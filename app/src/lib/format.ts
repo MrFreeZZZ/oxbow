@@ -52,7 +52,7 @@ export function personColor(email: string): number {
     hash ^= ch.charCodeAt(0);
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
-  return 1 + (hash % 8);
+  return 1 + (hash % 7);
 }
 
 export function initials(name: string): string {

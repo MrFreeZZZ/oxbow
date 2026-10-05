@@ -96,4 +96,9 @@ git remote add origin "$dest.remote.git"
 git push -q origin main feature/billing-webhooks feature/billing-ui feature/rate-limit-v2 \
   renovate/serde-1.x auth/1-models auth/2-api "auth/3-ui~2:refs/heads/auth/3-ui" --tags
 git checkout -q auth/3-ui
+
+# Work in progress set aside on auth/3-ui.
+alex
+echo "<SessionBanner expiresIn={300} />" > ui/login.tsx
+git stash push -q -m "Try a countdown in the expiry banner"
 echo "Created $dest"

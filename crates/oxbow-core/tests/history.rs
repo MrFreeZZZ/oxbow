@@ -1,6 +1,6 @@
 mod support;
 
-use oxbow_core::graph::{TRUNK_COLOR, color_for_name};
+use oxbow_core::graph::{STASH_COLOR, TRUNK_COLOR, color_for_name};
 use oxbow_core::{HistoryOptions, RefKind, Repo};
 use support::Fixture;
 
@@ -168,4 +168,39 @@ fn every_commit_knows_its_branch() {
             ("Root", Some("main")),
         ]
     );
+}
+
+#[test]
+fn stashes_hang_off_the_commit_they_were_made_on() {
+    let mut fx = Fixture::new();
+    let root = fx.commit("a.txt", "1\n", "Root");
+    fx.write("a.txt", "2\n");
+    fx.write("new.txt", "untracked\n");
+    fx.git(&["stash", "push", "-q", "--include-untracked", "-m", "First try"]);
+    let base = fx.commit("b.txt", "1\n", "Second");
+    fx.write("b.txt", "2\n");
+    fx.git(&["stash", "push", "-q", "-m", "Second try"]);
+
+    let history = Repo::open(fx.path())
+        .unwrap()
+        .history(&HistoryOptions::default())
+        .unwrap();
+    let rows: Vec<_> = history.rows.iter().map(|r| r.summary.as_str()).collect();
+    assert_eq!(rows, ["On main: Second try", "Second", "On main: First try", "Root"]);
+
+    assert_eq!(history.stashes.len(), 2);
+    assert_eq!(history.stashes[0].message, "On main: Second try");
+    let newest = &history.rows[0];
+    assert_eq!(newest.id, history.stashes[0].id);
+    assert_eq!(newest.parents, [base]);
+    assert_eq!(newest.graph.color, STASH_COLOR);
+    assert!(newest.unpushed);
+    assert_eq!(newest.labels[0].name, "stash@{0}");
+    assert_eq!(newest.labels[0].kind, RefKind::Stash);
+
+    // The index and untracked-files commits of a stash are not rows.
+    let older = &history.rows[2];
+    assert_eq!(older.labels[0].name, "stash@{1}");
+    assert_eq!(older.parents, [root]);
+    assert_eq!(history.rows.len(), 4);
 }

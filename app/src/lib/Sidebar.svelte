@@ -34,7 +34,9 @@
 
   /** The branch or tag highlighted in the sidebar follows the selected commit. */
   const focused = $derived(
-    clicked && clicked.target === selectedRow?.id ? clicked.name : (selectedRow?.graph.branch ?? null),
+    clicked && clicked.target === selectedRow?.id
+      ? clicked.name
+      : (selectedRow?.graph.branch ?? selectedRow?.labels.find((l) => l.kind === "stash")?.name ?? null),
   );
 
   const rowOf = $derived(new Map(history.rows.map((row) => [row.id, row])));
@@ -55,6 +57,19 @@
       .filter((r) => r.kind === "tag")
       .map((r) => ({ ref: r, time: rowOf.get(r.target)?.time ?? 0 }))
       .sort((a, b) => b.time - a.time || b.ref.name.localeCompare(a.ref.name)),
+  );
+
+  /** Stashes, newest first, with the "On main: " prefix git adds moved out of the title. */
+  const stashes = $derived(
+    history.stashes.map((s) => {
+      const name = `stash@{${s.index}}`;
+      const match = /^(?:WIP on|On) ([^:]+): (.*)$/.exec(s.message);
+      return {
+        ref: { name, kind: "stash" as const, target: s.id, remote: null },
+        title: match ? match[2] : s.message,
+        branch: match ? match[1] : null,
+      };
+    }),
   );
 
   /** Select the branch's or tag's latest commit, as if it were clicked in the graph. */
@@ -116,6 +131,24 @@
       </button>
     {/each}
     {@render more("branches", branches.length)}
+
+    {#if stashes.length}
+      <div class="heading">Stashes</div>
+      {#each shown("stashes", stashes) as s (s.ref.name)}
+        <button
+          class="item"
+          data-ref={s.ref.name}
+          style:background={focused === s.ref.name ? "var(--side-sel)" : undefined}
+          onclick={() => focus(s.ref)}
+          title="{s.ref.name}{s.branch ? ` on ${s.branch}` : ''}: {s.title}"
+        >
+          <svg class="icon" viewBox="0 0 16 16"><rect x="3" y="6.5" width="10" height="7" rx="1.5" /><path d="M4.5 4.5h7M6 2.5h4" /></svg>
+          <span class="grow ellipsis">{s.title}</span>
+          <span class="meta">{s.ref.name}</span>
+        </button>
+      {/each}
+      {@render more("stashes", stashes.length)}
+    {/if}
 
     {#if history.remotes.length}
       <div class="heading">Remotes</div>

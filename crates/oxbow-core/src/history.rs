@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::error::{Error, Result};
 use crate::graph::{self, GraphCommit, RowLayout};
-use crate::repo::{HeadInfo, RefInfo, RefKind, Repo};
+use crate::repo::{HeadInfo, RefInfo, RefKind, Repo, StashInfo};
 
 /// Options for loading the history.
 #[derive(Debug, Clone)]
@@ -34,6 +34,8 @@ pub struct History {
     pub trunk_tip_row: Option<usize>,
     pub refs: Vec<RefInfo>,
     pub remotes: Vec<String>,
+    /// Stash entries, newest first. Each one is also a row of the graph.
+    pub stashes: Vec<StashInfo>,
     pub rows: Vec<HistoryRow>,
     /// More commits exist beyond `rows`.
     pub truncated: bool,
@@ -80,6 +82,7 @@ impl Repo {
         let head = self.head()?;
         let refs = self.refs()?;
         let remotes = self.remotes();
+        let stashes = self.stashes()?;
 
         let mut tips: Vec<ObjectId> = refs
             .iter()
@@ -116,6 +119,25 @@ impl Repo {
                 });
             }
         }
+        // Stashes hang off the commit they were made on. Only that first parent is drawn: the other
+        // parents (the index and the untracked files) are internal to the stash.
+        let mut stash_ids = HashSet::new();
+        for stash in &stashes {
+            let Ok(id) = ObjectId::from_hex(stash.id.as_bytes()) else {
+                continue;
+            };
+            let Ok(commit) = repo.find_commit(id) else {
+                continue;
+            };
+            if !stash_ids.insert(id) {
+                continue;
+            }
+            nodes.push(Node {
+                id,
+                parents: commit.parent_ids().take(1).map(|p| p.detach()).collect(),
+                time: commit.time().map(|t| t.seconds).unwrap_or_default(),
+            });
+        }
         let nodes = topo_order(nodes);
         let row_of: HashMap<ObjectId, usize> = nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
 
@@ -148,6 +170,17 @@ impl Repo {
                 head: is_head,
             });
         }
+        for stash in &stashes {
+            let Ok(id) = ObjectId::from_hex(stash.id.as_bytes()) else {
+                continue;
+            };
+            labels.entry(id).or_default().push(Label {
+                name: format!("stash@{{{}}}", stash.index),
+                kind: RefKind::Stash,
+                color: 0,
+                head: false,
+            });
+        }
         for list in labels.values_mut() {
             list.sort_by_key(|l| (!l.head, l.kind as u8, l.name.clone()));
         }
@@ -174,7 +207,8 @@ impl Repo {
                 merged_name: (node.parents.len() > 1)
                     .then(|| merged_branch(&summary, &remotes))
                     .flatten(),
-                unpushed: unpushed.contains(&node.id),
+                unpushed: unpushed.contains(&node.id) || stash_ids.contains(&node.id),
+                stash: stash_ids.contains(&node.id),
             });
             details.push((
                 summary,
@@ -213,7 +247,7 @@ impl Repo {
                     time,
                     parents: node.parents.iter().map(ToString::to_string).collect(),
                     labels,
-                    unpushed: unpushed.contains(&node.id),
+                    unpushed: unpushed.contains(&node.id) || stash_ids.contains(&node.id),
                     graph,
                 }
             })
@@ -225,6 +259,7 @@ impl Repo {
             trunk_tip_row,
             refs,
             remotes,
+            stashes,
             rows,
             truncated,
         })

@@ -30,6 +30,8 @@
   });
 
   const color = $derived(row.graph.color);
+  // A stash has no branch line of its own; its capsule names the stash entry.
+  const branchName = $derived(row.graph.branch ?? row.labels.find((l) => l.kind === "stash")?.name ?? null);
   const totals = $derived(
     detail?.files.reduce((t, f) => ({ add: t.add + f.additions, del: t.del + f.deletions }), { add: 0, del: 0 }) ?? { add: 0, del: 0 },
   );
@@ -74,10 +76,10 @@
     <div class="message">
       <h1 class="selectable">
         {detail?.summary ?? row.summary}
-        {#if row.graph.branch}
+        {#if branchName}
           <span class="branch" style:color={plate(color)} style:background={tint(color, "label")} title="Branch of this commit">
             <svg class="icon tiny" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg>
-            {row.graph.branch}
+            {branchName}
           </span>
         {/if}
       </h1>

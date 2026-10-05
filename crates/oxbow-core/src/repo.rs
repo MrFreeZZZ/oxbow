@@ -30,6 +30,8 @@ pub enum RefKind {
     Local,
     Remote,
     Tag,
+    /// An entry of `refs/stash` (only used for labels, `refs()` never returns it).
+    Stash,
 }
 
 /// A branch or tag and the commit it points at.
@@ -130,4 +132,37 @@ impl Repo {
         let repo = self.local();
         repo.remote_names().iter().map(|name| name.to_string()).collect()
     }
+
+    /// Stash entries, newest (`stash@{0}`) first.
+    pub fn stashes(&self) -> Result<Vec<StashInfo>> {
+        let repo = self.local();
+        let Some(reference) = repo.try_find_reference("refs/stash").map_err(Error::git)? else {
+            return Ok(Vec::new());
+        };
+        let mut platform = reference.log_iter();
+        let Some(lines) = platform.rev().map_err(Error::git)? else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        for (index, line) in lines.enumerate() {
+            let line = line.map_err(Error::git)?;
+            out.push(StashInfo {
+                index,
+                id: line.new_oid.to_string(),
+                message: line.message.to_str_lossy().into_owned(),
+            });
+        }
+        Ok(out)
+    }
+}
+
+/// One entry of the stash.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StashInfo {
+    /// `n` in `stash@{n}`.
+    pub index: usize,
+    /// The stash commit. Its first parent is the commit the stash was made on.
+    pub id: String,
+    pub message: String,
 }

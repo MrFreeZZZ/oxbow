@@ -17,7 +17,11 @@ use serde::Serialize;
 pub type RowIndex = usize;
 
 /// Number of colors in the branch palette, not counting the trunk color.
-pub const PALETTE_SIZE: u8 = 8;
+/// The palette has no red (it would read as removed lines in diffs) and no yellow (tags only).
+pub const PALETTE_SIZE: u8 = 7;
+
+/// Neutral color for stashes, outside the branch palette.
+pub const STASH_COLOR: u8 = PALETTE_SIZE + 1;
 
 /// Color of the trunk lane.
 pub const TRUNK_COLOR: u8 = 0;
@@ -36,6 +40,8 @@ pub struct GraphCommit {
     pub merged_name: Option<String>,
     /// Whether this commit exists only locally (not reachable from any remote-tracking branch).
     pub unpushed: bool,
+    /// A stash entry: drawn in the neutral stash color, its line runs to the commit it was made on.
+    pub stash: bool,
 }
 
 /// The layout of one row.
@@ -44,7 +50,7 @@ pub struct GraphCommit {
 pub struct RowLayout {
     /// Column of the commit dot.
     pub column: u16,
-    /// Color of the commit dot (0 = trunk, `1..=PALETTE_SIZE` = branch palette).
+    /// Color of the commit dot (0 = trunk, `1..=PALETTE_SIZE` = branch palette, `STASH_COLOR` = stash).
     pub color: u8,
     /// Colors of branches that fork from this commit, drawn as a ring around the dot.
     pub fork_colors: Vec<u8>,
@@ -85,6 +91,8 @@ struct Lane {
     origin: Option<u16>,
     /// Branch name of the commits on this line.
     branch: Option<String>,
+    /// The line of a stash: the commit it leads to keeps its own branch color and name.
+    stash: bool,
 }
 
 /// Stable color for a branch name, never the trunk color.
@@ -112,18 +120,27 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
             .filter(|&c| lanes[c].as_ref().is_some_and(|l| l.target == Some(row)))
             .collect();
 
+        let is_stash = |c: usize| lanes[c].as_ref().is_some_and(|l| l.stash);
         let column = if commit.trunk {
             0
-        } else if let Some(&col) = waiting.iter().find(|&&c| c != 0) {
+        } else if let Some(&col) = waiting
+            .iter()
+            .find(|&&c| c != 0 && !is_stash(c))
+            .or_else(|| waiting.iter().find(|&&c| c != 0))
+        {
             col
         } else {
             free_column(&lanes, None)
         };
         ensure_len(&mut lanes, column);
+        // The commit continues the line in its column, unless that line is a stash's.
+        let continues = waiting.contains(&column) && !lanes[column].as_ref().is_some_and(|l| l.stash);
 
         let color = if commit.trunk {
             TRUNK_COLOR
-        } else if waiting.contains(&column) {
+        } else if commit.stash {
+            STASH_COLOR
+        } else if continues {
             lanes[column].as_ref().map_or(TRUNK_COLOR, |l| l.color)
         } else {
             match &commit.tip_name {
@@ -133,9 +150,9 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
         };
 
         // A branch tip further down a line (a stacked branch) names the commits below it.
-        let branch = if commit.trunk {
+        let branch = if commit.trunk || commit.stash {
             None
-        } else if waiting.contains(&column) {
+        } else if continues {
             commit
                 .tip_name
                 .clone()
@@ -148,7 +165,12 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
         let mut fork_colors = Vec::new();
         for &col in &waiting {
             let lane = lanes[col].take().expect("waiting lane exists");
-            if col != column && lane.first_parent && lane.color != color && !fork_colors.contains(&lane.color) {
+            if col != column
+                && lane.first_parent
+                && !lane.stash
+                && lane.color != color
+                && !fork_colors.contains(&lane.color)
+            {
                 fork_colors.push(lane.color);
             }
         }
@@ -165,6 +187,7 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
                     first_parent: true,
                     origin: None,
                     branch: branch.clone(),
+                    stash: commit.stash,
                 });
                 continue;
             }
@@ -218,6 +241,7 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
                 first_parent: false,
                 origin: Some(column as u16),
                 branch: merged_branch,
+                stash: false,
             });
         }
 
@@ -368,6 +392,24 @@ mod tests {
         assert_eq!(rows[1].branch.as_deref(), Some("stack/1"));
         // The line keeps the color of the branch it started with.
         assert_eq!(rows[1].color, rows[0].color);
+    }
+
+    #[test]
+    fn stash_line_leaves_the_branch_below_it_alone() {
+        // 0 stash -> 1 (feature tip) -> 2 (trunk root)
+        let stash = GraphCommit {
+            stash: true,
+            unpushed: true,
+            ..commit(&[1], false)
+        };
+        let feature = named(commit(&[2], false), "feature");
+        let rows = layout(&[stash, feature, commit(&[], true)]);
+        assert_eq!((rows[0].color, rows[0].branch.as_deref()), (STASH_COLOR, None));
+        assert_eq!(rows[0].segments[0].color, STASH_COLOR);
+        assert!(rows[0].segments[0].dashed);
+        assert_eq!(rows[1].color, color_for_name("feature"));
+        assert_eq!(rows[1].branch.as_deref(), Some("feature"));
+        assert!(rows[1].fork_colors.is_empty());
     }
 
     #[test]

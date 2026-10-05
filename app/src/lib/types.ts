@@ -1,6 +1,6 @@
 // Mirrors the serde types of oxbow-core.
 
-export type RefKind = "local" | "remote" | "tag";
+export type RefKind = "local" | "remote" | "tag" | "stash";
 
 export interface HeadInfo {
   branch: string | null;
@@ -50,12 +50,20 @@ export interface HistoryRow {
   graph: RowLayout;
 }
 
+export interface StashInfo {
+  /** n in stash@{n} */
+  index: number;
+  id: string;
+  message: string;
+}
+
 export interface History {
   head: HeadInfo;
   trunk: string | null;
   trunkTipRow: number | null;
   refs: RefInfo[];
   remotes: string[];
+  stashes: StashInfo[];
   rows: HistoryRow[];
   truncated: boolean;
 }

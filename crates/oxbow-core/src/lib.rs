@@ -15,4 +15,4 @@ pub use commit::{
 };
 pub use error::{Error, Result};
 pub use history::{History, HistoryOptions, HistoryRow, Label};
-pub use repo::{HeadInfo, RefInfo, RefKind, Repo};
+pub use repo::{HeadInfo, RefInfo, RefKind, Repo, StashInfo};

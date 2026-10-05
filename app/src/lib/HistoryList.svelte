@@ -144,6 +144,11 @@
                   <svg class="icon tiny" viewBox="0 0 16 16"><path d="M2.5 2.5h5l6 6-5 5-6-6z" /><circle cx="5.5" cy="5.5" r="0.8" /></svg>
                   {label.name}
                 </span>
+              {:else if label.kind === "stash"}
+                <span class="pill" style:color={plate(label.color)} style:background={tint(label.color, "label")}>
+                  <svg class="icon tiny" viewBox="0 0 16 16"><rect x="3" y="6.5" width="10" height="7" rx="1.5" /><path d="M4.5 4.5h7M6 2.5h4" /></svg>
+                  {label.name}
+                </span>
               {:else if label.kind === "remote"}
                 <span class="pill" style:color={plate(label.color)} style:border-color="color-mix(in srgb, {lane(label.color)} 40%, transparent)">{label.name}</span>
               {:else}
