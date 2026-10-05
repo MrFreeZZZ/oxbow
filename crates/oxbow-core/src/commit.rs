@@ -45,6 +45,10 @@ pub enum FileStatus {
     Modified,
     Renamed,
     Copied,
+    /// A new file git does not track yet (working copy only).
+    Untracked,
+    /// A file with unresolved merge conflicts (working copy only).
+    Conflicted,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -422,7 +426,7 @@ pub fn diff_text(before: &str, after: &str, context: DiffContext, with_words: bo
 }
 
 /// Split a removed/added line pair into unchanged and changed word runs.
-fn word_diff(before: &str, after: &str) -> (Vec<WordPart>, Vec<WordPart>) {
+pub(crate) fn word_diff(before: &str, after: &str) -> (Vec<WordPart>, Vec<WordPart>) {
     let input = InternedInput::new(
         gix::diff::blob::sources::words(before),
         gix::diff::blob::sources::words(after),

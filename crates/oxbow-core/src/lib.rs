@@ -10,6 +10,7 @@ pub mod error;
 pub mod graph;
 pub mod history;
 pub mod repo;
+pub mod worktree;
 
 pub use cli::{CommandOutput, GitCommand};
 pub use commit::{
@@ -18,3 +19,4 @@ pub use commit::{
 pub use error::{Error, Result};
 pub use history::{History, HistoryOptions, HistoryRow, Label};
 pub use repo::{HeadInfo, RefInfo, RefKind, Repo, StashInfo};
+pub use worktree::{Action, Plan, Side, WorkingTree};

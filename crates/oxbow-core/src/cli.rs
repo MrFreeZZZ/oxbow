@@ -4,6 +4,7 @@
 //! config behave exactly as in a terminal. A [`GitCommand`] is also what the confirmation sheet
 //! shows, so the user sees the very command that will run.
 
+use std::io::Write;
 use std::process::{Command, Stdio};
 
 use serde::Serialize;
@@ -58,18 +59,12 @@ pub struct CommandOutput {
 impl Repo {
     /// Run `command` in the repository's working directory and wait for it.
     pub fn run(&self, command: &GitCommand) -> Result<CommandOutput> {
-        let output = Command::new("git")
-            // Paths with non-ASCII names come back as they are, not as octal escapes.
-            .args(["-c", "core.quotePath=false"])
-            .args(&command.args)
-            .current_dir(self.workdir())
-            // There is no terminal to type a password into: fail instead of hanging.
-            .env("GIT_TERMINAL_PROMPT", "0")
-            // Messages stay in English, as in most guides and search results.
-            .env("LC_MESSAGES", "C")
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|err| Error::GitNotFound(err.to_string()))?;
+        self.run_with_input(command, None)
+    }
+
+    /// Run `command`, feeding `input` to its standard input (a patch for `git apply`).
+    pub fn run_with_input(&self, command: &GitCommand, input: Option<&[u8]>) -> Result<CommandOutput> {
+        let output = self.spawn(command, input)?;
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
         if output.status.success() {
@@ -81,6 +76,32 @@ impl Repo {
                 output: if stderr.trim().is_empty() { stdout } else { stderr },
             })
         }
+    }
+
+    /// Run `command` and return its raw output whatever its exit code.
+    pub(crate) fn spawn(&self, command: &GitCommand, input: Option<&[u8]>) -> Result<std::process::Output> {
+        let mut child = Command::new("git")
+            // Paths with non-ASCII names come back as they are, not as octal escapes.
+            .args(["-c", "core.quotePath=false"])
+            .args(&command.args)
+            .current_dir(self.workdir())
+            // There is no terminal to type a password into: fail instead of hanging.
+            .env("GIT_TERMINAL_PROMPT", "0")
+            // Messages stay in English, as in most guides and search results.
+            .env("LC_MESSAGES", "C")
+            .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|err| Error::GitNotFound(err.to_string()))?;
+        if let Some(input) = input {
+            let mut stdin = child.stdin.take().expect("stdin is piped");
+            // A command that exits early closes its end; its exit status tells what went wrong.
+            let _ = stdin.write_all(input);
+        }
+        child
+            .wait_with_output()
+            .map_err(|err| Error::GitNotFound(err.to_string()))
     }
 }
 
