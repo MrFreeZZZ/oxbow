@@ -1,10 +1,16 @@
 <script lang="ts">
   import { api } from "./api";
   import type { CommitDetail, FileDiff, HistoryRow } from "./types";
-  import { fullDate, initials, lane, personColor, plate, shortId, splitPath, tint } from "./format";
+  import { fullDate, initials, lane, personColor, plate, splitPath, tint } from "./format";
   import DiffView from "./DiffView.svelte";
+  import CommitChain from "./CommitChain.svelte";
 
-  let { row, onSelect }: { row: HistoryRow; onSelect: (id: string) => void } = $props();
+  let {
+    row,
+    childIds,
+    lookup,
+    onSelect,
+  }: { row: HistoryRow; childIds: string[]; lookup: (id: string) => HistoryRow | undefined; onSelect: (id: string) => void } = $props();
 
   let detail = $state<CommitDetail | null>(null);
   let diffs = $state<FileDiff[]>([]);
@@ -66,15 +72,15 @@
 <div class="panel">
   <div class="head">
     <div class="message">
-      <div class="title">
-        <h1 class="selectable">{detail?.summary ?? row.summary}</h1>
+      <h1 class="selectable">
+        {detail?.summary ?? row.summary}
         {#if row.graph.branch}
           <span class="branch" style:color={plate(color)} style:background={tint(color, "label")} title="Branch of this commit">
             <svg class="icon tiny" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg>
             {row.graph.branch}
           </span>
         {/if}
-      </div>
+      </h1>
       {#if detail?.body}<p class="body selectable">{detail.body}</p>{/if}
     </div>
     <div class="people">
@@ -83,15 +89,8 @@
         <span class="author" title={row.authorEmail}>{row.authorName}</span>
         <span class="date">{detail ? fullDate(detail.author.time, detail.author.offset) : ""}</span>
       </span>
-      <span class="key">commit</span>
-      <span class="sha mono selectable" title={row.id}>{shortId(row.id)}</span>
-      {#if row.parents.length}
-        <span class="key">{row.parents.length === 1 ? "parent" : "parents"}</span>
-        {#each row.parents as parent (parent)}
-          <button class="sha mono link" onclick={() => onSelect(parent)} title="Go to {parent}">{shortId(parent)}</button>
-        {/each}
-      {/if}
     </div>
+    <CommitChain {row} {childIds} {lookup} {onSelect} />
   </div>
 
   <div class="tabs" role="tablist" aria-label="Changes in this commit" bind:this={tabBar}>
@@ -162,34 +161,29 @@
     flex-direction: column;
     gap: 6px;
   }
-  .title {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-  }
   .branch {
     display: inline-flex;
     align-items: center;
     gap: 4px;
     height: 20px;
-    margin-top: 1px;
+    margin-left: 6px;
     padding: 0 8px;
     border-radius: 10px;
     font-size: 12px;
     font-weight: 500;
+    line-height: 1;
     white-space: nowrap;
-    flex-shrink: 0;
-    max-width: 45%;
+    vertical-align: 2px;
+    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
+    user-select: none;
   }
   .tiny {
     width: 12px;
     height: 12px;
   }
   h1 {
-    flex: 1 1 auto;
-    min-width: 0;
     margin: 0;
     font-size: 17px;
     font-weight: 600;
@@ -231,19 +225,9 @@
   .author {
     font-weight: 600;
   }
-  .date,
-  .key {
+  .date {
     font-size: 11px;
     color: var(--text2);
-  }
-  .sha {
-    font-size: 11.5px;
-    padding: 2px 7px;
-    border-radius: 6px;
-    background: var(--field);
-  }
-  .link {
-    color: var(--accent-text);
   }
   .tabs {
     display: flex;

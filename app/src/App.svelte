@@ -16,7 +16,20 @@
   let panelWidth = $state(640);
 
   const branchCount = $derived(history ? history.refs.filter((r) => r.kind === "local").length : 0);
-  const selectedRow = $derived(history?.rows.find((r) => r.id === selected) ?? null);
+  const rowsById = $derived(new Map(history?.rows.map((r) => [r.id, r]) ?? []));
+  const selectedRow = $derived(selected ? (rowsById.get(selected) ?? null) : null);
+  // Children of every commit, newest first (rows are already newest first).
+  const childrenOf = $derived.by(() => {
+    const map = new Map<string, string[]>();
+    for (const r of history?.rows ?? []) {
+      for (const parent of r.parents) {
+        const list = map.get(parent);
+        if (list) list.push(r.id);
+        else map.set(parent, [r.id]);
+      }
+    }
+    return map;
+  });
 
   async function load(path: string) {
     loading = true;
@@ -100,7 +113,7 @@
         <aside class="panel" style:width="{panelWidth}px" aria-label="Commit details">
           <button class="grip" onpointerdown={startResize} aria-label="Resize commit details" title="Drag to resize"></button>
           {#if selectedRow}
-            <CommitPanel row={selectedRow} onSelect={select} />
+            <CommitPanel row={selectedRow} childIds={childrenOf.get(selectedRow.id) ?? []} lookup={(id) => rowsById.get(id)} onSelect={select} />
           {/if}
         </aside>
       </div>
