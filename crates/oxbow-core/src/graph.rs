@@ -54,6 +54,10 @@ pub struct RowLayout {
     pub segments: Vec<Segment>,
     /// Rightmost column that has a line or a dot in this row; the commit text starts after it.
     pub width: u16,
+    /// Branch the commit belongs to: the nearest branch tip above it on its line, or the branch a
+    /// merge brought it in from. `None` for trunk commits (the caller knows the trunk's name) and
+    /// for lines whose branch is unknown.
+    pub branch: Option<String>,
 }
 
 /// A line from the center of row `i` (at column `from`) to the center of row `i + 1`
@@ -79,6 +83,8 @@ struct Lane {
     first_parent: bool,
     /// Column the lane leaves from in the row that created it, when it starts with a curve.
     origin: Option<u16>,
+    /// Branch name of the commits on this line.
+    branch: Option<String>,
 }
 
 /// Stable color for a branch name, never the trunk color.
@@ -126,6 +132,18 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
             }
         };
 
+        // A branch tip further down a line (a stacked branch) names the commits below it.
+        let branch = if commit.trunk {
+            None
+        } else if waiting.contains(&column) {
+            commit
+                .tip_name
+                .clone()
+                .or_else(|| lanes[column].as_ref().and_then(|l| l.branch.clone()))
+        } else {
+            commit.tip_name.clone()
+        };
+
         // Lines that end here. A branch line arriving through its first parent marks a fork point.
         let mut fork_colors = Vec::new();
         for &col in &waiting {
@@ -146,6 +164,7 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
                     dashed: commit.unpushed,
                     first_parent: true,
                     origin: None,
+                    branch: branch.clone(),
                 });
                 continue;
             }
@@ -170,6 +189,11 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
             }
 
             let parent_on_trunk = parent.is_some_and(|p| commits[p].trunk);
+            let merged_branch = if parent_on_trunk {
+                None
+            } else {
+                commit.merged_name.clone()
+            };
             let merged_color = if parent_on_trunk {
                 TRUNK_COLOR
             } else {
@@ -193,6 +217,7 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
                 dashed: commit.unpushed,
                 first_parent: false,
                 origin: Some(column as u16),
+                branch: merged_branch,
             });
         }
 
@@ -210,6 +235,7 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
             merge_colors,
             segments: Vec::new(),
             width: column as u16,
+            branch,
         });
     }
 
@@ -328,6 +354,20 @@ mod tests {
         );
         assert_eq!(rows[2].fork_colors, vec![color]);
         assert_eq!(rows[1].width, 1);
+        assert_eq!(rows[0].branch.as_deref(), Some("feature"));
+        assert_eq!(rows[1].branch, None);
+    }
+
+    #[test]
+    fn stacked_branch_tip_names_the_commits_below_it() {
+        // 0 top tip -> 1 (bottom tip) -> 2 (trunk root)
+        let top = named(commit(&[1], false), "stack/2");
+        let bottom = named(commit(&[2], false), "stack/1");
+        let rows = layout(&[top, bottom, commit(&[], true)]);
+        assert_eq!(rows[0].branch.as_deref(), Some("stack/2"));
+        assert_eq!(rows[1].branch.as_deref(), Some("stack/1"));
+        // The line keeps the color of the branch it started with.
+        assert_eq!(rows[1].color, rows[0].color);
     }
 
     #[test]
@@ -355,6 +395,7 @@ mod tests {
             ]
         );
         assert_eq!((rows[2].column, rows[2].color), (1, topic));
+        assert_eq!(rows[2].branch.as_deref(), Some("topic"));
         // The topic line forked from the root, so the root gets a ring in its color.
         assert_eq!(rows[3].fork_colors, vec![topic]);
         assert_eq!(

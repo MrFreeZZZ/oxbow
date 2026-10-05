@@ -1,15 +1,41 @@
 <script lang="ts">
-  import type { History, RefInfo, RepoSummary } from "./types";
+  import type { History, HistoryRow, RefInfo, RepoSummary } from "./types";
   import { lane, tint } from "./format";
 
   let {
     repo,
     history,
+    selectedRow,
     onOpen,
     onPick,
-  }: { repo: RepoSummary; history: History; onOpen: () => void; onPick: (commit: string) => void } = $props();
+  }: {
+    repo: RepoSummary;
+    history: History;
+    selectedRow: HistoryRow | null;
+    onOpen: () => void;
+    onPick: (commit: string) => void;
+  } = $props();
 
-  let focused = $state<string | null>(null);
+  /** Lists longer than this show only their first items until expanded. */
+  const COLLAPSED = 10;
+
+  // The ref clicked last, while its commit is still the selected one.
+  let clicked = $state<RefInfo | null>(null);
+  let expanded = $state<Record<string, boolean>>({});
+  let list = $state<HTMLDivElement>();
+
+  // Keep the highlighted item in view when the selection moves to another branch.
+  $effect(() => {
+    const name = focused;
+    if (!name || !list) return;
+    const item = [...list.querySelectorAll<HTMLElement>("[data-ref]")].find((el) => el.dataset.ref === name);
+    item?.scrollIntoView({ block: "nearest" });
+  });
+
+  /** The branch or tag highlighted in the sidebar follows the selected commit. */
+  const focused = $derived(
+    clicked && clicked.target === selectedRow?.id ? clicked.name : (selectedRow?.graph.branch ?? null),
+  );
 
   const rowOf = $derived(new Map(history.rows.map((row) => [row.id, row])));
 
@@ -33,10 +59,27 @@
 
   /** Select the branch's or tag's latest commit, as if it were clicked in the graph. */
   function focus(r: RefInfo) {
-    focused = r.name;
+    clicked = r;
     onPick(r.target);
   }
+
+  /** The first items of a list, plus the highlighted one if it would be hidden. */
+  function shown<T extends { ref: RefInfo }>(key: string, items: T[]): T[] {
+    if (expanded[key] || items.length <= COLLAPSED) return items;
+    const head = items.slice(0, COLLAPSED);
+    const current = items.slice(COLLAPSED).find((item) => item.ref.name === focused);
+    return current ? [...head, current] : head;
+  }
 </script>
+
+{#snippet more(key: string, count: number)}
+  {#if count > COLLAPSED}
+    <button class="more" onclick={() => (expanded[key] = !expanded[key])} aria-expanded={!!expanded[key]}>
+      <svg class="icon small" viewBox="0 0 16 16"><path d={expanded[key] ? "M4.5 10 8 6.5l3.5 3.5" : "M4.5 6 8 9.5 11.5 6"} /></svg>
+      {expanded[key] ? "Show less" : `Show all ${count}`}
+    </button>
+  {/if}
+{/snippet}
 
 <nav aria-label="Sidebar">
   <div class="lights" data-tauri-drag-region></div>
@@ -50,7 +93,7 @@
     <svg class="icon small" viewBox="0 0 16 16"><path d="M5 6l3-3 3 3M5 10l3 3 3-3" /></svg>
   </button>
 
-  <div class="scroll">
+  <div class="scroll" bind:this={list}>
     <div class="heading">Workspace</div>
     <div class="item current">
       <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" /><path d="M8 4.5V8l2.5 1.5" /></svg>
@@ -58,10 +101,11 @@
     </div>
 
     <div class="heading">Branches</div>
-    {#each branches as b (b.ref.name)}
+    {#each shown("branches", branches) as b (b.ref.name)}
       {@const head = b.ref.name === history.head.branch}
       <button
         class="item"
+        data-ref={b.ref.name}
         style:background={focused === b.ref.name ? tint(b.color) : undefined}
         onclick={() => focus(b.ref)}
         title="Go to the latest commit on {b.ref.name}"
@@ -71,6 +115,7 @@
         {#if head}<span class="head">HEAD</span>{/if}
       </button>
     {/each}
+    {@render more("branches", branches.length)}
 
     {#if history.remotes.length}
       <div class="heading">Remotes</div>
@@ -86,12 +131,19 @@
 
     {#if tags.length}
       <div class="heading">Tags</div>
-      {#each tags as t (t.ref.name)}
-        <button class="item" onclick={() => focus(t.ref)} title="Go to {t.ref.name}">
+      {#each shown("tags", tags) as t (t.ref.name)}
+        <button
+          class="item"
+          data-ref={t.ref.name}
+          style:background={focused === t.ref.name ? "var(--side-sel)" : undefined}
+          onclick={() => focus(t.ref)}
+          title="Go to {t.ref.name}"
+        >
           <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 2.5h5l6 6-5 5-6-6z" /><circle cx="5.5" cy="5.5" r="0.8" /></svg>
           <span class="grow ellipsis">{t.ref.name}</span>
         </button>
       {/each}
+      {@render more("tags", tags.length)}
     {/if}
   </div>
 </nav>
@@ -208,5 +260,19 @@
   .meta {
     font-size: 11px;
     color: var(--text2);
+  }
+  .more {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    margin: 2px 8px 0;
+    padding: 0 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--text2);
+  }
+  .more:hover {
+    color: var(--text);
   }
 </style>

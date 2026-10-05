@@ -185,15 +185,25 @@ impl Repo {
         }
 
         let layout = graph::layout(&graph_input);
+        // Trunk commits belong to the trunk branch, named without its remote (`origin/main` -> `main`).
+        let trunk_name = trunk_ref.map(|r| match r.kind {
+            RefKind::Remote => strip_remote(&r.name, &remotes).to_owned(),
+            _ => r.name.clone(),
+        });
         let rows = nodes
             .iter()
             .zip(details)
             .zip(layout)
-            .map(|((node, (summary, author_name, author_email, time)), graph)| {
+            .enumerate()
+            .map(|(row, ((node, (summary, author_name, author_email, time)), graph))| {
                 let mut labels = labels.remove(&node.id).unwrap_or_default();
                 // Labels take the color of the line they sit on.
                 for label in &mut labels {
                     label.color = graph.color;
+                }
+                let mut graph = graph;
+                if graph.branch.is_none() && on_trunk[row] {
+                    graph.branch = trunk_name.clone();
                 }
                 HistoryRow {
                     id: node.id.to_string(),

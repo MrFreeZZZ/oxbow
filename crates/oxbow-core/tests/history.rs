@@ -138,3 +138,34 @@ fn history_limit_truncates() {
     // The oldest loaded commit's line keeps going down past the limit.
     assert_eq!(history.rows[2].graph.segments.len(), 1);
 }
+
+#[test]
+fn every_commit_knows_its_branch() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "1\n", "Root");
+    fx.git(&["checkout", "-q", "-b", "auth/1-models"]);
+    fx.commit("m.txt", "1\n", "Models");
+    fx.git(&["checkout", "-q", "-b", "auth/2-api"]);
+    fx.commit("api.txt", "1\n", "Api");
+    fx.git(&["checkout", "-q", "main"]);
+    fx.commit("a.txt", "2\n", "Main work");
+
+    let history = Repo::open(fx.path())
+        .unwrap()
+        .history(&HistoryOptions::default())
+        .unwrap();
+    let branches: Vec<_> = history
+        .rows
+        .iter()
+        .map(|r| (r.summary.as_str(), r.graph.branch.as_deref()))
+        .collect();
+    assert_eq!(
+        branches,
+        [
+            ("Main work", Some("main")),
+            ("Api", Some("auth/2-api")),
+            ("Models", Some("auth/1-models")),
+            ("Root", Some("main")),
+        ]
+    );
+}

@@ -75,7 +75,7 @@
   <Welcome {loading} {error} onOpen={chooseRepo} />
 {:else}
   <div class="window">
-    <Sidebar {repo} {history} onOpen={chooseRepo} onPick={select} />
+    <Sidebar {repo} {history} {selectedRow} onOpen={chooseRepo} onPick={select} />
     <div class="main">
       <header data-tauri-drag-region>
         <div class="title" data-tauri-drag-region>

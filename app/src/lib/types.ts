@@ -28,6 +28,7 @@ export interface RowLayout {
   mergeColors: number[];
   segments: Segment[];
   width: number;
+  branch: string | null;
 }
 
 export interface Label {

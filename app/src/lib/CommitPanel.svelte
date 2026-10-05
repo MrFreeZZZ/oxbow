@@ -12,6 +12,16 @@
   let whole = $state(false);
   let error = $state<string | null>(null);
   let scroller = $state<HTMLDivElement>();
+  let tabBar = $state<HTMLDivElement>();
+
+  // The selected tab may be scrolled out of the tab bar, for example when a file is picked in Summary.
+  $effect(() => {
+    tab;
+    detail;
+    requestAnimationFrame(() =>
+      tabBar?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ inline: "nearest", block: "nearest" }),
+    );
+  });
 
   const color = $derived(row.graph.color);
   const totals = $derived(
@@ -56,7 +66,15 @@
 <div class="panel">
   <div class="head">
     <div class="message">
-      <h1 class="selectable">{detail?.summary ?? row.summary}</h1>
+      <div class="title">
+        <h1 class="selectable">{detail?.summary ?? row.summary}</h1>
+        {#if row.graph.branch}
+          <span class="branch" style:color={plate(color)} style:background={tint(color, "label")} title="Branch of this commit">
+            <svg class="icon tiny" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg>
+            {row.graph.branch}
+          </span>
+        {/if}
+      </div>
       {#if detail?.body}<p class="body selectable">{detail.body}</p>{/if}
     </div>
     <div class="people">
@@ -76,7 +94,7 @@
     </div>
   </div>
 
-  <div class="tabs" role="tablist" aria-label="Changes in this commit">
+  <div class="tabs" role="tablist" aria-label="Changes in this commit" bind:this={tabBar}>
     <button
       role="tab"
       aria-selected={tab === null}
@@ -144,7 +162,34 @@
     flex-direction: column;
     gap: 6px;
   }
+  .title {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .branch {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 20px;
+    margin-top: 1px;
+    padding: 0 8px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    flex-shrink: 0;
+    max-width: 45%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tiny {
+    width: 12px;
+    height: 12px;
+  }
   h1 {
+    flex: 1 1 auto;
+    min-width: 0;
     margin: 0;
     font-size: 17px;
     font-weight: 600;
