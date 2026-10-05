@@ -42,6 +42,42 @@ async fn blocking<T: Send + 'static>(
         .map_err(|err| err.to_string())
 }
 
+/// User settings live in `settings.json` in the app's config folder, as flat `oxbow.*` keys,
+/// holding only values that differ from the defaults.
+fn settings_file(app: &AppHandle) -> CommandResult<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .map(|dir| dir.join("settings.json"))
+        .map_err(|err| err.to_string())
+}
+
+fn read_settings(app: &AppHandle) -> serde_json::Map<String, serde_json::Value> {
+    settings_file(app)
+        .ok()
+        .and_then(|file| std::fs::read_to_string(file).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_setting(app: AppHandle, key: String) -> Option<serde_json::Value> {
+    read_settings(&app).remove(&key)
+}
+
+#[tauri::command]
+fn set_setting(app: AppHandle, key: String, value: serde_json::Value) -> CommandResult<()> {
+    let mut settings = read_settings(&app);
+    if value.is_null() {
+        settings.remove(&key);
+    } else {
+        settings.insert(key, value);
+    }
+    let file = settings_file(&app)?;
+    std::fs::create_dir_all(file.parent().expect("settings file has a parent")).map_err(|err| err.to_string())?;
+    let text = serde_json::to_string_pretty(&settings).map_err(|err| err.to_string())?;
+    std::fs::write(file, text + "\n").map_err(|err| err.to_string())
+}
+
 fn last_repo_file(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_config_dir().ok().map(|dir| dir.join("last-repository"))
 }
@@ -104,13 +140,17 @@ async fn commit_diff(
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // Restores the window's size and position from the last session.
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(Session::default())
         .invoke_handler(tauri::generate_handler![
             open_repo,
             initial_repo,
             history,
             commit_detail,
-            commit_diff
+            commit_diff,
+            get_setting,
+            set_setting
         ])
         .run(tauri::generate_context!())
         .expect("error while running Oxbow");

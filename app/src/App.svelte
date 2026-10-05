@@ -1,6 +1,6 @@
 <script lang="ts">
   import { open } from "@tauri-apps/plugin-dialog";
-  import { api } from "./lib/api";
+  import { api, settings } from "./lib/api";
   import type { History, RepoSummary } from "./lib/types";
   import Sidebar from "./lib/Sidebar.svelte";
   import HistoryList from "./lib/HistoryList.svelte";
@@ -55,12 +55,16 @@
     const up = () => {
       target.removeEventListener("pointermove", move);
       target.removeEventListener("pointerup", up);
+      api.setSetting(settings.detailsWidth, Math.round(panelWidth)).catch(() => {});
     };
     target.addEventListener("pointermove", move);
     target.addEventListener("pointerup", up);
   }
 
   $effect(() => {
+    api.getSetting<number>(settings.detailsWidth).then((width) => {
+      if (typeof width === "number") panelWidth = Math.min(Math.max(width, 360), window.innerWidth - 560);
+    });
     api.initialRepo().then((path) => {
       if (path) load(path);
     });
@@ -71,7 +75,7 @@
   <Welcome {loading} {error} onOpen={chooseRepo} />
 {:else}
   <div class="window">
-    <Sidebar {repo} {history} onOpen={chooseRepo} onFocusBranch={(target) => list?.reveal(target)} />
+    <Sidebar {repo} {history} onOpen={chooseRepo} onPick={select} />
     <div class="main">
       <header data-tauri-drag-region>
         <div class="title" data-tauri-drag-region>

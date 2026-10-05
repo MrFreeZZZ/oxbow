@@ -6,8 +6,8 @@
     repo,
     history,
     onOpen,
-    onFocusBranch,
-  }: { repo: RepoSummary; history: History; onOpen: () => void; onFocusBranch: (commit: string) => void } = $props();
+    onPick,
+  }: { repo: RepoSummary; history: History; onOpen: () => void; onPick: (commit: string) => void } = $props();
 
   let focused = $state<string | null>(null);
 
@@ -31,9 +31,10 @@
       .sort((a, b) => b.time - a.time || b.ref.name.localeCompare(a.ref.name)),
   );
 
+  /** Select the branch's or tag's latest commit, as if it were clicked in the graph. */
   function focus(r: RefInfo) {
     focused = r.name;
-    onFocusBranch(r.target);
+    onPick(r.target);
   }
 </script>
 
@@ -63,7 +64,7 @@
         class="item"
         style:background={focused === b.ref.name ? tint(b.color) : undefined}
         onclick={() => focus(b.ref)}
-        title="Show {b.ref.name} in the graph"
+        title="Go to the latest commit on {b.ref.name}"
       >
         <span class="dot" style:background={lane(b.color)}></span>
         <span class="grow ellipsis" class:bold={head}>{b.ref.name}</span>
@@ -86,7 +87,7 @@
     {#if tags.length}
       <div class="heading">Tags</div>
       {#each tags as t (t.ref.name)}
-        <button class="item" onclick={() => focus(t.ref)} title="Show {t.ref.name} in the graph">
+        <button class="item" onclick={() => focus(t.ref)} title="Go to {t.ref.name}">
           <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 2.5h5l6 6-5 5-6-6z" /><circle cx="5.5" cy="5.5" r="0.8" /></svg>
           <span class="grow ellipsis">{t.ref.name}</span>
         </button>

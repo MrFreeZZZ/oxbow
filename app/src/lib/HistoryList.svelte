@@ -88,7 +88,18 @@
     }
   }
 
+  /** Back to the newest commit: scroll to the top and select it. */
+  export function toTop() {
+    if (viewport) viewport.scrollTo({ top: 0, behavior: "smooth" });
+    if (rows[0]) onSelect(rows[0].id);
+  }
+
   function onKey(event: KeyboardEvent) {
+    if (event.key === "Home" || (event.key === "ArrowUp" && (event.metaKey || event.ctrlKey))) {
+      event.preventDefault();
+      toTop();
+      return;
+    }
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     event.preventDefault();
     const current = selected ? (indexOf.get(selected) ?? -1) : -1;
@@ -97,85 +108,124 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-<div
-  class="viewport"
-  bind:this={viewport}
-  bind:clientHeight={height}
-  onscroll={() => (scrollTop = viewport?.scrollTop ?? 0)}
-  onkeydown={onKey}
-  tabindex="0"
-  role="listbox"
-  aria-label="Commits"
->
-  <div class="canvas" style:height="{PAD_TOP * 2 + rows.length * ROW}px">
-    {#each visible as { row, index } (row.id)}
-      {@const isSelected = row.id === selected}
-      <div
-        class="row"
-        class:flash={flash === row.id}
-        role="option"
-        aria-selected={isSelected}
-        tabindex="-1"
-        style:top="{PAD_TOP + index * ROW}px"
-        style:padding-left="{textStart(row)}px"
-        style:background={isSelected ? tint(row.graph.color) : undefined}
-        style:--flash={tint(row.graph.color)}
-        onclick={() => onSelect(row.id)}
-        onkeydown={() => {}}
-      >
-        <span class="summary">{row.summary}</span>
-        <span class="meta">
-          {#each row.labels as label (label.kind + label.name)}
-            {#if label.kind === "tag"}
-              <span class="pill tag">
-                <svg class="icon tiny" viewBox="0 0 16 16"><path d="M2.5 2.5h5l6 6-5 5-6-6z" /><circle cx="5.5" cy="5.5" r="0.8" /></svg>
-                {label.name}
-              </span>
-            {:else if label.kind === "remote"}
-              <span class="pill" style:color={plate(label.color)} style:border-color="color-mix(in srgb, {lane(label.color)} 40%, transparent)">{label.name}</span>
-            {:else}
-              <span class="pill" class:head={label.head} style:color={plate(label.color)} style:background={tint(label.color, "label")}>{label.name}</span>
-            {/if}
-          {/each}
-          <span class="byline">{row.authorName} · {relativeTime(row.time)}</span>
-        </span>
-      </div>
-    {/each}
-
-    <svg class="lines" width="100%" height={PAD_TOP * 2 + rows.length * ROW} aria-hidden="true">
-      {#if history.trunkTipRow && history.trunkTipRow > first - OVERSCAN}
-        <!-- The trunk's newest commit is below newer work on other branches: a gray lead-in fills its column. -->
-        <path d="M{x(0)} 0V{y(history.trunkTipRow) - 10}" stroke="var(--lead-in)" stroke-width="2" stroke-dasharray="2 5" stroke-linecap="round" fill="none" />
-      {/if}
-      {#each drawn as { row, index } (row.id)}
-        {#each row.graph.segments as seg, k (k)}
-          <path
-            d={segmentPath(index, seg.from, seg.to)}
-            stroke={lane(seg.color)}
-            stroke-width={seg.color === 0 && seg.from === 0 && seg.to === 0 ? 4 : 2}
-            stroke-dasharray={seg.dashed ? "2 5" : undefined}
-            stroke-linecap="round"
-            fill="none"
-          />
-        {/each}
+<div class="wrap">
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <div
+    class="viewport"
+    bind:this={viewport}
+    bind:clientHeight={height}
+    onscroll={() => (scrollTop = viewport?.scrollTop ?? 0)}
+    onkeydown={onKey}
+    tabindex="0"
+    role="listbox"
+    aria-label="Commits"
+  >
+    <div class="canvas" style:height="{PAD_TOP * 2 + rows.length * ROW}px">
+      {#each visible as { row, index } (row.id)}
+        {@const isSelected = row.id === selected}
+        <div
+          class="row"
+          class:flash={flash === row.id}
+          role="option"
+          aria-selected={isSelected}
+          tabindex="-1"
+          style:top="{PAD_TOP + index * ROW}px"
+          style:padding-left="{textStart(row)}px"
+          style:background={isSelected ? tint(row.graph.color) : undefined}
+          style:--flash={tint(row.graph.color)}
+          onclick={() => onSelect(row.id)}
+          onkeydown={() => {}}
+        >
+          <span class="summary" class:selected={isSelected}>{row.summary}</span>
+          <span class="meta">
+            {#each row.labels as label (label.kind + label.name)}
+              {#if label.kind === "tag"}
+                <span class="pill tag">
+                  <svg class="icon tiny" viewBox="0 0 16 16"><path d="M2.5 2.5h5l6 6-5 5-6-6z" /><circle cx="5.5" cy="5.5" r="0.8" /></svg>
+                  {label.name}
+                </span>
+              {:else if label.kind === "remote"}
+                <span class="pill" style:color={plate(label.color)} style:border-color="color-mix(in srgb, {lane(label.color)} 40%, transparent)">{label.name}</span>
+              {:else}
+                <span class="pill" class:head={label.head} style:color={plate(label.color)} style:background={tint(label.color, "label")}>{label.name}</span>
+              {/if}
+            {/each}
+            <span class="byline">{row.authorName} · {relativeTime(row.time)}</span>
+          </span>
+        </div>
       {/each}
-    </svg>
 
-    {#each visible as { row, index } (row.id)}
-      {@const d = dot(row, index)}
-      <span class="halo" style:left="{d.left}px" style:top="{d.top}px" style:width="{d.outer}px" style:height="{d.outer}px" style:background={d.halo}>
-        <span class="gap" style:width="{d.size + 4}px" style:height="{d.size + 4}px" style:background={d.gap}>
-          <span class="dot" style:width="{d.size}px" style:height="{d.size}px" style:background={d.fill} style:border-color={d.ring}>
-            {#if d.hole}<span class="hole"></span>{/if}
+      <svg class="lines" width="100%" height={PAD_TOP * 2 + rows.length * ROW} aria-hidden="true">
+        {#if history.trunkTipRow && history.trunkTipRow > first - OVERSCAN}
+          <!-- The trunk's newest commit is below newer work on other branches: a gray lead-in fills its column. -->
+          <path d="M{x(0)} 0V{y(history.trunkTipRow) - 10}" stroke="var(--lead-in)" stroke-width="2" stroke-dasharray="2 5" stroke-linecap="round" fill="none" />
+        {/if}
+        {#each drawn as { row, index } (row.id)}
+          {#each row.graph.segments as seg, k (k)}
+            <path
+              d={segmentPath(index, seg.from, seg.to)}
+              stroke={lane(seg.color)}
+              stroke-width={seg.color === 0 && seg.from === 0 && seg.to === 0 ? 4 : 2}
+              stroke-dasharray={seg.dashed ? "2 5" : undefined}
+              stroke-linecap="round"
+              fill="none"
+            />
+          {/each}
+        {/each}
+      </svg>
+
+      {#each visible as { row, index } (row.id)}
+        {@const d = dot(row, index)}
+        <span class="halo" style:left="{d.left}px" style:top="{d.top}px" style:width="{d.outer}px" style:height="{d.outer}px" style:background={d.halo}>
+          <span class="gap" style:width="{d.size + 4}px" style:height="{d.size + 4}px" style:background={d.gap}>
+            <span class="dot" style:width="{d.size}px" style:height="{d.size}px" style:background={d.fill} style:border-color={d.ring}>
+              {#if d.hole}<span class="hole"></span>{/if}
+            </span>
           </span>
         </span>
-      </span>
-    {/each}
+      {/each}
+    </div>
   </div>
+
+  {#if scrollTop > ROW * 3}
+    <button class="top" onclick={toTop} aria-label="Go to the newest commit" title="Go to the newest commit (Home)">
+      <svg class="icon" viewBox="0 0 16 16"><path d="M8 13V3.5M3.5 8 8 3.5 12.5 8" /></svg>
+      <span>Top</span>
+    </button>
+  {/if}
 </div>
 
 <style>
+  .wrap {
+    position: relative;
+    flex-grow: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .top {
+    position: absolute;
+    right: 16px;
+    bottom: 16px;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 32px;
+    padding: 0 12px 0 10px;
+    border-radius: 16px;
+    background: var(--glass);
+    border: 0.5px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px);
+    color: var(--icon);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .top span {
+    color: var(--text);
+  }
   .viewport {
     position: relative;
     flex-grow: 1;
@@ -206,6 +256,9 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .summary.selected {
+    font-weight: 600;
   }
   .meta {
     display: flex;
