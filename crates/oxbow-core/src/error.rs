@@ -20,6 +20,8 @@ pub enum Error {
         code: Option<i32>,
         output: String,
     },
+    #[error("stopped")]
+    Cancelled,
 }
 
 impl Error {
