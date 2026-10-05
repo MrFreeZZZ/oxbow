@@ -22,26 +22,23 @@
   --red: #c4282c;
   --lead-in: #bcc0c7;
 
-  /* Lanes: 0 is the trunk (Steel), 1..8 the muted branch palette. Yellow is reserved for tags. */
-  /* Branch palette 1-7: no red (reads as removed lines) and no yellow (tags only). 8 is the stash grey. */
+  /* Branch palette 1-6: no red or pink (read as removed lines) and no yellow (tags only). 7 is the stash grey. */
   --lane-0: #4a6680;
   --lane-1: #a77bc9;
   --lane-2: #8c8fd0;
   --lane-3: #a07c64;
   --lane-4: #d99a62;
-  --lane-5: #d58aa5;
-  --lane-6: #6aae80;
-  --lane-7: #5baeb6;
-  --lane-8: #9b9ea4;
+  --lane-5: #6aae80;
+  --lane-6: #5baeb6;
+  --lane-7: #9b9ea4;
   --plate-0: #3b5266;
   --plate-1: #7e28ae;
   --plate-2: #3f3dae;
   --plate-3: #6b4229;
   --plate-4: #9a4700;
-  --plate-5: #b22a5e;
-  --plate-6: #1f7a3a;
-  --plate-7: #00727b;
-  --plate-8: #5c6168;
+  --plate-5: #1f7a3a;
+  --plate-6: #00727b;
+  --plate-7: #5c6168;
   --tint-soft: 10%;
   --tint-label: 12%;
   --tint-bar: 16%;
@@ -87,19 +84,17 @@
     --lane-2: #9a9ad8;
     --lane-3: #b79c88;
     --lane-4: #d9965a;
-    --lane-5: #db8aa6;
-    --lane-6: #73be8c;
-    --lane-7: #69b9c4;
-    --lane-8: #8f949b;
+    --lane-5: #73be8c;
+    --lane-6: #69b9c4;
+    --lane-7: #8f949b;
     --plate-0: #94b2cc;
     --plate-1: #d58cf7;
     --plate-2: #b3b1ff;
     --plate-3: #e0b898;
     --plate-4: #ffb340;
-    --plate-5: #ff8fb3;
-    --plate-6: #7edc9c;
-    --plate-7: #6fd8e8;
-    --plate-8: #bcc1c8;
+    --plate-5: #7edc9c;
+    --plate-6: #6fd8e8;
+    --plate-7: #bcc1c8;
     --tint-soft: 19%;
     --tint-label: 18%;
     --tint-bar: 26%;
