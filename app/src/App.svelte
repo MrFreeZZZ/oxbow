@@ -5,6 +5,8 @@
   import Sidebar from "./lib/Sidebar.svelte";
   import HistoryList from "./lib/HistoryList.svelte";
   import CommitPanel from "./lib/CommitPanel.svelte";
+  import ChangesPanel from "./lib/ChangesPanel.svelte";
+  import ConfirmSheet from "./lib/ConfirmSheet.svelte";
   import Welcome from "./lib/Welcome.svelte";
 
   let repo = $state<RepoSummary | null>(null);
@@ -14,14 +16,20 @@
   let loading = $state(false);
   let list = $state<HistoryList>();
   let panelWidth = $state(640);
+  /** Goes up on every reload of the history, so the changes panel reloads too. */
+  let version = $state(0);
 
   const branchCount = $derived(history ? history.refs.filter((r) => r.kind === "local").length : 0);
   const rowsById = $derived(new Map(history?.rows.map((r) => [r.id, r]) ?? []));
   const selectedRow = $derived(selected ? (rowsById.get(selected) ?? null) : null);
+  const headRow = $derived(history?.head.commit ? (rowsById.get(history.head.commit) ?? null) : null);
+  // The line the next commit goes on: the uncommitted row's, or HEAD's.
+  const headColor = $derived(history?.rows.find((r) => r.worktree)?.graph.color ?? headRow?.graph.color ?? 0);
   // Children of every commit, newest first (rows are already newest first).
   const childrenOf = $derived.by(() => {
     const map = new Map<string, string[]>();
     for (const r of history?.rows ?? []) {
+      if (r.worktree) continue;
       for (const parent of r.parents) {
         const list = map.get(parent);
         if (list) list.push(r.id);
@@ -44,6 +52,19 @@
       error = String(err);
     } finally {
       loading = false;
+    }
+  }
+
+  /** Reload after the repository changed, here or outside the app, keeping the selection when it still exists. */
+  async function refresh() {
+    if (!repo || loading) return;
+    try {
+      const next = await api.history();
+      history = next;
+      version++;
+      if (!selected || !next.rows.some((r) => r.id === selected)) selected = next.head.commit ?? next.rows[0]?.id ?? null;
+    } catch (err) {
+      error = String(err);
     }
   }
 
@@ -84,6 +105,8 @@
   });
 </script>
 
+<svelte:window onfocus={refresh} />
+
 {#if !repo || !history}
   <Welcome {loading} {error} onOpen={chooseRepo} />
 {:else}
@@ -101,7 +124,7 @@
         </span>
         <span class="spacer" data-tauri-drag-region></span>
         {#if error}<span class="error" role="alert">{error}</span>{/if}
-        <button class="capsule" onclick={() => repo && load(repo.path)} aria-label="Reload history" title="Reload">
+        <button class="capsule" onclick={refresh} aria-label="Reload history" title="Reload">
           <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5" /></svg>
         </button>
       </header>
@@ -112,13 +135,16 @@
         </section>
         <aside class="panel" style:width="{panelWidth}px" aria-label="Commit details">
           <button class="grip" onpointerdown={startResize} aria-label="Resize commit details" title="Drag to resize"></button>
-          {#if selectedRow}
+          {#if selectedRow?.worktree}
+            <ChangesPanel branch={history.head.branch} color={selectedRow.graph.color} head={headRow} {version} onChanged={refresh} />
+          {:else if selectedRow}
             <CommitPanel row={selectedRow} childIds={childrenOf.get(selectedRow.id) ?? []} lookup={(id) => rowsById.get(id)} onSelect={select} />
           {/if}
         </aside>
       </div>
     </div>
   </div>
+  <ConfirmSheet repo={repo.name} branch={history.head.branch} color={headColor} />
 {/if}
 
 <style>

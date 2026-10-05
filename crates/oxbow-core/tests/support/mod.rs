@@ -21,6 +21,9 @@ impl Fixture {
             clock: 0,
         };
         fixture.git(&["init", "-q", "-b", "main"]);
+        // Commits made through `Repo` use the repository's own identity, like a configured machine.
+        fixture.git(&["config", "user.name", "Alexander"]);
+        fixture.git(&["config", "user.email", "alexander@example.com"]);
         fixture
     }
 

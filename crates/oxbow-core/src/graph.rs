@@ -41,8 +41,11 @@ pub struct GraphCommit {
     pub merged_name: Option<String>,
     /// Whether this commit exists only locally (not reachable from any remote-tracking branch).
     pub unpushed: bool,
-    /// A stash entry: drawn in the neutral stash color, its line runs to the commit it was made on.
-    pub stash: bool,
+    /// A row on a line of its own that runs to the commit it was made on, without taking over
+    /// that commit's branch line: a stash entry or the uncommitted changes.
+    pub side: bool,
+    /// Fixed color for the row, instead of one derived from a branch name.
+    pub color: Option<u8>,
 }
 
 /// The layout of one row.
@@ -92,8 +95,8 @@ struct Lane {
     origin: Option<u16>,
     /// Branch name of the commits on this line.
     branch: Option<String>,
-    /// The line of a stash: the commit it leads to keeps its own branch color and name.
-    stash: bool,
+    /// A side line (stash, uncommitted changes): the commit it leads to keeps its own branch color and name.
+    side: bool,
 }
 
 /// Stable color for a branch name, never the trunk color.
@@ -121,12 +124,12 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
             .filter(|&c| lanes[c].as_ref().is_some_and(|l| l.target == Some(row)))
             .collect();
 
-        let is_stash = |c: usize| lanes[c].as_ref().is_some_and(|l| l.stash);
+        let is_side = |c: usize| lanes[c].as_ref().is_some_and(|l| l.side);
         let column = if commit.trunk {
             0
         } else if let Some(&col) = waiting
             .iter()
-            .find(|&&c| c != 0 && !is_stash(c))
+            .find(|&&c| c != 0 && !is_side(c))
             .or_else(|| waiting.iter().find(|&&c| c != 0))
         {
             col
@@ -134,13 +137,13 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
             free_column(&lanes, None)
         };
         ensure_len(&mut lanes, column);
-        // The commit continues the line in its column, unless that line is a stash's.
-        let continues = waiting.contains(&column) && !lanes[column].as_ref().is_some_and(|l| l.stash);
+        // The commit continues the line in its column, unless that is a side line.
+        let continues = waiting.contains(&column) && !lanes[column].as_ref().is_some_and(|l| l.side);
 
         let color = if commit.trunk {
             TRUNK_COLOR
-        } else if commit.stash {
-            STASH_COLOR
+        } else if let Some(color) = commit.color {
+            color
         } else if continues {
             lanes[column].as_ref().map_or(TRUNK_COLOR, |l| l.color)
         } else {
@@ -151,7 +154,7 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
         };
 
         // A branch tip further down a line (a stacked branch) names the commits below it.
-        let branch = if commit.trunk || commit.stash {
+        let branch = if commit.trunk || commit.side {
             None
         } else if continues {
             commit
@@ -168,7 +171,7 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
             let lane = lanes[col].take().expect("waiting lane exists");
             if col != column
                 && lane.first_parent
-                && !lane.stash
+                && !lane.side
                 && lane.color != color
                 && !fork_colors.contains(&lane.color)
             {
@@ -188,7 +191,7 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
                     first_parent: true,
                     origin: None,
                     branch: branch.clone(),
-                    stash: commit.stash,
+                    side: commit.side,
                 });
                 continue;
             }
@@ -242,7 +245,7 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
                 first_parent: false,
                 origin: Some(column as u16),
                 branch: merged_branch,
-                stash: false,
+                side: false,
             });
         }
 
@@ -399,7 +402,8 @@ mod tests {
     fn stash_line_leaves_the_branch_below_it_alone() {
         // 0 stash -> 1 (feature tip) -> 2 (trunk root)
         let stash = GraphCommit {
-            stash: true,
+            side: true,
+            color: Some(STASH_COLOR),
             unpushed: true,
             ..commit(&[1], false)
         };

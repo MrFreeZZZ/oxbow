@@ -56,6 +56,21 @@ pub struct HistoryRow {
     /// The commit is not on any remote-tracking branch yet.
     pub unpushed: bool,
     pub graph: RowLayout,
+    /// Set on the row of uncommitted changes, whose `id` is [`WORKTREE_ID`].
+    pub worktree: Option<WorktreeSummary>,
+}
+
+/// Id of the history row that stands for the uncommitted changes.
+pub const WORKTREE_ID: &str = "worktree";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeSummary {
+    /// Files with any change.
+    pub files: usize,
+    pub staged: usize,
+    pub unstaged: usize,
+    pub conflicted: usize,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -208,7 +223,8 @@ impl Repo {
                     .then(|| merged_branch(&summary, &remotes))
                     .flatten(),
                 unpushed: unpushed.contains(&node.id) || stash_ids.contains(&node.id),
-                stash: stash_ids.contains(&node.id),
+                side: stash_ids.contains(&node.id),
+                color: stash_ids.contains(&node.id).then_some(graph::STASH_COLOR),
             });
             details.push((
                 summary,
@@ -218,18 +234,65 @@ impl Repo {
             ));
         }
 
-        let layout = graph::layout(&graph_input);
+        let mut layout = graph::layout(&graph_input);
+
+        // Uncommitted changes get a row of their own on top, on a side line down to HEAD in the
+        // color of HEAD's line. A failing `git status` only hides the row.
+        let changes = self.working_tree().ok().filter(|tree| !tree.is_empty());
+        let head_id = head
+            .commit
+            .as_deref()
+            .and_then(|h| ObjectId::from_hex(h.as_bytes()).ok());
+        let head_row = head_id.and_then(|id| row_of.get(&id).copied());
+        let mut worktree_row = None;
+        if let Some(tree) = &changes {
+            let color = match head_row {
+                Some(r) => layout[r].color,
+                None => head.branch.as_deref().map_or(graph::TRUNK_COLOR, graph::color_for_name),
+            };
+            let mut shifted = Vec::with_capacity(graph_input.len() + 1);
+            shifted.push(GraphCommit {
+                parents: vec![head_row.map(|r| r + 1)],
+                side: true,
+                color: Some(color),
+                unpushed: true,
+                ..Default::default()
+            });
+            shifted.extend(graph_input.into_iter().map(|mut c| {
+                c.parents = c.parents.into_iter().map(|p| p.map(|r| r + 1)).collect();
+                c
+            }));
+            let mut all = graph::layout(&shifted);
+            let mut wip = all.remove(0);
+            wip.branch = head.branch.clone();
+            layout = all;
+            worktree_row = Some(HistoryRow {
+                id: WORKTREE_ID.to_owned(),
+                summary: "Uncommitted changes".to_owned(),
+                author_name: String::new(),
+                author_email: String::new(),
+                time: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs() as i64),
+                parents: head_id.iter().map(ToString::to_string).collect(),
+                labels: Vec::new(),
+                unpushed: true,
+                graph: wip,
+                worktree: Some(WorktreeSummary {
+                    files: tree.file_count(),
+                    staged: tree.staged.len(),
+                    unstaged: tree.unstaged.len(),
+                    conflicted: tree.conflicted.len(),
+                }),
+            });
+        }
         // Trunk commits belong to the trunk branch, named without its remote (`origin/main` -> `main`).
         let trunk_name = trunk_ref.map(|r| match r.kind {
             RefKind::Remote => strip_remote(&r.name, &remotes).to_owned(),
             _ => r.name.clone(),
         });
-        let rows = nodes
-            .iter()
-            .zip(details)
-            .zip(layout)
-            .enumerate()
-            .map(|(row, ((node, (summary, author_name, author_email, time)), graph))| {
+        let rows = nodes.iter().zip(details).zip(layout).enumerate().map(
+            |(row, ((node, (summary, author_name, author_email, time)), graph))| {
                 let mut labels = labels.remove(&node.id).unwrap_or_default();
                 // Labels take the color of the line they sit on.
                 for label in &mut labels {
@@ -249,9 +312,12 @@ impl Repo {
                     labels,
                     unpushed: unpushed.contains(&node.id) || stash_ids.contains(&node.id),
                     graph,
+                    worktree: None,
                 }
-            })
-            .collect();
+            },
+        );
+        let rows: Vec<HistoryRow> = worktree_row.into_iter().chain(rows).collect();
+        let trunk_tip_row = trunk_tip_row.map(|r| r + usize::from(changes.is_some()));
 
         Ok(History {
             head,

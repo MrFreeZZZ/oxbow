@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { DiffLine, FileDiff } from "./types";
+  import type { Snippet } from "svelte";
+  import type { DiffLine, FileDiff, Hunk } from "./types";
   import { plate, splitPath, tint } from "./format";
 
   let {
@@ -8,7 +9,16 @@
     whole,
     onToggleWhole,
     lineBudget = 4000,
-  }: { diffs: FileDiff[]; color: number; whole: boolean; onToggleWhole: () => void; lineBudget?: number } = $props();
+    hunkBar,
+  }: {
+    diffs: FileDiff[];
+    color: number;
+    whole: boolean;
+    onToggleWhole: () => void;
+    lineBudget?: number;
+    /** Actions over each hunk, for the working copy. */
+    hunkBar?: Snippet<[FileDiff, Hunk]>;
+  } = $props();
 
   let showAll = $state(false);
 
@@ -31,6 +41,8 @@
     modified: "Modified",
     renamed: "Renamed",
     copied: "Copied",
+    untracked: "New",
+    conflicted: "Conflicted",
   };
 
   /** Rounded corners for the first and last line of a run of added or removed lines. */
@@ -89,6 +101,7 @@
           {#if before > 0 && !whole}
             <button class="fold" onclick={onToggleWhole} title="Show whole file">⋯ {before} unchanged {before === 1 ? "line" : "lines"}</button>
           {/if}
+          {#if hunkBar}{@render hunkBar(diff, hunk)}{/if}
           {#each hunk.lines as line, i (i)}
             <div class="line {line.kind}" style:border-radius={radius(hunk.lines, i)} style:margin-top="{gap(hunk.lines, i)}px">
               <span class="no">{line.oldLine ?? ""}</span>

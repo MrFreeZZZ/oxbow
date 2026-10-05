@@ -48,6 +48,17 @@ export interface HistoryRow {
   labels: Label[];
   unpushed: boolean;
   graph: RowLayout;
+  /** Set on the row of uncommitted changes, whose id is WORKTREE_ID. */
+  worktree: WorktreeSummary | null;
+}
+
+export const WORKTREE_ID = "worktree";
+
+export interface WorktreeSummary {
+  files: number;
+  staged: number;
+  unstaged: number;
+  conflicted: number;
 }
 
 export interface StashInfo {
@@ -75,7 +86,7 @@ export interface Person {
   offset: number;
 }
 
-export type FileStatus = "added" | "deleted" | "modified" | "renamed" | "copied";
+export type FileStatus = "added" | "deleted" | "modified" | "renamed" | "copied" | "untracked" | "conflicted";
 
 export interface FileChange {
   path: string;
@@ -112,6 +123,8 @@ export interface DiffLine {
 }
 
 export interface Hunk {
+  /** The `@@ -a,b +c,d @@` line; it names the hunk when it is staged on its own. */
+  header: string;
   oldStart: number;
   oldLines: number;
   newStart: number;
@@ -128,4 +141,32 @@ export interface FileDiff {
 export interface RepoSummary {
   name: string;
   path: string;
+}
+
+export interface WorkingTree {
+  staged: FileChange[];
+  unstaged: FileChange[];
+  conflicted: FileChange[];
+}
+
+export type Side = "staged" | "unstaged";
+
+export type Action =
+  | { kind: "stage"; paths: string[] }
+  | { kind: "unstage"; paths: string[] }
+  | { kind: "discard"; paths: string[] }
+  | { kind: "stageHunk"; path: string; header: string }
+  | { kind: "unstageHunk"; path: string; header: string }
+  | { kind: "discardHunk"; path: string; header: string }
+  | { kind: "commit"; message: string; amend: boolean };
+
+export interface GitCommand {
+  args: string[];
+  comment: string | null;
+  /** The command as typed in a shell. */
+  display: string;
+}
+
+export interface Plan {
+  commands: GitCommand[];
 }

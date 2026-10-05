@@ -45,6 +45,10 @@ pub enum FileStatus {
     Modified,
     Renamed,
     Copied,
+    /// A new file git does not track yet (working copy only).
+    Untracked,
+    /// A file with unresolved merge conflicts (working copy only).
+    Conflicted,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,6 +75,8 @@ pub struct FileDiff {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Hunk {
+    /// The `@@ -a,b +c,d @@` line, which also names the hunk when it is staged on its own.
+    pub header: String,
     pub old_start: u32,
     pub old_lines: u32,
     pub new_start: u32,
@@ -411,6 +417,7 @@ pub fn diff_text(before: &str, after: &str, context: DiffContext, with_words: bo
         }
         push_context(&mut lines, &mut o, &mut n, tail);
         hunks.push(Hunk {
+            header: hunk_header(old_start + 1, o - old_start, new_start + 1, n - new_start),
             old_start: old_start + 1,
             old_lines: o - old_start,
             new_start: new_start + 1,
@@ -421,8 +428,22 @@ pub fn diff_text(before: &str, after: &str, context: DiffContext, with_words: bo
     hunks
 }
 
+/// The header git writes for a hunk: a count of 1 is left out, and an empty side starts one line earlier.
+fn hunk_header(old_start: u32, old_lines: u32, new_start: u32, new_lines: u32) -> String {
+    let range = |start: u32, lines: u32| match lines {
+        0 => format!("{},0", start - 1),
+        1 => start.to_string(),
+        _ => format!("{start},{lines}"),
+    };
+    format!(
+        "@@ -{} +{} @@",
+        range(old_start, old_lines),
+        range(new_start, new_lines)
+    )
+}
+
 /// Split a removed/added line pair into unchanged and changed word runs.
-fn word_diff(before: &str, after: &str) -> (Vec<WordPart>, Vec<WordPart>) {
+pub(crate) fn word_diff(before: &str, after: &str) -> (Vec<WordPart>, Vec<WordPart>) {
     let input = InternedInput::new(
         gix::diff::blob::sources::words(before),
         gix::diff::blob::sources::words(after),
@@ -453,6 +474,13 @@ fn word_diff(before: &str, after: &str) -> (Vec<WordPart>, Vec<WordPart>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hunk_headers_are_written_like_git_writes_them() {
+        assert_eq!(hunk_header(3, 7, 3, 9), "@@ -3,7 +3,9 @@");
+        assert_eq!(hunk_header(5, 1, 5, 1), "@@ -5 +5 @@");
+        assert_eq!(hunk_header(1, 0, 1, 4), "@@ -0,0 +1,4 @@");
+    }
 
     fn kinds(hunk: &Hunk) -> String {
         hunk.lines
