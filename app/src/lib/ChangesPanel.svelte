@@ -95,7 +95,9 @@
       (d) => {
         if (pick === current && whole === wholeFile) diff = d;
       },
-      (err) => (error = String(err)),
+      (err) => {
+        if (pick === current) error = String(err);
+      },
     );
   });
 
