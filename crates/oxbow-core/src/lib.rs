@@ -17,6 +17,6 @@ pub use commit::{
     CommitDetail, DiffContext, DiffLine, FileChange, FileDiff, FileStatus, Hunk, LineKind, Person, WordPart,
 };
 pub use error::{Error, Result};
-pub use history::{History, HistoryOptions, HistoryRow, Label};
+pub use history::{History, HistoryOptions, HistoryRow, Label, WORKTREE_ID, WorktreeSummary};
 pub use repo::{HeadInfo, RefInfo, RefKind, Repo, StashInfo};
 pub use worktree::{Action, Plan, Side, WorkingTree};

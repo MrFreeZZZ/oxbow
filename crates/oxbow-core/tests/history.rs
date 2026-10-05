@@ -204,3 +204,40 @@ fn stashes_hang_off_the_commit_they_were_made_on() {
     assert_eq!(older.parents, [root]);
     assert_eq!(history.rows.len(), 4);
 }
+
+#[test]
+fn uncommitted_changes_sit_on_top_in_the_color_of_head() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "1\n", "Root");
+    fx.git(&["checkout", "-q", "-b", "feature/x"]);
+    fx.commit("b.txt", "1\n", "Feature work");
+    fx.write("b.txt", "2\n");
+    fx.write("c.txt", "new\n");
+    fx.git(&["add", "c.txt"]);
+
+    let history = Repo::open(fx.path())
+        .unwrap()
+        .history(&HistoryOptions::default())
+        .unwrap();
+    let wip = &history.rows[0];
+    assert_eq!(wip.id, oxbow_core::WORKTREE_ID);
+    let summary = wip.worktree.as_ref().unwrap();
+    assert_eq!((summary.files, summary.staged, summary.unstaged), (2, 1, 1));
+    let head = &history.rows[1];
+    assert_eq!(head.summary, "Feature work");
+    assert_eq!(wip.parents, std::slice::from_ref(&head.id));
+    // Same color as HEAD's line, which keeps its own color and branch.
+    assert_eq!(wip.graph.color, color_for_name("feature/x"));
+    assert_eq!(head.graph.color, color_for_name("feature/x"));
+    assert_eq!(head.graph.branch.as_deref(), Some("feature/x"));
+    assert!(wip.graph.segments[0].dashed);
+    assert_eq!(history.trunk_tip_row, Some(2));
+
+    // A clean working copy has no such row.
+    fx.git(&["stash", "-q"]);
+    let history = Repo::open(fx.path())
+        .unwrap()
+        .history(&HistoryOptions::default())
+        .unwrap();
+    assert!(history.rows.iter().all(|r| r.worktree.is_none()));
+}
