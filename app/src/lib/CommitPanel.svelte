@@ -34,6 +34,7 @@
   const color = $derived(row.graph.color);
   // A stash has no branch line of its own; its capsule names the stash entry.
   const branchName = $derived(row.graph.branch ?? row.labels.find((l) => l.kind === "stash")?.name ?? null);
+  const tags = $derived(row.labels.filter((l) => l.kind === "tag").map((l) => l.name));
   const totals = $derived(
     detail?.files.reduce((t, f) => ({ add: t.add + f.additions, del: t.del + f.deletions }), { add: 0, del: 0 }) ?? { add: 0, del: 0 },
   );
@@ -84,6 +85,12 @@
             {branchName}
           </span>
         {/if}
+        {#each tags as name (name)}
+          <span class="branch tag" title="Tag on this commit">
+            <svg class="icon tiny" viewBox="0 0 16 16"><path d="M2.5 2.5h5l6 6-5 5-6-6z" /><circle cx="5.5" cy="5.5" r="0.8" /></svg>
+            {name}
+          </span>
+        {/each}
       </h1>
       {#if detail?.body}<p class="body selectable">{detail.body}</p>{/if}
     </div>
@@ -188,6 +195,12 @@
     overflow: hidden;
     text-overflow: ellipsis;
     user-select: none;
+  }
+  /* Muted yellow with a brighter outline, as in the history rows: yellow is for tags only. */
+  .branch.tag {
+    background: var(--tag-bg);
+    box-shadow: inset 0 0 0 1px var(--tag-border);
+    color: var(--tag-fg);
   }
   .tiny {
     width: 12px;
