@@ -7,7 +7,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::cli::GitCommand;
+use std::sync::atomic::AtomicBool;
+
+use crate::cli::{GitCommand, OutputLine};
 use crate::commit::{DiffLine, FileChange, FileDiff, FileStatus, Hunk, LineKind, word_diff};
 use crate::error::{Error, Result};
 use crate::repo::Repo;
@@ -89,6 +91,50 @@ pub enum Action {
         message: String,
         amend: bool,
     },
+    /// Download new commits, branches and tags from `remote`, or from every remote.
+    Fetch {
+        remote: Option<String>,
+    },
+    /// Bring the new commits of `remote`/`branch` into the checked-out branch, replaying local
+    /// commits on top of them.
+    Pull {
+        remote: String,
+        branch: String,
+    },
+    /// Send the local `branch` to `remote`, where it is called `upstream`.
+    Push {
+        remote: String,
+        branch: String,
+        upstream: String,
+        /// Remember `remote`/`upstream` as the branch's upstream (publishing a new branch).
+        set_upstream: bool,
+        /// Overwrite the remote branch even when it has commits the local one does not.
+        force: bool,
+        /// With `force`: only when the remote branch still points at this commit.
+        lease: Option<String>,
+        /// Skip the pre-push hook.
+        no_verify: bool,
+    },
+    /// Pull with rebase, then push: the way out of a push rejected for new remote commits.
+    PullAndPush {
+        remote: String,
+        branch: String,
+        upstream: String,
+        /// Skip the pre-push hook, when the push being retried skipped it too.
+        no_verify: bool,
+    },
+    /// Give up a pull that stopped on conflicts, back to where the branch was.
+    AbortRebase,
+}
+
+/// What happens while an action runs, for the live terminal in the sheet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ActionEvent {
+    /// A command starts; `display` is how it is typed in a shell.
+    Command { display: String },
+    /// The running command printed a line.
+    Line(OutputLine),
 }
 
 /// The commands an action runs, for the confirmation sheet.
@@ -233,12 +279,95 @@ impl Repo {
                     cmd
                 }]
             }
+            Action::Fetch { remote: Some(remote) } => vec![
+                GitCommand::new(["fetch", "--prune", remote])
+                    .comment(format!("--prune: drop {remote}/* branches deleted on the remote"))
+                    .with_progress(),
+            ],
+            Action::Fetch { remote: None } => vec![
+                GitCommand::new(["fetch", "--prune", "--all"])
+                    .comment("--all: every remote, --prune: drop branches deleted there")
+                    .with_progress(),
+            ],
+            Action::Pull { remote, branch } => vec![pull(remote, branch)],
+            Action::Push {
+                remote,
+                branch,
+                upstream,
+                set_upstream,
+                force,
+                lease,
+                no_verify,
+            } => {
+                let mut args = vec!["push".to_owned()];
+                let mut notes = Vec::new();
+                if *no_verify {
+                    args.push("--no-verify".to_owned());
+                    notes.push("--no-verify: skip the pre-push hook this one time".to_owned());
+                }
+                if *set_upstream {
+                    args.push("-u".to_owned());
+                    notes.push(format!("-u: remember {remote}/{upstream} as the upstream"));
+                }
+                match (force, lease) {
+                    (true, Some(lease)) => {
+                        args.push(format!("--force-with-lease={upstream}:{lease}"));
+                        notes.push(format!(
+                            "--force-with-lease: overwrite only if {remote}/{upstream} is still {}",
+                            &lease[..lease.len().min(7)]
+                        ));
+                    }
+                    (true, None) => {
+                        args.push("--force".to_owned());
+                        notes.push("--force: overwrite whatever the remote has".to_owned());
+                    }
+                    _ => {}
+                }
+                args.push(remote.clone());
+                args.push(refspec(branch, upstream));
+                if notes.is_empty() {
+                    notes.push(format!("sends the commits {remote}/{upstream} does not have yet"));
+                }
+                vec![GitCommand::new(args).comment(notes.join("; ")).with_progress()]
+            }
+            Action::PullAndPush {
+                remote,
+                branch,
+                upstream,
+                no_verify,
+            } => {
+                let mut push = vec!["push".to_owned()];
+                if *no_verify {
+                    push.push("--no-verify".to_owned());
+                }
+                push.extend([remote.clone(), refspec(branch, upstream)]);
+                vec![
+                    pull(remote, upstream),
+                    GitCommand::new(push)
+                        .comment("then send your commits on top")
+                        .with_progress(),
+                ]
+            }
+            Action::AbortRebase => {
+                vec![GitCommand::new(["rebase", "--abort"]).comment("back to where the branch was before the pull")]
+            }
         };
         Ok(Plan { commands })
     }
 
     /// Run `action`. Returns what the last command printed.
     pub fn perform(&self, action: &Action) -> Result<String> {
+        self.perform_with(action, &mut |_| {}, &AtomicBool::new(false))
+    }
+
+    /// Run `action`, reporting each command and each line it prints to `on_event`. Setting
+    /// `cancel` stops the running command.
+    pub fn perform_with(
+        &self,
+        action: &Action,
+        on_event: &mut dyn FnMut(ActionEvent),
+        cancel: &AtomicBool,
+    ) -> Result<String> {
         if let Action::Commit { message, .. } = action
             && message.trim().is_empty()
         {
@@ -251,7 +380,10 @@ impl Repo {
             _ => {
                 let mut last = String::new();
                 for command in self.plan(action)?.commands {
-                    let out = self.run(&command)?;
+                    on_event(ActionEvent::Command {
+                        display: command.display(),
+                    });
+                    let out = self.run_streaming(&command, &mut |line| on_event(ActionEvent::Line(line)), cancel)?;
                     last = if out.stdout.trim().is_empty() {
                         out.stderr
                     } else {
@@ -263,6 +395,9 @@ impl Repo {
         };
         let patch = self.hunk_patch(path, side, header)?;
         let command = &self.plan(action)?.commands[0];
+        on_event(ActionEvent::Command {
+            display: command.display(),
+        });
         let out = self.run_with_input(command, Some(patch.as_bytes()))?;
         Ok(out.stdout)
     }
@@ -341,6 +476,21 @@ impl Side {
             Side::Staged => "staged",
             Side::Unstaged => "unstaged",
         }
+    }
+}
+
+fn pull(remote: &str, branch: &str) -> GitCommand {
+    GitCommand::new(["pull", "--rebase", "--autostash", remote, branch])
+        .comment("--rebase: no merge commit, your commits go on top; --autostash: keep uncommitted files")
+        .with_progress()
+}
+
+/// `main`, or `local:remote` when the branch has another name on the remote.
+fn refspec(branch: &str, upstream: &str) -> String {
+    if branch == upstream {
+        branch.to_owned()
+    } else {
+        format!("{branch}:{upstream}")
     }
 }
 

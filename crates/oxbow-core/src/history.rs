@@ -8,6 +8,7 @@ use serde::Serialize;
 
 use crate::error::{Error, Result};
 use crate::graph::{self, GraphCommit, RowLayout};
+use crate::remote::Tracking;
 use crate::repo::{HeadInfo, RefInfo, RefKind, Repo, StashInfo};
 
 /// Options for loading the history.
@@ -34,6 +35,10 @@ pub struct History {
     pub trunk_tip_row: Option<usize>,
     pub refs: Vec<RefInfo>,
     pub remotes: Vec<String>,
+    /// Upstream of the checked-out branch, with ahead/behind counts.
+    pub tracking: Option<Tracking>,
+    /// Remote a branch without an upstream is published to.
+    pub default_remote: Option<String>,
     /// Stash entries, newest first. Each one is also a row of the graph.
     pub stashes: Vec<StashInfo>,
     pub rows: Vec<HistoryRow>,
@@ -324,6 +329,9 @@ impl Repo {
             trunk: trunk_ref.map(|r| r.name.clone()),
             trunk_tip_row,
             refs,
+            // A failing `git for-each-ref` only hides the ahead/behind counts.
+            tracking: self.tracking().ok().flatten(),
+            default_remote: self.default_remote(),
             remotes,
             stashes,
             rows,

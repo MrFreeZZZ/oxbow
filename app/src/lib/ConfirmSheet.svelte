@@ -1,21 +1,38 @@
 <script lang="ts">
-  import { confirm, type Icon } from "./confirm.svelte";
+  import { confirm, type Icon, type Part } from "./confirm.svelte";
   import { plate, tint } from "./format";
 
   let { repo, branch, color }: { repo: string; branch: string | null; color: number } = $props();
 
   let copied = $state(false);
   let goButton = $state<HTMLButtonElement>();
+  let linesBox = $state<HTMLDivElement>();
 
   const request = $derived(confirm.request);
   const failed = $derived(confirm.phase === "failed");
   const running = $derived(confirm.phase === "running");
+  const recovery = $derived(failed ? confirm.recovery : null);
+  // What the sheet says: the request, or after a failure the way out of it.
+  const shown = $derived.by(() => {
+    if (!request) return null;
+    if (running) return { title: confirm.status, body: [] as Part[], icon: request.icon, tone: request.danger ? "err" : "" };
+    if (recovery) return { title: recovery.title, body: recovery.body, icon: recovery.icon, tone: recovery.tone };
+    if (failed) return { title: "Git stopped with an error", body: [] as Part[], icon: request.icon, tone: "err" };
+    return { title: request.title, body: request.body, icon: request.icon, tone: request.danger ? "err" : "" };
+  });
 
   const icons: Record<Icon, string> = {
     stage: "M8 12.5V4M4.5 7.5 8 4l3.5 3.5M3 1.5h10",
     unstage: "M8 3.5V12M4.5 8.5 8 12l3.5-3.5M3 14.5h10",
     discard: "M2.5 4.5h11M6 4.5V3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5M4 4.5l.7 9a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.7-9",
     commit: "M1.5 8h3.5M11 8h3.5M8 5a3 3 0 1 1 0 6 3 3 0 0 1 0-6z",
+    fetch: "M13 8a5 5 0 0 1-8.6 3.5M3 8a5 5 0 0 1 8.6-3.5M11.8 1.8v2.9H8.9M4.2 14.2v-2.9h2.9",
+    pull: "M8 2v9M4.5 7.5 8 11l3.5-3.5M3 14h10",
+    push: "M8 12V3M4.5 6.5 8 3l3.5 3.5M3 14h10",
+    warn: "M8 2 1.5 13.5h13zM8 6.5v3.5M8 12v.2",
+    key: "M10 2.5a3.5 3.5 0 1 1-2.8 5.6L2.5 12.8V14.5h2v-1.5h1.5v-1.5h1.5l1.4-1.4M11 5.5v.1",
+    offline: "M2 2l12 12M4.5 12.5a3 3 0 0 1-.4-6 4 4 0 0 1 1.3-2.4M8 3.5a4 4 0 0 1 3.8 2.5 3.2 3.2 0 0 1 1.4 5.8",
+    hook: "M5 2v6.5a3.5 3.5 0 0 0 7 0V7M10 9l2-2 2 2",
   };
 
   // Token colors of the design's terminal block.
@@ -25,6 +42,7 @@
   const SHA = "#7FD1C4";
   const STR = "#A9D59A";
   const TEXT = "#E6E6EA";
+  const OUTPUT: Record<string, string> = { out: "#C7C7CC", err: "#FF8A80", hint: "#D9B26A", ok: "#8FD19E" };
 
   /** Split a shell-quoted command into colored words. */
   function tokens(display: string) {
@@ -38,7 +56,8 @@
   }
 
   async function copy() {
-    await navigator.clipboard.writeText(confirm.commands.map((c) => c.display).join("\n")).catch(() => {});
+    const commands = failed ? confirm.recoveryCommands : confirm.commands;
+    await navigator.clipboard.writeText(commands.map((c) => c.display).join("\n")).catch(() => {});
     copied = true;
     setTimeout(() => (copied = false), 1500);
   }
@@ -47,8 +66,9 @@
     if (!request) return;
     if (event.key === "Escape") {
       event.preventDefault();
-      confirm.cancel();
-    } else if (event.key === "Enter" && !failed && !running && !(event.target instanceof HTMLButtonElement)) {
+      if (running) confirm.stop();
+      else confirm.cancel();
+    } else if (event.key === "Enter" && confirm.phase === "ask" && !(event.target instanceof HTMLButtonElement)) {
       event.preventDefault();
       confirm.go();
     }
@@ -56,66 +76,114 @@
 
   // The action button takes the focus, so Return runs it and Escape cancels.
   $effect(() => {
-    if (request && confirm.phase === "ask") requestAnimationFrame(() => goButton?.focus());
+    if (request && (confirm.phase === "ask" || recovery?.button)) requestAnimationFrame(() => goButton?.focus());
+  });
+
+  // The live output follows the newest line, as a terminal does.
+  $effect(() => {
+    confirm.lines.length;
+    confirm.recoveryCommands.length;
+    // The box is a new element after the phase changes.
+    const box = linesBox;
+    if (box) requestAnimationFrame(() => (box.scrollTop = box.scrollHeight));
   });
 </script>
 
 <svelte:window onkeydown={onKey} />
 
-{#if request}
+{#snippet prompt(display: string)}
+  <div class="cmd">
+    <span class="prompt">{repo} </span><span style:color="var(--lane-{color})">({branch ?? "HEAD"})</span><span class="prompt"> % </span>
+    {#each tokens(display) as token, k (k)}<span style:color={token.color} class:bold={token.bold}>{token.text}</span>{" "}{/each}
+  </div>
+{/snippet}
+
+{#if request && shown}
   <div class="dim">
-    <div class="sheet" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
+    <div class="sheet" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-busy={running}>
       <div class="top">
         <span
           class="tile"
-          style:background={request.danger || failed ? "var(--danger-soft)" : tint(color, "label")}
-          style:color={request.danger || failed ? "var(--red)" : plate(color)}
+          style:background={shown.tone === "err" ? "var(--danger-soft)" : shown.tone === "warn" ? "var(--orange-soft)" : tint(color, "label")}
+          style:color={shown.tone === "err" ? "var(--red)" : shown.tone === "warn" ? "var(--orange)" : plate(color)}
         >
-          <svg class="icon" viewBox="0 0 16 16"><path d={icons[request.icon]} /></svg>
+          <svg class="icon" viewBox="0 0 16 16"><path d={icons[shown.icon]} /></svg>
         </span>
         <div class="words">
-          <span class="title" id="confirm-title">{failed ? "Git stopped with an error" : request.title}</span>
-          <span class="body">
-            {#each request.body as part, i (i)}
-              {#if typeof part === "string"}{part}{:else if "branch" in part}<span class="chip" style:background={tint(part.color, "label")} style:color={plate(part.color)}>{part.branch}</span
-                >{:else if "code" in part}<span class="chip mono">{part.code}</span>{:else}<span class="quote">“{part.quote}”</span>{/if}
-            {/each}
-          </span>
+          <span class="title" id="confirm-title">{shown.title}</span>
+          {#if shown.body.length}
+            <span class="body">
+              {#each shown.body as part, i (i)}
+                {#if typeof part === "string"}{part}{:else if "branch" in part}<span class="chip" style:background={tint(part.color, "label")} style:color={plate(part.color)}>{part.branch}</span
+                  >{:else if "code" in part}<span class="chip mono">{part.code}</span>{:else}<span class="quote">“{part.quote}”</span>{/if}
+              {/each}
+            </span>
+          {/if}
         </div>
       </div>
+
+      {#if request.option && confirm.phase === "ask"}
+        <button class="option" role="checkbox" aria-checked={request.option.on} onclick={() => confirm.toggleOption()}>
+          <span class="box" class:on={request.option.on}><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" /></svg></span>
+          <span class="option-words"><span>{request.option.label}</span>{#if request.option.sub}<span class="sub">{request.option.sub}</span>{/if}</span>
+        </button>
+      {/if}
 
       <div class="term" aria-label="Git command">
         <div class="bar">
           <span class="light"></span><span class="light"></span><span class="light"></span>
           <span class="where">zsh · {repo}</span>
-          <button class="copy" onclick={copy} disabled={!confirm.commands.length}>
+          <button class="copy" onclick={copy} disabled={!(failed ? confirm.recoveryCommands : confirm.commands).length}>
             <svg class="icon" viewBox="0 0 16 16"><path d="M5.5 5.5h7v8h-7zM3.5 10.5v-8h7" /></svg>
             {copied ? "Copied" : "Copy"}
           </button>
         </div>
-        <div class="lines mono selectable">
-          {#each confirm.commands as command, i (i)}
-            {#if command.comment}<div class="comment"># {command.comment}</div>{/if}
-            <div class="cmd">
-              <span class="prompt">{repo} </span><span style:color="var(--lane-{color})">({branch ?? "HEAD"})</span><span class="prompt"> % </span>
-              {#each tokens(command.display) as token, k (k)}<span style:color={token.color} class:bold={token.bold}>{token.text}</span>{" "}{/each}
-            </div>
-          {/each}
-          {#if failed}<div class="error">{confirm.output}</div>{/if}
+        <div class="lines mono selectable" bind:this={linesBox} aria-live="polite">
+          {#if confirm.phase === "ask"}
+            {#each confirm.commands as command, i (i)}
+              {@render prompt(command.display)}
+              {#if command.comment}<div class="comment"># {command.comment}</div>{/if}
+            {/each}
+          {:else}
+            {#each confirm.lines as line, i (i)}
+              {#if line.kind === "cmd"}{@render prompt(line.text)}{:else}<div class="output" style:color={OUTPUT[line.kind]}>{line.text}</div>{/if}
+            {/each}
+            {#if recovery?.button && confirm.recoveryCommands.length}
+              <div class="comment gap"># {recovery.button.label} runs {confirm.recoveryCommands.length === 1 ? "this" : "these"}:</div>
+              {#each confirm.recoveryCommands as command, i (i)}{@render prompt(command.display)}{/each}
+            {/if}
+          {/if}
         </div>
       </div>
 
-      <div class="foot">
-        <span class="note">{failed ? "Nothing else was run. Fix the problem and try again." : running ? "Running…" : (request.note ?? "")}</span>
-        {#if failed}
-          <button class="btn" onclick={() => confirm.cancel()}>Close</button>
-        {:else}
-          <button class="btn" onclick={() => confirm.cancel()} disabled={running}>Cancel</button>
-          <button class="btn go" class:danger={request.danger} bind:this={goButton} onclick={() => confirm.go()} disabled={running}>{request.button}</button>
-        {/if}
-      </div>
+      {#if running}
+        <div class="run">
+          <span class="track"><span class="fill" class:busy={confirm.progress === null} style:width="{confirm.progress ?? 30}%"></span></span>
+          <button class="btn" onclick={() => confirm.stop()}>Stop</button>
+        </div>
+      {:else}
+        <div class="foot">
+          {#if recovery?.alt}
+            <button class="alt" class:danger={recovery.alt.danger} onclick={() => confirm.alternative()}>{recovery.alt.label}</button>
+          {/if}
+          <span class="note">{failed ? (recovery?.note ?? "Nothing else was run.") : (request.note ?? "")}</span>
+          {#if failed}
+            <button class="btn" onclick={() => confirm.cancel()}>{recovery?.close ?? "Close"}</button>
+            {#if recovery?.button}
+              <button class="btn go" class:danger={recovery.button.danger} bind:this={goButton} onclick={() => confirm.recover()}>{recovery.button.label}</button>
+            {/if}
+          {:else}
+            <button class="btn" onclick={() => confirm.cancel()}>Cancel</button>
+            <button class="btn go" class:danger={request.danger} bind:this={goButton} onclick={() => confirm.go()}>{request.button}</button>
+          {/if}
+        </div>
+      {/if}
     </div>
   </div>
+{/if}
+
+{#if confirm.toast}
+  <div class="toast" role="status">{confirm.toast}</div>
 {/if}
 
 <style>
@@ -255,11 +323,114 @@
     color: #7c8088;
     font-style: italic;
   }
-  .error {
-    color: #ff8a80;
+  .output {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    padding-top: 4px;
+    padding-left: 16px;
+  }
+  .gap {
+    padding-top: 6px;
+  }
+  .option {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding-left: 58px;
+    white-space: normal;
+  }
+  .box {
+    width: 14px;
+    height: 14px;
+    margin-top: 2px;
+    flex-shrink: 0;
+    border-radius: 4px;
+    border: 1px solid var(--text2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: transparent;
+  }
+  .box.on {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .box svg {
+    width: 10px;
+    height: 10px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .option-words {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .sub {
+    font-size: 11px;
+    color: var(--text2);
+  }
+  .run {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding-top: 2px;
+  }
+  .track {
+    flex-grow: 1;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--field);
+    overflow: hidden;
+  }
+  .fill {
+    display: block;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--accent);
+    transition: width 0.25s;
+  }
+  /* Before git reports a percent, the bar slides back and forth. */
+  .fill.busy {
+    animation: slide 1.2s ease-in-out infinite alternate;
+  }
+  @keyframes slide {
+    from {
+      transform: translateX(-60%);
+    }
+    to {
+      transform: translateX(300%);
+    }
+  }
+  .alt {
+    flex-shrink: 0;
+    height: 30px;
+    padding: 0 12px;
+    margin-left: -12px;
+    border-radius: 15px;
+    font-weight: 500;
+  }
+  .alt.danger {
+    color: var(--red);
+  }
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%);
+    z-index: 42;
+    max-width: min(560px, calc(100vw - 48px));
+    padding: 9px 16px;
+    border-radius: 18px;
+    background: var(--glass);
+    border: 0.5px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px);
+    font-weight: 500;
   }
   .foot {
     display: flex;
