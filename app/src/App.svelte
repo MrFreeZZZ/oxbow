@@ -295,9 +295,14 @@
     display: flex;
     min-height: 0;
   }
+  /* The graph is a card of its own, like the file list in Summary. */
   .history {
     flex-grow: 1;
     min-width: 0;
+    margin: 4px 12px 12px;
+    border: 1px solid var(--sep);
+    border-radius: 12px;
+    overflow: hidden;
     background: var(--graph-bg);
     display: flex;
     flex-direction: column;
@@ -312,7 +317,6 @@
     font-size: 11px;
     font-weight: 600;
     color: var(--text2);
-    border-bottom: 1px solid var(--sep);
   }
   .columns span:first-child {
     flex-grow: 1;
@@ -323,7 +327,6 @@
   .panel {
     position: relative;
     flex-shrink: 0;
-    border-left: 1px solid var(--sep);
     display: flex;
     flex-direction: column;
     min-height: 0;
