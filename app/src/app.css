@@ -52,6 +52,20 @@
   --tint-label: 12%;
   --tint-bar: 16%;
 
+  --dim: rgba(0, 0, 0, 0.16);
+  --sheet: rgba(252, 252, 253, 0.98);
+  --term: #1c1c1f;
+  --term-bar: #26262a;
+  --danger: #c4282c;
+  --danger-soft: rgba(196, 40, 44, 0.1);
+  --orange: #a35400;
+  --orange-soft: rgba(240, 122, 16, 0.12);
+  --green-soft: rgba(26, 127, 55, 0.12);
+  --red-soft: rgba(196, 40, 44, 0.1);
+  --switch-off: rgba(0, 0, 0, 0.16);
+  --hunk-bg: #f1f4f9;
+  --hunk-text: #4f5f75;
+
   --tag-bg: #f7ebc0;
   --tag-border: #e3b400;
   --tag-fg: #5c4a00;
@@ -114,6 +128,20 @@
     --tint-soft: 19%;
     --tint-label: 18%;
     --tint-bar: 26%;
+
+    --dim: rgba(0, 0, 0, 0.35);
+    --sheet: rgba(44, 44, 48, 0.98);
+    --term: #141416;
+    --term-bar: #1d1d20;
+    --danger: #d9534f;
+    --danger-soft: rgba(255, 123, 114, 0.16);
+    --orange: #ffb340;
+    --orange-soft: rgba(255, 159, 10, 0.16);
+    --green-soft: rgba(46, 160, 67, 0.2);
+    --red-soft: rgba(248, 81, 73, 0.2);
+    --switch-off: rgba(255, 255, 255, 0.22);
+    --hunk-bg: rgba(110, 150, 220, 0.12);
+    --hunk-text: #9db2d0;
 
     --tag-bg: rgba(214, 170, 40, 0.22);
     --tag-border: #e8c547;

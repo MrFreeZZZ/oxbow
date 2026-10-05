@@ -29,6 +29,8 @@
     );
   });
 
+  // Effects follow the id, not the row object, so reloading the history keeps the panel as it is.
+  const id = $derived(row.id);
   const color = $derived(row.graph.color);
   // A stash has no branch line of its own; its capsule names the stash entry.
   const branchName = $derived(row.graph.branch ?? row.labels.find((l) => l.kind === "stash")?.name ?? null);
@@ -38,26 +40,26 @@
 
   // A new commit resets the tab; the diff mode is kept.
   $effect(() => {
-    const id = row.id;
+    const current = id;
     tab = null;
     detail = null;
     error = null;
-    api.commitDetail(id).then(
+    api.commitDetail(current).then(
       (d) => {
-        if (row.id === id) detail = d;
+        if (id === current) detail = d;
       },
       (err) => (error = String(err)),
     );
   });
 
   $effect(() => {
-    const id = row.id;
+    const current = id;
     const path = tab;
     const wholeFile = whole;
     diffs = [];
-    api.commitDiff(id, path, wholeFile).then(
+    api.commitDiff(current, path, wholeFile).then(
       (d) => {
-        if (row.id === id && tab === path && whole === wholeFile) diffs = d;
+        if (id === current && tab === path && whole === wholeFile) diffs = d;
       },
       (err) => (error = String(err)),
     );

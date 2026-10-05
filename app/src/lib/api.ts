@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { CommitDetail, FileDiff, History, RepoSummary } from "./types";
+import type { Action, CommitDetail, FileDiff, History, Plan, RepoSummary, Side, WorkingTree } from "./types";
 
 export const api = {
   initialRepo: () => invoke<string | null>("initial_repo"),
@@ -8,6 +8,10 @@ export const api = {
   commitDetail: (id: string) => invoke<CommitDetail>("commit_detail", { id }),
   commitDiff: (id: string, path: string | null, wholeFile: boolean) =>
     invoke<FileDiff[]>("commit_diff", { id, path, wholeFile }),
+  workingTree: () => invoke<WorkingTree>("working_tree"),
+  workingDiff: (path: string, side: Side, wholeFile: boolean) => invoke<FileDiff>("working_diff", { path, side, wholeFile }),
+  planAction: (action: Action) => invoke<Plan>("plan_action", { action }),
+  performAction: (action: Action) => invoke<string>("perform_action", { action }),
   getSetting: <T>(key: string) => invoke<T | null>("get_setting", { key }),
   setSetting: (key: string, value: unknown) => invoke<void>("set_setting", { key, value }),
 };
@@ -15,4 +19,6 @@ export const api = {
 /** Keys of `settings.json`. */
 export const settings = {
   detailsWidth: "oxbow.history.detailsWidth",
+  /** Ask before running a git command that changes the repository (default true). */
+  confirmActions: "oxbow.confirm.enabled",
 };

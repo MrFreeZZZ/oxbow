@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { History, HistoryRow } from "./types";
+  import type { History, HistoryRow, WorktreeSummary } from "./types";
   import { lane, plate, relativeTime, tint } from "./format";
 
   let { history, selected, onSelect }: { history: History; selected: string | null; onSelect: (id: string) => void } = $props();
@@ -68,6 +68,15 @@
       ring: isMerge ? "transparent" : row.unpushed ? lane(g.color) : "var(--graph-bg)",
       hole: isMerge,
     };
+  }
+
+  /** "5 files · 3 staged · 2 unstaged" for the row of uncommitted changes. */
+  function worktreeLine(w: WorktreeSummary): string {
+    const parts = [`${w.files} ${w.files === 1 ? "file" : "files"}`];
+    if (w.conflicted) parts.push(`${w.conflicted} conflicted`);
+    if (w.staged) parts.push(`${w.staged} staged`);
+    if (w.unstaged) parts.push(`${w.unstaged} unstaged`);
+    return parts.join(" · ");
   }
 
   function textStart(row: HistoryRow): number {
@@ -155,7 +164,11 @@
                 <span class="pill" class:head={label.head} style:color={plate(label.color)} style:background={tint(label.color, "label")}>{label.name}</span>
               {/if}
             {/each}
-            <span class="byline">{row.authorName} · {relativeTime(row.time)}</span>
+            {#if row.worktree}
+              <span class="byline">{worktreeLine(row.worktree)}</span>
+            {:else}
+              <span class="byline">{row.authorName} · {relativeTime(row.time)}</span>
+            {/if}
           </span>
         </div>
       {/each}
