@@ -11,6 +11,15 @@ pub enum Error {
     UnknownCommit(String),
     #[error("{0}")]
     Git(String),
+    #[error("could not run git: {0}")]
+    GitNotFound(String),
+    /// A `git` command exited with an error; `output` is what it printed.
+    #[error("`{command}` failed: {output}")]
+    Command {
+        command: String,
+        code: Option<i32>,
+        output: String,
+    },
 }
 
 impl Error {
