@@ -194,6 +194,7 @@
   .history {
     flex-grow: 1;
     min-width: 0;
+    background: var(--graph-bg);
     display: flex;
     flex-direction: column;
   }

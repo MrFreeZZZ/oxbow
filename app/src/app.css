@@ -3,6 +3,8 @@
 :root {
   color-scheme: light dark;
   --win: #ffffff;
+  /* The graph sits on its own warm tint, apart from the white commit panel. */
+  --graph-bg: #f7f6f2;
   --side: rgba(243, 243, 246, 0.96);
   --side-border: rgba(0, 0, 0, 0.06);
   --panel-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
@@ -22,23 +24,30 @@
   --red: #c4282c;
   --lead-in: #bcc0c7;
 
-  /* Branch palette 1-6: no red or pink (read as removed lines) and no yellow (tags only). 7 is the stash grey. */
+  /* Branch palette 1-9, muted: no red or pink (removed lines), no green (added lines), no yellow (tags),
+     no two colors of nearly the same hue. 10 is the stash grey. */
   --lane-0: #4a6680;
-  --lane-1: #a77bc9;
-  --lane-2: #8c8fd0;
-  --lane-3: #a07c64;
-  --lane-4: #d99a62;
-  --lane-5: #6aae80;
-  --lane-6: #5baeb6;
-  --lane-7: #9b9ea4;
+  --lane-1: #487e79;
+  --lane-2: #77bbc3;
+  --lane-3: #4d90ac;
+  --lane-4: #7fa0d0;
+  --lane-5: #64619b;
+  --lane-6: #9b8db5;
+  --lane-7: #77546f;
+  --lane-8: #cc986e;
+  --lane-9: #846047;
+  --lane-10: #9b9ea4;
   --plate-0: #3b5266;
-  --plate-1: #7e28ae;
-  --plate-2: #3f3dae;
-  --plate-3: #6b4229;
-  --plate-4: #9a4700;
-  --plate-5: #1f7a3a;
-  --plate-6: #00727b;
-  --plate-7: #5c6168;
+  --plate-1: #04534e;
+  --plate-2: #0b5158;
+  --plate-3: #064f67;
+  --plate-4: #174687;
+  --plate-5: #43388a;
+  --plate-6: #513975;
+  --plate-7: #68305d;
+  --plate-8: #6a3a07;
+  --plate-9: #6d3705;
+  --plate-10: #5c6168;
   --tint-soft: 10%;
   --tint-label: 12%;
   --tint-bar: 16%;
@@ -60,6 +69,7 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --win: #1e1e21;
+    --graph-bg: #252422;
     --side: rgba(44, 44, 48, 0.96);
     --side-border: rgba(255, 255, 255, 0.07);
     --panel-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
@@ -80,21 +90,27 @@
     --lead-in: #5c5f66;
 
     --lane-0: #94b2cc;
-    --lane-1: #b48acf;
-    --lane-2: #9a9ad8;
-    --lane-3: #b79c88;
-    --lane-4: #d9965a;
-    --lane-5: #73be8c;
-    --lane-6: #69b9c4;
-    --lane-7: #8f949b;
+    --lane-1: #5d938e;
+    --lane-2: #8dd2da;
+    --lane-3: #63a6c2;
+    --lane-4: #94b6e7;
+    --lane-5: #7875b1;
+    --lane-6: #b1a2cb;
+    --lane-7: #8c6884;
+    --lane-8: #e3ae83;
+    --lane-9: #99745b;
+    --lane-10: #8f949b;
     --plate-0: #94b2cc;
-    --plate-1: #d58cf7;
-    --plate-2: #b3b1ff;
-    --plate-3: #e0b898;
-    --plate-4: #ffb340;
-    --plate-5: #7edc9c;
-    --plate-6: #6fd8e8;
-    --plate-7: #bcc1c8;
+    --plate-1: #96d9d3;
+    --plate-2: #93d8e0;
+    --plate-3: #9ad4ee;
+    --plate-4: #aecdf9;
+    --plate-5: #c5c5f7;
+    --plate-6: #d2c1f2;
+    --plate-7: #e8badd;
+    --plate-8: #edc09d;
+    --plate-9: #efbf9f;
+    --plate-10: #bcc1c8;
     --tint-soft: 19%;
     --tint-label: 18%;
     --tint-bar: 26%;

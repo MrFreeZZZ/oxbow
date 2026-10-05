@@ -17,8 +17,9 @@ use serde::Serialize;
 pub type RowIndex = usize;
 
 /// Number of colors in the branch palette, not counting the trunk color.
-/// The palette has no red or pink (they read as removed lines in diffs) and no yellow (tags only).
-pub const PALETTE_SIZE: u8 = 6;
+/// The muted palette has no red or pink (removed lines), no green (added lines), no yellow (tags)
+/// and no two colors of nearly the same hue.
+pub const PALETTE_SIZE: u8 = 9;
 
 /// Neutral color for stashes, outside the branch palette.
 pub const STASH_COLOR: u8 = PALETTE_SIZE + 1;

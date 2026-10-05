@@ -59,13 +59,13 @@
       left: x(g.column) - (size + 8) / 2,
       top: y(index) - (size + 8) / 2,
       halo,
-      gap: forks.length ? "var(--win)" : "transparent",
+      gap: forks.length ? "var(--graph-bg)" : "transparent",
       fill: isMerge
         ? `linear-gradient(90deg, ${lane(g.color)} 50%, ${lane(merged)} 50%)`
         : row.unpushed
-          ? "var(--win)"
+          ? "var(--graph-bg)"
           : lane(g.color),
-      ring: isMerge ? "transparent" : row.unpushed ? lane(g.color) : "var(--win)",
+      ring: isMerge ? "transparent" : row.unpushed ? lane(g.color) : "var(--graph-bg)",
       hole: isMerge,
     };
   }
@@ -329,6 +329,6 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: var(--win);
+    background: var(--graph-bg);
   }
 </style>
