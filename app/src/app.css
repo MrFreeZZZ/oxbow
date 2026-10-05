@@ -43,6 +43,7 @@
   --plate-8: #00727b;
   --tint-soft: 10%;
   --tint-label: 12%;
+  --tint-bar: 16%;
 
   --tag-bg: #f7ebc0;
   --tag-border: #e3b400;
@@ -100,6 +101,7 @@
     --plate-8: #6fd8e8;
     --tint-soft: 19%;
     --tint-label: 18%;
+    --tint-bar: 26%;
 
     --tag-bg: rgba(214, 170, 40, 0.22);
     --tag-border: #e8c547;

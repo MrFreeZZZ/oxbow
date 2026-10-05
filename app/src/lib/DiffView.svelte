@@ -1,13 +1,14 @@
 <script lang="ts">
   import type { DiffLine, FileDiff } from "./types";
-  import { splitPath } from "./format";
+  import { plate, splitPath, tint } from "./format";
 
   let {
     diffs,
+    color,
     whole,
     onToggleWhole,
     lineBudget = 4000,
-  }: { diffs: FileDiff[]; whole: boolean; onToggleWhole: () => void; lineBudget?: number } = $props();
+  }: { diffs: FileDiff[]; color: number; whole: boolean; onToggleWhole: () => void; lineBudget?: number } = $props();
 
   let showAll = $state(false);
 
@@ -53,24 +54,26 @@
   {@const path = splitPath(diff.file.path)}
   <section class="file">
     <header>
-      <span class="path"><span class="dir">{path.dir}</span>{path.name}</span>
-      {#if diff.file.oldPath}<span class="from">from {diff.file.oldPath}</span>{/if}
-      <span class="status">{statusLabel[diff.file.status]}</span>
-      <span class="spacer"></span>
-      <span class="mono add">+{diff.file.additions}</span>
-      <span class="mono del">−{diff.file.deletions}</span>
-      <button
-        class="toggle"
-        class:on={whole}
-        onclick={onToggleWhole}
-        aria-pressed={whole}
-        aria-label={whole ? "Show changes only" : "Show whole file"}
-        title={whole ? "Show changes only" : "Show whole file"}
-      >
-        <svg class="icon" viewBox="0 0 16 16">
-          {#if whole}<path d="M3 5.5h10M3 10.5h10M8 1.5v2.5M8 12v2.5M6 3l2 1.5L10 3M6 13l2-1.5 2 1.5" />{:else}<path d="M3 3h10M3 13h10M3 8h10M8 4.5v-3M8 11.5v3" />{/if}
-        </svg>
-      </button>
+      <div class="bar" style:background={tint(color, "bar")} style:--name={plate(color)}>
+        <span class="path"><span class="dir">{path.dir}</span>{path.name}</span>
+        {#if diff.file.oldPath}<span class="from">from {diff.file.oldPath}</span>{/if}
+        <span class="status">{statusLabel[diff.file.status]}</span>
+        <span class="spacer"></span>
+        <span class="mono add">+{diff.file.additions}</span>
+        <span class="mono del">−{diff.file.deletions}</span>
+        <button
+          class="toggle"
+          class:on={whole}
+          onclick={onToggleWhole}
+          aria-pressed={whole}
+          aria-label={whole ? "Show changes only" : "Show whole file"}
+          title={whole ? "Show changes only" : "Show whole file"}
+        >
+          <svg class="icon" viewBox="0 0 16 16">
+            {#if whole}<path d="M3 5.5h10M3 10.5h10M8 1.5v2.5M8 12v2.5M6 3l2 1.5L10 3M6 13l2-1.5 2 1.5" />{:else}<path d="M3 3h10M3 13h10M3 8h10M8 4.5v-3M8 11.5v3" />{/if}
+          </svg>
+        </button>
+      </div>
     </header>
 
     {#if diff.file.binary}
@@ -105,22 +108,28 @@
 
 <style>
   .file {
-    padding: 4px 12px 14px;
+    padding: 0 12px 14px;
   }
+  /* Each file starts with a bar in the branch color, so files don't run together. */
   header {
     position: sticky;
     top: 0;
     z-index: 1;
+    padding: 6px 0;
+    background: var(--win);
+  }
+  .bar {
     display: flex;
     align-items: center;
     gap: 8px;
     height: 34px;
-    padding: 0 4px 0 8px;
-    background: var(--win);
+    padding: 0 4px 0 10px;
+    border-radius: 10px;
     font-size: 12px;
   }
   .path {
     font-weight: 600;
+    color: var(--name);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -156,7 +165,7 @@
     color: var(--icon);
   }
   .toggle.on {
-    background: var(--side-sel);
+    background: var(--win);
     color: var(--text);
   }
   .note {

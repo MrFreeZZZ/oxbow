@@ -93,7 +93,8 @@
     <CommitChain {row} {childIds} {lookup} {onSelect} />
   </div>
 
-  <div class="tabs" role="tablist" aria-label="Changes in this commit" bind:this={tabBar}>
+  <div class="tabs" role="tablist" aria-label="Changes in this commit">
+    <!-- Summary stays pinned first; only the file tabs scroll. -->
     <button
       role="tab"
       aria-selected={tab === null}
@@ -104,11 +105,16 @@
       class:on={tab === null}
       onclick={() => openTab(null)}>Summary</button
     >
-    {#each detail?.files ?? [] as file (file.path)}
-      <button role="tab" aria-selected={tab === file.path} class="tab neutral" class:on={tab === file.path} onclick={() => openTab(file.path)} title={file.path}
-        >{splitPath(file.path).name}</button
-      >
-    {/each}
+    {#if detail?.files.length}
+      <span class="divider" aria-hidden="true"></span>
+      <div class="file-tabs" bind:this={tabBar}>
+        {#each detail.files as file (file.path)}
+          <button role="tab" aria-selected={tab === file.path} class="tab neutral" class:on={tab === file.path} onclick={() => openTab(file.path)} title={file.path}
+            >{splitPath(file.path).name}</button
+          >
+        {/each}
+      </div>
+    {/if}
   </div>
 
   <div class="scroll" bind:this={scroller}>
@@ -137,7 +143,7 @@
         {/each}
       </div>
     {/if}
-    <DiffView {diffs} {whole} onToggleWhole={() => (whole = !whole)} />
+    <DiffView {diffs} {color} {whole} onToggleWhole={() => (whole = !whole)} />
   </div>
 </div>
 
@@ -233,11 +239,27 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 10px 12px;
+    padding: 10px 0 10px 12px;
     border-bottom: 1px solid var(--sep);
-    overflow-x: auto;
     flex-shrink: 0;
+  }
+  .divider {
+    width: 1px;
+    height: 16px;
+    background: var(--sep);
+    flex-shrink: 0;
+  }
+  .file-tabs {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding-right: 12px;
+    overflow-x: auto;
     scrollbar-width: none;
+  }
+  .file-tabs::-webkit-scrollbar {
+    display: none;
   }
   .tab {
     display: flex;
@@ -264,10 +286,12 @@
     overflow-y: auto;
     min-height: 0;
   }
+  /* The file list is a card of its own, so it reads apart from the diffs below it. */
   .files {
-    padding: 10px 12px 8px;
-    border-bottom: 1px solid var(--sep);
-    margin-bottom: 6px;
+    margin: 12px 12px 6px;
+    padding: 8px 4px 6px;
+    border-radius: 12px;
+    border: 1px solid var(--sep);
   }
   .count {
     display: flex;
