@@ -207,24 +207,25 @@ impl Repo {
                 }
                 commands
             }
-            Action::StageHunk { .. } => {
-                vec![GitCommand::new(["apply", "--cached", "-"]).comment("the hunk's patch comes on stdin")]
+            Action::StageHunk { path, header } => {
+                vec![GitCommand::new(["apply", "--cached", "-"]).comment(stdin_note(path, header))]
             }
-            Action::UnstageHunk { .. } => {
-                vec![
-                    GitCommand::new(["apply", "--cached", "--reverse", "-"]).comment("the hunk's patch comes on stdin"),
-                ]
+            Action::UnstageHunk { path, header } => {
+                vec![GitCommand::new(["apply", "--cached", "--reverse", "-"]).comment(stdin_note(path, header))]
             }
-            Action::DiscardHunk { .. } => {
-                vec![GitCommand::new(["apply", "--reverse", "-"]).comment("the hunk's patch comes on stdin")]
+            Action::DiscardHunk { path, header } => {
+                vec![GitCommand::new(["apply", "--reverse", "-"]).comment(stdin_note(path, header))]
             }
             Action::Commit { message, amend } => {
                 let mut args = vec!["commit".to_owned()];
                 if *amend {
                     args.push("--amend".to_owned());
                 }
-                args.push("-m".to_owned());
-                args.push(message.trim().to_owned());
+                // One -m per paragraph, as people type it; git puts the blank lines back between them.
+                for paragraph in paragraphs(message) {
+                    args.push("-m".to_owned());
+                    args.push(paragraph);
+                }
                 let cmd = GitCommand::new(args);
                 vec![if *amend {
                     cmd.comment("replace the last commit with one that also has the staged changes")
@@ -343,6 +344,30 @@ impl Side {
     }
 }
 
+fn stdin_note(path: &str, header: &str) -> String {
+    format!("the patch of the {header} hunk of {path} comes on stdin")
+}
+
+/// A message split at its blank lines, each paragraph trimmed.
+fn paragraphs(message: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    for line in message.lines() {
+        if line.trim().is_empty() {
+            if !current.is_empty() {
+                out.push(current.join("\n").trim().to_owned());
+                current.clear();
+            }
+        } else {
+            current.push(line.trim_end());
+        }
+    }
+    if !current.is_empty() {
+        out.push(current.join("\n").trim().to_owned());
+    }
+    out
+}
+
 fn change(path: &str, old_path: Option<&str>, status: FileStatus) -> FileChange {
     FileChange {
         path: path.to_owned(),
@@ -432,6 +457,7 @@ fn parse_patch(patch: &str) -> ParsedPatch {
                 header: format!("@@ {ranges} @@"),
                 text: line.to_owned(),
                 hunk: Hunk {
+                    header: format!("@@ {ranges} @@"),
                     old_start,
                     old_lines,
                     new_start,
@@ -521,6 +547,15 @@ fn mark_words(lines: &mut [DiffLine]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commit_messages_split_into_paragraphs() {
+        assert_eq!(
+            paragraphs("  Summary\n\n\nFirst line\nsecond line  \n\n- item\n"),
+            ["Summary", "First line\nsecond line", "- item"]
+        );
+        assert!(paragraphs(" \n ").is_empty());
+    }
 
     #[test]
     fn status_records_are_sorted_into_groups() {

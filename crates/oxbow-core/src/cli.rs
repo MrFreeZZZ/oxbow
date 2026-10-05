@@ -13,8 +13,8 @@ use crate::error::{Error, Result};
 use crate::repo::Repo;
 
 /// One `git` invocation, with an optional explanation for the confirmation sheet.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+/// It serializes with its `display` form too.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitCommand {
     /// Arguments after `git`.
     pub args: Vec<String>,
@@ -45,6 +45,23 @@ impl GitCommand {
             .chain(self.args.iter().map(|a| shell_quote(a)))
             .collect::<Vec<_>>()
             .join(" ")
+    }
+}
+
+impl Serialize for GitCommand {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Shown<'a> {
+            args: &'a [String],
+            comment: &'a Option<String>,
+            display: String,
+        }
+        Shown {
+            args: &self.args,
+            comment: &self.comment,
+            display: self.display(),
+        }
+        .serialize(serializer)
     }
 }
 

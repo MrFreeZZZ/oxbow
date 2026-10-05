@@ -58,12 +58,8 @@ fn hunks_can_be_staged_unstaged_and_discarded_one_by_one() {
 
     let diff = repo.working_diff("a.txt", Side::Unstaged, false).unwrap();
     assert_eq!(diff.hunks.len(), 2);
-    let header = |h: &oxbow_core::Hunk| {
-        format!(
-            "@@ -{},{} +{},{} @@",
-            h.old_start, h.old_lines, h.new_start, h.new_lines
-        )
-    };
+    // The front end sends back the header it was given.
+    let header = |h: &oxbow_core::Hunk| h.header.clone();
     let second = header(&diff.hunks[1]);
 
     // Stage only the second change.
@@ -149,11 +145,14 @@ fn files_are_staged_discarded_and_committed() {
     };
     assert_eq!(
         repo.plan(&commit).unwrap().commands[0].display(),
-        "git commit -m 'Add new.txt\n\nWith a body.'"
+        "git commit -m 'Add new.txt' -m 'With a body.'"
     );
     repo.perform(&commit).unwrap();
     assert!(repo.working_tree().unwrap().is_empty());
-    assert_eq!(fx.git(&["log", "-1", "--format=%s"]), "Add new.txt");
+    assert_eq!(
+        fx.git(&["log", "-1", "--format=%B"]).trim_end(),
+        "Add new.txt\n\nWith a body."
+    );
 
     // Unstage works before the first commit too.
     let mut empty = Fixture::new();

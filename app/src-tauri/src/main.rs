@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use oxbow_core::{CommitDetail, DiffContext, FileDiff, History, HistoryOptions, Repo};
+use oxbow_core::{Action, CommitDetail, DiffContext, FileDiff, History, HistoryOptions, Plan, Repo, Side, WorkingTree};
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
@@ -137,6 +137,43 @@ async fn commit_diff(
     blocking(move || repo.commit_diff(&id, path.as_deref(), context)).await
 }
 
+#[tauri::command]
+async fn working_tree(session: State<'_, Session>) -> CommandResult<WorkingTree> {
+    let repo = current(&session)?;
+    blocking(move || repo.working_tree()).await
+}
+
+#[tauri::command]
+async fn working_diff(
+    session: State<'_, Session>,
+    path: String,
+    side: Side,
+    whole_file: bool,
+) -> CommandResult<FileDiff> {
+    let repo = current(&session)?;
+    blocking(move || repo.working_diff(&path, side, whole_file)).await
+}
+
+/// The git commands an action will run, for the confirmation sheet.
+#[tauri::command]
+async fn plan_action(session: State<'_, Session>, action: Action) -> CommandResult<Plan> {
+    let repo = current(&session)?;
+    blocking(move || repo.plan(&action)).await
+}
+
+/// On failure the sheet already shows the command, so only git's own output comes back.
+#[tauri::command]
+async fn perform_action(session: State<'_, Session>, action: Action) -> CommandResult<String> {
+    let repo = current(&session)?;
+    tauri::async_runtime::spawn_blocking(move || repo.perform(&action))
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| match err {
+            oxbow_core::Error::Command { output, .. } => output.trim().to_owned(),
+            err => err.to_string(),
+        })
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -149,6 +186,10 @@ fn main() {
             history,
             commit_detail,
             commit_diff,
+            working_tree,
+            working_diff,
+            plan_action,
+            perform_action,
             get_setting,
             set_setting
         ])
