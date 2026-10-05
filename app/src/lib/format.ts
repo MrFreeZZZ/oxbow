@@ -66,3 +66,33 @@ export function splitPath(path: string): { dir: string; name: string } {
   const i = path.lastIndexOf("/");
   return i < 0 ? { dir: "", name: path } : { dir: path.slice(0, i + 1), name: path.slice(i + 1) };
 }
+
+/**
+ * Short labels for file tabs: the file name, and for files that share a name, as many parent
+ * folders as it takes to tell them apart, like PyCharm: "email/README.md", "resetpwd/README.md".
+ */
+export function tabLabels(paths: string[]): Map<string, string> {
+  const parts = new Map(paths.map((p) => [p, p.split("/")]));
+  const label = (p: string, depth: number) => parts.get(p)!.slice(-depth).join("/");
+  const depth = new Map(paths.map((p) => [p, 1]));
+  // Deepen every label that still collides until all are unique or show the whole path.
+  for (;;) {
+    const seen = new Map<string, string[]>();
+    for (const p of paths) {
+      const l = label(p, depth.get(p)!);
+      seen.set(l, [...(seen.get(l) ?? []), p]);
+    }
+    let grew = false;
+    for (const group of seen.values()) {
+      if (group.length < 2) continue;
+      for (const p of group) {
+        if (depth.get(p)! < parts.get(p)!.length) {
+          depth.set(p, depth.get(p)! + 1);
+          grew = true;
+        }
+      }
+    }
+    if (!grew) break;
+  }
+  return new Map(paths.map((p) => [p, label(p, depth.get(p)!)]));
+}
