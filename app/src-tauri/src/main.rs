@@ -2,16 +2,21 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
-use oxbow_core::{Action, CommitDetail, DiffContext, FileDiff, History, HistoryOptions, Plan, Repo, Side, WorkingTree};
+use oxbow_core::{
+    Action, CommitDetail, DiffContext, Failure, FileDiff, History, HistoryOptions, Plan, Repo, Side, WorkingTree,
+};
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// The repository open in the window.
 #[derive(Default)]
 struct Session {
     repo: Mutex<Option<Repo>>,
+    /// Set by Stop; the running action checks it.
+    cancel: Arc<AtomicBool>,
 }
 
 #[derive(Serialize)]
@@ -161,17 +166,43 @@ async fn plan_action(session: State<'_, Session>, action: Action) -> CommandResu
     blocking(move || repo.plan(&action)).await
 }
 
-/// On failure the sheet already shows the command, so only git's own output comes back.
+/// Run an action, sending each command and output line to the window as an `action-event`. A
+/// failure comes back explained, so the sheet can offer the way out.
 #[tauri::command]
-async fn perform_action(session: State<'_, Session>, action: Action) -> CommandResult<String> {
-    let repo = current(&session)?;
-    tauri::async_runtime::spawn_blocking(move || repo.perform(&action))
-        .await
-        .map_err(|err| err.to_string())?
-        .map_err(|err| match err {
-            oxbow_core::Error::Command { output, .. } => output.trim().to_owned(),
-            err => err.to_string(),
+async fn perform_action(app: AppHandle, session: State<'_, Session>, action: Action) -> Result<String, Failure> {
+    let repo = current(&session).map_err(|message| Failure {
+        kind: oxbow_core::FailureKind::Other,
+        output: message,
+        incoming: Vec::new(),
+        remote_tip: None,
+    })?;
+    let cancel = session.cancel.clone();
+    cancel.store(false, Ordering::Relaxed);
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        let result = repo.perform_with(
+            &action,
+            &mut |event| {
+                let _ = app.emit("action-event", event);
+            },
+            &cancel,
+        );
+        result.map_err(|err| repo.explain_failure(&action, &err))
+    })
+    .await;
+    joined.unwrap_or_else(|err| {
+        Err(Failure {
+            kind: oxbow_core::FailureKind::Other,
+            output: err.to_string(),
+            incoming: Vec::new(),
+            remote_tip: None,
         })
+    })
+}
+
+/// Stop the running action.
+#[tauri::command]
+fn stop_action(session: State<'_, Session>) {
+    session.cancel.store(true, Ordering::Relaxed);
 }
 
 fn main() {
@@ -190,6 +221,7 @@ fn main() {
             working_diff,
             plan_action,
             perform_action,
+            stop_action,
             get_setting,
             set_setting
         ])

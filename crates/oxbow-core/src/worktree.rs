@@ -120,6 +120,8 @@ pub enum Action {
         remote: String,
         branch: String,
         upstream: String,
+        /// Skip the pre-push hook, when the push being retried skipped it too.
+        no_verify: bool,
     },
     /// Give up a pull that stopped on conflicts, back to where the branch was.
     AbortRebase,
@@ -332,12 +334,20 @@ impl Repo {
                 remote,
                 branch,
                 upstream,
-            } => vec![
-                pull(remote, upstream),
-                GitCommand::new(["push", remote, &refspec(branch, upstream)])
-                    .comment("then send your commits on top")
-                    .with_progress(),
-            ],
+                no_verify,
+            } => {
+                let mut push = vec!["push".to_owned()];
+                if *no_verify {
+                    push.push("--no-verify".to_owned());
+                }
+                push.extend([remote.clone(), refspec(branch, upstream)]);
+                vec![
+                    pull(remote, upstream),
+                    GitCommand::new(push)
+                        .comment("then send your commits on top")
+                        .with_progress(),
+                ]
+            }
             Action::AbortRebase => {
                 vec![GitCommand::new(["rebase", "--abort"]).comment("back to where the branch was before the pull")]
             }

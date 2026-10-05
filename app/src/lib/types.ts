@@ -68,12 +68,23 @@ export interface StashInfo {
   message: string;
 }
 
+export interface Tracking {
+  remote: string;
+  /** Branch name on the remote. */
+  branch: string;
+  ahead: number;
+  behind: number;
+  gone: boolean;
+}
+
 export interface History {
   head: HeadInfo;
   trunk: string | null;
   trunkTipRow: number | null;
   refs: RefInfo[];
   remotes: string[];
+  tracking: Tracking | null;
+  defaultRemote: string | null;
   stashes: StashInfo[];
   rows: HistoryRow[];
   truncated: boolean;
@@ -158,7 +169,41 @@ export type Action =
   | { kind: "stageHunk"; path: string; header: string }
   | { kind: "unstageHunk"; path: string; header: string }
   | { kind: "discardHunk"; path: string; header: string }
-  | { kind: "commit"; message: string; amend: boolean };
+  | { kind: "commit"; message: string; amend: boolean }
+  | { kind: "fetch"; remote: string | null }
+  | { kind: "pull"; remote: string; branch: string }
+  | {
+      kind: "push";
+      remote: string;
+      branch: string;
+      upstream: string;
+      setUpstream: boolean;
+      force: boolean;
+      lease: string | null;
+      noVerify: boolean;
+    }
+  | { kind: "pullAndPush"; remote: string; branch: string; upstream: string; noVerify: boolean }
+  | { kind: "abortRebase" };
+
+export type ActionEvent =
+  | { kind: "command"; display: string }
+  | { kind: "line"; text: string; stderr: boolean; progress: boolean };
+
+export type FailureKind = "rejected" | "staleLease" | "auth" | "network" | "hook" | "conflict" | "cancelled" | "other";
+
+export interface CommitBrief {
+  id: string;
+  summary: string;
+  authorName: string;
+  time: number;
+}
+
+export interface Failure {
+  kind: FailureKind;
+  output: string;
+  incoming: CommitBrief[];
+  remoteTip: string | null;
+}
 
 export interface GitCommand {
   args: string[];

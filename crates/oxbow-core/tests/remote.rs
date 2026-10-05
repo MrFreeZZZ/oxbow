@@ -118,6 +118,7 @@ fn rejected_push_names_the_commits_in_the_way_and_pull_and_push_fixes_it() {
         remote: "origin".into(),
         branch: "main".into(),
         upstream: "main".into(),
+        no_verify: false,
     };
     let commands: Vec<String> = repo.plan(&both).unwrap().commands.iter().map(|c| c.display()).collect();
     assert_eq!(

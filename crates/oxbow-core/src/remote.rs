@@ -40,6 +40,8 @@ pub enum FailureKind {
     Hook,
     /// A pull stopped on conflicts.
     Conflict,
+    /// The user pressed Stop.
+    Cancelled,
     Other,
 }
 
@@ -73,7 +75,7 @@ impl Repo {
     pub fn explain_failure(&self, action: &Action, error: &Error) -> Failure {
         let pushing = matches!(
             action,
-            Action::Push { no_verify: false, .. } | Action::PullAndPush { .. }
+            Action::Push { no_verify: false, .. } | Action::PullAndPush { no_verify: false, .. }
         );
         let kind = classify_failure(error, pushing && self.has_pre_push_hook());
         let output = match error {
@@ -191,8 +193,10 @@ fn parse_tracking(line: &str) -> Option<Tracking> {
 
 /// Sort a failure by what git printed.
 pub fn classify_failure(error: &Error, pushing_with_hook: bool) -> FailureKind {
-    let Error::Command { output, .. } = error else {
-        return FailureKind::Other;
+    let output = match error {
+        Error::Command { output, .. } => output,
+        Error::Cancelled => return FailureKind::Cancelled,
+        _ => return FailureKind::Other,
     };
     let has = |needle: &str| output.contains(needle);
     if has("stale info") {
@@ -286,5 +290,6 @@ mod tests {
             FailureKind::Hook
         );
         assert_eq!(kind("something else"), FailureKind::Other);
+        assert_eq!(classify_failure(&Error::Cancelled, false), FailureKind::Cancelled);
     }
 }

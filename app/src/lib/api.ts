@@ -11,7 +11,9 @@ export const api = {
   workingTree: () => invoke<WorkingTree>("working_tree"),
   workingDiff: (path: string, side: Side, wholeFile: boolean) => invoke<FileDiff>("working_diff", { path, side, wholeFile }),
   planAction: (action: Action) => invoke<Plan>("plan_action", { action }),
+  /** Rejects with a `Failure`. */
   performAction: (action: Action) => invoke<string>("perform_action", { action }),
+  stopAction: () => invoke<void>("stop_action"),
   getSetting: <T>(key: string) => invoke<T | null>("get_setting", { key }),
   setSetting: (key: string, value: unknown) => invoke<void>("set_setting", { key, value }),
 };

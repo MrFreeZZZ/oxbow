@@ -7,6 +7,8 @@
   import CommitPanel from "./lib/CommitPanel.svelte";
   import ChangesPanel from "./lib/ChangesPanel.svelte";
   import ConfirmSheet from "./lib/ConfirmSheet.svelte";
+  import { confirm } from "./lib/confirm.svelte";
+  import { canPull, canPush, fetchRequest, pullRequest, pushRequest, type RemoteContext } from "./lib/remote";
   import Welcome from "./lib/Welcome.svelte";
 
   let repo = $state<RepoSummary | null>(null);
@@ -53,6 +55,27 @@
     } finally {
       loading = false;
     }
+  }
+
+  const remoteCtx = $derived<RemoteContext | null>(
+    history && {
+      branch: history.head.branch,
+      color: headColor,
+      tracking: history.tracking,
+      remote: history.tracking?.remote ?? history.defaultRemote,
+      remotes: history.remotes,
+      unpushed: history.rows.filter((r) => r.unpushed && !r.worktree && r.graph.branch === history!.head.branch),
+    },
+  );
+
+  async function sync(kind: "fetch" | "pull" | "push") {
+    // Commits made outside the app since the last reload belong in the sheet.
+    await refresh();
+    if (!remoteCtx) return;
+    const request = kind === "fetch" ? fetchRequest(remoteCtx) : kind === "pull" ? pullRequest(remoteCtx) : pushRequest(remoteCtx);
+    await confirm.run(request);
+    // Even a failed pull or push may have fetched, so the counts are worth reloading either way.
+    await refresh();
   }
 
   /** Reload after the repository changed, here or outside the app, keeping the selection when it still exists. */
@@ -124,6 +147,32 @@
         </span>
         <span class="spacer" data-tauri-drag-region></span>
         {#if error}<span class="error" role="alert">{error}</span>{/if}
+        {#if history.remotes.length && remoteCtx}
+          {@const t = history.tracking}
+          <div class="group" role="group" aria-label="Sync with remote">
+            <button onclick={() => sync("fetch")} aria-label="Fetch" title="Fetch from {history.remotes.length > 1 ? 'all remotes' : remoteCtx.remote}">
+              <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 0 1-8.6 3.5M3 8a5 5 0 0 1 8.6-3.5" /><path d="M11.8 1.8v2.9H8.9M4.2 14.2v-2.9h2.9" /></svg>
+            </button>
+            <button
+              onclick={() => sync("pull")}
+              disabled={!canPull(remoteCtx)}
+              aria-label={t?.behind ? `Pull ${t.behind} commits` : "Pull"}
+              title={canPull(remoteCtx) ? `Pull from ${t?.remote}/${t?.branch}` : "This branch has no upstream to pull from"}
+            >
+              <svg class="icon" viewBox="0 0 16 16"><path d="M8 2v9M4.5 7.5 8 11l3.5-3.5M3 14h10" /></svg>
+              {#if t?.behind}<span class="count">{t.behind}</span>{/if}
+            </button>
+            <button
+              onclick={() => sync("push")}
+              disabled={!canPush(remoteCtx)}
+              aria-label={t ? (t.ahead ? `Push ${t.ahead} commits` : "Push") : "Publish branch"}
+              title={!canPush(remoteCtx) ? "Check out a branch to push" : t && !t.gone ? `Push to ${t.remote}/${t.branch}` : `Publish ${history.head.branch} to ${remoteCtx.remote}`}
+            >
+              <svg class="icon" viewBox="0 0 16 16"><path d="M8 12V3M4.5 6.5 8 3l3.5 3.5M3 14h10" /></svg>
+              {#if t?.ahead}<span class="count">{t.ahead}</span>{:else if !t && history.head.branch}<span class="count">Publish</span>{/if}
+            </button>
+          </div>
+        {/if}
         <button class="capsule" onclick={refresh} aria-label="Reload history" title="Reload">
           <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5" /></svg>
         </button>
@@ -199,6 +248,35 @@
   }
   .capsule span {
     color: var(--text);
+  }
+  .group {
+    display: flex;
+    align-items: center;
+    height: 34px;
+    padding: 0 4px;
+    border-radius: 17px;
+    background: var(--glass);
+    border: 0.5px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    color: var(--icon);
+  }
+  .group button {
+    height: 34px;
+    min-width: 36px;
+    padding: 0 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    border-radius: 17px;
+  }
+  .group button:disabled {
+    opacity: 0.4;
+  }
+  .count {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent-text);
   }
   .spacer {
     flex-grow: 1;
