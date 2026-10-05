@@ -1,0 +1,157 @@
+// Hide the extra console window on Windows release builds.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use std::path::PathBuf;
+use std::sync::Mutex;
+
+use oxbow_core::{CommitDetail, DiffContext, FileDiff, History, HistoryOptions, Repo};
+use serde::Serialize;
+use tauri::{AppHandle, Manager, State};
+
+/// The repository open in the window.
+#[derive(Default)]
+struct Session {
+    repo: Mutex<Option<Repo>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RepoSummary {
+    name: String,
+    path: String,
+}
+
+type CommandResult<T> = Result<T, String>;
+
+fn current(session: &State<'_, Session>) -> CommandResult<Repo> {
+    session
+        .repo
+        .lock()
+        .expect("session lock")
+        .clone()
+        .ok_or_else(|| "No repository is open".to_owned())
+}
+
+/// Run blocking Git work off the main thread so the window stays responsive.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> oxbow_core::Result<T> + Send + 'static,
+) -> CommandResult<T> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
+}
+
+/// User settings live in `settings.json` in the app's config folder, as flat `oxbow.*` keys,
+/// holding only values that differ from the defaults.
+fn settings_file(app: &AppHandle) -> CommandResult<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .map(|dir| dir.join("settings.json"))
+        .map_err(|err| err.to_string())
+}
+
+fn read_settings(app: &AppHandle) -> serde_json::Map<String, serde_json::Value> {
+    settings_file(app)
+        .ok()
+        .and_then(|file| std::fs::read_to_string(file).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_setting(app: AppHandle, key: String) -> Option<serde_json::Value> {
+    read_settings(&app).remove(&key)
+}
+
+#[tauri::command]
+fn set_setting(app: AppHandle, key: String, value: serde_json::Value) -> CommandResult<()> {
+    let mut settings = read_settings(&app);
+    if value.is_null() {
+        settings.remove(&key);
+    } else {
+        settings.insert(key, value);
+    }
+    let file = settings_file(&app)?;
+    std::fs::create_dir_all(file.parent().expect("settings file has a parent")).map_err(|err| err.to_string())?;
+    let text = serde_json::to_string_pretty(&settings).map_err(|err| err.to_string())?;
+    std::fs::write(file, text + "\n").map_err(|err| err.to_string())
+}
+
+fn last_repo_file(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_config_dir().ok().map(|dir| dir.join("last-repository"))
+}
+
+#[tauri::command]
+async fn open_repo(app: AppHandle, session: State<'_, Session>, path: String) -> CommandResult<RepoSummary> {
+    let repo = blocking(move || Repo::open(&path)).await?;
+    let summary = RepoSummary {
+        name: repo.name(),
+        path: repo.workdir().display().to_string(),
+    };
+    if let Some(file) = last_repo_file(&app) {
+        // Remembering the repository is a convenience; failing to save it is not an error.
+        let _ = std::fs::create_dir_all(file.parent().expect("config file has a parent"));
+        let _ = std::fs::write(&file, &summary.path);
+    }
+    *session.repo.lock().expect("session lock") = Some(repo);
+    Ok(summary)
+}
+
+/// Repository to open at start: the first command-line argument, else the last one used.
+#[tauri::command]
+fn initial_repo(app: AppHandle) -> Option<String> {
+    std::env::args()
+        .nth(1)
+        .filter(|arg| !arg.starts_with('-'))
+        .or_else(|| last_repo_file(&app).and_then(|file| std::fs::read_to_string(file).ok()))
+        .map(|path| path.trim().to_owned())
+        .filter(|path| !path.is_empty())
+}
+
+#[tauri::command]
+async fn history(session: State<'_, Session>) -> CommandResult<History> {
+    let repo = current(&session)?;
+    blocking(move || repo.history(&HistoryOptions::default())).await
+}
+
+#[tauri::command]
+async fn commit_detail(session: State<'_, Session>, id: String) -> CommandResult<CommitDetail> {
+    let repo = current(&session)?;
+    blocking(move || repo.commit_detail(&id)).await
+}
+
+#[tauri::command]
+async fn commit_diff(
+    session: State<'_, Session>,
+    id: String,
+    path: Option<String>,
+    whole_file: bool,
+) -> CommandResult<Vec<FileDiff>> {
+    let repo = current(&session)?;
+    let context = if whole_file {
+        DiffContext::WholeFile
+    } else {
+        DiffContext::Compact
+    };
+    blocking(move || repo.commit_diff(&id, path.as_deref(), context)).await
+}
+
+fn main() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        // Restores the window's size and position from the last session.
+        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .manage(Session::default())
+        .invoke_handler(tauri::generate_handler![
+            open_repo,
+            initial_repo,
+            history,
+            commit_detail,
+            commit_diff,
+            get_setting,
+            set_setting
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running Oxbow");
+}

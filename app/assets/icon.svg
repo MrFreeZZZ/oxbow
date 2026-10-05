@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5B7A96"/>
+      <stop offset="1" stop-color="#3E566C"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
+  <!-- trunk -->
+  <path d="M400 230 V794" stroke="#F4F7FA" stroke-width="56" stroke-linecap="round" fill="none"/>
+  <!-- the oxbow: a branch that loops out and back -->
+  <path d="M400 330 C400 420 640 380 640 512 C640 644 400 604 400 694" stroke="#D9A6C0" stroke-width="44" stroke-linecap="round" fill="none"/>
+  <circle cx="400" cy="330" r="50" fill="#F4F7FA"/>
+  <circle cx="640" cy="512" r="46" fill="#D9A6C0"/>
+  <circle cx="400" cy="694" r="50" fill="#F4F7FA"/>
+</svg>

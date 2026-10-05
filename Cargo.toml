@@ -1,0 +1,15 @@
+[workspace]
+resolver = "3"
+members = ["crates/oxbow-core", "app/src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[workspace.dependencies]
+oxbow-core = { path = "crates/oxbow-core" }
+gix = "0.88"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"

@@ -1,0 +1,15 @@
+[package]
+name = "oxbow-core"
+description = "UI-agnostic Git core for Oxbow: history, graph lanes and diffs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+gix = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
