@@ -56,7 +56,9 @@
           ? `Picked commit${op.commit ? ` · ${op.commit.summary}` : ""}`
           : op.kind === "revert"
             ? "The revert"
-            : op.incoming
+            : op.kind === "stashApply"
+              ? `The stash${op.message ? ` · ${op.message}` : ""}`
+              : op.incoming
               ? `Incoming · all changes of ${op.incoming}, as one commit`
               : "Squashed changes",
   );
@@ -341,7 +343,13 @@
         {/each}
       {/if}
     </div>
-    <p class="hint">Nothing here is final until you {op.kind === "merge" || op.kind === "squash" ? "commit" : "continue"}. Abort puts everything back as it was before the {op.kind === "cherryPick" ? "cherry-pick" : op.kind}.</p>
+    <p class="hint">
+      {#if op.kind === "stashApply"}
+        Nothing here is final until you finish. Undo Apply takes back what the stash brought and keeps the stash.
+      {:else}
+        Nothing here is final until you {op.kind === "merge" || op.kind === "squash" ? "commit" : "continue"}. Abort puts everything back as it was before the {op.kind === "cherryPick" ? "cherry-pick" : op.kind}.
+      {/if}
+    </p>
   </aside>
 
   <div class="work">
@@ -351,7 +359,7 @@
       <div class="empty">
         <span class="big">✓</span>
         <span class="title">Every conflict is resolved</span>
-        <span>{op.kind === "merge" || op.kind === "squash" ? "Commit the merge" : "Continue"} with the button in the banner above.</span>
+        <span>{op.kind === "merge" || op.kind === "squash" ? "Commit the merge" : op.kind === "stashApply" ? "Finish" : "Continue"} with the button in the banner above.</span>
       </div>
     {:else if file && wholeOnly}
       <div class="empty">

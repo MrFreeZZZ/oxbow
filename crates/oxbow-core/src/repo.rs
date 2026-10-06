@@ -152,10 +152,19 @@ impl Repo {
         let mut out = Vec::new();
         for (index, line) in lines.enumerate() {
             let line = line.map_err(Error::git)?;
+            let message = line.message.to_str_lossy().into_owned();
+            let (branch, title) = split_stash_message(&message);
+            let commit = repo.find_commit(line.new_oid).map_err(Error::git)?;
+            let parents: Vec<String> = commit.parent_ids().map(|p| p.to_string()).collect();
             out.push(StashInfo {
                 index,
                 id: line.new_oid.to_string(),
-                message: line.message.to_str_lossy().into_owned(),
+                branch,
+                title,
+                base: parents.first().cloned().unwrap_or_default(),
+                untracked: parents.get(2).cloned(),
+                time: commit.time().map(|t| t.seconds).unwrap_or_default(),
+                message,
             });
         }
         Ok(out)
@@ -170,5 +179,36 @@ pub struct StashInfo {
     pub index: usize,
     /// The stash commit. Its first parent is the commit the stash was made on.
     pub id: String,
+    /// As git wrote it, e.g. `On main: Try a smaller pool`.
     pub message: String,
+    /// The branch it was made on, from the message; `None` on a detached `HEAD`.
+    pub branch: Option<String>,
+    /// The message without git's `On main: ` prefix.
+    pub title: String,
+    /// The commit it was made on.
+    pub base: String,
+    /// The commit holding its untracked files, when it has any.
+    pub untracked: Option<String>,
+    /// When it was made, seconds since the Unix epoch.
+    pub time: i64,
+}
+
+/// `On main: text` and `WIP on main: 1a2b3c4 Summary` into the branch and the text. A stash made
+/// on a detached `HEAD` says `(no branch)`.
+pub(crate) fn split_stash_message(message: &str) -> (Option<String>, String) {
+    let wip = message.starts_with("WIP on ");
+    let rest = message.strip_prefix("WIP on ").or_else(|| message.strip_prefix("On "));
+    let Some((branch, text)) = rest.and_then(|r| r.split_once(": ")) else {
+        return (None, message.to_owned());
+    };
+    let branch = (branch != "(no branch)").then(|| branch.to_owned());
+    // A stash saved without a message reads "WIP on main: 1a2b3c4 Its summary": the id is the
+    // commit it was made on, which is shown next to the stash anyway.
+    let text = match text.split_once(' ') {
+        Some((id, summary)) if wip && (7..=40).contains(&id.len()) && id.chars().all(|c| c.is_ascii_hexdigit()) => {
+            summary
+        }
+        _ => text,
+    };
+    (branch, text.to_owned())
 }

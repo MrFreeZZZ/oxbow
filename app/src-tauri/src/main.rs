@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use oxbow_core::{
     Action, CommitBrief, CommitDetail, ConflictFile, DeletionCheck, DiffContext, Failure, FileDiff, History,
-    HistoryOptions, MergePreview, Plan, Repo, Side, WorkingTree,
+    HistoryOptions, MergePreview, Plan, Repo, Side, StashCheck, WorkingTree,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -188,6 +188,13 @@ async fn conflict_file(session: State<'_, Session>, path: String) -> CommandResu
     blocking(move || repo.conflict_file(&path)).await
 }
 
+/// Whether `stash@{index}` applies cleanly to the checked-out commit.
+#[tauri::command]
+async fn stash_check(session: State<'_, Session>, index: usize, id: String) -> CommandResult<StashCheck> {
+    let repo = current(&session)?;
+    blocking(move || repo.stash_check(index, &id)).await
+}
+
 /// The git commands an action will run, for the confirmation sheet.
 #[tauri::command]
 async fn plan_action(session: State<'_, Session>, action: Action) -> CommandResult<Plan> {
@@ -252,6 +259,7 @@ fn main() {
             remote_deletion_check,
             merge_preview,
             conflict_file,
+            stash_check,
             plan_action,
             perform_action,
             stop_action,

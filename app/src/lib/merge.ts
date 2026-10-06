@@ -289,23 +289,25 @@ function mergeSheet(ctx: BranchContext, p: MergePreview, method: MergeMethod, ty
   };
 }
 
-type Stopped = "merge" | "rebase" | "pull" | "cherry-pick" | "revert";
-const NOUNS = { merge: "Merge", rebase: "Rebase", pull: "Pull", "cherry-pick": "Cherry-Pick", revert: "Revert" };
+type Stopped = "merge" | "rebase" | "pull" | "cherry-pick" | "revert" | "stash";
+const NOUNS = { merge: "Merge", rebase: "Rebase", pull: "Pull", "cherry-pick": "Cherry-Pick", revert: "Revert", stash: "Apply" };
 
 /** What stopped, for the operation in progress. */
 function stoppedBy(op: Operation): Stopped {
-  return op.kind === "rebase" ? "rebase" : op.kind === "cherryPick" ? "cherry-pick" : op.kind === "revert" ? "revert" : "merge";
+  return op.kind === "rebase" ? "rebase" : op.kind === "cherryPick" ? "cherry-pick" : op.kind === "revert" ? "revert" : op.kind === "stashApply" ? "stash" : "merge";
 }
 
 /** After an action stopped on conflicts: resolve them, or give it up. */
 export function stoppedOnConflicts(failure: Failure, what: Stopped): Recovery | null {
   if (failure.kind !== "conflict") return null;
-  const undo = what === "pull" ? "Undo Pull" : `Abort ${NOUNS[what]}`;
+  const undo = what === "pull" ? "Undo Pull" : what === "stash" ? "Undo Apply" : `Abort ${NOUNS[what]}`;
   return {
-    title: `The ${what} stopped on conflicts`,
+    title: what === "stash" ? "Applying the stash stopped on conflicts" : `The ${what} stopped on conflicts`,
     body: [
-      "Both sides change the same lines, so git needs you to choose what goes into each file. Resolve the conflicts, then ",
-      what === "merge" ? "commit the merge." : what === "pull" ? "continue the rebase." : `continue the ${what}.`,
+      what === "stash"
+        ? "The stash and your branch change the same lines, so git needs you to choose what goes into each file. Resolve the conflicts, then "
+        : "Both sides change the same lines, so git needs you to choose what goes into each file. Resolve the conflicts, then ",
+      what === "merge" ? "commit the merge." : what === "pull" ? "continue the rebase." : what === "stash" ? "finish the apply. The stash stays until then." : `continue the ${what}.`,
     ],
     icon: "warn",
     tone: "warn",
@@ -372,12 +374,36 @@ export function describe(op: Operation): {
         noun: "Revert",
         verb: "revert",
       };
+    case "stashApply":
+      return {
+        title: `Applying ${op.incoming ?? "a stash"} to ${branch}`,
+        noun: "Apply",
+        verb: "stash apply",
+      };
   }
 }
 
 export function abortRequest(ctx: BranchContext, op: Operation): Request {
   const { noun, verb } = describe(op);
   const branch = op.branch ?? "HEAD";
+  if (op.kind === "stashApply") {
+    return {
+      title: "Undo applying the stash?",
+      body: [
+        "Puts the files the stash changed back to how ",
+        chip(ctx, branch),
+        " has them and removes the untracked files it brought back. Your other changes stay. ",
+        { code: op.incoming ?? "The stash" },
+        " stays in the list.",
+      ],
+      icon: "discard",
+      danger: true,
+      button: "Undo Apply",
+      status: "Undoing the apply…",
+      done: "Undone. The stash is still in the list.",
+      action: { kind: "abort" },
+    };
+  }
   return {
     title: `Abort the ${verb}?`,
     body: [chip(ctx, branch), ` goes back to how it was before the ${verb}, and so do its files. Choices you made in conflicts are thrown away.`],
@@ -419,6 +445,21 @@ export function continueRequest(ctx: BranchContext, op: Operation, message?: str
   const commits = op.kind === "merge" || op.kind === "squash";
   const text = message ?? op.message ?? "";
   const step = op.step ? ` (commit ${op.step[0]} of ${op.step[1]})` : "";
+  if (op.kind === "stashApply") {
+    return {
+      title: "Finish applying the stash?",
+      body: [
+        "Keeps your resolved files as uncommitted changes on ",
+        chip(ctx, branch),
+        ". After a pop that hit a conflict git keeps the stash in the list, so Oxbow deletes it now that it is applied.",
+      ],
+      icon: "stash",
+      button: "Finish",
+      status: "Finishing…",
+      done: "Applied the stash. The changes are uncommitted.",
+      action: { kind: "continue", message: null },
+    };
+  }
   return {
     title: commits ? `Commit the ${verb}?` : `Continue the ${verb}?`,
     body: commits

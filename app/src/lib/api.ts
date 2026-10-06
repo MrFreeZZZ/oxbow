@@ -11,6 +11,7 @@ import type {
   Plan,
   RepoSummary,
   Side,
+  StashCheck,
   WorkingTree,
 } from "./types";
 
@@ -27,6 +28,7 @@ export const api = {
   remoteDeletionCheck: (branch: string) => invoke<CommitBrief[]>("remote_deletion_check", { branch }),
   mergePreview: (branch: string) => invoke<MergePreview>("merge_preview", { branch }),
   conflictFile: (path: string) => invoke<ConflictFile>("conflict_file", { path }),
+  stashCheck: (index: number, id: string) => invoke<StashCheck>("stash_check", { index, id }),
   planAction: (action: Action) => invoke<Plan>("plan_action", { action }),
   /** Rejects with a `Failure`. */
   performAction: (action: Action) => invoke<string>("perform_action", { action }),

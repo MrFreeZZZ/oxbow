@@ -45,6 +45,8 @@
     undo: "M3 6.5h7a3.5 3.5 0 0 1 0 7H6M5.5 4 3 6.5 5.5 9",
     revert: "M12.5 8a4.5 4.5 0 1 1-1.3-3.2M11.5 2v3h-3",
     reset: "M3.5 8a4.5 4.5 0 1 0 1.3-3.2M4.5 2v3h3",
+    stash: "M2.5 3.5h11v3h-11zM3.5 6.5v6h9v-6M6.5 9h3",
+    pop: "M2.5 8.5v4.5h11V8.5M8 10.5V2.5M5.5 5 8 2.5 10.5 5",
   };
 
   // Token colors of the terminal block follow the app theme (see --term-* in app.css).
@@ -281,7 +283,10 @@
 {/if}
 
 {#if confirm.toast}
-  <div class="toast" role="status">{confirm.toast}</div>
+  <div class="toast" class:with-undo={confirm.toastUndo} role="status">
+    <span>{confirm.toast}</span>
+    {#if confirm.toastUndo}<button class="undo" onclick={() => confirm.undo()}>Undo</button>{/if}
+  </div>
 {/if}
 
 <style>
@@ -620,6 +625,19 @@
     -webkit-backdrop-filter: blur(20px);
     backdrop-filter: blur(20px);
     font-weight: 500;
+  }
+  .toast.with-undo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 5px 5px 5px 16px;
+  }
+  .toast .undo {
+    height: 26px;
+    padding: 0 12px;
+    border-radius: 13px;
+    background: var(--field);
+    font-weight: 600;
   }
   .foot {
     display: flex;

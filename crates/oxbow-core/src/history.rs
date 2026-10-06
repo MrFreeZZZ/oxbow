@@ -344,6 +344,7 @@ impl Repo {
                         OperationKind::Rebase => "Rebase in progress",
                         OperationKind::CherryPick => "Cherry-pick in progress",
                         OperationKind::Revert => "Revert in progress",
+                        OperationKind::StashApply => "Stash apply in progress",
                     })
                     .to_owned(),
                 author_name: String::new(),
