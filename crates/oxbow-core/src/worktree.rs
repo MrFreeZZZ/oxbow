@@ -13,7 +13,7 @@ use crate::cli::{GitCommand, OutputLine};
 use crate::commit::{DiffLine, FileChange, FileDiff, FileStatus, Hunk, LineKind, word_diff};
 use crate::edit::{ResetMode, plan_reset};
 use crate::error::{Error, Result};
-use crate::operation::{ConflictSide, MergeMethod, Pick};
+use crate::operation::{ConflictSide, MergeMethod, OperationKind, Pick};
 use crate::repo::Repo;
 
 /// Files with more changed lines than this are not shown line by line.
@@ -216,6 +216,35 @@ pub enum Action {
     /// Replace the message of the last commit; its changes and the staged ones stay as they are.
     Reword {
         message: String,
+    },
+    /// Put every uncommitted change aside in a new stash, untracked files too with `untracked`.
+    StashPush {
+        message: Option<String>,
+        untracked: bool,
+    },
+    /// Bring the changes of `stash@{index}` (whose id is `id`) back into the working copy;
+    /// `pop` deletes the stash afterwards, `keep_index` restages what was staged.
+    StashApply {
+        index: usize,
+        id: String,
+        pop: bool,
+        keep_index: bool,
+    },
+    /// Delete `stash@{index}`.
+    StashDrop {
+        index: usize,
+        id: String,
+    },
+    /// Put a dropped stash back, e.g. to undo a drop or pop.
+    StashStore {
+        id: String,
+        message: String,
+    },
+    /// Create the branch `name` at the commit the stash was made on and apply it there.
+    StashBranch {
+        index: usize,
+        id: String,
+        name: String,
     },
 }
 
@@ -588,6 +617,58 @@ impl Repo {
             Action::CherryPick { commit } => self.plan_cherry_pick(commit)?,
             Action::Revert { commit } => self.plan_revert(commit)?,
             Action::Reset { commit, mode } => plan_reset(commit, *mode),
+            Action::StashPush { message, untracked } => {
+                let mut args = vec!["stash".to_owned(), "push".to_owned()];
+                if *untracked {
+                    args.push("--include-untracked".to_owned());
+                }
+                if let Some(message) = message.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+                    args.extend(["-m".to_owned(), message.to_owned()]);
+                }
+                let cmd = GitCommand::new(args);
+                vec![if *untracked {
+                    cmd.comment("--include-untracked: new files are stashed too")
+                } else {
+                    cmd.comment("new, untracked files stay where they are")
+                }]
+            }
+            Action::StashApply {
+                index,
+                id,
+                pop,
+                keep_index,
+            } => {
+                let name = self.stash_ref(*index, id)?;
+                let mut args = vec!["stash", if *pop { "pop" } else { "apply" }];
+                if *keep_index {
+                    args.push("--index");
+                }
+                args.push(&name);
+                let comment = match (*pop, *keep_index) {
+                    (true, true) => "pop: apply, then delete the stash; --index: staged files come back staged",
+                    (true, false) => "pop: apply, then delete the stash",
+                    (false, true) => "the stash stays in the list; --index: staged files come back staged",
+                    (false, false) => "the stash stays in the list",
+                };
+                vec![GitCommand::new(args).comment(comment)]
+            }
+            Action::StashDrop { index, id } => vec![
+                GitCommand::new(["stash".to_owned(), "drop".to_owned(), self.stash_ref(*index, id)?])
+                    .comment("later stashes move up one number"),
+            ],
+            Action::StashStore { id, message } => vec![
+                GitCommand::new(["stash", "store", "-m", message, id])
+                    .comment("puts the dropped stash back as stash@{0}"),
+            ],
+            Action::StashBranch { index, id, name } => vec![
+                GitCommand::new([
+                    "stash".to_owned(),
+                    "branch".to_owned(),
+                    name.clone(),
+                    self.stash_ref(*index, id)?,
+                ])
+                .comment("a new branch where the stash was made, with the stash applied and dropped"),
+            ],
             Action::Reword { message } => {
                 let mut args = vec!["commit".to_owned(), "--amend".to_owned(), "--only".to_owned()];
                 for paragraph in paragraphs(message) {
@@ -626,6 +707,10 @@ impl Repo {
                 if let Action::Resolve { path, picks } = action {
                     self.write_resolution(path, picks)?;
                 }
+                // The note of a conflicted apply goes when the apply is finished or undone.
+                let pending = self.pending_apply().is_some()
+                    && matches!(action, Action::Continue { .. } | Action::Abort)
+                    && self.operation()?.is_some_and(|op| op.kind == OperationKind::StashApply);
                 let mut last = String::new();
                 for command in self.plan(action)?.commands {
                     on_event(ActionEvent::Command {
@@ -642,12 +727,20 @@ impl Repo {
                             {
                                 self.remember_squash(branch, message.as_deref());
                             }
+                            if let Action::StashApply { id, pop, .. } = action
+                                && self.conflicted_paths().is_ok_and(|p| !p.is_empty())
+                            {
+                                self.remember_apply(id, *pop);
+                            }
                         })?;
                     last = if out.stdout.trim().is_empty() {
                         out.stderr
                     } else {
                         out.stdout
                     };
+                }
+                if pending {
+                    self.forget_apply();
                 }
                 return Ok(last);
             }

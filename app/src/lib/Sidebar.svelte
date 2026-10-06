@@ -19,6 +19,7 @@
   } from "./branches";
   import { pushRequest } from "./remote";
   import { mergeRequest } from "./merge";
+  import { stashMenu } from "./stash";
 
   let {
     repo,
@@ -28,6 +29,9 @@
     onOpen,
     onPick,
     run,
+    view,
+    onView,
+    onPickStash,
   }: {
     repo: RepoSummary;
     history: History;
@@ -37,6 +41,11 @@
     onPick: (commit: string) => void;
     /** Confirm and run a change to the repository. */
     run: (request: Request | Promise<Request>) => void;
+    /** The screen shown next to the sidebar. */
+    view: "history" | "stashes";
+    onView: (view: "history" | "stashes") => void;
+    /** On the Stashes screen a stash in the list is picked there instead of in History. */
+    onPickStash: (id: string) => void;
   } = $props();
 
   /** The open right-click menu and the ref it belongs to. */
@@ -76,7 +85,7 @@
   const busy = $derived.by(() => {
     const op = history.operation;
     if (!op?.branch) return null;
-    const word = { merge: "MERGING", squash: "SQUASHING", rebase: "REBASING", cherryPick: "PICKING", revert: "REVERTING" }[op.kind];
+    const word = { merge: "MERGING", squash: "SQUASHING", rebase: "REBASING", cherryPick: "PICKING", revert: "REVERTING", stashApply: "APPLYING" }[op.kind];
     return { branch: op.branch, word };
   });
 
@@ -98,17 +107,14 @@
       .sort((a, b) => b.time - a.time || b.ref.name.localeCompare(a.ref.name)),
   );
 
-  /** Stashes, newest first, with the "On main: " prefix git adds moved out of the title. */
+  /** Stashes, newest first. */
   const stashes = $derived(
-    history.stashes.map((s) => {
-      const name = `stash@{${s.index}}`;
-      const match = /^(?:WIP on|On) ([^:]+): (.*)$/.exec(s.message);
-      return {
-        ref: { name, kind: "stash" as const, target: s.id, remote: null, tracking: null },
-        title: match ? match[2] : s.message,
-        branch: match ? match[1] : null,
-      };
-    }),
+    history.stashes.map((s) => ({
+      ref: { name: `stash@{${s.index}}`, kind: "stash" as const, target: s.id, remote: null, tracking: null },
+      title: s.title,
+      branch: s.branch,
+      info: s,
+    })),
   );
 
   /** Per remote, its branches that no local branch tracks, newest first, and how many are tracked. */
@@ -289,10 +295,15 @@
 
   <div class="scroll" bind:this={list}>
     <div class="heading">Workspace</div>
-    <div class="item current">
+    <button class="item" class:current={view === "history"} onclick={() => onView("history")}>
       <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" /><path d="M8 4.5V8l2.5 1.5" /></svg>
       <span class="grow">History</span>
-    </div>
+    </button>
+    <button class="item" class:current={view === "stashes"} onclick={() => onView("stashes")}>
+      <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.stash} /></svg>
+      <span class="grow">Stashes</span>
+      {#if history.stashes.length}<span class="meta">{history.stashes.length}</span>{/if}
+    </button>
 
     <div class="heading with-button">
       <span>Branches</span>
@@ -342,8 +353,9 @@
         <button
           class="item"
           data-ref={s.ref.name}
-          style:background={focused === s.ref.name ? "var(--side-sel)" : undefined}
-          onclick={() => focus(s.ref)}
+          style:background={view === "history" && focused === s.ref.name ? "var(--side-sel)" : undefined}
+          onclick={() => (view === "stashes" ? onPickStash(s.ref.target) : focus(s.ref))}
+          oncontextmenu={(e) => open(e, "Stash menu", s.ref.name, stashMenu(ctx, s.info, run, copy))}
           title="{s.ref.name}{s.branch ? ` on ${s.branch}` : ''}: {s.title}"
         >
           <svg class="icon" viewBox="0 0 16 16"><rect x="3" y="6.5" width="10" height="7" rx="1.5" /><path d="M4.5 4.5h7M6 2.5h4" /></svg>

@@ -71,7 +71,24 @@ export interface StashInfo {
   /** n in stash@{n} */
   index: number;
   id: string;
+  /** As git wrote it, e.g. "On main: Try a smaller pool". */
   message: string;
+  /** The branch it was made on; null on a detached HEAD. */
+  branch: string | null;
+  /** The message without git's "On main: " prefix. */
+  title: string;
+  /** The commit it was made on. */
+  base: string;
+  /** The commit holding its untracked files. */
+  untracked: string | null;
+  time: number;
+}
+
+export interface StashCheck {
+  /** Files that would conflict; null when git can't tell. */
+  conflicts: string[] | null;
+  /** Uncommitted files the stash changes too: git refuses to apply over them. */
+  inTheWay: string[];
 }
 
 export interface Tracking {
@@ -212,12 +229,17 @@ export type Action =
   | { kind: "cherryPick"; commit: string }
   | { kind: "revert"; commit: string }
   | { kind: "reset"; commit: string; mode: ResetMode }
-  | { kind: "reword"; message: string };
+  | { kind: "reword"; message: string }
+  | { kind: "stashPush"; message: string | null; untracked: boolean }
+  | { kind: "stashApply"; index: number; id: string; pop: boolean; keepIndex: boolean }
+  | { kind: "stashDrop"; index: number; id: string }
+  | { kind: "stashStore"; id: string; message: string }
+  | { kind: "stashBranch"; index: number; id: string; name: string };
 
 export type ResetMode = "soft" | "mixed" | "hard";
 
 export type MergeMethod = "merge" | "squash" | "rebase" | "fastForward";
-export type OperationKind = "merge" | "squash" | "rebase" | "cherryPick" | "revert";
+export type OperationKind = "merge" | "squash" | "rebase" | "cherryPick" | "revert" | "stashApply";
 /** A side of a conflict as git names the index stages: ours is stage 2, theirs stage 3. */
 export type ConflictSide = "ours" | "theirs";
 export type Pick = "ours" | "theirs" | "oursThenTheirs" | "theirsThenOurs";

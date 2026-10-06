@@ -47,6 +47,8 @@ pub enum OperationKind {
     Rebase,
     CherryPick,
     Revert,
+    /// `git stash apply` or `pop` stopped on conflicts; Oxbow remembers it (git does not).
+    StashApply,
 }
 
 /// One side of a conflict, as git names the index stages: `ours` is stage 2, `theirs` stage 3.
@@ -277,6 +279,35 @@ impl Repo {
                 yours: ConflictSide::Ours,
                 message: Some(squash_message(&message)),
             }
+        } else if let Some(pending) = self.pending_apply() {
+            // Once nothing is conflicted or staged any more the apply was finished some other way.
+            let conflicted = self.conflicted_paths()?.len();
+            let staged = !self
+                .spawn(&GitCommand::new(["diff", "--cached", "--quiet"]), None)?
+                .status
+                .success();
+            if conflicted == 0 && !staged {
+                self.forget_apply();
+                let _ = std::fs::remove_file(dir.join(SQUASH_SOURCE));
+                return Ok(None);
+            }
+            let stash = self.stashes()?.into_iter().find(|s| s.id == pending.id);
+            let name = stash
+                .as_ref()
+                .map_or_else(|| short(&pending.id), |s| format!("stash@{{{}}}", s.index));
+            Operation {
+                kind: OperationKind::StashApply,
+                branch: here.clone(),
+                incoming: Some(name.clone()),
+                commit: None,
+                incoming_count: 0,
+                step: None,
+                conflicted: 0,
+                ours_label: here_label,
+                theirs_label: name,
+                yours: ConflictSide::Ours,
+                message: stash.map(|s| s.title),
+            }
         } else {
             let _ = std::fs::remove_file(dir.join(SQUASH_SOURCE));
             return Ok(None);
@@ -290,7 +321,7 @@ impl Repo {
     }
 
     /// Paths with unresolved conflicts, from the index.
-    fn conflicted_paths(&self) -> Result<Vec<String>> {
+    pub(crate) fn conflicted_paths(&self) -> Result<Vec<String>> {
         let repo = self.local();
         let index = repo.open_index().map_err(Error::git)?;
         let mut paths: Vec<String> = index
@@ -578,7 +609,13 @@ impl Repo {
             OperationKind::Revert => {
                 GitCommand::new(["revert", "--continue"]).comment("commits the revert with the resolved files")
             }
+            OperationKind::StashApply => return self.plan_finish_apply(&self.pending()?),
         }])
+    }
+
+    fn pending(&self) -> Result<crate::stash::PendingApply> {
+        self.pending_apply()
+            .ok_or_else(|| Error::Git("no stash is being applied".into()))
     }
 
     pub(crate) fn plan_abort(&self) -> Result<Vec<GitCommand>> {
@@ -597,6 +634,7 @@ impl Repo {
             OperationKind::Revert => {
                 GitCommand::new(["revert", "--abort"]).comment(format!("{branch} goes back to before the revert"))
             }
+            OperationKind::StashApply => return self.plan_undo_apply(&self.pending()?),
         }])
     }
 

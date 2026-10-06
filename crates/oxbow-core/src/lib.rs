@@ -13,6 +13,7 @@ pub mod history;
 pub mod operation;
 pub mod remote;
 pub mod repo;
+pub mod stash;
 pub mod worktree;
 
 pub use cli::{CommandOutput, GitCommand, OutputLine};
@@ -25,4 +26,5 @@ pub use history::{History, HistoryOptions, HistoryRow, Label, WORKTREE_ID, Workt
 pub use operation::{Chunk, ConflictFile, ConflictSide, MergeMethod, MergePreview, Operation, OperationKind, Pick};
 pub use remote::{CommitBrief, DeletionCheck, Failure, FailureKind, Tracking, classify_failure};
 pub use repo::{HeadInfo, RefInfo, RefKind, Repo, StashInfo};
+pub use stash::StashCheck;
 pub use worktree::{Action, ActionEvent, Plan, RemoteBranch, Side, WorkingTree};

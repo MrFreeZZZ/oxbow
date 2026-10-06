@@ -30,6 +30,8 @@ export type Icon =
   | "cherry"
   | "revert"
   | "undo"
+  | "stash"
+  | "pop"
   | "reset";
 
 export interface Request {
@@ -64,6 +66,8 @@ export interface Request {
   resolveConflicts?: boolean;
   /** The way out when the action fails. */
   recover?: (failure: Failure) => Recovery | null;
+  /** Offered as Undo on the toast after it succeeded, e.g. putting a dropped stash back. */
+  undo?: () => Request;
   action: Action;
 }
 
@@ -148,6 +152,10 @@ class ConfirmState {
   /** Commands the recovery button will run. */
   recoveryCommands = $state<GitCommand[]>([]);
   toast = $state<string | null>(null);
+  /** The Undo of the toast, when the action that showed it can be taken back. */
+  toastUndo = $state<(() => Request) | null>(null);
+  /** Runs a request the way the app does (with a reload after it); set by the app. */
+  runner: ((request: Request) => void) | null = null;
   #resolve: ((done: boolean) => void) | null = null;
   /** Goes up with every plan asked for, so a slow answer can't replace a newer one. */
   #planned = 0;
@@ -242,10 +250,12 @@ class ConfirmState {
     this.progress = null;
     this.failure = null;
     this.recovery = null;
+    // Only the request's own action can be undone, not a way out offered after it failed.
+    const undo = this.request && action === this.request.action ? (this.request.undo ?? null) : null;
     try {
       await api.performAction(action);
       this.#finish(true);
-      if (done) this.#showToast(done);
+      if (done) this.#showToast(done, undo);
     } catch (err) {
       const failure = toFailure(err);
       if (failure.kind === "conflict" && this.request?.resolveConflicts) {
@@ -292,10 +302,26 @@ class ConfirmState {
     this.#showToast(text);
   }
 
-  #showToast(text: string) {
+  /** Take back what the toast reports. */
+  undo() {
+    const undo = this.toastUndo;
+    this.toast = null;
+    this.toastUndo = null;
+    if (undo) this.runner?.(undo());
+  }
+
+  #showToast(text: string, undo: (() => Request) | null = null) {
     clearTimeout(this.#toastTimer);
     this.toast = text;
-    this.#toastTimer = setTimeout(() => (this.toast = null), 4500);
+    this.toastUndo = undo;
+    // An Undo stays a little longer, so there is time to reach it.
+    this.#toastTimer = setTimeout(
+      () => {
+        this.toast = null;
+        this.toastUndo = null;
+      },
+      undo ? 8000 : 4500,
+    );
   }
 
   #finish(done: boolean) {

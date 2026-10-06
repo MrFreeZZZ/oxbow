@@ -29,7 +29,8 @@
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
   const words = $derived(describe(op));
   const commits = $derived(op.kind === "merge" || op.kind === "squash");
-  const finish = $derived(commits ? `Commit ${words.noun}` : `Continue ${words.noun}`);
+  const stash = $derived(op.kind === "stashApply");
+  const finish = $derived(stash ? "Finish" : commits ? `Commit ${words.noun}` : `Continue ${words.noun}`);
   const title = $derived(
     resolving
       ? words.title
@@ -41,7 +42,7 @@
     if (!resolving) {
       return op.conflicted
         ? `Git stopped on ${op.conflicted === 1 ? "a conflict" : "conflicts"}. Finish or abort the ${words.verb} before you switch branches, pull or push.`
-        : `Every conflict is resolved. ${commits ? `Commit the ${words.verb}` : `Continue the ${words.verb}`} to finish it.`;
+        : `Every conflict is resolved. ${stash ? "Finish the apply" : commits ? `Commit the ${words.verb}` : `Continue the ${words.verb}`} to finish it.`;
     }
     const c = op.commit;
     switch (op.kind) {
@@ -51,6 +52,8 @@
         return op.incoming ? `All changes of ${op.incoming}, as one new commit` : "All changes of the squashed branch, as one new commit";
       case "rebase":
         return `${op.step ? `Commit ${op.step[0]} of ${op.step[1]}` : "Replaying"}${c ? `: ${shortId(c.id)} ${c.summary}` : ""}`;
+      case "stashApply":
+        return `${op.message ? `“${op.message}” · ` : ""}the stash stays in Stashes until you finish`;
       default:
         return c ? `${shortId(c.id)} ${c.summary}${c.authorName ? ` by ${c.authorName}` : ""}` : "";
     }
@@ -70,6 +73,8 @@
       <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.cherry} /></svg>
     {:else if op.kind === "revert"}
       <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.revert} /></svg>
+    {:else if op.kind === "stashApply"}
+      <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.stash} /></svg>
     {:else}
       <svg class="icon" viewBox="0 0 16 16"><path d="M4.5 2v12M4.5 4.5c0 3.5 7 2.5 7 6v3.5M2.5 12 4.5 14l2-2" /></svg>
     {/if}
@@ -83,7 +88,7 @@
   {:else}
     <span class="done">All resolved</span>
   {/if}
-  <button class="btn" onclick={onAbort}>Abort {words.noun}</button>
+  <button class="btn" onclick={onAbort}>{stash ? "Undo Apply" : `Abort ${words.noun}`}</button>
   {#if resolving && (op.kind === "rebase" || op.kind === "cherryPick")}
     <button class="btn" onclick={onSkip}>Skip Commit</button>
   {/if}

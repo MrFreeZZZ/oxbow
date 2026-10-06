@@ -14,6 +14,8 @@
   import OperationBanner from "./lib/OperationBanner.svelte";
   import ConflictsView from "./lib/ConflictsView.svelte";
   import { abortRequest, continueRequest, describe, mergeRequest, skipRequest } from "./lib/merge";
+  import { stashMenu, stashRequest } from "./lib/stash";
+  import StashesView from "./lib/StashesView.svelte";
   import { ancestors, cherryPickRequest, editMessageRequest, resetModes, resetRequest, revertRequest, undoCommitRequest } from "./lib/commits";
   import type { Operation } from "./lib/types";
   import { menuIcons, type MenuEntry } from "./lib/Menu.svelte";
@@ -33,6 +35,10 @@
   let resolving = $state(false);
   const operation = $derived(history?.operation ?? null);
   const showConflicts = $derived(resolving && !!operation);
+  /** The screen next to the sidebar. */
+  let view = $state<"history" | "stashes">("history");
+  /** The stash picked on the Stashes screen. */
+  let stashSel = $state<string | null>(null);
 
   const branchCount = $derived(history ? history.refs.filter((r) => r.kind === "local").length : 0);
   const rowsById = $derived(new Map(history?.rows.map((r) => [r.id, r]) ?? []));
@@ -104,22 +110,27 @@
 
   /** Confirm and run a change to the repository, then reload. After a checkout the new HEAD's
    *  latest commit is selected, as in the design. */
-  async function run(pending: Request | Promise<Request>) {
+  /** Confirm and run an action, then reload. True when it ran and succeeded. */
+  async function run(pending: Request | Promise<Request>): Promise<boolean> {
     let request: Request;
     try {
       request = await pending;
     } catch (err) {
       error = String(err);
-      return;
+      return false;
     }
     const before = history?.head;
     const opBefore = history?.operation ?? null;
-    await confirm.run(request);
+    const ok = await confirm.run(request);
     await refresh();
+    // A stash made or put back is the newest, and the Stashes screen shows it.
+    if (ok && (request.action.kind === "stashPush" || request.action.kind === "stashStore")) stashSel = history?.stashes[0]?.id ?? null;
     const after = history?.head;
     if (after?.commit && (after.branch !== before?.branch || after.commit !== before?.commit)) select(after.commit);
     openConflicts(opBefore);
+    return ok;
   }
+  confirm.runner = (request) => void run(request);
 
   /** After an action stopped on conflicts, or a rebase stopped again on its next commit, the
    *  Conflicts screen opens on its own. */
@@ -145,7 +156,15 @@
   /** The right-click menu of a commit in the graph. */
   function commitMenu(row: HistoryRow): MenuEntry[] {
     const ctx = branchCtx;
-    if (!ctx || !history || row.worktree) return [];
+    if (!ctx || !history) return [];
+    if (row.worktree) {
+      return [
+        { kind: "header", label: row.summary },
+        { kind: "item", label: "Stash Changes…", icon: menuIcons.stash, run: () => run(stashRequest(ctx)) },
+      ];
+    }
+    const stash = history.stashes.find((s) => s.id === row.id);
+    if (stash) return stashMenu(ctx, stash, run, (text) => copyText(text, `Copied ${text.length > 40 ? "it" : text}.`));
     const item = (label: string, icon: string, act: () => void, danger = false): MenuEntry => ({ kind: "item", label, icon, run: act, danger });
     const isHead = row.id === history.head.commit;
     const here = history.head.branch ?? "HEAD";
@@ -163,8 +182,7 @@
     // Branches at this commit can be merged or rebased onto right here, as from the branch list;
     // the commit itself can be copied, undone or made the branch's tip. None of it while a merge
     // or rebase waits to be finished.
-    const stash = row.labels.some((l) => l.kind === "stash");
-    if (!history.operation && !stash) {
+    if (!history.operation) {
       const locals = new Set(row.labels.filter((l) => l.kind === "local").map((l) => l.name));
       const mergeable = row.labels
         .filter((l) => (l.kind === "local" || (l.kind === "remote" && !locals.has(l.name.slice(l.name.indexOf("/") + 1)))) && l.name !== here)
@@ -274,6 +292,15 @@
     list?.reveal(id);
   }
 
+  /** Picking a commit from the sidebar goes back to History, which mounts the graph again. */
+  function pick(id: string) {
+    selected = id;
+    if (view === "history" && !showConflicts) return list?.reveal(id);
+    view = "history";
+    resolving = false;
+    requestAnimationFrame(() => list?.reveal(id));
+  }
+
   function startResize(event: PointerEvent) {
     const startX = event.clientX;
     const startWidth = panelWidth;
@@ -307,13 +334,26 @@
   <Welcome {loading} {error} onOpen={chooseRepo} />
 {:else}
   <div class="window">
-    <Sidebar {repo} {history} {selectedRow} ctx={branchCtx!} onOpen={chooseRepo} onPick={select} {run} />
+    <Sidebar {repo} {history} {selectedRow} ctx={branchCtx!} onOpen={chooseRepo}
+      onPick={pick}
+      {run}
+      {view}
+      onView={(v) => {
+        view = v;
+        resolving = false;
+        if (v === "history" && selected) requestAnimationFrame(() => list?.reveal(selected!));
+      }}
+      onPickStash={(id) => (stashSel = id)}
+    />
     <div class="main">
       <header data-tauri-drag-region>
         <div class="title" data-tauri-drag-region>
           {#if showConflicts && operation}
             <span class="name">Resolve Conflicts</span>
             <span class="sub">{describe(operation).noun} in progress · {operation.conflicted} {operation.conflicted === 1 ? "file" : "files"} left</span>
+          {:else if view === "stashes"}
+            <span class="name">Stashes</span>
+            <span class="sub">{repo.name} · on {history.head.branch ?? "detached HEAD"}</span>
           {:else}
             <span class="name">History</span>
             <span class="sub">{branchCount} {branchCount === 1 ? "branch" : "branches"} · {history.head.branch ?? operation?.branch ?? "detached HEAD"}</span>
@@ -321,8 +361,8 @@
         </div>
         <BranchPicker {history} {colorOf} onPick={(name) => branchCtx && run(switchRequest(branchCtx, name))} />
         {#if showConflicts}
-          <button class="capsule" onclick={() => (resolving = false)} title="Back to the commit graph">
-            <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>History
+          <button class="capsule" onclick={() => (resolving = false)} title={view === "stashes" ? "Back to Stashes" : "Back to the commit graph"}>
+            <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>{view === "stashes" ? "Stashes" : "History"}
           </button>
         {/if}
         <span class="spacer" data-tauri-drag-region></span>
@@ -377,6 +417,10 @@
       {#if showConflicts && operation}
         {#key repo.path}
           <ConflictsView {history} op={operation} {colorOf} {version} {run} />
+        {/key}
+      {:else if view === "stashes" && branchCtx}
+        {#key repo.path}
+          <StashesView {history} ctx={branchCtx} {colorOf} bind:selected={stashSel} {version} {run} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "it" : text}.`)} />
         {/key}
       {:else}
       <div class="content">
