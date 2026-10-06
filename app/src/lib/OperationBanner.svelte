@@ -5,6 +5,7 @@
   import type { Operation } from "./types";
   import { lane, plate, shortId, tint } from "./format";
   import { describe } from "./merge";
+  import { menuIcons } from "./Menu.svelte";
 
   let {
     op,
@@ -64,7 +65,11 @@
 >
   <span class="tile" style:background={tint(color, "bar")} style:color={plate(color)}>
     {#if op.kind === "rebase"}
-      <svg class="icon" viewBox="0 0 16 16"><path d="M4.5 14V7M4.5 7c0-3 7-1 7-5M11.5 2v12M9.5 4 11.5 2l2 2" /></svg>
+      <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.rebase} /></svg>
+    {:else if op.kind === "cherryPick"}
+      <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.cherry} /></svg>
+    {:else if op.kind === "revert"}
+      <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.revert} /></svg>
     {:else}
       <svg class="icon" viewBox="0 0 16 16"><path d="M4.5 2v12M4.5 4.5c0 3.5 7 2.5 7 6v3.5M2.5 12 4.5 14l2-2" /></svg>
     {/if}

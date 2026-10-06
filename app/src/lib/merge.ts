@@ -289,15 +289,23 @@ function mergeSheet(ctx: BranchContext, p: MergePreview, method: MergeMethod, ty
   };
 }
 
+type Stopped = "merge" | "rebase" | "pull" | "cherry-pick" | "revert";
+const NOUNS = { merge: "Merge", rebase: "Rebase", pull: "Pull", "cherry-pick": "Cherry-Pick", revert: "Revert" };
+
+/** What stopped, for the operation in progress. */
+function stoppedBy(op: Operation): Stopped {
+  return op.kind === "rebase" ? "rebase" : op.kind === "cherryPick" ? "cherry-pick" : op.kind === "revert" ? "revert" : "merge";
+}
+
 /** After an action stopped on conflicts: resolve them, or give it up. */
-export function stoppedOnConflicts(failure: Failure, what: "merge" | "rebase" | "pull"): Recovery | null {
+export function stoppedOnConflicts(failure: Failure, what: Stopped): Recovery | null {
   if (failure.kind !== "conflict") return null;
-  const undo = what === "pull" ? "Undo Pull" : what === "rebase" ? "Abort Rebase" : "Abort Merge";
+  const undo = what === "pull" ? "Undo Pull" : `Abort ${NOUNS[what]}`;
   return {
     title: `The ${what} stopped on conflicts`,
     body: [
       "Both sides change the same lines, so git needs you to choose what goes into each file. Resolve the conflicts, then ",
-      what === "merge" ? "commit the merge." : "continue the rebase.",
+      what === "merge" ? "commit the merge." : what === "pull" ? "continue the rebase." : `continue the ${what}.`,
     ],
     icon: "warn",
     tone: "warn",
@@ -309,6 +317,19 @@ export function stoppedOnConflicts(failure: Failure, what: "merge" | "rebase" | 
     },
     close: "Resolve Conflicts",
     note: "Nothing is lost while you decide.",
+  };
+}
+
+/** A cherry-pick whose changes are already on the branch stops with nothing to commit. */
+export function nothingToPick(ctx: BranchContext, failure: Failure): Recovery | null {
+  if (!failure.output.includes("is now empty")) return null;
+  return {
+    title: "Nothing left to pick",
+    body: ["The changes of this commit are already on ", chip(ctx, ctx.history.head.branch ?? "HEAD"), ", so cherry-picking it would make an empty commit. Skip it to finish."],
+    icon: "warn",
+    tone: "warn",
+    button: { label: "Skip It", action: { kind: "skip" }, status: "Skipping the commit…", done: "Nothing changed." },
+    close: "Later",
   };
 }
 
@@ -385,7 +406,7 @@ export function skipRequest(ctx: BranchContext, op: Operation): Request {
     button: "Skip Commit",
     status: "Skipping the commit…",
     done: "Skipped.",
-    recover: (failure) => stoppedOnConflicts(failure, "rebase"),
+    recover: (failure) => stoppedOnConflicts(failure, stoppedBy(op)),
     resolveConflicts: true,
     action: { kind: "skip" },
   };
@@ -402,8 +423,10 @@ export function continueRequest(ctx: BranchContext, op: Operation, message?: str
     title: commits ? `Commit the ${verb}?` : `Continue the ${verb}?`,
     body: commits
       ? ["Makes the commit that finishes the ", verb, " on ", chip(ctx, branch), "."]
-      : ["Commits the resolved files", step, " and goes on replaying the rest onto ", chip(ctx, op.incoming ?? branch), "."],
-    icon: commits ? "commit" : op.kind === "rebase" ? "rebase" : "merge",
+      : op.kind === "rebase"
+        ? ["Commits the resolved files", step, " and goes on replaying the rest onto ", chip(ctx, op.incoming ?? branch), "."]
+        : [`Makes the ${verb} commit on `, chip(ctx, branch), ` with the resolved files${op.commit ? `, keeping the message of ${shortId(op.commit.id)}` : ""}.`],
+    icon: commits ? "commit" : op.kind === "rebase" ? "rebase" : op.kind === "cherryPick" ? "cherry" : op.kind === "revert" ? "revert" : "merge",
     button: commits ? `Commit ${noun}` : `Continue ${noun}`,
     fields: commits
       ? [
@@ -419,9 +442,9 @@ export function continueRequest(ctx: BranchContext, op: Operation, message?: str
       : undefined,
     invalid: commits && !text.trim() ? "Type a commit message." : null,
     status: commits ? `Committing the ${verb}…` : `Continuing the ${verb}…`,
-    done: commits ? `Committed the ${verb} on ${branch}.` : `Done.`,
+    done: commits || op.kind !== "rebase" ? `Committed the ${verb} on ${branch}.` : `Done.`,
     resolveConflicts: !commits,
-    recover: (failure) => stoppedOnConflicts(failure, op.kind === "rebase" ? "rebase" : "merge"),
+    recover: (failure) => nothingToPick(ctx, failure) ?? stoppedOnConflicts(failure, stoppedBy(op)),
     // An untouched message stays git's, so the command shows plain --no-edit.
     action: {
       kind: "continue",

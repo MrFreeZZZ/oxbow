@@ -7,7 +7,7 @@
 
   let copied = $state(false);
   let goButton = $state<HTMLButtonElement>();
-  let textBox = $state<HTMLInputElement>();
+  let textBox = $state<HTMLInputElement | HTMLTextAreaElement>();
   let linesBox = $state<HTMLDivElement>();
 
   const request = $derived(confirm.request);
@@ -41,6 +41,10 @@
     drop: "M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.7 9h5.6l.7-9",
     merge: "M4.5 2v12M4.5 4.5c0 3.5 7 2.5 7 6v3.5M2.5 12 4.5 14l2-2",
     rebase: "M4.5 14V7M4.5 7c0-3 7-1 7-5M11.5 2v12M9.5 4 11.5 2l2 2",
+    cherry: "M3 12a2 2 0 1 0 4 0a2 2 0 1 0-4 0M9 11a2 2 0 1 0 4 0a2 2 0 1 0-4 0M5 10c.5-4 3-6.5 6-8M11 9c-.5-2.5-.5-5 0-7",
+    undo: "M3 6.5h7a3.5 3.5 0 0 1 0 7H6M5.5 4 3 6.5 5.5 9",
+    revert: "M12.5 8a4.5 4.5 0 1 1-1.3-3.2M11.5 2v3h-3",
+    reset: "M3.5 8a4.5 4.5 0 1 0 1.3-3.2M4.5 2v3h3",
   };
 
   // Token colors of the terminal block follow the app theme (see --term-* in app.css).
@@ -81,7 +85,13 @@
       event.preventDefault();
       if (running) confirm.stop();
       else confirm.cancel();
-    } else if (event.key === "Enter" && confirm.phase === "ask" && !(event.target instanceof HTMLButtonElement)) {
+    } else if (
+      event.key === "Enter" &&
+      confirm.phase === "ask" &&
+      !(event.target instanceof HTMLButtonElement) &&
+      // Return makes a new line in a message; ⌘Return runs the action.
+      !(event.target instanceof HTMLTextAreaElement && !event.metaKey && !event.ctrlKey)
+    ) {
       event.preventDefault();
       confirm.go();
     }
@@ -152,7 +162,19 @@
             <div class="field">
               <span class="label">{field.label}</span>
               <div class="inputs">
-                {#if field.text}
+                {#if field.text?.multiline}
+                  {@const text = field.text}
+                  <textarea
+                    class="text multiline"
+                    bind:this={textBox}
+                    value={text.value}
+                    placeholder={text.placeholder}
+                    aria-label={field.label}
+                    spellcheck="true"
+                    rows="4"
+                    oninput={(e) => confirm.edit(text.edit(e.currentTarget.value))}
+                  ></textarea>
+                {:else if field.text}
                   {@const text = field.text}
                   <input
                     class="text"
@@ -446,6 +468,13 @@
     outline: none;
     user-select: text;
     -webkit-user-select: text;
+  }
+  .text.multiline {
+    height: auto;
+    min-height: 84px;
+    padding: 6px 10px;
+    line-height: 1.4;
+    resize: vertical;
   }
   .text:focus {
     border-color: var(--accent);

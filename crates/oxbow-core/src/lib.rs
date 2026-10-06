@@ -6,6 +6,7 @@
 
 pub mod cli;
 pub mod commit;
+pub mod edit;
 pub mod error;
 pub mod graph;
 pub mod history;
@@ -18,6 +19,7 @@ pub use cli::{CommandOutput, GitCommand, OutputLine};
 pub use commit::{
     CommitDetail, DiffContext, DiffLine, FileChange, FileDiff, FileStatus, Hunk, LineKind, Person, WordPart,
 };
+pub use edit::ResetMode;
 pub use error::{Error, Result};
 pub use history::{History, HistoryOptions, HistoryRow, Label, WORKTREE_ID, WorktreeSummary};
 pub use operation::{Chunk, ConflictFile, ConflictSide, MergeMethod, MergePreview, Operation, OperationKind, Pick};
