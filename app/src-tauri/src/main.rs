@@ -475,6 +475,28 @@ fn open_in_editor(app: AppHandle, session: State<'_, Session>, path: String, lin
     open_in::open_file(&editor, &repo.workdir().join(Path::new(&path)), line)
 }
 
+/// The monospaced font families installed on this computer, sorted, for Settings › Diff & Text.
+#[tauri::command]
+async fn monospace_fonts() -> Vec<String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut fonts = fontdb::Database::new();
+        fonts.load_system_fonts();
+        let mut families: Vec<String> = fonts
+            .faces()
+            .filter(|face| face.monospaced)
+            .filter_map(|face| face.families.first().map(|(name, _)| name.clone()))
+            // Hidden system fonts (".SF NS Mono") are not meant to be picked by name, and emoji
+            // fonts call themselves monospaced.
+            .filter(|name| !name.starts_with('.') && !name.contains("Emoji"))
+            .collect();
+        families.sort_by_key(|name| name.to_lowercase());
+        families.dedup();
+        families
+    })
+    .await
+    .unwrap_or_default()
+}
+
 /// Open the repository folder in the terminal chosen in Settings.
 #[tauri::command]
 fn open_in_terminal(app: AppHandle, session: State<'_, Session>) -> CommandResult<()> {
@@ -582,6 +604,7 @@ fn main() {
             pull_setup,
             open_in_editor,
             open_in_terminal,
+            monospace_fonts,
             settings_text,
             save_settings_text
         ])

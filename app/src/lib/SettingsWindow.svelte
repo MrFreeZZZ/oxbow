@@ -53,6 +53,18 @@
 
   const text = (t: Text | undefined) => (typeof t === "function" ? t() : (t ?? ""));
   const opts = (...values: (string | number)[]): Option[] => values.map((value) => ({ value, label: String(value) }));
+  /** The options plus the current value when it is not one of them, as one typed into
+   *  settings.json can be, so the popup never shows empty. */
+  function withCurrent(options: Option[], current: Value): Option[] {
+    if (current === "" || options.some((o) => String(o.value) === String(current))) return options;
+    const extra = { value: current as string | number, label: String(current) };
+    const at = typeof current === "number" ? options.findIndex((o) => typeof o.value === "number" && o.value > current) : -1;
+    return at < 0 ? [...options, extra] : [...options.slice(0, at), extra, ...options.slice(at)];
+  }
+
+  /** Monospaced font families installed here, for the Font popup. */
+  let fonts = $state<string[]>([]);
+  api.monospaceFonts().then((list) => (fonts = list), () => {});
 
   // Oxbow's own settings.
   /** Installed apps as popup options; an empty popup says so. */
@@ -458,8 +470,11 @@
         {
           title: "Text",
           rows: [
-            prefRow("oxbow.text.font", "Font", "popup", { options: () => opts("SF Mono", "Menlo", "JetBrains Mono") }),
-            prefRow("oxbow.text.fontSize", "Size", "popup", { options: () => opts(11, 12, 13, 14) }),
+            prefRow("oxbow.text.font", "Font", "popup", {
+              sub: "Monospaced fonts installed on this computer",
+              options: () => opts(...new Set(["SF Mono", ...fonts])),
+            }),
+            prefRow("oxbow.text.fontSize", "Size", "popup", { options: () => opts(10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24) }),
             prefRow("oxbow.text.tabWidth", "Tab width", "popup", { options: () => opts(2, 4, 8) }),
           ],
         },
@@ -970,17 +985,18 @@
                       {/each}
                     </span>
                   {:else if control?.type === "popup"}
+                    {@const options = withCurrent(control.options(), control.get())}
                     <span class="popup" class:off>
                       <select
                         aria-label={text(row.label)}
                         disabled={off}
                         value={String(control.get())}
                         onchange={(event) => {
-                          const option = control.options().find((o) => String(o.value) === event.currentTarget.value);
+                          const option = options.find((o) => String(o.value) === event.currentTarget.value);
                           if (option) control.set(option.value);
                         }}
                       >
-                        {#each control.options() as option (option.value)}
+                        {#each options as option (option.value)}
                           <option value={String(option.value)}>{option.label}</option>
                         {/each}
                       </select>

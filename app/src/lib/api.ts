@@ -50,6 +50,7 @@ export const api = {
   pullSetup: () => invoke<PullSetup>("pull_setup"),
   openInEditor: (path: string, line: number | null) => invoke<void>("open_in_editor", { path, line }),
   openInTerminal: () => invoke<void>("open_in_terminal"),
+  monospaceFonts: () => invoke<string[]>("monospace_fonts"),
   settingsText: () => invoke<string>("settings_text"),
   saveSettingsText: (text: string) => invoke<void>("save_settings_text", { text }),
 };

@@ -18,7 +18,8 @@ export const defaults = {
   "oxbow.diff.contextLines": 3,
   "oxbow.diff.wordHighlight": true,
   "oxbow.diff.ignoreWhitespace": false,
-  "oxbow.text.font": "SF Mono" as "SF Mono" | "Menlo" | "JetBrains Mono",
+  /** A font family; SF Mono is the system's monospaced font on macOS. */
+  "oxbow.text.font": "SF Mono" as string,
   "oxbow.text.fontSize": 12,
   "oxbow.text.tabWidth": 4,
   "oxbow.git.englishOutput": true,
@@ -39,12 +40,11 @@ export const defaults = {
 export type PrefKey = keyof typeof defaults;
 export type PrefValue<K extends PrefKey> = (typeof defaults)[K];
 
-/** Font stacks for code, with fallbacks for systems that don't have the font. */
-const FONTS: Record<PrefValue<"oxbow.text.font">, string> = {
-  "SF Mono": `"SF Mono", ui-monospace, Menlo, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace`,
-  Menlo: `Menlo, ui-monospace, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace`,
-  "JetBrains Mono": `"JetBrains Mono", ui-monospace, Menlo, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace`,
-};
+/** The font stack for code: the chosen family, then fallbacks for systems that don't have it. */
+function fontStack(family: string): string {
+  const name = family.replace(/["\\]/g, "").trim();
+  return `${name ? `"${name}", ` : ""}ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace`;
+}
 
 class Prefs {
   #values = $state<Record<string, unknown>>({});
@@ -135,7 +135,7 @@ export function followLook() {
     });
     $effect(() => {
       const size = prefs.get("oxbow.text.fontSize");
-      root.style.setProperty("--code-font", FONTS[prefs.get("oxbow.text.font")] ?? FONTS["SF Mono"]);
+      root.style.setProperty("--code-font", fontStack(prefs.get("oxbow.text.font")));
       root.style.setProperty("--code-size", `${size}px`);
       root.style.setProperty("--code-line", `${Math.round(size * 1.65)}px`);
       root.style.setProperty("--tab", String(prefs.get("oxbow.text.tabWidth")));
