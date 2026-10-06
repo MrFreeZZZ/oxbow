@@ -9,7 +9,22 @@ import type { Action, ActionEvent, Failure, GitCommand } from "./types";
 /** A piece of the sheet's text: plain words, a branch capsule, a path or sha in mono, or a quoted message. */
 export type Part = string | { branch: string; color: number } | { code: string } | { quote: string };
 
-export type Icon = "stage" | "unstage" | "discard" | "commit" | "fetch" | "pull" | "push" | "warn" | "key" | "offline" | "hook";
+export type Icon =
+  | "stage"
+  | "unstage"
+  | "discard"
+  | "commit"
+  | "fetch"
+  | "pull"
+  | "push"
+  | "warn"
+  | "key"
+  | "offline"
+  | "hook"
+  | "checkout"
+  | "branch"
+  | "edit"
+  | "drop";
 
 export interface Request {
   /** A question, e.g. "Discard changes in 2 files?" */
@@ -27,11 +42,33 @@ export interface Request {
   status?: string;
   /** Short message shown after it succeeded. */
   done?: string;
-  /** A checkbox that changes the command, e.g. the lease of a force push. */
-  option?: { label: string; sub?: string; on: boolean; toggle: () => Request };
+  /** Inputs above the commands, e.g. the name of a new branch. */
+  fields?: Field[];
+  /** Checkboxes that change the commands, e.g. the lease of a force push. */
+  options?: Choice[];
+  /** Why the action button is off, e.g. an invalid branch name. */
+  invalid?: string | null;
   /** The way out when the action fails. */
   recover?: (failure: Failure) => Recovery | null;
   action: Action;
+}
+
+/** A checkbox of the sheet. */
+export interface Choice {
+  label: string;
+  sub?: string;
+  on: boolean;
+  toggle: () => Request;
+}
+
+/** A row of the sheet with a label: a text box, a choice of chips, or both, and a note under them. */
+export interface Field {
+  label: string;
+  text?: { value: string; placeholder?: string; edit: (value: string) => Request };
+  chips?: { label: string; on: boolean; mono?: boolean; pick: () => Request }[];
+  note?: string;
+  /** Shown instead of the note while the text can't be used, e.g. a name that is taken. */
+  error?: string;
 }
 
 /** What the sheet offers after a failure. */
@@ -73,6 +110,9 @@ class ConfirmState {
   recoveryCommands = $state<GitCommand[]>([]);
   toast = $state<string | null>(null);
   #resolve: ((done: boolean) => void) | null = null;
+  /** Goes up with every plan asked for, so a slow answer can't replace a newer one. */
+  #planned = 0;
+  #editTimer: ReturnType<typeof setTimeout> | undefined;
   #toastTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor() {
@@ -93,12 +133,23 @@ class ConfirmState {
   }
 
   go() {
-    if (this.request && this.phase === "ask") this.#execute(this.request.action, this.request.status ?? this.request.title, this.request.done);
+    if (this.request && this.phase === "ask" && !this.request.invalid) this.#execute(this.request.action, this.request.status ?? this.request.title, this.request.done);
   }
 
-  /** Flip the request's option, e.g. the lease of a force push. */
-  async toggleOption() {
-    if (this.request?.option && this.phase === "ask") await this.#ask(this.request.option.toggle());
+  /** Show another version of the request, after a checkbox or chip changed it. */
+  async change(request: Request) {
+    if (this.phase === "ask") await this.#ask(request);
+  }
+
+  /** Show the request for the text just typed; its commands follow once typing pauses. */
+  edit(request: Request) {
+    if (this.phase !== "ask") return;
+    this.request = request;
+    clearTimeout(this.#editTimer);
+    // `request` is the latest text: a newer keystroke clears this timer.
+    this.#editTimer = setTimeout(() => {
+      if (this.phase === "ask") this.#ask(request);
+    }, 150);
   }
 
   /** Run the recovery's button, e.g. Pull and Push after a rejected push. */
@@ -122,14 +173,18 @@ class ConfirmState {
   }
 
   async #ask(request: Request) {
+    const mine = ++this.#planned;
     this.request = request;
     this.lines = [];
     this.failure = null;
     this.recovery = null;
     try {
-      this.commands = (await api.planAction(request.action)).commands;
+      const plan = await api.planAction(request.action);
+      if (mine !== this.#planned) return;
+      this.commands = plan.commands;
       this.phase = "ask";
     } catch (err) {
+      if (mine !== this.#planned) return;
       this.commands = [];
       this.#fail({ kind: "other", output: String(err), incoming: [], remoteTip: null });
     }
@@ -182,6 +237,11 @@ class ConfirmState {
     else this.lines.push(line);
   }
 
+  /** A short message at the bottom of the window, e.g. after copying a name. */
+  say(text: string) {
+    this.#showToast(text);
+  }
+
   #showToast(text: string) {
     clearTimeout(this.#toastTimer);
     this.toast = text;
@@ -189,6 +249,7 @@ class ConfirmState {
   }
 
   #finish(done: boolean) {
+    clearTimeout(this.#editTimer);
     this.request = null;
     this.recovery = null;
     this.failure = null;

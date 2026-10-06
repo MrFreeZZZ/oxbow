@@ -6,6 +6,7 @@
 
   let copied = $state(false);
   let goButton = $state<HTMLButtonElement>();
+  let textBox = $state<HTMLInputElement>();
   let linesBox = $state<HTMLDivElement>();
 
   const request = $derived(confirm.request);
@@ -33,6 +34,10 @@
     key: "M10 2.5a3.5 3.5 0 1 1-2.8 5.6L2.5 12.8V14.5h2v-1.5h1.5v-1.5h1.5l1.4-1.4M11 5.5v.1",
     offline: "M2 2l12 12M4.5 12.5a3 3 0 0 1-.4-6 4 4 0 0 1 1.3-2.4M8 3.5a4 4 0 0 1 3.8 2.5 3.2 3.2 0 0 1 1.4 5.8",
     hook: "M5 2v6.5a3.5 3.5 0 0 0 7 0V7M10 9l2-2 2 2",
+    checkout: "M2.5 8h8M7.5 4.5 11 8l-3.5 3.5M13.5 3v10",
+    branch: "M3 3.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M3 12.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M10 5.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M4.5 5v6M11.5 7c0 3-7 2-7 4",
+    edit: "M10.5 2.5l3 3L6 13H3v-3z",
+    drop: "M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.7 9h5.6l.7-9",
   };
 
   // Token colors of the terminal block follow the app theme (see --term-* in app.css).
@@ -79,9 +84,20 @@
     }
   }
 
-  // The action button takes the focus, so Return runs it and Escape cancels.
+  // The action button takes the focus, so Return runs it and Escape cancels; a sheet that asks
+  // for a name puts the cursor in its text box instead. Only when the sheet opens or changes
+  // phase, not on every keystroke.
+  let focusedFor: unknown = null;
   $effect(() => {
-    if (request && (confirm.phase === "ask" || recovery?.button)) requestAnimationFrame(() => goButton?.focus());
+    const key = request && (confirm.phase === "ask" || recovery?.button) ? `${confirm.phase}:${request.title}` : null;
+    if (!key || key === focusedFor) return;
+    focusedFor = key;
+    requestAnimationFrame(() => {
+      if (confirm.phase === "ask" && textBox) {
+        textBox.focus();
+        textBox.select();
+      } else goButton?.focus();
+    });
   });
 
   // The live output follows the newest line, as a terminal does.
@@ -127,11 +143,48 @@
         </div>
       </div>
 
-      {#if request.option && confirm.phase === "ask"}
-        <button class="option" role="checkbox" aria-checked={request.option.on} onclick={() => confirm.toggleOption()}>
-          <span class="box" class:on={request.option.on}><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" /></svg></span>
-          <span class="option-words"><span>{request.option.label}</span>{#if request.option.sub}<span class="sub">{request.option.sub}</span>{/if}</span>
-        </button>
+      {#if request.fields?.length && confirm.phase === "ask"}
+        <div class="fields">
+          {#each request.fields as field, i (i)}
+            <div class="field">
+              <span class="label">{field.label}</span>
+              <div class="inputs">
+                {#if field.text}
+                  {@const text = field.text}
+                  <input
+                    class="text"
+                    bind:this={textBox}
+                    value={text.value}
+                    placeholder={text.placeholder}
+                    aria-label={field.label}
+                    spellcheck="false"
+                    autocomplete="off"
+                    oninput={(e) => confirm.edit(text.edit(e.currentTarget.value))}
+                  />
+                {/if}
+                {#if field.chips?.length}
+                  <span class="chips">
+                    {#each field.chips as chip (chip.label)}
+                      <button class="chip-button" class:on={chip.on} class:mono={chip.mono} aria-pressed={chip.on} onclick={() => confirm.change(chip.pick())}>{chip.label}</button>
+                    {/each}
+                  </span>
+                {/if}
+                {#if field.error}<span class="field-note error">{field.error}</span>{:else if field.note}<span class="field-note">{field.note}</span>{/if}
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+
+      {#if request.options?.length && confirm.phase === "ask"}
+        <div class="options">
+          {#each request.options as option (option.label)}
+            <button class="option" role="checkbox" aria-checked={option.on} onclick={() => confirm.change(option.toggle())}>
+              <span class="box" class:on={option.on}><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" /></svg></span>
+              <span class="option-words"><span>{option.label}</span>{#if option.sub}<span class="sub">{option.sub}</span>{/if}</span>
+            </button>
+          {/each}
+        </div>
       {/if}
 
       <div class="term" aria-label="Git command">
@@ -179,7 +232,7 @@
             {/if}
           {:else}
             <button class="btn" onclick={() => confirm.cancel()}>Cancel</button>
-            <button class="btn go" class:danger={request.danger} bind:this={goButton} onclick={() => confirm.go()}>{request.button}</button>
+            <button class="btn go" class:danger={request.danger} bind:this={goButton} disabled={!!request.invalid} title={request.invalid ?? undefined} onclick={() => confirm.go()}>{request.button}</button>
           {/if}
         </div>
       {/if}
@@ -336,12 +389,91 @@
   .gap {
     padding-top: 6px;
   }
+  .fields {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-left: 58px;
+  }
+  .field {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .label {
+    width: 70px;
+    flex-shrink: 0;
+    font-size: 12px;
+    line-height: 28px;
+    color: var(--text2);
+  }
+  .inputs {
+    flex-grow: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .text {
+    height: 28px;
+    padding: 0 10px;
+    border-radius: 8px;
+    background: var(--win);
+    border: 1px solid var(--sep);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    outline: none;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  .text:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 9px;
+    background: var(--field);
+    align-self: flex-start;
+  }
+  .chip-button {
+    height: 24px;
+    padding: 0 11px;
+    border-radius: 7px;
+    font-size: 12px;
+  }
+  .chip-button.on {
+    background: var(--glass);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+    font-weight: 600;
+  }
+  .chip-button.mono {
+    font-family: var(--mono);
+  }
+  .field-note {
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text2);
+  }
+  .field-note.error {
+    color: var(--red);
+  }
+  .options {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-left: 58px;
+  }
   .option {
     display: flex;
     align-items: flex-start;
     gap: 8px;
-    padding-left: 58px;
     white-space: normal;
+    text-align: left;
   }
   .box {
     width: 14px;

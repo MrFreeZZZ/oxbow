@@ -1,20 +1,44 @@
 <script lang="ts">
   import type { History, HistoryRow, RefInfo, RepoSummary } from "./types";
-  import { lane, tint } from "./format";
+  import { lane, shortTime, tint } from "./format";
+  import type { Request } from "./confirm.svelte";
+  import { confirm } from "./confirm.svelte";
+  import { api } from "./api";
+  import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
+  import {
+    deleteRemoteRequest,
+    deleteRequest,
+    newBranchRequest,
+    renameRequest,
+    switchRequest,
+    trackRequest,
+    upstreamOf,
+    type BranchContext,
+  } from "./branches";
+  import { pushRequest } from "./remote";
 
   let {
     repo,
     history,
     selectedRow,
+    ctx,
     onOpen,
     onPick,
+    run,
   }: {
     repo: RepoSummary;
     history: History;
     selectedRow: HistoryRow | null;
+    ctx: BranchContext;
     onOpen: () => void;
     onPick: (commit: string) => void;
+    /** Confirm and run a change to the repository. */
+    run: (request: Request | Promise<Request>) => void;
   } = $props();
+
+  /** The open right-click menu and the ref it belongs to. */
+  let menu = $state<{ x: number; y: number; label: string; ref: string; entries: MenuEntry[] } | null>(null);
+  let collapsedRemotes = $state<Record<string, boolean>>({});
 
   /** Lists longer than this show only their first items until expanded. */
   const COLLAPSED = 10;
@@ -65,12 +89,116 @@
       const name = `stash@{${s.index}}`;
       const match = /^(?:WIP on|On) ([^:]+): (.*)$/.exec(s.message);
       return {
-        ref: { name, kind: "stash" as const, target: s.id, remote: null },
+        ref: { name, kind: "stash" as const, target: s.id, remote: null, tracking: null },
         title: match ? match[2] : s.message,
         branch: match ? match[1] : null,
       };
     }),
   );
+
+  /** Per remote, its branches that no local branch tracks, newest first, and how many are tracked. */
+  const remoteBranches = $derived(
+    new Map(
+      history.remotes.map((remote) => {
+        // A remote branch some local branch tracks, or one with the same name, is "tracked locally".
+        const tracked = new Set(
+          history.refs
+            .filter((r) => r.kind === "local")
+            .flatMap((r) => [`${remote}/${r.name}`, ...(r.tracking?.remote === remote ? [`${remote}/${r.tracking.branch}`] : [])]),
+        );
+        const all = history.refs.filter((r) => r.kind === "remote" && r.remote === remote);
+        const own = all
+          .filter((r) => !tracked.has(r.name))
+          .map((r) => {
+            const row = rowOf.get(r.target);
+            return { ref: r, time: row?.time ?? 0, color: row?.graph.color ?? 0, author: row?.authorName ?? "" };
+          })
+          .sort((a, b) => b.time - a.time || a.ref.name.localeCompare(b.ref.name));
+        return [remote, { own, tracked: all.filter((r) => tracked.has(r.name)).map((r) => r.name) }];
+      }),
+    ),
+  );
+
+  const firstName = (name: string) => name.split(/\s+/)[0] ?? name;
+
+  function copy(text: string) {
+    navigator.clipboard.writeText(text).then(
+      () => confirm.say(`Copied ${text}.`),
+      () => confirm.say("Couldn’t copy to the clipboard."),
+    );
+  }
+
+  function open(event: MouseEvent, label: string, ref: string, entries: MenuEntry[]) {
+    event.preventDefault();
+    menu = { x: event.clientX, y: event.clientY, label, ref, entries };
+  }
+
+  /** The right-click menu of a local branch. */
+  function branchMenu(event: MouseEvent, ref: RefInfo) {
+    const isHead = ref.name === history.head.branch;
+    const isTrunk = ref.name === history.trunk;
+    const t = ref.tracking;
+    const status = isHead
+      ? "checked out"
+      : t?.gone
+        ? "deleted on the remote"
+        : !t
+          ? "not on a remote yet"
+          : t.ahead
+            ? `${t.ahead} to push`
+            : `on ${t.remote}`;
+    const item = (label: string, icon: string, act: () => void, danger = false): MenuEntry => ({ kind: "item", label, icon, run: act, danger });
+    const entries: MenuEntry[] = [{ kind: "header", label: `${ref.name} · ${status}` }];
+    const remove = () => run(api.deletionCheck(ref.name).then((check) => deleteRequest(ctx, ref, check)));
+    if (t?.gone && !isHead) {
+      entries.push(item(`Delete ${ref.name}…`, menuIcons.drop, remove, true));
+      entries.push({ kind: "note", label: "Its branch on the remote is gone, usually after its pull request was merged." });
+      entries.push({ kind: "sep" });
+    }
+    if (!isHead) entries.push(item("Check Out", menuIcons.checkout, () => run(switchRequest(ctx, ref.name))));
+    if (!upstreamOf(ref) && history.defaultRemote) {
+      entries.push({ kind: "sep" });
+      const unpushed = history.rows.filter((r) => r.unpushed && !r.worktree && r.graph.branch === ref.name);
+      entries.push(
+        item(`Publish to ${history.defaultRemote}`, menuIcons.push, () =>
+          run(
+            pushRequest({
+              branch: ref.name,
+              color: ctx.colorOf(ref.name),
+              tracking: null,
+              remote: history.defaultRemote,
+              remotes: history.remotes,
+              unpushed,
+            }),
+          ),
+        ),
+      );
+    }
+    entries.push({ kind: "sep" });
+    entries.push(item(`New Branch from ${ref.name}…`, menuIcons.branch, () => run(newBranchRequest(ctx, ref.name))));
+    if (!isTrunk) entries.push(item("Rename…", menuIcons.edit, () => run(renameRequest(ctx, ref))));
+    entries.push(item("Copy Name", menuIcons.copy, () => copy(ref.name)));
+    if (!isHead && !isTrunk && !t?.gone) {
+      entries.push({ kind: "sep" });
+      entries.push(item("Delete…", menuIcons.drop, remove, true));
+    }
+    if (isTrunk) entries.push({ kind: "note", label: "Default branch: rename and delete are turned off." });
+    else if (isHead) entries.push({ kind: "note", label: "Checked out. Switch to another branch to delete it." });
+    open(event, "Branch menu", ref.name, entries);
+  }
+
+  /** The right-click menu of a remote branch nobody tracks locally. */
+  function remoteMenu(event: MouseEvent, ref: RefInfo, author: string) {
+    const short = ref.name.slice((ref.remote ?? "").length + 1);
+    const taken = history.refs.some((r) => r.kind === "local" && r.name === short);
+    const entries: MenuEntry[] = [{ kind: "header", label: `${ref.name}${author ? ` · ${author}` : ""}` }];
+    if (!taken) entries.push({ kind: "item", label: "Check Out as Local Branch", icon: menuIcons.checkout, run: () => run(trackRequest(ctx, ref, author)) });
+    else entries.push({ kind: "note", label: `A local branch ${short} already exists, so it can’t be checked out under that name.` });
+    entries.push({ kind: "item", label: "Copy Name", icon: menuIcons.copy, run: () => copy(ref.name) });
+    entries.push({ kind: "sep" });
+    entries.push({ kind: "item", label: `Delete on ${ref.remote}…`, icon: menuIcons.drop, danger: true, run: () => run(api.remoteDeletionCheck(ref.name).then((lost) => deleteRemoteRequest(ctx, ref, author, lost))) });
+    open(event, "Remote branch menu", ref.name, entries);
+  }
 
   /** Select the branch's or tag's latest commit, as if it were clicked in the graph. */
   function focus(r: RefInfo) {
@@ -115,18 +243,26 @@
       <span class="grow">History</span>
     </div>
 
-    <div class="heading">Branches</div>
+    <div class="heading with-button">
+      <span>Branches</span>
+      <button class="add" onclick={() => run(newBranchRequest(ctx))} aria-label="New branch" title="New Branch…">
+        <svg class="icon" viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9" /></svg>
+      </button>
+    </div>
     {#each shown("branches", branches) as b (b.ref.name)}
       {@const head = b.ref.name === history.head.branch}
       <button
         class="item"
         data-ref={b.ref.name}
+        class:menu-open={menu?.ref === b.ref.name}
+        style:--ring={lane(b.color)}
         style:background={focused === b.ref.name ? tint(b.color) : undefined}
         onclick={() => focus(b.ref)}
-        title="Go to the latest commit on {b.ref.name}"
+        oncontextmenu={(e) => branchMenu(e, b.ref)}
       >
         <span class="dot" style:background={lane(b.color)}></span>
         <span class="grow ellipsis" class:bold={head}>{b.ref.name}</span>
+        {#if b.ref.tracking?.gone}<span class="badge" title="Its branch on {b.ref.tracking.remote} was deleted">gone</span>{/if}
         {#if head}<span class="head">HEAD</span>{/if}
       </button>
     {/each}
@@ -153,12 +289,39 @@
     {#if history.remotes.length}
       <div class="heading">Remotes</div>
       {#each history.remotes as remote (remote)}
-        {@const count = history.refs.filter((r) => r.kind === "remote" && r.remote === remote).length}
-        <div class="item">
+        {@const lists = remoteBranches.get(remote)!}
+        {@const count = lists.own.length + lists.tracked.length}
+        {@const expandedRemote = !collapsedRemotes[remote]}
+        <button class="item" onclick={() => (collapsedRemotes[remote] = expandedRemote)} aria-expanded={expandedRemote} title="{expandedRemote ? 'Hide' : 'Show'} the branches on {remote}">
           <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" /><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12" /></svg>
           <span class="grow">{remote}</span>
           <span class="meta">{count} {count === 1 ? "branch" : "branches"}</span>
-        </div>
+          <svg class="icon tiny" viewBox="0 0 16 16"><path d={expandedRemote ? "M4 6l4 4 4-4" : "M6 4l4 4-4 4"} /></svg>
+        </button>
+        {#if expandedRemote}
+          {#each shown(`remote:${remote}`, lists.own) as rb (rb.ref.name)}
+            {@const short = rb.ref.name.slice(remote.length + 1)}
+            <button
+              class="item nested"
+              data-ref={rb.ref.name}
+              class:menu-open={menu?.ref === rb.ref.name}
+              style:--ring={lane(rb.color)}
+              style:background={focused === rb.ref.name ? tint(rb.color) : undefined}
+              onclick={() => focus(rb.ref)}
+              oncontextmenu={(e) => remoteMenu(e, rb.ref, rb.author)}
+            >
+              <svg class="icon small" viewBox="0 0 16 16"
+                ><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg
+              >
+              <span class="grow ellipsis">{short}</span>
+              <span class="meta nowrap">{[firstName(rb.author), rb.time ? shortTime(rb.time) : ""].filter(Boolean).join(" · ")}</span>
+            </button>
+          {/each}
+          {@render more(`remote:${remote}`, lists.own.length)}
+          {#if lists.tracked.length}
+            <div class="tracked" title={lists.tracked.join(", ")}>{lists.tracked.length} more tracked locally</div>
+          {/if}
+        {/if}
       {/each}
     {/if}
 
@@ -180,6 +343,10 @@
     {/if}
   </div>
 </nav>
+
+{#if menu}
+  <Menu x={menu.x} y={menu.y} label={menu.label} entries={menu.entries} onClose={() => (menu = null)} />
+{/if}
 
 <style>
   nav {
@@ -291,6 +458,58 @@
     color: var(--accent-text);
   }
   .meta {
+    font-size: 11px;
+    color: var(--text2);
+  }
+  .with-button {
+    display: flex;
+    align-items: center;
+    padding-right: 12px;
+  }
+  .with-button span {
+    flex-grow: 1;
+  }
+  .add {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    color: var(--text2);
+  }
+  .add:hover {
+    background: var(--side-sel);
+    color: var(--text);
+  }
+  .add .icon {
+    width: 14px;
+    height: 14px;
+  }
+  .item.menu-open {
+    box-shadow: inset 0 0 0 1.5px var(--ring);
+  }
+  .item.nested {
+    padding-left: 30px;
+  }
+  .tiny {
+    width: 12px;
+    height: 12px;
+    color: var(--text2);
+  }
+  .nowrap {
+    white-space: nowrap;
+  }
+  .badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 7px;
+    background: var(--field);
+    color: var(--text2);
+  }
+  .tracked {
+    padding: 4px 18px 0 52px;
     font-size: 11px;
     color: var(--text2);
   }

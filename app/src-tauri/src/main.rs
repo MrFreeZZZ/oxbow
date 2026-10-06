@@ -6,7 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use oxbow_core::{
-    Action, CommitDetail, DiffContext, Failure, FileDiff, History, HistoryOptions, Plan, Repo, Side, WorkingTree,
+    Action, CommitBrief, CommitDetail, DeletionCheck, DiffContext, Failure, FileDiff, History, HistoryOptions, Plan,
+    Repo, Side, WorkingTree,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -159,6 +160,20 @@ async fn working_diff(
     blocking(move || repo.working_diff(&path, side, whole_file)).await
 }
 
+/// What deleting a local branch would lose, for the confirmation sheet.
+#[tauri::command]
+async fn deletion_check(session: State<'_, Session>, branch: String) -> CommandResult<DeletionCheck> {
+    let repo = current(&session)?;
+    blocking(move || repo.deletion_check(&branch)).await
+}
+
+/// Commits that deleting a remote branch (`origin/x`) on its remote would lose.
+#[tauri::command]
+async fn remote_deletion_check(session: State<'_, Session>, branch: String) -> CommandResult<Vec<CommitBrief>> {
+    let repo = current(&session)?;
+    blocking(move || repo.remote_deletion_check(&branch)).await
+}
+
 /// The git commands an action will run, for the confirmation sheet.
 #[tauri::command]
 async fn plan_action(session: State<'_, Session>, action: Action) -> CommandResult<Plan> {
@@ -219,6 +234,8 @@ fn main() {
             commit_diff,
             working_tree,
             working_diff,
+            deletion_check,
+            remote_deletion_check,
             plan_action,
             perform_action,
             stop_action,

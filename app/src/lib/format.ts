@@ -34,6 +34,17 @@ export function relativeTime(seconds: number, now = Date.now() / 1000): string {
   return date.toLocaleDateString(undefined, sameYear ? { day: "numeric", month: "short" } : { day: "numeric", month: "short", year: "numeric" });
 }
 
+/** "5m", "3h", "4d", "12 Mar": for tight spots like the sidebar. */
+export function shortTime(seconds: number, now = Date.now() / 1000): string {
+  const diff = Math.max(0, now - seconds);
+  if (diff < hour) return `${Math.max(1, Math.floor(diff / minute))}m`;
+  if (diff < day) return `${Math.floor(diff / hour)}h`;
+  if (diff < 7 * day) return `${Math.floor(diff / day)}d`;
+  const date = new Date(seconds * 1000);
+  const sameYear = date.getFullYear() === new Date(now * 1000).getFullYear();
+  return date.toLocaleDateString(undefined, sameYear ? { day: "numeric", month: "short" } : { month: "short", year: "numeric" });
+}
+
 /** Full date for the commit panel, in the commit's own time zone offset. */
 export function fullDate(seconds: number, offset: number): string {
   const local = new Date((seconds + offset) * 1000);

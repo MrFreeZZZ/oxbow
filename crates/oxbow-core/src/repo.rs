@@ -5,6 +5,7 @@ use gix::refs::Category;
 use serde::Serialize;
 
 use crate::error::{Error, Result};
+use crate::remote::Tracking;
 
 /// An open repository. Cheap to share between threads; every call works on its own
 /// thread-local handle.
@@ -45,6 +46,8 @@ pub struct RefInfo {
     pub target: String,
     /// For remote branches, the remote's name.
     pub remote: Option<String>,
+    /// For local branches, the upstream and how far apart the two are.
+    pub tracking: Option<Tracking>,
 }
 
 impl Repo {
@@ -121,6 +124,7 @@ impl Repo {
                 kind,
                 target: id.to_string(),
                 remote,
+                tracking: None,
             });
         }
         out.sort_by(|a, b| a.name.cmp(&b.name));

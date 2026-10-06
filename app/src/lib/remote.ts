@@ -202,12 +202,14 @@ function forcePushRequest(ctx: RemoteContext, action: Action & { kind: "push" },
     note: "Whoever pushed those commits still has them, but has to sort it out.",
     status: `Force pushing ${action.branch}…`,
     done: `Force-pushed ${action.branch} to ${remoteBranch}.`,
-    option: {
-      label: `Only if ${action.remote} still ends at ${shortId(tip)}`,
-      sub: "If someone pushes again before you, nothing is overwritten",
-      on: lease,
-      toggle: () => forcePushRequest(ctx, action, failure, !lease),
-    },
+    options: [
+      {
+        label: `Only if ${action.remote} still ends at ${shortId(tip)}`,
+        sub: "If someone pushes again before you, nothing is overwritten",
+        on: lease,
+        toggle: () => forcePushRequest(ctx, action, failure, !lease),
+      },
+    ],
     recover: (f) => pushRecovery(f, ctx, action),
     action: { ...action, force: true, lease: lease ? tip : null },
   };
@@ -245,6 +247,12 @@ function conflict(failure: Failure, ctx: RemoteContext): Recovery | null {
     close: "Leave as Is",
     note: "Your files stay as they are until you choose.",
   };
+}
+
+/** Try Again after a remote could not be reached or refused the sign-in, for any action that talks to `remote`. */
+export function remoteTrouble(failure: Failure, action: Action, verb: string, remote: string, done: string): Recovery | null {
+  const ctx: RemoteContext = { branch: null, color: 0, tracking: null, remote, remotes: [remote], unpushed: [] };
+  return networkOrAuth(failure, action, verb, ctx, done);
 }
 
 function networkOrAuth(failure: Failure, action: Action, verb: string, ctx: RemoteContext, done: string): Recovery | null {

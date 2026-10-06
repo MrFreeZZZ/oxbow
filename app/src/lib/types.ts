@@ -12,6 +12,8 @@ export interface RefInfo {
   kind: RefKind;
   target: string;
   remote: string | null;
+  /** For local branches: the upstream and how far apart the two are. */
+  tracking: Tracking | null;
 }
 
 export interface Segment {
@@ -183,13 +185,42 @@ export type Action =
       noVerify: boolean;
     }
   | { kind: "pullAndPush"; remote: string; branch: string; upstream: string; noVerify: boolean }
-  | { kind: "abortRebase" };
+  | { kind: "abortRebase" }
+  | { kind: "switch"; branch: string; stash: boolean }
+  | { kind: "track"; remote: string; branch: string; stash: boolean }
+  | { kind: "createBranch"; name: string; start: string | null; switch: boolean; publish: string | null }
+  | { kind: "renameBranch"; from: string; to: string; upstream: RemoteBranch | null }
+  | { kind: "deleteBranch"; name: string; force: boolean; upstream: RemoteBranch | null }
+  | { kind: "deleteRemoteBranch"; remote: string; branch: string };
+
+export interface RemoteBranch {
+  remote: string;
+  branch: string;
+}
+
+/** What deleting a local branch would lose. */
+export interface DeletionCheck {
+  /** Commits on no other branch, remote branch or tag, the upstream included. */
+  lost: CommitBrief[];
+  /** The same when the upstream is deleted too. */
+  lostWithUpstream: CommitBrief[];
+}
 
 export type ActionEvent =
   | { kind: "command"; display: string }
   | { kind: "line"; text: string; stderr: boolean; progress: boolean };
 
-export type FailureKind = "rejected" | "staleLease" | "auth" | "network" | "hook" | "conflict" | "cancelled" | "other";
+export type FailureKind =
+  | "rejected"
+  | "staleLease"
+  | "auth"
+  | "network"
+  | "hook"
+  | "conflict"
+  | "localChanges"
+  | "notMerged"
+  | "cancelled"
+  | "other";
 
 export interface CommitBrief {
   id: string;
