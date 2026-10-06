@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api } from "./api";
   import type { CommitDetail, FileDiff, HistoryRow } from "./types";
-  import { fullDate, initials, lane, personColor, plate, splitPath, tint } from "./format";
+  import { fullDate, initials, lane, personColor, plate, splitPath, tabLabels, tint } from "./format";
   import DiffView from "./DiffView.svelte";
   import CommitChain from "./CommitChain.svelte";
 
@@ -35,6 +35,7 @@
   // A stash has no branch line of its own; its capsule names the stash entry.
   const branchName = $derived(row.graph.branch ?? row.labels.find((l) => l.kind === "stash")?.name ?? null);
   const tags = $derived(row.labels.filter((l) => l.kind === "tag").map((l) => l.name));
+  const labels = $derived(tabLabels(detail?.files.map((f) => f.path) ?? []));
   const totals = $derived(
     detail?.files.reduce((t, f) => ({ add: t.add + f.additions, del: t.del + f.deletions }), { add: 0, del: 0 }) ?? { add: 0, del: 0 },
   );
@@ -126,7 +127,7 @@
       <div class="file-tabs" bind:this={tabBar}>
         {#each detail.files as file (file.path)}
           <button role="tab" aria-selected={tab === file.path} class="tab neutral" class:on={tab === file.path} onclick={() => openTab(file.path)} title={file.path}
-            >{splitPath(file.path).name}</button
+            >{labels.get(file.path)}</button
           >
         {/each}
       </div>
@@ -171,12 +172,15 @@
     flex-direction: column;
     min-height: 0;
   }
+  /* The commit's details are a card, like the graph and the file list in Summary. */
   .head {
-    padding: 14px 20px 16px;
+    margin: 4px 12px 0;
+    padding: 14px 16px 16px;
     display: flex;
     flex-direction: column;
     gap: 14px;
-    border-bottom: 1px solid var(--sep);
+    border: 1px solid var(--sep);
+    border-radius: 12px;
   }
   .message {
     display: flex;
@@ -262,7 +266,6 @@
     align-items: center;
     gap: 6px;
     padding: 10px 0 10px 12px;
-    border-bottom: 1px solid var(--sep);
     flex-shrink: 0;
   }
   .divider {

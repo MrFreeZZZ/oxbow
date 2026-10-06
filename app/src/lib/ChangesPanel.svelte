@@ -367,12 +367,15 @@
     flex-direction: column;
     min-height: 0;
   }
+  /* A card, like the commit details and the graph. */
   .head {
-    padding: 14px 20px 12px;
+    margin: 4px 12px 0;
+    padding: 14px 16px 12px;
     display: flex;
     flex-direction: column;
     gap: 4px;
-    border-bottom: 1px solid var(--sep);
+    border: 1px solid var(--sep);
+    border-radius: 12px;
   }
   h1 {
     margin: 0;
@@ -402,12 +405,15 @@
     font-size: 11px;
     color: var(--text2);
   }
+  /* The file lists are a card too, like the file list in a commit's Summary. */
   .lists {
     flex-shrink: 0;
     max-height: 38%;
     overflow-y: auto;
-    padding: 4px 0 6px;
-    border-bottom: 1px solid var(--sep);
+    margin: 12px 12px 6px;
+    padding: 6px 0;
+    border: 1px solid var(--sep);
+    border-radius: 12px;
   }
   .group {
     display: flex;
