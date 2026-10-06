@@ -16,6 +16,7 @@ use crate::edit::{ResetMode, plan_reset};
 use crate::error::{Error, Result};
 use crate::operation::{ConflictSide, MergeMethod, OperationKind, Pick};
 use crate::repo::Repo;
+use crate::tags;
 
 /// Files with more changed lines than this are not shown line by line.
 const MAX_DIFF_LINES: usize = 20_000;
@@ -263,6 +264,28 @@ pub enum Action {
     },
     /// Pack loose objects and drop unreachable ones (`git gc`).
     Optimize,
+    /// Tag `commit` as `name`: annotated with `message`, lightweight without one; with `push`,
+    /// send it to that remote.
+    CreateTag {
+        name: String,
+        commit: String,
+        message: Option<String>,
+        push: Option<String>,
+    },
+    /// Send tags to `remote`.
+    PushTags {
+        remote: String,
+        names: Vec<String>,
+    },
+    /// Delete a tag; with `remote`, on that remote too.
+    DeleteTag {
+        name: String,
+        remote: Option<String>,
+    },
+    /// Download every tag of `remote`.
+    FetchTags {
+        remote: String,
+    },
 }
 
 /// A branch on a remote: `branch` on `remote`.
@@ -696,6 +719,15 @@ impl Repo {
                 GitCommand::new(["remote", "remove", name])
                     .comment(format!("{name}/… branches go too; local branches stay")),
             ],
+            Action::CreateTag {
+                name,
+                commit,
+                message,
+                push,
+            } => tags::plan_create(name, commit, message.as_deref(), push.as_deref()),
+            Action::PushTags { remote, names } => vec![tags::push_command(remote, names)],
+            Action::DeleteTag { name, remote } => tags::plan_delete(name, remote.as_deref()),
+            Action::FetchTags { remote } => tags::plan_fetch(remote),
             Action::Optimize => {
                 vec![GitCommand::new(["gc"]).comment("packs loose objects and drops ones nothing points at any more")]
             }
@@ -772,6 +804,7 @@ impl Repo {
                 if pending {
                     self.forget_apply();
                 }
+                self.after_tags(action);
                 return Ok(last);
             }
         };
@@ -961,7 +994,7 @@ fn stdin_note(path: &str, header: &str) -> String {
 }
 
 /// A message split at its blank lines, each paragraph trimmed.
-fn paragraphs(message: &str) -> Vec<String> {
+pub(crate) fn paragraphs(message: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut current: Vec<&str> = Vec::new();
     for line in message.lines() {

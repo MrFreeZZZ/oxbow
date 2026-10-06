@@ -41,6 +41,8 @@ pub struct History {
     /// A merge, rebase, cherry-pick or revert that stopped, waiting to be finished or aborted.
     pub operation: Option<Operation>,
     pub refs: Vec<RefInfo>,
+    /// Tags the default remote does not have yet, as far as Oxbow knows.
+    pub local_tags: Vec<String>,
     pub remotes: Vec<String>,
     /// Upstream of the checked-out branch, with ahead/behind counts.
     pub tracking: Option<Tracking>,
@@ -408,6 +410,7 @@ impl Repo {
             lead_ins,
             previous_branch,
             operation,
+            local_tags: self.local_tags(&refs),
             refs,
             // A failing `git for-each-ref` only hides the ahead/behind counts.
             tracking: self.tracking().ok().flatten(),

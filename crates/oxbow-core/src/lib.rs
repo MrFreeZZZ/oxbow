@@ -15,6 +15,7 @@ pub mod operation;
 pub mod remote;
 pub mod repo;
 pub mod stash;
+pub mod tags;
 pub mod worktree;
 
 pub use cli::{CommandOutput, GitCommand, OutputLine};

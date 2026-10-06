@@ -11,7 +11,15 @@
     childIds,
     lookup,
     onSelect,
-  }: { row: HistoryRow; childIds: string[]; lookup: (id: string) => HistoryRow | undefined; onSelect: (id: string) => void } = $props();
+    localTags = [],
+  }: {
+    row: HistoryRow;
+    childIds: string[];
+    lookup: (id: string) => HistoryRow | undefined;
+    onSelect: (id: string) => void;
+    /** Tags the remote doesn't have yet: drawn dashed. */
+    localTags?: string[];
+  } = $props();
 
   let detail = $state<CommitDetail | null>(null);
   let diffs = $state<FileDiff[]>([]);
@@ -98,7 +106,7 @@
           </span>
         {/if}
         {#each tags as name (name)}
-          <span class="branch tag" title="Tag on this commit">
+          <span class="branch tag" class:local={localTags.includes(name)} title={localTags.includes(name) ? "Tag on this commit, not pushed yet" : "Tag on this commit"}>
             <svg class="icon tiny" viewBox="0 0 16 16"><path d="M2.5 2.5h5l6 6-5 5-6-6z" /><circle cx="5.5" cy="5.5" r="0.8" /></svg>
             {name}
           </span>
@@ -216,6 +224,11 @@
     background: var(--tag-bg);
     box-shadow: inset 0 0 0 1px var(--tag-border);
     color: var(--tag-fg);
+  }
+  .branch.tag.local {
+    box-shadow: none;
+    outline: 1px dashed var(--tag-border);
+    outline-offset: -1px;
   }
   .tiny {
     width: 12px;

@@ -20,6 +20,7 @@
   import { pushRequest } from "./remote";
   import { mergeRequest } from "./merge";
   import { stashMenu } from "./stash";
+  import { deleteTagRequest, fetchTagsRequest, isLocalTag, newTagRequest, pushTagsRequest } from "./tags";
 
   const TERMINAL = "M2.5 3.5h11v9h-11zM5 7l2 1.5L5 10M8.5 10.5h2.5";
   const FOLDER = "M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z";
@@ -256,8 +257,28 @@
       entries.push({ kind: "note", label: "HEAD goes to the tagged commit, on no branch." });
     }
     if (row) entries.push({ kind: "item", label: `New Branch from ${ref.name}…`, icon: menuIcons.branch, run: () => run(newBranchRequest(ctx, undefined, row)) });
+    const remote = history.defaultRemote;
+    if (remote && isLocalTag(ctx, ref.name)) {
+      entries.push({ kind: "sep" });
+      entries.push({ kind: "item", label: `Push to ${remote}`, icon: menuIcons.push, run: () => run(pushTagsRequest(ctx, [ref.name])) });
+    }
     entries.push({ kind: "item", label: "Copy Name", icon: menuIcons.copy, run: () => copy(ref.name) });
+    entries.push({ kind: "sep" });
+    entries.push({ kind: "item", label: "Delete Tag…", icon: menuIcons.drop, danger: true, run: () => run(deleteTagRequest(ctx, ref.name)) });
     open(event, "Tag menu", ref.name, entries);
+  }
+
+  /** The menu of the Tags heading: tags as a whole. */
+  function tagsMenu(event: MouseEvent) {
+    const remote = history.defaultRemote;
+    const local = history.localTags;
+    const entries: MenuEntry[] = [{ kind: "item", label: "New Tag…", icon: menuIcons.tag, run: () => run(newTagRequest(ctx)) }];
+    if (remote) {
+      entries.push({ kind: "sep" });
+      if (local.length) entries.push({ kind: "item", label: `Push ${local.length} Local ${local.length === 1 ? "Tag" : "Tags"} to ${remote}`, icon: menuIcons.push, run: () => run(pushTagsRequest(ctx, local)) });
+      entries.push({ kind: "item", label: `Fetch Tags from ${remote}`, icon: menuIcons.fetch, run: () => run(fetchTagsRequest(ctx)) });
+    }
+    open(event, "Tags menu", "tags-heading", entries);
   }
 
   /** Select the branch's or tag's latest commit, as if it were clicked in the graph. */
@@ -417,8 +438,16 @@
       {/each}
     {/if}
 
-    {#if tags.length}
-      <div class="heading">Tags</div>
+    {#if history.head.commit}
+      <div class="heading with-button" oncontextmenu={tagsMenu} role="group" aria-label="Tags">
+        <span>Tags</span>
+        <button class="add" onclick={tagsMenu} aria-label="Tag actions">
+          <svg class="icon" viewBox="0 0 16 16"><path d="M3.2 8a.8.8 0 1 0 1.6 0a.8.8 0 1 0-1.6 0M7.2 8a.8.8 0 1 0 1.6 0a.8.8 0 1 0-1.6 0M11.2 8a.8.8 0 1 0 1.6 0a.8.8 0 1 0-1.6 0" /></svg>
+        </button>
+        <button class="add" onclick={() => run(newTagRequest(ctx))} aria-label="New tag" title="New Tag…">
+          <svg class="icon" viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9" /></svg>
+        </button>
+      </div>
       {#each shown("tags", tags) as t (t.ref.name)}
         <button
           class="item"
@@ -431,6 +460,7 @@
         >
           <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 2.5h5l6 6-5 5-6-6z" /><circle cx="5.5" cy="5.5" r="0.8" /></svg>
           <span class="grow ellipsis">{t.ref.name}</span>
+          {#if history.localTags.includes(t.ref.name)}<span class="meta" title="Not on {history.defaultRemote} yet">local</span>{/if}
         </button>
       {/each}
       {@render more("tags", tags.length)}
