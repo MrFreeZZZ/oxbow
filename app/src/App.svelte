@@ -41,19 +41,39 @@
     return map;
   });
 
-  async function load(path: string) {
+  // Opening a repository switches the one the backend answers for. Each open gets a number, and an
+  // answer that belongs to an older one (a reload started before the switch, an earlier open) is
+  // dropped, so the window never shows one repository's commits while the backend has another.
+  let generation = 0;
+  let opening: Promise<void> = Promise.resolve();
+
+  function load(path: string): Promise<void> {
+    const mine = ++generation;
+    // One open at a time: the backend keeps whichever repository was opened last.
+    opening = opening.then(() => loadNow(path, mine));
+    return opening;
+  }
+
+  async function loadNow(path: string, mine: number) {
+    if (mine !== generation) return;
     loading = true;
     error = null;
+    // The commit panel must not ask the new repository about the old one's commits.
+    selected = null;
     try {
-      repo = await api.openRepo(path);
-      history = await api.history();
+      const summary = await api.openRepo(path);
+      const next = await api.history();
+      if (mine !== generation) return;
+      repo = summary;
+      history = next;
+      version++;
       // Start on the checked-out commit, like the design: HEAD's latest commit is selected.
-      selected = history.head.commit ?? history.rows[0]?.id ?? null;
+      selected = next.head.commit ?? next.rows[0]?.id ?? null;
       requestAnimationFrame(() => selected && list?.reveal(selected));
     } catch (err) {
-      error = String(err);
+      if (mine === generation) error = String(err);
     } finally {
-      loading = false;
+      if (mine === generation) loading = false;
     }
   }
 
@@ -81,13 +101,16 @@
   /** Reload after the repository changed, here or outside the app, keeping the selection when it still exists. */
   async function refresh() {
     if (!repo || loading) return;
+    const mine = generation;
     try {
       const next = await api.history();
+      // Another repository was opened meanwhile: this answer may come from the old one.
+      if (mine !== generation || loading) return;
       history = next;
       version++;
       if (!selected || !next.rows.some((r) => r.id === selected)) selected = next.head.commit ?? next.rows[0]?.id ?? null;
     } catch (err) {
-      error = String(err);
+      if (mine === generation) error = String(err);
     }
   }
 
@@ -180,15 +203,20 @@
       <div class="content">
         <section class="history" aria-label="Commit history">
           <div class="columns"><span>Description</span>{#if history.truncated}<span class="note">Showing the latest {history.rows.length.toLocaleString()} commits</span>{/if}</div>
-          <HistoryList bind:this={list} {history} {selected} onSelect={select} />
+          {#key repo.path}
+            <HistoryList bind:this={list} {history} {selected} onSelect={select} />
+          {/key}
         </section>
         <aside class="panel" style:width="{panelWidth}px" aria-label="Commit details">
           <button class="grip" onpointerdown={startResize} aria-label="Resize commit details" title="Drag to resize"></button>
-          {#if selectedRow?.worktree}
-            <ChangesPanel branch={history.head.branch} color={selectedRow.graph.color} head={headRow} {version} onChanged={refresh} />
-          {:else if selectedRow}
-            <CommitPanel row={selectedRow} childIds={childrenOf.get(selectedRow.id) ?? []} lookup={(id) => rowsById.get(id)} onSelect={select} />
-          {/if}
+          <!-- A new repository starts the panels from scratch. -->
+          {#key repo.path}
+            {#if selectedRow?.worktree}
+              <ChangesPanel branch={history.head.branch} color={selectedRow.graph.color} head={headRow} {version} onChanged={refresh} />
+            {:else if selectedRow}
+              <CommitPanel row={selectedRow} childIds={childrenOf.get(selectedRow.id) ?? []} lookup={(id) => rowsById.get(id)} onSelect={select} />
+            {/if}
+          {/key}
         </aside>
       </div>
     </div>

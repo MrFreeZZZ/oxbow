@@ -49,7 +49,10 @@
       (d) => {
         if (id === current) detail = d;
       },
-      (err) => (error = String(err)),
+      // An answer for a commit that is no longer shown must not cover the current one.
+      (err) => {
+        if (id === current) error = String(err);
+      },
     );
   });
 
@@ -62,7 +65,9 @@
       (d) => {
         if (id === current && tab === path && whole === wholeFile) diffs = d;
       },
-      (err) => (error = String(err)),
+      (err) => {
+        if (id === current) error = String(err);
+      },
     );
   });
 
