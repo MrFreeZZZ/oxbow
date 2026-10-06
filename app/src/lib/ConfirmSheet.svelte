@@ -35,14 +35,19 @@
     hook: "M5 2v6.5a3.5 3.5 0 0 0 7 0V7M10 9l2-2 2 2",
   };
 
-  // Token colors of the design's terminal block.
-  const GIT = "#F2F2F7";
-  const SUB = "#C9A9E8";
-  const FLAG = "#E6B08A";
-  const SHA = "#7FD1C4";
-  const STR = "#A9D59A";
-  const TEXT = "#E6E6EA";
-  const OUTPUT: Record<string, string> = { out: "#C7C7CC", err: "#FF8A80", hint: "#D9B26A", ok: "#8FD19E" };
+  // Token colors of the terminal block follow the app theme (see --term-* in app.css).
+  const GIT = "var(--term-git)";
+  const SUB = "var(--term-sub)";
+  const FLAG = "var(--term-flag)";
+  const SHA = "var(--term-sha)";
+  const STR = "var(--term-str)";
+  const TEXT = "var(--term-text)";
+  const OUTPUT: Record<string, string> = {
+    out: "var(--term-out)",
+    err: "var(--term-err)",
+    hint: "var(--term-hint)",
+    ok: "var(--term-ok)",
+  };
 
   /** Split a shell-quoted command into colored words. */
   function tokens(display: string) {
@@ -93,7 +98,7 @@
 
 {#snippet prompt(display: string)}
   <div class="cmd">
-    <span class="prompt">{repo} </span><span style:color="var(--lane-{color})">({branch ?? "HEAD"})</span><span class="prompt"> % </span>
+    <span class="prompt">{`${repo} `}</span><span style:color="var(--lane-{color})">({branch ?? "HEAD"})</span><span class="prompt">{" %"}</span>
     {#each tokens(display) as token, k (k)}<span style:color={token.color} class:bold={token.bold}>{token.text}</span>{" "}{/each}
   </div>
 {/snippet}
@@ -261,8 +266,8 @@
     border-radius: 12px;
     overflow: hidden;
     background: var(--term);
-    border: 0.5px solid rgba(255, 255, 255, 0.08);
-    box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.4);
+    border: 0.5px solid var(--term-border);
+    box-shadow: var(--term-shadow);
   }
   .bar {
     height: 28px;
@@ -271,19 +276,19 @@
     gap: 6px;
     padding: 0 8px 0 11px;
     background: var(--term-bar);
-    border-bottom: 0.5px solid rgba(255, 255, 255, 0.06);
+    border-bottom: 0.5px solid var(--term-border);
   }
   .light {
     width: 9px;
     height: 9px;
     border-radius: 5px;
-    background: #4a4c52;
+    background: var(--term-dot);
   }
   .where {
     flex-grow: 1;
     text-align: center;
     font-size: 11px;
-    color: #8e8e93;
+    color: var(--term-dim);
   }
   .copy {
     display: flex;
@@ -293,8 +298,8 @@
     padding: 0 8px;
     border-radius: 10px;
     font-size: 11px;
-    color: #a1a1a8;
-    background: rgba(255, 255, 255, 0.06);
+    color: var(--term-dim);
+    background: var(--term-button);
   }
   .copy .icon {
     width: 11px;
@@ -314,13 +319,13 @@
     overflow-wrap: anywhere;
   }
   .prompt {
-    color: #8e8e93;
+    color: var(--term-dim);
   }
   .bold {
     font-weight: 600;
   }
   .comment {
-    color: #7c8088;
+    color: var(--term-comment);
     font-style: italic;
   }
   .output {
