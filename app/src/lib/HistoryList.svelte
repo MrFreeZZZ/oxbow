@@ -246,7 +246,7 @@
           <span class="meta">
             {#each row.labels as label (label.kind + label.name)}
               {#if label.kind === "tag"}
-                <span class="pill tag">
+                <span class="pill tag" class:local={history.localTags.includes(label.name)} title={history.localTags.includes(label.name) ? `Not on ${history.defaultRemote} yet` : undefined}>
                   <svg class="icon tiny" viewBox="0 0 16 16"><path d="M2.5 2.5h5l6 6-5 5-6-6z" /><circle cx="5.5" cy="5.5" r="0.8" /></svg>
                   {label.name}
                 </span>
@@ -430,6 +430,10 @@
     background: var(--tag-bg);
     border-color: var(--tag-border);
     color: var(--tag-fg);
+  }
+  /* Not on the remote yet, like an unpushed commit's dashed line. */
+  .pill.tag.local {
+    border-style: dashed;
   }
   .tiny {
     width: 10px;

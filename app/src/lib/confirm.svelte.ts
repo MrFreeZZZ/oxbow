@@ -35,7 +35,8 @@ export type Icon =
   | "pop"
   | "reset"
   | "remote"
-  | "box";
+  | "box"
+  | "tag";
 
 export interface Request {
   /** A question, e.g. "Discard changes in 2 files?" */
@@ -142,7 +143,7 @@ export interface TermLine {
 type Phase = "ask" | "running" | "failed";
 
 /** Actions that throw work away or rewrite history: with "Risky only" these still ask. */
-const RISKY = new Set<Action["kind"]>(["discard", "discardHunk", "reset", "stashDrop", "deleteBranch", "deleteRemoteBranch", "abort", "abortRebase"]);
+const RISKY = new Set<Action["kind"]>(["discard", "discardHunk", "reset", "stashDrop", "deleteBranch", "deleteRemoteBranch", "deleteTag", "abort", "abortRebase"]);
 
 function isForcePush(action: Action): boolean {
   return action.kind === "push" && action.force;

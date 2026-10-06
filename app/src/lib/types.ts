@@ -111,6 +111,8 @@ export interface History {
   /** A merge, rebase, cherry-pick or revert that stopped, waiting to be finished or aborted. */
   operation: Operation | null;
   refs: RefInfo[];
+  /** Tags the default remote doesn’t have yet, as far as Oxbow knows. */
+  localTags: string[];
   remotes: string[];
   tracking: Tracking | null;
   defaultRemote: string | null;
@@ -238,7 +240,11 @@ export type Action =
   | { kind: "addRemote"; name: string; url: string }
   | { kind: "setRemoteUrl"; name: string; url: string }
   | { kind: "removeRemote"; name: string }
-  | { kind: "optimize" };
+  | { kind: "optimize" }
+  | { kind: "createTag"; name: string; commit: string; message: string | null; push: string | null }
+  | { kind: "pushTags"; remote: string; names: string[] }
+  | { kind: "deleteTag"; name: string; remote: string | null }
+  | { kind: "fetchTags"; remote: string };
 
 export type ResetMode = "soft" | "mixed" | "hard";
 

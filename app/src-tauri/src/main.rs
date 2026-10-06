@@ -462,6 +462,18 @@ async fn background_fetch(session: State<'_, Session>) -> CommandResult<()> {
     .await
 }
 
+/// Ask the default remote which tags it has, so tags it lacks show as local. True when that
+/// changed. Without a remote there is nothing to ask.
+#[tauri::command]
+async fn refresh_remote_tags(session: State<'_, Session>) -> CommandResult<bool> {
+    let repo = current(&session)?;
+    blocking(move || match repo.default_remote() {
+        Some(remote) => repo.refresh_remote_tags(&remote),
+        None => Ok(false),
+    })
+    .await
+}
+
 /// Open a file of the repository in the editor chosen in Settings.
 #[tauri::command]
 fn open_in_editor(app: AppHandle, session: State<'_, Session>, path: String, line: Option<u32>) -> CommandResult<()> {
@@ -605,6 +617,7 @@ fn main() {
             open_in_editor,
             open_in_terminal,
             monospace_fonts,
+            refresh_remote_tags,
             settings_text,
             save_settings_text
         ])

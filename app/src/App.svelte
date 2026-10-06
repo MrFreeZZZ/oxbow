@@ -23,6 +23,7 @@
   import { canPull, canPush, fetchRequest, pullRequest, pushRequest, type RemoteContext } from "./lib/remote";
   import Welcome from "./lib/Welcome.svelte";
   import { prefs } from "./lib/prefs.svelte";
+  import { deleteTagRequest, isLocalTag, newTagRequest, pushTagsRequest } from "./lib/tags";
 
   let repo = $state<RepoSummary | null>(null);
   let history = $state<History | null>(null);
@@ -125,6 +126,7 @@
     const opBefore = history?.operation ?? null;
     const ok = await confirm.run(request);
     await refresh();
+    if (ok && request.action.kind === "fetchTags") checkRemoteTags();
     // A stash made or put back is the newest, and the Stashes screen shows it.
     if (ok && (request.action.kind === "stashPush" || request.action.kind === "stashStore")) stashSel = history?.stashes[0]?.id ?? null;
     const after = history?.head;
@@ -214,6 +216,31 @@
     }
 
     group([isHead && !history.head.branch ? item("Create Branch…", menuIcons.branch, () => run(keepRequest(ctx))) : item("New Branch from Here…", menuIcons.branch, () => run(newBranchRequest(ctx, undefined, row)))]);
+    // Tags: a new one here, and pushing or deleting the ones on this commit.
+    // Push Tag and Delete Tag list the commit's tags in submenus, like Reset and Copy.
+    const tagging: MenuEntry[] = [item("New Tag Here…", menuIcons.tag, () => run(newTagRequest(ctx, row)))];
+    const tagsHere = row.labels.filter((l) => l.kind === "tag").map((l) => l.name);
+    const unpushed = history.defaultRemote ? tagsHere.filter((name) => isLocalTag(ctx, name)) : [];
+    if (unpushed.length) {
+      tagging.push({
+        kind: "sub",
+        label: `Push Tag to ${history.defaultRemote}`,
+        icon: menuIcons.push,
+        entries: [
+          ...unpushed.map((name) => ({ label: name, run: () => run(pushTagsRequest(ctx, [name])) })),
+          ...(unpushed.length > 1 ? [{ label: `All ${unpushed.length}`, run: () => run(pushTagsRequest(ctx, unpushed)) }] : []),
+        ],
+      });
+    }
+    if (tagsHere.length) {
+      tagging.push({
+        kind: "sub",
+        label: "Delete Tag",
+        icon: menuIcons.drop,
+        entries: tagsHere.map((name) => ({ label: `${name}…`, danger: true, run: () => run(deleteTagRequest(ctx, name)) })),
+      });
+    }
+    group(tagging);
     group([
       {
         kind: "sub",
@@ -266,7 +293,14 @@
     await confirm.run(request);
     // Even a failed pull or push may have fetched, so the counts are worth reloading either way.
     await refresh();
+    checkRemoteTags();
     openConflicts(opBefore);
+  }
+
+  /** Ask the remote which tags it has, so the ones it lacks show as local; quiet when offline. */
+  async function checkRemoteTags() {
+    if (!history?.remotes.length) return;
+    if (await api.refreshRemoteTags().catch(() => false)) await refresh();
   }
 
   /** Reload after the repository changed, here or outside the app, keeping the selection when it still exists. */
@@ -295,6 +329,7 @@
       if (confirm.request || document.hidden || loading) return;
       try {
         await api.backgroundFetch();
+        await api.refreshRemoteTags().catch(() => false);
         await refresh();
       } catch {
         // Offline, or the remote wants a password: the next turn tries again.
@@ -484,7 +519,7 @@
                 onResolve={operation ? () => (resolving = true) : undefined}
               />
             {:else if selectedRow}
-              <CommitPanel row={selectedRow} childIds={childrenOf.get(selectedRow.id) ?? []} lookup={(id) => rowsById.get(id)} onSelect={select} />
+              <CommitPanel row={selectedRow} childIds={childrenOf.get(selectedRow.id) ?? []} lookup={(id) => rowsById.get(id)} onSelect={select} localTags={history.localTags} />
             {/if}
           {/key}
         </aside>
