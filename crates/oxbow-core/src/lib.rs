@@ -19,6 +19,6 @@ pub use commit::{
 };
 pub use error::{Error, Result};
 pub use history::{History, HistoryOptions, HistoryRow, Label, WORKTREE_ID, WorktreeSummary};
-pub use remote::{CommitBrief, Failure, FailureKind, Tracking, classify_failure};
+pub use remote::{CommitBrief, DeletionCheck, Failure, FailureKind, Tracking, classify_failure};
 pub use repo::{HeadInfo, RefInfo, RefKind, Repo, StashInfo};
-pub use worktree::{Action, ActionEvent, Plan, Side, WorkingTree};
+pub use worktree::{Action, ActionEvent, Plan, RemoteBranch, Side, WorkingTree};

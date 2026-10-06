@@ -40,6 +40,10 @@ pub enum FailureKind {
     Hook,
     /// A pull stopped on conflicts.
     Conflict,
+    /// Switching branches would overwrite uncommitted changes.
+    LocalChanges,
+    /// `git branch -d` refused: the branch has commits that are not merged.
+    NotMerged,
     /// The user pressed Stop.
     Cancelled,
     Other,
@@ -110,6 +114,66 @@ impl Repo {
         Ok(parse_tracking(out.stdout.trim_end()))
     }
 
+    /// Upstream of every local branch that has one, by branch name.
+    pub fn branch_tracking(&self) -> Result<std::collections::HashMap<String, Tracking>> {
+        let out = self.run(&GitCommand::new([
+            "for-each-ref",
+            "--format=%(refname:short)%00%(upstream:remotename)%00%(upstream:remoteref)%00%(upstream:track,nobracket)",
+            "refs/heads",
+        ]))?;
+        Ok(out
+            .stdout
+            .lines()
+            .filter_map(|line| {
+                let (name, rest) = line.split_once('\0')?;
+                Some((name.to_owned(), parse_tracking(rest)?))
+            })
+            .collect())
+    }
+
+    /// What deleting the local `branch` would lose.
+    pub fn deletion_check(&self, branch: &str) -> Result<DeletionCheck> {
+        let upstream = self
+            .branch_tracking()?
+            .remove(branch)
+            .filter(|t| !t.gone)
+            .map(|t| format!("{}/{}", t.remote, t.branch));
+        let lost = self.only_on(Some(branch), None)?;
+        let lost_with_upstream = match &upstream {
+            Some(upstream) => self.only_on(Some(branch), Some(upstream))?,
+            None => lost.clone(),
+        };
+        Ok(DeletionCheck {
+            lost,
+            lost_with_upstream,
+        })
+    }
+
+    /// Commits of the remote branch `remote_branch` (`origin/x`) that no other branch, remote
+    /// branch or tag has: what deleting it on the remote would lose.
+    pub fn remote_deletion_check(&self, remote_branch: &str) -> Result<Vec<CommitBrief>> {
+        self.only_on(None, Some(remote_branch))
+    }
+
+    /// Commits, newest first, of the local `branch` and the remote branch `remote_branch`
+    /// (`origin/x`) that no other branch, remote branch or tag has.
+    fn only_on(&self, branch: Option<&str>, remote_branch: Option<&str>) -> Result<Vec<CommitBrief>> {
+        let mut args = vec![
+            "log".to_owned(),
+            "--max-count=50".to_owned(),
+            "--format=%H%x1f%s%x1f%an%x1f%ct".to_owned(),
+        ];
+        args.extend(branch.map(|b| format!("refs/heads/{b}")));
+        args.extend(remote_branch.map(|b| format!("refs/remotes/{b}")));
+        args.push("--not".to_owned());
+        // `--exclude` applies to the next `--branches` or `--remotes`, with names relative to it.
+        args.extend(branch.map(|b| format!("--exclude={b}")));
+        args.push("--branches".to_owned());
+        args.extend(remote_branch.map(|b| format!("--exclude={b}")));
+        args.extend(["--remotes".to_owned(), "--tags".to_owned()]);
+        Ok(parse_briefs(&self.run(&GitCommand::new(args))?.stdout))
+    }
+
     /// The remote to publish new branches to: `origin`, or the only remote there is.
     pub fn default_remote(&self) -> Option<String> {
         let remotes = self.remotes();
@@ -130,19 +194,7 @@ impl Repo {
             "--format=%H%x1f%s%x1f%an%x1f%ct",
             &format!("HEAD..refs/remotes/{remote}/{branch}"),
         ]))?;
-        Ok(out
-            .stdout
-            .lines()
-            .filter_map(|line| {
-                let mut parts = line.split('\u{1f}');
-                Some(CommitBrief {
-                    id: parts.next()?.to_owned(),
-                    summary: parts.next()?.to_owned(),
-                    author_name: parts.next()?.to_owned(),
-                    time: parts.next()?.parse().unwrap_or(0),
-                })
-            })
-            .collect())
+        Ok(parse_briefs(&out.stdout))
     }
 
     /// The commit a remote-tracking branch points at, as of the last fetch.
@@ -165,6 +217,31 @@ impl Repo {
         };
         self.workdir().join(out.stdout.trim()).is_file()
     }
+}
+
+/// What deleting a local branch would lose, for the confirmation sheet.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletionCheck {
+    /// Commits on no other branch, remote branch or tag, the branch's upstream included.
+    pub lost: Vec<CommitBrief>,
+    /// The same when the upstream is deleted too, its own commits included.
+    pub lost_with_upstream: Vec<CommitBrief>,
+}
+
+/// Lines of `git log --format=%H%x1f%s%x1f%an%x1f%ct`.
+fn parse_briefs(out: &str) -> Vec<CommitBrief> {
+    out.lines()
+        .filter_map(|line| {
+            let mut parts = line.split('\u{1f}');
+            Some(CommitBrief {
+                id: parts.next()?.to_owned(),
+                summary: parts.next()?.to_owned(),
+                author_name: parts.next()?.to_owned(),
+                time: parts.next()?.parse().unwrap_or(0),
+            })
+        })
+        .collect()
 }
 
 /// `origin\0refs/heads/main\0ahead 2, behind 1` from `git for-each-ref`.
@@ -205,6 +282,10 @@ pub fn classify_failure(error: &Error, pushing_with_hook: bool) -> FailureKind {
         FailureKind::Rejected
     } else if has("CONFLICT") || has("could not apply") || has("Resolve all conflicts") {
         FailureKind::Conflict
+    } else if has("would be overwritten by checkout") || has("would be overwritten by switch") {
+        FailureKind::LocalChanges
+    } else if has("is not fully merged") {
+        FailureKind::NotMerged
     } else if has("Authentication failed")
         || has("could not read Username")
         || has("could not read Password")
@@ -288,6 +369,14 @@ mod tests {
         assert_eq!(
             classify_failure(&failed("tests failed\nerror: failed to push some refs to 'x'"), true),
             FailureKind::Hook
+        );
+        assert_eq!(
+            kind("error: Your local changes to the following files would be overwritten by checkout:\n\ta.txt"),
+            FailureKind::LocalChanges
+        );
+        assert_eq!(
+            kind("error: the branch 'x' is not fully merged\nhint: If you are sure you want to delete it"),
+            FailureKind::NotMerged
         );
         assert_eq!(kind("something else"), FailureKind::Other);
         assert_eq!(classify_failure(&Error::Cancelled, false), FailureKind::Cancelled);

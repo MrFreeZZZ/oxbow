@@ -125,6 +125,52 @@ pub enum Action {
     },
     /// Give up a pull that stopped on conflicts, back to where the branch was.
     AbortRebase,
+    /// Check out the local `branch`. With `stash`, uncommitted changes are stashed first, for
+    /// when they would be overwritten.
+    Switch {
+        branch: String,
+        stash: bool,
+    },
+    /// Create a local branch from the remote one and check it out.
+    Track {
+        remote: String,
+        branch: String,
+        stash: bool,
+    },
+    /// Create the branch `name` at `start` (a branch or commit; `HEAD` when missing), optionally
+    /// check it out and publish it to a remote.
+    CreateBranch {
+        name: String,
+        start: Option<String>,
+        switch: bool,
+        publish: Option<String>,
+    },
+    /// Rename a local branch; with `upstream`, publish the new name there and delete the old one.
+    RenameBranch {
+        from: String,
+        to: String,
+        upstream: Option<RemoteBranch>,
+    },
+    /// Delete a local branch. `force` deletes it even with commits no other branch has;
+    /// `upstream` is deleted on its remote too.
+    DeleteBranch {
+        name: String,
+        force: bool,
+        upstream: Option<RemoteBranch>,
+    },
+    /// Delete a branch on its remote.
+    DeleteRemoteBranch {
+        remote: String,
+        branch: String,
+    },
+}
+
+/// A branch on a remote: `branch` on `remote`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteBranch {
+    pub remote: String,
+    pub branch: String,
 }
 
 /// What happens while an action runs, for the live terminal in the sheet.
@@ -351,6 +397,108 @@ impl Repo {
             Action::AbortRebase => {
                 vec![GitCommand::new(["rebase", "--abort"]).comment("back to where the branch was before the pull")]
             }
+            Action::Switch { branch, stash } => {
+                let mut commands = Vec::new();
+                if *stash {
+                    commands.push(stash_before(branch));
+                }
+                commands.push(
+                    GitCommand::new(["switch", branch]).comment("switch: the modern form of \"git checkout <branch>\""),
+                );
+                commands
+            }
+            Action::Track { remote, branch, stash } => {
+                let mut commands = Vec::new();
+                if *stash {
+                    commands.push(stash_before(branch));
+                }
+                commands.push(
+                    GitCommand::new(["switch".to_owned(), "--track".to_owned(), format!("{remote}/{branch}")])
+                        .comment(format!("--track: create {branch} that follows {remote}/{branch}")),
+                );
+                commands
+            }
+            Action::CreateBranch {
+                name,
+                start,
+                switch,
+                publish,
+            } => {
+                let at = start
+                    .as_deref()
+                    .map_or("the current commit".to_owned(), |s| s.to_owned());
+                let mut args = if *switch {
+                    vec!["switch".to_owned(), "-c".to_owned(), name.clone()]
+                } else {
+                    vec!["branch".to_owned(), name.clone()]
+                };
+                args.extend(start.iter().cloned());
+                let head = self.head()?.branch;
+                let mut commands = vec![GitCommand::new(args).comment(if *switch {
+                    format!("-c: create the branch at {at}, then switch to it")
+                } else {
+                    format!(
+                        "creates the branch at {at}, you stay on {}",
+                        head.as_deref().unwrap_or("the current commit")
+                    )
+                })];
+                if let Some(remote) = publish {
+                    commands.push(
+                        GitCommand::new(["push", "-u", remote, name])
+                            .comment(format!("-u: remember {remote}/{name} as its upstream"))
+                            .with_progress(),
+                    );
+                }
+                commands
+            }
+            Action::RenameBranch { from, to, upstream } => {
+                let mut commands =
+                    vec![GitCommand::new(["branch", "-m", from, to]).comment("-m: move, which renames the branch")];
+                if let Some(up) = upstream {
+                    commands.push(
+                        GitCommand::new(["push", "-u", &up.remote, to])
+                            .comment(format!("publish the new name and make {}/{to} the upstream", up.remote))
+                            .with_progress(),
+                    );
+                    commands.push(
+                        GitCommand::new([
+                            "push".to_owned(),
+                            up.remote.clone(),
+                            "--delete".to_owned(),
+                            up.branch.clone(),
+                        ])
+                        .comment("then remove the old name there")
+                        .with_progress(),
+                    );
+                }
+                commands
+            }
+            Action::DeleteBranch { name, force, upstream } => {
+                let mut commands = vec![if *force {
+                    GitCommand::new(["branch", "-D", name])
+                        .comment("-D: delete even though the commits are not merged anywhere")
+                } else {
+                    GitCommand::new(["branch", "-d", name]).comment("-d: deletes only when no work would be lost")
+                }];
+                if let Some(up) = upstream {
+                    commands.push(
+                        GitCommand::new([
+                            "push".to_owned(),
+                            up.remote.clone(),
+                            "--delete".to_owned(),
+                            up.branch.clone(),
+                        ])
+                        .comment(format!("removes {}/{} for everyone", up.remote, up.branch))
+                        .with_progress(),
+                    );
+                }
+                commands
+            }
+            Action::DeleteRemoteBranch { remote, branch } => vec![
+                GitCommand::new(["push", remote, "--delete", branch])
+                    .comment("--delete: remove the branch on the remote")
+                    .with_progress(),
+            ],
         };
         Ok(Plan { commands })
     }
@@ -477,6 +625,18 @@ impl Side {
             Side::Unstaged => "unstaged",
         }
     }
+}
+
+/// Put uncommitted changes, new files included, aside before switching to `branch`.
+fn stash_before(branch: &str) -> GitCommand {
+    GitCommand::new([
+        "stash".to_owned(),
+        "push".to_owned(),
+        "--include-untracked".to_owned(),
+        "-m".to_owned(),
+        format!("Before switching to {branch}"),
+    ])
+    .comment("keeps your uncommitted files in the stash, new ones too")
 }
 
 fn pull(remote: &str, branch: &str) -> GitCommand {

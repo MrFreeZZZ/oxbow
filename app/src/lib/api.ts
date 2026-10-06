@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Action, CommitDetail, FileDiff, History, Plan, RepoSummary, Side, WorkingTree } from "./types";
+import type { Action, CommitBrief, CommitDetail, DeletionCheck, FileDiff, History, Plan, RepoSummary, Side, WorkingTree } from "./types";
 
 export const api = {
   initialRepo: () => invoke<string | null>("initial_repo"),
@@ -10,6 +10,8 @@ export const api = {
     invoke<FileDiff[]>("commit_diff", { id, path, wholeFile }),
   workingTree: () => invoke<WorkingTree>("working_tree"),
   workingDiff: (path: string, side: Side, wholeFile: boolean) => invoke<FileDiff>("working_diff", { path, side, wholeFile }),
+  deletionCheck: (branch: string) => invoke<DeletionCheck>("deletion_check", { branch }),
+  remoteDeletionCheck: (branch: string) => invoke<CommitBrief[]>("remote_deletion_check", { branch }),
   planAction: (action: Action) => invoke<Plan>("plan_action", { action }),
   /** Rejects with a `Failure`. */
   performAction: (action: Action) => invoke<string>("perform_action", { action }),

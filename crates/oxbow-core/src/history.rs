@@ -100,7 +100,12 @@ impl Repo {
     pub fn history(&self, options: &HistoryOptions) -> Result<History> {
         let repo = self.local();
         let head = self.head()?;
-        let refs = self.refs()?;
+        let mut refs = self.refs()?;
+        // A failing `git for-each-ref` only hides the upstreams and their counts.
+        let mut upstreams = self.branch_tracking().unwrap_or_default();
+        for r in refs.iter_mut().filter(|r| r.kind == RefKind::Local) {
+            r.tracking = upstreams.remove(&r.name);
+        }
         let remotes = self.remotes();
         let stashes = self.stashes()?;
 

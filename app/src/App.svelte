@@ -7,7 +7,9 @@
   import CommitPanel from "./lib/CommitPanel.svelte";
   import ChangesPanel from "./lib/ChangesPanel.svelte";
   import ConfirmSheet from "./lib/ConfirmSheet.svelte";
-  import { confirm } from "./lib/confirm.svelte";
+  import { confirm, type Request } from "./lib/confirm.svelte";
+  import BranchPicker from "./lib/BranchPicker.svelte";
+  import { newBranchRequest, switchRequest, type BranchContext } from "./lib/branches";
   import { canPull, canPush, fetchRequest, pullRequest, pushRequest, type RemoteContext } from "./lib/remote";
   import Welcome from "./lib/Welcome.svelte";
 
@@ -75,6 +77,35 @@
     } finally {
       if (mine === generation) loading = false;
     }
+  }
+
+  const targetOf = $derived(new Map(history?.refs.map((r) => [r.kind === "tag" ? `tag:${r.name}` : r.name, r.target]) ?? []));
+  /** Lane color of a branch's latest commit; a name that doesn't exist yet gets HEAD's. */
+  function colorOf(name: string): number {
+    const target = targetOf.get(name);
+    const row = target ? rowsById.get(target) : undefined;
+    return row ? row.graph.color : headColor;
+  }
+
+  const branchCtx = $derived<BranchContext | null>(
+    history && { history, colorOf, uncommitted: history.rows.find((r) => r.worktree)?.worktree?.files ?? 0 },
+  );
+
+  /** Confirm and run a change to the repository, then reload. After a checkout the new HEAD's
+   *  latest commit is selected, as in the design. */
+  async function run(pending: Request | Promise<Request>) {
+    let request: Request;
+    try {
+      request = await pending;
+    } catch (err) {
+      error = String(err);
+      return;
+    }
+    const before = history?.head;
+    await confirm.run(request);
+    await refresh();
+    const after = history?.head;
+    if (after?.commit && (after.branch !== before?.branch || after.commit !== before?.commit)) select(after.commit);
   }
 
   const remoteCtx = $derived<RemoteContext | null>(
@@ -157,17 +188,14 @@
   <Welcome {loading} {error} onOpen={chooseRepo} />
 {:else}
   <div class="window">
-    <Sidebar {repo} {history} {selectedRow} onOpen={chooseRepo} onPick={select} />
+    <Sidebar {repo} {history} {selectedRow} ctx={branchCtx!} onOpen={chooseRepo} onPick={select} {run} />
     <div class="main">
       <header data-tauri-drag-region>
         <div class="title" data-tauri-drag-region>
           <span class="name">History</span>
           <span class="sub">{branchCount} {branchCount === 1 ? "branch" : "branches"} · {history.head.branch ?? "detached HEAD"}</span>
         </div>
-        <span class="capsule" title="Checked-out branch">
-          <svg class="icon" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg>
-          <span>{history.head.branch ?? "Detached"}</span>
-        </span>
+        <BranchPicker {history} {colorOf} onPick={(name) => branchCtx && run(switchRequest(branchCtx, name))} />
         <span class="spacer" data-tauri-drag-region></span>
         {#if error}<span class="error" role="alert">{error}</span>{/if}
         {#if history.remotes.length && remoteCtx}
@@ -196,6 +224,9 @@
             </button>
           </div>
         {/if}
+        <button class="capsule" onclick={() => branchCtx && run(newBranchRequest(branchCtx))} aria-label="New branch" title="New Branch…">
+          <svg class="icon" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg>
+        </button>
         <button class="capsule" onclick={refresh} aria-label="Reload history" title="Reload">
           <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5" /></svg>
         </button>
@@ -273,9 +304,6 @@
     box-shadow: var(--glass-shadow);
     color: var(--icon);
     font-weight: 500;
-  }
-  .capsule span {
-    color: var(--text);
   }
   .group {
     display: flex;
