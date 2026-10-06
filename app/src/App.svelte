@@ -217,10 +217,28 @@
 
     group([isHead && !history.head.branch ? item("Create Branch…", menuIcons.branch, () => run(keepRequest(ctx))) : item("New Branch from Here…", menuIcons.branch, () => run(newBranchRequest(ctx, undefined, row)))]);
     // Tags: a new one here, and pushing or deleting the ones on this commit.
+    // Push Tag and Delete Tag list the commit's tags in submenus, like Reset and Copy.
     const tagging: MenuEntry[] = [item("New Tag Here…", menuIcons.tag, () => run(newTagRequest(ctx, row)))];
-    for (const label of row.labels.filter((l) => l.kind === "tag").slice(0, 2)) {
-      if (history.defaultRemote && isLocalTag(ctx, label.name)) tagging.push(item(`Push Tag ${label.name}`, menuIcons.push, () => run(pushTagsRequest(ctx, [label.name]))));
-      tagging.push(item(`Delete Tag ${label.name}…`, menuIcons.drop, () => run(deleteTagRequest(ctx, label.name)), true));
+    const tagsHere = row.labels.filter((l) => l.kind === "tag").map((l) => l.name);
+    const unpushed = history.defaultRemote ? tagsHere.filter((name) => isLocalTag(ctx, name)) : [];
+    if (unpushed.length) {
+      tagging.push({
+        kind: "sub",
+        label: `Push Tag to ${history.defaultRemote}`,
+        icon: menuIcons.push,
+        entries: [
+          ...unpushed.map((name) => ({ label: name, run: () => run(pushTagsRequest(ctx, [name])) })),
+          ...(unpushed.length > 1 ? [{ label: `All ${unpushed.length}`, run: () => run(pushTagsRequest(ctx, unpushed)) }] : []),
+        ],
+      });
+    }
+    if (tagsHere.length) {
+      tagging.push({
+        kind: "sub",
+        label: "Delete Tag",
+        icon: menuIcons.drop,
+        entries: tagsHere.map((name) => ({ label: `${name}…`, danger: true, run: () => run(deleteTagRequest(ctx, name)) })),
+      });
     }
     group(tagging);
     group([
