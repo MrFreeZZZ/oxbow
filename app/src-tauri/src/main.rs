@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use oxbow_core::{
-    Action, CommitBrief, CommitDetail, DeletionCheck, DiffContext, Failure, FileDiff, History, HistoryOptions, Plan,
-    Repo, Side, WorkingTree,
+    Action, CommitBrief, CommitDetail, ConflictFile, DeletionCheck, DiffContext, Failure, FileDiff, History,
+    HistoryOptions, MergePreview, Plan, Repo, Side, WorkingTree,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -174,6 +174,20 @@ async fn remote_deletion_check(session: State<'_, Session>, branch: String) -> C
     blocking(move || repo.remote_deletion_check(&branch)).await
 }
 
+/// What merging `branch` into the checked-out branch would bring, for the merge sheet.
+#[tauri::command]
+async fn merge_preview(session: State<'_, Session>, branch: String) -> CommandResult<MergePreview> {
+    let repo = current(&session)?;
+    blocking(move || repo.merge_preview(&branch)).await
+}
+
+/// Both sides of a conflicted file, for the Conflicts screen.
+#[tauri::command]
+async fn conflict_file(session: State<'_, Session>, path: String) -> CommandResult<ConflictFile> {
+    let repo = current(&session)?;
+    blocking(move || repo.conflict_file(&path)).await
+}
+
 /// The git commands an action will run, for the confirmation sheet.
 #[tauri::command]
 async fn plan_action(session: State<'_, Session>, action: Action) -> CommandResult<Plan> {
@@ -236,6 +250,8 @@ fn main() {
             working_diff,
             deletion_check,
             remote_deletion_check,
+            merge_preview,
+            conflict_file,
             plan_action,
             perform_action,
             stop_action,

@@ -91,6 +91,8 @@ export interface History {
   leadIns: { column: number; row: number }[];
   /** While HEAD is detached, the branch checked out before. */
   previousBranch: string | null;
+  /** A merge, rebase, cherry-pick or revert that stopped, waiting to be finished or aborted. */
+  operation: Operation | null;
   refs: RefInfo[];
   remotes: string[];
   tracking: Tracking | null;
@@ -200,7 +202,62 @@ export type Action =
   | { kind: "createBranch"; name: string; start: string | null; switch: boolean; publish: string | null }
   | { kind: "renameBranch"; from: string; to: string; upstream: RemoteBranch | null }
   | { kind: "deleteBranch"; name: string; force: boolean; upstream: RemoteBranch | null }
-  | { kind: "deleteRemoteBranch"; remote: string; branch: string };
+  | { kind: "deleteRemoteBranch"; remote: string; branch: string }
+  | { kind: "merge"; branch: string; method: MergeMethod; message: string | null }
+  | { kind: "continue"; message: string | null }
+  | { kind: "abort" }
+  | { kind: "skip" }
+  | { kind: "resolve"; path: string; picks: Pick[] }
+  | { kind: "takeFile"; path: string; side: ConflictSide };
+
+export type MergeMethod = "merge" | "squash" | "rebase" | "fastForward";
+export type OperationKind = "merge" | "squash" | "rebase" | "cherryPick" | "revert";
+/** A side of a conflict as git names the index stages: ours is stage 2, theirs stage 3. */
+export type ConflictSide = "ours" | "theirs";
+export type Pick = "ours" | "theirs" | "oursThenTheirs" | "theirsThenOurs";
+
+export interface Operation {
+  kind: OperationKind;
+  /** The branch that changes: the checked-out one, or the one being rebased. */
+  branch: string | null;
+  /** The merged branch, the new base of a rebase, a short sha otherwise. */
+  incoming: string | null;
+  /** The commit being merged, replayed, picked or reverted. */
+  commit: CommitBrief | null;
+  incomingCount: number;
+  /** For a rebase: [commit it stopped on, of how many], from 1. */
+  step: [number, number] | null;
+  conflicted: number;
+  oursLabel: string;
+  theirsLabel: string;
+  /** The side with the user's own work: ours in a merge, theirs in a rebase. */
+  yours: ConflictSide;
+  message: string | null;
+}
+
+export interface MergePreview {
+  branch: string;
+  incoming: CommitBrief[];
+  incomingCount: number;
+  ours: CommitBrief[];
+  oursCount: number;
+  base: CommitBrief | null;
+  /** null when this git can't tell. */
+  conflicts: string[] | null;
+  files: number;
+  touchedHere: number;
+}
+
+export type Chunk = { kind: "same"; lines: string[] } | { kind: "conflict"; ours: string[]; base: string[]; theirs: string[] };
+
+export interface ConflictFile {
+  path: string;
+  base: boolean;
+  ours: boolean;
+  theirs: boolean;
+  binary: boolean;
+  chunks: Chunk[];
+}
 
 export interface RemoteBranch {
   remote: string;

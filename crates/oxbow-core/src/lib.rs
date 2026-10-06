@@ -9,6 +9,7 @@ pub mod commit;
 pub mod error;
 pub mod graph;
 pub mod history;
+pub mod operation;
 pub mod remote;
 pub mod repo;
 pub mod worktree;
@@ -19,6 +20,7 @@ pub use commit::{
 };
 pub use error::{Error, Result};
 pub use history::{History, HistoryOptions, HistoryRow, Label, WORKTREE_ID, WorktreeSummary};
+pub use operation::{Chunk, ConflictFile, ConflictSide, MergeMethod, MergePreview, Operation, OperationKind, Pick};
 pub use remote::{CommitBrief, DeletionCheck, Failure, FailureKind, Tracking, classify_failure};
 pub use repo::{HeadInfo, RefInfo, RefKind, Repo, StashInfo};
 pub use worktree::{Action, ActionEvent, Plan, RemoteBranch, Side, WorkingTree};

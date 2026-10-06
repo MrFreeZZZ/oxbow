@@ -16,6 +16,7 @@
     head,
     version,
     onChanged,
+    onResolve,
   }: {
     branch: string | null;
     color: number;
@@ -25,6 +26,8 @@
     version: number;
     /** Called after an action changed the repository. */
     onChanged: () => void;
+    /** Opens the Conflicts screen. */
+    onResolve?: () => void;
   } = $props();
 
   const SUMMARY_LIMIT = 72;
@@ -331,7 +334,10 @@
     {#if error}<p class="error" role="alert">{error}</p>{/if}
     {#if diff}
       {#if diff.file.status === "conflicted"}
-        <p class="hint">This file has merge conflicts. Fix them in your editor, then stage the file.</p>
+        <p class="hint">
+          This file has conflicts: both sides changed the same lines.
+          {#if onResolve}<button class="resolve" onclick={onResolve}>Resolve Conflicts…</button>{:else}Fix them in your editor, then stage the file.{/if}
+        </p>
       {/if}
       <DiffView diffs={[diff]} {color} {whole} onToggleWhole={() => (whole = !whole)} {hunkBar} />
     {/if}
@@ -729,5 +735,10 @@
     font-size: 11px;
     font-weight: 500;
     opacity: 0.85;
+  }
+  .resolve {
+    margin-left: 6px;
+    color: var(--accent-text);
+    font-weight: 600;
   }
 </style>

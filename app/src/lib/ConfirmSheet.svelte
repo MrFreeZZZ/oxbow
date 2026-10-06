@@ -1,6 +1,7 @@
 <script lang="ts">
   import { confirm, type Icon, type Part } from "./confirm.svelte";
   import { plate, tint } from "./format";
+  import MergePreview from "./MergePreview.svelte";
 
   let { repo, branch, color }: { repo: string; branch: string | null; color: number } = $props();
 
@@ -38,6 +39,8 @@
     branch: "M3 3.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M3 12.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M10 5.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M4.5 5v6M11.5 7c0 3-7 2-7 4",
     edit: "M10.5 2.5l3 3L6 13H3v-3z",
     drop: "M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.7 9h5.6l.7-9",
+    merge: "M4.5 2v12M4.5 4.5c0 3.5 7 2.5 7 6v3.5M2.5 12 4.5 14l2-2",
+    rebase: "M4.5 14V7M4.5 7c0-3 7-1 7-5M11.5 2v12M9.5 4 11.5 2l2 2",
   };
 
   // Token colors of the terminal block follow the app theme (see --term-* in app.css).
@@ -165,7 +168,15 @@
                 {#if field.chips?.length}
                   <span class="chips">
                     {#each field.chips as chip (chip.label)}
-                      <button class="chip-button" class:on={chip.on} class:mono={chip.mono} aria-pressed={chip.on} onclick={() => confirm.change(chip.pick())}>{chip.label}</button>
+                      <button
+                        class="chip-button"
+                        class:on={chip.on}
+                        class:mono={chip.mono}
+                        aria-pressed={chip.on}
+                        disabled={!!chip.off}
+                        title={chip.off}
+                        onclick={() => !chip.on && confirm.change(chip.pick())}>{chip.label}</button
+                      >
                     {/each}
                   </span>
                 {/if}
@@ -174,6 +185,10 @@
             </div>
           {/each}
         </div>
+      {/if}
+
+      {#if request.preview && confirm.phase === "ask"}
+        <MergePreview preview={request.preview} />
       {/if}
 
       {#if request.options?.length && confirm.phase === "ask"}
@@ -259,6 +274,8 @@
   }
   .sheet {
     width: min(620px, calc(100vw - 48px));
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
     padding: 22px 22px 18px;
     border-radius: 22px;
     background: var(--sheet);
@@ -456,6 +473,9 @@
   }
   .chip-button.mono {
     font-family: var(--mono);
+  }
+  .chip-button:disabled {
+    opacity: 0.4;
   }
   .field-note {
     font-size: 12px;
