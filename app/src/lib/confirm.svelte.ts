@@ -26,7 +26,11 @@ export type Icon =
   | "edit"
   | "drop"
   | "merge"
-  | "rebase";
+  | "rebase"
+  | "cherry"
+  | "revert"
+  | "undo"
+  | "reset";
 
 export interface Request {
   /** A question, e.g. "Discard changes in 2 files?" */
@@ -97,7 +101,8 @@ export interface Choice {
 /** A row of the sheet with a label: a text box, a choice of chips, or both, and a note under them. */
 export interface Field {
   label: string;
-  text?: { value: string; placeholder?: string; edit: (value: string) => Request };
+  /** `multiline` for a commit message: Return makes a new line, ⌘Return runs the action. */
+  text?: { value: string; placeholder?: string; multiline?: boolean; edit: (value: string) => Request };
   /** `off` says why a chip can't be picked. */
   chips?: { label: string; on: boolean; mono?: boolean; off?: string; pick: () => Request | Promise<Request> }[];
   note?: string;

@@ -14,6 +14,7 @@
   import OperationBanner from "./lib/OperationBanner.svelte";
   import ConflictsView from "./lib/ConflictsView.svelte";
   import { abortRequest, continueRequest, describe, mergeRequest, skipRequest } from "./lib/merge";
+  import { ancestors, cherryPickRequest, editMessageRequest, resetModes, resetRequest, revertRequest, undoCommitRequest } from "./lib/commits";
   import type { Operation } from "./lib/types";
   import { menuIcons, type MenuEntry } from "./lib/Menu.svelte";
   import { canPull, canPush, fetchRequest, pullRequest, pushRequest, type RemoteContext } from "./lib/remote";
@@ -145,37 +146,83 @@
   function commitMenu(row: HistoryRow): MenuEntry[] {
     const ctx = branchCtx;
     if (!ctx || !history || row.worktree) return [];
-    const item = (label: string, icon: string, act: () => void): MenuEntry => ({ kind: "item", label, icon, run: act });
+    const item = (label: string, icon: string, act: () => void, danger = false): MenuEntry => ({ kind: "item", label, icon, run: act, danger });
     const isHead = row.id === history.head.commit;
+    const here = history.head.branch ?? "HEAD";
     const entries: MenuEntry[] = [{ kind: "header", label: `${row.id.slice(0, 7)} · ${row.summary}` }];
+    const group = (items: MenuEntry[]) => {
+      if (items.length) entries.push(...(entries.length > 1 ? [{ kind: "sep" } as MenuEntry] : []), ...items);
+    };
     // A commit many branches point at lists the first few; the rest are in the branch list.
     const others = row.labels.filter((l) => l.kind === "local" && l.name !== history!.head.branch);
-    for (const label of others.slice(0, 3)) entries.push(item(`Check Out ${label.name}`, menuIcons.checkout, () => run(switchRequest(ctx, label.name))));
-    if (others.length > 3) entries.push({ kind: "note", label: `${others.length - 3} more branches here, in the branch list.` });
-    // Branches at this commit can be merged or rebased onto right here, as from the branch list.
-    const here = history.head.branch ?? "HEAD";
-    const locals = new Set(row.labels.filter((l) => l.kind === "local").map((l) => l.name));
-    const mergeable = history.operation
-      ? []
-      : row.labels.filter((l) => (l.kind === "local" || (l.kind === "remote" && !locals.has(l.name.slice(l.name.indexOf("/") + 1)))) && l.name !== here).slice(0, 2);
-    if (mergeable.length && entries.length > 1) entries.push({ kind: "sep" });
-    for (const label of mergeable) {
-      entries.push(item(`Merge ${label.name} into ${here}…`, menuIcons.merge, () => run(mergeRequest(ctx, label.name))));
-      if (history.head.branch) entries.push(item(`Rebase ${here} onto ${label.name}…`, menuIcons.rebase, () => run(mergeRequest(ctx, label.name, "rebase"))));
+    const switching: MenuEntry[] = others.slice(0, 3).map((label) => item(`Check Out ${label.name}`, menuIcons.checkout, () => run(switchRequest(ctx, label.name))));
+    if (others.length > 3) switching.push({ kind: "note", label: `${others.length - 3} more branches here, in the branch list.` });
+    if (!isHead) switching.push(item("Check Out This Commit…", menuIcons.checkout, () => run(detachRequest(ctx, row))));
+    group(switching);
+
+    // Branches at this commit can be merged or rebased onto right here, as from the branch list;
+    // the commit itself can be copied, undone or made the branch's tip. None of it while a merge
+    // or rebase waits to be finished.
+    const stash = row.labels.some((l) => l.kind === "stash");
+    if (!history.operation && !stash) {
+      const locals = new Set(row.labels.filter((l) => l.kind === "local").map((l) => l.name));
+      const mergeable = row.labels
+        .filter((l) => (l.kind === "local" || (l.kind === "remote" && !locals.has(l.name.slice(l.name.indexOf("/") + 1)))) && l.name !== here)
+        .slice(0, 2);
+      const merging: MenuEntry[] = [];
+      for (const label of mergeable) {
+        merging.push(item(`Merge ${label.name} into ${here}…`, menuIcons.merge, () => run(mergeRequest(ctx, label.name))));
+        if (history.head.branch) merging.push(item(`Rebase ${here} onto ${label.name}…`, menuIcons.rebase, () => run(mergeRequest(ctx, label.name, "rebase"))));
+      }
+      group(merging);
+
+      const inHead = ancestors(history, history.head.commit).has(row.id);
+      const editing: MenuEntry[] = [];
+      if (isHead && row.parents.length === 1) editing.push(item("Undo Commit", menuIcons.undo, () => run(undoCommitRequest(ctx, row))));
+      if (isHead) editing.push(item("Edit Message…", menuIcons.edit, () => run(editMessageRequest(ctx, row))));
+      if (!inHead && history.head.commit) editing.push(item(`Cherry-Pick onto ${here}`, menuIcons.cherry, () => run(cherryPickRequest(ctx, row))));
+      if (inHead) editing.push(item("Revert Commit…", menuIcons.revert, () => run(revertRequest(ctx, row))));
+      if (!isHead && history.head.commit) {
+        editing.push({
+          kind: "sub",
+          label: `Reset ${here} to Here`,
+          icon: menuIcons.reset,
+          entries: resetModes.map((m) => ({ label: m.label, hint: m.keeps, danger: m.mode === "hard", run: () => run(resetRequest(ctx, row, m.mode)) })),
+        });
+      }
+      group(editing);
     }
-    if (mergeable.length) entries.push({ kind: "sep" });
-    if (!isHead) entries.push(item("Check Out This Commit…", menuIcons.checkout, () => run(detachRequest(ctx, row))));
-    if (isHead && !history.head.branch) entries.push(item("Create Branch…", menuIcons.branch, () => run(keepRequest(ctx))));
-    else entries.push(item("New Branch from Here…", menuIcons.branch, () => run(newBranchRequest(ctx, undefined, row))));
-    entries.push({ kind: "sep" }, item("Copy SHA", menuIcons.copy, () => copySha(row.id)));
+
+    group([isHead && !history.head.branch ? item("Create Branch…", menuIcons.branch, () => run(keepRequest(ctx))) : item("New Branch from Here…", menuIcons.branch, () => run(newBranchRequest(ctx, undefined, row)))]);
+    group([
+      {
+        kind: "sub",
+        label: "Copy",
+        icon: menuIcons.copy,
+        entries: [
+          { label: "SHA", hint: row.id.slice(0, 7) + "…", run: () => copyText(row.id, `Copied ${row.id.slice(0, 7)}.`) },
+          { label: "Short SHA", hint: row.id.slice(0, 7), run: () => copyText(row.id.slice(0, 7), `Copied ${row.id.slice(0, 7)}.`) },
+          { label: "Message", run: () => copyMessage(row.id) },
+        ],
+      },
+    ]);
     return entries;
   }
 
-  function copySha(id: string) {
-    navigator.clipboard.writeText(id).then(
-      () => confirm.say(`Copied ${id.slice(0, 7)}.`),
+  function copyText(text: string, done: string) {
+    navigator.clipboard.writeText(text).then(
+      () => confirm.say(done),
       () => confirm.say("Couldn’t copy to the clipboard."),
     );
+  }
+
+  async function copyMessage(id: string) {
+    try {
+      const detail = await api.commitDetail(id);
+      copyText([detail.summary, detail.body.trim()].filter(Boolean).join("\n\n"), "Copied the message.");
+    } catch (err) {
+      error = String(err);
+    }
   }
 
   const remoteCtx = $derived<RemoteContext | null>(

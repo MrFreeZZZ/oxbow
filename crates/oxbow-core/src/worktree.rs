@@ -11,6 +11,7 @@ use std::sync::atomic::AtomicBool;
 
 use crate::cli::{GitCommand, OutputLine};
 use crate::commit::{DiffLine, FileChange, FileDiff, FileStatus, Hunk, LineKind, word_diff};
+use crate::edit::{ResetMode, plan_reset};
 use crate::error::{Error, Result};
 use crate::operation::{ConflictSide, MergeMethod, Pick};
 use crate::repo::Repo;
@@ -198,6 +199,23 @@ pub enum Action {
     TakeFile {
         path: String,
         side: ConflictSide,
+    },
+    /// Copy `commit` onto the checked-out branch as a new commit.
+    CherryPick {
+        commit: String,
+    },
+    /// Add a commit that undoes `commit`.
+    Revert {
+        commit: String,
+    },
+    /// Point the checked-out branch, or a detached `HEAD`, at `commit` (a sha or `HEAD~1`).
+    Reset {
+        commit: String,
+        mode: ResetMode,
+    },
+    /// Replace the message of the last commit; its changes and the staged ones stay as they are.
+    Reword {
+        message: String,
     },
 }
 
@@ -567,6 +585,17 @@ impl Repo {
                 "Oxbow writes your choices into {path} first; add marks it resolved"
             ))],
             Action::TakeFile { path, side } => self.plan_take_file(path, *side)?,
+            Action::CherryPick { commit } => self.plan_cherry_pick(commit)?,
+            Action::Revert { commit } => self.plan_revert(commit)?,
+            Action::Reset { commit, mode } => plan_reset(commit, *mode),
+            Action::Reword { message } => {
+                let mut args = vec!["commit".to_owned(), "--amend".to_owned(), "--only".to_owned()];
+                for paragraph in paragraphs(message) {
+                    args.push("-m".to_owned());
+                    args.push(paragraph);
+                }
+                vec![GitCommand::new(args).comment("--only: just the message; staged changes stay staged")]
+            }
         };
         Ok(Plan { commands })
     }
@@ -584,7 +613,7 @@ impl Repo {
         on_event: &mut dyn FnMut(ActionEvent),
         cancel: &AtomicBool,
     ) -> Result<String> {
-        if let Action::Commit { message, .. } = action
+        if let Action::Commit { message, .. } | Action::Reword { message } = action
             && message.trim().is_empty()
         {
             return Err(Error::Git("the commit message is empty".into()));

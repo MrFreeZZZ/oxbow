@@ -208,7 +208,13 @@ export type Action =
   | { kind: "abort" }
   | { kind: "skip" }
   | { kind: "resolve"; path: string; picks: Pick[] }
-  | { kind: "takeFile"; path: string; side: ConflictSide };
+  | { kind: "takeFile"; path: string; side: ConflictSide }
+  | { kind: "cherryPick"; commit: string }
+  | { kind: "revert"; commit: string }
+  | { kind: "reset"; commit: string; mode: ResetMode }
+  | { kind: "reword"; message: string };
+
+export type ResetMode = "soft" | "mixed" | "hard";
 
 export type MergeMethod = "merge" | "squash" | "rebase" | "fastForward";
 export type OperationKind = "merge" | "squash" | "rebase" | "cherryPick" | "revert";
