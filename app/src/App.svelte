@@ -13,7 +13,7 @@
   import DetachedBanner from "./lib/DetachedBanner.svelte";
   import OperationBanner from "./lib/OperationBanner.svelte";
   import ConflictsView from "./lib/ConflictsView.svelte";
-  import { abortRequest, continueRequest, describe, skipRequest } from "./lib/merge";
+  import { abortRequest, continueRequest, describe, mergeRequest, skipRequest } from "./lib/merge";
   import type { Operation } from "./lib/types";
   import { menuIcons, type MenuEntry } from "./lib/Menu.svelte";
   import { canPull, canPush, fetchRequest, pullRequest, pushRequest, type RemoteContext } from "./lib/remote";
@@ -152,6 +152,18 @@
     const others = row.labels.filter((l) => l.kind === "local" && l.name !== history!.head.branch);
     for (const label of others.slice(0, 3)) entries.push(item(`Check Out ${label.name}`, menuIcons.checkout, () => run(switchRequest(ctx, label.name))));
     if (others.length > 3) entries.push({ kind: "note", label: `${others.length - 3} more branches here, in the branch list.` });
+    // Branches at this commit can be merged or rebased onto right here, as from the branch list.
+    const here = history.head.branch ?? "HEAD";
+    const locals = new Set(row.labels.filter((l) => l.kind === "local").map((l) => l.name));
+    const mergeable = history.operation
+      ? []
+      : row.labels.filter((l) => (l.kind === "local" || (l.kind === "remote" && !locals.has(l.name.slice(l.name.indexOf("/") + 1)))) && l.name !== here).slice(0, 2);
+    if (mergeable.length && entries.length > 1) entries.push({ kind: "sep" });
+    for (const label of mergeable) {
+      entries.push(item(`Merge ${label.name} into ${here}…`, menuIcons.merge, () => run(mergeRequest(ctx, label.name))));
+      if (history.head.branch) entries.push(item(`Rebase ${here} onto ${label.name}…`, menuIcons.rebase, () => run(mergeRequest(ctx, label.name, "rebase"))));
+    }
+    if (mergeable.length) entries.push({ kind: "sep" });
     if (!isHead) entries.push(item("Check Out This Commit…", menuIcons.checkout, () => run(detachRequest(ctx, row))));
     if (isHead && !history.head.branch) entries.push(item("Create Branch…", menuIcons.branch, () => run(keepRequest(ctx))));
     else entries.push(item("New Branch from Here…", menuIcons.branch, () => run(newBranchRequest(ctx, undefined, row))));
