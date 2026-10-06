@@ -2,6 +2,7 @@
   // The Stashes screen: every stash on the left, the picked one on the right with whether it
   // applies to the checked-out branch, its actions, its files and their diffs.
   import { api } from "./api";
+  import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { CommitDetail, FileChange, FileDiff, History, StashCheck, StashInfo } from "./types";
   import type { Request } from "./confirm.svelte";
   import type { BranchContext } from "./branches";
@@ -44,7 +45,11 @@
   let checking = $state(false);
   let keepIndex = $state(false);
   let path = $state<string | null>(null);
-  let whole = $state(false);
+  let whole = $state(wholeByDefault());
+  // Diff & Text's default view applies again when it changes.
+  $effect(() => {
+    whole = wholeByDefault();
+  });
   let diffs = $state<FileDiff[]>([]);
   let error = $state<string | null>(null);
   let menu = $state<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
@@ -117,6 +122,7 @@
     const f = current ? files[current.id] : undefined;
     const file = path;
     const wholeFile = whole;
+    diffSettings();
     diffs = [];
     if (!current || !f || !file) return;
     // An untracked file's diff is in the stash's third commit.

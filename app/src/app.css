@@ -82,6 +82,12 @@
   --green-soft: rgba(26, 127, 55, 0.12);
   --red-soft: rgba(196, 40, 44, 0.1);
   --switch-off: rgba(0, 0, 0, 0.16);
+  /* Settings: grouped rows and their controls. */
+  --panel: rgba(0, 0, 0, 0.028);
+  --panel-border: rgba(0, 0, 0, 0.06);
+  --seg-on: #ffffff;
+  --seg-shadow: 0 1px 2px rgba(0, 0, 0, 0.14), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  --ctrl-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
   --hunk-bg: #f1f4f9;
   --hunk-text: #4f5f75;
 
@@ -97,98 +103,112 @@
 
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable", "Segoe UI", Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
   --mono: "SF Mono", ui-monospace, Menlo, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace;
+  /* Code views follow Diff & Text in Settings. */
+  --code-font: var(--mono);
+  --code-size: 12px;
+  --code-line: 20px;
+  --tab: 4;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --win: #1e1e21;
-    --graph-bg: #252422;
-    --side: rgba(44, 44, 48, 0.96);
-    --side-border: rgba(255, 255, 255, 0.07);
-    --panel-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
-    --glass: rgba(56, 56, 60, 0.92);
-    --glass-border: rgba(255, 255, 255, 0.1);
-    --glass-shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 4px 14px rgba(0, 0, 0, 0.3);
-    --text: #f2f2f7;
-    --text2: #a1a1a8;
-    --icon: #c7c7ce;
-    --code: #e6edf3;
-    --sep: rgba(255, 255, 255, 0.08);
-    --side-sel: rgba(255, 255, 255, 0.1);
-    --field: rgba(255, 255, 255, 0.07);
-    --accent: #0a84ff;
-    --accent-text: #5ab0ff;
-    --green: #56d364;
-    --red: #ff7b72;
-    --lead-in: #5c5f66;
+:root[data-theme="light"] {
+  color-scheme: light;
+}
 
-    --lane-0: #94b2cc;
-    --lane-1: #5d938e;
-    --lane-2: #8dd2da;
-    --lane-3: #63a6c2;
-    --lane-4: #94b6e7;
-    --lane-5: #7875b1;
-    --lane-6: #b1a2cb;
-    --lane-7: #8c6884;
-    --lane-8: #e3ae83;
-    --lane-9: #99745b;
-    --lane-10: #8f949b;
-    --lane-11: #9ea3ab;
-    --plate-0: #94b2cc;
-    --plate-1: #96d9d3;
-    --plate-2: #93d8e0;
-    --plate-3: #9ad4ee;
-    --plate-4: #aecdf9;
-    --plate-5: #c5c5f7;
-    --plate-6: #d2c1f2;
-    --plate-7: #e8badd;
-    --plate-8: #edc09d;
-    --plate-9: #efbf9f;
-    --plate-10: #bcc1c8;
-    --plate-11: #c7cbd1;
-    --tint-soft: 19%;
-    --tint-label: 18%;
-    --tint-bar: 26%;
+/* Dark, when the Appearance setting or the system asks for it (prefs.svelte.ts sets data-theme). */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --win: #1e1e21;
+  --graph-bg: #252422;
+  --side: rgba(44, 44, 48, 0.96);
+  --side-border: rgba(255, 255, 255, 0.07);
+  --panel-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+  --glass: rgba(56, 56, 60, 0.92);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 4px 14px rgba(0, 0, 0, 0.3);
+  --text: #f2f2f7;
+  --text2: #a1a1a8;
+  --icon: #c7c7ce;
+  --code: #e6edf3;
+  --sep: rgba(255, 255, 255, 0.08);
+  --side-sel: rgba(255, 255, 255, 0.1);
+  --field: rgba(255, 255, 255, 0.07);
+  --accent: #0a84ff;
+  --accent-text: #5ab0ff;
+  --green: #56d364;
+  --red: #ff7b72;
+  --lead-in: #5c5f66;
 
-    --dim: rgba(0, 0, 0, 0.35);
-    --sheet: rgba(44, 44, 48, 0.98);
-    --term: #141416;
-    --term-bar: #1d1d20;
-    --term-border: rgba(255, 255, 255, 0.07);
-    --term-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.4);
-    --term-dot: #4a4c52;
-    --term-dim: #8e8e93;
-    --term-button: rgba(255, 255, 255, 0.06);
-    --term-comment: #7c8088;
-    --term-git: #f2f2f7;
-    --term-sub: #c9a9e8;
-    --term-flag: #e6b08a;
-    --term-sha: #7fd1c4;
-    --term-str: #a9d59a;
-    --term-text: #e6e6ea;
-    --term-out: #c7c7cc;
-    --term-err: #ff8a80;
-    --term-hint: #d9b26a;
-    --term-ok: #8fd19e;
-    --danger: #d9534f;
-    --danger-soft: rgba(255, 123, 114, 0.16);
-    --orange: #ffb340;
-    --orange-soft: rgba(255, 159, 10, 0.16);
-    --green-soft: rgba(46, 160, 67, 0.2);
-    --red-soft: rgba(248, 81, 73, 0.2);
-    --switch-off: rgba(255, 255, 255, 0.22);
-    --hunk-bg: rgba(110, 150, 220, 0.12);
-    --hunk-text: #9db2d0;
+  --lane-0: #94b2cc;
+  --lane-1: #5d938e;
+  --lane-2: #8dd2da;
+  --lane-3: #63a6c2;
+  --lane-4: #94b6e7;
+  --lane-5: #7875b1;
+  --lane-6: #b1a2cb;
+  --lane-7: #8c6884;
+  --lane-8: #e3ae83;
+  --lane-9: #99745b;
+  --lane-10: #8f949b;
+  --lane-11: #9ea3ab;
+  --plate-0: #94b2cc;
+  --plate-1: #96d9d3;
+  --plate-2: #93d8e0;
+  --plate-3: #9ad4ee;
+  --plate-4: #aecdf9;
+  --plate-5: #c5c5f7;
+  --plate-6: #d2c1f2;
+  --plate-7: #e8badd;
+  --plate-8: #edc09d;
+  --plate-9: #efbf9f;
+  --plate-10: #bcc1c8;
+  --plate-11: #c7cbd1;
+  --tint-soft: 19%;
+  --tint-label: 18%;
+  --tint-bar: 26%;
 
-    --tag-bg: rgba(214, 170, 40, 0.22);
-    --tag-border: #e8c547;
-    --tag-fg: #f2d77a;
+  --dim: rgba(0, 0, 0, 0.35);
+  --sheet: rgba(44, 44, 48, 0.98);
+  --term: #141416;
+  --term-bar: #1d1d20;
+  --term-border: rgba(255, 255, 255, 0.07);
+  --term-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.4);
+  --term-dot: #4a4c52;
+  --term-dim: #8e8e93;
+  --term-button: rgba(255, 255, 255, 0.06);
+  --term-comment: #7c8088;
+  --term-git: #f2f2f7;
+  --term-sub: #c9a9e8;
+  --term-flag: #e6b08a;
+  --term-sha: #7fd1c4;
+  --term-str: #a9d59a;
+  --term-text: #e6e6ea;
+  --term-out: #c7c7cc;
+  --term-err: #ff8a80;
+  --term-hint: #d9b26a;
+  --term-ok: #8fd19e;
+  --danger: #d9534f;
+  --danger-soft: rgba(255, 123, 114, 0.16);
+  --orange: #ffb340;
+  --orange-soft: rgba(255, 159, 10, 0.16);
+  --green-soft: rgba(46, 160, 67, 0.2);
+  --red-soft: rgba(248, 81, 73, 0.2);
+  --switch-off: rgba(255, 255, 255, 0.22);
+  --panel: rgba(255, 255, 255, 0.04);
+  --panel-border: rgba(255, 255, 255, 0.07);
+  --seg-on: rgba(255, 255, 255, 0.2);
+  --seg-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --ctrl-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --hunk-bg: rgba(110, 150, 220, 0.12);
+  --hunk-text: #9db2d0;
 
-    --add: rgba(63, 185, 80, 0.13);
-    --add-word: rgba(63, 185, 80, 0.3);
-    --del: rgba(248, 81, 73, 0.13);
-    --del-word: rgba(248, 81, 73, 0.3);
-  }
+  --tag-bg: rgba(214, 170, 40, 0.22);
+  --tag-border: #e8c547;
+  --tag-fg: #f2d77a;
+
+  --add: rgba(63, 185, 80, 0.13);
+  --add-word: rgba(63, 185, 80, 0.3);
+  --del: rgba(248, 81, 73, 0.13);
+  --del-word: rgba(248, 81, 73, 0.3);
 }
 
 * {

@@ -13,6 +13,26 @@ use crate::remote::Tracking;
 pub struct Repo {
     shared: gix::ThreadSafeRepository,
     workdir: PathBuf,
+    diff: DiffOptions,
+}
+
+/// How diffs are shown, from the user's settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiffOptions {
+    /// Unchanged lines around each change in a compact diff.
+    pub context_lines: u32,
+    /// Lines that differ only in whitespace count as unchanged. Commit diffs only: the working
+    /// copy's diffs stay exact, so staging a hunk stages what is shown.
+    pub ignore_whitespace: bool,
+}
+
+impl Default for DiffOptions {
+    fn default() -> Self {
+        DiffOptions {
+            context_lines: crate::commit::CONTEXT_LINES,
+            ignore_whitespace: false,
+        }
+    }
 }
 
 /// What `HEAD` points at.
@@ -60,7 +80,20 @@ impl Repo {
             path: path.display().to_string(),
         })?;
         let workdir = shared.work_dir().ok_or(Error::Bare)?.to_path_buf();
-        Ok(Repo { shared, workdir })
+        Ok(Repo {
+            shared,
+            workdir,
+            diff: DiffOptions::default(),
+        })
+    }
+
+    /// Show diffs with these options from now on.
+    pub fn set_diff_options(&mut self, options: DiffOptions) {
+        self.diff = options;
+    }
+
+    pub fn diff_options(&self) -> DiffOptions {
+        self.diff
     }
 
     /// Root of the working tree.

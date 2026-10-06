@@ -5,6 +5,7 @@
 
 <script lang="ts">
   import { api } from "./api";
+  import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import { confirm, type Part, type Request } from "./confirm.svelte";
   import type { FileChange, FileDiff, Hunk, HistoryRow, Side, WorkingTree } from "./types";
   import { plate, splitPath, tint } from "./format";
@@ -35,7 +36,11 @@
   let tree = $state<WorkingTree | null>(null);
   let pick = $state<{ path: string; side: Side } | null>(null);
   let diff = $state<FileDiff | null>(null);
-  let whole = $state(false);
+  let whole = $state(wholeByDefault());
+  // Diff & Text's default view applies again when it changes.
+  $effect(() => {
+    whole = wholeByDefault();
+  });
   let error = $state<string | null>(null);
   let loads = $state(0);
 
@@ -89,6 +94,7 @@
   $effect(() => {
     const current = pick;
     const wholeFile = whole;
+    diffSettings();
     loads;
     if (!current) {
       diff = null;

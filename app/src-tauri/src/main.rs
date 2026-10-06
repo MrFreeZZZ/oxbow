@@ -6,16 +6,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use oxbow_core::{
-    Action, CommitBrief, CommitDetail, ConflictFile, DeletionCheck, DiffContext, Failure, FileDiff, History,
-    HistoryOptions, MergePreview, Plan, Repo, Side, StashCheck, WorkingTree,
+    Action, CommitBrief, CommitDetail, ConflictFile, DeletionCheck, DiffContext, DiffOptions, Failure, FileDiff,
+    History, HistoryOptions, MergePreview, Plan, Repo, Side, StashCheck, WorkingTree,
 };
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use serde_json::Value;
+use tauri::{AppHandle, Emitter, Manager, State, Theme, WebviewUrl, WebviewWindowBuilder};
 
 /// The repository open in the window.
 #[derive(Default)]
 struct Session {
     repo: Mutex<Option<Repo>>,
+    /// Diff settings, given to the repository on every call.
+    diff: Mutex<DiffOptions>,
     /// Set by Stop; the running action checks it.
     cancel: Arc<AtomicBool>,
 }
@@ -30,12 +33,14 @@ struct RepoSummary {
 type CommandResult<T> = Result<T, String>;
 
 fn current(session: &State<'_, Session>) -> CommandResult<Repo> {
-    session
+    let mut repo = session
         .repo
         .lock()
         .expect("session lock")
         .clone()
-        .ok_or_else(|| "No repository is open".to_owned())
+        .ok_or_else(|| "No repository is open".to_owned())?;
+    repo.set_diff_options(*session.diff.lock().expect("session lock"));
+    Ok(repo)
 }
 
 /// Run blocking Git work off the main thread so the window stays responsive.
@@ -66,22 +71,92 @@ fn read_settings(app: &AppHandle) -> serde_json::Map<String, serde_json::Value> 
 }
 
 #[tauri::command]
-fn get_setting(app: AppHandle, key: String) -> Option<serde_json::Value> {
+fn get_setting(app: AppHandle, key: String) -> Option<Value> {
     read_settings(&app).remove(&key)
 }
 
+/// Every setting that differs from its default.
 #[tauri::command]
-fn set_setting(app: AppHandle, key: String, value: serde_json::Value) -> CommandResult<()> {
+fn all_settings(app: AppHandle) -> serde_json::Map<String, Value> {
+    read_settings(&app)
+}
+
+#[derive(Clone, Serialize)]
+struct SettingChanged {
+    key: String,
+    value: Value,
+}
+
+/// Save a setting (`null` puts it back to its default) and tell every window.
+#[tauri::command]
+fn set_setting(app: AppHandle, session: State<'_, Session>, key: String, value: Value) -> CommandResult<()> {
     let mut settings = read_settings(&app);
     if value.is_null() {
         settings.remove(&key);
     } else {
-        settings.insert(key, value);
+        settings.insert(key.clone(), value.clone());
     }
     let file = settings_file(&app)?;
     std::fs::create_dir_all(file.parent().expect("settings file has a parent")).map_err(|err| err.to_string())?;
     let text = serde_json::to_string_pretty(&settings).map_err(|err| err.to_string())?;
-    std::fs::write(file, text + "\n").map_err(|err| err.to_string())
+    std::fs::write(file, text + "\n").map_err(|err| err.to_string())?;
+    apply_settings(&app, &session, &settings);
+    // A window that misses this keeps showing the old value until it reloads; not an error.
+    let _ = app.emit("settings-changed", SettingChanged { key, value });
+    Ok(())
+}
+
+/// The settings the backend itself follows: how diffs are made and the windows' appearance.
+fn apply_settings(app: &AppHandle, session: &Session, settings: &serde_json::Map<String, Value>) {
+    let defaults = DiffOptions::default();
+    *session.diff.lock().expect("session lock") = DiffOptions {
+        context_lines: settings
+            .get("oxbow.diff.contextLines")
+            .and_then(Value::as_u64)
+            .map_or(defaults.context_lines, |n| n.min(100) as u32),
+        ignore_whitespace: settings
+            .get("oxbow.diff.ignoreWhitespace")
+            .and_then(Value::as_bool)
+            .unwrap_or(defaults.ignore_whitespace),
+    };
+    let theme = appearance(settings);
+    for window in app.webview_windows().values() {
+        let _ = window.set_theme(theme);
+    }
+}
+
+/// `oxbow.appearance`: light, dark, or `None` to follow the system.
+fn appearance(settings: &serde_json::Map<String, Value>) -> Option<Theme> {
+    match settings.get("oxbow.appearance").and_then(Value::as_str) {
+        Some("light") => Some(Theme::Light),
+        Some("dark") => Some(Theme::Dark),
+        _ => None,
+    }
+}
+
+/// Open the Settings window. Async, because making a window in a synchronous command
+/// deadlocks on Windows.
+#[tauri::command]
+async fn open_settings(app: AppHandle) -> CommandResult<()> {
+    show_settings(&app)
+}
+
+/// Open the Settings window, or bring it to the front.
+fn show_settings(app: &AppHandle) -> CommandResult<()> {
+    if let Some(window) = app.get_webview_window("settings") {
+        return window.set_focus().map_err(|err| err.to_string());
+    }
+    let builder = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html#settings".into()))
+        .title("Settings")
+        .inner_size(940.0, 720.0)
+        .min_inner_size(760.0, 520.0)
+        .theme(appearance(&read_settings(app)));
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true)
+        .traffic_light_position(tauri::LogicalPosition::new(22.0, 24.0));
+    builder.build().map(|_| ()).map_err(|err| err.to_string())
 }
 
 fn last_repo_file(app: &AppHandle) -> Option<PathBuf> {
@@ -104,13 +179,22 @@ async fn open_repo(app: AppHandle, session: State<'_, Session>, path: String) ->
     Ok(summary)
 }
 
-/// Repository to open at start: the first command-line argument, else the last one used.
+/// Repository to open at start: the first command-line argument, else the last one used,
+/// unless the user turned that off.
 #[tauri::command]
 fn initial_repo(app: AppHandle) -> Option<String> {
+    let reopen = read_settings(&app)
+        .get("oxbow.startup.reopenRepository")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
     std::env::args()
         .nth(1)
         .filter(|arg| !arg.starts_with('-'))
-        .or_else(|| last_repo_file(&app).and_then(|file| std::fs::read_to_string(file).ok()))
+        .or_else(|| {
+            reopen
+                .then(|| last_repo_file(&app).and_then(|file| std::fs::read_to_string(file).ok()))
+                .flatten()
+        })
         .map(|path| path.trim().to_owned())
         .filter(|path| !path.is_empty())
 }
@@ -241,12 +325,38 @@ fn stop_action(session: State<'_, Session>) {
     session.cancel.store(true, Ordering::Relaxed);
 }
 
+/// The default macOS menu, with Settings… (⌘,) after About in the app menu.
+#[cfg(target_os = "macos")]
+fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    let menu = tauri::menu::Menu::default(app)?;
+    if let Some(app_menu) = menu.items()?.first().and_then(|item| item.as_submenu().cloned()) {
+        let settings = tauri::menu::MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
+        app_menu.insert(&settings, 2)?;
+        app_menu.insert(&tauri::menu::PredefinedMenuItem::separator(app)?, 3)?;
+    }
+    Ok(menu)
+}
+
 fn main() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Other systems have no menu bar; the window's own ⌘, / Ctrl+, opens Settings there.
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(app_menu);
+    builder
         .plugin(tauri_plugin_dialog::init())
         // Restores the window's size and position from the last session.
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(Session::default())
+        .on_menu_event(|app, event| {
+            if event.id() == "settings" {
+                let _ = show_settings(app);
+            }
+        })
+        .setup(|app| {
+            let handle = app.handle();
+            apply_settings(handle, &handle.state::<Session>(), &read_settings(handle));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             open_repo,
             initial_repo,
@@ -264,7 +374,9 @@ fn main() {
             perform_action,
             stop_action,
             get_setting,
-            set_setting
+            all_settings,
+            set_setting,
+            open_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running Oxbow");

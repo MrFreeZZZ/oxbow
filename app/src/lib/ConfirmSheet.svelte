@@ -2,6 +2,7 @@
   import { confirm, type Icon, type Part } from "./confirm.svelte";
   import { plate, tint } from "./format";
   import MergePreview from "./MergePreview.svelte";
+  import { prefs } from "./prefs.svelte";
 
   let { repo, branch, color }: { repo: string; branch: string | null; color: number } = $props();
 
@@ -226,6 +227,9 @@
         </div>
       {/if}
 
+      <!-- With "Show the git command" off, the commands stay out of the question; git's output
+           still shows once it runs. -->
+      {#if confirm.phase !== "ask" || prefs.get("oxbow.confirm.showCommand")}
       <div class="term" aria-label="Git command">
         <div class="bar">
           <span class="light"></span><span class="light"></span><span class="light"></span>
@@ -252,6 +256,7 @@
           {/if}
         </div>
       </div>
+      {/if}
 
       {#if running}
         <div class="run">

@@ -34,12 +34,12 @@ export const api = {
   performAction: (action: Action) => invoke<string>("perform_action", { action }),
   stopAction: () => invoke<void>("stop_action"),
   getSetting: <T>(key: string) => invoke<T | null>("get_setting", { key }),
+  allSettings: () => invoke<Record<string, unknown>>("all_settings"),
+  openSettings: () => invoke<void>("open_settings"),
   setSetting: (key: string, value: unknown) => invoke<void>("set_setting", { key, value }),
 };
 
 /** Keys of `settings.json`. */
 export const settings = {
   detailsWidth: "oxbow.history.detailsWidth",
-  /** Ask before running a git command that changes the repository (default true). */
-  confirmActions: "oxbow.confirm.enabled",
 };

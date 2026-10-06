@@ -2,6 +2,7 @@
   import type { Snippet } from "svelte";
   import type { DiffLine, FileDiff, Hunk } from "./types";
   import { plate, splitPath, tint } from "./format";
+  import { prefs } from "./prefs.svelte";
 
   let {
     diffs,
@@ -93,7 +94,15 @@
     {:else if diff.tooLarge}
       <p class="note">This file is too large to show.</p>
     {:else if diff.hunks.length === 0}
-      <p class="note">{diff.file.status === "renamed" ? "Renamed without changes." : "No changes in content."}</p>
+      <p class="note">
+        {#if diff.file.status === "renamed"}
+          Renamed without changes.
+        {:else if prefs.get("oxbow.diff.ignoreWhitespace")}
+          No changes besides whitespace, which Settings › Diff & Text is set to ignore.
+        {:else}
+          No changes in content.
+        {/if}
+      </p>
     {:else}
       <div class="code mono selectable">
         {#each diff.hunks as hunk, h (h)}
@@ -106,7 +115,7 @@
             <div class="line {line.kind}" style:border-radius={radius(hunk.lines, i)} style:margin-top="{gap(hunk.lines, i)}px">
               <span class="no">{line.oldLine ?? ""}</span>
               <span class="no">{line.newLine ?? ""}</span>
-              <span class="text">{#if line.words}{#each line.words as part, w (w)}{#if part.changed}<span class="word">{part.text}</span>{:else}{part.text}{/if}{/each}{:else}{line.text || " "}{/if}</span>
+              <span class="text">{#if line.words && prefs.get("oxbow.diff.wordHighlight")}{#each line.words as part, w (w)}{#if part.changed}<span class="word">{part.text}</span>{:else}{part.text}{/if}{/each}{:else}{line.text || " "}{/if}</span>
             </div>
           {/each}
         {/each}
@@ -186,8 +195,10 @@
     color: var(--text2);
   }
   .code {
-    font-size: 12px;
-    line-height: 20px;
+    font-family: var(--code-font);
+    font-size: var(--code-size);
+    line-height: var(--code-line);
+    tab-size: var(--tab);
     color: var(--code);
   }
   .line {

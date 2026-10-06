@@ -609,8 +609,10 @@
     flex-grow: 1;
     overflow: auto;
     padding: 6px 8px 10px;
-    font-size: 12px;
-    line-height: 20px;
+    font-family: var(--code-font);
+    font-size: var(--code-size);
+    line-height: var(--code-line);
+    tab-size: var(--tab);
     color: var(--code);
   }
   .line {

@@ -114,8 +114,11 @@ pub struct WordPart {
 /// Which part of the full diff to compute.
 #[derive(Debug, Clone, Copy)]
 pub enum DiffContext {
-    /// Changes with a few lines of context, split into hunks.
+    /// Changes with a few lines of context, split into hunks; as many as the repository's
+    /// [`DiffOptions`](crate::DiffOptions) say where they apply.
     Compact,
+    /// Changes with this many lines of context.
+    Lines(u32),
     /// The whole file in one hunk.
     WholeFile,
 }
@@ -152,7 +155,7 @@ impl Repo {
             .into_iter()
             .map(|change| {
                 let mut file = change.file;
-                match line_diff(&repo, change.old, change.new, DiffContext::Compact, false) {
+                match line_diff(&repo, change.old, change.new, DiffContext::Compact, false, false) {
                     Ok(Some((hunks, _))) => count_lines(&mut file, &hunks),
                     Ok(None) => file.binary = true,
                     // Counts are a nicety; a blob that can't be read still lists the file.
@@ -176,13 +179,18 @@ impl Repo {
     pub fn commit_diff(&self, id: &str, path: Option<&str>, context: DiffContext) -> Result<Vec<FileDiff>> {
         let repo = self.local();
         let commit = find_commit(&repo, id)?;
+        let options = self.diff_options();
+        let context = match context {
+            DiffContext::Compact => DiffContext::Lines(options.context_lines),
+            other => other,
+        };
         let mut out = Vec::new();
         for change in changes(&repo, &commit)? {
             if path.is_some_and(|p| p != change.file.path) {
                 continue;
             }
             let mut file = change.file;
-            let diff = match line_diff(&repo, change.old, change.new, context, true)? {
+            let diff = match line_diff(&repo, change.old, change.new, context, true, options.ignore_whitespace)? {
                 Some((hunks, too_large)) => {
                     count_lines(&mut file, &hunks);
                     FileDiff { file, hunks, too_large }
@@ -316,6 +324,7 @@ fn line_diff(
     new: Option<ObjectId>,
     context: DiffContext,
     with_words: bool,
+    ignore_whitespace: bool,
 ) -> Result<Option<(Vec<Hunk>, bool)>> {
     let before = blob(repo, old)?;
     let after = blob(repo, new)?;
@@ -327,14 +336,42 @@ fn line_diff(
     }
     let before = String::from_utf8_lossy(&before);
     let after = String::from_utf8_lossy(&after);
-    Ok(Some((diff_text(&before, &after, context, with_words), false)))
+    Ok(Some((
+        diff_text_with(&before, &after, context, with_words, ignore_whitespace),
+        false,
+    )))
 }
 
 /// Diff two texts into hunks.
 pub fn diff_text(before: &str, after: &str, context: DiffContext, with_words: bool) -> Vec<Hunk> {
+    diff_text_with(before, after, context, with_words, false)
+}
+
+/// The same line with every run of whitespace as one space and none at the ends, so lines that
+/// differ only in whitespace compare equal.
+fn squeeze_whitespace(text: &str) -> String {
+    text.split_inclusive('\n')
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" ") + "\n")
+        .collect()
+}
+
+/// Diff two texts into hunks, optionally treating lines that differ only in whitespace as equal.
+pub fn diff_text_with(
+    before: &str,
+    after: &str,
+    context: DiffContext,
+    with_words: bool,
+    ignore_whitespace: bool,
+) -> Vec<Hunk> {
     let old: Vec<&str> = before.split_inclusive('\n').collect();
     let new: Vec<&str> = after.split_inclusive('\n').collect();
-    let input = InternedInput::new(before, after);
+    // The squeezed texts have exactly one line per original line, so the diff's line numbers
+    // point into `old` and `new` as they are.
+    let squeezed = ignore_whitespace.then(|| (squeeze_whitespace(before), squeeze_whitespace(after)));
+    let input = match &squeezed {
+        Some((b, a)) => InternedInput::new(b.as_str(), a.as_str()),
+        None => InternedInput::new(before, after),
+    };
     let mut diff = Diff::compute(Algorithm::Histogram, &input);
     diff.postprocess_lines(&input);
     let changes: Vec<gix::diff::blob::Hunk> = diff.hunks().collect();
@@ -344,6 +381,7 @@ pub fn diff_text(before: &str, after: &str, context: DiffContext, with_words: bo
 
     let ctx = match context {
         DiffContext::Compact => CONTEXT_LINES,
+        DiffContext::Lines(lines) => lines,
         DiffContext::WholeFile => u32::MAX / 4,
     };
     // Group changes whose context would touch or overlap.
@@ -539,6 +577,26 @@ mod tests {
         assert_eq!(changed, ["30"]);
         let joined: String = parts.iter().map(|p| p.text.as_str()).collect();
         assert_eq!(joined, "let timeout = 30;");
+    }
+
+    #[test]
+    fn context_lines_can_be_chosen() {
+        let before: String = (1..=20).map(|i| format!("line {i}\n")).collect();
+        let after = before.replace("line 10\n", "line ten\n");
+        let hunks = diff_text(&before, &after, DiffContext::Lines(1), false);
+        assert_eq!(kinds(&hunks[0]), " -+ ");
+        assert_eq!(hunks[0].old_start, 9);
+    }
+
+    #[test]
+    fn whitespace_changes_can_be_ignored() {
+        let before = "fn main() {\n    run();\n    stop();\n}\n";
+        let after = "fn main() {\n\trun();  \n    halt();\n}\n";
+        let all = diff_text_with(before, after, DiffContext::Compact, false, false);
+        assert_eq!(kinds(&all[0]), " --++ ");
+        let changed = diff_text_with(before, after, DiffContext::Compact, false, true);
+        assert_eq!(kinds(&changed[0]), "  -+ ");
+        assert_eq!(changed[0].lines[2].text, "    stop();");
     }
 
     #[test]

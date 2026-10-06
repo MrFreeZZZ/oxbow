@@ -25,6 +25,6 @@ pub use error::{Error, Result};
 pub use history::{History, HistoryOptions, HistoryRow, Label, WORKTREE_ID, WorktreeSummary};
 pub use operation::{Chunk, ConflictFile, ConflictSide, MergeMethod, MergePreview, Operation, OperationKind, Pick};
 pub use remote::{CommitBrief, DeletionCheck, Failure, FailureKind, Tracking, classify_failure};
-pub use repo::{HeadInfo, RefInfo, RefKind, Repo, StashInfo};
+pub use repo::{DiffOptions, HeadInfo, RefInfo, RefKind, Repo, StashInfo};
 pub use stash::StashCheck;
 pub use worktree::{Action, ActionEvent, Plan, RemoteBranch, Side, WorkingTree};

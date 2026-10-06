@@ -779,8 +779,12 @@ impl Repo {
 
     /// `git diff` output for one file.
     fn raw_diff(&self, file: &FileChange, side: Side, whole_file: bool) -> Result<String> {
-        let context = if whole_file { "-U100000000" } else { "-U3" };
-        let mut args = vec!["diff", "--no-color", "--no-ext-diff", "--no-renames", context];
+        let context = if whole_file {
+            "-U100000000".to_owned()
+        } else {
+            format!("-U{}", self.diff_options().context_lines)
+        };
+        let mut args = vec!["diff", "--no-color", "--no-ext-diff", "--no-renames", &context];
         if file.status == FileStatus::Untracked {
             // `--no-index` exits with 1 when the files differ, which they always do here.
             args.extend(["--no-index", "--", "/dev/null", &file.path]);

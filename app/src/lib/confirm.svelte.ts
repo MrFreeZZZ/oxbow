@@ -3,7 +3,8 @@
 // the same sheet with git's live output. A failure turns the sheet into the way out of it.
 
 import { listen } from "@tauri-apps/api/event";
-import { api, settings } from "./api";
+import { api } from "./api";
+import { prefs } from "./prefs.svelte";
 import type { Action, ActionEvent, Failure, GitCommand } from "./types";
 
 /** A piece of the sheet's text: plain words, a branch capsule, a path or sha in mono, or a quoted message. */
@@ -138,6 +139,24 @@ export interface TermLine {
 
 type Phase = "ask" | "running" | "failed";
 
+/** Actions that throw work away or rewrite history: with "Risky only" these still ask. */
+const RISKY = new Set<Action["kind"]>(["discard", "discardHunk", "reset", "stashDrop", "deleteBranch", "deleteRemoteBranch", "abort", "abortRebase"]);
+
+function isForcePush(action: Action): boolean {
+  return action.kind === "push" && action.force;
+}
+
+/** Whether to show the sheet before running, from the Confirmations settings. A sheet that needs
+ *  something typed or chosen, or can't run as it is, always shows. */
+function shouldAsk(request: Request): boolean {
+  if (request.fields?.length || request.invalid) return true;
+  const action = request.action;
+  if (isForcePush(action) && prefs.get("oxbow.push.confirmForce")) return true;
+  if (!prefs.get("oxbow.confirm.enabled")) return false;
+  if (prefs.get("oxbow.confirm.scope") === "all") return true;
+  return !!request.danger || isForcePush(action) || RISKY.has(action.kind) || (action.kind === "merge" && action.method === "rebase");
+}
+
 class ConfirmState {
   request = $state<Request | null>(null);
   commands = $state<GitCommand[]>([]);
@@ -169,14 +188,18 @@ class ConfirmState {
   /** Ask, then run. Resolves to true once the action ran, false if it was cancelled or failed. */
   async run(request: Request): Promise<boolean> {
     const done = new Promise<boolean>((resolve) => (this.#resolve = resolve));
-    // With confirmations turned off in settings.json the sheet only shows up while it runs.
-    const ask = (await api.getSetting<boolean>(settings.confirmActions).catch(() => null)) ?? true;
-    if (ask) await this.#ask(request);
+    await this.#askOrRun(request);
+    return done;
+  }
+
+  /** Show the sheet, or, when the settings say not to ask, run right away: then the sheet only
+   *  shows up while it runs. */
+  async #askOrRun(request: Request) {
+    if (shouldAsk(request)) await this.#ask(request);
     else {
       this.request = request;
       this.#execute(request.action, request.status ?? request.title, request.done);
     }
-    return done;
   }
 
   go() {
@@ -214,7 +237,7 @@ class ConfirmState {
   /** Open the recovery's other choice, e.g. Force Push…, as a new confirmation. */
   async alternative() {
     const alt = this.recovery?.alt;
-    if (alt) await this.#ask(alt.request());
+    if (alt) await this.#askOrRun(alt.request());
   }
 
   stop() {
