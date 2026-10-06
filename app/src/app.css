@@ -25,7 +25,7 @@
   --lead-in: #bcc0c7;
 
   /* Branch palette 1-9, muted: no red or pink (removed lines), no green (added lines), no yellow (tags),
-     no two colors of nearly the same hue. 10 is the stash grey. */
+     no two colors of nearly the same hue. 10 is the stash grey, 11 the grey of commits on no branch. */
   --lane-0: #4a6680;
   --lane-1: #487e79;
   --lane-2: #77bbc3;
@@ -37,6 +37,7 @@
   --lane-8: #cc986e;
   --lane-9: #846047;
   --lane-10: #9b9ea4;
+  --lane-11: #8a8f98;
   --plate-0: #3b5266;
   --plate-1: #04534e;
   --plate-2: #0b5158;
@@ -48,6 +49,7 @@
   --plate-8: #6a3a07;
   --plate-9: #6d3705;
   --plate-10: #5c6168;
+  --plate-11: #4a4f57;
   --tint-soft: 10%;
   --tint-label: 12%;
   --tint-bar: 16%;
@@ -131,6 +133,7 @@
     --lane-8: #e3ae83;
     --lane-9: #99745b;
     --lane-10: #8f949b;
+    --lane-11: #9ea3ab;
     --plate-0: #94b2cc;
     --plate-1: #96d9d3;
     --plate-2: #93d8e0;
@@ -142,6 +145,7 @@
     --plate-8: #edc09d;
     --plate-9: #efbf9f;
     --plate-10: #bcc1c8;
+    --plate-11: #c7cbd1;
     --tint-soft: 19%;
     --tint-label: 18%;
     --tint-bar: 26%;

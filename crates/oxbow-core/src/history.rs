@@ -7,7 +7,7 @@ use gix::traverse::commit::simple::CommitTimeOrder;
 use serde::Serialize;
 
 use crate::error::{Error, Result};
-use crate::graph::{self, GraphCommit, RowLayout};
+use crate::graph::{self, GraphCommit, LeadIn, RowLayout};
 use crate::remote::Tracking;
 use crate::repo::{HeadInfo, RefInfo, RefKind, Repo, StashInfo};
 
@@ -33,6 +33,10 @@ pub struct History {
     pub trunk: Option<String>,
     /// Row of the trunk's newest commit. Rows above it are newer commits on other branches.
     pub trunk_tip_row: Option<usize>,
+    /// Gray dashed lines that fill empty columns above lines starting below the top.
+    pub lead_ins: Vec<LeadIn>,
+    /// While `HEAD` is detached, the branch checked out before, to go back to.
+    pub previous_branch: Option<String>,
     pub refs: Vec<RefInfo>,
     pub remotes: Vec<String>,
     /// Upstream of the checked-out branch, with ahead/behind counts.
@@ -60,6 +64,8 @@ pub struct HistoryRow {
     pub labels: Vec<Label>,
     /// The commit is not on any remote-tracking branch yet.
     pub unpushed: bool,
+    /// Only a detached `HEAD` has the commit: no branch or tag keeps it.
+    pub no_branch: bool,
     pub graph: RowLayout,
     /// Set on the row of uncommitted changes, whose `id` is [`WORKTREE_ID`].
     pub worktree: Option<WorktreeSummary>,
@@ -181,6 +187,32 @@ impl Repo {
 
         let unpushed = unpushed_commits(&repo, &refs, &head)?;
 
+        // Commits a branch or tag keeps. While HEAD is detached, the others were made there and
+        // belong to no branch. Children come before parents, so one pass reaches every ancestor.
+        let mut kept = vec![head.branch.is_some(); nodes.len()];
+        for r in &refs {
+            if let Some(&row) = ObjectId::from_hex(r.target.as_bytes())
+                .ok()
+                .and_then(|id| row_of.get(&id))
+            {
+                kept[row] = true;
+            }
+        }
+        for row in 0..nodes.len() {
+            if kept[row] {
+                for parent in &nodes[row].parents {
+                    if let Some(&p) = row_of.get(parent) {
+                        kept[p] = true;
+                    }
+                }
+            }
+        }
+        let no_branch: Vec<bool> = nodes
+            .iter()
+            .enumerate()
+            .map(|(row, node)| !kept[row] && !stash_ids.contains(&node.id))
+            .collect();
+
         // Labels per commit.
         let mut labels: HashMap<ObjectId, Vec<Label>> = HashMap::new();
         for r in &refs {
@@ -193,6 +225,20 @@ impl Repo {
                 kind: r.kind,
                 color: 0,
                 head: is_head,
+            });
+        }
+        // A detached HEAD gets a label of its own, as no branch label marks it.
+        if let Some(id) = head
+            .commit
+            .as_deref()
+            .filter(|_| head.branch.is_none())
+            .and_then(|h| ObjectId::from_hex(h.as_bytes()).ok())
+        {
+            labels.entry(id).or_default().push(Label {
+                name: "HEAD".to_owned(),
+                kind: RefKind::Head,
+                color: 0,
+                head: true,
             });
         }
         for stash in &stashes {
@@ -234,7 +280,12 @@ impl Repo {
                     .flatten(),
                 unpushed: unpushed.contains(&node.id) || stash_ids.contains(&node.id),
                 side: stash_ids.contains(&node.id),
-                color: stash_ids.contains(&node.id).then_some(graph::STASH_COLOR),
+                color: if stash_ids.contains(&node.id) {
+                    Some(graph::STASH_COLOR)
+                } else {
+                    no_branch[row].then_some(graph::NO_BRANCH_COLOR)
+                },
+                worktree: false,
             });
             details.push((
                 summary,
@@ -244,8 +295,6 @@ impl Repo {
             ));
         }
 
-        let mut layout = graph::layout(&graph_input);
-
         // Uncommitted changes get a row of their own on top, on a side line down to HEAD in the
         // color of HEAD's line. A failing `git status` only hides the row.
         let changes = self.working_tree().ok().filter(|tree| !tree.is_empty());
@@ -254,10 +303,11 @@ impl Repo {
             .as_deref()
             .and_then(|h| ObjectId::from_hex(h.as_bytes()).ok());
         let head_row = head_id.and_then(|id| row_of.get(&id).copied());
+        let mut graph = graph::layout(&graph_input, head_row);
         let mut worktree_row = None;
         if let Some(tree) = &changes {
             let color = match head_row {
-                Some(r) => layout[r].color,
+                Some(r) => graph.rows[r].color,
                 None => head.branch.as_deref().map_or(graph::TRUNK_COLOR, graph::color_for_name),
             };
             let mut shifted = Vec::with_capacity(graph_input.len() + 1);
@@ -266,16 +316,16 @@ impl Repo {
                 side: true,
                 color: Some(color),
                 unpushed: true,
+                worktree: true,
                 ..Default::default()
             });
             shifted.extend(graph_input.into_iter().map(|mut c| {
                 c.parents = c.parents.into_iter().map(|p| p.map(|r| r + 1)).collect();
                 c
             }));
-            let mut all = graph::layout(&shifted);
-            let mut wip = all.remove(0);
+            graph = graph::layout(&shifted, head_row.map(|r| r + 1));
+            let mut wip = graph.rows.remove(0);
             wip.branch = head.branch.clone();
-            layout = all;
             worktree_row = Some(HistoryRow {
                 id: WORKTREE_ID.to_owned(),
                 summary: "Uncommitted changes".to_owned(),
@@ -287,6 +337,7 @@ impl Repo {
                 parents: head_id.iter().map(ToString::to_string).collect(),
                 labels: Vec::new(),
                 unpushed: true,
+                no_branch: false,
                 graph: wip,
                 worktree: Some(WorktreeSummary {
                     files: tree.file_count(),
@@ -301,7 +352,9 @@ impl Repo {
             RefKind::Remote => strip_remote(&r.name, &remotes).to_owned(),
             _ => r.name.clone(),
         });
-        let rows = nodes.iter().zip(details).zip(layout).enumerate().map(
+        let lead_ins = graph.lead_ins;
+        let previous_branch = head.branch.is_none().then(|| self.previous_branch(&refs)).flatten();
+        let rows = nodes.iter().zip(details).zip(graph.rows).enumerate().map(
             |(row, ((node, (summary, author_name, author_email, time)), graph))| {
                 let mut labels = labels.remove(&node.id).unwrap_or_default();
                 // Labels take the color of the line they sit on.
@@ -321,6 +374,7 @@ impl Repo {
                     parents: node.parents.iter().map(ToString::to_string).collect(),
                     labels,
                     unpushed: unpushed.contains(&node.id) || stash_ids.contains(&node.id),
+                    no_branch: no_branch[row],
                     graph,
                     worktree: None,
                 }
@@ -333,6 +387,8 @@ impl Repo {
             head,
             trunk: trunk_ref.map(|r| r.name.clone()),
             trunk_tip_row,
+            lead_ins,
+            previous_branch,
             refs,
             // A failing `git for-each-ref` only hides the ahead/behind counts.
             tracking: self.tracking().ok().flatten(),
@@ -342,6 +398,29 @@ impl Repo {
             rows,
             truncated,
         })
+    }
+}
+
+impl Repo {
+    /// The branch checked out before `HEAD` was detached, read from `HEAD`'s reflog.
+    fn previous_branch(&self, refs: &[RefInfo]) -> Option<String> {
+        let repo = self.local();
+        let head = repo.find_reference("HEAD").ok()?;
+        let mut log = head.log_iter();
+        for line in log.rev().ok()?? {
+            let line = line.ok()?;
+            let message = line.message.to_str_lossy();
+            let Some((from, _)) = message
+                .strip_prefix("checkout: moving from ")
+                .and_then(|rest| rest.split_once(" to "))
+            else {
+                continue;
+            };
+            if refs.iter().any(|r| r.kind == RefKind::Local && r.name == from) {
+                return Some(from.to_owned());
+            }
+        }
+        None
     }
 }
 

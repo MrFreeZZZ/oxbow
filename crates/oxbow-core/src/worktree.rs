@@ -126,9 +126,18 @@ pub enum Action {
     /// Give up a pull that stopped on conflicts, back to where the branch was.
     AbortRebase,
     /// Check out the local `branch`. With `stash`, uncommitted changes are stashed first, for
-    /// when they would be overwritten.
+    /// when they would be overwritten. With `keep`, a branch of that name is created at `HEAD`
+    /// first, so commits made on a detached `HEAD` are not left behind.
     Switch {
         branch: String,
+        stash: bool,
+        #[serde(default)]
+        keep: Option<String>,
+    },
+    /// Check out a commit without a branch: `HEAD` points at the commit (a detached `HEAD`).
+    /// `commit` is a sha or a tag name.
+    Detach {
+        commit: String,
         stash: bool,
     },
     /// Create a local branch from the remote one and check it out.
@@ -397,13 +406,33 @@ impl Repo {
             Action::AbortRebase => {
                 vec![GitCommand::new(["rebase", "--abort"]).comment("back to where the branch was before the pull")]
             }
-            Action::Switch { branch, stash } => {
+            Action::Switch { branch, stash, keep } => {
                 let mut commands = Vec::new();
+                if let Some(name) = keep {
+                    commands.push(
+                        GitCommand::new(["branch", name])
+                            .comment(format!("{name} keeps the commits made without a branch")),
+                    );
+                }
                 if *stash {
                     commands.push(stash_before(branch));
                 }
                 commands.push(
                     GitCommand::new(["switch", branch]).comment("switch: the modern form of \"git checkout <branch>\""),
+                );
+                commands
+            }
+            Action::Detach { commit, stash } => {
+                // A full sha reads better short; a tag name stays as it is.
+                let full_sha = commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit());
+                let short = if full_sha { &commit[..7] } else { commit.as_str() };
+                let mut commands = Vec::new();
+                if *stash {
+                    commands.push(stash_before(short));
+                }
+                commands.push(
+                    GitCommand::new(["switch", "--detach", short])
+                        .comment("--detach: HEAD points at a commit, not at a branch"),
                 );
                 commands
             }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { History, HistoryRow, RefInfo, RepoSummary } from "./types";
-  import { lane, shortTime, tint } from "./format";
+  import { lane, NO_BRANCH_COLOR, shortTime, tint } from "./format";
   import type { Request } from "./confirm.svelte";
   import { confirm } from "./confirm.svelte";
   import { api } from "./api";
@@ -8,6 +8,8 @@
   import {
     deleteRemoteRequest,
     deleteRequest,
+    detachRequest,
+    keepRequest,
     newBranchRequest,
     renameRequest,
     switchRequest,
@@ -60,10 +62,15 @@
   const focused = $derived(
     clicked && clicked.target === selectedRow?.id
       ? clicked.name
-      : (selectedRow?.graph.branch ?? selectedRow?.labels.find((l) => l.kind === "stash")?.name ?? null),
+      : (selectedRow?.graph.branch ??
+          (selectedRow?.noBranch ? "HEAD" : null) ??
+          selectedRow?.labels.find((l) => l.kind === "stash")?.name ??
+          null),
   );
 
   const rowOf = $derived(new Map(history.rows.map((row) => [row.id, row])));
+  /** While HEAD is detached, its commit. */
+  const detached = $derived(!history.head.branch && history.head.commit ? (rowOf.get(history.head.commit) ?? null) : null);
 
   /** Local branches: the checked-out one first, the rest by latest commit, newest first. */
   const branches = $derived(
@@ -200,6 +207,29 @@
     open(event, "Remote branch menu", ref.name, entries);
   }
 
+  /** The right-click menu of the detached HEAD row. */
+  function detachedMenu(event: MouseEvent, row: HistoryRow) {
+    const sha = row.id.slice(0, 7);
+    open(event, "Detached HEAD menu", "HEAD", [
+      { kind: "header", label: `HEAD · ${sha} · not on a branch` },
+      { kind: "item", label: "Create Branch…", icon: menuIcons.branch, run: () => run(keepRequest(ctx)) },
+      { kind: "item", label: "Copy SHA", icon: menuIcons.copy, run: () => copy(row.id) },
+    ]);
+  }
+
+  /** The right-click menu of a tag. */
+  function tagMenu(event: MouseEvent, ref: RefInfo) {
+    const row = rowOf.get(ref.target);
+    const entries: MenuEntry[] = [{ kind: "header", label: ref.name }];
+    if (row && row.id !== history.head.commit) {
+      entries.push({ kind: "item", label: "Check Out", icon: menuIcons.checkout, run: () => run(detachRequest(ctx, row, ref.name)) });
+      entries.push({ kind: "note", label: "HEAD goes to the tagged commit, on no branch." });
+    }
+    if (row) entries.push({ kind: "item", label: `New Branch from ${ref.name}…`, icon: menuIcons.branch, run: () => run(newBranchRequest(ctx, undefined, row)) });
+    entries.push({ kind: "item", label: "Copy Name", icon: menuIcons.copy, run: () => copy(ref.name) });
+    open(event, "Tag menu", ref.name, entries);
+  }
+
   /** Select the branch's or tag's latest commit, as if it were clicked in the graph. */
   function focus(r: RefInfo) {
     clicked = r;
@@ -249,6 +279,23 @@
         <svg class="icon" viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9" /></svg>
       </button>
     </div>
+    {#if detached}
+      <!-- Gray, the color of what belongs to no branch. -->
+      {@const color = NO_BRANCH_COLOR}
+      <button
+        class="item"
+        data-ref="HEAD"
+        class:menu-open={menu?.ref === "HEAD"}
+        style:--ring={lane(color)}
+        style:background={focused === "HEAD" ? tint(color) : undefined}
+        onclick={() => onPick(detached.id)}
+        oncontextmenu={(e) => detachedMenu(e, detached)}
+      >
+        <svg class="icon" viewBox="0 0 16 16" style:color={lane(color)}><path d="M2 8h3M11 8h3M5 8a3 3 0 1 0 6 0a3 3 0 1 0-6 0" /></svg>
+        <span class="grow ellipsis bold">Detached HEAD</span>
+        <span class="head">HEAD</span>
+      </button>
+    {/if}
     {#each shown("branches", branches) as b (b.ref.name)}
       {@const head = b.ref.name === history.head.branch}
       <button
@@ -331,9 +378,11 @@
         <button
           class="item"
           data-ref={t.ref.name}
+          class:menu-open={menu?.ref === t.ref.name}
+          style:--ring="var(--tag-border)"
           style:background={focused === t.ref.name ? "var(--side-sel)" : undefined}
           onclick={() => focus(t.ref)}
-          title="Go to {t.ref.name}"
+          oncontextmenu={(e) => tagMenu(e, t.ref)}
         >
           <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 2.5h5l6 6-5 5-6-6z" /><circle cx="5.5" cy="5.5" r="0.8" /></svg>
           <span class="grow ellipsis">{t.ref.name}</span>

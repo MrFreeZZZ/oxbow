@@ -2,7 +2,7 @@
 
 import type { Part, Recovery, Request } from "./confirm.svelte";
 import { remoteTrouble } from "./remote";
-import type { Action, CommitBrief, DeletionCheck, Failure, History, RefInfo } from "./types";
+import type { Action, CommitBrief, DeletionCheck, Failure, History, HistoryRow, RefInfo } from "./types";
 import { shortId } from "./format";
 
 export interface BranchContext {
@@ -64,34 +64,66 @@ function listCommits(commits: CommitBrief[]): Part[] {
 }
 
 /** Stash and Switch, when uncommitted files are in the way of a checkout. */
-function changesInTheWay(failure: Failure, action: Action & { kind: "switch" | "track" }, ctx: BranchContext): Recovery | null {
+function changesInTheWay(failure: Failure, action: Action & { kind: "switch" | "track" | "detach" }, ctx: BranchContext): Recovery | null {
   if (failure.kind !== "localChanges") return null;
-  const branch = action.branch;
+  const target = action.kind === "detach" ? shortId(action.commit) : action.branch;
+  // A branch that keeps detached commits was already created before the switch stopped.
+  const retry: Action = action.kind === "switch" ? { ...action, stash: true, keep: null } : { ...action, stash: true };
   return {
     title: "Your uncommitted changes are in the way",
     body: [
-      "Some files you changed are different on ",
-      chip(ctx, action.kind === "track" ? `${action.remote}/${branch}` : branch),
+      "Some files you changed are different ",
+      ...(action.kind === "detach" ? ["in ", { code: target }] : ["on ", chip(ctx, action.kind === "track" ? `${action.remote}/${target}` : target)]),
       ", so switching would overwrite your changes. Stash and Switch puts all uncommitted files aside in the stash first. They wait there, under Stashes in the sidebar, until you bring them back.",
     ],
     icon: "warn",
     tone: "warn",
     button: {
       label: "Stash and Switch",
-      action: { ...action, stash: true },
-      status: `Stashing your changes, then switching to ${branch}…`,
-      done: `Switched to ${branch}. Your changes are in the stash.`,
+      action: retry,
+      status: `Stashing your changes, then switching to ${target}…`,
+      done: `Switched to ${target}. Your changes are in the stash.`,
     },
     close: "Cancel",
     note: "Nothing changed yet.",
   };
 }
 
+/** Commits made on a detached HEAD, which no branch keeps, newest first. */
+export function onNoBranch(history: History): HistoryRow[] {
+  return history.head.branch ? [] : history.rows.filter((r) => r.noBranch);
+}
+
+/** "…stay on no branch: History stops showing them…", for leaving a detached HEAD. */
+function leftBehind(lost: HistoryRow[]): Part[] {
+  const them = lost.length === 1 ? "it" : "them";
+  return [
+    ` The ${plural(lost.length, "commit")} you made without a branch, `,
+    ...listCommits(lost.map((r) => ({ id: r.id, summary: r.summary, authorName: r.authorName, time: r.time }))),
+    `, stay on no branch: History stops showing ${them}, and git deletes ${them} after about two weeks. To keep ${them}, create a branch first.`,
+  ];
+}
+
 export function switchRequest(ctx: BranchContext, branch: string): Request {
-  const action: Action = { kind: "switch", branch, stash: false };
+  const action: Action = { kind: "switch", branch, stash: false, keep: null };
+  const lost = onNoBranch(ctx.history);
+  if (lost.length) {
+    return {
+      title: `Leave ${plural(lost.length, "commit")} behind?`,
+      body: ["Checks out ", chip(ctx, branch), " and makes it the current branch.", ...leftBehind(lost), comeAlong(ctx)],
+      icon: "warn",
+      tone: "warn",
+      button: "Switch Anyway",
+      alt: { label: "Create Branch First", request: () => keepRequest(ctx, branch) },
+      status: `Switching to ${branch}…`,
+      done: `Switched to ${branch}. ${plural(lost.length, "commit")} left behind.`,
+      recover: (failure) => changesInTheWay(failure, action, ctx),
+      action,
+    };
+  }
   const body: Part[] = ["Checks out ", chip(ctx, branch), " and makes it the current branch, so new commits go there. "];
   if (ctx.history.head.branch) body.push("You leave ", here(ctx), " as it is.");
-  else body.push("You leave the commit ", here(ctx), ", which is on no branch.");
+  else body.push("HEAD stops pointing straight at ", here(ctx), ".");
   body.push(comeAlong(ctx));
   return {
     title: `Switch to ${branch}?`,
@@ -128,6 +160,97 @@ export function trackRequest(ctx: BranchContext, ref: RefInfo, author: string): 
   };
 }
 
+/** Check out a commit without a branch. `tag` names the tag it was picked by. */
+export function detachRequest(ctx: BranchContext, row: HistoryRow, tag?: string): Request {
+  const action: Action = { kind: "detach", commit: tag ?? row.id, stash: false };
+  const sha = shortId(row.id);
+  const lost = onNoBranch(ctx.history).filter((r) => r.id !== row.id);
+  const body: Part[] = ["Moves HEAD to commit ", { code: sha }, " ", { quote: row.summary }];
+  if (tag) body.push(", tagged ", { code: tag }, ", to build or test that version. You will be on no branch (a detached HEAD), so to change something create a branch from here first.");
+  else body.push(". You will be on no branch, a “detached HEAD”: commits you make there belong to no branch until you create one.");
+  if (lost.length) body.push(...leftBehind(lost));
+  body.push(comeAlong(ctx));
+  return {
+    title: lost.length ? `Leave ${plural(lost.length, "commit")} behind?` : tag ? `Check out ${tag}?` : "Check out this commit without a branch?",
+    body,
+    icon: lost.length ? "warn" : "checkout",
+    tone: lost.length ? "warn" : undefined,
+    button: lost.length ? "Check Out Anyway" : "Check Out",
+    status: `Checking out ${tag ?? sha}…`,
+    done: `Checked out ${tag ?? sha}. HEAD is not on a branch now.`,
+    recover: (failure) => changesInTheWay(failure, action, ctx),
+    action,
+  };
+}
+
+const KEEP_PREFIXES = ["experiment/", "feature/", "fix/"];
+
+/** Create a branch at a detached HEAD, so its commits belong to it. With `then`, switch there afterwards. */
+export function keepRequest(ctx: BranchContext, then?: string): Request {
+  return keepSheet(ctx, then, "", false);
+}
+
+function keepSheet(ctx: BranchContext, then: string | undefined, typed: string, publishIt: boolean): Request {
+  const again = (value: string, publish = publishIt) => keepSheet(ctx, then, value, publish);
+  const name = typed.trim();
+  const problem = nameProblem(ctx, name);
+  const commit = ctx.history.head.commit;
+  const lost = onNoBranch(ctx.history);
+  const remote = ctx.history.defaultRemote;
+  const publish = !then && publishIt && remote ? remote : null;
+  const tag = ctx.history.refs.find((r) => r.kind === "tag" && r.target === commit)?.name;
+  const nameChip = name && !problem ? chip(ctx, name) : "a new branch";
+  const body: Part[] = ["Creates ", nameChip, " at ", { code: commit ? shortId(commit) : "HEAD" }];
+  if (then) {
+    body.push(`, where HEAD is now, so the ${plural(lost.length, "commit")} you made without a branch belong to it. Then checks out `, chip(ctx, then), ". Nothing is left behind.");
+  } else {
+    body.push(", where HEAD is now, and switches to it. ");
+    if (lost.length) body.push(`The ${plural(lost.length, "commit")} you made without a branch now belong to it, so they show up in the sidebar and can be pushed. Your files do not change.`);
+    else body.push("New commits go to this branch. Your files do not change.");
+    if (publish) body.push(` Then it is published to ${publish}.`);
+  }
+  const action: Action = then
+    ? { kind: "switch", branch: then, stash: false, keep: name }
+    : { kind: "createBranch", name, start: null, switch: true, publish };
+  const withPrefix = (prefix: string) => {
+    const bare = KEEP_PREFIXES.reduce((n, p) => (n.startsWith(p) ? n.slice(p.length) : n), typed);
+    return typed.startsWith(prefix) ? bare : prefix + bare;
+  };
+  return {
+    title: then ? `Keep ${plural(lost.length, "commit")}, then switch` : lost.length ? `Keep ${plural(lost.length, "commit")} on a new branch` : `New branch at ${tag ?? (commit ? shortId(commit) : "HEAD")}`,
+    body,
+    icon: "branch",
+    button: then ? "Create and Switch" : "Create Branch",
+    fields: [
+      {
+        label: "Name",
+        text: { value: typed, placeholder: "experiment/new-cache", edit: (value) => again(value) },
+        chips: KEEP_PREFIXES.map((p) => ({ label: p, on: typed.startsWith(p), pick: () => again(withPrefix(p)) })),
+        error: name && problem ? problem : undefined,
+      },
+    ],
+    options:
+      !then && remote
+        ? [
+            {
+              label: `Publish it to ${remote}`,
+              sub: "Others see it, and Push and Pull work without arguments",
+              on: publishIt,
+              toggle: () => again(typed, !publishIt),
+            },
+          ]
+        : [],
+    invalid: problem,
+    status: `Creating ${name}…`,
+    done: then ? `Created ${name} with your commits and switched to ${then}.` : `Created ${name}. HEAD is on a branch again.`,
+    recover: (failure) =>
+      action.kind === "switch"
+        ? changesInTheWay(failure, action, ctx)
+        : remoteTrouble(failure, action, "Publishing to", remote ?? "the remote", `Created and published ${name}.`),
+    action,
+  };
+}
+
 interface NewBranch {
   name: string;
   /** Key of the chosen base. */
@@ -147,8 +270,8 @@ interface Base {
 
 const PREFIXES = ["feature/", "fix/", "chore/"];
 
-/** The New Branch sheet. `from` is the branch it was opened on, if any. */
-export function newBranchRequest(ctx: BranchContext, from?: string): Request {
+/** The New Branch sheet. `from` is the branch it was opened on, if any; `at` a commit it was opened on. */
+export function newBranchRequest(ctx: BranchContext, from?: string, at?: HistoryRow): Request {
   const { head, trunk } = ctx.history;
   const target = (name: string) => local(ctx, name)?.target ?? null;
   const bases: Base[] = [
@@ -162,7 +285,8 @@ export function newBranchRequest(ctx: BranchContext, from?: string): Request {
   ];
   if (trunk && trunk !== head.branch && local(ctx, trunk)) bases.push({ key: "trunk", label: trunk, ref: trunk, sha: target(trunk), color: ctx.colorOf(trunk) });
   if (from && from !== head.branch && from !== trunk) bases.push({ key: "from", label: from, ref: from, sha: target(from), color: ctx.colorOf(from) });
-  const start = from === head.branch ? "head" : from === trunk ? "trunk" : from ? "from" : "head";
+  if (at && at.id !== head.commit) bases.push({ key: "commit", label: shortId(at.id), ref: at.id, sha: at.id, color: at.graph.color });
+  const start = at && at.id !== head.commit ? "commit" : from === head.branch ? "head" : from === trunk ? "trunk" : from ? "from" : "head";
   return newBranchSheet(ctx, bases, { name: "", base: start, switchTo: true, publish: false });
 }
 
@@ -176,8 +300,9 @@ function newBranchSheet(ctx: BranchContext, bases: Base[], state: NewBranch): Re
   const color = base.color;
 
   const body: Part[] = ["Creates ", name && !problem ? chip(ctx, name, color) : "a new branch", " at "];
-  if (base.ref || ctx.history.head.branch) body.push(chip(ctx, base.ref ?? ctx.history.head.branch!, color));
-  if (base.sha) body.push(base.ref || ctx.history.head.branch ? ", commit " : "commit ", { code: shortId(base.sha) });
+  const named = base.key !== "commit" && (base.ref || ctx.history.head.branch);
+  if (named) body.push(chip(ctx, base.ref ?? ctx.history.head.branch!, color));
+  if (base.sha) body.push(named ? ", commit " : "commit ", { code: shortId(base.sha) });
   if (state.switchTo) body.push(`, and switches to it.${comeAlong(ctx)}`);
   else if (ctx.history.head.branch) body.push(". You stay on ", here(ctx), ".");
   else body.push(".");

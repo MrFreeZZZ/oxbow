@@ -5,11 +5,14 @@
 //! about gitoxide, so it can be tested with hand-made histories.
 //!
 //! Rules from the Oxbow design:
-//! - the trunk (first-parent chain of `main`/`master`) always occupies column 0;
+//! - the trunk (first-parent chain of `main`/`master`) occupies column 0;
 //! - every other branch gets its own column to the right and keeps it for its whole life,
 //!   columns are reused only after a branch line has ended;
 //! - a branch line runs down to the commit it forks from and curves into that commit's column;
-//! - colors are stable per branch name; color 0 is reserved for the trunk.
+//! - colors are stable per branch name; color 0 is reserved for the trunk;
+//! - the checked-out branch's line takes column 0 from the top of the graph down to its fork
+//!   point. Only the trunk moves out of its way, into the column that line had, and curves back
+//!   at the fork point; every other line keeps its column and color.
 
 use serde::Serialize;
 
@@ -23,6 +26,9 @@ pub const PALETTE_SIZE: u8 = 9;
 
 /// Neutral color for stashes, outside the branch palette.
 pub const STASH_COLOR: u8 = PALETTE_SIZE + 1;
+
+/// Gray for commits that belong to no branch: made on a detached `HEAD`.
+pub const NO_BRANCH_COLOR: u8 = STASH_COLOR + 1;
 
 /// Color of the trunk lane.
 pub const TRUNK_COLOR: u8 = 0;
@@ -46,6 +52,26 @@ pub struct GraphCommit {
     pub side: bool,
     /// Fixed color for the row, instead of one derived from a branch name.
     pub color: Option<u8>,
+    /// The row of uncommitted changes, a side row on top of `HEAD`.
+    pub worktree: bool,
+}
+
+/// The layout of a whole history.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Graph {
+    pub rows: Vec<RowLayout>,
+    /// Gray dashed lines from the top of the graph down to a commit, filling an empty column
+    /// above a line that starts below newer commits of other branches.
+    pub lead_ins: Vec<LeadIn>,
+}
+
+/// A gray dashed line in `column` from the top of the graph down to the dot of `row`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LeadIn {
+    pub column: u16,
+    pub row: RowIndex,
 }
 
 /// The layout of one row.
@@ -80,6 +106,8 @@ pub struct Segment {
     pub color: u8,
     /// Dashed lines lead down from commits that have not been pushed yet.
     pub dashed: bool,
+    /// The trunk's own line, drawn thicker than the others.
+    pub thick: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +125,11 @@ struct Lane {
     branch: Option<String>,
     /// A side line (stash, uncommitted changes): the commit it leads to keeps its own branch color and name.
     side: bool,
+    /// The trunk's first-parent line.
+    trunk: bool,
+    /// The line of commits with a fixed color (made on a detached `HEAD`): a commit below it on a
+    /// branch continues its branch's line instead, and doesn't take this color.
+    fixed: bool,
 }
 
 /// Stable color for a branch name, never the trunk color.
@@ -110,8 +143,107 @@ pub fn color_for_name(name: &str) -> u8 {
     1 + (hash % u32::from(PALETTE_SIZE)) as u8
 }
 
-/// Lay out `commits`, which must be ordered children before parents.
-pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
+/// Lay out `commits`, which must be ordered children before parents. `focus` is the row of the
+/// checked-out commit: its line moves to column 0.
+pub fn layout(commits: &[GraphCommit], focus: Option<RowIndex>) -> Graph {
+    let plain = Plan::plain(commits.len());
+    let mut rows = place(commits, &plain);
+    let plan = focus.and_then(|row| Plan::focused(commits, &rows, row));
+    if let Some(plan) = &plan {
+        rows = place(commits, plan);
+    }
+
+    let mut lead_ins = Vec::new();
+    let top_left = plan.as_ref().and_then(|p| p.left.iter().position(|&l| l));
+    if let Some(top) = top_left.filter(|&t| t > 0) {
+        lead_ins.push(LeadIn { column: 0, row: top });
+    }
+    // The trunk starts below newer work: its column stays empty above it, unless the focused line is there.
+    if let Some(tip) = commits.iter().position(|c| c.trunk).filter(|&t| t > 0) {
+        let column = rows[tip].column;
+        if column != 0 || top_left.is_none_or(|top| top > tip) {
+            lead_ins.push(LeadIn { column, row: tip });
+        }
+    }
+    Graph { rows, lead_ins }
+}
+
+/// Where the trunk and the focused line go.
+struct Plan {
+    /// Rows drawn in column 0: the focused line and the uncommitted changes on top of it.
+    left: Vec<bool>,
+    /// Column 0 belongs to the focused line rather than the trunk, until `until`.
+    focused: bool,
+    /// Column of the trunk while column 0 is the focused line's.
+    trunk_column: usize,
+    /// Row where the focused line ends, at the commit it forks from; `None` if it runs to the bottom.
+    until: Option<RowIndex>,
+}
+
+impl Plan {
+    fn plain(len: usize) -> Plan {
+        Plan {
+            left: vec![false; len],
+            focused: false,
+            trunk_column: 0,
+            until: None,
+        }
+    }
+
+    /// The plan that puts the line of `head` in column 0, from the layout without one.
+    fn focused(commits: &[GraphCommit], plain: &[RowLayout], head: RowIndex) -> Option<Plan> {
+        let first_parent = |row: RowIndex| commits[row].parents.first().copied().flatten();
+        let mut plan = Plan::plain(commits.len());
+        let mut top = head;
+        if commits[head].trunk {
+            // The trunk is in column 0 already. Uncommitted changes on its newest commit go right above it.
+            if commits.iter().position(|c| c.trunk) != Some(head) {
+                return None;
+            }
+        } else {
+            let column = usize::from(plain[head].column);
+            plan.focused = true;
+            plan.left[head] = true;
+            // Down to the commit the line forks from.
+            let mut row = head;
+            plan.until = loop {
+                match first_parent(row) {
+                    Some(p) if usize::from(plain[p].column) == column && !commits[p].trunk && !commits[p].side => {
+                        plan.left[p] = true;
+                        row = p;
+                    }
+                    Some(p) => break Some(p),
+                    None => break None,
+                }
+            };
+            // Up through the branches stacked on it, which share the line.
+            while let Some(child) = (0..top)
+                .rev()
+                .find(|&r| !commits[r].side && usize::from(plain[r].column) == column && first_parent(r) == Some(top))
+            {
+                plan.left[child] = true;
+                top = child;
+            }
+            let trunk_above = commits[..plan.until.unwrap_or(commits.len())].iter().any(|c| c.trunk);
+            plan.trunk_column = if trunk_above { column } else { 0 };
+        }
+        if let Some(wip) = (0..top).find(|&r| commits[r].worktree && first_parent(r) == Some(top)) {
+            plan.left[wip] = true;
+        }
+        plan.left.contains(&true).then_some(plan)
+    }
+
+    /// Whether column 0 is the focused line's in `row`.
+    fn focused_at(&self, row: RowIndex) -> bool {
+        self.focused && self.until.is_none_or(|until| row < until)
+    }
+
+    fn trunk_column_at(&self, row: RowIndex) -> usize {
+        if self.focused_at(row) { self.trunk_column } else { 0 }
+    }
+}
+
+fn place(commits: &[GraphCommit], plan: &Plan) -> Vec<RowLayout> {
     let mut lanes: Vec<Option<Lane>> = vec![None];
     let mut rows = Vec::with_capacity(commits.len());
     // Merge lines that join a lane which already exists, per row: (from, to column, color, dashed).
@@ -120,31 +252,41 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
     let mut after: Vec<Vec<Option<Lane>>> = Vec::with_capacity(commits.len());
 
     for (row, commit) in commits.iter().enumerate() {
+        let trunk_column = plan.trunk_column_at(row);
+        let focused = plan.focused_at(row);
+        let reserved = |c: usize| c == trunk_column || (focused && c == 0);
         let waiting: Vec<usize> = (0..lanes.len())
             .filter(|&c| lanes[c].as_ref().is_some_and(|l| l.target == Some(row)))
             .collect();
 
-        let is_side = |c: usize| lanes[c].as_ref().is_some_and(|l| l.side);
-        let column = if commit.trunk {
+        // Which of the lines arriving here goes on through this commit: a branch line before a side
+        // line or the line of commits on no branch, a line of pushed commits before one of local
+        // work forked from it, then the leftmost.
+        let rank = |c: usize| {
+            lanes[c]
+                .as_ref()
+                .map_or((true, true, true), |l| (l.side, l.fixed, l.dashed))
+        };
+        let column = if plan.left[row] {
             0
-        } else if let Some(&col) = waiting
-            .iter()
-            .find(|&&c| c != 0 && !is_side(c))
-            .or_else(|| waiting.iter().find(|&&c| c != 0))
-        {
+        } else if commit.trunk {
+            trunk_column
+        } else if let Some(&col) = waiting.iter().filter(|&&c| !reserved(c)).min_by_key(|&&c| rank(c)) {
             col
         } else {
-            free_column(&lanes, None)
+            free_column(&lanes, &[trunk_column])
         };
         ensure_len(&mut lanes, column);
         // The commit continues the line in its column, unless that is a side line.
         let continues = waiting.contains(&column) && !lanes[column].as_ref().is_some_and(|l| l.side);
+        // It takes that line's color and branch, unless the line's color belongs to its own commits.
+        let inherits = continues && !lanes[column].as_ref().is_some_and(|l| l.fixed);
 
         let color = if commit.trunk {
             TRUNK_COLOR
         } else if let Some(color) = commit.color {
             color
-        } else if continues {
+        } else if inherits {
             lanes[column].as_ref().map_or(TRUNK_COLOR, |l| l.color)
         } else {
             match &commit.tip_name {
@@ -156,7 +298,7 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
         // A branch tip further down a line (a stacked branch) names the commits below it.
         let branch = if commit.trunk || commit.side {
             None
-        } else if continues {
+        } else if inherits {
             commit
                 .tip_name
                 .clone()
@@ -169,13 +311,17 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
         let mut fork_colors = Vec::new();
         for &col in &waiting {
             let lane = lanes[col].take().expect("waiting lane exists");
-            if col != column
-                && lane.first_parent
-                && !lane.side
-                && lane.color != color
-                && !fork_colors.contains(&lane.color)
-            {
+            if lane.first_parent && !lane.side && lane.color != color && !fork_colors.contains(&lane.color) {
                 fork_colors.push(lane.color);
+            }
+        }
+
+        // The focused line ended here: the trunk curves back into column 0.
+        if plan.focused && plan.until == Some(row) && plan.trunk_column != 0 && lanes[0].is_none() {
+            let moved = lanes.get_mut(plan.trunk_column).and_then(|l| l.take_if(|l| l.trunk));
+            if let Some(mut lane) = moved {
+                lane.origin = Some(plan.trunk_column as u16);
+                lanes[0] = Some(lane);
             }
         }
 
@@ -192,6 +338,8 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
                     origin: None,
                     branch: branch.clone(),
                     side: commit.side,
+                    trunk: commit.trunk,
+                    fixed: commit.color.is_some() && !commit.side,
                 });
                 continue;
             }
@@ -210,6 +358,7 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
                         to: col as u16,
                         color: lane_color,
                         dashed: commit.unpushed,
+                        thick: false,
                     });
                 }
                 continue;
@@ -232,10 +381,11 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
             if !merge_colors.contains(&merged_color) {
                 merge_colors.push(merged_color);
             }
-            let col = if parent_on_trunk && lanes[0].is_none() {
-                0
+            ensure_len(&mut lanes, trunk_column);
+            let col = if parent_on_trunk && lanes[trunk_column].is_none() && !(focused && trunk_column == 0) {
+                trunk_column
             } else {
-                free_column(&lanes, Some(column))
+                free_column(&lanes, &[column, trunk_column])
             };
             ensure_len(&mut lanes, col);
             lanes[col] = Some(Lane {
@@ -246,6 +396,8 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
                 origin: Some(column as u16),
                 branch: merged_branch,
                 side: false,
+                trunk: false,
+                fixed: false,
             });
         }
 
@@ -281,6 +433,7 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
                 to,
                 color: lane.color,
                 dashed: lane.dashed,
+                thick: lane.trunk,
             });
         }
         segments.append(&mut joins[row]);
@@ -304,9 +457,9 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<RowLayout> {
 }
 
 /// First unused column from 1 on, skipping `avoid`.
-fn free_column(lanes: &[Option<Lane>], avoid: Option<usize>) -> usize {
+fn free_column(lanes: &[Option<Lane>], avoid: &[usize]) -> usize {
     (1..)
-        .find(|&c| Some(c) != avoid && lanes.get(c).is_none_or(Option::is_none))
+        .find(|&c| !avoid.contains(&c) && lanes.get(c).is_none_or(Option::is_none))
         .expect("there is always a free column")
 }
 
@@ -345,12 +498,13 @@ mod tests {
             to: col,
             color,
             dashed: false,
+            thick: color == TRUNK_COLOR,
         }
     }
 
     #[test]
     fn linear_trunk_is_one_straight_line() {
-        let rows = layout(&[commit(&[1], true), commit(&[2], true), commit(&[], true)]);
+        let rows = layout(&[commit(&[1], true), commit(&[2], true), commit(&[], true)], None).rows;
         assert!(rows.iter().all(|r| r.column == 0 && r.color == TRUNK_COLOR));
         assert_eq!(rows[0].segments, vec![straight(0, 0)]);
         assert_eq!(rows[1].segments, vec![straight(0, 0)]);
@@ -363,7 +517,7 @@ mod tests {
         // 1 main tip -> 2
         // 2 root
         let feature = named(commit(&[2], false), "feature");
-        let rows = layout(&[feature, commit(&[2], true), commit(&[], true)]);
+        let rows = layout(&[feature, commit(&[2], true), commit(&[], true)], None).rows;
         let color = color_for_name("feature");
         assert_eq!((rows[0].column, rows[0].color), (1, color));
         assert_eq!(rows[1].column, 0);
@@ -376,7 +530,8 @@ mod tests {
                     from: 1,
                     to: 0,
                     color,
-                    dashed: false
+                    dashed: false,
+                    thick: false,
                 }
             ]
         );
@@ -391,7 +546,7 @@ mod tests {
         // 0 top tip -> 1 (bottom tip) -> 2 (trunk root)
         let top = named(commit(&[1], false), "stack/2");
         let bottom = named(commit(&[2], false), "stack/1");
-        let rows = layout(&[top, bottom, commit(&[], true)]);
+        let rows = layout(&[top, bottom, commit(&[], true)], None).rows;
         assert_eq!(rows[0].branch.as_deref(), Some("stack/2"));
         assert_eq!(rows[1].branch.as_deref(), Some("stack/1"));
         // The line keeps the color of the branch it started with.
@@ -408,7 +563,7 @@ mod tests {
             ..commit(&[1], false)
         };
         let feature = named(commit(&[2], false), "feature");
-        let rows = layout(&[stash, feature, commit(&[], true)]);
+        let rows = layout(&[stash, feature, commit(&[], true)], None).rows;
         assert_eq!((rows[0].color, rows[0].branch.as_deref()), (STASH_COLOR, None));
         assert_eq!(rows[0].segments[0].color, STASH_COLOR);
         assert!(rows[0].segments[0].dashed);
@@ -425,7 +580,11 @@ mod tests {
         // 3 root
         let mut merge = commit(&[1, 2], true);
         merge.merged_name = Some("topic".into());
-        let rows = layout(&[merge, commit(&[3], true), commit(&[3], false), commit(&[], true)]);
+        let rows = layout(
+            &[merge, commit(&[3], true), commit(&[3], false), commit(&[], true)],
+            None,
+        )
+        .rows;
         let topic = color_for_name("topic");
         assert_eq!(rows[0].merge_colors, vec![topic]);
         // The merged line leaves the merge dot with a curve into column 1.
@@ -437,7 +596,8 @@ mod tests {
                     from: 0,
                     to: 1,
                     color: topic,
-                    dashed: false
+                    dashed: false,
+                    thick: false,
                 }
             ]
         );
@@ -453,7 +613,8 @@ mod tests {
                     from: 1,
                     to: 0,
                     color: topic,
-                    dashed: false
+                    dashed: false,
+                    thick: false,
                 }
             ]
         );
@@ -464,7 +625,7 @@ mod tests {
         // Two branches one after the other both fork from trunk; the second reuses column 1.
         let a = named(commit(&[1], false), "a");
         let b = named(commit(&[3], false), "b");
-        let rows = layout(&[a, commit(&[2], true), b, commit(&[], true)]);
+        let rows = layout(&[a, commit(&[2], true), b, commit(&[], true)], None).rows;
         assert_eq!(rows[0].column, 1);
         assert_eq!(rows[2].column, 1);
     }
@@ -473,7 +634,7 @@ mod tests {
     fn unpushed_commits_have_dashed_lines() {
         let mut tip = named(commit(&[1], false), "wip");
         tip.unpushed = true;
-        let rows = layout(&[tip, commit(&[2], false), commit(&[], true)]);
+        let rows = layout(&[tip, commit(&[2], false), commit(&[], true)], None).rows;
         assert!(rows[0].segments[0].dashed);
         assert!(!rows[1].segments[0].dashed);
     }
@@ -482,8 +643,117 @@ mod tests {
     fn missing_parent_runs_to_the_bottom() {
         let mut c = commit(&[], true);
         c.parents = vec![None];
-        let rows = layout(&[c]);
+        let rows = layout(&[c], None).rows;
         assert_eq!(rows[0].segments, vec![straight(0, 0)]);
+    }
+
+    fn curve(from: u16, to: u16, color: u8) -> Segment {
+        Segment {
+            from,
+            to,
+            color,
+            dashed: false,
+            thick: color == TRUNK_COLOR,
+        }
+    }
+
+    #[test]
+    fn checked_out_branch_takes_column_zero_and_the_trunk_steps_aside() {
+        // 0 main tip -> 2
+        // 1 feature tip (HEAD) -> 2
+        // 2 root, where feature forks from main
+        let feature = named(commit(&[2], false), "feature");
+        let color = color_for_name("feature");
+        let graph = layout(&[commit(&[2], true), feature, commit(&[], true)], Some(1));
+        let rows = &graph.rows;
+        assert_eq!((rows[0].column, rows[1].column, rows[2].column), (1, 0, 0));
+        // Colors don't change, only columns.
+        assert_eq!((rows[0].color, rows[1].color), (TRUNK_COLOR, color));
+        assert_eq!(rows[0].segments, vec![straight(1, TRUNK_COLOR)]);
+        // The trunk curves back into column 0 at the fork point; the feature line runs straight into it.
+        assert_eq!(rows[1].segments, vec![straight(0, color), curve(1, 0, TRUNK_COLOR)]);
+        assert_eq!(rows[2].fork_colors, vec![color]);
+        // Column 0 is empty above the feature's tip.
+        assert_eq!(graph.lead_ins, vec![LeadIn { column: 0, row: 1 }]);
+    }
+
+    #[test]
+    fn the_whole_stack_moves_and_the_trunk_keeps_a_lead_in() {
+        // 0 stack/2 -> 1 stack/1 (HEAD) -> 3 root; 2 main tip -> 3
+        let top = named(commit(&[1], false), "stack/2");
+        let bottom = named(commit(&[3], false), "stack/1");
+        let graph = layout(&[top, bottom, commit(&[3], true), commit(&[], true)], Some(1));
+        let columns: Vec<u16> = graph.rows.iter().map(|r| r.column).collect();
+        assert_eq!(columns, [0, 0, 1, 0]);
+        assert_eq!(graph.lead_ins, vec![LeadIn { column: 1, row: 2 }]);
+    }
+
+    #[test]
+    fn a_nested_branch_moves_only_its_own_commits() {
+        // 0 base tip -> 2; 1 child tip (HEAD) -> 2, forked from base; 2 base -> 3; 3 root
+        let base = named(commit(&[2], false), "base");
+        let child = named(commit(&[2], false), "child");
+        let graph = layout(&[base, child, commit(&[3], false), commit(&[], true)], Some(1));
+        let rows = &graph.rows;
+        assert_eq!((rows[0].column, rows[1].column, rows[2].column), (1, 0, 1));
+        assert_eq!(rows[2].color, color_for_name("base"));
+        // The child line curves into its fork point on base.
+        assert!(rows[1].segments.contains(&curve(0, 1, color_for_name("child"))));
+        assert_eq!(rows[2].fork_colors, vec![color_for_name("child")]);
+    }
+
+    #[test]
+    fn uncommitted_changes_sit_right_above_the_trunk_tip() {
+        // 0 uncommitted -> 2 (main tip, HEAD); 1 feature -> 3; 3 root
+        let wip = GraphCommit {
+            side: true,
+            worktree: true,
+            color: Some(TRUNK_COLOR),
+            unpushed: true,
+            ..commit(&[2], false)
+        };
+        let feature = named(commit(&[3], false), "feature");
+        let graph = layout(&[wip, feature, commit(&[3], true), commit(&[], true)], Some(2));
+        let columns: Vec<u16> = graph.rows.iter().map(|r| r.column).collect();
+        assert_eq!(columns, [0, 1, 0, 0]);
+        assert!(graph.lead_ins.is_empty());
+    }
+
+    #[test]
+    fn without_focus_the_trunk_gets_a_lead_in_when_it_starts_lower() {
+        let feature = named(commit(&[1], false), "feature");
+        let graph = layout(&[feature, commit(&[], true)], None);
+        assert_eq!(graph.lead_ins, vec![LeadIn { column: 0, row: 1 }]);
+    }
+
+    #[test]
+    fn commits_on_no_branch_keep_their_gray_to_themselves() {
+        // 0 made on a detached HEAD -> 2; 1 feature tip -> 2; 2 feature -> 3; 3 root
+        let detached = GraphCommit {
+            color: Some(NO_BRANCH_COLOR),
+            unpushed: true,
+            ..commit(&[2], false)
+        };
+        let feature = named(commit(&[2], false), "feature");
+        let graph = layout(&[detached, feature, commit(&[3], false), commit(&[], true)], Some(0));
+        let rows = &graph.rows;
+        // The feature line carries on below the fork; the gray line ends there with a ring.
+        assert_eq!((rows[0].column, rows[1].column, rows[2].column), (0, 1, 1));
+        assert_eq!(rows[2].color, color_for_name("feature"));
+        assert_eq!(rows[2].branch.as_deref(), Some("feature"));
+        assert_eq!(rows[2].fork_colors, vec![NO_BRANCH_COLOR]);
+    }
+
+    #[test]
+    fn local_work_forked_from_a_pushed_branch_leaves_it_its_line() {
+        // 0 local tip (not pushed) -> 2; 1 pushed tip -> 2; 2 pushed -> 3; 3 root
+        let mut local = named(commit(&[2], false), "experiment");
+        local.unpushed = true;
+        let pushed = named(commit(&[2], false), "auth");
+        let rows = layout(&[local, pushed, commit(&[3], false), commit(&[], true)], None).rows;
+        assert_eq!((rows[0].column, rows[1].column, rows[2].column), (1, 2, 2));
+        assert_eq!(rows[2].branch.as_deref(), Some("auth"));
+        assert_eq!(rows[2].fork_colors, vec![color_for_name("experiment")]);
     }
 
     #[test]

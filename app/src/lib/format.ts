@@ -1,5 +1,8 @@
 // Formatting helpers and the branch palette.
 
+/** Gray of commits that belong to no branch (made on a detached HEAD), as in oxbow-core. */
+export const NO_BRANCH_COLOR = 11;
+
 /** CSS variable for a lane color: 0 is the trunk (Steel), 1..8 the branch palette. */
 export const lane = (color: number) => `var(--lane-${color})`;
 /** Darker (light theme) or brighter (dark theme) text color for labels on a lane tint. */

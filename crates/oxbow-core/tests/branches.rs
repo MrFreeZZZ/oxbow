@@ -24,6 +24,7 @@ fn switch(branch: &str, stash: bool) -> Action {
     Action::Switch {
         branch: branch.into(),
         stash,
+        keep: None,
     }
 }
 
@@ -261,4 +262,51 @@ fn remote_branches_are_deleted_on_the_remote() {
     );
     repo.perform(&delete).unwrap();
     assert_eq!(fx.git(&["ls-remote", "--heads", "origin", "gone-soon"]), "");
+}
+
+#[test]
+fn detaching_and_keeping_commits_made_without_a_branch() {
+    let mut fx = Fixture::new();
+    let root = fx.commit("a.txt", "one\n", "Root");
+    fx.commit("a.txt", "two\n", "Second");
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let detach = Action::Detach {
+        commit: root.clone(),
+        stash: false,
+    };
+    assert_eq!(
+        repo.plan(&detach).unwrap().commands[0].display(),
+        format!("git switch --detach {}", &root[..7])
+    );
+    repo.perform(&detach).unwrap();
+    assert_eq!(head(&mut fx), "");
+    let experiment = fx.commit("b.txt", "b\n", "Experiment");
+
+    let history = repo.history(&Default::default()).unwrap();
+    assert_eq!(history.previous_branch.as_deref(), Some("main"));
+    let top = &history.rows[0];
+    assert_eq!(top.id, experiment);
+    assert!(top.no_branch);
+    assert_eq!(top.graph.color, oxbow_core::graph::NO_BRANCH_COLOR);
+    assert_eq!(
+        (top.labels[0].name.as_str(), top.labels[0].kind),
+        ("HEAD", RefKind::Head)
+    );
+    // The detached line takes column 0; main steps aside until the commit it started from.
+    assert_eq!(top.graph.column, 0);
+    let root_row = history.rows.iter().find(|r| r.id == root).unwrap();
+    assert!(!root_row.no_branch);
+    assert_eq!(root_row.graph.fork_colors, [oxbow_core::graph::NO_BRANCH_COLOR]);
+
+    let keep = Action::Switch {
+        branch: "main".into(),
+        stash: false,
+        keep: Some("experiment".into()),
+    };
+    let displays: Vec<String> = repo.plan(&keep).unwrap().commands.iter().map(|c| c.display()).collect();
+    assert_eq!(displays, ["git branch experiment", "git switch main"]);
+    repo.perform(&keep).unwrap();
+    assert_eq!(head(&mut fx), "main");
+    assert_eq!(fx.git(&["rev-parse", "experiment"]), experiment);
 }
