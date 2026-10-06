@@ -1,7 +1,7 @@
 <script lang="ts">
   import { open } from "@tauri-apps/plugin-dialog";
   import { api, settings } from "./lib/api";
-  import type { History, RepoSummary } from "./lib/types";
+  import type { History, HistoryRow, RepoSummary } from "./lib/types";
   import Sidebar from "./lib/Sidebar.svelte";
   import HistoryList from "./lib/HistoryList.svelte";
   import CommitPanel from "./lib/CommitPanel.svelte";
@@ -9,7 +9,9 @@
   import ConfirmSheet from "./lib/ConfirmSheet.svelte";
   import { confirm, type Request } from "./lib/confirm.svelte";
   import BranchPicker from "./lib/BranchPicker.svelte";
-  import { newBranchRequest, switchRequest, type BranchContext } from "./lib/branches";
+  import { detachRequest, keepRequest, newBranchRequest, switchRequest, type BranchContext } from "./lib/branches";
+  import DetachedBanner from "./lib/DetachedBanner.svelte";
+  import { menuIcons, type MenuEntry } from "./lib/Menu.svelte";
   import { canPull, canPush, fetchRequest, pullRequest, pushRequest, type RemoteContext } from "./lib/remote";
   import Welcome from "./lib/Welcome.svelte";
 
@@ -106,6 +108,44 @@
     await refresh();
     const after = history?.head;
     if (after?.commit && (after.branch !== before?.branch || after.commit !== before?.commit)) select(after.commit);
+  }
+
+  /** Where "Back to" goes from a detached HEAD: the branch checked out before, else the trunk. */
+  const backTo = $derived.by(() => {
+    if (!history || history.head.branch) return null;
+    const local = (name: string | null) => (name && history!.refs.some((r) => r.kind === "local" && r.name === name) ? name : null);
+    return local(history.previousBranch) ?? local(history.trunk);
+  });
+
+  /** The new branch button: while HEAD is detached, it keeps HEAD's commits on a branch. */
+  function newBranch() {
+    if (!branchCtx) return;
+    run(history?.head.branch || !history?.head.commit ? newBranchRequest(branchCtx) : keepRequest(branchCtx));
+  }
+
+  /** The right-click menu of a commit in the graph. */
+  function commitMenu(row: HistoryRow): MenuEntry[] {
+    const ctx = branchCtx;
+    if (!ctx || !history || row.worktree) return [];
+    const item = (label: string, icon: string, act: () => void): MenuEntry => ({ kind: "item", label, icon, run: act });
+    const isHead = row.id === history.head.commit;
+    const entries: MenuEntry[] = [{ kind: "header", label: `${row.id.slice(0, 7)} · ${row.summary}` }];
+    // A commit many branches point at lists the first few; the rest are in the branch list.
+    const others = row.labels.filter((l) => l.kind === "local" && l.name !== history!.head.branch);
+    for (const label of others.slice(0, 3)) entries.push(item(`Check Out ${label.name}`, menuIcons.checkout, () => run(switchRequest(ctx, label.name))));
+    if (others.length > 3) entries.push({ kind: "note", label: `${others.length - 3} more branches here, in the branch list.` });
+    if (!isHead) entries.push(item("Check Out This Commit…", menuIcons.checkout, () => run(detachRequest(ctx, row))));
+    if (isHead && !history.head.branch) entries.push(item("Create Branch…", menuIcons.branch, () => run(keepRequest(ctx))));
+    else entries.push(item("New Branch from Here…", menuIcons.branch, () => run(newBranchRequest(ctx, undefined, row))));
+    entries.push({ kind: "sep" }, item("Copy SHA", menuIcons.copy, () => copySha(row.id)));
+    return entries;
+  }
+
+  function copySha(id: string) {
+    navigator.clipboard.writeText(id).then(
+      () => confirm.say(`Copied ${id.slice(0, 7)}.`),
+      () => confirm.say("Couldn’t copy to the clipboard."),
+    );
   }
 
   const remoteCtx = $derived<RemoteContext | null>(
@@ -224,18 +264,21 @@
             </button>
           </div>
         {/if}
-        <button class="capsule" onclick={() => branchCtx && run(newBranchRequest(branchCtx))} aria-label="New branch" title="New Branch…">
+        <button class="capsule" onclick={newBranch} aria-label="New branch" title={history.head.branch ? "New Branch…" : "Create a branch at HEAD…"}>
           <svg class="icon" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg>
         </button>
         <button class="capsule" onclick={refresh} aria-label="Reload history" title="Reload">
           <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5" /></svg>
         </button>
       </header>
+      {#if !history.head.branch && history.head.commit && branchCtx}
+        <DetachedBanner {history} back={backTo} onBack={() => backTo && run(switchRequest(branchCtx!, backTo))} onKeep={newBranch} />
+      {/if}
       <div class="content">
         <section class="history" aria-label="Commit history">
           <div class="columns"><span>Description</span>{#if history.truncated}<span class="note">Showing the latest {history.rows.length.toLocaleString()} commits</span>{/if}</div>
           {#key repo.path}
-            <HistoryList bind:this={list} {history} {selected} onSelect={select} />
+            <HistoryList bind:this={list} {history} {selected} onSelect={select} menuFor={commitMenu} />
           {/key}
         </section>
         <aside class="panel" style:width="{panelWidth}px" aria-label="Commit details">

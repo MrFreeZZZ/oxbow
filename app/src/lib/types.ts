@@ -1,6 +1,6 @@
 // Mirrors the serde types of oxbow-core.
 
-export type RefKind = "local" | "remote" | "tag" | "stash";
+export type RefKind = "local" | "remote" | "tag" | "stash" | "head";
 
 export interface HeadInfo {
   branch: string | null;
@@ -21,6 +21,8 @@ export interface Segment {
   to: number;
   color: number;
   dashed: boolean;
+  /** The trunk's own line, drawn thicker. */
+  thick: boolean;
 }
 
 export interface RowLayout {
@@ -49,6 +51,8 @@ export interface HistoryRow {
   parents: string[];
   labels: Label[];
   unpushed: boolean;
+  /** Only a detached HEAD has the commit: no branch or tag keeps it. */
+  noBranch: boolean;
   graph: RowLayout;
   /** Set on the row of uncommitted changes, whose id is WORKTREE_ID. */
   worktree: WorktreeSummary | null;
@@ -83,6 +87,10 @@ export interface History {
   head: HeadInfo;
   trunk: string | null;
   trunkTipRow: number | null;
+  /** Gray dashed lines from the top of the graph down to a row, in an otherwise empty column. */
+  leadIns: { column: number; row: number }[];
+  /** While HEAD is detached, the branch checked out before. */
+  previousBranch: string | null;
   refs: RefInfo[];
   remotes: string[];
   tracking: Tracking | null;
@@ -186,7 +194,8 @@ export type Action =
     }
   | { kind: "pullAndPush"; remote: string; branch: string; upstream: string; noVerify: boolean }
   | { kind: "abortRebase" }
-  | { kind: "switch"; branch: string; stash: boolean }
+  | { kind: "switch"; branch: string; stash: boolean; keep: string | null }
+  | { kind: "detach"; commit: string; stash: boolean }
   | { kind: "track"; remote: string; branch: string; stash: boolean }
   | { kind: "createBranch"; name: string; start: string | null; switch: boolean; publish: string | null }
   | { kind: "renameBranch"; from: string; to: string; upstream: RemoteBranch | null }

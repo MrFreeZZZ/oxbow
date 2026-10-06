@@ -36,6 +36,10 @@ export interface Request {
   button: string;
   /** Red button and icon for actions that throw work away. */
   danger?: boolean;
+  /** Orange icon for a step worth a second look, e.g. leaving commits behind. */
+  tone?: "warn";
+  /** Another way to go, as a new confirmation, e.g. Create Branch First. */
+  alt?: { label: string; request: () => Request };
   /** Extra line in the footer, e.g. that discarding can't be undone. */
   note?: string;
   /** Title while it runs, e.g. "Pushing main to origin…". */

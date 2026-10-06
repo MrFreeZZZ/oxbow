@@ -1,8 +1,21 @@
 <script lang="ts">
-  import type { History, HistoryRow, WorktreeSummary } from "./types";
+  import { untrack } from "svelte";
+  import type { History, HistoryRow, RowLayout, Segment, WorktreeSummary } from "./types";
   import { lane, plate, relativeTime, tint } from "./format";
+  import Menu, { type MenuEntry } from "./Menu.svelte";
 
-  let { history, selected, onSelect }: { history: History; selected: string | null; onSelect: (id: string) => void } = $props();
+  let {
+    history,
+    selected,
+    onSelect,
+    menuFor,
+  }: {
+    history: History;
+    selected: string | null;
+    onSelect: (id: string) => void;
+    /** Entries of a commit's right-click menu; none, no menu. */
+    menuFor: (row: HistoryRow) => MenuEntry[];
+  } = $props();
 
   // Geometry from the design: 44px two-line rows, lanes 18px apart, trunk lane centered 14px in.
   const ROW = 44;
@@ -16,6 +29,82 @@
   let scrollTop = $state(0);
   let height = $state(600);
   let flash = $state<string | null>(null);
+  let menu = $state<{ x: number; y: number; id: string; entries: MenuEntry[] } | null>(null);
+
+  function openMenu(event: MouseEvent, row: HistoryRow) {
+    const entries = menuFor(row);
+    if (!entries.length) return;
+    event.preventDefault();
+    menu = { x: event.clientX, y: event.clientY, id: row.id, entries };
+  }
+
+  // When the layout changes, e.g. a checkout moves a branch to the left column, lines and dots
+  // glide from their old columns to the new ones instead of jumping.
+  const MOVE_MS = 220;
+  /** Layout of each row and the lead-ins before the change, while it animates. */
+  let from = $state<{ rows: Map<string, RowLayout>; leadIns: Map<string, number> } | null>(null);
+  let progress = $state(1);
+  let frame = 0;
+  let shownRows: HistoryRow[] | null = null;
+  let shownLeadIns = new Map<string, number>();
+
+  $effect.pre(() => {
+    const next = history;
+    untrack(() => {
+      const leadIns = new Map(next.leadIns.map((l) => [next.rows[l.row]?.id ?? "", l.column]));
+      if (shownRows && shownRows !== next.rows) animate(shownRows, shownLeadIns, next.rows);
+      shownRows = next.rows;
+      shownLeadIns = leadIns;
+    });
+  });
+
+  function animate(old: HistoryRow[], oldLeadIns: Map<string, number>, next: HistoryRow[]) {
+    const rows = new Map(old.map((r) => [r.id, r.graph]));
+    const moved = next.some((r) => {
+      const before = rows.get(r.id);
+      return before && (before.column !== r.graph.column || before.width !== r.graph.width);
+    });
+    if (!moved || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    cancelAnimationFrame(frame);
+    from = { rows, leadIns: oldLeadIns };
+    progress = 0;
+    const start = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / MOVE_MS);
+      // Ease out: quick start, soft landing.
+      progress = 1 - (1 - t) ** 3;
+      if (t < 1) frame = requestAnimationFrame(step);
+      else from = null;
+    };
+    frame = requestAnimationFrame(step);
+  }
+
+  const mix = (a: number, b: number) => a + (b - a) * progress;
+
+  function columnOf(row: HistoryRow): number {
+    const old = from?.rows.get(row.id);
+    return old ? mix(old.column, row.graph.column) : row.graph.column;
+  }
+
+  /** The row's lines, on their way from the old columns; new ones fade in. */
+  function segmentsOf(row: HistoryRow): (Segment & { opacity: number })[] {
+    const old = from?.rows.get(row.id);
+    if (!old) return row.graph.segments.map((seg) => ({ ...seg, opacity: 1 }));
+    const pool = [...old.segments];
+    return row.graph.segments.map((seg) => {
+      const i = pool.findIndex((o) => o.color === seg.color && o.dashed === seg.dashed && o.thick === seg.thick);
+      if (i < 0) return { ...seg, opacity: progress };
+      const [o] = pool.splice(i, 1);
+      return { ...seg, from: mix(o.from, seg.from), to: mix(o.to, seg.to), opacity: 1 };
+    });
+  }
+
+  const leadIns = $derived(
+    history.leadIns.map((l) => {
+      const old = from?.leadIns.get(history.rows[l.row]?.id ?? "");
+      return { row: l.row, column: old === undefined ? l.column : mix(old, l.column), opacity: old === undefined && from ? progress : 1 };
+    }),
+  );
 
   const rows = $derived(history.rows);
   const indexOf = $derived(new Map(rows.map((row, i) => [row.id, i])));
@@ -56,7 +145,7 @@
     return {
       size,
       outer: size + 8,
-      left: x(g.column) - (size + 8) / 2,
+      left: x(columnOf(row)) - (size + 8) / 2,
       top: y(index) - (size + 8) / 2,
       halo,
       gap: forks.length ? "var(--graph-bg)" : "transparent",
@@ -80,7 +169,8 @@
   }
 
   function textStart(row: HistoryRow): number {
-    return FIRST_LANE + LANE * row.graph.width + 18;
+    const old = from?.rows.get(row.id);
+    return FIRST_LANE + LANE * (old ? mix(old.width, row.graph.width) : row.graph.width) + 18;
   }
 
   /** Scroll so the commit is visible, centering it when it is far away. */
@@ -135,6 +225,7 @@
         <div
           class="row"
           class:flash={flash === row.id}
+          class:menu-open={menu?.id === row.id}
           role="option"
           aria-selected={isSelected}
           tabindex="-1"
@@ -142,7 +233,9 @@
           style:padding-left="{textStart(row)}px"
           style:background={isSelected ? tint(row.graph.color) : undefined}
           style:--flash={tint(row.graph.color)}
+          style:--ring={lane(row.graph.color)}
           onclick={() => onSelect(row.id)}
+          oncontextmenu={(e) => openMenu(e, row)}
           onkeydown={() => {}}
         >
           <span class="summary" class:selected={isSelected}>{row.summary}</span>
@@ -158,6 +251,8 @@
                   <svg class="icon tiny" viewBox="0 0 16 16"><rect x="3" y="6.5" width="10" height="7" rx="1.5" /><path d="M4.5 4.5h7M6 2.5h4" /></svg>
                   {label.name}
                 </span>
+              {:else if label.kind === "head"}
+                <span class="pill head" style:color={plate(label.color)} style:border-color="color-mix(in srgb, {lane(label.color)} 55%, transparent)">HEAD</span>
               {:else if label.kind === "remote"}
                 <span class="pill" style:color={plate(label.color)} style:border-color="color-mix(in srgb, {lane(label.color)} 40%, transparent)">{label.name}</span>
               {:else}
@@ -174,16 +269,19 @@
       {/each}
 
       <svg class="lines" width="100%" height={PAD_TOP * 2 + rows.length * ROW} aria-hidden="true">
-        {#if history.trunkTipRow && history.trunkTipRow > first - OVERSCAN}
-          <!-- The trunk's newest commit is below newer work on other branches: a gray lead-in fills its column. -->
-          <path d="M{x(0)} 0V{y(history.trunkTipRow) - 10}" stroke="var(--lead-in)" stroke-width="2" stroke-dasharray="2 5" stroke-linecap="round" fill="none" />
-        {/if}
+        <!-- A line that starts below newer work on other branches: a gray lead-in fills its column above it. -->
+        {#each leadIns as lead, k (k)}
+          {#if lead.row > first - OVERSCAN}
+            <path d="M{x(lead.column)} 0V{y(lead.row) - 10}" stroke="var(--lead-in)" stroke-width="2" stroke-dasharray="2 5" stroke-linecap="round" fill="none" opacity={lead.opacity} />
+          {/if}
+        {/each}
         {#each drawn as { row, index } (row.id)}
-          {#each row.graph.segments as seg, k (k)}
+          {#each segmentsOf(row) as seg, k (k)}
             <path
               d={segmentPath(index, seg.from, seg.to)}
               stroke={lane(seg.color)}
-              stroke-width={seg.color === 0 && seg.from === 0 && seg.to === 0 ? 4 : 2}
+              stroke-width={seg.thick ? 4 : 2}
+              opacity={seg.opacity}
               stroke-dasharray={seg.dashed ? "2 5" : undefined}
               stroke-linecap="round"
               fill="none"
@@ -204,6 +302,10 @@
       {/each}
     </div>
   </div>
+
+  {#if menu}
+    <Menu x={menu.x} y={menu.y} label="Commit menu" entries={menu.entries} onClose={() => (menu = null)} />
+  {/if}
 
   {#if scrollTop > ROW * 3}
     <button class="top" onclick={toTop} aria-label="Go to the newest commit" title="Go to the newest commit (Home)">
@@ -269,6 +371,9 @@
   }
   .row.flash {
     background: var(--flash);
+  }
+  .row.menu-open {
+    box-shadow: inset 0 0 0 1.5px var(--ring);
   }
   .summary {
     overflow: hidden;

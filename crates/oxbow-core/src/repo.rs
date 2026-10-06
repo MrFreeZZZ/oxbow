@@ -33,6 +33,8 @@ pub enum RefKind {
     Tag,
     /// An entry of `refs/stash` (only used for labels, `refs()` never returns it).
     Stash,
+    /// `HEAD` pointing at a commit rather than a branch (only used for labels).
+    Head,
 }
 
 /// A branch or tag and the commit it points at.

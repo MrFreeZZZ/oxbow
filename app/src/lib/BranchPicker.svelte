@@ -2,7 +2,8 @@
   // The toolbar's branch button: a list of local branches, and picking one checks it out.
 
   import type { History } from "./types";
-  import { lane, tint } from "./format";
+  import { lane, NO_BRANCH_COLOR, shortId, tint } from "./format";
+  import { onNoBranch } from "./branches";
 
   let {
     history,
@@ -20,6 +21,14 @@
   let active = $state(0);
 
   const head = $derived(history.head.branch);
+  const lost = $derived(onNoBranch(history).length);
+  /** While detached: the tag HEAD is at, unless commits were made there since. */
+  const detachedAt = $derived.by(() => {
+    const commit = history.head.commit;
+    if (head || !commit) return null;
+    const tag = lost ? null : history.refs.find((r) => r.kind === "tag" && r.target === commit)?.name;
+    return tag ?? shortId(commit);
+  });
   const time = $derived(new Map(history.rows.map((r) => [r.id, r.time])));
   /** The checked-out branch first, then the rest by latest commit, like the sidebar. */
   const branches = $derived(
@@ -58,10 +67,10 @@
 
 <div class="picker">
   <button class="capsule" onclick={toggle} aria-haspopup="menu" aria-expanded={open} title={open ? undefined : "Check out a branch"}>
-    <svg class="icon" viewBox="0 0 16 16" style:color={head ? lane(colorOf(head)) : undefined}
+    <svg class="icon" viewBox="0 0 16 16" style:color={head ? lane(colorOf(head)) : lane(NO_BRANCH_COLOR)}
       ><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg
     >
-    <span>{head ?? "Detached"}</span>
+    <span>{head ?? (detachedAt ? `Detached at ${detachedAt}` : "No commits")}</span>
     <svg class="icon small" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>
   </button>
   {#if open}
@@ -95,7 +104,11 @@
         {/each}
       </div>
       <div class="sep"></div>
-      <div class="foot">Uncommitted changes move with you to the branch you check out.</div>
+      <div class="foot">
+        {lost
+          ? `The ${lost} ${lost === 1 ? "commit" : "commits"} on no branch stay behind when you switch. Create a branch first to keep them.`
+          : "Uncommitted changes move with you to the branch you check out."}
+      </div>
     </div>
   {/if}
 </div>

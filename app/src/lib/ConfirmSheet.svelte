@@ -19,7 +19,7 @@
     if (running) return { title: confirm.status, body: [] as Part[], icon: request.icon, tone: request.danger ? "err" : "" };
     if (recovery) return { title: recovery.title, body: recovery.body, icon: recovery.icon, tone: recovery.tone };
     if (failed) return { title: "Git stopped with an error", body: [] as Part[], icon: request.icon, tone: "err" };
-    return { title: request.title, body: request.body, icon: request.icon, tone: request.danger ? "err" : "" };
+    return { title: request.title, body: request.body, icon: request.icon, tone: request.danger ? "err" : (request.tone ?? "") };
   });
 
   const icons: Record<Icon, string> = {
@@ -223,6 +223,9 @@
         <div class="foot">
           {#if recovery?.alt}
             <button class="alt" class:danger={recovery.alt.danger} onclick={() => confirm.alternative()}>{recovery.alt.label}</button>
+          {:else if !failed && request.alt}
+            {@const alt = request.alt}
+            <button class="alt" onclick={() => confirm.change(alt.request())}>{alt.label}</button>
           {/if}
           <span class="note">{failed ? (recovery?.note ?? "Nothing else was run.") : (request.note ?? "")}</span>
           {#if failed}
