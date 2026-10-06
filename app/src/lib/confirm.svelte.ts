@@ -33,7 +33,9 @@ export type Icon =
   | "undo"
   | "stash"
   | "pop"
-  | "reset";
+  | "reset"
+  | "remote"
+  | "box";
 
 export interface Request {
   /** A question, e.g. "Discard changes in 2 files?" */

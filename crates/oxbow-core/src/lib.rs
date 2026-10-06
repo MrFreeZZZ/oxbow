@@ -6,6 +6,7 @@
 
 pub mod cli;
 pub mod commit;
+pub mod config;
 pub mod edit;
 pub mod error;
 pub mod graph;
@@ -20,6 +21,7 @@ pub use cli::{CommandOutput, GitCommand, OutputLine};
 pub use commit::{
     CommitDetail, DiffContext, DiffLine, FileChange, FileDiff, FileStatus, Hunk, LineKind, Person, WordPart,
 };
+pub use config::{ConfigScope, GitInfo, RemoteInfo, SshKey, Storage};
 pub use edit::ResetMode;
 pub use error::{Error, Result};
 pub use history::{History, HistoryOptions, HistoryRow, Label, WORKTREE_ID, WorktreeSummary};
@@ -27,4 +29,4 @@ pub use operation::{Chunk, ConflictFile, ConflictSide, MergeMethod, MergePreview
 pub use remote::{CommitBrief, DeletionCheck, Failure, FailureKind, Tracking, classify_failure};
 pub use repo::{DiffOptions, HeadInfo, RefInfo, RefKind, Repo, StashInfo};
 pub use stash::StashCheck;
-pub use worktree::{Action, ActionEvent, Plan, RemoteBranch, Side, WorkingTree};
+pub use worktree::{Action, ActionEvent, Plan, PullMode, RemoteBranch, Side, WorkingTree};

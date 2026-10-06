@@ -3,6 +3,9 @@ import type {
   Action,
   CommitBrief,
   CommitDetail,
+  ConfigScope,
+  GitSettings,
+  RepoSettings,
   ConflictFile,
   DeletionCheck,
   FileDiff,
@@ -14,6 +17,7 @@ import type {
   StashCheck,
   WorkingTree,
 } from "./types";
+import type { PullSetup } from "./remote";
 
 export const api = {
   initialRepo: () => invoke<string | null>("initial_repo"),
@@ -37,6 +41,17 @@ export const api = {
   allSettings: () => invoke<Record<string, unknown>>("all_settings"),
   openSettings: () => invoke<void>("open_settings"),
   setSetting: (key: string, value: unknown) => invoke<void>("set_setting", { key, value }),
+  gitSettings: () => invoke<GitSettings>("git_settings"),
+  repoSettings: () => invoke<RepoSettings | null>("repo_settings"),
+  /** `null` removes the value. */
+  setGitConfig: (scope: ConfigScope, key: string, value: string | null) =>
+    invoke<void>("set_git_config", { scope, key, value }),
+  backgroundFetch: () => invoke<void>("background_fetch"),
+  pullSetup: () => invoke<PullSetup>("pull_setup"),
+  openInEditor: (path: string, line: number | null) => invoke<void>("open_in_editor", { path, line }),
+  openInTerminal: () => invoke<void>("open_in_terminal"),
+  settingsText: () => invoke<string>("settings_text"),
+  saveSettingsText: (text: string) => invoke<void>("save_settings_text", { text }),
 };
 
 /** Keys of `settings.json`. */

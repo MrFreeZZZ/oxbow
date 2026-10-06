@@ -1,10 +1,13 @@
 // Hide the extra console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::path::PathBuf;
+mod open_in;
+
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use oxbow_core::config::{self, ConfigScope};
 use oxbow_core::{
     Action, CommitBrief, CommitDetail, ConflictFile, DeletionCheck, DiffContext, DiffOptions, Failure, FileDiff,
     History, HistoryOptions, MergePreview, Plan, Repo, Side, StashCheck, WorkingTree,
@@ -119,6 +122,25 @@ fn apply_settings(app: &AppHandle, session: &Session, settings: &serde_json::Map
             .and_then(Value::as_bool)
             .unwrap_or(defaults.ignore_whitespace),
     };
+    config::set_git_program(
+        settings
+            .get("oxbow.git.path")
+            .and_then(Value::as_str)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from),
+    );
+    config::set_english_output(
+        settings
+            .get("oxbow.git.englishOutput")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+    );
+    config::set_run_hooks(
+        settings
+            .get("oxbow.git.runHooks")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+    );
     let theme = appearance(settings);
     for window in app.webview_windows().values() {
         let _ = window.set_theme(theme);
@@ -176,6 +198,8 @@ async fn open_repo(app: AppHandle, session: State<'_, Session>, path: String) ->
         let _ = std::fs::write(&file, &summary.path);
     }
     *session.repo.lock().expect("session lock") = Some(repo);
+    // Settings shows this repository under This Repository.
+    let _ = app.emit("repo-changed", ());
     Ok(summary)
 }
 
@@ -289,7 +313,15 @@ async fn plan_action(session: State<'_, Session>, action: Action) -> CommandResu
 /// Run an action, sending each command and output line to the window as an `action-event`. A
 /// failure comes back explained, so the sheet can offer the way out.
 #[tauri::command]
-async fn perform_action(app: AppHandle, session: State<'_, Session>, action: Action) -> Result<String, Failure> {
+async fn perform_action(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    action: Action,
+) -> Result<String, Failure> {
+    // Only the window that asked shows the output: Settings runs actions of its own.
+    let label = window.label().to_owned();
+    let from_settings = label != "main";
     let repo = current(&session).map_err(|message| Failure {
         kind: oxbow_core::FailureKind::Other,
         output: message,
@@ -298,17 +330,22 @@ async fn perform_action(app: AppHandle, session: State<'_, Session>, action: Act
     })?;
     let cancel = session.cancel.clone();
     cancel.store(false, Ordering::Relaxed);
+    let events = app.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
         let result = repo.perform_with(
             &action,
             &mut |event| {
-                let _ = app.emit("action-event", event);
+                let _ = events.emit_to(label.as_str(), "action-event", event);
             },
             &cancel,
         );
         result.map_err(|err| repo.explain_failure(&action, &err))
     })
     .await;
+    // The main window shows the remotes and branches Settings just changed.
+    if from_settings {
+        let _ = app.emit_to("main", "repo-touched", ());
+    }
     joined.unwrap_or_else(|err| {
         Err(Failure {
             kind: oxbow_core::FailureKind::Other,
@@ -317,6 +354,167 @@ async fn perform_action(app: AppHandle, session: State<'_, Session>, action: Act
             remote_tip: None,
         })
     })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitSettings {
+    git: oxbow_core::GitInfo,
+    /// Everything in ~/.gitconfig.
+    global: std::collections::BTreeMap<String, String>,
+    ssh_keys: Vec<oxbow_core::SshKey>,
+    editors: Vec<open_in::App>,
+    terminals: Vec<open_in::App>,
+}
+
+/// What Settings shows from Git's own config and the computer.
+#[tauri::command]
+async fn git_settings() -> CommandResult<GitSettings> {
+    blocking(|| {
+        Ok(GitSettings {
+            git: config::git_info(),
+            global: config::global_config(),
+            ssh_keys: config::ssh_keys(),
+            editors: open_in::editors(),
+            terminals: open_in::terminals(),
+        })
+    })
+    .await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RepoSettings {
+    name: String,
+    path: String,
+    /// Everything in the repository's .git/config.
+    local: std::collections::BTreeMap<String, String>,
+    remotes: Vec<oxbow_core::RemoteInfo>,
+    storage: Option<oxbow_core::Storage>,
+}
+
+/// Settings › This Repository, or nothing when no repository is open.
+#[tauri::command]
+async fn repo_settings(session: State<'_, Session>) -> CommandResult<Option<RepoSettings>> {
+    let Ok(repo) = current(&session) else {
+        return Ok(None);
+    };
+    blocking(move || {
+        Ok(Some(RepoSettings {
+            name: repo.name(),
+            path: repo.workdir().display().to_string(),
+            local: repo.local_config(),
+            remotes: repo.remotes_info()?,
+            storage: repo.storage().ok(),
+        }))
+    })
+    .await
+}
+
+/// Change a value in ~/.gitconfig or the open repository's .git/config; `None` removes it.
+#[tauri::command]
+async fn set_git_config(
+    session: State<'_, Session>,
+    scope: ConfigScope,
+    key: String,
+    value: Option<String>,
+) -> CommandResult<()> {
+    let repo = match scope {
+        ConfigScope::Local => Some(current(&session)?),
+        ConfigScope::Global => None,
+    };
+    blocking(move || match repo {
+        Some(repo) => repo.set_local_config(&key, value.as_deref()),
+        None => config::set_global_config(&key, value.as_deref()),
+    })
+    .await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PullSetup {
+    mode: oxbow_core::PullMode,
+    autostash: bool,
+}
+
+/// How Pull will go here, for the words of its confirmation.
+#[tauri::command]
+async fn pull_setup(session: State<'_, Session>) -> CommandResult<PullSetup> {
+    let repo = current(&session)?;
+    blocking(move || {
+        Ok(PullSetup {
+            mode: repo.pull_mode(),
+            autostash: repo.pull_autostash(),
+        })
+    })
+    .await
+}
+
+/// Fetch every remote in the background: no sheet, and a failure is only reported.
+#[tauri::command]
+async fn background_fetch(session: State<'_, Session>) -> CommandResult<()> {
+    let repo = current(&session)?;
+    blocking(move || {
+        let mut command = repo.fetch_command(None);
+        command.args.insert(1, "--quiet".to_owned());
+        repo.run(&command).map(|_| ())
+    })
+    .await
+}
+
+/// Open a file of the repository in the editor chosen in Settings.
+#[tauri::command]
+fn open_in_editor(app: AppHandle, session: State<'_, Session>, path: String, line: Option<u32>) -> CommandResult<()> {
+    let repo = current(&session)?;
+    let editor = read_settings(&app)
+        .get("oxbow.openIn.editor")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| open_in::editors().first().map(|app| app.id.to_owned()))
+        .ok_or("No editor found. Install one, then pick it in Settings › Integrations.")?;
+    open_in::open_file(&editor, &repo.workdir().join(Path::new(&path)), line)
+}
+
+/// Open the repository folder in the terminal chosen in Settings.
+#[tauri::command]
+fn open_in_terminal(app: AppHandle, session: State<'_, Session>) -> CommandResult<()> {
+    let repo = current(&session)?;
+    let terminal = read_settings(&app)
+        .get("oxbow.openIn.terminal")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| open_in::terminals().first().map(|app| app.id.to_owned()))
+        .ok_or("No terminal found.")?;
+    open_in::open_terminal(&terminal, repo.workdir())
+}
+
+/// settings.json as it is on disk, for editing it as text.
+#[tauri::command]
+fn settings_text(app: AppHandle) -> CommandResult<String> {
+    let file = settings_file(&app)?;
+    Ok(std::fs::read_to_string(file).unwrap_or_else(|_| "{}\n".to_owned()))
+}
+
+/// Save settings.json edited as text. It must be a JSON object; every window takes the new
+/// values at once.
+#[tauri::command]
+fn save_settings_text(app: AppHandle, session: State<'_, Session>, text: String) -> CommandResult<()> {
+    let settings: serde_json::Map<String, Value> = serde_json::from_str(&text).map_err(|err| err.to_string())?;
+    let before = read_settings(&app);
+    let file = settings_file(&app)?;
+    std::fs::create_dir_all(file.parent().expect("settings file has a parent")).map_err(|err| err.to_string())?;
+    std::fs::write(&file, if text.ends_with('\n') { text } else { text + "\n" }).map_err(|err| err.to_string())?;
+    apply_settings(&app, &session, &settings);
+    let removed = before
+        .keys()
+        .filter(|key| !settings.contains_key(*key))
+        .map(|key| (key.clone(), Value::Null));
+    for (key, value) in settings.clone().into_iter().chain(removed) {
+        if before.get(&key) != Some(&value) {
+            let _ = app.emit("settings-changed", SettingChanged { key, value });
+        }
+    }
+    Ok(())
 }
 
 /// Stop the running action.
@@ -376,7 +574,16 @@ fn main() {
             get_setting,
             all_settings,
             set_setting,
-            open_settings
+            open_settings,
+            git_settings,
+            repo_settings,
+            set_git_config,
+            background_fetch,
+            pull_setup,
+            open_in_editor,
+            open_in_terminal,
+            settings_text,
+            save_settings_text
         ])
         .run(tauri::generate_context!())
         .expect("error while running Oxbow");

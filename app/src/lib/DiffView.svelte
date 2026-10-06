@@ -3,6 +3,9 @@
   import type { DiffLine, FileDiff, Hunk } from "./types";
   import { plate, splitPath, tint } from "./format";
   import { prefs } from "./prefs.svelte";
+  import { api } from "./api";
+  import { confirm } from "./confirm.svelte";
+  import { languageOf, paint } from "./syntax";
 
   let {
     diffs,
@@ -11,6 +14,7 @@
     onToggleWhole,
     lineBudget = 4000,
     hunkBar,
+    openable = true,
   }: {
     diffs: FileDiff[];
     color: number;
@@ -19,7 +23,15 @@
     lineBudget?: number;
     /** Actions over each hunk, for the working copy. */
     hunkBar?: Snippet<[FileDiff, Hunk]>;
+    /** Offer to open the file in the editor from Settings › Integrations. */
+    openable?: boolean;
   } = $props();
+
+  /** Open the file in the editor, at its first change. */
+  function openInEditor(diff: FileDiff) {
+    const first = diff.hunks[0]?.lines.find((l) => l.kind !== "context" && l.newLine !== null) ?? diff.hunks[0]?.lines[0];
+    api.openInEditor(diff.file.path, first?.newLine ?? null).catch((err) => confirm.say(String(err)));
+  }
 
   let showAll = $state(false);
 
@@ -74,6 +86,11 @@
         <span class="spacer"></span>
         <span class="mono add">+{diff.file.additions}</span>
         <span class="mono del">−{diff.file.deletions}</span>
+        {#if openable && diff.file.status !== "deleted"}
+          <button class="toggle" onclick={() => openInEditor(diff)} aria-label="Open in editor" title="Open in Editor">
+            <svg class="icon" viewBox="0 0 16 16"><path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" /></svg>
+          </button>
+        {/if}
         <button
           class="toggle"
           class:on={whole}
@@ -104,6 +121,7 @@
         {/if}
       </p>
     {:else}
+      {@const language = languageOf(diff.file.path)}
       <div class="code mono selectable">
         {#each diff.hunks as hunk, h (h)}
           {@const before = h === 0 ? hunk.oldStart - 1 : hunk.oldStart - (diff.hunks[h - 1].oldStart + diff.hunks[h - 1].oldLines)}
@@ -115,7 +133,7 @@
             <div class="line {line.kind}" style:border-radius={radius(hunk.lines, i)} style:margin-top="{gap(hunk.lines, i)}px">
               <span class="no">{line.oldLine ?? ""}</span>
               <span class="no">{line.newLine ?? ""}</span>
-              <span class="text">{#if line.words && prefs.get("oxbow.diff.wordHighlight")}{#each line.words as part, w (w)}{#if part.changed}<span class="word">{part.text}</span>{:else}{part.text}{/if}{/each}{:else}{line.text || " "}{/if}</span>
+              <span class="text">{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language) as piece, w (w)}<span class:word={piece.changed} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>
             </div>
           {/each}
         {/each}
@@ -199,7 +217,9 @@
     font-size: var(--code-size);
     line-height: var(--code-line);
     tab-size: var(--tab);
-    color: var(--code);
+    color: var(--code-fg, var(--code));
+    background: var(--code-bg, transparent);
+    border-radius: 10px;
   }
   .line {
     display: grid;
@@ -212,7 +232,7 @@
     background: var(--del);
   }
   .no {
-    color: var(--text2);
+    color: var(--code-dim, var(--text2));
     opacity: 0.7;
     text-align: right;
     padding-right: 10px;
@@ -241,8 +261,8 @@
     padding: 0 12px;
     height: 22px;
     border-radius: 9px;
-    background: var(--field);
-    color: var(--text2);
+    background: var(--fold-bg, var(--field));
+    color: var(--code-dim, var(--text2));
     font-family: var(--font);
     font-size: 11px;
   }

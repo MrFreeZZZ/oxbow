@@ -129,18 +129,8 @@ impl Repo {
 
     /// `git` set up to run `command` in the working directory.
     fn command(&self, command: &GitCommand) -> Command {
-        let mut git = Command::new("git");
-        git
-            // Paths with non-ASCII names come back as they are, not as octal escapes.
-            .args(["-c", "core.quotePath=false"])
-            .args(command.run_args())
-            .current_dir(self.workdir())
-            // There is no terminal to type a password into: fail instead of hanging.
-            .env("GIT_TERMINAL_PROMPT", "0")
-            // Nor an editor: `rebase --continue` and the like keep the message git prepared.
-            .env("GIT_EDITOR", "true")
-            // Messages stay in English, as in most guides and search results.
-            .env("LC_MESSAGES", "C");
+        let mut git = crate::config::git();
+        git.args(command.run_args()).current_dir(self.workdir());
         git
     }
 

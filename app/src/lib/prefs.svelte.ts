@@ -4,6 +4,7 @@
 
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
+import { paletteOf, themeById, themeVariables } from "./themes";
 
 export const defaults = {
   "oxbow.appearance": "system" as "system" | "light" | "dark",
@@ -20,6 +21,19 @@ export const defaults = {
   "oxbow.text.font": "SF Mono" as "SF Mono" | "Menlo" | "JetBrains Mono",
   "oxbow.text.fontSize": 12,
   "oxbow.text.tabWidth": 4,
+  "oxbow.git.englishOutput": true,
+  "oxbow.git.path": "",
+  "oxbow.git.runHooks": true,
+  "oxbow.fetch.auto": true,
+  /** Minutes between background fetches. */
+  "oxbow.fetch.interval": 15,
+  /** Characters before the commit summary counter warns; 0 is off. */
+  "oxbow.commit.subjectGuide": 72,
+  /** Empty: the first one installed. */
+  "oxbow.openIn.editor": "",
+  "oxbow.openIn.terminal": "",
+  "oxbow.theme": "oxbow",
+  "oxbow.theme.variant": "auto" as "auto" | "light" | "dark",
 };
 
 export type PrefKey = keyof typeof defaults;
@@ -63,16 +77,17 @@ class Prefs {
     return this.get(key) !== defaults[key];
   }
 
-  /** Save a setting; its default value is saved as no value at all. */
-  set<K extends PrefKey>(key: K, value: PrefValue<K>) {
+  /** Save a setting; its default value is saved as no value at all. Resolves once the backend
+   *  follows it too. */
+  set<K extends PrefKey>(key: K, value: PrefValue<K>): Promise<void> {
     const stored = value === defaults[key] ? null : value;
     if (stored === null) delete this.#values[key];
     else this.#values[key] = stored;
-    api.setSetting(key, stored).catch(() => {});
+    return api.setSetting(key, stored).catch(() => {});
   }
 
-  reset(key: PrefKey) {
-    this.set(key, defaults[key]);
+  reset(key: PrefKey): Promise<void> {
+    return this.set(key, defaults[key]);
   }
 }
 
@@ -106,6 +121,17 @@ export function followLook() {
     $effect(() => {
       const appearance = prefs.get("oxbow.appearance");
       root.dataset.theme = appearance === "system" ? (system ? "dark" : "light") : appearance;
+    });
+    // The code theme, from Settings › Themes.
+    $effect(() => {
+      const appearance = prefs.get("oxbow.appearance");
+      const look = appearance === "system" ? (system ? "dark" : "light") : appearance;
+      const theme = themeById(prefs.get("oxbow.theme"));
+      const { palette, dark } = paletteOf(theme, prefs.get("oxbow.theme.variant"), look);
+      for (const [name, value] of Object.entries(themeVariables(theme, palette, dark, look))) {
+        if (value) root.style.setProperty(name, value);
+        else root.style.removeProperty(name);
+      }
     });
     $effect(() => {
       const size = prefs.get("oxbow.text.fontSize");

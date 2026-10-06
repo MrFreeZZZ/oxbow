@@ -212,6 +212,9 @@ impl Repo {
 
     /// Whether a pre-push hook is installed, honoring `core.hooksPath`.
     pub(crate) fn has_pre_push_hook(&self) -> bool {
+        if !crate::config::run_hooks() {
+            return false;
+        }
         let Ok(out) = self.run(&GitCommand::new(["rev-parse", "--git-path", "hooks/pre-push"])) else {
             return false;
         };

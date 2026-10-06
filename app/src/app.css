@@ -270,3 +270,24 @@ button:focus-visible {
   user-select: text;
   -webkit-user-select: text;
 }
+
+/* Syntax colors of code views, from the code theme (themes.ts). */
+.syn-kw {
+  color: var(--syn-kw);
+}
+.syn-str {
+  color: var(--syn-str);
+}
+.syn-type {
+  color: var(--syn-type);
+}
+.syn-fn {
+  color: var(--syn-fn);
+}
+.syn-num {
+  color: var(--syn-num);
+}
+.syn-com {
+  color: var(--syn-com);
+  font-style: italic;
+}

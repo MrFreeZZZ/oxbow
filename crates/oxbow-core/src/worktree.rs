@@ -11,6 +11,7 @@ use std::sync::atomic::AtomicBool;
 
 use crate::cli::{GitCommand, OutputLine};
 use crate::commit::{DiffLine, FileChange, FileDiff, FileStatus, Hunk, LineKind, word_diff};
+use crate::config;
 use crate::edit::{ResetMode, plan_reset};
 use crate::error::{Error, Result};
 use crate::operation::{ConflictSide, MergeMethod, OperationKind, Pick};
@@ -246,6 +247,22 @@ pub enum Action {
         id: String,
         name: String,
     },
+    /// Add a remote; nothing is fetched from it yet.
+    AddRemote {
+        name: String,
+        url: String,
+    },
+    /// Point a remote at another address.
+    SetRemoteUrl {
+        name: String,
+        url: String,
+    },
+    /// Forget a remote and its remote branches.
+    RemoveRemote {
+        name: String,
+    },
+    /// Pack loose objects and drop unreachable ones (`git gc`).
+    Optimize,
 }
 
 /// A branch on a remote: `branch` on `remote`.
@@ -396,6 +413,9 @@ impl Repo {
                 if *amend {
                     args.push("--amend".to_owned());
                 }
+                if !config::run_hooks() {
+                    args.push("--no-verify".to_owned());
+                }
                 // One -m per paragraph, as people type it; git puts the blank lines back between them.
                 for paragraph in paragraphs(message) {
                     args.push("-m".to_owned());
@@ -404,21 +424,14 @@ impl Repo {
                 let cmd = GitCommand::new(args);
                 vec![if *amend {
                     cmd.comment("replace the last commit with one that also has the staged changes")
+                } else if !config::run_hooks() {
+                    cmd.comment(HOOKS_OFF)
                 } else {
                     cmd
                 }]
             }
-            Action::Fetch { remote: Some(remote) } => vec![
-                GitCommand::new(["fetch", "--prune", remote])
-                    .comment(format!("--prune: drop {remote}/* branches deleted on the remote"))
-                    .with_progress(),
-            ],
-            Action::Fetch { remote: None } => vec![
-                GitCommand::new(["fetch", "--prune", "--all"])
-                    .comment("--all: every remote, --prune: drop branches deleted there")
-                    .with_progress(),
-            ],
-            Action::Pull { remote, branch } => vec![pull(remote, branch)],
+            Action::Fetch { remote } => vec![self.fetch_command(remote.as_deref()).with_progress()],
+            Action::Pull { remote, branch } => vec![self.pull_command(remote, branch)],
             Action::Push {
                 remote,
                 branch,
@@ -433,6 +446,9 @@ impl Repo {
                 if *no_verify {
                     args.push("--no-verify".to_owned());
                     notes.push("--no-verify: skip the pre-push hook this one time".to_owned());
+                } else if !config::run_hooks() {
+                    args.push("--no-verify".to_owned());
+                    notes.push(HOOKS_OFF.to_owned());
                 }
                 if *set_upstream {
                     args.push("-u".to_owned());
@@ -466,12 +482,12 @@ impl Repo {
                 no_verify,
             } => {
                 let mut push = vec!["push".to_owned()];
-                if *no_verify {
+                if *no_verify || !config::run_hooks() {
                     push.push("--no-verify".to_owned());
                 }
                 push.extend([remote.clone(), refspec(branch, upstream)]);
                 vec![
-                    pull(remote, upstream),
+                    self.pull_command(remote, upstream),
                     GitCommand::new(push)
                         .comment("then send your commits on top")
                         .with_progress(),
@@ -669,6 +685,20 @@ impl Repo {
                 ])
                 .comment("a new branch where the stash was made, with the stash applied and dropped"),
             ],
+            Action::AddRemote { name, url } => vec![
+                GitCommand::new(["remote", "add", name, url])
+                    .comment(format!("Fetch shows {name}’s branches as {name}/…")),
+            ],
+            Action::SetRemoteUrl { name, url } => vec![
+                GitCommand::new(["remote", "set-url", name, url]).comment("fetch and push both use the new address"),
+            ],
+            Action::RemoveRemote { name } => vec![
+                GitCommand::new(["remote", "remove", name])
+                    .comment(format!("{name}/… branches go too; local branches stay")),
+            ],
+            Action::Optimize => {
+                vec![GitCommand::new(["gc"]).comment("packs loose objects and drops ones nothing points at any more")]
+            }
             Action::Reword { message } => {
                 let mut args = vec!["commit".to_owned(), "--amend".to_owned(), "--only".to_owned()];
                 for paragraph in paragraphs(message) {
@@ -847,10 +877,74 @@ fn stash_before(branch: &str) -> GitCommand {
     .comment("keeps your uncommitted files in the stash, new ones too")
 }
 
-fn pull(remote: &str, branch: &str) -> GitCommand {
-    GitCommand::new(["pull", "--rebase", "--autostash", remote, branch])
-        .comment("--rebase: no merge commit, your commits go on top; --autostash: keep uncommitted files")
-        .with_progress()
+/// How Pull brings in the remote's commits, from `pull.rebase` and `pull.ff`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PullMode {
+    /// Oxbow's default when neither is set: your commits go on top, no merge commit.
+    Rebase,
+    Merge,
+    FastForward,
+}
+
+impl Repo {
+    pub fn pull_mode(&self) -> PullMode {
+        if self.config_value("pull.ff").is_some_and(|ff| ff == "only") {
+            PullMode::FastForward
+        } else if self.config_bool("pull.rebase") == Some(false) {
+            PullMode::Merge
+        } else {
+            PullMode::Rebase
+        }
+    }
+
+    /// Whether Pull puts uncommitted changes aside and back (`rebase.autoStash`, on by default).
+    pub fn pull_autostash(&self) -> bool {
+        self.config_bool("rebase.autoStash").unwrap_or(true)
+    }
+}
+
+/// What a commit or push says when Settings turned hooks off.
+const HOOKS_OFF: &str = "--no-verify: Git hooks are turned off in Settings";
+
+impl Repo {
+    /// `git fetch` of one remote or all, pruning unless `fetch.prune` is turned off.
+    pub fn fetch_command(&self, remote: Option<&str>) -> GitCommand {
+        let prune = self.config_bool("fetch.prune").unwrap_or(true);
+        let mut args = vec!["fetch"];
+        if prune {
+            args.push("--prune");
+        }
+        args.push(remote.unwrap_or("--all"));
+        let comment = match (remote, prune) {
+            (Some(remote), true) => format!("--prune: drop {remote}/* branches deleted on the remote"),
+            (Some(remote), false) => format!("gets what is new on {remote}"),
+            (None, true) => "--all: every remote, --prune: drop branches deleted there".to_owned(),
+            (None, false) => "--all: every remote".to_owned(),
+        };
+        GitCommand::new(args).comment(comment)
+    }
+
+    /// `git pull` the way Settings › Git says: rebase (the default), merge or fast-forward only,
+    /// read from `pull.rebase` and `pull.ff` so it matches a terminal.
+    fn pull_command(&self, remote: &str, branch: &str) -> GitCommand {
+        let (mode, note) = match self.pull_mode() {
+            PullMode::FastForward => ("--ff-only", "--ff-only: only if your branch has no commits of its own"),
+            PullMode::Merge => (
+                "--no-rebase",
+                "--no-rebase: a merge commit joins the remote's commits with yours",
+            ),
+            PullMode::Rebase => ("--rebase", "--rebase: no merge commit, your commits go on top"),
+        };
+        let mut args = vec!["pull", mode];
+        let mut comment = note.to_owned();
+        if self.pull_autostash() {
+            args.push("--autostash");
+            comment.push_str("; --autostash: keep uncommitted files");
+        }
+        args.extend([remote, branch]);
+        GitCommand::new(args).comment(comment).with_progress()
+    }
 }
 
 /// `main`, or `local:remote` when the branch has another name on the remote.

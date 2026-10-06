@@ -21,6 +21,9 @@
   import { mergeRequest } from "./merge";
   import { stashMenu } from "./stash";
 
+  const TERMINAL = "M2.5 3.5h11v9h-11zM5 7l2 1.5L5 10M8.5 10.5h2.5";
+  const FOLDER = "M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z";
+
   let {
     repo,
     history,
@@ -284,7 +287,16 @@
 <nav aria-label="Sidebar">
   <div class="lights" data-tauri-drag-region></div>
 
-  <button class="repo" onclick={onOpen} title="Open another repository">
+  <button
+    class="repo"
+    onclick={onOpen}
+    oncontextmenu={(event) =>
+      open(event, `Repository ${repo.name}`, repo.path, [
+        { kind: "item", label: "Open in Terminal", icon: TERMINAL, run: () => api.openInTerminal().catch((err) => confirm.say(String(err))) },
+        { kind: "item", label: "Open Another Repository…", icon: FOLDER, run: onOpen },
+      ])}
+    title="Open another repository"
+  >
     <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z" /></svg>
     <span class="repo-text">
       <span class="repo-name">{repo.name}</span>

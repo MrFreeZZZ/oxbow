@@ -60,19 +60,30 @@ export function fetchRequest(ctx: RemoteContext): Request {
   };
 }
 
-export function pullRequest(ctx: RemoteContext): Request {
+/** How Pull goes, from Settings › Git: rebase is the default. */
+export interface PullSetup {
+  mode: "rebase" | "merge" | "fastForward";
+  autostash: boolean;
+}
+
+export function pullRequest(ctx: RemoteContext, setup: PullSetup = { mode: "rebase", autostash: true }): Request {
   const t = ctx.tracking!;
   const branch = ctx.branch!;
   const upstream = `${t.remote}/${t.branch}`;
   const action: Action = { kind: "pull", remote: t.remote, branch: t.branch };
+  const how: Part[] =
+    setup.mode === "merge"
+      ? [" and merges it into ", chip(ctx, branch), "; a merge commit joins the two when both have new commits."]
+      : setup.mode === "fastForward"
+        ? [" and moves ", chip(ctx, branch), " up to it. If the branch has commits of its own, nothing changes and Git says so."]
+        : [" and replays your local commits of ", chip(ctx, branch), " on top of it."];
   return {
     title: `Pull into ${branch}?`,
     body: [
       "Fetches ",
       chip(ctx, upstream),
-      " and replays your local commits of ",
-      chip(ctx, branch),
-      " on top of it. Uncommitted files are stashed first and restored after.",
+      ...how,
+      setup.autostash ? " Uncommitted files are stashed first and restored after." : " Uncommitted changes to the same files stop the pull.",
     ],
     icon: "pull",
     button: "Pull",
