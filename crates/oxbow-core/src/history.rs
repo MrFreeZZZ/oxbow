@@ -8,6 +8,7 @@ use serde::Serialize;
 
 use crate::error::{Error, Result};
 use crate::graph::{self, GraphCommit, LeadIn, RowLayout};
+use crate::operation::{Operation, OperationKind};
 use crate::remote::Tracking;
 use crate::repo::{HeadInfo, RefInfo, RefKind, Repo, StashInfo};
 
@@ -37,6 +38,8 @@ pub struct History {
     pub lead_ins: Vec<LeadIn>,
     /// While `HEAD` is detached, the branch checked out before, to go back to.
     pub previous_branch: Option<String>,
+    /// A merge, rebase, cherry-pick or revert that stopped, waiting to be finished or aborted.
+    pub operation: Option<Operation>,
     pub refs: Vec<RefInfo>,
     pub remotes: Vec<String>,
     /// Upstream of the checked-out branch, with ahead/behind counts.
@@ -114,6 +117,9 @@ impl Repo {
         }
         let remotes = self.remotes();
         let stashes = self.stashes()?;
+        // A failure to read the operation's state only hides its banner.
+        let operation = self.operation().ok().flatten();
+        let rebasing = operation.as_ref().is_some_and(|op| op.kind == OperationKind::Rebase);
 
         let mut tips: Vec<ObjectId> = refs
             .iter()
@@ -189,7 +195,8 @@ impl Repo {
 
         // Commits a branch or tag keeps. While HEAD is detached, the others were made there and
         // belong to no branch. Children come before parents, so one pass reaches every ancestor.
-        let mut kept = vec![head.branch.is_some(); nodes.len()];
+        // A rebase detaches HEAD while it works; its commits will be the branch's.
+        let mut kept = vec![head.branch.is_some() || rebasing; nodes.len()];
         for r in &refs {
             if let Some(&row) = ObjectId::from_hex(r.target.as_bytes())
                 .ok()
@@ -227,11 +234,12 @@ impl Repo {
                 head: is_head,
             });
         }
-        // A detached HEAD gets a label of its own, as no branch label marks it.
+        // A detached HEAD gets a label of its own, as no branch label marks it. A rebase detaches
+        // HEAD too, but there the banner says what is going on.
         if let Some(id) = head
             .commit
             .as_deref()
-            .filter(|_| head.branch.is_none())
+            .filter(|_| head.branch.is_none() && !rebasing)
             .and_then(|h| ObjectId::from_hex(h.as_bytes()).ok())
         {
             labels.entry(id).or_default().push(Label {
@@ -328,7 +336,16 @@ impl Repo {
             wip.branch = head.branch.clone();
             worktree_row = Some(HistoryRow {
                 id: WORKTREE_ID.to_owned(),
-                summary: "Uncommitted changes".to_owned(),
+                summary: operation
+                    .as_ref()
+                    .map_or("Uncommitted changes", |op| match op.kind {
+                        OperationKind::Merge => "Merge in progress",
+                        OperationKind::Squash => "Squash merge in progress",
+                        OperationKind::Rebase => "Rebase in progress",
+                        OperationKind::CherryPick => "Cherry-pick in progress",
+                        OperationKind::Revert => "Revert in progress",
+                    })
+                    .to_owned(),
                 author_name: String::new(),
                 author_email: String::new(),
                 time: std::time::SystemTime::now()
@@ -389,6 +406,7 @@ impl Repo {
             trunk_tip_row,
             lead_ins,
             previous_branch,
+            operation,
             refs,
             // A failing `git for-each-ref` only hides the ahead/behind counts.
             tracking: self.tracking().ok().flatten(),

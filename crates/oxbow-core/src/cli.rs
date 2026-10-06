@@ -137,6 +137,8 @@ impl Repo {
             .current_dir(self.workdir())
             // There is no terminal to type a password into: fail instead of hanging.
             .env("GIT_TERMINAL_PROMPT", "0")
+            // Nor an editor: `rebase --continue` and the like keep the message git prepared.
+            .env("GIT_EDITOR", "true")
             // Messages stay in English, as in most guides and search results.
             .env("LC_MESSAGES", "C");
         git

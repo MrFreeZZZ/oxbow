@@ -20,7 +20,10 @@
   let field = $state<HTMLInputElement>();
   let active = $state(0);
 
-  const head = $derived(history.head.branch);
+  // A rebase detaches HEAD, but the branch it is rebasing is the one the user is on.
+  const head = $derived(history.head.branch ?? (history.operation?.kind === "rebase" ? history.operation.branch : null));
+  /** While an operation is in progress, checking out another branch is refused by git. */
+  const busy = $derived(history.operation ? `Finish or abort the ${history.operation.kind === "cherryPick" ? "cherry-pick" : history.operation.kind} first` : null);
   const lost = $derived(onNoBranch(history).length);
   /** While detached: the tag HEAD is at, unless commits were made there since. */
   const detachedAt = $derived.by(() => {
@@ -39,6 +42,7 @@
   const shown = $derived(query.trim() ? branches.filter((b) => b.name.toLowerCase().includes(query.trim().toLowerCase())) : branches);
 
   function toggle() {
+    if (busy) return;
     open = !open;
     query = "";
     active = 0;
@@ -66,12 +70,12 @@
 </script>
 
 <div class="picker">
-  <button class="capsule" onclick={toggle} aria-haspopup="menu" aria-expanded={open} title={open ? undefined : "Check out a branch"}>
+  <button class="capsule" class:off={!!busy} onclick={toggle} aria-haspopup="menu" aria-expanded={open} title={busy ?? (open ? undefined : "Check out a branch")}>
     <svg class="icon" viewBox="0 0 16 16" style:color={head ? lane(colorOf(head)) : lane(NO_BRANCH_COLOR)}
       ><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg
     >
     <span>{head ?? (detachedAt ? `Detached at ${detachedAt}` : "No commits")}</span>
-    <svg class="icon small" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>
+    {#if !busy}<svg class="icon small" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>{/if}
   </button>
   {#if open}
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
@@ -247,5 +251,8 @@
     color: var(--text2);
     padding: 2px 10px 6px;
     line-height: 1.4;
+  }
+  .capsule.off {
+    opacity: 0.75;
   }
 </style>

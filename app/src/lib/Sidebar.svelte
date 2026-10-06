@@ -18,6 +18,7 @@
     type BranchContext,
   } from "./branches";
   import { pushRequest } from "./remote";
+  import { mergeRequest } from "./merge";
 
   let {
     repo,
@@ -70,7 +71,14 @@
 
   const rowOf = $derived(new Map(history.rows.map((row) => [row.id, row])));
   /** While HEAD is detached, its commit. */
-  const detached = $derived(!history.head.branch && history.head.commit ? (rowOf.get(history.head.commit) ?? null) : null);
+  const detached = $derived(!history.head.branch && history.head.commit && history.operation?.kind !== "rebase" ? (rowOf.get(history.head.commit) ?? null) : null);
+  /** The branch a merge, rebase, cherry-pick or revert is changing, and the word for it. */
+  const busy = $derived.by(() => {
+    const op = history.operation;
+    if (!op?.branch) return null;
+    const word = { merge: "MERGING", squash: "SQUASHING", rebase: "REBASING", cherryPick: "PICKING", revert: "REVERTING" }[op.kind];
+    return { branch: op.branch, word };
+  });
 
   /** Local branches: the checked-out one first, the rest by latest commit, newest first. */
   const branches = $derived(
@@ -163,6 +171,7 @@
       entries.push({ kind: "sep" });
     }
     if (!isHead) entries.push(item("Check Out", menuIcons.checkout, () => run(switchRequest(ctx, ref.name))));
+    if (!isHead) entries.push(...mergeItems(ref.name));
     if (!upstreamOf(ref) && history.defaultRemote) {
       entries.push({ kind: "sep" });
       const unpushed = history.rows.filter((r) => r.unpushed && !r.worktree && r.graph.branch === ref.name);
@@ -194,6 +203,17 @@
     open(event, "Branch menu", ref.name, entries);
   }
 
+  /** Merge and Rebase items for a branch other than the checked-out one. */
+  function mergeItems(name: string): MenuEntry[] {
+    const here = history.head.branch ?? "HEAD";
+    // A merge in progress has to be finished first; the banner says so.
+    if (history.operation) return [];
+    return [
+      { kind: "item", label: `Merge into ${here}…`, icon: menuIcons.merge, run: () => run(mergeRequest(ctx, name)) },
+      ...(history.head.branch ? [{ kind: "item", label: `Rebase ${here} onto ${name}…`, icon: menuIcons.rebase, run: () => run(mergeRequest(ctx, name, "rebase")) } as MenuEntry] : []),
+    ];
+  }
+
   /** The right-click menu of a remote branch nobody tracks locally. */
   function remoteMenu(event: MouseEvent, ref: RefInfo, author: string) {
     const short = ref.name.slice((ref.remote ?? "").length + 1);
@@ -201,6 +221,7 @@
     const entries: MenuEntry[] = [{ kind: "header", label: `${ref.name}${author ? ` · ${author}` : ""}` }];
     if (!taken) entries.push({ kind: "item", label: "Check Out as Local Branch", icon: menuIcons.checkout, run: () => run(trackRequest(ctx, ref, author)) });
     else entries.push({ kind: "note", label: `A local branch ${short} already exists, so it can’t be checked out under that name.` });
+    entries.push(...mergeItems(ref.name));
     entries.push({ kind: "item", label: "Copy Name", icon: menuIcons.copy, run: () => copy(ref.name) });
     entries.push({ kind: "sep" });
     entries.push({ kind: "item", label: `Delete on ${ref.remote}…`, icon: menuIcons.drop, danger: true, run: () => run(api.remoteDeletionCheck(ref.name).then((lost) => deleteRemoteRequest(ctx, ref, author, lost))) });
@@ -297,7 +318,7 @@
       </button>
     {/if}
     {#each shown("branches", branches) as b (b.ref.name)}
-      {@const head = b.ref.name === history.head.branch}
+      {@const head = b.ref.name === history.head.branch || busy?.branch === b.ref.name}
       <button
         class="item"
         data-ref={b.ref.name}
@@ -310,7 +331,7 @@
         <span class="dot" style:background={lane(b.color)}></span>
         <span class="grow ellipsis" class:bold={head}>{b.ref.name}</span>
         {#if b.ref.tracking?.gone}<span class="badge" title="Its branch on {b.ref.tracking.remote} was deleted">gone</span>{/if}
-        {#if head}<span class="head">HEAD</span>{/if}
+        {#if busy?.branch === b.ref.name}<span class="head busy">{busy.word}</span>{:else if head}<span class="head">HEAD</span>{/if}
       </button>
     {/each}
     {@render more("branches", branches.length)}
@@ -505,6 +526,9 @@
     font-size: 10px;
     font-weight: 700;
     color: var(--accent-text);
+  }
+  .head.busy {
+    color: var(--orange);
   }
   .meta {
     font-size: 11px;

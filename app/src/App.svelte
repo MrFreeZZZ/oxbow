@@ -11,6 +11,10 @@
   import BranchPicker from "./lib/BranchPicker.svelte";
   import { detachRequest, keepRequest, newBranchRequest, switchRequest, type BranchContext } from "./lib/branches";
   import DetachedBanner from "./lib/DetachedBanner.svelte";
+  import OperationBanner from "./lib/OperationBanner.svelte";
+  import ConflictsView from "./lib/ConflictsView.svelte";
+  import { abortRequest, continueRequest, describe, skipRequest } from "./lib/merge";
+  import type { Operation } from "./lib/types";
   import { menuIcons, type MenuEntry } from "./lib/Menu.svelte";
   import { canPull, canPush, fetchRequest, pullRequest, pushRequest, type RemoteContext } from "./lib/remote";
   import Welcome from "./lib/Welcome.svelte";
@@ -24,6 +28,10 @@
   let panelWidth = $state(640);
   /** Goes up on every reload of the history, so the changes panel reloads too. */
   let version = $state(0);
+  /** The Conflicts screen is open in place of History. */
+  let resolving = $state(false);
+  const operation = $derived(history?.operation ?? null);
+  const showConflicts = $derived(resolving && !!operation);
 
   const branchCount = $derived(history ? history.refs.filter((r) => r.kind === "local").length : 0);
   const rowsById = $derived(new Map(history?.rows.map((r) => [r.id, r]) ?? []));
@@ -104,10 +112,20 @@
       return;
     }
     const before = history?.head;
+    const opBefore = history?.operation ?? null;
     await confirm.run(request);
     await refresh();
     const after = history?.head;
     if (after?.commit && (after.branch !== before?.branch || after.commit !== before?.commit)) select(after.commit);
+    openConflicts(opBefore);
+  }
+
+  /** After an action stopped on conflicts, or a rebase stopped again on its next commit, the
+   *  Conflicts screen opens on its own. */
+  function openConflicts(before: Operation | null) {
+    const op = history?.operation;
+    if (!op) resolving = false;
+    else if (op.conflicted && (!before || before.kind !== op.kind || before.commit?.id !== op.commit?.id)) resolving = true;
   }
 
   /** Where "Back to" goes from a detached HEAD: the branch checked out before, else the trunk. */
@@ -164,9 +182,11 @@
     await refresh();
     if (!remoteCtx) return;
     const request = kind === "fetch" ? fetchRequest(remoteCtx) : kind === "pull" ? pullRequest(remoteCtx) : pushRequest(remoteCtx);
+    const opBefore = history?.operation ?? null;
     await confirm.run(request);
     // Even a failed pull or push may have fetched, so the counts are worth reloading either way.
     await refresh();
+    openConflicts(opBefore);
   }
 
   /** Reload after the repository changed, here or outside the app, keeping the selection when it still exists. */
@@ -232,10 +252,20 @@
     <div class="main">
       <header data-tauri-drag-region>
         <div class="title" data-tauri-drag-region>
-          <span class="name">History</span>
-          <span class="sub">{branchCount} {branchCount === 1 ? "branch" : "branches"} · {history.head.branch ?? "detached HEAD"}</span>
+          {#if showConflicts && operation}
+            <span class="name">Resolve Conflicts</span>
+            <span class="sub">{describe(operation).noun} in progress · {operation.conflicted} {operation.conflicted === 1 ? "file" : "files"} left</span>
+          {:else}
+            <span class="name">History</span>
+            <span class="sub">{branchCount} {branchCount === 1 ? "branch" : "branches"} · {history.head.branch ?? operation?.branch ?? "detached HEAD"}</span>
+          {/if}
         </div>
         <BranchPicker {history} {colorOf} onPick={(name) => branchCtx && run(switchRequest(branchCtx, name))} />
+        {#if showConflicts}
+          <button class="capsule" onclick={() => (resolving = false)} title="Back to the commit graph">
+            <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>History
+          </button>
+        {/if}
         <span class="spacer" data-tauri-drag-region></span>
         {#if error}<span class="error" role="alert">{error}</span>{/if}
         {#if history.remotes.length && remoteCtx}
@@ -271,9 +301,25 @@
           <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5" /></svg>
         </button>
       </header>
-      {#if !history.head.branch && history.head.commit && branchCtx}
+      {#if operation && branchCtx}
+        {@const op = operation}
+        <OperationBanner
+          {op}
+          color={op.branch ? colorOf(op.branch) : headColor}
+          resolving={showConflicts}
+          onResolve={() => (resolving = true)}
+          onAbort={() => run(abortRequest(branchCtx!, op))}
+          onSkip={() => run(skipRequest(branchCtx!, op))}
+          onContinue={() => run(continueRequest(branchCtx!, op))}
+        />
+      {:else if !history.head.branch && history.head.commit && branchCtx}
         <DetachedBanner {history} back={backTo} onBack={() => backTo && run(switchRequest(branchCtx!, backTo))} onKeep={newBranch} />
       {/if}
+      {#if showConflicts && operation}
+        {#key repo.path}
+          <ConflictsView {history} op={operation} {colorOf} {version} {run} />
+        {/key}
+      {:else}
       <div class="content">
         <section class="history" aria-label="Commit history">
           <div class="columns"><span>Description</span>{#if history.truncated}<span class="note">Showing the latest {history.rows.length.toLocaleString()} commits</span>{/if}</div>
@@ -286,16 +332,24 @@
           <!-- A new repository starts the panels from scratch. -->
           {#key repo.path}
             {#if selectedRow?.worktree}
-              <ChangesPanel branch={history.head.branch} color={selectedRow.graph.color} head={headRow} {version} onChanged={refresh} />
+              <ChangesPanel
+                branch={history.head.branch}
+                color={selectedRow.graph.color}
+                head={headRow}
+                {version}
+                onChanged={refresh}
+                onResolve={operation ? () => (resolving = true) : undefined}
+              />
             {:else if selectedRow}
               <CommitPanel row={selectedRow} childIds={childrenOf.get(selectedRow.id) ?? []} lookup={(id) => rowsById.get(id)} onSelect={select} />
             {/if}
           {/key}
         </aside>
       </div>
+      {/if}
     </div>
   </div>
-  <ConfirmSheet repo={repo.name} branch={history.head.branch} color={headColor} />
+  <ConfirmSheet repo={repo.name} branch={history.head.branch ?? operation?.branch ?? null} color={headColor} />
 {/if}
 
 <style>

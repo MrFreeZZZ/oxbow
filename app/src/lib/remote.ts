@@ -1,6 +1,7 @@
 // Confirmations for Fetch, Pull and Push, and the way out when one of them fails.
 
 import type { Part, Recovery, Request } from "./confirm.svelte";
+import { stoppedOnConflicts } from "./merge";
 import type { Action, CommitBrief, Failure, HistoryRow, Tracking } from "./types";
 import { shortId } from "./format";
 
@@ -78,7 +79,7 @@ export function pullRequest(ctx: RemoteContext): Request {
     note: t.behind ? `${upstream} had ${plural(t.behind, "new commit")} at the last fetch.` : undefined,
     status: `Pulling ${upstream} into ${branch}…`,
     done: `${branch} is up to date with ${upstream}.`,
-    recover: (failure) => conflict(failure, ctx) ?? networkOrAuth(failure, action, "Pulling", ctx, `${branch} is up to date with ${upstream}.`),
+    recover: (failure) => conflict(failure) ?? networkOrAuth(failure, action, "Pulling", ctx, `${branch} is up to date with ${upstream}.`),
     action,
   };
 }
@@ -182,7 +183,7 @@ function pushRecovery(failure: Failure, ctx: RemoteContext, action: Action & { k
       close: "Close",
     };
   }
-  return conflict(failure, ctx) ?? networkOrAuth(failure, action, "Pushing", ctx, `Pushed ${action.branch}.`);
+  return conflict(failure) ?? networkOrAuth(failure, action, "Pushing", ctx, `Pushed ${action.branch}.`);
 }
 
 function forcePushRequest(ctx: RemoteContext, action: Action & { kind: "push" }, failure: Failure, lease: boolean): Request {
@@ -230,23 +231,8 @@ function noVerifyRequest(ctx: RemoteContext, action: Action & { kind: "push" }):
   };
 }
 
-function conflict(failure: Failure, ctx: RemoteContext): Recovery | null {
-  if (failure.kind !== "conflict") return null;
-  return {
-    title: "The pull stopped on conflicts",
-    body: [
-      "Your commits on ",
-      chip(ctx, ctx.branch ?? "HEAD"),
-      " and the new ones change the same lines. Oxbow can’t resolve conflicts yet: undo the pull, or fix the files in your editor and run ",
-      { code: "git rebase --continue" },
-      ".",
-    ],
-    icon: "warn",
-    tone: "warn",
-    button: { label: "Undo Pull", action: { kind: "abortRebase" }, status: "Undoing the pull…", done: `${ctx.branch} is back where it was.` },
-    close: "Leave as Is",
-    note: "Your files stay as they are until you choose.",
-  };
+function conflict(failure: Failure): Recovery | null {
+  return stoppedOnConflicts(failure, "pull");
 }
 
 /** Try Again after a remote could not be reached or refused the sign-in, for any action that talks to `remote`. */

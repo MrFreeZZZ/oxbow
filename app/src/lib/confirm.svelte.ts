@@ -24,7 +24,9 @@ export type Icon =
   | "checkout"
   | "branch"
   | "edit"
-  | "drop";
+  | "drop"
+  | "merge"
+  | "rebase";
 
 export interface Request {
   /** A question, e.g. "Discard changes in 2 files?" */
@@ -52,9 +54,36 @@ export interface Request {
   options?: Choice[];
   /** Why the action button is off, e.g. an invalid branch name. */
   invalid?: string | null;
+  /** A picture of the result above the commands, e.g. the commits a merge brings in. */
+  preview?: Preview;
+  /** Stopping on conflicts is expected: the sheet closes so they can be resolved. */
+  resolveConflicts?: boolean;
   /** The way out when the action fails. */
   recover?: (failure: Failure) => Recovery | null;
   action: Action;
+}
+
+/** A small graph of what the action makes, and a verdict under it. */
+export interface Preview {
+  rows: PreviewRow[];
+  verdict: { tone: "ok" | "warn" | "info"; parts: Part[] } | null;
+}
+
+export interface PreviewRow {
+  /** 0 is the checked-out branch's line, 1 the other branch's. */
+  lane: 0 | 1;
+  color: number;
+  summary: string;
+  /** A short sha; null for a commit the action makes. */
+  sha: string | null;
+  /** merge: two colors; base: where the branches split; more: "and N more" in a line. */
+  node: "commit" | "new" | "merge" | "base" | "more";
+  /** For a merge node: the other branch's color. */
+  other?: number;
+  /** Shown faded: stays as it is. */
+  muted?: boolean;
+  /** Rows this one connects down to. */
+  links: number[];
 }
 
 /** A checkbox of the sheet. */
@@ -69,7 +98,8 @@ export interface Choice {
 export interface Field {
   label: string;
   text?: { value: string; placeholder?: string; edit: (value: string) => Request };
-  chips?: { label: string; on: boolean; mono?: boolean; pick: () => Request }[];
+  /** `off` says why a chip can't be picked. */
+  chips?: { label: string; on: boolean; mono?: boolean; off?: string; pick: () => Request | Promise<Request> }[];
   note?: string;
   /** Shown instead of the note while the text can't be used, e.g. a name that is taken. */
   error?: string;
@@ -141,8 +171,14 @@ class ConfirmState {
   }
 
   /** Show another version of the request, after a checkbox or chip changed it. */
-  async change(request: Request) {
-    if (this.phase === "ask") await this.#ask(request);
+  async change(request: Request | Promise<Request>) {
+    if (this.phase !== "ask") return;
+    try {
+      const next = await request;
+      if (this.phase === "ask") await this.#ask(next);
+    } catch (err) {
+      this.#fail({ kind: "other", output: String(err), incoming: [], remoteTip: null });
+    }
   }
 
   /** Show the request for the text just typed; its commands follow once typing pauses. */
@@ -207,6 +243,11 @@ class ConfirmState {
       if (done) this.#showToast(done);
     } catch (err) {
       const failure = toFailure(err);
+      if (failure.kind === "conflict" && this.request?.resolveConflicts) {
+        this.#finish(false);
+        this.#showToast("Stopped on conflicts, as expected. Pick what goes into each file.");
+        return;
+      }
       if (failure.kind === "cancelled") {
         this.#finish(false);
         this.#showToast("Stopped. Nothing else was run.");

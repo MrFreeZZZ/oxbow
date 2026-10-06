@@ -230,7 +230,7 @@ pub struct DeletionCheck {
 }
 
 /// Lines of `git log --format=%H%x1f%s%x1f%an%x1f%ct`.
-fn parse_briefs(out: &str) -> Vec<CommitBrief> {
+pub(crate) fn parse_briefs(out: &str) -> Vec<CommitBrief> {
     out.lines()
         .filter_map(|line| {
             let mut parts = line.split('\u{1f}');

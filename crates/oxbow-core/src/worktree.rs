@@ -12,6 +12,7 @@ use std::sync::atomic::AtomicBool;
 use crate::cli::{GitCommand, OutputLine};
 use crate::commit::{DiffLine, FileChange, FileDiff, FileStatus, Hunk, LineKind, word_diff};
 use crate::error::{Error, Result};
+use crate::operation::{ConflictSide, MergeMethod, Pick};
 use crate::repo::Repo;
 
 /// Files with more changed lines than this are not shown line by line.
@@ -171,6 +172,32 @@ pub enum Action {
     DeleteRemoteBranch {
         remote: String,
         branch: String,
+    },
+    /// Bring `branch` into the checked-out branch. `message` is the commit's, for a merge commit
+    /// or a squash.
+    Merge {
+        branch: String,
+        method: MergeMethod,
+        message: Option<String>,
+    },
+    /// Finish the merge, rebase, cherry-pick or revert in progress once its conflicts are
+    /// resolved. `message` replaces the one git prepared.
+    Continue {
+        message: Option<String>,
+    },
+    /// Give up the operation in progress: everything goes back to how it was before it.
+    Abort,
+    /// Leave out the commit a rebase or cherry-pick stopped on.
+    Skip,
+    /// Write the chosen side of each conflict of `path` into the file and mark it resolved.
+    Resolve {
+        path: String,
+        picks: Vec<Pick>,
+    },
+    /// Resolve `path` with one side's whole file; a side that deleted it deletes it.
+    TakeFile {
+        path: String,
+        side: ConflictSide,
     },
 }
 
@@ -528,6 +555,18 @@ impl Repo {
                     .comment("--delete: remove the branch on the remote")
                     .with_progress(),
             ],
+            Action::Merge {
+                branch,
+                method,
+                message,
+            } => self.plan_merge(branch, *method, message.as_deref())?,
+            Action::Continue { message } => self.plan_continue(message.as_deref())?,
+            Action::Abort => self.plan_abort()?,
+            Action::Skip => self.plan_skip()?,
+            Action::Resolve { path, .. } => vec![GitCommand::new(["add", "--", path]).comment(format!(
+                "Oxbow writes your choices into {path} first; add marks it resolved"
+            ))],
+            Action::TakeFile { path, side } => self.plan_take_file(path, *side)?,
         };
         Ok(Plan { commands })
     }
@@ -555,12 +594,26 @@ impl Repo {
             Action::DiscardHunk { path, header } => (Side::Unstaged, path, header),
             Action::UnstageHunk { path, header } => (Side::Staged, path, header),
             _ => {
+                if let Action::Resolve { path, picks } = action {
+                    self.write_resolution(path, picks)?;
+                }
                 let mut last = String::new();
                 for command in self.plan(action)?.commands {
                     on_event(ActionEvent::Command {
                         display: command.display(),
                     });
-                    let out = self.run_streaming(&command, &mut |line| on_event(ActionEvent::Line(line)), cancel)?;
+                    let out = self
+                        .run_streaming(&command, &mut |line| on_event(ActionEvent::Line(line)), cancel)
+                        .inspect_err(|_| {
+                            if let Action::Merge {
+                                branch,
+                                method: MergeMethod::Squash,
+                                message,
+                            } = action
+                            {
+                                self.remember_squash(branch, message.as_deref());
+                            }
+                        })?;
                     last = if out.stdout.trim().is_empty() {
                         out.stderr
                     } else {
