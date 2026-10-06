@@ -553,6 +553,9 @@ impl Repo {
         Ok(match method {
             MergeMethod::Merge => {
                 let mut args = with_message(&["merge", "--no-ff"]);
+                if !crate::config::run_hooks() {
+                    args.push("--no-verify".to_owned());
+                }
                 args.push(branch.to_owned());
                 vec![GitCommand::new(args).comment("--no-ff: a merge commit even when git could just move the branch")]
             }
@@ -562,6 +565,9 @@ impl Repo {
             ],
             MergeMethod::Squash => {
                 let mut commit = vec!["commit".to_owned()];
+                if !crate::config::run_hooks() {
+                    commit.push("--no-verify".to_owned());
+                }
                 match message.map(str::trim).filter(|m| !m.is_empty()) {
                     Some(message) => commit.extend(["-m".to_owned(), message.to_owned()]),
                     None => commit.push("--no-edit".to_owned()),
@@ -572,9 +578,18 @@ impl Repo {
                     GitCommand::new(commit).comment(format!("one new commit on {here}; {branch} stays as it is")),
                 ]
             }
-            MergeMethod::Rebase => vec![GitCommand::new(["rebase", branch]).comment(format!(
-                "replays {here}’s own commits on top of {branch}, as new commits"
-            ))],
+            MergeMethod::Rebase => {
+                // Branches stacked on this one move along, unless rebase.updateRefs is off.
+                let mut comment = format!("replays {here}’s own commits on top of {branch}, as new commits");
+                // --update-refs needs git 2.38.
+                let args = if self.config_value("rebase.updateRefs").is_none() && crate::config::git_at_least(2, 38) {
+                    comment.push_str("; --update-refs: branches stacked on it move along");
+                    vec!["rebase", "--update-refs", branch]
+                } else {
+                    vec!["rebase", branch]
+                };
+                vec![GitCommand::new(args).comment(comment)]
+            }
         })
     }
 

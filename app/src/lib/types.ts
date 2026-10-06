@@ -234,7 +234,11 @@ export type Action =
   | { kind: "stashApply"; index: number; id: string; pop: boolean; keepIndex: boolean }
   | { kind: "stashDrop"; index: number; id: string }
   | { kind: "stashStore"; id: string; message: string }
-  | { kind: "stashBranch"; index: number; id: string; name: string };
+  | { kind: "stashBranch"; index: number; id: string; name: string }
+  | { kind: "addRemote"; name: string; url: string }
+  | { kind: "setRemoteUrl"; name: string; url: string }
+  | { kind: "removeRemote"; name: string }
+  | { kind: "optimize" };
 
 export type ResetMode = "soft" | "mixed" | "hard";
 
@@ -339,4 +343,45 @@ export interface GitCommand {
 
 export interface Plan {
   commands: GitCommand[];
+}
+
+/** Which config file a Git setting lives in: ~/.gitconfig or the repository's .git/config. */
+export type ConfigScope = "global" | "local";
+
+export interface OpenApp {
+  id: string;
+  name: string;
+}
+
+export interface SshKey {
+  name: string;
+  path: string;
+  kind: string;
+  fingerprint: string | null;
+  comment: string;
+  public: string;
+}
+
+/** Settings read from Git's own config and the computer. */
+export interface GitSettings {
+  git: { path: string; version: string | null; custom: boolean };
+  global: Record<string, string>;
+  sshKeys: SshKey[];
+  editors: OpenApp[];
+  terminals: OpenApp[];
+}
+
+export interface RemoteInfo {
+  name: string;
+  fetchUrl: string;
+  pushUrl: string;
+}
+
+/** Settings › This Repository. */
+export interface RepoSettings {
+  name: string;
+  path: string;
+  local: Record<string, string>;
+  remotes: RemoteInfo[];
+  storage: { bytes: number; objects: number; loose: number; lfsPatterns: string[] } | null;
 }

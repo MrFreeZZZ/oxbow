@@ -5,6 +5,7 @@
 
 <script lang="ts">
   import { api } from "./api";
+  import { diffSettings, prefs, wholeByDefault } from "./prefs.svelte";
   import { confirm, type Part, type Request } from "./confirm.svelte";
   import type { FileChange, FileDiff, Hunk, HistoryRow, Side, WorkingTree } from "./types";
   import { plate, splitPath, tint } from "./format";
@@ -30,12 +31,17 @@
     onResolve?: () => void;
   } = $props();
 
-  const SUMMARY_LIMIT = 72;
+  /** Settings › Git › Subject line guide; 0 hides the counter. */
+  const SUMMARY_LIMIT = $derived(prefs.get("oxbow.commit.subjectGuide"));
 
   let tree = $state<WorkingTree | null>(null);
   let pick = $state<{ path: string; side: Side } | null>(null);
   let diff = $state<FileDiff | null>(null);
-  let whole = $state(false);
+  let whole = $state(wholeByDefault());
+  // Diff & Text's default view applies again when it changes.
+  $effect(() => {
+    whole = wholeByDefault();
+  });
   let error = $state<string | null>(null);
   let loads = $state(0);
 
@@ -89,6 +95,7 @@
   $effect(() => {
     const current = pick;
     const wholeFile = whole;
+    diffSettings();
     loads;
     if (!current) {
       diff = null;
@@ -353,7 +360,7 @@
     </div>
     <div class="summary">
       <input type="text" aria-label="Commit summary" placeholder="Summary" bind:value={draft.summary} onkeydown={onCommitKey} spellcheck="true" />
-      <span class="counter" class:over={draft.summary.length > SUMMARY_LIMIT}>{draft.summary.length}/{SUMMARY_LIMIT}</span>
+      {#if SUMMARY_LIMIT}<span class="counter" class:over={draft.summary.length > SUMMARY_LIMIT}>{draft.summary.length}/{SUMMARY_LIMIT}</span>{/if}
     </div>
     <textarea aria-label="Commit description" placeholder="Description" rows="2" bind:value={draft.description} onkeydown={onCommitKey}></textarea>
     <div class="row">

@@ -3,6 +3,7 @@
   import type { History, HistoryRow, RowLayout, Segment, WorktreeSummary } from "./types";
   import { lane, plate, relativeTime, tint } from "./format";
   import Menu, { type MenuEntry } from "./Menu.svelte";
+  import { prefs } from "./prefs.svelte";
 
   let {
     history,
@@ -18,7 +19,9 @@
   } = $props();
 
   // Geometry from the design: 44px two-line rows, lanes 18px apart, trunk lane centered 14px in.
-  const ROW = 44;
+  // Compact rows (General → History rows) put everything on one 28px line.
+  const compact = $derived(prefs.get("oxbow.history.rowStyle") === "compact");
+  const ROW = $derived(compact ? 28 : 44);
   const PAD_TOP = 4;
   const PAD_LEFT = 8;
   const LANE = 18;
@@ -133,7 +136,7 @@
     const g = row.graph;
     const isMerge = row.parents.length > 1;
     const isSelected = row.id === selected;
-    const size = isMerge ? 18 : isSelected ? 15 : g.color === 0 ? 13 : 11;
+    const size = compact ? (isMerge ? 14 : isSelected ? 12 : g.color === 0 ? 11 : 9) : isMerge ? 18 : isSelected ? 15 : g.color === 0 ? 13 : 11;
     const forks = g.forkColors;
     const halo =
       forks.length === 0
@@ -224,6 +227,7 @@
         {@const isSelected = row.id === selected}
         <div
           class="row"
+          class:compact
           class:flash={flash === row.id}
           class:menu-open={menu?.id === row.id}
           role="option"
@@ -368,6 +372,22 @@
     padding-right: 10px;
     border-radius: 8px;
     transition: background-color 0.3s;
+  }
+  /* One line: the message, then labels, author and time at the right. */
+  .row.compact {
+    height: 28px;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+  }
+  .row.compact .summary {
+    flex: 0 1 auto;
+    min-width: min(45%, 160px);
+  }
+  /* Kept at the right while there is room; when there isn't, it gives way from its right end. */
+  .row.compact .meta {
+    flex: 0 1 auto;
+    margin-left: auto;
   }
   .row.flash {
     background: var(--flash);

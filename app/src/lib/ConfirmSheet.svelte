@@ -2,12 +2,13 @@
   import { confirm, type Icon, type Part } from "./confirm.svelte";
   import { plate, tint } from "./format";
   import MergePreview from "./MergePreview.svelte";
+  import { prefs } from "./prefs.svelte";
 
   let { repo, branch, color }: { repo: string; branch: string | null; color: number } = $props();
 
   let copied = $state(false);
   let goButton = $state<HTMLButtonElement>();
-  let textBox = $state<HTMLInputElement | HTMLTextAreaElement>();
+  let fieldsBox = $state<HTMLDivElement>();
   let linesBox = $state<HTMLDivElement>();
 
   const request = $derived(confirm.request);
@@ -47,6 +48,8 @@
     reset: "M3.5 8a4.5 4.5 0 1 0 1.3-3.2M4.5 2v3h3",
     stash: "M2.5 3.5h11v3h-11zM3.5 6.5v6h9v-6M6.5 9h3",
     pop: "M2.5 8.5v4.5h11V8.5M8 10.5V2.5M5.5 5 8 2.5 10.5 5",
+    remote: "M8 1.8a6.2 6.2 0 1 0 0 12.4a6.2 6.2 0 1 0 0-12.4M1.8 8h12.4M8 1.8c-2.2 2.2-2.2 10.2 0 12.4M8 1.8c2.2 2.2 2.2 10.2 0 12.4",
+    box: "M2.5 5 8 2l5.5 3v6L8 14l-5.5-3zM2.5 5 8 8l5.5-3M8 8v6",
   };
 
   // Token colors of the terminal block follow the app theme (see --term-* in app.css).
@@ -108,6 +111,8 @@
     if (!key || key === focusedFor) return;
     focusedFor = key;
     requestAnimationFrame(() => {
+      // The first text box, when a sheet has several.
+      const textBox = fieldsBox?.querySelector<HTMLInputElement | HTMLTextAreaElement>(".text");
       if (confirm.phase === "ask" && textBox) {
         textBox.focus();
         textBox.select();
@@ -159,7 +164,7 @@
       </div>
 
       {#if request.fields?.length && confirm.phase === "ask"}
-        <div class="fields">
+        <div class="fields" bind:this={fieldsBox}>
           {#each request.fields as field, i (i)}
             <div class="field">
               <span class="label">{field.label}</span>
@@ -168,7 +173,6 @@
                   {@const text = field.text}
                   <textarea
                     class="text multiline"
-                    bind:this={textBox}
                     value={text.value}
                     placeholder={text.placeholder}
                     aria-label={field.label}
@@ -180,7 +184,6 @@
                   {@const text = field.text}
                   <input
                     class="text"
-                    bind:this={textBox}
                     value={text.value}
                     placeholder={text.placeholder}
                     aria-label={field.label}
@@ -226,6 +229,9 @@
         </div>
       {/if}
 
+      <!-- With "Show the git command" off, the commands stay out of the question; git's output
+           still shows once it runs. -->
+      {#if confirm.phase !== "ask" || prefs.get("oxbow.confirm.showCommand")}
       <div class="term" aria-label="Git command">
         <div class="bar">
           <span class="light"></span><span class="light"></span><span class="light"></span>
@@ -252,6 +258,7 @@
           {/if}
         </div>
       </div>
+      {/if}
 
       {#if running}
         <div class="run">

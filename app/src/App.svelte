@@ -1,5 +1,6 @@
 <script lang="ts">
   import { open } from "@tauri-apps/plugin-dialog";
+  import { listen } from "@tauri-apps/api/event";
   import { api, settings } from "./lib/api";
   import type { History, HistoryRow, RepoSummary } from "./lib/types";
   import Sidebar from "./lib/Sidebar.svelte";
@@ -21,6 +22,7 @@
   import { menuIcons, type MenuEntry } from "./lib/Menu.svelte";
   import { canPull, canPush, fetchRequest, pullRequest, pushRequest, type RemoteContext } from "./lib/remote";
   import Welcome from "./lib/Welcome.svelte";
+  import { prefs } from "./lib/prefs.svelte";
 
   let repo = $state<RepoSummary | null>(null);
   let history = $state<History | null>(null);
@@ -258,7 +260,8 @@
     // Commits made outside the app since the last reload belong in the sheet.
     await refresh();
     if (!remoteCtx) return;
-    const request = kind === "fetch" ? fetchRequest(remoteCtx) : kind === "pull" ? pullRequest(remoteCtx) : pushRequest(remoteCtx);
+    const setup = kind === "pull" ? await api.pullSetup().catch(() => undefined) : undefined;
+    const request = kind === "fetch" ? fetchRequest(remoteCtx) : kind === "pull" ? pullRequest(remoteCtx, setup) : pushRequest(remoteCtx);
     const opBefore = history?.operation ?? null;
     await confirm.run(request);
     // Even a failed pull or push may have fetched, so the counts are worth reloading either way.
@@ -281,6 +284,29 @@
       if (mine === generation) error = String(err);
     }
   }
+
+  // Background fetch, from Settings › General: keeps ahead/behind counts current. It skips a
+  // turn while a sheet is open or the window is hidden, and failures stay quiet; Fetch in the
+  // toolbar says what is wrong.
+  const hasRemotes = $derived(!!history?.remotes.length);
+  $effect(() => {
+    if (!repo || !hasRemotes || !prefs.get("oxbow.fetch.auto")) return;
+    const fetchNow = async () => {
+      if (confirm.request || document.hidden || loading) return;
+      try {
+        await api.backgroundFetch();
+        await refresh();
+      } catch {
+        // Offline, or the remote wants a password: the next turn tries again.
+      }
+    };
+    const first = setTimeout(fetchNow, 5000);
+    const timer = setInterval(fetchNow, prefs.get("oxbow.fetch.interval") * 60_000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+    };
+  });
 
   async function chooseRepo() {
     const path = await open({ directory: true, multiple: false, title: "Open Repository" });
@@ -325,10 +351,21 @@
     api.initialRepo().then((path) => {
       if (path) load(path);
     });
+    // Settings changed remotes or packed the repository.
+    const unlisten = listen("repo-touched", () => refresh());
+    return () => unlisten.then((stop) => stop());
   });
 </script>
 
-<svelte:window onfocus={refresh} />
+<svelte:window
+  onfocus={refresh}
+  onkeydown={(event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === ",") {
+      event.preventDefault();
+      api.openSettings();
+    }
+  }}
+/>
 
 {#if !repo || !history}
   <Welcome {loading} {error} onOpen={chooseRepo} />
@@ -398,6 +435,9 @@
         </button>
         <button class="capsule" onclick={refresh} aria-label="Reload history" title="Reload">
           <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5" /></svg>
+        </button>
+        <button class="capsule" onclick={() => api.openSettings()} aria-label="Settings" title={navigator.platform.startsWith("Mac") ? "Settings (⌘,)" : "Settings (Ctrl+,)"}>
+          <svg class="icon" viewBox="0 0 16 16"><path d="M12.78 6.52L14.44 6.56L14.44 9.44L12.78 9.48L12.42 10.33L13.57 11.54L11.54 13.57L10.33 12.42L9.48 12.78L9.44 14.44L6.56 14.44L6.52 12.78L5.67 12.42L4.46 13.57L2.43 11.54L3.58 10.33L3.22 9.48L1.56 9.44L1.56 6.56L3.22 6.52L3.58 5.67L2.43 4.46L4.46 2.43L5.67 3.58L6.52 3.22L6.56 1.56L9.44 1.56L9.48 3.22L10.33 3.58L11.54 2.43L13.57 4.46L12.42 5.67zM8 5.8a2.2 2.2 0 1 0 0 4.4a2.2 2.2 0 1 0 0-4.4" /></svg>
         </button>
       </header>
       {#if operation && branchCtx}

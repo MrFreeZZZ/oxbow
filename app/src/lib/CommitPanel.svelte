@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api } from "./api";
+  import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { CommitDetail, FileDiff, HistoryRow } from "./types";
   import { fullDate, initials, lane, personColor, plate, splitPath, tabLabels, tint } from "./format";
   import DiffView from "./DiffView.svelte";
@@ -15,7 +16,11 @@
   let detail = $state<CommitDetail | null>(null);
   let diffs = $state<FileDiff[]>([]);
   let tab = $state<string | null>(null); // null = Summary, otherwise a file path
-  let whole = $state(false);
+  let whole = $state(wholeByDefault());
+  // Diff & Text's default view applies again when it changes.
+  $effect(() => {
+    whole = wholeByDefault();
+  });
   let error = $state<string | null>(null);
   let scroller = $state<HTMLDivElement>();
   let tabBar = $state<HTMLDivElement>();
@@ -61,6 +66,7 @@
     const current = id;
     const path = tab;
     const wholeFile = whole;
+    diffSettings();
     diffs = [];
     api.commitDiff(current, path, wholeFile).then(
       (d) => {
