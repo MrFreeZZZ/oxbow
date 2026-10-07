@@ -33,7 +33,7 @@ fn every_mode_finds_what_git_log_finds() {
         .into_iter()
         .map(|h| h.0)
         .collect();
-    assert_eq!(ids, [limit.clone()]);
+    assert_eq!(ids, std::slice::from_ref(&limit));
     let ids: Vec<_> = find(&repo, SearchMode::Message, "limiter")
         .into_iter()
         .map(|h| h.0)
