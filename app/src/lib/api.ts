@@ -38,6 +38,7 @@ export const api = {
   fileHistory: (path: string, rev: string | null) => invoke<FileHistory>("file_history", { path, rev }),
   blame: (path: string, rev: string) => invoke<Blame>("blame", { path, rev }),
   lineHistory: (path: string, line: number, rev: string) => invoke<string[]>("line_history", { path, line, rev }),
+  files: () => invoke<string[]>("files"),
   filePickaxe: (path: string, text: string, matchCase: boolean, rev: string) => invoke<string[]>("file_pickaxe", { path, text, matchCase, rev }),
   workingTree: () => invoke<WorkingTree>("working_tree"),
   workingDiff: (path: string, side: Side, wholeFile: boolean) => invoke<FileDiff>("working_diff", { path, side, wholeFile }),

@@ -31,6 +31,7 @@
   import CompareView from "./lib/CompareView.svelte";
   import FileHistoryView from "./lib/FileHistoryView.svelte";
   import FindField from "./lib/FindField.svelte";
+  import QuickOpen from "./lib/QuickOpen.svelte";
   import { nav } from "./lib/nav.svelte";
   import type { CompareMode } from "./lib/types";
 
@@ -65,6 +66,12 @@
       view = "file";
       resolving = false;
     });
+  });
+  // After Quick Open, typing goes straight into Find in file.
+  $effect(() => {
+    if (!nav.focusFind || view !== "file" || !findField) return;
+    nav.focusFind = false;
+    requestAnimationFrame(() => findField?.focus());
   });
   /** What Compare shows: `target` against `base`. */
   let comparing = $state<{ base: string; target: string; mode: CompareMode }>({ base: "", target: "", mode: "split" });
@@ -161,6 +168,7 @@
       const next = await api.history();
       if (mine !== generation) return;
       repo = summary;
+      nav.repo = summary.path;
       history = next;
       version++;
       // Start on the checked-out commit, like the design: HEAD's latest commit is selected.
@@ -478,6 +486,10 @@
     if ((event.metaKey || event.ctrlKey) && event.key === ",") {
       event.preventDefault();
       api.openSettings();
+    } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "p" && history && !confirm.request) {
+      // Quick Open: any file's history.
+      event.preventDefault();
+      nav.quickOpen = !nav.quickOpen;
     } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f" && history && !confirm.request && view === "file" && !showConflicts) {
       // In File History, ⌘F finds in the file.
       event.preventDefault();
@@ -677,6 +689,9 @@
       {/if}
     </div>
   </div>
+  {#if nav.quickOpen}
+    <QuickOpen commit={selectedRow && !selectedRow.worktree ? { id: selectedRow.id, summary: selectedRow.summary } : null} onClose={() => (nav.quickOpen = false)} />
+  {/if}
   <ConfirmSheet repo={repo.name} branch={history.head.branch ?? operation?.branch ?? null} color={headColor} />
 {/if}
 
