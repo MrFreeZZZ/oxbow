@@ -3,6 +3,7 @@
   // changed (Changes) or who last changed every line (Blame). A line number shows every commit
   // that changed that line (git log -L).
 
+  import { tick } from "svelte";
   import { api } from "./api";
   import { nav } from "./nav.svelte";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
@@ -41,7 +42,9 @@
   let diffs = $state<FileDiff[]>([]);
   let whole = $state(wholeByDefault());
   let list = $state<HTMLDivElement>();
-  let code = $state<HTMLDivElement>();
+  let main = $state<HTMLElement>();
+  /** Commits that added or removed the text being found (git log -S); null while there is none. */
+  let finding = $state<{ text: string; ids: string[] } | null>(null);
 
   const mode = $derived(nav.fileMode);
   const all = $derived(file ? [...(showElsewhere ? file.elsewhere : []), ...file.commits] : []);
@@ -186,12 +189,87 @@
     return before < 0 || i > before;
   }
 
+  // Find in file: the matches on screen, in order, each one the spans it was cut into.
+  const find = $derived(nav.find.text);
+  let matches: HTMLElement[][] = [];
+  let findKey = "";
+  let findShown: unknown = null;
+  let shownAt = -1;
+
+  $effect(() => {
+    const key = `${find}\u0000${nav.find.matchCase}\u0000${mode}\u0000${path}`;
+    // Collected again whenever the code on screen changes; new code starts at its first match.
+    const shown = mode === "changes" ? diffs : blame;
+    tick().then(() => {
+      matches = collect();
+      const fresh = key !== findKey || shown !== findShown;
+      findKey = key;
+      findShown = shown;
+      const at = fresh ? 0 : Math.min(nav.found.at, Math.max(0, matches.length - 1));
+      shownAt = at;
+      nav.found = { count: matches.length, at };
+      show(at, fresh);
+    });
+  });
+
+  // The arrows and Enter move to another match.
+  $effect(() => {
+    const at = nav.found.at;
+    if (at === shownAt) return;
+    shownAt = at;
+    show(at, true);
+  });
+
+  function collect(): HTMLElement[][] {
+    if (!main || !find) return [];
+    const out: HTMLElement[][] = [];
+    let line: Element | null = null;
+    let hit: string | null = null;
+    for (const el of main.querySelectorAll<HTMLElement>(".found")) {
+      if (el.parentElement === line && el.dataset.hit === hit) out[out.length - 1].push(el);
+      else out.push([el]);
+      line = el.parentElement;
+      hit = el.dataset.hit ?? null;
+    }
+    return out;
+  }
+
+  /** Ring the current match, and scroll to it. */
+  function show(at: number, scroll: boolean) {
+    main?.querySelectorAll(".found.current").forEach((el) => el.classList.remove("current"));
+    const match = matches[at];
+    if (!match) return;
+    match.forEach((el) => el.classList.add("current"));
+    if (scroll) match[0].scrollIntoView({ block: "center", inline: "nearest" });
+  }
+
+  // The commits that added or removed the text, asked of git a moment after typing stops.
+  $effect(() => {
+    const text = find;
+    const matchCase = nav.find.matchCase;
+    const p = path;
+    version;
+    if (!text) {
+      finding = null;
+      return;
+    }
+    const timer = setTimeout(() => {
+      api.filePickaxe(p, text, matchCase, "HEAD").then(
+        (ids) => {
+          if (nav.find.text === text && nav.find.matchCase === matchCase && path === p) finding = { text, ids };
+        },
+        () => (finding = null),
+      );
+    }, 300);
+    return () => clearTimeout(timer);
+  });
+
   const renamedAt = (c: FileCommit) => c.oldPath && (c.status === "renamed" || c.status === "copied");
 </script>
 
 {#snippet commitRow(c: FileCommit, other: boolean)}
   {@const color = colorOfCommit(c.id)}
-  {@const dim = !!line && !line.ids.includes(c.id)}
+  {@const dim = (!!line && !line.ids.includes(c.id)) || (!!finding && !finding.ids.includes(c.id))}
   <button class="commit" class:on={selected === c.id} class:dim class:other style:--lane={lane(color)} style:background={selected === c.id ? tint(color) : undefined} onclick={() => select(c.id)}>
     <span class="rail"><span class="dot" class:hollow={other}></span></span>
     <span class="lines">
@@ -228,6 +306,12 @@
           <button onclick={() => (line = null)} aria-label="Show all commits">×</button>
         </div>
       {/if}
+      {#if finding}
+        <div class="chip">
+          <span><b>“{finding.text}”</b> · {finding.ids.length ? `added or removed in ${finding.ids.length} ${finding.ids.length === 1 ? "commit" : "commits"}` : "no commit added or removed it"}</span>
+          <button onclick={() => (nav.find = { ...nav.find, text: "" })} aria-label="Stop finding">×</button>
+        </div>
+      {/if}
       {#if file.elsewhere.length}
         <div class="elsewhere">
           <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3" stroke-dasharray="2 2" /></svg>
@@ -249,7 +333,7 @@
     {/if}
   </section>
 
-  <section class="main" aria-label={mode === "blame" ? "Blame" : "Changes"}>
+  <section class="main" bind:this={main} aria-label={mode === "blame" ? "Blame" : "Changes"}>
     {#if mode === "changes"}
       {#if pick}
         {@const color = colorOfCommit(pick.id)}
@@ -265,7 +349,7 @@
         {#if renamedAt(pick)}<p class="note">This commit renamed it from <span class="mono">{pick.oldPath}</span>.</p>{/if}
         {#if !byId.has(pick.id) || file?.elsewhere.some((c) => c.id === pick.id)}<p class="note">This change is on another branch, not on {headName}.</p>{/if}
         <div class="scroll">
-          <DiffView {diffs} {color} {whole} history={false} onToggleWhole={() => (whole = !whole)} />
+          <DiffView {diffs} {color} {whole} history={false} find={find || null} matchCase={nav.find.matchCase} onToggleWhole={() => (whole = !whole)} />
         </div>
       {:else}
         <p class="hint pad">Pick a commit on the left.</p>
@@ -298,7 +382,7 @@
       {#if blameError}
         <p class="error" role="alert">{blameError}</p>
       {:else if blame}
-        <div class="code mono selectable" bind:this={code}>
+        <div class="code mono selectable">
           {#each blocks as block (block.from)}
             {@const c = blame.commits[block.commit]}
             {@const color = colorOfCommit(c.id)}
@@ -315,7 +399,7 @@
                 {#each block.lines as l (l.no)}
                   <div class="row">
                     <button class="no" class:picked={line?.no === l.no} onclick={() => lineHistory(l.no)} title="Every change to line {l.no}">{l.no}</button>
-                    <span class="text">{#each paint(l.text || " ", null, language) as piece, k (k)}<span class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>
+                    <span class="text">{#each paint(l.text || " ", null, language, find || null, nav.find.matchCase) as piece, k (k)}<span class:found={piece.found} data-hit={piece.hit} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>
                   </div>
                 {/each}
               </div>
@@ -797,5 +881,14 @@
   .error {
     margin: 20px;
     color: var(--red);
+  }
+  /* Found text: an outlined neutral capsule, as in History search; the current one gets a strong ring. */
+  .found {
+    border-radius: 4px;
+    box-shadow: 0 0 0 1.5px var(--found-ring);
+    background: var(--found-bg);
+  }
+  .found:global(.current) {
+    box-shadow: 0 0 0 2px var(--text);
   }
 </style>

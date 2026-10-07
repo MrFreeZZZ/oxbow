@@ -30,6 +30,7 @@
   import { untrack } from "svelte";
   import CompareView from "./lib/CompareView.svelte";
   import FileHistoryView from "./lib/FileHistoryView.svelte";
+  import FindField from "./lib/FindField.svelte";
   import PairPanel from "./lib/PairPanel.svelte";
   import { nav } from "./lib/nav.svelte";
   import type { CompareMode } from "./lib/types";
@@ -41,6 +42,7 @@
   let loading = $state(false);
   let list = $state<HistoryList>();
   let searchField = $state<SearchField>();
+  let findField = $state<FindField>();
   let panelWidth = $state(640);
   /** Goes up on every reload of the history, so the changes panel reloads too. */
   let version = $state(0);
@@ -56,7 +58,11 @@
   $effect(() => {
     if (!nav.file) return;
     untrack(() => {
-      if (view !== "file") fileBack = view;
+      // Coming from another screen starts without a find.
+      if (view !== "file") {
+        fileBack = view;
+        nav.find = { ...nav.find, text: "" };
+      }
       view = "file";
       resolving = false;
     });
@@ -491,6 +497,10 @@
     if ((event.metaKey || event.ctrlKey) && event.key === ",") {
       event.preventDefault();
       api.openSettings();
+    } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f" && history && !confirm.request && view === "file" && !showConflicts) {
+      // In File History, ⌘F finds in the file.
+      event.preventDefault();
+      findField?.focus();
     } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f" && history && !confirm.request) {
       event.preventDefault();
       view = "history";
@@ -520,6 +530,12 @@
     />
     <div class="main">
       <header data-tauri-drag-region>
+        {#if view === "file" && !showConflicts}
+          {@const back = fileBack === "compare" ? "Compare" : fileBack === "stashes" ? "Stashes" : "History"}
+          <button class="back" onclick={() => ((view = fileBack), (nav.file = null))} aria-label="Back to {back}" title="Back to {back}">
+            <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>
+          </button>
+        {/if}
         <div class="title" data-tauri-drag-region>
           {#if showConflicts && operation}
             <span class="name">Resolve Conflicts</span>
@@ -538,11 +554,11 @@
             <span class="sub">{branchCount} {branchCount === 1 ? "branch" : "branches"} · {history.head.branch ?? operation?.branch ?? "detached HEAD"}</span>
           {/if}
         </div>
-        <BranchPicker {history} {colorOf} onPick={(name) => branchCtx && run(switchRequest(branchCtx, name))} />
+        <!-- File History is about one file: a plain back arrow and no branch picker, as in the design, leave room for Find in file. -->
+        {#if view !== "file" || showConflicts}
+          <BranchPicker {history} {colorOf} onPick={(name) => branchCtx && run(switchRequest(branchCtx, name))} />
+        {/if}
         {#if view === "file" && !showConflicts}
-          <button class="capsule" onclick={() => ((view = fileBack), (nav.file = null))} title="Back">
-            <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>{fileBack === "compare" ? "Compare" : fileBack === "stashes" ? "Stashes" : "History"}
-          </button>
           <div class="segmented" role="radiogroup" aria-label="File history mode">
             <button role="radio" aria-checked={nav.fileMode === "changes"} class:on={nav.fileMode === "changes"} onclick={() => (nav.fileMode = "changes")}>Changes</button>
             <button role="radio" aria-checked={nav.fileMode === "blame"} class:on={nav.fileMode === "blame"} onclick={() => (nav.fileMode = "blame")}>Blame</button>
@@ -595,6 +611,9 @@
         <button class="capsule" onclick={() => api.openSettings()} aria-label="Settings" title={navigator.platform.startsWith("Mac") ? "Settings (⌘,)" : "Settings (Ctrl+,)"}>
           <svg class="icon" viewBox="0 0 16 16"><path d="M12.78 6.52L14.44 6.56L14.44 9.44L12.78 9.48L12.42 10.33L13.57 11.54L11.54 13.57L10.33 12.42L9.48 12.78L9.44 14.44L6.56 14.44L6.52 12.78L5.67 12.42L4.46 13.57L2.43 11.54L3.58 10.33L3.22 9.48L1.56 9.44L1.56 6.56L3.22 6.52L3.58 5.67L2.43 4.46L4.46 2.43L5.67 3.58L6.52 3.22L6.56 1.56L9.44 1.56L9.48 3.22L10.33 3.58L11.54 2.43L13.57 4.46L12.42 5.67zM8 5.8a2.2 2.2 0 1 0 0 4.4a2.2 2.2 0 1 0 0-4.4" /></svg>
         </button>
+        {#if view === "file" && !showConflicts}
+          <FindField bind:this={findField} />
+        {/if}
         {#if view === "history" && !showConflicts}
           <SearchField bind:this={searchField} rows={history.rows} {matches} {selected} onGo={select} />
         {/if}
@@ -720,6 +739,12 @@
     flex-direction: column;
     line-height: 1.2;
     margin-right: 4px;
+    min-width: 0;
+  }
+  .title span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .name {
     font-size: 15px;
@@ -741,6 +766,20 @@
     box-shadow: var(--glass-shadow);
     color: var(--icon);
     font-weight: 500;
+  }
+  .back {
+    width: 28px;
+    height: 28px;
+    margin-right: -4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 14px;
+    color: var(--icon);
+    flex-shrink: 0;
+  }
+  .back:hover {
+    background: var(--field);
   }
   .group {
     display: flex;

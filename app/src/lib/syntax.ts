@@ -78,6 +78,8 @@ export interface Piece {
   role: Role;
   changed: boolean;
   found?: boolean;
+  /** Which occurrence of the searched text in the line this piece belongs to. */
+  hit?: number;
 }
 
 function roleOf(classes: string): Role {
@@ -124,15 +126,25 @@ function tokens(text: string, language: string): { text: string; role: Role }[] 
 
 /** The line in pieces to draw: syntax colors from `language`, changed words from `words`, and
  *  `find` (searched code, matched as git's -S does: exact case) marked. */
-export function paint(text: string, words: WordPart[] | null, language: string | null, find: string | null = null): Piece[] {
+export function paint(text: string, words: WordPart[] | null, language: string | null, find: string | null = null, matchCase = true): Piece[] {
   const pieces = colored(text, words, language);
-  return find && text.includes(find) ? mark(pieces, text, find) : pieces;
+  if (!find) return pieces;
+  const inside = occurrences(text, find, matchCase);
+  return inside.length ? mark(pieces, text, inside) : pieces;
 }
 
-/** Cut the pieces where `find` starts and ends, and flag the ones inside it. */
-function mark(pieces: Piece[], text: string, find: string): Piece[] {
-  const inside: [number, number][] = [];
-  for (let at = text.indexOf(find); at >= 0; at = text.indexOf(find, at + find.length)) inside.push([at, at + find.length]);
+/** Where `find` is in `text`: start and end of each occurrence, left to right. */
+export function occurrences(text: string, find: string, matchCase = true): [number, number][] {
+  const hay = matchCase ? text : text.toLowerCase();
+  const needle = matchCase ? find : find.toLowerCase();
+  const out: [number, number][] = [];
+  if (!needle) return out;
+  for (let at = hay.indexOf(needle); at >= 0; at = hay.indexOf(needle, at + needle.length)) out.push([at, at + needle.length]);
+  return out;
+}
+
+/** Cut the pieces where the occurrences start and end, and flag the ones inside them with the occurrence's number. */
+function mark(pieces: Piece[], text: string, inside: [number, number][]): Piece[] {
   const out: Piece[] = [];
   let offset = 0;
   for (const piece of pieces) {
@@ -141,7 +153,8 @@ function mark(pieces: Piece[], text: string, find: string): Piece[] {
     const cuts = [offset, ...inside.flat().filter((c) => c > offset && c < end), end];
     for (let i = 0; i + 1 < cuts.length; i++) {
       const [a, b] = [cuts[i], cuts[i + 1]];
-      out.push({ ...piece, text: text.slice(a, b), found: inside.some(([s, e]) => a >= s && b <= e) });
+      const hit = inside.findIndex(([s, e]) => a >= s && b <= e);
+      out.push({ ...piece, text: text.slice(a, b), found: hit >= 0, hit: hit >= 0 ? hit : undefined });
     }
     offset = end;
   }

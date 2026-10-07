@@ -55,4 +55,19 @@ fn history_follows_renames_and_blame_names_each_line() {
         repo.line_history("src/config.rs", 2, "HEAD").unwrap(),
         [edit.clone(), first.clone()]
     );
+
+    // Find in file: the commits that added or removed a text, here and on other branches.
+    assert_eq!(
+        repo.file_pickaxe("src/config.rs", "TWO", false, "HEAD").unwrap(),
+        [edit.clone(), first.clone()]
+    );
+    assert!(
+        repo.file_pickaxe("src/config.rs", "TWO", true, "HEAD")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        repo.file_pickaxe("src/config.rs", "zero", true, "HEAD").unwrap(),
+        std::slice::from_ref(&side)
+    );
 }
