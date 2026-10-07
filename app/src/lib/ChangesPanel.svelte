@@ -4,6 +4,7 @@
 </script>
 
 <script lang="ts">
+  import { keys } from "./keys";
   import { api } from "./api";
   import { diffSettings, prefs, wholeByDefault } from "./prefs.svelte";
   import { confirm, type Part, type Request } from "./confirm.svelte";
@@ -461,7 +462,7 @@
     <div class="row">
       <span class="grow hint-line">{commitHint}</span>
       <button class="go" onclick={commit} disabled={!canCommit}>
-        {draft.amend ? "Amend" : "Commit"} <span class="keys">{navigator.platform.startsWith("Mac") ? "⌘↩" : "Ctrl+↩"}</span>
+        {draft.amend ? "Amend" : "Commit"} <span class="keys">{keys("Mod+Enter")}</span>
       </button>
     </div>
   </div>

@@ -121,6 +121,8 @@
   .picker {
     position: relative;
     display: flex;
+    min-width: 0;
+    flex-shrink: 0.02;
   }
   .capsule {
     display: flex;
@@ -135,8 +137,15 @@
     color: var(--icon);
     font-weight: 500;
   }
+  .capsule {
+    min-width: 0;
+    max-width: 100%;
+  }
   .capsule span {
     color: var(--text);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .small {
     width: 14px;

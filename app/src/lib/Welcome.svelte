@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { keys } from "./keys";
   // The Welcome window: clone, open or start a repository on the left with this computer's Git
   // setup under them; repositories opened before on the right, each with where it stands.
 
@@ -25,9 +26,6 @@
     onOpenPath: (path: string) => void;
   } = $props();
 
-  const mac = navigator.platform.startsWith("Mac");
-  const cmd = mac ? "⌘" : "Ctrl+";
-  const shift = mac ? "⇧" : "Shift+";
 
   let filter = $state("");
   let selected = $state<string | null>(null);
@@ -60,9 +58,9 @@
   });
 
   const actions = [
-    { label: "Clone Repository…", keys: `${shift}${cmd}C`, icon: "M8 2.5v8M5 7.5l3 3 3-3M3 13.5h10", run: () => start.clone() },
-    { label: "Open Local Repository…", keys: `${cmd}O`, icon: "M1.5 4.5a1 1 0 0 1 1-1H6l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z", run: () => onOpen() },
-    { label: "New Repository…", keys: `${cmd}N`, icon: "M8 3v10M3 8h10", run: () => start.newRepo() },
+    { label: "Clone Repository…", keys: keys("Mod+Shift+C"), icon: "M8 2.5v8M5 7.5l3 3 3-3M3 13.5h10", run: () => start.clone() },
+    { label: "Open Local Repository…", keys: keys("Mod+O"), icon: "M1.5 4.5a1 1 0 0 1 1-1H6l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z", run: () => onOpen() },
+    { label: "New Repository…", keys: keys("Mod+N"), icon: "M8 3v10M3 8h10", run: () => start.newRepo() },
   ];
 
   const env = $derived.by(() => {

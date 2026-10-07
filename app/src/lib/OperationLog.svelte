@@ -6,10 +6,10 @@
   import { cannotRestore, clearRequest, entryIcon, isRedo, oplog, restoreRequest, undoRequest } from "./oplog.svelte";
   import { relativeTime } from "./format";
   import { prefs } from "./prefs.svelte";
+  import { keys, withKeys } from "./keys";
 
   let { repo, run }: { repo: string; run: (request: Request) => void } = $props();
 
-  const mac = navigator.platform.startsWith("Mac");
   const latest = $derived(oplog.entries[0] ?? null);
   /** Steps that throw work away get the warning tint, as the design has for a reset. */
   const warn = new Set(["reset", "discard", "drop"]);
@@ -44,7 +44,7 @@
     aria-haspopup="dialog"
     aria-expanded={oplog.open}
     aria-label={latest ? `Undo ${latest.title}, open operation log` : "Open operation log"}
-    title={latest ? `Operation Log. ${mac ? "⌘Z" : "Ctrl+Z"} ${isRedo(latest) ? "redoes what the undo took back" : `undoes “${latest.title}”`}` : "Operation Log"}
+    title={latest ? withKeys(isRedo(latest) ? "Redo, from the Operation Log" : `Undo “${latest.title}”`, "Mod+Z") : "Operation Log"}
   >
     <svg class="icon" viewBox="0 0 16 16"><path d="M5.5 4 2.5 7l3 3M3 7h6.5a3.5 3.5 0 0 1 0 7H7" /></svg>
     <svg class="icon small" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>
@@ -71,7 +71,7 @@
             </span>
             {#if i === 0}
               <button class="primary" disabled={!!blocked} title={blocked ?? undefined} onclick={() => go(undoRequest(entry))}>
-                {isRedo(entry) ? "Redo" : "Undo"}<span class="key">{mac ? "⌘Z" : "Ctrl+Z"}</span>
+                {isRedo(entry) ? "Redo" : "Undo"}<span class="key">{keys("Mod+Z")}</span>
               </button>
             {:else}
               <span class="time">{relativeTime(entry.time)}</span>

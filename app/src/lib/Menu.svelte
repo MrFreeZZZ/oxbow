@@ -1,6 +1,7 @@
 <script lang="ts" module>
   export type MenuEntry =
-    | { kind: "item"; label: string; icon: string; danger?: boolean; run: () => void }
+    /** `keys`: its shortcut, grey on the right, e.g. "⌘O". */
+    | { kind: "item"; label: string; icon: string; danger?: boolean; keys?: string; run: () => void }
     /** Opens a submenu to the side, e.g. Reset ▸ Soft / Mixed / Hard. */
     | { kind: "sub"; label: string; icon: string; entries: SubEntry[] }
     | { kind: "header"; label: string }
@@ -141,6 +142,7 @@
       <button role="menuitem" class:danger={entry.danger} onmouseenter={() => (sub = null)} onclick={() => choose(run)}>
         <svg class="icon" viewBox="0 0 16 16"><path d={entry.icon} /></svg>
         <span>{entry.label}</span>
+        {#if entry.keys}<span class="keys">{entry.keys}</span>{/if}
       </button>
     {/if}
   {/each}
@@ -242,6 +244,12 @@
   }
   .submenu button {
     gap: 28px;
+  }
+  button .keys {
+    flex-grow: 0;
+    margin-left: 18px;
+    font-size: 12px;
+    color: var(--text2);
   }
   .submenu .hint {
     flex-grow: 0;

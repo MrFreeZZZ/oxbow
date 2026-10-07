@@ -3,6 +3,9 @@
 :root {
   color-scheme: light dark;
   --win: #ffffff;
+  /* Laid over a button's own color on hover and while pressed. */
+  --hover-wash: rgba(0, 0, 0, 0.065);
+  --press-wash: rgba(0, 0, 0, 0.1);
   /* The graph sits on its own warm tint, apart from the white commit panel. */
   --graph-bg: #f7f6f2;
   --side: rgba(243, 243, 246, 0.96);
@@ -121,6 +124,8 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
   --win: #1e1e21;
+  --hover-wash: rgba(255, 255, 255, 0.08);
+  --press-wash: rgba(255, 255, 255, 0.14);
   --graph-bg: #252422;
   --side: rgba(44, 44, 48, 0.96);
   --side-border: rgba(255, 255, 255, 0.07);
@@ -249,6 +254,82 @@ button {
   cursor: default;
   text-align: left;
   white-space: nowrap;
+}
+
+/* Buttons light up under the pointer: a soft wash over their own color, so glass capsules,
+   grey buttons and the blue action buttons all react alike. Lists and menus with a hover of
+   their own are left out. `:root` outweighs the components' own background rules. */
+:root
+  :is(
+    .capsule,
+    .group > button,
+    .segmented > button:not(.on),
+    [role="radiogroup"] > button[role="radio"][aria-checked="false"],
+    .btn,
+    .hbtn,
+    .action,
+    .env-action,
+    .pill,
+    .plain,
+    .primary,
+    .small-button,
+    .small-btn,
+    .term,
+    .toggle,
+    .alt,
+    .go,
+    .undo,
+    .restore,
+    .take,
+    .swap,
+    .resolve,
+    .stash-now,
+    .amend,
+    .open,
+    .top,
+    .tab,
+    .copy,
+    .clear,
+    nav .item:not(.current),
+    nav .repo
+  ):not(:disabled):hover {
+  background-image: linear-gradient(var(--hover-wash), var(--hover-wash));
+}
+:root
+  :is(
+    .capsule,
+    .group > button,
+    .segmented > button,
+    [role="radiogroup"] > button[role="radio"],
+    .btn,
+    .hbtn,
+    .action,
+    .env-action,
+    .pill,
+    .plain,
+    .primary,
+    .small-button,
+    .small-btn,
+    .term,
+    .toggle,
+    .alt,
+    .go,
+    .undo,
+    .restore,
+    .take,
+    .swap,
+    .resolve,
+    .stash-now,
+    .amend,
+    .open,
+    .top,
+    .tab,
+    .copy,
+    .clear,
+    nav .item,
+    nav .repo
+  ):not(:disabled):active {
+  background-image: linear-gradient(var(--press-wash), var(--press-wash));
 }
 
 button:focus-visible {
