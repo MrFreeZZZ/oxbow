@@ -5,6 +5,7 @@
 //! shows, so the user sees the very command that will run.
 
 use std::io::{Read, Write};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -113,48 +114,14 @@ impl Repo {
 
     /// Run `command`, feeding `input` to its standard input (a patch for `git apply`).
     pub fn run_with_input(&self, command: &GitCommand, input: Option<&[u8]>) -> Result<CommandOutput> {
-        let output = self.spawn(command, input)?;
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        if output.status.success() {
-            Ok(CommandOutput { stdout, stderr })
-        } else {
-            Err(Error::Command {
-                command: command.display(),
-                code: output.status.code(),
-                output: if stderr.trim().is_empty() { stdout } else { stderr },
-            })
-        }
-    }
-
-    /// `git` set up to run `command` in the working directory.
-    fn command(&self, command: &GitCommand) -> Command {
-        let mut git = crate::config::git();
-        git.args(command.run_args()).current_dir(self.workdir());
-        git
+        run_in(self.workdir(), command, input)
     }
 
     /// Run `command` and return its raw output whatever its exit code.
     pub(crate) fn spawn(&self, command: &GitCommand, input: Option<&[u8]>) -> Result<std::process::Output> {
-        let mut child = self
-            .command(command)
-            .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|err| Error::GitNotFound(err.to_string()))?;
-        if let Some(input) = input {
-            let mut stdin = child.stdin.take().expect("stdin is piped");
-            // A command that exits early closes its end; its exit status tells what went wrong.
-            let _ = stdin.write_all(input);
-        }
-        child
-            .wait_with_output()
-            .map_err(|err| Error::GitNotFound(err.to_string()))
+        spawn_in(self.workdir(), command, input)
     }
-}
 
-impl Repo {
     /// Run `command`, passing each line it prints to `on_line` as it comes. Setting `cancel`
     /// stops the command; it then fails with [`Error::Cancelled`].
     pub fn run_streaming(
@@ -163,62 +130,112 @@ impl Repo {
         on_line: &mut dyn FnMut(OutputLine),
         cancel: &AtomicBool,
     ) -> Result<CommandOutput> {
-        let mut child = self
-            .command(command)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|err| Error::GitNotFound(err.to_string()))?;
-        let (send, receive) = mpsc::channel();
-        let readers = [
-            read_lines(child.stdout.take().expect("stdout is piped"), false, send.clone()),
-            read_lines(child.stderr.take().expect("stderr is piped"), true, send),
-        ];
-        let mut output = CommandOutput::default();
-        let status = loop {
-            match receive.recv_timeout(Duration::from_millis(50)) {
-                Ok(line) => {
-                    if !line.progress {
-                        let all = if line.stderr {
-                            &mut output.stderr
-                        } else {
-                            &mut output.stdout
-                        };
-                        all.push_str(&line.text);
-                        all.push('\n');
-                    }
-                    on_line(line);
-                    continue;
+        run_streaming_in(self.workdir(), command, on_line, cancel)
+    }
+}
+
+/// `git` set up to run `command` in `dir`.
+fn command_in(dir: &Path, command: &GitCommand) -> Command {
+    let mut git = crate::config::git();
+    git.args(command.run_args()).current_dir(dir);
+    git
+}
+
+/// Run `command` in `dir`, which need not be a repository (`clone`, `init`), and wait for it.
+pub fn run_in(dir: &Path, command: &GitCommand, input: Option<&[u8]>) -> Result<CommandOutput> {
+    let output = spawn_in(dir, command, input)?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    if output.status.success() {
+        Ok(CommandOutput { stdout, stderr })
+    } else {
+        Err(Error::Command {
+            command: command.display(),
+            code: output.status.code(),
+            output: if stderr.trim().is_empty() { stdout } else { stderr },
+        })
+    }
+}
+
+fn spawn_in(dir: &Path, command: &GitCommand, input: Option<&[u8]>) -> Result<std::process::Output> {
+    let mut child = command_in(dir, command)
+        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| Error::GitNotFound(err.to_string()))?;
+    if let Some(input) = input {
+        let mut stdin = child.stdin.take().expect("stdin is piped");
+        // A command that exits early closes its end; its exit status tells what went wrong.
+        let _ = stdin.write_all(input);
+    }
+    child
+        .wait_with_output()
+        .map_err(|err| Error::GitNotFound(err.to_string()))
+}
+
+/// Run `command` in `dir`, passing each line it prints to `on_line` as it comes. Setting
+/// `cancel` stops the command; it then fails with [`Error::Cancelled`].
+pub fn run_streaming_in(
+    dir: &Path,
+    command: &GitCommand,
+    on_line: &mut dyn FnMut(OutputLine),
+    cancel: &AtomicBool,
+) -> Result<CommandOutput> {
+    let mut child = command_in(dir, command)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| Error::GitNotFound(err.to_string()))?;
+    let (send, receive) = mpsc::channel();
+    let readers = [
+        read_lines(child.stdout.take().expect("stdout is piped"), false, send.clone()),
+        read_lines(child.stderr.take().expect("stderr is piped"), true, send),
+    ];
+    let mut output = CommandOutput::default();
+    let status = loop {
+        match receive.recv_timeout(Duration::from_millis(50)) {
+            Ok(line) => {
+                if !line.progress {
+                    let all = if line.stderr {
+                        &mut output.stderr
+                    } else {
+                        &mut output.stdout
+                    };
+                    all.push_str(&line.text);
+                    all.push('\n');
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                // Both pipes are closed: the command is done, or about to be.
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    break child.wait().map_err(|err| Error::GitNotFound(err.to_string()))?;
-                }
+                on_line(line);
+                continue;
             }
-            if cancel.load(Ordering::Relaxed) {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(Error::Cancelled);
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            // Both pipes are closed: the command is done, or about to be.
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                break child.wait().map_err(|err| Error::GitNotFound(err.to_string()))?;
             }
-        };
-        for reader in readers {
-            let _ = reader.join();
         }
-        if status.success() {
-            Ok(output)
-        } else {
-            Err(Error::Command {
-                command: command.display(),
-                code: status.code(),
-                output: if output.stderr.trim().is_empty() {
-                    output.stdout
-                } else {
-                    output.stderr
-                },
-            })
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(Error::Cancelled);
         }
+    };
+    for reader in readers {
+        let _ = reader.join();
+    }
+    if status.success() {
+        Ok(output)
+    } else {
+        Err(Error::Command {
+            command: command.display(),
+            code: status.code(),
+            output: if output.stderr.trim().is_empty() {
+                output.stdout
+            } else {
+                output.stderr
+            },
+        })
     }
 }
 

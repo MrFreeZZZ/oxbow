@@ -17,6 +17,7 @@ pub mod operation;
 pub mod remote;
 pub mod repo;
 pub mod search;
+pub mod setup;
 pub mod stash;
 pub mod tags;
 pub mod worktree;
@@ -26,7 +27,7 @@ pub use commit::{
     CommitDetail, DiffContext, DiffLine, FileChange, FileDiff, FileStatus, Hunk, LineKind, Person, WordPart,
 };
 pub use compare::{CompareCommit, CompareFile, CompareMode, Comparison};
-pub use config::{ConfigScope, GitInfo, RemoteInfo, SshKey, Storage};
+pub use config::{ConfigScope, GitInfo, RemoteInfo, SshKey, SshSource, Storage};
 pub use edit::ResetMode;
 pub use error::{Error, Result};
 pub use filehistory::{Blame, BlameCommit, BlameLine, FileCommit, FileHistory};
@@ -35,5 +36,6 @@ pub use operation::{Chunk, ConflictFile, ConflictSide, MergeMethod, MergePreview
 pub use remote::{CommitBrief, DeletionCheck, Failure, FailureKind, Tracking, classify_failure};
 pub use repo::{DiffOptions, HeadInfo, RefInfo, RefKind, Repo, StashInfo};
 pub use search::{SearchHit, SearchMode, SearchQuery, SearchResult};
+pub use setup::{CloneOptions, NewRepoOptions, NewRepoPlan, RemoteProbe, RepoGlance};
 pub use stash::StashCheck;
 pub use worktree::{Action, ActionEvent, Plan, PullMode, RemoteBranch, Side, WorkingTree};

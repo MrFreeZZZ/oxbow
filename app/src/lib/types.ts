@@ -487,3 +487,83 @@ export interface SearchResult {
   more: boolean;
   command: string;
 }
+
+/** A repository in the Welcome window's Recent Repositories. */
+export interface RecentRepo {
+  path: string;
+  name: string;
+  /** Last opened, in seconds since 1970. */
+  opened: number;
+  /** The folder is gone: moved, renamed or deleted. */
+  missing: boolean;
+}
+
+/** Where a recent repository stands. */
+export interface RepoGlance {
+  branch: string | null;
+  color: number;
+  ahead: number;
+  behind: number;
+  upstream: boolean;
+  remote: string | null;
+  changed: number;
+  stashes: number;
+  operation: OperationKind | null;
+  conflicts: number;
+}
+
+/** What the Welcome window says about this computer's Git setup. */
+export interface WelcomeInfo {
+  version: string;
+  git: { path: string; version: string | null; custom: boolean };
+  name: string | null;
+  email: string | null;
+  ssh: { label: string; ok: boolean };
+  defaultBranch: string | null;
+  home: string;
+  /** Where clones and new repositories go unless another folder is picked. */
+  projects: string;
+  /** [key, name] of the starter .gitignore files and licenses. */
+  gitignores: [string, string][];
+  licenses: [string, string][];
+}
+
+export interface RemoteProbe {
+  transport: string;
+  defaultBranch: string | null;
+  branches: number;
+}
+
+export interface CloneOptions {
+  url: string;
+  path: string;
+  submodules: boolean;
+  shallow: boolean;
+}
+
+export interface NewRepoOptions {
+  path: string;
+  branch: string;
+  readme: boolean;
+  gitignore: string | null;
+  license: string | null;
+  commit: boolean;
+}
+
+export interface NewRepoPlan {
+  path: string;
+  exists: boolean;
+  entries: number;
+  /** Already a repository: open it instead. */
+  repository: string | null;
+  writes: string[];
+  kept: string[];
+  commands: GitCommand[];
+}
+
+/** One line git printed. */
+export interface OutputLine {
+  text: string;
+  stderr: boolean;
+  progress: boolean;
+}

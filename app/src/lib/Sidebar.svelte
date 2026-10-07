@@ -21,9 +21,11 @@
   import { mergeRequest } from "./merge";
   import { stashMenu } from "./stash";
   import { deleteTagRequest, fetchTagsRequest, isLocalTag, newTagRequest, pushTagsRequest } from "./tags";
+  import { start } from "./start.svelte";
 
   const TERMINAL = "M2.5 3.5h11v9h-11zM5 7l2 1.5L5 10M8.5 10.5h2.5";
   const FOLDER = "M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z";
+  const HOME = "M2.5 7.5 8 3l5.5 4.5M4 6.5v6.5h8V6.5";
 
   let {
     repo,
@@ -31,6 +33,8 @@
     selectedRow,
     ctx,
     onOpen,
+    onOpenPath,
+    onWelcome,
     onPick,
     run,
     view,
@@ -43,6 +47,9 @@
     selectedRow: HistoryRow | null;
     ctx: BranchContext;
     onOpen: () => void;
+    onOpenPath: (path: string) => void;
+    /** Close the repository and show the Welcome window. */
+    onWelcome: () => void;
     onPick: (commit: string) => void;
     /** Confirm and run a change to the repository. */
     run: (request: Request | Promise<Request>) => void;
@@ -162,6 +169,27 @@
   function open(event: MouseEvent, label: string, ref: string, entries: MenuEntry[]) {
     event.preventDefault();
     menu = { x: event.clientX, y: event.clientY, label, ref, entries };
+  }
+
+  /** The repository button's menu: recent repositories, then clone, open, new. */
+  async function repoMenu(event: MouseEvent) {
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const recent = (await api.recentRepos().catch(() => [])).filter((r) => r.path !== repo.path && !r.missing).slice(0, 8);
+    const entries: MenuEntry[] = [];
+    if (recent.length) {
+      entries.push({ kind: "header", label: "Recent" });
+      for (const r of recent) entries.push({ kind: "item", label: r.name, icon: FOLDER, run: () => onOpenPath(r.path) });
+      entries.push({ kind: "sep" });
+    }
+    entries.push(
+      { kind: "item", label: "Clone Repository…", icon: "M8 2.5v8M5 7.5l3 3 3-3M3 13.5h10", run: () => start.clone() },
+      { kind: "item", label: "Open Local Repository…", icon: FOLDER, run: onOpen },
+      { kind: "item", label: "New Repository…", icon: "M8 3v10M3 8h10", run: () => start.newRepo() },
+      { kind: "sep" },
+      { kind: "item", label: "Open in Terminal", icon: TERMINAL, run: () => api.openInTerminal().catch((err) => confirm.say(String(err))) },
+      { kind: "item", label: "Welcome Window", icon: HOME, run: onWelcome },
+    );
+    menu = { x: box.left, y: box.bottom + 4, label: `Repository ${repo.name}`, ref: repo.path, entries };
   }
 
   /** The right-click menu of a local branch. */
@@ -319,13 +347,12 @@
 
   <button
     class="repo"
-    onclick={onOpen}
-    oncontextmenu={(event) =>
-      open(event, `Repository ${repo.name}`, repo.path, [
-        { kind: "item", label: "Open in Terminal", icon: TERMINAL, run: () => api.openInTerminal().catch((err) => confirm.say(String(err))) },
-        { kind: "item", label: "Open Another Repository…", icon: FOLDER, run: onOpen },
-      ])}
-    title="Open another repository"
+    onclick={repoMenu}
+    oncontextmenu={(event) => {
+      event.preventDefault();
+      repoMenu(event);
+    }}
+    title="Switch, clone or start a repository"
   >
     <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z" /></svg>
     <span class="repo-text">

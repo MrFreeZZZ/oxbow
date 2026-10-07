@@ -22,12 +22,32 @@ import type {
   Side,
   StashCheck,
   WorkingTree,
+  RecentRepo,
+  RepoGlance,
+  WelcomeInfo,
+  RemoteProbe,
+  CloneOptions,
+  NewRepoOptions,
+  NewRepoPlan,
+  GitCommand,
 } from "./types";
 import type { PullSetup } from "./remote";
 
 export const api = {
   initialRepo: () => invoke<string | null>("initial_repo"),
   openRepo: (path: string) => invoke<RepoSummary>("open_repo", { path }),
+  recentRepos: () => invoke<RecentRepo[]>("recent_repos"),
+  /** With `to`, the repository moved there. */
+  forgetRepo: (path: string, to: string | null = null) => invoke<void>("forget_repo", { path, to }),
+  repoGlance: (path: string) => invoke<RepoGlance>("repo_glance", { path }),
+  welcomeInfo: () => invoke<WelcomeInfo>("welcome_info"),
+  folderState: (path: string) => invoke<"missing" | "empty" | "files" | "file">("folder_state", { path }),
+  probeRemote: (url: string) => invoke<RemoteProbe>("probe_remote", { url }),
+  cloneCommand: (options: CloneOptions) => invoke<GitCommand>("clone_command", { options }),
+  /** Sends `clone-line` events while it runs; Stop is `stopAction`. */
+  cloneRepo: (options: CloneOptions) => invoke<string>("clone_repo", { options }),
+  planNewRepo: (options: NewRepoOptions) => invoke<NewRepoPlan>("plan_new_repo", { options }),
+  createRepo: (options: NewRepoOptions) => invoke<string>("create_repo", { options }),
   history: () => invoke<History>("history"),
   commitDetail: (id: string) => invoke<CommitDetail>("commit_detail", { id }),
   commitDiff: (id: string, path: string | null, wholeFile: boolean) =>

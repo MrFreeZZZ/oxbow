@@ -378,6 +378,52 @@ pub fn ssh_keys() -> Vec<SshKey> {
     keys
 }
 
+/// How SSH will authenticate, in a line for the Welcome window.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SshSource {
+    pub label: String,
+    /// False when there is no key and no agent: only HTTPS addresses will work.
+    pub ok: bool,
+}
+
+pub fn ssh_source() -> SshSource {
+    let agent = std::env::var("SSH_AUTH_SOCK").unwrap_or_default();
+    let config = home_dir()
+        .and_then(|home| std::fs::read_to_string(home.join(".ssh").join("config")).ok())
+        .unwrap_or_default();
+    let one_password = agent.to_lowercase().contains("1password")
+        || config.lines().any(|line| {
+            let line = line.trim().to_lowercase();
+            line.starts_with("identityagent") && line.contains("1password")
+        });
+    if one_password {
+        return SshSource {
+            label: "SSH via 1Password agent".into(),
+            ok: true,
+        };
+    }
+    let keys = ssh_keys();
+    match (keys.first(), keys.len()) {
+        (Some(key), 1) => SshSource {
+            label: format!("SSH key {}", key.name),
+            ok: true,
+        },
+        (Some(key), n) => SshSource {
+            label: format!("SSH key {} and {} more", key.name, n - 1),
+            ok: true,
+        },
+        (None, _) if !agent.is_empty() => SshSource {
+            label: "SSH via ssh-agent".into(),
+            ok: true,
+        },
+        (None, _) => SshSource {
+            label: "No SSH key yet · HTTPS works".into(),
+            ok: false,
+        },
+    }
+}
+
 fn fingerprint(path: &Path) -> Option<String> {
     let output = Command::new("ssh-keygen")
         .arg("-lf")

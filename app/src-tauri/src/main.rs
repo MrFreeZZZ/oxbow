@@ -197,6 +197,7 @@ async fn open_repo(app: AppHandle, session: State<'_, Session>, path: String) ->
         let _ = std::fs::create_dir_all(file.parent().expect("config file has a parent"));
         let _ = std::fs::write(&file, &summary.path);
     }
+    remember_repo(&app, &summary.path);
     *session.repo.lock().expect("session lock") = Some(repo);
     // Settings shows this repository under This Repository.
     let _ = app.emit("repo-changed", ());
@@ -221,6 +222,233 @@ fn initial_repo(app: AppHandle) -> Option<String> {
         })
         .map(|path| path.trim().to_owned())
         .filter(|path| !path.is_empty())
+}
+
+/// Repositories opened before, newest first, kept in `recent-repositories.json`.
+#[derive(Clone, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecentRepo {
+    path: String,
+    /// When it was last opened, in seconds since 1970.
+    opened: i64,
+    /// Filled in when listed: the folder name, and whether the folder is gone.
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    missing: bool,
+}
+
+/// How many repositories Recent Repositories keeps.
+const RECENT_LIMIT: usize = 40;
+
+fn recent_file(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("recent-repositories.json"))
+}
+
+fn read_recent(app: &AppHandle) -> Vec<RecentRepo> {
+    let saved = recent_file(app)
+        .and_then(|file| std::fs::read_to_string(file).ok())
+        .and_then(|text| serde_json::from_str::<Vec<RecentRepo>>(&text).ok());
+    match saved {
+        Some(list) => list,
+        // Before the list existed, Oxbow remembered only the last repository.
+        None => last_repo_file(app)
+            .and_then(|file| std::fs::read_to_string(file).ok())
+            .map(|path| path.trim().to_owned())
+            .filter(|path| !path.is_empty())
+            .map(|path| {
+                vec![RecentRepo {
+                    path,
+                    opened: now(),
+                    name: String::new(),
+                    missing: false,
+                }]
+            })
+            .unwrap_or_default(),
+    }
+}
+
+fn write_recent(app: &AppHandle, list: &[RecentRepo]) {
+    let Some(file) = recent_file(app) else { return };
+    let _ = std::fs::create_dir_all(file.parent().expect("config file has a parent"));
+    if let Ok(text) = serde_json::to_string_pretty(list) {
+        let _ = std::fs::write(file, text + "\n");
+    }
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
+/// Put `path` at the top of Recent Repositories.
+fn remember_repo(app: &AppHandle, path: &str) {
+    let mut list = read_recent(app);
+    list.retain(|r| r.path != path);
+    list.insert(
+        0,
+        RecentRepo {
+            path: path.to_owned(),
+            opened: now(),
+            name: String::new(),
+            missing: false,
+        },
+    );
+    list.truncate(RECENT_LIMIT);
+    write_recent(app, &list);
+}
+
+#[tauri::command]
+fn recent_repos(app: AppHandle) -> Vec<RecentRepo> {
+    read_recent(&app)
+        .into_iter()
+        .map(|mut r| {
+            let path = Path::new(&r.path);
+            r.name = path
+                .file_name()
+                .map_or_else(|| r.path.clone(), |n| n.to_string_lossy().into_owned());
+            r.missing = !path.is_dir();
+            r
+        })
+        .collect()
+}
+
+/// Take a repository off Recent Repositories; with `to`, it moved there (Locate…).
+#[tauri::command]
+fn forget_repo(app: AppHandle, path: String, to: Option<String>) {
+    let mut list = read_recent(&app);
+    match to {
+        Some(to) => {
+            list.retain(|r| r.path != to);
+            if let Some(entry) = list.iter_mut().find(|r| r.path == path) {
+                entry.path = to;
+            }
+        }
+        None => list.retain(|r| r.path != path),
+    }
+    write_recent(&app, &list);
+}
+
+/// Where a recent repository stands, for its row.
+#[tauri::command]
+async fn repo_glance(path: String) -> CommandResult<oxbow_core::RepoGlance> {
+    blocking(move || oxbow_core::setup::glance(Path::new(&path))).await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WelcomeInfo {
+    version: String,
+    git: oxbow_core::GitInfo,
+    name: Option<String>,
+    email: Option<String>,
+    ssh: oxbow_core::SshSource,
+    /// `init.defaultBranch`, when set.
+    default_branch: Option<String>,
+    home: String,
+    /// Where clones and new repositories go unless the user picks another folder.
+    projects: String,
+    gitignores: Vec<(String, String)>,
+    licenses: Vec<(String, String)>,
+}
+
+/// What the Welcome window says about this computer's Git setup.
+#[tauri::command]
+async fn welcome_info(app: AppHandle) -> CommandResult<WelcomeInfo> {
+    let version = app.package_info().version.to_string();
+    blocking(move || {
+        let global = config::global_config();
+        let home = config::home_dir().unwrap_or_default();
+        let projects = ["Developer", "Projects", "projects", "src", "Code", "code"]
+            .iter()
+            .map(|name| home.join(name))
+            .find(|dir| dir.is_dir())
+            .unwrap_or_else(|| home.clone());
+        Ok(WelcomeInfo {
+            version,
+            git: config::git_info(),
+            name: global.get("user.name").cloned(),
+            email: global.get("user.email").cloned(),
+            ssh: config::ssh_source(),
+            default_branch: global.get("init.defaultbranch").cloned(),
+            home: home.display().to_string(),
+            projects: projects.display().to_string(),
+            gitignores: oxbow_core::setup::GITIGNORES
+                .iter()
+                .map(|(key, name, _)| ((*key).to_owned(), (*name).to_owned()))
+                .collect(),
+            licenses: oxbow_core::setup::LICENSES
+                .iter()
+                .map(|(key, name, _)| ((*key).to_owned(), (*name).to_owned()))
+                .collect(),
+        })
+    })
+    .await
+}
+
+/// Whether a folder is free to clone into: `missing`, `empty`, `files` or `file`.
+#[tauri::command]
+fn folder_state(path: String) -> &'static str {
+    let path = Path::new(&path);
+    if !path.exists() {
+        "missing"
+    } else if !path.is_dir() {
+        "file"
+    } else if std::fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_none()) {
+        "empty"
+    } else {
+        "files"
+    }
+}
+
+#[tauri::command]
+async fn probe_remote(url: String) -> CommandResult<oxbow_core::RemoteProbe> {
+    blocking(move || oxbow_core::setup::probe_remote(&url)).await
+}
+
+#[tauri::command]
+fn clone_command(options: oxbow_core::CloneOptions) -> CommandResult<oxbow_core::GitCommand> {
+    oxbow_core::setup::clone_command(&options).map_err(|err| err.to_string())
+}
+
+/// Clone, sending each line git prints to the window as a `clone-line`. Stop (`stop_action`)
+/// ends it and removes what it made.
+#[tauri::command]
+async fn clone_repo(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    options: oxbow_core::CloneOptions,
+) -> CommandResult<String> {
+    let cancel = session.cancel.clone();
+    cancel.store(false, Ordering::Relaxed);
+    let path = options.path.display().to_string();
+    blocking(move || {
+        oxbow_core::setup::clone(
+            &options,
+            &mut |line| {
+                let _ = window.emit_to(window.label(), "clone-line", line);
+            },
+            &cancel,
+        )
+    })
+    .await?;
+    Ok(path)
+}
+
+#[tauri::command]
+async fn plan_new_repo(options: oxbow_core::NewRepoOptions) -> CommandResult<oxbow_core::NewRepoPlan> {
+    blocking(move || oxbow_core::setup::plan_new_repo(&options)).await
+}
+
+#[tauri::command]
+async fn create_repo(options: oxbow_core::NewRepoOptions) -> CommandResult<String> {
+    let path = options.path.display().to_string();
+    blocking(move || oxbow_core::setup::create_repo(&options)).await?;
+    Ok(path)
 }
 
 #[tauri::command]
@@ -670,6 +898,16 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             open_repo,
             initial_repo,
+            recent_repos,
+            forget_repo,
+            repo_glance,
+            welcome_info,
+            folder_state,
+            probe_remote,
+            clone_command,
+            clone_repo,
+            plan_new_repo,
+            create_repo,
             history,
             commit_detail,
             commit_diff,

@@ -35,6 +35,9 @@
   import PairPanel from "./lib/PairPanel.svelte";
   import { nav } from "./lib/nav.svelte";
   import type { CompareMode } from "./lib/types";
+  import CloneSheet from "./lib/CloneSheet.svelte";
+  import NewRepoSheet from "./lib/NewRepoSheet.svelte";
+  import { start } from "./lib/start.svelte";
 
   let repo = $state<RepoSummary | null>(null);
   let history = $state<History | null>(null);
@@ -453,6 +456,26 @@
     if (typeof path === "string") await load(path);
   }
 
+  /** A clone or a new repository is ready: open it. */
+  function started(path: string) {
+    start.sheet = null;
+    load(path);
+  }
+
+  /** Back to the Welcome window; the repository stays in Recent Repositories. */
+  function closeRepo() {
+    ++generation;
+    repo = null;
+    history = null;
+    selected = null;
+    second = null;
+    search.clear();
+    view = "history";
+    nav.quickOpen = false;
+    error = null;
+    loading = false;
+  }
+
   function select(id: string) {
     selected = id;
     second = null;
@@ -520,15 +543,28 @@
       requestAnimationFrame(() => searchField?.focus());
     } else if (event.key === "Escape" && second && view === "history" && !confirm.request && !event.defaultPrevented) {
       second = null;
+    } else if ((event.metaKey || event.ctrlKey) && !event.altKey && !confirm.request && !start.sheet && !loading) {
+      // Clone ⇧⌘C, Open ⌘O, New ⌘N, here and on the Welcome window.
+      const key = event.key.toLowerCase();
+      if (key === "c" && event.shiftKey) {
+        event.preventDefault();
+        start.clone();
+      } else if (key === "o" && !event.shiftKey) {
+        event.preventDefault();
+        chooseRepo();
+      } else if (key === "n" && !event.shiftKey) {
+        event.preventDefault();
+        start.newRepo();
+      }
     }
   }}
 />
 
 {#if !repo || !history}
-  <Welcome {loading} {error} onOpen={chooseRepo} />
+  <Welcome {loading} {error} onOpen={chooseRepo} onOpenPath={load} />
 {:else}
   <div class="window">
-    <Sidebar {repo} {history} {selectedRow} ctx={branchCtx!} onOpen={chooseRepo}
+    <Sidebar {repo} {history} {selectedRow} ctx={branchCtx!} onOpen={chooseRepo} onOpenPath={load} onWelcome={closeRepo}
       onPick={pick}
       {run}
       {view}
@@ -724,6 +760,11 @@
     <QuickOpen commit={selectedRow && !selectedRow.worktree ? { id: selectedRow.id, summary: selectedRow.summary } : null} onClose={() => (nav.quickOpen = false)} />
   {/if}
   <ConfirmSheet repo={repo.name} branch={history.head.branch ?? operation?.branch ?? null} color={headColor} />
+{/if}
+{#if start.sheet?.kind === "clone"}
+  <CloneSheet url={start.sheet.url} onDone={started} onClose={() => (start.sheet = null)} />
+{:else if start.sheet?.kind === "new"}
+  <NewRepoSheet folder={start.sheet.folder} onDone={started} onClose={() => (start.sheet = null)} />
 {/if}
 
 <style>
