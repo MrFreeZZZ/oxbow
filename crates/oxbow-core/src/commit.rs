@@ -151,19 +151,7 @@ impl Repo {
         let author = person(commit.author().map_err(Error::git)?);
         let committer = person(commit.committer().map_err(Error::git)?);
         let parents = commit.parent_ids().map(|p| p.to_string()).collect();
-        let files = changes(&repo, &commit)?
-            .into_iter()
-            .map(|change| {
-                let mut file = change.file;
-                match line_diff(&repo, change.old, change.new, DiffContext::Compact, false, false) {
-                    Ok(Some((hunks, _))) => count_lines(&mut file, &hunks),
-                    Ok(None) => file.binary = true,
-                    // Counts are a nicety; a blob that can't be read still lists the file.
-                    Err(_) => {}
-                }
-                file
-            })
-            .collect();
+        let files = counted(&repo, changes(&repo, &commit)?);
         Ok(CommitDetail {
             id: commit.id.to_string(),
             summary,
@@ -179,18 +167,43 @@ impl Repo {
     pub fn commit_diff(&self, id: &str, path: Option<&str>, context: DiffContext) -> Result<Vec<FileDiff>> {
         let repo = self.local();
         let commit = find_commit(&repo, id)?;
+        let changes = changes(&repo, &commit)?;
+        self.diffs(&repo, changes, path, context)
+    }
+
+    /// Changed files between two commits' trees, with line counts.
+    pub fn tree_files(&self, from: &str, to: &str) -> Result<Vec<FileChange>> {
+        let repo = self.local();
+        let changes = tree_changes(&repo, Some(&from_tree(&repo, from)?), &from_tree(&repo, to)?)?;
+        Ok(counted(&repo, changes))
+    }
+
+    /// Line diffs between two commits' trees, for all files or only `path`.
+    pub fn tree_diff(&self, from: &str, to: &str, path: Option<&str>, context: DiffContext) -> Result<Vec<FileDiff>> {
+        let repo = self.local();
+        let changes = tree_changes(&repo, Some(&from_tree(&repo, from)?), &from_tree(&repo, to)?)?;
+        self.diffs(&repo, changes, path, context)
+    }
+
+    fn diffs(
+        &self,
+        repo: &gix::Repository,
+        changes: Vec<Change>,
+        path: Option<&str>,
+        context: DiffContext,
+    ) -> Result<Vec<FileDiff>> {
         let options = self.diff_options();
         let context = match context {
             DiffContext::Compact => DiffContext::Lines(options.context_lines),
             other => other,
         };
         let mut out = Vec::new();
-        for change in changes(&repo, &commit)? {
+        for change in changes {
             if path.is_some_and(|p| p != change.file.path) {
                 continue;
             }
             let mut file = change.file;
-            let diff = match line_diff(&repo, change.old, change.new, context, true, options.ignore_whitespace)? {
+            let diff = match line_diff(repo, change.old, change.new, context, true, options.ignore_whitespace)? {
                 Some((hunks, too_large)) => {
                     count_lines(&mut file, &hunks);
                     FileDiff { file, hunks, too_large }
@@ -227,6 +240,27 @@ fn count_lines(file: &mut FileChange, hunks: &[Hunk]) {
     }
 }
 
+/// Files with their added and removed line counts.
+fn counted(repo: &gix::Repository, changes: Vec<Change>) -> Vec<FileChange> {
+    changes
+        .into_iter()
+        .map(|change| {
+            let mut file = change.file;
+            match line_diff(repo, change.old, change.new, DiffContext::Compact, false, false) {
+                Ok(Some((hunks, _))) => count_lines(&mut file, &hunks),
+                Ok(None) => file.binary = true,
+                // Counts are a nicety; a blob that can't be read still lists the file.
+                Err(_) => {}
+            }
+            file
+        })
+        .collect()
+}
+
+fn from_tree<'r>(repo: &'r gix::Repository, id: &str) -> Result<gix::Tree<'r>> {
+    find_commit(repo, id)?.tree().map_err(Error::git)
+}
+
 /// Changed files of `commit` compared to its first parent (or to nothing for a root commit).
 fn changes(repo: &gix::Repository, commit: &gix::Commit<'_>) -> Result<Vec<Change>> {
     let new_tree = commit.tree().map_err(Error::git)?;
@@ -241,9 +275,16 @@ fn changes(repo: &gix::Repository, commit: &gix::Commit<'_>) -> Result<Vec<Chang
         ),
         None => None,
     };
-    let raw = repo
-        .diff_tree_to_tree(old_tree.as_ref(), &new_tree, None)
-        .map_err(Error::git)?;
+    tree_changes(repo, old_tree.as_ref(), &new_tree)
+}
+
+/// Changed files between two trees; everything is added when there is no old one.
+fn tree_changes(
+    repo: &gix::Repository,
+    old_tree: Option<&gix::Tree<'_>>,
+    new_tree: &gix::Tree<'_>,
+) -> Result<Vec<Change>> {
+    let raw = repo.diff_tree_to_tree(old_tree, new_tree, None).map_err(Error::git)?;
     let path = |p: &BStr| p.to_str_lossy().into_owned();
     let mut out = Vec::new();
     for change in raw {

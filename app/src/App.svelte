@@ -28,6 +28,8 @@
   import SearchBar from "./lib/SearchBar.svelte";
   import { search, type Found } from "./lib/search.svelte";
   import { untrack } from "svelte";
+  import CompareView from "./lib/CompareView.svelte";
+  import type { CompareMode } from "./lib/types";
 
   let repo = $state<RepoSummary | null>(null);
   let history = $state<History | null>(null);
@@ -44,7 +46,15 @@
   const operation = $derived(history?.operation ?? null);
   const showConflicts = $derived(resolving && !!operation);
   /** The screen next to the sidebar. */
-  let view = $state<"history" | "stashes">("history");
+  let view = $state<"history" | "stashes" | "compare">("history");
+  /** What Compare shows: `target` against `base`. */
+  let comparing = $state<{ base: string; target: string; mode: CompareMode }>({ base: "", target: "", mode: "split" });
+
+  function openCompare(base: string, target: string) {
+    comparing = { base, target, mode: comparing.mode };
+    view = "compare";
+    resolving = false;
+  }
   /** The stash picked on the Stashes screen. */
   let stashSel = $state<string | null>(null);
 
@@ -126,6 +136,7 @@
     // The commit panel must not ask the new repository about the old one's commits.
     selected = null;
     search.clear();
+    if (view === "compare") view = "history";
     try {
       const summary = await api.openRepo(path);
       const next = await api.history();
@@ -285,6 +296,12 @@
       });
     }
     group(tagging);
+    // Compare this commit, named by its branch when one ends here, with HEAD or the default branch.
+    const name = row.labels.find((l) => l.kind === "local")?.name ?? row.id.slice(0, 7);
+    const against = [...new Set([isHead ? null : here, history.trunk])].filter((b): b is string => !!b && b !== name);
+    if (against.length) {
+      group([{ kind: "sub", label: "Compare", icon: menuIcons.compare, entries: against.map((b) => ({ label: `With ${b}`, run: () => openCompare(b, name) })) }]);
+    }
     group([
       {
         kind: "sub",
@@ -465,6 +482,7 @@
         if (v === "history" && selected) requestAnimationFrame(() => list?.reveal(selected!));
       }}
       onPickStash={(id) => (stashSel = id)}
+      onCompare={openCompare}
     />
     <div class="main">
       <header data-tauri-drag-region>
@@ -472,6 +490,9 @@
           {#if showConflicts && operation}
             <span class="name">Resolve Conflicts</span>
             <span class="sub">{describe(operation).noun} in progress · {operation.conflicted} {operation.conflicted === 1 ? "file" : "files"} left</span>
+          {:else if view === "compare"}
+            <span class="name">Compare</span>
+            <span class="sub">{comparing.target} with {comparing.base}</span>
           {:else if view === "stashes"}
             <span class="name">Stashes</span>
             <span class="sub">{repo.name} · on {history.head.branch ?? "detached HEAD"}</span>
@@ -481,6 +502,11 @@
           {/if}
         </div>
         <BranchPicker {history} {colorOf} onPick={(name) => branchCtx && run(switchRequest(branchCtx, name))} />
+        {#if view === "compare" && !showConflicts}
+          <button class="capsule" onclick={() => (view = "history")} title="Back to the commit graph">
+            <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>History
+          </button>
+        {/if}
         {#if showConflicts}
           <button class="capsule" onclick={() => (resolving = false)} title={view === "stashes" ? "Back to Stashes" : "Back to the commit graph"}>
             <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>{view === "stashes" ? "Stashes" : "History"}
@@ -547,6 +573,23 @@
       {#if showConflicts && operation}
         {#key repo.path}
           <ConflictsView {history} op={operation} {colorOf} {version} {run} />
+        {/key}
+      {:else if view === "compare"}
+        {#key repo.path}
+          <CompareView
+            {history}
+            base={comparing.base}
+            target={comparing.target}
+            mode={comparing.mode}
+            {version}
+            {colorOf}
+            lookup={(id) => rowsById.get(id)}
+            childrenOf={(id) => childrenOf.get(id) ?? []}
+            onChange={(next) => (comparing = next)}
+            copy={(text) => copyText(text, "Copied the command.")}
+            {panelWidth}
+            onGrip={startResize}
+          />
         {/key}
       {:else if view === "stashes" && branchCtx}
         {#key repo.path}

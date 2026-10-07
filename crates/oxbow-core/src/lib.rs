@@ -6,6 +6,7 @@
 
 pub mod cli;
 pub mod commit;
+pub mod compare;
 pub mod config;
 pub mod edit;
 pub mod error;
@@ -23,6 +24,7 @@ pub use cli::{CommandOutput, GitCommand, OutputLine};
 pub use commit::{
     CommitDetail, DiffContext, DiffLine, FileChange, FileDiff, FileStatus, Hunk, LineKind, Person, WordPart,
 };
+pub use compare::{CompareCommit, CompareFile, CompareMode, Comparison};
 pub use config::{ConfigScope, GitInfo, RemoteInfo, SshKey, Storage};
 pub use edit::ResetMode;
 pub use error::{Error, Result};

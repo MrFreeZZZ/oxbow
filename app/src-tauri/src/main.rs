@@ -252,6 +252,34 @@ async fn commit_diff(
 }
 
 #[tauri::command]
+async fn compare(
+    session: State<'_, Session>,
+    base: String,
+    target: String,
+    mode: oxbow_core::CompareMode,
+) -> CommandResult<oxbow_core::Comparison> {
+    let repo = current(&session)?;
+    blocking(move || repo.compare(&base, &target, mode)).await
+}
+
+#[tauri::command]
+async fn compare_diff(
+    session: State<'_, Session>,
+    from: String,
+    to: String,
+    path: Option<String>,
+    whole_file: bool,
+) -> CommandResult<Vec<FileDiff>> {
+    let repo = current(&session)?;
+    let context = if whole_file {
+        DiffContext::WholeFile
+    } else {
+        DiffContext::Compact
+    };
+    blocking(move || repo.tree_diff(&from, &to, path.as_deref(), context)).await
+}
+
+#[tauri::command]
 async fn working_tree(session: State<'_, Session>) -> CommandResult<WorkingTree> {
     let repo = current(&session)?;
     blocking(move || repo.working_tree()).await
@@ -605,6 +633,8 @@ fn main() {
             history,
             commit_detail,
             commit_diff,
+            compare,
+            compare_diff,
             working_tree,
             working_diff,
             deletion_check,
