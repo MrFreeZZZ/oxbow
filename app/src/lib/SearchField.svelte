@@ -79,6 +79,16 @@
   const count = (n: number | null | undefined) => (n === undefined ? "" : n === null ? "…" : n === 1 ? "1 commit" : `${n.toLocaleString()} commits`);
 </script>
 
+<svelte:window
+  onkeydown={(event) => {
+    if (menu && event.key === "Escape") {
+      event.preventDefault();
+      menu = false;
+      input?.focus();
+    }
+  }}
+/>
+
 <div class="field" class:active={search.active}>
   <svg class="icon glass" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="M10.3 10.3 14 14" /></svg>
   <button class="token" onclick={openMenu} aria-haspopup="menu" aria-expanded={menu} aria-label="Search in {label}">
