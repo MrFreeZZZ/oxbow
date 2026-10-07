@@ -71,11 +71,13 @@ export function languageOf(path: string): string | null {
 /** What a piece of code is, as the theme colors it. */
 export type Role = "kw" | "str" | "type" | "fn" | "num" | "com" | null;
 
-/** A run of text with one color, and whether it is a changed word of the line. */
+/** A run of text with one color, whether it is a changed word of the line, and whether it is
+ *  text being searched for. */
 export interface Piece {
   text: string;
   role: Role;
   changed: boolean;
+  found?: boolean;
 }
 
 function roleOf(classes: string): Role {
@@ -120,8 +122,33 @@ function tokens(text: string, language: string): { text: string; role: Role }[] 
   return runs;
 }
 
-/** The line in pieces to draw: syntax colors from `language`, changed words from `words`. */
-export function paint(text: string, words: WordPart[] | null, language: string | null): Piece[] {
+/** The line in pieces to draw: syntax colors from `language`, changed words from `words`, and
+ *  `find` (searched code, matched as git's -S does: exact case) marked. */
+export function paint(text: string, words: WordPart[] | null, language: string | null, find: string | null = null): Piece[] {
+  const pieces = colored(text, words, language);
+  return find && text.includes(find) ? mark(pieces, text, find) : pieces;
+}
+
+/** Cut the pieces where `find` starts and ends, and flag the ones inside it. */
+function mark(pieces: Piece[], text: string, find: string): Piece[] {
+  const inside: [number, number][] = [];
+  for (let at = text.indexOf(find); at >= 0; at = text.indexOf(find, at + find.length)) inside.push([at, at + find.length]);
+  const out: Piece[] = [];
+  let offset = 0;
+  for (const piece of pieces) {
+    const end = offset + piece.text.length;
+    // Cut points that fall inside this piece.
+    const cuts = [offset, ...inside.flat().filter((c) => c > offset && c < end), end];
+    for (let i = 0; i + 1 < cuts.length; i++) {
+      const [a, b] = [cuts[i], cuts[i + 1]];
+      out.push({ ...piece, text: text.slice(a, b), found: inside.some(([s, e]) => a >= s && b <= e) });
+    }
+    offset = end;
+  }
+  return out;
+}
+
+function colored(text: string, words: WordPart[] | null, language: string | null): Piece[] {
   const runs = language ? tokens(text, language) : [{ text, role: null as Role }];
   if (!words) return runs.map((run) => ({ ...run, changed: false }));
   // Cut the colored runs where changed words start and end.

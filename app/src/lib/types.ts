@@ -391,3 +391,26 @@ export interface RepoSettings {
   remotes: RemoteInfo[];
   storage: { bytes: number; objects: number; loose: number; lfsPatterns: string[] } | null;
 }
+
+export type SearchMode = "message" | "code" | "author" | "file";
+
+export interface SearchQuery {
+  mode: SearchMode;
+  text: string;
+  branch: string | null;
+  /** As `git log --since` reads it, e.g. `1.week.ago`. */
+  since: string | null;
+  author: string | null;
+}
+
+export interface SearchHit {
+  id: string;
+  /** For code and file searches, the files that matched. */
+  files: string[];
+}
+
+export interface SearchResult {
+  hits: SearchHit[];
+  more: boolean;
+  command: string;
+}

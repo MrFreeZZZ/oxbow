@@ -462,6 +462,16 @@ async fn background_fetch(session: State<'_, Session>) -> CommandResult<()> {
     .await
 }
 
+/// Search the history: messages, code changes, authors or file paths.
+#[tauri::command]
+async fn search(
+    session: State<'_, Session>,
+    query: oxbow_core::SearchQuery,
+) -> CommandResult<oxbow_core::SearchResult> {
+    let repo = current(&session)?;
+    blocking(move || repo.search(&query)).await
+}
+
 /// Ask the default remote which tags it has, so tags it lacks show as local. True when that
 /// changed. Without a remote there is nothing to ask.
 #[tauri::command]
@@ -618,6 +628,7 @@ fn main() {
             open_in_terminal,
             monospace_fonts,
             refresh_remote_tags,
+            search,
             settings_text,
             save_settings_text
         ])

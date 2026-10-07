@@ -4,18 +4,22 @@
   import { lane, plate, relativeTime, tint } from "./format";
   import Menu, { type MenuEntry } from "./Menu.svelte";
   import { prefs } from "./prefs.svelte";
+  import { split, type Found } from "./search.svelte";
 
   let {
     history,
     selected,
     onSelect,
     menuFor,
+    found = null,
   }: {
     history: History;
     selected: string | null;
     onSelect: (id: string) => void;
     /** Entries of a commit's right-click menu; none, no menu. */
     menuFor: (row: HistoryRow) => MenuEntry[];
+    /** A search: other commits fade, or only the matches are listed. */
+    found?: Found | null;
   } = $props();
 
   // Geometry from the design: 44px two-line rows, lanes 18px apart, trunk lane centered 14px in.
@@ -109,7 +113,10 @@
     }),
   );
 
-  const rows = $derived(history.rows);
+  /** Only Matches lists the matching commits alone, without the graph. */
+  const only = $derived(!!found?.only);
+  const rows = $derived(found?.only ? history.rows.filter((r) => found.hits.has(r.id)) : history.rows);
+  const faded = (row: HistoryRow) => !!found && !found.hits.has(row.id);
   const indexOf = $derived(new Map(rows.map((row, i) => [row.id, i])));
   const first = $derived(Math.max(0, Math.floor((scrollTop - PAD_TOP) / ROW) - OVERSCAN));
   const last = $derived(Math.min(rows.length, Math.ceil((scrollTop + height) / ROW) + OVERSCAN));
@@ -172,8 +179,21 @@
   }
 
   function textStart(row: HistoryRow): number {
+    if (only) return 30;
     const old = from?.rows.get(row.id);
     return FIRST_LANE + LANE * (old ? mix(old.width, row.graph.width) : row.graph.width) + 18;
+  }
+
+  /** Where a match is when the summary doesn't show it: the files, or the description. */
+  function foundNote(row: HistoryRow): string | null {
+    if (!found || !found.hits.has(row.id)) return null;
+    const files = found.hits.get(row.id) ?? [];
+    if (files.length) {
+      const names = files.slice(0, 2).map((f) => f.slice(f.lastIndexOf("/") + 1));
+      return names.join(", ") + (files.length > 2 ? ` +${files.length - 2}` : "");
+    }
+    if (found.mode === "message" && !row.summary.toLowerCase().includes(found.text.toLowerCase())) return "in description";
+    return null;
   }
 
   /** Scroll so the commit is visible, centering it when it is far away. */
@@ -228,6 +248,7 @@
         <div
           class="row"
           class:compact
+          class:faded={faded(row)}
           class:flash={flash === row.id}
           class:menu-open={menu?.id === row.id}
           role="option"
@@ -242,7 +263,13 @@
           oncontextmenu={(e) => openMenu(e, row)}
           onkeydown={() => {}}
         >
-          <span class="summary" class:selected={isSelected}>{row.summary}</span>
+          <span class="summary" class:selected={isSelected}>
+            {#if found?.mode === "message"}
+              {#each split(row.summary, found.text) as piece, k (k)}{#if piece.hit}<mark>{piece.text}</mark>{:else}{piece.text}{/if}{/each}
+            {:else}
+              {row.summary}
+            {/if}
+          </span>
           <span class="meta">
             {#each row.labels as label (label.kind + label.name)}
               {#if label.kind === "tag"}
@@ -266,13 +293,32 @@
             {#if row.worktree}
               <span class="byline">{worktreeLine(row.worktree)}</span>
             {:else}
-              <span class="byline">{row.authorName} · {relativeTime(row.time)}</span>
+              <span class="byline">
+                {#if found?.mode === "author"}
+                  {#each split(row.authorName, found.text) as piece, k (k)}{#if piece.hit}<mark>{piece.text}</mark>{:else}{piece.text}{/if}{/each}
+                {:else}
+                  {row.authorName}
+                {/if}
+                · {relativeTime(row.time)}
+              </span>
+              {@const note = foundNote(row)}
+              {#if note}
+                <span class="found-note">
+                  <svg class="icon tiny" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="M10.3 10.3 14 14" /></svg>
+                  {note}
+                </span>
+              {/if}
             {/if}
           </span>
         </div>
       {/each}
 
-      <svg class="lines" width="100%" height={PAD_TOP * 2 + rows.length * ROW} aria-hidden="true">
+      {#if only}
+        {#each visible as { row, index } (row.id)}
+          <span class="flat-dot" style:top="{y(index) - 4}px" style:background={lane(row.graph.color)}></span>
+        {/each}
+      {:else}
+      <svg class="lines" class:faded={!!found} width="100%" height={PAD_TOP * 2 + rows.length * ROW} aria-hidden="true">
         <!-- A line that starts below newer work on other branches: a gray lead-in fills its column above it. -->
         {#each leadIns as lead, k (k)}
           {#if lead.row > first - OVERSCAN}
@@ -296,7 +342,7 @@
 
       {#each visible as { row, index } (row.id)}
         {@const d = dot(row, index)}
-        <span class="halo" style:left="{d.left}px" style:top="{d.top}px" style:width="{d.outer}px" style:height="{d.outer}px" style:background={d.halo}>
+        <span class="halo" class:faded={faded(row)} style:left="{d.left}px" style:top="{d.top}px" style:width="{d.outer}px" style:height="{d.outer}px" style:background={d.halo}>
           <span class="gap" style:width="{d.size + 4}px" style:height="{d.size + 4}px" style:background={d.gap}>
             <span class="dot" style:width="{d.size}px" style:height="{d.size}px" style:background={d.fill} style:border-color={d.ring}>
               {#if d.hole}<span class="hole"></span>{/if}
@@ -304,6 +350,7 @@
           </span>
         </span>
       {/each}
+      {/if}
     </div>
   </div>
 
@@ -444,6 +491,43 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  /* A search fades the commits that don't match, and the lines between them. */
+  .row.faded {
+    opacity: 0.4;
+  }
+  .lines.faded {
+    opacity: 0.35;
+  }
+  .halo.faded {
+    opacity: 0.35;
+  }
+  mark {
+    color: inherit;
+    font-weight: 600;
+    background: var(--found-bg);
+    box-shadow: 0 0 0 1px var(--found-ring);
+    border-radius: 3px;
+    padding: 0 1px;
+  }
+  .found-note {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 1;
+    min-width: 0;
+  }
+  .flat-dot {
+    position: absolute;
+    left: 22px;
+    width: 8px;
+    height: 8px;
+    border-radius: 4px;
+    pointer-events: none;
   }
   .lines {
     position: absolute;
