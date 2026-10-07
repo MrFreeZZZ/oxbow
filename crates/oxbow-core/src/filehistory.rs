@@ -194,6 +194,32 @@ impl Repo {
             .map(str::to_owned)
             .collect())
     }
+
+    /// The commits that added or removed `text` in `path` (`git log -S`), from `rev` back across
+    /// renames, then on other branches.
+    pub fn file_pickaxe(&self, path: &str, text: &str, match_case: bool, rev: &str) -> Result<Vec<String>> {
+        let rev = self.commit_id(rev)?;
+        let run = |revs: &[&str]| -> Result<Vec<String>> {
+            let mut args = vec!["log".to_owned(), "--format=%H".to_owned(), format!("-S{text}")];
+            if !match_case {
+                args.push("-i".to_owned());
+            }
+            args.extend(revs.iter().map(|r| (*r).to_owned()));
+            args.push("--".to_owned());
+            args.push(path.to_owned());
+            let out = self.run(&GitCommand::new(args))?;
+            Ok(out
+                .stdout
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(str::to_owned)
+                .collect())
+        };
+        let mut ids = run(&["--follow", &rev])?;
+        ids.extend(run(&["--all", "--not", &rev])?);
+        Ok(ids)
+    }
 }
 
 /// Commits of `git log` output whose format starts with \x01: the format line and the lines after it.

@@ -302,6 +302,18 @@ async fn line_history(session: State<'_, Session>, path: String, line: u32, rev:
 }
 
 #[tauri::command]
+async fn file_pickaxe(
+    session: State<'_, Session>,
+    path: String,
+    text: String,
+    match_case: bool,
+    rev: String,
+) -> CommandResult<Vec<String>> {
+    let repo = current(&session)?;
+    blocking(move || repo.file_pickaxe(&path, &text, match_case, &rev)).await
+}
+
+#[tauri::command]
 async fn working_tree(session: State<'_, Session>) -> CommandResult<WorkingTree> {
     let repo = current(&session)?;
     blocking(move || repo.working_tree()).await
@@ -660,6 +672,7 @@ fn main() {
             file_history,
             blame,
             line_history,
+            file_pickaxe,
             working_tree,
             working_diff,
             deletion_check,

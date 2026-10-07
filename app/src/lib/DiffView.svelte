@@ -17,6 +17,7 @@
     hunkBar,
     openable = true,
     find = null,
+    matchCase = true,
     commit = null,
     history = true,
   }: {
@@ -31,6 +32,8 @@
     openable?: boolean;
     /** Code being searched for in History: marked wherever it appears. */
     find?: string | null;
+    /** Whether `find` must match letter case. */
+    matchCase?: boolean;
     /** The commit shown, so File History starts on it. */
     commit?: string | null;
     /** Offer File History; not on File History itself. */
@@ -148,7 +151,7 @@
             <div class="line {line.kind}" style:border-radius={radius(hunk.lines, i)} style:margin-top="{gap(hunk.lines, i)}px">
               <span class="no">{line.oldLine ?? ""}</span>
               <span class="no">{line.newLine ?? ""}</span>
-              <span class="text">{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>
+              <span class="text">{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found} data-hit={piece.hit} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>
             </div>
           {/each}
         {/each}
@@ -274,6 +277,10 @@
     border-radius: 4px;
     box-shadow: 0 0 0 1.5px var(--found-ring);
     background: var(--found-bg);
+  }
+  /* The match Find in file is on. */
+  .found:global(.current) {
+    box-shadow: 0 0 0 2px var(--text);
   }
   .fold {
     display: block;
