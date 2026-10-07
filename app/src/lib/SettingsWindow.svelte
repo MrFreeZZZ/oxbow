@@ -476,6 +476,18 @@
             prefRow("oxbow.diff.ignoreWhitespace", "Ignore whitespace changes", "switch", {
               sub: "In commits and stashes. Changes stays exact, so staging matches what you see",
             }),
+            prefRow("oxbow.diff.files", "Files of a commit", "seg", {
+              sub: "Smart folds long, generated, deleted and binary files",
+              options: () => [
+                { value: "smart", label: "Smart" },
+                { value: "expanded", label: "Expanded" },
+                { value: "collapsed", label: "Collapsed" },
+              ],
+            }),
+            prefRow("oxbow.diff.foldOver", "Fold diffs longer than", "popup", {
+              off: () => prefs.get("oxbow.diff.files") !== "smart",
+              options: () => [100, 300, 1000].map((value) => ({ value, label: `${value} lines` })),
+            }),
           ],
         },
         {

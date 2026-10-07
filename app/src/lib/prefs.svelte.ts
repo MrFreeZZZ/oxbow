@@ -22,6 +22,10 @@ export const defaults = {
   "oxbow.diff.contextLines": 3,
   "oxbow.diff.wordHighlight": true,
   "oxbow.diff.ignoreWhitespace": false,
+  /** Which files of a commit start open in its diff. */
+  "oxbow.diff.files": "smart" as "smart" | "expanded" | "collapsed",
+  /** Smart folds files with more changed lines than this. */
+  "oxbow.diff.foldOver": 300,
   /** A font family; SF Mono is the system's monospaced font on macOS. */
   "oxbow.text.font": "SF Mono" as string,
   "oxbow.text.fontSize": 12,

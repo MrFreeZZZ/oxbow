@@ -4,6 +4,7 @@
   import type { CommitDetail, FileDiff, HistoryRow } from "./types";
   import { fullDate, initials, lane, personColor, plate, splitPath, tabLabels, tint } from "./format";
   import DiffView from "./DiffView.svelte";
+  import FoldAll from "./FoldAll.svelte";
   import CommitChain from "./CommitChain.svelte";
 
   let {
@@ -29,6 +30,8 @@
     /** What that search looked for, shown on those files. */
     foundText?: string | null;
   } = $props();
+
+  let diffView = $state<DiffView>();
 
   let detail = $state<CommitDetail | null>(null);
   let diffs = $state<FileDiff[]>([]);
@@ -167,6 +170,7 @@
           <span class="grow">{detail.files.length} {detail.files.length === 1 ? "file" : "files"} changed</span>
           <span class="add">+{totals.add}</span>
           <span class="del">−{totals.del}</span>
+          <FoldAll onFold={(fold) => diffView?.setAll(fold)} />
         </div>
         {#each detail.files as file (file.path)}
           {@const p = splitPath(file.path)}
@@ -188,7 +192,7 @@
         {/each}
       </div>
     {/if}
-    <DiffView {diffs} {color} {whole} {find} commit={row.id} onToggleWhole={() => (whole = !whole)} />
+    <DiffView bind:this={diffView} foldable {diffs} {color} {whole} {find} commit={row.id} onToggleWhole={() => (whole = !whole)} />
   </div>
 </div>
 

@@ -258,9 +258,10 @@ button {
 
 /* Buttons light up under the pointer: a soft wash over their own color, so glass capsules,
    grey buttons and the blue action buttons all react alike. Lists and menus with a hover of
-   their own are left out. `:root` outweighs the components' own background rules. */
+   their own are left out. `:root` outweighs the components' own background rules, and only
+   buttons match, so a row or header that shares a class name stays still. */
 :root
-  :is(
+  button:is(
     .capsule,
     .group > button,
     .segmented > button:not(.on),
@@ -290,13 +291,15 @@ button {
     .tab,
     .copy,
     .clear,
+    .fold-all > button,
+    .head,
     nav .item:not(.current),
     nav .repo
   ):not(:disabled):hover {
   background-image: linear-gradient(var(--hover-wash), var(--hover-wash));
 }
 :root
-  :is(
+  button:is(
     .capsule,
     .group > button,
     .segmented > button,
@@ -326,6 +329,8 @@ button {
     .tab,
     .copy,
     .clear,
+    .fold-all > button,
+    .head,
     nav .item,
     nav .repo
   ):not(:disabled):active {
