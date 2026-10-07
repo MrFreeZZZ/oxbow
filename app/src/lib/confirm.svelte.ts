@@ -36,7 +36,9 @@ export type Icon =
   | "reset"
   | "remote"
   | "box"
-  | "tag";
+  | "tag"
+  | "ignore"
+  | "lines";
 
 export interface Request {
   /** A question, e.g. "Discard changes in 2 files?" */
@@ -216,7 +218,7 @@ class ConfirmState {
       const next = await request;
       if (this.phase === "ask") await this.#ask(next);
     } catch (err) {
-      this.#fail({ kind: "other", output: String(err), incoming: [], remoteTip: null });
+      this.#fail({ kind: "other", output: String(err), incoming: [], remoteTip: null, hook: null });
     }
   }
 
@@ -265,7 +267,7 @@ class ConfirmState {
     } catch (err) {
       if (mine !== this.#planned) return;
       this.commands = [];
-      this.#fail({ kind: "other", output: String(err), incoming: [], remoteTip: null });
+      this.#fail({ kind: "other", output: String(err), incoming: [], remoteTip: null, hook: null });
     }
   }
 
@@ -362,7 +364,7 @@ class ConfirmState {
 
 function toFailure(err: unknown): Failure {
   if (err && typeof err === "object" && "kind" in err) return err as Failure;
-  return { kind: "other", output: String(err), incoming: [], remoteTip: null };
+  return { kind: "other", output: String(err), incoming: [], remoteTip: null, hook: null };
 }
 
 function lineKind(text: string, stderr: boolean): TermLine["kind"] {

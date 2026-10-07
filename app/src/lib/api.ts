@@ -83,6 +83,7 @@ export const api = {
   backgroundFetch: () => invoke<void>("background_fetch"),
   pullSetup: () => invoke<PullSetup>("pull_setup"),
   openInEditor: (path: string, line: number | null) => invoke<void>("open_in_editor", { path, line }),
+  revealFile: (path: string) => invoke<void>("reveal_file", { path }),
   openInTerminal: () => invoke<void>("open_in_terminal"),
   monospaceFonts: () => invoke<string[]>("monospace_fonts"),
   refreshRemoteTags: () => invoke<boolean>("refresh_remote_tags"),

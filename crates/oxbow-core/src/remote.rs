@@ -36,7 +36,7 @@ pub enum FailureKind {
     Auth,
     /// The remote could not be reached.
     Network,
-    /// A local hook (pre-push) stopped the command.
+    /// A local hook (pre-push, pre-commit, commit-msg) stopped the command.
     Hook,
     /// A pull stopped on conflicts.
     Conflict,
@@ -71,6 +71,9 @@ pub struct Failure {
     pub incoming: Vec<CommitBrief>,
     /// For a rejected push: where the remote branch is now, for `--force-with-lease`.
     pub remote_tip: Option<String>,
+    /// For a hook that stopped the command: its name, or both names when either of the
+    /// `pre-commit` and `commit-msg` hooks could have.
+    pub hook: Option<String>,
 }
 
 impl Repo {
@@ -81,7 +84,22 @@ impl Repo {
             action,
             Action::Push { no_verify: false, .. } | Action::PullAndPush { no_verify: false, .. }
         );
-        let kind = classify_failure(error, pushing && self.has_pre_push_hook());
+        let pre_push = pushing && self.has_pre_push_hook();
+        let mut kind = classify_failure(error, pre_push);
+        let mut hook = pre_push.then(|| "pre-push".to_owned());
+        if let Action::Commit { no_verify: false, .. } = action
+            && kind == FailureKind::Other
+            && let Error::Command { output, .. } = error
+        {
+            let hooks: Vec<&str> = ["pre-commit", "commit-msg"]
+                .into_iter()
+                .filter(|name| self.has_hook(name))
+                .collect();
+            if !hooks.is_empty() && !commit_refused(output) {
+                kind = FailureKind::Hook;
+                hook = Some(hooks.join(" or "));
+            }
+        }
         let output = match error {
             Error::Command { output, .. } => output.trim().to_owned(),
             other => other.to_string(),
@@ -91,6 +109,7 @@ impl Repo {
             output,
             incoming: Vec::new(),
             remote_tip: None,
+            hook: hook.filter(|_| kind == FailureKind::Hook),
         };
         if matches!(kind, FailureKind::Rejected | FailureKind::StaleLease)
             && let Action::Push { remote, upstream, .. } | Action::PullAndPush { remote, upstream, .. } = action
@@ -212,10 +231,16 @@ impl Repo {
 
     /// Whether a pre-push hook is installed, honoring `core.hooksPath`.
     pub(crate) fn has_pre_push_hook(&self) -> bool {
+        self.has_hook("pre-push")
+    }
+
+    /// Whether the hook `name` is installed and hooks are on in Settings, honoring
+    /// `core.hooksPath`.
+    pub(crate) fn has_hook(&self, name: &str) -> bool {
         if !crate::config::run_hooks() {
             return false;
         }
-        let Ok(out) = self.run(&GitCommand::new(["rev-parse", "--git-path", "hooks/pre-push"])) else {
+        let Ok(out) = self.run(&GitCommand::new(["rev-parse", "--git-path", &format!("hooks/{name}")])) else {
             return false;
         };
         self.workdir().join(out.stdout.trim()).is_file()
@@ -269,6 +294,24 @@ fn parse_tracking(line: &str) -> Option<Tracking> {
         behind: count("behind "),
         gone: track == "gone",
     })
+}
+
+/// Whether git itself refused a commit, before or without any hook: nothing staged, no name
+/// or email, an empty message.
+fn commit_refused(output: &str) -> bool {
+    [
+        "nothing to commit",
+        "nothing added to commit",
+        "no changes added to commit",
+        "Author identity unknown",
+        "empty ident name",
+        "unable to auto-detect email",
+        "Aborting commit due to empty commit message",
+        "You have unmerged paths",
+        "Committing is not possible",
+    ]
+    .iter()
+    .any(|needle| output.contains(needle))
 }
 
 /// Sort a failure by what git printed.

@@ -66,6 +66,7 @@ fn hunks_can_be_staged_unstaged_and_discarded_one_by_one() {
     repo.perform(&Action::StageHunk {
         path: "a.txt".into(),
         header: second.clone(),
+        lines: None,
     })
     .unwrap();
     let staged = repo.working_diff("a.txt", Side::Staged, false).unwrap();
@@ -84,6 +85,7 @@ fn hunks_can_be_staged_unstaged_and_discarded_one_by_one() {
     repo.perform(&Action::DiscardHunk {
         path: "a.txt".into(),
         header: first,
+        lines: None,
     })
     .unwrap();
     assert_eq!(
@@ -96,6 +98,7 @@ fn hunks_can_be_staged_unstaged_and_discarded_one_by_one() {
         .perform(&Action::UnstageHunk {
             path: "a.txt".into(),
             header: "@@ -1,2 +1,2 @@".into(),
+            lines: None,
         })
         .unwrap_err();
     assert!(err.to_string().contains("changed since"), "{err}");
@@ -105,6 +108,7 @@ fn hunks_can_be_staged_unstaged_and_discarded_one_by_one() {
     repo.perform(&Action::UnstageHunk {
         path: "a.txt".into(),
         header: header(&staged.hunks[0]),
+        lines: None,
     })
     .unwrap();
     let tree = repo.working_tree().unwrap();
@@ -142,6 +146,7 @@ fn files_are_staged_discarded_and_committed() {
     let commit = Action::Commit {
         message: "Add new.txt\n\nWith a body.".into(),
         amend: false,
+        no_verify: false,
     };
     assert_eq!(
         repo.plan(&commit).unwrap().commands[0].display(),

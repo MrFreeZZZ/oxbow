@@ -27,6 +27,12 @@ pub struct GitCommand {
     /// Ask git for progress output even though it does not write to a terminal. Not shown, since
     /// nobody types it.
     pub progress: bool,
+    /// What Oxbow feeds the command on standard input, shown so it can be checked, e.g. the
+    /// patch of a few lines for `git apply`.
+    pub input: Option<String>,
+    /// A step Oxbow does itself before the command, as it would be typed in a shell, e.g.
+    /// adding a line to `.gitignore`.
+    pub before: Option<String>,
 }
 
 impl GitCommand {
@@ -39,6 +45,8 @@ impl GitCommand {
             args: args.into_iter().map(Into::into).collect(),
             comment: None,
             progress: false,
+            input: None,
+            before: None,
         }
     }
 
@@ -49,6 +57,16 @@ impl GitCommand {
 
     pub fn with_progress(mut self) -> Self {
         self.progress = true;
+        self
+    }
+
+    pub fn input(mut self, input: impl Into<String>) -> Self {
+        self.input = Some(input.into());
+        self
+    }
+
+    pub fn before(mut self, step: impl Into<String>) -> Self {
+        self.before = Some(step.into());
         self
     }
 
@@ -77,11 +95,15 @@ impl Serialize for GitCommand {
             args: &'a [String],
             comment: &'a Option<String>,
             display: String,
+            input: &'a Option<String>,
+            before: &'a Option<String>,
         }
         Shown {
             args: &self.args,
             comment: &self.comment,
             display: self.display(),
+            input: &self.input,
+            before: &self.before,
         }
         .serialize(serializer)
     }
@@ -273,7 +295,7 @@ fn read_lines(
 }
 
 /// Quote an argument for display the way a POSIX shell would need it.
-fn shell_quote(arg: &str) -> String {
+pub(crate) fn shell_quote(arg: &str) -> String {
     let plain = !arg.is_empty() && arg.chars().all(|c| c.is_alphanumeric() || "-_./:=@+,%^~{}".contains(c));
     if plain {
         arg.to_owned()

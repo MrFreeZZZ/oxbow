@@ -78,22 +78,36 @@ pub enum Action {
         paths: Vec<String>,
     },
     /// Stage, unstage or discard one hunk, identified by its `@@` header so a file that changed
-    /// in the meantime is refused instead of patched in the wrong place.
+    /// in the meantime is refused instead of patched in the wrong place. With `lines`, only those
+    /// changed lines of it (indexes into the hunk's lines); the others stay as they are.
     StageHunk {
         path: String,
         header: String,
+        #[serde(default)]
+        lines: Option<Vec<usize>>,
     },
     UnstageHunk {
         path: String,
         header: String,
+        #[serde(default)]
+        lines: Option<Vec<usize>>,
     },
     DiscardHunk {
         path: String,
         header: String,
+        #[serde(default)]
+        lines: Option<Vec<usize>>,
+    },
+    /// Add `pattern` as a line of the top `.gitignore` and stage it.
+    Ignore {
+        pattern: String,
     },
     Commit {
         message: String,
         amend: bool,
+        /// Skip the pre-commit and commit-msg hooks this one time.
+        #[serde(default)]
+        no_verify: bool,
     },
     /// Download new commits, branches and tags from `remote`, or from every remote.
     Fetch {
@@ -219,10 +233,13 @@ pub enum Action {
     Reword {
         message: String,
     },
-    /// Put every uncommitted change aside in a new stash, untracked files too with `untracked`.
+    /// Put uncommitted changes aside in a new stash, untracked files too with `untracked`: those
+    /// of `paths`, or every change when it is empty.
     StashPush {
         message: Option<String>,
         untracked: bool,
+        #[serde(default)]
+        paths: Vec<String>,
     },
     /// Bring the changes of `stash@{index}` (whose id is `id`) back into the working copy;
     /// `pop` deletes the stash afterwards, `keep_index` restages what was staged.
@@ -422,21 +439,46 @@ impl Repo {
                 }
                 commands
             }
-            Action::StageHunk { path, header } => {
-                vec![GitCommand::new(["apply", "--cached", "-"]).comment(stdin_note(path, header))]
+            Action::StageHunk { path, header, lines }
+            | Action::UnstageHunk { path, header, lines }
+            | Action::DiscardHunk { path, header, lines } => {
+                let (side, args): (_, &[&str]) = match action {
+                    Action::StageHunk { .. } => (Side::Unstaged, &["apply", "--cached", "-"]),
+                    Action::UnstageHunk { .. } => (Side::Staged, &["apply", "--cached", "--reverse", "-"]),
+                    _ => (Side::Unstaged, &["apply", "--reverse", "-"]),
+                };
+                let cmd = GitCommand::new(args.iter().copied());
+                match lines {
+                    None => vec![cmd.comment(stdin_note(path, header))],
+                    Some(lines) => {
+                        let forward = matches!(action, Action::StageHunk { .. });
+                        let patch = self.hunk_patch(path, side, header, Some(lines), forward)?;
+                        let what = match action {
+                            Action::StageHunk { .. } => {
+                                "--cached: only the staging area changes, your file stays as is. By hand: git add -p, then e"
+                            }
+                            Action::UnstageHunk { .. } => "--reverse: take these lines back out of the staging area",
+                            _ => "--reverse: undo just these lines in the file on disk",
+                        };
+                        vec![cmd.comment(what).input(patch)]
+                    }
+                }
             }
-            Action::UnstageHunk { path, header } => {
-                vec![GitCommand::new(["apply", "--cached", "--reverse", "-"]).comment(stdin_note(path, header))]
-            }
-            Action::DiscardHunk { path, header } => {
-                vec![GitCommand::new(["apply", "--reverse", "-"]).comment(stdin_note(path, header))]
-            }
-            Action::Commit { message, amend } => {
+            Action::Ignore { pattern } => vec![
+                GitCommand::new(["add", "--", ".gitignore"])
+                    .comment("stage .gitignore, so the rule reaches everyone with the next commit")
+                    .before(format!("echo {} >> .gitignore", crate::cli::shell_quote(pattern))),
+            ],
+            Action::Commit {
+                message,
+                amend,
+                no_verify,
+            } => {
                 let mut args = vec!["commit".to_owned()];
                 if *amend {
                     args.push("--amend".to_owned());
                 }
-                if !config::run_hooks() {
+                if *no_verify || !config::run_hooks() {
                     args.push("--no-verify".to_owned());
                 }
                 // One -m per paragraph, as people type it; git puts the blank lines back between them.
@@ -447,6 +489,8 @@ impl Repo {
                 let cmd = GitCommand::new(args);
                 vec![if *amend {
                     cmd.comment("replace the last commit with one that also has the staged changes")
+                } else if *no_verify {
+                    cmd.comment("--no-verify: skip the pre-commit and commit-msg hooks this once")
                 } else if !config::run_hooks() {
                     cmd.comment(HOOKS_OFF)
                 } else {
@@ -656,7 +700,11 @@ impl Repo {
             Action::CherryPick { commit } => self.plan_cherry_pick(commit)?,
             Action::Revert { commit } => self.plan_revert(commit)?,
             Action::Reset { commit, mode } => plan_reset(commit, *mode),
-            Action::StashPush { message, untracked } => {
+            Action::StashPush {
+                message,
+                untracked,
+                paths,
+            } => {
                 let mut args = vec!["stash".to_owned(), "push".to_owned()];
                 if *untracked {
                     args.push("--include-untracked".to_owned());
@@ -664,11 +712,16 @@ impl Repo {
                 if let Some(message) = message.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
                     args.extend(["-m".to_owned(), message.to_owned()]);
                 }
+                if !paths.is_empty() {
+                    args.push("--".to_owned());
+                    args.extend(paths.iter().cloned());
+                }
                 let cmd = GitCommand::new(args);
-                vec![if *untracked {
-                    cmd.comment("--include-untracked: new files are stashed too")
-                } else {
-                    cmd.comment("new, untracked files stay where they are")
+                vec![match (paths.is_empty(), *untracked) {
+                    (false, true) => cmd.comment("-- then paths: only these files; --include-untracked: new ones too"),
+                    (false, false) => cmd.comment("-- then paths: only these files, the rest stays as it is"),
+                    (true, true) => cmd.comment("--include-untracked: new files are stashed too"),
+                    (true, false) => cmd.comment("new, untracked files stay where they are"),
                 }]
             }
             Action::StashApply {
@@ -761,13 +814,16 @@ impl Repo {
         {
             return Err(Error::Git("the commit message is empty".into()));
         }
-        let (side, path, header) = match action {
-            Action::StageHunk { path, header } => (Side::Unstaged, path, header),
-            Action::DiscardHunk { path, header } => (Side::Unstaged, path, header),
-            Action::UnstageHunk { path, header } => (Side::Staged, path, header),
+        let (side, path, header, lines) = match action {
+            Action::StageHunk { path, header, lines } => (Side::Unstaged, path, header, lines),
+            Action::DiscardHunk { path, header, lines } => (Side::Unstaged, path, header, lines),
+            Action::UnstageHunk { path, header, lines } => (Side::Staged, path, header, lines),
             _ => {
                 if let Action::Resolve { path, picks } = action {
                     self.write_resolution(path, picks)?;
+                }
+                if let Action::Ignore { pattern } = action {
+                    self.add_ignore_rule(pattern)?;
                 }
                 // The note of a conflicted apply goes when the apply is finished or undone.
                 let pending = self.pending_apply().is_some()
@@ -808,7 +864,9 @@ impl Repo {
                 return Ok(last);
             }
         };
-        let patch = self.hunk_patch(path, side, header)?;
+        // Staging goes forward; unstaging and discarding apply the patch in reverse.
+        let forward = matches!(action, Action::StageHunk { .. });
+        let patch = self.hunk_patch(path, side, header, lines.as_deref(), forward)?;
         let command = &self.plan(action)?.commands[0];
         on_event(ActionEvent::Command {
             display: command.display(),
@@ -817,8 +875,16 @@ impl Repo {
         Ok(out.stdout)
     }
 
-    /// A patch with the file header and only the hunk that starts with `header`.
-    fn hunk_patch(&self, path: &str, side: Side, header: &str) -> Result<String> {
+    /// A patch with the file header and only the hunk that starts with `header`; with `lines`,
+    /// only those changed lines of it, for applying `forward` (staging) or in reverse.
+    fn hunk_patch(
+        &self,
+        path: &str,
+        side: Side,
+        header: &str,
+        lines: Option<&[usize]>,
+        forward: bool,
+    ) -> Result<String> {
         let tree = self.working_tree()?;
         let list = match side {
             Side::Staged => &tree.staged,
@@ -837,7 +903,31 @@ impl Repo {
             .iter()
             .find(|h| h.header == header)
             .ok_or_else(|| Error::Git(format!("{path} changed since it was shown; refresh and try again")))?;
-        Ok(format!("{}{}", parsed.file_header, hunk.text))
+        let text = match lines {
+            None => hunk.text.clone(),
+            Some(lines) => partial_hunk(&hunk.text, lines, forward)
+                .ok_or_else(|| Error::Git("pick at least one changed line".into()))?,
+        };
+        Ok(format!("{}{}", parsed.file_header, text))
+    }
+
+    /// Add `pattern` as a line at the end of the top `.gitignore`, creating it if needed.
+    fn add_ignore_rule(&self, pattern: &str) -> Result<()> {
+        let pattern = pattern.trim_end_matches(['\r', '\n']);
+        if pattern.trim().is_empty() || pattern.contains('\n') {
+            return Err(Error::Git("an ignore rule is one line of text".into()));
+        }
+        let file = self.workdir().join(".gitignore");
+        let mut text = std::fs::read_to_string(&file).unwrap_or_default();
+        if text.lines().any(|line| line == pattern) {
+            return Ok(());
+        }
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(pattern);
+        text.push('\n');
+        std::fs::write(&file, text).map_err(|err| Error::Git(format!("could not write .gitignore: {err}")))
     }
 
     /// `git diff` output for one file.
@@ -1154,6 +1244,79 @@ fn parse_patch(patch: &str) -> ParsedPatch {
         hunks,
         binary,
     }
+}
+
+/// The hunk `text` (its `@@` line first) with only the changed lines whose indexes, counted
+/// as in [`Hunk::lines`], are in `selected`, for `git apply` going `forward` or with `--reverse`.
+/// git has no command for single lines; this is what `git add -p` and `e` do by hand. A changed
+/// line left out is dropped when it only exists on the side the patch makes, and becomes
+/// context when the side the patch applies to already has it. `None` when nothing is selected.
+fn partial_hunk(text: &str, selected: &[usize], forward: bool) -> Option<String> {
+    let mut rows = text.split_inclusive('\n');
+    let head = rows.next()?;
+    let rest = head.strip_prefix("@@ ")?;
+    let end = rest.find(" @@")?;
+    let mut ranges = rest[..end].split(' ');
+    let (old_start, old_lines) = parse_range(ranges.next()?.trim_start_matches('-'));
+    let (new_start, new_lines) = parse_range(ranges.next()?.trim_start_matches('+'));
+    // The function name git shows after the second @@, and the line end.
+    let tail = &rest[end + 3..];
+
+    let mut body = String::new();
+    let (mut old, mut new, mut index, mut picked) = (0u32, 0u32, 0usize, 0usize);
+    // Whether the line before a "\ No newline at end of file" made it into the patch.
+    let mut kept = false;
+    for row in rows {
+        match row.as_bytes().first() {
+            Some(b'+') | Some(b'-') => {
+                let added = row.starts_with('+');
+                if selected.contains(&index) {
+                    picked += 1;
+                    body.push_str(row);
+                    if added {
+                        new += 1;
+                    } else {
+                        old += 1;
+                    }
+                    kept = true;
+                } else if added != forward {
+                    body.push(' ');
+                    body.push_str(&row[1..]);
+                    old += 1;
+                    new += 1;
+                    kept = true;
+                } else {
+                    kept = false;
+                }
+                index += 1;
+            }
+            Some(b' ') => {
+                body.push_str(row);
+                old += 1;
+                new += 1;
+                kept = true;
+                index += 1;
+            }
+            Some(b'\\') if kept => body.push_str(row),
+            _ => {}
+        }
+    }
+    if picked == 0 {
+        return None;
+    }
+    // A side with no lines names the line before it, so the start moves by one when that changes.
+    let start = |start: u32, was: u32, now: u32| match (was, now) {
+        (0, n) if n > 0 => start + 1,
+        (w, 0) if w > 0 => start.saturating_sub(1),
+        _ => start,
+    };
+    Some(format!(
+        "@@ -{},{} +{},{} @@{tail}{body}",
+        start(old_start, old_lines, old),
+        old,
+        start(new_start, new_lines, new),
+        new
+    ))
 }
 
 fn parse_range(range: &str) -> (u32, u32) {
