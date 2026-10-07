@@ -2,6 +2,7 @@
   // Every change between the two sides of Compare, as one diff: Summary with the files, then a
   // tab per file, like the commit details.
 
+  import type { Snippet } from "svelte";
   import { api } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { Comparison, FileDiff } from "./types";
@@ -14,6 +15,7 @@
     target,
     color,
     onPickCommit,
+    header,
   }: {
     comparison: Comparison;
     base: string;
@@ -21,6 +23,8 @@
     color: number;
     /** Show one commit of the compared side. */
     onPickCommit: (id: string) => void;
+    /** Shown in place of the headline, as when two commits are compared in History. */
+    header?: Snippet;
   } = $props();
 
   let tab = $state<string | null>(null);
@@ -66,30 +70,34 @@
 </script>
 
 <div class="panel">
-  <div class="head">
-    <h1>
-      {#if c.mode === "split"}
-        What {target} changed since it split from {base}
-      {:else}
-        How {target} differs from {base}
-      {/if}
-    </h1>
-    <p class="sub">
-      {[
-        authors.length ? `By ${authors.slice(0, 3).join(", ")}${authors.length > 3 ? ` and ${authors.length - 3} more` : ""}` : null,
-        `${c.files.length} ${c.files.length === 1 ? "file" : "files"}`,
-        `${commits} ${commits === 1 ? "commit" : "commits"}`,
-      ]
-        .filter(Boolean)
-        .join(" · ")}
-    </p>
-    {#if c.mode === "tips" && c.behindCount}
-      <p class="warn">
-        Also shows the {c.behindCount} newer {c.behindCount === 1 ? "commit" : "commits"} on {base} undone, because the tips are compared directly.
-        {#if c.mergeBase}Since Split leaves them out.{/if}
+  {#if header}
+    {@render header()}
+  {:else}
+    <div class="head">
+      <h1>
+        {#if c.mode === "split"}
+          What {target} changed since it split from {base}
+        {:else}
+          How {target} differs from {base}
+        {/if}
+      </h1>
+      <p class="sub">
+        {[
+          authors.length ? `By ${authors.slice(0, 3).join(", ")}${authors.length > 3 ? ` and ${authors.length - 3} more` : ""}` : null,
+          `${c.files.length} ${c.files.length === 1 ? "file" : "files"}`,
+          `${commits} ${commits === 1 ? "commit" : "commits"}`,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
       </p>
-    {/if}
-  </div>
+      {#if c.mode === "tips" && c.behindCount}
+        <p class="warn">
+          Also shows the {c.behindCount} newer {c.behindCount === 1 ? "commit" : "commits"} on {base} undone, because the tips are compared directly.
+          {#if c.mergeBase}Since Split leaves them out.{/if}
+        </p>
+      {/if}
+    </div>
+  {/if}
 
   <div class="tabs" role="tablist" aria-label="Changes">
     <button
