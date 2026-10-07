@@ -320,7 +320,10 @@ export type Action =
   | { kind: "createTag"; name: string; commit: string; message: string | null; push: string | null }
   | { kind: "pushTags"; remote: string; names: string[] }
   | { kind: "deleteTag"; name: string; remote: string | null }
-  | { kind: "fetchTags"; remote: string };
+  | { kind: "fetchTags"; remote: string }
+  /** Back to before step `id` of the Operation Log, or right after it with `after`. */
+  | { kind: "restore"; id: string; after: boolean }
+  | { kind: "clearOperationLog" };
 
 export type ResetMode = "soft" | "mixed" | "hard";
 
@@ -575,4 +578,47 @@ export interface OutputLine {
   text: string;
   stderr: boolean;
   progress: boolean;
+}
+
+/** Where HEAD was: on a branch (maybe with no commit yet), or detached at a commit. */
+export interface HeadState {
+  branch: string | null;
+  commit: string | null;
+}
+
+/** A ref a step created, moved or deleted, by full name. */
+export interface RefMove {
+  name: string;
+  before: string | null;
+  after: string | null;
+}
+
+export interface StashRecord {
+  id: string;
+  message: string;
+}
+
+/** The files at one moment: the working copy, and the staging area unless it had conflicts. */
+export interface Trees {
+  worktree: string;
+  index: string | null;
+}
+
+/** One step of the Operation Log. */
+export interface OpEntry {
+  id: string;
+  /** Seconds since the epoch. */
+  time: number;
+  /** The icon: commit, discard, reset, … */
+  kind: string;
+  title: string;
+  detail: string;
+  /** It failed or stopped half way, e.g. on conflicts. */
+  failed: boolean;
+  headBefore: HeadState;
+  headAfter: HeadState;
+  refs: RefMove[];
+  stash: { before: StashRecord[]; after: StashRecord[] } | null;
+  before: Trees;
+  after: Trees;
 }

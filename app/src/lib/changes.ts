@@ -150,7 +150,7 @@ export function linesRequest(kind: LinesKind, path: string, hunk: Hunk, lines: n
     icon: "discard",
     button: "Discard",
     danger: true,
-    note: "This can't be undone.",
+    note: "Undo brings it back, from the toast or the Operation Log.",
     done: `Discarded ${plural(n, "line")}.`,
     action,
   };

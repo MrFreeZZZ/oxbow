@@ -16,6 +16,8 @@ export const defaults = {
   "oxbow.confirm.scope": "all" as "all" | "risky",
   "oxbow.confirm.showCommand": true,
   "oxbow.push.confirmForce": true,
+  /** Days the Operation Log keeps its steps, so they can be undone. */
+  "oxbow.undo.keepDays": 30,
   "oxbow.diff.view": "changes" as "changes" | "full",
   "oxbow.diff.contextLines": 3,
   "oxbow.diff.wordHighlight": true,

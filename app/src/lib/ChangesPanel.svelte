@@ -161,7 +161,8 @@
       icon: "discard",
       button: "Discard",
       danger: true,
-      note: "This can't be undone.",
+      note: "Undo brings it back, from the toast or the Operation Log.",
+      done: `Discarded changes in ${count(files)}.`,
       action: { kind: "discard", paths: files.map((f) => f.path) },
     });
   }
@@ -187,7 +188,8 @@
         icon: "discard",
         button: "Discard",
         danger: true,
-        note: "This can't be undone.",
+        note: "Undo brings it back, from the toast or the Operation Log.",
+        done: `Discarded ${lines(hunk)} of ${path.slice(path.lastIndexOf("/") + 1)}.`,
       },
     };
     act({ ...request[kind], action: { kind, path, header: hunk.header } });

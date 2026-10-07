@@ -4,6 +4,7 @@
 
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
+import { oplog, undoRequest } from "./oplog.svelte";
 import { prefs } from "./prefs.svelte";
 import type { Action, ActionEvent, Failure, GitCommand } from "./types";
 
@@ -54,7 +55,7 @@ export interface Request {
   tone?: "warn";
   /** Another way to go, as a new confirmation, e.g. Create Branch First. */
   alt?: { label: string; request: () => Request };
-  /** Extra line in the footer, e.g. that discarding can't be undone. */
+  /** Extra line in the footer, e.g. how to undo a discard. */
   note?: string;
   /** Title while it runs, e.g. "Pushing main to origin…". */
   status?: string;
@@ -145,7 +146,7 @@ export interface TermLine {
 type Phase = "ask" | "running" | "failed";
 
 /** Actions that throw work away or rewrite history: with "Risky only" these still ask. */
-const RISKY = new Set<Action["kind"]>(["discard", "discardHunk", "reset", "stashDrop", "deleteBranch", "deleteRemoteBranch", "deleteTag", "abort", "abortRebase"]);
+const RISKY = new Set<Action["kind"]>(["discard", "discardHunk", "reset", "stashDrop", "deleteBranch", "deleteRemoteBranch", "deleteTag", "abort", "abortRebase", "restore", "clearOperationLog"]);
 
 function isForcePush(action: Action): boolean {
   return action.kind === "push" && action.force;
@@ -280,10 +281,11 @@ class ConfirmState {
     this.recovery = null;
     // Only the request's own action can be undone, not a way out offered after it failed.
     const undo = this.request && action === this.request.action ? (this.request.undo ?? null) : null;
+    const started = Math.floor(Date.now() / 1000);
     try {
       await api.performAction(action);
       this.#finish(true);
-      if (done) this.#showToast(done, undo);
+      if (done) this.#showToast(done, undo ?? (await this.#undoFromLog(action, started)));
     } catch (err) {
       const failure = toFailure(err);
       if (failure.kind === "conflict" && this.request?.resolveConflicts) {
@@ -323,6 +325,14 @@ class ConfirmState {
     const last = this.lines[this.lines.length - 1];
     if (last?.progress) this.lines[this.lines.length - 1] = line;
     else this.lines.push(line);
+  }
+
+  /** Undo of the step the Operation Log just recorded for `action`, when there is one. */
+  async #undoFromLog(action: Action, started: number): Promise<(() => Request) | null> {
+    if (action.kind === "clearOperationLog") return null;
+    await oplog.load();
+    const entry = oplog.entries[0];
+    return entry && entry.time >= started && !entry.failed ? () => undoRequest(entry) : null;
   }
 
   /** A short message at the bottom of the window, e.g. after copying a name. */

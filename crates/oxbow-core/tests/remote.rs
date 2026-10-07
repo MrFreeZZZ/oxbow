@@ -70,6 +70,8 @@ fn tracking_counts_commits_both_ways() {
     .unwrap();
     let tracking = repo.tracking().unwrap().unwrap();
     assert_eq!((tracking.ahead, tracking.behind), (1, 1));
+    // A fetch only moves origin/main, which an undo can't take back: it stays out of the log.
+    assert!(repo.operation_log().unwrap().is_empty());
 
     // The history carries the same counts for the toolbar.
     let history = repo.history(&Default::default()).unwrap();
