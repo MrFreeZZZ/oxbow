@@ -30,6 +30,7 @@
   import { untrack } from "svelte";
   import CompareView from "./lib/CompareView.svelte";
   import FileHistoryView from "./lib/FileHistoryView.svelte";
+  import PairPanel from "./lib/PairPanel.svelte";
   import { nav } from "./lib/nav.svelte";
   import type { CompareMode } from "./lib/types";
 
@@ -63,8 +64,8 @@
   /** What Compare shows: `target` against `base`. */
   let comparing = $state<{ base: string; target: string; mode: CompareMode }>({ base: "", target: "", mode: "split" });
 
-  function openCompare(base: string, target: string) {
-    comparing = { base, target, mode: comparing.mode };
+  function openCompare(base: string, target: string, mode: CompareMode = comparing.mode) {
+    comparing = { base, target, mode };
     view = "compare";
     resolving = false;
   }
@@ -74,6 +75,21 @@
   const branchCount = $derived(history ? history.refs.filter((r) => r.kind === "local").length : 0);
   const rowsById = $derived(new Map(history?.rows.map((r) => [r.id, r]) ?? []));
   const selectedRow = $derived(selected ? (rowsById.get(selected) ?? null) : null);
+  /** A second commit, ⌘-clicked, compared with the selected one in the details panel. */
+  let second = $state<string | null>(null);
+  const pair = $derived.by(() => {
+    const other = second ? rowsById.get(second) : undefined;
+    if (!history || !selectedRow || selectedRow.worktree || !other || other.worktree || other.id === selectedRow.id) return null;
+    // Rows are newest first, so the later one in the list is the older commit.
+    const rows = history.rows;
+    return rows.indexOf(other) > rows.indexOf(selectedRow) ? { older: other, newer: selectedRow } : { older: selectedRow, newer: other };
+  });
+
+  /** ⌘-click: compare with the selected commit; on the selected one itself, or with nothing to compare against, just select. */
+  function pickSecond(id: string) {
+    if (!selectedRow || selectedRow.worktree) return select(id);
+    second = id === selected ? null : id;
+  }
   const headRow = $derived(history?.head.commit ? (rowsById.get(history.head.commit) ?? null) : null);
   // The line the next commit goes on: the uncommitted row's, or HEAD's.
   const headColor = $derived(history?.rows.find((r) => r.worktree)?.graph.color ?? headRow?.graph.color ?? 0);
@@ -148,6 +164,7 @@
     error = null;
     // The commit panel must not ask the new repository about the old one's commits.
     selected = null;
+    second = null;
     search.clear();
     if (view === "compare" || view === "file") view = "history";
     try {
@@ -424,12 +441,14 @@
 
   function select(id: string) {
     selected = id;
+    second = null;
     list?.reveal(id);
   }
 
   /** Picking a commit from the sidebar goes back to History, which mounts the graph again. */
   function pick(id: string) {
     selected = id;
+    second = null;
     if (view === "history" && !showConflicts) return list?.reveal(id);
     view = "history";
     resolving = false;
@@ -477,6 +496,8 @@
       view = "history";
       resolving = false;
       requestAnimationFrame(() => searchField?.focus());
+    } else if (event.key === "Escape" && second && view === "history" && !confirm.request && !event.defaultPrevented) {
+      second = null;
     }
   }}
 />
@@ -629,14 +650,24 @@
         <section class="history" aria-label="Commit history">
           <div class="columns"><span>{#if found?.only}Matching commits · graph hidden{:else}Description{/if}</span>{#if history.truncated}<span class="note">Showing the latest {history.rows.length.toLocaleString()} commits</span>{/if}</div>
           {#key repo.path}
-            <HistoryList bind:this={list} {history} {selected} onSelect={select} menuFor={commitMenu} {found} />
+            <HistoryList bind:this={list} {history} {selected} onSelect={select} menuFor={commitMenu} {found} second={pair ? second : null} onSecond={pickSecond} />
           {/key}
         </section>
         <aside class="panel" style:width="{panelWidth}px" aria-label="Commit details">
           <button class="grip" onpointerdown={startResize} aria-label="Resize commit details" title="Drag to resize"></button>
           <!-- A new repository starts the panels from scratch. -->
           {#key repo.path}
-            {#if selectedRow?.worktree}
+            {#if pair}
+              <PairPanel
+                older={pair.older}
+                newer={pair.newer}
+                {version}
+                copy={(text) => copyText(text, "Copied the command.")}
+                onSelect={select}
+                onClear={() => (second = null)}
+                onOpenCompare={(from, to) => openCompare(from.slice(0, 7), to.slice(0, 7), "tips")}
+              />
+            {:else if selectedRow?.worktree}
               <ChangesPanel
                 branch={history.head.branch}
                 color={selectedRow.graph.color}
