@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { oplog } from "./oplog.svelte";
   import type { History, HistoryRow, RefInfo, RepoSummary } from "./types";
   import { lane, NO_BRANCH_COLOR, shortTime, tint } from "./format";
   import type { Request } from "./confirm.svelte";
@@ -372,6 +373,11 @@
       <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.stash} /></svg>
       <span class="grow">Stashes</span>
       {#if history.stashes.length}<span class="meta">{history.stashes.length}</span>{/if}
+    </button>
+    <button class="item" class:current={oplog.open} onclick={() => (oplog.open = !oplog.open)} title="Every step Oxbow ran here, to undo or restore">
+      <svg class="icon" viewBox="0 0 16 16"><path d="M5.5 4 2.5 7l3 3M3 7h6.5a3.5 3.5 0 0 1 0 7H7" /></svg>
+      <span class="grow">Operation Log</span>
+      {#if oplog.entries.length}<span class="meta">{oplog.entries.length}</span>{/if}
     </button>
 
     <div class="heading with-button">

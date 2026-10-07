@@ -38,6 +38,8 @@
   import CloneSheet from "./lib/CloneSheet.svelte";
   import NewRepoSheet from "./lib/NewRepoSheet.svelte";
   import { start } from "./lib/start.svelte";
+  import OperationLog from "./lib/OperationLog.svelte";
+  import { oplog, undoRequest } from "./lib/oplog.svelte";
 
   let repo = $state<RepoSummary | null>(null);
   let history = $state<History | null>(null);
@@ -182,6 +184,7 @@
     selected = null;
     second = null;
     search.clear();
+    oplog.forget();
     if (view === "compare" || view === "file") view = "history";
     try {
       const summary = await api.openRepo(path);
@@ -191,6 +194,7 @@
       nav.repo = summary.path;
       history = next;
       version++;
+      oplog.load();
       // Start on the checked-out commit, like the design: HEAD's latest commit is selected.
       selected = next.head.commit ?? next.rows[0]?.id ?? null;
       requestAnimationFrame(() => selected && list?.reveal(selected));
@@ -237,6 +241,21 @@
     return ok;
   }
   confirm.runner = (request) => void run(request);
+
+  /** ⌘Z: back to before the newest step of the Operation Log. */
+  async function undoLatest() {
+    oplog.open = false;
+    await oplog.load();
+    const latest = oplog.entries[0];
+    if (latest) run(undoRequest(latest));
+    else confirm.say("Nothing to undo yet.");
+  }
+
+  /** The key went to a text field, where ⌘Z undoes typing. */
+  function typing(event: KeyboardEvent): boolean {
+    const target = event.target as HTMLElement | null;
+    return !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+  }
 
   /** After an action stopped on conflicts, or a rebase stopped again on its next commit, the
    *  Conflicts screen opens on its own. */
@@ -421,6 +440,7 @@
       if (mine !== generation || loading) return;
       history = next;
       version++;
+      oplog.load();
       if (!selected || !next.rows.some((r) => r.id === selected)) selected = next.head.commit ?? next.rows[0]?.id ?? null;
     } catch (err) {
       if (mine === generation) error = String(err);
@@ -470,6 +490,7 @@
     selected = null;
     second = null;
     search.clear();
+    oplog.forget();
     view = "history";
     nav.quickOpen = false;
     error = null;
@@ -541,6 +562,10 @@
       view = "history";
       resolving = false;
       requestAnimationFrame(() => searchField?.focus());
+    } else if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "z" && history && !confirm.request && !start.sheet && !typing(event)) {
+      // ⌘Z undoes the newest step of the Operation Log. In a text field it stays the field's own.
+      event.preventDefault();
+      undoLatest();
     } else if (event.key === "Escape" && second && view === "history" && !confirm.request && !event.defaultPrevented) {
       second = null;
     } else if ((event.metaKey || event.ctrlKey) && !event.altKey && !confirm.request && !start.sheet && !loading) {
@@ -659,6 +684,7 @@
         <button class="capsule" onclick={() => api.openSettings()} aria-label="Settings" title={navigator.platform.startsWith("Mac") ? "Settings (⌘,)" : "Settings (Ctrl+,)"}>
           <svg class="icon" viewBox="0 0 16 16"><path d="M12.78 6.52L14.44 6.56L14.44 9.44L12.78 9.48L12.42 10.33L13.57 11.54L11.54 13.57L10.33 12.42L9.48 12.78L9.44 14.44L6.56 14.44L6.52 12.78L5.67 12.42L4.46 13.57L2.43 11.54L3.58 10.33L3.22 9.48L1.56 9.44L1.56 6.56L3.22 6.52L3.58 5.67L2.43 4.46L4.46 2.43L5.67 3.58L6.52 3.22L6.56 1.56L9.44 1.56L9.48 3.22L10.33 3.58L11.54 2.43L13.57 4.46L12.42 5.67zM8 5.8a2.2 2.2 0 1 0 0 4.4a2.2 2.2 0 1 0 0-4.4" /></svg>
         </button>
+        <OperationLog repo={repo.name} run={(request) => void run(request)} />
         {#if view === "file" && !showConflicts}
           <FindField bind:this={findField} />
         {/if}

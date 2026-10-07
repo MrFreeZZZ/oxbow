@@ -33,6 +33,8 @@ pub struct GitCommand {
     /// A step Oxbow does itself before the command, as it would be typed in a shell, e.g.
     /// adding a line to `.gitignore`.
     pub before: Option<String>,
+    /// Environment variables for the command, e.g. a scratch `GIT_INDEX_FILE`. Not shown.
+    pub env: Vec<(String, String)>,
 }
 
 impl GitCommand {
@@ -47,6 +49,7 @@ impl GitCommand {
             progress: false,
             input: None,
             before: None,
+            env: Vec::new(),
         }
     }
 
@@ -67,6 +70,11 @@ impl GitCommand {
 
     pub fn before(mut self, step: impl Into<String>) -> Self {
         self.before = Some(step.into());
+        self
+    }
+
+    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.env.push((key.into(), value.into()));
         self
     }
 
@@ -160,6 +168,7 @@ impl Repo {
 fn command_in(dir: &Path, command: &GitCommand) -> Command {
     let mut git = crate::config::git();
     git.args(command.run_args()).current_dir(dir);
+    git.envs(command.env.iter().map(|(k, v)| (k, v)));
     git
 }
 

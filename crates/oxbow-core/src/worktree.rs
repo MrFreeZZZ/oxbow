@@ -303,6 +303,14 @@ pub enum Action {
     FetchTags {
         remote: String,
     },
+    /// Put the repository back to how it was before step `id` of the Operation Log, or right
+    /// after it with `after`.
+    Restore {
+        id: String,
+        after: bool,
+    },
+    /// Forget every step of the Operation Log.
+    ClearOperationLog,
 }
 
 /// A branch on a remote: `branch` on `remote`.
@@ -784,6 +792,11 @@ impl Repo {
             Action::Optimize => {
                 vec![GitCommand::new(["gc"]).comment("packs loose objects and drops ones nothing points at any more")]
             }
+            Action::Restore { id, after } => self.plan_restore(id, *after)?,
+            Action::ClearOperationLog => vec![
+                GitCommand::new(["update-ref", "-d", crate::oplog::OPLOG_REF])
+                    .comment("the snapshots go with git's next clean-up"),
+            ],
             Action::Reword { message } => {
                 let mut args = vec!["commit".to_owned(), "--amend".to_owned(), "--only".to_owned()];
                 for paragraph in paragraphs(message) {
@@ -802,8 +815,37 @@ impl Repo {
     }
 
     /// Run `action`, reporting each command and each line it prints to `on_event`. Setting
-    /// `cancel` stops the running command.
+    /// `cancel` stops the running command. The step goes into the Operation Log with the state
+    /// before and after it, so it can be undone; a log that can't be written never stops it.
     pub fn perform_with(
+        &self,
+        action: &Action,
+        on_event: &mut dyn FnMut(ActionEvent),
+        cancel: &AtomicBool,
+    ) -> Result<String> {
+        if let Action::ClearOperationLog = action {
+            let out = self.perform_unlogged(action, on_event, cancel)?;
+            self.clear_operation_log()?;
+            return Ok(out);
+        }
+        if let Action::Restore { id, .. } = action {
+            self.prepare_restore(id)?;
+        }
+        let before = self.snapshot().ok();
+        let result = self.perform_unlogged(action, on_event, cancel);
+        if let Action::Restore { .. } = action {
+            // read-tree forgets what git knew about the files on disk.
+            let _ = self.run(&GitCommand::new(["update-index", "-q", "--refresh"]));
+        }
+        if let Some(before) = before
+            && let Ok(after) = self.snapshot()
+        {
+            let _ = self.record(action, &before, &after, result.is_err());
+        }
+        result
+    }
+
+    fn perform_unlogged(
         &self,
         action: &Action,
         on_event: &mut dyn FnMut(ActionEvent),

@@ -30,6 +30,7 @@ import type {
   NewRepoOptions,
   NewRepoPlan,
   GitCommand,
+  OpEntry,
 } from "./types";
 import type { PullSetup } from "./remote";
 
@@ -87,6 +88,8 @@ export const api = {
   openInTerminal: () => invoke<void>("open_in_terminal"),
   monospaceFonts: () => invoke<string[]>("monospace_fonts"),
   refreshRemoteTags: () => invoke<boolean>("refresh_remote_tags"),
+  /** Newest first. */
+  operationLog: () => invoke<OpEntry[]>("operation_log"),
   search: (query: SearchQuery) => invoke<SearchResult>("search", { query }),
   settingsText: () => invoke<string>("settings_text"),
   saveSettingsText: (text: string) => invoke<void>("save_settings_text", { text }),

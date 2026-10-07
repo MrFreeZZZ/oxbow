@@ -288,7 +288,17 @@
         },
         {
           title: "Safety",
-          rows: [prefRow("oxbow.push.confirmForce", "Ask before force pushing", "switch", { sub: "Oxbow always force pushes with --force-with-lease" })],
+          rows: [
+            prefRow("oxbow.undo.keepDays", "Keep undo history for", "seg", {
+              sub: "Every action in the Operation Log can be undone",
+              options: () => [
+                { value: 7, label: "7 days" },
+                { value: 30, label: "30 days" },
+                { value: 90, label: "90 days" },
+              ],
+            }),
+            prefRow("oxbow.push.confirmForce", "Ask before force pushing", "switch", { sub: "Oxbow always force pushes with --force-with-lease" }),
+          ],
         },
       ],
     },

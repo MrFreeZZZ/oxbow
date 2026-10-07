@@ -141,6 +141,12 @@ fn apply_settings(app: &AppHandle, session: &Session, settings: &serde_json::Map
             .and_then(Value::as_bool)
             .unwrap_or(true),
     );
+    oxbow_core::oplog::set_keep_days(
+        settings
+            .get("oxbow.undo.keepDays")
+            .and_then(Value::as_u64)
+            .map_or(30, |days| days.min(3650) as u32),
+    );
     let theme = appearance(settings);
     for window in app.webview_windows().values() {
         let _ = window.set_theme(theme);
@@ -547,6 +553,13 @@ async fn file_pickaxe(
     blocking(move || repo.file_pickaxe(&path, &text, match_case, &rev)).await
 }
 
+/// The Operation Log, newest step first.
+#[tauri::command]
+async fn operation_log(session: State<'_, Session>) -> CommandResult<Vec<oxbow_core::OpEntry>> {
+    let repo = current(&session)?;
+    blocking(move || repo.operation_log()).await
+}
+
 #[tauri::command]
 async fn working_tree(session: State<'_, Session>) -> CommandResult<WorkingTree> {
     let repo = current(&session)?;
@@ -949,6 +962,7 @@ fn main() {
             open_in_editor,
             open_in_terminal,
             reveal_file,
+            operation_log,
             monospace_fonts,
             refresh_remote_tags,
             search,
