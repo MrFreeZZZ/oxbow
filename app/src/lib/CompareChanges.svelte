@@ -8,6 +8,7 @@
   import type { Comparison, FileDiff } from "./types";
   import { lane, plate, shortId, splitPath, tabLabels, tint } from "./format";
   import DiffView from "./DiffView.svelte";
+  import FoldAll from "./FoldAll.svelte";
 
   let {
     comparison: c,
@@ -26,6 +27,8 @@
     /** Shown in place of the headline, as when two commits are compared in History. */
     header?: Snippet;
   } = $props();
+
+  let diffView = $state<DiffView>();
 
   let tab = $state<string | null>(null);
   let whole = $state(wholeByDefault());
@@ -129,6 +132,7 @@
             <span class="grow">{c.files.length} {c.files.length === 1 ? "file" : "files"} changed</span>
             <span class="add">+{totals.add}</span>
             <span class="del">−{totals.del}</span>
+            <FoldAll onFold={(fold) => diffView?.setAll(fold)} />
           </div>
           {#each c.files as file (file.path)}
             {@const p = splitPath(file.path)}
@@ -155,7 +159,7 @@
         <p class="empty">No differences: both sides have the same files.</p>
       {/if}
     {/if}
-    <DiffView {diffs} {color} {whole} onToggleWhole={() => (whole = !whole)} />
+    <DiffView bind:this={diffView} foldable {diffs} {color} {whole} onToggleWhole={() => (whole = !whole)} />
   </div>
 </div>
 

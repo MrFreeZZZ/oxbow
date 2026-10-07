@@ -18,6 +18,9 @@
   import { confirm } from "./confirm.svelte";
   import { languageOf, paint } from "./syntax";
   import { nav } from "./nav.svelte";
+  import { untrack } from "svelte";
+  import { foldReason, startsFolded } from "./diffFold";
+  import { mac } from "./keys";
 
   let {
     diffs,
@@ -32,6 +35,7 @@
     commit = null,
     history = true,
     picker = null,
+    foldable = false,
   }: {
     diffs: FileDiff[];
     color: number;
@@ -52,7 +56,38 @@
     history?: boolean;
     /** Checkboxes on the changed lines of a hunk, to stage or discard single lines. */
     picker?: LinePicker | null;
+    /** Each file folds to its header; Smart, Expanded or Collapsed in Settings › Diff & Text says which start folded. */
+    foldable?: boolean;
   } = $props();
+
+  /** Folded files, by path. */
+  let folded = $state<Record<string, boolean>>({});
+  // Another commit starts from the setting; the same files loaded again (the whole-file toggle)
+  // keep what was folded by hand.
+  const fileSet = $derived(diffs.map((d) => d.file.path).join("\n"));
+  $effect(() => {
+    const key = fileSet;
+    prefs.get("oxbow.diff.files");
+    prefs.get("oxbow.diff.foldOver");
+    if (!foldable || !key) return;
+    untrack(() => {
+      folded = Object.fromEntries(diffs.map((d) => [d.file.path, startsFolded(d)]));
+    });
+  });
+
+  const isFolded = (diff: FileDiff) => foldable && !!folded[diff.file.path];
+
+  /** Fold or unfold every file, from the file list's buttons or ⌥-click on a chevron. */
+  export function setAll(fold: boolean) {
+    folded = Object.fromEntries(diffs.map((d) => [d.file.path, fold]));
+    if (!fold) showAll = true;
+  }
+
+  function toggle(diff: FileDiff, event: MouseEvent) {
+    const fold = !isFolded(diff);
+    if (event.altKey) setAll(fold);
+    else folded = { ...folded, [diff.file.path]: fold };
+  }
 
   /** Open the file in the editor, at its first change. */
   function openInEditor(diff: FileDiff) {
@@ -70,7 +105,8 @@
     for (const diff of diffs) {
       if (budget <= 0) break;
       files.push(diff);
-      budget -= diff.hunks.reduce((n, h) => n + h.lines.length, 0);
+      // A folded file draws no lines.
+      if (!isFolded(diff)) budget -= diff.hunks.reduce((n, h) => n + h.lines.length, 0);
     }
     return { files, hidden: diffs.length - files.length };
   });
@@ -104,13 +140,31 @@
 
 {#each shown.files as diff (diff.file.path)}
   {@const path = splitPath(diff.file.path)}
-  <section class="file">
+  {@const isShut = isFolded(diff)}
+  {@const why = isShut ? foldReason(diff) : null}
+  <section class="file" class:shut={isShut} data-path={diff.file.path}>
     <header>
       <div class="bar" style:background={tint(color, "bar")} style:--name={plate(color)}>
-        <span class="path"><span class="dir">{path.dir}</span>{path.name}</span>
-        {#if diff.file.oldPath}<span class="from">from {diff.file.oldPath}</span>{/if}
-        <span class="status">{statusLabel[diff.file.status]}</span>
-        <span class="spacer"></span>
+        {#if foldable}
+          <button
+            class="head"
+            onclick={(e) => toggle(diff, e)}
+            aria-expanded={!isShut}
+            title={`${isShut ? "Show" : "Hide"} the diff. ${mac ? "⌥-click" : "Alt+click"}: every file`}
+          >
+            <svg class="icon chevron" class:shut={isShut} viewBox="0 0 16 16"><path d="M4.5 6 8 9.5 11.5 6" /></svg>
+            <span class="path"><span class="dir">{path.dir}</span>{path.name}</span>
+            {#if diff.file.oldPath}<span class="from">from {diff.file.oldPath}</span>{/if}
+            <span class="status">{statusLabel[diff.file.status]}</span>
+            {#if why && why !== statusLabel[diff.file.status]}<span class="why">· {why}</span>{/if}
+            <span class="spacer"></span>
+          </button>
+        {:else}
+          <span class="path"><span class="dir">{path.dir}</span>{path.name}</span>
+          {#if diff.file.oldPath}<span class="from">from {diff.file.oldPath}</span>{/if}
+          <span class="status">{statusLabel[diff.file.status]}</span>
+          <span class="spacer"></span>
+        {/if}
         <span class="mono add">+{diff.file.additions}</span>
         <span class="mono del">−{diff.file.deletions}</span>
         {#if openable && history && diff.file.status !== "untracked"}
@@ -138,7 +192,9 @@
       </div>
     </header>
 
-    {#if diff.file.binary}
+    {#if isShut}
+      <!-- Folded: the header alone. -->
+    {:else if diff.file.binary}
       <p class="note">Binary file, no text diff.</p>
     {:else if diff.tooLarge}
       <p class="note">This file is too large to show.</p>
@@ -203,6 +259,34 @@
 <style>
   .file {
     padding: 0 12px 14px;
+  }
+  .file.shut {
+    padding-bottom: 0;
+  }
+  .head {
+    flex-grow: 1;
+    min-width: 0;
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: -6px;
+    padding-left: 4px;
+    border-radius: 8px;
+  }
+  .chevron {
+    width: 14px;
+    height: 14px;
+    color: var(--name);
+    transition: transform 0.15s ease;
+  }
+  .chevron.shut {
+    transform: rotate(-90deg);
+  }
+  .why {
+    color: var(--text2);
+    font-size: 11px;
+    white-space: nowrap;
   }
   /* Each file starts with a bar in the branch color, so files don't run together. */
   header {

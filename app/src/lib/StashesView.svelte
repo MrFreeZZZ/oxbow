@@ -9,6 +9,7 @@
   import { applyRequest, dropRequest, stashBranchRequest, stashMenu, stashName, stashRequest } from "./stash";
   import { plate, relativeTime, shortId, splitPath, tint } from "./format";
   import DiffView from "./DiffView.svelte";
+  import FoldAll from "./FoldAll.svelte";
   import Menu, { type MenuEntry } from "./Menu.svelte";
 
   let {
@@ -30,6 +31,8 @@
     run: (request: Request | Promise<Request>) => void;
     copy: (text: string) => void;
   } = $props();
+
+  let diffView = $state<DiffView>();
 
   /** Grey, the color of stashes in the graph; also for a branch that is gone. */
   const STASH_COLOR = 10;
@@ -282,6 +285,7 @@
               <span class="grow">{plural(t?.count ?? 0, "file")}</span>
               <span class="add">+{t?.add}</span>
               <span class="del">−{t?.del}</span>
+              <FoldAll onFold={(fold) => diffView?.setAll(fold)} />
             </div>
             {#each [...f.tracked.map((x) => ({ file: x, untracked: false })), ...f.untracked.map((x) => ({ file: x, untracked: true }))] as { file, untracked } (file.path + untracked)}
               {@const p = splitPath(file.path)}
@@ -299,7 +303,7 @@
             {/each}
           </div>
         {/if}
-        <DiffView {diffs} color={branchColor(stash)} {whole} onToggleWhole={() => (whole = !whole)} />
+        <DiffView bind:this={diffView} foldable {diffs} color={branchColor(stash)} {whole} onToggleWhole={() => (whole = !whole)} />
       </div>
     {/if}
   </section>
