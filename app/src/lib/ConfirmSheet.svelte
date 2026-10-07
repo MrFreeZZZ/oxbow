@@ -52,7 +52,21 @@
     remote: "M8 1.8a6.2 6.2 0 1 0 0 12.4a6.2 6.2 0 1 0 0-12.4M1.8 8h12.4M8 1.8c-2.2 2.2-2.2 10.2 0 12.4M8 1.8c2.2 2.2 2.2 10.2 0 12.4",
     tag: "M2.5 2.5h5l6 6-5 5-6-6zM5.5 4.7a.8.8 0 1 0 0 1.6a.8.8 0 1 0 0-1.6",
     box: "M2.5 5 8 2l5.5 3v6L8 14l-5.5-3zM2.5 5 8 8l5.5-3M8 8v6",
+    ignore: "M3 3l10 10M5.2 5.2C3.8 6 2.8 7 2 8c1.5 2.5 3.7 4 6 4 1 0 2-.3 2.8-.8M7 4.1c.3 0 .7-.1 1-.1 2.3 0 4.5 1.5 6 4-.4.7-.9 1.3-1.4 1.8",
+    lines: "M2.5 4h11M2.5 8h7M2.5 12h9",
   };
+
+  /** The hunk part of a patch fed on stdin, without the file header, and at most `max` lines. */
+  function patchLines(input: string, max = 16): { kind: string; text: string }[] {
+    const all = input.replace(/\n$/, "").split("\n");
+    const start = all.findIndex((l) => l.startsWith("@@"));
+    const body = (start < 0 ? all : all.slice(start)).map((text) => ({
+      kind: text.startsWith("@@") ? "at" : text.startsWith("+") ? "add" : text.startsWith("-") ? "del" : "ctx",
+      text,
+    }));
+    if (body.length <= max) return body;
+    return [...body.slice(0, max - 1), { kind: "ctx", text: `… ${body.length - max + 1} more lines` }];
+  }
 
   const OUTPUT: Record<string, string> = {
     out: "var(--term-out)",
@@ -228,6 +242,11 @@
         <div class="lines mono selectable" bind:this={linesBox} aria-live="polite">
           {#if confirm.phase === "ask"}
             {#each confirm.commands as command, i (i)}
+              {#if command.before}{@render prompt(command.before)}{/if}
+              {#if command.input}
+                <div class="comment"># Oxbow writes a patch with just these lines and feeds it on stdin:</div>
+                {#each patchLines(command.input) as line, k (k)}<div class="patch {line.kind}">{line.text}</div>{/each}
+              {/if}
               {@render prompt(command.display)}
               {#if command.comment}<div class="comment"># {command.comment}</div>{/if}
             {/each}
@@ -414,6 +433,20 @@
   }
   .bold {
     font-weight: 600;
+  }
+  .patch {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--term-dim);
+  }
+  .patch.at {
+    color: var(--term-hint);
+  }
+  .patch.add {
+    color: var(--term-ok);
+  }
+  .patch.del {
+    color: var(--term-err);
   }
   .comment {
     color: var(--term-comment);

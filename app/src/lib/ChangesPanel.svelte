@@ -9,7 +9,10 @@
   import { confirm, type Part, type Request } from "./confirm.svelte";
   import type { FileChange, FileDiff, Hunk, HistoryRow, Side, WorkingTree } from "./types";
   import { plate, splitPath, tint } from "./format";
-  import DiffView from "./DiffView.svelte";
+  import DiffView, { type LinePicker } from "./DiffView.svelte";
+  import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
+  import { nav } from "./nav.svelte";
+  import { commitRecovery, ignoreChoices, ignoreRequest, linesRequest, stashFilesRequest, stashMessageFor, type LinesKind } from "./changes";
 
   let {
     branch,
@@ -44,6 +47,9 @@
   });
   let error = $state<string | null>(null);
   let loads = $state(0);
+  /** Lines picked in one hunk of the diff shown, with the one clicked last for Shift-click. */
+  let sel = $state<{ header: string; lines: number[]; anchor: number } | null>(null);
+  let menu = $state<{ x: number; y: number; entries: MenuEntry[]; label: string } | null>(null);
 
   const staged = $derived(tree?.staged ?? []);
   const unstaged = $derived(tree?.unstaged ?? []);
@@ -103,7 +109,11 @@
     }
     api.workingDiff(current.path, current.side, wholeFile).then(
       (d) => {
-        if (pick === current && whole === wholeFile) diff = d;
+        if (pick === current && whole === wholeFile) {
+          diff = d;
+          // Picked lines belong to the hunks they were picked in.
+          sel = null;
+        }
       },
       (err) => {
         if (pick === current) error = String(err);
@@ -183,17 +193,87 @@
     act({ ...request[kind], action: { kind, path, header: hunk.header } });
   }
 
+  /** Changed lines can be picked in the hunks of a tracked file, not in the whole-file view. */
+  const picker: LinePicker = {
+    enabled: () => !whole && !!pick && !!diff && diff.file.status !== "untracked" && diff.file.status !== "conflicted",
+    picked: (hunk) => (sel?.header === hunk.header ? sel.lines : []),
+    toggle: (hunk, index, range) => {
+      const current = sel?.header === hunk.header ? sel : null;
+      let lines = current?.lines ?? [];
+      if (range && current) {
+        const [from, to] = current.anchor < index ? [current.anchor, index] : [index, current.anchor];
+        const span = hunk.lines.flatMap((l, i) => (i >= from && i <= to && l.kind !== "context" ? [i] : []));
+        lines = [...new Set([...lines, ...span])];
+      } else lines = lines.includes(index) ? lines.filter((i) => i !== index) : [...lines, index];
+      sel = lines.length ? { header: hunk.header, lines, anchor: index } : null;
+    },
+  };
+
+  function linesAction(kind: LinesKind, path: string, hunk: Hunk) {
+    if (sel?.header === hunk.header) act(linesRequest(kind, path, hunk, [...sel.lines].sort((a, b) => a - b)));
+  }
+
+  /** Every file with changes once, for a stash of a few of them. */
+  function stashCandidates() {
+    const seen = new Map<string, { path: string; untracked: boolean; staged: boolean; unstaged: boolean }>();
+    for (const f of unstaged) seen.set(f.path, { path: f.path, untracked: f.status === "untracked", staged: stagedPaths.has(f.path), unstaged: true });
+    for (const f of staged) if (!seen.has(f.path)) seen.set(f.path, { path: f.path, untracked: false, staged: true, unstaged: false });
+    return [...seen.values()];
+  }
+
+  const revealLabel = navigator.platform.startsWith("Mac") ? "Reveal in Finder" : navigator.platform.startsWith("Win") ? "Show in Explorer" : "Open Containing Folder";
+
+  function fileMenu(event: MouseEvent, file: FileChange, group: "staged" | "unstaged" | "conflicted") {
+    event.preventDefault();
+    const name = splitPath(file.path).name;
+    const what = { modified: "modified", added: "new file", untracked: "untracked", deleted: "deleted", renamed: "renamed", copied: "copied", conflicted: "conflicted" }[file.status];
+    const entries: MenuEntry[] = [{ kind: "header", label: `${name} · ${what}${group === "staged" ? ", staged" : ""}` }];
+    if (group === "staged") entries.push({ kind: "item", label: "Unstage File", icon: menuIcons.unstage, run: () => unstage([file]) });
+    else if (group === "unstaged") entries.push({ kind: "item", label: "Stage File", icon: menuIcons.stage, run: () => stage([file]) });
+    if (group !== "conflicted")
+      entries.push({ kind: "item", label: "Stash This File…", icon: menuIcons.stash, run: () => act(stashFilesRequest(stashCandidates(), [file.path], stashMessageFor(file.path))) });
+    if (file.status === "untracked")
+      entries.push({
+        kind: "sub",
+        label: "Ignore",
+        icon: menuIcons.ignore,
+        entries: ignoreChoices(file.path).map((choice) => ({ label: choice.label, hint: choice.pattern, run: () => act(ignoreRequest(file.path, choice)) })),
+      });
+    entries.push({ kind: "sep" });
+    if (file.status !== "deleted")
+      entries.push({ kind: "item", label: "Open in Editor", icon: menuIcons.open, run: () => api.openInEditor(file.path, null).catch((err) => confirm.say(String(err))) });
+    if (file.status !== "deleted")
+      entries.push({ kind: "item", label: revealLabel, icon: menuIcons.reveal, run: () => api.revealFile(file.path).catch((err) => confirm.say(String(err))) });
+    entries.push({
+      kind: "item",
+      label: "Copy Path",
+      icon: menuIcons.copy,
+      run: () => navigator.clipboard.writeText(file.path).then(() => confirm.say(`Copied ${file.path}.`), () => {}),
+    });
+    if (file.status !== "untracked" && file.status !== "added") entries.push({ kind: "item", label: "File History", icon: menuIcons.history, run: () => nav.openFile(file.path) });
+    if (group === "unstaged") {
+      entries.push({ kind: "sep" });
+      entries.push({ kind: "item", label: file.status === "untracked" ? "Delete File…" : "Discard Changes…", icon: menuIcons.drop, danger: true, run: () => discard([file]) });
+    }
+    menu = { x: event.clientX, y: event.clientY, entries, label: `${name} menu` };
+  }
+
   async function commit() {
     if (!canCommit) return;
     const files = staged.length;
     const pushed = draft.amend && head && !head.unpushed;
+    const action = { kind: "commit" as const, message, amend: draft.amend };
+    const summary = draft.summary.trim();
+    const where = branch ?? "HEAD";
     const done = await confirm.run({
       title: draft.amend ? `Amend the last commit on ${branch ?? "HEAD"}?` : `Commit ${files} ${files === 1 ? "file" : "files"} to ${branch ?? "HEAD"}?`,
       body: draft.amend ? amendBody(files) : ["Makes the commit ", { quote: draft.summary.trim() }, " on ", branchPart, " with the staged changes."],
       icon: "commit",
       button: draft.amend ? "Amend" : "Commit",
       note: pushed ? "The last commit is already pushed. After amending, pushing will need --force-with-lease." : undefined,
-      action: { kind: "commit", message, amend: draft.amend },
+      status: `Committing to ${where}…`,
+      recover: (failure) => commitRecovery(failure, action, summary, where),
+      action,
     });
     if (done) {
       draft.summary = "";
@@ -252,7 +332,8 @@
   {@const b = badge[file.status]}
   {@const isPicked = pick?.path === file.path && pick.side === side}
   {@const partly = group === "staged" ? unstagedPaths.has(file.path) : group === "unstaged" && stagedPaths.has(file.path)}
-  <div class="file" class:picked={isPicked}>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="file" class:picked={isPicked} oncontextmenu={(e) => fileMenu(e, file, group)}>
     {#if group !== "conflicted"}
       <input
         type="checkbox"
@@ -282,14 +363,26 @@
 {#snippet hunkBar(d: FileDiff, hunk: Hunk)}
   {#if !whole && pick && d.file.status !== "untracked" && d.file.status !== "conflicted"}
     {@const current = pick}
+    {@const n = sel?.header === hunk.header ? sel.lines.length : 0}
+    {@const lineWord = n === 1 ? "Line" : "Lines"}
     <div class="hunk">
       <span class="header">{hunk.header}</span>
+      {#if n}
+        <button class="state picked" onclick={() => (sel = null)} title="Clear the picked lines">{n} of {hunk.lines.filter((l) => l.kind !== "context").length} lines</button>
+        {#if current.side === "unstaged"}
+          <button class="hbtn" onclick={() => linesAction("discardHunk", current.path, hunk)}>Discard {n} {lineWord}</button>
+          <button class="hbtn primary" onclick={() => linesAction("stageHunk", current.path, hunk)}>Stage {n} {lineWord}</button>
+        {:else}
+          <button class="hbtn" onclick={() => linesAction("unstageHunk", current.path, hunk)}>Unstage {n} {lineWord}</button>
+        {/if}
+      {:else}
       <span class="state" class:staged={current.side === "staged"}>{current.side === "staged" ? "Staged" : "Unstaged"}</span>
       {#if current.side === "unstaged"}
         <button class="hbtn" onclick={() => hunkAction("discardHunk", current.path, hunk)}>Discard</button>
         <button class="hbtn primary" onclick={() => hunkAction("stageHunk", current.path, hunk)}>Stage Hunk</button>
       {:else}
         <button class="hbtn" onclick={() => hunkAction("unstageHunk", current.path, hunk)}>Unstage Hunk</button>
+      {/if}
       {/if}
     </div>
   {/if}
@@ -346,7 +439,7 @@
           {#if onResolve}<button class="resolve" onclick={onResolve}>Resolve Conflicts…</button>{:else}Fix them in your editor, then stage the file.{/if}
         </p>
       {/if}
-      <DiffView diffs={[diff]} {color} {whole} onToggleWhole={() => (whole = !whole)} {hunkBar} />
+      <DiffView diffs={[diff]} {color} {whole} onToggleWhole={() => (whole = !whole)} {hunkBar} {picker} />
     {/if}
   </div>
 
@@ -371,6 +464,10 @@
     </div>
   </div>
 </div>
+
+{#if menu}
+  <Menu x={menu.x} y={menu.y} label={menu.label} entries={menu.entries} onClose={() => (menu = null)} />
+{/if}
 
 <style>
   .panel {
@@ -600,6 +697,10 @@
   }
   .state.staged {
     color: var(--green);
+  }
+  .state.picked {
+    color: var(--text);
+    padding: 0 4px;
   }
   .hbtn {
     height: 24px;

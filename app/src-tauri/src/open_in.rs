@@ -180,6 +180,29 @@ pub fn open_terminal(terminal: &str, dir: &Path) -> Result<(), String> {
     launch(command)
 }
 
+/// Show `path` selected in the system's file manager; on Linux, open its folder.
+pub fn reveal(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let command = {
+        let mut command = Command::new("open");
+        command.arg("-R").arg(path);
+        command
+    };
+    #[cfg(target_os = "windows")]
+    let command = {
+        let mut command = Command::new("explorer");
+        command.arg(format!("/select,{}", path.display()));
+        command
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(path.parent().unwrap_or(path));
+        command
+    };
+    launch(command)
+}
+
 /// Start `command` and let it run on its own.
 fn launch(mut command: Command) -> Result<(), String> {
     let mut child = command

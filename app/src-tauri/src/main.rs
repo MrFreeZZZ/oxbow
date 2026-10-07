@@ -623,6 +623,7 @@ async fn perform_action(
         output: message,
         incoming: Vec::new(),
         remote_tip: None,
+        hook: None,
     })?;
     let cancel = session.cancel.clone();
     cancel.store(false, Ordering::Relaxed);
@@ -648,6 +649,7 @@ async fn perform_action(
             output: err.to_string(),
             incoming: Vec::new(),
             remote_tip: None,
+            hook: None,
         })
     })
 }
@@ -791,6 +793,13 @@ fn open_in_editor(app: AppHandle, session: State<'_, Session>, path: String, lin
         .or_else(|| open_in::editors().first().map(|app| app.id.to_owned()))
         .ok_or("No editor found. Install one, then pick it in Settings › Integrations.")?;
     open_in::open_file(&editor, &repo.workdir().join(Path::new(&path)), line)
+}
+
+/// Show a file of the repository in Finder (Explorer, or the file manager on Linux).
+#[tauri::command]
+fn reveal_file(session: State<'_, Session>, path: String) -> CommandResult<()> {
+    let repo = current(&session)?;
+    open_in::reveal(&repo.workdir().join(Path::new(&path)))
 }
 
 /// The monospaced font families installed on this computer, sorted, for Settings › Diff & Text.
@@ -939,6 +948,7 @@ fn main() {
             pull_setup,
             open_in_editor,
             open_in_terminal,
+            reveal_file,
             monospace_fonts,
             refresh_remote_tags,
             search,

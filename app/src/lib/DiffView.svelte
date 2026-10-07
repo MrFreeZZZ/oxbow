@@ -1,3 +1,14 @@
+<script lang="ts" module>
+  import type { Hunk as HunkOf } from "./types";
+
+  /** Which changed lines of a hunk are picked; the others dim once any is. */
+  export interface LinePicker {
+    enabled: (hunk: HunkOf) => boolean;
+    picked: (hunk: HunkOf) => number[];
+    toggle: (hunk: HunkOf, index: number, range: boolean) => void;
+  }
+</script>
+
 <script lang="ts">
   import type { Snippet } from "svelte";
   import type { DiffLine, FileDiff, Hunk } from "./types";
@@ -20,6 +31,7 @@
     matchCase = true,
     commit = null,
     history = true,
+    picker = null,
   }: {
     diffs: FileDiff[];
     color: number;
@@ -38,6 +50,8 @@
     commit?: string | null;
     /** Offer File History; not on File History itself. */
     history?: boolean;
+    /** Checkboxes on the changed lines of a hunk, to stage or discard single lines. */
+    picker?: LinePicker | null;
   } = $props();
 
   /** Open the file in the editor, at its first change. */
@@ -147,8 +161,30 @@
             <button class="fold" onclick={onToggleWhole} title="Show whole file">⋯ {before} unchanged {before === 1 ? "line" : "lines"}</button>
           {/if}
           {#if hunkBar}{@render hunkBar(diff, hunk)}{/if}
+          {@const picking = !!picker?.enabled(hunk)}
+          {@const picked = picking ? picker!.picked(hunk) : []}
           {#each hunk.lines as line, i (i)}
-            <div class="line {line.kind}" style:border-radius={radius(hunk.lines, i)} style:margin-top="{gap(hunk.lines, i)}px">
+            {@const on = picked.includes(i)}
+            <div
+              class="line {line.kind}"
+              class:picking
+              class:faded={picked.length > 0 && line.kind !== "context" && !on}
+              style:border-radius={radius(hunk.lines, i)}
+              style:margin-top="{gap(hunk.lines, i)}px"
+            >
+              {#if picking}
+                {#if line.kind !== "context"}
+                  <button
+                    class="pick"
+                    class:on
+                    role="checkbox"
+                    aria-checked={on}
+                    aria-label="{on ? 'Unselect' : 'Select'} line {line.newLine ?? line.oldLine}"
+                    title="Pick this line; Shift-click picks a range"
+                    onclick={(e) => picker!.toggle(hunk, i, e.shiftKey)}
+                  ><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" /></svg></button>
+                {:else}<span></span>{/if}
+              {/if}
               <span class="no">{line.oldLine ?? ""}</span>
               <span class="no">{line.newLine ?? ""}</span>
               <span class="text">{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found} data-hit={piece.hit} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>
@@ -243,8 +279,42 @@
     display: grid;
     grid-template-columns: 40px 40px 1fr;
   }
+  .line.picking {
+    grid-template-columns: 24px 40px 40px 1fr;
+  }
+  .line.faded > :not(.pick) {
+    opacity: 0.45;
+  }
   .line.added {
     background: var(--add);
+  }
+  .pick {
+    align-self: center;
+    justify-self: center;
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    border: 1.2px solid var(--text2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+  .pick svg {
+    width: 11px;
+    height: 11px;
+    fill: none;
+    stroke: transparent;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .pick.on {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .pick.on svg {
+    stroke: #fff;
   }
   .line.removed {
     background: var(--del);

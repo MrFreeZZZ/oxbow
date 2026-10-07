@@ -17,6 +17,7 @@ fn stashed() -> (Fixture, Repo) {
     let push = Action::StashPush {
         message: Some("Shout two".into()),
         untracked: true,
+        paths: Vec::new(),
     };
     assert_eq!(
         repo.plan(&push).unwrap().commands[0].display(),
@@ -91,6 +92,7 @@ fn an_action_on_a_stash_that_moved_is_refused() {
     repo.perform(&Action::StashPush {
         message: None,
         untracked: false,
+        paths: Vec::new(),
     })
     .unwrap();
     // stash@{0} is the new one now.

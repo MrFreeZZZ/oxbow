@@ -270,10 +270,12 @@ export type Action =
   | { kind: "stage"; paths: string[] }
   | { kind: "unstage"; paths: string[] }
   | { kind: "discard"; paths: string[] }
-  | { kind: "stageHunk"; path: string; header: string }
-  | { kind: "unstageHunk"; path: string; header: string }
-  | { kind: "discardHunk"; path: string; header: string }
-  | { kind: "commit"; message: string; amend: boolean }
+  /** `lines`: only these changed lines of the hunk, as indexes into its lines. */
+  | { kind: "stageHunk"; path: string; header: string; lines?: number[] | null }
+  | { kind: "unstageHunk"; path: string; header: string; lines?: number[] | null }
+  | { kind: "discardHunk"; path: string; header: string; lines?: number[] | null }
+  | { kind: "ignore"; pattern: string }
+  | { kind: "commit"; message: string; amend: boolean; noVerify?: boolean }
   | { kind: "fetch"; remote: string | null }
   | { kind: "pull"; remote: string; branch: string }
   | {
@@ -305,7 +307,8 @@ export type Action =
   | { kind: "revert"; commit: string }
   | { kind: "reset"; commit: string; mode: ResetMode }
   | { kind: "reword"; message: string }
-  | { kind: "stashPush"; message: string | null; untracked: boolean }
+  /** `paths`: only these files; every change when empty or missing. */
+  | { kind: "stashPush"; message: string | null; untracked: boolean; paths?: string[] }
   | { kind: "stashApply"; index: number; id: string; pop: boolean; keepIndex: boolean }
   | { kind: "stashDrop"; index: number; id: string }
   | { kind: "stashStore"; id: string; message: string }
@@ -411,6 +414,8 @@ export interface Failure {
   output: string;
   incoming: CommitBrief[];
   remoteTip: string | null;
+  /** The hook that stopped it, e.g. "pre-commit", or "pre-commit or commit-msg". */
+  hook: string | null;
 }
 
 export interface GitCommand {
@@ -418,6 +423,10 @@ export interface GitCommand {
   comment: string | null;
   /** The command as typed in a shell. */
   display: string;
+  /** What Oxbow feeds it on stdin, e.g. the patch of a few lines. */
+  input: string | null;
+  /** A step Oxbow does itself first, as typed in a shell. */
+  before: string | null;
 }
 
 export interface Plan {
