@@ -477,7 +477,7 @@
               sub: "In commits and stashes. Changes stays exact, so staging matches what you see",
             }),
             prefRow("oxbow.diff.files", "Files of a commit", "seg", {
-              sub: "Smart folds big diffs, lock and generated files, deleted and binary files",
+              sub: "Smart folds long, generated, deleted and binary files",
               options: () => [
                 { value: "smart", label: "Smart" },
                 { value: "expanded", label: "Expanded" },
