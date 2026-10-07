@@ -10,6 +10,8 @@ export const defaults = {
   "oxbow.appearance": "system" as "system" | "light" | "dark",
   "oxbow.history.rowStyle": "twoLines" as "twoLines" | "compact",
   "oxbow.startup.reopenRepository": true,
+  /** Where Clone and New Repository put repositories; empty: ~/Developer or the like. */
+  "oxbow.clone.folder": "",
   "oxbow.confirm.enabled": true,
   "oxbow.confirm.scope": "all" as "all" | "risky",
   "oxbow.confirm.showCommand": true,

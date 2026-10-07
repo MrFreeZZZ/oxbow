@@ -3,6 +3,7 @@
   import { plate, tint } from "./format";
   import MergePreview from "./MergePreview.svelte";
   import { prefs } from "./prefs.svelte";
+  import { tokens } from "./term";
 
   let { repo, branch, color }: { repo: string; branch: string | null; color: number } = $props();
 
@@ -53,30 +54,12 @@
     box: "M2.5 5 8 2l5.5 3v6L8 14l-5.5-3zM2.5 5 8 8l5.5-3M8 8v6",
   };
 
-  // Token colors of the terminal block follow the app theme (see --term-* in app.css).
-  const GIT = "var(--term-git)";
-  const SUB = "var(--term-sub)";
-  const FLAG = "var(--term-flag)";
-  const SHA = "var(--term-sha)";
-  const STR = "var(--term-str)";
-  const TEXT = "var(--term-text)";
   const OUTPUT: Record<string, string> = {
     out: "var(--term-out)",
     err: "var(--term-err)",
     hint: "var(--term-hint)",
     ok: "var(--term-ok)",
   };
-
-  /** Split a shell-quoted command into colored words. */
-  function tokens(display: string) {
-    const words = display.match(/'(?:[^']|'\\'')*'|"[^"]*"|\S+/g) ?? [];
-    return words.map((word, i) => ({
-      text: word,
-      bold: i === 0,
-      color:
-        i === 0 ? GIT : i === 1 ? SUB : word.startsWith("-") ? FLAG : /^['"]/.test(word) ? STR : /^[0-9a-f]{7,40}$/.test(word) ? SHA : TEXT,
-    }));
-  }
 
   async function copy() {
     const commands = failed ? confirm.recoveryCommands : confirm.commands;
