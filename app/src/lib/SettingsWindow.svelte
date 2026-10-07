@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { keys } from "./keys";
   // The Settings window (⌘,): sections on the left, grouped rows of controls on the right, in
   // the layout of the Settings design. Oxbow's own settings save at once to settings.json and
   // reach the main window through prefs; Git's own (identity, pull, default branch…) are written
@@ -937,7 +938,7 @@
           {/if}
           <span class="spacer"></span>
           <button class="plain" disabled={jsonText === jsonSaved} onclick={() => ((jsonText = jsonSaved), (jsonError = null))}>Revert</button>
-          <button class="primary" disabled={jsonText === jsonSaved} onclick={saveJson}>Save <span class="keys">{mac ? "⌘S" : "Ctrl+S"}</span></button>
+          <button class="primary" disabled={jsonText === jsonSaved} onclick={saveJson}>Save <span class="keys">{keys("Mod+S")}</span></button>
         </div>
       </div>
     {:else}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { keys, withKeys } from "./keys";
   // The toolbar search field: a mode token (Message, Code, Author, File, SHA), the text, and the
   // place of the selected commit among the matches with arrows to the previous and next one.
 
@@ -106,6 +107,7 @@
     spellcheck="false"
     autocomplete="off"
     aria-label="Search history"
+    title={withKeys("Search History", "Mod+F")}
   />
   {#if search.active}
     <span class="place" aria-live="polite">
@@ -117,10 +119,10 @@
         None
       {/if}
     </span>
-    <button class="arrow" onclick={() => step(-1)} disabled={!matches.length} aria-label="Previous match" title="Previous match (⇧Enter)">
+    <button class="arrow" onclick={() => step(-1)} disabled={!matches.length} aria-label="Previous match" title={withKeys("Previous Match", "Shift+Enter")}>
       <svg class="icon" viewBox="0 0 16 16"><path d="M4.5 9.5 8 6l3.5 3.5" /></svg>
     </button>
-    <button class="arrow" onclick={() => step(1)} disabled={!matches.length} aria-label="Next match" title="Next match (Enter)">
+    <button class="arrow" onclick={() => step(1)} disabled={!matches.length} aria-label="Next match" title={withKeys("Next Match", "Enter")}>
       <svg class="icon" viewBox="0 0 16 16"><path d="M4.5 6.5 8 10l3.5-3.5" /></svg>
     </button>
     <button class="clear" onclick={() => search.clear()} aria-label="Clear search">
@@ -158,7 +160,7 @@
           <span class="name">Find in a file…</span>
           <span class="sub">pick a file, then search its text and history</span>
         </span>
-        <span class="flag">{navigator.platform.startsWith("Mac") ? "⌘P" : "Ctrl+P"}</span>
+        <span class="flag">{keys("Mod+P")}</span>
       </button>
       {#if search.recent.length}
         <div class="sep"></div>

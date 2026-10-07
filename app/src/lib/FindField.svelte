@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { keys, withKeys } from "./keys";
   // Find in file, in File History's toolbar: the text, a letter-case switch, which match is
   // current among how many, and arrows to the previous and next one.
 
@@ -39,6 +40,7 @@
     spellcheck="false"
     autocomplete="off"
     aria-label="Find in file"
+    title={withKeys("Find in File", "Mod+F")}
   />
   <button
     class="case"
@@ -50,10 +52,10 @@
   >
   {#if active}
     <span class="place" aria-live="polite">{nav.found.count ? `${nav.found.at + 1} of ${nav.found.count}` : "None"}</span>
-    <button class="arrow" onclick={() => nav.findStep(-1)} disabled={!nav.found.count} aria-label="Previous match" title="Previous match (⇧Enter)">
+    <button class="arrow" onclick={() => nav.findStep(-1)} disabled={!nav.found.count} aria-label="Previous match" title={withKeys("Previous Match", "Shift+Enter")}>
       <svg class="icon" viewBox="0 0 16 16"><path d="M4.5 9.5 8 6l3.5 3.5" /></svg>
     </button>
-    <button class="arrow" onclick={() => nav.findStep(1)} disabled={!nav.found.count} aria-label="Next match" title="Next match (Enter)">
+    <button class="arrow" onclick={() => nav.findStep(1)} disabled={!nav.found.count} aria-label="Next match" title={withKeys("Next Match", "Enter")}>
       <svg class="icon" viewBox="0 0 16 16"><path d="M4.5 6.5 8 10l3.5-3.5" /></svg>
     </button>
     <button class="clear" onclick={clear} aria-label="Clear">

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { confirm, type Part } from "./confirm.svelte";
   import { actionIcons as icons } from "./icons";
+  import { withKeys } from "./keys";
   import { plate, tint } from "./format";
   import MergePreview from "./MergePreview.svelte";
   import { prefs } from "./prefs.svelte";
@@ -16,6 +17,8 @@
   const request = $derived(confirm.request);
   const failed = $derived(confirm.phase === "failed");
   const running = $derived(confirm.phase === "running");
+  /** A commit message: Return makes a new line, so the action runs with ⌘Return. */
+  const multiline = $derived(!!request?.fields?.some((f) => f.text?.multiline));
   const recovery = $derived(failed ? confirm.recovery : null);
   // What the sheet says: the request, or after a failure the way out of it.
   const shown = $derived.by(() => {
@@ -236,7 +239,7 @@
       {#if running}
         <div class="run">
           <span class="track"><span class="fill" class:busy={confirm.progress === null} style:width="{confirm.progress ?? 30}%"></span></span>
-          <button class="btn" onclick={() => confirm.stop()}>Stop</button>
+          <button class="btn" onclick={() => confirm.stop()} title={withKeys("Stop", "Escape")}>Stop</button>
         </div>
       {:else}
         <div class="foot">
@@ -248,13 +251,13 @@
           {/if}
           <span class="note">{failed ? (recovery?.note ?? "Nothing else was run.") : (request.note ?? "")}</span>
           {#if failed}
-            <button class="btn" onclick={() => confirm.cancel()}>{recovery?.close ?? "Close"}</button>
+            <button class="btn" onclick={() => confirm.cancel()} title={withKeys(recovery?.close ?? "Close", "Escape")}>{recovery?.close ?? "Close"}</button>
             {#if recovery?.button}
               <button class="btn go" class:danger={recovery.button.danger} bind:this={goButton} onclick={() => confirm.recover()}>{recovery.button.label}</button>
             {/if}
           {:else}
-            <button class="btn" onclick={() => confirm.cancel()}>Cancel</button>
-            <button class="btn go" class:danger={request.danger} bind:this={goButton} disabled={!!request.invalid} title={request.invalid ?? undefined} onclick={() => confirm.go()}>{request.button}</button>
+            <button class="btn" onclick={() => confirm.cancel()} title={withKeys("Cancel", "Escape")}>Cancel</button>
+            <button class="btn go" class:danger={request.danger} bind:this={goButton} disabled={!!request.invalid} title={request.invalid ?? withKeys(request.button, multiline ? "Mod+Enter" : "Enter")} onclick={() => confirm.go()}>{request.button}</button>
           {/if}
         </div>
       {/if}

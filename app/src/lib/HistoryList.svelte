@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { withKeys } from "./keys";
   import { untrack } from "svelte";
   import type { History, HistoryRow, RowLayout, Segment, WorktreeSummary } from "./types";
   import { lane, plate, relativeTime, tint } from "./format";
@@ -366,7 +367,7 @@
   {/if}
 
   {#if scrollTop > ROW * 3}
-    <button class="top" onclick={toTop} aria-label="Go to the newest commit" title="Go to the newest commit (Home)">
+    <button class="top" onclick={toTop} aria-label="Go to the newest commit" title={withKeys("Go to the Newest Commit", "Home")}>
       <svg class="icon" viewBox="0 0 16 16"><path d="M8 13V3.5M3.5 8 8 3.5 12.5 8" /></svg>
       <span>Top</span>
     </button>

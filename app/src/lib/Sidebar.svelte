@@ -1,5 +1,6 @@
 <script lang="ts">
   import { oplog } from "./oplog.svelte";
+  import { keys } from "./keys";
   import type { History, HistoryRow, RefInfo, RepoSummary } from "./types";
   import { lane, NO_BRANCH_COLOR, shortTime, tint } from "./format";
   import type { Request } from "./confirm.svelte";
@@ -183,9 +184,9 @@
       entries.push({ kind: "sep" });
     }
     entries.push(
-      { kind: "item", label: "Clone Repository…", icon: "M8 2.5v8M5 7.5l3 3 3-3M3 13.5h10", run: () => start.clone() },
-      { kind: "item", label: "Open Local Repository…", icon: FOLDER, run: onOpen },
-      { kind: "item", label: "New Repository…", icon: "M8 3v10M3 8h10", run: () => start.newRepo() },
+      { kind: "item", label: "Clone Repository…", icon: "M8 2.5v8M5 7.5l3 3 3-3M3 13.5h10", keys: keys("Mod+Shift+C"), run: () => start.clone() },
+      { kind: "item", label: "Open Local Repository…", icon: FOLDER, keys: keys("Mod+O"), run: onOpen },
+      { kind: "item", label: "New Repository…", icon: "M8 3v10M3 8h10", keys: keys("Mod+N"), run: () => start.newRepo() },
       { kind: "sep" },
       { kind: "item", label: "Open in Terminal", icon: TERMINAL, run: () => api.openInTerminal().catch((err) => confirm.say(String(err))) },
       { kind: "item", label: "Welcome Window", icon: HOME, run: onWelcome },

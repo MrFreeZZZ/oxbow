@@ -39,6 +39,7 @@
   import NewRepoSheet from "./lib/NewRepoSheet.svelte";
   import { start } from "./lib/start.svelte";
   import OperationLog from "./lib/OperationLog.svelte";
+  import { withKeys } from "./lib/keys";
   import { oplog, undoRequest } from "./lib/oplog.svelte";
 
   let repo = $state<RepoSummary | null>(null);
@@ -603,94 +604,99 @@
     />
     <div class="main">
       <header data-tauri-drag-region>
-        {#if view === "file" && !showConflicts}
-          {@const back = fileBack === "compare" ? "Compare" : fileBack === "stashes" ? "Stashes" : "History"}
-          <button class="back" onclick={() => ((view = fileBack), (nav.file = null))} aria-label="Back to {back}" title="Back to {back}">
-            <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>
-          </button>
-        {/if}
-        <div class="title" data-tauri-drag-region>
-          {#if showConflicts && operation}
-            <span class="name">Resolve Conflicts</span>
-            <span class="sub">{describe(operation).noun} in progress · {operation.conflicted} {operation.conflicted === 1 ? "file" : "files"} left</span>
-          {:else if view === "file" && nav.file}
-            <span class="name">{nav.file.path.slice(nav.file.path.lastIndexOf("/") + 1)}</span>
-            <span class="sub">{repo.name} · {nav.file.path}</span>
-          {:else if view === "compare"}
-            <span class="name">Compare</span>
-            <span class="sub">{comparing.target} with {comparing.base}</span>
-          {:else if view === "stashes"}
-            <span class="name">Stashes</span>
-            <span class="sub">{repo.name} · on {history.head.branch ?? "detached HEAD"}</span>
-          {:else}
-            <span class="name">History</span>
-            <span class="sub">{branchCount} {branchCount === 1 ? "branch" : "branches"} · {history.head.branch ?? operation?.branch ?? "detached HEAD"}</span>
+        <div class="lead" data-tauri-drag-region>
+          {#if view === "file" && !showConflicts}
+            {@const back = fileBack === "compare" ? "Compare" : fileBack === "stashes" ? "Stashes" : "History"}
+            <button class="back" onclick={() => ((view = fileBack), (nav.file = null))} aria-label="Back to {back}" title="Back to {back}">
+              <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>
+            </button>
+          {/if}
+          <div class="title" data-tauri-drag-region>
+            {#if showConflicts && operation}
+              <span class="name">Resolve Conflicts</span>
+              <span class="sub">{describe(operation).noun} in progress · {operation.conflicted} {operation.conflicted === 1 ? "file" : "files"} left</span>
+            {:else if view === "file" && nav.file}
+              <span class="name">{nav.file.path.slice(nav.file.path.lastIndexOf("/") + 1)}</span>
+              <span class="sub">{repo.name} · {nav.file.path}</span>
+            {:else if view === "compare"}
+              <span class="name">Compare</span>
+              <span class="sub">{comparing.target} with {comparing.base}</span>
+            {:else if view === "stashes"}
+              <span class="name">Stashes</span>
+              <span class="sub">{repo.name} · on {history.head.branch ?? "detached HEAD"}</span>
+            {:else}
+              <span class="name">History</span>
+              <span class="sub">{branchCount} {branchCount === 1 ? "branch" : "branches"} · {history.head.branch ?? operation?.branch ?? "detached HEAD"}</span>
+            {/if}
+          </div>
+          <!-- File History is about one file: a plain back arrow and no branch picker, as in the design, leave room for Find in file. -->
+          {#if view !== "file" || showConflicts}
+            <BranchPicker {history} {colorOf} onPick={(name) => branchCtx && run(switchRequest(branchCtx, name))} />
+            <button class="capsule" onclick={newBranch} aria-label="New branch" title={history.head.branch ? "New Branch…" : "Create a branch at HEAD…"}>
+              <svg class="icon" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><path d="M4.5 5v6M11.5 2.5v6M8.5 5.5h6" /></svg>
+            </button>
+          {/if}
+          {#if view === "file" && !showConflicts}
+            <div class="segmented" role="radiogroup" aria-label="File history mode">
+              <button role="radio" aria-checked={nav.fileMode === "changes"} class:on={nav.fileMode === "changes"} onclick={() => (nav.fileMode = "changes")}>Changes</button>
+              <button role="radio" aria-checked={nav.fileMode === "blame"} class:on={nav.fileMode === "blame"} onclick={() => (nav.fileMode = "blame")}>Blame</button>
+            </div>
+          {/if}
+          {#if view === "compare" && !showConflicts}
+            <button class="capsule" onclick={() => (view = "history")} title="Back to the commit graph">
+              <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>History
+            </button>
+          {/if}
+          {#if showConflicts}
+            <button class="capsule" onclick={() => (resolving = false)} title={view === "stashes" ? "Back to Stashes" : "Back to the commit graph"}>
+              <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>{view === "stashes" ? "Stashes" : "History"}
+            </button>
           {/if}
         </div>
-        <!-- File History is about one file: a plain back arrow and no branch picker, as in the design, leave room for Find in file. -->
-        {#if view !== "file" || showConflicts}
-          <BranchPicker {history} {colorOf} onPick={(name) => branchCtx && run(switchRequest(branchCtx, name))} />
-        {/if}
-        {#if view === "file" && !showConflicts}
-          <div class="segmented" role="radiogroup" aria-label="File history mode">
-            <button role="radio" aria-checked={nav.fileMode === "changes"} class:on={nav.fileMode === "changes"} onclick={() => (nav.fileMode = "changes")}>Changes</button>
-            <button role="radio" aria-checked={nav.fileMode === "blame"} class:on={nav.fileMode === "blame"} onclick={() => (nav.fileMode = "blame")}>Blame</button>
-          </div>
-        {/if}
-        {#if view === "compare" && !showConflicts}
-          <button class="capsule" onclick={() => (view = "history")} title="Back to the commit graph">
-            <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>History
+        <div class="center" data-tauri-drag-region>
+          {#if view === "file" && !showConflicts}
+            <FindField bind:this={findField} />
+          {/if}
+          {#if view === "history" && !showConflicts}
+            <SearchField bind:this={searchField} rows={history.rows} {matches} {selected} onGo={select} />
+          {/if}
+        </div>
+        <div class="trail" data-tauri-drag-region>
+          {#if error}<span class="error" role="alert">{error}</span>{/if}
+          {#if history.remotes.length && remoteCtx}
+            {@const t = history.tracking}
+            <div class="group" role="group" aria-label="Sync with remote">
+              <button onclick={() => sync("fetch")} aria-label="Fetch" title="Fetch from {history.remotes.length > 1 ? 'all remotes' : remoteCtx.remote}">
+                <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 0 1-8.6 3.5M3 8a5 5 0 0 1 8.6-3.5" /><path d="M11.8 1.8v2.9H8.9M4.2 14.2v-2.9h2.9" /></svg>
+              </button>
+              <button
+                onclick={() => sync("pull")}
+                disabled={!canPull(remoteCtx)}
+                aria-label={t?.behind ? `Pull ${t.behind} commits` : "Pull"}
+                title={canPull(remoteCtx) ? `Pull from ${t?.remote}/${t?.branch}` : "This branch has no upstream to pull from"}
+              >
+                <svg class="icon" viewBox="0 0 16 16"><path d="M8 2v9M4.5 7.5 8 11l3.5-3.5M3 14h10" /></svg>
+                {#if t?.behind}<span class="count">{t.behind}</span>{/if}
+              </button>
+              <button
+                onclick={() => sync("push")}
+                disabled={!canPush(remoteCtx)}
+                aria-label={t ? (t.ahead ? `Push ${t.ahead} commits` : "Push") : "Publish branch"}
+                title={!canPush(remoteCtx) ? "Check out a branch to push" : t && !t.gone ? `Push to ${t.remote}/${t.branch}` : `Publish ${history.head.branch} to ${remoteCtx.remote}`}
+              >
+                <svg class="icon" viewBox="0 0 16 16"><path d="M8 12V3M4.5 6.5 8 3l3.5 3.5M3 14h10" /></svg>
+                {#if t?.ahead}<span class="count">{t.ahead}</span>{:else if !t && history.head.branch}<span class="count">Publish</span>{/if}
+              </button>
+            </div>
+          {/if}
+          <button class="capsule" onclick={refresh} aria-label="Reload history" title="Reload">
+            <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5" /></svg>
           </button>
-        {/if}
-        {#if showConflicts}
-          <button class="capsule" onclick={() => (resolving = false)} title={view === "stashes" ? "Back to Stashes" : "Back to the commit graph"}>
-            <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>{view === "stashes" ? "Stashes" : "History"}
+          <button class="capsule" onclick={() => api.openSettings()} aria-label="Settings" title={withKeys("Settings", "Mod+,")}>
+            <svg class="icon" viewBox="0 0 16 16"><path d="M12.78 6.52L14.44 6.56L14.44 9.44L12.78 9.48L12.42 10.33L13.57 11.54L11.54 13.57L10.33 12.42L9.48 12.78L9.44 14.44L6.56 14.44L6.52 12.78L5.67 12.42L4.46 13.57L2.43 11.54L3.58 10.33L3.22 9.48L1.56 9.44L1.56 6.56L3.22 6.52L3.58 5.67L2.43 4.46L4.46 2.43L5.67 3.58L6.52 3.22L6.56 1.56L9.44 1.56L9.48 3.22L10.33 3.58L11.54 2.43L13.57 4.46L12.42 5.67zM8 5.8a2.2 2.2 0 1 0 0 4.4a2.2 2.2 0 1 0 0-4.4" /></svg>
           </button>
-        {/if}
-        <span class="spacer" data-tauri-drag-region></span>
-        {#if error}<span class="error" role="alert">{error}</span>{/if}
-        {#if history.remotes.length && remoteCtx}
-          {@const t = history.tracking}
-          <div class="group" role="group" aria-label="Sync with remote">
-            <button onclick={() => sync("fetch")} aria-label="Fetch" title="Fetch from {history.remotes.length > 1 ? 'all remotes' : remoteCtx.remote}">
-              <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 0 1-8.6 3.5M3 8a5 5 0 0 1 8.6-3.5" /><path d="M11.8 1.8v2.9H8.9M4.2 14.2v-2.9h2.9" /></svg>
-            </button>
-            <button
-              onclick={() => sync("pull")}
-              disabled={!canPull(remoteCtx)}
-              aria-label={t?.behind ? `Pull ${t.behind} commits` : "Pull"}
-              title={canPull(remoteCtx) ? `Pull from ${t?.remote}/${t?.branch}` : "This branch has no upstream to pull from"}
-            >
-              <svg class="icon" viewBox="0 0 16 16"><path d="M8 2v9M4.5 7.5 8 11l3.5-3.5M3 14h10" /></svg>
-              {#if t?.behind}<span class="count">{t.behind}</span>{/if}
-            </button>
-            <button
-              onclick={() => sync("push")}
-              disabled={!canPush(remoteCtx)}
-              aria-label={t ? (t.ahead ? `Push ${t.ahead} commits` : "Push") : "Publish branch"}
-              title={!canPush(remoteCtx) ? "Check out a branch to push" : t && !t.gone ? `Push to ${t.remote}/${t.branch}` : `Publish ${history.head.branch} to ${remoteCtx.remote}`}
-            >
-              <svg class="icon" viewBox="0 0 16 16"><path d="M8 12V3M4.5 6.5 8 3l3.5 3.5M3 14h10" /></svg>
-              {#if t?.ahead}<span class="count">{t.ahead}</span>{:else if !t && history.head.branch}<span class="count">Publish</span>{/if}
-            </button>
-          </div>
-        {/if}
-        <button class="capsule" onclick={newBranch} aria-label="New branch" title={history.head.branch ? "New Branch…" : "Create a branch at HEAD…"}>
-          <svg class="icon" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg>
-        </button>
-        <button class="capsule" onclick={refresh} aria-label="Reload history" title="Reload">
-          <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5" /></svg>
-        </button>
-        <button class="capsule" onclick={() => api.openSettings()} aria-label="Settings" title={navigator.platform.startsWith("Mac") ? "Settings (⌘,)" : "Settings (Ctrl+,)"}>
-          <svg class="icon" viewBox="0 0 16 16"><path d="M12.78 6.52L14.44 6.56L14.44 9.44L12.78 9.48L12.42 10.33L13.57 11.54L11.54 13.57L10.33 12.42L9.48 12.78L9.44 14.44L6.56 14.44L6.52 12.78L5.67 12.42L4.46 13.57L2.43 11.54L3.58 10.33L3.22 9.48L1.56 9.44L1.56 6.56L3.22 6.52L3.58 5.67L2.43 4.46L4.46 2.43L5.67 3.58L6.52 3.22L6.56 1.56L9.44 1.56L9.48 3.22L10.33 3.58L11.54 2.43L13.57 4.46L12.42 5.67zM8 5.8a2.2 2.2 0 1 0 0 4.4a2.2 2.2 0 1 0 0-4.4" /></svg>
-        </button>
-        <OperationLog repo={repo.name} run={(request) => void run(request)} />
-        {#if view === "file" && !showConflicts}
-          <FindField bind:this={findField} />
-        {/if}
-        {#if view === "history" && !showConflicts}
-          <SearchField bind:this={searchField} rows={history.rows} {matches} {selected} onGo={select} />
-        {/if}
+          <OperationLog repo={repo.name} run={(request) => void run(request)} />
+        </div>
       </header>
       {#if searching}
         <SearchBar {history} count={matches.length} copy={(text) => copyText(text, "Copied the command.")} />
@@ -808,6 +814,9 @@
     display: flex;
     flex-direction: column;
   }
+  /* Three zones: the two sides share the room equally, so the search sits in the middle of the
+     toolbar. In a narrow window the buttons on the right keep their size, and the title and then
+     the search give way, rather than anything covering a button. */
   header {
     height: 56px;
     display: flex;
@@ -815,6 +824,28 @@
     gap: 10px;
     padding: 0 12px 0 14px;
     flex-shrink: 0;
+  }
+  .lead,
+  .trail {
+    flex: 1 1 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    align-self: stretch;
+  }
+  .lead {
+    min-width: 0;
+  }
+  .trail {
+    min-width: max-content;
+    justify-content: flex-end;
+  }
+  .center {
+    flex: 0 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    align-self: stretch;
   }
   .title {
     display: flex;
@@ -837,6 +868,7 @@
     color: var(--text2);
   }
   .capsule {
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -910,10 +942,6 @@
   .segmented button.on {
     background: var(--side-sel);
     font-weight: 600;
-  }
-  .spacer {
-    flex-grow: 1;
-    align-self: stretch;
   }
   .error {
     color: var(--red);
