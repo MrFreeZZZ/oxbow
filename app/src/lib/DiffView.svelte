@@ -15,6 +15,7 @@
     lineBudget = 4000,
     hunkBar,
     openable = true,
+    find = null,
   }: {
     diffs: FileDiff[];
     color: number;
@@ -25,6 +26,8 @@
     hunkBar?: Snippet<[FileDiff, Hunk]>;
     /** Offer to open the file in the editor from Settings › Integrations. */
     openable?: boolean;
+    /** Code being searched for in History: marked wherever it appears. */
+    find?: string | null;
   } = $props();
 
   /** Open the file in the editor, at its first change. */
@@ -133,7 +136,7 @@
             <div class="line {line.kind}" style:border-radius={radius(hunk.lines, i)} style:margin-top="{gap(hunk.lines, i)}px">
               <span class="no">{line.oldLine ?? ""}</span>
               <span class="no">{line.newLine ?? ""}</span>
-              <span class="text">{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language) as piece, w (w)}<span class:word={piece.changed} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>
+              <span class="text">{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>
             </div>
           {/each}
         {/each}
@@ -253,6 +256,12 @@
     background: var(--del-word);
     border-radius: 5px;
     padding: 1px 0;
+  }
+  /* Searched code: an outlined neutral capsule, since yellow is for tags. */
+  .found {
+    border-radius: 4px;
+    box-shadow: 0 0 0 1.5px var(--found-ring);
+    background: var(--found-bg);
   }
   .fold {
     display: block;

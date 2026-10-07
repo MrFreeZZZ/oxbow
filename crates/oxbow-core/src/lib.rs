@@ -14,6 +14,7 @@ pub mod history;
 pub mod operation;
 pub mod remote;
 pub mod repo;
+pub mod search;
 pub mod stash;
 pub mod tags;
 pub mod worktree;
@@ -29,5 +30,6 @@ pub use history::{History, HistoryOptions, HistoryRow, Label, WORKTREE_ID, Workt
 pub use operation::{Chunk, ConflictFile, ConflictSide, MergeMethod, MergePreview, Operation, OperationKind, Pick};
 pub use remote::{CommitBrief, DeletionCheck, Failure, FailureKind, Tracking, classify_failure};
 pub use repo::{DiffOptions, HeadInfo, RefInfo, RefKind, Repo, StashInfo};
+pub use search::{SearchHit, SearchMode, SearchQuery, SearchResult};
 pub use stash::StashCheck;
 pub use worktree::{Action, ActionEvent, Plan, PullMode, RemoteBranch, Side, WorkingTree};

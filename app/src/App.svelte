@@ -24,6 +24,10 @@
   import Welcome from "./lib/Welcome.svelte";
   import { prefs } from "./lib/prefs.svelte";
   import { deleteTagRequest, isLocalTag, newTagRequest, pushTagsRequest } from "./lib/tags";
+  import SearchField from "./lib/SearchField.svelte";
+  import SearchBar from "./lib/SearchBar.svelte";
+  import { search, type Found } from "./lib/search.svelte";
+  import { untrack } from "svelte";
 
   let repo = $state<RepoSummary | null>(null);
   let history = $state<History | null>(null);
@@ -31,6 +35,7 @@
   let error = $state<string | null>(null);
   let loading = $state(false);
   let list = $state<HistoryList>();
+  let searchField = $state<SearchField>();
   let panelWidth = $state(640);
   /** Goes up on every reload of the history, so the changes panel reloads too. */
   let version = $state(0);
@@ -63,6 +68,44 @@
     return map;
   });
 
+  // Searching the history: the search runs again when the query, its filters or the commits change.
+  const searching = $derived(!!history && view === "history" && !showConflicts && search.active);
+  const hitMap = $derived(new Map(search.result?.hits.map((h) => [h.id, h.files]) ?? []));
+  /** Matching commits among the loaded ones, in graph order. */
+  const matches = $derived(searching && search.result ? (history?.rows.filter((r) => hitMap.has(r.id)).map((r) => r.id) ?? []) : []);
+  const found = $derived<Found | null>(
+    searching && search.result ? { hits: hitMap, mode: search.parsed.mode, text: search.parsed.text, only: search.only } : null,
+  );
+  // Cheap to compare, so a reload that changed nothing doesn't search again.
+  const historyKey = $derived(history ? `${history.rows.length}:${history.rows[0]?.id}:${history.head.commit}:${history.refs.map((r) => r.target).join()}` : "");
+  const searchKey = $derived(search.key);
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    historyKey;
+    searchKey;
+    clearTimeout(searchTimer);
+    if (!search.active) {
+      untrack(() => search.run([]));
+      return;
+    }
+    searchTimer = setTimeout(() => search.run(untrack(() => history?.rows ?? [])), 220);
+  });
+  // A new search selects its first match; a reload with the same search keeps the selection.
+  let selectedFor = "";
+  $effect(() => {
+    const first = matches[0];
+    const key = search.resultKey;
+    const only = search.only;
+    if (!first) return;
+    untrack(() => {
+      const stale = !!selected && !matches.includes(selected);
+      if (key === selectedFor && !(only && stale)) return;
+      selectedFor = key;
+      if (stale || !selected) select(first);
+      else requestAnimationFrame(() => selected && list?.reveal(selected));
+    });
+  });
+
   // Opening a repository switches the one the backend answers for. Each open gets a number, and an
   // answer that belongs to an older one (a reload started before the switch, an earlier open) is
   // dropped, so the window never shows one repository's commits while the backend has another.
@@ -82,6 +125,7 @@
     error = null;
     // The commit panel must not ask the new repository about the old one's commits.
     selected = null;
+    search.clear();
     try {
       const summary = await api.openRepo(path);
       const next = await api.history();
@@ -398,6 +442,11 @@
     if ((event.metaKey || event.ctrlKey) && event.key === ",") {
       event.preventDefault();
       api.openSettings();
+    } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f" && history && !confirm.request) {
+      event.preventDefault();
+      view = "history";
+      resolving = false;
+      requestAnimationFrame(() => searchField?.focus());
     }
   }}
 />
@@ -474,7 +523,13 @@
         <button class="capsule" onclick={() => api.openSettings()} aria-label="Settings" title={navigator.platform.startsWith("Mac") ? "Settings (⌘,)" : "Settings (Ctrl+,)"}>
           <svg class="icon" viewBox="0 0 16 16"><path d="M12.78 6.52L14.44 6.56L14.44 9.44L12.78 9.48L12.42 10.33L13.57 11.54L11.54 13.57L10.33 12.42L9.48 12.78L9.44 14.44L6.56 14.44L6.52 12.78L5.67 12.42L4.46 13.57L2.43 11.54L3.58 10.33L3.22 9.48L1.56 9.44L1.56 6.56L3.22 6.52L3.58 5.67L2.43 4.46L4.46 2.43L5.67 3.58L6.52 3.22L6.56 1.56L9.44 1.56L9.48 3.22L10.33 3.58L11.54 2.43L13.57 4.46L12.42 5.67zM8 5.8a2.2 2.2 0 1 0 0 4.4a2.2 2.2 0 1 0 0-4.4" /></svg>
         </button>
+        {#if view === "history" && !showConflicts}
+          <SearchField bind:this={searchField} rows={history.rows} {matches} {selected} onGo={select} />
+        {/if}
       </header>
+      {#if searching}
+        <SearchBar {history} count={matches.length} copy={(text) => copyText(text, "Copied the command.")} />
+      {/if}
       {#if operation && branchCtx}
         {@const op = operation}
         <OperationBanner
@@ -500,9 +555,9 @@
       {:else}
       <div class="content">
         <section class="history" aria-label="Commit history">
-          <div class="columns"><span>Description</span>{#if history.truncated}<span class="note">Showing the latest {history.rows.length.toLocaleString()} commits</span>{/if}</div>
+          <div class="columns"><span>{#if found?.only}Matching commits · graph hidden{:else}Description{/if}</span>{#if history.truncated}<span class="note">Showing the latest {history.rows.length.toLocaleString()} commits</span>{/if}</div>
           {#key repo.path}
-            <HistoryList bind:this={list} {history} {selected} onSelect={select} menuFor={commitMenu} />
+            <HistoryList bind:this={list} {history} {selected} onSelect={select} menuFor={commitMenu} {found} />
           {/key}
         </section>
         <aside class="panel" style:width="{panelWidth}px" aria-label="Commit details">
@@ -519,7 +574,11 @@
                 onResolve={operation ? () => (resolving = true) : undefined}
               />
             {:else if selectedRow}
-              <CommitPanel row={selectedRow} childIds={childrenOf.get(selectedRow.id) ?? []} lookup={(id) => rowsById.get(id)} onSelect={select} localTags={history.localTags} />
+              <CommitPanel row={selectedRow} childIds={childrenOf.get(selectedRow.id) ?? []} lookup={(id) => rowsById.get(id)} onSelect={select} localTags={history.localTags}
+                find={found?.mode === "code" ? found.text : null}
+                foundFiles={found?.hits.get(selectedRow.id) ?? []}
+                foundText={found?.text ?? null}
+              />
             {/if}
           {/key}
         </aside>

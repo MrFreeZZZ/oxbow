@@ -93,6 +93,9 @@
 
   --tag-bg: #f7ebc0;
   --tag-border: #e3b400;
+  /* Search: matched words and searched code, neutral since yellow is for tags. */
+  --found-bg: rgba(60, 60, 67, 0.1);
+  --found-ring: rgba(60, 60, 67, 0.45);
   --tag-fg: #5c4a00;
 
   /* Diff style B: soft blocks, no +/- markers. */
@@ -203,6 +206,8 @@
 
   --tag-bg: rgba(214, 170, 40, 0.22);
   --tag-border: #e8c547;
+  --found-bg: rgba(235, 235, 245, 0.14);
+  --found-ring: rgba(235, 235, 245, 0.5);
   --tag-fg: #f2d77a;
 
   --add: rgba(63, 185, 80, 0.13);

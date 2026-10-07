@@ -12,6 +12,9 @@
     lookup,
     onSelect,
     localTags = [],
+    find = null,
+    foundFiles = [],
+    foundText = null,
   }: {
     row: HistoryRow;
     childIds: string[];
@@ -19,6 +22,12 @@
     onSelect: (id: string) => void;
     /** Tags the remote doesn't have yet: drawn dashed. */
     localTags?: string[];
+    /** Text a code search looked for: marked in the diff. */
+    find?: string | null;
+    /** Files a code or file search matched in this commit. */
+    foundFiles?: string[];
+    /** What that search looked for, shown on those files. */
+    foundText?: string | null;
   } = $props();
 
   let detail = $state<CommitDetail | null>(null);
@@ -164,6 +173,11 @@
           <button class="file" onclick={() => openTab(file.path)}>
             <span class="badge {file.status}">{statusIcon[file.status]}</span>
             <span class="grow ellipsis"><span class="dir">{p.dir}</span>{p.name}</span>
+            {#if foundFiles.includes(file.path)}
+              <span class="found" title={find ? `Adds or removes “${find}”` : "The path matches the search"}>
+                <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="M10.3 10.3 14 14" /></svg>{foundText ?? "match"}
+              </span>
+            {/if}
             {#if file.binary}
               <span class="meta">binary</span>
             {:else}
@@ -174,7 +188,7 @@
         {/each}
       </div>
     {/if}
-    <DiffView {diffs} {color} {whole} onToggleWhole={() => (whole = !whole)} />
+    <DiffView {diffs} {color} {whole} {find} onToggleWhole={() => (whole = !whole)} />
   </div>
 </div>
 
@@ -345,6 +359,28 @@
     font-size: 11px;
     font-weight: 600;
     color: var(--text2);
+  }
+  .found {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    max-width: 40%;
+    height: 18px;
+    padding: 0 7px 0 5px;
+    border-radius: 9px;
+    background: var(--found-bg);
+    box-shadow: inset 0 0 0 1px var(--found-ring);
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 1;
+  }
+  .found .icon {
+    width: 10px;
+    height: 10px;
+    flex-shrink: 0;
   }
   .file {
     display: flex;
