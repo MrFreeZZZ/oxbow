@@ -12,6 +12,8 @@
     onSelect,
     menuFor,
     found = null,
+    second = null,
+    onSecond,
   }: {
     history: History;
     selected: string | null;
@@ -20,6 +22,10 @@
     menuFor: (row: HistoryRow) => MenuEntry[];
     /** A search: other commits fade, or only the matches are listed. */
     found?: Found | null;
+    /** A second commit picked with ⌘-click, compared with the selected one. */
+    second?: string | null;
+    /** ⌘-click (Ctrl-click off the Mac) on a commit. */
+    onSecond?: (id: string) => void;
   } = $props();
 
   // Geometry from the design: 44px two-line rows, lanes 18px apart, trunk lane centered 14px in.
@@ -142,7 +148,7 @@
   function dot(row: HistoryRow, index: number) {
     const g = row.graph;
     const isMerge = row.parents.length > 1;
-    const isSelected = row.id === selected;
+    const isSelected = row.id === selected || row.id === second;
     const size = compact ? (isMerge ? 14 : isSelected ? 12 : g.color === 0 ? 11 : 9) : isMerge ? 18 : isSelected ? 15 : g.color === 0 ? 13 : 11;
     const forks = g.forkColors;
     const halo =
@@ -245,6 +251,7 @@
     <div class="canvas" style:height="{PAD_TOP * 2 + rows.length * ROW}px">
       {#each visible as { row, index } (row.id)}
         {@const isSelected = row.id === selected}
+        {@const picked = isSelected || row.id === second}
         <div
           class="row"
           class:compact
@@ -252,14 +259,14 @@
           class:flash={flash === row.id}
           class:menu-open={menu?.id === row.id}
           role="option"
-          aria-selected={isSelected}
+          aria-selected={picked}
           tabindex="-1"
           style:top="{PAD_TOP + index * ROW}px"
           style:padding-left="{textStart(row)}px"
-          style:background={isSelected ? tint(row.graph.color) : undefined}
+          style:background={picked ? tint(row.graph.color) : undefined}
           style:--flash={tint(row.graph.color)}
           style:--ring={lane(row.graph.color)}
-          onclick={() => onSelect(row.id)}
+          onclick={(e) => ((e.metaKey || e.ctrlKey) && onSecond && !row.worktree ? onSecond(row.id) : onSelect(row.id))}
           oncontextmenu={(e) => openMenu(e, row)}
           onkeydown={() => {}}
         >
