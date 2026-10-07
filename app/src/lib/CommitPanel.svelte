@@ -188,7 +188,7 @@
         {/each}
       </div>
     {/if}
-    <DiffView {diffs} {color} {whole} {find} onToggleWhole={() => (whole = !whole)} />
+    <DiffView {diffs} {color} {whole} {find} commit={row.id} onToggleWhole={() => (whole = !whole)} />
   </div>
 </div>
 

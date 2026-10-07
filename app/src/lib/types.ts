@@ -139,6 +139,48 @@ export interface FileChange {
   binary: boolean;
 }
 
+export interface FileCommit {
+  id: string;
+  parents: string[];
+  summary: string;
+  authorName: string;
+  authorEmail: string;
+  time: number;
+  /** The file's path after this commit. */
+  path: string;
+  /** Its path before, when this commit renamed or copied it. */
+  oldPath: string | null;
+  status: FileStatus;
+  additions: number;
+  deletions: number;
+}
+
+export interface FileHistory {
+  path: string;
+  commits: FileCommit[];
+  /** Commits on other branches that changed the file. */
+  elsewhere: FileCommit[];
+  more: boolean;
+}
+
+export interface BlameCommit {
+  id: string;
+  summary: string;
+  authorName: string;
+  authorEmail: string;
+  time: number;
+  path: string;
+  boundary: boolean;
+}
+
+export interface Blame {
+  rev: string;
+  path: string;
+  commits: BlameCommit[];
+  lines: { commit: number; text: string }[];
+  command: string;
+}
+
 export type CompareMode = "split" | "tips";
 
 export interface CompareCommit {

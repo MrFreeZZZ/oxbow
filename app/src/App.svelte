@@ -29,6 +29,8 @@
   import { search, type Found } from "./lib/search.svelte";
   import { untrack } from "svelte";
   import CompareView from "./lib/CompareView.svelte";
+  import FileHistoryView from "./lib/FileHistoryView.svelte";
+  import { nav } from "./lib/nav.svelte";
   import type { CompareMode } from "./lib/types";
 
   let repo = $state<RepoSummary | null>(null);
@@ -46,7 +48,18 @@
   const operation = $derived(history?.operation ?? null);
   const showConflicts = $derived(resolving && !!operation);
   /** The screen next to the sidebar. */
-  let view = $state<"history" | "stashes" | "compare">("history");
+  let view = $state<"history" | "stashes" | "compare" | "file">("history");
+  /** The screen File History goes back to. */
+  let fileBack = $state<"history" | "stashes" | "compare">("history");
+  // A diff's File History button opens the screen.
+  $effect(() => {
+    if (!nav.file) return;
+    untrack(() => {
+      if (view !== "file") fileBack = view;
+      view = "file";
+      resolving = false;
+    });
+  });
   /** What Compare shows: `target` against `base`. */
   let comparing = $state<{ base: string; target: string; mode: CompareMode }>({ base: "", target: "", mode: "split" });
 
@@ -136,7 +149,7 @@
     // The commit panel must not ask the new repository about the old one's commits.
     selected = null;
     search.clear();
-    if (view === "compare") view = "history";
+    if (view === "compare" || view === "file") view = "history";
     try {
       const summary = await api.openRepo(path);
       const next = await api.history();
@@ -490,6 +503,9 @@
           {#if showConflicts && operation}
             <span class="name">Resolve Conflicts</span>
             <span class="sub">{describe(operation).noun} in progress · {operation.conflicted} {operation.conflicted === 1 ? "file" : "files"} left</span>
+          {:else if view === "file" && nav.file}
+            <span class="name">{nav.file.path.slice(nav.file.path.lastIndexOf("/") + 1)}</span>
+            <span class="sub">{repo.name} · {nav.file.path}</span>
           {:else if view === "compare"}
             <span class="name">Compare</span>
             <span class="sub">{comparing.target} with {comparing.base}</span>
@@ -502,6 +518,15 @@
           {/if}
         </div>
         <BranchPicker {history} {colorOf} onPick={(name) => branchCtx && run(switchRequest(branchCtx, name))} />
+        {#if view === "file" && !showConflicts}
+          <button class="capsule" onclick={() => ((view = fileBack), (nav.file = null))} title="Back">
+            <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>{fileBack === "compare" ? "Compare" : fileBack === "stashes" ? "Stashes" : "History"}
+          </button>
+          <div class="segmented" role="radiogroup" aria-label="File history mode">
+            <button role="radio" aria-checked={nav.fileMode === "changes"} class:on={nav.fileMode === "changes"} onclick={() => (nav.fileMode = "changes")}>Changes</button>
+            <button role="radio" aria-checked={nav.fileMode === "blame"} class:on={nav.fileMode === "blame"} onclick={() => (nav.fileMode = "blame")}>Blame</button>
+          </div>
+        {/if}
         {#if view === "compare" && !showConflicts}
           <button class="capsule" onclick={() => (view = "history")} title="Back to the commit graph">
             <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>History
@@ -573,6 +598,10 @@
       {#if showConflicts && operation}
         {#key repo.path}
           <ConflictsView {history} op={operation} {colorOf} {version} {run} />
+        {/key}
+      {:else if view === "file" && nav.file}
+        {#key repo.path + nav.file.path}
+          <FileHistoryView {history} path={nav.file.path} start={nav.file.commit} {version} lookup={(id) => rowsById.get(id)} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "the command" : text}.`)} />
         {/key}
       {:else if view === "compare"}
         {#key repo.path}
@@ -710,6 +739,25 @@
     font-size: 11px;
     font-weight: 600;
     color: var(--accent-text);
+  }
+  .segmented {
+    display: flex;
+    padding: 3px;
+    border-radius: 17px;
+    background: var(--glass);
+    border: 0.5px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+  }
+  .segmented button {
+    height: 28px;
+    padding: 0 16px;
+    border-radius: 14px;
+    color: var(--text);
+    font-weight: 500;
+  }
+  .segmented button.on {
+    background: var(--side-sel);
+    font-weight: 600;
   }
   .spacer {
     flex-grow: 1;

@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  Blame,
+  FileHistory,
   CompareMode,
   Comparison,
   Action,
@@ -33,6 +35,9 @@ export const api = {
   compare: (base: string, target: string, mode: CompareMode) => invoke<Comparison>("compare", { base, target, mode }),
   compareDiff: (from: string, to: string, path: string | null, wholeFile: boolean) =>
     invoke<FileDiff[]>("compare_diff", { from, to, path, wholeFile }),
+  fileHistory: (path: string, rev: string | null) => invoke<FileHistory>("file_history", { path, rev }),
+  blame: (path: string, rev: string) => invoke<Blame>("blame", { path, rev }),
+  lineHistory: (path: string, line: number, rev: string) => invoke<string[]>("line_history", { path, line, rev }),
   workingTree: () => invoke<WorkingTree>("working_tree"),
   workingDiff: (path: string, side: Side, wholeFile: boolean) => invoke<FileDiff>("working_diff", { path, side, wholeFile }),
   deletionCheck: (branch: string) => invoke<DeletionCheck>("deletion_check", { branch }),

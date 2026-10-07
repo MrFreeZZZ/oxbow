@@ -135,7 +135,7 @@ impl Repo {
     }
 
     /// The commit a branch, tag or SHA names.
-    fn commit_id(&self, name: &str) -> Result<String> {
+    pub(crate) fn commit_id(&self, name: &str) -> Result<String> {
         let out = self
             .run(&GitCommand::new([
                 "rev-parse",
