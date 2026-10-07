@@ -56,6 +56,9 @@ fn history_follows_renames_and_blame_names_each_line() {
         [edit.clone(), first.clone()]
     );
 
+    // Quick Open lists HEAD's files.
+    assert_eq!(repo.files().unwrap(), ["src/config.rs"]);
+
     // Find in file: the commits that added or removed a text, here and on other branches.
     assert_eq!(
         repo.file_pickaxe("src/config.rs", "TWO", false, "HEAD").unwrap(),

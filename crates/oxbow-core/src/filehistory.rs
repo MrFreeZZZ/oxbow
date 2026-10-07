@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::cli::GitCommand;
 use crate::commit::FileStatus;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::repo::Repo;
 
 /// At most this many commits of a file are listed.
@@ -79,6 +79,24 @@ pub struct Blame {
 }
 
 impl Repo {
+    /// Every file in HEAD's tree, sorted by path: what File History can be opened on. Empty before
+    /// the first commit.
+    pub fn files(&self) -> Result<Vec<String>> {
+        let repo = self.local();
+        let Ok(commit) = repo.head_commit() else {
+            return Ok(Vec::new());
+        };
+        let tree = commit.tree().map_err(Error::git)?;
+        let entries = tree.traverse().breadthfirst.files().map_err(Error::git)?;
+        let mut paths: Vec<String> = entries
+            .into_iter()
+            .filter(|e| e.mode.is_blob() || e.mode.is_link())
+            .map(|e| e.filepath.to_string())
+            .collect();
+        paths.sort();
+        Ok(paths)
+    }
+
     /// The commits that changed `path`, from `rev` (HEAD when missing) back, across renames;
     /// and the ones on other branches.
     pub fn file_history(&self, path: &str, rev: Option<&str>) -> Result<FileHistory> {

@@ -4,6 +4,7 @@
 
   import type { HistoryRow } from "./types";
   import { MODES, search, type Mode } from "./search.svelte";
+  import { nav } from "./nav.svelte";
 
   let {
     rows,
@@ -143,6 +144,22 @@
           <span class="flag">{m.flag}</span>
         </button>
       {/each}
+      <div class="sep"></div>
+      <button
+        class="mode"
+        role="menuitem"
+        onclick={() => {
+          menu = false;
+          nav.quickOpen = true;
+        }}
+      >
+        <span class="check"></span>
+        <span class="what">
+          <span class="name">Find in a file…</span>
+          <span class="sub">pick a file, then search its text and history</span>
+        </span>
+        <span class="flag">{navigator.platform.startsWith("Mac") ? "⌘P" : "Ctrl+P"}</span>
+      </button>
       {#if search.recent.length}
         <div class="sep"></div>
         <div class="heading">Recent searches</div>
