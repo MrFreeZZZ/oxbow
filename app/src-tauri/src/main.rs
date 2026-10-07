@@ -280,6 +280,28 @@ async fn compare_diff(
 }
 
 #[tauri::command]
+async fn file_history(
+    session: State<'_, Session>,
+    path: String,
+    rev: Option<String>,
+) -> CommandResult<oxbow_core::FileHistory> {
+    let repo = current(&session)?;
+    blocking(move || repo.file_history(&path, rev.as_deref())).await
+}
+
+#[tauri::command]
+async fn blame(session: State<'_, Session>, path: String, rev: String) -> CommandResult<oxbow_core::Blame> {
+    let repo = current(&session)?;
+    blocking(move || repo.blame(&path, &rev)).await
+}
+
+#[tauri::command]
+async fn line_history(session: State<'_, Session>, path: String, line: u32, rev: String) -> CommandResult<Vec<String>> {
+    let repo = current(&session)?;
+    blocking(move || repo.line_history(&path, line, &rev)).await
+}
+
+#[tauri::command]
 async fn working_tree(session: State<'_, Session>) -> CommandResult<WorkingTree> {
     let repo = current(&session)?;
     blocking(move || repo.working_tree()).await
@@ -635,6 +657,9 @@ fn main() {
             commit_diff,
             compare,
             compare_diff,
+            file_history,
+            blame,
+            line_history,
             working_tree,
             working_diff,
             deletion_check,

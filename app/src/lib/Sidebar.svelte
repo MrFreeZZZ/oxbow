@@ -47,7 +47,7 @@
     /** Confirm and run a change to the repository. */
     run: (request: Request | Promise<Request>) => void;
     /** The screen shown next to the sidebar. */
-    view: "history" | "stashes" | "compare";
+    view: "history" | "stashes" | "compare" | "file";
     onView: (view: "history" | "stashes") => void;
     /** On the Stashes screen a stash in the list is picked there instead of in History. */
     onPickStash: (id: string) => void;

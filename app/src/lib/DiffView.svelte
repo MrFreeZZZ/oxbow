@@ -6,6 +6,7 @@
   import { api } from "./api";
   import { confirm } from "./confirm.svelte";
   import { languageOf, paint } from "./syntax";
+  import { nav } from "./nav.svelte";
 
   let {
     diffs,
@@ -16,6 +17,8 @@
     hunkBar,
     openable = true,
     find = null,
+    commit = null,
+    history = true,
   }: {
     diffs: FileDiff[];
     color: number;
@@ -28,6 +31,10 @@
     openable?: boolean;
     /** Code being searched for in History: marked wherever it appears. */
     find?: string | null;
+    /** The commit shown, so File History starts on it. */
+    commit?: string | null;
+    /** Offer File History; not on File History itself. */
+    history?: boolean;
   } = $props();
 
   /** Open the file in the editor, at its first change. */
@@ -89,6 +96,11 @@
         <span class="spacer"></span>
         <span class="mono add">+{diff.file.additions}</span>
         <span class="mono del">−{diff.file.deletions}</span>
+        {#if openable && history && diff.file.status !== "untracked"}
+          <button class="toggle" onclick={() => nav.openFile(diff.file.path, commit)} aria-label="File history" title="File History and Blame">
+            <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.2l2 1.3" /></svg>
+          </button>
+        {/if}
         {#if openable && diff.file.status !== "deleted"}
           <button class="toggle" onclick={() => openInEditor(diff)} aria-label="Open in editor" title="Open in Editor">
             <svg class="icon" viewBox="0 0 16 16"><path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" /></svg>
