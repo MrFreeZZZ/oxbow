@@ -139,6 +139,37 @@ export interface FileChange {
   binary: boolean;
 }
 
+export type CompareMode = "split" | "tips";
+
+export interface CompareCommit {
+  id: string;
+  summary: string;
+  authorName: string;
+  time: number;
+}
+
+export interface CompareFile extends FileChange {
+  /** The newest commit of the compared side that touched the file. */
+  last: string | null;
+  /** Tip to Tip only: the difference comes from the base side's newer commits alone. */
+  onlyBase: boolean;
+}
+
+export interface Comparison {
+  baseId: string;
+  targetId: string;
+  mergeBase: CompareCommit | null;
+  ahead: CompareCommit[];
+  behind: CompareCommit[];
+  aheadCount: number;
+  behindCount: number;
+  mode: CompareMode;
+  /** The commit the diff starts from: the split point, or the base's tip. */
+  from: string;
+  files: CompareFile[];
+  command: string;
+}
+
 export interface CommitDetail {
   id: string;
   summary: string;

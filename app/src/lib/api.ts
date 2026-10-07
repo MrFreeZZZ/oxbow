@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  CompareMode,
+  Comparison,
   Action,
   CommitBrief,
   CommitDetail,
@@ -28,6 +30,9 @@ export const api = {
   commitDetail: (id: string) => invoke<CommitDetail>("commit_detail", { id }),
   commitDiff: (id: string, path: string | null, wholeFile: boolean) =>
     invoke<FileDiff[]>("commit_diff", { id, path, wholeFile }),
+  compare: (base: string, target: string, mode: CompareMode) => invoke<Comparison>("compare", { base, target, mode }),
+  compareDiff: (from: string, to: string, path: string | null, wholeFile: boolean) =>
+    invoke<FileDiff[]>("compare_diff", { from, to, path, wholeFile }),
   workingTree: () => invoke<WorkingTree>("working_tree"),
   workingDiff: (path: string, side: Side, wholeFile: boolean) => invoke<FileDiff>("working_diff", { path, side, wholeFile }),
   deletionCheck: (branch: string) => invoke<DeletionCheck>("deletion_check", { branch }),
