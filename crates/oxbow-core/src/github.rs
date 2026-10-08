@@ -345,6 +345,22 @@ impl Client {
             .map_err(|err| github(None, format!("GitHub sent an unexpected answer: {err}")))
     }
 
+    /// How many commits `branch` of `owner/name` has: a list of one commit per page, so the
+    /// number of the last page. Signed in when there is a token, so private repositories count.
+    pub fn commit_count(&self, owner: &str, name: &str, branch: &str) -> Result<u64> {
+        let mut request = self.api_request(
+            "GET",
+            &format!("/repos/{owner}/{name}/commits?sha={}&per_page=1", percent(branch)),
+            None,
+        );
+        request.authorized = self.token.is_some();
+        let response = self.call(&request)?;
+        if let Some(last) = response.link.as_deref().and_then(last_page) {
+            return Ok(last);
+        }
+        Ok(response.body.as_array().map_or(0, |list| list.len() as u64))
+    }
+
     /// Send an API request; an error status comes back as GitHub's own message.
     pub(crate) fn call(&self, request: &Request) -> Result<Response> {
         let response = self.send(request)?;
@@ -405,13 +421,19 @@ impl Client {
                     .collect::<Vec<_>>()
             })
             .filter(|scopes| !scopes.is_empty());
+        let link = header("link");
         let text = response.body_mut().read_to_string().map_err(network)?;
         let body = if text.trim().is_empty() {
             Value::Null
         } else {
             serde_json::from_str(&text).unwrap_or(Value::String(text))
         };
-        Ok(Response { status, scopes, body })
+        Ok(Response {
+            status,
+            scopes,
+            link,
+            body,
+        })
     }
 }
 
@@ -420,7 +442,28 @@ impl Client {
 pub(crate) struct Response {
     pub status: u16,
     pub scopes: Option<Vec<String>>,
+    /// The `Link` header, which points at the other pages of a list.
+    pub link: Option<String>,
     pub body: Value,
+}
+
+/// The page number of the `rel="last"` link in a `Link` header.
+fn last_page(link: &str) -> Option<u64> {
+    link.split(',')
+        .find(|part| part.contains("rel=\"last\""))
+        .and_then(|part| {
+            let url = part
+                .split(';')
+                .next()?
+                .trim()
+                .trim_start_matches('<')
+                .trim_end_matches('>');
+            let query = url.split_once('?')?.1;
+            query
+                .split('&')
+                .find_map(|pair| pair.strip_prefix("page="))
+                .and_then(|n| n.parse().ok())
+        })
 }
 
 fn github(status: Option<u16>, message: String) -> Error {

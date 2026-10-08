@@ -940,7 +940,11 @@ impl Repo {
             self.prepare_restore(id)?;
         }
         let before = self.snapshot().ok();
+        if let Action::EditStack { plan } = action {
+            self.remember_return(plan);
+        }
         let result = self.perform_unlogged(action, on_event, cancel);
+        self.forget_return();
         if let Action::Restore { .. } = action {
             // read-tree forgets what git knew about the files on disk.
             let _ = self.run(&GitCommand::new(["update-index", "-q", "--refresh"]));

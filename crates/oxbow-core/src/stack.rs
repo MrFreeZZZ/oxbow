@@ -25,6 +25,9 @@ const MAX_COMMITS: usize = 300;
 /// Where the todo list waits for git, inside the git directory.
 const TODO_FILE: &str = "oxbow/rebase-todo";
 
+/// The branch to go back to once a stack rebase that stopped is over: the top, then that branch.
+const RETURN_FILE: &str = "oxbow/edit-stack-return";
+
 /// A stack of branches on top of the trunk, as the Edit Stack screen shows it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -595,6 +598,53 @@ impl Repo {
             );
         }
         Ok(commands)
+    }
+
+    /// Note the branch to switch back to when the rebase of `plan` stops before its end, so
+    /// Continue, Skip or Abort can finish the job.
+    pub(crate) fn remember_return(&self, plan: &StackPlan) {
+        if let Some(head) = plan.head.as_deref().filter(|h| *h != plan.top)
+            && let Ok(file) = self.git_file(RETURN_FILE)
+        {
+            let _ = std::fs::write(file, format!("{}\n{head}\n", plan.top));
+        }
+    }
+
+    /// The branch to switch back to after the stack rebase in progress, if it is one.
+    fn pending_return(&self) -> Option<String> {
+        let text = std::fs::read_to_string(self.git_file(RETURN_FILE).ok()?).ok()?;
+        let mut lines = text.lines();
+        let (top, head) = (lines.next()?, lines.next()?);
+        let rebasing = std::fs::read_to_string(self.git_file("rebase-merge/head-name").ok()?).ok()?;
+        (rebasing.trim() == format!("refs/heads/{top}")).then(|| head.to_owned())
+    }
+
+    /// The switch back that goes after Continue, Skip or Abort of a stack rebase that stopped.
+    /// With `ending`, the step always ends the rebase (an abort); otherwise only when nothing
+    /// left in the todo list stops it again.
+    pub(crate) fn return_after(&self, ending: bool) -> Option<GitCommand> {
+        let head = self.pending_return()?;
+        if !ending {
+            let todo = std::fs::read_to_string(self.git_file("rebase-merge/git-rebase-todo").ok()?).ok()?;
+            let stops = todo.lines().any(|line| {
+                let word = line.split_whitespace().next().unwrap_or_default();
+                matches!(word, "edit" | "e" | "break" | "b")
+            });
+            if stops {
+                return None;
+            }
+        }
+        Some(GitCommand::new(["switch", &head]).comment(format!("back to {head}, the branch you were on")))
+    }
+
+    /// Forget the branch to switch back to once no rebase is going on.
+    pub(crate) fn forget_return(&self) {
+        if let Ok(file) = self.git_file(RETURN_FILE)
+            && file.exists()
+            && !self.git_file("rebase-merge").is_ok_and(|dir| dir.exists())
+        {
+            let _ = std::fs::remove_file(file);
+        }
     }
 
     /// Write the todo list where the sequence editor of `command` copies it from.

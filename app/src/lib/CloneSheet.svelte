@@ -247,7 +247,11 @@
           {#if r.defaultBranch}
             <span>· default branch</span>
             <span class="cap" style:background={tint(probeBranchColor, "label")} style:color={plate(probeBranchColor)}>{r.defaultBranch}</span>
-            <span class="grey">· {r.branches.toLocaleString()} {r.branches === 1 ? "branch" : "branches"}</span>
+            {#if r.commits != null}
+              <span class="grey">· {r.commits.toLocaleString()} {r.commits === 1 ? "commit" : "commits"}</span>
+            {:else}
+              <span class="grey">· {r.branches.toLocaleString()} {r.branches === 1 ? "branch" : "branches"}</span>
+            {/if}
           {:else}
             <span class="grey">· empty repository</span>
           {/if}

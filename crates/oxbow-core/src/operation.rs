@@ -622,7 +622,7 @@ impl Repo {
             }
             GitCommand::new(args).comment(comment)
         };
-        Ok(vec![match op.kind {
+        let mut commands = vec![match op.kind {
             OperationKind::Merge => commit("records the merge, with both branches as its parents"),
             OperationKind::Squash => commit("one new commit with all the squashed changes"),
             OperationKind::Rebase => {
@@ -634,7 +634,11 @@ impl Repo {
                 GitCommand::new(["revert", "--continue"]).comment("commits the revert with the resolved files")
             }
             OperationKind::StashApply => return self.plan_finish_apply(&self.pending()?),
-        }])
+        }];
+        if op.kind == OperationKind::Rebase {
+            commands.extend(self.return_after(false));
+        }
+        Ok(commands)
     }
 
     fn pending(&self) -> Result<crate::stash::PendingApply> {
@@ -645,7 +649,7 @@ impl Repo {
     pub(crate) fn plan_abort(&self) -> Result<Vec<GitCommand>> {
         let op = self.current_operation()?;
         let branch = op.branch.unwrap_or_else(|| "the branch".to_owned());
-        Ok(vec![match op.kind {
+        let mut commands = vec![match op.kind {
             OperationKind::Merge => GitCommand::new(["merge", "--abort"])
                 .comment(format!("{branch} and its files go back to before the merge")),
             OperationKind::Squash => GitCommand::new(["reset", "--merge"])
@@ -659,20 +663,28 @@ impl Repo {
                 GitCommand::new(["revert", "--abort"]).comment(format!("{branch} goes back to before the revert"))
             }
             OperationKind::StashApply => return self.plan_undo_apply(&self.pending()?),
-        }])
+        }];
+        if op.kind == OperationKind::Rebase {
+            commands.extend(self.return_after(true));
+        }
+        Ok(commands)
     }
 
     pub(crate) fn plan_skip(&self) -> Result<Vec<GitCommand>> {
         let op = self.current_operation()?;
         let commit = op.commit.map_or_else(|| "this commit".to_owned(), |c| short(&c.id));
-        Ok(vec![match op.kind {
+        let mut commands = vec![match op.kind {
             OperationKind::Rebase => GitCommand::new(["rebase", "--skip"])
                 .comment(format!("leaves {commit} out and goes on with the next one")),
             OperationKind::CherryPick => {
                 GitCommand::new(["cherry-pick", "--skip"]).comment(format!("leaves {commit} out"))
             }
             _ => return Err(Error::Git("only a rebase or cherry-pick can skip a commit".into())),
-        }])
+        }];
+        if op.kind == OperationKind::Rebase {
+            commands.extend(self.return_after(false));
+        }
+        Ok(commands)
     }
 
     pub(crate) fn plan_take_file(&self, path: &str, side: ConflictSide) -> Result<Vec<GitCommand>> {

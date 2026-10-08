@@ -123,11 +123,13 @@ fn clone_probe_and_glance() {
     fx.git(&["switch", "-q", "main"]);
     let url = fx.path().display().to_string();
 
-    let probe = setup::probe_remote(&url).unwrap();
+    let github = oxbow_core::github::Client::default();
+    let probe = setup::probe_remote(&url, &github).unwrap();
     assert_eq!(probe.transport, "local");
     assert_eq!(probe.default_branch.as_deref(), Some("main"));
     assert_eq!(probe.branches, 2);
-    assert!(setup::probe_remote(&format!("{url}-missing")).is_err());
+    assert_eq!(probe.commits, Some(1), "the commits of main, not of every branch");
+    assert!(setup::probe_remote(&format!("{url}-missing"), &github).is_err());
 
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("copy");
