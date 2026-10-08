@@ -34,6 +34,8 @@ export const defaults = {
   "oxbow.git.path": "",
   "oxbow.git.runHooks": true,
   "oxbow.fetch.auto": true,
+  /** Pull runs `git fetch <remote>` first, so the remote's other branches are current too. */
+  "oxbow.pull.fetchFirst": true,
   /** Minutes between background fetches. */
   "oxbow.fetch.interval": 15,
   /** Characters before the commit summary counter warns; 0 is off. */

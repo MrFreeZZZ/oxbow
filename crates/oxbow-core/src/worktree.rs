@@ -122,6 +122,10 @@ pub enum Action {
     Pull {
         remote: String,
         branch: String,
+        /// Fetch all of `remote` first, so its other branches are current too; `git pull` alone
+        /// only updates `remote`/`branch`.
+        #[serde(default)]
+        fetch_first: bool,
     },
     /// Send the local `branch` to `remote`, where it is called `upstream`.
     Push {
@@ -563,7 +567,18 @@ impl Repo {
                 }]
             }
             Action::Fetch { remote } => vec![self.fetch_command(remote.as_deref()).with_progress()],
-            Action::Pull { remote, branch } => vec![self.pull_command(remote, branch)],
+            Action::Pull {
+                remote,
+                branch,
+                fetch_first,
+            } => {
+                let mut plan = Vec::new();
+                if *fetch_first {
+                    plan.push(self.fetch_command(Some(remote)).with_progress());
+                }
+                plan.push(self.pull_command(remote, branch));
+                plan
+            }
             Action::Push {
                 remote,
                 branch,

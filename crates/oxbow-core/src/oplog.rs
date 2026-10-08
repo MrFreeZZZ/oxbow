@@ -637,7 +637,7 @@ impl Repo {
             Action::Commit { amend: true, .. } => ("commit", format!("Amend the last commit on {here}")),
             Action::Commit { .. } => ("commit", format!("Commit to {here}")),
             Action::Fetch { remote } => ("fetch", format!("Fetch {}", remote.as_deref().unwrap_or("all remotes"))),
-            Action::Pull { remote, branch } => ("pull", format!("Pull {remote}/{branch}")),
+            Action::Pull { remote, branch, .. } => ("pull", format!("Pull {remote}/{branch}")),
             Action::Push {
                 remote, branch, force, ..
             } => (

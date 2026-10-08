@@ -468,7 +468,10 @@
       await confirm.run({ ...fetchRequest(remoteCtx), background: () => void backgroundFetch(false) });
       return;
     }
-    const setup = kind === "pull" ? await api.pullSetup().catch(() => undefined) : undefined;
+    const setup =
+      kind === "pull"
+        ? { ...(await api.pullSetup().catch(() => ({ mode: "rebase" as const, autostash: true }))), fetchFirst: prefs.get("oxbow.pull.fetchFirst") }
+        : undefined;
     const request = kind === "pull" ? pullRequest(remoteCtx, setup) : pushRequest(remoteCtx);
     const opBefore = history?.operation ?? null;
     const ok = await confirm.run(request);

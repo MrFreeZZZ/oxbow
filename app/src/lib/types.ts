@@ -279,7 +279,7 @@ export type Action =
   | { kind: "ignore"; pattern: string }
   | { kind: "commit"; message: string; amend: boolean; noVerify?: boolean }
   | { kind: "fetch"; remote: string | null }
-  | { kind: "pull"; remote: string; branch: string }
+  | { kind: "pull"; remote: string; branch: string; fetchFirst?: boolean }
   | {
       kind: "push";
       remote: string;
