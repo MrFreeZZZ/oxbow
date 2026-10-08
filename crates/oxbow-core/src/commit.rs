@@ -82,6 +82,11 @@ pub struct Hunk {
     pub new_start: u32,
     pub new_lines: u32,
     pub lines: Vec<DiffLine>,
+    /// For uncommitted changes: a fingerprint of the hunk's exact bytes, line endings and "no
+    /// newline at end of file" included. A hunk action sends it back, so a hunk that changed
+    /// since it was shown is refused.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub check: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -502,6 +507,7 @@ pub fn diff_text_with(
             new_start: new_start + 1,
             new_lines: n - new_start,
             lines,
+            check: String::new(),
         });
     }
     hunks

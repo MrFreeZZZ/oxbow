@@ -1,6 +1,6 @@
 mod support;
 
-use oxbow_core::{Action, ConflictSide, OperationKind, Repo};
+use oxbow_core::{Action, ActionEvent, ConflictSide, OperationKind, Repo};
 use support::Fixture;
 
 fn read(fx: &Fixture, file: &str) -> String {
@@ -200,6 +200,32 @@ fn undo_apply_keeps_an_untracked_file_that_was_there_before() {
 
     let undo = repo.plan(&Action::Abort).unwrap();
     assert!(undo.commands.iter().all(|c| !c.display().contains("clean")), "{undo:?}");
+    repo.perform(&Action::Abort).unwrap();
+    assert!(repo.operation().unwrap().is_none());
+    assert_eq!(read(&fx, "a.txt"), "one\n2 committed\nthree\n");
+    assert_eq!(read(&fx, "new.txt"), "my own new.txt\n");
+}
+
+#[test]
+fn undo_apply_keeps_an_untracked_file_made_just_before_git_ran() {
+    let (mut fx, repo) = stashed();
+    fx.commit("a.txt", "one\n2 committed\nthree\n", "Number two");
+    // An editor saves new.txt after Oxbow looked and before git restores the stash's files.
+    let path = fx.path().join("new.txt");
+    let mut on_event = |event: ActionEvent| {
+        if matches!(event, ActionEvent::Command { .. }) && !path.exists() {
+            std::fs::write(&path, "my own new.txt\n").unwrap();
+        }
+    };
+    let err = repo
+        .perform_with(
+            &apply(&repo, false),
+            &mut on_event,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("already exists"), "{err}");
+
     repo.perform(&Action::Abort).unwrap();
     assert!(repo.operation().unwrap().is_none());
     assert_eq!(read(&fx, "a.txt"), "one\n2 committed\nthree\n");
