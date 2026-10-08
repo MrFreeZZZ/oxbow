@@ -17,9 +17,10 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::CommandResult;
 
-/// The Client ID of Oxbow's GitHub OAuth app, for signing in with the browser. Settings can
-/// name another one with `oxbow.github.clientId`; with neither, only a token works.
-const CLIENT_ID: &str = "";
+/// The Client ID of Oxbow's GitHub OAuth app (registered by MrFreeZZZ, device flow on, tokens
+/// that don't expire), for signing in with the browser. It is public, not a secret. Settings can
+/// name another app with `oxbow.github.clientId`.
+const CLIENT_ID: &str = "Ov23liNWrLpV4KFn313e";
 
 /// The Keychain item: "Oxbow GitHub", account = the login.
 const SERVICE: &str = "Oxbow GitHub";
