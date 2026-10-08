@@ -481,7 +481,7 @@ fn topo_order(nodes: Vec<Node>) -> Vec<Node> {
 }
 
 /// The branch drawn as the trunk: `main` or `master`, local first, then the remote's default.
-fn pick_trunk<'a>(refs: &'a [RefInfo], head: &HeadInfo) -> Option<&'a RefInfo> {
+pub(crate) fn pick_trunk<'a>(refs: &'a [RefInfo], head: &HeadInfo) -> Option<&'a RefInfo> {
     let find = |kind: RefKind, name: &str| refs.iter().find(|r| r.kind == kind && r.name == name);
     find(RefKind::Local, "main")
         .or_else(|| find(RefKind::Local, "master"))

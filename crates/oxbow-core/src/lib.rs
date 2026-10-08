@@ -19,6 +19,7 @@ pub mod remote;
 pub mod repo;
 pub mod search;
 pub mod setup;
+pub mod stack;
 pub mod stash;
 pub mod tags;
 pub mod worktree;
@@ -39,5 +40,8 @@ pub use remote::{CommitBrief, DeletionCheck, Failure, FailureKind, Tracking, cla
 pub use repo::{DiffOptions, HeadInfo, RefInfo, RefKind, Repo, StashInfo};
 pub use search::{SearchHit, SearchMode, SearchQuery, SearchResult};
 pub use setup::{CloneOptions, NewRepoOptions, NewRepoPlan, RemoteProbe, RepoGlance};
+pub use stack::{
+    BranchAfter, Stack, StackBranch, StackCommit, StackConflict, StackPlan, StackPreview, StackStep, StepAction,
+};
 pub use stash::StashCheck;
-pub use worktree::{Action, ActionEvent, Plan, PullMode, RemoteBranch, Side, WorkingTree};
+pub use worktree::{Action, ActionEvent, BranchPush, Plan, PullMode, RemoteBranch, Side, WorkingTree};

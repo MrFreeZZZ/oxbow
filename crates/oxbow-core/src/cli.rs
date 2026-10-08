@@ -35,6 +35,8 @@ pub struct GitCommand {
     pub before: Option<String>,
     /// Environment variables for the command, e.g. a scratch `GIT_INDEX_FILE`. Not shown.
     pub env: Vec<(String, String)>,
+    /// The todo list Oxbow hands an interactive rebase instead of opening an editor; shown.
+    pub todo: Option<String>,
 }
 
 impl GitCommand {
@@ -50,6 +52,7 @@ impl GitCommand {
             input: None,
             before: None,
             env: Vec::new(),
+            todo: None,
         }
     }
 
@@ -70,6 +73,11 @@ impl GitCommand {
 
     pub fn before(mut self, step: impl Into<String>) -> Self {
         self.before = Some(step.into());
+        self
+    }
+
+    pub fn todo(mut self, todo: impl Into<String>) -> Self {
+        self.todo = Some(todo.into());
         self
     }
 
@@ -105,6 +113,7 @@ impl Serialize for GitCommand {
             display: String,
             input: &'a Option<String>,
             before: &'a Option<String>,
+            todo: &'a Option<String>,
         }
         Shown {
             args: &self.args,
@@ -112,6 +121,7 @@ impl Serialize for GitCommand {
             display: self.display(),
             input: &self.input,
             before: &self.before,
+            todo: &self.todo,
         }
         .serialize(serializer)
     }

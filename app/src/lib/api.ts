@@ -31,6 +31,9 @@ import type {
   NewRepoPlan,
   GitCommand,
   OpEntry,
+  Stack,
+  StackPlan,
+  StackPreview,
 } from "./types";
 import type { PullSetup } from "./remote";
 
@@ -68,6 +71,8 @@ export const api = {
   mergePreview: (branch: string) => invoke<MergePreview>("merge_preview", { branch }),
   conflictFile: (path: string) => invoke<ConflictFile>("conflict_file", { path }),
   stashCheck: (index: number, id: string) => invoke<StashCheck>("stash_check", { index, id }),
+  stack: (branch: string | null) => invoke<Stack>("stack", { branch }),
+  stackPreview: (plan: StackPlan) => invoke<StackPreview>("stack_preview", { plan }),
   planAction: (action: Action) => invoke<Plan>("plan_action", { action }),
   /** Rejects with a `Failure`. */
   performAction: (action: Action) => invoke<string>("perform_action", { action }),

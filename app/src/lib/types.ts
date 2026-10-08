@@ -323,7 +323,10 @@ export type Action =
   | { kind: "fetchTags"; remote: string }
   /** Back to before step `id` of the Operation Log, or right after it with `after`. */
   | { kind: "restore"; id: string; after: boolean }
-  | { kind: "clearOperationLog" };
+  | { kind: "clearOperationLog" }
+  | { kind: "editStack"; plan: StackPlan }
+  | { kind: "addToCommit"; commit: string }
+  | { kind: "pushBranches"; remote: string; branches: { branch: string; upstream: string }[] };
 
 export type ResetMode = "soft" | "mixed" | "hard";
 
@@ -430,6 +433,8 @@ export interface GitCommand {
   input: string | null;
   /** A step Oxbow does itself first, as typed in a shell. */
   before: string | null;
+  /** The todo list Oxbow hands an interactive rebase. */
+  todo: string | null;
 }
 
 export interface Plan {
@@ -621,4 +626,71 @@ export interface OpEntry {
   stash: { before: StashRecord[]; after: StashRecord[] } | null;
   before: Trees;
   after: Trees;
+}
+
+/** A stack of branches on top of the trunk, for Edit Stack. */
+export interface Stack {
+  /** The branch at the top, the one the rebase rewrites. */
+  top: string;
+  head: string | null;
+  /** The branch the stack is built on, e.g. "main". */
+  trunk: string;
+  base: CommitBrief;
+  trunkTip: CommitBrief;
+  /** Commits on the trunk since the stack's base. */
+  newer: number;
+  /** Newest first. */
+  commits: StackCommit[];
+  /** Top first; a branch owns the commits under it down to the next one. */
+  branches: StackBranch[];
+  /** Branches that fork off the stack, so the rebase leaves them as they are. */
+  leftBehind: string[];
+  dirty: boolean;
+}
+
+export interface StackCommit {
+  id: string;
+  summary: string;
+  message: string;
+  authorName: string;
+  time: number;
+  additions: number;
+  deletions: number;
+  branch: string;
+  pushed: boolean;
+}
+
+export interface StackBranch {
+  name: string;
+  tip: string;
+  upstream: RemoteBranch | null;
+  ahead: number;
+}
+
+export type StepAction = "pick" | "reword" | "edit" | "squash" | "fixup" | "drop";
+
+/** Oldest first. */
+export type StackStep = { kind: "commit"; id: string; action: StepAction; message: string | null } | { kind: "branch"; name: string };
+
+export interface StackPlan {
+  top: string;
+  base: string;
+  onto: string;
+  ontoName: string | null;
+  head: string | null;
+  steps: StackStep[];
+}
+
+export interface StackPreview {
+  changed: boolean;
+  rewritten: number;
+  squashed: number;
+  dropped: number;
+  reworded: number;
+  moved: number;
+  edits: number;
+  emptied: string[];
+  conflict: { id: string; summary: string; files: string[] } | null;
+  /** Top first. */
+  branches: { name: string; commits: number; moves: boolean; forcePush: RemoteBranch | null }[];
 }

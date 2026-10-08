@@ -311,6 +311,28 @@ pub enum Action {
     },
     /// Forget every step of the Operation Log.
     ClearOperationLog,
+    /// Rewrite a stack of branches as `plan` says: an interactive rebase.
+    EditStack {
+        plan: crate::stack::StackPlan,
+    },
+    /// Fold the staged changes into `commit`, an older commit of the checked-out branch.
+    AddToCommit {
+        commit: String,
+    },
+    /// Push several local branches to `remote` at once, each to its upstream, overwriting what
+    /// the rebase replaced there while nobody else pushed (`--force-with-lease`).
+    PushBranches {
+        remote: String,
+        branches: Vec<BranchPush>,
+    },
+}
+
+/// A local branch and its name on the remote.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchPush {
+    pub branch: String,
+    pub upstream: String,
 }
 
 /// A branch on a remote: `branch` on `remote`.
@@ -797,6 +819,20 @@ impl Repo {
                 GitCommand::new(["update-ref", "-d", crate::oplog::OPLOG_REF])
                     .comment("the snapshots go with git's next clean-up"),
             ],
+            Action::EditStack { plan } => self.plan_edit_stack(plan)?,
+            Action::AddToCommit { commit } => self.plan_add_to_commit(commit)?,
+            Action::PushBranches { remote, branches } => {
+                let mut args = vec!["push".to_owned(), "--force-with-lease".to_owned()];
+                if !config::run_hooks() {
+                    args.push("--no-verify".to_owned());
+                }
+                args.push(remote.clone());
+                args.extend(branches.iter().map(|b| refspec(&b.branch, &b.upstream)));
+                let comment = format!(
+                    "--force-with-lease: each one only if {remote} still has what was fetched last, so nobody else’s new commits get overwritten"
+                );
+                vec![GitCommand::new(args).comment(comment).with_progress()]
+            }
             Action::Reword { message } => {
                 let mut args = vec!["commit".to_owned(), "--amend".to_owned(), "--only".to_owned()];
                 for paragraph in paragraphs(message) {
@@ -873,6 +909,7 @@ impl Repo {
                     && self.operation()?.is_some_and(|op| op.kind == OperationKind::StashApply);
                 let mut last = String::new();
                 for command in self.plan(action)?.commands {
+                    self.write_todo(&command)?;
                     on_event(ActionEvent::Command {
                         display: command.display(),
                     });

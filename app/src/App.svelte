@@ -41,6 +41,8 @@
   import OperationLog from "./lib/OperationLog.svelte";
   import { withKeys } from "./lib/keys";
   import { oplog, undoRequest } from "./lib/oplog.svelte";
+  import EditStackView from "./lib/EditStackView.svelte";
+  import { addToCommitRequest, dropCommitRequest, rewordRequest, squashRequest } from "./lib/stack";
 
   let repo = $state<RepoSummary | null>(null);
   let history = $state<History | null>(null);
@@ -58,7 +60,15 @@
   const operation = $derived(history?.operation ?? null);
   const showConflicts = $derived(resolving && !!operation);
   /** The screen next to the sidebar. */
-  let view = $state<"history" | "stashes" | "compare" | "file">("history");
+  let view = $state<"history" | "stashes" | "compare" | "file" | "stack">("history");
+  /** The branch whose stack Edit Stack shows; the checked-out one when null. */
+  let stackBranch = $state<string | null>(null);
+
+  function openStack(branch: string | null) {
+    stackBranch = branch;
+    view = "stack";
+    resolving = false;
+  }
   /** The screen File History goes back to. */
   let fileBack = $state<"history" | "stashes" | "compare">("history");
   // A diff's File History button opens the screen.
@@ -67,7 +77,7 @@
     untrack(() => {
       // Coming from another screen starts without a find.
       if (view !== "file") {
-        fileBack = view;
+        fileBack = view === "stack" ? "history" : view;
         nav.find = { ...nav.find, text: "" };
       }
       view = "file";
@@ -186,7 +196,7 @@
     second = null;
     search.clear();
     oplog.forget();
-    if (view === "compare" || view === "file") view = "history";
+    if (view === "compare" || view === "file" || view === "stack") view = "history";
     try {
       const summary = await api.openRepo(path);
       const next = await api.history();
@@ -279,6 +289,21 @@
     run(history?.head.branch || !history?.head.commit ? newBranchRequest(branchCtx) : keepRequest(branchCtx));
   }
 
+  /** Commits of the checked-out branch that are not on the trunk, in a straight line: the part of
+   *  its stack the commit menu can rewrite. Empty with a merge among them. */
+  const headStack = $derived.by(() => {
+    const out = new Set<string>();
+    if (!history?.head.branch || !history.head.commit || history.head.branch === history.trunk) return out;
+    const trunkTip = history.trunk ? targetOf.get(history.trunk) : undefined;
+    const onTrunk = ancestors(history, trunkTip ?? null);
+    for (const id of ancestors(history, history.head.commit)) {
+      if (onTrunk.has(id)) continue;
+      if ((rowsById.get(id)?.parents.length ?? 0) > 1) return new Set<string>();
+      out.add(id);
+    }
+    return out;
+  });
+
   /** The right-click menu of a commit in the graph. */
   function commitMenu(row: HistoryRow): MenuEntry[] {
     const ctx = branchCtx;
@@ -324,6 +349,16 @@
       const editing: MenuEntry[] = [];
       if (isHead && row.parents.length === 1) editing.push(item("Undo Commit", menuIcons.undo, () => run(undoCommitRequest(ctx, row))));
       if (isHead) editing.push(item("Edit Message…", menuIcons.edit, () => run(editMessageRequest(ctx, row))));
+      // The checked-out branch's own commits, above the trunk, can be rewritten in place.
+      const own = headStack.has(row.id);
+      if (own && !isHead) {
+        editing.push(item("Edit Message…", menuIcons.edit, () => run(rewordRequest(ctx, row))));
+        const staged = history.rows[0]?.worktree?.staged ?? 0;
+        if (staged) editing.push(item("Add Staged Changes to This Commit…", menuIcons.stage, () => run(addToCommitRequest(ctx, row))));
+      }
+      if (own && headStack.has(row.parents[0] ?? "")) editing.push(item("Squash into Previous…", menuIcons.merge, () => run(squashRequest(ctx, row))));
+      if (own) editing.push(item("Drop Commit…", menuIcons.drop, () => run(dropCommitRequest(ctx, row)), true));
+      if (own) editing.push(item("Edit Stack…", menuIcons.rebase, () => openStack(null)));
       if (!inHead && history.head.commit) editing.push(item(`Cherry-Pick onto ${here}`, menuIcons.cherry, () => run(cherryPickRequest(ctx, row))));
       if (inHead) editing.push(item("Revert Commit…", menuIcons.revert, () => run(revertRequest(ctx, row))));
       if (!isHead && history.head.commit) {
@@ -601,6 +636,7 @@
       }}
       onPickStash={(id) => (stashSel = id)}
       onCompare={openCompare}
+      onEditStack={openStack}
     />
     <div class="main">
       <header data-tauri-drag-region>
@@ -618,6 +654,9 @@
             {:else if view === "file" && nav.file}
               <span class="name">{nav.file.path.slice(nav.file.path.lastIndexOf("/") + 1)}</span>
               <span class="sub">{repo.name} · {nav.file.path}</span>
+            {:else if view === "stack"}
+              <span class="name">Edit Stack</span>
+              <span class="sub">Interactive rebase · {repo.name}</span>
             {:else if view === "compare"}
               <span class="name">Compare</span>
               <span class="sub">{comparing.target} with {comparing.base}</span>
@@ -642,7 +681,7 @@
               <button role="radio" aria-checked={nav.fileMode === "blame"} class:on={nav.fileMode === "blame"} onclick={() => (nav.fileMode = "blame")}>Blame</button>
             </div>
           {/if}
-          {#if view === "compare" && !showConflicts}
+          {#if (view === "compare" || view === "stack") && !showConflicts}
             <button class="capsule" onclick={() => (view = "history")} title="Back to the commit graph">
               <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>History
             </button>
@@ -739,6 +778,10 @@
             {panelWidth}
             onGrip={startResize}
           />
+        {/key}
+      {:else if view === "stack" && branchCtx}
+        {#key repo.path}
+          <EditStackView branch={stackBranch} ctx={branchCtx} {colorOf} {version} {run} onClose={() => (view = "history")} />
         {/key}
       {:else if view === "stashes" && branchCtx}
         {#key repo.path}

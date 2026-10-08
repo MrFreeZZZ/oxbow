@@ -612,6 +612,23 @@ async fn stash_check(session: State<'_, Session>, index: usize, id: String) -> C
     blocking(move || repo.stash_check(index, &id)).await
 }
 
+/// The stack `branch` belongs to (the checked-out branch without one), for Edit Stack.
+#[tauri::command]
+async fn stack(session: State<'_, Session>, branch: Option<String>) -> CommandResult<oxbow_core::Stack> {
+    let repo = current(&session)?;
+    blocking(move || repo.stack(branch.as_deref())).await
+}
+
+/// A dry run of an Edit Stack plan: what it changes, where it would stop, what to push.
+#[tauri::command]
+async fn stack_preview(
+    session: State<'_, Session>,
+    plan: oxbow_core::StackPlan,
+) -> CommandResult<oxbow_core::StackPreview> {
+    let repo = current(&session)?;
+    blocking(move || repo.stack_preview(&plan)).await
+}
+
 /// The git commands an action will run, for the confirmation sheet.
 #[tauri::command]
 async fn plan_action(session: State<'_, Session>, action: Action) -> CommandResult<Plan> {
@@ -947,6 +964,8 @@ fn main() {
             merge_preview,
             conflict_file,
             stash_check,
+            stack,
+            stack_preview,
             plan_action,
             perform_action,
             stop_action,

@@ -43,6 +43,7 @@
     onView,
     onPickStash,
     onCompare,
+    onEditStack,
   }: {
     repo: RepoSummary;
     history: History;
@@ -56,12 +57,14 @@
     /** Confirm and run a change to the repository. */
     run: (request: Request | Promise<Request>) => void;
     /** The screen shown next to the sidebar. */
-    view: "history" | "stashes" | "compare" | "file";
+    view: "history" | "stashes" | "compare" | "file" | "stack";
     onView: (view: "history" | "stashes") => void;
     /** On the Stashes screen a stash in the list is picked there instead of in History. */
     onPickStash: (id: string) => void;
     /** Open Compare: what `target` has against `base`. */
     onCompare: (base: string, target: string) => void;
+    /** Open Edit Stack for the stack `branch` is in. */
+    onEditStack: (branch: string) => void;
   } = $props();
 
   const headName = $derived(history.head.branch ?? "HEAD");
@@ -236,6 +239,10 @@
           ),
         ),
       );
+    }
+    if (!isTrunk && !history.operation) {
+      entries.push({ kind: "sep" });
+      entries.push(item("Edit Stack…", menuIcons.rebase, () => onEditStack(ref.name)));
     }
     entries.push({ kind: "sep" });
     entries.push(item(`New Branch from ${ref.name}…`, menuIcons.branch, () => run(newBranchRequest(ctx, ref.name))));

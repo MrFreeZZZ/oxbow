@@ -41,6 +41,17 @@
     return [...body.slice(0, max - 1), { kind: "ctx", text: `… ${body.length - max + 1} more lines` }];
   }
 
+  /** The lines of a rebase todo list, with the command word apart, at most `max` lines. */
+  function todoLines(todo: string, max = 24): { kind: string; word: string; rest: string }[] {
+    const all = todo.replace(/\n$/, "").split("\n").map((text) => {
+      const space = text.indexOf(" ");
+      const word = space < 0 ? text : text.slice(0, space);
+      return { kind: word, word, rest: space < 0 ? "" : text.slice(space) };
+    });
+    if (all.length <= max) return all;
+    return [...all.slice(0, max - 1), { kind: "more", word: "", rest: `… ${all.length - max + 1} more lines` }];
+  }
+
   const OUTPUT: Record<string, string> = {
     out: "var(--term-out)",
     err: "var(--term-err)",
@@ -222,6 +233,10 @@
               {/if}
               {@render prompt(command.display)}
               {#if command.comment}<div class="comment"># {command.comment}</div>{/if}
+              {#if command.todo}
+                <div class="comment"># Oxbow hands git this todo list instead of opening an editor:</div>
+                {#each todoLines(command.todo) as line, k (k)}<div class="todo {line.kind}"><span class="todo-word">{line.word}</span>{line.rest}</div>{/each}
+              {/if}
             {/each}
           {:else}
             {#each confirm.lines as line, i (i)}
@@ -424,6 +439,30 @@
   .comment {
     color: var(--term-comment);
     font-style: italic;
+  }
+  /* A rebase todo list, the way git's editor shows it: the command word colored by what it does. */
+  .todo {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--term-text);
+    padding-left: 16px;
+  }
+  .todo-word {
+    color: var(--term-sub);
+  }
+  .todo.drop .todo-word {
+    color: var(--term-err);
+  }
+  .todo.fixup .todo-word,
+  .todo.squash .todo-word {
+    color: var(--term-flag);
+  }
+  .todo.update-ref .todo-word,
+  .todo.exec .todo-word {
+    color: var(--term-sha);
+  }
+  .todo.more {
+    color: var(--term-dim);
   }
   .output {
     white-space: pre-wrap;
