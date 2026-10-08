@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { HistoryRow } from "./types";
   import { lane, plate, shortId, tint } from "./format";
+  import { softArrows } from "./shapes";
 
   let {
     row,
@@ -11,8 +12,6 @@
 
   // Soft arrows, as in the design's stack strip: newest on the left, each arrow points left.
   const HEIGHT = 42;
-  const TIP = 14;
-  const GAP = 4;
   const MAX_IDS = 2;
 
   let width = $state(0);
@@ -27,50 +26,7 @@
     return list;
   });
 
-  /** Polygon with rounded corners, as an SVG path. */
-  function roundPoly(points: [number, number][], radii: number[]): string {
-    return (
-      points
-        .map((p, i) => {
-          const a = points[(i - 1 + points.length) % points.length];
-          const b = points[(i + 1) % points.length];
-          const la = Math.hypot(p[0] - a[0], p[1] - a[1]);
-          const lb = Math.hypot(b[0] - p[0], b[1] - p[1]);
-          const ra = Math.min(radii[i], la / 2);
-          const rb = Math.min(radii[i], lb / 2);
-          const s = [p[0] + ((a[0] - p[0]) * ra) / la, p[1] + ((a[1] - p[1]) * ra) / la];
-          const e = [p[0] + ((b[0] - p[0]) * rb) / lb, p[1] + ((b[1] - p[1]) * rb) / lb];
-          return `${i ? "L" : "M"}${s[0].toFixed(1)} ${s[1].toFixed(1)}Q${p[0]} ${p[1]} ${e[0].toFixed(1)} ${e[1].toFixed(1)}`;
-        })
-        .join("") + "Z"
-    );
-  }
-
-  // Shapes are built oldest first, left to right (tip on the right, notch on the left), then mirrored.
-  const shapes = $derived.by(() => {
-    const n = blocks.length;
-    const cw = (width + (n - 1) * (TIP - GAP)) / n;
-    return blocks.map((block, display) => {
-      const i = n - 1 - display;
-      const x0 = i * (cw - TIP + GAP);
-      const x1 = x0 + cw;
-      const points: [number, number][] = [
-        [x0, 0],
-        [x1 - TIP, 0],
-        [x1, HEIGHT / 2],
-        [x1 - TIP, HEIGHT],
-        [x0, HEIGHT],
-      ];
-      const radii = [10, 10, 12, 10, 10];
-      if (i > 0) {
-        points.push([x0 + TIP, HEIGHT / 2]);
-        radii.push(7);
-      }
-      const bx = x0 + (i ? TIP : 0);
-      const bw = cw - TIP - (i ? TIP : 0);
-      return { block, path: roundPoly(points.map(([x, y]) => [width - x, y]), radii), left: width - bx - bw, width: bw };
-    });
-  });
+  const shapes = $derived(softArrows(blocks.length, width, HEIGHT).map((shape, i) => ({ ...shape, block: blocks[i] })));
 
   const color = $derived(row.graph.color);
 </script>
