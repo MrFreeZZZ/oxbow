@@ -463,6 +463,18 @@ async fn create_repo(options: oxbow_core::NewRepoOptions) -> CommandResult<Strin
 #[tauri::command]
 async fn history(session: State<'_, Session>) -> CommandResult<History> {
     let repo = current(&session)?;
+    // Open the repository afresh: the built-in engine reads .git/config once, so a remote that
+    // Publish or Settings just added would stay unseen.
+    let workdir = repo.workdir().to_path_buf();
+    let fresh = blocking(move || Repo::open(&workdir)).await.unwrap_or(repo);
+    {
+        let mut open = session.repo.lock().expect("session lock");
+        if open.as_ref().is_some_and(|open| open.workdir() == fresh.workdir()) {
+            *open = Some(fresh.clone());
+        }
+    }
+    let mut repo = fresh;
+    repo.set_diff_options(*session.diff.lock().expect("session lock"));
     blocking(move || repo.history(&HistoryOptions::default())).await
 }
 
@@ -1145,7 +1157,9 @@ fn main() {
             accounts::github_device_stop,
             accounts::github_sign_in_token,
             accounts::github_sign_out,
-            accounts::open_github
+            accounts::open_github,
+            accounts::github_owners,
+            accounts::github_publish
         ])
         .run(tauri::generate_context!())
         .expect("error while running Oxbow");

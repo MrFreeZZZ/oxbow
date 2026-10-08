@@ -37,6 +37,8 @@ import type {
   GitHubAccount,
   SignInSetup,
   DeviceCode,
+  GitHubOwners,
+  Publish,
 } from "./types";
 import type { PullSetup } from "./remote";
 
@@ -119,6 +121,9 @@ export const api = {
   githubSignOut: () => invoke<void>("github_sign_out"),
   /** Opens a github.com page in the browser. */
   openGitHub: (url: string) => invoke<void>("open_github", { url }),
+  githubOwners: () => invoke<GitHubOwners>("github_owners"),
+  /** Sends `action-event`s while it runs; Stop is `stopAction`. Resolves to the repository's page. */
+  githubPublish: (path: string, publish: Publish) => invoke<string>("github_publish", { path, publish }),
 };
 
 /** Keys of `settings.json`. */

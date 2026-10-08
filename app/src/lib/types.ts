@@ -494,6 +494,23 @@ export interface GitHubAccount {
   scopes: string[] | null;
 }
 
+/** Where Publish can put a repository: the account and its organizations. */
+export interface GitHubOwners {
+  login: string;
+  orgs: string[];
+}
+
+/** A repository to make on GitHub and push to. */
+export interface Publish {
+  owner: string;
+  /** `owner` is the signed-in account, not an organization. */
+  personal: boolean;
+  name: string;
+  private: boolean;
+  description: string;
+  branch: string;
+}
+
 /** What the sign-in sheet shows before it starts. */
 export interface SignInSetup {
   /** Null: this build can't sign in with the browser, only with a token. */
