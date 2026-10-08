@@ -158,3 +158,31 @@ fn a_disabled_device_flow_is_explained() {
     let err = Client::new(&address, &address).device_code("Iv1.id").unwrap_err();
     assert!(err.to_string().contains("Device flow is turned off"), "{err}");
 }
+
+#[test]
+fn commits_are_counted_from_the_last_page() {
+    let (api, seen) = server(vec![
+        (
+            200,
+            vec![(
+                "Link",
+                "<https://api.github.com/repositories/1/commits?sha=main&per_page=1&page=2>; rel=\"next\", <https://api.github.com/repositories/1/commits?sha=main&per_page=1&page=1234>; rel=\"last\"",
+            )],
+            "[{}]",
+        ),
+        (200, vec![], "[{}]"),
+    ]);
+    let client = Client::new(&api, &api);
+    assert_eq!(client.commit_count("acme", "api", "main").unwrap(), 1234);
+    let first = seen.recv().unwrap();
+    assert_eq!(first.line, "GET /repos/acme/api/commits?sha=main&per_page=1 HTTP/1.1");
+    assert!(
+        !first
+            .headers
+            .iter()
+            .any(|h| h.to_lowercase().starts_with("authorization"))
+    );
+    // One commit: no other pages.
+    assert_eq!(client.commit_count("acme", "api", "feature/x").unwrap(), 1);
+    assert!(seen.recv().unwrap().line.contains("sha=feature%2Fx"));
+}

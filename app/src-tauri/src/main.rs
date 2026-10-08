@@ -416,8 +416,17 @@ fn folder_state(path: String) -> &'static str {
 }
 
 #[tauri::command]
-async fn probe_remote(url: String) -> CommandResult<oxbow_core::RemoteProbe> {
-    blocking(move || oxbow_core::setup::probe_remote(&url)).await
+async fn probe_remote(
+    app: tauri::AppHandle,
+    accounts: State<'_, accounts::Accounts>,
+    url: String,
+) -> CommandResult<oxbow_core::RemoteProbe> {
+    // Signed in, a private repository on github.com can count its commits too.
+    let mut github = oxbow_core::github::Client::default();
+    if let Some(token) = accounts.token(&app) {
+        github = github.with_token(token);
+    }
+    blocking(move || oxbow_core::setup::probe_remote(&url, &github)).await
 }
 
 #[tauri::command]

@@ -37,6 +37,9 @@ pub struct RemoteProbe {
     /// The branch a clone checks out, `None` for an empty repository.
     pub default_branch: Option<String>,
     pub branches: usize,
+    /// Commits on the default branch, when the remote can tell without a clone: a repository
+    /// on this computer or on github.com.
+    pub commits: Option<u64>,
 }
 
 /// How git will reach `url`, in the words the Clone sheet uses.
@@ -83,8 +86,9 @@ fn neutral_dir() -> PathBuf {
     crate::config::home_dir().unwrap_or_else(std::env::temp_dir)
 }
 
-/// Ask the remote for its branches with `git ls-remote`, giving up after a while.
-pub fn probe_remote(url: &str) -> Result<RemoteProbe> {
+/// Ask the remote for its branches with `git ls-remote`, giving up after a while, and count the
+/// commits of its default branch where that needs no clone; `github` asks github.com.
+pub fn probe_remote(url: &str, github: &crate::github::Client) -> Result<RemoteProbe> {
     let url = check_url(url)?;
     let command = GitCommand::new(["ls-remote", "--symref", url]);
     let cancel = Arc::new(AtomicBool::new(false));
@@ -105,6 +109,7 @@ pub fn probe_remote(url: &str) -> Result<RemoteProbe> {
         transport: transport(url).to_owned(),
         default_branch: None,
         branches: 0,
+        commits: None,
     };
     for line in out.stdout.lines() {
         if let Some(rest) = line.strip_prefix("ref: refs/heads/") {
@@ -118,7 +123,30 @@ pub fn probe_remote(url: &str) -> Result<RemoteProbe> {
             probe.branches += 1;
         }
     }
+    if let Some(branch) = &probe.default_branch {
+        probe.commits = if probe.transport == "local" {
+            local_commits(url, branch)
+        } else {
+            crate::pulls::parse_github_url(url)
+                .and_then(|(owner, name)| github.commit_count(&owner, &name, branch).ok())
+        };
+    }
     Ok(probe)
+}
+
+/// The commits of `branch` in the repository at `url` on this computer.
+fn local_commits(url: &str, branch: &str) -> Option<u64> {
+    let path = url.strip_prefix("file://").unwrap_or(url);
+    let path = match path.strip_prefix("~/") {
+        Some(rest) => crate::config::home_dir()?.join(rest),
+        None => neutral_dir().join(path),
+    };
+    let command = GitCommand::new([
+        "rev-list".to_owned(),
+        "--count".to_owned(),
+        format!("refs/heads/{branch}"),
+    ]);
+    run_in(&path, &command, None).ok()?.stdout.trim().parse().ok()
 }
 
 /// `git clone` as it runs and as the sheet shows it.

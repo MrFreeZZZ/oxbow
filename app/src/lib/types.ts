@@ -624,6 +624,8 @@ export interface RemoteProbe {
   transport: string;
   defaultBranch: string | null;
   branches: number;
+  /** Commits on the default branch, when the remote could tell without a clone. */
+  commits: number | null;
 }
 
 export interface CloneOptions {

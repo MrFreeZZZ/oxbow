@@ -300,6 +300,40 @@ fn moving_onto_the_newest_main_finds_the_conflict_first() {
     assert_eq!(op.kind, OperationKind::Rebase);
     repo.perform(&Action::Abort).unwrap();
     assert!(repo.operation().unwrap().is_none());
+    assert_eq!(
+        fx.git(&["branch", "--show-current"]),
+        "auth/2",
+        "back on the branch it started from"
+    );
+}
+
+#[test]
+fn after_a_conflict_continue_goes_back_to_the_branch_it_started_from() {
+    let mut fx = stacked();
+    fx.git(&["switch", "-q", "main"]);
+    fx.commit("api.rs", "fn sessions_v2() {}\n", "Sessions on main");
+    fx.git(&["switch", "-q", "auth/2"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let stack = repo.stack(None).unwrap();
+    let mut plan = as_is(&stack);
+    plan.onto = stack.trunk_tip.id.clone();
+    plan.onto_name = Some("main".into());
+    repo.perform(&Action::EditStack { plan }).unwrap_err();
+    assert!(repo.operation().unwrap().is_some());
+
+    fx.write("api.rs", "fn sessions_v2() {}\nfn sessions() {}\n");
+    fx.git(&["add", "api.rs"]);
+    let commands = repo.plan(&Action::Continue { message: None }).unwrap().commands;
+    assert_eq!(commands.last().unwrap().display(), "git switch auth/2");
+    repo.perform(&Action::Continue { message: None }).unwrap();
+    assert!(repo.operation().unwrap().is_none());
+    assert_eq!(fx.git(&["branch", "--show-current"]), "auth/2");
+    assert_eq!(subjects(&mut fx, "main..auth/3").len(), 5);
+    assert_eq!(subjects(&mut fx, "main..auth/2").len(), 3);
+    assert!(
+        !fx.path().join(".git/oxbow/edit-stack-return").exists(),
+        "the note is gone"
+    );
 }
 
 #[test]
@@ -339,6 +373,7 @@ fn an_edit_stops_the_rebase_on_that_commit() {
     repo.perform(&Action::Continue { message: None }).unwrap();
     assert!(repo.operation().unwrap().is_none());
     assert_eq!(subjects(&mut fx, "main..auth/3").len(), 5);
+    assert_eq!(fx.git(&["branch", "--show-current"]), "auth/2");
 }
 
 #[test]
