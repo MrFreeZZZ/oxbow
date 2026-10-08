@@ -39,6 +39,10 @@ import type {
   DeviceCode,
   GitHubOwners,
   Publish,
+  GitHubRepo,
+  PullCall,
+  PullRequest,
+  PullSummary,
 } from "./types";
 import type { PullSetup } from "./remote";
 
@@ -124,6 +128,15 @@ export const api = {
   githubOwners: () => invoke<GitHubOwners>("github_owners"),
   /** Sends `action-event`s while it runs; Stop is `stopAction`. Resolves to the repository's page. */
   githubPublish: (path: string, publish: Publish) => invoke<string>("github_publish", { path, publish }),
+  githubRepo: () => invoke<GitHubRepo | null>("github_repo"),
+  /** Open and recently closed, the latest updated first. */
+  githubPulls: () => invoke<PullSummary[]>("github_pulls"),
+  githubPull: (number: number) => invoke<PullRequest>("github_pull", { number }),
+  /** The requests as curl, for the sheet. */
+  githubCallsPreview: (calls: PullCall[]) => invoke<string[]>("github_calls_preview", { calls }),
+  /** Sends `action-event`s while it runs; resolves to what the last call (or a create) answered. */
+  githubRun: (calls: PullCall[]) => invoke<{ number?: number; html_url?: string; sha?: string } | null>("github_run", { calls }),
+  codeOwners: (base: string, branch: string) => invoke<string[]>("code_owners", { base, branch }),
 };
 
 /** Keys of `settings.json`. */

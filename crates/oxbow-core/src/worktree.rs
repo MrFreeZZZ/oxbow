@@ -337,6 +337,16 @@ pub enum Action {
         remote: String,
         branches: Vec<BranchPush>,
     },
+    /// After `branch`'s pull request was merged into `base` on GitHub, bring the result here:
+    /// fetch it, fast-forward the local `base`, and delete the branch on `remote` and here when
+    /// asked to.
+    PullRequestMerged {
+        remote: String,
+        base: String,
+        branch: String,
+        delete_remote: bool,
+        delete_local: bool,
+    },
 }
 
 /// A local branch and its name on the remote.
@@ -884,6 +894,13 @@ impl Repo {
                 );
                 vec![GitCommand::new(args).comment(comment).with_progress()]
             }
+            Action::PullRequestMerged {
+                remote,
+                base,
+                branch,
+                delete_remote,
+                delete_local,
+            } => self.plan_pull_request_merged(remote, base, branch, *delete_remote, *delete_local)?,
             Action::Reword { message } => {
                 let mut args = vec!["commit".to_owned(), "--amend".to_owned(), "--only".to_owned()];
                 for paragraph in paragraphs(message) {

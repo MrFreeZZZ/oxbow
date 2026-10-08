@@ -138,7 +138,8 @@ impl Repo {
             | Action::PullAndPush { remote, .. }
             | Action::PushTags { remote, .. }
             | Action::FetchTags { remote }
-            | Action::PushBranches { remote, .. } => Some(remote.clone()),
+            | Action::PushBranches { remote, .. }
+            | Action::PullRequestMerged { remote, .. } => Some(remote.clone()),
             _ => None,
         }
     }

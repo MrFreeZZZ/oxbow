@@ -809,7 +809,7 @@ impl Repo {
     }
 
     /// Uncommitted changes to tracked files: what a rebase needs put aside. New files stay.
-    fn tracked_changes(&self) -> Result<bool> {
+    pub(crate) fn tracked_changes(&self) -> Result<bool> {
         let tree = self.working_tree()?;
         Ok(!tree.staged.is_empty()
             || !tree.conflicted.is_empty()
@@ -829,7 +829,7 @@ impl Repo {
         Ok(!out.stdout.trim().is_empty())
     }
 
-    fn is_ancestor(&self, ancestor: &str, of: &str) -> bool {
+    pub(crate) fn is_ancestor(&self, ancestor: &str, of: &str) -> bool {
         self.spawn(&GitCommand::new(["merge-base", "--is-ancestor", ancestor, of]), None)
             .is_ok_and(|out| out.status.success())
     }

@@ -16,6 +16,7 @@ pub mod graph;
 pub mod history;
 pub mod operation;
 pub mod oplog;
+pub mod pulls;
 pub mod remote;
 pub mod repo;
 pub mod search;

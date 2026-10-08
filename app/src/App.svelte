@@ -46,6 +46,8 @@
   import ActivityPopover from "./lib/ActivityPopover.svelte";
   import { activity, failureShort, type ActivityItem } from "./lib/activity.svelte";
   import { addToCommitRequest, dropCommitRequest, rewordRequest, squashRequest } from "./lib/stack";
+  import PullRequestView from "./lib/PullRequestView.svelte";
+  import { github } from "./lib/github.svelte";
 
   let repo = $state<RepoSummary | null>(null);
   let history = $state<History | null>(null);
@@ -63,7 +65,7 @@
   const operation = $derived(history?.operation ?? null);
   const showConflicts = $derived(resolving && !!operation);
   /** The screen next to the sidebar. */
-  let view = $state<"history" | "stashes" | "compare" | "file" | "stack">("history");
+  let view = $state<"history" | "stashes" | "compare" | "file" | "stack" | "pull">("history");
   /** The branch whose stack Edit Stack shows; the checked-out one when null. */
   let stackBranch = $state<string | null>(null);
 
@@ -72,6 +74,17 @@
     view = "stack";
     resolving = false;
   }
+  /** The branch the Pull Request screen shows. */
+  let pullBranch = $state<string | null>(null);
+
+  function openPull(branch: string) {
+    pullBranch = branch;
+    view = "pull";
+    resolving = false;
+    if (repo) github.load(repo.path, true);
+  }
+  const shownPull = $derived(view === "pull" && pullBranch ? github.pullOf(pullBranch) : null);
+
   /** The screen File History goes back to. */
   let fileBack = $state<"history" | "stashes" | "compare">("history");
   // A diff's File History button opens the screen.
@@ -80,7 +93,7 @@
     untrack(() => {
       // Coming from another screen starts without a find.
       if (view !== "file") {
-        fileBack = view === "stack" ? "history" : view;
+        fileBack = view === "stack" || view === "pull" ? "history" : view;
         nav.find = { ...nav.find, text: "" };
       }
       view = "file";
@@ -200,16 +213,18 @@
     search.clear();
     oplog.forget();
     activity.reset();
-    if (view === "compare" || view === "file" || view === "stack") view = "history";
+    if (view === "compare" || view === "file" || view === "stack" || view === "pull") view = "history";
     try {
       const summary = await api.openRepo(path);
       const next = await api.history();
       if (mine !== generation) return;
       repo = summary;
       nav.repo = summary.path;
+      github.load(summary.path);
       history = next;
       version++;
       oplog.load();
+      if (repo) github.load(repo.path);
       // Start on the checked-out commit, like the design: HEAD's latest commit is selected.
       selected = next.head.commit ?? next.rows[0]?.id ?? null;
       requestAnimationFrame(() => selected && list?.reveal(selected));
@@ -640,7 +655,12 @@
     });
     // Settings changed remotes or packed the repository.
     const unlisten = listen("repo-touched", () => refresh());
-    return () => unlisten.then((stop) => stop());
+    // Signing in or out changes what GitHub tells about the pull requests.
+    const account = listen("account-changed", () => repo && github.load(repo.path, true));
+    return () => {
+      unlisten.then((stop) => stop());
+      account.then((stop) => stop());
+    };
   });
 </script>
 
@@ -702,6 +722,7 @@
       onPickStash={(id) => (stashSel = id)}
       onCompare={openCompare}
       onEditStack={openStack}
+      onPullRequest={openPull}
     />
     <div class="main">
       <header data-tauri-drag-region>
@@ -719,6 +740,9 @@
             {:else if view === "file" && nav.file}
               <span class="name">{nav.file.path.slice(nav.file.path.lastIndexOf("/") + 1)}</span>
               <span class="sub">{repo.name} · {nav.file.path}</span>
+            {:else if view === "pull" && pullBranch}
+              <span class="name">{pullBranch}</span>
+              <span class="sub">{shownPull ? `Pull request #${shownPull.number}` : "No pull request yet"}{github.repo ? ` · ${github.repo.owner}/${github.repo.name}` : ""}</span>
             {:else if view === "stack"}
               <span class="name">Edit Stack</span>
               <span class="sub">Interactive rebase · {repo.name}</span>
@@ -752,7 +776,7 @@
               <button role="radio" aria-checked={nav.fileMode === "blame"} class:on={nav.fileMode === "blame"} onclick={() => (nav.fileMode = "blame")}>Blame</button>
             </div>
           {/if}
-          {#if (view === "compare" || view === "stack") && !showConflicts}
+          {#if (view === "compare" || view === "stack" || view === "pull") && !showConflicts}
             <button class="capsule" onclick={() => (view = "history")} title="Back to the commit graph">
               <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>History
             </button>
@@ -830,6 +854,12 @@
               Publish to GitHub
             </button>
           {/if}
+          {#if view === "pull" && shownPull && !showConflicts}
+            <button class="capsule" onclick={() => api.openGitHub(shownPull!.htmlUrl)} title="Open the pull request on GitHub">
+              <svg class="icon" viewBox="0 0 16 16"><path d="M9.5 2.5h4v4M13.5 2.5 8 8M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" /></svg>
+              Open on GitHub
+            </button>
+          {/if}
           <button class="capsule" onclick={refresh} aria-label="Reload history" title="Reload">
             <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5" /></svg>
           </button>
@@ -879,6 +909,19 @@
             copy={(text) => copyText(text, "Copied the command.")}
             {panelWidth}
             onGrip={startResize}
+          />
+        {/key}
+      {:else if view === "pull" && pullBranch && branchCtx}
+        {#key repo.path}
+          <PullRequestView
+            branch={pullBranch}
+            {history}
+            ctx={branchCtx}
+            {colorOf}
+            {version}
+            {run}
+            onBranch={(name) => (pullBranch = name)}
+            copy={(text) => copyText(text, `Copied ${text.length > 40 ? "it" : text}.`)}
           />
         {/key}
       {:else if view === "stack" && branchCtx}

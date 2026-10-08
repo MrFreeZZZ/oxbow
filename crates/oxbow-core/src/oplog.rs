@@ -714,6 +714,10 @@ impl Repo {
             }
             Action::ClearOperationLog => ("drop", "Clear the Operation Log".to_owned()),
             Action::EditStack { plan } => ("rebase", format!("Edit stack {}", plan.top)),
+            Action::PullRequestMerged { branch, base, .. } => (
+                "merge",
+                format!("Bring in the merged pull request of {branch} into {base}"),
+            ),
             Action::PushBranches { remote, branches } => {
                 ("push", format!("Push {} branches to {remote}", branches.len()))
             }
