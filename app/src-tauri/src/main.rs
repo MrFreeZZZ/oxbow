@@ -944,17 +944,98 @@ fn save_settings_text(app: AppHandle, session: State<'_, Session>, text: String)
     let file = settings_file(&app)?;
     std::fs::create_dir_all(file.parent().expect("settings file has a parent")).map_err(|err| err.to_string())?;
     std::fs::write(&file, if text.ends_with('\n') { text } else { text + "\n" }).map_err(|err| err.to_string())?;
-    apply_settings(&app, &session, &settings);
+    settings_replaced(&app, &session, &before, &settings);
+    Ok(())
+}
+
+/// Follow settings that replaced `before` all at once, and tell every window which keys changed.
+fn settings_replaced(
+    app: &AppHandle,
+    session: &Session,
+    before: &serde_json::Map<String, Value>,
+    after: &serde_json::Map<String, Value>,
+) {
+    apply_settings(app, session, after);
     let removed = before
         .keys()
-        .filter(|key| !settings.contains_key(*key))
+        .filter(|key| !after.contains_key(*key))
         .map(|key| (key.clone(), Value::Null));
-    for (key, value) in settings.clone().into_iter().chain(removed) {
+    for (key, value) in after.clone().into_iter().chain(removed) {
         if before.get(&key) != Some(&value) {
             let _ = app.emit("settings-changed", SettingChanged { key, value });
         }
     }
+}
+
+/// Where the old settings go when they are put back to the defaults.
+fn settings_backup(file: &Path) -> PathBuf {
+    file.with_file_name("settings.backup.json")
+}
+
+/// Rename `from` to `to`, replacing `to` (which a rename on Windows won't do by itself).
+fn move_file(from: &Path, to: &Path) -> CommandResult<()> {
+    #[cfg(windows)]
+    let _ = std::fs::remove_file(to);
+    std::fs::rename(from, to).map_err(|err| err.to_string())
+}
+
+#[derive(Serialize)]
+struct SettingsLocation {
+    /// settings.json and its backup as typed in a shell, with `~` for the home folder.
+    file: String,
+    backup: String,
+}
+
+#[tauri::command]
+fn settings_location(app: AppHandle) -> CommandResult<SettingsLocation> {
+    let file = settings_file(&app)?;
+    let home = app.path().home_dir().ok();
+    let shown = |path: &Path| match home.as_deref().and_then(|home| path.strip_prefix(home).ok()) {
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    };
+    Ok(SettingsLocation {
+        file: shown(&file),
+        backup: shown(&settings_backup(&file)),
+    })
+}
+
+/// Put every Oxbow setting back to its default. settings.json moves aside to
+/// settings.backup.json, so the old values can come back; Git's own settings are not touched.
+#[tauri::command]
+fn restore_default_settings(app: AppHandle, session: State<'_, Session>) -> CommandResult<()> {
+    let before = read_settings(&app);
+    let file = settings_file(&app)?;
+    if file.exists() {
+        move_file(&file, &settings_backup(&file))?;
+    }
+    settings_replaced(&app, &session, &before, &serde_json::Map::new());
     Ok(())
+}
+
+/// Bring back the settings that Restore Defaults moved aside.
+#[tauri::command]
+fn restore_settings_backup(app: AppHandle, session: State<'_, Session>) -> CommandResult<()> {
+    let file = settings_file(&app)?;
+    let backup = settings_backup(&file);
+    let text = std::fs::read_to_string(&backup).map_err(|_| "There is no copy of the old settings.".to_owned())?;
+    let after: serde_json::Map<String, Value> = serde_json::from_str(&text).map_err(|err| err.to_string())?;
+    let before = read_settings(&app);
+    move_file(&backup, &file)?;
+    settings_replaced(&app, &session, &before, &after);
+    Ok(())
+}
+
+/// Show settings.json in Finder, Explorer or the file manager; an empty one is made first, so
+/// there is a file to show.
+#[tauri::command]
+fn reveal_settings(app: AppHandle) -> CommandResult<()> {
+    let file = settings_file(&app)?;
+    if !file.exists() {
+        std::fs::create_dir_all(file.parent().expect("settings file has a parent")).map_err(|err| err.to_string())?;
+        std::fs::write(&file, "{}\n").map_err(|err| err.to_string())?;
+    }
+    open_in::reveal(&file)
 }
 
 /// Stop the running action.
@@ -1049,7 +1130,11 @@ fn main() {
             refresh_remote_tags,
             search,
             settings_text,
-            save_settings_text
+            save_settings_text,
+            settings_location,
+            restore_default_settings,
+            restore_settings_backup,
+            reveal_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running Oxbow");

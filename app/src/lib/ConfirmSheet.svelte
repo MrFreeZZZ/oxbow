@@ -116,7 +116,8 @@
 
 {#snippet prompt(display: string)}
   <div class="cmd">
-    <span class="prompt">{`${repo} `}</span><span style:color="var(--lane-{color})">({branch ?? "HEAD"})</span><span class="prompt">{" %"}</span>
+    <!-- A step Oxbow does itself runs outside the repository, from the home folder. -->
+    {#if request?.local}<span class="prompt">~ %</span>{:else}<span class="prompt">{`${repo} `}</span><span style:color="var(--lane-{color})">({branch ?? "HEAD"})</span><span class="prompt">{" %"}</span>{/if}
     {#each tokens(display) as token, k (k)}<span style:color={token.color} class:bold={token.bold}>{token.text}</span>{" "}{/each}
   </div>
 {/snippet}
@@ -217,7 +218,7 @@
       <div class="term" aria-label="Git command">
         <div class="bar">
           <span class="light"></span><span class="light"></span><span class="light"></span>
-          <span class="where">zsh · {repo}</span>
+          <span class="where">{request.local || !repo ? "zsh" : `zsh · ${repo}`}</span>
           <button class="copy" onclick={copy} disabled={!(failed ? confirm.recoveryCommands : confirm.commands).length}>
             <svg class="icon" viewBox="0 0 16 16"><path d="M5.5 5.5h7v8h-7zM3.5 10.5v-8h7" /></svg>
             {copied ? "Copied" : "Copy"}

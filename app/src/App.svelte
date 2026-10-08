@@ -246,9 +246,9 @@
     const opBefore = history?.operation ?? null;
     const ok = await confirm.run(request);
     await refresh();
-    if (ok && request.action.kind === "fetchTags") checkRemoteTags();
+    if (ok && request.action?.kind === "fetchTags") checkRemoteTags();
     // A stash made or put back is the newest, and the Stashes screen shows it.
-    if (ok && (request.action.kind === "stashPush" || request.action.kind === "stashStore")) stashSel = history?.stashes[0]?.id ?? null;
+    if (ok && (request.action?.kind === "stashPush" || request.action?.kind === "stashStore")) stashSel = history?.stashes[0]?.id ?? null;
     const after = history?.head;
     if (after?.commit && (after.branch !== before?.branch || after.commit !== before?.commit)) select(after.commit);
     openConflicts(opBefore);

@@ -101,6 +101,11 @@ export const api = {
   search: (query: SearchQuery) => invoke<SearchResult>("search", { query }),
   settingsText: () => invoke<string>("settings_text"),
   saveSettingsText: (text: string) => invoke<void>("save_settings_text", { text }),
+  /** settings.json and the copy Restore Defaults keeps, as typed in a shell. */
+  settingsLocation: () => invoke<{ file: string; backup: string }>("settings_location"),
+  restoreDefaultSettings: () => invoke<void>("restore_default_settings"),
+  restoreSettingsBackup: () => invoke<void>("restore_settings_backup"),
+  revealSettings: () => invoke<void>("reveal_settings"),
 };
 
 /** Keys of `settings.json`. */
