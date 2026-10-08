@@ -296,41 +296,53 @@ impl Repo {
             .collect())
     }
 
-    /// Remove the untracked files an undone apply restored. Each file is first moved aside, which
-    /// is atomic, and only then compared with the stash: an edit saved up to that moment is
-    /// in the copy and keeps it, and one saved later makes a new file that stays where it is. A
-    /// copy that differs goes back in place, or, if its place was taken meanwhile, stays in
-    /// `.git/oxbow/kept` and the undo stops before git changes anything.
+    /// Move the untracked files an undone apply restored out of the working tree, into a new
+    /// folder of `.git/oxbow/removed` for this undo. Nothing is deleted: an editor that still has
+    /// a file open writes into the moved copy, which stays recoverable. A moved copy that no
+    /// longer matches the stash goes back in place (never over a file that took its place;
+    /// then it stays in the folder and the undo stops before git changes anything). Folders
+    /// older than 30 days are cleared on the next undo.
     pub(crate) fn remove_brought_back(&self, pending: &PendingApply) -> Result<()> {
         let files = self.restorable(pending)?;
         if files.is_empty() {
             return Ok(());
         }
         let io = |err: std::io::Error| Error::Git(err.to_string());
-        let aside = self.local().git_dir().join("oxbow").join("abort");
-        std::fs::create_dir_all(&aside).map_err(io)?;
+        let root = self.local().git_dir().join("oxbow").join("removed");
+        std::fs::create_dir_all(&root).map_err(io)?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or_default();
+        prune_removed(&root, now);
+        // A folder of its own, never one an earlier undo left.
+        let mut n = 0;
+        let folder = loop {
+            let folder = root.join(format!("{now}-{}-{n}", std::process::id()));
+            match std::fs::create_dir(&folder) {
+                Ok(()) => break folder,
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+                Err(err) => return Err(io(err)),
+            }
+        };
         let mut stuck = Vec::new();
-        for (n, (path, blob)) in files.iter().enumerate() {
+        for (path, blob) in &files {
             let file = self.workdir().join(path);
-            let moved = aside.join(n.to_string());
+            let moved = folder.join(path);
+            if let Some(parent) = moved.parent() {
+                std::fs::create_dir_all(parent).map_err(io)?;
+            }
             // Another file system (a linked worktree elsewhere) can't move atomically: keep it.
             if std::fs::rename(&file, &moved).is_err() {
                 continue;
             }
-            if self.hash_as(&moved, path).as_deref() == Some(blob.as_str()) {
-                std::fs::remove_file(&moved).map_err(io)?;
-            } else if file.symlink_metadata().is_err() {
-                std::fs::rename(&moved, &file).map_err(io)?;
-            } else {
-                let kept = self.local().git_dir().join("oxbow").join("kept").join(path);
-                if let Some(parent) = kept.parent() {
-                    std::fs::create_dir_all(parent).map_err(io)?;
-                }
-                std::fs::rename(&moved, &kept).map_err(io)?;
-                stuck.push(kept.display().to_string());
+            if self.hash_as(&moved, path).as_deref() != Some(blob.as_str())
+                // A hard link never replaces a file that is there.
+                && std::fs::hard_link(&moved, &file).is_err()
+            {
+                stuck.push(moved.display().to_string());
             }
         }
-        let _ = std::fs::remove_dir(&aside);
         if stuck.is_empty() {
             Ok(())
         } else {
@@ -356,7 +368,7 @@ impl Repo {
         if commands.is_empty() {
             commands.push(GitCommand::new(["reset", "--quiet"]).comment("clear the conflict marks"));
         }
-        // Oxbow removes the restored untracked files itself, checking each one as it goes.
+        // Oxbow moves the restored untracked files aside itself, checking each one as it goes.
         let brought = self.brought_back(pending)?;
         if !brought.is_empty() {
             let quoted: Vec<String> = brought.iter().map(|p| crate::cli::shell_quote(p)).collect();
@@ -364,12 +376,26 @@ impl Repo {
             commands.insert(
                 0,
                 first.before(format!(
-                    "rm -- {}  # untracked files the stash brought back, if still as it has them",
+                    "mv -- {} .git/oxbow/removed/  # untracked files the stash brought back, if still as it has them",
                     quoted.join(" ")
                 )),
             );
         }
         Ok(commands)
+    }
+}
+
+/// Delete the folders of `.git/oxbow/removed` (named `<seconds>-…`) older than 30 days.
+fn prune_removed(root: &std::path::Path, now: u64) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let made = name.split('-').next().and_then(|s| s.parse::<u64>().ok());
+        if made.is_some_and(|made| now.saturating_sub(made) > 30 * 24 * 60 * 60) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
     }
 }
 
