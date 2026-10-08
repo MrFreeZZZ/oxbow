@@ -1,6 +1,6 @@
 mod support;
 
-use oxbow_core::{Action, FileStatus, LineKind, Repo, Side, shown_lines};
+use oxbow_core::{Action, FileStatus, LineKind, Repo, Side};
 use support::Fixture;
 
 fn lines(n: usize, changed: &[usize]) -> String {
@@ -66,7 +66,7 @@ fn hunks_can_be_staged_unstaged_and_discarded_one_by_one() {
     repo.perform(&Action::StageHunk {
         path: "a.txt".into(),
         header: second.clone(),
-        shown: shown_lines(&diff.hunks[1]),
+        check: diff.hunks[1].check.clone(),
         lines: None,
     })
     .unwrap();
@@ -86,7 +86,7 @@ fn hunks_can_be_staged_unstaged_and_discarded_one_by_one() {
     repo.perform(&Action::DiscardHunk {
         path: "a.txt".into(),
         header: first,
-        shown: shown_lines(&unstaged.hunks[0]),
+        check: unstaged.hunks[0].check.clone(),
         lines: None,
     })
     .unwrap();
@@ -100,7 +100,7 @@ fn hunks_can_be_staged_unstaged_and_discarded_one_by_one() {
         .perform(&Action::UnstageHunk {
             path: "a.txt".into(),
             header: "@@ -1,2 +1,2 @@".into(),
-            shown: Vec::new(),
+            check: String::new(),
             lines: None,
         })
         .unwrap_err();
@@ -111,7 +111,7 @@ fn hunks_can_be_staged_unstaged_and_discarded_one_by_one() {
     repo.perform(&Action::UnstageHunk {
         path: "a.txt".into(),
         header: header(&staged.hunks[0]),
-        shown: shown_lines(&staged.hunks[0]),
+        check: staged.hunks[0].check.clone(),
         lines: None,
     })
     .unwrap();
@@ -233,18 +233,18 @@ fn a_hunk_edited_after_it_was_shown_is_refused() {
     fx.commit("a.txt", "one\ntwo\nthree\n", "Root");
     fx.write("a.txt", "one\nfirst edit\nthree\n");
     let repo = Repo::open(fx.path()).unwrap();
-    let shown = repo.working_diff("a.txt", Side::Unstaged, false).unwrap().hunks[0].clone();
+    let seen = repo.working_diff("a.txt", Side::Unstaged, false).unwrap().hunks[0].clone();
 
     // Another editor saves a new line in the same place: same `@@` header, other text.
     fx.write("a.txt", "one\nnew important edit\nthree\n");
     let fresh = repo.working_diff("a.txt", Side::Unstaged, false).unwrap().hunks[0].clone();
-    assert_eq!(fresh.header, shown.header);
+    assert_eq!(fresh.header, seen.header);
 
     let err = repo
         .perform(&Action::DiscardHunk {
             path: "a.txt".into(),
-            header: shown.header.clone(),
-            shown: shown_lines(&shown),
+            header: seen.header.clone(),
+            check: seen.check.clone(),
             lines: None,
         })
         .unwrap_err();
@@ -253,4 +253,42 @@ fn a_hunk_edited_after_it_was_shown_is_refused() {
         std::fs::read_to_string(fx.path().join("a.txt")).unwrap(),
         "one\nnew important edit\nthree\n"
     );
+}
+
+#[test]
+fn a_hunk_whose_line_endings_changed_after_it_was_shown_is_refused() {
+    // The text on screen stays the same; only the bytes git would apply differ.
+    for (shown, saved) in [("new\n", "new"), ("new\n", "new\r\n")] {
+        let mut fx = Fixture::new();
+        fx.commit("a.txt", "old\n", "Root");
+        fx.write("a.txt", shown);
+        let repo = Repo::open(fx.path()).unwrap();
+        let seen = repo.working_diff("a.txt", Side::Unstaged, false).unwrap().hunks[0].clone();
+        fx.write("a.txt", saved);
+        let fresh = repo.working_diff("a.txt", Side::Unstaged, false).unwrap().hunks[0].clone();
+        assert_eq!(
+            (fresh.header.as_str(), fresh.lines.len()),
+            (seen.header.as_str(), seen.lines.len())
+        );
+
+        for action in [
+            Action::DiscardHunk {
+                path: "a.txt".into(),
+                header: seen.header.clone(),
+                check: seen.check.clone(),
+                lines: None,
+            },
+            Action::StageHunk {
+                path: "a.txt".into(),
+                header: seen.header.clone(),
+                check: seen.check.clone(),
+                lines: None,
+            },
+        ] {
+            let err = repo.perform(&action).unwrap_err();
+            assert!(err.to_string().contains("changed since"), "{saved:?}: {err}");
+        }
+        assert_eq!(std::fs::read(fx.path().join("a.txt")).unwrap(), saved.as_bytes());
+        assert_eq!(fx.git(&["diff", "--cached", "--name-only"]), "");
+    }
 }

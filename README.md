@@ -2,7 +2,7 @@
 
 A calm desktop Git client for macOS, Windows and Linux.
 
-Oxbow is at its first milestone: it opens a repository and shows its **History**. That means the commit graph across all branches and tags, plus a commit panel with the changed files and diffs. Nothing in the app changes a repository yet.
+Oxbow reads history, graphs and diffs with gitoxide and changes repositories through the git command line: staging and commits, branches, merge and rebase with conflict resolution, stashes, tags, push, pull and fetch, Edit Stack, and an Operation Log with Undo. Every change shows the exact git commands first.
 
 ## Layout
 

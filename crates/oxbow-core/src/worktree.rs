@@ -77,28 +77,28 @@ pub enum Action {
     Discard {
         paths: Vec<String>,
     },
-    /// Stage, unstage or discard one hunk, identified by its `@@` header and `shown`, its lines
-    /// as the user saw them (see [`shown_lines`]), so a file that changed in the meantime is
+    /// Stage, unstage or discard one hunk, identified by its `@@` header and `check`, the
+    /// fingerprint of its bytes ([`Hunk::check`]), so a file that changed in the meantime is
     /// refused instead of patched in the wrong place. With `lines`, only those changed lines of
     /// it (indexes into the hunk's lines); the others stay as they are.
     StageHunk {
         path: String,
         header: String,
-        shown: Vec<String>,
+        check: String,
         #[serde(default)]
         lines: Option<Vec<usize>>,
     },
     UnstageHunk {
         path: String,
         header: String,
-        shown: Vec<String>,
+        check: String,
         #[serde(default)]
         lines: Option<Vec<usize>>,
     },
     DiscardHunk {
         path: String,
         header: String,
-        shown: Vec<String>,
+        check: String,
         #[serde(default)]
         lines: Option<Vec<usize>>,
     },
@@ -492,19 +492,19 @@ impl Repo {
             Action::StageHunk {
                 path,
                 header,
-                shown,
+                check,
                 lines,
             }
             | Action::UnstageHunk {
                 path,
                 header,
-                shown,
+                check,
                 lines,
             }
             | Action::DiscardHunk {
                 path,
                 header,
-                shown,
+                check,
                 lines,
             } => {
                 let (side, args): (_, &[&str]) = match action {
@@ -517,7 +517,7 @@ impl Repo {
                     None => vec![cmd.comment(stdin_note(path, header))],
                     Some(lines) => {
                         let forward = matches!(action, Action::StageHunk { .. });
-                        let patch = self.hunk_patch(path, side, header, shown, Some(lines), forward)?;
+                        let patch = self.hunk_patch(path, side, header, check, Some(lines), forward)?;
                         let what = match action {
                             Action::StageHunk { .. } => {
                                 "--cached: only the staging area changes, your file stays as is. By hand: git add -p, then e"
@@ -932,25 +932,25 @@ impl Repo {
         {
             return Err(Error::Git("the commit message is empty".into()));
         }
-        let (side, path, header, shown, lines) = match action {
+        let (side, path, header, check, lines) = match action {
             Action::StageHunk {
                 path,
                 header,
-                shown,
+                check,
                 lines,
-            } => (Side::Unstaged, path, header, shown, lines),
+            } => (Side::Unstaged, path, header, check, lines),
             Action::DiscardHunk {
                 path,
                 header,
-                shown,
+                check,
                 lines,
-            } => (Side::Unstaged, path, header, shown, lines),
+            } => (Side::Unstaged, path, header, check, lines),
             Action::UnstageHunk {
                 path,
                 header,
-                shown,
+                check,
                 lines,
-            } => (Side::Staged, path, header, shown, lines),
+            } => (Side::Staged, path, header, check, lines),
             _ => {
                 if let Action::Resolve { path, picks } = action {
                     self.write_resolution(path, picks)?;
@@ -1006,7 +1006,7 @@ impl Repo {
         };
         // Staging goes forward; unstaging and discarding apply the patch in reverse.
         let forward = matches!(action, Action::StageHunk { .. });
-        let patch = self.hunk_patch(path, side, header, shown, lines.as_deref(), forward)?;
+        let patch = self.hunk_patch(path, side, header, check, lines.as_deref(), forward)?;
         let command = &self.plan(action)?.commands[0];
         on_event(ActionEvent::Command {
             display: command.display(),
@@ -1016,7 +1016,7 @@ impl Repo {
     }
 
     /// A patch with the file header and only the hunk that starts with `header` and still has
-    /// the `shown` lines; with `lines`, only those changed lines of it, for applying `forward`
+    /// the bytes `check` was made from; with `lines`, only those changed lines of it, for applying `forward`
     /// (staging) or in reverse.
     #[allow(clippy::too_many_arguments)]
     fn hunk_patch(
@@ -1024,7 +1024,7 @@ impl Repo {
         path: &str,
         side: Side,
         header: &str,
-        shown: &[String],
+        check: &str,
         lines: Option<&[usize]>,
         forward: bool,
     ) -> Result<String> {
@@ -1045,7 +1045,7 @@ impl Repo {
             .hunks
             .iter()
             // The header gives only line numbers: an edit inside the hunk keeps them.
-            .find(|h| h.header == header && shown_lines(&h.hunk) == shown)
+            .find(|h| h.header == header && h.hunk.check == check)
             .ok_or_else(|| Error::Git(format!("{path} changed since it was shown; refresh and try again")))?;
         let text = match lines {
             None => hunk.text.clone(),
@@ -1224,20 +1224,12 @@ fn refspec(branch: &str, upstream: &str) -> String {
     }
 }
 
-/// The lines of `hunk` as the user saw them: `+`, `-` or a space, then the text. A hunk action
-/// carries them so the hunk is applied only while the file still has them.
-pub fn shown_lines(hunk: &Hunk) -> Vec<String> {
-    hunk.lines
-        .iter()
-        .map(|line| {
-            let mark = match line.kind {
-                LineKind::Added => '+',
-                LineKind::Removed => '-',
-                LineKind::Context => ' ',
-            };
-            format!("{mark}{}", line.text)
-        })
-        .collect()
+/// A fingerprint of a hunk's text (FNV-1a), enough to notice that it changed.
+fn fingerprint(text: &str) -> String {
+    let hash = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    });
+    format!("{hash:016x}{:x}", text.len())
 }
 
 fn stdin_note(path: &str, header: &str) -> String {
@@ -1359,6 +1351,7 @@ fn parse_patch(patch: &str) -> ParsedPatch {
                     new_start,
                     new_lines,
                     lines: Vec::new(),
+                    check: String::new(),
                 },
             });
             continue;
@@ -1399,6 +1392,7 @@ fn parse_patch(patch: &str) -> ParsedPatch {
     }
     for hunk in &mut hunks {
         mark_words(&mut hunk.hunk.lines);
+        hunk.hunk.check = fingerprint(&hunk.text);
     }
     ParsedPatch {
         file_header,

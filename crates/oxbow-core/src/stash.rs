@@ -240,6 +240,41 @@ impl Repo {
         Ok((in_head, added))
     }
 
+    /// The stash's untracked files that are on disk now just as the stash has them: the ones
+    /// the apply restored. A file that appeared before git got to it is left alone by git ("already
+    /// exists, no checkout") and has other content, so it is not one of them; nor is `kept`, or a
+    /// restored file edited since.
+    fn brought_back(&self, id: &str, kept: &[String]) -> Result<Vec<String>> {
+        let out = self.run(&GitCommand::new(["ls-tree", "-r", "-z", &format!("{id}^3")]))?;
+        let mut stashed: Vec<(String, String)> = Vec::new();
+        for record in out.stdout.split('\0').filter(|r| !r.is_empty()) {
+            let Some((meta, path)) = record.split_once('\t') else {
+                continue;
+            };
+            let mut meta = meta.split(' ');
+            let (Some(mode), Some(_), Some(blob)) = (meta.next(), meta.next(), meta.next()) else {
+                continue;
+            };
+            let plain = self.workdir().join(path).symlink_metadata().is_ok_and(|m| m.is_file());
+            if (mode == "100644" || mode == "100755") && plain && !kept.iter().any(|k| k == path) {
+                stashed.push((path.to_owned(), blob.to_owned()));
+            }
+        }
+        if stashed.is_empty() {
+            return Ok(Vec::new());
+        }
+        // `hash-object` takes file names, not pathspecs.
+        let mut args = vec!["hash-object".to_owned(), "--".to_owned()];
+        args.extend(stashed.iter().map(|(path, _)| path.clone()));
+        let hashes = self.run(&GitCommand::new(args))?.stdout;
+        Ok(stashed
+            .into_iter()
+            .zip(hashes.lines())
+            .filter(|((_, blob), now)| blob == now.trim())
+            .map(|((path, _), _)| path)
+            .collect())
+    }
+
     /// Undo an apply that stopped on conflicts. git refused to apply over uncommitted changes in
     /// these files, so putting them back to `HEAD` loses only what the stash brought.
     pub(crate) fn plan_undo_apply(&self, pending: &PendingApply) -> Result<Vec<GitCommand>> {
@@ -252,11 +287,7 @@ impl Repo {
         if !added.is_empty() {
             commands.push(with_paths(&["rm", "-f", "--quiet"], &added).comment("files the stash added"));
         }
-        let brought: Vec<String> = files
-            .untracked
-            .into_iter()
-            .filter(|p| !pending.kept.contains(p))
-            .collect();
+        let brought = self.brought_back(&pending.id, &pending.kept)?;
         if !brought.is_empty() {
             commands.push(
                 with_paths(&["clean", "-f", "--quiet"], &brought).comment("untracked files the stash brought back"),

@@ -245,6 +245,8 @@ export interface Hunk {
   newStart: number;
   newLines: number;
   lines: DiffLine[];
+  /** Uncommitted changes only: fingerprint of the hunk's bytes, sent back with hunk actions. */
+  check?: string;
 }
 
 export interface FileDiff {
@@ -271,9 +273,9 @@ export type Action =
   | { kind: "unstage"; paths: string[] }
   | { kind: "discard"; paths: string[] }
   /** `lines`: only these changed lines of the hunk, as indexes into its lines. */
-  | { kind: "stageHunk"; path: string; header: string; shown: string[]; lines?: number[] | null }
-  | { kind: "unstageHunk"; path: string; header: string; shown: string[]; lines?: number[] | null }
-  | { kind: "discardHunk"; path: string; header: string; shown: string[]; lines?: number[] | null }
+  | { kind: "stageHunk"; path: string; header: string; check: string; lines?: number[] | null }
+  | { kind: "unstageHunk"; path: string; header: string; check: string; lines?: number[] | null }
+  | { kind: "discardHunk"; path: string; header: string; check: string; lines?: number[] | null }
   | { kind: "ignore"; pattern: string }
   | { kind: "commit"; message: string; amend: boolean; noVerify?: boolean }
   | { kind: "fetch"; remote: string | null }

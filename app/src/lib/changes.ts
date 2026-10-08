@@ -115,11 +115,6 @@ function quoted(texts: string[]): Part[] {
   return parts;
 }
 
-/** The hunk's lines as the user sees them, so the core refuses it if the file changed since. */
-export function shownLines(hunk: Hunk): string[] {
-  return hunk.lines.map((l) => (l.kind === "added" ? "+" : l.kind === "removed" ? "-" : " ") + l.text);
-}
-
 export type LinesKind = "stageHunk" | "unstageHunk" | "discardHunk";
 
 /** Stage, unstage or discard only the picked lines of a hunk. */
@@ -130,7 +125,7 @@ export function linesRequest(kind: LinesKind, path: string, hunk: Hunk, lines: n
   const texts = [...lines].sort((a, b) => a - b).map((i) => hunk.lines[i]?.text ?? "");
   const name = splitPath(path).name;
   const others = rest ? ` The other ${plural(rest, "changed line")} of this hunk ${rest === 1 ? "stays" : "stay"}` : "";
-  const action: Action = { kind, path, header: hunk.header, shown: shownLines(hunk), lines };
+  const action: Action = { kind, path, header: hunk.header, check: hunk.check ?? "", lines };
   if (kind === "stageHunk")
     return {
       title: `Stage ${plural(n, "line")} of ${name}?`,
