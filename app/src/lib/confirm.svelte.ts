@@ -82,8 +82,8 @@ export interface Request {
   action?: Action;
   /** Something Oxbow does itself instead of git, e.g. putting its settings back to the
    *  defaults: the sheet shows the same step as shell commands, the button runs it, and the
-   *  toast says what it returned. */
-  local?: { commands: string[]; comment?: string; run: () => Promise<string> };
+   *  toast says what it returned. `comments` gives each command its own. */
+  local?: { commands: string[]; comment?: string; comments?: (string | null)[]; run: () => Promise<string> };
 }
 
 /** A small graph of what the action makes, and a verdict under it. */
@@ -324,8 +324,8 @@ class ConfirmState {
     this.failure = null;
     this.recovery = null;
     if (request.local) {
-      const comment = request.local.comment ?? null;
-      this.commands = request.local.commands.map((display) => ({ args: [], comment, display, input: null, before: null, todo: null }));
+      const { comment = null, comments } = request.local;
+      this.commands = request.local.commands.map((display, i) => ({ args: [], comment: comments ? (comments[i] ?? null) : comment, display, input: null, before: null, todo: null }));
       this.phase = "ask";
       return;
     }
@@ -385,6 +385,8 @@ class ConfirmState {
       this.#finish(true);
       this.#showToast(said, request.undo ?? null);
     } catch (err) {
+      // A step Oxbow did itself says what went wrong in words, under what ran before it.
+      if (this.lines.length) this.lines.push({ kind: "err", text: String(err) });
       this.#fail({ kind: "other", output: String(err), incoming: [], remoteTip: null, hook: null });
     }
   }

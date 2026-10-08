@@ -1,4 +1,4 @@
-//! GitHub's REST API: signing in to an account.
+//! GitHub's REST API: signing in to an account and publishing a repository.
 //!
 //! Git itself never needs this: fetch and push go through the `git` command line. The API is for
 //! what git can't do, such as knowing who is signed in. Signing in uses GitHub's device flow (the
@@ -11,6 +11,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::cli::GitCommand;
 use crate::error::{Error, Result};
 
 /// github.com's API and web addresses.
@@ -47,6 +48,66 @@ pub struct Me {
     /// The token's scopes; `None` for a fine-grained token, whose permissions GitHub doesn't
     /// list.
     pub scopes: Option<Vec<String>>,
+}
+
+/// A repository GitHub just made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct NewRepository {
+    pub full_name: String,
+    pub html_url: String,
+    pub clone_url: String,
+    pub private: bool,
+}
+
+/// What Publish to GitHub makes: a repository under `owner` (the signed-in account or one of its
+/// organizations), then `origin` pointing at it and the branch pushed there.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Publish {
+    pub owner: String,
+    /// Whether `owner` is the signed-in account rather than an organization.
+    pub personal: bool,
+    pub name: String,
+    pub private: bool,
+    #[serde(default)]
+    pub description: String,
+    /// The branch to push.
+    pub branch: String,
+}
+
+impl Publish {
+    /// Where the repository will be, before it exists: the HTTPS address, which the sign-in
+    /// answers for.
+    pub fn url(&self) -> String {
+        format!("{WEB}/{}/{}.git", self.owner, self.name)
+    }
+
+    /// The git half of publishing, run in the repository after GitHub made its copy.
+    pub fn commands(&self) -> Vec<GitCommand> {
+        let mut push = vec!["push".to_owned()];
+        if !crate::config::run_hooks() {
+            push.push("--no-verify".to_owned());
+        }
+        push.extend(["-u".to_owned(), "origin".to_owned(), self.branch.clone()]);
+        vec![
+            GitCommand::new(["remote", "add", "origin", &self.url()])
+                .comment("the new GitHub repository becomes origin"),
+            GitCommand::new(push)
+                .comment(format!("-u: remember origin/{} as the upstream", self.branch))
+                .with_progress(),
+        ]
+    }
+}
+
+/// Whether a name is one GitHub takes for a repository as it is: letters, digits, `-`, `_` and
+/// `.`, at most 100 characters, and not `.` or `..`.
+pub fn valid_repository_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 100
+        && name != "."
+        && name != ".."
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
 }
 
 /// The code to type on github.com/login/device.
@@ -126,8 +187,12 @@ impl std::fmt::Debug for Client {
 }
 
 impl Default for Client {
+    /// github.com, or the server `OXBOW_GITHUB_API` names, for trying Oxbow against a stand-in.
     fn default() -> Self {
-        Client::new(API, WEB)
+        match std::env::var("OXBOW_GITHUB_API") {
+            Ok(api) if !api.is_empty() => Client::new(&api, &api),
+            _ => Client::new(API, WEB),
+        }
     }
 }
 
@@ -195,6 +260,23 @@ impl Client {
         self.api_request("GET", "/user", None)
     }
 
+    pub fn orgs_request(&self) -> Request {
+        self.api_request("GET", "/user/orgs?per_page=100", None)
+    }
+
+    pub fn create_repository_request(&self, publish: &Publish) -> Request {
+        let path = if publish.personal {
+            "/user/repos".to_owned()
+        } else {
+            format!("/orgs/{}/repos", publish.owner)
+        };
+        let mut body = serde_json::json!({ "name": publish.name, "private": publish.private });
+        if !publish.description.trim().is_empty() {
+            body["description"] = Value::String(publish.description.trim().to_owned());
+        }
+        self.api_request("POST", &path, Some(body))
+    }
+
     pub(crate) fn api_request(&self, method: &'static str, path: &str, json: Option<Value>) -> Request {
         Request {
             method,
@@ -241,6 +323,26 @@ impl Client {
         let user = serde_json::from_value(response.body)
             .map_err(|err| github(None, format!("GitHub sent an unexpected answer: {err}")))?;
         Ok(Me { user, scopes })
+    }
+
+    /// The organizations the account belongs to, by login.
+    pub fn orgs(&self) -> Result<Vec<String>> {
+        let body = self.call(&self.orgs_request())?.body;
+        Ok(body
+            .as_array()
+            .map(|orgs| {
+                orgs.iter()
+                    .filter_map(|org| org.get("login").and_then(Value::as_str).map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Make an empty repository on GitHub.
+    pub fn create_repository(&self, publish: &Publish) -> Result<NewRepository> {
+        let response = self.call(&self.create_repository_request(publish))?;
+        serde_json::from_value(response.body)
+            .map_err(|err| github(None, format!("GitHub sent an unexpected answer: {err}")))
     }
 
     /// Send an API request; an error status comes back as GitHub's own message.
@@ -350,6 +452,12 @@ fn api_error(status: u16, body: &Value) -> String {
         .unwrap_or_default();
     match status {
         401 => "GitHub didn't accept the token: it is wrong, expired or revoked".to_owned(),
+        403 | 404 if message.contains("Resource not accessible") || message == "Not Found" => {
+            "The token may not do this: it needs the repo scope, or access to the organization".to_owned()
+        }
+        _ if details.iter().any(|d| d.contains("name already exists")) => {
+            "A repository with this name already exists there. Pick another name.".to_owned()
+        }
         _ if !details.is_empty() => details.join(". "),
         _ if !message.is_empty() => message.to_owned(),
         _ if status >= 400 => format!("GitHub answered with error {status}"),
@@ -402,6 +510,32 @@ mod tests {
             client.user_request().display(),
             "curl -H \"Authorization: Bearer $GITHUB_TOKEN\" https://api.github.com/user"
         );
+    }
+
+    #[test]
+    fn publishing_shows_the_request_and_commands() {
+        let publish = Publish {
+            owner: "acme".into(),
+            personal: false,
+            name: "api".into(),
+            private: true,
+            description: String::new(),
+            branch: "main".into(),
+        };
+        assert_eq!(
+            Client::default().create_repository_request(&publish).display(),
+            r#"curl -X POST -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/orgs/acme/repos -d '{"name":"api","private":true}'"#
+        );
+        let shown: Vec<String> = publish.commands().iter().map(GitCommand::display).collect();
+        assert_eq!(
+            shown,
+            [
+                "git remote add origin https://github.com/acme/api.git",
+                "git push -u origin main"
+            ]
+        );
+        assert!(valid_repository_name("my-app.rs_2"));
+        assert!(!valid_repository_name("my app") && !valid_repository_name("..") && !valid_repository_name(""));
     }
 
     #[test]

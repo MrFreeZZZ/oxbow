@@ -10,10 +10,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use oxbow_core::github::{self, Client, DeviceCode, DevicePoll};
+use oxbow_core::github::{self, Client, DeviceCode, DevicePoll, Publish};
+use oxbow_core::{ActionEvent, OutputLine};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::CommandResult;
 
@@ -108,6 +109,18 @@ impl Accounts {
             *cached = entry(&account.login).ok()?.get_password().ok();
         }
         cached.clone()
+    }
+
+    /// A client signed in as the account; fails with a message for people when nobody is.
+    pub fn client(&self, app: &AppHandle) -> CommandResult<Client> {
+        let token = self.token(app).ok_or_else(|| match saved(app) {
+            Some(_) => format!(
+                "Oxbow can't read the GitHub token from the {}. Sign in again in Settings › Accounts.",
+                store_name()
+            ),
+            None => "Sign in to GitHub in Settings › Accounts first".to_owned(),
+        })?;
+        Ok(Client::default().with_token(token))
     }
 
     fn keep(&self, app: &AppHandle, me: github::Me, token: String, method: &str) -> CommandResult<Account> {
@@ -265,7 +278,7 @@ async fn finish(app: &AppHandle, accounts: &Accounts, token: String, method: &st
         .map_err(|err| err.to_string())?
         .map_err(|err| err.to_string())?;
     let account = accounts.keep(app, me, token, method)?;
-    let _ = tauri::Emitter::emit(app, "account-changed", ());
+    let _ = app.emit("account-changed", ());
     Ok(account)
 }
 
@@ -281,7 +294,7 @@ pub fn github_sign_out(app: AppHandle, accounts: State<'_, Accounts>) -> Command
     }
     save(&app, None)?;
     *accounts.token.lock().expect("token lock") = None;
-    let _ = tauri::Emitter::emit(&app, "account-changed", ());
+    let _ = app.emit("account-changed", ());
     Ok(())
 }
 
@@ -292,4 +305,80 @@ pub fn open_github(url: String) -> CommandResult<()> {
         return Err("Only github.com pages open from here".into());
     }
     crate::open_in::open_url(&url)
+}
+
+/// Where Publish can put a repository: the account itself and its organizations.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Owners {
+    login: String,
+    orgs: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn github_owners(app: AppHandle, accounts: State<'_, Accounts>) -> CommandResult<Owners> {
+    let account = saved(&app).ok_or("Sign in to GitHub in Settings › Accounts first")?;
+    let client = accounts.client(&app)?;
+    // Without read:org the list is empty, and the account itself still works.
+    let orgs = tauri::async_runtime::spawn_blocking(move || client.orgs().unwrap_or_default())
+        .await
+        .map_err(|err| err.to_string())?;
+    Ok(Owners {
+        login: account.login,
+        orgs,
+    })
+}
+
+/// Make the repository on GitHub, add it as origin and push the branch. Each step goes to the
+/// window that asked as an `action-event`, like any action; Stop stops the push.
+#[tauri::command]
+pub async fn github_publish(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    accounts: State<'_, Accounts>,
+    path: String,
+    publish: Publish,
+) -> CommandResult<String> {
+    if !github::valid_repository_name(&publish.name) {
+        return Err("Use letters, digits, - _ and . for the name".into());
+    }
+    let client = accounts.client(&app)?;
+    let label = window.label().to_owned();
+    let cancel = app.state::<crate::Session>().cancel.clone();
+    cancel.store(false, Ordering::Relaxed);
+    tauri::async_runtime::spawn_blocking(move || {
+        let emit = |event: ActionEvent| {
+            let _ = app.emit_to(label.as_str(), "action-event", event);
+        };
+        let say = |text: String| {
+            emit(ActionEvent::Line(OutputLine {
+                text,
+                stderr: false,
+                progress: false,
+            }))
+        };
+        emit(ActionEvent::Command {
+            display: client.create_repository_request(&publish).display(),
+        });
+        let made = client.create_repository(&publish).map_err(|err| err.to_string())?;
+        say(format!(
+            "Created {} ({})",
+            made.html_url,
+            if made.private { "private" } else { "public" }
+        ));
+        let dir = PathBuf::from(&path);
+        for command in publish.commands() {
+            emit(ActionEvent::Command {
+                display: command.display(),
+            });
+            oxbow_core::cli::run_streaming_in(&dir, &command, &mut |line| emit(ActionEvent::Line(line)), &cancel)
+                .map_err(|err| match err {
+                    oxbow_core::Error::Command { output, .. } => output,
+                    other => other.to_string(),
+                })?;
+        }
+        Ok(made.html_url)
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }

@@ -5,10 +5,11 @@
   import { open as chooseFolder } from "@tauri-apps/plugin-dialog";
   import { api } from "./api";
   import { prefs } from "./prefs.svelte";
+  import { publishCommands, publishNote, repositoryName } from "./publish";
   import { join, start } from "./start.svelte";
   import TermBlock, { type TermLine } from "./TermBlock.svelte";
   import { tilde } from "./term";
-  import type { NewRepoPlan } from "./types";
+  import type { GitHubOwners, NewRepoPlan, Publish } from "./types";
 
   let {
     folder: initialFolder,
@@ -39,6 +40,24 @@
   let running = $state(false);
   let failure = $state<string | null>(null);
   let nameInput = $state<HTMLInputElement>();
+
+  // Publish to GitHub once the first commit is made; needs a sign-in.
+  let owners = $state<GitHubOwners | null>(null);
+  let publish = $state(false);
+  let owner = $state("");
+  let isPrivate = $state(true);
+  /** The repository made here when publishing it failed: Open goes there. */
+  let made = $state<string | null>(null);
+  let phase = $state<"creating" | "publishing">("creating");
+  api.githubAccount().then(
+    (account) =>
+      account &&
+      api.githubOwners().then(
+        (o) => ((owners = o), (owner = o.login)),
+        () => (owners = { login: account.login, orgs: [] }),
+      ),
+    () => {},
+  );
 
   const info = $derived(start.info);
   const home = $derived(info?.home ?? "");
@@ -87,6 +106,10 @@
   });
 
   const hasFiles = $derived(!!plan && plan.entries > 0);
+  const publishing = $derived(publish && commit && !!owners);
+  const toPublish = $derived<Publish | null>(
+    owners ? { owner: owner || owners.login, personal: (owner || owners.login) === owners.login, name: repositoryName(name), private: isPrivate, description: "", branch: options.branch } : null,
+  );
   const nameOf = (key: string | null, table: [string, string][] | undefined) => table?.find(([k]) => k === key)?.[1] ?? "";
 
   async function choose() {
@@ -101,17 +124,28 @@
 
   async function go() {
     if (running) return;
-    if (plan?.repository) {
-      onDone(plan.repository);
+    if (plan?.repository || made) {
+      onDone(plan?.repository ?? made!);
       return;
     }
     if (invalid) return;
     running = true;
     failure = null;
+    phase = "creating";
+    let path: string | null = null;
     try {
-      const made = await api.createRepo(options);
-      onDone(made);
+      path = await api.createRepo(options);
+      if (publishing && toPublish) {
+        phase = "publishing";
+        await api.githubPublish(path, toPublish);
+      }
+      onDone(path);
     } catch (err) {
+      if (path) {
+        made = path;
+        failure = `The repository is made here, but publishing to GitHub failed: ${String(err).trim()}`;
+        return;
+      }
       const message = String(err);
       failure = message.includes("failed: ") ? message.slice(message.indexOf("failed: ") + 8).replace(/^(fatal|error): /, "") : message;
     } finally {
@@ -149,6 +183,10 @@
       out.push({ kind: "comment", text: `Oxbow writes ${what.join(", ")}` });
     }
     for (const command of rest) out.push({ kind: "cmd", text: command.display });
+    if (publishing && toPublish) {
+      out.push({ kind: "comment", text: publishNote(toPublish) });
+      for (const text of publishCommands(toPublish)) out.push({ kind: "cmd", text });
+    }
     return out;
   });
 
@@ -231,6 +269,35 @@
             <span class="hint warn-text">Commits need your name and email: save them on the Welcome window first.</span>
           {/if}
         </div>
+
+        <span class="label top">GitHub</span>
+        <div class="starts">
+          {#if owners}
+            <div class="row wrap">
+              <button class="check" role="checkbox" aria-checked={publishing} disabled={!commit} onclick={() => (publish = !publish)} title={commit ? undefined : "Publishing needs the first commit"}>
+                <span class="box" class:on={publishing}><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" /></svg></span>
+                Publish to GitHub
+              </button>
+              {#if owners.orgs.length}
+                <label class="popup" class:off={!publishing}>
+                  <span class="grey">Owner</span>
+                  <select bind:value={owner} aria-label="Owner" disabled={!publishing}>
+                    {#each [owners.login, ...owners.orgs] as o (o)}<option value={o}>{o}</option>{/each}
+                  </select>
+                </label>
+              {/if}
+              <div class="seg" class:off={!publishing} role="radiogroup" aria-label="Visibility">
+                <button role="radio" aria-checked={isPrivate} class:on={isPrivate} disabled={!publishing} onclick={() => (isPrivate = true)}>Private</button>
+                <button role="radio" aria-checked={!isPrivate} class:on={!isPrivate} disabled={!publishing} onclick={() => (isPrivate = false)}>Public</button>
+              </div>
+            </div>
+            {#if publishing && toPublish && toPublish.name !== name.trim()}
+              <span class="hint">On GitHub it is called {toPublish.name}.</span>
+            {/if}
+          {:else}
+            <span class="hint">Sign in to GitHub in Settings › Accounts to publish from here. <button class="link" onclick={() => api.openSettings()}>Open Settings</button></span>
+          {/if}
+        </div>
       {/if}
     </div>
 
@@ -242,10 +309,12 @@
     {/if}
 
     <div class="foot">
-      <span class="foot-note">{mac ? "Nothing leaves this Mac." : "Nothing leaves this computer."}</span>
+      <span class="foot-note"
+        >{publishing ? (isPrivate ? "Private on GitHub: only you can see it." : "Public on GitHub: anyone can see it.") : mac ? "Nothing leaves this Mac." : "Nothing leaves this computer."}</span
+      >
       <button class="btn" onclick={onClose} disabled={running}>Cancel</button>
-      <button class="btn go" onclick={go} disabled={running || (!plan?.repository && !!invalid)} title={plan?.repository ? undefined : (invalid ?? undefined)}>
-        {plan?.repository ? "Open" : running ? "Creating…" : "Create"}
+      <button class="btn go" onclick={go} disabled={running || (!plan?.repository && !made && !!invalid)} title={plan?.repository || made ? undefined : (invalid ?? undefined)}>
+        {plan?.repository || made ? "Open" : running ? (phase === "publishing" ? "Publishing…" : "Creating…") : publishing ? "Create and Publish" : "Create"}
       </button>
     </div>
   </div>
@@ -353,6 +422,13 @@
   }
   .grey {
     color: var(--text2);
+  }
+  .off {
+    opacity: 0.5;
+  }
+  .link {
+    color: var(--accent);
+    font-size: inherit;
   }
   .seg {
     display: flex;

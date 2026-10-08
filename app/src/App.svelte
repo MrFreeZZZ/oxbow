@@ -37,6 +37,7 @@
   import type { CompareMode } from "./lib/types";
   import CloneSheet from "./lib/CloneSheet.svelte";
   import NewRepoSheet from "./lib/NewRepoSheet.svelte";
+  import { startPublish } from "./lib/publish";
   import { start } from "./lib/start.svelte";
   import OperationLog from "./lib/OperationLog.svelte";
   import { withKeys } from "./lib/keys";
@@ -449,6 +450,17 @@
     },
   );
 
+  /** A repository with no remote: make one on GitHub and push there. */
+  async function publishToGitHub() {
+    if (!repo || !history?.head.branch) return;
+    if (!(await api.githubAccount().catch(() => null))) {
+      confirm.say("Sign in to GitHub in Settings › Accounts first.");
+      api.openSettings();
+      return;
+    }
+    await run(startPublish(repo.path, repo.name, history.head.branch, headColor));
+  }
+
   async function sync(kind: "fetch" | "pull" | "push") {
     // While a fetch runs, Fetch shows its progress, and Pull or Push waits for it in line.
     if (kind === "fetch" && (activity.running || activity.problem)) {
@@ -812,6 +824,11 @@
             </div>
             <ActivityPopover fix={fixFetch} retry={() => backgroundFetch(false)} settings={() => ((activity.open = false), api.openSettings())} />
             </div>
+          {:else if history.head.branch && history.head.commit}
+            <button class="capsule publish" onclick={publishToGitHub} title="Make a repository on GitHub and push {history.head.branch} there">
+              <svg class="icon" viewBox="0 0 16 16"><path d="M8 12V3M4.5 6.5 8 3l3.5 3.5M3 14h10" /></svg>
+              Publish to GitHub
+            </button>
           {/if}
           <button class="capsule" onclick={refresh} aria-label="Reload history" title="Reload">
             <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5" /></svg>

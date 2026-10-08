@@ -2,7 +2,7 @@
 
 A calm desktop Git client for macOS, Windows and Linux.
 
-Oxbow reads history, graphs and diffs with gitoxide and changes repositories through the git command line: staging and commits, branches, merge and rebase with conflict resolution, stashes, tags, push, pull and fetch, Edit Stack, and an Operation Log with Undo. Every change shows the exact git commands first. Sign in to GitHub in Settings › Accounts, with the browser or a personal access token; the token is kept in the Keychain (Credential Manager on Windows, the Secret Service on Linux).
+Oxbow reads history, graphs and diffs with gitoxide and changes repositories through the git command line: staging and commits, branches, merge and rebase with conflict resolution, stashes, tags, push, pull and fetch, Edit Stack, and an Operation Log with Undo. Every change shows the exact git commands first. Sign in to GitHub in Settings › Accounts, with the browser or a personal access token; the token is kept in the Keychain (Credential Manager on Windows, the Secret Service on Linux). A repository without a remote, or a new one, can then be published to GitHub in one step.
 
 ## Layout
 
