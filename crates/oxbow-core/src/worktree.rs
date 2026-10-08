@@ -962,6 +962,12 @@ impl Repo {
                 let pending = self.pending_apply().is_some()
                     && matches!(action, Action::Continue { .. } | Action::Abort)
                     && self.operation()?.is_some_and(|op| op.kind == OperationKind::StashApply);
+                if pending
+                    && matches!(action, Action::Abort)
+                    && let Some(apply) = self.pending_apply()
+                {
+                    self.remove_brought_back(&apply)?;
+                }
                 // Files git will not restore over, so an undo of the apply leaves them be.
                 let in_the_way = match action {
                     Action::StashApply { id, .. } => self.untracked_in_the_way(id),
