@@ -290,3 +290,51 @@ fn undo_apply_keeps_a_restored_file_edited_after_the_plan_was_made() {
     assert_eq!(read(&fx, "new.txt"), "edit saved after the plan\n");
     assert_eq!(read(&fx, "a.txt"), "one\n2 committed\nthree\n");
 }
+
+/// Every file under `.git/oxbow/removed`, with its content.
+fn removed(fx: &Fixture) -> Vec<String> {
+    fn walk(dir: &std::path::Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            if entry.path().is_dir() {
+                walk(&entry.path(), out);
+            } else {
+                out.push(std::fs::read_to_string(entry.path()).unwrap());
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&fx.path().join(".git/oxbow/removed"), &mut out);
+    out.sort();
+    out
+}
+
+#[test]
+fn undo_apply_moves_restored_files_aside_and_keeps_writes_through_an_open_file() {
+    use std::io::Write;
+    let (mut fx, repo) = stashed();
+    fx.commit("a.txt", "one\n2 committed\nthree\n", "Number two");
+    repo.perform(&apply(&repo, false)).unwrap_err();
+    // An editor has new.txt open and writes to it after the undo moved it.
+    let mut open = std::fs::OpenOptions::new()
+        .append(true)
+        .open(fx.path().join("new.txt"))
+        .unwrap();
+
+    repo.perform(&Action::Abort).unwrap();
+    assert!(!fx.path().join("new.txt").exists());
+    open.write_all(b"edit through the open file\n").unwrap();
+    drop(open);
+    assert_eq!(removed(&fx), ["new\nedit through the open file\n"]);
+}
+
+#[test]
+fn each_undo_keeps_its_own_copies() {
+    let (mut fx, repo) = stashed();
+    fx.commit("a.txt", "one\n2 committed\nthree\n", "Number two");
+    for _ in 0..2 {
+        repo.perform(&apply(&repo, false)).unwrap_err();
+        repo.perform(&Action::Abort).unwrap();
+    }
+    assert_eq!(removed(&fx), ["new\n", "new\n"]);
+    assert_eq!(repo.stashes().unwrap().len(), 1);
+}
