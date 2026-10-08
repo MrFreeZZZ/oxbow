@@ -24,7 +24,9 @@
   import { stashMenu } from "./stash";
   import { deleteTagRequest, fetchTagsRequest, isLocalTag, newTagRequest, pushTagsRequest } from "./tags";
   import { start } from "./start.svelte";
+  import { github } from "./github.svelte";
 
+  const PULL_ICON = "M3 3.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M3 12.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M10 12.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M4.5 5v6M11.5 11V6.5a2 2 0 0 0-2-2H7M8.5 3 7 4.5 8.5 6";
   const TERMINAL = "M2.5 3.5h11v9h-11zM5 7l2 1.5L5 10M8.5 10.5h2.5";
   const FOLDER = "M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z";
   const HOME = "M2.5 7.5 8 3l5.5 4.5M4 6.5v6.5h8V6.5";
@@ -44,6 +46,7 @@
     onPickStash,
     onCompare,
     onEditStack,
+    onPullRequest,
   }: {
     repo: RepoSummary;
     history: History;
@@ -57,7 +60,7 @@
     /** Confirm and run a change to the repository. */
     run: (request: Request | Promise<Request>) => void;
     /** The screen shown next to the sidebar. */
-    view: "history" | "stashes" | "compare" | "file" | "stack";
+    view: "history" | "stashes" | "compare" | "file" | "stack" | "pull";
     onView: (view: "history" | "stashes") => void;
     /** On the Stashes screen a stash in the list is picked there instead of in History. */
     onPickStash: (id: string) => void;
@@ -65,7 +68,12 @@
     onCompare: (base: string, target: string) => void;
     /** Open Edit Stack for the stack `branch` is in. */
     onEditStack: (branch: string) => void;
+    /** Open the Pull Request screen of `branch`. */
+    onPullRequest: (branch: string) => void;
   } = $props();
+
+  /** The checked-out branch's pull request, for the Workspace item. */
+  const headPull = $derived(history.head.branch ? github.pullOf(history.head.branch) : null);
 
   const headName = $derived(history.head.branch ?? "HEAD");
   const compareItem = (name: string): MenuEntry => ({ kind: "item", label: `Compare with ${headName}`, icon: menuIcons.compare, run: () => onCompare(headName, name) });
@@ -244,6 +252,11 @@
       entries.push({ kind: "sep" });
       entries.push(item("Edit Stack…", menuIcons.rebase, () => onEditStack(ref.name)));
     }
+    if (!isTrunk && github.repo) {
+      const pull = github.pullOf(ref.name);
+      if (history.operation) entries.push({ kind: "sep" });
+      entries.push(item(pull ? `Pull Request #${pull.number}` : "Create Pull Request…", PULL_ICON, () => onPullRequest(ref.name)));
+    }
     entries.push({ kind: "sep" });
     entries.push(item(`New Branch from ${ref.name}…`, menuIcons.branch, () => run(newBranchRequest(ctx, ref.name))));
     if (!isTrunk) entries.push(item("Rename…", menuIcons.edit, () => run(renameRequest(ctx, ref))));
@@ -382,6 +395,14 @@
       <span class="grow">Stashes</span>
       {#if history.stashes.length}<span class="meta">{history.stashes.length}</span>{/if}
     </button>
+    {#if github.repo && history.head.branch && history.head.branch !== history.trunk}
+      {@const branch = history.head.branch}
+      <button class="item" class:current={view === "pull"} onclick={() => onPullRequest(branch)} title={headPull ? `Pull request #${headPull.number} of ${branch}` : `Open a pull request for ${branch}`}>
+        <svg class="icon" viewBox="0 0 16 16"><path d={PULL_ICON} /></svg>
+        <span class="grow">Pull Request</span>
+        {#if headPull}<span class="meta">#{headPull.number}</span>{/if}
+      </button>
+    {/if}
     <button class="item" class:current={oplog.open} onclick={() => (oplog.open = !oplog.open)} title="Every step Oxbow ran here, to undo or restore">
       <svg class="icon" viewBox="0 0 16 16"><path d="M5.5 4 2.5 7l3 3M3 7h6.5a3.5 3.5 0 0 1 0 7H7" /></svg>
       <span class="grow">Operation Log</span>
@@ -425,6 +446,7 @@
         <span class="dot" style:background={lane(b.color)}></span>
         <span class="grow ellipsis" class:bold={head}>{b.ref.name}</span>
         {#if b.ref.tracking?.gone}<span class="badge" title="Its branch on {b.ref.tracking.remote} was deleted">gone</span>{/if}
+        {#if github.openPullOf(b.ref.name) && !head}<span class="meta" title="Pull request #{github.openPullOf(b.ref.name)?.number}">#{github.openPullOf(b.ref.name)?.number}</span>{/if}
         {#if busy?.branch === b.ref.name}<span class="head busy">{busy.word}</span>{:else if head}<span class="head">HEAD</span>{/if}
       </button>
     {/each}

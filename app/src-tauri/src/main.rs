@@ -3,6 +3,7 @@
 
 mod accounts;
 mod open_in;
+mod pulls;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1159,7 +1160,13 @@ fn main() {
             accounts::github_sign_out,
             accounts::open_github,
             accounts::github_owners,
-            accounts::github_publish
+            accounts::github_publish,
+            pulls::github_repo,
+            pulls::github_pulls,
+            pulls::github_pull,
+            pulls::github_calls_preview,
+            pulls::github_run,
+            pulls::code_owners
         ])
         .run(tauri::generate_context!())
         .expect("error while running Oxbow");

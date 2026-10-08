@@ -329,7 +329,8 @@ export type Action =
   | { kind: "clearOperationLog" }
   | { kind: "editStack"; plan: StackPlan }
   | { kind: "addToCommit"; commit: string }
-  | { kind: "pushBranches"; remote: string; branches: { branch: string; upstream: string }[] };
+  | { kind: "pushBranches"; remote: string; branches: { branch: string; upstream: string }[] }
+  | { kind: "pullRequestMerged"; remote: string; base: string; branch: string; deleteRemote: boolean; deleteLocal: boolean };
 
 export type ResetMode = "soft" | "mixed" | "hard";
 
@@ -768,3 +769,124 @@ export interface StackPreview {
   /** Top first. */
   branches: { name: string; commits: number; moves: boolean; forcePush: RemoteBranch | null }[];
 }
+
+// --- Pull requests ---------------------------------------------------------------------------
+
+/** The GitHub repository the open one pushes to. */
+export interface GitHubRepo {
+  owner: string;
+  name: string;
+  /** The remote that points at it. */
+  remote: string;
+}
+
+export interface GitHubPerson {
+  login: string;
+  avatarUrl: string;
+}
+
+export type PullState = "open" | "closed" | "merged";
+
+export interface PullSummary {
+  number: number;
+  title: string;
+  state: PullState;
+  draft: boolean;
+  head: string;
+  headSha: string;
+  /** Another account for a pull request from a fork. */
+  headOwner: string | null;
+  base: string;
+  htmlUrl: string;
+  body: string;
+  author: GitHubPerson;
+  created: number;
+  updated: number;
+  nodeId: string;
+}
+
+export interface PullCommit {
+  sha: string;
+  summary: string;
+  message: string;
+  author: string;
+  time: number;
+  additions: number | null;
+  deletions: number | null;
+}
+
+export type ReviewState = "approved" | "changesRequested" | "commented" | "dismissed";
+
+export interface PullReview {
+  author: GitHubPerson;
+  state: ReviewState;
+  time: number;
+}
+
+export interface HunkLine {
+  number: number | null;
+  text: string;
+  mark: boolean;
+}
+
+export interface PullComment {
+  author: GitHubPerson;
+  body: string;
+  time: number;
+}
+
+export type PullEntry =
+  | { kind: "comment"; author: GitHubPerson; body: string; time: number }
+  | { kind: "review"; author: GitHubPerson; state: ReviewState; body: string; time: number }
+  | { kind: "thread"; path: string; line: number | null; hunk: HunkLine[]; comments: PullComment[]; resolved: boolean | null; outdated: boolean; time: number }
+  | { kind: "event"; actor: string; text: string; icon: "push" | "ok" | "fail" | "review" | "draft" | "dot"; tone: "ok" | "bad" | null; time: number };
+
+export interface PullCheck {
+  name: string;
+  detail: string;
+  state: "ok" | "fail" | "run" | "skip";
+  seconds: number | null;
+  url: string | null;
+}
+
+/** What the repository allows when merging. */
+export interface MergeSettings {
+  mergeCommit: boolean;
+  squash: boolean;
+  rebase: boolean;
+  autoMerge: boolean;
+  deleteBranchOnMerge: boolean;
+  defaultBranch: string;
+  canPush: boolean;
+}
+
+export interface PullRequest extends PullSummary {
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  commitCount: number;
+  mergeable: boolean | null;
+  mergeableState: string;
+  mergedAt: number | null;
+  mergeCommit: string | null;
+  mergedBy: string | null;
+  autoMerge: string | null;
+  commits: PullCommit[];
+  reviews: PullReview[];
+  requested: string[];
+  timeline: PullEntry[];
+  checks: PullCheck[];
+  requiredApprovals: number | null;
+  settings: MergeSettings;
+}
+
+export type MergeMethodName = "merge" | "squash" | "rebase";
+
+/** A change to a pull request; `number` 0 is the one a `create` earlier in the same run made. */
+export type PullCall =
+  | { kind: "merge"; number: number; method: MergeMethodName; title?: string | null; message?: string | null; sha: string }
+  | { kind: "create"; head: string; base: string; title: string; body: string; draft: boolean }
+  | { kind: "requestReviewers"; number: number; reviewers: string[] }
+  | { kind: "update"; number: number; base?: string | null; body?: string | null }
+  | { kind: "readyForReview"; number: number; id: string }
+  | { kind: "autoMerge"; number: number; id: string; method?: MergeMethodName | null };
