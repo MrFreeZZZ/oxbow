@@ -87,7 +87,12 @@
       const tracked = api.commitDetail(s.id);
       const untracked: Promise<CommitDetail | null> = s.untracked ? api.commitDetail(s.untracked) : Promise.resolve(null);
       Promise.all([tracked, untracked]).then(
-        ([t, u]) => (files[s.id] = { tracked: t.files, untracked: u?.files ?? [] }),
+        // The stash's own detail lists its untracked files too; here they are shown apart.
+        ([t, u]) => {
+          const untrackedFiles = u?.files ?? [];
+          const apart = new Set(untrackedFiles.map((f) => f.path));
+          files[s.id] = { tracked: t.files.filter((f) => !apart.has(f.path)), untracked: untrackedFiles };
+        },
         (err) => (error = String(err)),
       );
     }
