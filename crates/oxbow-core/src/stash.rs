@@ -7,7 +7,7 @@
 
 use serde::Serialize;
 
-use crate::cli::GitCommand;
+use crate::cli::{GitCommand, literal};
 use crate::error::{Error, Result};
 use crate::repo::Repo;
 
@@ -36,6 +36,9 @@ pub(crate) struct StashFiles {
 pub(crate) struct PendingApply {
     pub id: String,
     pub pop: bool,
+    /// Untracked files of the stash that were already on disk before the apply. git leaves
+    /// them alone ("already exists, no checkout"), so undoing the apply must too.
+    pub kept: Vec<String>,
 }
 
 impl Repo {
@@ -153,12 +156,33 @@ impl Repo {
         let mut lines = text.lines();
         let id = lines.next()?.trim().to_owned();
         let pop = lines.next().is_some_and(|l| l.trim() == "pop");
-        Some(PendingApply { id, pop })
+        // The rest, one path per NUL: a file name may hold a line break.
+        let rest = text.splitn(3, '\n').nth(2).unwrap_or_default();
+        let kept = rest.split('\0').filter(|p| !p.is_empty()).map(str::to_owned).collect();
+        Some(PendingApply { id, pop, kept })
     }
 
-    /// Note an apply that stopped on conflicts, so it can be finished or undone.
-    pub(crate) fn remember_apply(&self, id: &str, pop: bool) {
-        let text = format!("{id}\n{}\n", if pop { "pop" } else { "apply" });
+    /// The stash's untracked files that are on disk now, before it is applied.
+    pub(crate) fn untracked_in_the_way(&self, id: &str) -> Vec<String> {
+        self.stash_files(id)
+            .map(|files| {
+                files
+                    .untracked
+                    .into_iter()
+                    .filter(|p| self.workdir().join(p).symlink_metadata().is_ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Note an apply that stopped on conflicts, so it can be finished or undone. `kept` are
+    /// the untracked files that were there before it, from [`Repo::untracked_in_the_way`].
+    pub(crate) fn remember_apply(&self, id: &str, pop: bool, kept: &[String]) {
+        let mut text = format!("{id}\n{}\n", if pop { "pop" } else { "apply" });
+        for path in kept {
+            text.push_str(path);
+            text.push('\0');
+        }
         let _ = std::fs::write(self.local().git_dir().join(STASH_APPLY), text);
     }
 
@@ -198,7 +222,8 @@ impl Repo {
         let mut in_head: Vec<String> = Vec::new();
         if !paths.is_empty() {
             let mut args = vec!["ls-tree", "-r", "-z", "--name-only", "HEAD", "--"];
-            args.extend(&paths);
+            let literal: Vec<String> = paths.iter().map(|p| literal(p)).collect();
+            args.extend(literal.iter().map(String::as_str));
             in_head = self
                 .run(&GitCommand::new(args))?
                 .stdout
@@ -227,10 +252,14 @@ impl Repo {
         if !added.is_empty() {
             commands.push(with_paths(&["rm", "-f", "--quiet"], &added).comment("files the stash added"));
         }
-        if !files.untracked.is_empty() {
+        let brought: Vec<String> = files
+            .untracked
+            .into_iter()
+            .filter(|p| !pending.kept.contains(p))
+            .collect();
+        if !brought.is_empty() {
             commands.push(
-                with_paths(&["clean", "-f", "--quiet"], &files.untracked)
-                    .comment("untracked files the stash brought back"),
+                with_paths(&["clean", "-f", "--quiet"], &brought).comment("untracked files the stash brought back"),
             );
         }
         if commands.is_empty() {
@@ -246,7 +275,7 @@ fn with_paths(args: &[&str], paths: &[String]) -> GitCommand {
         args.iter()
             .map(|a| a.to_string())
             .chain(["--".to_owned()])
-            .chain(paths.iter().cloned()),
+            .chain(paths.iter().map(|p| literal(p))),
     )
 }
 

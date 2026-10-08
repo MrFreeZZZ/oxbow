@@ -46,4 +46,4 @@ pub use stack::{
     BranchAfter, Stack, StackBranch, StackCommit, StackConflict, StackPlan, StackPreview, StackStep, StepAction,
 };
 pub use stash::StashCheck;
-pub use worktree::{Action, ActionEvent, BranchPush, Plan, PullMode, RemoteBranch, Side, WorkingTree};
+pub use worktree::{Action, ActionEvent, BranchPush, Plan, PullMode, RemoteBranch, Side, WorkingTree, shown_lines};

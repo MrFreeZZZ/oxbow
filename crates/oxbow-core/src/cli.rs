@@ -324,6 +324,17 @@ fn read_lines(
     })
 }
 
+/// `path` as a pathspec that names just that file. git reads `*`, `?`, `[` and a leading `:`
+/// in a pathspec as a pattern, so `a*.txt` alone would also pick `another.txt`; such paths get
+/// the `:(literal)` prefix. Paths without them stay as they are, to keep the shown commands plain.
+pub fn literal(path: &str) -> String {
+    if path.starts_with(':') || path.contains(['*', '?', '[', '\\']) {
+        format!(":(literal){path}")
+    } else {
+        path.to_owned()
+    }
+}
+
 /// Quote an argument for display the way a POSIX shell would need it.
 pub(crate) fn shell_quote(arg: &str) -> String {
     let plain = !arg.is_empty() && arg.chars().all(|c| c.is_alphanumeric() || "-_./:=@+,%^~{}".contains(c));

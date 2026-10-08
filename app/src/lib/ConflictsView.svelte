@@ -262,6 +262,7 @@
   const wholeOnly = $derived.by(() => {
     if (!file || lineByLine) return null;
     if (file.binary) return "This is a binary file, so it can’t be merged line by line. Pick one side’s version.";
+    if (file.link) return "This is a symbolic link or a submodule, so it can’t be merged line by line. Pick one side’s version.";
     if (!file.ours || !file.theirs) {
       const gone = !file.ours ? labelOf("ours") : labelOf("theirs");
       const kept = !file.ours ? labelOf("theirs") : labelOf("ours");

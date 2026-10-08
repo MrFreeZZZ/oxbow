@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use crate::cli::GitCommand;
+use crate::cli::{GitCommand, literal};
 use crate::edit::ResetMode;
 use crate::error::{Error, Result};
 use crate::operation::{MergeMethod, OperationKind};
@@ -392,7 +392,7 @@ impl Repo {
                 GitCommand::new(
                     ["clean".to_owned(), "-f".to_owned(), "--".to_owned()]
                         .into_iter()
-                        .chain(gone),
+                        .chain(gone.iter().map(|p| literal(p))),
                 )
                 .comment(note),
             );
@@ -494,7 +494,7 @@ impl Repo {
                 .map(str::to_owned)
                 .collect();
             if !untracked.is_empty() {
-                let list = untracked.join("\0");
+                let list = untracked.iter().map(|p| literal(p)).collect::<Vec<_>>().join("\0");
                 self.run_with_input(
                     &with_scratch(GitCommand::new([
                         "add",

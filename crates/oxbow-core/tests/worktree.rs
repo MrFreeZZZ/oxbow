@@ -1,6 +1,6 @@
 mod support;
 
-use oxbow_core::{Action, FileStatus, LineKind, Repo, Side};
+use oxbow_core::{Action, FileStatus, LineKind, Repo, Side, shown_lines};
 use support::Fixture;
 
 fn lines(n: usize, changed: &[usize]) -> String {
@@ -66,6 +66,7 @@ fn hunks_can_be_staged_unstaged_and_discarded_one_by_one() {
     repo.perform(&Action::StageHunk {
         path: "a.txt".into(),
         header: second.clone(),
+        shown: shown_lines(&diff.hunks[1]),
         lines: None,
     })
     .unwrap();
@@ -85,6 +86,7 @@ fn hunks_can_be_staged_unstaged_and_discarded_one_by_one() {
     repo.perform(&Action::DiscardHunk {
         path: "a.txt".into(),
         header: first,
+        shown: shown_lines(&unstaged.hunks[0]),
         lines: None,
     })
     .unwrap();
@@ -98,6 +100,7 @@ fn hunks_can_be_staged_unstaged_and_discarded_one_by_one() {
         .perform(&Action::UnstageHunk {
             path: "a.txt".into(),
             header: "@@ -1,2 +1,2 @@".into(),
+            shown: Vec::new(),
             lines: None,
         })
         .unwrap_err();
@@ -108,6 +111,7 @@ fn hunks_can_be_staged_unstaged_and_discarded_one_by_one() {
     repo.perform(&Action::UnstageHunk {
         path: "a.txt".into(),
         header: header(&staged.hunks[0]),
+        shown: shown_lines(&staged.hunks[0]),
         lines: None,
     })
     .unwrap();
@@ -172,4 +176,81 @@ fn files_are_staged_discarded_and_committed() {
     let tree = repo.working_tree().unwrap();
     assert!(tree.staged.is_empty());
     assert_eq!(tree.unstaged[0].status, FileStatus::Untracked);
+}
+
+#[test]
+fn a_file_name_with_pattern_characters_means_just_that_file() {
+    let mut fx = Fixture::new();
+    fx.commit("a*.txt", "star\n", "Root");
+    fx.commit("another.txt", "other\n", "Second");
+    fx.write("a*.txt", "star changed\n");
+    fx.write("another.txt", "other changed\n");
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let only = vec!["a*.txt".to_owned()];
+    let stage = Action::Stage { paths: only.clone() };
+    assert_eq!(
+        repo.plan(&stage).unwrap().commands[0].display(),
+        "git add -- ':(literal)a*.txt'"
+    );
+    repo.perform(&stage).unwrap();
+    assert_eq!(fx.git(&["diff", "--cached", "--name-only"]), "a*.txt");
+    repo.perform(&Action::Unstage { paths: only.clone() }).unwrap();
+    assert_eq!(fx.git(&["diff", "--cached", "--name-only"]), "");
+
+    repo.perform(&Action::Discard { paths: only }).unwrap();
+    assert_eq!(std::fs::read_to_string(fx.path().join("a*.txt")).unwrap(), "star\n");
+    assert_eq!(
+        std::fs::read_to_string(fx.path().join("another.txt")).unwrap(),
+        "other changed\n"
+    );
+}
+
+#[test]
+fn unstaging_a_rename_unstages_both_paths() {
+    let mut fx = Fixture::new();
+    fx.commit("old.txt", "keep me\n", "Root");
+    fx.git(&["mv", "old.txt", "new.txt"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let renamed = &repo.working_tree().unwrap().staged[0];
+    assert_eq!(
+        (renamed.path.as_str(), renamed.old_path.as_deref()),
+        ("new.txt", Some("old.txt"))
+    );
+
+    repo.perform(&Action::Unstage {
+        paths: vec!["new.txt".into()],
+    })
+    .unwrap();
+    // Nothing is left for the next commit, and the file on disk keeps its new name.
+    assert_eq!(fx.git(&["diff", "--cached", "--name-status"]), "");
+    assert!(fx.path().join("new.txt").exists());
+}
+
+#[test]
+fn a_hunk_edited_after_it_was_shown_is_refused() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "one\ntwo\nthree\n", "Root");
+    fx.write("a.txt", "one\nfirst edit\nthree\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    let shown = repo.working_diff("a.txt", Side::Unstaged, false).unwrap().hunks[0].clone();
+
+    // Another editor saves a new line in the same place: same `@@` header, other text.
+    fx.write("a.txt", "one\nnew important edit\nthree\n");
+    let fresh = repo.working_diff("a.txt", Side::Unstaged, false).unwrap().hunks[0].clone();
+    assert_eq!(fresh.header, shown.header);
+
+    let err = repo
+        .perform(&Action::DiscardHunk {
+            path: "a.txt".into(),
+            header: shown.header.clone(),
+            shown: shown_lines(&shown),
+            lines: None,
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("changed since"), "{err}");
+    assert_eq!(
+        std::fs::read_to_string(fx.path().join("a.txt")).unwrap(),
+        "one\nnew important edit\nthree\n"
+    );
 }

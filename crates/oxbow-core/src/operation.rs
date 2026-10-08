@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use gix::bstr::ByteSlice;
 use serde::{Deserialize, Serialize};
 
-use crate::cli::GitCommand;
+use crate::cli::{GitCommand, literal};
 use crate::error::{Error, Result};
 use crate::remote::{CommitBrief, parse_briefs};
 use crate::repo::{RefKind, Repo};
@@ -117,6 +117,8 @@ pub struct ConflictFile {
     pub theirs: bool,
     /// Binary files can only be taken whole from one side.
     pub binary: bool,
+    /// A symbolic link or a submodule on some side: also taken whole from one side.
+    pub link: bool,
     /// Empty when the file can't be merged line by line.
     pub chunks: Vec<Chunk>,
 }
@@ -450,7 +452,7 @@ impl Repo {
 
     /// Both sides of a conflicted file and the conflicts between them.
     pub fn conflict_file(&self, path: &str) -> Result<ConflictFile> {
-        let [base, ours, theirs] = self.stages(path)?;
+        let ([base, ours, theirs], link) = self.stages(path)?;
         if ours.is_none() && theirs.is_none() && base.is_none() {
             return Err(Error::Git(format!("{path} has no conflicts")));
         }
@@ -458,7 +460,7 @@ impl Repo {
             .iter()
             .any(|blob| blob.as_ref().is_some_and(|b| b.iter().take(8000).any(|&c| c == 0)));
         let chunks = match (&ours, &theirs) {
-            (Some(o), Some(t)) if !binary => self
+            (Some(o), Some(t)) if !binary && !link => self
                 .merge_blobs(o, base.as_deref().unwrap_or_default(), t)?
                 .into_iter()
                 .map(|chunk| match chunk {
@@ -478,14 +480,15 @@ impl Repo {
             ours: ours.is_some(),
             theirs: theirs.is_some(),
             binary,
+            link,
             chunks,
         })
     }
 
     /// The file with `picks` in place of its conflicts, in order.
     pub(crate) fn resolved_text(&self, path: &str, picks: &[Pick]) -> Result<String> {
-        let [base, ours, theirs] = self.stages(path)?;
-        let (Some(ours), Some(theirs)) = (ours, theirs) else {
+        let ([base, ours, theirs], link) = self.stages(path)?;
+        let (Some(ours), Some(theirs), false) = (ours, theirs, link) else {
             return Err(Error::Git(format!("{path} can only be taken whole from one side")));
         };
         let chunks = self.merge_blobs(&ours, base.as_deref().unwrap_or_default(), &theirs)?;
@@ -520,6 +523,12 @@ impl Repo {
         let file = self.workdir().join(path);
         if let Some(parent) = file.parent() {
             std::fs::create_dir_all(parent).map_err(|err| Error::Git(err.to_string()))?;
+        }
+        // Writing through a link would change the file it points to, not the link.
+        if file.symlink_metadata().is_ok_and(|m| !m.is_file()) {
+            return Err(Error::Git(format!(
+                "{path} is not a plain file; take it whole from one side"
+            )));
         }
         std::fs::write(&file, text).map_err(|err| Error::Git(format!("could not write {path}: {err}")))
     }
@@ -668,38 +677,43 @@ impl Repo {
 
     pub(crate) fn plan_take_file(&self, path: &str, side: ConflictSide) -> Result<Vec<GitCommand>> {
         let op = self.current_operation()?;
-        let [_, ours, theirs] = self.stages(path)?;
+        let ([_, ours, theirs], _) = self.stages(path)?;
         let (exists, flag, label) = match side {
             ConflictSide::Ours => (ours.is_some(), "--ours", op.ours_label),
             ConflictSide::Theirs => (theirs.is_some(), "--theirs", op.theirs_label),
         };
         Ok(if exists {
             vec![
-                GitCommand::new(["checkout", flag, "--", path])
+                GitCommand::new(["checkout", flag, "--", &literal(path)])
                     .comment(format!("{flag}: the whole file as it is on {label}")),
-                GitCommand::new(["add", "--", path]).comment("marks it resolved"),
+                GitCommand::new(["add", "--", &literal(path)]).comment("marks it resolved"),
             ]
         } else {
             vec![
-                GitCommand::new(["rm", "--quiet", "--", path]).comment(format!("{label} deleted the file, so it goes")),
+                GitCommand::new(["rm", "--quiet", "--", &literal(path)])
+                    .comment(format!("{label} deleted the file, so it goes")),
             ]
         })
     }
 
-    /// The base, ours and theirs versions of `path` in the index.
-    fn stages(&self, path: &str) -> Result<[Option<Vec<u8>>; 3]> {
+    /// The base, ours and theirs versions of `path` in the index, and whether any of them is
+    /// a symbolic link or a submodule rather than a file.
+    fn stages(&self, path: &str) -> Result<([Option<Vec<u8>>; 3], bool)> {
+        use gix::index::entry::Mode;
         let repo = self.local();
         let index = repo.open_index().map_err(Error::git)?;
         let mut out: [Option<Vec<u8>>; 3] = [None, None, None];
+        let mut link = false;
         for entry in index.entries() {
             let stage = entry.stage_raw() as usize;
             if stage == 0 || entry.path(&index) != path.as_bytes() {
                 continue;
             }
+            link |= entry.mode != Mode::FILE && entry.mode != Mode::FILE_EXECUTABLE;
             let object = repo.find_object(entry.id).map_err(Error::git)?;
             out[stage - 1] = Some(object.data.clone());
         }
-        Ok(out)
+        Ok((out, link))
     }
 
     /// Merge three versions with `git merge-file`, the way git marks conflicts in the file.

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use std::sync::atomic::AtomicBool;
 
-use crate::cli::{GitCommand, OutputLine};
+use crate::cli::{GitCommand, OutputLine, literal};
 use crate::commit::{DiffLine, FileChange, FileDiff, FileStatus, Hunk, LineKind, word_diff};
 use crate::config;
 use crate::edit::{ResetMode, plan_reset};
@@ -77,24 +77,28 @@ pub enum Action {
     Discard {
         paths: Vec<String>,
     },
-    /// Stage, unstage or discard one hunk, identified by its `@@` header so a file that changed
-    /// in the meantime is refused instead of patched in the wrong place. With `lines`, only those
-    /// changed lines of it (indexes into the hunk's lines); the others stay as they are.
+    /// Stage, unstage or discard one hunk, identified by its `@@` header and `shown`, its lines
+    /// as the user saw them (see [`shown_lines`]), so a file that changed in the meantime is
+    /// refused instead of patched in the wrong place. With `lines`, only those changed lines of
+    /// it (indexes into the hunk's lines); the others stay as they are.
     StageHunk {
         path: String,
         header: String,
+        shown: Vec<String>,
         #[serde(default)]
         lines: Option<Vec<usize>>,
     },
     UnstageHunk {
         path: String,
         header: String,
+        shown: Vec<String>,
         #[serde(default)]
         lines: Option<Vec<usize>>,
     },
     DiscardHunk {
         path: String,
         header: String,
+        shown: Vec<String>,
         #[serde(default)]
         lines: Option<Vec<usize>>,
     },
@@ -434,14 +438,26 @@ impl Repo {
                 args.iter()
                     .map(|s| s.to_string())
                     .chain(["--".to_owned()])
-                    .chain(paths.iter().cloned()),
+                    .chain(paths.iter().map(|p| literal(p))),
             )
         };
         let commands = match action {
             Action::Stage { paths: p } => vec![paths(&["add"], p).comment("add the files to the next commit")],
             Action::Unstage { paths: p } => {
                 if self.head()?.commit.is_some() {
-                    vec![paths(&["restore", "--staged"], p).comment("take them out of the next commit, keep the edits")]
+                    // A rename is a deletion of the old path too: unstage both halves.
+                    let tree = self.working_tree()?;
+                    let mut p = p.clone();
+                    for file in &tree.staged {
+                        if let Some(old) = file.old_path.as_ref().filter(|_| p.contains(&file.path))
+                            && !p.contains(old)
+                        {
+                            p.push(old.clone());
+                        }
+                    }
+                    vec![
+                        paths(&["restore", "--staged"], &p).comment("take them out of the next commit, keep the edits"),
+                    ]
                 } else {
                     vec![
                         paths(&["rm", "--cached", "-r", "--quiet"], p)
@@ -473,9 +489,24 @@ impl Repo {
                 }
                 commands
             }
-            Action::StageHunk { path, header, lines }
-            | Action::UnstageHunk { path, header, lines }
-            | Action::DiscardHunk { path, header, lines } => {
+            Action::StageHunk {
+                path,
+                header,
+                shown,
+                lines,
+            }
+            | Action::UnstageHunk {
+                path,
+                header,
+                shown,
+                lines,
+            }
+            | Action::DiscardHunk {
+                path,
+                header,
+                shown,
+                lines,
+            } => {
                 let (side, args): (_, &[&str]) = match action {
                     Action::StageHunk { .. } => (Side::Unstaged, &["apply", "--cached", "-"]),
                     Action::UnstageHunk { .. } => (Side::Staged, &["apply", "--cached", "--reverse", "-"]),
@@ -486,7 +517,7 @@ impl Repo {
                     None => vec![cmd.comment(stdin_note(path, header))],
                     Some(lines) => {
                         let forward = matches!(action, Action::StageHunk { .. });
-                        let patch = self.hunk_patch(path, side, header, Some(lines), forward)?;
+                        let patch = self.hunk_patch(path, side, header, shown, Some(lines), forward)?;
                         let what = match action {
                             Action::StageHunk { .. } => {
                                 "--cached: only the staging area changes, your file stays as is. By hand: git add -p, then e"
@@ -727,7 +758,7 @@ impl Repo {
             Action::Continue { message } => self.plan_continue(message.as_deref())?,
             Action::Abort => self.plan_abort()?,
             Action::Skip => self.plan_skip()?,
-            Action::Resolve { path, .. } => vec![GitCommand::new(["add", "--", path]).comment(format!(
+            Action::Resolve { path, .. } => vec![GitCommand::new(["add", "--", &literal(path)]).comment(format!(
                 "Oxbow writes your choices into {path} first; add marks it resolved"
             ))],
             Action::TakeFile { path, side } => self.plan_take_file(path, *side)?,
@@ -748,7 +779,7 @@ impl Repo {
                 }
                 if !paths.is_empty() {
                     args.push("--".to_owned());
-                    args.extend(paths.iter().cloned());
+                    args.extend(paths.iter().map(|p| literal(p)));
                 }
                 let cmd = GitCommand::new(args);
                 vec![match (paths.is_empty(), *untracked) {
@@ -901,10 +932,25 @@ impl Repo {
         {
             return Err(Error::Git("the commit message is empty".into()));
         }
-        let (side, path, header, lines) = match action {
-            Action::StageHunk { path, header, lines } => (Side::Unstaged, path, header, lines),
-            Action::DiscardHunk { path, header, lines } => (Side::Unstaged, path, header, lines),
-            Action::UnstageHunk { path, header, lines } => (Side::Staged, path, header, lines),
+        let (side, path, header, shown, lines) = match action {
+            Action::StageHunk {
+                path,
+                header,
+                shown,
+                lines,
+            } => (Side::Unstaged, path, header, shown, lines),
+            Action::DiscardHunk {
+                path,
+                header,
+                shown,
+                lines,
+            } => (Side::Unstaged, path, header, shown, lines),
+            Action::UnstageHunk {
+                path,
+                header,
+                shown,
+                lines,
+            } => (Side::Staged, path, header, shown, lines),
             _ => {
                 if let Action::Resolve { path, picks } = action {
                     self.write_resolution(path, picks)?;
@@ -916,6 +962,11 @@ impl Repo {
                 let pending = self.pending_apply().is_some()
                     && matches!(action, Action::Continue { .. } | Action::Abort)
                     && self.operation()?.is_some_and(|op| op.kind == OperationKind::StashApply);
+                // Files git will not restore over, so an undo of the apply leaves them be.
+                let in_the_way = match action {
+                    Action::StashApply { id, .. } => self.untracked_in_the_way(id),
+                    _ => Vec::new(),
+                };
                 let mut last = String::new();
                 for command in self.plan(action)?.commands {
                     self.write_todo(&command)?;
@@ -937,7 +988,7 @@ impl Repo {
                             if let Action::StashApply { id, pop, .. } = action
                                 && self.conflicted_paths().is_ok_and(|p| !p.is_empty())
                             {
-                                self.remember_apply(id, *pop);
+                                self.remember_apply(id, *pop, &in_the_way);
                             }
                         })?;
                     last = if out.stdout.trim().is_empty() {
@@ -955,7 +1006,7 @@ impl Repo {
         };
         // Staging goes forward; unstaging and discarding apply the patch in reverse.
         let forward = matches!(action, Action::StageHunk { .. });
-        let patch = self.hunk_patch(path, side, header, lines.as_deref(), forward)?;
+        let patch = self.hunk_patch(path, side, header, shown, lines.as_deref(), forward)?;
         let command = &self.plan(action)?.commands[0];
         on_event(ActionEvent::Command {
             display: command.display(),
@@ -964,13 +1015,16 @@ impl Repo {
         Ok(out.stdout)
     }
 
-    /// A patch with the file header and only the hunk that starts with `header`; with `lines`,
-    /// only those changed lines of it, for applying `forward` (staging) or in reverse.
+    /// A patch with the file header and only the hunk that starts with `header` and still has
+    /// the `shown` lines; with `lines`, only those changed lines of it, for applying `forward`
+    /// (staging) or in reverse.
+    #[allow(clippy::too_many_arguments)]
     fn hunk_patch(
         &self,
         path: &str,
         side: Side,
         header: &str,
+        shown: &[String],
         lines: Option<&[usize]>,
         forward: bool,
     ) -> Result<String> {
@@ -990,7 +1044,8 @@ impl Repo {
         let hunk = parsed
             .hunks
             .iter()
-            .find(|h| h.header == header)
+            // The header gives only line numbers: an edit inside the hunk keeps them.
+            .find(|h| h.header == header && shown_lines(&h.hunk) == shown)
             .ok_or_else(|| Error::Git(format!("{path} changed since it was shown; refresh and try again")))?;
         let text = match lines {
             None => hunk.text.clone(),
@@ -1036,7 +1091,8 @@ impl Repo {
         if side == Side::Staged {
             args.push("--cached");
         }
-        args.extend(["--", &file.path]);
+        let path = literal(&file.path);
+        args.extend(["--", &path]);
         Ok(self.run(&GitCommand::new(args))?.stdout)
     }
 
@@ -1166,6 +1222,22 @@ fn refspec(branch: &str, upstream: &str) -> String {
     } else {
         format!("{branch}:{upstream}")
     }
+}
+
+/// The lines of `hunk` as the user saw them: `+`, `-` or a space, then the text. A hunk action
+/// carries them so the hunk is applied only while the file still has them.
+pub fn shown_lines(hunk: &Hunk) -> Vec<String> {
+    hunk.lines
+        .iter()
+        .map(|line| {
+            let mark = match line.kind {
+                LineKind::Added => '+',
+                LineKind::Removed => '-',
+                LineKind::Context => ' ',
+            };
+            format!("{mark}{}", line.text)
+        })
+        .collect()
 }
 
 fn stdin_note(path: &str, header: &str) -> String {

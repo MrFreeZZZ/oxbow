@@ -274,3 +274,47 @@ fn a_squash_message_from_git_lists_the_commits() {
     let op = repo.operation().unwrap().expect("a squash waiting for its commit");
     assert_eq!(op.message.as_deref(), Some("Squash 2 commits\n\n- Shout two\n- Add b"));
 }
+
+#[cfg(unix)]
+#[test]
+fn a_conflicted_symlink_is_taken_whole_and_its_target_left_alone() {
+    use std::os::unix::fs::symlink;
+    let mut fx = Fixture::new();
+    for name in ["base.txt", "ours.txt", "theirs.txt"] {
+        fx.write(name, &format!("{name} content\n"));
+    }
+    symlink("base.txt", fx.path().join("link")).unwrap();
+    fx.git(&["add", "-A"]);
+    fx.git(&["commit", "-q", "-m", "Root"]);
+    fx.git(&["switch", "-q", "-c", "feature"]);
+    std::fs::remove_file(fx.path().join("link")).unwrap();
+    symlink("theirs.txt", fx.path().join("link")).unwrap();
+    fx.git(&["commit", "-q", "-am", "Point at theirs"]);
+    fx.git(&["switch", "-q", "main"]);
+    std::fs::remove_file(fx.path().join("link")).unwrap();
+    symlink("ours.txt", fx.path().join("link")).unwrap();
+    fx.git(&["commit", "-q", "-am", "Point at ours"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+
+    let file = repo.conflict_file("link").unwrap();
+    assert!(file.link && file.chunks.is_empty());
+    // Line by line would write through the link into ours.txt: refused.
+    let err = repo
+        .perform(&Action::Resolve {
+            path: "link".into(),
+            picks: vec![Pick::Theirs],
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("whole"), "{err}");
+    assert_eq!(read(&fx, "ours.txt"), "ours.txt content\n");
+
+    repo.perform(&Action::TakeFile {
+        path: "link".into(),
+        side: ConflictSide::Theirs,
+    })
+    .unwrap();
+    let target = std::fs::read_link(fx.path().join("link")).unwrap();
+    assert_eq!(target.to_str(), Some("theirs.txt"));
+    assert_eq!(read(&fx, "ours.txt"), "ours.txt content\n");
+}
