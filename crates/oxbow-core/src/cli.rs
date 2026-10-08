@@ -37,6 +37,8 @@ pub struct GitCommand {
     pub env: Vec<(String, String)>,
     /// The todo list Oxbow hands an interactive rebase instead of opening an editor; shown.
     pub todo: Option<String>,
+    /// Another program than `git`, e.g. `ssh-add`; the arguments are its own.
+    pub program: Option<String>,
 }
 
 impl GitCommand {
@@ -53,7 +55,13 @@ impl GitCommand {
             before: None,
             env: Vec::new(),
             todo: None,
+            program: None,
         }
+    }
+
+    pub fn program(mut self, program: impl Into<String>) -> Self {
+        self.program = Some(program.into());
+        self
     }
 
     pub fn comment(mut self, comment: impl Into<String>) -> Self {
@@ -97,7 +105,7 @@ impl GitCommand {
 
     /// The command as it would be typed in a shell, with arguments quoted where needed.
     pub fn display(&self) -> String {
-        std::iter::once("git".to_owned())
+        std::iter::once(self.program.clone().unwrap_or_else(|| "git".to_owned()))
             .chain(self.args.iter().map(|a| shell_quote(a)))
             .collect::<Vec<_>>()
             .join(" ")
@@ -176,7 +184,10 @@ impl Repo {
 
 /// `git` set up to run `command` in `dir`.
 fn command_in(dir: &Path, command: &GitCommand) -> Command {
-    let mut git = crate::config::git();
+    let mut git = match &command.program {
+        Some(program) => Command::new(program),
+        None => crate::config::git(),
+    };
     git.args(command.run_args()).current_dir(dir);
     git.envs(command.env.iter().map(|(k, v)| (k, v)));
     git

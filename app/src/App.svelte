@@ -42,6 +42,8 @@
   import { withKeys } from "./lib/keys";
   import { oplog, undoRequest } from "./lib/oplog.svelte";
   import EditStackView from "./lib/EditStackView.svelte";
+  import ActivityPopover from "./lib/ActivityPopover.svelte";
+  import { activity, failureShort, type ActivityItem } from "./lib/activity.svelte";
   import { addToCommitRequest, dropCommitRequest, rewordRequest, squashRequest } from "./lib/stack";
 
   let repo = $state<RepoSummary | null>(null);
@@ -196,6 +198,7 @@
     second = null;
     search.clear();
     oplog.forget();
+    activity.reset();
     if (view === "compare" || view === "file" || view === "stack") view = "history";
     try {
       const summary = await api.openRepo(path);
@@ -447,17 +450,70 @@
   );
 
   async function sync(kind: "fetch" | "pull" | "push") {
+    // While a fetch runs, Fetch shows its progress, and Pull or Push waits for it in line.
+    if (kind === "fetch" && (activity.running || activity.problem)) {
+      activity.open = !activity.open;
+      return;
+    }
+    if (kind !== "fetch" && activity.running) {
+      const branch = history?.head.branch ?? "HEAD";
+      activity.queue(kind, kind === "push" ? `Push ${branch}` : `Pull into ${branch}`);
+      return;
+    }
     // Commits made outside the app since the last reload belong in the sheet.
     await refresh();
     if (!remoteCtx) return;
+    if (kind === "fetch") {
+      // The sheet closes on Fetch: the fetch runs in the background, with its progress on the button.
+      await confirm.run({ ...fetchRequest(remoteCtx), background: () => void backgroundFetch(false) });
+      return;
+    }
     const setup = kind === "pull" ? await api.pullSetup().catch(() => undefined) : undefined;
-    const request = kind === "fetch" ? fetchRequest(remoteCtx) : kind === "pull" ? pullRequest(remoteCtx, setup) : pushRequest(remoteCtx);
+    const request = kind === "pull" ? pullRequest(remoteCtx, setup) : pushRequest(remoteCtx);
     const opBefore = history?.operation ?? null;
-    await confirm.run(request);
+    const ok = await confirm.run(request);
     // Even a failed pull or push may have fetched, so the counts are worth reloading either way.
     await refresh();
     checkRemoteTags();
     openConflicts(opBefore);
+    if (ok) activity.note(kind, request.title.replace(/^Push /, "Pushed ").replace(/^Publish /, "Published ").replace(/^Pull /, "Pulled ").replace(/\?$/, ""), request.done ?? "");
+  }
+  activity.startQueued = (kind) => void sync(kind);
+
+  /** What Fetch fetches: the one remote, or all of them, as its sheet says. */
+  function fetchTarget(): { remote: string | null; label: string } | null {
+    if (!history?.remotes.length) return null;
+    const remote = remoteCtx?.remote ?? history.remotes[0];
+    return history.remotes.length > 1 ? { remote: null, label: "all remotes" } : { remote, label: remote };
+  }
+
+  /** Fetch in the background; one someone asked for says how it went. */
+  async function backgroundFetch(auto: boolean) {
+    const target = fetchTarget();
+    if (!target) return;
+    const ok = await activity.fetch(target.remote, target.label, auto);
+    if (!ok) return;
+    await api.refreshRemoteTags().catch(() => false);
+    await refresh();
+    if (!auto) confirm.say(activity.recent[0]?.sub === "Nothing new" ? `Fetched ${target.label}. Nothing new.` : `Fetched ${target.label}.`);
+  }
+
+  /** Fix… of a failed fetch in Activity: the sheet with the way out, e.g. Add Key to Agent. */
+  async function fixFetch(item: ActivityItem) {
+    activity.open = false;
+    const target = fetchTarget();
+    if (!remoteCtx || !item.failure || !target) return;
+    const ok = await confirm.show(fetchRequest(remoteCtx), item.failure, item.lines);
+    const ran = confirm.ran;
+    await refresh();
+    if (!ok) return;
+    if (ran?.kind === "fetch") {
+      activity.fixed(target.label);
+      checkRemoteTags();
+    } else if (ran?.kind === "setRemoteUrl") {
+      // A new address: see whether it works.
+      backgroundFetch(false);
+    }
   }
 
   /** Ask the remote which tags it has, so the ones it lacks show as local; quiet when offline. */
@@ -484,20 +540,14 @@
   }
 
   // Background fetch, from Settings › General: keeps ahead/behind counts current. It skips a
-  // turn while a sheet is open or the window is hidden, and failures stay quiet; Fetch in the
-  // toolbar says what is wrong.
+  // turn while a sheet is open or the window is hidden; a failure only puts the amber dot on
+  // Fetch, and Activity says what is wrong.
   const hasRemotes = $derived(!!history?.remotes.length);
   $effect(() => {
     if (!repo || !hasRemotes || !prefs.get("oxbow.fetch.auto")) return;
-    const fetchNow = async () => {
-      if (confirm.request || document.hidden || loading) return;
-      try {
-        await api.backgroundFetch();
-        await api.refreshRemoteTags().catch(() => false);
-        await refresh();
-      } catch {
-        // Offline, or the remote wants a password: the next turn tries again.
-      }
+    const fetchNow = () => {
+      if (confirm.request || document.hidden || loading || activity.running) return;
+      backgroundFetch(true);
     };
     const first = setTimeout(fetchNow, 5000);
     const timer = setInterval(fetchNow, prefs.get("oxbow.fetch.interval") * 60_000);
@@ -665,7 +715,13 @@
               <span class="sub">{repo.name} · on {history.head.branch ?? "detached HEAD"}</span>
             {:else}
               <span class="name">History</span>
-              <span class="sub">{branchCount} {branchCount === 1 ? "branch" : "branches"} · {history.head.branch ?? operation?.branch ?? "detached HEAD"}</span>
+              {#if activity.running}
+                <span class="sub">{activity.running.title}{activity.percent !== null ? ` · ${activity.percent}%` : "…"}</span>
+              {:else if activity.problem?.failure}
+                <span class="sub amber">Fetch failed · {failureShort(activity.problem.failure)}</span>
+              {:else}
+                <span class="sub">{branchCount} {branchCount === 1 ? "branch" : "branches"} · {history.head.branch ?? operation?.branch ?? "detached HEAD"}</span>
+              {/if}
             {/if}
           </div>
           <!-- File History is about one file: a plain back arrow and no branch picker, as in the design, leave room for Find in file. -->
@@ -704,9 +760,33 @@
           {#if error}<span class="error" role="alert">{error}</span>{/if}
           {#if history.remotes.length && remoteCtx}
             {@const t = history.tracking}
+            <div class="sync">
             <div class="group" role="group" aria-label="Sync with remote">
-              <button onclick={() => sync("fetch")} aria-label="Fetch" title="Fetch from {history.remotes.length > 1 ? 'all remotes' : remoteCtx.remote}">
-                <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 0 1-8.6 3.5M3 8a5 5 0 0 1 8.6-3.5" /><path d="M11.8 1.8v2.9H8.9M4.2 14.2v-2.9h2.9" /></svg>
+              <button
+                class="fetch"
+                onclick={() => sync("fetch")}
+                oncontextmenu={(event) => {
+                  event.preventDefault();
+                  activity.open = !activity.open;
+                }}
+                aria-label={activity.running ? "Fetching, show Activity" : activity.problem ? "Fetch failed, show Activity" : "Fetch"}
+                aria-haspopup="dialog"
+                aria-expanded={activity.open}
+                title={activity.running
+                  ? `${activity.running.title} · click for Activity`
+                  : activity.problem
+                    ? `${activity.problem.sub} · click for Activity`
+                    : `Fetch from ${history.remotes.length > 1 ? "all remotes" : remoteCtx.remote} · right-click for Activity`}
+              >
+                {#if activity.running}
+                  <svg class="icon ring" class:spin={activity.percent === null} viewBox="0 0 16 16">
+                    <circle cx="8" cy="8" r="5.5" class="ring-track" />
+                    <circle cx="8" cy="8" r="5.5" class="ring-fill" pathLength="100" stroke-dasharray="{activity.percent ?? 25} 100" />
+                  </svg>
+                {:else}
+                  <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 0 1-8.6 3.5M3 8a5 5 0 0 1 8.6-3.5" /><path d="M11.8 1.8v2.9H8.9M4.2 14.2v-2.9h2.9" /></svg>
+                  {#if activity.problem}<span class="dot"></span>{/if}
+                {/if}
               </button>
               <button
                 onclick={() => sync("pull")}
@@ -726,6 +806,8 @@
                 <svg class="icon" viewBox="0 0 16 16"><path d="M8 12V3M4.5 6.5 8 3l3.5 3.5M3 14h10" /></svg>
                 {#if t?.ahead}<span class="count">{t.ahead}</span>{:else if !t && history.head.branch}<span class="count">Publish</span>{/if}
               </button>
+            </div>
+            <ActivityPopover fix={fixFetch} retry={() => backgroundFetch(false)} settings={() => ((activity.open = false), api.openSettings())} />
             </div>
           {/if}
           <button class="capsule" onclick={refresh} aria-label="Reload history" title="Reload">
@@ -961,6 +1043,51 @@
   }
   .group button:disabled {
     opacity: 0.4;
+  }
+  .sync {
+    position: relative;
+    display: flex;
+  }
+  .fetch {
+    position: relative;
+  }
+  .ring {
+    transform: rotate(-90deg);
+  }
+  .ring circle {
+    fill: none;
+    stroke-width: 1.8;
+  }
+  .ring-track {
+    stroke: var(--sep);
+  }
+  .ring-fill {
+    stroke: var(--accent);
+    stroke-linecap: round;
+    transition: stroke-dasharray 0.2s;
+  }
+  .ring.spin {
+    animation: ring-spin 1.2s linear infinite;
+  }
+  @keyframes ring-spin {
+    from {
+      transform: rotate(-90deg);
+    }
+    to {
+      transform: rotate(270deg);
+    }
+  }
+  .dot {
+    position: absolute;
+    top: 7px;
+    right: 7px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--orange);
+  }
+  .sub.amber {
+    color: var(--orange);
   }
   .count {
     font-size: 11px;

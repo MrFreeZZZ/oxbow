@@ -86,7 +86,10 @@ export const api = {
   /** `null` removes the value. */
   setGitConfig: (scope: ConfigScope, key: string, value: string | null) =>
     invoke<void>("set_git_config", { scope, key, value }),
-  backgroundFetch: () => invoke<void>("background_fetch"),
+  /** Sends `fetch-event`s while it runs; rejects with a `Failure`. */
+  fetchInBackground: (remote: string | null) => invoke<{ updated: number }>("fetch_in_background", { remote }),
+  stopFetch: () => invoke<void>("stop_fetch"),
+  publicKey: (key: string) => invoke<string>("public_key", { key }),
   pullSetup: () => invoke<PullSetup>("pull_setup"),
   openInEditor: (path: string, line: number | null) => invoke<void>("open_in_editor", { path, line }),
   revealFile: (path: string) => invoke<void>("reveal_file", { path }),

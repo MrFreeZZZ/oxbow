@@ -275,6 +275,10 @@ pub enum Action {
         name: String,
         url: String,
     },
+    /// Load an SSH key into ssh-agent (`ssh-add`), e.g. after a restart emptied it.
+    AddSshKey {
+        key: String,
+    },
     /// Forget a remote and its remote branches.
     RemoveRemote {
         name: String,
@@ -798,6 +802,7 @@ impl Repo {
             Action::SetRemoteUrl { name, url } => vec![
                 GitCommand::new(["remote", "set-url", name, url]).comment("fetch and push both use the new address"),
             ],
+            Action::AddSshKey { key } => vec![crate::ssh::add_key_command(key)],
             Action::RemoveRemote { name } => vec![
                 GitCommand::new(["remote", "remove", name])
                     .comment(format!("{name}/… branches go too; local branches stay")),
@@ -859,6 +864,10 @@ impl Repo {
         on_event: &mut dyn FnMut(ActionEvent),
         cancel: &AtomicBool,
     ) -> Result<String> {
+        // Loading a key changes nothing in the repository.
+        if let Action::AddSshKey { .. } = action {
+            return self.perform_unlogged(action, on_event, cancel);
+        }
         if let Action::ClearOperationLog = action {
             let out = self.perform_unlogged(action, on_event, cancel)?;
             self.clear_operation_log()?;
@@ -910,6 +919,7 @@ impl Repo {
                 let mut last = String::new();
                 for command in self.plan(action)?.commands {
                     self.write_todo(&command)?;
+                    let command = crate::ssh::interactive(command);
                     on_event(ActionEvent::Command {
                         display: command.display(),
                     });

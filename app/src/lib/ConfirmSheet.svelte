@@ -242,6 +242,12 @@
             {#each confirm.lines as line, i (i)}
               {#if line.kind === "cmd"}{@render prompt(line.text)}{:else}<div class="output" style:color={OUTPUT[line.kind]}>{line.text}</div>{/if}
             {/each}
+            {#if recovery?.checked?.length}
+              <div class="comment"># Oxbow checked why:</div>
+              {#each recovery.checked as line, i (i)}
+                {#if line.kind === "cmd"}{@render prompt(line.text)}{:else if line.kind === "hint"}<div class="comment">{line.text}</div>{:else}<div class="output" style:color={OUTPUT[line.kind]}>{line.text}</div>{/if}
+              {/each}
+            {/if}
             {#if recovery?.button && confirm.recoveryCommands.length}
               <div class="comment gap"># {recovery.button.label} runs {confirm.recoveryCommands.length === 1 ? "this" : "these"}:</div>
               {#each confirm.recoveryCommands as command, i (i)}{@render prompt(command.display)}{/each}
@@ -269,6 +275,8 @@
             <button class="btn" onclick={() => confirm.cancel()} title={withKeys(recovery?.close ?? "Close", "Escape")}>{recovery?.close ?? "Close"}</button>
             {#if recovery?.button}
               <button class="btn go" class:danger={recovery.button.danger} bind:this={goButton} onclick={() => confirm.recover()}>{recovery.button.label}</button>
+            {:else if recovery?.act}
+              <button class="btn go" bind:this={goButton} onclick={() => confirm.act()}>{recovery.act.label}</button>
             {/if}
           {:else}
             <button class="btn" onclick={() => confirm.cancel()} title={withKeys("Cancel", "Escape")}>Cancel</button>

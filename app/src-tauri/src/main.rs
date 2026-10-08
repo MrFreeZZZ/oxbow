@@ -24,6 +24,8 @@ struct Session {
     diff: Mutex<DiffOptions>,
     /// Set by Stop; the running action checks it.
     cancel: Arc<AtomicBool>,
+    /// Stop of the fetch running in the background, apart from actions in the sheet.
+    fetch_cancel: Arc<AtomicBool>,
 }
 
 #[derive(Serialize)]
@@ -654,6 +656,7 @@ async fn perform_action(
         incoming: Vec::new(),
         remote_tip: None,
         hook: None,
+        ssh: None,
     })?;
     let cancel = session.cancel.clone();
     cancel.store(false, Ordering::Relaxed);
@@ -680,6 +683,7 @@ async fn perform_action(
             incoming: Vec::new(),
             remote_tip: None,
             hook: None,
+            ssh: None,
         })
     })
 }
@@ -778,16 +782,73 @@ async fn pull_setup(session: State<'_, Session>) -> CommandResult<PullSetup> {
     .await
 }
 
-/// Fetch every remote in the background: no sheet, and a failure is only reported.
+/// How a background fetch ended.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Fetched {
+    /// Remote branches and tags that are new, moved or gone.
+    updated: u32,
+}
+
+/// Fetch one remote or all in the background: no sheet, git's progress goes to the main window
+/// as `fetch-event`s, and a failure comes back explained, for Activity.
 #[tauri::command]
-async fn background_fetch(session: State<'_, Session>) -> CommandResult<()> {
-    let repo = current(&session)?;
-    blocking(move || {
-        let mut command = repo.fetch_command(None);
-        command.args.insert(1, "--quiet".to_owned());
-        repo.run(&command).map(|_| ())
+async fn fetch_in_background(
+    app: AppHandle,
+    session: State<'_, Session>,
+    remote: Option<String>,
+) -> Result<Fetched, Failure> {
+    let failed = |output: String| Failure {
+        kind: oxbow_core::FailureKind::Other,
+        output,
+        incoming: Vec::new(),
+        remote_tip: None,
+        hook: None,
+        ssh: None,
+    };
+    let repo = current(&session).map_err(failed)?;
+    let cancel = session.fetch_cancel.clone();
+    cancel.store(false, Ordering::Relaxed);
+    tauri::async_runtime::spawn_blocking(move || {
+        let action = Action::Fetch { remote: remote.clone() };
+        let command = repo.fetch_command(remote.as_deref()).with_progress();
+        let _ = app.emit_to(
+            "main",
+            "fetch-event",
+            oxbow_core::ActionEvent::Command {
+                display: command.display(),
+            },
+        );
+        let mut updated = 0;
+        let result = repo.run_streaming(
+            &command,
+            &mut |line| {
+                if !line.progress && oxbow_core::remote::is_ref_update(&line.text) {
+                    updated += 1;
+                }
+                let _ = app.emit_to("main", "fetch-event", oxbow_core::ActionEvent::Line(line));
+            },
+            &cancel,
+        );
+        match result {
+            Ok(_) => Ok(Fetched { updated }),
+            Err(err) => Err(repo.explain_failure(&action, &err)),
+        }
     })
     .await
+    .unwrap_or_else(|err| Err(failed(err.to_string())))
+}
+
+/// Stop the background fetch.
+#[tauri::command]
+fn stop_fetch(session: State<'_, Session>) {
+    session.fetch_cancel.store(true, Ordering::Relaxed);
+}
+
+/// The public half of an SSH key, to paste into GitHub.
+#[tauri::command]
+fn public_key(key: String) -> CommandResult<String> {
+    oxbow_core::ssh::public_key(&key).map_err(|err| err.to_string())
 }
 
 /// Search the history: messages, code changes, authors or file paths.
@@ -976,7 +1037,9 @@ fn main() {
             git_settings,
             repo_settings,
             set_git_config,
-            background_fetch,
+            fetch_in_background,
+            stop_fetch,
+            public_key,
             pull_setup,
             open_in_editor,
             open_in_terminal,

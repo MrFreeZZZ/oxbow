@@ -1,8 +1,10 @@
 // Confirmations for Fetch, Pull and Push, and the way out when one of them fails.
 
-import type { Part, Recovery, Request } from "./confirm.svelte";
+import type { Part, Recovery, Request, Step, TermLine } from "./confirm.svelte";
+import { api } from "./api";
+import { mac } from "./keys";
 import { stoppedOnConflicts } from "./merge";
-import type { Action, CommitBrief, Failure, HistoryRow, Tracking } from "./types";
+import type { Action, CommitBrief, Failure, HistoryRow, SshCheck, Tracking } from "./types";
 import { shortId } from "./format";
 
 export interface RemoteContext {
@@ -255,6 +257,10 @@ export function remoteTrouble(failure: Failure, action: Action, verb: string, re
 function networkOrAuth(failure: Failure, action: Action, verb: string, ctx: RemoteContext, done: string): Recovery | null {
   const remote = "remote" in action && action.remote ? action.remote : (ctx.remote ?? "the remote");
   const again = { label: "Try Again", action, status: `${verb} ${remote}…`, done };
+  if (failure.kind === "auth" && failure.ssh) {
+    const ssh = sshRecovery(failure.ssh, verbNoun(action), again);
+    if (ssh) return ssh;
+  }
   if (failure.kind === "auth") {
     return {
       title: `${remote} did not accept your sign-in`,
@@ -280,4 +286,146 @@ function networkOrAuth(failure: Failure, action: Action, verb: string, ctx: Remo
     };
   }
   return null;
+}
+
+/** "Fetch", "Pull" or "Push", for "Fetch from origin connects over SSH…". */
+function verbNoun(action: Action): string {
+  if (action.kind === "fetch" || action.kind === "fetchTags") return "Fetch";
+  if (action.kind === "pull") return "Pull";
+  return "Push";
+}
+
+/** "GitHub" for github.com, as people say it; the host name for anything else. */
+export function hostName(host: string): string {
+  const known: Record<string, string> = { "github.com": "GitHub", "gitlab.com": "GitLab", "bitbucket.org": "Bitbucket", "codeberg.org": "Codeberg" };
+  return known[host.toLowerCase()] ?? host;
+}
+
+/** What Oxbow ran to find out, for the sheet's terminal block. */
+function checkedLines(check: SshCheck, fix: string[] = []): TermLine[] {
+  const lines: TermLine[] = [];
+  for (const step of check.steps) {
+    lines.push({ kind: "cmd", text: step.command });
+    for (const text of step.output.split("\n").filter(Boolean)) lines.push({ kind: step.bad ? "err" : "out", text });
+  }
+  if (fix.length) {
+    lines.push({ kind: "hint", text: "# the fix:" });
+    for (const text of fix) lines.push(text.startsWith("#") ? { kind: "hint", text } : { kind: "cmd", text });
+  }
+  return lines;
+}
+
+/** The way out when a remote refused the SSH connection, from what Oxbow found out. */
+export function sshRecovery(check: SshCheck, verb: string, retry: Step & { label: string }): Recovery | null {
+  const host = hostName(check.host);
+  const how: Part[] = [`${verb} ${verb === "Push" ? "to" : "from"} `, { code: check.remote }, " connects over SSH as ", { code: check.login }];
+  const https = check.httpsUrl ? { label: "Use HTTPS Instead…", request: () => httpsRequest(check) } : undefined;
+  switch (check.problem) {
+    case "agentEmpty": {
+      return {
+        title: `${host} didn’t accept your SSH key`,
+        body: [
+          ...how,
+          ", and no key was offered: ssh-agent is empty, which usually happens after a restart. The key ",
+          { code: check.key! },
+          ` is still on disk. Adding it to the agent${mac ? " and to Keychain fixes this for good." : " fixes this until the next restart."}`,
+        ],
+        icon: "key",
+        tone: "err",
+        checked: checkedLines(check),
+        button: { label: "Add Key to Agent", action: { kind: "addSshKey", key: check.keyPath! }, status: "Adding the key to ssh-agent…", next: retry },
+        alt: https,
+        note: "If the key has a passphrase, a small window asks for it once.",
+        close: "Close",
+      };
+    }
+    case "keyNotOnHost":
+      return {
+        title: `Your SSH key isn’t on ${host}`,
+        body: [
+          ...how,
+          ". ",
+          ...(check.key ? ["Your key ", { code: check.key } as Part, " was offered"] : ["A key from ssh-agent was offered"]),
+          `, but no ${host} account has it. Add the public key to your account, then try again.`,
+        ],
+        icon: "key",
+        tone: "err",
+        checked: [...checkedLines(check), { kind: "hint", text: `# The key is loaded, but ${host} doesn’t know it.` }],
+        act: check.keyPath
+          ? {
+              label: "Copy Public Key",
+              run: async () => {
+                await navigator.clipboard.writeText(await api.publicKey(check.keyPath!));
+                return host === "GitHub"
+                  ? "Copied the public key. Paste it in GitHub › Settings › SSH and GPG keys, then try again."
+                  : `Copied the public key. Add it to your ${host} account, then try again.`;
+              },
+            }
+          : undefined,
+        button: check.keyPath ? undefined : retry,
+        alt: https,
+        note: "Nothing changed in your repository.",
+        close: "Close",
+      };
+    case "noKey":
+      return {
+        title: "This computer has no SSH key yet",
+        body: [...how, `, but there is no key in `, { code: "~/.ssh" }, ` and none in ssh-agent. Make one and add it to ${host}, or connect over HTTPS instead.`],
+        icon: "key",
+        tone: "err",
+        checked: checkedLines(check, ["ssh-keygen -t ed25519", `# then add ~/.ssh/id_ed25519.pub to your ${host} account`]),
+        button: retry,
+        alt: https,
+        close: "Close",
+      };
+    case "unknownHost":
+      return {
+        title: `ssh doesn’t trust ${check.host} yet`,
+        body: [
+          ...how,
+          ", but ",
+          { code: check.host },
+          " is not in ",
+          { code: "~/.ssh/known_hosts" },
+          `, or its key changed. Try Again asks whether to trust it: compare the fingerprint with the one ${host} publishes before you answer yes.`,
+        ],
+        icon: "key",
+        tone: "warn",
+        checked: checkedLines(check),
+        button: retry,
+        alt: https,
+        close: "Close",
+      };
+    case "works":
+      return {
+        title: `ssh gets into ${host} now`,
+        body: ["When Oxbow checked, ", { code: check.login }, " let the key in, so the failure was probably passing. Try again."],
+        icon: "key",
+        tone: "warn",
+        checked: checkedLines(check),
+        button: retry,
+        close: "Close",
+      };
+    default:
+      return null;
+  }
+}
+
+/** Point the remote at its HTTPS address instead of SSH. */
+export function httpsRequest(check: SshCheck): Request {
+  const url = check.httpsUrl!;
+  return {
+    title: `Connect ${check.remote} over HTTPS?`,
+    body: [
+      "Same repository, different way in: Fetch, Pull and Push then sign in with your ",
+      hostName(check.host),
+      " password or token, which Git’s credential helper keeps, instead of an SSH key. Nothing else changes.",
+    ],
+    icon: "key",
+    button: "Switch to HTTPS",
+    note: "Switch back any time in Settings › Repository › Remotes.",
+    status: `Switching ${check.remote} to HTTPS…`,
+    done: `${check.remote} now uses ${url}.`,
+    action: { kind: "setRemoteUrl", name: check.remote, url },
+  };
 }

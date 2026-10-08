@@ -75,6 +75,9 @@ export interface Request {
   recover?: (failure: Failure) => Recovery | null;
   /** Offered as Undo on the toast after it succeeded, e.g. putting a dropped stash back. */
   undo?: () => Request;
+  /** Runs in the background instead of in the sheet, e.g. a fetch: the sheet closes on the
+   *  button and this starts it. */
+  background?: () => void;
   action: Action;
 }
 
@@ -127,13 +130,26 @@ export interface Recovery {
   body: Part[];
   icon: Icon;
   tone: "warn" | "err";
-  /** Runs right away: the sheet already shows its commands. */
-  button?: { label: string; action: Action; status: string; done?: string; danger?: boolean };
+  /** Runs right away: the sheet already shows its commands. With `next`, that runs after it
+   *  in the same sheet, e.g. the fetch again once the SSH key is loaded. */
+  button?: { label: string; action: Action; status: string; done?: string; danger?: boolean; next?: Step };
+  /** A button that does something besides git, e.g. Copy Public Key, then closes the sheet
+   *  with its message. */
+  act?: { label: string; run: () => Promise<string> };
+  /** What Oxbow ran to find out why, shown under git's output. */
+  checked?: TermLine[];
   /** Opens another confirmation, e.g. Force Push… */
   alt?: { label: string; danger?: boolean; request: () => Request };
   note?: string;
   /** Label of the button that closes the sheet. */
   close?: string;
+}
+
+/** An action the sheet runs, with what it says meanwhile and after. */
+export interface Step {
+  action: Action;
+  status: string;
+  done?: string;
 }
 
 export interface TermLine {
@@ -177,6 +193,8 @@ class ConfirmState {
   /** Commands the recovery button will run. */
   recoveryCommands = $state<GitCommand[]>([]);
   toast = $state<string | null>(null);
+  /** The last action that ran and succeeded, e.g. the fetch after Add Key to Agent. */
+  ran: Action | null = null;
   /** The Undo of the toast, when the action that showed it can be taken back. */
   toastUndo = $state<(() => Request) | null>(null);
   /** Runs a request the way the app does (with a reload after it); set by the app. */
@@ -202,13 +220,22 @@ class ConfirmState {
    *  shows up while it runs. */
   async #askOrRun(request: Request) {
     if (shouldAsk(request)) await this.#ask(request);
-    else {
+    else if (request.background) {
+      this.#finish(true);
+      request.background();
+    } else {
       this.request = request;
       this.#execute(request.action, request.status ?? request.title, request.done);
     }
   }
 
   go() {
+    const background = this.request?.background;
+    if (background && this.phase === "ask") {
+      this.#finish(true);
+      background();
+      return;
+    }
     if (this.request && this.phase === "ask" && !this.request.invalid) this.#execute(this.request.action, this.request.status ?? this.request.title, this.request.done);
   }
 
@@ -234,10 +261,35 @@ class ConfirmState {
     }, 150);
   }
 
+  /** Show a failure that happened elsewhere, e.g. a background fetch, with its way out.
+   *  Resolves like `run`: true once the way out ran and succeeded. */
+  async show(request: Request, failure: Failure, lines: TermLine[] = []): Promise<boolean> {
+    if (this.request) return false;
+    const done = new Promise<boolean>((resolve) => (this.#resolve = resolve));
+    this.request = request;
+    this.commands = [];
+    this.lines = lines.filter((line) => !line.progress);
+    await this.#fail(failure);
+    return done;
+  }
+
   /** Run the recovery's button, e.g. Pull and Push after a rejected push. */
   recover() {
     const button = this.recovery?.button;
-    if (button) this.#execute(button.action, button.status, button.done);
+    if (button) this.#execute(button.action, button.status, button.done, button.next);
+  }
+
+  /** The recovery's other kind of button, e.g. Copy Public Key. */
+  async act() {
+    const act = this.recovery?.act;
+    if (!act) return;
+    try {
+      const said = await act.run();
+      this.#finish(false);
+      this.#showToast(said);
+    } catch (err) {
+      this.#showToast(String(err));
+    }
   }
 
   /** Open the recovery's other choice, e.g. Force Push…, as a new confirmation. */
@@ -272,8 +324,9 @@ class ConfirmState {
     }
   }
 
-  async #execute(action: Action, status: string, done?: string) {
+  async #execute(action: Action, status: string, done?: string, next?: Step): Promise<void> {
     this.phase = "running";
+    this.ran = null;
     this.status = status;
     this.lines = [];
     this.progress = null;
@@ -284,6 +337,8 @@ class ConfirmState {
     const started = Math.floor(Date.now() / 1000);
     try {
       await api.performAction(action);
+      this.ran = action;
+      if (next) return this.#execute(next.action, next.status, next.done);
       this.#finish(true);
       if (done) this.#showToast(done, undo ?? (await this.#undoFromLog(action, started)));
     } catch (err) {
@@ -377,7 +432,7 @@ function toFailure(err: unknown): Failure {
   return { kind: "other", output: String(err), incoming: [], remoteTip: null, hook: null };
 }
 
-function lineKind(text: string, stderr: boolean): TermLine["kind"] {
+export function lineKind(text: string, stderr: boolean): TermLine["kind"] {
   if (/^hint:/.test(text)) return "hint";
   if (/^(error|fatal):|^ ! |\[rejected\]|^CONFLICT/.test(text)) return "err";
   if (!stderr) return "out";

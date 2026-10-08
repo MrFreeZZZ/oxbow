@@ -19,6 +19,7 @@ pub mod remote;
 pub mod repo;
 pub mod search;
 pub mod setup;
+pub mod ssh;
 pub mod stack;
 pub mod stash;
 pub mod tags;
@@ -40,6 +41,7 @@ pub use remote::{CommitBrief, DeletionCheck, Failure, FailureKind, Tracking, cla
 pub use repo::{DiffOptions, HeadInfo, RefInfo, RefKind, Repo, StashInfo};
 pub use search::{SearchHit, SearchMode, SearchQuery, SearchResult};
 pub use setup::{CloneOptions, NewRepoOptions, NewRepoPlan, RemoteProbe, RepoGlance};
+pub use ssh::{SshCheck, SshProblem, SshStep};
 pub use stack::{
     BranchAfter, Stack, StackBranch, StackCommit, StackConflict, StackPlan, StackPreview, StackStep, StepAction,
 };
