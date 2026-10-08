@@ -4,7 +4,7 @@
 
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
-import { paletteOf, themeById, themeVariables } from "./themes";
+import { paletteOf, THEMES, themeById, themeVariables } from "./themes";
 
 export const defaults = {
   "oxbow.appearance": "system" as "system" | "light" | "dark",
@@ -50,6 +50,52 @@ export const defaults = {
 export type PrefKey = keyof typeof defaults;
 export type PrefValue<K extends PrefKey> = (typeof defaults)[K];
 
+/** What a setting may hold beyond the type of its default: the words a text setting knows, or
+ *  the range of a number. */
+type Rule = { oneOf?: readonly string[]; min?: number; max?: number; whole?: boolean };
+
+export const rules: Partial<Record<PrefKey, Rule>> = {
+  "oxbow.appearance": { oneOf: ["system", "light", "dark"] },
+  "oxbow.history.rowStyle": { oneOf: ["twoLines", "compact"] },
+  "oxbow.confirm.scope": { oneOf: ["all", "risky"] },
+  "oxbow.undo.keepDays": { min: 1, max: 3650, whole: true },
+  "oxbow.diff.view": { oneOf: ["changes", "full"] },
+  "oxbow.diff.contextLines": { min: 0, max: 100, whole: true },
+  "oxbow.diff.files": { oneOf: ["smart", "expanded", "collapsed"] },
+  "oxbow.diff.foldOver": { min: 1, max: 100000, whole: true },
+  "oxbow.text.fontSize": { min: 6, max: 72 },
+  "oxbow.text.tabWidth": { min: 1, max: 16, whole: true },
+  "oxbow.fetch.interval": { min: 1, max: 1440, whole: true },
+  "oxbow.commit.subjectGuide": { min: 0, max: 500, whole: true },
+  "oxbow.theme": { oneOf: THEMES.map((theme) => theme.id) },
+  "oxbow.theme.variant": { oneOf: ["auto", "light", "dark"] },
+};
+
+/** Keys Oxbow keeps in settings.json by itself, e.g. the width of a panel, with their type. */
+export const internal: Record<string, "number"> = { "oxbow.history.detailsWidth": "number" };
+
+const named = (type: string) => (type === "null" ? "null" : type === "boolean" ? "true or false" : `${/^[aeiou]/.test(type) ? "an" : "a"} ${type}`);
+const quoted = (words: readonly string[]) => words.map((word) => `"${word}"`).join(", ");
+
+/** Whether settings.json may hold the key. */
+export const knownSetting = (key: string) => key in defaults || key in internal;
+
+/** What is wrong with a value of settings.json, or null when Oxbow can use it. */
+export function problemOf(key: string, value: unknown): string | null {
+  const expected = key in defaults ? typeof defaults[key as PrefKey] : internal[key];
+  if (!expected) return `Oxbow has no setting “${key}”`;
+  const actual = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+  if (actual !== expected) return `Expected ${named(expected)}, not ${named(actual)}`;
+  const rule = rules[key as PrefKey];
+  if (!rule) return null;
+  if (rule.oneOf && !rule.oneOf.includes(value as string)) return `Expected one of ${quoted(rule.oneOf)}`;
+  if (typeof value === "number") {
+    if (rule.whole && !Number.isInteger(value)) return "Expected a whole number";
+    if ((rule.min !== undefined && value < rule.min) || (rule.max !== undefined && value > rule.max)) return `Expected a number from ${rule.min ?? "−∞"} to ${rule.max ?? "∞"}`;
+  }
+  return null;
+}
+
 /** The font stack for code: the chosen family, then fallbacks for systems that don't have it. */
 function fontStack(family: string): string {
   const name = family.replace(/["\\]/g, "").trim();
@@ -78,8 +124,13 @@ class Prefs {
 
   get<K extends PrefKey>(key: K): PrefValue<K> {
     const value = this.#values[key];
-    const fallback = defaults[key];
-    return (value !== undefined && typeof value === typeof fallback ? value : fallback) as PrefValue<K>;
+    // A value settings.json can't hold, e.g. typed in by hand, counts as the default.
+    return (value !== undefined && !problemOf(key, value) ? value : defaults[key]) as PrefValue<K>;
+  }
+
+  /** Whether settings.json holds anything, so Restore Defaults has something to do. */
+  get customized(): boolean {
+    return Object.keys(this.#values).length > 0;
   }
 
   /** Whether the setting differs from its default. */

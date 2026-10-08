@@ -12,7 +12,8 @@
   import { confirm } from "./confirm.svelte";
   import DiffView from "./DiffView.svelte";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
-  import { defaults, effectiveLook, prefs, type PrefKey } from "./prefs.svelte";
+  import { check, lineOf, segments } from "./jsonCheck";
+  import { defaults, effectiveLook, knownSetting, prefs, problemOf, type PrefKey } from "./prefs.svelte";
   import { addRemoteRequest, optimizeRequest, removeRemoteRequest, setUrlRequest } from "./repoSettings";
   import { paletteOf, THEMES, themeById, type Palette } from "./themes";
   import type { ConfigScope, FileDiff, GitSettings, OpenApp, RemoteInfo, RepoSettings } from "./types";
@@ -753,21 +754,43 @@
     json = true;
   }
 
-  const unknownKeys = $derived.by(() => {
-    try {
-      const parsed = JSON.parse(jsonText);
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? Object.keys(parsed).filter((key) => !(key in defaults) && key !== "oxbow.history.detailsWidth") : [];
-    } catch {
-      return [];
-    }
-  });
+  // What is wrong in the text, checked as it is typed: errors keep it from being saved, so a
+  // value Oxbow can't use never reaches the other windows.
+  const checked = $derived(check(jsonText, knownSetting, problemOf));
+  const pieces = $derived(segments(jsonText, checked));
+  const errors = $derived(checked.problems.filter((p) => p.level === "error"));
+  let editor = $state<HTMLTextAreaElement>();
+  let painted = $state<HTMLPreElement>();
+  let caret = $state(0);
+  /** The problem under the pointer, with where to show it. */
+  let hover = $state<{ index: number; x: number; y: number } | null>(null);
+  /** The problem the bar describes: the one at the caret, else the first. */
+  const described = $derived(checked.problems.find((p) => p.from <= caret && caret <= p.to) ?? errors[0] ?? checked.problems[0] ?? null);
+
+  function followScroll() {
+    if (!editor || !painted) return;
+    painted.scrollTop = editor.scrollTop;
+    painted.scrollLeft = editor.scrollLeft;
+  }
+
+  function pointAt(event: MouseEvent) {
+    // The painted text lies under the text box, so ask what is under the pointer at every depth.
+    const under = document.elementsFromPoint(event.clientX, event.clientY).find((el) => el instanceof HTMLElement && el.dataset.problem);
+    const index = under instanceof HTMLElement ? Number(under.dataset.problem) : null;
+    hover = index === null ? null : { index, x: event.clientX, y: event.clientY };
+  }
+
+  /** Put the caret on a problem. */
+  function goTo(from: number, to: number) {
+    if (!editor) return;
+    editor.focus();
+    editor.setSelectionRange(from, to);
+    caret = from;
+  }
 
   async function saveJson() {
-    try {
-      const parsed = JSON.parse(jsonText);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("settings.json must be one object: { \"oxbow.…\": … }");
-    } catch (err) {
-      jsonError = err instanceof Error ? err.message : String(err);
+    if (errors.length) {
+      jsonError = `Fix ${errors.length === 1 ? "the error" : `${errors.length} errors`} to save`;
       return;
     }
     try {
@@ -778,6 +801,62 @@
     } catch (err) {
       jsonError = String(err);
     }
+  }
+
+  const revealLabel = mac ? "Reveal in Finder" : navigator.platform.startsWith("Win") ? "Show in Explorer" : "Open Containing Folder";
+
+  function reveal() {
+    api.revealSettings().catch((err) => confirm.say(String(err)));
+  }
+
+  /** A path typed into a shell, with ~ left unquoted. */
+  const shellPath = (path: string) => path.replace(/[^\w@%+=:,./~-]/g, "\\$&");
+
+  /** Whether there is anything to restore; a file Oxbow can't read counts too. */
+  const customized = $derived(prefs.customized || (json && jsonSaved.trim() !== "{}"));
+
+  async function restoreDefaults() {
+    const where = await api.settingsLocation().catch(() => ({ file: "settings.json", backup: "settings.backup.json" }));
+    const reopen = async () => {
+      if (json) jsonText = jsonSaved = await api.settingsText().catch(() => "{}\n");
+    };
+    await confirm.run({
+      title: "Restore the default settings?",
+      body: [
+        "Every Oxbow setting goes back to its default. Git’s own settings (identity, pull, default branch, signing) stay as they are in ~/.gitconfig and .git/config. The current file is kept as ",
+        { code: "settings.backup.json" },
+        ".",
+      ],
+      icon: "reset",
+      button: "Restore Defaults",
+      danger: true,
+      status: "Restoring the default settings…",
+      local: {
+        commands: [`mv ${shellPath(where.file)} ${shellPath(where.backup)}`],
+        comment: "Oxbow does this itself; no git command runs",
+        run: async () => {
+          await api.restoreDefaultSettings();
+          await reopen();
+          return "Settings are back to their defaults.";
+        },
+      },
+      undo: () => ({
+        title: "Put back the settings you had?",
+        body: ["The settings from before Restore Defaults come back from ", { code: "settings.backup.json" }, "."],
+        icon: "undo",
+        button: "Put Back",
+        status: "Putting the settings back…",
+        local: {
+          commands: [`mv ${shellPath(where.backup)} ${shellPath(where.file)}`],
+          comment: "Oxbow does this itself; no git command runs",
+          run: async () => {
+            await api.restoreSettingsBackup();
+            await reopen();
+            return "Your settings are back.";
+          },
+        },
+      }),
+    });
   }
 
   // Themes: a sample diff drawn by the real code view, in the chosen theme.
@@ -904,7 +983,15 @@
         </button>
       </div>
       <h1 data-tauri-drag-region>{json ? "settings.json" : needle ? "Search" : labelOf(current)}</h1>
+      {#if json}
+        <button class="folder" onclick={reveal} title={revealLabel} aria-label={revealLabel}>
+          <svg class="icon small" viewBox="0 0 16 16"><path d={menuIcons.reveal} /></svg>
+        </button>
+      {/if}
       <span class="spacer" data-tauri-drag-region></span>
+      <button class="pill" onclick={restoreDefaults} disabled={!customized} title={customized ? "Put every Oxbow setting back to its default. Git’s own settings stay as they are" : "Every Oxbow setting is at its default"}>
+        <svg class="icon small" viewBox="0 0 16 16"><path d={menuIcons.reset} /></svg>Restore defaults
+      </button>
       {#if json}
         <button class="pill" onclick={() => (json = false)} title="Back to the Settings window">
           <svg class="icon small" viewBox="0 0 16 16"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" /></svg>Open Settings UI
@@ -926,11 +1013,30 @@
           Only values that differ from the defaults are listed. Git’s own settings (identity, pull, default branch, signing) stay in ~/.gitconfig, where Settings writes them with
           <code>git config</code>.
         </p>
-        <textarea
+        <div class="code">
+          <pre class="painted" bind:this={painted} aria-hidden="true">{#each pieces as piece, i (i)}<span
+                class="t-{piece.kind}"
+                class:bad={piece.problem !== null && checked.problems[piece.problem].level === "error"}
+                class:odd={piece.problem !== null && checked.problems[piece.problem].level === "warn"}
+                data-problem={piece.problem ?? undefined}>{piece.text}</span
+              >{/each}{"\n"}</pre>
+          <textarea
           class="editor"
+          bind:this={editor}
           bind:value={jsonText}
           spellcheck="false"
+          wrap="off"
+          autocapitalize="off"
+          autocomplete="off"
           aria-label="settings.json"
+          aria-invalid={errors.length > 0}
+          onscroll={followScroll}
+          oninput={() => (jsonError = null)}
+          onselect={(event) => (caret = event.currentTarget.selectionStart)}
+          onkeyup={(event) => (caret = event.currentTarget.selectionStart)}
+          onclick={(event) => (caret = event.currentTarget.selectionStart)}
+          onmousemove={pointAt}
+          onmouseleave={() => (hover = null)}
           onkeydown={(event) => {
             if ((event.metaKey || event.ctrlKey) && event.key === "s") {
               event.preventDefault();
@@ -942,18 +1048,25 @@
               jsonText = box.value;
             }
           }}
-        ></textarea>
+          ></textarea>
+          {#if hover && checked.problems[hover.index]}
+            {@const problem = checked.problems[hover.index]}
+            <div class="tip" class:warn={problem.level === "warn"} role="tooltip" style:left="{hover.x + 12}px" style:top="{hover.y + 16}px">{problem.message}</div>
+          {/if}
+        </div>
         <div class="json-bar">
           {#if jsonError}
             <span class="error">{jsonError}</span>
-          {:else if unknownKeys.length}
-            <span class="warn">Oxbow does not know {unknownKeys.join(", ")}</span>
+          {:else if described}
+            <button class="problem-link" class:warn={described.level === "warn"} onclick={() => goTo(described.from, described.to)} title="Go to it">
+              Line {lineOf(jsonText, described.from)}: {described.message}{#if checked.problems.length > 1}<span class="more">&nbsp;· {checked.problems.length - 1} more</span>{/if}
+            </button>
           {:else}
             <span class="sub">{jsonText === jsonSaved ? "Saved" : "Not saved yet"}</span>
           {/if}
           <span class="spacer"></span>
           <button class="plain" disabled={jsonText === jsonSaved} onclick={() => ((jsonText = jsonSaved), (jsonError = null))}>Revert</button>
-          <button class="primary" disabled={jsonText === jsonSaved} onclick={saveJson}>Save <span class="keys">{keys("Mod+S")}</span></button>
+          <button class="primary" disabled={jsonText === jsonSaved || errors.length > 0} onclick={saveJson} title={errors.length ? "Fix the errors underlined in red to save" : undefined}>Save <span class="keys">{keys("Mod+S")}</span></button>
         </div>
       </div>
     {:else}
@@ -1711,26 +1824,155 @@
     font-size: 11px;
   }
 
-  .editor {
+  /* The text box draws only the caret and selection; the colored copy of its text lies under it,
+     in the same font and place, and scrolls with it. */
+  .code {
+    position: relative;
     flex-grow: 1;
     min-height: 0;
-    resize: none;
-    padding: 10px 12px;
     border-radius: 12px;
     border: 0.5px solid var(--panel-border);
     background: var(--code-bg, var(--win));
-    color: var(--code-fg, var(--code));
+  }
+
+  .code:focus-within {
+    border-color: var(--accent);
+  }
+
+  .painted,
+  .editor {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    padding: 10px 12px;
+    border: 0;
     font-family: var(--code-font);
     font-size: var(--code-size);
     line-height: var(--code-line);
+    letter-spacing: 0;
     tab-size: 2;
+    white-space: pre;
+    overflow: auto;
+  }
+
+  .painted {
+    color: var(--code-fg, var(--code));
+    overflow: hidden;
+    pointer-events: auto;
+  }
+
+  .editor {
+    resize: none;
+    background: transparent;
+    color: transparent;
+    caret-color: var(--code-fg, var(--code));
     outline: 0;
     user-select: text;
     -webkit-user-select: text;
   }
 
-  .editor:focus-visible {
-    border-color: var(--accent);
+  .editor::selection {
+    background: color-mix(in srgb, var(--accent) 28%, transparent);
+    color: transparent;
+  }
+
+  .t-key {
+    color: var(--syn-type, var(--code-fg));
+  }
+
+  .t-str {
+    color: var(--syn-str, var(--code-fg));
+  }
+
+  .t-num {
+    color: var(--syn-num, var(--code-fg));
+  }
+
+  .t-lit {
+    color: var(--syn-kw, var(--code-fg));
+  }
+
+  .t-com {
+    color: var(--syn-com, var(--code-fg));
+  }
+
+  .t-punct {
+    opacity: 0.75;
+  }
+
+  .bad,
+  .odd {
+    text-decoration-line: underline;
+    text-decoration-style: wavy;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+    text-decoration-skip-ink: none;
+  }
+
+  .bad {
+    text-decoration-color: var(--danger);
+  }
+
+  .odd {
+    text-decoration-color: var(--orange);
+  }
+
+  .tip {
+    position: fixed;
+    z-index: 20;
+    max-width: 360px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: var(--glass);
+    border: 0.5px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px);
+    font-size: 12px;
+    line-height: 1.35;
+    color: var(--danger);
+    pointer-events: none;
+  }
+
+  .tip.warn {
+    color: var(--orange);
+  }
+
+  .problem-link {
+    min-width: 0;
+    padding: 0;
+    background: none;
+    font-size: 12px;
+    color: var(--danger);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: left;
+  }
+
+  .problem-link.warn {
+    color: var(--orange);
+  }
+
+  .problem-link .more {
+    color: var(--text2);
+  }
+
+  .folder {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 13px;
+    color: var(--icon);
+  }
+
+  .folder:hover {
+    background: var(--field);
+  }
+
+  .pill:disabled {
+    opacity: 0.45;
   }
 
   .json-bar {
@@ -1744,9 +1986,6 @@
     color: var(--danger);
   }
 
-  .json-bar .warn {
-    color: var(--orange);
-  }
 
   .plain,
   .primary {

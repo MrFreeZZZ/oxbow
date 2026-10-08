@@ -78,7 +78,12 @@ export interface Request {
   /** Runs in the background instead of in the sheet, e.g. a fetch: the sheet closes on the
    *  button and this starts it. */
   background?: () => void;
-  action: Action;
+  /** The git action; a request without one is `local`. */
+  action?: Action;
+  /** Something Oxbow does itself instead of git, e.g. putting its settings back to the
+   *  defaults: the sheet shows the same step as shell commands, the button runs it, and the
+   *  toast says what it returned. */
+  local?: { commands: string[]; comment?: string; run: () => Promise<string> };
 }
 
 /** A small graph of what the action makes, and a verdict under it. */
@@ -173,9 +178,10 @@ function isForcePush(action: Action): boolean {
 function shouldAsk(request: Request): boolean {
   if (request.fields?.length || request.invalid) return true;
   const action = request.action;
-  if (isForcePush(action) && prefs.get("oxbow.push.confirmForce")) return true;
+  if (action && isForcePush(action) && prefs.get("oxbow.push.confirmForce")) return true;
   if (!prefs.get("oxbow.confirm.enabled")) return false;
   if (prefs.get("oxbow.confirm.scope") === "all") return true;
+  if (!action) return !!request.danger;
   return !!request.danger || isForcePush(action) || RISKY.has(action.kind) || (action.kind === "merge" && action.method === "rebase");
 }
 
@@ -220,10 +226,13 @@ class ConfirmState {
    *  shows up while it runs. */
   async #askOrRun(request: Request) {
     if (shouldAsk(request)) await this.#ask(request);
-    else if (request.background) {
+    else if (request.local) {
+      this.request = request;
+      this.#runLocal(request);
+    } else if (request.background) {
       this.#finish(true);
       request.background();
-    } else {
+    } else if (request.action) {
       this.request = request;
       this.#execute(request.action, request.status ?? request.title, request.done);
     }
@@ -236,7 +245,9 @@ class ConfirmState {
       background();
       return;
     }
-    if (this.request && this.phase === "ask" && !this.request.invalid) this.#execute(this.request.action, this.request.status ?? this.request.title, this.request.done);
+    if (!this.request || this.phase !== "ask" || this.request.invalid) return;
+    if (this.request.local) this.#runLocal(this.request);
+    else if (this.request.action) this.#execute(this.request.action, this.request.status ?? this.request.title, this.request.done);
   }
 
   /** Show another version of the request, after a checkbox or chip changed it. */
@@ -312,6 +323,13 @@ class ConfirmState {
     this.lines = [];
     this.failure = null;
     this.recovery = null;
+    if (request.local) {
+      const comment = request.local.comment ?? null;
+      this.commands = request.local.commands.map((display) => ({ args: [], comment, display, input: null, before: null, todo: null }));
+      this.phase = "ask";
+      return;
+    }
+    if (!request.action) return;
     try {
       const plan = await api.planAction(request.action);
       if (mine !== this.#planned) return;
@@ -354,6 +372,20 @@ class ConfirmState {
         return;
       }
       this.#fail(failure);
+    }
+  }
+
+  /** Run a request's `local` step: it has no git output, so the sheet closes on success. */
+  async #runLocal(request: Request) {
+    this.phase = "running";
+    this.status = request.status ?? request.title;
+    this.lines = [];
+    try {
+      const said = await request.local!.run();
+      this.#finish(true);
+      this.#showToast(said, request.undo ?? null);
+    } catch (err) {
+      this.#fail({ kind: "other", output: String(err), incoming: [], remoteTip: null, hook: null });
     }
   }
 
@@ -400,7 +432,10 @@ class ConfirmState {
     const undo = this.toastUndo;
     this.toast = null;
     this.toastUndo = null;
-    if (undo) this.runner?.(undo());
+    if (!undo) return;
+    // The Settings window has no runner of its own.
+    if (this.runner) this.runner(undo());
+    else void this.run(undo());
   }
 
   #showToast(text: string, undo: (() => Request) | null = null) {
