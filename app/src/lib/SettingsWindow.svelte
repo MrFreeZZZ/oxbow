@@ -11,12 +11,13 @@
   import ConfirmSheet from "./ConfirmSheet.svelte";
   import { confirm } from "./confirm.svelte";
   import DiffView from "./DiffView.svelte";
+  import GitHubSignIn from "./GitHubSignIn.svelte";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import { check, lineOf, segments } from "./jsonCheck";
   import { defaults, effectiveLook, knownSetting, prefs, problemOf, type PrefKey } from "./prefs.svelte";
   import { addRemoteRequest, optimizeRequest, removeRemoteRequest, setUrlRequest } from "./repoSettings";
   import { paletteOf, THEMES, themeById, type Palette } from "./themes";
-  import type { ConfigScope, FileDiff, GitSettings, OpenApp, RemoteInfo, RepoSettings } from "./types";
+  import type { ConfigScope, FileDiff, GitHubAccount, GitSettings, OpenApp, RemoteInfo, RepoSettings } from "./types";
 
   const GEAR =
     "M12.78 6.52L14.44 6.56L14.44 9.44L12.78 9.48L12.42 10.33L13.57 11.54L11.54 13.57L10.33 12.42L9.48 12.78L9.44 14.44L6.56 14.44L6.52 12.78L5.67 12.42L4.46 13.57L2.43 11.54L3.58 10.33L3.22 9.48L1.56 9.44L1.56 6.56L3.22 6.52L3.58 5.67L2.43 4.46L4.46 2.43L5.67 3.58L6.52 3.22L6.56 1.56L9.44 1.56L9.48 3.22L10.33 3.58L11.54 2.43L13.57 4.46L12.42 5.67zM8 5.8a2.2 2.2 0 1 0 0 4.4a2.2 2.2 0 1 0 0-4.4";
@@ -43,6 +44,8 @@
     sub?: Text;
     mono?: boolean;
     badge?: () => string | null;
+    /** A round picture before the label, e.g. an account's avatar. */
+    image?: () => string | null;
     control?: Control;
     setting?: Setting;
     /** Greyed out while another setting makes this one irrelevant. */
@@ -88,12 +91,54 @@
   let problem = $state<string | null>(null);
 
   async function load() {
-    const [g, r] = await Promise.all([api.gitSettings().catch(() => null), api.repoSettings().catch(() => null)]);
+    const [g, r, a] = await Promise.all([api.gitSettings().catch(() => null), api.repoSettings().catch(() => null), api.githubAccount().catch(() => null)]);
     git = g;
     repo = r;
+    account = a;
   }
   load();
   listen("repo-changed", () => load()).catch(() => {});
+  listen("account-changed", () => load()).catch(() => {});
+
+  // GitHub: who is signed in, and the sign-in sheet.
+  let account = $state<GitHubAccount | null>(null);
+  let signIn = $state<{ tokenFirst: boolean } | null>(null);
+  const storeName = navigator.platform.startsWith("Mac") ? "Keychain" : navigator.platform.startsWith("Win") ? "Credential Manager" : "keyring";
+  const lacksRepo = () => !!account?.scopes && !account.scopes.includes("repo");
+
+  /** Where the token is kept, as the command that would remove it. */
+  function forgetCommand(login: string): string {
+    const platform = navigator.platform;
+    if (platform.startsWith("Mac")) return `security delete-generic-password -s "Oxbow GitHub" -a ${login}`;
+    if (platform.startsWith("Win")) return `cmdkey /delete:${login}.Oxbow GitHub`;
+    return `secret-tool clear service "Oxbow GitHub" username ${login}`;
+  }
+
+  async function signOut() {
+    if (!account) return;
+    const login = account.login;
+    await confirm.run({
+      title: `Sign out of GitHub as ${login}?`,
+      body: [
+        `Oxbow forgets the token: it leaves the ${storeName}, and Publish and`,
+        " pull requests need a new sign-in. Git’s own saved passwords and SSH keys stay. GitHub keeps the authorization until you revoke it in ",
+        { code: "Settings › Applications" },
+        " there.",
+      ],
+      icon: "key",
+      button: "Sign Out",
+      status: "Signing out…",
+      local: {
+        commands: [forgetCommand(login)],
+        comment: "Oxbow does this itself; no git command runs",
+        run: async () => {
+          await api.githubSignOut();
+          await load();
+          return `Signed out of GitHub.`;
+        },
+      },
+    });
+  }
 
   function config(scope: ConfigScope, key: string): string | undefined {
     const map = scope === "global" ? git?.global : repo?.local;
@@ -334,6 +379,40 @@
       color: "var(--lane-0)",
       icon: "M8 8a2.6 2.6 0 1 0 0-5.2a2.6 2.6 0 1 0 0 5.2M3 13.8c.6-2.6 2.6-3.6 5-3.6s4.4 1 5 3.6",
       groups: () => [
+        {
+          title: "GitHub",
+          foot: "Git keeps using your SSH keys and saved passwords. Oxbow lends git this sign-in for https://github.com remotes that have none.",
+          rows: account
+            ? [
+                {
+                  id: "github:account",
+                  label: account.name ?? account.login,
+                  image: () => account?.avatarUrl ?? null,
+                  sub: () => `${account?.name ? `@${account.login} · ` : ""}${account?.method === "browser" ? "signed in with the browser" : "signed in with a token"} · the token is in the ${storeName}`,
+                  badge: () => "Connected",
+                  control: { type: "button", label: "Sign Out…", run: signOut },
+                  more: () => [{ kind: "item", label: "Open Profile on GitHub", icon: menuIcons.reveal, run: () => account && api.openGitHub(account.htmlUrl) }],
+                },
+                ...(lacksRepo()
+                  ? [
+                      {
+                        id: "github:scopes",
+                        label: "This token can’t publish or open pull requests",
+                        sub: () => `It needs the repo scope; it has ${account?.scopes?.length ? account.scopes.join(", ") : "none"}.`,
+                        control: { type: "button" as const, label: "Sign In Again…", run: () => (signIn = { tokenFirst: account?.method === "token" }) },
+                      },
+                    ]
+                  : []),
+              ]
+            : [
+                {
+                  id: "github:none",
+                  label: "GitHub",
+                  sub: "Sign in to publish repositories and work with pull requests",
+                  control: { type: "button", label: "Sign In…", run: () => (signIn = { tokenFirst: false }) },
+                },
+              ],
+        },
         {
           title: "Commit identity",
           foot: () => `Saved in ~/.gitconfig.${repo ? ` A repository can use its own identity, see ${repo.name} in the sidebar.` : ""}`,
@@ -1112,6 +1191,7 @@
                       <svg class="icon" viewBox="0 0 16 16"><path d={GEAR} /></svg>
                     </button>
                   {/if}
+                  {#if row.image?.()}<img class="avatar" src={row.image()} alt="" />{/if}
                   <span class="text" class:off>
                     <span class="name" class:mono={row.mono}>{text(row.label)}</span>
                     {#if text(row.sub)}<span class="sub">{text(row.sub)}</span>{/if}
@@ -1233,6 +1313,16 @@
 {/if}
 
 <ConfirmSheet repo={repo?.name ?? ""} branch={null} color={0} />
+{#if signIn}
+  <GitHubSignIn
+    tokenFirst={signIn.tokenFirst}
+    onClose={() => (signIn = null)}
+    onDone={(signedIn) => {
+      account = signedIn;
+      signIn = null;
+    }}
+  />
+{/if}
 
 <style>
   .settings {
@@ -1545,6 +1635,14 @@
 
   .off {
     opacity: 0.4;
+  }
+
+  .avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 15px;
+    flex-shrink: 0;
+    background: var(--field);
   }
 
   .chip {

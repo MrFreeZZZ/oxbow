@@ -11,6 +11,7 @@ pub mod config;
 pub mod edit;
 pub mod error;
 pub mod filehistory;
+pub mod github;
 pub mod graph;
 pub mod history;
 pub mod operation;

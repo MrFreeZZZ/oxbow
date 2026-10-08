@@ -34,6 +34,9 @@ import type {
   Stack,
   StackPlan,
   StackPreview,
+  GitHubAccount,
+  SignInSetup,
+  DeviceCode,
 } from "./types";
 import type { PullSetup } from "./remote";
 
@@ -106,6 +109,16 @@ export const api = {
   restoreDefaultSettings: () => invoke<void>("restore_default_settings"),
   restoreSettingsBackup: () => invoke<void>("restore_settings_backup"),
   revealSettings: () => invoke<void>("reveal_settings"),
+  githubAccount: () => invoke<GitHubAccount | null>("github_account"),
+  githubSignInSetup: () => invoke<SignInSetup>("github_sign_in_setup"),
+  githubDeviceStart: () => invoke<DeviceCode>("github_device_start"),
+  /** Resolves once the code is approved in the browser; fails with "stopped" after Stop. */
+  githubDeviceWait: (deviceCode: string, interval: number, expiresIn: number) => invoke<GitHubAccount>("github_device_wait", { deviceCode, interval, expiresIn }),
+  githubDeviceStop: () => invoke<void>("github_device_stop"),
+  githubSignInToken: (token: string) => invoke<GitHubAccount>("github_sign_in_token", { token }),
+  githubSignOut: () => invoke<void>("github_sign_out"),
+  /** Opens a github.com page in the browser. */
+  openGitHub: (url: string) => invoke<void>("open_github", { url }),
 };
 
 /** Keys of `settings.json`. */

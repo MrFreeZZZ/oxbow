@@ -1,7 +1,7 @@
 name: CI
 
-# The repo is private and macOS minutes count ten times against the monthly allowance, so the
-# app is built for macOS only, once per merge to main (or when run by hand from the Actions tab).
+# The app is built for macOS only, once per merge to main (or when run by hand from the Actions
+# tab).
 # Format, lint and tests run locally before every push.
 on:
   push:

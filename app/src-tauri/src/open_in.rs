@@ -203,6 +203,29 @@ pub fn reveal(path: &Path) -> Result<(), String> {
     launch(command)
 }
 
+/// Open a web page in the default browser.
+pub fn open_url(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let command = {
+        let mut command = Command::new("open");
+        command.arg(url);
+        command
+    };
+    #[cfg(target_os = "windows")]
+    let command = {
+        let mut command = Command::new("rundll32");
+        command.args(["url.dll,FileProtocolHandler", url]);
+        command
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(url);
+        command
+    };
+    launch(command)
+}
+
 /// Start `command` and let it run on its own.
 fn launch(mut command: Command) -> Result<(), String> {
     let mut child = command
