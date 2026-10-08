@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
-use crate::cli::GitCommand;
+use crate::cli::{GitCommand, literal};
 use crate::commit::FileStatus;
 use crate::error::{Error, Result};
 use crate::repo::Repo;
@@ -126,7 +126,7 @@ impl Repo {
             ];
             args.extend(revs.iter().cloned());
             args.push("--".to_owned());
-            args.push(path.to_owned());
+            args.push(literal(path));
             self.run(&GitCommand::new(args))
         };
         let names = run("--name-status")?;
@@ -224,7 +224,7 @@ impl Repo {
             }
             args.extend(revs.iter().map(|r| (*r).to_owned()));
             args.push("--".to_owned());
-            args.push(path.to_owned());
+            args.push(literal(path));
             let out = self.run(&GitCommand::new(args))?;
             Ok(out
                 .stdout

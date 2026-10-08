@@ -187,3 +187,21 @@ fn a_stash_becomes_a_branch() {
     assert_eq!(read(&fx, "a.txt"), "one\nTWO stashed\nthree\n");
     assert!(repo.stashes().unwrap().is_empty());
 }
+
+#[test]
+fn undo_apply_keeps_an_untracked_file_that_was_there_before() {
+    let (mut fx, repo) = stashed();
+    fx.commit("a.txt", "one\n2 committed\nthree\n", "Number two");
+    // Made after the check before the apply, so git does not restore over it.
+    fx.write("new.txt", "my own new.txt\n");
+    let err = repo.perform(&apply(&repo, false)).unwrap_err();
+    assert!(err.to_string().contains("already exists"), "{err}");
+    assert_eq!(repo.operation().unwrap().unwrap().kind, OperationKind::StashApply);
+
+    let undo = repo.plan(&Action::Abort).unwrap();
+    assert!(undo.commands.iter().all(|c| !c.display().contains("clean")), "{undo:?}");
+    repo.perform(&Action::Abort).unwrap();
+    assert!(repo.operation().unwrap().is_none());
+    assert_eq!(read(&fx, "a.txt"), "one\n2 committed\nthree\n");
+    assert_eq!(read(&fx, "new.txt"), "my own new.txt\n");
+}

@@ -1,6 +1,6 @@
 mod support;
 
-use oxbow_core::{Action, FailureKind, LineKind, Repo, Side};
+use oxbow_core::{Action, FailureKind, LineKind, Repo, Side, shown_lines};
 use support::Fixture;
 
 const BEFORE: &str = "one\ntwo\nthree\nfour\nfive\n";
@@ -8,8 +8,8 @@ const BEFORE: &str = "one\ntwo\nthree\nfour\nfive\n";
 /// added lines.
 const AFTER: &str = "one\nTWO\n2a\n2b\nthree\nfour\nfive\n";
 
-/// Indexes of the changed lines of the only hunk of `path` on `side`, with their text.
-fn changed(repo: &Repo, path: &str, side: Side) -> (String, Vec<(usize, LineKind, String)>) {
+/// The header and shown lines of the only hunk of `path` on `side`, and indexes of its changed lines with their text.
+fn changed(repo: &Repo, path: &str, side: Side) -> (String, Vec<String>, Vec<(usize, LineKind, String)>) {
     let diff = repo.working_diff(path, side, false).unwrap();
     assert_eq!(diff.hunks.len(), 1);
     let hunk = &diff.hunks[0];
@@ -20,7 +20,7 @@ fn changed(repo: &Repo, path: &str, side: Side) -> (String, Vec<(usize, LineKind
         .filter(|(_, l)| l.kind != LineKind::Context)
         .map(|(i, l)| (i, l.kind, l.text.clone()))
         .collect();
-    (hunk.header.clone(), lines)
+    (hunk.header.clone(), shown_lines(hunk), lines)
 }
 
 fn index_of(lines: &[(usize, LineKind, String)], text: &str) -> usize {
@@ -39,11 +39,12 @@ fn single_lines_are_staged_unstaged_and_discarded() {
     let repo = Repo::open(fx.path()).unwrap();
 
     // Stage the replacement of `two` and `2b`, but not `2a`.
-    let (header, lines) = changed(&repo, "a.txt", Side::Unstaged);
+    let (header, shown, lines) = changed(&repo, "a.txt", Side::Unstaged);
     let picked = vec![index_of(&lines, "two"), index_of(&lines, "TWO"), index_of(&lines, "2b")];
     let stage = Action::StageHunk {
         path: "a.txt".into(),
         header,
+        shown,
         lines: Some(picked),
     };
     let plan = repo.plan(&stage).unwrap();
@@ -57,24 +58,26 @@ fn single_lines_are_staged_unstaged_and_discarded() {
     assert_eq!(staged_text(&mut fx, "a.txt"), "one\nTWO\n2b\nthree\nfour\nfive\n");
     // The file itself keeps every change; only `2a` is left unstaged.
     assert_eq!(std::fs::read_to_string(fx.path().join("a.txt")).unwrap(), AFTER);
-    let (_, left) = changed(&repo, "a.txt", Side::Unstaged);
+    let (_, _, left) = changed(&repo, "a.txt", Side::Unstaged);
     assert_eq!(left.iter().map(|l| l.2.as_str()).collect::<Vec<_>>(), ["2a"]);
 
     // Unstage `2b` again, keeping the staged replacement.
-    let (header, lines) = changed(&repo, "a.txt", Side::Staged);
+    let (header, shown, lines) = changed(&repo, "a.txt", Side::Staged);
     repo.perform(&Action::UnstageHunk {
         path: "a.txt".into(),
         header,
+        shown,
         lines: Some(vec![index_of(&lines, "2b")]),
     })
     .unwrap();
     assert_eq!(staged_text(&mut fx, "a.txt"), "one\nTWO\nthree\nfour\nfive\n");
 
     // Discard `2a` from the file; `2b` stays.
-    let (header, lines) = changed(&repo, "a.txt", Side::Unstaged);
+    let (header, shown, lines) = changed(&repo, "a.txt", Side::Unstaged);
     repo.perform(&Action::DiscardHunk {
         path: "a.txt".into(),
         header,
+        shown,
         lines: Some(vec![index_of(&lines, "2a")]),
     })
     .unwrap();
@@ -84,11 +87,12 @@ fn single_lines_are_staged_unstaged_and_discarded() {
     );
 
     // Nothing picked is refused.
-    let (header, _) = changed(&repo, "a.txt", Side::Unstaged);
+    let (header, shown, _) = changed(&repo, "a.txt", Side::Unstaged);
     let err = repo
         .perform(&Action::StageHunk {
             path: "a.txt".into(),
             header,
+            shown,
             lines: Some(Vec::new()),
         })
         .unwrap_err();
@@ -101,11 +105,12 @@ fn a_last_line_without_newline_can_be_staged_alone() {
     fx.commit("a.txt", "one\ntwo", "Root");
     fx.write("a.txt", "one\ntwo\nthree\nfour");
     let repo = Repo::open(fx.path()).unwrap();
-    let (header, lines) = changed(&repo, "a.txt", Side::Unstaged);
+    let (header, shown, lines) = changed(&repo, "a.txt", Side::Unstaged);
     // -two (no newline), +two, +three, +four (no newline): stage only the newline fix of `two`.
     repo.perform(&Action::StageHunk {
         path: "a.txt".into(),
         header,
+        shown,
         lines: Some(vec![lines[0].0, lines[1].0]),
     })
     .unwrap();

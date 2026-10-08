@@ -13,7 +13,7 @@
   import DiffView, { type LinePicker } from "./DiffView.svelte";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import { nav } from "./nav.svelte";
-  import { commitRecovery, ignoreChoices, ignoreRequest, linesRequest, stashFilesRequest, stashMessageFor, type LinesKind } from "./changes";
+  import { commitRecovery, ignoreChoices, ignoreRequest, linesRequest, shownLines, stashFilesRequest, stashMessageFor, type LinesKind } from "./changes";
 
   let {
     branch,
@@ -193,7 +193,7 @@
         done: `Discarded ${lines(hunk)} of ${path.slice(path.lastIndexOf("/") + 1)}.`,
       },
     };
-    act({ ...request[kind], action: { kind, path, header: hunk.header } });
+    act({ ...request[kind], action: { kind, path, header: hunk.header, shown: shownLines(hunk) } });
   }
 
   /** Changed lines can be picked in the hunks of a tracked file, not in the whole-file view. */
