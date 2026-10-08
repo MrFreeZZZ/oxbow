@@ -316,6 +316,7 @@ export type Action =
   | { kind: "addRemote"; name: string; url: string }
   | { kind: "setRemoteUrl"; name: string; url: string }
   | { kind: "removeRemote"; name: string }
+  | { kind: "addSshKey"; key: string }
   | { kind: "optimize" }
   | { kind: "createTag"; name: string; commit: string; message: string | null; push: string | null }
   | { kind: "pushTags"; remote: string; names: string[] }
@@ -422,6 +423,25 @@ export interface Failure {
   remoteTip: string | null;
   /** The hook that stopped it, e.g. "pre-commit", or "pre-commit or commit-msg". */
   hook: string | null;
+  /** For a refused SSH connection: what Oxbow found out. */
+  ssh?: SshCheck | null;
+}
+
+export type SshProblem = "agentEmpty" | "keyNotOnHost" | "noKey" | "unknownHost" | "works" | "other";
+
+export interface SshCheck {
+  problem: SshProblem;
+  remote: string;
+  url: string;
+  /** e.g. `git@github.com`. */
+  login: string;
+  host: string;
+  /** As `~/.ssh/id_ed25519`. */
+  key: string | null;
+  keyPath: string | null;
+  /** What Oxbow ran to find out. */
+  steps: { command: string; output: string; bad: boolean }[];
+  httpsUrl: string | null;
 }
 
 export interface GitCommand {

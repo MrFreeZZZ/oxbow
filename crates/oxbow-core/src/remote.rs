@@ -74,6 +74,8 @@ pub struct Failure {
     /// For a hook that stopped the command: its name, or both names when either of the
     /// `pre-commit` and `commit-msg` hooks could have.
     pub hook: Option<String>,
+    /// For a refused SSH connection: what Oxbow found out, and so which fix fits.
+    pub ssh: Option<Box<crate::ssh::SshCheck>>,
 }
 
 impl Repo {
@@ -110,7 +112,13 @@ impl Repo {
             incoming: Vec::new(),
             remote_tip: None,
             hook: hook.filter(|_| kind == FailureKind::Hook),
+            ssh: None,
         };
+        if kind == FailureKind::Auth
+            && let Some(remote) = self.remote_of(action)
+        {
+            failure.ssh = self.check_ssh(&remote).map(Box::new);
+        }
         if matches!(kind, FailureKind::Rejected | FailureKind::StaleLease)
             && let Action::Push { remote, upstream, .. } | Action::PullAndPush { remote, upstream, .. } = action
         {
@@ -118,6 +126,21 @@ impl Repo {
             failure.remote_tip = self.remote_tip(remote, upstream);
         }
         failure
+    }
+
+    /// The remote `action` talks to; for a fetch of every remote, the default one.
+    fn remote_of(&self, action: &Action) -> Option<String> {
+        match action {
+            Action::Fetch { remote: None } => self.default_remote(),
+            Action::Fetch { remote: Some(remote) }
+            | Action::Pull { remote, .. }
+            | Action::Push { remote, .. }
+            | Action::PullAndPush { remote, .. }
+            | Action::PushTags { remote, .. }
+            | Action::FetchTags { remote }
+            | Action::PushBranches { remote, .. } => Some(remote.clone()),
+            _ => None,
+        }
     }
 
     /// Upstream of the checked-out branch; `None` when it has none or `HEAD` is detached.
@@ -314,6 +337,17 @@ fn commit_refused(output: &str) -> bool {
     .any(|needle| output.contains(needle))
 }
 
+/// A line of `git fetch` saying a remote branch or tag is new, moved or gone, e.g.
+/// ` * [new branch]      auth -> origin/auth` or `   1a2b3c4..5d6e7f8  main -> origin/main`.
+pub fn is_ref_update(line: &str) -> bool {
+    let mut chars = line.chars();
+    chars.next() == Some(' ')
+        && chars.next().is_some_and(|flag| " +-*t!=".contains(flag))
+        && chars.next() == Some(' ')
+        && line.contains(" -> ")
+        && !line.contains("[up to date]")
+}
+
 /// Sort a failure by what git printed.
 pub fn classify_failure(error: &Error, pushing_with_hook: bool) -> FailureKind {
     let output = match error {
@@ -338,6 +372,7 @@ pub fn classify_failure(error: &Error, pushing_with_hook: bool) -> FailureKind {
         || has("terminal prompts disabled")
         || has("Invalid username or token")
         || has("Permission denied (publickey")
+        || has("Host key verification failed")
         || has("The requested URL returned error: 403")
         || has("The requested URL returned error: 401")
     {
@@ -369,6 +404,19 @@ mod tests {
             code: Some(1),
             output: output.into(),
         }
+    }
+
+    #[test]
+    fn fetch_lines_that_move_a_ref_are_counted() {
+        assert!(is_ref_update(" * [new branch]      auth/3-ui  -> origin/auth/3-ui"));
+        assert!(is_ref_update("   1a2b3c4..5d6e7f8  main       -> origin/main"));
+        assert!(is_ref_update(
+            " + 1a2b3c4...5d6e7f8 wip       -> origin/wip  (forced update)"
+        ));
+        assert!(is_ref_update(" - [deleted]         (none)     -> origin/old"));
+        assert!(!is_ref_update("From github.com:acme/api"));
+        assert!(!is_ref_update("Receiving objects:  64% (1203/1880)"));
+        assert!(!is_ref_update(" = [up to date]      main       -> origin/main"));
     }
 
     #[test]

@@ -690,6 +690,7 @@ impl Repo {
             Action::StashBranch { name, .. } => ("branch", format!("Create branch {name} from a stash")),
             Action::AddRemote { name, .. } => ("remote", format!("Add remote {name}")),
             Action::SetRemoteUrl { name, .. } => ("remote", format!("Change the address of {name}")),
+            Action::AddSshKey { .. } => ("remote", "Add an SSH key to the agent".to_owned()),
             Action::RemoveRemote { name } => ("remote", format!("Remove remote {name}")),
             Action::Optimize => ("box", "Optimize the repository".to_owned()),
             Action::CreateTag { name, .. } => ("tag", format!("Create tag {name}")),
