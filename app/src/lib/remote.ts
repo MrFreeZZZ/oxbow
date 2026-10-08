@@ -66,13 +66,15 @@ export function fetchRequest(ctx: RemoteContext): Request {
 export interface PullSetup {
   mode: "rebase" | "merge" | "fastForward";
   autostash: boolean;
+  /** Fetch the whole remote first, not only the branch being pulled. */
+  fetchFirst?: boolean;
 }
 
 export function pullRequest(ctx: RemoteContext, setup: PullSetup = { mode: "rebase", autostash: true }): Request {
   const t = ctx.tracking!;
   const branch = ctx.branch!;
   const upstream = `${t.remote}/${t.branch}`;
-  const action: Action = { kind: "pull", remote: t.remote, branch: t.branch };
+  const action: Action = { kind: "pull", remote: t.remote, branch: t.branch, fetchFirst: !!setup.fetchFirst };
   const how: Part[] =
     setup.mode === "merge"
       ? [" and merges it into ", chip(ctx, branch), "; a merge commit joins the two when both have new commits."]
@@ -82,7 +84,7 @@ export function pullRequest(ctx: RemoteContext, setup: PullSetup = { mode: "reba
   return {
     title: `Pull into ${branch}?`,
     body: [
-      "Fetches ",
+      ...(setup.fetchFirst ? ["Fetches every branch of ", { code: t.remote }, ", then takes "] : ["Fetches "]),
       chip(ctx, upstream),
       ...how,
       setup.autostash ? " Uncommitted files are stashed first and restored after." : " Uncommitted changes to the same files stop the pull.",

@@ -427,6 +427,9 @@
               setting: gitSetting("global", () => pullWrites(pullMode()), ["pull.rebase", "pull.ff"]),
             },
             gitSwitch("global", ["rebase.autoStash", "merge.autoStash"], "Stash my changes before pulling and bring them back after", true),
+            prefRow("oxbow.pull.fetchFirst", "Fetch from the remote before pulling", "switch", {
+              sub: () => (prefs.get("oxbow.pull.fetchFirst") ? "Pull runs git fetch first, so every remote branch is current" : "git pull updates only the branch it pulls"),
+            }),
           ],
         },
         {

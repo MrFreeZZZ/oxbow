@@ -207,6 +207,46 @@ fn publishing_a_branch_sets_its_upstream() {
 }
 
 #[test]
+fn pull_fetches_every_branch_first_when_asked() {
+    let mut team = Team::new();
+    team.kirill.git(&["checkout", "-q", "-b", "feature/csv"]);
+    team.kirill.commit("csv.txt", "csv\n", "CSV");
+    team.kirill.git(&["push", "-q", "origin", "feature/csv"]);
+    team.kirill.git(&["checkout", "-q", "main"]);
+    team.kirill.commit("c.txt", "his\n", "His");
+    team.kirill.git(&["push", "-q", "origin", "main"]);
+    let repo = Repo::open(team.me.path()).unwrap();
+    let pull = |fetch_first| Action::Pull {
+        remote: "origin".into(),
+        branch: "main".into(),
+        fetch_first,
+    };
+
+    // git pull alone only brings origin/main up to date.
+    let plain = repo.plan(&pull(false)).unwrap().commands;
+    assert_eq!(plain.len(), 1);
+    repo.perform(&pull(false)).unwrap();
+    assert_eq!(team.me.git(&["log", "-1", "--format=%s"]), "His");
+    assert!(
+        team.me
+            .git(&["branch", "-r"])
+            .lines()
+            .all(|b| b.trim() != "origin/feature/csv")
+    );
+
+    let first = repo.plan(&pull(true)).unwrap().commands;
+    assert_eq!(first[0].args, ["fetch", "--prune", "origin"]);
+    assert_eq!(first[1].args[0], "pull");
+    repo.perform(&pull(true)).unwrap();
+    assert!(
+        team.me
+            .git(&["branch", "-r"])
+            .lines()
+            .any(|b| b.trim() == "origin/feature/csv")
+    );
+}
+
+#[test]
 fn pull_conflict_is_recognized_and_can_be_aborted() {
     let mut team = Team::new();
     team.me.commit("a.txt", "mine\n", "Mine");
@@ -216,6 +256,7 @@ fn pull_conflict_is_recognized_and_can_be_aborted() {
     let pull = Action::Pull {
         remote: "origin".into(),
         branch: "main".into(),
+        fetch_first: false,
     };
     let error = repo.perform(&pull).unwrap_err();
     assert_eq!(repo.explain_failure(&pull, &error).kind, FailureKind::Conflict);
