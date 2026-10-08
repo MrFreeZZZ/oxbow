@@ -231,3 +231,62 @@ fn undo_apply_keeps_an_untracked_file_made_just_before_git_ran() {
     assert_eq!(read(&fx, "a.txt"), "one\n2 committed\nthree\n");
     assert_eq!(read(&fx, "new.txt"), "my own new.txt\n");
 }
+
+#[test]
+fn undo_apply_works_for_a_stash_without_untracked_files() {
+    for pop in [false, true] {
+        let mut fx = Fixture::new();
+        fx.commit("a.txt", "one\ntwo\nthree\n", "Root");
+        fx.write("a.txt", "one\nTWO stashed\nthree\n");
+        let repo = Repo::open(fx.path()).unwrap();
+        repo.perform(&Action::StashPush {
+            message: None,
+            untracked: false,
+            paths: Vec::new(),
+        })
+        .unwrap();
+        fx.commit("a.txt", "one\n2 committed\nthree\n", "Number two");
+        repo.perform(&apply(&repo, pop)).unwrap_err();
+
+        repo.perform(&Action::Abort).unwrap();
+        assert!(repo.operation().unwrap().is_none());
+        assert_eq!(read(&fx, "a.txt"), "one\n2 committed\nthree\n");
+        assert_eq!(repo.stashes().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn undo_apply_keeps_a_restored_file_edited_after_the_plan_was_made() {
+    let (mut fx, repo) = stashed();
+    fx.commit("a.txt", "one\n2 committed\nthree\n", "Number two");
+    repo.perform(&apply(&repo, false)).unwrap_err();
+    assert_eq!(read(&fx, "new.txt"), "new\n");
+
+    // The sheet lists new.txt for removal; then an editor saves it before Undo is pressed.
+    let plan = repo.plan(&Action::Abort).unwrap();
+    assert!(
+        plan.commands[0]
+            .before
+            .as_deref()
+            .unwrap_or_default()
+            .contains("new.txt"),
+        "{plan:?}"
+    );
+    fx.write("new.txt", "edit saved after the plan\n");
+    // And another edit lands while git runs.
+    let path = fx.path().join("other.txt");
+    let mut on_event = |event: ActionEvent| {
+        if matches!(event, ActionEvent::Command { .. }) && !path.exists() {
+            std::fs::write(&path, "x\n").unwrap();
+        }
+    };
+    repo.perform_with(
+        &Action::Abort,
+        &mut on_event,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    assert!(repo.operation().unwrap().is_none());
+    assert_eq!(read(&fx, "new.txt"), "edit saved after the plan\n");
+    assert_eq!(read(&fx, "a.txt"), "one\n2 committed\nthree\n");
+}

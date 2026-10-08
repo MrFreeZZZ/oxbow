@@ -240,13 +240,19 @@ impl Repo {
         Ok((in_head, added))
     }
 
-    /// The stash's untracked files that are on disk now just as the stash has them: the ones
-    /// the apply restored. A file that appeared before git got to it is left alone by git ("already
-    /// exists, no checkout") and has other content, so it is not one of them; nor is `kept`, or a
-    /// restored file edited since.
-    fn brought_back(&self, id: &str, kept: &[String]) -> Result<Vec<String>> {
-        let out = self.run(&GitCommand::new(["ls-tree", "-r", "-z", &format!("{id}^3")]))?;
-        let mut stashed: Vec<(String, String)> = Vec::new();
+    /// The stash's untracked files the apply may have restored, with their blobs: plain files on
+    /// disk now, not in `kept`. A stash made without untracked files has none.
+    fn restorable(&self, pending: &PendingApply) -> Result<Vec<(String, String)>> {
+        let Some(commit) = self
+            .stashes()?
+            .into_iter()
+            .find(|s| s.id == pending.id)
+            .and_then(|s| s.untracked)
+        else {
+            return Ok(Vec::new());
+        };
+        let out = self.run(&GitCommand::new(["ls-tree", "-r", "-z", &commit]))?;
+        let mut files = Vec::new();
         for record in out.stdout.split('\0').filter(|r| !r.is_empty()) {
             let Some((meta, path)) = record.split_once('\t') else {
                 continue;
@@ -256,23 +262,83 @@ impl Repo {
                 continue;
             };
             let plain = self.workdir().join(path).symlink_metadata().is_ok_and(|m| m.is_file());
-            if (mode == "100644" || mode == "100755") && plain && !kept.iter().any(|k| k == path) {
-                stashed.push((path.to_owned(), blob.to_owned()));
+            if (mode == "100644" || mode == "100755") && plain && !pending.kept.iter().any(|k| k == path) {
+                files.push((path.to_owned(), blob.to_owned()));
             }
         }
-        if stashed.is_empty() {
-            return Ok(Vec::new());
-        }
-        // `hash-object` takes file names, not pathspecs.
-        let mut args = vec!["hash-object".to_owned(), "--".to_owned()];
-        args.extend(stashed.iter().map(|(path, _)| path.clone()));
-        let hashes = self.run(&GitCommand::new(args))?.stdout;
-        Ok(stashed
+        Ok(files)
+    }
+
+    /// git's id for `file` as if it were at `path` in the working tree (same filters).
+    fn hash_as(&self, file: &std::path::Path, path: &str) -> Option<String> {
+        let out = self
+            .run(&GitCommand::new([
+                "hash-object".to_owned(),
+                format!("--path={path}"),
+                "--".to_owned(),
+                file.display().to_string(),
+            ]))
+            .ok()?;
+        Some(out.stdout.trim().to_owned())
+    }
+
+    /// The stash's untracked files that are on disk now just as the stash has them: the ones
+    /// the apply restored. A file that appeared before git got to it is left alone by git ("already
+    /// exists, no checkout") and has other content, so it is not one of them; nor is `kept`, or a
+    /// restored file edited since. What the confirmation sheet lists; [`Repo::remove_brought_back`]
+    /// checks again as it removes them.
+    fn brought_back(&self, pending: &PendingApply) -> Result<Vec<String>> {
+        Ok(self
+            .restorable(pending)?
             .into_iter()
-            .zip(hashes.lines())
-            .filter(|((_, blob), now)| blob == now.trim())
-            .map(|((path, _), _)| path)
+            .filter(|(path, blob)| self.hash_as(&self.workdir().join(path), path).as_deref() == Some(blob))
+            .map(|(path, _)| path)
             .collect())
+    }
+
+    /// Remove the untracked files an undone apply restored. Each file is first moved aside, which
+    /// is atomic, and only then compared with the stash: an edit saved up to that moment is
+    /// in the copy and keeps it, and one saved later makes a new file that stays where it is. A
+    /// copy that differs goes back in place, or, if its place was taken meanwhile, stays in
+    /// `.git/oxbow/kept` and the undo stops before git changes anything.
+    pub(crate) fn remove_brought_back(&self, pending: &PendingApply) -> Result<()> {
+        let files = self.restorable(pending)?;
+        if files.is_empty() {
+            return Ok(());
+        }
+        let io = |err: std::io::Error| Error::Git(err.to_string());
+        let aside = self.local().git_dir().join("oxbow").join("abort");
+        std::fs::create_dir_all(&aside).map_err(io)?;
+        let mut stuck = Vec::new();
+        for (n, (path, blob)) in files.iter().enumerate() {
+            let file = self.workdir().join(path);
+            let moved = aside.join(n.to_string());
+            // Another file system (a linked worktree elsewhere) can't move atomically: keep it.
+            if std::fs::rename(&file, &moved).is_err() {
+                continue;
+            }
+            if self.hash_as(&moved, path).as_deref() == Some(blob.as_str()) {
+                std::fs::remove_file(&moved).map_err(io)?;
+            } else if file.symlink_metadata().is_err() {
+                std::fs::rename(&moved, &file).map_err(io)?;
+            } else {
+                let kept = self.local().git_dir().join("oxbow").join("kept").join(path);
+                if let Some(parent) = kept.parent() {
+                    std::fs::create_dir_all(parent).map_err(io)?;
+                }
+                std::fs::rename(&moved, &kept).map_err(io)?;
+                stuck.push(kept.display().to_string());
+            }
+        }
+        let _ = std::fs::remove_dir(&aside);
+        if stuck.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::Git(format!(
+                "files changed while the apply was being undone; your versions are in {}",
+                stuck.join(", ")
+            )))
+        }
     }
 
     /// Undo an apply that stopped on conflicts. git refused to apply over uncommitted changes in
@@ -287,14 +353,21 @@ impl Repo {
         if !added.is_empty() {
             commands.push(with_paths(&["rm", "-f", "--quiet"], &added).comment("files the stash added"));
         }
-        let brought = self.brought_back(&pending.id, &pending.kept)?;
-        if !brought.is_empty() {
-            commands.push(
-                with_paths(&["clean", "-f", "--quiet"], &brought).comment("untracked files the stash brought back"),
-            );
-        }
         if commands.is_empty() {
             commands.push(GitCommand::new(["reset", "--quiet"]).comment("clear the conflict marks"));
+        }
+        // Oxbow removes the restored untracked files itself, checking each one as it goes.
+        let brought = self.brought_back(pending)?;
+        if !brought.is_empty() {
+            let quoted: Vec<String> = brought.iter().map(|p| crate::cli::shell_quote(p)).collect();
+            let first = commands.remove(0);
+            commands.insert(
+                0,
+                first.before(format!(
+                    "rm -- {}  # untracked files the stash brought back, if still as it has them",
+                    quoted.join(" ")
+                )),
+            );
         }
         Ok(commands)
     }
