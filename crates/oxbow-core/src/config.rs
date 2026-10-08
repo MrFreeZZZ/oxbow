@@ -20,6 +20,33 @@ use crate::repo::Repo;
 static PROGRAM: RwLock<Option<PathBuf>> = RwLock::new(None);
 static ENGLISH: AtomicBool = AtomicBool::new(true);
 static HOOKS: AtomicBool = AtomicBool::new(true);
+static GITHUB_TOKEN: RwLock<Option<TokenSource>> = RwLock::new(None);
+
+/// Where the GitHub sign-in's token comes from, asked only when a command talks to a remote.
+pub type TokenSource = Box<dyn Fn() -> Option<String> + Send + Sync>;
+
+/// Lend git the GitHub sign-in for `https://github.com` remotes, through a credential helper
+/// that answers with the token. Git asks the user's own helpers first, so a password already in
+/// the keychain still wins; ours only fills the gap, e.g. right after Publish. `None` stops.
+pub fn set_github_token(source: Option<TokenSource>) {
+    *GITHUB_TOKEN.write().expect("github token lock") = source;
+}
+
+/// The helper: on `get` it prints the token from the environment, so it never shows in the
+/// list of running processes; on `store` and `erase` it does nothing.
+const GITHUB_HELPER: &str = "credential.https://github.com.helper=!f() { if [ \"$1\" = get ]; then echo username=x-access-token; echo \"password=$OXBOW_GITHUB_TOKEN\"; fi; }; f";
+
+/// Add the GitHub helper to a command that talks to a remote, when signed in.
+pub(crate) fn lend_github_token(git: &mut Command) {
+    let token = GITHUB_TOKEN
+        .read()
+        .expect("github token lock")
+        .as_ref()
+        .and_then(|source| source());
+    if let Some(token) = token {
+        git.args(["-c", GITHUB_HELPER]).env("OXBOW_GITHUB_TOKEN", token);
+    }
+}
 
 /// Run this `git` instead of the first one on `PATH`; `None` goes back to that one.
 pub fn set_git_program(path: Option<PathBuf>) {
@@ -471,5 +498,27 @@ mod tests {
     fn booleans_read_as_git_reads_them() {
         assert!(git_bool("true") && git_bool("Yes") && git_bool("1") && git_bool("on"));
         assert!(!git_bool("false") && !git_bool("0") && !git_bool("off") && !git_bool(""));
+    }
+
+    #[test]
+    fn the_github_helper_answers_git() {
+        let mut git = Command::new("git");
+        git.args(["-c", "credential.helper=", "-c", GITHUB_HELPER, "credential", "fill"])
+            .env("OXBOW_GITHUB_TOKEN", "gho_secret")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped());
+        let mut child = git.spawn().expect("git runs");
+        use std::io::Write;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"protocol=https\nhost=github.com\n\n")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.contains("username=x-access-token"), "{text}");
+        assert!(text.contains("password=gho_secret"), "{text}");
     }
 }

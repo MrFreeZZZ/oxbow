@@ -43,6 +43,8 @@ export const defaults = {
   /** Empty: the first one installed. */
   "oxbow.openIn.editor": "",
   "oxbow.openIn.terminal": "",
+  /** The Client ID of a GitHub OAuth app for signing in with the browser; empty: Oxbow's own. */
+  "oxbow.github.clientId": "",
   "oxbow.theme": "oxbow",
   "oxbow.theme.variant": "auto" as "auto" | "light" | "dark",
 };

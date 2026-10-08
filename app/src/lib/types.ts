@@ -482,6 +482,39 @@ export interface SshKey {
   public: string;
 }
 
+/** The GitHub account signed in, from Settings › Accounts. */
+export interface GitHubAccount {
+  login: string;
+  name: string | null;
+  avatarUrl: string;
+  htmlUrl: string;
+  /** How it signed in: the browser (device flow) or a pasted token. */
+  method: "browser" | "token";
+  /** The token's scopes; null for a fine-grained token. */
+  scopes: string[] | null;
+}
+
+/** What the sign-in sheet shows before it starts. */
+export interface SignInSetup {
+  /** Null: this build can't sign in with the browser, only with a token. */
+  clientId: string | null;
+  deviceRequests: string[];
+  tokenRequest: string;
+  newTokenUrl: string;
+  scopes: string[];
+  /** Keychain, Windows Credential Manager or keyring. */
+  store: string;
+}
+
+/** The one-time code to approve on github.com/login/device. */
+export interface DeviceCode {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+  interval: number;
+}
+
 /** Settings read from Git's own config and the computer. */
 export interface GitSettings {
   git: { path: string; version: string | null; custom: boolean };

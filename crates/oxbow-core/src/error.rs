@@ -20,6 +20,9 @@ pub enum Error {
         code: Option<i32>,
         output: String,
     },
+    /// A GitHub API call failed; `message` says why in words for people.
+    #[error("{message}")]
+    GitHub { status: Option<u16>, message: String },
     #[error("stopped")]
     Cancelled,
 }

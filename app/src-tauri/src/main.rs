@@ -1,6 +1,7 @@
 // Hide the extra console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod accounts;
 mod open_in;
 
 use std::path::{Path, PathBuf};
@@ -1066,6 +1067,7 @@ fn main() {
         // Restores the window's size and position from the last session.
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(Session::default())
+        .manage(accounts::Accounts::default())
         .on_menu_event(|app, event| {
             if event.id() == "settings" {
                 let _ = show_settings(app);
@@ -1074,6 +1076,7 @@ fn main() {
         .setup(|app| {
             let handle = app.handle();
             apply_settings(handle, &handle.state::<Session>(), &read_settings(handle));
+            accounts::lend_to_git(handle);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1134,7 +1137,15 @@ fn main() {
             settings_location,
             restore_default_settings,
             restore_settings_backup,
-            reveal_settings
+            reveal_settings,
+            accounts::github_account,
+            accounts::github_sign_in_setup,
+            accounts::github_device_start,
+            accounts::github_device_wait,
+            accounts::github_device_stop,
+            accounts::github_sign_in_token,
+            accounts::github_sign_out,
+            accounts::open_github
         ])
         .run(tauri::generate_context!())
         .expect("error while running Oxbow");

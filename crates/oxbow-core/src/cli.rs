@@ -188,9 +188,33 @@ fn command_in(dir: &Path, command: &GitCommand) -> Command {
         Some(program) => Command::new(program),
         None => crate::config::git(),
     };
+    if command.program.is_none() && talks_to_remote(&command.args) {
+        crate::config::lend_github_token(&mut git);
+    }
     git.args(command.run_args()).current_dir(dir);
     git.envs(command.env.iter().map(|(k, v)| (k, v)));
     git
+}
+
+/// Whether a git command may need a password: it fetches from or pushes to a remote.
+fn talks_to_remote(args: &[String]) -> bool {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            // Options of git itself that take a value.
+            "-c" | "-C" => {
+                args.next();
+            }
+            option if option.starts_with('-') => {}
+            command => {
+                return matches!(
+                    command,
+                    "push" | "pull" | "fetch" | "clone" | "ls-remote" | "remote" | "submodule"
+                );
+            }
+        }
+    }
+    false
 }
 
 /// Run `command` in `dir`, which need not be a repository (`clone`, `init`), and wait for it.
@@ -348,6 +372,16 @@ pub(crate) fn shell_quote(arg: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commands_that_reach_a_remote_are_told_apart() {
+        let talks = |args: &[&str]| talks_to_remote(&args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>());
+        assert!(talks(&["push", "-u", "origin", "main"]));
+        assert!(talks(&["-c", "core.hooksPath=x", "fetch", "--prune"]));
+        assert!(talks(&["-C", "/tmp/a", "clone", "https://github.com/a/b"]));
+        assert!(!talks(&["commit", "-m", "push the button"]));
+        assert!(!talks(&["-c", "push.default=simple", "status"]));
+    }
 
     #[test]
     fn display_quotes_only_what_a_shell_needs() {
