@@ -156,7 +156,7 @@ impl Repo {
         let author = person(commit.author().map_err(Error::git)?);
         let committer = person(commit.committer().map_err(Error::git)?);
         let parents = commit.parent_ids().map(|p| p.to_string()).collect();
-        let files = counted(&repo, changes(&repo, &commit)?);
+        let files = counted(&repo, self.commit_changes(&repo, &commit)?);
         Ok(CommitDetail {
             id: commit.id.to_string(),
             summary,
@@ -172,8 +172,24 @@ impl Repo {
     pub fn commit_diff(&self, id: &str, path: Option<&str>, context: DiffContext) -> Result<Vec<FileDiff>> {
         let repo = self.local();
         let commit = find_commit(&repo, id)?;
-        let changes = changes(&repo, &commit)?;
+        let changes = self.commit_changes(&repo, &commit)?;
         self.diffs(&repo, changes, path, context)
+    }
+
+    /// Changed files of a commit against its first parent. A stash keeps its untracked files in a
+    /// third commit; they are part of what it changes, so they come after its tracked files.
+    fn commit_changes(&self, repo: &gix::Repository, commit: &gix::Commit<'_>) -> Result<Vec<Change>> {
+        let mut out = changes(repo, commit)?;
+        let id = commit.id.to_string();
+        let untracked = self
+            .stashes()?
+            .into_iter()
+            .find(|s| s.id == id)
+            .and_then(|s| s.untracked);
+        if let Some(untracked) = untracked {
+            out.extend(tree_changes(repo, None, &from_tree(repo, &untracked)?)?);
+        }
+        Ok(out)
     }
 
     /// Changed files between two commits' trees, with line counts.

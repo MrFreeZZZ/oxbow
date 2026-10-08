@@ -1,6 +1,6 @@
 mod support;
 
-use oxbow_core::{Action, ActionEvent, ConflictSide, OperationKind, Repo};
+use oxbow_core::{Action, ActionEvent, ConflictSide, DiffContext, OperationKind, Repo};
 use support::Fixture;
 
 fn read(fx: &Fixture, file: &str) -> String {
@@ -46,6 +46,23 @@ fn a_stash_knows_its_branch_base_and_untracked_files() {
     assert_eq!(stash.base, fx.git(&["rev-parse", "HEAD"]));
     assert!(stash.untracked.is_some());
     assert_eq!(fx.git(&["status", "--porcelain"]), "");
+}
+
+#[test]
+fn a_stash_commit_lists_its_untracked_files_too() {
+    let (_fx, repo) = stashed();
+    let id = repo.stashes().unwrap()[0].id.clone();
+    let files: Vec<String> = repo
+        .commit_detail(&id)
+        .unwrap()
+        .files
+        .into_iter()
+        .map(|f| f.path)
+        .collect();
+    assert_eq!(files, ["a.txt", "new.txt"]);
+    let diff = repo.commit_diff(&id, Some("new.txt"), DiffContext::Compact).unwrap();
+    assert_eq!(diff.len(), 1);
+    assert_eq!(diff[0].file.additions, 1);
 }
 
 #[test]
