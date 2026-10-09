@@ -28,6 +28,8 @@ class Nav {
 
   /** Quick Open (⌘P): pick a file to open File History on. */
   quickOpen = $state(false);
+  /** Quick Open lists only the files a Git LFS pattern matches. */
+  quickPattern = $state<string | null>(null);
   /** Put the cursor in Find in file once File History is up, after Quick Open. */
   focusFind = $state(false);
   /** Files opened in File History lately, newest first, per repository. */

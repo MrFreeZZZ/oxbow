@@ -6,6 +6,7 @@
   import { api } from "./api";
   import { nav } from "./nav.svelte";
   import { shortId, splitPath } from "./format";
+  import { matches } from "./lfs.svelte";
 
   let {
     commit,
@@ -34,6 +35,8 @@
     );
     input?.focus();
   });
+  // Show Matching Files lasts until Quick Open closes.
+  $effect(() => () => (nav.quickPattern = null));
 
   $effect(() => {
     const id = commit?.id;
@@ -86,6 +89,16 @@
   const found = $derived.by<{ items: Item[]; total: number }>(() => {
     if (!files) return { items: [], total: 0 };
     const q = query.toLowerCase().replace(/\s+/g, "");
+    const pattern = nav.quickPattern;
+    if (pattern) {
+      const pool = files.filter((p) => matches(pattern, p));
+      const ranked = pool.flatMap((path) => {
+        const m = q ? fuzzy(path, q) : { score: 0, hits: [] };
+        return m ? [{ path, hits: m.hits, from: "all" as const, score: m.score }] : [];
+      });
+      if (q) ranked.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+      return { items: ranked.slice(0, LIMIT), total: ranked.length };
+    }
     if (!q) {
       const seen = new Set<string>();
       const take = (paths: string[], from: Item["from"]) =>
@@ -173,7 +186,7 @@
     {:else if !files}
       <p class="note">Reading the files…</p>
     {:else if !items.length}
-      <p class="note">{files.length ? `No file matches “${query}”.` : "This repository has no commits yet."}</p>
+      <p class="note">{nav.quickPattern && !query ? `No committed file matches ${nav.quickPattern} yet.` : files.length ? `No file matches “${query}”.` : "This repository has no commits yet."}</p>
     {:else}
       {#each items as item, i (item.from + item.path)}
         {#if i === 0 || items[i - 1].from !== item.from}
@@ -181,6 +194,8 @@
             <div class="heading">
               {#if item.from === "commit" && commit}
                 In the selected commit <span class="mono">{shortId(commit.id)}</span> · {commit.summary}
+              {:else if nav.quickPattern}
+                Committed files <span class="mono">{nav.quickPattern}</span> matches
               {:else}
                 {heading[item.from]}
               {/if}

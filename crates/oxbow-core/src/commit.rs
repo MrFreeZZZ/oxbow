@@ -76,6 +76,9 @@ pub struct FileChange {
     /// Only the line endings changed; the text is the same.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub eol: Option<EolChange>,
+    /// The file is kept in Git LFS, with the pointers before and after where they are known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lfs: Option<crate::lfs::LfsChange>,
 }
 
 /// Old and new file mode, in git's octal form (`100644`, `100755`, `120000`).
@@ -519,6 +522,16 @@ fn inspect(
     let after = blob(repo, new)?;
     file.old_size = old.map(|_| before.len() as u64);
     file.new_size = new.map(|_| after.len() as u64);
+    let pointers = (crate::lfs::parse_pointer(&before), crate::lfs::parse_pointer(&after));
+    if pointers.0.is_some() || pointers.1.is_some() {
+        // The sizes of the files LFS keeps, not of their pointers.
+        file.old_size = pointers.0.as_ref().map(|p| p.size).or(file.old_size);
+        file.new_size = pointers.1.as_ref().map(|p| p.size).or(file.new_size);
+        file.lfs = Some(crate::lfs::LfsChange {
+            old: pointers.0,
+            new: pointers.1,
+        });
+    }
     if is_binary(&before) || is_binary(&after) {
         file.binary = true;
         if matches!(file.status, FileStatus::Renamed | FileStatus::Copied) {

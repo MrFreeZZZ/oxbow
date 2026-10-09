@@ -13,6 +13,7 @@
   import DiffView, { type LinePicker } from "./DiffView.svelte";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import { nav } from "./nav.svelte";
+  import { BIG_FILE, bytes } from "./unusual";
   import { commitRecovery, ignoreChoices, ignoreRequest, linesRequest, stashFilesRequest, stashMessageFor, type LinesKind } from "./changes";
 
   let {
@@ -354,6 +355,11 @@
       <span class="badge {b.tone}" title={b.title}>{b.text}</span>
       <span class="path"><span class="dir">{p.dir}</span>{p.name}</span>
       {#if partly}<span class="note">partly staged</span>{/if}
+      {#if file.lfs}
+        <span class="note" title="Kept in Git LFS: git stores a small pointer">LFS{file.newSize !== undefined ? ` · ${bytes(file.newSize)}` : ""}</span>
+      {:else if (file.newSize ?? 0) >= BIG_FILE}
+        <span class="note warn" title="Too big for a git repository: GitHub refuses files over 100 MB">{bytes(file.newSize!)}</span>
+      {/if}
     </button>
     {#if group === "unstaged"}
       <button class="discard" onclick={() => discard([file])} aria-label="Discard changes in {file.path}" title="Discard changes">
@@ -451,6 +457,7 @@
         {picker}
         loadFull={(d) => api.workingDiff(d.file.path, pick!.side, whole, true)}
         command={(d) => (pick?.side === "staged" ? `git diff --cached -- ${d.file.path}` : `git diff -- ${d.file.path}`)}
+        working
       />
     {/if}
   </div>
@@ -636,6 +643,9 @@
     font-size: 11px;
     color: var(--text2);
     flex-shrink: 0;
+  }
+  .note.warn {
+    color: var(--orange);
   }
   .discard {
     width: 24px;

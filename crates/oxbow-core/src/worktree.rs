@@ -16,12 +16,17 @@ use crate::commit::{
 use crate::config;
 use crate::edit::{ResetMode, plan_reset};
 use crate::error::{Error, Result};
+use crate::lfs::{self, LfsChange};
 use crate::operation::{ConflictSide, MergeMethod, OperationKind, Pick};
 use crate::repo::Repo;
 use crate::tags;
+use std::io::Read;
 
 /// Files with more changed lines than this are not shown line by line.
 const MAX_DIFF_LINES: usize = 20_000;
+
+/// Untracked files bigger than this are not read to count their lines.
+const MAX_COUNTED_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Uncommitted changes, grouped the way they are staged.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -349,6 +354,27 @@ pub enum Action {
         delete_remote: bool,
         delete_local: bool,
     },
+    /// Keep files matching `pattern` in Git LFS, and stage `.gitattributes` and `paths`.
+    LfsTrack {
+        pattern: String,
+        paths: Vec<String>,
+    },
+    /// Stop sending new files matching `pattern` to Git LFS.
+    LfsUntrack {
+        pattern: String,
+    },
+    /// Download LFS files in place of their pointers: those `include` matches, or all.
+    LfsPull {
+        include: Option<String>,
+    },
+    /// Delete local copies of LFS files that are no longer checked out and are on the server.
+    LfsPrune,
+    /// Install git-lfs with Homebrew at `brew` (when given) and turn it on; with `pull`,
+    /// download this repository's LFS files after.
+    LfsInstall {
+        brew: Option<String>,
+        pull: bool,
+    },
 }
 
 /// A local branch and its name on the remote.
@@ -407,14 +433,53 @@ impl Repo {
             }
         }
         for file in tree.unstaged.iter_mut().filter(|f| f.status == FileStatus::Untracked) {
-            if let Ok(data) = std::fs::read(self.workdir().join(&file.path)) {
-                file.binary = data.iter().take(8000).any(|&b| b == 0);
-                if !file.binary {
-                    file.additions = data.split(|&b| b == b'\n').filter(|l| !l.is_empty()).count() as u32;
-                }
+            let path = self.workdir().join(&file.path);
+            let Ok(len) = std::fs::metadata(&path).map(|m| m.len()) else {
+                continue;
+            };
+            // A big file is not read whole on every refresh: its start says whether it is binary.
+            let data = if len > MAX_COUNTED_BYTES {
+                let mut start = Vec::new();
+                let _ = std::fs::File::open(&path).and_then(|f| f.take(8000).read_to_end(&mut start));
+                start
+            } else {
+                std::fs::read(&path).unwrap_or_default()
+            };
+            file.binary = data.iter().take(8000).any(|&b| b == 0);
+            if !file.binary && len <= MAX_COUNTED_BYTES {
+                file.additions = data.split(|&b| b == b'\n').filter(|l| !l.is_empty()).count() as u32;
             }
         }
+        self.mark_lfs_and_sizes(&mut tree);
         Ok(tree)
+    }
+
+    /// Mark files `.gitattributes` sends to LFS, and give binary, LFS and big files their size in
+    /// the working copy, for the badge in the file list and the note on a file too big for git.
+    fn mark_lfs_and_sizes(&self, tree: &mut WorkingTree) {
+        let paths: Vec<&str> = tree
+            .staged
+            .iter()
+            .chain(&tree.unstaged)
+            .filter(|f| f.status != FileStatus::Deleted)
+            .map(|f| f.path.as_str())
+            .collect();
+        let lfs = self.lfs_paths(&paths);
+        for file in tree.staged.iter_mut().chain(tree.unstaged.iter_mut()) {
+            if file.status == FileStatus::Deleted {
+                continue;
+            }
+            let tracked = lfs.contains(&file.path);
+            if tracked {
+                file.lfs = Some(LfsChange::default());
+            }
+            let Some((size, _)) = self.lfs_file_size(&file.path) else {
+                continue;
+            };
+            if tracked || file.binary || size >= lfs::BIG_FILE {
+                file.new_size = Some(size);
+            }
+        }
     }
 
     /// The diff of one file on one side of the working copy.
@@ -459,7 +524,26 @@ impl Repo {
                 path: file.path.clone(),
             }),
         };
-        if file.binary {
+        if file.lfs.is_some() {
+            // What git diffs for an LFS file is its pointer: three short lines.
+            let side_text = |skip: LineKind| -> String {
+                hunks
+                    .iter()
+                    .flat_map(|h| &h.lines)
+                    .filter(|l| l.kind != skip)
+                    .map(|l| format!("{}\n", l.text))
+                    .collect()
+            };
+            let lfs = LfsChange {
+                old: lfs::parse_pointer(side_text(LineKind::Added).as_bytes()),
+                new: lfs::parse_pointer(side_text(LineKind::Removed).as_bytes()),
+            };
+            file.old_size = lfs.old.as_ref().map(|p| p.size);
+            if let Some(new) = &lfs.new {
+                file.new_size = Some(new.size);
+            }
+            file.lfs = Some(lfs);
+        } else if file.binary {
             file.old_size = old
                 .as_ref()
                 .and_then(|s| self.read_source(s).ok())
@@ -937,6 +1021,11 @@ impl Repo {
                 delete_remote,
                 delete_local,
             } => self.plan_pull_request_merged(remote, base, branch, *delete_remote, *delete_local)?,
+            Action::LfsTrack { pattern, paths } => lfs::plan_track(pattern, paths),
+            Action::LfsUntrack { pattern } => lfs::plan_untrack(pattern),
+            Action::LfsPull { include } => lfs::plan_pull(include.as_deref()),
+            Action::LfsPrune => lfs::plan_prune(),
+            Action::LfsInstall { brew, pull } => lfs::plan_install(brew.as_deref(), *pull),
             Action::Reword { message } => {
                 let mut args = vec!["commit".to_owned(), "--amend".to_owned(), "--only".to_owned()];
                 for paragraph in paragraphs(message) {

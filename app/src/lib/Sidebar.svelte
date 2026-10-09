@@ -25,6 +25,9 @@
   import { deleteTagRequest, fetchTagsRequest, isLocalTag, newTagRequest, pushTagsRequest } from "./tags";
   import { start } from "./start.svelte";
   import { github } from "./github.svelte";
+  import { downloadRequest, installRequest, lfs, patternNote, pruneRequest, lfsTrackRequest, untrackRequest } from "./lfs.svelte";
+  import { nav } from "./nav.svelte";
+  import type { LfsPattern } from "./types";
 
   const PULL_ICON = "M3 3.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M3 12.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M10 12.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M4.5 5v6M11.5 11V6.5a2 2 0 0 0-2-2H7M8.5 3 7 4.5 8.5 6";
   const TERMINAL = "M2.5 3.5h11v9h-11zM5 7l2 1.5L5 10M8.5 10.5h2.5";
@@ -340,6 +343,52 @@
     open(event, "Tags menu", "tags-heading", entries);
   }
 
+  /** What to do when an LFS action needs git-lfs and it isn't ready: install it or turn it on. */
+  function needsLfs(): MenuEntry[] {
+    const request = installRequest(repo.name);
+    if (request) return [{ kind: "item", label: `${request.button} Git LFS…`, icon: menuIcons.lfs, run: () => run(request) }];
+    return [
+      { kind: "item", label: "Download Git LFS…", icon: menuIcons.open, run: () => api.openLfsDownload().catch((err) => confirm.say(String(err))) },
+      { kind: "note", label: "git-lfs isn’t installed, and Oxbow didn’t find Homebrew to install it with." },
+    ];
+  }
+
+  /** The menu of the Git LFS heading: LFS as a whole. */
+  function lfsMenu(event: MouseEvent) {
+    const missing = lfs.patterns.reduce((n, p) => n + p.missing, 0);
+    const entries: MenuEntry[] = [];
+    if (!lfs.ready) entries.push(...needsLfs(), { kind: "sep" });
+    else {
+      entries.push({ kind: "item", label: "Track Files…", icon: menuIcons.lfs, run: () => run(lfsTrackRequest(null, null)) });
+      entries.push({ kind: "sep" });
+      entries.push({ kind: "item", label: missing ? `Download ${missing} ${missing === 1 ? "File" : "Files"}` : "Download All Files", icon: menuIcons.fetch, run: () => run(downloadRequest(null)) });
+      entries.push({ kind: "item", label: "Free Up Space…", icon: menuIcons.drop, run: () => run(api.lfsPrunePreview().catch(() => null).then(pruneRequest)) });
+    }
+    open(event, "Git LFS menu", "lfs-heading", entries);
+  }
+
+  /** The menu of one LFS pattern. */
+  function patternMenu(event: MouseEvent, p: LfsPattern) {
+    const entries: MenuEntry[] = [{ kind: "header", label: `${p.pattern} · ${p.files} ${p.files === 1 ? "file" : "files"}` }];
+    if (!lfs.ready) entries.push(...needsLfs());
+    else if (p.missing) entries.push({ kind: "item", label: `Download ${p.missing} ${p.missing === 1 ? "File" : "Files"}`, icon: menuIcons.fetch, run: () => run(downloadRequest(p)) });
+    entries.push({
+      kind: "item",
+      label: "Show Matching Files",
+      icon: menuIcons.folder,
+      run: () => {
+        nav.quickPattern = p.pattern;
+        nav.quickOpen = true;
+      },
+    });
+    entries.push({ kind: "item", label: "Copy Pattern", icon: menuIcons.copy, run: () => copy(p.pattern) });
+    if (lfs.ready) {
+      entries.push({ kind: "sep" });
+      entries.push({ kind: "item", label: "Stop Tracking…", icon: menuIcons.lfs, run: () => run(untrackRequest(p.pattern)) });
+    }
+    open(event, "Git LFS pattern menu", `lfs:${p.pattern}`, entries);
+  }
+
   /** Select the branch's or tag's latest commit, as if it were clicked in the graph. */
   function focus(r: RefInfo) {
     clicked = r;
@@ -469,6 +518,36 @@
         </button>
       {/each}
       {@render more("stashes", stashes.length)}
+    {/if}
+
+    {#if lfs.patterns.length}
+      <div class="heading with-button" oncontextmenu={lfsMenu} role="group" aria-label="Git LFS">
+        <span>Git LFS{#if !lfs.ready}<span class="missing">{lfs.status?.version ? "turned off" : "not installed"}</span>{/if}</span>
+        <button class="add" onclick={lfsMenu} aria-label="Git LFS actions">
+          <svg class="icon" viewBox="0 0 16 16"><path d="M3.2 8a.8.8 0 1 0 1.6 0a.8.8 0 1 0-1.6 0M7.2 8a.8.8 0 1 0 1.6 0a.8.8 0 1 0-1.6 0M11.2 8a.8.8 0 1 0 1.6 0a.8.8 0 1 0-1.6 0" /></svg>
+        </button>
+        {#if lfs.ready}
+          <button class="add" onclick={() => run(lfsTrackRequest(null, null))} aria-label="Track files with Git LFS" title="Track Files…">
+            <svg class="icon" viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9" /></svg>
+          </button>
+        {/if}
+      </div>
+      {#each lfs.patterns as p (p.pattern)}
+        <button
+          class="item lfs"
+          class:menu-open={menu?.ref === `lfs:${p.pattern}`}
+          style:--ring="var(--sep)"
+          onclick={(e) => patternMenu(e, p)}
+          oncontextmenu={(e) => patternMenu(e, p)}
+        >
+          <svg class="icon" class:off={!lfs.ready} viewBox="0 0 16 16"><path d={menuIcons.lfs} /></svg>
+          <span class="grow lfs-text">
+            <span class="ellipsis mono pattern">{p.pattern}</span>
+            <span class="ellipsis sub">{patternNote(p)}</span>
+          </span>
+          {#if lfs.ready && p.missing}<span class="meta warn">{p.missing} to download</span>{:else if p.new}<span class="meta">new</span>{/if}
+        </button>
+      {/each}
     {/if}
 
     {#if history.remotes.length}
@@ -687,6 +766,34 @@
   }
   .item.menu-open {
     box-shadow: inset 0 0 0 1.5px var(--ring);
+  }
+  .item.lfs {
+    height: 38px;
+  }
+  .lfs-text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.25;
+    text-align: left;
+  }
+  .lfs-text .pattern {
+    font-size: 12px;
+  }
+  .lfs-text .sub {
+    font-size: 10.5px;
+    color: var(--text2);
+  }
+  .icon.off,
+  .missing {
+    color: var(--orange);
+  }
+  .missing {
+    font-weight: 500;
+    margin-left: 6px;
+  }
+  .meta.warn {
+    color: var(--orange);
+    white-space: nowrap;
   }
   .item.nested {
     padding-left: 30px;

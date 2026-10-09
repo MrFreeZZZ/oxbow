@@ -209,7 +209,7 @@ fn talks_to_remote(args: &[String]) -> bool {
             command => {
                 return matches!(
                     command,
-                    "push" | "pull" | "fetch" | "clone" | "ls-remote" | "remote" | "submodule"
+                    "push" | "pull" | "fetch" | "clone" | "ls-remote" | "remote" | "submodule" | "lfs"
                 );
             }
         }

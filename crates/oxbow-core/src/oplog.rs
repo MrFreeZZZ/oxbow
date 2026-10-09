@@ -718,6 +718,12 @@ impl Repo {
                 "merge",
                 format!("Bring in the merged pull request of {branch} into {base}"),
             ),
+            Action::LfsTrack { pattern, .. } => ("lfs", format!("Track {pattern} with Git LFS")),
+            Action::LfsUntrack { pattern } => ("lfs", format!("Stop tracking {pattern} with Git LFS")),
+            Action::LfsPull { include: Some(pattern) } => ("fetch", format!("Download LFS files of {pattern}")),
+            Action::LfsPull { include: None } => ("fetch", "Download LFS files".to_owned()),
+            Action::LfsPrune => ("lfs", "Free up LFS space".to_owned()),
+            Action::LfsInstall { .. } => ("lfs", "Install Git LFS".to_owned()),
             Action::PushBranches { remote, branches } => {
                 ("push", format!("Push {} branches to {remote}", branches.len()))
             }

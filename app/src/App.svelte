@@ -48,6 +48,8 @@
   import { addToCommitRequest, dropCommitRequest, rewordRequest, squashRequest } from "./lib/stack";
   import PullRequestView from "./lib/PullRequestView.svelte";
   import { github } from "./lib/github.svelte";
+  import { lfs } from "./lib/lfs.svelte";
+  import LfsBanner from "./lib/LfsBanner.svelte";
 
   let repo = $state<RepoSummary | null>(null);
   let history = $state<History | null>(null);
@@ -212,6 +214,7 @@
     second = null;
     search.clear();
     oplog.forget();
+    lfs.forget();
     activity.reset();
     if (view === "compare" || view === "file" || view === "stack" || view === "pull") view = "history";
     try {
@@ -224,6 +227,7 @@
       history = next;
       version++;
       oplog.load();
+      lfs.load();
       if (repo) github.load(repo.path);
       // Start on the checked-out commit, like the design: HEAD's latest commit is selected.
       selected = next.head.commit ?? next.rows[0]?.id ?? null;
@@ -563,6 +567,7 @@
       history = next;
       version++;
       oplog.load();
+      lfs.load();
       if (!selected || !next.rows.some((r) => r.id === selected)) selected = next.head.commit ?? next.rows[0]?.id ?? null;
     } catch (err) {
       if (mine === generation) error = String(err);
@@ -885,6 +890,9 @@
         />
       {:else if !history.head.branch && history.head.commit && branchCtx}
         <DetachedBanner {history} back={backTo} onBack={() => backTo && run(switchRequest(branchCtx!, backTo))} onKeep={newBranch} />
+      {/if}
+      {#if lfs.missing && !lfs.dismissed}
+        <LfsBanner repoName={repo.name} run={(request) => void run(request)} />
       {/if}
       {#if showConflicts && operation}
         {#key repo.path}

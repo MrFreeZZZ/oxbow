@@ -203,6 +203,20 @@ pub fn reveal(path: &Path) -> Result<(), String> {
     launch(command)
 }
 
+/// Preview a file with Quick Look on macOS; elsewhere open it in its default app.
+pub fn quick_look(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut command = Command::new("qlmanage");
+        command.arg("-p").arg(path);
+        launch(command)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        open_url(&path.display().to_string())
+    }
+}
+
 /// Open a web page in the default browser.
 pub fn open_url(url: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
