@@ -364,7 +364,8 @@ export type Action =
   | { kind: "createBranch"; name: string; start: string | null; switch: boolean; publish: string | null }
   | { kind: "renameBranch"; from: string; to: string; upstream: RemoteBranch | null }
   | { kind: "deleteBranch"; name: string; force: boolean; upstream: RemoteBranch | null }
-  | { kind: "deleteRemoteBranch"; remote: string; branch: string }
+  /** `expect`: only while the branch there is still at this commit (--force-with-lease). */
+  | { kind: "deleteRemoteBranch"; remote: string; branch: string; expect?: string | null }
   | { kind: "merge"; branch: string; method: MergeMethod; message: string | null }
   | { kind: "continue"; message: string | null }
   | { kind: "abort" }
@@ -396,8 +397,11 @@ export type Action =
   | { kind: "editStack"; plan: StackPlan }
   | { kind: "addToCommit"; commit: string }
   | { kind: "pushBranches"; remote: string; branches: { branch: string; upstream: string }[] }
-  | { kind: "pullRequestMerged"; remote: string; base: string; branch: string; deleteRemote: boolean; deleteLocal: boolean }
-  | { kind: "lfsTrack"; pattern: string; paths: string[] }
+  | { kind: "pullRequestMerged"; remote: string; base: string; branch: string }
+  /** Only while `branch` is still at `sha`, the commit GitHub merged. */
+  | { kind: "deleteMergedBranch"; base: string; branch: string; sha: string }
+  /** `stage`: stage .gitattributes and `paths` too. */
+  | { kind: "lfsTrack"; pattern: string; paths: string[]; stage: boolean }
   | { kind: "lfsUntrack"; pattern: string }
   | { kind: "lfsPull"; include: string | null }
   | { kind: "lfsPrune" }
@@ -780,6 +784,12 @@ export interface OpEntry {
 }
 
 /** A stack of branches on top of the trunk, for Edit Stack. */
+/** A branch that has a merged pull request, for a restack to move onto. */
+export interface Landing {
+  name: string;
+  tip: CommitBrief;
+}
+
 export interface Stack {
   /** The branch at the top, the one the rebase rewrites. */
   top: string;
@@ -941,6 +951,8 @@ export interface PullRequest extends PullSummary {
   deletions: number;
   changedFiles: number;
   commitCount: number;
+  /** `commits` has them all: GitHub lists at most 250. */
+  commitsComplete: boolean;
   mergeable: boolean | null;
   mergeableState: string;
   mergedAt: number | null;

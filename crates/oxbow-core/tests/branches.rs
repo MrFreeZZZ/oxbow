@@ -255,6 +255,7 @@ fn remote_branches_are_deleted_on_the_remote() {
     let delete = Action::DeleteRemoteBranch {
         remote: "origin".into(),
         branch: "gone-soon".into(),
+        expect: None,
     };
     assert_eq!(
         repo.plan(&delete).unwrap().commands[0].display(),

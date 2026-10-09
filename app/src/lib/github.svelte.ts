@@ -15,20 +15,21 @@ class GitHubState {
   problem = $state<string | null>(null);
   #path = "";
   #loadedAt = 0;
+  /** Counts loads: only the latest one's answer is kept, so an answer for the account signed
+   *  out of, or for another repository, never comes back. */
+  #load = 0;
 
   /** Load what the repository at `path` has on GitHub; `force` skips the one-minute wait. */
   async load(path: string, force = false) {
     if (path !== this.#path) {
       this.#path = path;
-      this.repo = null;
-      this.pulls = [];
-      this.problem = null;
-      this.#loadedAt = 0;
+      this.#forget();
     }
     if (!force && Date.now() - this.#loadedAt < FRESH_FOR) return;
     this.#loadedAt = Date.now();
+    const load = ++this.#load;
     const repo = await api.githubRepo().catch(() => null);
-    if (path !== this.#path) return;
+    if (load !== this.#load) return;
     this.repo = repo;
     if (!repo) {
       this.pulls = [];
@@ -36,12 +37,26 @@ class GitHubState {
     }
     try {
       const pulls = await api.githubPulls();
-      if (path !== this.#path) return;
+      if (load !== this.#load) return;
       this.pulls = pulls;
       this.problem = null;
     } catch (err) {
-      if (path === this.#path) this.problem = String(err);
+      if (load === this.#load) this.problem = String(err);
     }
+  }
+
+  /** Signed in as someone else, or out: what the old account could see goes at once. */
+  accountChanged() {
+    this.#forget();
+    return this.refresh();
+  }
+
+  #forget() {
+    this.#load += 1;
+    this.repo = null;
+    this.pulls = [];
+    this.problem = null;
+    this.#loadedAt = 0;
   }
 
   /** Load the list again now, e.g. after a pull request changed. */

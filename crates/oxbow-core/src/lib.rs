@@ -48,7 +48,8 @@ pub use search::{SearchHit, SearchMode, SearchQuery, SearchResult};
 pub use setup::{CloneOptions, NewRepoOptions, NewRepoPlan, RemoteProbe, RepoGlance};
 pub use ssh::{SshCheck, SshProblem, SshStep};
 pub use stack::{
-    BranchAfter, Stack, StackBranch, StackCommit, StackConflict, StackPlan, StackPreview, StackStep, StepAction,
+    BranchAfter, Landing, Stack, StackBranch, StackCommit, StackConflict, StackPlan, StackPreview, StackStep,
+    StepAction,
 };
 pub use stash::StashCheck;
 pub use worktree::{Action, ActionEvent, BranchPush, Plan, PullMode, RemoteBranch, Side, WorkingTree};

@@ -34,7 +34,9 @@ export interface Checked {
 }
 
 const SPACE = /\s+/y;
-const STRING = /"(?:[^"\\\n]|\\["\\/bfnrt]|\\u[0-9a-fA-F]{4})*"/y;
+// JSON strings can't hold raw control characters (U+0000 to U+001F), a Tab included.
+const STRING = /"(?:[^"\\\u0000-\u001f]|\\["\\/bfnrt]|\\u[0-9a-fA-F]{4})*"/y;
+const CONTROL = /[\u0000-\u001f]/;
 const LOOSE_STRING = /"(?:[^"\\\n]|\\.)*"?/y;
 const NUMBER = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
 const WORD = /[A-Za-z_$][\w$]*/y;
@@ -58,7 +60,12 @@ export function tokenize(text: string): Token[] {
       else {
         to = at(LOOSE_STRING, text, i);
         const closed = to - i > 1 && text[to - 1] === '"';
-        tokens.push({ kind: "str", from: i, to, wrong: closed ? "Not a valid escape, e.g. \\\\ for a backslash" : "Missing the closing quote" });
+        const wrong = !closed
+          ? "Missing the closing quote"
+          : CONTROL.test(text.slice(i, to))
+            ? "A Tab or other control character must be written as an escape, e.g. \\t"
+            : "Not a valid escape, e.g. \\\\ for a backslash";
+        tokens.push({ kind: "str", from: i, to, wrong });
       }
     } else if (c === "/" && (text[i + 1] === "/" || text[i + 1] === "*")) {
       const end = text[i + 1] === "/" ? text.indexOf("\n", i) : text.indexOf("*/", i + 2);
@@ -111,9 +118,18 @@ export function check(text: string, known: (key: string) => boolean, problemOf: 
     return token;
   }
 
+  /** JSON.parse of one token; what it can't read is a problem under the token, not a throw. */
+  function parse(token: Token): unknown {
+    try {
+      return JSON.parse(word(token));
+    } catch (err) {
+      fail(token, err instanceof Error ? err.message : String(err));
+    }
+  }
+
   function string(token: Token): string {
     if (token.wrong) fail(token, token.wrong);
-    return JSON.parse(word(token));
+    return parse(token) as string;
   }
 
   function value(): unknown {
@@ -123,7 +139,7 @@ export function check(text: string, known: (key: string) => boolean, problemOf: 
     if (token.kind === "punct" && word(token) === "[") return array();
     i += 1;
     if (token.kind === "str") return string(token);
-    if (token.kind === "num" || token.kind === "lit") return JSON.parse(word(token));
+    if (token.kind === "num" || token.kind === "lit") return parse(token);
     fail(token, token.wrong ?? `Expected a value, not “${word(token)}”`);
   }
 
@@ -184,7 +200,8 @@ export function check(text: string, known: (key: string) => boolean, problemOf: 
     object(entries);
     if (i < meaningful.length) fail(meaningful[i], "Nothing may follow the closing }");
   } catch (err) {
-    if (err !== STOP) throw err;
+    // Anything else is a mistake of the reader: still a problem to show, never a broken editor.
+    if (err !== STOP) problems.push({ from: 0, to: 0, message: String(err), level: "error" });
   }
 
   // Each setting against what it can hold.

@@ -349,7 +349,7 @@ pub struct Storage {
 }
 
 fn lfs_patterns(workdir: &Path) -> Vec<String> {
-    std::fs::read_to_string(workdir.join(".gitattributes"))
+    crate::lfs::read_attributes(workdir)
         .unwrap_or_default()
         .lines()
         .filter(|line| line.split_whitespace().any(|attr| attr == "filter=lfs"))

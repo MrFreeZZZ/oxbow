@@ -8,7 +8,7 @@
   import { github } from "./github.svelte";
   import type { Request } from "./confirm.svelte";
   import type { BranchContext } from "./branches";
-  import type { Action, History, MergeMethodName, PullCheck, PullEntry, PullRequest, PullSummary, ReviewState, Stack, StackPreview } from "./types";
+  import type { Action, History, MergeMethodName, Landing, PullCheck, PullEntry, PullRequest, PullSummary, ReviewState, Stack, StackPreview } from "./types";
   import { lane, person, plate, relativeTime, shortId, splitPath, tint } from "./format";
   import { softArrows } from "./shapes";
   import { editStackRequest, freshDraft, planOf } from "./stack";
@@ -273,25 +273,46 @@
     preview: StackPreview;
     /** Open pull requests of the stack that still go into the merged branch. */
     retarget: PullSummary[];
+    /** Why it can't be restacked from here, e.g. the merge isn't here yet. */
+    problem: string | null;
   }
   let restack = $state<Restack | null>(null);
   let restackSkipped = $state(false);
 
-  /** The stack built on `merged`, here, with its commits left out and moved onto the trunk. */
-  async function planRestack(merged: PullSummary, shas: Set<string>): Promise<Restack | null> {
+  /** Where the stack goes: a branch that has the merge, fetched first when none has it yet, so
+   *  the merged commits never leave the stack for a base without them. */
+  async function landing(s: Stack, merged: PullRequest): Promise<Landing | null> {
+    if (!merged.mergeCommit) return null;
+    const candidates = [...new Set([s.trunk, ...(gh ? [`${gh.remote}/${merged.base}`] : []), merged.base])];
+    const found = await api.landedOn(merged.mergeCommit, candidates);
+    if (found || !gh) return found;
+    await api.fetchInBackground(gh.remote).catch(() => {});
+    return api.landedOn(merged.mergeCommit, candidates);
+  }
+
+  /** The stack built on `merged`, here, with its commits left out and moved onto a branch that
+   *  has the merge. */
+  async function planRestack(merged: PullRequest): Promise<Restack | null> {
+    const shas = new Set(merged.commits.map((c) => c.sha));
     const candidates = github.pulls.filter((p) => p.state === "open" && p.head !== merged.head && ctx.history.refs.some((r) => r.kind === "local" && r.name === p.head));
     for (const candidate of candidates) {
-      const s = await api.stack(candidate.head).catch(() => null);
+      let s = await api.stack(candidate.head).catch(() => null);
       if (!s) continue;
       const drop = s.commits.filter((c) => shas.has(c.id)).map((c) => c.id);
       if (!drop.length) continue;
+      const names = new Set(s.branches.map((b) => b.name));
+      const retarget = github.pulls.filter((p) => p.state === "open" && names.has(p.head) && p.base === merged.head);
+      const stuck = (problem: string): Restack => ({ merged, stack: s!, drop, preview: { changed: false } as StackPreview, retarget, problem });
+      if (!merged.commitsComplete)
+        return stuck(`#${merged.number} has more commits than GitHub lists (250), so Oxbow can’t tell which ones to leave out. Use Edit Stack to drop them by hand.`);
+      const onto = await landing(s, merged);
+      if (!onto) return stuck(`${merged.base} here doesn’t have the merge yet. Fetch, then come back to restack.`);
+      s = { ...s, trunk: onto.name, trunkTip: onto.tip };
       const draft = freshDraft(s, true);
       for (const id of drop) draft.acts[id] = "drop";
       draft.items = draft.items.filter((item) => !(item.kind === "branch" && item.name === merged.head));
       const preview = await api.stackPreview(planOf(s, draft));
-      const names = new Set(s.branches.map((b) => b.name));
-      const retarget = github.pulls.filter((p) => p.state === "open" && names.has(p.head) && p.base === merged.head);
-      return { merged, stack: s, drop, preview, retarget };
+      return { merged, stack: s, drop, preview, retarget, problem: null };
     }
     return null;
   }
@@ -301,14 +322,13 @@
     const current = pr;
     restack = null;
     if (!current || current.state !== "merged") return;
-    const shas = new Set(current.commits.map((c) => c.sha));
-    planRestack(current, shas).then((r) => pr === current && (restack = r), () => {});
+    planRestack(current).then((r) => pr === current && (restack = r), () => {});
   });
 
   async function startRestack(merged: PullSummary) {
     const detail = merged.number === pr?.number ? pr : await api.githubPull(merged.number);
-    const plan = restack?.merged.number === merged.number ? restack : await planRestack(merged, new Set(detail.commits.map((c) => c.sha)));
-    if (!plan) return;
+    const plan = restack?.merged.number === merged.number ? restack : await planRestack(detail);
+    if (!plan || plan.problem) return;
     const draft = freshDraft(plan.stack, true);
     for (const id of plan.drop) draft.acts[id] = "drop";
     draft.items = draft.items.filter((item) => !(item.kind === "branch" && item.name === merged.head));
@@ -324,11 +344,11 @@
   }
 
   const restackSteps = $derived.by(() => {
-    if (!restack) return [];
+    if (!restack || restack.problem) return [];
     const { stack: s, drop, preview: p, retarget, merged } = restack;
     const kept = s.commits.length - drop.length;
     const names = s.branches.filter((b) => b.name !== merged.head).map((b) => b.name);
-    const steps = [`Rebase ${plural(kept, "commit")} of ${names.join(" and ")} onto ${merged.base}, leaving out ${plural(drop.length, "commit")} ${merged.base} has now`];
+    const steps = [`Rebase ${plural(kept, "commit")} of ${names.join(" and ")} onto ${s.trunk}, leaving out ${plural(drop.length, "commit")} ${merged.base} has now`];
     for (const r of retarget) steps.push(`Change the base of #${r.number} to ${merged.base}`);
     const forced = p.branches.filter((b) => b.forcePush).length;
     if (forced) steps.push(`Force push ${plural(forced, "branch")} with --force-with-lease`);
@@ -768,6 +788,10 @@
           <span class="muted small-text">
             {built.join(" and ")} {built.length > 1 ? "were" : "was"} built on {pr.head}, which is in {pr.base} now{restack.drop.length && pr.commits.length > 1 && pr.mergeCommit ? " as new commits" : ""}.
           </span>
+          {#if restack.problem}
+            {@const [bg, fg] = toneOf("warn")}
+            <span class="step">{@render dot("dot", bg, fg)}<span>{restack.problem}</span></span>
+          {/if}
           {#each restackSteps as step, i (i)}
             {@const warn = i === restackSteps.length - 1 && !!restack.preview.conflict}
             {@const [bg, fg] = toneOf(warn ? "warn" : "ok")}
@@ -775,7 +799,7 @@
           {/each}
           <div class="buttons">
             <button class="capsule" onclick={() => (restackSkipped = true)}>Later</button>
-            <button class="primary small" onclick={() => restack && startRestack(restack.merged)}>Restack…</button>
+            <button class="primary small" disabled={!!restack.problem} onclick={() => restack && startRestack(restack.merged)}>Restack…</button>
           </div>
         </div>
       {:else if restack}

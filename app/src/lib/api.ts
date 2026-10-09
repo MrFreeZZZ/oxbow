@@ -32,6 +32,7 @@ import type {
   NewRepoPlan,
   GitCommand,
   OpEntry,
+  Landing,
   Stack,
   StackPlan,
   StackPreview,
@@ -96,6 +97,7 @@ export const api = {
   conflictFile: (path: string) => invoke<ConflictFile>("conflict_file", { path }),
   stashCheck: (index: number, id: string) => invoke<StashCheck>("stash_check", { index, id }),
   stack: (branch: string | null) => invoke<Stack>("stack", { branch }),
+  landedOn: (merged: string, candidates: string[]) => invoke<Landing | null>("landed_on", { merged, candidates }),
   stackPreview: (plan: StackPlan) => invoke<StackPreview>("stack_preview", { plan }),
   planAction: (action: Action) => invoke<Plan>("plan_action", { action }),
   /** Rejects with a `Failure`. */
@@ -148,7 +150,8 @@ export const api = {
   openGitHub: (url: string) => invoke<void>("open_github", { url }),
   githubOwners: () => invoke<GitHubOwners>("github_owners"),
   /** Sends `action-event`s while it runs; Stop is `stopAction`. Resolves to the repository's page. */
-  githubPublish: (path: string, publish: Publish) => invoke<string>("github_publish", { path, publish }),
+  /** `create: false`: the repository is on GitHub already, only origin and the push are left. */
+  githubPublish: (path: string, publish: Publish, create = true) => invoke<string>("github_publish", { path, publish, create }),
   githubRepo: () => invoke<GitHubRepo | null>("github_repo"),
   /** Open and recently closed, the latest updated first. */
   githubPulls: () => invoke<PullSummary[]>("github_pulls"),

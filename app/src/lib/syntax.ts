@@ -63,9 +63,11 @@ const BY_NAME: Record<string, keyof typeof LANGUAGES> = {
 /** The language of a file, from its name; `null` for plain text. */
 export function languageOf(path: string): string | null {
   const name = path.split("/").pop()!.toLowerCase();
-  if (BY_NAME[name]) return BY_NAME[name];
+  // Own keys only: a file can be called `constructor`, or end in `.tostring`.
+  if (Object.hasOwn(BY_NAME, name)) return BY_NAME[name];
   const dot = name.lastIndexOf(".");
-  return dot > 0 ? (BY_EXTENSION[name.slice(dot + 1)] ?? null) : null;
+  const ext = name.slice(dot + 1);
+  return dot > 0 && Object.hasOwn(BY_EXTENSION, ext) ? BY_EXTENSION[ext] : null;
 }
 
 /** What a piece of code is, as the theme colors it. */

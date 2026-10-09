@@ -31,7 +31,8 @@
   let file = $state<ConflictFile | null>(null);
   let error = $state<string | null>(null);
   /** Choices per file, one per conflict, kept while the user moves between files. */
-  let choices = $state<Record<string, (Choice | null)[]>>({});
+  // A Map, as a conflicted file may be called `constructor` or `__proto__`.
+  let choices = $state.raw(new Map<string, (Choice | null)[]>());
   /** Every file that was conflicted in this step, so resolved ones still show as done. */
   let seen = $state<string[]>([]);
   let seenFor = "";
@@ -82,7 +83,7 @@
       if (key !== seenFor) {
         seenFor = key;
         seen = paths;
-        choices = {};
+        choices = new Map();
       } else {
         seen = [...seen, ...paths.filter((p) => !seen.includes(p))];
       }
@@ -104,7 +105,7 @@
       if (current !== path) return;
       file = next;
       const count = next.chunks.filter((c) => c.kind === "conflict").length;
-      if (choices[path]?.length !== count) choices[path] = Array(count).fill(null);
+      if (choices.get(path)?.length !== count) choices = new Map(choices).set(path, Array(count).fill(null));
     } catch (err) {
       error = String(err);
     }
@@ -116,15 +117,15 @@
     untrack(() => reload());
   });
 
-  const picked = $derived(current ? (choices[current] ?? []) : []);
+  const picked = $derived(current ? (choices.get(current) ?? []) : []);
   const open_ = $derived(picked.filter((c) => c === null).length);
   const lineByLine = $derived(!!file && file.chunks.length > 0);
 
   function choose(k: number, choice: Choice | null) {
     if (!current) return;
-    const list = [...(choices[current] ?? [])];
+    const list = [...(choices.get(current) ?? [])];
     list[k] = choice;
-    choices[current] = list;
+    choices = new Map(choices).set(current, list);
   }
 
   /** What each side looks like around the conflicts: one line of context, the rest folded. */
@@ -212,7 +213,7 @@
   }
 
   const conflictsIn = (path: string) => {
-    const list = choices[path];
+    const list = choices.get(path);
     return list ? list.filter((c) => c === null).length : null;
   };
 

@@ -669,7 +669,7 @@
     // Settings changed remotes or packed the repository.
     const unlisten = listen("repo-touched", () => refresh());
     // Signing in or out changes what GitHub tells about the pull requests.
-    const account = listen("account-changed", () => repo && github.load(repo.path, true));
+    const account = listen("account-changed", () => repo && github.accountChanged());
     return () => {
       unlisten.then((stop) => stop());
       account.then((stop) => stop());

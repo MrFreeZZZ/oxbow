@@ -6,6 +6,7 @@
 //! `git lfs` like any other command.
 
 use std::io::Read;
+use std::path::Path;
 
 use serde::Serialize;
 
@@ -117,11 +118,14 @@ fn pathspec(pattern: &str) -> String {
 
 /// `git lfs track` and staging what it changed: `.gitattributes`, and `paths` so they go in as
 /// pointers.
-pub(crate) fn plan_track(pattern: &str, paths: &[String]) -> Vec<GitCommand> {
+pub(crate) fn plan_track(pattern: &str, paths: &[String], stage: bool) -> Vec<GitCommand> {
     let mut commands = vec![GitCommand::new(["lfs", "track", pattern]).comment(format!(
         "writes {} filter=lfs diff=lfs merge=lfs -text to .gitattributes",
         pattern
     ))];
+    if !stage {
+        return commands;
+    }
     let mut add = vec!["add".to_owned(), "--".to_owned(), ".gitattributes".to_owned()];
     add.extend(paths.iter().map(|p| crate::cli::literal(p)));
     commands.push(GitCommand::new(add).comment(if paths.is_empty() {
@@ -182,6 +186,41 @@ pub(crate) fn plan_install(brew: Option<&str>, pull: bool) -> Vec<GitCommand> {
     commands
 }
 
+/// More of `.gitattributes` than anyone writes by hand; the rest is not read.
+const MAX_ATTRIBUTES_BYTES: u64 = 1024 * 1024;
+
+/// At most `limit` bytes of `path` when it is a plain file. A repository can commit a symlink,
+/// say to /dev/zero or a FIFO, where a file is expected; reading through it would never end.
+/// The file opened must be the one looked at, so a swap in between is caught too.
+pub(crate) fn read_regular(path: &Path, limit: u64) -> Option<Vec<u8>> {
+    let seen = std::fs::symlink_metadata(path).ok()?;
+    if !seen.file_type().is_file() {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    let opened = file.metadata().ok()?;
+    if !opened.is_file() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if (seen.dev(), seen.ino()) != (opened.dev(), opened.ino()) {
+            return None;
+        }
+    }
+    let mut bytes = Vec::new();
+    file.take(limit).read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
+
+/// `.gitattributes` in the working copy, when it is a plain file: git itself never follows a
+/// symlink for attributes.
+pub(crate) fn read_attributes(workdir: &Path) -> Option<String> {
+    read_regular(&workdir.join(".gitattributes"), MAX_ATTRIBUTES_BYTES)
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+}
+
 impl Repo {
     /// Which files the repository keeps in LFS, and whether `git lfs` is there to fetch them.
     pub fn lfs_status(&self) -> Result<LfsStatus> {
@@ -189,7 +228,7 @@ impl Repo {
             let first = out.stdout.split_whitespace().next().unwrap_or_default().to_owned();
             first.strip_prefix("git-lfs/").map_or(first.clone(), str::to_owned)
         });
-        let text = std::fs::read_to_string(self.workdir().join(".gitattributes")).unwrap_or_default();
+        let text = read_attributes(self.workdir()).unwrap_or_default();
         let committed = self
             .run(&GitCommand::new(["cat-file", "-p", "HEAD:.gitattributes"]))
             .map(|out| lfs_patterns(&out.stdout))
@@ -231,16 +270,16 @@ impl Repo {
     /// is not there.
     pub(crate) fn lfs_file_size(&self, path: &str) -> Option<(u64, bool)> {
         let file = self.workdir().join(path);
-        let len = std::fs::metadata(&file).ok()?.len();
+        // A symlink is a link here, as for git, not the file it points at.
+        let meta = std::fs::symlink_metadata(&file).ok()?;
+        if !meta.is_file() {
+            return None;
+        }
+        let len = meta.len();
         if len > MAX_POINTER {
             return Some((len, false));
         }
-        let mut data = Vec::new();
-        std::fs::File::open(&file)
-            .ok()?
-            .take(MAX_POINTER)
-            .read_to_end(&mut data)
-            .ok()?;
+        let data = read_regular(&file, MAX_POINTER)?;
         Some(match parse_pointer(&data) {
             Some(pointer) => (pointer.size, true),
             None => (len, false),
@@ -349,8 +388,15 @@ mod tests {
 
     #[test]
     fn track_stages_the_rule_and_the_files() {
-        let commands = plan_track("*.mov", &["assets/demo/intro.mov".into()]);
+        let commands = plan_track("*.mov", &["assets/demo/intro.mov".into()], true);
         assert_eq!(commands[0].display(), "git lfs track '*.mov'");
         assert_eq!(commands[1].display(), "git add -- .gitattributes assets/demo/intro.mov");
+    }
+
+    #[test]
+    fn track_without_staging_leaves_the_index_alone() {
+        let commands = plan_track("*.mov", &["assets/demo/intro.mov".into()], false);
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].display(), "git lfs track '*.mov'");
     }
 }

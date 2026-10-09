@@ -64,6 +64,7 @@ fn tracking_turns_a_staged_file_into_a_pointer() {
     repo.perform(&Action::LfsTrack {
         pattern: "*.mov".into(),
         paths: vec!["assets/intro.mov".into()],
+        stage: true,
     })
     .unwrap();
     assert!(
@@ -98,4 +99,32 @@ fn tracking_turns_a_staged_file_into_a_pointer() {
     })
     .unwrap();
     assert!(repo.lfs_status().unwrap().patterns.is_empty());
+}
+
+/// A repository can commit `.gitattributes` as a symlink to a file that never ends; it is not
+/// read through, as git itself doesn't. Nor is a symlink shown as a picture.
+#[cfg(unix)]
+#[test]
+fn symlinks_to_endless_files_are_not_read() {
+    let mut fx = Fixture::new();
+    std::os::unix::fs::symlink("/dev/zero", fx.path().join(".gitattributes")).unwrap();
+    std::os::unix::fs::symlink("/dev/zero", fx.path().join("logo.svg")).unwrap();
+    fx.commit("a.txt", "a\n", "Root");
+    let repo = Repo::open(fx.path()).unwrap();
+    assert!(repo.lfs_status().unwrap().patterns.is_empty());
+    let shown = repo
+        .read_source(&oxbow_core::Source::Worktree {
+            path: "logo.svg".into(),
+        })
+        .unwrap();
+    assert_eq!(shown, b"/dev/zero");
+    // Untracked, it is counted as a link too.
+    std::os::unix::fs::symlink("/dev/zero", fx.path().join("new.txt")).unwrap();
+    assert!(
+        repo.working_tree()
+            .unwrap()
+            .unstaged
+            .iter()
+            .any(|f| f.path == "new.txt")
+    );
 }

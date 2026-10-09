@@ -26,7 +26,7 @@ export const isSvg = (path: string) => path.toLowerCase().endsWith(".svg");
 /** The picture type of `path` by its extension, or null when the webview can't draw it. */
 export function imageType(path: string): string | null {
   const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
-  return IMAGE_TYPES[ext] ?? null;
+  return Object.hasOwn(IMAGE_TYPES, ext) ? IMAGE_TYPES[ext] : null;
 }
 
 /** `18.4 KB`, `6.1 MB`. */

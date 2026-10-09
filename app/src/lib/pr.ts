@@ -6,7 +6,7 @@ import { api } from "./api";
 import type { Part, Request } from "./confirm.svelte";
 import type { BranchContext } from "./branches";
 import { shortId } from "./format";
-import type { Action, Failure, GitHubRepo, MergeMethodName, PullCall, PullRequest, PullSummary } from "./types";
+import type { Action, Failure, GitHubRepo, MergeMethodName, Plan, PullCall, PullRequest, PullSummary } from "./types";
 
 /** "Squash and Merge" as the start of a sentence: "Squash and merge". */
 const sentence = (label: string) => label.charAt(0) + label.slice(1).toLowerCase();
@@ -89,28 +89,46 @@ export function mergeMessage(gh: GitHubRepo, pr: PullRequest, method: MergeMetho
   return { title: null, message: null };
 }
 
-/** Merge on GitHub, then bring the merge here. */
+/** The first line of what git said, for a note. */
+const firstLine = (err: unknown) => String(err).trim().split("\n").find((line) => line.trim())?.replace(/^(error|fatal): /, "") ?? "";
+
+/** Merge on GitHub, then bring the merge here; deleting the branch comes last, and a delete
+ *  that fails only adds a note: the merge is in by then. */
 export async function mergeRequest(ctx: BranchContext, gh: GitHubRepo, pr: PullRequest, method: MergeMethodName, deleteBranch: boolean): Promise<Request> {
   const { title, message } = mergeMessage(gh, pr, method);
   const calls: PullCall[] = [{ kind: "merge", number: pr.number, method, title, message, sha: pr.headSha }];
   const local = ctx.history.refs.find((r) => r.kind === "local" && r.name === pr.head);
   const fromFork = !!pr.headOwner && pr.headOwner !== gh.owner;
-  // A local branch with commits GitHub doesn't have stays, so nothing is lost.
+  // A local branch with commits GitHub doesn't have stays, so nothing is lost. The delete
+  // itself checks again: only while the branch is still at the merged commit.
   const deleteLocal = deleteBranch && local?.target === pr.headSha;
-  const landed: Action = {
-    kind: "pullRequestMerged",
-    remote: gh.remote,
-    base: pr.base,
-    branch: pr.head,
-    deleteRemote: deleteBranch && !fromFork && !pr.settings.deleteBranchOnMerge,
-    deleteLocal,
-  };
-  const [curls, plan] = await Promise.all([api.githubCallsPreview(calls), api.planAction(landed)]);
+  const landed: Action = { kind: "pullRequestMerged", remote: gh.remote, base: pr.base, branch: pr.head };
+  const cleanup: { action: Action; failed: (err: unknown) => string }[] = [];
+  if (deleteBranch && !fromFork && !pr.settings.deleteBranchOnMerge)
+    cleanup.push({
+      action: { kind: "deleteRemoteBranch", remote: gh.remote, branch: pr.head, expect: pr.headSha },
+      failed: (err) => `${pr.head} stays on ${gh.remote}: ${firstLine(err)}`,
+    });
+  if (deleteLocal)
+    cleanup.push({
+      action: { kind: "deleteMergedBranch", base: pr.base, branch: pr.head, sha: pr.headSha },
+      failed: (err) => `${pr.head} stays here: ${firstLine(err)}`,
+    });
+  // A delete that can't be done (uncommitted changes on the branch) is left out and said so.
+  const [curls, plan, ...cleanupPlans] = await Promise.all([
+    api.githubCallsPreview(calls),
+    api.planAction(landed),
+    ...cleanup.map((c) => api.planAction(c.action).catch((err: unknown) => String(err))),
+  ]);
+  const skipped = cleanupPlans.filter((p): p is string => typeof p === "string");
+  const steps = cleanup.filter((_, i) => typeof cleanupPlans[i] !== "string");
+  const commands = [plan, ...cleanupPlans.filter((p): p is Plan => typeof p !== "string")].flatMap((p) => p.commands);
   const verb = method === "squash" ? `squashes ${plural(pr.commitCount, "commit")} of ` : method === "rebase" ? `replays ${plural(pr.commitCount, "commit")} of ` : "merges ";
   const body: Part[] = ["GitHub ", verb, chip(ctx, pr.head), " into ", chip(ctx, pr.base)];
   body.push(method === "squash" ? " as one commit" : method === "merge" ? " with a merge commit" : "", ", then your ", chip(ctx, pr.base), " catches up here.");
   if (deleteBranch && pr.settings.deleteBranchOnMerge) body.push(" GitHub deletes its branch there itself.");
   if (deleteBranch && local && !deleteLocal) body.push(" The local branch stays: it has commits GitHub doesn’t.");
+  for (const why of skipped) body.push(` The local branch stays: ${why.replace(/^(error|fatal): /, "")}.`);
   const flags = `--${method}${deleteBranch ? " --delete-branch" : ""}`;
   return {
     title: `${sentence(METHODS.find((m) => m.id === method)!.button)} #${pr.number}?`,
@@ -120,12 +138,20 @@ export async function mergeRequest(ctx: BranchContext, gh: GitHubRepo, pr: PullR
     status: `Merging #${pr.number} on GitHub…`,
     note: "Undo can’t take back a merge on GitHub. The steps here are in the Operation Log.",
     local: {
-      commands: [...curls, ...plan.commands.map((c) => c.display)],
-      comments: [`gh pr merge ${pr.number} ${flags} does the same`, ...plan.commands.map((c) => c.comment)],
+      commands: [...curls, ...commands.map((c) => c.display)],
+      comments: [`gh pr merge ${pr.number} ${flags} does the same`, ...commands.map((c) => c.comment)],
       run: async () => {
         await api.githubRun(calls);
         await perform(landed);
-        return `Merged #${pr.number} into ${pr.base}.`;
+        const notes: string[] = [];
+        for (const step of steps) {
+          try {
+            await api.performAction(step.action);
+          } catch (err) {
+            notes.push(step.failed((err as Failure)?.output ?? err));
+          }
+        }
+        return [`Merged #${pr.number} into ${pr.base}.`, ...notes].join(" ");
       },
     },
   };

@@ -83,6 +83,8 @@ export function publishRequest(path: string, owners: GitHubOwners, publish: Publ
     recover: (failure) => {
       // GitHub made nothing: the name can change and it can go again.
       const made = confirm.lines.some((line) => line.text.startsWith("Created https://"));
+      // The push only starts once origin is added.
+      const linked = confirm.lines.some((line) => line.kind === "cmd" && line.text.startsWith("git push"));
       if (!made)
         return {
           title: "GitHub didn’t make the repository",
@@ -90,6 +92,15 @@ export function publishRequest(path: string, owners: GitHubOwners, publish: Publ
           icon: "warn",
           tone: "err",
           alt: { label: "Change and Try Again…", request: () => publishRequest(path, owners, publish, color) },
+          close: "Close",
+        };
+      if (!linked)
+        return {
+          title: `github.com/${at} is made, but origin wasn’t added`,
+          body: [failure.output.trim()],
+          icon: "warn",
+          tone: "err",
+          alt: { label: "Add Origin and Push…", request: () => linkRequest(path, publish, color) },
           close: "Close",
         };
       return {
@@ -109,6 +120,28 @@ export function publishRequest(path: string, owners: GitHubOwners, publish: Publ
       ],
       run: async () => {
         await api.githubPublish(path, publish);
+        return `Published to github.com/${at}.`;
+      },
+    },
+  };
+}
+
+/** After a Publish that made the repository on GitHub but stopped before origin was added: add
+ *  it and push, without making the repository again. */
+function linkRequest(path: string, publish: Publish, color: number): Request {
+  const at = `${publish.owner}/${publish.name}`;
+  const [, ...commands] = publishCommands(publish);
+  return {
+    title: `Add github.com/${at} as origin?`,
+    body: ["The repository is on GitHub already. This adds it as ", { code: "origin" }, " and pushes ", { branch: publish.branch, color }, " there."],
+    icon: "push",
+    button: "Add and Push",
+    status: `Pushing to github.com/${at}…`,
+    local: {
+      commands,
+      comments: ["the GitHub repository becomes origin", `-u: remember origin/${publish.branch} as the upstream`],
+      run: async () => {
+        await api.githubPublish(path, publish, false);
         return `Published to github.com/${at}.`;
       },
     },

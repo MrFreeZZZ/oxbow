@@ -74,8 +74,9 @@
     working?: boolean;
   } = $props();
 
-  /** Diffs loaded in full with Show Diff Anyway, by path. */
-  let full = $state<Record<string, FileDiff>>({});
+  /** Diffs loaded in full with Show Diff Anyway, by the very diff they stand in for: a diff
+   *  loaded again (the file changed, the other side) is a new one and shows as it is. */
+  let full = $state.raw(new Map<FileDiff, FileDiff>());
   /** Files whose line endings are shown, by path. */
   let showEol = $state<Record<string, boolean>>({});
   /** SVG files shown as code instead of as a picture, by path. */
@@ -83,16 +84,20 @@
   $effect(() => {
     fileSet;
     untrack(() => {
-      full = {};
+      full = new Map();
       showEol = {};
       showCode = {};
     });
   });
-  const items = $derived(diffs.map((d) => full[d.file.path] ?? d));
+  const items = $derived(diffs.map((d) => full.get(d) ?? d));
+
+  /** `map[key]`, only when `key` is its own: a file may be called `constructor` or `__proto__`. */
+  const own = <T,>(map: Record<string, T>, key: string): T | undefined => (Object.hasOwn(map, key) ? map[key] : undefined);
 
   function showAnyway(diff: FileDiff) {
     loadFull?.(diff).then(
-      (d) => (full = { ...full, [d.file.path]: d }),
+      // Only while that diff is still shown: a late answer doesn't bring back an old one.
+      (d) => diffs.includes(diff) && (full = new Map(full).set(diff, d)),
       (err) => confirm.say(String(err)),
     );
   }
@@ -104,12 +109,12 @@
     if (f.lfs) return "lfs";
     if (working && (f.newSize ?? 0) >= BIG_FILE && f.status !== "deleted") return "big";
     if (f.binary && imageType(f.path) && (diff.old || diff.new)) return "image";
-    if (isSvg(f.path) && !showCode[f.path] && (diff.old || diff.new)) return "image";
+    if (isSvg(f.path) && !own(showCode, f.path) && (diff.old || diff.new)) return "image";
     if (f.binary) return "binary";
     if (diff.limited) return "limited";
     if (diff.tooLarge) return "tooLarge";
     if (f.mode && diff.hunks.length === 0) return "mode";
-    if (f.eol && !showEol[f.path]) return "eol";
+    if (f.eol && !own(showEol, f.path)) return "eol";
     return null;
   }
 
@@ -137,7 +142,7 @@
     });
   });
 
-  const isFolded = (diff: FileDiff) => foldable && !!folded[diff.file.path];
+  const isFolded = (diff: FileDiff) => foldable && !!own(folded, diff.file.path);
 
   /** Fold or unfold every file, from the file list's buttons or ⌥-click on a chevron. */
   export function setAll(fold: boolean) {
@@ -278,11 +283,11 @@
       {#if isSvg(diff.file.path) && (diff.old || diff.new)}
         <div class="banner">
           <svg class="icon" viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="11" rx="2" /><circle cx="6" cy="6.5" r="1.3" /><path d="M2.5 12l3.5-3.5 3 3 2-2 2.5 2.5" /></svg>
-          <span class="grow">{showCode[diff.file.path] ? "SVG code. The picture it draws is one click away." : "SVG picture, drawn from the file. Its code is one click away."}</span>
+          <span class="grow">{own(showCode, diff.file.path) ? "SVG code. The picture it draws is one click away." : "SVG picture, drawn from the file. Its code is one click away."}</span>
           <button
             class="chip"
-            aria-pressed={!!showCode[diff.file.path]}
-            onclick={() => (showCode = { ...showCode, [diff.file.path]: !showCode[diff.file.path] })}>{showCode[diff.file.path] ? "Show Picture" : "Show Code"}</button
+            aria-pressed={!!own(showCode, diff.file.path)}
+            onclick={() => (showCode = { ...showCode, [diff.file.path]: !own(showCode, diff.file.path) })}>{own(showCode, diff.file.path) ? "Show Picture" : "Show Code"}</button
           >
         </div>
       {/if}
@@ -292,9 +297,9 @@
           <span class="grow">Only line endings changed: {diff.file.eol.from} → {diff.file.eol.to} in {diff.file.eol.lines} {diff.file.eol.lines === 1 ? "line" : "lines"}.</span>
           <button
             class="chip"
-            class:on={showEol[diff.file.path]}
-            aria-pressed={!!showEol[diff.file.path]}
-            onclick={() => (showEol = { ...showEol, [diff.file.path]: !showEol[diff.file.path] })}>{showEol[diff.file.path] ? "Hide Line Endings" : "Show Line Endings"}</button
+            class:on={own(showEol, diff.file.path)}
+            aria-pressed={!!own(showEol, diff.file.path)}
+            onclick={() => (showEol = { ...showEol, [diff.file.path]: !own(showEol, diff.file.path) })}>{own(showEol, diff.file.path) ? "Hide Line Endings" : "Show Line Endings"}</button
           >
         </div>
       {:else if diff.file.oldPath && diff.file.similarity !== undefined && diff.hunks.length > 0}
@@ -366,7 +371,7 @@
               {/if}
               <span class="no">{line.oldLine ?? ""}</span>
               <span class="no">{line.newLine ?? ""}</span>
-              <span class="text">{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found} data-hit={piece.hit} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}{#if line.cr && showEol[diff.file.path]}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}</span>
+              <span class="text">{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found} data-hit={piece.hit} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}{#if line.cr && own(showEol, diff.file.path)}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}</span>
             </div>
           {/each}
         {/each}

@@ -3,6 +3,7 @@
   // `gh auth login --web` does), or with a personal access token pasted here. Either way the
   // token goes to the computer's credential store and the requests show in the terminal block.
 
+  import { onDestroy } from "svelte";
   import { api } from "./api";
   import { prefs } from "./prefs.svelte";
   import TermBlock, { type TermLine } from "./TermBlock.svelte";
@@ -30,21 +31,32 @@
     if (mode === "token") tokenInput?.focus();
   });
 
+  /** Counts sign-ins started and cancelled: one that finds it changed after an await stops there. */
+  let attempt = 0;
+
   async function startBrowser() {
+    const mine = ++attempt;
     problem = null;
     phase = "starting";
+    let started: DeviceCode;
     try {
-      code = await api.githubDeviceStart();
+      started = await api.githubDeviceStart();
     } catch (err) {
+      if (mine !== attempt) return;
       problem = String(err);
       phase = "ask";
       return;
     }
+    if (mine !== attempt) return;
+    code = started;
     phase = "waiting";
     await copyAndOpen();
+    if (mine !== attempt) return;
     try {
-      onDone(await api.githubDeviceWait(code.deviceCode, code.interval, code.expiresIn));
+      const account = await api.githubDeviceWait(started.deviceCode, started.interval, started.expiresIn);
+      if (mine === attempt) onDone(account);
     } catch (err) {
+      if (mine !== attempt) return;
       if (String(err) !== "stopped") problem = String(err);
       phase = "ask";
       code = null;
@@ -60,20 +72,32 @@
   }
 
   async function signInWithToken() {
+    const mine = ++attempt;
     problem = null;
     phase = "checking";
     try {
-      onDone(await api.githubSignInToken(token));
+      const account = await api.githubSignInToken(token);
+      if (mine === attempt) onDone(account);
     } catch (err) {
+      if (mine !== attempt || String(err) === "stopped") return;
       problem = String(err);
       phase = "ask";
     }
   }
 
+  /** Stop whatever sign-in is under way: nothing it brings back is kept or opened. */
+  function stop() {
+    if (phase === "ask") return;
+    attempt += 1;
+    api.githubDeviceStop().catch(() => {});
+  }
+
   function cancel() {
-    if (phase === "waiting") api.githubDeviceStop();
+    stop();
     onClose();
   }
+
+  onDestroy(stop);
 
   function onKey(event: KeyboardEvent) {
     if (event.key === "Escape") {
