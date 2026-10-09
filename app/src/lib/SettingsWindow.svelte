@@ -571,6 +571,13 @@
               off: () => prefs.get("oxbow.diff.files") !== "smart",
               options: () => [100, 300, 1000].map((value) => ({ value, label: `${value} lines` })),
             }),
+            prefRow("oxbow.diff.maxLines", "Hide diffs longer than", "popup", {
+              sub: "A bigger diff waits for Show Diff Anyway, so History stays fast",
+              options: () => [
+                ...[1000, 5000, 20000].map((value) => ({ value, label: `${value.toLocaleString("en-US")} lines` })),
+                { value: 0, label: "Never" },
+              ],
+            }),
           ],
         },
         {
@@ -942,6 +949,9 @@
   const sample: FileDiff = {
     file: { path: "src/config.rs", oldPath: null, status: "modified", additions: 1, deletions: 1, binary: false },
     tooLarge: false,
+    limited: false,
+    old: null,
+    new: null,
     hunks: [
       {
         header: "@@ -18,7 +18,7 @@",

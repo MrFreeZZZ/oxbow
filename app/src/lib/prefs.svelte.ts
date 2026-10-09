@@ -26,6 +26,8 @@ export const defaults = {
   "oxbow.diff.files": "smart" as "smart" | "expanded" | "collapsed",
   /** Smart folds files with more changed lines than this. */
   "oxbow.diff.foldOver": 300,
+  /** Files with more changed lines than this wait for Show Diff Anyway; 0 shows every diff. */
+  "oxbow.diff.maxLines": 5000,
   /** A font family; SF Mono is the system's monospaced font on macOS. */
   "oxbow.text.font": "SF Mono" as string,
   "oxbow.text.fontSize": 12,
@@ -65,6 +67,7 @@ export const rules: Partial<Record<PrefKey, Rule>> = {
   "oxbow.diff.contextLines": { min: 0, max: 100, whole: true },
   "oxbow.diff.files": { oneOf: ["smart", "expanded", "collapsed"] },
   "oxbow.diff.foldOver": { min: 1, max: 100000, whole: true },
+  "oxbow.diff.maxLines": { min: 0, max: 10000000, whole: true },
   "oxbow.text.fontSize": { min: 6, max: 72 },
   "oxbow.text.tabWidth": { min: 1, max: 16, whole: true },
   "oxbow.fetch.interval": { min: 1, max: 1440, whole: true },
@@ -159,7 +162,7 @@ export const prefs = new Prefs();
 /** Read inside an effect that loads diffs, so it loads them again when Diff & Text changes how
  *  the backend makes them. */
 export function diffSettings(): string {
-  return `${prefs.get("oxbow.diff.contextLines")}:${prefs.get("oxbow.diff.ignoreWhitespace")}`;
+  return `${prefs.get("oxbow.diff.contextLines")}:${prefs.get("oxbow.diff.ignoreWhitespace")}:${prefs.get("oxbow.diff.maxLines")}`;
 }
 
 /** Whether code views start on the whole file, from Diff & Text. */

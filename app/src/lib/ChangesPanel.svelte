@@ -442,7 +442,16 @@
           {#if onResolve}<button class="resolve" onclick={onResolve}>Resolve Conflicts…</button>{:else}Fix them in your editor, then stage the file.{/if}
         </p>
       {/if}
-      <DiffView diffs={[diff]} {color} {whole} onToggleWhole={() => (whole = !whole)} {hunkBar} {picker} />
+      <DiffView
+        diffs={[diff]}
+        {color}
+        {whole}
+        onToggleWhole={() => (whole = !whole)}
+        {hunkBar}
+        {picker}
+        loadFull={(d) => api.workingDiff(d.file.path, pick!.side, whole, true)}
+        command={(d) => (pick?.side === "staged" ? `git diff --cached -- ${d.file.path}` : `git diff -- ${d.file.path}`)}
+      />
     {/if}
   </div>
 

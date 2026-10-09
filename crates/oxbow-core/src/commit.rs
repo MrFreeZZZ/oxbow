@@ -2,7 +2,7 @@ use gix::ObjectId;
 use gix::bstr::{BStr, ByteSlice};
 use gix::diff::blob::{Algorithm, Diff, InternedInput};
 use gix::object::tree::diff::ChangeDetached;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::repo::Repo;
@@ -10,7 +10,7 @@ use crate::repo::Repo;
 /// Lines of unchanged context around each change in a compact diff.
 pub const CONTEXT_LINES: u32 = 3;
 /// Blobs larger than this are not diffed line by line.
-const MAX_BLOB_BYTES: usize = 4 * 1024 * 1024;
+const MAX_BLOB_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,11 +37,12 @@ pub struct Person {
     pub offset: i32,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum FileStatus {
     Added,
     Deleted,
+    #[default]
     Modified,
     Renamed,
     Copied,
@@ -51,7 +52,7 @@ pub enum FileStatus {
     Conflicted,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileChange {
     pub path: String,
@@ -61,6 +62,50 @@ pub struct FileChange {
     pub additions: u32,
     pub deletions: u32,
     pub binary: bool,
+    /// Sizes in bytes of the file before and after, where known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_size: Option<u64>,
+    /// The file mode changed, for example it became executable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<ModeChange>,
+    /// For renames and copies: how much of the old file is left, in percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub similarity: Option<u32>,
+    /// Only the line endings changed; the text is the same.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eol: Option<EolChange>,
+}
+
+/// Old and new file mode, in git's octal form (`100644`, `100755`, `120000`).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModeChange {
+    pub old: String,
+    pub new: String,
+}
+
+/// A file whose lines changed only in how they end.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EolChange {
+    /// `CRLF`, `LF` or `mixed`.
+    pub from: String,
+    pub to: String,
+    /// Lines whose ending changed.
+    pub lines: u32,
+}
+
+/// Where the bytes of one side of a file diff can be read, to show an image or open a binary
+/// file in another app.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Source {
+    /// A blob in the object database.
+    Blob { id: String },
+    /// The file in the working tree.
+    Worktree { path: String },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -70,6 +115,12 @@ pub struct FileDiff {
     pub hunks: Vec<Hunk>,
     /// The file is too large to show line by line.
     pub too_large: bool,
+    /// The diff has more changed lines than the limit in Settings, so it is left out until asked
+    /// for; the counts in `file` are still right.
+    pub limited: bool,
+    /// The file before and after the change, where it exists.
+    pub old: Option<Source>,
+    pub new: Option<Source>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +156,9 @@ pub struct DiffLine {
     pub new_line: Option<u32>,
     /// The line without its line ending.
     pub text: String,
+    /// The line ends with a carriage return (CRLF), which `text` leaves out.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cr: bool,
     /// For a removed line paired with an added line: the parts of the text, marking the changed words.
     pub words: Option<Vec<WordPart>>,
 }
@@ -132,6 +186,13 @@ struct Change {
     file: FileChange,
     old: Option<ObjectId>,
     new: Option<ObjectId>,
+}
+
+/// What reading both sides of a change found.
+struct Inspected {
+    /// `None` for binary content.
+    hunks: Option<Vec<Hunk>>,
+    too_large: bool,
 }
 
 impl Repo {
@@ -224,23 +285,69 @@ impl Repo {
                 continue;
             }
             let mut file = change.file;
-            let diff = match line_diff(repo, change.old, change.new, context, true, options.ignore_whitespace)? {
-                Some((hunks, too_large)) => {
-                    count_lines(&mut file, &hunks);
-                    FileDiff { file, hunks, too_large }
+            let found = inspect(
+                repo,
+                &mut file,
+                change.old,
+                change.new,
+                context,
+                true,
+                options.ignore_whitespace,
+            )?;
+            let (hunks, too_large, limited) = match found.hunks {
+                Some(hunks) if over_limit(&file, options.max_lines) => {
+                    drop(hunks);
+                    (Vec::new(), found.too_large, true)
                 }
-                None => {
-                    file.binary = true;
-                    FileDiff {
-                        file,
-                        hunks: Vec::new(),
-                        too_large: false,
-                    }
-                }
+                Some(hunks) => (hunks, found.too_large, false),
+                None => (Vec::new(), false, false),
             };
-            out.push(diff);
+            let blob = |id: Option<ObjectId>| id.map(|id| Source::Blob { id: id.to_string() });
+            out.push(FileDiff {
+                file,
+                hunks,
+                too_large,
+                limited,
+                old: blob(change.old),
+                new: blob(change.new),
+            });
         }
         Ok(out)
+    }
+}
+
+/// More changed lines than `max` (0: no limit).
+pub(crate) fn over_limit(file: &FileChange, max: u32) -> bool {
+    max > 0 && file.additions + file.deletions > max
+}
+
+impl Repo {
+    /// The bytes of one side of a file diff.
+    pub fn read_source(&self, source: &Source) -> Result<Vec<u8>> {
+        match source {
+            Source::Blob { id } => {
+                let oid =
+                    ObjectId::from_hex(id.as_bytes()).map_err(|_| Error::Git(format!("{id} is not an object id")))?;
+                let repo = self.local();
+                let object = repo.find_object(oid).map_err(Error::git)?;
+                if object.kind != gix::object::Kind::Blob {
+                    return Err(Error::Git(format!("{id} is not a file")));
+                }
+                Ok(object.detach().data)
+            }
+            Source::Worktree { path } => {
+                let relative = std::path::Path::new(path);
+                // Only a path inside the working tree.
+                if !relative
+                    .components()
+                    .all(|c| matches!(c, std::path::Component::Normal(_)))
+                {
+                    return Err(Error::Git(format!("{path} is not a path in the repository")));
+                }
+                std::fs::read(self.workdir().join(relative))
+                    .map_err(|err| Error::Git(format!("could not read {path}: {err}")))
+            }
+        }
     }
 }
 
@@ -267,12 +374,16 @@ fn counted(repo: &gix::Repository, changes: Vec<Change>) -> Vec<FileChange> {
         .into_iter()
         .map(|change| {
             let mut file = change.file;
-            match line_diff(repo, change.old, change.new, DiffContext::Compact, false, false) {
-                Ok(Some((hunks, _))) => count_lines(&mut file, &hunks),
-                Ok(None) => file.binary = true,
-                // Counts are a nicety; a blob that can't be read still lists the file.
-                Err(_) => {}
-            }
+            // Counts are a nicety; a blob that can't be read still lists the file.
+            let _ = inspect(
+                repo,
+                &mut file,
+                change.old,
+                change.new,
+                DiffContext::Compact,
+                false,
+                false,
+            );
             file
         })
         .collect()
@@ -316,9 +427,13 @@ fn tree_changes(
             path: path(p),
             old_path,
             status,
-            additions: 0,
-            deletions: 0,
-            binary: false,
+            ..FileChange::default()
+        };
+        let mode = |old: gix::object::tree::EntryMode, new: gix::object::tree::EntryMode| {
+            (old != new).then(|| ModeChange {
+                old: mode_text(old),
+                new: mode_text(new),
+            })
         };
         out.push(match change {
             ChangeDetached::Addition { location, id, .. } => Change {
@@ -334,26 +449,36 @@ fn tree_changes(
             ChangeDetached::Modification {
                 location,
                 previous_id,
+                previous_entry_mode,
                 id,
+                entry_mode,
                 ..
             } => Change {
-                file: file(location.as_ref(), None, FileStatus::Modified),
+                file: FileChange {
+                    mode: mode(previous_entry_mode, entry_mode),
+                    ..file(location.as_ref(), None, FileStatus::Modified)
+                },
                 old: Some(previous_id),
                 new: Some(id),
             },
             ChangeDetached::Rewrite {
                 source_location,
                 source_id,
+                source_entry_mode,
                 location,
                 id,
+                entry_mode,
                 copy,
                 ..
             } => Change {
-                file: file(
-                    location.as_ref(),
-                    Some(path(source_location.as_ref())),
-                    if copy { FileStatus::Copied } else { FileStatus::Renamed },
-                ),
+                file: FileChange {
+                    mode: mode(source_entry_mode, entry_mode),
+                    ..file(
+                        location.as_ref(),
+                        Some(path(source_location.as_ref())),
+                        if copy { FileStatus::Copied } else { FileStatus::Renamed },
+                    )
+                },
                 old: Some(source_id),
                 new: Some(id),
             },
@@ -379,29 +504,116 @@ fn is_binary(data: &[u8]) -> bool {
     data[..data.len().min(8000)].contains(&0)
 }
 
-/// Line diff between two blobs. `None` for binary content; `Some((hunks, too_large))` otherwise.
-fn line_diff(
+/// Read both sides of a change and diff them line by line, filling in what `file` can tell
+/// about them: sizes, line counts, binary content, rename similarity and line-ending changes.
+fn inspect(
     repo: &gix::Repository,
+    file: &mut FileChange,
     old: Option<ObjectId>,
     new: Option<ObjectId>,
     context: DiffContext,
     with_words: bool,
     ignore_whitespace: bool,
-) -> Result<Option<(Vec<Hunk>, bool)>> {
+) -> Result<Inspected> {
     let before = blob(repo, old)?;
     let after = blob(repo, new)?;
+    file.old_size = old.map(|_| before.len() as u64);
+    file.new_size = new.map(|_| after.len() as u64);
     if is_binary(&before) || is_binary(&after) {
-        return Ok(None);
+        file.binary = true;
+        if matches!(file.status, FileStatus::Renamed | FileStatus::Copied) {
+            file.similarity = Some(if before == after { 100 } else { 0 });
+        }
+        return Ok(Inspected {
+            hunks: None,
+            too_large: false,
+        });
     }
     if before.len() > MAX_BLOB_BYTES || after.len() > MAX_BLOB_BYTES {
-        return Ok(Some((Vec::new(), true)));
+        return Ok(Inspected {
+            hunks: Some(Vec::new()),
+            too_large: true,
+        });
     }
     let before = String::from_utf8_lossy(&before);
     let after = String::from_utf8_lossy(&after);
-    Ok(Some((
-        diff_text_with(&before, &after, context, with_words, ignore_whitespace),
-        false,
-    )))
+    let hunks = diff_text_with(&before, &after, context, with_words, ignore_whitespace);
+    count_lines(file, &hunks);
+    if matches!(file.status, FileStatus::Renamed | FileStatus::Copied) {
+        file.similarity = Some(similarity(&before, &after, file.deletions));
+    }
+    file.eol = eol_change(&hunks);
+    Ok(Inspected {
+        hunks: Some(hunks),
+        too_large: false,
+    })
+}
+
+/// Share of the old file's lines that are still there, in percent, measured against the longer side.
+fn similarity(before: &str, after: &str, deletions: u32) -> u32 {
+    let old = before.split_inclusive('\n').count() as u64;
+    let new = after.split_inclusive('\n').count() as u64;
+    let longest = old.max(new);
+    if longest == 0 {
+        return 100;
+    }
+    ((old.saturating_sub(u64::from(deletions)) * 100) / longest) as u32
+}
+
+/// When every change in `hunks` only swaps line endings, which way and on how many lines.
+pub(crate) fn eol_change(hunks: &[Hunk]) -> Option<EolChange> {
+    let (mut from_cr, mut from_lf, mut to_cr, mut to_lf, mut lines) = (0u32, 0u32, 0u32, 0u32, 0u32);
+    for hunk in hunks {
+        let mut i = 0;
+        let l = &hunk.lines;
+        while i < l.len() {
+            if l[i].kind == LineKind::Context {
+                i += 1;
+                continue;
+            }
+            let removed = l[i..].iter().take_while(|x| x.kind == LineKind::Removed).count();
+            let added = l[i + removed..]
+                .iter()
+                .take_while(|x| x.kind == LineKind::Added)
+                .count();
+            if removed == 0 || removed != added {
+                return None;
+            }
+            for k in 0..removed {
+                let (r, a) = (&l[i + k], &l[i + removed + k]);
+                if r.text != a.text || r.cr == a.cr {
+                    return None;
+                }
+                if r.cr {
+                    from_cr += 1
+                } else {
+                    from_lf += 1
+                }
+                if a.cr {
+                    to_cr += 1
+                } else {
+                    to_lf += 1
+                }
+                lines += 1;
+            }
+            i += removed + added;
+        }
+    }
+    let name = |cr: u32, lf: u32| match (cr, lf) {
+        (_, 0) => "CRLF",
+        (0, _) => "LF",
+        _ => "mixed",
+    };
+    (lines > 0).then(|| EolChange {
+        from: name(from_cr, from_lf).to_owned(),
+        to: name(to_cr, to_lf).to_owned(),
+        lines,
+    })
+}
+
+/// A tree entry mode as git prints it.
+fn mode_text(mode: gix::object::tree::EntryMode) -> String {
+    format!("{:06o}", mode.value())
 }
 
 /// Diff two texts into hunks.
@@ -456,6 +668,7 @@ pub fn diff_text_with(
     }
 
     let text = |line: &str| line.trim_end_matches('\n').trim_end_matches('\r').to_owned();
+    let cr = |line: &str| line.trim_end_matches('\n').ends_with('\r');
     let mut hunks = Vec::with_capacity(groups.len());
     for (first, last) in groups {
         let start = &changes[first];
@@ -472,6 +685,7 @@ pub fn diff_text_with(
                     old_line: Some(*o + 1),
                     new_line: Some(*n + 1),
                     text: text(old[*o as usize]),
+                    cr: cr(new[*n as usize]),
                     words: None,
                 });
                 *o += 1;
@@ -489,6 +703,7 @@ pub fn diff_text_with(
                     old_line: Some(i + 1),
                     new_line: None,
                     text: text(old[i as usize]),
+                    cr: cr(old[i as usize]),
                     words: None,
                 })
                 .collect();
@@ -500,6 +715,7 @@ pub fn diff_text_with(
                     old_line: None,
                     new_line: Some(i + 1),
                     text: text(new[i as usize]),
+                    cr: cr(new[i as usize]),
                     words: None,
                 })
                 .collect();

@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::AtomicBool;
 
 use crate::cli::{GitCommand, OutputLine, literal};
-use crate::commit::{DiffLine, FileChange, FileDiff, FileStatus, Hunk, LineKind, word_diff};
+use crate::commit::{
+    DiffLine, FileChange, FileDiff, FileStatus, Hunk, LineKind, ModeChange, Source, eol_change, over_limit, word_diff,
+};
 use crate::config;
 use crate::edit::{ResetMode, plan_reset};
 use crate::error::{Error, Result};
@@ -430,18 +432,52 @@ impl Repo {
             .ok_or_else(|| Error::Git(format!("{path} has no {} changes", side.word())))?;
         let patch = self.raw_diff(&file, side, whole_file)?;
         let parsed = parse_patch(&patch);
-        let too_large = parsed.hunks.iter().map(|h| h.hunk.lines.len()).sum::<usize>() > MAX_DIFF_LINES;
+        let hunks: Vec<Hunk> = parsed.hunks.into_iter().map(|h| h.hunk).collect();
+        let mut file = FileChange {
+            binary: file.binary || parsed.binary,
+            mode: parsed.mode,
+            ..file
+        };
+        if !file.binary {
+            file.additions = 0;
+            file.deletions = 0;
+            for line in hunks.iter().flat_map(|h| &h.lines) {
+                match line.kind {
+                    LineKind::Added => file.additions += 1,
+                    LineKind::Removed => file.deletions += 1,
+                    LineKind::Context => {}
+                }
+            }
+            file.eol = eol_change(&hunks);
+        }
+        // The blob ids of `index <old>..<new>`; all zeros stands for a side that does not exist.
+        let blob = |id: &Option<String>| id.clone().filter(|id| id.bytes().any(|b| b != b'0'));
+        let old = blob(&parsed.ids.0).map(|id| Source::Blob { id });
+        let new = match side {
+            Side::Staged => blob(&parsed.ids.1).map(|id| Source::Blob { id }),
+            Side::Unstaged => (file.status != FileStatus::Deleted).then(|| Source::Worktree {
+                path: file.path.clone(),
+            }),
+        };
+        if file.binary {
+            file.old_size = old
+                .as_ref()
+                .and_then(|s| self.read_source(s).ok())
+                .map(|b| b.len() as u64);
+            file.new_size = new
+                .as_ref()
+                .and_then(|s| self.read_source(s).ok())
+                .map(|b| b.len() as u64);
+        }
+        let limited = over_limit(&file, self.diff_options().max_lines);
+        let too_large = !limited && hunks.iter().map(|h| h.lines.len()).sum::<usize>() > MAX_DIFF_LINES;
         Ok(FileDiff {
-            file: FileChange {
-                binary: file.binary || parsed.binary,
-                ..file
-            },
-            hunks: if too_large {
-                Vec::new()
-            } else {
-                parsed.hunks.into_iter().map(|h| h.hunk).collect()
-            },
+            file,
+            hunks: if too_large || limited { Vec::new() } else { hunks },
             too_large,
+            limited,
+            old,
+            new,
         })
     }
 
@@ -1123,7 +1159,14 @@ impl Repo {
         } else {
             format!("-U{}", self.diff_options().context_lines)
         };
-        let mut args = vec!["diff", "--no-color", "--no-ext-diff", "--no-renames", &context];
+        let mut args = vec![
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-renames",
+            "--full-index",
+            &context,
+        ];
         if file.status == FileStatus::Untracked {
             // `--no-index` exits with 1 when the files differ, which they always do here.
             args.extend(["--no-index", "--", "/dev/null", &file.path]);
@@ -1303,9 +1346,7 @@ fn change(path: &str, old_path: Option<&str>, status: FileStatus) -> FileChange 
         path: path.to_owned(),
         old_path: old_path.map(str::to_owned),
         status,
-        additions: 0,
-        deletions: 0,
-        binary: false,
+        ..FileChange::default()
     }
 }
 
@@ -1365,6 +1406,10 @@ struct ParsedPatch {
     file_header: String,
     hunks: Vec<ParsedHunk>,
     binary: bool,
+    /// `old mode` and `new mode` from the header.
+    mode: Option<ModeChange>,
+    /// The blob ids of the `index` line.
+    ids: (Option<String>, Option<String>),
 }
 
 /// Parse the output of `git diff` for a single file.
@@ -1372,6 +1417,7 @@ fn parse_patch(patch: &str) -> ParsedPatch {
     let mut file_header = String::new();
     let mut hunks: Vec<ParsedHunk> = Vec::new();
     let mut binary = false;
+    let (mut old_mode, mut new_mode, mut ids) = (None, None, (None, None));
     let (mut old_no, mut new_no) = (0u32, 0u32);
     for line in patch.split_inclusive('\n') {
         let body = line.strip_suffix('\n').unwrap_or(line);
@@ -1401,12 +1447,22 @@ fn parse_patch(patch: &str) -> ParsedPatch {
         let Some(current) = hunks.last_mut() else {
             if body.starts_with("Binary files ") || body == "GIT binary patch" {
                 binary = true;
+            } else if let Some(m) = body.strip_prefix("old mode ") {
+                old_mode = Some(m.trim().to_owned());
+            } else if let Some(m) = body.strip_prefix("new mode ") {
+                new_mode = Some(m.trim().to_owned());
+            } else if let Some((a, b)) = body
+                .strip_prefix("index ")
+                .and_then(|r| r.split(' ').next()?.split_once(".."))
+            {
+                ids = (Some(a.to_owned()), Some(b.to_owned()));
             }
             file_header.push_str(line);
             continue;
         };
         current.text.push_str(line);
         let text = body.get(1..).unwrap_or_default().trim_end_matches('\r').to_owned();
+        let cr = body.ends_with('\r');
         let (kind, old_line, new_line) = match body.chars().next() {
             Some('+') => {
                 new_no += 1;
@@ -1429,6 +1485,7 @@ fn parse_patch(patch: &str) -> ParsedPatch {
             old_line,
             new_line,
             text,
+            cr,
             words: None,
         });
     }
@@ -1436,10 +1493,16 @@ fn parse_patch(patch: &str) -> ParsedPatch {
         mark_words(&mut hunk.hunk.lines);
         hunk.hunk.check = fingerprint(&hunk.text);
     }
+    let mode = match (old_mode, new_mode) {
+        (Some(old), Some(new)) => Some(ModeChange { old, new }),
+        _ => None,
+    };
     ParsedPatch {
         file_header,
         hunks,
         binary,
+        mode,
+        ids,
     }
 }
 

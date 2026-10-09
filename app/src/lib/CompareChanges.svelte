@@ -8,6 +8,7 @@
   import type { Comparison, FileDiff } from "./types";
   import { lane, plate, shortId, splitPath, tabLabels, tint } from "./format";
   import DiffView from "./DiffView.svelte";
+  import FileBadge from "./FileBadge.svelte";
   import FoldAll from "./FoldAll.svelte";
 
   let {
@@ -146,12 +147,7 @@
               {:else if file.last}
                 <button class="sha mono" onclick={() => onPickCommit(file.last!)} title="The latest commit on {target} that changed it">{shortId(file.last)}</button>
               {/if}
-              {#if file.binary}
-                <span class="meta">binary</span>
-              {:else}
-                <span class="mono add">+{file.additions}</span>
-                <span class="mono del num">−{file.deletions}</span>
-              {/if}
+              <FileBadge {file} />
             </div>
           {/each}
         </div>
@@ -159,7 +155,16 @@
         <p class="empty">No differences: both sides have the same files.</p>
       {/if}
     {/if}
-    <DiffView bind:this={diffView} foldable {diffs} {color} {whole} onToggleWhole={() => (whole = !whole)} />
+    <DiffView
+      bind:this={diffView}
+      foldable
+      {diffs}
+      {color}
+      {whole}
+      onToggleWhole={() => (whole = !whole)}
+      loadFull={(d) => api.compareDiff(c.from, c.targetId, d.file.path, whole, true).then((all) => all[0])}
+      command={(d) => `git diff ${c.from.slice(0, 7)} ${c.targetId.slice(0, 7)} -- ${d.file.path}`}
+    />
   </div>
 </div>
 
