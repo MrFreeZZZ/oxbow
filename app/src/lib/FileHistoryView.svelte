@@ -349,7 +349,16 @@
         {#if renamedAt(pick)}<p class="note">This commit renamed it from <span class="mono">{pick.oldPath}</span>.</p>{/if}
         {#if !byId.has(pick.id) || file?.elsewhere.some((c) => c.id === pick.id)}<p class="note">This change is on another branch, not on {headName}.</p>{/if}
         <div class="scroll">
-          <DiffView {diffs} {color} {whole} history={false} find={find || null} matchCase={nav.find.matchCase} onToggleWhole={() => (whole = !whole)} />
+          <DiffView
+            {diffs}
+            {color}
+            {whole}
+            history={false}
+            find={find || null}
+            matchCase={nav.find.matchCase}
+            onToggleWhole={() => (whole = !whole)}
+            loadFull={(d) => api.commitDiff(pick!.id, d.file.path, whole, true).then((all) => all[0])}
+          />
         </div>
       {:else}
         <p class="hint pad">Pick a commit on the left.</p>

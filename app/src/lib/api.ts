@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   Blame,
+  Source,
   FileHistory,
   CompareMode,
   Comparison,
@@ -63,18 +64,23 @@ export const api = {
   createRepo: (options: NewRepoOptions) => invoke<string>("create_repo", { options }),
   history: () => invoke<History>("history"),
   commitDetail: (id: string) => invoke<CommitDetail>("commit_detail", { id }),
-  commitDiff: (id: string, path: string | null, wholeFile: boolean) =>
-    invoke<FileDiff[]>("commit_diff", { id, path, wholeFile }),
+  /** `full`: past the line limit in Settings (Show Diff Anyway). */
+  commitDiff: (id: string, path: string | null, wholeFile: boolean, full = false) =>
+    invoke<FileDiff[]>("commit_diff", { id, path, wholeFile, full }),
   compare: (base: string, target: string, mode: CompareMode) => invoke<Comparison>("compare", { base, target, mode }),
-  compareDiff: (from: string, to: string, path: string | null, wholeFile: boolean) =>
-    invoke<FileDiff[]>("compare_diff", { from, to, path, wholeFile }),
+  compareDiff: (from: string, to: string, path: string | null, wholeFile: boolean, full = false) =>
+    invoke<FileDiff[]>("compare_diff", { from, to, path, wholeFile, full }),
   fileHistory: (path: string, rev: string | null) => invoke<FileHistory>("file_history", { path, rev }),
   blame: (path: string, rev: string) => invoke<Blame>("blame", { path, rev }),
   lineHistory: (path: string, line: number, rev: string) => invoke<string[]>("line_history", { path, line, rev }),
   files: () => invoke<string[]>("files"),
   filePickaxe: (path: string, text: string, matchCase: boolean, rev: string) => invoke<string[]>("file_pickaxe", { path, text, matchCase, rev }),
   workingTree: () => invoke<WorkingTree>("working_tree"),
-  workingDiff: (path: string, side: Side, wholeFile: boolean) => invoke<FileDiff>("working_diff", { path, side, wholeFile }),
+  workingDiff: (path: string, side: Side, wholeFile: boolean, full = false) =>
+    invoke<FileDiff>("working_diff", { path, side, wholeFile, full }),
+  sourceBytes: (source: Source) => invoke<ArrayBuffer>("source_bytes", { source }),
+  /** `label` names the copy: `logo (old a3f9c21).png`. */
+  openSource: (source: Source, path: string, label: string) => invoke<void>("open_source", { source, path, label }),
   deletionCheck: (branch: string) => invoke<DeletionCheck>("deletion_check", { branch }),
   remoteDeletionCheck: (branch: string) => invoke<CommitBrief[]>("remote_deletion_check", { branch }),
   mergePreview: (branch: string) => invoke<MergePreview>("merge_preview", { branch }),

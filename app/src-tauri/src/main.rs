@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use oxbow_core::config::{self, ConfigScope};
 use oxbow_core::{
     Action, CommitBrief, CommitDetail, ConflictFile, DeletionCheck, DiffContext, DiffOptions, Failure, FileDiff,
-    History, HistoryOptions, MergePreview, Plan, Repo, Side, StashCheck, WorkingTree,
+    History, HistoryOptions, MergePreview, Plan, Repo, Side, Source, StashCheck, WorkingTree,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -38,6 +38,19 @@ struct RepoSummary {
 }
 
 type CommandResult<T> = Result<T, String>;
+
+/// The repository, set to show a diff in full however many lines it has when `full` is set
+/// (Show Diff Anyway).
+fn current_full(session: &State<'_, Session>, full: Option<bool>) -> CommandResult<Repo> {
+    let mut repo = current(session)?;
+    if full == Some(true) {
+        repo.set_diff_options(DiffOptions {
+            max_lines: 0,
+            ..repo.diff_options()
+        });
+    }
+    Ok(repo)
+}
 
 fn current(session: &State<'_, Session>) -> CommandResult<Repo> {
     let mut repo = session
@@ -125,6 +138,10 @@ fn apply_settings(app: &AppHandle, session: &Session, settings: &serde_json::Map
             .get("oxbow.diff.ignoreWhitespace")
             .and_then(Value::as_bool)
             .unwrap_or(defaults.ignore_whitespace),
+        max_lines: settings
+            .get("oxbow.diff.maxLines")
+            .and_then(Value::as_u64)
+            .map_or(defaults.max_lines, |n| n.min(10_000_000) as u32),
     };
     config::set_git_program(
         settings
@@ -500,8 +517,9 @@ async fn commit_diff(
     id: String,
     path: Option<String>,
     whole_file: bool,
+    full: Option<bool>,
 ) -> CommandResult<Vec<FileDiff>> {
-    let repo = current(&session)?;
+    let repo = current_full(&session, full)?;
     let context = if whole_file {
         DiffContext::WholeFile
     } else {
@@ -528,8 +546,9 @@ async fn compare_diff(
     to: String,
     path: Option<String>,
     whole_file: bool,
+    full: Option<bool>,
 ) -> CommandResult<Vec<FileDiff>> {
-    let repo = current(&session)?;
+    let repo = current_full(&session, full)?;
     let context = if whole_file {
         DiffContext::WholeFile
     } else {
@@ -585,6 +604,47 @@ async fn operation_log(session: State<'_, Session>) -> CommandResult<Vec<oxbow_c
     blocking(move || repo.operation_log()).await
 }
 
+/// The bytes of one side of a file diff, to show an image.
+#[tauri::command]
+async fn source_bytes(session: State<'_, Session>, source: Source) -> CommandResult<tauri::ipc::Response> {
+    let repo = current(&session)?;
+    blocking(move || repo.read_source(&source))
+        .await
+        .map(tauri::ipc::Response::new)
+}
+
+/// Open one side of a file diff in the app the system picks for it: the working-tree file as it
+/// is, any other version from a copy in a temporary folder named after it.
+#[tauri::command]
+async fn open_source(session: State<'_, Session>, source: Source, path: String, label: String) -> CommandResult<()> {
+    let repo = current(&session)?;
+    let file = match &source {
+        Source::Worktree { path } => repo.workdir().join(Path::new(path)),
+        Source::Blob { id } => {
+            let data = blocking({
+                let source = source.clone();
+                move || repo.read_source(&source)
+            })
+            .await?;
+            let name = Path::new(&path)
+                .file_name()
+                .map_or_else(|| "file".into(), |n| n.to_string_lossy().into_owned());
+            let short: String = id.chars().take(7).collect();
+            // `logo.png` becomes `logo (old a3f9c21).png`, so the app's window says which one it is.
+            let named = match name.rsplit_once('.') {
+                Some((stem, ext)) if !stem.is_empty() => format!("{stem} ({label} {short}).{ext}"),
+                _ => format!("{name} ({label} {short})"),
+            };
+            let dir = std::env::temp_dir().join("oxbow-versions");
+            std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+            let file = dir.join(named);
+            std::fs::write(&file, data).map_err(|err| err.to_string())?;
+            file
+        }
+    };
+    open_in::open_url(&file.display().to_string())
+}
+
 #[tauri::command]
 async fn working_tree(session: State<'_, Session>) -> CommandResult<WorkingTree> {
     let repo = current(&session)?;
@@ -597,8 +657,9 @@ async fn working_diff(
     path: String,
     side: Side,
     whole_file: bool,
+    full: Option<bool>,
 ) -> CommandResult<FileDiff> {
-    let repo = current(&session)?;
+    let repo = current_full(&session, full)?;
     blocking(move || repo.working_diff(&path, side, whole_file)).await
 }
 
@@ -1126,6 +1187,8 @@ fn main() {
             files,
             working_tree,
             working_diff,
+            source_bytes,
+            open_source,
             deletion_check,
             remote_deletion_check,
             merge_preview,

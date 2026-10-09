@@ -6,6 +6,7 @@
   import DiffView from "./DiffView.svelte";
   import FoldAll from "./FoldAll.svelte";
   import CommitChain from "./CommitChain.svelte";
+  import FileBadge from "./FileBadge.svelte";
 
   let {
     row,
@@ -182,17 +183,24 @@
                 <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="M10.3 10.3 14 14" /></svg>{foundText ?? "match"}
               </span>
             {/if}
-            {#if file.binary}
-              <span class="meta">binary</span>
-            {:else}
-              <span class="mono add">+{file.additions}</span>
-              <span class="mono del num">−{file.deletions}</span>
-            {/if}
+            <FileBadge {file} />
           </button>
         {/each}
       </div>
     {/if}
-    <DiffView bind:this={diffView} foldable {diffs} {color} {whole} {find} commit={row.id} onToggleWhole={() => (whole = !whole)} />
+    <DiffView
+      bind:this={diffView}
+      foldable
+      {diffs}
+      {color}
+      {whole}
+      {find}
+      commit={row.id}
+      onToggleWhole={() => (whole = !whole)}
+      loadFull={(d) => api.commitDiff(row.id, d.file.path, whole, true).then((all) => all[0])}
+      command={(d) =>
+        detail?.parents.length ? `git diff ${row.id.slice(0, 7)}~1 ${row.id.slice(0, 7)} -- ${d.file.path}` : `git show ${row.id.slice(0, 7)} -- ${d.file.path}`}
+    />
   </div>
 </div>
 

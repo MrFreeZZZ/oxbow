@@ -137,7 +137,31 @@ export interface FileChange {
   additions: number;
   deletions: number;
   binary: boolean;
+  /** Sizes in bytes before and after, where known. */
+  oldSize?: number;
+  newSize?: number;
+  /** The file mode changed, for example it became executable. */
+  mode?: ModeChange;
+  /** For renames and copies: how much of the old file is left, in percent. */
+  similarity?: number;
+  /** Only the line endings changed. */
+  eol?: EolChange;
 }
+
+/** Old and new mode in git's octal form: 100644, 100755, 120000. */
+export interface ModeChange {
+  old: string;
+  new: string;
+}
+
+export interface EolChange {
+  from: "CRLF" | "LF" | "mixed";
+  to: "CRLF" | "LF" | "mixed";
+  lines: number;
+}
+
+/** Where one side of a file diff can be read. */
+export type Source = { kind: "blob"; id: string } | { kind: "worktree"; path: string };
 
 export interface FileCommit {
   id: string;
@@ -234,6 +258,8 @@ export interface DiffLine {
   oldLine: number | null;
   newLine: number | null;
   text: string;
+  /** The line ends with CRLF; `text` leaves the CR out. */
+  cr?: boolean;
   words: WordPart[] | null;
 }
 
@@ -253,6 +279,10 @@ export interface FileDiff {
   file: FileChange;
   hunks: Hunk[];
   tooLarge: boolean;
+  /** More changed lines than Settings › Diff & Text allows: left out until Show Diff Anyway. */
+  limited: boolean;
+  old: Source | null;
+  new: Source | null;
 }
 
 export interface RepoSummary {

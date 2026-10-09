@@ -29,7 +29,8 @@ pub mod worktree;
 
 pub use cli::{CommandOutput, GitCommand, OutputLine};
 pub use commit::{
-    CommitDetail, DiffContext, DiffLine, FileChange, FileDiff, FileStatus, Hunk, LineKind, Person, WordPart,
+    CommitDetail, DiffContext, DiffLine, EolChange, FileChange, FileDiff, FileStatus, Hunk, LineKind, ModeChange,
+    Person, Source, WordPart,
 };
 pub use compare::{CompareCommit, CompareFile, CompareMode, Comparison};
 pub use config::{ConfigScope, GitInfo, RemoteInfo, SshKey, SshSource, Storage};

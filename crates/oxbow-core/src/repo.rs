@@ -24,6 +24,8 @@ pub struct DiffOptions {
     /// Lines that differ only in whitespace count as unchanged. Commit diffs only: the working
     /// copy's diffs stay exact, so staging a hunk stages what is shown.
     pub ignore_whitespace: bool,
+    /// Files with more changed lines than this are not diffed until asked for (0: no limit).
+    pub max_lines: u32,
 }
 
 impl Default for DiffOptions {
@@ -31,6 +33,7 @@ impl Default for DiffOptions {
         DiffOptions {
             context_lines: crate::commit::CONTEXT_LINES,
             ignore_whitespace: false,
+            max_lines: 5_000,
         }
     }
 }

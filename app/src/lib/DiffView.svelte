@@ -21,6 +21,9 @@
   import { untrack } from "svelte";
   import { foldReason, startsFolded } from "./diffFold";
   import { mac } from "./keys";
+  import ImageDiff from "./ImageDiff.svelte";
+  import UnusualCard from "./UnusualCard.svelte";
+  import { bytes, imageType } from "./unusual";
 
   let {
     diffs,
@@ -36,6 +39,8 @@
     history = true,
     picker = null,
     foldable = false,
+    loadFull,
+    command,
   }: {
     diffs: FileDiff[];
     color: number;
@@ -58,7 +63,51 @@
     picker?: LinePicker | null;
     /** Each file folds to its header; Smart, Expanded or Collapsed in Settings › Diff & Text says which start folded. */
     foldable?: boolean;
+    /** The file's diff past the line limit in Settings, for Show Diff Anyway. */
+    loadFull?: (diff: FileDiff) => Promise<FileDiff>;
+    /** The `git diff` that shows a file's change, for the binary card. */
+    command?: (diff: FileDiff) => string | null;
   } = $props();
+
+  /** Diffs loaded in full with Show Diff Anyway, by path. */
+  let full = $state<Record<string, FileDiff>>({});
+  /** Files whose line endings are shown, by path. */
+  let showEol = $state<Record<string, boolean>>({});
+  $effect(() => {
+    fileSet;
+    untrack(() => {
+      full = {};
+      showEol = {};
+    });
+  });
+  const items = $derived(diffs.map((d) => full[d.file.path] ?? d));
+
+  function showAnyway(diff: FileDiff) {
+    loadFull?.(diff).then(
+      (d) => (full = { ...full, [d.file.path]: d }),
+      (err) => confirm.say(String(err)),
+    );
+  }
+
+  /** What stands in for the code: a picture, or a card about a change a line diff can't show. */
+  function special(diff: FileDiff): "image" | "binary" | "limited" | "tooLarge" | "mode" | "eol" | null {
+    const f = diff.file;
+    if (f.binary && imageType(f.path) && (diff.old || diff.new)) return "image";
+    if (f.binary) return "binary";
+    if (diff.limited) return "limited";
+    if (diff.tooLarge) return "tooLarge";
+    if (f.mode && diff.hunks.length === 0) return "mode";
+    if (f.eol && !showEol[f.path]) return "eol";
+    return null;
+  }
+
+  /** The header's path: a rename within one folder reads `dir/old.rs → new.rs`. */
+  function renamedName(diff: FileDiff): string | null {
+    const old = diff.file.oldPath;
+    if (!old) return null;
+    const o = splitPath(old);
+    return o.dir === splitPath(diff.file.path).dir ? o.name : null;
+  }
 
   /** Folded files, by path. */
   let folded = $state<Record<string, boolean>>({});
@@ -71,7 +120,8 @@
     prefs.get("oxbow.diff.foldOver");
     if (!foldable || !key) return;
     untrack(() => {
-      folded = Object.fromEntries(diffs.map((d) => [d.file.path, startsFolded(d)]));
+      // A file shown on its own tab is what was asked for, so it starts open.
+      folded = Object.fromEntries(diffs.map((d) => [d.file.path, diffs.length > 1 && startsFolded(d)]));
     });
   });
 
@@ -99,16 +149,16 @@
 
   /** Files to render, cut off once the line budget is spent so huge commits stay responsive. */
   const shown = $derived.by(() => {
-    if (showAll) return { files: diffs, hidden: 0 };
+    if (showAll) return { files: items, hidden: 0 };
     let budget = lineBudget;
     const files: FileDiff[] = [];
-    for (const diff of diffs) {
+    for (const diff of items) {
       if (budget <= 0) break;
       files.push(diff);
       // A folded file draws no lines.
       if (!isFolded(diff)) budget -= diff.hunks.reduce((n, h) => n + h.lines.length, 0);
     }
-    return { files, hidden: diffs.length - files.length };
+    return { files, hidden: items.length - files.length };
   });
 
   const statusLabel: Record<string, string> = {
@@ -138,10 +188,22 @@
   }
 </script>
 
+{#snippet name(diff: FileDiff)}
+  {@const path = splitPath(diff.file.path)}
+  {@const old = renamedName(diff)}
+  {#if old}
+    <span class="path"><span class="dir">{path.dir}</span>{old} <span class="dir">→</span> {path.name}</span>
+  {:else}
+    <span class="path"><span class="dir">{path.dir}</span>{path.name}</span>
+    {#if diff.file.oldPath}<span class="from">from {diff.file.oldPath}</span>{/if}
+  {/if}
+{/snippet}
+
 {#each shown.files as diff (diff.file.path)}
   {@const path = splitPath(diff.file.path)}
   {@const isShut = isFolded(diff)}
   {@const why = isShut ? foldReason(diff) : null}
+  {@const kind = isShut ? null : special(diff)}
   <section class="file" class:shut={isShut} data-path={diff.file.path}>
     <header>
       <div class="bar" style:background={tint(color, "bar")} style:--name={plate(color)}>
@@ -153,20 +215,25 @@
             title={`${isShut ? "Show" : "Hide"} the diff. ${mac ? "⌥-click" : "Alt+click"}: every file`}
           >
             <svg class="icon chevron" class:shut={isShut} viewBox="0 0 16 16"><path d="M4.5 6 8 9.5 11.5 6" /></svg>
-            <span class="path"><span class="dir">{path.dir}</span>{path.name}</span>
-            {#if diff.file.oldPath}<span class="from">from {diff.file.oldPath}</span>{/if}
+            {@render name(diff)}
             <span class="status">{statusLabel[diff.file.status]}</span>
             {#if why && why !== statusLabel[diff.file.status]}<span class="why">· {why}</span>{/if}
             <span class="spacer"></span>
           </button>
         {:else}
-          <span class="path"><span class="dir">{path.dir}</span>{path.name}</span>
-          {#if diff.file.oldPath}<span class="from">from {diff.file.oldPath}</span>{/if}
+          {@render name(diff)}
           <span class="status">{statusLabel[diff.file.status]}</span>
           <span class="spacer"></span>
         {/if}
-        <span class="mono add">+{diff.file.additions}</span>
-        <span class="mono del">−{diff.file.deletions}</span>
+        {#if diff.file.binary}
+          {@const f = diff.file}
+          <span class="mono size">{f.oldSize !== undefined && f.newSize !== undefined ? `${bytes(f.oldSize)} → ${bytes(f.newSize)}` : bytes(f.newSize ?? f.oldSize ?? 0)}</span>
+        {:else if diff.file.mode && diff.file.additions + diff.file.deletions === 0}
+          <span class="mono size">mode {diff.file.mode.old} → {diff.file.mode.new}</span>
+        {:else}
+          <span class="mono add">+{diff.file.additions}</span>
+          <span class="mono del">−{diff.file.deletions}</span>
+        {/if}
         {#if openable && history && diff.file.status !== "untracked"}
           <button class="toggle" onclick={() => nav.openFile(diff.file.path, commit)} aria-label="File history" title="File History and Blame">
             <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.2l2 1.3" /></svg>
@@ -192,12 +259,40 @@
       </div>
     </header>
 
+    {#if !isShut}
+      {#if diff.file.eol}
+        <div class="banner">
+          <svg class="icon" viewBox="0 0 16 16"><path d="M12.5 3.5v5a2 2 0 0 1-2 2h-7M6 8l-2.5 2.5L6 13" /></svg>
+          <span class="grow">Only line endings changed: {diff.file.eol.from} → {diff.file.eol.to} in {diff.file.eol.lines} {diff.file.eol.lines === 1 ? "line" : "lines"}.</span>
+          <button
+            class="chip"
+            class:on={showEol[diff.file.path]}
+            aria-pressed={!!showEol[diff.file.path]}
+            onclick={() => (showEol = { ...showEol, [diff.file.path]: !showEol[diff.file.path] })}>{showEol[diff.file.path] ? "Hide Line Endings" : "Show Line Endings"}</button
+          >
+        </div>
+      {:else if diff.file.oldPath && diff.file.similarity !== undefined && diff.hunks.length > 0}
+        <div class="banner">
+          <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 8h9M8.5 5l3 3-3 3M13.5 3.5v9" /></svg>
+          <span class="grow"
+            >{diff.file.status === "copied" ? "Copied" : "Renamed"} from {diff.file.oldPath} · {diff.file.similarity}% similar, so git shows it as a
+            {diff.file.status === "copied" ? "copy" : "rename"} with a small diff.</span
+          >
+        </div>
+      {/if}
+      {#if diff.file.mode && diff.hunks.length > 0}
+        <div class="banner">
+          <svg class="icon" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="2" /><path d="M4.5 6l2 2-2 2M8 10.5h3" /></svg>
+          <span class="grow">Mode {diff.file.mode.old} → {diff.file.mode.new} too{diff.file.mode.new === "100755" ? ": the file is executable now" : ""}.</span>
+        </div>
+      {/if}
+    {/if}
     {#if isShut}
       <!-- Folded: the header alone. -->
-    {:else if diff.file.binary}
-      <p class="note">Binary file, no text diff.</p>
-    {:else if diff.tooLarge}
-      <p class="note">This file is too large to show.</p>
+    {:else if kind === "image"}
+      <ImageDiff {diff} />
+    {:else if kind}
+      <UnusualCard {diff} {kind} {openable} command={command?.(diff) ?? null} onShowAnyway={loadFull ? () => showAnyway(diff) : undefined} />
     {:else if diff.hunks.length === 0}
       <p class="note">
         {#if diff.file.status === "renamed"}
@@ -243,7 +338,7 @@
               {/if}
               <span class="no">{line.oldLine ?? ""}</span>
               <span class="no">{line.newLine ?? ""}</span>
-              <span class="text">{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found} data-hit={piece.hit} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>
+              <span class="text">{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found} data-hit={piece.hit} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}{#if line.cr && showEol[diff.file.path]}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}</span>
             </div>
           {/each}
         {/each}
@@ -349,6 +444,55 @@
   .note {
     margin: 4px 8px;
     color: var(--text2);
+  }
+  .size {
+    color: var(--text2);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 30px;
+    margin: 2px 0 8px;
+    padding: 4px 4px 4px 10px;
+    border-radius: 9px;
+    background: var(--field);
+    font-size: 12px;
+  }
+  .banner .icon {
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+    color: var(--text2);
+  }
+  .banner .grow {
+    flex-grow: 1;
+    min-width: 0;
+  }
+  .chip {
+    height: 22px;
+    padding: 0 10px;
+    border-radius: 11px;
+    background: var(--win);
+    font-size: 12px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .chip.on {
+    font-weight: 600;
+  }
+  /* A carriage return, shown on request where only line endings changed. */
+  .cr {
+    margin-left: 4px;
+    padding: 0 4px;
+    border-radius: 5px;
+    font-size: 0.85em;
+    color: var(--text2);
+    background: var(--field);
+    user-select: none;
+    -webkit-user-select: none;
   }
   .code {
     font-family: var(--code-font);

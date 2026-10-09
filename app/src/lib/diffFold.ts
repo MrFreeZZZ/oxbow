@@ -4,6 +4,7 @@
 
 import { prefs } from "./prefs.svelte";
 import type { FileDiff } from "./types";
+import { imageType } from "./unusual";
 
 /** Written by tools, rarely read in a review. */
 const generated = [
@@ -20,7 +21,7 @@ export function isGenerated(path: string): boolean {
 /** Why the file starts folded in Smart mode, or null when it starts open. */
 export function foldReason(diff: FileDiff, over = prefs.get("oxbow.diff.foldOver")): string | null {
   const f = diff.file;
-  if (f.binary) return "Binary file";
+  if (f.binary && !imageType(f.path)) return "Binary file";
   if (diff.tooLarge) return "Too large to show";
   if (f.status === "deleted") return "Deleted";
   if (isGenerated(f.path)) return "Generated file";

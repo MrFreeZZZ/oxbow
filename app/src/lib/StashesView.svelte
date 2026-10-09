@@ -9,6 +9,7 @@
   import { applyRequest, dropRequest, stashBranchRequest, stashMenu, stashName, stashRequest } from "./stash";
   import { plate, relativeTime, shortId, splitPath, tint } from "./format";
   import DiffView from "./DiffView.svelte";
+  import FileBadge from "./FileBadge.svelte";
   import FoldAll from "./FoldAll.svelte";
   import Menu, { type MenuEntry } from "./Menu.svelte";
 
@@ -298,17 +299,24 @@
                 <span class="badge {untracked ? 'added' : file.status}">{untracked ? "A" : statusIcon[file.status]}</span>
                 <span class="grow ellipsis"><span class="dir">{p.dir}</span>{p.name}</span>
                 {#if untracked}<span class="meta">untracked</span>{/if}
-                {#if file.binary}
-                  <span class="meta">binary</span>
-                {:else}
-                  <span class="mono add">+{file.additions}</span>
-                  <span class="mono del num">−{file.deletions}</span>
-                {/if}
+                <FileBadge {file} />
               </button>
             {/each}
           </div>
         {/if}
-        <DiffView bind:this={diffView} foldable {diffs} color={branchColor(stash)} {whole} onToggleWhole={() => (whole = !whole)} />
+        <DiffView
+          bind:this={diffView}
+          foldable
+          {diffs}
+          color={branchColor(stash)}
+          {whole}
+          onToggleWhole={() => (whole = !whole)}
+          loadFull={(d) => {
+            const s = stash!;
+            const source = files[s.id]?.tracked.some((x) => x.path === d.file.path) ? s.id : (s.untracked ?? s.id);
+            return api.commitDiff(source, d.file.path, whole, true).then((all) => all[0]);
+          }}
+        />
       </div>
     {/if}
   </section>
