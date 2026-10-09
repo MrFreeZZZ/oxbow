@@ -5,10 +5,10 @@
 //! picture) is kept in `accounts.json` next to settings.json, so Settings can show it without
 //! reading the Keychain, which macOS may ask about.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use oxbow_core::github::{self, Client, DeviceCode, DevicePoll, Publish};
 use oxbow_core::{ActionEvent, OutputLine};
@@ -23,7 +23,8 @@ use crate::CommandResult;
 /// name another app with `oxbow.github.clientId`.
 const CLIENT_ID: &str = "Ov23liNWrLpV4KFn313e";
 
-/// The Keychain item: "Oxbow GitHub", account = the login.
+/// The Keychain item: "Oxbow GitHub", account = the login, then `#` and when it was signed in
+/// (see [`Account::item`]).
 const SERVICE: &str = "Oxbow GitHub";
 
 /// The signed-in GitHub account, as Settings shows it.
@@ -38,6 +39,16 @@ pub struct Account {
     pub method: String,
     /// The token's scopes; `None` for a fine-grained token.
     pub scopes: Option<Vec<String>>,
+    /// The credential store item with the token. Each sign-in writes a new one, so the item in
+    /// use is never written over; accounts saved before that use the bare login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item: Option<String>,
+}
+
+impl Account {
+    fn item(&self) -> &str {
+        self.item.as_deref().unwrap_or(&self.login)
+    }
 }
 
 /// The token, read from the credential store once and kept for the session.
@@ -58,13 +69,20 @@ fn accounts_file(app: &AppHandle) -> CommandResult<PathBuf> {
 
 /// The account in accounts.json, if any.
 pub fn saved(app: &AppHandle) -> Option<Account> {
-    let text = std::fs::read_to_string(accounts_file(app).ok()?).ok()?;
+    saved_in(&accounts_file(app).ok()?)
+}
+
+fn saved_in(file: &Path) -> Option<Account> {
+    let text = std::fs::read_to_string(file).ok()?;
     let mut all: serde_json::Map<String, Value> = serde_json::from_str(&text).ok()?;
     serde_json::from_value(all.remove("github.com")?).ok()
 }
 
 fn save(app: &AppHandle, account: Option<&Account>) -> CommandResult<()> {
-    let file = accounts_file(app)?;
+    save_in(&accounts_file(app)?, account)
+}
+
+fn save_in(file: &Path, account: Option<&Account>) -> CommandResult<()> {
     std::fs::create_dir_all(file.parent().expect("accounts file has a parent")).map_err(|err| err.to_string())?;
     let mut all = serde_json::Map::new();
     if let Some(account) = account {
@@ -77,14 +95,70 @@ fn save(app: &AppHandle, account: Option<&Account>) -> CommandResult<()> {
     // Written whole or not at all: a half-written file would forget who is signed in.
     let part = file.with_extension("json.part");
     std::fs::write(&part, text + "\n").map_err(|err| err.to_string())?;
-    std::fs::rename(&part, &file).map_err(|err| {
+    std::fs::rename(&part, file).map_err(|err| {
         let _ = std::fs::remove_file(&part);
         err.to_string()
     })
 }
 
-fn entry(login: &str) -> CommandResult<keyring::Entry> {
-    keyring::Entry::new(SERVICE, login).map_err(|err| keychain_error(&err))
+fn entry(item: &str) -> CommandResult<keyring::Entry> {
+    keyring::Entry::new(SERVICE, item).map_err(|err| keychain_error(&err))
+}
+
+/// Where tokens are kept, by item: the computer's credential store, or a map in tests.
+trait Store {
+    fn set(&self, item: &str, token: &str) -> CommandResult<()>;
+    /// Take `item` out; one that isn't there is fine.
+    fn delete(&self, item: &str) -> CommandResult<()>;
+}
+
+struct Keyring;
+
+impl Store for Keyring {
+    fn set(&self, item: &str, token: &str) -> CommandResult<()> {
+        entry(item)?.set_password(token).map_err(|err| keychain_error(&err))
+    }
+
+    fn delete(&self, item: &str) -> CommandResult<()> {
+        match entry(item)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(err) => Err(keychain_error(&err)),
+        }
+    }
+}
+
+/// Sign in as `account` with `token`, the accounts file being `file`. The token goes into a new
+/// item, the file then points at it, and the old account's item goes last: until the file is
+/// written nothing in use has changed, so `stopped` (asked once the store took the token, which
+/// may have asked first) or a file that can't be written leaves the old account and its token as
+/// they were. An item that can't be taken out afterwards is only left unused.
+fn switch_to(
+    store: &dyn Store,
+    file: &Path,
+    mut account: Account,
+    token: &str,
+    stopped: &dyn Fn() -> bool,
+) -> CommandResult<Account> {
+    let old = saved_in(file);
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    // GitHub logins have no `#`.
+    let item = format!("{}#{stamp}", account.login);
+    store.set(&item, token)?;
+    if stopped() {
+        let _ = store.delete(&item);
+        return Err("stopped".into());
+    }
+    account.item = Some(item.clone());
+    if let Err(err) = save_in(file, Some(&account)) {
+        let _ = store.delete(&item);
+        return Err(err);
+    }
+    if let Some(old) = old
+        && old.item() != item
+    {
+        let _ = store.delete(old.item());
+    }
+    Ok(account)
 }
 
 fn keychain_error(err: &keyring::Error) -> String {
@@ -113,7 +187,7 @@ impl Accounts {
         let mut cached = self.token.lock().expect("token lock");
         if cached.is_none() {
             let account = saved(app)?;
-            *cached = entry(&account.login).ok()?.get_password().ok();
+            *cached = entry(account.item()).ok()?.get_password().ok();
         }
         cached.clone()
     }
@@ -156,32 +230,6 @@ impl Accounts {
         if self.cancelled(attempt) {
             return Err("stopped".into());
         }
-        let old = saved(app);
-        // Signing in again as the same account overwrites its token in place, so the old token is
-        // kept aside to put back; anything else is a new item, taken out again when the sign-in
-        // goes no further.
-        let same = old.as_ref().is_some_and(|old| old.login == me.user.login);
-        let previous = if same { self.token(app) } else { None };
-        let replaced = old.filter(|_| !same);
-        let new_entry = entry(&me.user.login)?;
-        // The store as it was before this sign-in. A same account whose old token can't be read
-        // keeps the new one: it is that account's, and nothing in memory says otherwise.
-        let undo = || match (same, &previous) {
-            (true, Some(previous)) => {
-                let _ = new_entry.set_password(previous);
-            }
-            (true, None) => {}
-            (false, _) => {
-                let _ = new_entry.delete_credential();
-            }
-        };
-        // The new token goes in first: a store that refuses it leaves the old account as it was.
-        new_entry.set_password(&token).map_err(|err| keychain_error(&err))?;
-        // The Keychain may have asked first: a Cancel meanwhile still wins.
-        if self.cancelled(attempt) {
-            undo();
-            return Err("stopped".into());
-        }
         let account = Account {
             login: me.user.login,
             name: me.user.name.filter(|name| !name.is_empty()),
@@ -189,18 +237,11 @@ impl Accounts {
             html_url: me.user.html_url,
             method: method.to_owned(),
             scopes: me.scopes,
+            item: None,
         };
-        if let Err(err) = save(app, Some(&account)) {
-            // Back to the old account, with its own token.
-            undo();
-            return Err(err);
-        }
-        // Signing in as someone else replaces the old account; its token goes last.
-        if let Some(old) = replaced
-            && let Ok(entry) = entry(&old.login)
-        {
-            let _ = entry.delete_credential();
-        }
+        let file = accounts_file(app)?;
+        // The Keychain may have asked first: a Cancel meanwhile still wins.
+        let account = switch_to(&Keyring, &file, account, &token, &|| self.cancelled(attempt))?;
         *self.token.lock().expect("token lock") = Some(token);
         Ok(account)
     }
@@ -354,10 +395,7 @@ async fn finish(
 #[tauri::command]
 pub fn github_sign_out(app: AppHandle, accounts: State<'_, Accounts>) -> CommandResult<()> {
     if let Some(account) = saved(&app) {
-        match entry(&account.login)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => {}
-            Err(err) => return Err(keychain_error(&err)),
-        }
+        Keyring.delete(account.item())?;
     }
     save(&app, None)?;
     *accounts.token.lock().expect("token lock") = None;
@@ -456,4 +494,102 @@ pub async fn github_publish(
     })
     .await
     .map_err(|err| err.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::collections::BTreeMap;
+
+    use super::*;
+
+    /// Items in memory; `refuse` makes taking any out fail, as a locked store would.
+    #[derive(Default)]
+    struct Memory {
+        items: RefCell<BTreeMap<String, String>>,
+        refuse: bool,
+    }
+
+    impl Store for Memory {
+        fn set(&self, item: &str, token: &str) -> CommandResult<()> {
+            self.items.borrow_mut().insert(item.into(), token.into());
+            Ok(())
+        }
+
+        fn delete(&self, item: &str) -> CommandResult<()> {
+            if self.refuse {
+                return Err("refused".into());
+            }
+            self.items.borrow_mut().remove(item);
+            Ok(())
+        }
+    }
+
+    fn account(login: &str) -> Account {
+        Account {
+            login: login.into(),
+            name: None,
+            avatar_url: String::new(),
+            html_url: String::new(),
+            method: "token".into(),
+            scopes: None,
+            item: None,
+        }
+    }
+
+    /// An accounts file signed in as maria with `old` under her bare login, as before items.
+    fn signed_in(store: &Memory) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "oxbow-accounts-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let file = dir.join("accounts.json");
+        save_in(&file, Some(&account("maria"))).unwrap();
+        store.set("maria", "old").unwrap();
+        (dir, file)
+    }
+
+    fn token_in_use(store: &Memory, file: &Path) -> Option<String> {
+        store.items.borrow().get(saved_in(file)?.item()).cloned()
+    }
+
+    #[test]
+    fn signing_in_again_replaces_the_token_only_once_it_is_saved() {
+        let store = Memory::default();
+        let (dir, file) = signed_in(&store);
+        switch_to(&store, &file, account("maria"), "new", &|| false).unwrap();
+        assert_eq!(token_in_use(&store, &file).as_deref(), Some("new"));
+        assert_eq!(store.items.borrow().len(), 1, "the old item is gone");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_cancelled_sign_in_keeps_the_token_in_use_even_when_nothing_can_be_taken_out() {
+        for login in ["maria", "alex"] {
+            let store = Memory {
+                refuse: true,
+                ..Memory::default()
+            };
+            let (dir, file) = signed_in(&store);
+            let err = switch_to(&store, &file, account(login), "new", &|| true).unwrap_err();
+            assert_eq!(err, "stopped");
+            assert_eq!(saved_in(&file).unwrap().login, "maria");
+            assert_eq!(token_in_use(&store, &file).as_deref(), Some("old"));
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn an_account_file_that_cant_be_written_keeps_the_old_sign_in() {
+        let store = Memory::default();
+        let (dir, file) = signed_in(&store);
+        // A folder where the new file would go makes the rename fail.
+        std::fs::create_dir_all(dir.join("accounts.json.part")).unwrap();
+        switch_to(&store, &file, account("maria"), "new", &|| false).unwrap_err();
+        assert_eq!(token_in_use(&store, &file).as_deref(), Some("old"));
+        assert_eq!(store.items.borrow().len(), 1, "the new item is taken out again");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
