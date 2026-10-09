@@ -78,7 +78,15 @@ export const api = {
   workingTree: () => invoke<WorkingTree>("working_tree"),
   workingDiff: (path: string, side: Side, wholeFile: boolean, full = false) =>
     invoke<FileDiff>("working_diff", { path, side, wholeFile, full }),
-  sourceBytes: (source: Source) => invoke<ArrayBuffer>("source_bytes", { source }),
+  /** The raw bytes arrive as an ArrayBuffer, or as a list of numbers when the IPC falls back to JSON. */
+  sourceBytes: (source: Source) =>
+    invoke<ArrayBuffer | ArrayBufferView | number[]>("source_bytes", { source }).then((data) =>
+      data instanceof ArrayBuffer
+        ? new Uint8Array(data)
+        : ArrayBuffer.isView(data)
+          ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+          : Uint8Array.from(data),
+    ),
   /** `label` names the copy: `logo (old a3f9c21).png`. */
   openSource: (source: Source, path: string, label: string) => invoke<void>("open_source", { source, path, label }),
   deletionCheck: (branch: string) => invoke<DeletionCheck>("deletion_check", { branch }),
