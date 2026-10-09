@@ -2,7 +2,7 @@
   import { api } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { CommitDetail, FileDiff, HistoryRow } from "./types";
-  import { fullDate, initials, lane, personColor, plate, splitPath, tabLabels, tint } from "./format";
+  import { fullDate, initials, lane, person, plate, splitPath, tabLabels, tint } from "./format";
   import DiffView from "./DiffView.svelte";
   import FoldAll from "./FoldAll.svelte";
   import CommitChain from "./CommitChain.svelte";
@@ -128,7 +128,7 @@
       {#if detail?.body}<p class="body selectable">{detail.body}</p>{/if}
     </div>
     <div class="people">
-      <span class="avatar" style:background={lane(personColor(row.authorEmail))}>{initials(row.authorName)}</span>
+      <span class="avatar" style:background={person(row.authorEmail)}>{initials(row.authorName)}</span>
       <span class="who">
         <span class="author" title={row.authorEmail}>{row.authorName}</span>
         <span class="date">{detail ? fullDate(detail.author.time, detail.author.offset) : ""}</span>

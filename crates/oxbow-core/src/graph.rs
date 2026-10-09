@@ -9,26 +9,43 @@
 //! - every other branch gets its own column to the right and keeps it for its whole life,
 //!   columns are reused only after a branch line has ended;
 //! - a branch line runs down to the commit it forks from and curves into that commit's column;
-//! - colors are stable per branch name; color 0 is reserved for the trunk;
+//! - colors are stable per branch name; color 0 is reserved for the trunk (the production branch);
 //! - the checked-out branch's line takes column 0 from the top of the graph down to its fork
 //!   point. Only the trunk moves out of its way, into the column that line had, and curves back
 //!   at the fork point; every other line keeps its column and color.
+
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use serde::Serialize;
 
 /// Index of a commit in the display order.
 pub type RowIndex = usize;
 
-/// Number of colors in the branch palette, not counting the trunk color.
-/// The muted palette has no red or pink (removed lines), no green (added lines), no yellow (tags)
-/// and no two colors of nearly the same hue.
-pub const PALETTE_SIZE: u8 = 9;
+/// Most branch colors a palette has, not counting the trunk color: the Oxbow palette's nine.
+/// Mineral, Paper and Signal have seven. None of them has red or pink (removed lines), green
+/// (added lines) or yellow (tags).
+pub const MAX_BRANCH_COLORS: u8 = 9;
 
-/// Neutral color for stashes, outside the branch palette.
-pub const STASH_COLOR: u8 = PALETTE_SIZE + 1;
+/// Branch colors of the default palette, Mineral.
+pub const DEFAULT_BRANCH_COLORS: u8 = 7;
+
+/// Neutral color for stashes, outside every branch palette.
+pub const STASH_COLOR: u8 = 10;
 
 /// Gray for commits that belong to no branch: made on a detached `HEAD`.
-pub const NO_BRANCH_COLOR: u8 = STASH_COLOR + 1;
+pub const NO_BRANCH_COLOR: u8 = 11;
+
+static BRANCH_COLORS: AtomicU8 = AtomicU8::new(DEFAULT_BRANCH_COLORS);
+
+/// How many branch colors the chosen palette has (Settings › Themes › Branch palette).
+pub fn set_branch_colors(count: u8) {
+    BRANCH_COLORS.store(count.clamp(1, MAX_BRANCH_COLORS), Ordering::Relaxed);
+}
+
+/// Branch colors of the chosen palette: names hash into `1..=branch_colors()`.
+pub fn branch_colors() -> u8 {
+    BRANCH_COLORS.load(Ordering::Relaxed)
+}
 
 /// Color of the trunk lane.
 pub const TRUNK_COLOR: u8 = 0;
@@ -52,6 +69,9 @@ pub struct GraphCommit {
     pub side: bool,
     /// Fixed color for the row, instead of one derived from a branch name.
     pub color: Option<u8>,
+    /// Commit id. A line that has no branch name takes its color from the id of the commit it
+    /// starts at, so it keeps that color as newer commits push it down.
+    pub id: String,
     /// The row of uncommitted changes, a side row on top of `HEAD`.
     pub worktree: bool,
 }
@@ -80,7 +100,7 @@ pub struct LeadIn {
 pub struct RowLayout {
     /// Column of the commit dot.
     pub column: u16,
-    /// Color of the commit dot (0 = trunk, `1..=PALETTE_SIZE` = branch palette, `STASH_COLOR` = stash).
+    /// Color of the commit dot (0 = trunk, `1..=branch_colors()` = branch palette, `STASH_COLOR` = stash).
     pub color: u8,
     /// Colors of branches that fork from this commit, drawn as a ring around the dot.
     pub fork_colors: Vec<u8>,
@@ -140,7 +160,7 @@ pub fn color_for_name(name: &str) -> u8 {
         hash ^= u32::from(byte);
         hash = hash.wrapping_mul(0x0100_0193);
     }
-    1 + (hash % u32::from(PALETTE_SIZE)) as u8
+    1 + (hash % u32::from(branch_colors())) as u8
 }
 
 /// Lay out `commits`, which must be ordered children before parents. `focus` is the row of the
@@ -291,7 +311,7 @@ fn place(commits: &[GraphCommit], plan: &Plan) -> Vec<RowLayout> {
         } else {
             match &commit.tip_name {
                 Some(name) => color_for_name(name),
-                None => color_for_name(&format!("#{row}")),
+                None => color_for_name(&format!("#{}", commit.id)),
             }
         };
 
@@ -375,7 +395,10 @@ fn place(commits: &[GraphCommit], plan: &Plan) -> Vec<RowLayout> {
             } else {
                 match &commit.merged_name {
                     Some(name) => color_for_name(name),
-                    None => color_for_name(&format!("#{row}:{index}")),
+                    None => match parent {
+                        Some(p) => color_for_name(&format!("#{}", commits[p].id)),
+                        None => color_for_name(&format!("#{}:{index}", commit.id)),
+                    },
                 }
             };
             if !merge_colors.contains(&merged_color) {
@@ -690,16 +713,16 @@ mod tests {
 
     #[test]
     fn a_nested_branch_moves_only_its_own_commits() {
-        // 0 base tip -> 2; 1 child tip (HEAD) -> 2, forked from base; 2 base -> 3; 3 root
+        // 0 base tip -> 2; 1 nested tip (HEAD) -> 2, forked from base; 2 base -> 3; 3 root
         let base = named(commit(&[2], false), "base");
-        let child = named(commit(&[2], false), "child");
+        let child = named(commit(&[2], false), "nested");
         let graph = layout(&[base, child, commit(&[3], false), commit(&[], true)], Some(1));
         let rows = &graph.rows;
         assert_eq!((rows[0].column, rows[1].column, rows[2].column), (1, 0, 1));
         assert_eq!(rows[2].color, color_for_name("base"));
-        // The child line curves into its fork point on base.
-        assert!(rows[1].segments.contains(&curve(0, 1, color_for_name("child"))));
-        assert_eq!(rows[2].fork_colors, vec![color_for_name("child")]);
+        // The nested line curves into its fork point on base.
+        assert!(rows[1].segments.contains(&curve(0, 1, color_for_name("nested"))));
+        assert_eq!(rows[2].fork_colors, vec![color_for_name("nested")]);
     }
 
     #[test]
@@ -761,7 +784,7 @@ mod tests {
         for name in ["main", "feature/x", "", "renovate/serde-1.x"] {
             let c = color_for_name(name);
             assert_eq!(c, color_for_name(name));
-            assert!((1..=PALETTE_SIZE).contains(&c));
+            assert!((1..=branch_colors()).contains(&c));
         }
     }
 }

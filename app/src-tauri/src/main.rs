@@ -168,6 +168,10 @@ fn apply_settings(app: &AppHandle, session: &Session, settings: &serde_json::Map
             .and_then(Value::as_u64)
             .map_or(30, |days| days.min(3650) as u32),
     );
+    oxbow_core::graph::set_branch_colors(match settings.get("oxbow.branchPalette").and_then(Value::as_str) {
+        Some("oxbow") => oxbow_core::graph::MAX_BRANCH_COLORS,
+        _ => oxbow_core::graph::DEFAULT_BRANCH_COLORS,
+    });
     let theme = appearance(settings);
     for window in app.webview_windows().values() {
         let _ = window.set_theme(theme);
@@ -807,6 +811,21 @@ struct RepoSettings {
     local: std::collections::BTreeMap<String, String>,
     remotes: Vec<oxbow_core::RemoteInfo>,
     storage: Option<oxbow_core::Storage>,
+    production: Production,
+}
+
+/// Settings › This Repository › Production branch.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Production {
+    /// The chosen branch as a full ref; `None` is Auto.
+    chosen: Option<String>,
+    /// Whether the chosen branch exists.
+    found: bool,
+    /// Full ref of the branch Auto picks, if any.
+    auto: Option<String>,
+    /// Local and remote branches to choose from, as full refs.
+    branches: Vec<String>,
 }
 
 /// Settings › This Repository, or nothing when no repository is open.
@@ -822,6 +841,22 @@ async fn repo_settings(session: State<'_, Session>) -> CommandResult<Option<Repo
             local: repo.local_config(),
             remotes: repo.remotes_info()?,
             storage: repo.storage().ok(),
+            production: {
+                let refs = repo.refs()?;
+                let chosen = repo.production_setting();
+                Production {
+                    found: chosen
+                        .as_deref()
+                        .is_some_and(|c| oxbow_core::history::pick_trunk(&refs, Some(c)).is_some()),
+                    auto: oxbow_core::history::pick_trunk(&refs, None).and_then(oxbow_core::history::full_ref),
+                    branches: refs
+                        .iter()
+                        .filter_map(oxbow_core::history::full_ref)
+                        .filter(|r| !r.ends_with("/HEAD"))
+                        .collect(),
+                    chosen,
+                }
+            },
         }))
     })
     .await
@@ -830,6 +865,7 @@ async fn repo_settings(session: State<'_, Session>) -> CommandResult<Option<Repo
 /// Change a value in ~/.gitconfig or the open repository's .git/config; `None` removes it.
 #[tauri::command]
 async fn set_git_config(
+    app: AppHandle,
     session: State<'_, Session>,
     scope: ConfigScope,
     key: String,
@@ -839,11 +875,17 @@ async fn set_git_config(
         ConfigScope::Local => Some(current(&session)?),
         ConfigScope::Global => None,
     };
+    // The production branch changes how the main window draws the graph.
+    let redraw = key.eq_ignore_ascii_case(oxbow_core::history::PRODUCTION_KEY);
     blocking(move || match repo {
         Some(repo) => repo.set_local_config(&key, value.as_deref()),
         None => config::set_global_config(&key, value.as_deref()),
     })
-    .await
+    .await?;
+    if redraw {
+        let _ = app.emit_to("main", "repo-touched", ());
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]

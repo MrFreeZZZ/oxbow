@@ -117,7 +117,7 @@
 {#snippet prompt(display: string)}
   <div class="cmd">
     <!-- A step Oxbow does itself runs outside the repository, from the home folder. -->
-    {#if request?.local}<span class="prompt">~ %</span>{:else}<span class="prompt">{`${repo} `}</span><span style:color="var(--lane-{color})">({branch ?? "HEAD"})</span><span class="prompt">{" %"}</span>{/if}
+    {#if request?.local}<span class="prompt">~ %</span>{:else}<span class="prompt">{`${repo} `}</span><span style:color="var(--plate-{color})">({branch ?? "HEAD"})</span><span class="prompt">{" %"}</span>{/if}
     {#each tokens(display) as token, k (k)}<span style:color={token.color} class:bold={token.bold}>{token.text}</span>{" "}{/each}
   </div>
 {/snippet}

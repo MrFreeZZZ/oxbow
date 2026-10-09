@@ -59,8 +59,11 @@ export function fullDate(seconds: number, offset: number): string {
   return `${date} at ${time} (${zone})`;
 }
 
-/** Stable palette color for a person, from their email. */
-export function personColor(email: string): number {
+/** Stable color for a person, from their email: an avatar fill of its own palette, so the branch
+ *  palette in Settings never recolors people. */
+export const person = (email: string) => `var(--person-${personColor(email)})`;
+
+function personColor(email: string): number {
   let hash = 0x811c9dc5;
   for (const ch of email.toLowerCase()) {
     hash ^= ch.charCodeAt(0);

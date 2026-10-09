@@ -651,6 +651,14 @@
     target.addEventListener("pointerup", up);
   }
 
+  // Palettes differ in how many colors branch names hash into: lay the graph out again.
+  let palette: string | null = null;
+  $effect(() => {
+    const next = prefs.get("oxbow.branchPalette");
+    if (palette !== null && palette !== next && repo) untrack(() => refresh());
+    palette = next;
+  });
+
   $effect(() => {
     api.getSetting<number>(settings.detailsWidth).then((width) => {
       if (typeof width === "number") panelWidth = Math.min(Math.max(width, 360), window.innerWidth - 560);

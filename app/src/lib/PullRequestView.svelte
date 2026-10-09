@@ -9,7 +9,7 @@
   import type { Request } from "./confirm.svelte";
   import type { BranchContext } from "./branches";
   import type { Action, History, MergeMethodName, PullCheck, PullEntry, PullRequest, PullSummary, ReviewState, Stack, StackPreview } from "./types";
-  import { lane, personColor, plate, relativeTime, shortId, splitPath, tint } from "./format";
+  import { lane, person, plate, relativeTime, shortId, splitPath, tint } from "./format";
   import { softArrows } from "./shapes";
   import { editStackRequest, freshDraft, planOf } from "./stack";
   import {
@@ -443,7 +443,7 @@
 </script>
 
 {#snippet avatar(login: string, url: string, size: number)}
-  <span class="avatar" style:width="{size}px" style:height="{size}px" style:background={lane(personColor(login))} style:font-size="{Math.round(size * 0.42)}px">
+  <span class="avatar" style:width="{size}px" style:height="{size}px" style:background={person(login)} style:font-size="{Math.round(size * 0.42)}px">
     {(login[0] ?? "?").toUpperCase()}
     {#if url}<img src={url} alt="" onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")} />{/if}
   </span>

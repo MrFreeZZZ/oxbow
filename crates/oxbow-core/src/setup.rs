@@ -446,9 +446,14 @@ pub fn glance(path: &Path) -> Result<RepoGlance> {
         .head()?
         .branch
         .or_else(|| operation.as_ref().and_then(|op| op.branch.clone()));
+    let refs = repo.refs().unwrap_or_default();
+    let production = repo.production_setting();
+    let trunk = crate::history::pick_trunk(&refs, production.as_deref());
     let color = match branch.as_deref() {
         None => crate::graph::NO_BRANCH_COLOR,
-        Some("main" | "master") => crate::graph::TRUNK_COLOR,
+        Some(name) if trunk.is_some_and(|t| t.kind == crate::RefKind::Local && t.name == name) => {
+            crate::graph::TRUNK_COLOR
+        }
         Some(name) => crate::graph::color_for_name(name),
     };
     let tracking = repo.tracking().ok().flatten();

@@ -227,14 +227,16 @@ impl Repo {
                 .ok_or_else(|| Error::Git("check out a branch first: HEAD is not on one".into()))?,
         };
         let refs = self.refs()?;
-        let trunk = crate::history::pick_trunk(&refs, &head)
-            .filter(|r| !(r.kind == RefKind::Local && r.name == branch))
-            .ok_or_else(|| {
-                Error::Git(format!(
-                    "{branch} is the main branch: there is no stack on top of it to edit"
-                ))
-            })?
-            .clone();
+        let production = self.production_setting();
+        let trunk = crate::history::pick_trunk(&refs, production.as_deref()).ok_or_else(|| {
+            Error::Git("there is no main branch to stack on: no main or master, and none chosen in Settings".into())
+        })?;
+        if trunk.kind == RefKind::Local && trunk.name == branch {
+            return Err(Error::Git(format!(
+                "{branch} is the main branch: there is no stack on top of it to edit"
+            )));
+        }
+        let trunk = trunk.clone();
         let base = self
             .run(&GitCommand::new(["merge-base", &trunk.name, &branch]))
             .map(|out| out.stdout.trim().to_owned())

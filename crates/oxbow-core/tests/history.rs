@@ -241,3 +241,78 @@ fn uncommitted_changes_sit_on_top_in_the_color_of_head() {
         .unwrap();
     assert!(history.rows.iter().all(|r| r.worktree.is_none()));
 }
+
+#[test]
+fn the_chosen_production_branch_is_the_trunk() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "1\n", "Root");
+    fx.git(&["checkout", "-q", "-b", "develop"]);
+    fx.commit("b.txt", "1\n", "Develop work");
+    fx.git(&["checkout", "-q", "main"]);
+    fx.commit("a.txt", "2\n", "Main work");
+
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.set_local_config(oxbow_core::history::PRODUCTION_KEY, Some("refs/heads/develop"))
+        .unwrap();
+    let history = Repo::open(fx.path())
+        .unwrap()
+        .history(&HistoryOptions::default())
+        .unwrap();
+    assert_eq!(history.trunk.as_deref(), Some("develop"));
+    let develop = history.rows.iter().find(|r| r.summary == "Develop work").unwrap();
+    assert_eq!(develop.graph.color, TRUNK_COLOR);
+    // main is checked out, so it takes column 0, but in its own color.
+    let main = history.rows.iter().find(|r| r.summary == "Main work").unwrap();
+    assert_eq!((main.graph.column, main.graph.color), (0, color_for_name("main")));
+
+    // A chosen branch that is gone leaves no trunk rather than falling back.
+    repo.set_local_config(oxbow_core::history::PRODUCTION_KEY, Some("refs/heads/gone"))
+        .unwrap();
+    let history = Repo::open(fx.path())
+        .unwrap()
+        .history(&HistoryOptions::default())
+        .unwrap();
+    assert_eq!(history.trunk, None);
+}
+
+#[test]
+fn without_main_or_master_the_checked_out_branch_is_not_the_trunk() {
+    let mut fx = Fixture::new();
+    fx.git(&["checkout", "-q", "-b", "trunk-less"]);
+    fx.commit("a.txt", "1\n", "Root");
+    let history = Repo::open(fx.path())
+        .unwrap()
+        .history(&HistoryOptions::default())
+        .unwrap();
+    assert_eq!(history.trunk, None);
+    assert_ne!(history.rows[0].graph.color, TRUNK_COLOR);
+}
+
+#[test]
+fn a_line_without_a_name_keeps_its_color_as_history_grows() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "1\n", "Root");
+    fx.git(&["checkout", "-q", "-b", "topic"]);
+    fx.commit("b.txt", "1\n", "Topic work");
+    fx.git(&["checkout", "-q", "main"]);
+    fx.commit("a.txt", "2\n", "Main work");
+    fx.git(&["merge", "-q", "--no-ff", "-m", "Merge work", "topic"]);
+    fx.git(&["branch", "-q", "-D", "topic"]);
+    let color = |fx: &Fixture| {
+        let history = Repo::open(fx.path())
+            .unwrap()
+            .history(&HistoryOptions::default())
+            .unwrap();
+        history
+            .rows
+            .iter()
+            .find(|r| r.summary == "Topic work")
+            .unwrap()
+            .graph
+            .color
+    };
+    let before = color(&fx);
+    fx.commit("a.txt", "3\n", "Later");
+    fx.commit("a.txt", "4\n", "Even later");
+    assert_eq!(color(&fx), before);
+}
