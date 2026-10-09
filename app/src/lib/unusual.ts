@@ -14,7 +14,11 @@ const IMAGE_TYPES: Record<string, string> = {
   avif: "image/avif",
   bmp: "image/bmp",
   ico: "image/x-icon",
+  svg: "image/svg+xml",
 };
+
+/** An SVG is text to git, but a picture to the people who change it. */
+export const isSvg = (path: string) => path.toLowerCase().endsWith(".svg");
 
 /** The picture type of `path` by its extension, or null when the webview can't draw it. */
 export function imageType(path: string): string | null {
