@@ -39,6 +39,10 @@ pub struct GitCommand {
     pub todo: Option<String>,
     /// Another program than `git`, e.g. `ssh-add`; the arguments are its own.
     pub program: Option<String>,
+    /// Run only when the first commit is an ancestor of the second at the moment the command's
+    /// turn comes, after the commands before it ran; otherwise it is left out. For a
+    /// fast-forward that depends on what a fetch before it brings.
+    pub only_if_ancestor: Option<(String, String)>,
 }
 
 impl GitCommand {
@@ -56,6 +60,7 @@ impl GitCommand {
             env: Vec::new(),
             todo: None,
             program: None,
+            only_if_ancestor: None,
         }
     }
 
@@ -86,6 +91,11 @@ impl GitCommand {
 
     pub fn todo(mut self, todo: impl Into<String>) -> Self {
         self.todo = Some(todo.into());
+        self
+    }
+
+    pub fn only_if_ancestor(mut self, ancestor: impl Into<String>, of: impl Into<String>) -> Self {
+        self.only_if_ancestor = Some((ancestor.into(), of.into()));
         self
     }
 

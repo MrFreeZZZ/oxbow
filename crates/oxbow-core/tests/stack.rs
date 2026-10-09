@@ -293,7 +293,11 @@ fn moving_onto_the_newest_main_finds_the_conflict_first() {
     let commands = repo.plan(&Action::EditStack { plan: plan.clone() }).unwrap().commands;
     assert_eq!(
         commands[0].display(),
-        format!("git rebase --interactive --onto main {} auth/3", &stack.base.id[..7])
+        format!(
+            "git rebase --interactive --onto {} {} auth/3",
+            stack.trunk_tip.id,
+            &stack.base.id[..7]
+        )
     );
     repo.perform(&Action::EditStack { plan }).unwrap_err();
     let op = repo.operation().unwrap().expect("the rebase stopped");
@@ -305,6 +309,27 @@ fn moving_onto_the_newest_main_finds_the_conflict_first() {
         "auth/2",
         "back on the branch it started from"
     );
+}
+
+#[test]
+fn the_stack_lands_on_the_commit_it_was_shown_even_if_the_branch_moves() {
+    let mut fx = stacked();
+    fx.git(&["switch", "-q", "main"]);
+    fx.commit("docs.md", "how\n", "Docs on main");
+    fx.git(&["switch", "-q", "auth/2"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let stack = repo.stack(None).unwrap();
+    let mut plan = as_is(&stack);
+    plan.onto = stack.trunk_tip.id.clone();
+    plan.onto_name = Some("main".into());
+    let commands = repo.plan(&Action::EditStack { plan: plan.clone() }).unwrap().commands;
+    assert!(commands[0].comment.as_deref().unwrap().starts_with("--onto main ("));
+
+    // Someone else moves main back between the preview and the run.
+    fx.git(&["branch", "-f", "main", "main~1"]);
+    repo.perform(&Action::EditStack { plan }).unwrap();
+    assert_eq!(fx.git(&["rev-parse", "auth/1~1"]), stack.trunk_tip.id);
+    assert!(fx.path().join("docs.md").exists());
 }
 
 #[test]

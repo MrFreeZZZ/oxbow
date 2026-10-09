@@ -357,6 +357,94 @@ fn a_checked_out_base_catches_up() {
     assert!(me.path().join("b.txt").exists());
 }
 
+/// A commit made here on main that reached GitHub another way, before the merge: the fetch
+/// shows main has nothing of its own any more, so it still catches up.
+#[test]
+fn a_base_whose_commits_the_fetch_brings_catches_up() {
+    let (_remote, url, mut me) = hosted();
+    me.git(&["switch", "-q", "-c", "feature"]);
+    me.commit("b.txt", "two\n", "Two");
+    me.git(&["push", "-q", "-u", "origin", "feature"]);
+    me.git(&["switch", "-q", "main"]);
+    me.commit("fix.txt", "fix\n", "Fix");
+    // Pushed without updating origin/main here, as from another clone.
+    me.git(&["push", "-q", &url, "main:main"]);
+    me.git(&["switch", "-q", "feature"]);
+    let squashed = squash_on_github(&url, "feature");
+
+    let repo = Repo::open(me.path()).unwrap();
+    let landed = Action::PullRequestMerged {
+        remote: "origin".into(),
+        base: "main".into(),
+        branch: "feature".into(),
+    };
+    repo.perform(&landed).unwrap();
+    assert_eq!(me.git(&["rev-parse", "main"]), squashed);
+}
+
+/// A base with a commit GitHub doesn't have stays as it is, and the fetch still lands.
+#[test]
+fn a_base_with_commits_of_its_own_stays() {
+    let (_remote, url, mut me) = hosted();
+    me.git(&["switch", "-q", "-c", "feature"]);
+    me.commit("b.txt", "two\n", "Two");
+    me.git(&["push", "-q", "-u", "origin", "feature"]);
+    me.git(&["switch", "-q", "main"]);
+    let mine = me.commit("mine.txt", "mine\n", "Mine");
+    let squashed = squash_on_github(&url, "feature");
+
+    let repo = Repo::open(me.path()).unwrap();
+    let landed = Action::PullRequestMerged {
+        remote: "origin".into(),
+        base: "main".into(),
+        branch: "feature".into(),
+    };
+    repo.perform(&landed).unwrap();
+    assert_eq!(me.git(&["rev-parse", "main"]), mine);
+    assert_eq!(me.git(&["rev-parse", "origin/main"]), squashed);
+}
+
+/// A branch checked out in another worktree is neither deleted nor fast-forwarded from here.
+#[test]
+fn a_branch_in_another_worktree_stays() {
+    let (_remote, url, mut me) = hosted();
+    me.git(&["switch", "-q", "-c", "feature"]);
+    let tip = me.commit("b.txt", "two\n", "Two");
+    me.git(&["push", "-q", "-u", "origin", "feature"]);
+    me.git(&["switch", "-q", "--detach"]);
+    let squashed = squash_on_github(&url, "feature");
+    let place = tempfile::tempdir().unwrap();
+    let elsewhere = place.path().join("feature");
+    me.git(&["worktree", "add", "-q", elsewhere.to_str().unwrap(), "feature"]);
+    let main_place = place.path().join("main");
+    me.git(&["worktree", "add", "-q", main_place.to_str().unwrap(), "main"]);
+
+    let repo = Repo::open(me.path()).unwrap();
+    let landed = Action::PullRequestMerged {
+        remote: "origin".into(),
+        base: "main".into(),
+        branch: "feature".into(),
+    };
+    assert_eq!(shown(&repo, &landed), ["git fetch --prune origin"]);
+    repo.perform(&landed).unwrap();
+    assert_eq!(me.git(&["rev-parse", "origin/main"]), squashed);
+
+    let local = Action::DeleteMergedBranch {
+        base: "main".into(),
+        branch: "feature".into(),
+        sha: tip.clone(),
+    };
+    let error = repo.plan(&local).unwrap_err().to_string();
+    assert!(error.contains("feature is checked out in"), "{error}");
+    assert!(repo.perform(&local).is_err());
+    assert_eq!(me.git(&["rev-parse", "feature"]), tip);
+
+    // Gone from there, it can go.
+    me.git(&["worktree", "remove", elsewhere.to_str().unwrap()]);
+    repo.perform(&local).unwrap();
+    assert!(me.git(&["branch", "--list", "feature"]).is_empty());
+}
+
 /// Commits pushed or made after the merge keep the branch, here and on the remote.
 #[test]
 fn a_branch_that_moved_since_the_merge_stays() {
