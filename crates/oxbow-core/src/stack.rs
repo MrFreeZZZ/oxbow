@@ -133,6 +133,14 @@ pub struct StackPlan {
     pub steps: Vec<StackStep>,
 }
 
+/// A branch that has a merged pull request, for a restack to move onto.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Landing {
+    pub name: String,
+    pub tip: CommitBrief,
+}
+
 /// What a plan does, worked out by a dry run.
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -835,6 +843,22 @@ impl Repo {
             .stdout
             .trim()
             .to_owned())
+    }
+
+    /// Where a stack goes once a pull request of it landed as `merged` (GitHub's merge commit):
+    /// the first of `candidates` (`main`, `origin/main`) that has it, with its newest commit.
+    /// `None` while none has it, e.g. before a fetch: the stack must not drop the merged commits
+    /// onto a branch without them.
+    pub fn landed_on(&self, merged: &str, candidates: &[String]) -> Option<Landing> {
+        candidates
+            .iter()
+            .find(|name| self.is_ancestor(merged, name))
+            .and_then(|name| {
+                Some(Landing {
+                    name: name.clone(),
+                    tip: self.brief_of(name).ok()?,
+                })
+            })
     }
 
     fn brief_of(&self, rev: &str) -> Result<CommitBrief> {

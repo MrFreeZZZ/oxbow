@@ -709,6 +709,18 @@ async fn stack(session: State<'_, Session>, branch: Option<String>) -> CommandRe
     blocking(move || repo.stack(branch.as_deref())).await
 }
 
+/// Which of `candidates` has the merged pull request's commit `merged`, for a restack to move
+/// onto; none until a fetch brought it.
+#[tauri::command]
+async fn landed_on(
+    session: State<'_, Session>,
+    merged: String,
+    candidates: Vec<String>,
+) -> CommandResult<Option<oxbow_core::Landing>> {
+    let repo = current(&session)?;
+    blocking(move || Ok(repo.landed_on(&merged, &candidates))).await
+}
+
 /// A dry run of an Edit Stack plan: what it changes, where it would stop, what to push.
 #[tauri::command]
 async fn stack_preview(
@@ -1266,6 +1278,7 @@ fn main() {
             conflict_file,
             stash_check,
             stack,
+            landed_on,
             stack_preview,
             plan_action,
             perform_action,

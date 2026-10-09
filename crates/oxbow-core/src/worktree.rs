@@ -70,6 +70,11 @@ pub enum Side {
     Unstaged,
 }
 
+/// `LfsTrack` stages what it changes unless asked not to.
+fn staged_by_default() -> bool {
+    true
+}
+
 /// A change to the working copy or the index, as asked for by the user.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -200,10 +205,13 @@ pub enum Action {
         force: bool,
         upstream: Option<RemoteBranch>,
     },
-    /// Delete a branch on its remote.
+    /// Delete a branch on its remote; with `expect`, only while it is still at that commit
+    /// there (`--force-with-lease`).
     DeleteRemoteBranch {
         remote: String,
         branch: String,
+        #[serde(default)]
+        expect: Option<String>,
     },
     /// Bring `branch` into the checked-out branch. `message` is the commit's, for a merge commit
     /// or a squash.
@@ -345,19 +353,25 @@ pub enum Action {
         branches: Vec<BranchPush>,
     },
     /// After `branch`'s pull request was merged into `base` on GitHub, bring the result here:
-    /// fetch it, fast-forward the local `base`, and delete the branch on `remote` and here when
-    /// asked to.
+    /// fetch it and fast-forward the local `base`, checked out or not.
     PullRequestMerged {
         remote: String,
         base: String,
         branch: String,
-        delete_remote: bool,
-        delete_local: bool,
     },
-    /// Keep files matching `pattern` in Git LFS, and stage `.gitattributes` and `paths`.
+    /// Delete the local `branch` of a merged pull request, only while it is still at `sha`, the
+    /// commit GitHub merged; when it is checked out, `base` is checked out instead.
+    DeleteMergedBranch {
+        base: String,
+        branch: String,
+        sha: String,
+    },
+    /// Keep files matching `pattern` in Git LFS; with `stage`, stage `.gitattributes` and `paths`.
     LfsTrack {
         pattern: String,
         paths: Vec<String>,
+        #[serde(default = "staged_by_default")]
+        stage: bool,
     },
     /// Stop sending new files matching `pattern` to Git LFS.
     LfsUntrack {
@@ -434,7 +448,13 @@ impl Repo {
         }
         for file in tree.unstaged.iter_mut().filter(|f| f.status == FileStatus::Untracked) {
             let path = self.workdir().join(&file.path);
-            let Ok(len) = std::fs::metadata(&path).map(|m| m.len()) else {
+            // A symlink counts as one, as for git: what it points at may never end (/dev/zero).
+            let Ok(len) = std::fs::symlink_metadata(&path)
+                .ok()
+                .filter(|m| m.is_file())
+                .map(|m| m.len())
+                .ok_or(())
+            else {
                 continue;
             };
             // A big file is not read whole on every refresh: its start says whether it is binary.
@@ -443,7 +463,7 @@ impl Repo {
                 let _ = std::fs::File::open(&path).and_then(|f| f.take(8000).read_to_end(&mut start));
                 start
             } else {
-                std::fs::read(&path).unwrap_or_default()
+                crate::lfs::read_regular(&path, MAX_COUNTED_BYTES).unwrap_or_default()
             };
             file.binary = data.iter().take(8000).any(|&b| b == 0);
             if !file.binary && len <= MAX_COUNTED_BYTES {
@@ -890,10 +910,31 @@ impl Repo {
                 }
                 commands
             }
-            Action::DeleteRemoteBranch { remote, branch } => vec![
+            Action::DeleteRemoteBranch {
+                remote,
+                branch,
+                expect: None,
+            } => vec![
                 GitCommand::new(["push", remote, "--delete", branch])
                     .comment("--delete: remove the branch on the remote")
                     .with_progress(),
+            ],
+            Action::DeleteRemoteBranch {
+                remote,
+                branch,
+                expect: Some(sha),
+            } => vec![
+                GitCommand::new([
+                    "push".to_owned(),
+                    format!("--force-with-lease=refs/heads/{branch}:{sha}"),
+                    remote.clone(),
+                    "--delete".to_owned(),
+                    branch.clone(),
+                ])
+                .comment(format!(
+                    "--force-with-lease: only while {branch} there is still the commit that was merged, so newer pushes stay"
+                ))
+                .with_progress(),
             ],
             Action::Merge {
                 branch,
@@ -1014,14 +1055,9 @@ impl Repo {
                 );
                 vec![GitCommand::new(args).comment(comment).with_progress()]
             }
-            Action::PullRequestMerged {
-                remote,
-                base,
-                branch,
-                delete_remote,
-                delete_local,
-            } => self.plan_pull_request_merged(remote, base, branch, *delete_remote, *delete_local)?,
-            Action::LfsTrack { pattern, paths } => lfs::plan_track(pattern, paths),
+            Action::PullRequestMerged { remote, base, .. } => self.plan_pull_request_merged(remote, base)?,
+            Action::DeleteMergedBranch { base, branch, sha } => self.plan_delete_merged_branch(base, branch, sha)?,
+            Action::LfsTrack { pattern, paths, stage } => lfs::plan_track(pattern, paths, *stage),
             Action::LfsUntrack { pattern } => lfs::plan_untrack(pattern),
             Action::LfsPull { include } => lfs::plan_pull(include.as_deref()),
             Action::LfsPrune => lfs::plan_prune(),

@@ -652,7 +652,7 @@ impl Repo {
             Action::CreateBranch { name, .. } => ("branch", format!("Create branch {name}")),
             Action::RenameBranch { from, to, .. } => ("branch", format!("Rename {from} to {to}")),
             Action::DeleteBranch { name, .. } => ("drop", format!("Delete branch {name}")),
-            Action::DeleteRemoteBranch { remote, branch } => ("drop", format!("Delete {branch} on {remote}")),
+            Action::DeleteRemoteBranch { remote, branch, .. } => ("drop", format!("Delete {branch} on {remote}")),
             Action::Merge { branch, method, .. } => match method {
                 MergeMethod::Merge => ("merge", format!("Merge {branch} into {here}")),
                 MergeMethod::Squash => ("merge", format!("Squash {branch} into {here}")),
@@ -718,6 +718,7 @@ impl Repo {
                 "merge",
                 format!("Bring in the merged pull request of {branch} into {base}"),
             ),
+            Action::DeleteMergedBranch { branch, .. } => ("drop", format!("Delete the merged branch {branch}")),
             Action::LfsTrack { pattern, .. } => ("lfs", format!("Track {pattern} with Git LFS")),
             Action::LfsUntrack { pattern } => ("lfs", format!("Stop tracking {pattern} with Git LFS")),
             Action::LfsPull { include: Some(pattern) } => ("fetch", format!("Download LFS files of {pattern}")),

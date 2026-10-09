@@ -129,15 +129,18 @@
       return;
     }
     if (invalid) return;
+    // What was asked for when Create was pressed: the fields can't change it halfway.
+    const asked = { ...options };
+    const toGitHub = publishing && toPublish ? { ...toPublish, branch: asked.branch } : null;
     running = true;
     failure = null;
     phase = "creating";
     let path: string | null = null;
     try {
-      path = await api.createRepo(options);
-      if (publishing && toPublish) {
+      path = await api.createRepo(asked);
+      if (toGitHub) {
         phase = "publishing";
-        await api.githubPublish(path, toPublish);
+        await api.githubPublish(path, toGitHub);
       }
       onDone(path);
     } catch (err) {
@@ -205,7 +208,7 @@
       <span class="sub">Starts version control in a new folder, or in a folder you already have.</span>
     </div>
 
-    <div class="grid">
+    <div class="grid" inert={running}>
       <span class="label">Name</span>
       <input class="text" bind:this={nameInput} bind:value={name} placeholder="my-project" aria-label="Name" spellcheck="false" autocomplete="off" />
 

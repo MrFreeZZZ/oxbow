@@ -169,62 +169,80 @@ impl Repo {
 }
 
 impl Repo {
-    /// The commands of [`crate::Action::PullRequestMerged`].
-    pub(crate) fn plan_pull_request_merged(
-        &self,
-        remote: &str,
-        base: &str,
-        branch: &str,
-        delete_remote: bool,
-        delete_local: bool,
-    ) -> Result<Vec<GitCommand>> {
+    /// The commands of [`crate::Action::PullRequestMerged`]: fetch the merge, then let the local
+    /// `base` catch up when it has nothing of its own. Deleting the branch is a step of its own
+    /// ([`crate::Action::DeleteMergedBranch`]), so a failed delete never keeps the merge out.
+    pub(crate) fn plan_pull_request_merged(&self, remote: &str, base: &str) -> Result<Vec<GitCommand>> {
         let head = self.head()?.branch;
-        let here = |name: &str| {
-            self.run(&GitCommand::new([
-                "rev-parse".to_owned(),
-                "--verify".to_owned(),
-                "--quiet".to_owned(),
-                format!("refs/heads/{name}"),
-            ]))
-            .is_ok()
-        };
-        let mut plan = Vec::new();
-        if delete_remote {
-            plan.push(
-                GitCommand::new(["push", remote, "--delete", branch])
-                    .comment("the pull request is merged: remove its branch for everyone")
-                    .with_progress(),
-            );
-        }
-        plan.push(
+        let mut plan = vec![
             GitCommand::new(["fetch", "--prune", remote])
                 .comment("bring in the merge; --prune forgets branches deleted there")
                 .with_progress(),
-        );
+        ];
+        let local = format!("refs/heads/{base}");
+        let tracking = format!("refs/remotes/{remote}/{base}");
         // A local base with commits of its own stays as it is: Pull sorts that out.
-        if here(base)
-            && head.as_deref() != Some(base)
-            && self.is_ancestor(&format!("refs/heads/{base}"), &format!("refs/remotes/{remote}/{base}"))
-        {
-            plan.push(
-                GitCommand::new(["fetch".to_owned(), remote.to_owned(), format!("{base}:{base}")])
-                    .comment(format!("fast-forward your {base} to {remote}/{base}")),
-            );
-        }
-        if delete_local && here(branch) {
-            let checked_out = head.as_deref() == Some(branch);
-            // Uncommitted changes keep the branch: they may not fit on the base.
-            if checked_out && self.tracked_changes()? {
-                return Ok(plan);
+        if self.has_ref(&local) && self.is_ancestor(&local, &tracking) {
+            if head.as_deref() == Some(base) {
+                plan.push(
+                    GitCommand::new(["merge".to_owned(), "--ff-only".to_owned(), format!("{remote}/{base}")])
+                        .comment(format!(
+                            "your checked-out {base} catches up; changes of yours in the way stop it, nothing is overwritten"
+                        )),
+                );
+            } else {
+                plan.push(
+                    GitCommand::new(["fetch".to_owned(), remote.to_owned(), format!("{base}:{base}")])
+                        .comment(format!("fast-forward your {base} to {remote}/{base}")),
+                );
             }
-            if checked_out {
-                plan.push(GitCommand::new(["switch", base]).comment(format!("leave {branch} to delete it")));
-            }
-            plan.push(GitCommand::new(["branch", "-D", branch]).comment(format!(
-                "-D: {base} has its changes as new commits, so git can't tell it is merged"
-            )));
         }
         Ok(plan)
+    }
+
+    /// The commands of [`crate::Action::DeleteMergedBranch`]: delete `branch` only while it is
+    /// still at `sha`, the commit GitHub merged, leaving it for `base` when it is checked out.
+    pub(crate) fn plan_delete_merged_branch(&self, base: &str, branch: &str, sha: &str) -> Result<Vec<GitCommand>> {
+        let name = format!("refs/heads/{branch}");
+        if !self.has_ref(&name) {
+            return Ok(Vec::new());
+        }
+        let mut plan = Vec::new();
+        if self.head()?.branch.as_deref() == Some(branch) {
+            // Uncommitted changes keep the branch: they may not fit on the base.
+            if self.tracked_changes()? {
+                return Err(Error::Git(format!("{branch} has uncommitted changes")));
+            }
+            plan.push(GitCommand::new(["switch", base]).comment(format!("leave {branch} to delete it")));
+        }
+        let short: String = sha.chars().take(7).collect();
+        plan.push(GitCommand::new(["update-ref", "-d", &name, sha]).comment(format!(
+            "only while {branch} is still at {short}, the commit GitHub merged: newer commits keep it"
+        )));
+        let configured = |key: &str| {
+            self.run(&GitCommand::new([
+                "config".to_owned(),
+                "--get".to_owned(),
+                format!("branch.{branch}.{key}"),
+            ]))
+            .is_ok()
+        };
+        if configured("remote") || configured("merge") {
+            plan.push(
+                GitCommand::new([
+                    "config".to_owned(),
+                    "--remove-section".to_owned(),
+                    format!("branch.{branch}"),
+                ])
+                .comment("forget its upstream, as git branch -D does"),
+            );
+        }
+        Ok(plan)
+    }
+
+    fn has_ref(&self, name: &str) -> bool {
+        self.run(&GitCommand::new(["rev-parse", "--verify", "--quiet", name]))
+            .is_ok()
     }
 }
 
@@ -366,6 +384,9 @@ pub struct PullRequest {
     /// The method auto-merge will use, when it is on.
     pub auto_merge: Option<String>,
     pub commits: Vec<PullCommit>,
+    /// `commits` has every commit: GitHub lists at most 250, so a bigger pull request can't
+    /// say which commits a restack leaves out.
+    pub commits_complete: bool,
     /// Each reviewer's latest say, in the order they first spoke.
     pub reviews: Vec<Review>,
     /// Reviews asked for and not given yet: logins, and teams as `org/team`.
@@ -692,17 +713,39 @@ impl Client {
             .unwrap_or_default())
     }
 
+    /// Every item of a list GitHub hands out 100 at a time, from at most `most` pages: a page
+    /// with fewer is the last one.
+    fn pages(&self, repo: &GitHubRepo, path: &str, most: u32) -> Result<Value> {
+        let mut items = Vec::new();
+        for page in 1..=most {
+            let request = self.api_request("GET", &repo.path(&format!("{path}?per_page=100&page={page}")), None);
+            let body = self.call(&request)?.body;
+            let list = match body {
+                Value::Array(list) => list,
+                _ => break,
+            };
+            let last = list.len() < 100;
+            items.extend(list);
+            if last {
+                break;
+            }
+        }
+        Ok(Value::Array(items))
+    }
+
     /// Everything about pull request `number`. Parts this account may not read are left empty.
     pub fn pull_request(&self, repo: &GitHubRepo, number: u64) -> Result<PullRequest> {
         let get = |path: String| {
             let request = self.api_request("GET", &repo.path(&path), None);
             move || self.call(&request).map(|r| r.body)
         };
+        let all = |path: String, most: u32| move || self.pages(repo, &path, most);
         let (pull, commits, comments, timeline, settings) = std::thread::scope(|s| {
             let pull = s.spawn(get(format!("/pulls/{number}")));
-            let commits = s.spawn(get(format!("/pulls/{number}/commits?per_page=100")));
-            let comments = s.spawn(get(format!("/pulls/{number}/comments?per_page=100")));
-            let timeline = s.spawn(get(format!("/issues/{number}/timeline?per_page=100")));
+            // GitHub lists at most 250 commits of a pull request, however many pages are asked for.
+            let commits = s.spawn(all(format!("/pulls/{number}/commits"), 3));
+            let comments = s.spawn(all(format!("/pulls/{number}/comments"), 10));
+            let timeline = s.spawn(all(format!("/issues/{number}/timeline"), 10));
             let settings = s.spawn(get(String::new()));
             (
                 pull.join(),
@@ -741,6 +784,7 @@ impl Client {
             .as_array()
             .map(|c| c.iter().map(pull_commit).collect())
             .unwrap_or_default();
+        let commit_count = pull.get("commits").and_then(Value::as_u64).unwrap_or(0);
         let mut entries = conversation(&timeline, &comments, &resolved);
         entries.sort_by_key(Entry::time);
         let reviews = latest_reviews(&timeline);
@@ -755,6 +799,7 @@ impl Client {
             deletions: number_field("deletions"),
             changed_files: number_field("changed_files"),
             commit_count: number_field("commits"),
+            commits_complete: commits.len() as u64 >= commit_count,
             mergeable: pull.get("mergeable").and_then(Value::as_bool),
             mergeable_state: pull
                 .get("mergeable_state")

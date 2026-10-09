@@ -11,6 +11,9 @@ use crate::repo::Repo;
 pub const CONTEXT_LINES: u32 = 3;
 /// Blobs larger than this are not diffed line by line.
 const MAX_BLOB_BYTES: usize = 16 * 1024 * 1024;
+/// Diff lines built for one file at most, even with no line limit in Settings (Show Diff Anyway):
+/// 16 MiB of newlines would otherwise be 16 million lines, over a gigabyte.
+const MAX_SHOWN_LINES: usize = 1_000_000;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -196,6 +199,8 @@ struct Inspected {
     /// `None` for binary content.
     hunks: Option<Vec<Hunk>>,
     too_large: bool,
+    /// More changed lines than the limit: counted, but no lines were built.
+    limited: bool,
 }
 
 impl Repo {
@@ -220,7 +225,11 @@ impl Repo {
         let author = person(commit.author().map_err(Error::git)?);
         let committer = person(commit.committer().map_err(Error::git)?);
         let parents = commit.parent_ids().map(|p| p.to_string()).collect();
-        let files = counted(&repo, self.commit_changes(&repo, &commit)?);
+        let files = counted(
+            &repo,
+            self.commit_changes(&repo, &commit)?,
+            self.diff_options().max_lines,
+        );
         Ok(CommitDetail {
             id: commit.id.to_string(),
             summary,
@@ -260,7 +269,7 @@ impl Repo {
     pub fn tree_files(&self, from: &str, to: &str) -> Result<Vec<FileChange>> {
         let repo = self.local();
         let changes = tree_changes(&repo, Some(&from_tree(&repo, from)?), &from_tree(&repo, to)?)?;
-        Ok(counted(&repo, changes))
+        Ok(counted(&repo, changes, self.diff_options().max_lines))
     }
 
     /// Line diffs between two commits' trees, for all files or only `path`.
@@ -296,15 +305,9 @@ impl Repo {
                 context,
                 true,
                 options.ignore_whitespace,
+                options.max_lines,
             )?;
-            let (hunks, too_large, limited) = match found.hunks {
-                Some(hunks) if over_limit(&file, options.max_lines) => {
-                    drop(hunks);
-                    (Vec::new(), found.too_large, true)
-                }
-                Some(hunks) => (hunks, found.too_large, false),
-                None => (Vec::new(), false, false),
-            };
+            let (hunks, too_large, limited) = (found.hunks.unwrap_or_default(), found.too_large, found.limited);
             let blob = |id: Option<ObjectId>| id.map(|id| Source::Blob { id: id.to_string() });
             out.push(FileDiff {
                 file,
@@ -347,8 +350,15 @@ impl Repo {
                 {
                     return Err(Error::Git(format!("{path} is not a path in the repository")));
                 }
-                std::fs::read(self.workdir().join(relative))
-                    .map_err(|err| Error::Git(format!("could not read {path}: {err}")))
+                let full = self.workdir().join(relative);
+                // A symlink's side is where it points, as git stores it, never what is there.
+                if std::fs::symlink_metadata(&full).is_ok_and(|m| m.file_type().is_symlink()) {
+                    return std::fs::read_link(&full)
+                        .map(|target| target.to_string_lossy().into_owned().into_bytes())
+                        .map_err(|err| Error::Git(format!("could not read {path}: {err}")));
+                }
+                crate::lfs::read_regular(&full, u64::MAX)
+                    .ok_or_else(|| Error::Git(format!("could not read {path}: not a plain file")))
             }
         }
     }
@@ -372,7 +382,7 @@ fn count_lines(file: &mut FileChange, hunks: &[Hunk]) {
 }
 
 /// Files with their added and removed line counts.
-fn counted(repo: &gix::Repository, changes: Vec<Change>) -> Vec<FileChange> {
+fn counted(repo: &gix::Repository, changes: Vec<Change>, max_lines: u32) -> Vec<FileChange> {
     changes
         .into_iter()
         .map(|change| {
@@ -386,6 +396,7 @@ fn counted(repo: &gix::Repository, changes: Vec<Change>) -> Vec<FileChange> {
                 DiffContext::Compact,
                 false,
                 false,
+                max_lines,
             );
             file
         })
@@ -509,6 +520,8 @@ fn is_binary(data: &[u8]) -> bool {
 
 /// Read both sides of a change and diff them line by line, filling in what `file` can tell
 /// about them: sizes, line counts, binary content, rename similarity and line-ending changes.
+/// With more than `max_lines` changed lines (0: no limit) only the counts are worked out.
+#[allow(clippy::too_many_arguments)]
 fn inspect(
     repo: &gix::Repository,
     file: &mut FileChange,
@@ -517,6 +530,7 @@ fn inspect(
     context: DiffContext,
     with_words: bool,
     ignore_whitespace: bool,
+    max_lines: u32,
 ) -> Result<Inspected> {
     let before = blob(repo, old)?;
     let after = blob(repo, new)?;
@@ -540,25 +554,43 @@ fn inspect(
         return Ok(Inspected {
             hunks: None,
             too_large: false,
+            limited: false,
         });
     }
     if before.len() > MAX_BLOB_BYTES || after.len() > MAX_BLOB_BYTES {
         return Ok(Inspected {
             hunks: Some(Vec::new()),
             too_large: true,
+            limited: false,
         });
     }
     let before = String::from_utf8_lossy(&before);
     let after = String::from_utf8_lossy(&after);
-    let hunks = diff_text_with(&before, &after, context, with_words, ignore_whitespace);
-    count_lines(file, &hunks);
+    let budget = if max_lines == 0 {
+        MAX_SHOWN_LINES
+    } else {
+        MAX_SHOWN_LINES.min(max_lines as usize)
+    };
+    let (hunks, too_large, limited) =
+        match diff_text_within(&before, &after, context, with_words, ignore_whitespace, budget) {
+            Ok(hunks) => {
+                count_lines(file, &hunks);
+                file.eol = eol_change(&hunks);
+                (hunks, false, false)
+            }
+            Err(Over { additions, deletions }) => {
+                file.additions = additions;
+                file.deletions = deletions;
+                (Vec::new(), !over_limit(file, max_lines), over_limit(file, max_lines))
+            }
+        };
     if matches!(file.status, FileStatus::Renamed | FileStatus::Copied) {
         file.similarity = Some(similarity(&before, &after, file.deletions));
     }
-    file.eol = eol_change(&hunks);
     Ok(Inspected {
         hunks: Some(hunks),
-        too_large: false,
+        too_large,
+        limited,
     })
 }
 
@@ -650,10 +682,28 @@ pub fn diff_text_with(
     with_words: bool,
     ignore_whitespace: bool,
 ) -> Vec<Hunk> {
-    let old: Vec<&str> = before.split_inclusive('\n').collect();
-    let new: Vec<&str> = after.split_inclusive('\n').collect();
+    diff_text_within(before, after, context, with_words, ignore_whitespace, usize::MAX).unwrap_or_default()
+}
+
+/// The changed lines of a diff that was not built: more than its budget.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Over {
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+/// [`diff_text_with`], giving up before a single line is built when more than `budget` lines
+/// would be: changed lines count against it, and so does their context.
+pub(crate) fn diff_text_within(
+    before: &str,
+    after: &str,
+    context: DiffContext,
+    with_words: bool,
+    ignore_whitespace: bool,
+    budget: usize,
+) -> std::result::Result<Vec<Hunk>, Over> {
     // The squeezed texts have exactly one line per original line, so the diff's line numbers
-    // point into `old` and `new` as they are.
+    // point into the original lines as they are.
     let squeezed = ignore_whitespace.then(|| (squeeze_whitespace(before), squeeze_whitespace(after)));
     let input = match &squeezed {
         Some((b, a)) => InternedInput::new(b.as_str(), a.as_str()),
@@ -663,7 +713,7 @@ pub fn diff_text_with(
     diff.postprocess_lines(&input);
     let changes: Vec<gix::diff::blob::Hunk> = diff.hunks().collect();
     if changes.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let ctx = match context {
@@ -671,6 +721,23 @@ pub fn diff_text_with(
         DiffContext::Lines(lines) => lines,
         DiffContext::WholeFile => u32::MAX / 4,
     };
+    let deletions: usize = changes.iter().map(|c| c.before.len()).sum();
+    let additions: usize = changes.iter().map(|c| c.after.len()).sum();
+    // Context: at most `ctx` lines on each side of a change, and never more than the file has.
+    let context_lines = (ctx as usize)
+        .saturating_mul(2)
+        .saturating_mul(changes.len())
+        .min(input.before.len());
+    if additions + deletions > budget || additions + deletions + context_lines > MAX_SHOWN_LINES {
+        return Err(Over {
+            additions: additions as u32,
+            deletions: deletions as u32,
+        });
+    }
+    drop(input);
+    drop(squeezed);
+    let old: Vec<&str> = before.split_inclusive('\n').collect();
+    let new: Vec<&str> = after.split_inclusive('\n').collect();
     // Group changes whose context would touch or overlap.
     let mut groups: Vec<(usize, usize)> = Vec::new();
     for (i, change) in changes.iter().enumerate() {
@@ -755,7 +822,7 @@ pub fn diff_text_with(
             check: String::new(),
         });
     }
-    hunks
+    Ok(hunks)
 }
 
 /// The header git writes for a hunk: a count of 1 is left out, and an empty side starts one line earlier.
@@ -896,5 +963,20 @@ mod tests {
         let hunks = diff_text("", "a\nb\n", DiffContext::Compact, false);
         assert_eq!((hunks[0].old_start, hunks[0].old_lines, hunks[0].new_lines), (1, 0, 2));
         assert_eq!(kinds(&hunks[0]), "++");
+    }
+
+    #[test]
+    fn a_diff_over_its_budget_is_only_counted() {
+        let after = "\n".repeat(50);
+        let over = diff_text_within("x\n", &after, DiffContext::Compact, false, false, 10);
+        assert_eq!(
+            over.err(),
+            Some(Over {
+                additions: 50,
+                deletions: 1
+            })
+        );
+        let within = diff_text_within("x\n", &after, DiffContext::Compact, false, false, 51).unwrap();
+        assert_eq!(within[0].lines.len(), 51);
     }
 }

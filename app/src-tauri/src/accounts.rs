@@ -6,7 +6,7 @@
 //! reading the Keychain, which macOS may ask about.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -44,8 +44,9 @@ pub struct Account {
 #[derive(Default)]
 pub struct Accounts {
     token: Arc<Mutex<Option<String>>>,
-    /// Set by Cancel while waiting for the browser.
-    stop: AtomicBool,
+    /// Counts the times signing in was cancelled. A sign-in remembers the count it started with
+    /// and keeps nothing once it changed, whatever it was waiting for then.
+    cancels: AtomicU64,
 }
 
 fn accounts_file(app: &AppHandle) -> CommandResult<PathBuf> {
@@ -73,7 +74,13 @@ fn save(app: &AppHandle, account: Option<&Account>) -> CommandResult<()> {
         );
     }
     let text = serde_json::to_string_pretty(&all).map_err(|err| err.to_string())?;
-    std::fs::write(file, text + "\n").map_err(|err| err.to_string())
+    // Written whole or not at all: a half-written file would forget who is signed in.
+    let part = file.with_extension("json.part");
+    std::fs::write(&part, text + "\n").map_err(|err| err.to_string())?;
+    std::fs::rename(&part, &file).map_err(|err| {
+        let _ = std::fs::remove_file(&part);
+        err.to_string()
+    })
 }
 
 fn entry(login: &str) -> CommandResult<keyring::Entry> {
@@ -123,16 +130,47 @@ impl Accounts {
         Ok(Client::default().with_token(token))
     }
 
-    fn keep(&self, app: &AppHandle, me: github::Me, token: String, method: &str) -> CommandResult<Account> {
-        // Signing in as someone else replaces the old account.
-        if let Some(old) = saved(app).filter(|old| old.login != me.user.login)
-            && let Ok(entry) = entry(&old.login)
-        {
-            let _ = entry.delete_credential();
+    /// The count of cancels now, for a sign-in to start with.
+    fn attempt(&self) -> u64 {
+        self.cancels.load(Ordering::SeqCst)
+    }
+
+    /// Stop every sign-in under way: none of them keeps a token any more.
+    fn cancel(&self) {
+        self.cancels.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn cancelled(&self, attempt: u64) -> bool {
+        self.attempt() != attempt
+    }
+
+    /// Keep the token of the sign-in that started as `attempt`, unless it was cancelled since.
+    fn keep(
+        &self,
+        app: &AppHandle,
+        attempt: u64,
+        me: github::Me,
+        token: String,
+        method: &str,
+    ) -> CommandResult<Account> {
+        if self.cancelled(attempt) {
+            return Err("stopped".into());
         }
-        entry(&me.user.login)?
-            .set_password(&token)
-            .map_err(|err| keychain_error(&err))?;
+        let old = saved(app);
+        // Signing in again as the same account overwrites its token in place; anything else is a
+        // new item, taken out again when the sign-in goes no further.
+        let same = old.as_ref().is_some_and(|old| old.login == me.user.login);
+        let replaced = old.filter(|_| !same);
+        let new_entry = entry(&me.user.login)?;
+        // The new token goes in first: a store that refuses it leaves the old account as it was.
+        new_entry.set_password(&token).map_err(|err| keychain_error(&err))?;
+        // The Keychain may have asked first: a Cancel meanwhile still wins.
+        if self.cancelled(attempt) {
+            if !same {
+                let _ = new_entry.delete_credential();
+            }
+            return Err("stopped".into());
+        }
         let account = Account {
             login: me.user.login,
             name: me.user.name.filter(|name| !name.is_empty()),
@@ -141,7 +179,19 @@ impl Accounts {
             method: method.to_owned(),
             scopes: me.scopes,
         };
-        save(app, Some(&account))?;
+        if let Err(err) = save(app, Some(&account)) {
+            // Back to the old account: its token is still there.
+            if !same {
+                let _ = new_entry.delete_credential();
+            }
+            return Err(err);
+        }
+        // Signing in as someone else replaces the old account; its token goes last.
+        if let Some(old) = replaced
+            && let Ok(entry) = entry(&old.login)
+        {
+            let _ = entry.delete_credential();
+        }
         *self.token.lock().expect("token lock") = Some(token);
         Ok(account)
     }
@@ -219,7 +269,7 @@ pub async fn github_device_wait(
     expires_in: u64,
 ) -> CommandResult<Account> {
     let id = client_id(&app).ok_or("Signing in with the browser needs Oxbow’s GitHub app")?;
-    accounts.stop.store(false, Ordering::Relaxed);
+    let attempt = accounts.attempt();
     let waiter = app.clone();
     let token = tauri::async_runtime::spawn_blocking(move || -> CommandResult<String> {
         let accounts = waiter.state::<Accounts>();
@@ -230,7 +280,7 @@ pub async fn github_device_wait(
             // Sleep in short steps so Cancel answers at once.
             let wake = Instant::now() + every;
             while Instant::now() < wake {
-                if accounts.stop.load(Ordering::Relaxed) {
+                if accounts.cancelled(attempt) {
                     return Err("stopped".into());
                 }
                 std::thread::sleep(Duration::from_millis(100));
@@ -249,12 +299,13 @@ pub async fn github_device_wait(
     })
     .await
     .map_err(|err| err.to_string())??;
-    finish(&app, &accounts, token, "browser").await
+    finish(&app, &accounts, attempt, token, "browser").await
 }
 
+/// Cancel signing in, whatever it is waiting for: the code, the browser or GitHub's answer.
 #[tauri::command]
 pub fn github_device_stop(accounts: State<'_, Accounts>) {
-    accounts.stop.store(true, Ordering::Relaxed);
+    accounts.cancel();
 }
 
 /// Sign in with a personal access token.
@@ -264,20 +315,27 @@ pub async fn github_sign_in_token(
     accounts: State<'_, Accounts>,
     token: String,
 ) -> CommandResult<Account> {
+    let attempt = accounts.attempt();
     let token = token.trim().to_owned();
     if token.is_empty() {
         return Err("Paste a token first".into());
     }
-    finish(&app, &accounts, token, "token").await
+    finish(&app, &accounts, attempt, token, "token").await
 }
 
-async fn finish(app: &AppHandle, accounts: &Accounts, token: String, method: &str) -> CommandResult<Account> {
+async fn finish(
+    app: &AppHandle,
+    accounts: &Accounts,
+    attempt: u64,
+    token: String,
+    method: &str,
+) -> CommandResult<Account> {
     let checked = token.clone();
     let me = tauri::async_runtime::spawn_blocking(move || Client::default().with_token(checked).me())
         .await
         .map_err(|err| err.to_string())?
         .map_err(|err| err.to_string())?;
-    let account = accounts.keep(app, me, token, method)?;
+    let account = accounts.keep(app, attempt, me, token, method)?;
     let _ = app.emit("account-changed", ());
     Ok(account)
 }
@@ -330,7 +388,9 @@ pub async fn github_owners(app: AppHandle, accounts: State<'_, Accounts>) -> Com
 }
 
 /// Make the repository on GitHub, add it as origin and push the branch. Each step goes to the
-/// window that asked as an `action-event`, like any action; Stop stops the push.
+/// window that asked as an `action-event`, like any action; Stop stops the push. With `create`
+/// false the repository is on GitHub already (an earlier Publish made it, then stopped): only
+/// origin and the push are left.
 #[tauri::command]
 pub async fn github_publish(
     app: AppHandle,
@@ -338,6 +398,7 @@ pub async fn github_publish(
     accounts: State<'_, Accounts>,
     path: String,
     publish: Publish,
+    create: Option<bool>,
 ) -> CommandResult<String> {
     if !github::valid_repository_name(&publish.name) {
         return Err("Use letters, digits, - _ and . for the name".into());
@@ -357,15 +418,20 @@ pub async fn github_publish(
                 progress: false,
             }))
         };
-        emit(ActionEvent::Command {
-            display: client.create_repository_request(&publish).display(),
-        });
-        let made = client.create_repository(&publish).map_err(|err| err.to_string())?;
-        say(format!(
-            "Created {} ({})",
-            made.html_url,
-            if made.private { "private" } else { "public" }
-        ));
+        let html_url = if create == Some(false) {
+            format!("https://github.com/{}/{}", publish.owner, publish.name)
+        } else {
+            emit(ActionEvent::Command {
+                display: client.create_repository_request(&publish).display(),
+            });
+            let made = client.create_repository(&publish).map_err(|err| err.to_string())?;
+            say(format!(
+                "Created {} ({})",
+                made.html_url,
+                if made.private { "private" } else { "public" }
+            ));
+            made.html_url
+        };
         let dir = PathBuf::from(&path);
         for command in publish.commands() {
             emit(ActionEvent::Command {
@@ -377,7 +443,7 @@ pub async fn github_publish(
                     other => other.to_string(),
                 })?;
         }
-        Ok(made.html_url)
+        Ok(html_url)
     })
     .await
     .map_err(|err| err.to_string())?

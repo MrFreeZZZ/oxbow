@@ -161,7 +161,7 @@ export function lfsTrackRequest(path: string | null, size: number | null, state?
     invalid: problem,
     status: `Tracking ${pattern}…`,
     done: `Git LFS now tracks ${pattern}.`,
-    action: { kind: "lfsTrack", pattern, paths: stagePaths },
+    action: { kind: "lfsTrack", pattern, paths: stagePaths, stage: s.stage },
   };
 }
 
