@@ -44,6 +44,7 @@ import type {
   PullCall,
   PullRequest,
   PullSummary,
+  LfsStatus,
 } from "./types";
 import type { PullSetup } from "./remote";
 
@@ -116,6 +117,12 @@ export const api = {
   pullSetup: () => invoke<PullSetup>("pull_setup"),
   openInEditor: (path: string, line: number | null) => invoke<void>("open_in_editor", { path, line }),
   revealFile: (path: string) => invoke<void>("reveal_file", { path }),
+  /** Quick Look on macOS, the default app elsewhere. */
+  quickLook: (path: string) => invoke<void>("quick_look", { path }),
+  lfsStatus: () => invoke<LfsStatus>("lfs_status"),
+  /** e.g. "3 files would be pruned (1.4 GB)"; null when nothing would be. */
+  lfsPrunePreview: () => invoke<string | null>("lfs_prune_preview"),
+  openLfsDownload: () => invoke<void>("open_lfs_download"),
   openInTerminal: () => invoke<void>("open_in_terminal"),
   monospaceFonts: () => invoke<string[]>("monospace_fonts"),
   refreshRemoteTags: () => invoke<boolean>("refresh_remote_tags"),

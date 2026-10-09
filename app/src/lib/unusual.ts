@@ -5,6 +5,9 @@
 import { prefs } from "./prefs.svelte";
 import type { FileChange, ModeChange } from "./types";
 
+/** Files this big get a warning and the way into Git LFS: GitHub warns at 50 MB and refuses 100 MB. */
+export const BIG_FILE = 50 * 1024 * 1024;
+
 const IMAGE_TYPES: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",
@@ -59,8 +62,15 @@ export function modeWord(mode: ModeChange): "executable" | "notExecutable" | "li
 export const maxLines = () => prefs.get("oxbow.diff.maxLines");
 
 /** The badge and the short note a file list shows for an unusual change, or null for plain text. */
-export function fileBadge(file: FileChange): { badge: string; note: string; title: string } | null {
+export function fileBadge(file: FileChange): { badge: string; note: string; title: string; warn?: boolean } | null {
   const sizes = file.oldSize !== undefined && file.newSize !== undefined;
+  if (file.lfs) {
+    const size = file.newSize ?? file.oldSize;
+    return { badge: "LFS", note: size !== undefined ? bytes(size) : "", title: "Kept in Git LFS: git stores a small pointer" };
+  }
+  if ((file.newSize ?? 0) >= BIG_FILE) {
+    return { badge: file.binary ? "Binary" : "Large", note: bytes(file.newSize!), title: "Too big for a git repository: GitHub refuses files over 100 MB", warn: true };
+  }
   if (file.binary && imageType(file.path)) {
     const note = sizes ? `${bytes(file.oldSize!)} → ${bytes(file.newSize!)}` : bytes(file.newSize ?? file.oldSize ?? 0);
     return { badge: "Image", note, title: "A picture: compare the two versions in its diff" };

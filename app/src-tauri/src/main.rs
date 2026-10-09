@@ -945,6 +945,33 @@ async fn search(
     blocking(move || repo.search(&query)).await
 }
 
+/// Which files the repository keeps in Git LFS, and whether git-lfs is installed.
+#[tauri::command]
+async fn lfs_status(session: State<'_, Session>) -> CommandResult<oxbow_core::LfsStatus> {
+    let repo = current(&session)?;
+    blocking(move || repo.lfs_status()).await
+}
+
+/// What Free Up Space would delete, e.g. `3 files would be pruned (1.4 GB)`.
+#[tauri::command]
+async fn lfs_prune_preview(session: State<'_, Session>) -> CommandResult<Option<String>> {
+    let repo = current(&session)?;
+    blocking(move || repo.lfs_prune_preview()).await
+}
+
+/// The Git LFS download page, for installing it without Homebrew.
+#[tauri::command]
+fn open_lfs_download() -> CommandResult<()> {
+    open_in::open_url("https://git-lfs.com")
+}
+
+/// Preview a file of the working copy: Quick Look on macOS, the default app elsewhere.
+#[tauri::command]
+fn quick_look(session: State<'_, Session>, path: String) -> CommandResult<()> {
+    let repo = current(&session)?;
+    open_in::quick_look(&repo.workdir().join(Path::new(&path)))
+}
+
 /// Ask the default remote which tags it has, so tags it lacks show as local. True when that
 /// changed. Without a remote there is nothing to ask.
 #[tauri::command]
@@ -1157,6 +1184,8 @@ fn main() {
             }
         })
         .setup(|app| {
+            // Before anything runs git: it must find git-lfs where Homebrew put it.
+            oxbow_core::lfs::extend_path();
             let handle = app.handle();
             apply_settings(handle, &handle.state::<Session>(), &read_settings(handle));
             accounts::lend_to_git(handle);
@@ -1213,6 +1242,10 @@ fn main() {
             open_in_editor,
             open_in_terminal,
             reveal_file,
+            quick_look,
+            lfs_status,
+            lfs_prune_preview,
+            open_lfs_download,
             operation_log,
             monospace_fonts,
             refresh_remote_tags,

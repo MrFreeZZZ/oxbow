@@ -146,6 +146,42 @@ export interface FileChange {
   similarity?: number;
   /** Only the line endings changed. */
   eol?: EolChange;
+  /** Kept in Git LFS; the pointers before and after where they are known. */
+  lfs?: LfsChange;
+}
+
+/** A pointer file: the LFS object that stands in for a file. */
+export interface LfsPointer {
+  /** `sha256:4d7a…` */
+  oid: string;
+  size: number;
+}
+
+export interface LfsChange {
+  old: LfsPointer | null;
+  new: LfsPointer | null;
+}
+
+/** One `filter=lfs` rule of .gitattributes and the files it covers. */
+export interface LfsPattern {
+  pattern: string;
+  files: number;
+  /** Bytes: the real files', or what their pointers name. */
+  size: number;
+  /** Files that are still pointers here: not downloaded. */
+  missing: number;
+  /** Not in the last commit's .gitattributes yet. */
+  new: boolean;
+}
+
+export interface LfsStatus {
+  /** null when git-lfs is not installed. */
+  version: string | null;
+  /** `git lfs install` has turned on the filters that swap pointers and files. */
+  filters: boolean;
+  patterns: LfsPattern[];
+  /** Homebrew, to install git-lfs with. */
+  brew: string | null;
 }
 
 /** Old and new mode in git's octal form: 100644, 100755, 120000. */
@@ -360,7 +396,12 @@ export type Action =
   | { kind: "editStack"; plan: StackPlan }
   | { kind: "addToCommit"; commit: string }
   | { kind: "pushBranches"; remote: string; branches: { branch: string; upstream: string }[] }
-  | { kind: "pullRequestMerged"; remote: string; base: string; branch: string; deleteRemote: boolean; deleteLocal: boolean };
+  | { kind: "pullRequestMerged"; remote: string; base: string; branch: string; deleteRemote: boolean; deleteLocal: boolean }
+  | { kind: "lfsTrack"; pattern: string; paths: string[] }
+  | { kind: "lfsUntrack"; pattern: string }
+  | { kind: "lfsPull"; include: string | null }
+  | { kind: "lfsPrune" }
+  | { kind: "lfsInstall"; brew: string | null; pull: boolean };
 
 export type ResetMode = "soft" | "mixed" | "hard";
 

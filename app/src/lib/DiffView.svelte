@@ -23,6 +23,8 @@
   import { mac } from "./keys";
   import ImageDiff from "./ImageDiff.svelte";
   import UnusualCard from "./UnusualCard.svelte";
+  import LfsCard from "./LfsCard.svelte";
+  import { BIG_FILE } from "./lfs.svelte";
   import { bytes, imageType, isSvg } from "./unusual";
 
   let {
@@ -41,6 +43,7 @@
     foldable = false,
     loadFull,
     command,
+    working = false,
   }: {
     diffs: FileDiff[];
     color: number;
@@ -67,6 +70,8 @@
     loadFull?: (diff: FileDiff) => Promise<FileDiff>;
     /** The `git diff` that shows a file's change, for the binary card. */
     command?: (diff: FileDiff) => string | null;
+    /** Uncommitted changes: a big file offers Git LFS, an LFS file Stop Tracking. */
+    working?: boolean;
   } = $props();
 
   /** Diffs loaded in full with Show Diff Anyway, by path. */
@@ -93,8 +98,11 @@
   }
 
   /** What stands in for the code: a picture, or a card about a change a line diff can't show. */
-  function special(diff: FileDiff): "image" | "binary" | "limited" | "tooLarge" | "mode" | "eol" | null {
+  function special(diff: FileDiff): "lfs" | "big" | "image" | "binary" | "limited" | "tooLarge" | "mode" | "eol" | null {
     const f = diff.file;
+    // What git diffs for an LFS file is its pointer, not the picture or the video.
+    if (f.lfs) return "lfs";
+    if (working && (f.newSize ?? 0) >= BIG_FILE && f.status !== "deleted") return "big";
     if (f.binary && imageType(f.path) && (diff.old || diff.new)) return "image";
     if (isSvg(f.path) && !showCode[f.path] && (diff.old || diff.new)) return "image";
     if (f.binary) return "binary";
@@ -229,7 +237,10 @@
           <span class="status">{statusLabel[diff.file.status]}</span>
           <span class="spacer"></span>
         {/if}
-        {#if diff.file.binary}
+        {#if diff.file.lfs}
+          {@const f = diff.file}
+          <span class="mono size" title="Kept in Git LFS">LFS · {f.oldSize !== undefined && f.newSize !== undefined && f.oldSize !== f.newSize ? `${bytes(f.oldSize)} → ${bytes(f.newSize)}` : bytes(f.newSize ?? f.oldSize ?? 0)}</span>
+        {:else if diff.file.binary}
           {@const f = diff.file}
           <span class="mono size">{f.oldSize !== undefined && f.newSize !== undefined ? `${bytes(f.oldSize)} → ${bytes(f.newSize)}` : bytes(f.newSize ?? f.oldSize ?? 0)}</span>
         {:else if diff.file.mode && diff.file.additions + diff.file.deletions === 0}
@@ -304,6 +315,8 @@
     {/if}
     {#if isShut}
       <!-- Folded: the header alone. -->
+    {:else if kind === "lfs" || kind === "big"}
+      <LfsCard {diff} {kind} {working} />
     {:else if kind === "image"}
       <ImageDiff {diff} />
     {:else if kind}

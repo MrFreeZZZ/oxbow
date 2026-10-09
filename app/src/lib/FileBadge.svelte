@@ -13,7 +13,7 @@
 
 {#if badge}
   <span class="badge" title={badge.title}>{badge.badge}</span>
-  <span class="note">{badge.note}</span>
+  <span class="note" class:warn={badge.warn}>{badge.note}</span>
 {:else}
   {#if renamed}<span class="badge" title={file.oldPath ? `From ${file.oldPath}` : undefined}>{file.status === "copied" ? "Copied" : "Renamed"}</span>{/if}
   <span class="mono add">+{file.additions}</span>
@@ -39,6 +39,9 @@
     color: var(--text2);
     white-space: nowrap;
     flex-shrink: 0;
+  }
+  .note.warn {
+    color: var(--orange);
   }
   .add {
     color: var(--green);

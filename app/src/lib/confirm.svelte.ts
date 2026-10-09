@@ -39,7 +39,8 @@ export type Icon =
   | "box"
   | "tag"
   | "ignore"
-  | "lines";
+  | "lines"
+  | "lfs";
 
 export interface Request {
   /** A question, e.g. "Discard changes in 2 files?" */
