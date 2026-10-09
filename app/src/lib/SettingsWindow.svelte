@@ -10,6 +10,8 @@
   import { api } from "./api";
   import ConfirmSheet from "./ConfirmSheet.svelte";
   import { confirm } from "./confirm.svelte";
+  import BranchPreview from "./BranchPreview.svelte";
+  import { BRANCH_PALETTES, branchPaletteById } from "./branchPalettes";
   import DiffView from "./DiffView.svelte";
   import GitHubSignIn from "./GitHubSignIn.svelte";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
@@ -358,6 +360,7 @@
         const theme = themeById(prefs.get("oxbow.theme"));
         return [
           {
+            title: "Code",
             rows: [
               prefRow("oxbow.theme.variant", "Variant", "seg", {
                 sub: () => (theme.light && theme.dark ? "Auto follows Appearance in General" : `${theme.name} has only a ${theme.dark ? "dark" : "light"} version, so it is used in both`),
@@ -367,6 +370,16 @@
                   { value: "light", label: "Light" },
                   { value: "dark", label: "Dark" },
                 ],
+              }),
+            ],
+          },
+          {
+            title: "Branches & graph",
+            foot: "Light and dark follow Appearance in General. Branch names pick their color; the production branch is set per repository in This Repository.",
+            rows: [
+              prefRow("oxbow.branchPalette", "Branch palette", "seg", {
+                sub: () => branchPaletteById(prefs.get("oxbow.branchPalette")).note,
+                options: () => BRANCH_PALETTES.map((palette) => ({ value: palette.id, label: palette.name })),
               }),
             ],
           },
@@ -635,7 +648,37 @@
       groups: () => {
         if (!repo) return [];
         const r = repo;
+        const production = r.production;
+        const short = (ref: string) => ref.replace(/^refs\/(heads|remotes)\//, "");
         return [
+          {
+            title: "Graph",
+            rows: [
+              {
+                id: "git:local:oxbow.productionBranch",
+                label: "Production branch",
+                sub: () =>
+                  production.chosen && !production.found
+                    ? `${short(production.chosen)} is not here anymore, so no branch is drawn as production. Choose Auto or another branch.`
+                    : production.chosen
+                      ? "Drawn in the production color and on the thick line"
+                      : production.auto
+                        ? `Auto picks ${short(production.auto)}: main or master, local first`
+                        : "Auto finds no main or master, so no branch is drawn as production",
+                control: {
+                  type: "popup",
+                  options: () => [
+                    { value: "", label: production.auto ? `Auto (${short(production.auto)})` : "Auto (main/master)" },
+                    ...(production.chosen && !production.found ? [{ value: production.chosen, label: `${short(production.chosen)} (not found)` }] : []),
+                    ...production.branches.map((ref) => ({ value: ref, label: short(ref) })),
+                  ],
+                  get: () => production.chosen ?? "",
+                  set: (value) => writeGit("local", [["oxbow.productionBranch", String(value) || null]]),
+                },
+                setting: gitSetting("local", () => [["oxbow.productionBranch", production.chosen]], ["oxbow.productionBranch"]),
+              },
+            ],
+          },
           {
             title: "Identity",
             rows: [
@@ -1162,18 +1205,16 @@
       <div class="scroll">
         {#if problem}<p class="problem" role="alert">{problem}</p>{/if}
 
-        {#if !needle && current.id === "theme"}
-          <section>
-            <h2>Preview</h2>
-            <div class="theme-preview">
-              <DiffView diffs={[sample]} color={0} whole={false} onToggleWhole={() => {}} openable={false} />
-            </div>
-          </section>
-        {/if}
-
         {#each shown as group (group.key)}
           <section>
             {#if group.title}<h2>{group.title}</h2>{/if}
+            {#if !needle && group.key === "theme:0"}
+              <div class="theme-preview">
+                <DiffView diffs={[sample]} color={0} whole={false} onToggleWhole={() => {}} openable={false} />
+              </div>
+            {:else if !needle && group.key === "theme:1"}
+              <BranchPreview colors={prefs.get("oxbow.branchPalette") === "oxbow" ? 9 : 7} />
+            {/if}
             <div class="panel">
               {#each group.rows as row (row.id)}
                 {@const off = row.off?.()}
@@ -1263,37 +1304,37 @@
             </div>
             {#if text(group.foot)}<p class="foot">{text(group.foot)}</p>{/if}
           </section>
+          {#if !needle && group.key === "theme:0"}
+            <section>
+              <div class="title-line">
+                <h2>Popular themes</h2>
+                <span class="sub">by VS Code Marketplace installs</span>
+              </div>
+              <div class="cards" role="radiogroup" aria-label="Theme">
+                {#each THEMES as theme (theme.id)}
+                  {@const { palette } = paletteOf(theme, prefs.get("oxbow.theme.variant"), look)}
+                  {@const on = prefs.get("oxbow.theme") === theme.id}
+                  <button class="card" role="radio" aria-checked={on} onclick={() => prefs.set("oxbow.theme", theme.id)} title={theme.name}>
+                    <span class="swatch" class:on style:background={palette.bg}>
+                      {#each bars(palette) as bar, i (i)}
+                        <span style:left="{bar.x}px" style:top="{bar.y}px" style:width="{bar.w}px" style:background={bar.c} style:opacity={bar.soft ? 0.25 : 1}></span>
+                      {/each}
+                    </span>
+                    <span class="card-name">
+                      {#if theme.rank}<span class="rank">{theme.rank}</span>{/if}
+                      <span class:strong={on}>{theme.name}</span>
+                    </span>
+                    <span class="card-sub">{theme.installs ? `${theme.installs} · ` : "Default · "}{theme.light && theme.dark ? "Light, Dark" : theme.dark ? "Dark" : "Light"}</span>
+                  </button>
+                {/each}
+              </div>
+              <p class="foot">Themes color code: diffs, conflicts and stashes. The window keeps its own look.</p>
+            </section>
+          {/if}
         {:else}
           {#if needle}<p class="empty">No settings match “{query.trim()}”.</p>{/if}
         {/each}
 
-        {#if !needle && current.id === "theme"}
-          <section>
-            <div class="title-line">
-              <h2>Popular themes</h2>
-              <span class="sub">by VS Code Marketplace installs</span>
-            </div>
-            <div class="cards" role="radiogroup" aria-label="Theme">
-              {#each THEMES as theme (theme.id)}
-                {@const { palette } = paletteOf(theme, prefs.get("oxbow.theme.variant"), look)}
-                {@const on = prefs.get("oxbow.theme") === theme.id}
-                <button class="card" role="radio" aria-checked={on} onclick={() => prefs.set("oxbow.theme", theme.id)} title={theme.name}>
-                  <span class="swatch" class:on style:background={palette.bg}>
-                    {#each bars(palette) as bar, i (i)}
-                      <span style:left="{bar.x}px" style:top="{bar.y}px" style:width="{bar.w}px" style:background={bar.c} style:opacity={bar.soft ? 0.25 : 1}></span>
-                    {/each}
-                  </span>
-                  <span class="card-name">
-                    {#if theme.rank}<span class="rank">{theme.rank}</span>{/if}
-                    <span class:strong={on}>{theme.name}</span>
-                  </span>
-                  <span class="card-sub">{theme.installs ? `${theme.installs} · ` : "Default · "}{theme.light && theme.dark ? "Light, Dark" : theme.dark ? "Dark" : "Light"}</span>
-                </button>
-              {/each}
-            </div>
-            <p class="foot">Themes color code: diffs, conflicts and stashes. The window keeps its own look.</p>
-          </section>
-        {/if}
 
         {#if !needle && current.id === "diff"}
           <section>

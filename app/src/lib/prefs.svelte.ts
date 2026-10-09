@@ -4,6 +4,7 @@
 
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
+import { BRANCH_PALETTES, branchPaletteById, branchVariables, type BranchPaletteId } from "./branchPalettes";
 import { paletteOf, THEMES, themeById, themeVariables } from "./themes";
 
 export const defaults = {
@@ -49,6 +50,8 @@ export const defaults = {
   "oxbow.github.clientId": "",
   "oxbow.theme": "oxbow",
   "oxbow.theme.variant": "auto" as "auto" | "light" | "dark",
+  /** Colors of branches everywhere: graph, sidebar, capsules, stacks. */
+  "oxbow.branchPalette": "mineral" as BranchPaletteId,
 };
 
 export type PrefKey = keyof typeof defaults;
@@ -74,6 +77,7 @@ export const rules: Partial<Record<PrefKey, Rule>> = {
   "oxbow.commit.subjectGuide": { min: 0, max: 500, whole: true },
   "oxbow.theme": { oneOf: THEMES.map((theme) => theme.id) },
   "oxbow.theme.variant": { oneOf: ["auto", "light", "dark"] },
+  "oxbow.branchPalette": { oneOf: BRANCH_PALETTES.map((palette) => palette.id) },
 };
 
 /** Keys Oxbow keeps in settings.json by itself, e.g. the width of a panel, with their type. */
@@ -195,6 +199,15 @@ export function followLook() {
       const theme = themeById(prefs.get("oxbow.theme"));
       const { palette, dark } = paletteOf(theme, prefs.get("oxbow.theme.variant"), look);
       for (const [name, value] of Object.entries(themeVariables(theme, palette, dark, look))) {
+        if (value) root.style.setProperty(name, value);
+        else root.style.removeProperty(name);
+      }
+    });
+    // Branch colors, from Settings › Themes › Branches & graph. They follow the window's look.
+    $effect(() => {
+      const appearance = prefs.get("oxbow.appearance");
+      const look = appearance === "system" ? (system ? "dark" : "light") : appearance;
+      for (const [name, value] of Object.entries(branchVariables(branchPaletteById(prefs.get("oxbow.branchPalette")), look))) {
         if (value) root.style.setProperty(name, value);
         else root.style.removeProperty(name);
       }

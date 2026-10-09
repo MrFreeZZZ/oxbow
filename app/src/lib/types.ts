@@ -626,6 +626,9 @@ export interface RepoSettings {
   local: Record<string, string>;
   remotes: RemoteInfo[];
   storage: { bytes: number; objects: number; loose: number; lfsPatterns: string[] } | null;
+  /** Production branch: the chosen full ref (`null` is Auto), whether it exists, what Auto
+   *  picks, and the local and remote branches to choose from. */
+  production: { chosen: string | null; found: boolean; auto: string | null; branches: string[] };
 }
 
 export type SearchMode = "message" | "code" | "author" | "file";

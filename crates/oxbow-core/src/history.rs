@@ -181,7 +181,8 @@ impl Repo {
         let row_of: HashMap<ObjectId, usize> = nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
 
         // The trunk: first-parent chain of the main branch.
-        let trunk_ref = pick_trunk(&refs, &head);
+        let production = self.production_setting();
+        let trunk_ref = pick_trunk(&refs, production.as_deref());
         let mut on_trunk = vec![false; nodes.len()];
         let mut trunk_tip_row = None;
         if let Some(tip) = trunk_ref.and_then(|r| ObjectId::from_hex(r.target.as_bytes()).ok()) {
@@ -290,6 +291,7 @@ impl Repo {
                     .flatten(),
                 unpushed: unpushed.contains(&node.id) || stash_ids.contains(&node.id),
                 side: stash_ids.contains(&node.id),
+                id: node.id.to_string(),
                 color: if stash_ids.contains(&node.id) {
                     Some(graph::STASH_COLOR)
                 } else {
@@ -480,14 +482,50 @@ fn topo_order(nodes: Vec<Node>) -> Vec<Node> {
     order.into_iter().filter_map(|i| slots[i].take()).collect()
 }
 
-/// The branch drawn as the trunk: `main` or `master`, local first, then the remote's default.
-pub(crate) fn pick_trunk<'a>(refs: &'a [RefInfo], head: &HeadInfo) -> Option<&'a RefInfo> {
+/// Where Settings › This Repository › Production branch is kept, as a full ref name.
+pub const PRODUCTION_KEY: &str = "oxbow.productionBranch";
+
+/// Full ref name of a branch: `refs/heads/main`, `refs/remotes/origin/main`.
+pub fn full_ref(r: &RefInfo) -> Option<String> {
+    match r.kind {
+        RefKind::Local => Some(format!("refs/heads/{}", r.name)),
+        RefKind::Remote => Some(format!("refs/remotes/{}", r.name)),
+        _ => None,
+    }
+}
+
+/// The production branch, drawn as the trunk: the branch chosen in Settings (a full ref), or with
+/// none chosen `main` or `master`, local first, then on a remote (`origin` before the others).
+/// A chosen branch that no longer exists gives none, as does a repository without `main` or
+/// `master`: the checked-out branch never stands in for it.
+pub fn pick_trunk<'a>(refs: &'a [RefInfo], chosen: Option<&str>) -> Option<&'a RefInfo> {
+    if let Some(chosen) = chosen {
+        return refs.iter().find(|r| full_ref(r).as_deref() == Some(chosen));
+    }
     let find = |kind: RefKind, name: &str| refs.iter().find(|r| r.kind == kind && r.name == name);
+    let mut remotes: Vec<&str> = refs.iter().filter_map(|r| r.remote.as_deref()).collect();
+    remotes.sort_by_key(|&r| (r != "origin", r));
+    remotes.dedup();
     find(RefKind::Local, "main")
         .or_else(|| find(RefKind::Local, "master"))
-        .or_else(|| find(RefKind::Remote, "origin/main"))
-        .or_else(|| find(RefKind::Remote, "origin/master"))
-        .or_else(|| head.branch.as_deref().and_then(|b| find(RefKind::Local, b)))
+        .or_else(|| {
+            remotes.iter().find_map(|remote| {
+                find(RefKind::Remote, &format!("{remote}/main"))
+                    .or_else(|| find(RefKind::Remote, &format!("{remote}/master")))
+            })
+        })
+}
+
+impl Repo {
+    /// The production branch chosen in Settings, as a full ref name; `None` is Auto.
+    pub fn production_setting(&self) -> Option<String> {
+        let repo = self.local();
+        let config = repo.config_snapshot();
+        config
+            .string(PRODUCTION_KEY)
+            .map(|value| value.to_str_lossy().trim().to_owned())
+            .filter(|value| !value.is_empty())
+    }
 }
 
 /// Commits reachable from local branches or `HEAD` but from no remote-tracking branch.
@@ -563,6 +601,51 @@ fn merged_branch(summary: &str, remotes: &[String]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+
+    fn branch(name: &str, kind: RefKind) -> RefInfo {
+        RefInfo {
+            name: name.to_owned(),
+            kind,
+            target: String::new(),
+            remote: (kind == RefKind::Remote).then(|| name.split('/').next().unwrap_or_default().to_owned()),
+            tracking: None,
+        }
+    }
+
+    #[test]
+    fn auto_production_prefers_local_then_origin_then_other_remotes() {
+        let refs = [
+            branch("upstream/main", RefKind::Remote),
+            branch("origin/master", RefKind::Remote),
+            branch("feature", RefKind::Local),
+        ];
+        assert_eq!(pick_trunk(&refs, None).map(|r| r.name.as_str()), Some("origin/master"));
+        let refs = [
+            branch("upstream/main", RefKind::Remote),
+            branch("feature", RefKind::Local),
+        ];
+        assert_eq!(pick_trunk(&refs, None).map(|r| r.name.as_str()), Some("upstream/main"));
+        let refs = [branch("master", RefKind::Local), branch("origin/main", RefKind::Remote)];
+        assert_eq!(pick_trunk(&refs, None).map(|r| r.name.as_str()), Some("master"));
+        let refs = [branch("feature", RefKind::Local)];
+        assert!(pick_trunk(&refs, None).is_none());
+    }
+
+    #[test]
+    fn a_chosen_production_branch_is_matched_by_its_full_ref() {
+        let refs = [
+            branch("main", RefKind::Local),
+            branch("origin/develop", RefKind::Remote),
+            branch("develop", RefKind::Local),
+        ];
+        let pick = |chosen| pick_trunk(&refs, Some(chosen)).map(|r| (r.name.as_str(), r.kind));
+        assert_eq!(
+            pick("refs/remotes/origin/develop"),
+            Some(("origin/develop", RefKind::Remote))
+        );
+        assert_eq!(pick("refs/heads/develop"), Some(("develop", RefKind::Local)));
+        assert_eq!(pick("refs/heads/gone"), None);
+    }
     use super::*;
 
     #[test]

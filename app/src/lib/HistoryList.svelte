@@ -130,6 +130,20 @@
   const visible = $derived(rows.slice(first, last).map((row, k) => ({ row, index: first + k })));
 
   const x = (column: number) => PAD_LEFT + FIRST_LANE + LANE * column;
+
+  // Lines: 3px for the production branch, 2px for the others. Lanes sit on whole pixels, so a
+  // 2px line covers two pixels exactly; a 3px one would smear over four on a 1x screen and moves
+  // half a pixel there. On Retina 3px is six device pixels and needs no nudge.
+  let dpr = $state(window.devicePixelRatio || 1);
+  $effect(() => {
+    const media = matchMedia(`(resolution: ${dpr}dppx)`);
+    const changed = () => (dpr = window.devicePixelRatio || 1);
+    media.addEventListener("change", changed);
+    return () => media.removeEventListener("change", changed);
+  });
+  const nudge = $derived(Number.isInteger(dpr) && dpr % 2 === 1 ? 0.5 : 0);
+  /** The production branch's name, local or on a remote. */
+  const isProduction = (name: string) => !!history.trunk && (name === history.trunk || name.endsWith(`/${history.trunk}`));
   const y = (index: number) => PAD_TOP + ROW / 2 + ROW * index;
 
   /** Straight line, or an S-curve over one row when the column changes. */
@@ -293,9 +307,9 @@
               {:else if label.kind === "head"}
                 <span class="pill head" style:color={plate(label.color)} style:border-color="color-mix(in srgb, {lane(label.color)} 55%, transparent)">HEAD</span>
               {:else if label.kind === "remote"}
-                <span class="pill" style:color={plate(label.color)} style:border-color="color-mix(in srgb, {lane(label.color)} 40%, transparent)">{label.name}</span>
+                <span class="pill" class:production={label.color === 0 && isProduction(label.name)} style:color={plate(label.color)} style:border-color="color-mix(in srgb, {lane(label.color)} 40%, transparent)">{label.name}</span>
               {:else}
-                <span class="pill" class:head={label.head} style:color={plate(label.color)} style:background={tint(label.color, "label")}>{label.name}</span>
+                <span class="pill" class:head={label.head} class:production={label.color === 0 && isProduction(label.name)} style:color={plate(label.color)} style:background={tint(label.color, "label")}>{label.name}</span>
               {/if}
             {/each}
             {#if row.worktree}
@@ -338,7 +352,8 @@
             <path
               d={segmentPath(index, seg.from, seg.to)}
               stroke={lane(seg.color)}
-              stroke-width={seg.thick ? 4 : 2}
+              stroke-width={seg.thick ? 3 : 2}
+              transform={seg.thick && nudge ? `translate(${nudge} 0)` : undefined}
               opacity={seg.opacity}
               stroke-dasharray={seg.dashed ? "2 5" : undefined}
               stroke-linecap="round"
@@ -480,6 +495,9 @@
   }
   .pill.head {
     font-weight: 600;
+  }
+  .pill.production {
+    font-weight: 700;
   }
   .pill.tag {
     background: var(--tag-bg);

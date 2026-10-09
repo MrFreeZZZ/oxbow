@@ -53,6 +53,16 @@
   --plate-9: #6d3705;
   --plate-10: #5c6168;
   --plate-11: #4a4f57;
+  /* Author avatars: the original palette, apart from the branch palette chosen in Settings. */
+  --person-1: #487e79;
+  --person-2: #77bbc3;
+  --person-3: #4d90ac;
+  --person-4: #7fa0d0;
+  --person-5: #64619b;
+  --person-6: #9b8db5;
+  --person-7: #77546f;
+  --person-8: #cc986e;
+  --person-9: #846047;
   --tint-soft: 10%;
   --tint-label: 12%;
   --tint-bar: 16%;
@@ -170,6 +180,16 @@
   --plate-9: #efbf9f;
   --plate-10: #bcc1c8;
   --plate-11: #c7cbd1;
+  /* Author avatars, dark. */
+  --person-1: #5d938e;
+  --person-2: #8dd2da;
+  --person-3: #63a6c2;
+  --person-4: #94b6e7;
+  --person-5: #7875b1;
+  --person-6: #b1a2cb;
+  --person-7: #8c6884;
+  --person-8: #e3ae83;
+  --person-9: #99745b;
   --tint-soft: 19%;
   --tint-label: 18%;
   --tint-bar: 26%;

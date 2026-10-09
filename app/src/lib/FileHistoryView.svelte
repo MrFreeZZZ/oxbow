@@ -8,7 +8,7 @@
   import { nav } from "./nav.svelte";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { Blame, FileCommit, FileDiff, FileHistory, History, HistoryRow } from "./types";
-  import { initials, lane, personColor, relativeTime, shortId, splitPath, tint } from "./format";
+  import { initials, lane, person, relativeTime, shortId, splitPath, tint } from "./format";
   import { languageOf, paint } from "./syntax";
   import DiffView from "./DiffView.svelte";
 
@@ -338,7 +338,7 @@
       {#if pick}
         {@const color = colorOfCommit(pick.id)}
         <div class="head">
-          <span class="avatar" style:background={lane(personColor(pick.authorEmail))}>{initials(pick.authorName)}</span>
+          <span class="avatar" style:background={person(pick.authorEmail)}>{initials(pick.authorName)}</span>
           <span class="who">
             <span class="title">{pick.summary}</span>
             <span class="byline">{pick.authorName} · {relativeTime(pick.time)} · <button class="mono link" onclick={() => copy(pick.id)} title="Copy the SHA">{shortId(pick.id)}</button></span>
@@ -366,7 +366,7 @@
     {:else}
       {#if pick}
         <div class="head">
-          <span class="avatar" style:background={lane(personColor(pick.authorEmail))}>{initials(pick.authorName)}</span>
+          <span class="avatar" style:background={person(pick.authorEmail)}>{initials(pick.authorName)}</span>
           <span class="who">
             <span class="title">{pick.summary}</span>
             <span class="byline">{pick.authorName} · {relativeTime(pick.time)} · {shortId(pick.id)} · {linesHere} {linesHere === 1 ? "line" : "lines"} here</span>
@@ -400,7 +400,7 @@
             <div class="block" class:on class:dim style:background={on ? tint(color) : undefined}>
               <button class="gutter" onclick={() => select(c.id)} title="{c.summary}\n{c.authorName} · {shortId(c.id)}">
                 <span class="age" style:background={lane(color)} style:opacity={ages(c.time)}></span>
-                <span class="mini" style:background={lane(personColor(c.authorEmail))}>{initials(c.authorName).slice(0, 1)}</span>
+                <span class="mini" style:background={person(c.authorEmail)}>{initials(c.authorName).slice(0, 1)}</span>
                 <span class="msg">{c.summary}</span>
                 <span class="when">{relativeTime(c.time)}</span>
               </button>
