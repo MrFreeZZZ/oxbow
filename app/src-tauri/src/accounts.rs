@@ -157,18 +157,29 @@ impl Accounts {
             return Err("stopped".into());
         }
         let old = saved(app);
-        // Signing in again as the same account overwrites its token in place; anything else is a
-        // new item, taken out again when the sign-in goes no further.
+        // Signing in again as the same account overwrites its token in place, so the old token is
+        // kept aside to put back; anything else is a new item, taken out again when the sign-in
+        // goes no further.
         let same = old.as_ref().is_some_and(|old| old.login == me.user.login);
+        let previous = if same { self.token(app) } else { None };
         let replaced = old.filter(|_| !same);
         let new_entry = entry(&me.user.login)?;
+        // The store as it was before this sign-in. A same account whose old token can't be read
+        // keeps the new one: it is that account's, and nothing in memory says otherwise.
+        let undo = || match (same, &previous) {
+            (true, Some(previous)) => {
+                let _ = new_entry.set_password(previous);
+            }
+            (true, None) => {}
+            (false, _) => {
+                let _ = new_entry.delete_credential();
+            }
+        };
         // The new token goes in first: a store that refuses it leaves the old account as it was.
         new_entry.set_password(&token).map_err(|err| keychain_error(&err))?;
         // The Keychain may have asked first: a Cancel meanwhile still wins.
         if self.cancelled(attempt) {
-            if !same {
-                let _ = new_entry.delete_credential();
-            }
+            undo();
             return Err("stopped".into());
         }
         let account = Account {
@@ -180,10 +191,8 @@ impl Accounts {
             scopes: me.scopes,
         };
         if let Err(err) = save(app, Some(&account)) {
-            // Back to the old account: its token is still there.
-            if !same {
-                let _ = new_entry.delete_credential();
-            }
+            // Back to the old account, with its own token.
+            undo();
             return Err(err);
         }
         // Signing in as someone else replaces the old account; its token goes last.

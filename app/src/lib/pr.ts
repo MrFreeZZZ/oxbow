@@ -125,7 +125,7 @@ export async function mergeRequest(ctx: BranchContext, gh: GitHubRepo, pr: PullR
   const commands = [plan, ...cleanupPlans.filter((p): p is Plan => typeof p !== "string")].flatMap((p) => p.commands);
   const verb = method === "squash" ? `squashes ${plural(pr.commitCount, "commit")} of ` : method === "rebase" ? `replays ${plural(pr.commitCount, "commit")} of ` : "merges ";
   const body: Part[] = ["GitHub ", verb, chip(ctx, pr.head), " into ", chip(ctx, pr.base)];
-  body.push(method === "squash" ? " as one commit" : method === "merge" ? " with a merge commit" : "", ", then your ", chip(ctx, pr.base), " catches up here.");
+  body.push(method === "squash" ? " as one commit" : method === "merge" ? " with a merge commit" : "", ", then your ", chip(ctx, pr.base), " catches up here, unless it has commits of its own.");
   if (deleteBranch && pr.settings.deleteBranchOnMerge) body.push(" GitHub deletes its branch there itself.");
   if (deleteBranch && local && !deleteLocal) body.push(" The local branch stays: it has commits GitHub doesn’t.");
   for (const why of skipped) body.push(` The local branch stays: ${why.replace(/^(error|fatal): /, "")}.`);

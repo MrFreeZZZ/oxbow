@@ -580,9 +580,13 @@ impl Repo {
         if keep_empty {
             args.push("--empty=keep".to_owned());
         }
-        let onto_shown = plan.onto_name.clone().unwrap_or_else(|| short(&plan.onto));
+        // The checked commit itself, not its name: a branch can move between the preview and here.
+        let onto_shown = match &plan.onto_name {
+            Some(name) => format!("{name} ({})", short(&plan.onto)),
+            None => short(&plan.onto),
+        };
         if plan.onto != plan.base {
-            args.extend(["--onto".to_owned(), onto_shown.clone()]);
+            args.extend(["--onto".to_owned(), plan.onto.clone()]);
         }
         args.push(short(&plan.base));
         args.push(plan.top.clone());

@@ -1172,6 +1172,11 @@ impl Repo {
                 };
                 let mut last = String::new();
                 for command in self.plan(action)?.commands {
+                    if let Some((ancestor, of)) = &command.only_if_ancestor
+                        && !self.is_ancestor(ancestor, of)
+                    {
+                        continue;
+                    }
                     self.write_todo(&command)?;
                     let command = crate::ssh::interactive(command);
                     on_event(ActionEvent::Command {

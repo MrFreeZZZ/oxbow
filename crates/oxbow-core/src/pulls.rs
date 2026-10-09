@@ -7,6 +7,7 @@
 //! ready for review, and auto-merge.
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -181,21 +182,29 @@ impl Repo {
         ];
         let local = format!("refs/heads/{base}");
         let tracking = format!("refs/remotes/{remote}/{base}");
-        // A local base with commits of its own stays as it is: Pull sorts that out.
-        if self.has_ref(&local) && self.is_ancestor(&local, &tracking) {
-            if head.as_deref() == Some(base) {
-                plan.push(
-                    GitCommand::new(["merge".to_owned(), "--ff-only".to_owned(), format!("{remote}/{base}")])
-                        .comment(format!(
-                            "your checked-out {base} catches up; changes of yours in the way stop it, nothing is overwritten"
-                        )),
-                );
-            } else {
-                plan.push(
-                    GitCommand::new(["fetch".to_owned(), remote.to_owned(), format!("{base}:{base}")])
-                        .comment(format!("fast-forward your {base} to {remote}/{base}")),
-                );
-            }
+        // Whether base has commits of its own is decided after the fetch, by what it brought:
+        // a base that has them stays as it is, Pull sorts that out.
+        if !self.has_ref(&local) {
+            return Ok(plan);
+        }
+        if head.as_deref() == Some(base) {
+            plan.push(
+                GitCommand::new(["merge".to_owned(), "--ff-only".to_owned(), format!("{remote}/{base}")])
+                    .comment(format!(
+                        "your checked-out {base} catches up, unless it has commits of its own; changes of yours in the way stop it, nothing is overwritten"
+                    ))
+                    .only_if_ancestor(&local, &tracking),
+            );
+        } else if self.branch_in_use(base).ok().flatten().is_none() {
+            // fetch refuses a base checked out in another worktree itself; this only keeps the
+            // refusal from failing the whole step.
+            plan.push(
+                GitCommand::new(["fetch".to_owned(), remote.to_owned(), format!("{base}:{base}")])
+                    .comment(format!(
+                        "fast-forward your {base} to {remote}/{base}, unless it has commits of its own"
+                    ))
+                    .only_if_ancestor(&local, &tracking),
+            );
         }
         Ok(plan)
     }
@@ -206,6 +215,10 @@ impl Repo {
         let name = format!("refs/heads/{branch}");
         if !self.has_ref(&name) {
             return Ok(Vec::new());
+        }
+        // update-ref, unlike git branch -D, would pull the branch from under another worktree.
+        if let Some(place) = self.branch_in_use(branch)? {
+            return Err(Error::Git(format!("{branch} {place}")));
         }
         let mut plan = Vec::new();
         if self.head()?.branch.as_deref() == Some(branch) {
@@ -238,6 +251,55 @@ impl Repo {
             );
         }
         Ok(plan)
+    }
+
+    /// How `branch` is in use where deleting or moving it would break something, as git
+    /// branch -D sees it: checked out in another worktree, or being rebased or bisected in any.
+    fn branch_in_use(&self, branch: &str) -> Result<Option<String>> {
+        let out = self.run(&GitCommand::new([
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+            "--git-dir",
+        ]))?;
+        let mut lines = out.stdout.lines().map(|l| PathBuf::from(l.trim()));
+        let (Some(common), Some(here)) = (lines.next(), lines.next()) else {
+            return Ok(None);
+        };
+        let here = here.canonicalize().unwrap_or(here);
+        let mut dirs = vec![common.clone()];
+        if let Ok(entries) = std::fs::read_dir(common.join("worktrees")) {
+            dirs.extend(entries.flatten().map(|e| e.path()));
+        }
+        let full = format!("refs/heads/{branch}");
+        for dir in dirs {
+            let read = |name: &str| {
+                std::fs::read_to_string(dir.join(name))
+                    .map(|t| t.trim().to_owned())
+                    .ok()
+            };
+            let elsewhere = dir.canonicalize().unwrap_or_else(|_| dir.clone()) != here;
+            let doing = if elsewhere && read("HEAD").is_some_and(|h| h == format!("ref: {full}")) {
+                "is checked out"
+            } else if ["rebase-merge/head-name", "rebase-apply/head-name"]
+                .iter()
+                .any(|f| read(f).is_some_and(|h| h == full))
+            {
+                "is being rebased"
+            } else if read("BISECT_START").is_some_and(|b| b == branch || b == full) {
+                "is being bisected"
+            } else {
+                continue;
+            };
+            // A linked worktree's folder is named in its gitdir file; the main one holds .git.
+            let folder = match read("gitdir") {
+                Some(file) => Path::new(&file).parent().map(Path::to_path_buf),
+                None => dir.parent().map(Path::to_path_buf),
+            };
+            let place = folder.map_or_else(String::new, |f| format!(" in {}", f.display()));
+            return Ok(Some(format!("{doing}{place}")));
+        }
+        Ok(None)
     }
 
     fn has_ref(&self, name: &str) -> bool {
