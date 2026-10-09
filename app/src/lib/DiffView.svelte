@@ -23,7 +23,7 @@
   import { mac } from "./keys";
   import ImageDiff from "./ImageDiff.svelte";
   import UnusualCard from "./UnusualCard.svelte";
-  import { bytes, imageType } from "./unusual";
+  import { bytes, imageType, isSvg } from "./unusual";
 
   let {
     diffs,
@@ -73,11 +73,14 @@
   let full = $state<Record<string, FileDiff>>({});
   /** Files whose line endings are shown, by path. */
   let showEol = $state<Record<string, boolean>>({});
+  /** SVG files shown as code instead of as a picture, by path. */
+  let showCode = $state<Record<string, boolean>>({});
   $effect(() => {
     fileSet;
     untrack(() => {
       full = {};
       showEol = {};
+      showCode = {};
     });
   });
   const items = $derived(diffs.map((d) => full[d.file.path] ?? d));
@@ -93,6 +96,7 @@
   function special(diff: FileDiff): "image" | "binary" | "limited" | "tooLarge" | "mode" | "eol" | null {
     const f = diff.file;
     if (f.binary && imageType(f.path) && (diff.old || diff.new)) return "image";
+    if (isSvg(f.path) && !showCode[f.path] && (diff.old || diff.new)) return "image";
     if (f.binary) return "binary";
     if (diff.limited) return "limited";
     if (diff.tooLarge) return "tooLarge";
@@ -260,6 +264,17 @@
     </header>
 
     {#if !isShut}
+      {#if isSvg(diff.file.path) && (diff.old || diff.new)}
+        <div class="banner">
+          <svg class="icon" viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="11" rx="2" /><circle cx="6" cy="6.5" r="1.3" /><path d="M2.5 12l3.5-3.5 3 3 2-2 2.5 2.5" /></svg>
+          <span class="grow">{showCode[diff.file.path] ? "SVG code. The picture it draws is one click away." : "SVG picture, drawn from the file. Its code is one click away."}</span>
+          <button
+            class="chip"
+            aria-pressed={!!showCode[diff.file.path]}
+            onclick={() => (showCode = { ...showCode, [diff.file.path]: !showCode[diff.file.path] })}>{showCode[diff.file.path] ? "Show Picture" : "Show Code"}</button
+          >
+        </div>
+      {/if}
       {#if diff.file.eol}
         <div class="banner">
           <svg class="icon" viewBox="0 0 16 16"><path d="M12.5 3.5v5a2 2 0 0 1-2 2h-7M6 8l-2.5 2.5L6 13" /></svg>
