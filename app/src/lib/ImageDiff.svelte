@@ -24,7 +24,7 @@
   async function load(source: Source | null, type: string): Promise<Side | null> {
     if (!source) return null;
     const data = await api.sourceBytes(source);
-    const url = URL.createObjectURL(new Blob([data], { type }));
+    const url = URL.createObjectURL(new Blob([data as Uint8Array<ArrayBuffer>], { type }));
     const img = new Image();
     img.src = url;
     await img.decode().catch(() => {});
