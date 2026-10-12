@@ -41,7 +41,8 @@ export type Icon =
   | "ignore"
   | "lines"
   | "lfs"
-  | "bisect";
+  | "bisect"
+  | "worktree";
 
 export interface Request {
   /** A question, e.g. "Discard changes in 2 files?" */
@@ -75,6 +76,8 @@ export interface Request {
   resolveConflicts?: boolean;
   /** The way out when the action fails. */
   recover?: (failure: Failure) => Recovery | null;
+  /** What Oxbow does once the action succeeded, e.g. open the new worktree's window. */
+  after?: () => void;
   /** Offered as Undo on the toast after it succeeded, e.g. putting a dropped stash back. */
   undo?: () => Request;
   /** Runs in the background instead of in the sheet, e.g. a fetch: the sheet closes on the
@@ -354,12 +357,14 @@ class ConfirmState {
     this.recovery = null;
     // Only the request's own action can be undone, not a way out offered after it failed.
     const undo = this.request && action === this.request.action ? (this.request.undo ?? null) : null;
+    const after = this.request && action === this.request.action ? this.request.after : undefined;
     const started = Math.floor(Date.now() / 1000);
     try {
       await api.performAction(action);
       this.ran = action;
       if (next) return this.#execute(next.action, next.status, next.done);
       this.#finish(true);
+      after?.();
       if (done) this.#showToast(done, undo ?? (await this.#undoFromLog(action, started)));
     } catch (err) {
       const failure = toFailure(err);

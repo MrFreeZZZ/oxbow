@@ -1,0 +1,218 @@
+mod support;
+
+use oxbow_core::{Action, HistoryOptions, Repo};
+use support::Fixture;
+
+/// `main` with two commits and a branch `fix/login` off the first.
+fn repo_with_branch() -> Fixture {
+    let mut fx = Fixture::new();
+    fx.commit("app.rs", "one\n", "First");
+    fx.git(&["branch", "fix/login"]);
+    fx.commit("app.rs", "two\n", "Second");
+    fx
+}
+
+/// A folder next to the repository's, like the sheet suggests.
+fn sibling(fx: &Fixture, name: &str) -> String {
+    fx.path().parent().unwrap().join(name).display().to_string()
+}
+
+fn shown(repo: &Repo, action: &Action) -> Vec<String> {
+    repo.plan(action)
+        .unwrap()
+        .commands
+        .iter()
+        .map(|c| c.display())
+        .collect()
+}
+
+#[test]
+fn adding_a_worktree_checks_the_branch_out_in_a_new_folder() {
+    let fx = repo_with_branch();
+    let repo = Repo::open(fx.path()).unwrap();
+    let path = sibling(&fx, "repo-fix-login");
+    let add = Action::WorktreeAdd {
+        path: path.clone(),
+        branch: "fix/login".into(),
+        create: false,
+        start: None,
+    };
+    assert_eq!(shown(&repo, &add), ["git worktree add ../repo-fix-login fix/login"]);
+    repo.perform(&add).unwrap();
+
+    let list = repo.worktrees().unwrap();
+    assert_eq!(list.len(), 2);
+    assert!(list[0].main && list[0].current);
+    assert_eq!(list[0].branch.as_deref(), Some("main"));
+    assert_eq!(list[1].name, "repo-fix-login");
+    assert_eq!(list[1].branch.as_deref(), Some("fix/login"));
+    assert!(!list[1].main && !list[1].current && !list[1].missing);
+    assert!(std::path::Path::new(&path).join("app.rs").is_file());
+
+    // The history knows them too, and they are not in the Operation Log.
+    let history = repo.history(&HistoryOptions::default()).unwrap();
+    assert_eq!(history.worktrees.len(), 2);
+    assert!(repo.operation_log().unwrap().is_empty());
+}
+
+#[test]
+fn a_new_branch_is_made_where_asked() {
+    let mut fx = repo_with_branch();
+    let first = fx.git(&["rev-parse", "fix/login"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let add = Action::WorktreeAdd {
+        path: sibling(&fx, "repo-spike"),
+        branch: "spike/cache".into(),
+        create: true,
+        start: Some("fix/login".into()),
+    };
+    assert_eq!(
+        shown(&repo, &add),
+        ["git worktree add -b spike/cache ../repo-spike fix/login"]
+    );
+    repo.perform(&add).unwrap();
+    assert_eq!(fx.git(&["rev-parse", "spike/cache"]), first);
+    let list = repo.worktrees().unwrap();
+    assert_eq!(list[1].branch.as_deref(), Some("spike/cache"));
+    assert_eq!(list[1].head.as_deref(), Some(first.as_str()));
+}
+
+#[test]
+fn the_other_folder_opens_as_a_repository_of_its_own() {
+    let fx = repo_with_branch();
+    let path = sibling(&fx, "repo-fix-login");
+    let main = Repo::open(fx.path()).unwrap();
+    main.perform(&Action::WorktreeAdd {
+        path: path.clone(),
+        branch: "fix/login".into(),
+        create: false,
+        start: None,
+    })
+    .unwrap();
+
+    let linked = Repo::open(&path).unwrap();
+    let history = linked.history(&HistoryOptions::default()).unwrap();
+    assert_eq!(history.head.branch.as_deref(), Some("fix/login"));
+    let here: Vec<_> = history.worktrees.iter().filter(|t| t.current).collect();
+    assert_eq!(here.len(), 1);
+    assert_eq!(here[0].name, "repo-fix-login");
+    assert!(history.worktrees[0].main && !history.worktrees[0].current);
+}
+
+#[test]
+fn removing_a_worktree_with_changes_forces_or_stashes_them() {
+    let mut fx = repo_with_branch();
+    let repo = Repo::open(fx.path()).unwrap();
+    for name in ["repo-a", "repo-b"] {
+        repo.perform(&Action::WorktreeAdd {
+            path: sibling(&fx, name),
+            branch: name.into(),
+            create: true,
+            start: None,
+        })
+        .unwrap();
+        let folder = std::path::Path::new(&sibling(&fx, name)).to_path_buf();
+        std::fs::write(folder.join("app.rs"), "edited\n").unwrap();
+        std::fs::write(folder.join("notes.txt"), "new\n").unwrap();
+    }
+    let list = repo.worktrees().unwrap();
+    assert_eq!(list[1].changed, 2);
+    assert_eq!(list[2].changed, 2);
+
+    // git refuses a plain remove while there are changes.
+    let a = sibling(&fx, "repo-a");
+    let plain = Action::WorktreeRemove {
+        path: a.clone(),
+        force: false,
+        stash: false,
+    };
+    assert!(repo.perform(&plain).is_err());
+    let forced = Action::WorktreeRemove {
+        path: a.clone(),
+        force: true,
+        stash: false,
+    };
+    assert_eq!(shown(&repo, &forced), ["git worktree remove --force ../repo-a"]);
+    repo.perform(&forced).unwrap();
+    assert!(!std::path::Path::new(&a).exists());
+    // The branch stays.
+    assert!(!fx.git(&["rev-parse", "repo-a"]).is_empty());
+
+    let b = sibling(&fx, "repo-b");
+    let stashed = Action::WorktreeRemove {
+        path: b.clone(),
+        force: true,
+        stash: true,
+    };
+    assert_eq!(
+        shown(&repo, &stashed),
+        [
+            "git -C ../repo-b stash push --include-untracked -m 'repo-b before removing it'",
+            "git worktree remove ../repo-b",
+        ]
+    );
+    repo.perform(&stashed).unwrap();
+    assert!(!std::path::Path::new(&b).exists());
+    assert_eq!(
+        fx.git(&["stash", "list", "--format=%s"]),
+        "On repo-b: repo-b before removing it"
+    );
+    assert_eq!(repo.worktrees().unwrap().len(), 1);
+}
+
+#[test]
+fn locked_missing_and_moved_worktrees() {
+    let fx = repo_with_branch();
+    let repo = Repo::open(fx.path()).unwrap();
+    let path = sibling(&fx, "repo-usb");
+    repo.perform(&Action::WorktreeAdd {
+        path: path.clone(),
+        branch: "fix/login".into(),
+        create: false,
+        start: None,
+    })
+    .unwrap();
+
+    let lock = Action::WorktreeLock {
+        path: path.clone(),
+        reason: Some("on the USB drive".into()),
+    };
+    assert_eq!(
+        shown(&repo, &lock),
+        ["git worktree lock --reason 'on the USB drive' ../repo-usb"]
+    );
+    repo.perform(&lock).unwrap();
+    assert_eq!(repo.worktrees().unwrap()[1].locked.as_deref(), Some("on the USB drive"));
+
+    // Removing a locked one unlocks it first.
+    let remove = Action::WorktreeRemove {
+        path: path.clone(),
+        force: false,
+        stash: false,
+    };
+    assert_eq!(
+        shown(&repo, &remove),
+        ["git worktree unlock ../repo-usb", "git worktree remove ../repo-usb"]
+    );
+
+    repo.perform(&Action::WorktreeUnlock { path: path.clone() }).unwrap();
+    assert_eq!(repo.worktrees().unwrap()[1].locked, None);
+
+    // Moved by hand: missing, until git is told where it went.
+    let moved = sibling(&fx, "repo-moved");
+    std::fs::rename(&path, &moved).unwrap();
+    assert!(repo.worktrees().unwrap()[1].missing);
+    let repair = Action::WorktreeRepair { path: moved.clone() };
+    assert_eq!(shown(&repo, &repair), ["git worktree repair ../repo-moved"]);
+    repo.perform(&repair).unwrap();
+    let list = repo.worktrees().unwrap();
+    assert!(!list[1].missing);
+    assert_eq!(list[1].name, "repo-moved");
+
+    // Deleted: prune forgets it, and its branch can be checked out again.
+    std::fs::remove_dir_all(&moved).unwrap();
+    assert!(repo.worktrees().unwrap()[1].missing);
+    assert_eq!(shown(&repo, &Action::WorktreePrune), ["git worktree prune --verbose"]);
+    repo.perform(&Action::WorktreePrune).unwrap();
+    assert_eq!(repo.worktrees().unwrap().len(), 1);
+}

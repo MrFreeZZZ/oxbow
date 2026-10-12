@@ -5,8 +5,9 @@ mod accounts;
 mod open_in;
 mod pulls;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use oxbow_core::config::{self, ConfigScope};
@@ -18,16 +19,71 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State, Theme, WebviewUrl, WebviewWindowBuilder};
 
-/// The repository open in the window.
+/// What each window has open, by window label: every repository window ("main", and
+/// "repo-N" for the ones Open in New Window makes) has its own repository and Stop buttons.
 #[derive(Default)]
 struct Session {
-    repo: Mutex<Option<Repo>>,
+    windows: Mutex<HashMap<String, Slot>>,
     /// Diff settings, given to the repository on every call.
     diff: Mutex<DiffOptions>,
+    /// The repository window used last: the one Settings shows and changes.
+    focused: Mutex<Option<String>>,
+    /// The folder a new window opens, until it asks for it.
+    pending: Mutex<HashMap<String, String>>,
+    /// Number of the next new window.
+    next: AtomicUsize,
+}
+
+#[derive(Default)]
+struct Slot {
+    repo: Option<Repo>,
     /// Set by Stop; the running action checks it.
     cancel: Arc<AtomicBool>,
     /// Stop of the fetch running in the background, apart from actions in the sheet.
     fetch_cancel: Arc<AtomicBool>,
+}
+
+impl Session {
+    /// The repository window `window` acts for: itself, or for Settings the one used last.
+    fn label(&self, window: &tauri::WebviewWindow) -> String {
+        if window.label() == "settings" {
+            self.focused
+                .lock()
+                .expect("session lock")
+                .clone()
+                .unwrap_or_else(|| "main".to_owned())
+        } else {
+            window.label().to_owned()
+        }
+    }
+
+    fn slot<T>(&self, window: &tauri::WebviewWindow, f: impl FnOnce(&mut Slot) -> T) -> T {
+        let label = self.label(window);
+        f(self.windows.lock().expect("session lock").entry(label).or_default())
+    }
+
+    fn cancel(&self, window: &tauri::WebviewWindow) -> Arc<AtomicBool> {
+        self.slot(window, |slot| slot.cancel.clone())
+    }
+
+    fn fetch_cancel(&self, window: &tauri::WebviewWindow) -> Arc<AtomicBool> {
+        self.slot(window, |slot| slot.fetch_cancel.clone())
+    }
+
+    /// The window that has the repository at `path` open, if any.
+    fn window_of(&self, path: &Path) -> Option<String> {
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        self.windows
+            .lock()
+            .expect("session lock")
+            .iter()
+            .find(|(_, slot)| {
+                slot.repo
+                    .as_ref()
+                    .is_some_and(|r| r.workdir().canonicalize().unwrap_or_else(|_| r.workdir().to_path_buf()) == path)
+            })
+            .map(|(label, _)| label.clone())
+    }
 }
 
 #[derive(Serialize)]
@@ -41,8 +97,8 @@ type CommandResult<T> = Result<T, String>;
 
 /// The repository, set to show a diff in full however many lines it has when `full` is set
 /// (Show Diff Anyway).
-fn current_full(session: &State<'_, Session>, full: Option<bool>) -> CommandResult<Repo> {
-    let mut repo = current(session)?;
+fn current_full(session: &Session, window: &tauri::WebviewWindow, full: Option<bool>) -> CommandResult<Repo> {
+    let mut repo = current(session, window)?;
     if full == Some(true) {
         repo.set_diff_options(DiffOptions {
             max_lines: 0,
@@ -52,12 +108,10 @@ fn current_full(session: &State<'_, Session>, full: Option<bool>) -> CommandResu
     Ok(repo)
 }
 
-fn current(session: &State<'_, Session>) -> CommandResult<Repo> {
+/// The repository open in the window `window` acts for.
+fn current(session: &Session, window: &tauri::WebviewWindow) -> CommandResult<Repo> {
     let mut repo = session
-        .repo
-        .lock()
-        .expect("session lock")
-        .clone()
+        .slot(window, |slot| slot.repo.clone())
         .ok_or_else(|| "No repository is open".to_owned())?;
     repo.set_diff_options(*session.diff.lock().expect("session lock"));
     Ok(repo)
@@ -217,28 +271,39 @@ fn last_repo_file(app: &AppHandle) -> Option<PathBuf> {
 }
 
 #[tauri::command]
-async fn open_repo(app: AppHandle, session: State<'_, Session>, path: String) -> CommandResult<RepoSummary> {
+async fn open_repo(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    path: String,
+) -> CommandResult<RepoSummary> {
     let repo = blocking(move || Repo::open(&path)).await?;
     let summary = RepoSummary {
         name: repo.name(),
         path: repo.workdir().display().to_string(),
     };
-    if let Some(file) = last_repo_file(&app) {
+    // The next start opens what the first window had; another worktree's window doesn't count.
+    if window.label() == "main"
+        && let Some(file) = last_repo_file(&app)
+    {
         // Remembering the repository is a convenience; failing to save it is not an error.
         let _ = std::fs::create_dir_all(file.parent().expect("config file has a parent"));
         let _ = std::fs::write(&file, &summary.path);
     }
     remember_repo(&app, &summary.path);
-    *session.repo.lock().expect("session lock") = Some(repo);
+    session.slot(&window, |slot| slot.repo = Some(repo));
     // Settings shows this repository under This Repository.
     let _ = app.emit("repo-changed", ());
     Ok(summary)
 }
 
 /// Repository to open at start: the first command-line argument, else the last one used,
-/// unless the user turned that off.
+/// unless the user turned that off. A window Open in New Window made opens its folder.
 #[tauri::command]
-fn initial_repo(app: AppHandle) -> Option<String> {
+fn initial_repo(app: AppHandle, window: tauri::WebviewWindow, session: State<'_, Session>) -> Option<String> {
+    if window.label() != "main" {
+        return session.pending.lock().expect("session lock").remove(window.label());
+    }
     let reopen = read_settings(&app)
         .get("oxbow.startup.reopenRepository")
         .and_then(Value::as_bool)
@@ -463,7 +528,7 @@ async fn clone_repo(
     session: State<'_, Session>,
     options: oxbow_core::CloneOptions,
 ) -> CommandResult<String> {
-    let cancel = session.cancel.clone();
+    let cancel = session.cancel(&window);
     cancel.store(false, Ordering::Relaxed);
     let path = options.path.display().to_string();
     blocking(move || {
@@ -492,17 +557,18 @@ async fn create_repo(options: oxbow_core::NewRepoOptions) -> CommandResult<Strin
 }
 
 #[tauri::command]
-async fn history(session: State<'_, Session>) -> CommandResult<History> {
-    let repo = current(&session)?;
+async fn history(window: tauri::WebviewWindow, session: State<'_, Session>) -> CommandResult<History> {
+    let repo = current(&session, &window)?;
     // Open the repository afresh: the built-in engine reads .git/config once, so a remote that
     // Publish or Settings just added would stay unseen.
     let workdir = repo.workdir().to_path_buf();
     let fresh = blocking(move || Repo::open(&workdir)).await.unwrap_or(repo);
     {
-        let mut open = session.repo.lock().expect("session lock");
-        if open.as_ref().is_some_and(|open| open.workdir() == fresh.workdir()) {
-            *open = Some(fresh.clone());
-        }
+        session.slot(&window, |slot| {
+            if slot.repo.as_ref().is_some_and(|open| open.workdir() == fresh.workdir()) {
+                slot.repo = Some(fresh.clone());
+            }
+        });
     }
     let mut repo = fresh;
     repo.set_diff_options(*session.diff.lock().expect("session lock"));
@@ -510,20 +576,25 @@ async fn history(session: State<'_, Session>) -> CommandResult<History> {
 }
 
 #[tauri::command]
-async fn commit_detail(session: State<'_, Session>, id: String) -> CommandResult<CommitDetail> {
-    let repo = current(&session)?;
+async fn commit_detail(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    id: String,
+) -> CommandResult<CommitDetail> {
+    let repo = current(&session, &window)?;
     blocking(move || repo.commit_detail(&id)).await
 }
 
 #[tauri::command]
 async fn commit_diff(
+    window: tauri::WebviewWindow,
     session: State<'_, Session>,
     id: String,
     path: Option<String>,
     whole_file: bool,
     full: Option<bool>,
 ) -> CommandResult<Vec<FileDiff>> {
-    let repo = current_full(&session, full)?;
+    let repo = current_full(&session, &window, full)?;
     let context = if whole_file {
         DiffContext::WholeFile
     } else {
@@ -534,17 +605,19 @@ async fn commit_diff(
 
 #[tauri::command]
 async fn compare(
+    window: tauri::WebviewWindow,
     session: State<'_, Session>,
     base: String,
     target: String,
     mode: oxbow_core::CompareMode,
 ) -> CommandResult<oxbow_core::Comparison> {
-    let repo = current(&session)?;
+    let repo = current(&session, &window)?;
     blocking(move || repo.compare(&base, &target, mode)).await
 }
 
 #[tauri::command]
 async fn compare_diff(
+    window: tauri::WebviewWindow,
     session: State<'_, Session>,
     from: String,
     to: String,
@@ -552,7 +625,7 @@ async fn compare_diff(
     whole_file: bool,
     full: Option<bool>,
 ) -> CommandResult<Vec<FileDiff>> {
-    let repo = current_full(&session, full)?;
+    let repo = current_full(&session, &window, full)?;
     let context = if whole_file {
         DiffContext::WholeFile
     } else {
@@ -563,55 +636,75 @@ async fn compare_diff(
 
 #[tauri::command]
 async fn file_history(
+    window: tauri::WebviewWindow,
     session: State<'_, Session>,
     path: String,
     rev: Option<String>,
 ) -> CommandResult<oxbow_core::FileHistory> {
-    let repo = current(&session)?;
+    let repo = current(&session, &window)?;
     blocking(move || repo.file_history(&path, rev.as_deref())).await
 }
 
 #[tauri::command]
-async fn blame(session: State<'_, Session>, path: String, rev: String) -> CommandResult<oxbow_core::Blame> {
-    let repo = current(&session)?;
+async fn blame(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    path: String,
+    rev: String,
+) -> CommandResult<oxbow_core::Blame> {
+    let repo = current(&session, &window)?;
     blocking(move || repo.blame(&path, &rev)).await
 }
 
 #[tauri::command]
-async fn line_history(session: State<'_, Session>, path: String, line: u32, rev: String) -> CommandResult<Vec<String>> {
-    let repo = current(&session)?;
+async fn line_history(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    path: String,
+    line: u32,
+    rev: String,
+) -> CommandResult<Vec<String>> {
+    let repo = current(&session, &window)?;
     blocking(move || repo.line_history(&path, line, &rev)).await
 }
 
 #[tauri::command]
-async fn files(session: State<'_, Session>) -> CommandResult<Vec<String>> {
-    let repo = current(&session)?;
+async fn files(window: tauri::WebviewWindow, session: State<'_, Session>) -> CommandResult<Vec<String>> {
+    let repo = current(&session, &window)?;
     blocking(move || repo.files()).await
 }
 
 #[tauri::command]
 async fn file_pickaxe(
+    window: tauri::WebviewWindow,
     session: State<'_, Session>,
     path: String,
     text: String,
     match_case: bool,
     rev: String,
 ) -> CommandResult<Vec<String>> {
-    let repo = current(&session)?;
+    let repo = current(&session, &window)?;
     blocking(move || repo.file_pickaxe(&path, &text, match_case, &rev)).await
 }
 
 /// The Operation Log, newest step first.
 #[tauri::command]
-async fn operation_log(session: State<'_, Session>) -> CommandResult<Vec<oxbow_core::OpEntry>> {
-    let repo = current(&session)?;
+async fn operation_log(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+) -> CommandResult<Vec<oxbow_core::OpEntry>> {
+    let repo = current(&session, &window)?;
     blocking(move || repo.operation_log()).await
 }
 
 /// The bytes of one side of a file diff, to show an image.
 #[tauri::command]
-async fn source_bytes(session: State<'_, Session>, source: Source) -> CommandResult<tauri::ipc::Response> {
-    let repo = current(&session)?;
+async fn source_bytes(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    source: Source,
+) -> CommandResult<tauri::ipc::Response> {
+    let repo = current(&session, &window)?;
     blocking(move || repo.read_source(&source))
         .await
         .map(tauri::ipc::Response::new)
@@ -620,8 +713,14 @@ async fn source_bytes(session: State<'_, Session>, source: Source) -> CommandRes
 /// Open one side of a file diff in the app the system picks for it: the working-tree file as it
 /// is, any other version from a copy in a temporary folder named after it.
 #[tauri::command]
-async fn open_source(session: State<'_, Session>, source: Source, path: String, label: String) -> CommandResult<()> {
-    let repo = current(&session)?;
+async fn open_source(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    source: Source,
+    path: String,
+    label: String,
+) -> CommandResult<()> {
+    let repo = current(&session, &window)?;
     let file = match &source {
         Source::Worktree { path } => repo.workdir().join(Path::new(path)),
         Source::Blob { id } => {
@@ -650,62 +749,88 @@ async fn open_source(session: State<'_, Session>, source: Source, path: String, 
 }
 
 #[tauri::command]
-async fn working_tree(session: State<'_, Session>) -> CommandResult<WorkingTree> {
-    let repo = current(&session)?;
+async fn working_tree(window: tauri::WebviewWindow, session: State<'_, Session>) -> CommandResult<WorkingTree> {
+    let repo = current(&session, &window)?;
     blocking(move || repo.working_tree()).await
 }
 
 #[tauri::command]
 async fn working_diff(
+    window: tauri::WebviewWindow,
     session: State<'_, Session>,
     path: String,
     side: Side,
     whole_file: bool,
     full: Option<bool>,
 ) -> CommandResult<FileDiff> {
-    let repo = current_full(&session, full)?;
+    let repo = current_full(&session, &window, full)?;
     blocking(move || repo.working_diff(&path, side, whole_file)).await
 }
 
 /// What deleting a local branch would lose, for the confirmation sheet.
 #[tauri::command]
-async fn deletion_check(session: State<'_, Session>, branch: String) -> CommandResult<DeletionCheck> {
-    let repo = current(&session)?;
+async fn deletion_check(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    branch: String,
+) -> CommandResult<DeletionCheck> {
+    let repo = current(&session, &window)?;
     blocking(move || repo.deletion_check(&branch)).await
 }
 
 /// Commits that deleting a remote branch (`origin/x`) on its remote would lose.
 #[tauri::command]
-async fn remote_deletion_check(session: State<'_, Session>, branch: String) -> CommandResult<Vec<CommitBrief>> {
-    let repo = current(&session)?;
+async fn remote_deletion_check(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    branch: String,
+) -> CommandResult<Vec<CommitBrief>> {
+    let repo = current(&session, &window)?;
     blocking(move || repo.remote_deletion_check(&branch)).await
 }
 
 /// What merging `branch` into the checked-out branch would bring, for the merge sheet.
 #[tauri::command]
-async fn merge_preview(session: State<'_, Session>, branch: String) -> CommandResult<MergePreview> {
-    let repo = current(&session)?;
+async fn merge_preview(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    branch: String,
+) -> CommandResult<MergePreview> {
+    let repo = current(&session, &window)?;
     blocking(move || repo.merge_preview(&branch)).await
 }
 
 /// Both sides of a conflicted file, for the Conflicts screen.
 #[tauri::command]
-async fn conflict_file(session: State<'_, Session>, path: String) -> CommandResult<ConflictFile> {
-    let repo = current(&session)?;
+async fn conflict_file(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    path: String,
+) -> CommandResult<ConflictFile> {
+    let repo = current(&session, &window)?;
     blocking(move || repo.conflict_file(&path)).await
 }
 
 /// Whether `stash@{index}` applies cleanly to the checked-out commit.
 #[tauri::command]
-async fn stash_check(session: State<'_, Session>, index: usize, id: String) -> CommandResult<StashCheck> {
-    let repo = current(&session)?;
+async fn stash_check(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    index: usize,
+    id: String,
+) -> CommandResult<StashCheck> {
+    let repo = current(&session, &window)?;
     blocking(move || repo.stash_check(index, &id)).await
 }
 
 /// The stack `branch` belongs to (the checked-out branch without one), for Edit Stack.
 #[tauri::command]
-async fn stack(session: State<'_, Session>, branch: Option<String>) -> CommandResult<oxbow_core::Stack> {
-    let repo = current(&session)?;
+async fn stack(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    branch: Option<String>,
+) -> CommandResult<oxbow_core::Stack> {
+    let repo = current(&session, &window)?;
     blocking(move || repo.stack(branch.as_deref())).await
 }
 
@@ -713,28 +838,30 @@ async fn stack(session: State<'_, Session>, branch: Option<String>) -> CommandRe
 /// onto; none until a fetch brought it.
 #[tauri::command]
 async fn landed_on(
+    window: tauri::WebviewWindow,
     session: State<'_, Session>,
     merged: String,
     candidates: Vec<String>,
 ) -> CommandResult<Option<oxbow_core::Landing>> {
-    let repo = current(&session)?;
+    let repo = current(&session, &window)?;
     blocking(move || Ok(repo.landed_on(&merged, &candidates))).await
 }
 
 /// A dry run of an Edit Stack plan: what it changes, where it would stop, what to push.
 #[tauri::command]
 async fn stack_preview(
+    window: tauri::WebviewWindow,
     session: State<'_, Session>,
     plan: oxbow_core::StackPlan,
 ) -> CommandResult<oxbow_core::StackPreview> {
-    let repo = current(&session)?;
+    let repo = current(&session, &window)?;
     blocking(move || repo.stack_preview(&plan)).await
 }
 
 /// The git commands an action will run, for the confirmation sheet.
 #[tauri::command]
-async fn plan_action(session: State<'_, Session>, action: Action) -> CommandResult<Plan> {
-    let repo = current(&session)?;
+async fn plan_action(window: tauri::WebviewWindow, session: State<'_, Session>, action: Action) -> CommandResult<Plan> {
+    let repo = current(&session, &window)?;
     blocking(move || repo.plan(&action)).await
 }
 
@@ -749,8 +876,9 @@ async fn perform_action(
 ) -> Result<String, Failure> {
     // Only the window that asked shows the output: Settings runs actions of its own.
     let label = window.label().to_owned();
-    let from_settings = label != "main";
-    let repo = current(&session).map_err(|message| Failure {
+    let from_settings = label == "settings";
+    let repo_window = session.label(&window);
+    let repo = current(&session, &window).map_err(|message| Failure {
         kind: oxbow_core::FailureKind::Other,
         output: message,
         incoming: Vec::new(),
@@ -758,7 +886,7 @@ async fn perform_action(
         hook: None,
         ssh: None,
     })?;
-    let cancel = session.cancel.clone();
+    let cancel = session.cancel(&window);
     cancel.store(false, Ordering::Relaxed);
     let events = app.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
@@ -772,9 +900,9 @@ async fn perform_action(
         result.map_err(|err| repo.explain_failure(&action, &err))
     })
     .await;
-    // The main window shows the remotes and branches Settings just changed.
+    // The repository window shows the remotes and branches Settings just changed.
     if from_settings {
-        let _ = app.emit_to("main", "repo-touched", ());
+        let _ = app.emit_to(repo_window.as_str(), "repo-touched", ());
     }
     joined.unwrap_or_else(|err| {
         Err(Failure {
@@ -842,8 +970,11 @@ struct Production {
 
 /// Settings › This Repository, or nothing when no repository is open.
 #[tauri::command]
-async fn repo_settings(session: State<'_, Session>) -> CommandResult<Option<RepoSettings>> {
-    let Ok(repo) = current(&session) else {
+async fn repo_settings(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+) -> CommandResult<Option<RepoSettings>> {
+    let Ok(repo) = current(&session, &window) else {
         return Ok(None);
     };
     blocking(move || {
@@ -878,13 +1009,14 @@ async fn repo_settings(session: State<'_, Session>) -> CommandResult<Option<Repo
 #[tauri::command]
 async fn set_git_config(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     session: State<'_, Session>,
     scope: ConfigScope,
     key: String,
     value: Option<String>,
 ) -> CommandResult<()> {
     let repo = match scope {
-        ConfigScope::Local => Some(current(&session)?),
+        ConfigScope::Local => Some(current(&session, &window)?),
         ConfigScope::Global => None,
     };
     // The production branch changes how the main window draws the graph.
@@ -895,7 +1027,7 @@ async fn set_git_config(
     })
     .await?;
     if redraw {
-        let _ = app.emit_to("main", "repo-touched", ());
+        let _ = app.emit_to(session.label(&window).as_str(), "repo-touched", ());
     }
     Ok(())
 }
@@ -909,8 +1041,8 @@ struct PullSetup {
 
 /// How Pull will go here, for the words of its confirmation.
 #[tauri::command]
-async fn pull_setup(session: State<'_, Session>) -> CommandResult<PullSetup> {
-    let repo = current(&session)?;
+async fn pull_setup(window: tauri::WebviewWindow, session: State<'_, Session>) -> CommandResult<PullSetup> {
+    let repo = current(&session, &window)?;
     blocking(move || {
         Ok(PullSetup {
             mode: repo.pull_mode(),
@@ -928,11 +1060,12 @@ struct Fetched {
     updated: u32,
 }
 
-/// Fetch one remote or all in the background: no sheet, git's progress goes to the main window
+/// Fetch one remote or all in the background: no sheet, git's progress goes to the window
 /// as `fetch-event`s, and a failure comes back explained, for Activity.
 #[tauri::command]
 async fn fetch_in_background(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     session: State<'_, Session>,
     remote: Option<String>,
 ) -> Result<Fetched, Failure> {
@@ -944,14 +1077,15 @@ async fn fetch_in_background(
         hook: None,
         ssh: None,
     };
-    let repo = current(&session).map_err(failed)?;
-    let cancel = session.fetch_cancel.clone();
+    let repo = current(&session, &window).map_err(failed)?;
+    let cancel = session.fetch_cancel(&window);
     cancel.store(false, Ordering::Relaxed);
+    let label = window.label().to_owned();
     tauri::async_runtime::spawn_blocking(move || {
         let action = Action::Fetch { remote: remote.clone() };
         let command = repo.fetch_command(remote.as_deref()).with_progress();
         let _ = app.emit_to(
-            "main",
+            label.as_str(),
             "fetch-event",
             oxbow_core::ActionEvent::Command {
                 display: command.display(),
@@ -964,7 +1098,7 @@ async fn fetch_in_background(
                 if !line.progress && oxbow_core::remote::is_ref_update(&line.text) {
                     updated += 1;
                 }
-                let _ = app.emit_to("main", "fetch-event", oxbow_core::ActionEvent::Line(line));
+                let _ = app.emit_to(label.as_str(), "fetch-event", oxbow_core::ActionEvent::Line(line));
             },
             &cancel,
         );
@@ -979,8 +1113,8 @@ async fn fetch_in_background(
 
 /// Stop the background fetch.
 #[tauri::command]
-fn stop_fetch(session: State<'_, Session>) {
-    session.fetch_cancel.store(true, Ordering::Relaxed);
+fn stop_fetch(window: tauri::WebviewWindow, session: State<'_, Session>) {
+    session.fetch_cancel(&window).store(true, Ordering::Relaxed);
 }
 
 /// The public half of an SSH key, to paste into GitHub.
@@ -992,24 +1126,25 @@ fn public_key(key: String) -> CommandResult<String> {
 /// Search the history: messages, code changes, authors or file paths.
 #[tauri::command]
 async fn search(
+    window: tauri::WebviewWindow,
     session: State<'_, Session>,
     query: oxbow_core::SearchQuery,
 ) -> CommandResult<oxbow_core::SearchResult> {
-    let repo = current(&session)?;
+    let repo = current(&session, &window)?;
     blocking(move || repo.search(&query)).await
 }
 
 /// Which files the repository keeps in Git LFS, and whether git-lfs is installed.
 #[tauri::command]
-async fn lfs_status(session: State<'_, Session>) -> CommandResult<oxbow_core::LfsStatus> {
-    let repo = current(&session)?;
+async fn lfs_status(window: tauri::WebviewWindow, session: State<'_, Session>) -> CommandResult<oxbow_core::LfsStatus> {
+    let repo = current(&session, &window)?;
     blocking(move || repo.lfs_status()).await
 }
 
 /// What Free Up Space would delete, e.g. `3 files would be pruned (1.4 GB)`.
 #[tauri::command]
-async fn lfs_prune_preview(session: State<'_, Session>) -> CommandResult<Option<String>> {
-    let repo = current(&session)?;
+async fn lfs_prune_preview(window: tauri::WebviewWindow, session: State<'_, Session>) -> CommandResult<Option<String>> {
+    let repo = current(&session, &window)?;
     blocking(move || repo.lfs_prune_preview()).await
 }
 
@@ -1021,16 +1156,16 @@ fn open_lfs_download() -> CommandResult<()> {
 
 /// Preview a file of the working copy: Quick Look on macOS, the default app elsewhere.
 #[tauri::command]
-fn quick_look(session: State<'_, Session>, path: String) -> CommandResult<()> {
-    let repo = current(&session)?;
+fn quick_look(window: tauri::WebviewWindow, session: State<'_, Session>, path: String) -> CommandResult<()> {
+    let repo = current(&session, &window)?;
     open_in::quick_look(&repo.workdir().join(Path::new(&path)))
 }
 
 /// Ask the default remote which tags it has, so tags it lacks show as local. True when that
 /// changed. Without a remote there is nothing to ask.
 #[tauri::command]
-async fn refresh_remote_tags(session: State<'_, Session>) -> CommandResult<bool> {
-    let repo = current(&session)?;
+async fn refresh_remote_tags(window: tauri::WebviewWindow, session: State<'_, Session>) -> CommandResult<bool> {
+    let repo = current(&session, &window)?;
     blocking(move || match repo.default_remote() {
         Some(remote) => repo.refresh_remote_tags(&remote),
         None => Ok(false),
@@ -1040,8 +1175,14 @@ async fn refresh_remote_tags(session: State<'_, Session>) -> CommandResult<bool>
 
 /// Open a file of the repository in the editor chosen in Settings.
 #[tauri::command]
-fn open_in_editor(app: AppHandle, session: State<'_, Session>, path: String, line: Option<u32>) -> CommandResult<()> {
-    let repo = current(&session)?;
+fn open_in_editor(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    path: String,
+    line: Option<u32>,
+) -> CommandResult<()> {
+    let repo = current(&session, &window)?;
     let editor = read_settings(&app)
         .get("oxbow.openIn.editor")
         .and_then(Value::as_str)
@@ -1053,8 +1194,8 @@ fn open_in_editor(app: AppHandle, session: State<'_, Session>, path: String, lin
 
 /// Show a file of the repository in Finder (Explorer, or the file manager on Linux).
 #[tauri::command]
-fn reveal_file(session: State<'_, Session>, path: String) -> CommandResult<()> {
-    let repo = current(&session)?;
+fn reveal_file(window: tauri::WebviewWindow, session: State<'_, Session>, path: String) -> CommandResult<()> {
+    let repo = current(&session, &window)?;
     open_in::reveal(&repo.workdir().join(Path::new(&path)))
 }
 
@@ -1080,17 +1221,104 @@ async fn monospace_fonts() -> Vec<String> {
     .unwrap_or_default()
 }
 
-/// Open the repository folder in the terminal chosen in Settings.
+/// Open the repository folder in the terminal chosen in Settings; with `worktree`, that other
+/// working folder of it.
 #[tauri::command]
-fn open_in_terminal(app: AppHandle, session: State<'_, Session>) -> CommandResult<()> {
-    let repo = current(&session)?;
+fn open_in_terminal(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    worktree: Option<String>,
+) -> CommandResult<()> {
+    let repo = current(&session, &window)?;
+    let dir = match worktree {
+        Some(path) => worktree_folder(&repo, &path)?,
+        None => repo.workdir().to_path_buf(),
+    };
     let terminal = read_settings(&app)
         .get("oxbow.openIn.terminal")
         .and_then(Value::as_str)
         .map(str::to_owned)
         .or_else(|| open_in::terminals().first().map(|app| app.id.to_owned()))
         .ok_or("No terminal found.")?;
-    open_in::open_terminal(&terminal, repo.workdir())
+    open_in::open_terminal(&terminal, &dir)
+}
+
+/// `path` when it is one of the repository's worktrees; commands that open things take no other.
+fn worktree_folder(repo: &Repo, path: &str) -> CommandResult<PathBuf> {
+    let known = repo.worktrees().map_err(|err| err.to_string())?;
+    let wanted = Path::new(path).canonicalize().ok();
+    known
+        .iter()
+        .filter(|t| !t.missing)
+        .find(|t| t.path == path || wanted.is_some() && Path::new(&t.path).canonicalize().ok() == wanted)
+        .map(|t| PathBuf::from(&t.path))
+        .ok_or_else(|| format!("{path} isn’t a worktree of this repository any more"))
+}
+
+/// Show a worktree's folder in Finder (Explorer, or the file manager on Linux).
+#[tauri::command]
+fn reveal_worktree(window: tauri::WebviewWindow, session: State<'_, Session>, path: String) -> CommandResult<()> {
+    let repo = current(&session, &window)?;
+    open_in::reveal(&worktree_folder(&repo, &path)?)
+}
+
+/// Open the worktree at `path` in a window of its own, or bring forward the window that has it.
+/// Async, because making a window in a synchronous command deadlocks on Windows.
+#[tauri::command]
+async fn open_window(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    path: String,
+) -> CommandResult<()> {
+    let repo = current(&session, &window)?;
+    let folder = worktree_folder(&repo, &path)?;
+    if let Some(open) = session
+        .window_of(&folder)
+        .and_then(|label| app.get_webview_window(&label))
+    {
+        let _ = open.unminimize();
+        return open.set_focus().map_err(|err| err.to_string());
+    }
+    let label = format!("repo-{}", session.next.fetch_add(1, Ordering::Relaxed) + 1);
+    session
+        .pending
+        .lock()
+        .expect("session lock")
+        .insert(label.clone(), path);
+    // Named after the folder, so the Window menu and Mission Control tell the windows apart.
+    let title = folder
+        .file_name()
+        .map_or_else(|| "Oxbow".to_owned(), |name| name.to_string_lossy().into_owned());
+    let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
+        .title(title)
+        .inner_size(1360.0, 860.0)
+        .min_inner_size(900.0, 560.0)
+        .theme(appearance(&read_settings(&app)));
+    // A little down and to the right of the window it was opened from.
+    if let (Ok(at), Ok(scale)) = (window.outer_position(), window.scale_factor()) {
+        let at = at.to_logical::<f64>(scale);
+        builder = builder.position(at.x + 32.0, at.y + 32.0);
+    }
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true)
+        .traffic_light_position(tauri::LogicalPosition::new(22.0, 26.0));
+    builder.build().map(|_| ()).map_err(|err| err.to_string())
+}
+
+/// Close the window of the worktree that was at `path`, after it was removed.
+#[tauri::command]
+fn close_window_of(app: AppHandle, window: tauri::WebviewWindow, session: State<'_, Session>, path: String) {
+    if let Some(open) = session
+        .window_of(Path::new(&path))
+        .filter(|label| label != window.label())
+        .and_then(|label| app.get_webview_window(&label))
+    {
+        let _ = open.close();
+    }
 }
 
 /// settings.json as it is on disk, for editing it as text.
@@ -1205,8 +1433,8 @@ fn reveal_settings(app: AppHandle) -> CommandResult<()> {
 
 /// Stop the running action.
 #[tauri::command]
-fn stop_action(session: State<'_, Session>) {
-    session.cancel.store(true, Ordering::Relaxed);
+fn stop_action(window: tauri::WebviewWindow, session: State<'_, Session>) {
+    session.cancel(&window).store(true, Ordering::Relaxed);
 }
 
 /// The default macOS menu, with Settings… (⌘,) after About in the app menu.
@@ -1232,6 +1460,28 @@ fn main() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(Session::default())
         .manage(accounts::Accounts::default())
+        .on_window_event(|window, event| {
+            let session = window.state::<Session>();
+            let label = window.label().to_owned();
+            match event {
+                // Settings shows and changes the repository of the window used last.
+                tauri::WindowEvent::Focused(true) if label != "settings" => {
+                    let changed = session.focused.lock().expect("session lock").replace(label.clone()) != Some(label);
+                    if changed {
+                        let _ = window.emit_to("settings", "repo-changed", ());
+                    }
+                }
+                tauri::WindowEvent::Destroyed => {
+                    session.windows.lock().expect("session lock").remove(&label);
+                    session.pending.lock().expect("session lock").remove(&label);
+                    let mut focused = session.focused.lock().expect("session lock");
+                    if focused.as_deref() == Some(label.as_str()) {
+                        *focused = None;
+                    }
+                }
+                _ => {}
+            }
+        })
         .on_menu_event(|app, event| {
             if event.id() == "settings" {
                 let _ = show_settings(app);
@@ -1296,6 +1546,9 @@ fn main() {
             pull_setup,
             open_in_editor,
             open_in_terminal,
+            reveal_worktree,
+            open_window,
+            close_window_of,
             reveal_file,
             quick_look,
             lfs_status,
