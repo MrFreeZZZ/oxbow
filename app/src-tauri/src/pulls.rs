@@ -13,8 +13,11 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::accounts::Accounts;
 use crate::{CommandResult, Session, blocking, current};
 
-fn github_repo_of(session: &State<'_, Session>) -> CommandResult<(oxbow_core::Repo, GitHubRepo)> {
-    let repo = current(session)?;
+fn github_repo_of(
+    session: &State<'_, Session>,
+    window: &tauri::WebviewWindow,
+) -> CommandResult<(oxbow_core::Repo, GitHubRepo)> {
+    let repo = current(session, window)?;
     let github = repo
         .github_repo()
         .ok_or_else(|| "This repository has no remote on github.com".to_owned())?;
@@ -23,8 +26,11 @@ fn github_repo_of(session: &State<'_, Session>) -> CommandResult<(oxbow_core::Re
 
 /// The GitHub repository the open one pushes to, if any. Asks nothing of GitHub.
 #[tauri::command]
-pub async fn github_repo(session: State<'_, Session>) -> CommandResult<Option<GitHubRepo>> {
-    let repo = current(&session)?;
+pub async fn github_repo(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+) -> CommandResult<Option<GitHubRepo>> {
+    let repo = current(&session, &window)?;
     blocking(move || Ok(repo.github_repo())).await
 }
 
@@ -32,10 +38,11 @@ pub async fn github_repo(session: State<'_, Session>) -> CommandResult<Option<Gi
 #[tauri::command]
 pub async fn github_pulls(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     session: State<'_, Session>,
     accounts: State<'_, Accounts>,
 ) -> CommandResult<Vec<PullSummary>> {
-    let (_, github) = github_repo_of(&session)?;
+    let (_, github) = github_repo_of(&session, &window)?;
     let client = accounts.client(&app)?;
     blocking(move || client.pulls(&github)).await
 }
@@ -44,11 +51,12 @@ pub async fn github_pulls(
 #[tauri::command]
 pub async fn github_pull(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     session: State<'_, Session>,
     accounts: State<'_, Accounts>,
     number: u64,
 ) -> CommandResult<PullRequest> {
-    let (repo, github) = github_repo_of(&session)?;
+    let (repo, github) = github_repo_of(&session, &window)?;
     let client = accounts.client(&app)?;
     blocking(move || {
         let mut pull = client.pull_request(&github, number)?;
@@ -67,8 +75,12 @@ pub async fn github_pull(
 
 /// The requests `calls` send, as curl, for the sheet.
 #[tauri::command]
-pub async fn github_calls_preview(session: State<'_, Session>, calls: Vec<Call>) -> CommandResult<Vec<String>> {
-    let (_, github) = github_repo_of(&session)?;
+pub async fn github_calls_preview(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    calls: Vec<Call>,
+) -> CommandResult<Vec<String>> {
+    let (_, github) = github_repo_of(&session, &window)?;
     let client = Client::default();
     Ok(calls
         .iter()
@@ -86,10 +98,10 @@ pub async fn github_run(
     accounts: State<'_, Accounts>,
     calls: Vec<Call>,
 ) -> CommandResult<Value> {
-    let (_, github) = github_repo_of(&session)?;
+    let (_, github) = github_repo_of(&session, &window)?;
     let client = accounts.client(&app)?;
     let label = window.label().to_owned();
-    let cancel = app.state::<Session>().cancel.clone();
+    let cancel = app.state::<Session>().cancel(&window);
     cancel.store(false, Ordering::Relaxed);
     tauri::async_runtime::spawn_blocking(move || {
         let emit = |event: ActionEvent| {
@@ -132,7 +144,12 @@ pub async fn github_run(
 
 /// Who CODEOWNERS asks to review what `branch` changes against `base`.
 #[tauri::command]
-pub async fn code_owners(session: State<'_, Session>, base: String, branch: String) -> CommandResult<Vec<String>> {
-    let repo = current(&session)?;
+pub async fn code_owners(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    base: String,
+    branch: String,
+) -> CommandResult<Vec<String>> {
+    let repo = current(&session, &window)?;
     blocking(move || Ok(repo.code_owners(&base, &branch))).await
 }

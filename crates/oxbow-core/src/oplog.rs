@@ -745,6 +745,13 @@ impl Repo {
                 ),
             ),
             Action::BisectReset => ("bisect", "Finish the bisect".to_owned()),
+            // Worktree steps stay out of the log; these only name them.
+            Action::WorktreeAdd { path, .. } => ("worktree", format!("Add the worktree {path}")),
+            Action::WorktreeRemove { path, .. } => ("worktree", format!("Remove the worktree {path}")),
+            Action::WorktreeLock { path, .. } => ("worktree", format!("Lock the worktree {path}")),
+            Action::WorktreeUnlock { path } => ("worktree", format!("Unlock the worktree {path}")),
+            Action::WorktreePrune => ("worktree", "Prune worktrees".to_owned()),
+            Action::WorktreeRepair { path } => ("worktree", format!("Repair the worktree {path}")),
             Action::PushBranches { remote, branches } => {
                 ("push", format!("Push {} branches to {remote}", branches.len()))
             }

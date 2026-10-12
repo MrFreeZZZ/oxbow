@@ -452,7 +452,7 @@ pub async fn github_publish(
     }
     let client = accounts.client(&app)?;
     let label = window.label().to_owned();
-    let cancel = app.state::<crate::Session>().cancel.clone();
+    let cancel = app.state::<crate::Session>().cancel(&window);
     cancel.store(false, Ordering::Relaxed);
     tauri::async_runtime::spawn_blocking(move || {
         let emit = |event: ActionEvent| {

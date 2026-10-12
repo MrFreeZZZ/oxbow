@@ -4,6 +4,7 @@
   import type { History } from "./types";
   import { lane, NO_BRANCH_COLOR, shortId, tint } from "./format";
   import { onNoBranch } from "./branches";
+  import { worktreeOf } from "./worktrees";
 
   let {
     history,
@@ -109,6 +110,7 @@
           >
             <span class="dot" style:background={lane(color)}></span>
             <span class="name" class:bold={current}>{b.name}</span>
+            {#if worktreeOf(history, b.name)}<span class="note">in {worktreeOf(history, b.name)?.name}</span>{/if}
             {#if b.tracking?.ahead}<span class="note">↑{b.tracking.ahead}</span>{/if}
             {#if b.tracking?.gone}<span class="note">gone</span>{/if}
             <span class="check" style:color={lane(color)}>{current ? "✓" : ""}</span>

@@ -409,6 +409,38 @@ pub enum Action {
     /// Stop bisecting, or finish once the commit is found: back to where it started, with the
     /// changes stashed before it.
     BisectReset,
+    /// A new working folder at `path` with `branch` checked out; with `create`, a new branch of
+    /// that name made at `start` (`HEAD` when missing).
+    WorktreeAdd {
+        path: String,
+        branch: String,
+        create: bool,
+        #[serde(default)]
+        start: Option<String>,
+    },
+    /// Delete the worktree at `path`, its folder too. `force` throws its uncommitted changes
+    /// away; `stash` puts them in the stash first instead.
+    WorktreeRemove {
+        path: String,
+        force: bool,
+        #[serde(default)]
+        stash: bool,
+    },
+    /// Keep git from pruning or removing the worktree at `path`.
+    WorktreeLock {
+        path: String,
+        #[serde(default)]
+        reason: Option<String>,
+    },
+    WorktreeUnlock {
+        path: String,
+    },
+    /// Forget worktrees whose folders are gone.
+    WorktreePrune,
+    /// A worktree folder moved by hand is now at `path`: reconnect it.
+    WorktreeRepair {
+        path: String,
+    },
 }
 
 /// A local branch and its name on the remote.
@@ -1090,6 +1122,17 @@ impl Repo {
             } => self.plan_bisect_start(good, bad, *stash, command.as_deref()),
             Action::BisectMark { mark, commit } => self.plan_bisect_mark(*mark, commit.as_deref())?,
             Action::BisectReset => self.plan_bisect_reset()?,
+            Action::WorktreeAdd {
+                path,
+                branch,
+                create,
+                start,
+            } => self.plan_worktree_add(path, branch, *create, start.as_deref()),
+            Action::WorktreeRemove { path, force, stash } => self.plan_worktree_remove(path, *force, *stash)?,
+            Action::WorktreeLock { path, reason } => self.plan_worktree_lock(path, reason.as_deref()),
+            Action::WorktreeUnlock { path } => self.plan_worktree_unlock(path),
+            Action::WorktreePrune => self.plan_worktree_prune(),
+            Action::WorktreeRepair { path } => self.plan_worktree_repair(path),
             Action::Reword { message } => {
                 let mut args = vec!["commit".to_owned(), "--amend".to_owned(), "--only".to_owned()];
                 for paragraph in paragraphs(message) {
@@ -1116,8 +1159,17 @@ impl Repo {
         on_event: &mut dyn FnMut(ActionEvent),
         cancel: &AtomicBool,
     ) -> Result<String> {
-        // Loading a key changes nothing in the repository.
-        if let Action::AddSshKey { .. } = action {
+        // Loading a key changes nothing in the repository. A worktree is a folder: undoing the
+        // branch a new one made would pull it from under that folder, and a removed one's files
+        // were never in a snapshot.
+        if let Action::AddSshKey { .. }
+        | Action::WorktreeAdd { .. }
+        | Action::WorktreeRemove { .. }
+        | Action::WorktreeLock { .. }
+        | Action::WorktreeUnlock { .. }
+        | Action::WorktreePrune
+        | Action::WorktreeRepair { .. } = action
+        {
             return self.perform_unlogged(action, on_event, cancel);
         }
         // A bisect step only checks out a commit to test, and undoing one would not take back

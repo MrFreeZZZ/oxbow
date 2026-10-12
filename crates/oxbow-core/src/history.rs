@@ -12,6 +12,7 @@ use crate::graph::{self, GraphCommit, LeadIn, RowLayout};
 use crate::operation::{Operation, OperationKind};
 use crate::remote::Tracking;
 use crate::repo::{HeadInfo, RefInfo, RefKind, Repo, StashInfo};
+use crate::worktrees::Worktree;
 
 /// Options for loading the history.
 #[derive(Debug, Clone)]
@@ -43,6 +44,9 @@ pub struct History {
     pub operation: Option<Operation>,
     /// A bisect in progress, or one that found its commit and waits to be finished.
     pub bisect: Option<Bisect>,
+    /// Every working folder of the repository, the main one first. Just this one when there are
+    /// no others, or when git can't list them.
+    pub worktrees: Vec<Worktree>,
     pub refs: Vec<RefInfo>,
     /// Tags the default remote does not have yet, as far as Oxbow knows.
     pub local_tags: Vec<String>,
@@ -126,6 +130,7 @@ impl Repo {
         let operation = self.operation().ok().flatten();
         let rebasing = operation.as_ref().is_some_and(|op| op.kind == OperationKind::Rebase);
         let bisect = self.bisect().ok().flatten();
+        let worktrees = self.worktrees().unwrap_or_default();
 
         let mut tips: Vec<ObjectId> = refs
             .iter()
@@ -417,6 +422,7 @@ impl Repo {
             previous_branch,
             operation,
             bisect,
+            worktrees,
             local_tags: self.local_tags(&refs),
             refs,
             // A failing `git for-each-ref` only hides the ahead/behind counts.

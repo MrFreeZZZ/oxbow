@@ -112,6 +112,8 @@ export interface History {
   operation: Operation | null;
   /** A bisect in progress, or one that found its commit and waits to be finished. */
   bisect: Bisect | null;
+  /** Every working folder of the repository, the main one first. */
+  worktrees: Worktree[];
   refs: RefInfo[];
   /** Tags the default remote doesn’t have yet, as far as Oxbow knows. */
   localTags: string[];
@@ -412,7 +414,33 @@ export type Action =
   | { kind: "bisectStart"; good: string; bad: string; stash: boolean; command: string | null }
   /** `commit`: the commit under test when null. */
   | { kind: "bisectMark"; mark: BisectMark; commit: string | null }
-  | { kind: "bisectReset" };
+  | { kind: "bisectReset" }
+  | { kind: "worktreeAdd"; path: string; branch: string; create: boolean; start: string | null }
+  | { kind: "worktreeRemove"; path: string; force: boolean; stash: boolean }
+  | { kind: "worktreeLock"; path: string; reason: string | null }
+  | { kind: "worktreeUnlock"; path: string }
+  | { kind: "worktreePrune" }
+  | { kind: "worktreeRepair"; path: string };
+
+/** One working folder of the repository (`git worktree`). */
+export interface Worktree {
+  path: string;
+  /** The folder's name. */
+  name: string;
+  /** null while HEAD is detached there. */
+  branch: string | null;
+  head: string | null;
+  /** The folder that holds the repository; it can't be removed. */
+  main: boolean;
+  /** The folder open in this window. */
+  current: boolean;
+  /** The reason it was locked, "" without one; null when it isn't. */
+  locked: string | null;
+  /** Its folder is gone. */
+  missing: boolean;
+  /** Files with uncommitted changes there; 0 for this window's and a missing one. */
+  changed: number;
+}
 
 export type BisectMark = "good" | "bad" | "skip";
 

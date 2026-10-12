@@ -125,7 +125,13 @@ export const api = {
   /** e.g. "3 files would be pruned (1.4 GB)"; null when nothing would be. */
   lfsPrunePreview: () => invoke<string | null>("lfs_prune_preview"),
   openLfsDownload: () => invoke<void>("open_lfs_download"),
-  openInTerminal: () => invoke<void>("open_in_terminal"),
+  /** With `worktree`, that working folder of the repository instead. */
+  openInTerminal: (worktree: string | null = null) => invoke<void>("open_in_terminal", { worktree }),
+  revealWorktree: (path: string) => invoke<void>("reveal_worktree", { path }),
+  /** A window of its own for the worktree at `path`, or the one it is already open in. */
+  openWindow: (path: string) => invoke<void>("open_window", { path }),
+  /** After removing the worktree at `path`, close the window that showed it. */
+  closeWindowOf: (path: string) => invoke<void>("close_window_of", { path }),
   monospaceFonts: () => invoke<string[]>("monospace_fonts"),
   refreshRemoteTags: () => invoke<boolean>("refresh_remote_tags"),
   /** Newest first. */

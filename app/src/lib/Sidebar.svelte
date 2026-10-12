@@ -27,12 +27,14 @@
   import { github } from "./github.svelte";
   import { downloadRequest, installRequest, lfs, patternNote, pruneRequest, lfsTrackRequest, untrackRequest } from "./lfs.svelte";
   import { nav } from "./nav.svelte";
-  import type { LfsPattern } from "./types";
+  import type { LfsPattern, Worktree } from "./types";
+  import { locateRequest, lockRequest, newWorktreeRequest, pruneWorktreesRequest, removeWorktreeRequest, tilde, unlockRequest, worktreeOf } from "./worktrees";
 
   const PULL_ICON = "M3 3.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M3 12.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M10 12.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M4.5 5v6M11.5 11V6.5a2 2 0 0 0-2-2H7M8.5 3 7 4.5 8.5 6";
   const TERMINAL = "M2.5 3.5h11v9h-11zM5 7l2 1.5L5 10M8.5 10.5h2.5";
   const FOLDER = "M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z";
   const HOME = "M2.5 7.5 8 3l5.5 4.5M4 6.5v6.5h8V6.5";
+  const LOCK = "M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2";
 
   let {
     repo,
@@ -223,14 +225,17 @@
             ? `${t.ahead} to push`
             : `on ${t.remote}`;
     const item = (label: string, icon: string, act: () => void, danger = false): MenuEntry => ({ kind: "item", label, icon, run: act, danger });
-    const entries: MenuEntry[] = [{ kind: "header", label: `${ref.name} · ${status}` }];
+    const elsewhere = worktreeOf(history, ref.name);
+    const entries: MenuEntry[] = [{ kind: "header", label: `${ref.name} · ${elsewhere ? `in ${elsewhere.name}` : status}` }];
     const remove = () => run(api.deletionCheck(ref.name).then((check) => deleteRequest(ctx, ref, check)));
-    if (t?.gone && !isHead) {
+    if (t?.gone && !isHead && !elsewhere) {
       entries.push(item(`Delete ${ref.name}…`, menuIcons.drop, remove, true));
       entries.push({ kind: "note", label: "Its branch on the remote is gone, usually after its pull request was merged." });
       entries.push({ kind: "sep" });
     }
-    if (!isHead) entries.push(item("Check Out", menuIcons.checkout, () => run(switchRequest(ctx, ref.name))));
+    if (elsewhere && !elsewhere.missing) entries.push(item(`Open ${elsewhere.name}`, menuIcons.open, () => openWorktree(elsewhere)));
+    else if (!isHead) entries.push(item("Check Out", menuIcons.checkout, () => run(switchRequest(ctx, ref.name))));
+    if (!isHead && !elsewhere) entries.push(item("Open in New Worktree…", menuIcons.folder, () => run(newWorktreeRequest(ctx, repo.path, ref.name))));
     if (!isHead) entries.push(...mergeItems(ref.name));
     if (!isHead) entries.push(compareItem(ref.name));
     if (!upstreamOf(ref) && history.defaultRemote) {
@@ -264,11 +269,12 @@
     entries.push(item(`New Branch from ${ref.name}…`, menuIcons.branch, () => run(newBranchRequest(ctx, ref.name))));
     if (!isTrunk) entries.push(item("Rename…", menuIcons.edit, () => run(renameRequest(ctx, ref))));
     entries.push(item("Copy Name", menuIcons.copy, () => copy(ref.name)));
-    if (!isHead && !isTrunk && !t?.gone) {
+    if (!isHead && !isTrunk && !t?.gone && !elsewhere) {
       entries.push({ kind: "sep" });
       entries.push(item("Delete…", menuIcons.drop, remove, true));
     }
-    if (isTrunk) entries.push({ kind: "note", label: "Default branch: rename and delete are turned off." });
+    if (elsewhere) entries.push({ kind: "note", label: elsewhere.missing ? `Checked out in ${elsewhere.name}, whose folder is gone. Prune it under Worktrees to free the branch.` : `Checked out in ${elsewhere.name}. Git keeps a branch in one folder at a time.` });
+    else if (isTrunk) entries.push({ kind: "note", label: "Default branch: rename and delete are turned off." });
     else if (isHead) entries.push({ kind: "note", label: "Checked out. Switch to another branch to delete it." });
     open(event, "Branch menu", ref.name, entries);
   }
@@ -389,6 +395,67 @@
     open(event, "Git LFS pattern menu", `lfs:${p.pattern}`, entries);
   }
 
+  /** Working folders of the repository, the main one first, as git lists them. */
+  const worktrees = $derived(history.worktrees);
+
+  /** A worktree in its own window, or the window that already has it. */
+  function openWorktree(wt: Worktree) {
+    api.openWindow(wt.path).catch((err) => confirm.say(String(err)));
+  }
+
+  /** The commit a worktree has checked out, selected in History. */
+  function showWorktree(wt: Worktree) {
+    if (wt.head && rowOf.has(wt.head)) {
+      clicked = wt.branch ? (history.refs.find((r) => r.kind === "local" && r.name === wt.branch) ?? null) : null;
+      onPick(wt.head);
+    } else confirm.say(`${wt.head ? wt.head.slice(0, 7) : "Its commit"} isn’t in the loaded history.`);
+  }
+
+  /** What the note on a worktree's row says. */
+  function worktreeNote(wt: Worktree): { text: string; tone?: "accent" | "warn" } | null {
+    if (wt.current) return { text: "this window", tone: "accent" };
+    if (wt.missing) return { text: "missing", tone: "warn" };
+    if (wt.changed) return { text: `${wt.changed} changed` };
+    if (wt.locked !== null) return { text: "locked" };
+    return null;
+  }
+
+  /** The menu of a worktree. */
+  function worktreeMenu(event: MouseEvent, wt: Worktree) {
+    const where = wt.branch ?? (wt.head ? `detached at ${wt.head.slice(0, 7)}` : "no commits");
+    const entries: MenuEntry[] = [{ kind: "header", label: `${wt.name} · ${where}` }];
+    const lock: MenuEntry[] = wt.main
+      ? []
+      : wt.locked !== null
+        ? [{ kind: "item", label: "Unlock…", icon: LOCK, run: () => run(unlockRequest(wt)) }]
+        : [{ kind: "item", label: "Lock…", icon: LOCK, run: () => run(lockRequest(wt)) }];
+    if (wt.missing) {
+      entries.push({ kind: "note", label: `Folder not found at ${tilde(wt.path)}.` });
+      entries.push({ kind: "item", label: "Locate Folder…", icon: menuIcons.folder, run: () => locateRequest(ctx, wt).then((request) => request && run(request)) });
+      if (wt.locked === null) entries.push({ kind: "item", label: "Prune…", icon: menuIcons.drop, run: () => run(pruneWorktreesRequest(ctx)) });
+      entries.push(...lock);
+      entries.push({ kind: "item", label: "Copy Path", icon: menuIcons.copy, run: () => copy(wt.path) });
+      if (wt.locked !== null) entries.push({ kind: "note", label: "Locked, so Prune leaves it. Unlock it to let Prune forget it." });
+      open(event, "Worktree menu", `worktree:${wt.path}`, entries);
+      return;
+    }
+    if (!wt.current) entries.push({ kind: "item", label: "Open in New Window", icon: menuIcons.open, run: () => openWorktree(wt) });
+    if (wt.head) entries.push({ kind: "item", label: wt.branch ? `Show ${wt.branch} in History` : "Show in History", icon: menuIcons.history, run: () => showWorktree(wt) });
+    entries.push(
+      { kind: "item", label: "Show in Finder", icon: menuIcons.reveal, run: () => api.revealWorktree(wt.path).catch((err) => confirm.say(String(err))) },
+      { kind: "item", label: "Open in Terminal", icon: TERMINAL, run: () => api.openInTerminal(wt.path).catch((err) => confirm.say(String(err))) },
+      { kind: "item", label: "Copy Path", icon: menuIcons.copy, run: () => copy(wt.path) },
+    );
+    const removable = !wt.main && !wt.current;
+    if (lock.length || removable) entries.push({ kind: "sep" });
+    entries.push(...lock);
+    if (removable) entries.push({ kind: "item", label: "Remove Worktree…", icon: menuIcons.drop, danger: true, run: () => run(removeWorktreeRequest(ctx, wt)) });
+    if (wt.main) entries.push({ kind: "note", label: "The main folder: it holds the repository, so it can’t be removed." });
+    else if (wt.current) entries.push({ kind: "note", label: "Open in this window. To remove it, use the main folder’s window." });
+    if (wt.locked) entries.push({ kind: "note", label: `Locked: ${wt.locked}` });
+    open(event, "Worktree menu", `worktree:${wt.path}`, entries);
+  }
+
   /** Select the branch's or tag's latest commit, as if it were clicked in the graph. */
   function focus(r: RefInfo) {
     clicked = r;
@@ -495,6 +562,10 @@
         <span class="dot" style:background={lane(b.color)}></span>
         <span class="grow ellipsis" class:bold={head}>{b.ref.name}</span>
         {#if b.ref.tracking?.gone}<span class="badge" title="Its branch on {b.ref.tracking.remote} was deleted">gone</span>{/if}
+        {#if worktreeOf(history, b.ref.name)}
+          {@const wt = worktreeOf(history, b.ref.name)!}
+          <svg class="icon tiny" class:off={wt.missing} viewBox="0 0 16 16" role="img" aria-label="Checked out in {wt.name}"><title>Checked out in {wt.name}</title><path d={menuIcons.folder} /></svg>
+        {/if}
         {#if github.openPullOf(b.ref.name) && !head}<span class="meta" title="Pull request #{github.openPullOf(b.ref.name)?.number}">#{github.openPullOf(b.ref.name)?.number}</span>{/if}
         {#if busy?.branch === b.ref.name}<span class="head busy">{busy.word}</span>{:else if head}<span class="head">HEAD</span>{/if}
       </button>
@@ -546,6 +617,39 @@
             <span class="ellipsis sub">{patternNote(p)}</span>
           </span>
           {#if lfs.ready && p.missing}<span class="meta warn">{p.missing} to download</span>{:else if p.new}<span class="meta">new</span>{/if}
+        </button>
+      {/each}
+    {/if}
+
+    {#if history.head.commit && worktrees.length}
+      <div class="heading with-button">
+        <span>Worktrees</span>
+        <button class="add" onclick={() => run(newWorktreeRequest(ctx, repo.path))} aria-label="New worktree" title="New Worktree…">
+          <svg class="icon" viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9" /></svg>
+        </button>
+      </div>
+      {#each worktrees as wt (wt.path)}
+        {@const color = wt.branch ? ctx.colorOf(wt.branch) : NO_BRANCH_COLOR}
+        {@const note = worktreeNote(wt)}
+        <button
+          class="item two"
+          class:menu-open={menu?.ref === `worktree:${wt.path}`}
+          style:--ring={lane(color)}
+          onclick={() => (wt.missing ? undefined : showWorktree(wt))}
+          ondblclick={() => !wt.current && !wt.missing && openWorktree(wt)}
+          oncontextmenu={(e) => worktreeMenu(e, wt)}
+          title={wt.missing ? `Folder not found at ${tilde(wt.path)}` : wt.current ? tilde(wt.path) : `${tilde(wt.path)} · double-click to open its window`}
+        >
+          {#if wt.missing}
+            <svg class="icon off" viewBox="0 0 16 16"><path d="M8 2 1.5 13.5h13zM8 6.5v3.5M8 12v.2" /></svg>
+          {:else}
+            <svg class="icon" class:here={wt.current} viewBox="0 0 16 16"><path d={menuIcons.folder} /></svg>
+          {/if}
+          <span class="grow two-text">
+            <span class="ellipsis" class:bold={wt.current}>{wt.name}</span>
+            <span class="ellipsis sub"><span class="mini-dot" style:background={lane(color)}></span>{wt.branch ?? (wt.head ? `detached at ${wt.head.slice(0, 7)}` : "no commits")}</span>
+          </span>
+          {#if note}<span class="meta nowrap" class:accent={note.tone === "accent"} class:warn={note.tone === "warn"}>{note.text}</span>{/if}
         </button>
       {/each}
     {/if}
@@ -767,8 +871,34 @@
   .item.menu-open {
     box-shadow: inset 0 0 0 1.5px var(--ring);
   }
-  .item.lfs {
+  .item.lfs,
+  .item.two {
     height: 38px;
+  }
+  .two-text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.25;
+    text-align: left;
+  }
+  .two-text .sub {
+    font-size: 10.5px;
+    color: var(--text2);
+  }
+  .mini-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 3px;
+    margin-right: 5px;
+    vertical-align: 1px;
+  }
+  .icon.here {
+    color: var(--accent-text);
+  }
+  .meta.accent {
+    color: var(--accent-text);
+    font-weight: 600;
   }
   .lfs-text {
     display: flex;

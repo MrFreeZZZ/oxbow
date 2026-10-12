@@ -4,6 +4,7 @@ import type { Part, Recovery, Request } from "./confirm.svelte";
 import { remoteTrouble } from "./remote";
 import type { Action, CommitBrief, DeletionCheck, Failure, History, HistoryRow, RefInfo } from "./types";
 import { shortId } from "./format";
+import { elsewhereRequest, refusedForWorktree, worktreeOf } from "./worktrees";
 
 export interface BranchContext {
   history: History;
@@ -105,6 +106,9 @@ function leftBehind(lost: HistoryRow[]): Part[] {
 }
 
 export function switchRequest(ctx: BranchContext, branch: string): Request {
+  // Another worktree has it checked out: git refuses, so that folder is offered instead.
+  const elsewhere = worktreeOf(ctx.history, branch);
+  if (elsewhere) return elsewhereRequest(ctx, branch, elsewhere);
   const action: Action = { kind: "switch", branch, stash: false, keep: null };
   const lost = onNoBranch(ctx.history);
   if (lost.length) {
@@ -117,7 +121,7 @@ export function switchRequest(ctx: BranchContext, branch: string): Request {
       alt: { label: "Create Branch First", request: () => keepRequest(ctx, branch) },
       status: `Switching to ${branch}…`,
       done: `Switched to ${branch}. ${plural(lost.length, "commit")} left behind.`,
-      recover: (failure) => changesInTheWay(failure, action, ctx),
+      recover: (failure) => changesInTheWay(failure, action, ctx) ?? refusedForWorktree(failure, ctx),
       action,
     };
   }
@@ -132,7 +136,7 @@ export function switchRequest(ctx: BranchContext, branch: string): Request {
     button: "Switch",
     status: `Switching to ${branch}…`,
     done: `Switched to ${branch}.`,
-    recover: (failure) => changesInTheWay(failure, action, ctx),
+    recover: (failure) => changesInTheWay(failure, action, ctx) ?? refusedForWorktree(failure, ctx),
     action,
   };
 }

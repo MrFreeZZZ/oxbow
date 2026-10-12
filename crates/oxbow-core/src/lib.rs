@@ -28,6 +28,7 @@ pub mod stack;
 pub mod stash;
 pub mod tags;
 pub mod worktree;
+pub mod worktrees;
 
 pub use bisect::{Bisect, BisectMark};
 pub use cli::{CommandOutput, GitCommand, OutputLine};
@@ -55,3 +56,4 @@ pub use stack::{
 };
 pub use stash::StashCheck;
 pub use worktree::{Action, ActionEvent, BranchPush, Plan, PullMode, RemoteBranch, Side, WorkingTree};
+pub use worktrees::Worktree;
