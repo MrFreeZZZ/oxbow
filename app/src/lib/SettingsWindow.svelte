@@ -601,6 +601,10 @@
               options: () => opts(...new Set(["SF Mono", ...fonts])),
             }),
             prefRow("oxbow.text.fontSize", "Size", "popup", { options: () => opts(10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24) }),
+            prefRow("oxbow.text.lineHeight", "Line height", "popup", {
+              sub: () => `${Math.round(prefs.get("oxbow.text.fontSize") * prefs.get("oxbow.text.lineHeight"))} px per line at size ${prefs.get("oxbow.text.fontSize")}`,
+              options: () => opts(1.2, 1.4, 1.5, 1.6, 1.8, 2),
+            }),
             prefRow("oxbow.text.tabWidth", "Tab width", "popup", { options: () => opts(2, 4, 8) }),
           ],
         },
