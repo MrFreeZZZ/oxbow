@@ -32,6 +32,8 @@ export const defaults = {
   /** A font family; SF Mono is the system's monospaced font on macOS. */
   "oxbow.text.font": "SF Mono" as string,
   "oxbow.text.fontSize": 12,
+  /** Line height of code, as a multiple of the font size. */
+  "oxbow.text.lineHeight": 1.6,
   "oxbow.text.tabWidth": 4,
   "oxbow.git.englishOutput": true,
   "oxbow.git.path": "",
@@ -72,6 +74,7 @@ export const rules: Partial<Record<PrefKey, Rule>> = {
   "oxbow.diff.foldOver": { min: 1, max: 100000, whole: true },
   "oxbow.diff.maxLines": { min: 0, max: 10000000, whole: true },
   "oxbow.text.fontSize": { min: 6, max: 72 },
+  "oxbow.text.lineHeight": { min: 1, max: 3 },
   "oxbow.text.tabWidth": { min: 1, max: 16, whole: true },
   "oxbow.fetch.interval": { min: 1, max: 1440, whole: true },
   "oxbow.commit.subjectGuide": { min: 0, max: 500, whole: true },
@@ -216,7 +219,7 @@ export function followLook() {
       const size = prefs.get("oxbow.text.fontSize");
       root.style.setProperty("--code-font", fontStack(prefs.get("oxbow.text.font")));
       root.style.setProperty("--code-size", `${size}px`);
-      root.style.setProperty("--code-line", `${Math.round(size * 1.65)}px`);
+      root.style.setProperty("--code-line", `${Math.round(size * prefs.get("oxbow.text.lineHeight"))}px`);
       root.style.setProperty("--tab", String(prefs.get("oxbow.text.tabWidth")));
     });
   });

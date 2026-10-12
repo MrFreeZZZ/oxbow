@@ -196,7 +196,7 @@
     const entries: MenuEntry[] = [];
     if (recent.length) {
       entries.push({ kind: "header", label: "Recent" });
-      for (const r of recent) entries.push({ kind: "item", label: r.name, icon: FOLDER, run: () => onOpenPath(r.path) });
+      for (const r of recent) entries.push({ kind: "item", label: r.name, detail: tilde(r.path), icon: FOLDER, run: () => onOpenPath(r.path) });
       entries.push({ kind: "sep" });
     }
     entries.push(
@@ -495,7 +495,7 @@
     <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z" /></svg>
     <span class="repo-text">
       <span class="repo-name">{repo.name}</span>
-      <span class="repo-path">{repo.path}</span>
+      <span class="repo-path">{tilde(repo.path)}</span>
     </span>
     <svg class="icon small" viewBox="0 0 16 16"><path d="M5 6l3-3 3 3M5 10l3 3 3-3" /></svg>
   </button>
