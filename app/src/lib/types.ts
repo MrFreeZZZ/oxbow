@@ -110,6 +110,8 @@ export interface History {
   previousBranch: string | null;
   /** A merge, rebase, cherry-pick or revert that stopped, waiting to be finished or aborted. */
   operation: Operation | null;
+  /** A bisect in progress, or one that found its commit and waits to be finished. */
+  bisect: Bisect | null;
   refs: RefInfo[];
   /** Tags the default remote doesn’t have yet, as far as Oxbow knows. */
   localTags: string[];
@@ -405,7 +407,48 @@ export type Action =
   | { kind: "lfsUntrack"; pattern: string }
   | { kind: "lfsPull"; include: string | null }
   | { kind: "lfsPrune" }
-  | { kind: "lfsInstall"; brew: string | null; pull: boolean };
+  | { kind: "lfsInstall"; brew: string | null; pull: boolean }
+  /** `command`: git runs it at every step and answers by its exit code. */
+  | { kind: "bisectStart"; good: string; bad: string; stash: boolean; command: string | null }
+  /** `commit`: the commit under test when null. */
+  | { kind: "bisectMark"; mark: BisectMark; commit: string | null }
+  | { kind: "bisectReset" };
+
+export type BisectMark = "good" | "bad" | "skip";
+
+/** git bisect, from git's own state, so one started in a terminal shows too. */
+export interface Bisect {
+  /** Where finishing goes back to: a branch, or a sha when HEAD was detached. */
+  start: string;
+  startIsBranch: boolean;
+  /** The first good and bad answers, which set the range, and their names (a branch, tag or short sha). */
+  firstGood: string | null;
+  firstGoodLabel: string | null;
+  firstBad: string | null;
+  firstBadLabel: string | null;
+  good: string[];
+  bad: string[];
+  skipped: string[];
+  /** Commits the first bad one may still be; empty when unknown. */
+  candidates: string[];
+  /** Answers given after the range was set. */
+  steps: number;
+  /** git's numbers for the commit under test: revisions left after it, roughly how many steps. */
+  left: number;
+  stepsLeft: number;
+  testing: string | null;
+  found: string | null;
+  /** Only skipped commits are left: it is one of these. */
+  possible: string[];
+  /** The last answer and what git said, as in a terminal. */
+  output: string[];
+  /** git bisect log. */
+  log: string;
+  /** Oxbow stashed changes before starting; Finish brings them back. */
+  stashed: boolean;
+  termBad: string;
+  termGood: string;
+}
 
 export type ResetMode = "soft" | "mixed" | "hard";
 

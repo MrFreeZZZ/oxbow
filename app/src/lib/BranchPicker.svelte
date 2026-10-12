@@ -23,7 +23,17 @@
   // A rebase detaches HEAD, but the branch it is rebasing is the one the user is on.
   const head = $derived(history.head.branch ?? (history.operation?.kind === "rebase" ? history.operation.branch : null));
   /** While an operation is in progress, checking out another branch is refused by git. */
-  const busy = $derived(history.operation ? `Finish or abort the ${history.operation.kind === "cherryPick" ? "cherry-pick" : history.operation.kind} first` : null);
+  const busy = $derived(
+    history.operation
+      ? `Finish or abort the ${history.operation.kind === "cherryPick" ? "cherry-pick" : history.operation.kind} first`
+      : history.bisect
+        ? `${history.bisect.found ? "Finish" : "Stop"} the bisect first`
+        : null,
+  );
+  /** While bisecting, the button says so instead of "Detached at". */
+  const bisecting = $derived(
+    history.bisect ? (history.bisect.found ? `Bisect done · ${shortId(history.bisect.found)}` : `Bisecting · ${shortId(history.head.commit ?? "")}`) : null,
+  );
   const lost = $derived(onNoBranch(history).length);
   /** While detached: the tag HEAD is at, unless commits were made there since. */
   const detachedAt = $derived.by(() => {
@@ -74,7 +84,7 @@
     <svg class="icon" viewBox="0 0 16 16" style:color={head ? lane(colorOf(head)) : lane(NO_BRANCH_COLOR)}
       ><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg
     >
-    <span>{head ?? (detachedAt ? `Detached at ${detachedAt}` : "No commits")}</span>
+    <span>{bisecting ?? head ?? (detachedAt ? `Detached at ${detachedAt}` : "No commits")}</span>
     {#if !busy}<svg class="icon small" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>{/if}
   </button>
   {#if open}

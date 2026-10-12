@@ -50,6 +50,10 @@
   import { github } from "./lib/github.svelte";
   import { lfs } from "./lib/lfs.svelte";
   import LfsBanner from "./lib/LfsBanner.svelte";
+  import BisectBanner from "./lib/BisectBanner.svelte";
+  import { bisectMarkRequest, bisectResetRequest, bisectStartRequest } from "./lib/bisect";
+  import { keys } from "./lib/keys";
+  import type { BisectMark } from "./lib/types";
 
   let repo = $state<RepoSummary | null>(null);
   let history = $state<History | null>(null);
@@ -340,6 +344,7 @@
     const stash = history.stashes.find((s) => s.id === row.id);
     if (stash) return stashMenu(ctx, stash, run, (text) => copyText(text, `Copied ${text.length > 40 ? "it" : text}.`));
     const item = (label: string, icon: string, act: () => void, danger = false): MenuEntry => ({ kind: "item", label, icon, run: act, danger });
+    if (history.bisect) return bisectMenu(row, ctx, item);
     const isHead = row.id === history.head.commit;
     const here = history.head.branch ?? "HEAD";
     const entries: MenuEntry[] = [{ kind: "header", label: `${row.id.slice(0, 7)} · ${row.summary}` }];
@@ -393,6 +398,12 @@
         });
       }
       group(editing);
+
+      // Bisect: from a branch tip (or HEAD) back to a tag, or from an older commit up to HEAD.
+      const finding: MenuEntry[] = [];
+      if (isHead || row.labels.some((l) => l.kind === "local")) finding.push(item("Find What Broke This…", menuIcons.bisect, () => run(bisectStartRequest(ctx, { bad: row }))));
+      else if (inHead) finding.push(item("Find First Bad Commit After This…", menuIcons.bisect, () => run(bisectStartRequest(ctx, { good: row }))));
+      group(finding);
     }
 
     group([isHead && !history.head.branch ? item("Create Branch…", menuIcons.branch, () => run(keepRequest(ctx))) : item("New Branch from Here…", menuIcons.branch, () => run(newBranchRequest(ctx, undefined, row)))]);
@@ -440,6 +451,42 @@
       },
     ]);
     return entries;
+  }
+
+  /** The commit menu while bisecting: answers about the commit, Stop or Finish, and the
+   *  things that don't move HEAD. */
+  function bisectMenu(row: HistoryRow, ctx: BranchContext, item: (label: string, icon: string, act: () => void, danger?: boolean) => MenuEntry): MenuEntry[] {
+    const bisect = history!.bisect!;
+    const entries: MenuEntry[] = [{ kind: "header", label: `${row.id.slice(0, 7)} · ${row.summary}` }];
+    if (!bisect.found) {
+      const testing = row.id === history!.head.commit;
+      const mark = (label: string, icon: string, kind: BisectMark, key: string): MenuEntry => ({ ...item(label, icon, () => run(bisectMarkRequest(ctx, kind, row))), ...(testing ? { keys: keys(key) } : {}) });
+      entries.push(mark("Mark as Good", menuIcons.good, "good", "G"), mark("Mark as Bad", menuIcons.bad, "bad", "B"), mark("Skip This Commit", menuIcons.skip, "skip", "S"), { kind: "sep" });
+    }
+    entries.push(item(bisect.found ? "Finish Bisect…" : "Stop Bisect…", menuIcons.bisect, () => run(bisectResetRequest(ctx, bisect))), { kind: "sep" });
+    entries.push(item("New Branch from Here…", menuIcons.branch, () => run(newBranchRequest(ctx, undefined, row))), item("New Tag Here…", menuIcons.tag, () => run(newTagRequest(ctx, row))));
+    const name = row.labels.find((l) => l.kind === "local")?.name ?? row.id.slice(0, 7);
+    const against = [bisect.startIsBranch ? bisect.start : null, history!.trunk].filter((b, i, all): b is string => !!b && b !== name && all.indexOf(b) === i);
+    entries.push({ kind: "sep" });
+    if (against.length) entries.push({ kind: "sub", label: "Compare", icon: menuIcons.compare, entries: against.map((b) => ({ label: `With ${b}`, run: () => openCompare(b, name) })) });
+    entries.push({
+      kind: "sub",
+      label: "Copy",
+      icon: menuIcons.copy,
+      entries: [
+        { label: "SHA", hint: row.id.slice(0, 7) + "…", run: () => copyText(row.id, `Copied ${row.id.slice(0, 7)}.`) },
+        { label: "Short SHA", hint: row.id.slice(0, 7), run: () => copyText(row.id.slice(0, 7), `Copied ${row.id.slice(0, 7)}.`) },
+        { label: "Message", run: () => copyMessage(row.id) },
+      ],
+    });
+    return entries;
+  }
+
+  /** G, B or S while bisecting: the answer for the commit under test. */
+  function bisectKey(mark: BisectMark) {
+    if (!branchCtx || !history?.bisect || history.bisect.found || !history.bisect.testing) return;
+    if (mark === "skip" && !(history.bisect.good.length && history.bisect.bad.length)) return;
+    run(bisectMarkRequest(branchCtx, mark));
   }
 
   function copyText(text: string, done: string) {
@@ -700,6 +747,10 @@
       // ⌘Z undoes the newest step of the Operation Log. In a text field it stays the field's own.
       event.preventDefault();
       undoLatest();
+    } else if (history?.bisect && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && ["g", "b", "s"].includes(event.key.toLowerCase()) && view === "history" && !showConflicts && !confirm.request && !start.sheet && !nav.quickOpen && !typing(event)) {
+      // Bisecting: G, B and S answer for the commit under test, as the banner's tooltips say.
+      event.preventDefault();
+      bisectKey(({ g: "good", b: "bad", s: "skip" } as const)[event.key.toLowerCase() as "g" | "b" | "s"]);
     } else if (event.key === "Escape" && second && view === "history" && !confirm.request && !event.defaultPrevented) {
       second = null;
     } else if ((event.metaKey || event.ctrlKey) && !event.altKey && !confirm.request && !start.sheet && !loading) {
@@ -772,7 +823,7 @@
               {:else if activity.problem?.failure}
                 <span class="sub amber">Fetch failed · {failureShort(activity.problem.failure)}</span>
               {:else}
-                <span class="sub">{branchCount} {branchCount === 1 ? "branch" : "branches"} · {history.head.branch ?? operation?.branch ?? "detached HEAD"}</span>
+                <span class="sub">{branchCount} {branchCount === 1 ? "branch" : "branches"} · {history.bisect ? (history.bisect.found ? "Bisect done" : "Bisecting") : (history.head.branch ?? operation?.branch ?? "detached HEAD")}</span>
               {/if}
             {/if}
           </div>
@@ -896,8 +947,22 @@
           onSkip={() => run(skipRequest(branchCtx!, op))}
           onContinue={() => run(continueRequest(branchCtx!, op))}
         />
-      {:else if !history.head.branch && history.head.commit && branchCtx}
+      {:else if !history.bisect && !history.head.branch && history.head.commit && branchCtx}
         <DetachedBanner {history} back={backTo} onBack={() => backTo && run(switchRequest(branchCtx!, backTo))} onKeep={newBranch} />
+      {/if}
+      {#if history.bisect && branchCtx}
+        {@const bisect = history.bisect}
+        <BisectBanner
+          {bisect}
+          lookup={(id) => rowsById.get(id)}
+          onStop={() => run(bisectResetRequest(branchCtx!, bisect))}
+          onFinish={() => run(bisectResetRequest(branchCtx!, bisect))}
+          onSkip={() => bisectKey("skip")}
+          onGood={() => bisectKey("good")}
+          onBad={() => bisectKey("bad")}
+          onShow={pick}
+          copy={(text) => copyText(text, "Copied the bisect log.")}
+        />
       {/if}
       {#if lfs.missing && !lfs.dismissed}
         <LfsBanner repoName={repo.name} run={(request) => void run(request)} />

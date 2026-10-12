@@ -324,6 +324,9 @@ impl Repo {
             };
             return Err(Error::Git(format!("{what} is in progress: finish or abort it first")));
         }
+        if self.bisect()?.is_some() {
+            return Err(Error::Git("A bisect is in progress: stop or finish it first".into()));
+        }
 
         // The value each ref had then: before the oldest undone step that moved it.
         let mut targets: BTreeMap<&str, Option<&String>> = BTreeMap::new();
@@ -537,7 +540,10 @@ impl Repo {
             .stdout
             .lines()
             .filter_map(|line| line.split_once(' '))
-            .filter(|(_, name)| *name != "refs/stash" && !name.starts_with("refs/oxbow/"))
+            // git's notes on a bisect are its own: a restore must not move them under it.
+            .filter(|(_, name)| {
+                *name != "refs/stash" && !name.starts_with("refs/oxbow/") && !name.starts_with("refs/bisect/")
+            })
             .map(|(id, name)| (name.to_owned(), id.to_owned()))
             .collect())
     }
@@ -725,6 +731,20 @@ impl Repo {
             Action::LfsPull { include: None } => ("fetch", "Download LFS files".to_owned()),
             Action::LfsPrune => ("lfs", "Free up LFS space".to_owned()),
             Action::LfsInstall { .. } => ("lfs", "Install Git LFS".to_owned()),
+            Action::BisectStart { .. } => ("bisect", "Start a bisect".to_owned()),
+            Action::BisectMark { mark, commit } => (
+                "bisect",
+                format!(
+                    "Mark {} as {}",
+                    commit.as_deref().map_or_else(|| "the commit".to_owned(), short_id),
+                    match mark {
+                        crate::bisect::BisectMark::Good => "good",
+                        crate::bisect::BisectMark::Bad => "bad",
+                        crate::bisect::BisectMark::Skip => "skipped",
+                    }
+                ),
+            ),
+            Action::BisectReset => ("bisect", "Finish the bisect".to_owned()),
             Action::PushBranches { remote, branches } => {
                 ("push", format!("Push {} branches to {remote}", branches.len()))
             }

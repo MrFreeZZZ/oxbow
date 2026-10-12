@@ -6,6 +6,7 @@ use gix::revision::walk::Sorting;
 use gix::traverse::commit::simple::CommitTimeOrder;
 use serde::Serialize;
 
+use crate::bisect::Bisect;
 use crate::error::{Error, Result};
 use crate::graph::{self, GraphCommit, LeadIn, RowLayout};
 use crate::operation::{Operation, OperationKind};
@@ -40,6 +41,8 @@ pub struct History {
     pub previous_branch: Option<String>,
     /// A merge, rebase, cherry-pick or revert that stopped, waiting to be finished or aborted.
     pub operation: Option<Operation>,
+    /// A bisect in progress, or one that found its commit and waits to be finished.
+    pub bisect: Option<Bisect>,
     pub refs: Vec<RefInfo>,
     /// Tags the default remote does not have yet, as far as Oxbow knows.
     pub local_tags: Vec<String>,
@@ -122,6 +125,7 @@ impl Repo {
         // A failure to read the operation's state only hides its banner.
         let operation = self.operation().ok().flatten();
         let rebasing = operation.as_ref().is_some_and(|op| op.kind == OperationKind::Rebase);
+        let bisect = self.bisect().ok().flatten();
 
         let mut tips: Vec<ObjectId> = refs
             .iter()
@@ -412,6 +416,7 @@ impl Repo {
             lead_ins,
             previous_branch,
             operation,
+            bisect,
             local_tags: self.local_tags(&refs),
             refs,
             // A failing `git for-each-ref` only hides the ahead/behind counts.

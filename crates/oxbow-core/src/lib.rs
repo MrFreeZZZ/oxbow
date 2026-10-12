@@ -4,6 +4,7 @@
 //! go through the system `git` (see [`cli`]) so hooks, credentials and SSH behave exactly like on
 //! the command line.
 
+pub mod bisect;
 pub mod cli;
 pub mod commit;
 pub mod compare;
@@ -28,6 +29,7 @@ pub mod stash;
 pub mod tags;
 pub mod worktree;
 
+pub use bisect::{Bisect, BisectMark};
 pub use cli::{CommandOutput, GitCommand, OutputLine};
 pub use commit::{
     CommitDetail, DiffContext, DiffLine, EolChange, FileChange, FileDiff, FileStatus, Hunk, LineKind, ModeChange,
