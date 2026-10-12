@@ -6,6 +6,7 @@
   import Menu, { type MenuEntry } from "./Menu.svelte";
   import { prefs } from "./prefs.svelte";
   import { split, type Found } from "./search.svelte";
+  import { bisectPills, bisectRange, type BisectPill } from "./bisect";
 
   let {
     history,
@@ -123,7 +124,11 @@
   /** Only Matches lists the matching commits alone, without the graph. */
   const only = $derived(!!found?.only);
   const rows = $derived(found?.only ? history.rows.filter((r) => found.hits.has(r.id)) : history.rows);
-  const faded = (row: HistoryRow) => !!found && !found.hits.has(row.id);
+  // A bisect fades what is outside its range, and marks the commits it answered.
+  const pills = $derived(bisectPills(history.bisect));
+  const inRange = $derived(bisectRange(history.bisect));
+  const PILL: Record<BisectPill, string> = { good: "good", bad: "bad", skipped: "skipped", testing: "HEAD · testing", found: "first bad commit", possible: "maybe first bad" };
+  const faded = (row: HistoryRow) => (!!found && !found.hits.has(row.id)) || (!!inRange && !row.worktree && !inRange.has(row.id));
   const indexOf = $derived(new Map(rows.map((row, i) => [row.id, i])));
   const first = $derived(Math.max(0, Math.floor((scrollTop - PAD_TOP) / ROW) - OVERSCAN));
   const last = $derived(Math.min(rows.length, Math.ceil((scrollTop + height) / ROW) + OVERSCAN));
@@ -267,6 +272,7 @@
       {#each visible as { row, index } (row.id)}
         {@const isSelected = row.id === selected}
         {@const picked = isSelected || row.id === second}
+        {@const pill = pills.get(row.id)}
         <div
           class="row"
           class:compact
@@ -293,6 +299,9 @@
             {/if}
           </span>
           <span class="meta">
+            {#if pill && pill !== "testing"}
+              <span class="pill bisect {pill}">{pill === "found" && history.bisect?.termBad !== "bad" ? `first ${history.bisect?.termBad} commit` : PILL[pill]}</span>
+            {/if}
             {#each row.labels as label (label.kind + label.name)}
               {#if label.kind === "tag"}
                 <span class="pill tag" class:local={history.localTags.includes(label.name)} title={history.localTags.includes(label.name) ? `Not on ${history.defaultRemote} yet` : undefined}>
@@ -304,6 +313,8 @@
                   <svg class="icon tiny" viewBox="0 0 16 16"><rect x="3" y="6.5" width="10" height="7" rx="1.5" /><path d="M4.5 4.5h7M6 2.5h4" /></svg>
                   {label.name}
                 </span>
+              {:else if label.kind === "head" && pill === "testing"}
+                <span class="pill head testing" title="The commit under test">{PILL.testing}</span>
               {:else if label.kind === "head"}
                 <span class="pill head" style:color={plate(label.color)} style:border-color="color-mix(in srgb, {lane(label.color)} 55%, transparent)">HEAD</span>
               {:else if label.kind === "remote"}
@@ -498,6 +509,34 @@
   }
   .pill.production {
     font-weight: 700;
+  }
+  /* Bisect answers, in the colors of the banner's Good and Bad. */
+  .pill.bisect {
+    font-weight: 600;
+  }
+  .pill.good {
+    background: var(--green-soft);
+    color: var(--green);
+  }
+  .pill.bad,
+  .pill.found {
+    background: var(--red-soft);
+    color: var(--red);
+  }
+  .pill.found {
+    font-weight: 700;
+  }
+  .pill.skipped {
+    background: var(--field);
+    color: var(--text2);
+  }
+  .pill.possible {
+    background: var(--orange-soft);
+    color: var(--orange);
+  }
+  .pill.testing {
+    border-color: var(--text);
+    color: var(--text);
   }
   .pill.tag {
     background: var(--tag-bg);

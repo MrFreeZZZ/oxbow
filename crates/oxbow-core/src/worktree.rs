@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use std::sync::atomic::AtomicBool;
 
+use crate::bisect::BisectMark;
 use crate::cli::{GitCommand, OutputLine, literal};
 use crate::commit::{
     DiffLine, FileChange, FileDiff, FileStatus, Hunk, LineKind, ModeChange, Source, eol_change, over_limit, word_diff,
@@ -389,6 +390,25 @@ pub enum Action {
         brew: Option<String>,
         pull: bool,
     },
+    /// Start bisecting: git checks out commits between `good` and `bad` to find the first bad
+    /// one. With `stash`, uncommitted changes are put aside first; with `command`, git tests
+    /// every step with it and answers on its own.
+    BisectStart {
+        good: String,
+        bad: String,
+        stash: bool,
+        #[serde(default)]
+        command: Option<String>,
+    },
+    /// Answer for `commit`, or for the commit under test when there is none.
+    BisectMark {
+        mark: BisectMark,
+        #[serde(default)]
+        commit: Option<String>,
+    },
+    /// Stop bisecting, or finish once the commit is found: back to where it started, with the
+    /// changes stashed before it.
+    BisectReset,
 }
 
 /// A local branch and its name on the remote.
@@ -1062,6 +1082,14 @@ impl Repo {
             Action::LfsPull { include } => lfs::plan_pull(include.as_deref()),
             Action::LfsPrune => lfs::plan_prune(),
             Action::LfsInstall { brew, pull } => lfs::plan_install(brew.as_deref(), *pull),
+            Action::BisectStart {
+                good,
+                bad,
+                stash,
+                command,
+            } => self.plan_bisect_start(good, bad, *stash, command.as_deref()),
+            Action::BisectMark { mark, commit } => self.plan_bisect_mark(*mark, commit.as_deref())?,
+            Action::BisectReset => self.plan_bisect_reset()?,
             Action::Reword { message } => {
                 let mut args = vec!["commit".to_owned(), "--amend".to_owned(), "--only".to_owned()];
                 for paragraph in paragraphs(message) {
@@ -1091,6 +1119,13 @@ impl Repo {
         // Loading a key changes nothing in the repository.
         if let Action::AddSshKey { .. } = action {
             return self.perform_unlogged(action, on_event, cancel);
+        }
+        // A bisect step only checks out a commit to test, and undoing one would not take back
+        // git's notes on the answers; the stash made before it stays in the list until Finish.
+        if let Action::BisectStart { .. } | Action::BisectMark { .. } | Action::BisectReset = action {
+            let result = self.perform_unlogged(action, on_event, cancel);
+            self.forget_bisect_stash();
+            return result;
         }
         if let Action::ClearOperationLog = action {
             let out = self.perform_unlogged(action, on_event, cancel)?;
@@ -1171,6 +1206,10 @@ impl Repo {
                     _ => Vec::new(),
                 };
                 let mut last = String::new();
+                let stash_before = match action {
+                    Action::BisectStart { stash: true, .. } => Some(self.stash_tip()),
+                    _ => None,
+                };
                 for command in self.plan(action)?.commands {
                     if let Some((ancestor, of)) = &command.only_if_ancestor
                         && !self.is_ancestor(ancestor, of)
@@ -1199,6 +1238,11 @@ impl Repo {
                                 self.remember_apply(id, *pop, &in_the_way);
                             }
                         })?;
+                    if let Some(before) = &stash_before
+                        && command.args.first().is_some_and(|a| a == "stash")
+                    {
+                        self.note_bisect_stash(before.as_deref());
+                    }
                     last = if out.stdout.trim().is_empty() {
                         out.stderr
                     } else {

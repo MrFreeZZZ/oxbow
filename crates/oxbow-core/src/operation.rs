@@ -159,7 +159,7 @@ enum RawChunk {
 }
 
 impl Repo {
-    fn git_dir(&self) -> PathBuf {
+    pub(crate) fn git_dir(&self) -> PathBuf {
         self.local().git_dir().to_path_buf()
     }
 
