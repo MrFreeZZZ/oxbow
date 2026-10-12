@@ -88,6 +88,11 @@
   // for a name puts the cursor in its text box instead. Only when the sheet opens or changes
   // phase, not on every keystroke.
   let focusedFor: unknown = null;
+
+  /** Puts the cursor in a text box that appears with `focus`, e.g. a search box. */
+  function focusIf(node: HTMLInputElement, on: boolean | undefined) {
+    if (on) requestAnimationFrame(() => node.focus());
+  }
   $effect(() => {
     const key = request && (confirm.phase === "ask" || recovery?.button) ? `${confirm.phase}:${request.title}` : null;
     if (!key || key === focusedFor) return;
@@ -172,6 +177,7 @@
                     aria-label={field.label}
                     spellcheck="false"
                     autocomplete="off"
+                    use:focusIf={text.focus}
                     oninput={(e) => confirm.edit(text.edit(e.currentTarget.value))}
                   />
                 {/if}

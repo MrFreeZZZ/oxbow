@@ -58,6 +58,8 @@ interface NewWorktree {
   /** The folder was typed or chosen, so it stops following the branch. */
   edited: boolean;
   open: boolean;
+  /** What is typed in the search box Other… opens; null while it is closed. */
+  search: string | null;
 }
 
 const PREFIXES = ["feature/", "fix/"];
@@ -97,20 +99,23 @@ export async function newWorktreeRequest(ctx: BranchContext, repoPath: string, b
   const free = freeBranches(ctx.history);
   const first = branch && free.includes(branch) ? branch : free[0];
   const state: NewWorktree = first
-    ? { branch: first, create: false, from: null, folder: "", edited: false, open: true }
-    : { branch: "", create: true, from: null, folder: "", edited: false, open: true };
+    ? { branch: first, create: false, from: null, folder: "", edited: false, open: true, search: null }
+    : { branch: "", create: true, from: null, folder: "", edited: false, open: true, search: null };
   state.folder = tilde(await freeFolder(ctx.history, repoPath, state.branch || "new"));
   const shown = [...new Set([first, ...free].filter((b): b is string => !!b))].slice(0, 3);
-  return newWorktreeSheet(ctx, repoPath, shown, free.length, state);
+  return newWorktreeSheet(ctx, repoPath, shown, free, state);
 }
 
-function newWorktreeSheet(ctx: BranchContext, repoPath: string, shown: string[], freeCount: number, state: NewWorktree): Request {
-  const again = (change: Partial<NewWorktree>) => newWorktreeSheet(ctx, repoPath, shown, freeCount, { ...state, ...change });
+/** Branch chips shown while searching. */
+const FOUND = 8;
+
+function newWorktreeSheet(ctx: BranchContext, repoPath: string, shown: string[], free: string[], state: NewWorktree): Request {
+  const again = (change: Partial<NewWorktree>) => newWorktreeSheet(ctx, repoPath, shown, free, { ...state, ...change });
   /** Pick another branch: the folder follows it unless it was typed. */
   const pickBranch = async (change: Partial<NewWorktree>) => {
     const next = { ...state, ...change };
     if (!next.edited) next.folder = tilde(await freeFolder(ctx.history, repoPath, next.branch || "new"));
-    return newWorktreeSheet(ctx, repoPath, shown, freeCount, next);
+    return newWorktreeSheet(ctx, repoPath, shown, free, next);
   };
   const { history } = ctx;
   const name = state.branch.trim();
@@ -127,6 +132,7 @@ function newWorktreeSheet(ctx: BranchContext, repoPath: string, shown: string[],
     invalid = problem;
     if (name && problem) nameError = problem;
   } else if (!name) invalid = "Every branch is checked out in a worktree already: pick New branch.";
+  if (!invalid && state.search !== null) invalid = "Pick one of the branches found.";
   let folderError: string | undefined;
   if (!invalid) {
     if (!path) invalid = "Choose a folder for it.";
@@ -143,14 +149,30 @@ function newWorktreeSheet(ctx: BranchContext, repoPath: string, shown: string[],
   const busy = [here, ...history.worktrees.filter((t) => !t.current).map((t) => t.branch)].filter((b): b is string => !!b);
   const notes: string[] = [];
   if (busy.length) notes.push(`${list([...new Set(busy)])} ${busy.length === 1 ? "is" : "are"} already checked out in a worktree.`);
-  if (freeCount > shown.length) notes.push("For another branch, use Open in New Worktree… in its menu in the sidebar.");
 
+  // Other… opens a search box over every free branch; a branch picked there joins the chips.
+  const searching = state.search !== null;
+  const query = (state.search ?? "").trim().toLowerCase();
+  const found = free.filter((b) => b.toLowerCase().includes(query));
+  const picked = !state.create && state.branch && !shown.includes(state.branch) ? [state.branch] : [];
+  const names = searching ? found.slice(0, FOUND) : [...shown, ...picked];
+  // While searching no chip is on, so a click on any of them picks it and closes the search.
+  const branchChip = (b: string) => ({ label: b, on: !searching && !state.create && state.branch === b, pick: () => pickBranch({ branch: b, create: false, search: null }) });
+  if (searching) {
+    notes.length = 0;
+    if (!found.length) notes.push(`No free branch matches “${state.search?.trim()}”.`);
+    else if (found.length > FOUND) notes.push(`${found.length} branches match: type more of the name.`);
+  }
   const fields: NonNullable<Request["fields"]> = [
     {
       label: "Branch",
+      text: searching
+        ? { value: state.search ?? "", placeholder: `Find a branch: ${free.length} are free`, focus: true, edit: (value) => again({ search: value }) }
+        : undefined,
       chips: [
-        ...shown.map((b) => ({ label: b, on: !state.create && state.branch === b, pick: () => pickBranch({ branch: b, create: false }) })),
-        { label: "New branch", on: state.create, pick: () => pickBranch({ branch: "", create: true }) },
+        ...names.map(branchChip),
+        ...(free.length > shown.length && !searching ? [{ label: "Other…", on: false, pick: () => again({ search: "" }) }] : []),
+        { label: "New branch", on: !searching && state.create, pick: () => pickBranch({ branch: state.create ? state.branch : "", create: true, search: null }) },
       ],
       note: notes.join(" ") || undefined,
     },
