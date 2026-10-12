@@ -1,7 +1,7 @@
 <script lang="ts" module>
   export type MenuEntry =
-    /** `keys`: its shortcut, grey on the right, e.g. "⌘O". */
-    | { kind: "item"; label: string; icon: string; danger?: boolean; keys?: string; run: () => void }
+    /** `keys`: its shortcut, grey on the right, e.g. "⌘O". `detail`: a grey second line, e.g. a folder's path. */
+    | { kind: "item"; label: string; icon: string; danger?: boolean; keys?: string; detail?: string; run: () => void }
     /** Opens a submenu to the side, e.g. Reset ▸ Soft / Mixed / Hard. */
     | { kind: "sub"; label: string; icon: string; entries: SubEntry[] }
     | { kind: "header"; label: string }
@@ -145,9 +145,16 @@
       </button>
     {:else}
       {@const run = entry.run}
-      <button role="menuitem" class:danger={entry.danger} onmouseenter={() => (sub = null)} onclick={() => choose(run)}>
+      <button role="menuitem" class:danger={entry.danger} class:two={entry.detail} onmouseenter={() => (sub = null)} onclick={() => choose(run)}>
         <svg class="icon" viewBox="0 0 16 16"><path d={entry.icon} /></svg>
-        <span>{entry.label}</span>
+        {#if entry.detail}
+          <span class="lines">
+            <span>{entry.label}</span>
+            <span class="detail" title={entry.detail}>{entry.detail}</span>
+          </span>
+        {:else}
+          <span>{entry.label}</span>
+        {/if}
         {#if entry.keys}<span class="keys">{entry.keys}</span>{/if}
       </button>
     {/if}
@@ -238,6 +245,18 @@
   button:focus-visible,
   button.open {
     background: var(--side-sel);
+  }
+  button.two {
+    height: 38px;
+  }
+  .lines {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.25;
+  }
+  .lines .detail {
+    font-size: 11px;
+    color: var(--text2);
   }
   button .chevron {
     width: 12px;
