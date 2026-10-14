@@ -46,6 +46,8 @@ pub enum FailureKind {
     NotMerged,
     /// The user pressed Stop.
     Cancelled,
+    /// The secrets check found what looks like a password or key in the staged lines.
+    Secrets,
     Other,
 }
 
@@ -76,6 +78,9 @@ pub struct Failure {
     pub hook: Option<String>,
     /// For a refused SSH connection: what Oxbow found out, and so which fix fits.
     pub ssh: Option<Box<crate::ssh::SshCheck>>,
+    /// For a commit the secrets check stopped: the lines it found.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secrets: Option<Box<Vec<crate::secrets::SecretFinding>>>,
 }
 
 impl Repo {
@@ -104,6 +109,8 @@ impl Repo {
         }
         let output = match error {
             Error::Command { output, .. } => output.trim().to_owned(),
+            // Nothing ran: the sheet lists the lines instead.
+            Error::Secrets(_) => String::new(),
             other => other.to_string(),
         };
         let mut failure = Failure {
@@ -113,6 +120,10 @@ impl Repo {
             remote_tip: None,
             hook: hook.filter(|_| kind == FailureKind::Hook),
             ssh: None,
+            secrets: match error {
+                Error::Secrets(found) => Some(Box::new(found.clone())),
+                _ => None,
+            },
         };
         if kind == FailureKind::Auth
             && let Some(remote) = self.remote_of(action)
@@ -355,6 +366,7 @@ pub fn classify_failure(error: &Error, pushing_with_hook: bool) -> FailureKind {
     let output = match error {
         Error::Command { output, .. } => output,
         Error::Cancelled => return FailureKind::Cancelled,
+        Error::Secrets(_) => return FailureKind::Secrets,
         _ => return FailureKind::Other,
     };
     let has = |needle: &str| output.contains(needle);

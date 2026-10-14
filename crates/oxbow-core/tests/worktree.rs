@@ -151,6 +151,7 @@ fn files_are_staged_discarded_and_committed() {
         message: "Add new.txt\n\nWith a body.".into(),
         amend: false,
         no_verify: false,
+        allow_secrets: false,
     };
     assert_eq!(
         repo.plan(&commit).unwrap().commands[0].display(),

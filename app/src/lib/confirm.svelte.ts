@@ -6,7 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import { oplog, undoRequest } from "./oplog.svelte";
 import { prefs } from "./prefs.svelte";
-import type { Action, ActionEvent, Failure, GitCommand } from "./types";
+import type { Action, ActionEvent, Failure, GitCommand, SecretFinding } from "./types";
 
 /** A piece of the sheet's text: plain words, a branch capsule, a path or sha in mono, or a quoted message. */
 export type Part = string | { branch: string; color: number } | { code: string } | { quote: string };
@@ -72,6 +72,8 @@ export interface Request {
   invalid?: string | null;
   /** A picture of the result above the commands, e.g. the commits a merge brings in. */
   preview?: Preview;
+  /** Asks even with confirmations off, e.g. turning the secrets check off. */
+  always?: boolean;
   /** Stopping on conflicts is expected: the sheet closes so they can be resolved. */
   resolveConflicts?: boolean;
   /** The way out when the action fails. */
@@ -149,6 +151,8 @@ export interface Recovery {
   act?: { label: string; run: () => Promise<string> };
   /** What Oxbow ran to find out why, shown under git's output. */
   checked?: TermLine[];
+  /** The lines the secrets check stopped a commit on, listed above the commands. */
+  secrets?: SecretFinding[];
   /** Opens another confirmation, e.g. Force Push… */
   alt?: { label: string; danger?: boolean; request: () => Request };
   note?: string;
@@ -182,7 +186,7 @@ function isForcePush(action: Action): boolean {
 /** Whether to show the sheet before running, from the Confirmations settings. A sheet that needs
  *  something typed or chosen, or can't run as it is, always shows. */
 function shouldAsk(request: Request): boolean {
-  if (request.fields?.length || request.invalid) return true;
+  if (request.always || request.fields?.length || request.invalid) return true;
   const action = request.action;
   if (action && isForcePush(action) && prefs.get("oxbow.push.confirmForce")) return true;
   if (!prefs.get("oxbow.confirm.enabled")) return false;

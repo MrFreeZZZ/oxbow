@@ -9,14 +9,14 @@
   import { open as openFile } from "@tauri-apps/plugin-dialog";
   import { api } from "./api";
   import ConfirmSheet from "./ConfirmSheet.svelte";
-  import { confirm } from "./confirm.svelte";
+  import { confirm, type Request } from "./confirm.svelte";
   import BranchPreview from "./BranchPreview.svelte";
   import { BRANCH_PALETTES, branchPaletteById } from "./branchPalettes";
   import DiffView from "./DiffView.svelte";
   import GitHubSignIn from "./GitHubSignIn.svelte";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import { check, lineOf, segments } from "./jsonCheck";
-  import { defaults, effectiveLook, knownSetting, prefs, problemOf, type PrefKey } from "./prefs.svelte";
+  import { defaults, effectiveLook, knownSetting, prefs, problemOf, type PrefKey, type SecretPattern } from "./prefs.svelte";
   import { addRemoteRequest, optimizeRequest, removeRemoteRequest, setUrlRequest } from "./repoSettings";
   import { paletteOf, THEMES, themeById, type Palette } from "./themes";
   import type { ConfigScope, FileDiff, GitHubAccount, GitSettings, OpenApp, RemoteInfo, RepoSettings } from "./types";
@@ -549,6 +549,36 @@
             }),
           ],
         },
+        {
+          title: "Security",
+          foot: "Your patterns are checked together with the built-in set: keys of AWS, GitHub, GitLab, Slack, Stripe, Google and OpenAI, private keys, and names like *API_KEY*, *SECRET*, *TOKEN*, *PASSWORD* that get a value.",
+          rows: [
+            {
+              ...prefRow("oxbow.commit.checkSecrets", "Check for secrets before committing", "switch", {
+                sub: () =>
+                  prefs.get("oxbow.commit.checkSecrets")
+                    ? "Stops a commit whose staged lines look like a password, token or private key"
+                    : "Off: commits go through without the check",
+              }),
+              control: { type: "switch", get: () => prefs.get("oxbow.commit.checkSecrets"), set: (on) => (on ? prefs.set("oxbow.commit.checkSecrets", true) : checkSecretsOff()) },
+            },
+            ...prefs.get("oxbow.secrets.patterns").map((p, i): Row => ({
+              id: `secret:${i}`,
+              label: p.pattern,
+              mono: true,
+              sub: p.kind === "name" ? "Variable name: flags a line that gives it a value" : "Text: a regular expression for the secret itself",
+              off: () => !prefs.get("oxbow.commit.checkSecrets"),
+              control: { type: "button", label: "Remove", run: () => removePattern(i) },
+            })),
+            {
+              id: "secret:add",
+              label: prefs.get("oxbow.secrets.patterns").length ? "Add a pattern" : "No patterns of your own yet",
+              sub: prefs.get("oxbow.secrets.patterns").length ? undefined : "e.g. CLIENT_ID, or the API keys of a service you use",
+              off: () => !prefs.get("oxbow.commit.checkSecrets"),
+              control: { type: "button", label: "Add…", run: () => confirm.run(patternRequest("", "name")) },
+            },
+          ],
+        },
       ],
     },
     {
@@ -947,6 +977,79 @@
 
   /** Whether there is anything to restore; a file Oxbow can't read counts too. */
   const customized = $derived(prefs.customized || (json && jsonSaved.trim() !== "{}"));
+
+  /** The sheet that adds a secret pattern of your own. */
+  function patternRequest(pattern: string, kind: SecretPattern["kind"]): Request {
+    const list = prefs.get("oxbow.secrets.patterns");
+    const text = pattern.trim();
+    let invalid: string | null = text ? null : "Type a pattern";
+    if (text && kind === "text") {
+      try {
+        new RegExp(text);
+      } catch {
+        invalid = "This is not a regular expression";
+      }
+    }
+    if (text && list.some((p) => p.kind === kind && p.pattern === text)) invalid = "This pattern is in the list already";
+    return {
+      title: "Add a secret pattern",
+      body: ["Oxbow checks staged lines for it before each commit, in every repository, together with the built-in patterns."],
+      icon: "key",
+      button: "Add Pattern",
+      always: true,
+      invalid: text ? invalid : "Type a pattern",
+      fields: [
+        {
+          label: "Looks for",
+          chips: [
+            { label: "Variable name", on: kind === "name", pick: () => patternRequest(pattern, "name") },
+            { label: "Text (regex)", on: kind === "text", pick: () => patternRequest(pattern, "text") },
+          ],
+        },
+        {
+          label: "Pattern",
+          text: { value: pattern, placeholder: kind === "name" ? "CLIENT_ID or PARK_*" : "pk_live_[0-9a-zA-Z]{24}", focus: true, edit: (value) => patternRequest(value, kind) },
+          note: kind === "name" ? `Flags lines that give it a value: NAME = "…", NAME: … or "NAME": "…". * stands for any characters; case does not matter.` : "Flags any added line where this matches, e.g. a key with a known prefix.",
+          error: text && invalid ? invalid : undefined,
+        },
+      ],
+      status: "Adding the pattern…",
+      local: {
+        commands: [],
+        run: async () => {
+          await prefs.set("oxbow.secrets.patterns", [...list, { kind, pattern: text }]);
+          return `Added ${text}.`;
+        },
+      },
+    };
+  }
+
+  function removePattern(index: number) {
+    const list = prefs.get("oxbow.secrets.patterns");
+    prefs.set("oxbow.secrets.patterns", list.filter((_, i) => i !== index));
+  }
+
+  /** Turning the secrets check off always asks, even with confirmations off. */
+  async function checkSecretsOff() {
+    await confirm.run({
+      title: "Turn off the secrets check?",
+      body: [
+        "Commits in every repository go through without Oxbow looking for passwords, tokens and private keys in the staged lines. A secret that reaches a remote has to be revoked: deleting it from history is not enough.",
+      ],
+      icon: "key",
+      button: "Turn Off",
+      danger: true,
+      always: true,
+      status: "Turning the secrets check off…",
+      local: {
+        commands: [],
+        run: async () => {
+          await prefs.set("oxbow.commit.checkSecrets", false);
+          return "The secrets check is off.";
+        },
+      },
+    });
+  }
 
   async function restoreDefaults() {
     const where = await api.settingsLocation().catch(() => ({ file: "settings.json", backup: "settings.backup.json" }));

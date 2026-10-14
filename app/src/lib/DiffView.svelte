@@ -381,7 +381,7 @@
               {/if}
               <span class="no">{line.oldLine ?? ""}</span>
               <span class="no">{line.newLine ?? ""}</span>
-              <span class="text">{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found} data-hit={piece.hit} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}{#if line.cr && own(showEol, diff.file.path)}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}</span>
+              <span class="text">{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found} data-hit={piece.hit} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}{#if line.cr && own(showEol, diff.file.path)}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}{#if line.secret}<span class="secret" title="Looks like a secret: Oxbow stops the commit until it is unstaged, or you commit anyway. Add oxbow:allow to the line if it is not one."><svg viewBox="0 0 16 16"><path d="M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2" /></svg>{line.secret}</span>{/if}</span>
             </div>
           {/each}
         {/each}
@@ -527,6 +527,30 @@
     font-weight: 600;
   }
   /* A carriage return, shown on request where only line endings changed. */
+  .secret {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-left: 8px;
+    padding: 0 7px 0 5px;
+    border-radius: 7px;
+    font-family: var(--font);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--orange);
+    background: var(--orange-soft);
+    vertical-align: 1px;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .secret svg {
+    width: 11px;
+    height: 11px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linejoin: round;
+  }
   .cr {
     margin-left: 4px;
     padding: 0 4px;

@@ -203,6 +203,7 @@ fn a_failing_pre_commit_hook_is_told_apart_and_can_be_skipped() {
         message: "Change a".into(),
         amend: false,
         no_verify: false,
+        allow_secrets: false,
     };
     let err = repo.perform(&commit).unwrap_err();
     let failure = repo.explain_failure(&commit, &err);
@@ -214,6 +215,7 @@ fn a_failing_pre_commit_hook_is_told_apart_and_can_be_skipped() {
         message: "Change a".into(),
         amend: false,
         no_verify: true,
+        allow_secrets: false,
     };
     assert_eq!(
         repo.plan(&skip).unwrap().commands[0].display(),

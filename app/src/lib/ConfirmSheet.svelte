@@ -151,6 +151,21 @@
         </div>
       </div>
 
+      {#if recovery?.secrets?.length}
+        <div class="secrets" aria-label="Possible secrets">
+          {#each recovery.secrets as found, i (i)}
+            <div class="secret">
+              <div class="secret-head">
+                <svg class="lock" viewBox="0 0 16 16"><path d="M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2" /></svg>
+                <span class="mono where-line">{found.path}<span class="line-no">:{found.line}</span></span>
+                <span class="kind">{found.kind}</span>
+              </div>
+              <div class="mono masked selectable">{found.masked}</div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+
       {#if request.fields?.length && confirm.phase === "ask"}
         <div class="fields" bind:this={fieldsBox}>
           {#each request.fields as field, i (i)}
@@ -220,7 +235,7 @@
 
       <!-- With "Show the git command" off, the commands stay out of the question; git's output
            still shows once it runs. -->
-      {#if confirm.phase !== "ask" || prefs.get("oxbow.confirm.showCommand")}
+      {#if (confirm.phase !== "ask" || prefs.get("oxbow.confirm.showCommand")) && !(request.local && !request.local.commands.length)}
       <div class="term" aria-label="Git command">
         <div class="bar">
           <span class="light"></span><span class="light"></span><span class="light"></span>
@@ -250,7 +265,7 @@
               {#if line.kind === "cmd"}{@render prompt(line.text)}{:else}<div class="output" style:color={OUTPUT[line.kind]}>{line.text}</div>{/if}
             {/each}
             {#if recovery?.checked?.length}
-              <div class="comment"># Oxbow checked why:</div>
+              {#if !recovery.secrets}<div class="comment"># Oxbow checked why:</div>{/if}
               {#each recovery.checked as line, i (i)}
                 {#if line.kind === "cmd"}{@render prompt(line.text)}{:else if line.kind === "hint"}<div class="comment">{line.text}</div>{:else}<div class="output" style:color={OUTPUT[line.kind]}>{line.text}</div>{/if}
               {/each}
@@ -569,6 +584,65 @@
   }
   .field-note.error {
     color: var(--red);
+  }
+  .secrets {
+    display: flex;
+    flex-direction: column;
+    margin-left: 58px;
+    border-radius: 12px;
+    background: var(--field);
+    overflow: hidden;
+  }
+  .secret {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 8px 12px;
+  }
+  .secret + .secret {
+    border-top: 0.5px solid var(--sep);
+  }
+  .secret-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .lock {
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+    fill: none;
+    stroke: var(--orange);
+    stroke-width: 1.4;
+    stroke-linejoin: round;
+  }
+  .where-line {
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .line-no {
+    color: var(--text2);
+  }
+  .kind {
+    margin-left: auto;
+    flex-shrink: 0;
+    padding: 1px 8px;
+    border-radius: 8px;
+    background: var(--orange-soft);
+    color: var(--orange);
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .masked {
+    font-size: 12px;
+    color: var(--text2);
+    padding-left: 19px;
+    white-space: pre;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .options {
     display: flex;
