@@ -1274,15 +1274,28 @@ impl Repo {
         {
             let commits = self.missing_commits(&format!("refs/heads/{branch}"), base, lease)?;
             if !commits.is_empty() {
-                self.record_replay(branch, base, lease, &commits)?;
+                self.record_replay(branch, &commits)?;
             }
         }
+        // A pick of Copy and Push finished by hand: which commit it became. Aborted: forgotten.
+        let replaying = match action {
+            Action::Continue { .. } | Action::Abort => self.replay_in_progress(),
+            _ => None,
+        };
         let before = self.snapshot().ok();
         if let Action::EditStack { plan } = action {
             self.remember_return(plan);
         }
         let result = self.perform_unlogged(action, on_event, cancel);
         self.forget_return();
+        if result.is_ok()
+            && let Some((branch, source, tip)) = &replaying
+        {
+            match action {
+                Action::Continue { .. } => self.note_replay_copy(branch, source, tip)?,
+                _ => self.forget_replay(branch)?,
+            }
+        }
         if let Action::Restore { .. } = action {
             // read-tree forgets what git knew about the files on disk.
             let _ = self.run(&GitCommand::new(["update-index", "-q", "--refresh"]));
