@@ -1288,12 +1288,19 @@ impl Repo {
         }
         let result = self.perform_unlogged(action, on_event, cancel);
         self.forget_return();
-        if result.is_ok()
-            && let Some((branch, source, tip)) = &replaying
-        {
+        if let Some((branch, source, tip)) = &replaying {
             match action {
-                Action::Continue { .. } => self.note_replay_copy(branch, source, tip)?,
-                _ => self.forget_replay(branch)?,
+                // Continue goes on with the picks left and can stop on the next one's conflict
+                // after it made this one's copy: the copy is noted either way. Nothing is noted
+                // when it stopped before making a commit.
+                Action::Continue { .. } => {
+                    let noted = self.note_replay_copy(branch, source, tip);
+                    if result.is_ok() {
+                        noted?;
+                    }
+                }
+                _ if result.is_ok() => self.forget_replay(branch)?,
+                _ => {}
             }
         }
         if let Action::Restore { .. } = action {
