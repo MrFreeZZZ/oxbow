@@ -899,7 +899,7 @@ impl Repo {
                 .any(|f| f.status != crate::commit::FileStatus::Untracked))
     }
 
-    fn has_merges(&self, range: &str) -> Result<bool> {
+    pub(crate) fn has_merges(&self, range: &str) -> Result<bool> {
         let out = self.run(&GitCommand::new([
             "rev-list",
             "--min-parents=2",

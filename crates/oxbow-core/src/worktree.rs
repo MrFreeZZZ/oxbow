@@ -165,6 +165,19 @@ pub enum Action {
         /// Skip the pre-push hook, when the push being retried skipped it too.
         no_verify: bool,
     },
+    /// Push a branch whose pushed commits were rewritten here while someone pushed on top of
+    /// the old versions: copy their commits after `base` (the state this clone last pushed)
+    /// onto the branch first, then replace the old versions with `--force-with-lease` at
+    /// `lease`. A pull with rebase would drop an edited message as already upstream.
+    ReplayAndPush {
+        remote: String,
+        branch: String,
+        upstream: String,
+        base: String,
+        lease: String,
+        #[serde(default)]
+        no_verify: bool,
+    },
     /// Give up a pull that stopped on conflicts, back to where the branch was.
     AbortRebase,
     /// Check out the local `branch`. With `stash`, uncommitted changes are stashed first, for
@@ -877,6 +890,14 @@ impl Repo {
                         .with_progress(),
                 ]
             }
+            Action::ReplayAndPush {
+                remote,
+                branch,
+                upstream,
+                base,
+                lease,
+                no_verify,
+            } => self.plan_replay_and_push(remote, branch, upstream, base, lease, *no_verify)?,
             Action::AbortRebase => {
                 vec![GitCommand::new(["rebase", "--abort"]).comment("back to where the branch was before the pull")]
             }
@@ -1564,6 +1585,58 @@ impl Repo {
 
     /// `git pull` the way Settings › Git says: rebase (the default), merge or fast-forward only,
     /// read from `pull.rebase` and `pull.ff` so it matches a terminal.
+    fn plan_replay_and_push(
+        &self,
+        remote: &str,
+        branch: &str,
+        upstream: &str,
+        base: &str,
+        lease: &str,
+        no_verify: bool,
+    ) -> Result<Vec<GitCommand>> {
+        if !self.is_ancestor(base, lease) || self.has_merges(&format!("{base}..{lease}"))? {
+            return Err(Error::Git(format!(
+                "{remote}/{upstream} was rewritten or merged into since your last push; push with force or sort it out by hand"
+            )));
+        }
+        let mut commands = Vec::new();
+        let commits = self.missing_commits(&format!("refs/heads/{branch}"), base, lease);
+        if !commits.is_empty() {
+            let mut people: Vec<&str> = Vec::new();
+            for c in &commits {
+                if !people.contains(&c.author_name.as_str()) {
+                    people.push(&c.author_name);
+                }
+            }
+            let mut args = vec!["cherry-pick".to_owned()];
+            args.extend(commits.iter().map(|c| c.id.clone()));
+            commands.push(GitCommand::new(args).comment(format!(
+                "copy {} by {} onto your rewritten {branch}; they keep their author",
+                if commits.len() == 1 {
+                    "the commit".to_owned()
+                } else {
+                    format!("the {} commits", commits.len())
+                },
+                people.join(", ")
+            )));
+        }
+        let mut push = vec!["push".to_owned()];
+        if no_verify || !config::run_hooks() {
+            push.push("--no-verify".to_owned());
+        }
+        push.push(format!("--force-with-lease={upstream}:{lease}"));
+        push.extend([remote.to_owned(), refspec(branch, upstream)]);
+        commands.push(
+            GitCommand::new(push)
+                .comment(format!(
+                    "--force-with-lease: replace the old versions only if {remote}/{upstream} is still {}",
+                    &lease[..lease.len().min(7)]
+                ))
+                .with_progress(),
+        );
+        Ok(commands)
+    }
+
     fn pull_command(&self, remote: &str, branch: &str) -> GitCommand {
         let (mode, note) = match self.pull_mode() {
             PullMode::FastForward => ("--ff-only", "--ff-only: only if your branch has no commits of its own"),
