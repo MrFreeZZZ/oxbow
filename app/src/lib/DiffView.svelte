@@ -34,6 +34,7 @@
     onToggleWhole,
     lineBudget = 4000,
     hunkBar,
+    fileActions,
     openable = true,
     find = null,
     matchCase = true,
@@ -52,6 +53,8 @@
     lineBudget?: number;
     /** Actions over each hunk, for the working copy. */
     hunkBar?: Snippet<[FileDiff, Hunk]>;
+    /** Actions for the whole file on its header bar, for the working copy. */
+    fileActions?: Snippet<[FileDiff]>;
     /** Offer to open the file in the editor from Settings › Integrations. */
     openable?: boolean;
     /** Code being searched for in History: marked wherever it appears. */
@@ -197,6 +200,12 @@
     return `${top}px ${top}px ${bottom}px ${bottom}px`;
   }
 
+  /** Digits of the longest line number, so the number columns fit it. */
+  function digits(diff: FileDiff): number {
+    const last = diff.hunks.reduce((n, h) => Math.max(n, h.oldStart + h.oldLines, h.newStart + h.newLines), 0);
+    return Math.max(3, String(last).length);
+  }
+
   function gap(lines: DiffLine[], i: number): number {
     if (i === 0) return 0;
     const line = lines[i];
@@ -254,6 +263,7 @@
           <span class="mono add">+{diff.file.additions}</span>
           <span class="mono del">−{diff.file.deletions}</span>
         {/if}
+        {#if fileActions}{@render fileActions(diff)}{/if}
         {#if openable && history && diff.file.status !== "untracked"}
           <button class="toggle" onclick={() => nav.openFile(diff.file.path, commit)} aria-label="File history" title="File History and Blame">
             <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.2l2 1.3" /></svg>
@@ -338,7 +348,7 @@
       </p>
     {:else}
       {@const language = languageOf(diff.file.path)}
-      <div class="code mono selectable">
+      <div class="code mono selectable" style:--digits={digits(diff)}>
         {#each diff.hunks as hunk, h (h)}
           {@const before = h === 0 ? hunk.oldStart - 1 : hunk.oldStart - (diff.hunks[h - 1].oldStart + diff.hunks[h - 1].oldLines)}
           {#if before > 0 && !whole}
@@ -536,12 +546,14 @@
     background: var(--code-bg, transparent);
     border-radius: 10px;
   }
+  /* The number columns fit the longest line number at the code's size. */
   .line {
+    --no: calc(var(--digits, 3) * 1ch + 18px);
     display: grid;
-    grid-template-columns: 40px 40px 1fr;
+    grid-template-columns: var(--no) var(--no) 1fr;
   }
   .line.picking {
-    grid-template-columns: 24px 40px 40px 1fr;
+    grid-template-columns: 24px var(--no) var(--no) 1fr;
   }
   .line.faded > :not(.pick) {
     opacity: 0.45;
@@ -619,6 +631,7 @@
     margin: 4px 0;
     padding: 0 12px;
     height: 22px;
+    line-height: 22px;
     border-radius: 9px;
     background: var(--fold-bg, var(--field));
     color: var(--code-dim, var(--text2));

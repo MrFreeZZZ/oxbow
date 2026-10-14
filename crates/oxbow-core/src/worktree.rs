@@ -567,6 +567,26 @@ impl Repo {
             .find(|f| f.path == path)
             .cloned()
             .ok_or_else(|| Error::Git(format!("{path} has no {} changes", side.word())))?;
+        self.diff_of(file, side, whole_file)
+    }
+
+    /// The diffs of the files on one side of the working copy, in the order of `paths`, for
+    /// the Summary of Uncommitted changes. Paths without changes on that side are left out.
+    pub fn working_diffs(&self, paths: &[String], side: Side, whole_file: bool) -> Result<Vec<FileDiff>> {
+        let tree = self.working_tree()?;
+        let list = match side {
+            Side::Staged => &tree.staged,
+            Side::Unstaged => &tree.unstaged,
+        };
+        paths
+            .iter()
+            .filter_map(|path| list.iter().chain(&tree.conflicted).find(|f| &f.path == path))
+            .map(|file| self.diff_of(file.clone(), side, whole_file))
+            .collect()
+    }
+
+    /// The diff of `file`, one entry of the working tree, on `side`.
+    fn diff_of(&self, file: FileChange, side: Side, whole_file: bool) -> Result<FileDiff> {
         let patch = self.raw_diff(&file, side, whole_file)?;
         let parsed = parse_patch(&patch);
         let hunks: Vec<Hunk> = parsed.hunks.into_iter().map(|h| h.hunk).collect();
