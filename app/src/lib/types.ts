@@ -384,7 +384,7 @@ export type Action =
   | { kind: "cherryPick"; commit: string }
   | { kind: "revert"; commit: string }
   | { kind: "reset"; commit: string; mode: ResetMode }
-  | { kind: "reword"; message: string }
+  | { kind: "reword"; message: string; noVerify?: boolean }
   /** `paths`: only these files; every change when empty or missing. */
   | { kind: "stashPush"; message: string | null; untracked: boolean; paths?: string[] }
   | { kind: "stashApply"; index: number; id: string; pop: boolean; keepIndex: boolean }

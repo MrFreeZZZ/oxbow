@@ -90,6 +90,7 @@ fn an_edited_pushed_commit_is_pushed_with_a_lease() {
 
     repo.perform(&Action::Reword {
         message: "Yandex spider".into(),
+        no_verify: false,
     })
     .unwrap();
     let tracking = repo.tracking().unwrap().unwrap();
@@ -120,6 +121,21 @@ fn an_edited_pushed_commit_is_pushed_with_a_lease() {
     .unwrap();
     let tracking = repo.tracking().unwrap().unwrap();
     assert_eq!((tracking.ahead, tracking.behind, tracking.rewritten), (1, 1, None));
+}
+
+#[test]
+fn an_undone_pull_does_not_make_a_teammates_commit_look_rewritten() {
+    let mut team = Team::new();
+    team.kirill.commit("c.txt", "his\n", "His");
+    team.kirill.git(&["push", "-q", "origin", "main"]);
+    let repo = Repo::open(team.me.path()).unwrap();
+    team.me.git(&["pull", "-q", "--ff-only", "origin", "main"]);
+    // Undo of the pull: the branch goes back, but its reflog still has Kirill's commit.
+    team.me.git(&["reset", "-q", "--hard", "HEAD@{1}"]);
+    team.me.commit("b.txt", "mine\n", "Mine");
+    let tracking = repo.tracking().unwrap().unwrap();
+    assert_eq!((tracking.ahead, tracking.behind), (1, 1));
+    assert_eq!(tracking.rewritten, None);
 }
 
 #[test]

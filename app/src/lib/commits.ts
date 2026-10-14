@@ -215,6 +215,37 @@ function editMessageSheet(ctx: BranchContext, row: HistoryRow, original: string,
     invalid: !typed.trim() ? "Type a commit message." : typed.trim() === original.trim() ? "Change the message first." : null,
     status: "Saving the message…",
     done: "Saved the new message.",
+    recover: (failure) => rewordRecovery(failure, typed),
     action: { kind: "reword", message: typed },
+  };
+}
+
+/** The way out when the pre-commit or commit-msg hook stopped the new message. */
+function rewordRecovery(failure: Failure, message: string): Recovery | null {
+  if (failure.kind !== "hook") return null;
+  const hook = failure.hook ?? "commit-msg";
+  const action = { kind: "reword" as const, message };
+  return {
+    title: hook.includes(" or ") ? "A commit hook stopped the new message" : `The ${hook} hook stopped the new message`,
+    body: [`The repository’s ${hook} hook found a problem, so the message did not change. Its output is below: fix what it reports and try again.`],
+    icon: "hook",
+    tone: "err",
+    button: { label: "Try Again", action, status: "Saving the message…", done: "Saved the new message." },
+    alt: {
+      label: "Save Without Hook…",
+      danger: true,
+      request: () => ({
+        title: `Save the message without the ${hook.includes(" or ") ? "commit hooks" : `${hook} hook`}?`,
+        body: ["Skips the hook this once, so the last commit gets the message ", { quote: message.split("\n")[0] }, " without the checks it runs."],
+        icon: "hook",
+        button: "Save Anyway",
+        danger: true,
+        note: "The hook runs again on your next commit.",
+        status: "Saving the message…",
+        done: "Saved the new message without the hook.",
+        action: { ...action, noVerify: true },
+      }),
+    },
+    close: "Close",
   };
 }

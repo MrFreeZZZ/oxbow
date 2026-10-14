@@ -259,6 +259,9 @@ pub enum Action {
     /// Replace the message of the last commit; its changes and the staged ones stay as they are.
     Reword {
         message: String,
+        /// Skip the pre-commit and commit-msg hooks this one time.
+        #[serde(default)]
+        no_verify: bool,
     },
     /// Put uncommitted changes aside in a new stash, untracked files too with `untracked`: those
     /// of `paths`, or every change when it is empty.
@@ -1165,13 +1168,25 @@ impl Repo {
             Action::WorktreeUnlock { path } => self.plan_worktree_unlock(path),
             Action::WorktreePrune => self.plan_worktree_prune(),
             Action::WorktreeRepair { path } => self.plan_worktree_repair(path),
-            Action::Reword { message } => {
+            Action::Reword { message, no_verify } => {
                 let mut args = vec!["commit".to_owned(), "--amend".to_owned(), "--only".to_owned()];
+                // The same hooks rule as Commit: off in Settings, or skipped this once.
+                let skip = *no_verify || !config::run_hooks();
+                if skip {
+                    args.push("--no-verify".to_owned());
+                }
                 for paragraph in paragraphs(message) {
                     args.push("-m".to_owned());
                     args.push(paragraph);
                 }
-                vec![GitCommand::new(args).comment("--only: just the message; staged changes stay staged")]
+                let cmd = GitCommand::new(args);
+                vec![if *no_verify {
+                    cmd.comment("--only: just the message, staged changes stay staged; --no-verify: skip the pre-commit and commit-msg hooks this once")
+                } else if skip {
+                    cmd.comment(format!("--only: just the message; staged changes stay staged. {HOOKS_OFF}"))
+                } else {
+                    cmd.comment("--only: just the message; staged changes stay staged")
+                }]
             }
         };
         Ok(Plan { commands })
@@ -1254,7 +1269,7 @@ impl Repo {
         on_event: &mut dyn FnMut(ActionEvent),
         cancel: &AtomicBool,
     ) -> Result<String> {
-        if let Action::Commit { message, .. } | Action::Reword { message } = action
+        if let Action::Commit { message, .. } | Action::Reword { message, .. } = action
             && message.trim().is_empty()
         {
             return Err(Error::Git("the commit message is empty".into()));

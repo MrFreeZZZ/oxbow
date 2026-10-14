@@ -1038,6 +1038,7 @@
               />
             {:else if selectedRow?.worktree}
               <ChangesPanel
+                repo={repo.path}
                 branch={history.head.branch}
                 color={selectedRow.graph.color}
                 head={headRow}

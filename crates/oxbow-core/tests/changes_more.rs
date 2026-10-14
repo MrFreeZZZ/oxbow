@@ -226,6 +226,45 @@ fn a_failing_pre_commit_hook_is_told_apart_and_can_be_skipped() {
 }
 
 #[test]
+fn a_failing_commit_msg_hook_stops_an_edited_message_and_can_be_skipped() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    let hook = fx.path().join(".git/hooks/commit-msg");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\necho 'commit-msg: needs a ticket number' >&2\nexit 1\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let reword = Action::Reword {
+        message: "Root commit".into(),
+        no_verify: false,
+    };
+    let err = repo.perform(&reword).unwrap_err();
+    let failure = repo.explain_failure(&reword, &err);
+    assert_eq!(failure.kind, FailureKind::Hook);
+    assert_eq!(failure.hook.as_deref(), Some("commit-msg"));
+    assert_eq!(fx.git(&["log", "-1", "--format=%s"]), "Root");
+
+    let skip = Action::Reword {
+        message: "Root commit".into(),
+        no_verify: true,
+    };
+    assert_eq!(
+        repo.plan(&skip).unwrap().commands[0].display(),
+        "git commit --amend --only --no-verify -m 'Root commit'"
+    );
+    repo.perform(&skip).unwrap();
+    assert_eq!(fx.git(&["log", "-1", "--format=%s"]), "Root commit");
+}
+
+#[test]
 fn working_diffs_follow_the_paths_on_one_side() {
     let mut fx = Fixture::new();
     fx.commit("a.txt", BEFORE, "Root");

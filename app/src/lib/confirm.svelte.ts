@@ -296,6 +296,7 @@ class ConfirmState {
 
   /** Run the recovery's button, e.g. Pull and Push after a rejected push. */
   recover() {
+    if (this.phase !== "failed") return;
     const button = this.recovery?.button;
     if (button) this.#execute(button.action, button.status, button.done, button.next);
   }
@@ -353,6 +354,7 @@ class ConfirmState {
   }
 
   async #execute(action: Action, status: string, done?: string, next?: Step): Promise<void> {
+    this.#stopPlanning();
     this.phase = "running";
     this.ran = null;
     this.status = status;
@@ -389,6 +391,7 @@ class ConfirmState {
 
   /** Run a request's `local` step: it has no git output, so the sheet closes on success. */
   async #runLocal(request: Request) {
+    this.#stopPlanning();
     this.phase = "running";
     this.status = request.status ?? request.title;
     this.lines = [];
@@ -466,8 +469,15 @@ class ConfirmState {
     );
   }
 
-  #finish(done: boolean) {
+  /** Once the action starts or the sheet closes, a plan still on its way is out of date: it must
+   *  not put the sheet back to asking, where Save would run the action a second time. */
+  #stopPlanning() {
     clearTimeout(this.#editTimer);
+    this.#planned++;
+  }
+
+  #finish(done: boolean) {
+    this.#stopPlanning();
     this.request = null;
     this.recovery = null;
     this.failure = null;

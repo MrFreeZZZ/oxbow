@@ -99,7 +99,10 @@ impl Repo {
         let pre_push = pushing && self.has_pre_push_hook();
         let mut kind = classify_failure(error, pre_push);
         let mut hook = pre_push.then(|| "pre-push".to_owned());
-        if let Action::Commit { no_verify: false, .. } = action
+        // A commit or an edited message the pre-commit or commit-msg hook stopped. With hooks off
+        // in Settings they did not run, so they are not to blame.
+        if let Action::Commit { no_verify: false, .. } | Action::Reword { no_verify: false, .. } = action
+            && crate::config::run_hooks()
             && kind == FailureKind::Other
             && let Error::Command { output, .. } = error
         {
@@ -181,10 +184,16 @@ impl Repo {
         Ok(tracking)
     }
 
-    /// The tip of `remote`/`upstream` when the local `branch` once pointed there: its own
-    /// earlier state, which it has since rewritten. The branch's reflog remembers it.
+    /// The tip of `remote`/`upstream` when this clone pushed it and the local `branch` once
+    /// pointed there: its own earlier state, which it has since rewritten. The branch's reflog
+    /// remembers it. A tip that came in with a fetch or pull is someone else's, even when the
+    /// branch once fast-forwarded to it and an undo took that back: replacing it would delete
+    /// their commits.
     fn rewritten_upstream(&self, branch: &str, remote: &str, upstream: &str) -> Option<String> {
         let tip = self.remote_tip(remote, upstream)?;
+        if !self.pushed_from_here(remote, upstream, &tip) {
+            return None;
+        }
         let out = self
             .run(&GitCommand::new([
                 "reflog",
@@ -195,6 +204,25 @@ impl Repo {
             ]))
             .ok()?;
         out.stdout.lines().any(|id| id == tip).then_some(tip)
+    }
+
+    /// Whether `remote`/`upstream` got to `tip` through a push from this clone, not a fetch: the
+    /// newest entry of its reflog that moved it to `tip` says "update by push".
+    fn pushed_from_here(&self, remote: &str, upstream: &str, tip: &str) -> bool {
+        let Ok(out) = self.run(&GitCommand::new([
+            "reflog",
+            "show",
+            "--format=%H%x09%gs",
+            "--max-count=500",
+            &format!("refs/remotes/{remote}/{upstream}"),
+        ])) else {
+            return false;
+        };
+        out.stdout
+            .lines()
+            .filter_map(|line| line.split_once('\t'))
+            .find(|(id, _)| *id == tip)
+            .is_some_and(|(_, subject)| subject == "update by push")
     }
 
     /// Upstream of every local branch that has one, by branch name.
