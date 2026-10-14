@@ -80,6 +80,8 @@ export const api = {
   workingTree: () => invoke<WorkingTree>("working_tree"),
   workingDiff: (path: string, side: Side, wholeFile: boolean, full = false) =>
     invoke<FileDiff>("working_diff", { path, side, wholeFile, full }),
+  /** The diffs of `paths` on one side, in that order; files without changes there are left out. */
+  workingDiffs: (paths: string[], side: Side, wholeFile: boolean) => invoke<FileDiff[]>("working_diffs", { paths, side, wholeFile }),
   /** The raw bytes arrive as an ArrayBuffer, or as a list of numbers when the IPC falls back to JSON. */
   sourceBytes: (source: Source) =>
     invoke<ArrayBuffer | ArrayBufferView | number[]>("source_bytes", { source }).then((data) =>

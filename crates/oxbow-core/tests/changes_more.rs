@@ -222,3 +222,24 @@ fn a_failing_pre_commit_hook_is_told_apart_and_can_be_skipped() {
     repo.perform(&skip).unwrap();
     assert_eq!(fx.git(&["log", "-1", "--format=%s"]), "Change a");
 }
+
+#[test]
+fn working_diffs_follow_the_paths_on_one_side() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", BEFORE, "Root");
+    fx.commit("b.txt", BEFORE, "Second");
+    fx.write("a.txt", AFTER);
+    fx.write("b.txt", AFTER);
+    fx.git(&["add", "b.txt"]);
+    fx.write("new.txt", "fresh\n");
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let paths = |list: Vec<oxbow_core::FileDiff>| list.into_iter().map(|d| d.file.path).collect::<Vec<_>>();
+    let wanted = ["new.txt", "b.txt", "a.txt"].map(String::from);
+    // b.txt is staged only, so the unstaged side leaves it out; the order is the one asked for.
+    let unstaged = repo.working_diffs(&wanted, Side::Unstaged, false).unwrap();
+    assert_eq!(paths(unstaged), ["new.txt", "a.txt"]);
+    let staged = repo.working_diffs(&wanted, Side::Staged, false).unwrap();
+    assert_eq!(staged[0].hunks.len(), 1);
+    assert_eq!(paths(staged), ["b.txt"]);
+}

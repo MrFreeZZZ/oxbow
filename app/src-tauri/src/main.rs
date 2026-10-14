@@ -767,6 +767,19 @@ async fn working_diff(
     blocking(move || repo.working_diff(&path, side, whole_file)).await
 }
 
+/// The diffs of several files on one side of the working copy, for the Summary tab.
+#[tauri::command]
+async fn working_diffs(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    paths: Vec<String>,
+    side: Side,
+    whole_file: bool,
+) -> CommandResult<Vec<FileDiff>> {
+    let repo = current(&session, &window)?;
+    blocking(move || repo.working_diffs(&paths, side, whole_file)).await
+}
+
 /// What deleting a local branch would lose, for the confirmation sheet.
 #[tauri::command]
 async fn deletion_check(
@@ -1520,6 +1533,7 @@ fn main() {
             files,
             working_tree,
             working_diff,
+            working_diffs,
             source_bytes,
             open_source,
             deletion_check,
