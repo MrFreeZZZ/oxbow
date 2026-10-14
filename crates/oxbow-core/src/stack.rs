@@ -915,7 +915,7 @@ impl Repo {
     }
 
     /// A file in the git directory, for this worktree.
-    fn git_file(&self, name: &str) -> Result<std::path::PathBuf> {
+    pub(crate) fn git_file(&self, name: &str) -> Result<std::path::PathBuf> {
         let out = self.run(&GitCommand::new(["rev-parse", "--git-path", name]))?;
         Ok(self.workdir().join(out.stdout.trim()))
     }

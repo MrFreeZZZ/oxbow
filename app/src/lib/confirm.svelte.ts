@@ -145,7 +145,7 @@ export interface Recovery {
   tone: "warn" | "err";
   /** Runs right away: the sheet already shows its commands. With `next`, that runs after it
    *  in the same sheet, e.g. the fetch again once the SSH key is loaded. */
-  button?: { label: string; action: Action; status: string; done?: string; danger?: boolean; next?: Step };
+  button?: { label: string; action: Action; status: string; done?: string; danger?: boolean; next?: Step; recover?: (failure: Failure) => Recovery | null };
   /** A button that does something besides git, e.g. Copy Public Key, then closes the sheet
    *  with its message. */
   act?: { label: string; run: () => Promise<string> };
@@ -219,6 +219,8 @@ class ConfirmState {
   /** Goes up with every plan asked for, so a slow answer can't replace a newer one. */
   #planned = 0;
   #editTimer: ReturnType<typeof setTimeout> | undefined;
+  /** How failures go on after a recovery button ran an action of its own. */
+  #recover: ((failure: Failure) => Recovery | null) | null = null;
   #toastTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor() {
@@ -235,6 +237,7 @@ class ConfirmState {
   /** Show the sheet, or, when the settings say not to ask, run right away: then the sheet only
    *  shows up while it runs. */
   async #askOrRun(request: Request) {
+    this.#recover = null;
     if (shouldAsk(request)) await this.#ask(request);
     else if (request.local) {
       this.request = request;
@@ -287,6 +290,7 @@ class ConfirmState {
   async show(request: Request, failure: Failure, lines: TermLine[] = []): Promise<boolean> {
     if (this.request) return false;
     const done = new Promise<boolean>((resolve) => (this.#resolve = resolve));
+    this.#recover = null;
     this.request = request;
     this.commands = [];
     this.lines = lines.filter((line) => !line.progress);
@@ -298,7 +302,11 @@ class ConfirmState {
   recover() {
     if (this.phase !== "failed") return;
     const button = this.recovery?.button;
-    if (button) this.#execute(button.action, button.status, button.done, button.next);
+    if (!button) return;
+    // A way out that runs another kind of action (Copy and Push after a force push) says how
+    // its own failures go on; the rest go on with the request's.
+    if (button.recover) this.#recover = button.recover;
+    this.#execute(button.action, button.status, button.done, button.next);
   }
 
   /** The recovery's other kind of button, e.g. Copy Public Key. */
@@ -330,6 +338,7 @@ class ConfirmState {
 
   async #ask(request: Request) {
     const mine = ++this.#planned;
+    this.#recover = null;
     this.request = request;
     this.lines = [];
     this.failure = null;
@@ -409,7 +418,7 @@ class ConfirmState {
   async #fail(failure: Failure) {
     this.failure = failure;
     if (!this.lines.length && failure.output) this.lines = failure.output.split("\n").map((text) => ({ kind: lineKind(text, true), text }));
-    this.recovery = this.request?.recover?.(failure) ?? null;
+    this.recovery = (this.#recover ?? this.request?.recover)?.(failure) ?? null;
     this.recoveryCommands = [];
     this.phase = "failed";
     const button = this.recovery?.button;
@@ -478,6 +487,7 @@ class ConfirmState {
 
   #finish(done: boolean) {
     this.#stopPlanning();
+    this.#recover = null;
     this.request = null;
     this.recovery = null;
     this.failure = null;
