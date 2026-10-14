@@ -894,17 +894,18 @@
               <button
                 onclick={() => sync("pull")}
                 disabled={!canPull(remoteCtx)}
-                aria-label={t?.behind ? `Pull ${t.behind} commits` : "Pull"}
+                aria-label={t?.behind && !t.rewritten ? `Pull ${t.behind} commits` : "Pull"}
                 title={canPull(remoteCtx) ? `Pull from ${t?.remote}/${t?.branch}` : "This branch has no upstream to pull from"}
               >
                 <svg class="icon" viewBox="0 0 16 16"><path d="M8 2v9M4.5 7.5 8 11l3.5-3.5M3 14h10" /></svg>
-                {#if t?.behind}<span class="count">{t.behind}</span>{/if}
+                <!-- Old versions of commits rewritten here are nothing to pull. -->
+                {#if t?.behind && !t.rewritten}<span class="count">{t.behind}</span>{/if}
               </button>
               <button
                 onclick={() => sync("push")}
                 disabled={!canPush(remoteCtx)}
                 aria-label={t ? (t.ahead ? `Push ${t.ahead} commits` : "Push") : "Publish branch"}
-                title={!canPush(remoteCtx) ? "Check out a branch to push" : t && !t.gone ? `Push to ${t.remote}/${t.branch}` : `Publish ${history.head.branch} to ${remoteCtx.remote}`}
+                title={!canPush(remoteCtx) ? "Check out a branch to push" : t?.rewritten ? `Force push to ${t.remote}/${t.branch}: it has the old versions of commits you rewrote` : t && !t.gone ? `Push to ${t.remote}/${t.branch}` : `Publish ${history.head.branch} to ${remoteCtx.remote}`}
               >
                 <svg class="icon" viewBox="0 0 16 16"><path d="M8 12V3M4.5 6.5 8 3l3.5 3.5M3 14h10" /></svg>
                 {#if t?.ahead}<span class="count">{t.ahead}</span>{:else if !t && history.head.branch}<span class="count">Publish</span>{/if}

@@ -80,6 +80,49 @@ fn tracking_counts_commits_both_ways() {
 }
 
 #[test]
+fn an_edited_pushed_commit_is_pushed_with_a_lease() {
+    let mut team = Team::new();
+    team.me.commit("b.txt", "mine\n", "Yonder spider");
+    team.me.git(&["push", "-q", "origin", "main"]);
+    let pushed = team.me.git(&["rev-parse", "HEAD"]);
+    let repo = Repo::open(team.me.path()).unwrap();
+    assert_eq!(repo.tracking().unwrap().unwrap().rewritten, None);
+
+    repo.perform(&Action::Reword {
+        message: "Yandex spider".into(),
+    })
+    .unwrap();
+    let tracking = repo.tracking().unwrap().unwrap();
+    assert_eq!((tracking.ahead, tracking.behind), (1, 1));
+    assert_eq!(tracking.rewritten.as_deref(), Some(pushed.as_str()));
+
+    let mut action = push(false);
+    if let Action::Push { force, lease, .. } = &mut action {
+        *force = true;
+        *lease = tracking.rewritten.clone();
+    }
+    repo.perform(&action).unwrap();
+    assert_eq!(
+        team.me.git(&["log", "-1", "--format=%s", "origin/main"]),
+        "Yandex spider"
+    );
+    let tracking = repo.tracking().unwrap().unwrap();
+    assert_eq!((tracking.ahead, tracking.behind, tracking.rewritten), (0, 0, None));
+
+    // A teammate's commit was never on this branch: that is something to pull, not to replace.
+    team.kirill.git(&["pull", "-q", "--rebase", "origin", "main"]);
+    team.kirill.commit("c.txt", "his\n", "His");
+    team.kirill.git(&["push", "-q", "origin", "main"]);
+    team.me.commit("d.txt", "more\n", "More");
+    repo.perform(&Action::Fetch {
+        remote: Some("origin".into()),
+    })
+    .unwrap();
+    let tracking = repo.tracking().unwrap().unwrap();
+    assert_eq!((tracking.ahead, tracking.behind, tracking.rewritten), (1, 1, None));
+}
+
+#[test]
 fn push_streams_its_output() {
     let mut team = Team::new();
     team.me.commit("b.txt", "mine\n", "Mine");
