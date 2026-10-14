@@ -369,6 +369,25 @@
     }
   }
 
+  /** The description grows with its text while it is being written, up to DESC_LINES, and
+   *  goes back to two lines after, so the diffs keep their room. */
+  const DESC_LINES = 10;
+  let descBox = $state<HTMLTextAreaElement>();
+  let descOpen = $state(false);
+  $effect(() => {
+    draft.description;
+    const open = descOpen;
+    const box = descBox;
+    if (!box) return;
+    const style = getComputedStyle(box);
+    const line = parseFloat(style.lineHeight);
+    const frame = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+    const least = 2 * line + frame;
+    box.style.height = `${least}px`;
+    const wanted = Math.min(box.scrollHeight + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth), DESC_LINES * line + frame);
+    box.style.height = `${open ? Math.max(least, wanted) : least}px`;
+  });
+
   function onCommitKey(event: KeyboardEvent) {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
@@ -591,7 +610,16 @@
       <input type="text" aria-label="Commit summary" placeholder="Summary" bind:value={draft.summary} onkeydown={onCommitKey} spellcheck="true" />
       {#if SUMMARY_LIMIT}<span class="counter" class:over={draft.summary.length > SUMMARY_LIMIT}>{draft.summary.length}/{SUMMARY_LIMIT}</span>{/if}
     </div>
-    <textarea aria-label="Commit description" placeholder="Description" rows="2" bind:value={draft.description} onkeydown={onCommitKey}></textarea>
+    <textarea
+      aria-label="Commit description"
+      placeholder="Description"
+      rows="2"
+      bind:this={descBox}
+      bind:value={draft.description}
+      onkeydown={onCommitKey}
+      onfocus={() => (descOpen = true)}
+      onblur={() => (descOpen = false)}
+    ></textarea>
     <div class="row">
       <span class="grow hint-line">{commitHint}</span>
       <button class="go" onclick={commit} disabled={!canCommit}>
@@ -1034,6 +1062,7 @@
     font: inherit;
     line-height: 1.45;
     color: var(--text);
+    transition: height 0.15s ease;
   }
   input::placeholder,
   textarea::placeholder {
