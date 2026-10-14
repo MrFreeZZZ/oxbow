@@ -539,6 +539,15 @@
             prefRow("oxbow.git.runHooks", "Run Git hooks", "switch", {
               sub: () => (prefs.get("oxbow.git.runHooks") ? "pre-commit, commit-msg and pre-push from .git/hooks" : "Commits, merges and pushes add --no-verify"),
             }),
+            {
+              ...prefRow("oxbow.commit.checkSecrets", "Check for secrets before committing", "switch", {
+                sub: () =>
+                  prefs.get("oxbow.commit.checkSecrets")
+                    ? "Stops a commit whose staged lines look like a password, token or private key"
+                    : "Off: commits go through without the check",
+              }),
+              control: { type: "switch", get: () => prefs.get("oxbow.commit.checkSecrets"), set: (on) => (on ? prefs.set("oxbow.commit.checkSecrets", true) : checkSecretsOff()) },
+            },
             prefRow("oxbow.commit.subjectGuide", "Subject line guide", "popup", {
               sub: "A soft marker in the commit message field",
               options: () => [
@@ -947,6 +956,28 @@
 
   /** Whether there is anything to restore; a file Oxbow can't read counts too. */
   const customized = $derived(prefs.customized || (json && jsonSaved.trim() !== "{}"));
+
+  /** Turning the secrets check off always asks, even with confirmations off. */
+  async function checkSecretsOff() {
+    await confirm.run({
+      title: "Turn off the secrets check?",
+      body: [
+        "Commits in every repository go through without Oxbow looking for passwords, tokens and private keys in the staged lines. A secret that reaches a remote has to be revoked: deleting it from history is not enough.",
+      ],
+      icon: "key",
+      button: "Turn Off",
+      danger: true,
+      always: true,
+      status: "Turning the secrets check off…",
+      local: {
+        commands: [],
+        run: async () => {
+          await prefs.set("oxbow.commit.checkSecrets", false);
+          return "The secrets check is off.";
+        },
+      },
+    });
+  }
 
   async function restoreDefaults() {
     const where = await api.settingsLocation().catch(() => ({ file: "settings.json", backup: "settings.backup.json" }));

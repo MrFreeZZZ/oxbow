@@ -43,6 +43,8 @@ export const defaults = {
   "oxbow.pull.fetchFirst": true,
   /** Minutes between background fetches. */
   "oxbow.fetch.interval": 15,
+  /** Before each commit, look for passwords and keys in the staged lines. */
+  "oxbow.commit.checkSecrets": true,
   /** Characters before the commit summary counter warns; 0 is off. */
   "oxbow.commit.subjectGuide": 72,
   /** Empty: the first one installed. */

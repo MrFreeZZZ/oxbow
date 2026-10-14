@@ -1,9 +1,9 @@
 // The finer actions of the working copy: single lines of a hunk, ignoring a file, stashing a
-// few files, and the way out when a commit hook says no.
+// few files, and the way out when a commit hook or the secrets check says no.
 
 import type { Part, Recovery, Request } from "./confirm.svelte";
 import { splitPath } from "./format";
-import type { Action, Failure, Hunk } from "./types";
+import type { Action, Failure, Hunk, SecretFinding } from "./types";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -158,6 +158,7 @@ export function linesRequest(kind: LinesKind, path: string, hunk: Hunk, lines: n
 
 /** The way out when a pre-commit or commit-msg hook stopped a commit. */
 export function commitRecovery(failure: Failure, action: Action & { kind: "commit" }, summary: string, branch: string): Recovery | null {
+  if (failure.kind === "secrets") return secretsRecovery(failure.secrets ?? [], action, summary, branch);
   if (failure.kind !== "hook") return null;
   const hook = failure.hook ?? "pre-commit";
   const both = hook.includes(" or ");
@@ -170,6 +171,46 @@ export function commitRecovery(failure: Failure, action: Action & { kind: "commi
     alt: { label: "Commit Without Hook…", danger: true, request: () => noVerifyRequest(action, summary, branch, hook) },
     note: "Your message is kept.",
     close: "Close",
+  };
+}
+
+/** The way out when Oxbow found what looks like a password or key in the staged lines. */
+function secretsRecovery(found: SecretFinding[], action: Action & { kind: "commit" }, summary: string, branch: string): Recovery {
+  const paths = [...new Set(found.map((f) => f.path))];
+  const files = paths.length === 1 ? splitPath(paths[0]).name : plural(paths.length, "file");
+  return {
+    title: found.length === 1 ? `Possible ${found[0].kind} in ${files}` : `Possible secrets in ${files}`,
+    body: [
+      "Oxbow checked the staged lines before committing and stopped: ",
+      found.length === 1 ? "this one looks" : "these look",
+      " like a password or key. Once pushed, a secret has to be revoked: deleting it from history is not enough.",
+    ],
+    icon: "key",
+    tone: "warn",
+    secrets: found,
+    button: {
+      label: paths.length === 1 ? "Unstage File" : `Unstage ${plural(paths.length, "File")}`,
+      action: { kind: "unstage", paths },
+      status: "Unstaging…",
+      done: `Unstaged ${paths.length === 1 ? files : plural(paths.length, "file")}. Your files do not change.`,
+    },
+    alt: { label: "Commit Anyway…", danger: true, request: () => allowSecretsRequest(action, summary, branch, found.length) },
+    note: "Your message is kept. A line with oxbow:allow is never flagged.",
+    close: "Close",
+  };
+}
+
+function allowSecretsRequest(action: Action & { kind: "commit" }, summary: string, branch: string, n: number): Request {
+  return {
+    title: `Commit with ${n === 1 ? "a possible secret" : `${n} possible secrets`}?`,
+    body: ["Commits ", { quote: summary }, ` to ${branch} as it is. If ${n === 1 ? "it is a real secret" : "they are real secrets"}, revoke ${n === 1 ? "it" : "them"} before pushing.`],
+    icon: "key",
+    button: action.amend ? "Amend Anyway" : "Commit Anyway",
+    danger: true,
+    note: "Oxbow checks again on your next commit.",
+    status: `Committing to ${branch}…`,
+    done: `Committed to ${branch}.`,
+    action: { ...action, allowSecrets: true },
   };
 }
 

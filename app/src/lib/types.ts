@@ -301,6 +301,8 @@ export interface DiffLine {
   /** The line ends with CRLF; `text` leaves the CR out. */
   cr?: boolean;
   words: WordPart[] | null;
+  /** An added line that looks like it holds a secret: what it looks like, e.g. "GitHub token". */
+  secret?: string | null;
 }
 
 export interface Hunk {
@@ -347,7 +349,7 @@ export type Action =
   | { kind: "unstageHunk"; path: string; header: string; check: string; lines?: number[] | null }
   | { kind: "discardHunk"; path: string; header: string; check: string; lines?: number[] | null }
   | { kind: "ignore"; pattern: string }
-  | { kind: "commit"; message: string; amend: boolean; noVerify?: boolean }
+  | { kind: "commit"; message: string; amend: boolean; noVerify?: boolean; allowSecrets?: boolean }
   | { kind: "fetch"; remote: string | null }
   | { kind: "pull"; remote: string; branch: string; fetchFirst?: boolean }
   | {
@@ -549,6 +551,7 @@ export type ActionEvent =
   | { kind: "line"; text: string; stderr: boolean; progress: boolean };
 
 export type FailureKind =
+  | "secrets"
   | "rejected"
   | "staleLease"
   | "auth"
@@ -574,8 +577,21 @@ export interface Failure {
   remoteTip: string | null;
   /** The hook that stopped it, e.g. "pre-commit", or "pre-commit or commit-msg". */
   hook: string | null;
+  /** For a commit Oxbow stopped: what looks like a password or key in the staged lines. */
+  secrets?: SecretFinding[];
   /** For a refused SSH connection: what Oxbow found out. */
   ssh?: SshCheck | null;
+}
+
+/** An added line of a commit that looks like it holds a secret. */
+export interface SecretFinding {
+  path: string;
+  /** 1-based, in the new file. */
+  line: number;
+  /** What it looks like, e.g. "GitHub token". */
+  kind: string;
+  /** The line with the secret masked, e.g. `TOKEN = "ghp_R8mZ••••••••Gt"`. */
+  masked: string;
 }
 
 export type SshProblem = "agentEmpty" | "keyNotOnHost" | "noKey" | "unknownHost" | "works" | "other";
