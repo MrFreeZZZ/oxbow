@@ -47,11 +47,11 @@
   function track() {
     if (lfs.ready) run(lfsTrackRequest(file.path, size));
     else if (lfs.status?.version || lfs.status?.brew) run(installRequest(repoName));
-    else api.openLfsDownload().catch((err) => confirm.say(String(err)));
+    else api.openLfsDownload().catch((err) => confirm.fail(err));
   }
 
   function preview() {
-    api.quickLook(file.path).catch((err) => confirm.say(String(err)));
+    api.quickLook(file.path).catch((err) => confirm.fail(err));
   }
 
   const pointerLines = (p: LfsPointer) => [

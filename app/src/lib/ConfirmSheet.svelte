@@ -313,10 +313,33 @@
 {/if}
 
 {#if confirm.toast}
-  <div class="toast" class:with-undo={confirm.toastUndo} role="status">
-    <span>{confirm.toast}</span>
-    {#if confirm.toastUndo}<button class="undo" onclick={() => confirm.undo()}>Undo</button>{/if}
-  </div>
+  {@const toast = confirm.toast}
+  {#key toast.id}
+    <div
+      class="toast {toast.tone}"
+      role={toast.tone === "error" ? "alert" : "status"}
+      onpointerenter={() => confirm.hold()}
+      onpointerleave={() => confirm.release()}
+    >
+      <span class="mark" aria-hidden="true">
+        <svg viewBox="0 0 16 16" width="14" height="14">
+          {#if toast.tone === "done"}
+            <path d="M3.5 8.4l3 3 6-6.6" />
+          {:else if toast.tone === "info"}
+            <path d="M8 7.2v4.6" /><circle cx="8" cy="4.6" r="0.4" />
+          {:else}
+            <path d="M8 3.6v5.2" /><circle cx="8" cy="11.8" r="0.4" />
+          {/if}
+        </svg>
+      </span>
+      <span class="words">{toast.text}</span>
+      {#if confirm.toastUndo}<button class="undo" onclick={() => confirm.undo()}>Undo</button>{/if}
+      <button class="close" title="Close" aria-label="Close" onclick={() => confirm.dismiss()}>
+        <svg viewBox="0 0 16 16" width="11" height="11"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+      </button>
+      {#if confirm.toastTime}<span class="time" style:animation-duration="{confirm.toastTime}ms"></span>{/if}
+    </div>
+  {/key}
 {/if}
 
 <style>
@@ -737,34 +760,119 @@
   .alt.danger {
     color: var(--red);
   }
+  /* Toasts come in at the top right, under the toolbar, where the eye already is after a click
+     on it. A tinted mark says at a glance whether it went well; a thin line runs down the time. */
   .toast {
     position: fixed;
-    left: 50%;
-    bottom: 24px;
-    transform: translateX(-50%);
+    top: 64px;
+    right: 16px;
     z-index: 42;
-    max-width: min(560px, calc(100vw - 48px));
-    padding: 9px 16px;
-    border-radius: 18px;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    -webkit-backdrop-filter: blur(20px);
-    backdrop-filter: blur(20px);
-    font-weight: 500;
-  }
-  .toast.with-undo {
     display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 5px 5px 5px 16px;
+    align-items: flex-start;
+    gap: 10px;
+    width: max-content;
+    min-width: 300px;
+    max-width: min(440px, calc(100vw - 32px));
+    padding: 12px 10px 13px 12px;
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--sheet);
+    border: 0.5px solid var(--glass-border);
+    box-shadow:
+      0 12px 32px rgba(0, 0, 0, 0.18),
+      0 2px 6px rgba(0, 0, 0, 0.08);
+    animation: toast-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+    --tone: var(--text2);
+    --tone-soft: var(--field);
+  }
+  .toast.done {
+    --tone: var(--green);
+    --tone-soft: var(--green-soft);
+  }
+  .toast.warn {
+    --tone: var(--orange);
+    --tone-soft: var(--orange-soft);
+  }
+  .toast.error {
+    --tone: var(--red);
+    --tone-soft: var(--red-soft);
+  }
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateX(24px);
+    }
+  }
+  .toast .mark {
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 12px;
+    background: var(--tone-soft);
+    color: var(--tone);
+  }
+  .toast .mark svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .toast .words {
+    flex-grow: 1;
+    min-width: 0;
+    padding-top: 3px;
+    line-height: 1.4;
+    font-weight: 500;
+    overflow-wrap: anywhere;
+    user-select: text;
   }
   .toast .undo {
-    height: 26px;
+    flex-shrink: 0;
+    height: 24px;
     padding: 0 12px;
-    border-radius: 13px;
+    border-radius: 12px;
     background: var(--field);
     font-weight: 600;
+  }
+  .toast .close {
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 12px;
+    color: var(--text2);
+  }
+  .toast .close:hover {
+    opacity: 1;
+    background: var(--field);
+  }
+  .toast .close svg {
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+  }
+  .toast .time {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    height: 2px;
+    width: 100%;
+    background: var(--tone);
+    opacity: 0.5;
+    transform-origin: left;
+    animation: toast-time linear forwards;
+  }
+  .toast:hover .time {
+    animation-play-state: paused;
+  }
+  @keyframes toast-time {
+    to {
+      transform: scaleX(0);
+    }
   }
   .foot {
     display: flex;

@@ -330,14 +330,14 @@
       });
     entries.push({ kind: "sep" });
     if (file.status !== "deleted")
-      entries.push({ kind: "item", label: "Open in Editor", icon: menuIcons.open, run: () => api.openInEditor(file.path, null).catch((err) => confirm.say(String(err))) });
+      entries.push({ kind: "item", label: "Open in Editor", icon: menuIcons.open, run: () => api.openInEditor(file.path, null).catch((err) => confirm.fail(err)) });
     if (file.status !== "deleted")
-      entries.push({ kind: "item", label: revealLabel, icon: menuIcons.reveal, run: () => api.revealFile(file.path).catch((err) => confirm.say(String(err))) });
+      entries.push({ kind: "item", label: revealLabel, icon: menuIcons.reveal, run: () => api.revealFile(file.path).catch((err) => confirm.fail(err)) });
     entries.push({
       kind: "item",
       label: "Copy Path",
       icon: menuIcons.copy,
-      run: () => navigator.clipboard.writeText(file.path).then(() => confirm.say(`Copied ${file.path}.`), () => {}),
+      run: () => navigator.clipboard.writeText(file.path).then(() => confirm.say(`Copied ${file.path}.`, "done"), () => {}),
     });
     if (file.status !== "untracked" && file.status !== "added") entries.push({ kind: "item", label: "File History", icon: menuIcons.history, run: () => nav.openFile(file.path) });
     if (group === "unstaged") {

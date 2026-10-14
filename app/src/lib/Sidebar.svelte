@@ -179,8 +179,8 @@
 
   function copy(text: string) {
     navigator.clipboard.writeText(text).then(
-      () => confirm.say(`Copied ${text}.`),
-      () => confirm.say("Couldn’t copy to the clipboard."),
+      () => confirm.say(`Copied ${text}.`, "done"),
+      () => confirm.say("Couldn’t copy to the clipboard.", "error"),
     );
   }
 
@@ -204,7 +204,7 @@
       { kind: "item", label: "Open Local Repository…", icon: FOLDER, keys: keys("Mod+O"), run: onOpen },
       { kind: "item", label: "New Repository…", icon: "M8 3v10M3 8h10", keys: keys("Mod+N"), run: () => start.newRepo() },
       { kind: "sep" },
-      { kind: "item", label: "Open in Terminal", icon: TERMINAL, run: () => api.openInTerminal().catch((err) => confirm.say(String(err))) },
+      { kind: "item", label: "Open in Terminal", icon: TERMINAL, run: () => api.openInTerminal().catch((err) => confirm.fail(err)) },
       { kind: "item", label: "Welcome Window", icon: HOME, run: onWelcome },
     );
     menu = { x: box.left, y: box.bottom + 4, label: `Repository ${repo.name}`, ref: repo.path, entries };
@@ -354,7 +354,7 @@
     const request = installRequest(repo.name);
     if (request) return [{ kind: "item", label: `${request.button} Git LFS…`, icon: menuIcons.lfs, run: () => run(request) }];
     return [
-      { kind: "item", label: "Download Git LFS…", icon: menuIcons.open, run: () => api.openLfsDownload().catch((err) => confirm.say(String(err))) },
+      { kind: "item", label: "Download Git LFS…", icon: menuIcons.open, run: () => api.openLfsDownload().catch((err) => confirm.fail(err)) },
       { kind: "note", label: "git-lfs isn’t installed, and Oxbow didn’t find Homebrew to install it with." },
     ];
   }
@@ -400,7 +400,7 @@
 
   /** A worktree in its own window, or the window that already has it. */
   function openWorktree(wt: Worktree) {
-    api.openWindow(wt.path).catch((err) => confirm.say(String(err)));
+    api.openWindow(wt.path).catch((err) => confirm.fail(err));
   }
 
   /** The commit a worktree has checked out, selected in History. */
@@ -408,7 +408,7 @@
     if (wt.head && rowOf.has(wt.head)) {
       clicked = wt.branch ? (history.refs.find((r) => r.kind === "local" && r.name === wt.branch) ?? null) : null;
       onPick(wt.head);
-    } else confirm.say(`${wt.head ? wt.head.slice(0, 7) : "Its commit"} isn’t in the loaded history.`);
+    } else confirm.say(`${wt.head ? wt.head.slice(0, 7) : "Its commit"} isn’t in the loaded history.`, "warn");
   }
 
   /** What the note on a worktree's row says. */
@@ -442,8 +442,8 @@
     if (!wt.current) entries.push({ kind: "item", label: "Open in New Window", icon: menuIcons.open, run: () => openWorktree(wt) });
     if (wt.head) entries.push({ kind: "item", label: wt.branch ? `Show ${wt.branch} in History` : "Show in History", icon: menuIcons.history, run: () => showWorktree(wt) });
     entries.push(
-      { kind: "item", label: "Show in Finder", icon: menuIcons.reveal, run: () => api.revealWorktree(wt.path).catch((err) => confirm.say(String(err))) },
-      { kind: "item", label: "Open in Terminal", icon: TERMINAL, run: () => api.openInTerminal(wt.path).catch((err) => confirm.say(String(err))) },
+      { kind: "item", label: "Show in Finder", icon: menuIcons.reveal, run: () => api.revealWorktree(wt.path).catch((err) => confirm.fail(err)) },
+      { kind: "item", label: "Open in Terminal", icon: TERMINAL, run: () => api.openInTerminal(wt.path).catch((err) => confirm.fail(err)) },
       { kind: "item", label: "Copy Path", icon: menuIcons.copy, run: () => copy(wt.path) },
     );
     const removable = !wt.main && !wt.current;

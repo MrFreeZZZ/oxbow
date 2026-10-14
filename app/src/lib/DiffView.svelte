@@ -101,7 +101,7 @@
     loadFull?.(diff).then(
       // Only while that diff is still shown: a late answer doesn't bring back an old one.
       (d) => diffs.includes(diff) && (full = new Map(full).set(diff, d)),
-      (err) => confirm.say(String(err)),
+      (err) => confirm.fail(err),
     );
   }
 
@@ -162,7 +162,7 @@
   /** Open the file in the editor, at its first change. */
   function openInEditor(diff: FileDiff) {
     const first = diff.hunks[0]?.lines.find((l) => l.kind !== "context" && l.newLine !== null) ?? diff.hunks[0]?.lines[0];
-    api.openInEditor(diff.file.path, first?.newLine ?? null).catch((err) => confirm.say(String(err)));
+    api.openInEditor(diff.file.path, first?.newLine ?? null).catch((err) => confirm.fail(err));
   }
 
   let showAll = $state(false);

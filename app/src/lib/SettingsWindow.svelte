@@ -969,7 +969,7 @@
   const revealLabel = mac ? "Reveal in Finder" : navigator.platform.startsWith("Win") ? "Show in Explorer" : "Open Containing Folder";
 
   function reveal() {
-    api.revealSettings().catch((err) => confirm.say(String(err)));
+    api.revealSettings().catch((err) => confirm.fail(err));
   }
 
   /** A path typed into a shell, with ~ left unquoted. */
