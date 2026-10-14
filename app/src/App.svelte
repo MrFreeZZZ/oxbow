@@ -491,8 +491,8 @@
 
   function copyText(text: string, done: string) {
     navigator.clipboard.writeText(text).then(
-      () => confirm.say(done),
-      () => confirm.say("Couldn’t copy to the clipboard."),
+      () => confirm.say(done, "done"),
+      () => confirm.say("Couldn’t copy to the clipboard.", "error"),
     );
   }
 
@@ -520,7 +520,7 @@
   async function publishToGitHub() {
     if (!repo || !history?.head.branch) return;
     if (!(await api.githubAccount().catch(() => null))) {
-      confirm.say("Sign in to GitHub in Settings › Accounts first.");
+      confirm.say("Sign in to GitHub in Settings › Accounts first.", "warn");
       api.openSettings();
       return;
     }
@@ -576,7 +576,7 @@
     if (!ok) return;
     await api.refreshRemoteTags().catch(() => false);
     await refresh();
-    if (!auto) confirm.say(activity.recent[0]?.sub === "Nothing new" ? `Fetched ${target.label}. Nothing new.` : `Fetched ${target.label}.`);
+    if (!auto) confirm.say(activity.recent[0]?.sub === "Nothing new" ? `Fetched ${target.label}. Nothing new.` : `Fetched ${target.label}.`, "done");
   }
 
   /** Fix… of a failed fetch in Activity: the sheet with the way out, e.g. Add Key to Agent. */

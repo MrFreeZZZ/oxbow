@@ -8,6 +8,9 @@ import { oplog, undoRequest } from "./oplog.svelte";
 import { prefs } from "./prefs.svelte";
 import type { Action, ActionEvent, Failure, GitCommand, SecretFinding } from "./types";
 
+/** What a toast reports: an action done, a note, something to look at, or a failure. */
+export type Tone = "done" | "info" | "warn" | "error";
+
 /** A piece of the sheet's text: plain words, a branch capsule, a path or sha in mono, or a quoted message. */
 export type Part = string | { branch: string; color: number } | { code: string } | { quote: string };
 
@@ -208,7 +211,8 @@ class ConfirmState {
   recovery = $state<Recovery | null>(null);
   /** Commands the recovery button will run. */
   recoveryCommands = $state<GitCommand[]>([]);
-  toast = $state<string | null>(null);
+  /** The message in the corner, with its kind: `id` changes with every new one, so it shows afresh. */
+  toast = $state<{ text: string; tone: Tone; id: number } | null>(null);
   /** The last action that ran and succeeded, e.g. the fetch after Add Key to Agent. */
   ran: Action | null = null;
   /** The Undo of the toast, when the action that showed it can be taken back. */
@@ -222,6 +226,10 @@ class ConfirmState {
   /** How failures go on after a recovery button ran an action of its own. */
   #recover: ((failure: Failure) => Recovery | null) | null = null;
   #toastTimer: ReturnType<typeof setTimeout> | undefined;
+  /** How long the toast has left, and since when that runs; a pointer over it stops the clock. */
+  #toastLeft = 0;
+  #toastSince = 0;
+  #toastCount = 0;
 
   constructor() {
     listen<ActionEvent>("action-event", (event) => this.#onEvent(event.payload)).catch(() => {});
@@ -316,9 +324,9 @@ class ConfirmState {
     try {
       const said = await act.run();
       this.#finish(false);
-      this.#showToast(said);
+      this.#showToast(said, null, "done");
     } catch (err) {
-      this.#showToast(String(err));
+      this.#showToast(String(err), null, "error");
     }
   }
 
@@ -381,12 +389,12 @@ class ConfirmState {
       if (next) return this.#execute(next.action, next.status, next.done);
       this.#finish(true);
       after?.();
-      if (done) this.#showToast(done, undo ?? (await this.#undoFromLog(action, started)));
+      if (done) this.#showToast(done, undo ?? (await this.#undoFromLog(action, started)), "done");
     } catch (err) {
       const failure = toFailure(err);
       if (failure.kind === "conflict" && this.request?.resolveConflicts) {
         this.#finish(false);
-        this.#showToast("Stopped on conflicts, as expected. Pick what goes into each file.");
+        this.#showToast("Stopped on conflicts, as expected. Pick what goes into each file.", null, "warn");
         return;
       }
       if (failure.kind === "cancelled") {
@@ -407,7 +415,7 @@ class ConfirmState {
     try {
       const said = await request.local!.run();
       this.#finish(true);
-      this.#showToast(said, request.undo ?? null);
+      this.#showToast(said, request.undo ?? null, "done");
     } catch (err) {
       // A step Oxbow did itself says what went wrong in words, under what ran before it.
       if (this.lines.length) this.lines.push({ kind: "err", text: String(err) });
@@ -448,9 +456,35 @@ class ConfirmState {
     return entry && entry.time >= started && !entry.failed ? () => undoRequest(entry) : null;
   }
 
-  /** A short message at the bottom of the window, e.g. after copying a name. */
-  say(text: string) {
-    this.#showToast(text);
+  /** A short message in the top right corner, e.g. after copying a name. */
+  say(text: string, tone: Tone = "info") {
+    this.#showToast(text, null, tone);
+  }
+
+  /** Something that didn't work, e.g. the editor couldn't be opened: it stays until closed. */
+  fail(err: unknown) {
+    this.#showToast(String(err), null, "error");
+  }
+
+  /** Close the toast. */
+  dismiss() {
+    clearTimeout(this.#toastTimer);
+    this.toast = null;
+    this.toastUndo = null;
+  }
+
+  /** The pointer is over the toast: it waits. */
+  hold() {
+    if (!this.#toastLeft) return;
+    clearTimeout(this.#toastTimer);
+    this.#toastLeft = Math.max(1500, this.#toastLeft - (Date.now() - this.#toastSince));
+  }
+
+  /** The pointer left: the toast goes on with the time it had left. */
+  release() {
+    if (!this.toast || !this.#toastLeft) return;
+    this.#toastSince = Date.now();
+    this.#toastTimer = setTimeout(() => this.dismiss(), this.#toastLeft);
   }
 
   /** Take back what the toast reports. */
@@ -464,18 +498,20 @@ class ConfirmState {
     else void this.run(undo());
   }
 
-  #showToast(text: string, undo: (() => Request) | null = null) {
+  #showToast(text: string, undo: (() => Request) | null = null, tone: Tone = "info") {
     clearTimeout(this.#toastTimer);
-    this.toast = text;
+    this.toast = { text, tone, id: ++this.#toastCount };
     this.toastUndo = undo;
-    // An Undo stays a little longer, so there is time to reach it.
-    this.#toastTimer = setTimeout(
-      () => {
-        this.toast = null;
-        this.toastUndo = null;
-      },
-      undo ? 8000 : 4500,
-    );
+    // An error waits to be read and closed; an Undo or a warning stays a little longer, so there
+    // is time to reach it.
+    this.#toastLeft = tone === "error" ? 0 : undo || tone === "warn" ? 8000 : 5000;
+    this.#toastSince = Date.now();
+    if (this.#toastLeft) this.#toastTimer = setTimeout(() => this.dismiss(), this.#toastLeft);
+  }
+
+  /** How long the toast shows, for the bar that runs down on it; 0 for one that waits. */
+  get toastTime(): number {
+    return this.toast ? this.#toastLeft : 0;
   }
 
   /** Once the action starts or the sheet closes, a plan still on its way is out of date: it must

@@ -30,7 +30,7 @@
   let busy = $state(false);
 
   function open(source: Source, label: string) {
-    api.openSource(source, file.path, label).catch((err) => confirm.say(String(err)));
+    api.openSource(source, file.path, label).catch((err) => confirm.fail(err));
   }
 
   async function showAnyway() {
@@ -39,7 +39,7 @@
   }
 
   function openInEditor() {
-    api.openInEditor(file.path, null).catch((err) => confirm.say(String(err)));
+    api.openInEditor(file.path, null).catch((err) => confirm.fail(err));
   }
 
   const binaryLines = $derived<TermLine[]>([
@@ -102,7 +102,7 @@
       {#if diff.old}<button class="button" onclick={() => open(diff.old!, "old")}>Open Old Version</button>{/if}
       {#if diff.new}<button class="button" onclick={() => open(diff.new!, "new")}>Open New Version</button>{/if}
       {#if openable && file.status !== "deleted"}
-        <button class="button" onclick={() => api.revealFile(file.path).catch((err) => confirm.say(String(err)))}>{mac ? "Show in Finder" : "Show in Folder"}</button>
+        <button class="button" onclick={() => api.revealFile(file.path).catch((err) => confirm.fail(err))}>{mac ? "Show in Finder" : "Show in Folder"}</button>
       {/if}
     </div>
     <p class="tip">Tip: a <code>textconv</code> rule in .gitattributes lets git diff some binary formats as text.</p>

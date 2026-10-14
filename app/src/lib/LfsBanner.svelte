@@ -14,7 +14,7 @@
   function act() {
     const request = installRequest(repoName);
     if (request) run(request);
-    else api.openLfsDownload().catch((err) => confirm.say(String(err)));
+    else api.openLfsDownload().catch((err) => confirm.fail(err));
   }
 </script>
 
