@@ -94,6 +94,8 @@
     if (on) requestAnimationFrame(() => node.focus());
   }
   $effect(() => {
+    // A closed sheet forgets, so the same sheet opened again gets the focus again.
+    if (!request) focusedFor = null;
     const key = request && (confirm.phase === "ask" || recovery?.button) ? `${confirm.phase}:${request.title}` : null;
     if (!key || key === focusedFor) return;
     focusedFor = key;

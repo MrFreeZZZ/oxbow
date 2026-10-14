@@ -91,7 +91,11 @@ export function pullRequest(ctx: RemoteContext, setup: PullSetup = { mode: "reba
     ],
     icon: "pull",
     button: "Pull",
-    note: t.behind ? `${upstream} had ${plural(t.behind, "new commit")} at the last fetch.` : undefined,
+    note: t.rewritten
+      ? `${upstream} still has the old versions of commits you rewrote: pulling brings them back. Push replaces them instead.`
+      : t.behind
+        ? `${upstream} had ${plural(t.behind, "new commit")} at the last fetch.`
+        : undefined,
     status: `Pulling ${upstream} into ${branch}…`,
     done: `${branch} is up to date with ${upstream}.`,
     recover: (failure) => conflict(failure) ?? networkOrAuth(failure, action, "Pulling", ctx, `${branch} is up to date with ${upstream}.`),
@@ -135,6 +139,8 @@ export function pushRequest(ctx: RemoteContext): Request {
     };
   }
   const commits = ctx.unpushed;
+  const rewritten = ctx.tracking?.rewritten;
+  if (rewritten) return rewrittenPushRequest(ctx, action, to, rewritten);
   const body: Part[] = [`Uploads ${plural(commits.length, "commit")} of `, chip(ctx, branch), ` to ${to.remote}${commits.length ? ": " : ""}`];
   const listed = commits.slice(0, 3);
   listed.forEach((c, i) => {
@@ -153,6 +159,34 @@ export function pushRequest(ctx: RemoteContext): Request {
     done: commits.length ? `Pushed ${plural(commits.length, "commit")} to ${to.remote}/${to.upstream}.` : `${to.remote}/${to.upstream} is up to date.`,
     recover,
     action,
+  };
+}
+
+/** Push after commits already on the remote were rewritten here (an edited message, a squash,
+ *  a drop, Edit Stack): a plain push is refused, and Pull and Push would bring the old versions
+ *  back. So it replaces them, with --force-with-lease at the tip seen at the last fetch. */
+function rewrittenPushRequest(ctx: RemoteContext, action: Action & { kind: "push" }, to: { remote: string; upstream: string }, tip: string): Request {
+  const remoteBranch = `${to.remote}/${to.upstream}`;
+  const branch = action.branch;
+  const old = ctx.tracking?.behind ?? 0;
+  const fresh = Math.max(ctx.unpushed.length, ctx.tracking?.ahead ?? 0);
+  return {
+    title: `Push ${branch} to ${to.remote} with force?`,
+    body: [
+      "You rewrote commits that are already on ",
+      chip(ctx, remoteBranch),
+      `. The push replaces the old ${old === 1 ? "version" : `versions (${old})`} there with your ${plural(fresh, "commit")} of `,
+      chip(ctx, branch),
+      ". A normal push would be refused, and a pull would bring the old ones back.",
+    ],
+    icon: "push",
+    tone: "warn",
+    button: "Force Push",
+    note: `If someone pushed to ${remoteBranch} after your last fetch, nothing is overwritten.`,
+    status: `Force pushing ${branch} to ${to.remote}…`,
+    done: `Pushed ${branch} to ${remoteBranch}, replacing the old commits.`,
+    recover: (failure) => pushRecovery(failure, ctx, action),
+    action: { ...action, force: true, lease: tip },
   };
 }
 

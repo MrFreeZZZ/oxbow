@@ -22,6 +22,11 @@ pub struct Tracking {
     pub behind: u32,
     /// The upstream branch was deleted on the remote.
     pub gone: bool,
+    /// The upstream's tip when every commit it has that the branch lacks was on this branch
+    /// before: an edited message, a squash, a drop or Edit Stack rewrote pushed commits. Push
+    /// then replaces them with `--force-with-lease` at this tip; a pull would bring them back.
+    /// Only for the checked-out branch.
+    pub rewritten: Option<String>,
 }
 
 /// Why a fetch, pull or push failed, so the app can offer the way out.
@@ -166,7 +171,30 @@ impl Repo {
             "--format=%(upstream:remotename)%00%(upstream:remoteref)%00%(upstream:track,nobracket)",
             &format!("refs/heads/{branch}"),
         ]))?;
-        Ok(parse_tracking(out.stdout.trim_end()))
+        let mut tracking = parse_tracking(out.stdout.trim_end());
+        if let Some(t) = &mut tracking
+            && t.ahead > 0
+            && t.behind > 0
+        {
+            t.rewritten = self.rewritten_upstream(&branch, &t.remote, &t.branch);
+        }
+        Ok(tracking)
+    }
+
+    /// The tip of `remote`/`upstream` when the local `branch` once pointed there: its own
+    /// earlier state, which it has since rewritten. The branch's reflog remembers it.
+    fn rewritten_upstream(&self, branch: &str, remote: &str, upstream: &str) -> Option<String> {
+        let tip = self.remote_tip(remote, upstream)?;
+        let out = self
+            .run(&GitCommand::new([
+                "reflog",
+                "show",
+                "--format=%H",
+                "--max-count=500",
+                &format!("refs/heads/{branch}"),
+            ]))
+            .ok()?;
+        out.stdout.lines().any(|id| id == tip).then_some(tip)
     }
 
     /// Upstream of every local branch that has one, by branch name.
@@ -329,6 +357,7 @@ fn parse_tracking(line: &str) -> Option<Tracking> {
         ahead: count("ahead "),
         behind: count("behind "),
         gone: track == "gone",
+        rewritten: None,
     })
 }
 
@@ -442,7 +471,8 @@ mod tests {
                 branch: "main".into(),
                 ahead: 2,
                 behind: 1,
-                gone: false
+                gone: false,
+                rewritten: None
             })
         );
         let gone = parse_tracking("origin\0refs/heads/old\0gone").unwrap();

@@ -98,6 +98,9 @@ export interface Tracking {
   ahead: number;
   behind: number;
   gone: boolean;
+  /** The upstream's tip when its extra commits are this branch's own, since rewritten:
+   *  Push replaces them with --force-with-lease at this tip. */
+  rewritten: string | null;
 }
 
 export interface History {
