@@ -46,7 +46,7 @@ pub use history::{History, HistoryOptions, HistoryRow, Label, WORKTREE_ID, Workt
 pub use lfs::{LfsChange, LfsPattern, LfsPointer, LfsStatus};
 pub use operation::{Chunk, ConflictFile, ConflictSide, MergeMethod, MergePreview, Operation, OperationKind, Pick};
 pub use oplog::{HeadState, OpEntry, RefMove, StashMove, StashRecord, Trees};
-pub use remote::{CommitBrief, DeletionCheck, Failure, FailureKind, Tracking, classify_failure};
+pub use remote::{CommitBrief, DeletionCheck, Failure, FailureKind, Replay, Tracking, classify_failure};
 pub use repo::{DiffOptions, HeadInfo, RefInfo, RefKind, Repo, StashInfo};
 pub use search::{SearchHit, SearchMode, SearchQuery, SearchResult};
 pub use secrets::{PatternKind, SecretFinding, SecretPattern, set_secrets_check};

@@ -139,6 +139,164 @@ fn an_undone_pull_does_not_make_a_teammates_commit_look_rewritten() {
 }
 
 #[test]
+fn a_dropped_pushed_commit_is_pushed_away_with_a_lease() {
+    let mut team = Team::new();
+    team.me.commit("b.txt", "mine\n", "Oops");
+    team.me.git(&["push", "-q", "origin", "main"]);
+    let pushed = team.me.git(&["rev-parse", "HEAD"]);
+    let repo = Repo::open(team.me.path()).unwrap();
+    // Undo Commit: the branch goes back, nothing new on top.
+    team.me.git(&["reset", "-q", "--soft", "HEAD~1"]);
+    let tracking = repo.tracking().unwrap().unwrap();
+    assert_eq!((tracking.ahead, tracking.behind), (0, 1));
+    assert_eq!(tracking.rewritten.as_deref(), Some(pushed.as_str()));
+    assert_eq!(tracking.replay, None);
+
+    let mut action = push(false);
+    if let Action::Push { force, lease, .. } = &mut action {
+        *force = true;
+        *lease = tracking.rewritten.clone();
+    }
+    repo.perform(&action).unwrap();
+    assert_eq!(team.me.git(&["log", "-1", "--format=%s", "origin/main"]), "Root");
+    let tracking = repo.tracking().unwrap().unwrap();
+    assert_eq!((tracking.ahead, tracking.behind, tracking.rewritten), (0, 0, None));
+}
+
+/// Edit Message on a pushed commit, while Kirill pushes on top of its old version.
+fn edited_under_a_teammate() -> (Team, Repo, String) {
+    let mut team = Team::new();
+    team.me.commit("b.txt", "mine\n", "Old message");
+    team.me.git(&["push", "-q", "origin", "main"]);
+    let old = team.me.git(&["rev-parse", "HEAD"]);
+    let repo = Repo::open(team.me.path()).unwrap();
+    repo.perform(&Action::Reword {
+        message: "New message".into(),
+        no_verify: false,
+    })
+    .unwrap();
+    team.kirill.git(&["pull", "-q", "--rebase", "origin", "main"]);
+    team.kirill.commit("c.txt", "his\n", "Peer change");
+    team.kirill.git(&["push", "-q", "origin", "main"]);
+    (team, repo, old)
+}
+
+fn messages(team: &mut Team, rev: &str) -> String {
+    team.me.git(&["log", "--format=%s", rev])
+}
+
+#[test]
+fn commits_pushed_on_an_edited_one_are_copied_over_before_the_push() {
+    let (mut team, repo, old) = edited_under_a_teammate();
+    repo.perform(&Action::Fetch {
+        remote: Some("origin".into()),
+    })
+    .unwrap();
+    let tip = team.me.git(&["rev-parse", "origin/main"]);
+    let tracking = repo.tracking().unwrap().unwrap();
+    assert_eq!((tracking.ahead, tracking.behind), (1, 2));
+    assert_eq!(tracking.rewritten.as_deref(), Some(tip.as_str()));
+    let replay = tracking.replay.unwrap();
+    assert_eq!(replay.base, old);
+    assert_eq!(
+        replay.commits.iter().map(|c| c.summary.as_str()).collect::<Vec<_>>(),
+        ["Peer change"]
+    );
+
+    let action = Action::ReplayAndPush {
+        remote: "origin".into(),
+        branch: "main".into(),
+        upstream: "main".into(),
+        base: replay.base,
+        lease: tip,
+        no_verify: false,
+    };
+    let plan = repo.plan(&action).unwrap();
+    assert_eq!(plan.commands.len(), 2);
+    assert!(
+        plan.commands[0].display().starts_with("git cherry-pick "),
+        "{}",
+        plan.commands[0].display()
+    );
+    repo.perform(&action).unwrap();
+    assert_eq!(messages(&mut team, "origin/main"), "Peer change\nNew message\nRoot");
+    assert!(team.me.path().join("c.txt").exists());
+    let tracking = repo.tracking().unwrap().unwrap();
+    assert_eq!((tracking.ahead, tracking.behind, tracking.rewritten), (0, 0, None));
+}
+
+#[test]
+fn a_stale_lease_after_an_edit_says_what_to_copy_over() {
+    let (mut team, repo, old) = edited_under_a_teammate();
+    // The last fetch was before Kirill's push: the lease is the old version.
+    let mut action = push(false);
+    if let Action::Push { force, lease, .. } = &mut action {
+        *force = true;
+        *lease = Some(old.clone());
+    }
+    let err = repo.perform(&action).unwrap_err();
+    let failure = repo.explain_failure(&action, &err);
+    assert_eq!(failure.kind, FailureKind::StaleLease);
+    let tip = team.me.git(&["rev-parse", "origin/main"]);
+    assert_eq!(failure.remote_tip.as_deref(), Some(tip.as_str()));
+    let tracking = failure.tracking.unwrap();
+    assert_eq!(tracking.rewritten.as_deref(), Some(tip.as_str()));
+    assert_eq!(tracking.replay.unwrap().base, old);
+    // The edited message is still the branch's, not lost to a rebase.
+    assert_eq!(messages(&mut team, "main"), "New message\nRoot");
+}
+
+#[test]
+fn a_copied_commit_resolved_by_hand_is_not_copied_again() {
+    let mut team = Team::new();
+    team.me.commit("b.txt", "mine\n", "Mine");
+    team.me.git(&["push", "-q", "origin", "main"]);
+    let old = team.me.git(&["rev-parse", "HEAD"]);
+    team.kirill.git(&["pull", "-q", "--rebase", "origin", "main"]);
+    team.kirill.commit("b.txt", "his\n", "His");
+    team.kirill.git(&["push", "-q", "origin", "main"]);
+    // Amend with other contents: Kirill's change no longer applies cleanly.
+    team.me.write("b.txt", "mine, better\n");
+    team.me.git(&["commit", "-q", "-a", "--amend", "--no-edit"]);
+    team.me.git(&["fetch", "-q", "origin"]);
+    let tip = team.me.git(&["rev-parse", "origin/main"]);
+    let repo = Repo::open(team.me.path()).unwrap();
+    assert_eq!(repo.tracking().unwrap().unwrap().replay.unwrap().base, old);
+
+    let action = Action::ReplayAndPush {
+        remote: "origin".into(),
+        branch: "main".into(),
+        upstream: "main".into(),
+        base: old,
+        lease: tip.clone(),
+        no_verify: false,
+    };
+    let err = repo.perform(&action).unwrap_err();
+    assert_eq!(repo.explain_failure(&action, &err).kind, FailureKind::Conflict);
+    team.me.write("b.txt", "his, better\n");
+    team.me.git(&["add", "b.txt"]);
+    team.me.git(&["-c", "core.editor=true", "cherry-pick", "--continue"]);
+
+    let tracking = repo.tracking().unwrap().unwrap();
+    assert_eq!(tracking.rewritten.as_deref(), Some(tip.as_str()));
+    assert_eq!(tracking.replay, None);
+}
+
+#[test]
+fn a_teammates_push_on_unchanged_commits_is_still_a_plain_pull() {
+    let mut team = Team::new();
+    team.me.commit("b.txt", "mine\n", "Mine");
+    team.me.git(&["push", "-q", "origin", "main"]);
+    team.kirill.git(&["pull", "-q", "--rebase", "origin", "main"]);
+    team.kirill.commit("c.txt", "his\n", "His");
+    team.kirill.git(&["push", "-q", "origin", "main"]);
+    let repo = Repo::open(team.me.path()).unwrap();
+    team.me.git(&["fetch", "-q", "origin"]);
+    let tracking = repo.tracking().unwrap().unwrap();
+    assert_eq!((tracking.ahead, tracking.behind, tracking.rewritten), (0, 1, None));
+}
+
+#[test]
 fn push_streams_its_output() {
     let mut team = Team::new();
     team.me.commit("b.txt", "mine\n", "Mine");

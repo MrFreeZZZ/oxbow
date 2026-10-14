@@ -909,6 +909,7 @@ async fn perform_action(
         hook: None,
         ssh: None,
         secrets: None,
+        tracking: None,
     })?;
     let cancel = session.cancel(&window);
     cancel.store(false, Ordering::Relaxed);
@@ -937,6 +938,7 @@ async fn perform_action(
             hook: None,
             ssh: None,
             secrets: None,
+            tracking: None,
         })
     })
 }
@@ -1102,6 +1104,7 @@ async fn fetch_in_background(
         hook: None,
         ssh: None,
         secrets: None,
+        tracking: None,
     };
     let repo = current(&session, &window).map_err(failed)?;
     let cancel = session.fetch_cancel(&window);

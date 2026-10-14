@@ -27,6 +27,20 @@ pub struct Tracking {
     /// then replaces them with `--force-with-lease` at this tip; a pull would bring them back.
     /// Only for the checked-out branch.
     pub rewritten: Option<String>,
+    /// With `rewritten`: commits someone pushed on top of the old versions, which the branch
+    /// does not have yet. Push copies them onto the branch first, so neither their work nor the
+    /// rewrite is lost; a pull with rebase would drop an edited message as already upstream.
+    pub replay: Option<Replay>,
+}
+
+/// Commits to copy onto a rewritten branch before it replaces its old versions on the remote.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Replay {
+    /// The remote branch as this clone last pushed it: the old versions end here.
+    pub base: String,
+    /// What others pushed after it that the branch has no copy of, oldest first.
+    pub commits: Vec<CommitBrief>,
 }
 
 /// Why a fetch, pull or push failed, so the app can offer the way out.
@@ -80,12 +94,16 @@ pub struct Failure {
     pub remote_tip: Option<String>,
     /// For a hook that stopped the command: its name, or both names when either of the
     /// `pre-commit` and `commit-msg` hooks could have.
-    pub hook: Option<String>,
+    pub hook: Option<Box<str>>,
     /// For a refused SSH connection: what Oxbow found out, and so which fix fits.
     pub ssh: Option<Box<crate::ssh::SshCheck>>,
     /// For a commit the secrets check stopped: the lines it found.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secrets: Option<Box<Vec<crate::secrets::SecretFinding>>>,
+    /// For a rejected push of commits rewritten here: the branch's tracking after the fetch,
+    /// with the lease to use and what others pushed on top of the old versions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tracking: Option<Box<Tracking>>,
 }
 
 impl Repo {
@@ -94,7 +112,9 @@ impl Repo {
     pub fn explain_failure(&self, action: &Action, error: &Error) -> Failure {
         let pushing = matches!(
             action,
-            Action::Push { no_verify: false, .. } | Action::PullAndPush { no_verify: false, .. }
+            Action::Push { no_verify: false, .. }
+                | Action::PullAndPush { no_verify: false, .. }
+                | Action::ReplayAndPush { no_verify: false, .. }
         );
         let pre_push = pushing && self.has_pre_push_hook();
         let mut kind = classify_failure(error, pre_push);
@@ -126,12 +146,13 @@ impl Repo {
             output,
             incoming: Vec::new(),
             remote_tip: None,
-            hook: hook.filter(|_| kind == FailureKind::Hook),
+            hook: hook.filter(|_| kind == FailureKind::Hook).map(Into::into),
             ssh: None,
             secrets: match error {
                 Error::Secrets(found) => Some(Box::new(found.clone())),
                 _ => None,
             },
+            tracking: None,
         };
         if kind == FailureKind::Auth
             && let Some(remote) = self.remote_of(action)
@@ -139,10 +160,20 @@ impl Repo {
             failure.ssh = self.check_ssh(&remote).map(Box::new);
         }
         if matches!(kind, FailureKind::Rejected | FailureKind::StaleLease)
-            && let Action::Push { remote, upstream, .. } | Action::PullAndPush { remote, upstream, .. } = action
+            && let Action::Push { remote, upstream, .. }
+            | Action::PullAndPush { remote, upstream, .. }
+            | Action::ReplayAndPush { remote, upstream, .. } = action
         {
             failure.incoming = self.incoming(remote, upstream).unwrap_or_default();
             failure.remote_tip = self.remote_tip(remote, upstream);
+            // After that fetch: whether the push was replacing commits rewritten here, and
+            // what others pushed on top of them meanwhile.
+            failure.tracking = self
+                .tracking()
+                .ok()
+                .flatten()
+                .filter(|t| t.rewritten.is_some())
+                .map(Box::new);
         }
         failure
     }
@@ -155,6 +186,7 @@ impl Repo {
             | Action::Pull { remote, .. }
             | Action::Push { remote, .. }
             | Action::PullAndPush { remote, .. }
+            | Action::ReplayAndPush { remote, .. }
             | Action::PushTags { remote, .. }
             | Action::FetchTags { remote }
             | Action::PushBranches { remote, .. }
@@ -176,53 +208,121 @@ impl Repo {
         ]))?;
         let mut tracking = parse_tracking(out.stdout.trim_end());
         if let Some(t) = &mut tracking
-            && t.ahead > 0
             && t.behind > 0
         {
-            t.rewritten = self.rewritten_upstream(&branch, &t.remote, &t.branch);
+            self.find_rewrite(&branch, t);
         }
         Ok(tracking)
     }
 
-    /// The tip of `remote`/`upstream` when this clone pushed it and the local `branch` once
-    /// pointed there: its own earlier state, which it has since rewritten. The branch's reflog
-    /// remembers it. A tip that came in with a fetch or pull is someone else's, even when the
-    /// branch once fast-forwarded to it and an undo took that back: replacing it would delete
-    /// their commits.
-    fn rewritten_upstream(&self, branch: &str, remote: &str, upstream: &str) -> Option<String> {
-        let tip = self.remote_tip(remote, upstream)?;
-        if !self.pushed_from_here(remote, upstream, &tip) {
-            return None;
+    /// Fill `rewritten` (and `replay`) when the remote branch still has commits this clone
+    /// pushed and the local `branch` has since rewritten or dropped: an edited message, a squash,
+    /// Undo Commit, Edit Stack. The last state this clone pushed must be in the branch's reflog
+    /// and gone from the branch. A remote state that only came in with a fetch or pull is
+    /// someone else's, even when the branch once fast-forwarded to it and an undo took that
+    /// back: replacing it would delete their commits.
+    fn find_rewrite(&self, branch: &str, t: &mut Tracking) {
+        let local = format!("refs/heads/{branch}");
+        let Some(tip) = self.remote_tip(&t.remote, &t.branch) else {
+            return;
+        };
+        let Some(pushed) = self.last_pushed(&t.remote, &t.branch) else {
+            return;
+        };
+        if self.is_ancestor(&pushed, &local) || !self.in_reflog(&local, &pushed) {
+            return;
         }
+        if pushed == tip {
+            t.rewritten = Some(tip);
+            return;
+        }
+        // Someone pushed on top of the old versions. Their commits are copied over, which a
+        // merge among them would not survive: that one is left to sort out by hand.
+        if !self.is_ancestor(&pushed, &tip) || self.has_merges(&format!("{pushed}..{tip}")).unwrap_or(true) {
+            return;
+        }
+        let commits = self.missing_commits(&local, &pushed, &tip);
+        t.rewritten = Some(tip);
+        if !commits.is_empty() {
+            t.replay = Some(Replay { base: pushed, commits });
+        }
+    }
+
+    /// Where this clone last pushed `remote`/`upstream`: the newest "update by push" entry of
+    /// its reflog.
+    fn last_pushed(&self, remote: &str, upstream: &str) -> Option<String> {
         let out = self
             .run(&GitCommand::new([
                 "reflog",
                 "show",
-                "--format=%H",
+                "--format=%H%x09%gs",
                 "--max-count=500",
-                &format!("refs/heads/{branch}"),
+                &format!("refs/remotes/{remote}/{upstream}"),
             ]))
             .ok()?;
-        out.stdout.lines().any(|id| id == tip).then_some(tip)
-    }
-
-    /// Whether `remote`/`upstream` got to `tip` through a push from this clone, not a fetch: the
-    /// newest entry of its reflog that moved it to `tip` says "update by push".
-    fn pushed_from_here(&self, remote: &str, upstream: &str, tip: &str) -> bool {
-        let Ok(out) = self.run(&GitCommand::new([
-            "reflog",
-            "show",
-            "--format=%H%x09%gs",
-            "--max-count=500",
-            &format!("refs/remotes/{remote}/{upstream}"),
-        ])) else {
-            return false;
-        };
         out.stdout
             .lines()
             .filter_map(|line| line.split_once('\t'))
-            .find(|(id, _)| *id == tip)
-            .is_some_and(|(_, subject)| subject == "update by push")
+            .find(|(_, subject)| *subject == "update by push")
+            .map(|(id, _)| id.to_owned())
+    }
+
+    fn in_reflog(&self, reference: &str, id: &str) -> bool {
+        self.run(&GitCommand::new([
+            "reflog",
+            "show",
+            "--format=%H",
+            "--max-count=500",
+            reference,
+        ]))
+        .is_ok_and(|out| out.stdout.lines().any(|line| line == id))
+    }
+
+    /// The commits of `from..to` that `local` has no copy of, oldest first. A copy has the same
+    /// patch (as rebase sees it), or the same author, author time and subject: a cherry-pick
+    /// that stopped on conflicts and was resolved by hand keeps those.
+    pub(crate) fn missing_commits(&self, local: &str, from: &str, to: &str) -> Vec<CommitBrief> {
+        let lines = |args: &[&str]| {
+            self.run(&GitCommand::new(args.iter().copied()))
+                .map(|out| out.stdout)
+                .unwrap_or_default()
+        };
+        let same_patch = lines(&[
+            "rev-list",
+            "--cherry-pick",
+            "--right-only",
+            "--no-merges",
+            &format!("{local}...{to}"),
+        ]);
+        let uncopied: std::collections::HashSet<&str> = same_patch.lines().collect();
+        const WHO: &str = "%an%x1f%ae%x1f%at%x1f%s";
+        let ours = lines(&["log", &format!("--format={WHO}"), &format!("{to}..{local}")]);
+        let copied: std::collections::HashSet<&str> = ours.lines().collect();
+        let theirs = lines(&[
+            "log",
+            "--reverse",
+            &format!("--format=%H%x1e{WHO}%x1e%ct"),
+            &format!("{from}..{to}"),
+        ]);
+        theirs
+            .lines()
+            .filter_map(|line| {
+                let mut parts = line.split('\u{1e}');
+                let (id, who, time) = (parts.next()?, parts.next()?, parts.next()?);
+                if !uncopied.contains(id) || copied.contains(who) {
+                    return None;
+                }
+                let mut who = who.split('\u{1f}');
+                let author_name = who.next()?.to_owned();
+                let summary = who.nth(2)?.to_owned();
+                Some(CommitBrief {
+                    id: id.to_owned(),
+                    summary,
+                    author_name,
+                    time: time.parse().unwrap_or(0),
+                })
+            })
+            .collect()
     }
 
     /// Upstream of every local branch that has one, by branch name.
@@ -386,6 +486,7 @@ fn parse_tracking(line: &str) -> Option<Tracking> {
         behind: count("behind "),
         gone: track == "gone",
         rewritten: None,
+        replay: None,
     })
 }
 
@@ -500,7 +601,8 @@ mod tests {
                 ahead: 2,
                 behind: 1,
                 gone: false,
-                rewritten: None
+                rewritten: None,
+                replay: None
             })
         );
         let gone = parse_tracking("origin\0refs/heads/old\0gone").unwrap();

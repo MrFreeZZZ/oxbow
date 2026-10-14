@@ -651,6 +651,9 @@ impl Repo {
                 format!("{} {branch} to {remote}", if *force { "Force push" } else { "Push" }),
             ),
             Action::PullAndPush { branch, .. } => ("push", format!("Pull and push {branch}")),
+            Action::ReplayAndPush { branch, remote, .. } => {
+                ("push", format!("Copy new commits and force push {branch} to {remote}"))
+            }
             Action::AbortRebase => ("undo", "Undo the pull".to_owned()),
             Action::Switch { branch, .. } => ("checkout", format!("Check out {branch}")),
             Action::Detach { commit, .. } => ("checkout", format!("Check out {}", short_id(commit))),

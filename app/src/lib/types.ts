@@ -101,6 +101,9 @@ export interface Tracking {
   /** The upstream's tip when its extra commits are this branch's own, since rewritten:
    *  Push replaces them with --force-with-lease at this tip. */
   rewritten: string | null;
+  /** With `rewritten`: commits someone pushed on top of the old versions that the branch has
+   *  no copy of. Push copies them over first (`base` is where this clone last pushed). */
+  replay: { base: string; commits: CommitBrief[] } | null;
 }
 
 export interface History {
@@ -366,6 +369,7 @@ export type Action =
       noVerify: boolean;
     }
   | { kind: "pullAndPush"; remote: string; branch: string; upstream: string; noVerify: boolean }
+  | { kind: "replayAndPush"; remote: string; branch: string; upstream: string; base: string; lease: string; noVerify: boolean }
   | { kind: "abortRebase" }
   | { kind: "switch"; branch: string; stash: boolean; keep: string | null }
   | { kind: "detach"; commit: string; stash: boolean }
@@ -584,6 +588,9 @@ export interface Failure {
   secrets?: SecretFinding[];
   /** For a refused SSH connection: what Oxbow found out. */
   ssh?: SshCheck | null;
+  /** For a rejected push of commits rewritten here: tracking after the fetch, with the lease
+   *  and what others pushed on top of the old versions. */
+  tracking?: Tracking | null;
 }
 
 /** An added line of a commit that looks like it holds a secret. */

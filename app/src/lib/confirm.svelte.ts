@@ -180,7 +180,7 @@ type Phase = "ask" | "running" | "failed";
 const RISKY = new Set<Action["kind"]>(["discard", "discardHunk", "reset", "stashDrop", "deleteBranch", "deleteRemoteBranch", "deleteTag", "abort", "abortRebase", "restore", "clearOperationLog"]);
 
 function isForcePush(action: Action): boolean {
-  return action.kind === "push" && action.force;
+  return (action.kind === "push" && action.force) || action.kind === "replayAndPush";
 }
 
 /** Whether to show the sheet before running, from the Confirmations settings. A sheet that needs

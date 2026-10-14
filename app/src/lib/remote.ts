@@ -140,6 +140,8 @@ export function pushRequest(ctx: RemoteContext): Request {
   }
   const commits = ctx.unpushed;
   const rewritten = ctx.tracking?.rewritten;
+  const replay = ctx.tracking?.replay;
+  if (rewritten && replay) return replayPushRequest(ctx, action, rewritten, replay);
   if (rewritten) return rewrittenPushRequest(ctx, action, to, rewritten);
   const body: Part[] = [`Uploads ${plural(commits.length, "commit")} of `, chip(ctx, branch), ` to ${to.remote}${commits.length ? ": " : ""}`];
   const listed = commits.slice(0, 3);
@@ -172,15 +174,29 @@ function rewrittenPushRequest(ctx: RemoteContext, action: Action & { kind: "push
   const forced: Action & { kind: "push" } = { ...action, force: true, lease: tip };
   const old = ctx.tracking?.behind ?? 0;
   const fresh = Math.max(ctx.unpushed.length, ctx.tracking?.ahead ?? 0);
+  // Undo Commit or a reset took pushed commits back, with nothing new in their place.
+  const body: Part[] = fresh
+    ? [
+        "You rewrote commits that are already on ",
+        chip(ctx, remoteBranch),
+        `. The push replaces the old ${old === 1 ? "version" : `versions (${old})`} there with your ${plural(fresh, "commit")} of `,
+        chip(ctx, branch),
+        ". A normal push would be refused, and a pull would bring the old ones back.",
+      ]
+    : [
+        `You took back ${old === 1 ? "a commit" : plural(old, "commit")} that ${old === 1 ? "is" : "are"} already on `,
+        chip(ctx, remoteBranch),
+        ". The push removes ",
+        old === 1 ? "it" : "them",
+        " there too, so the remote ends where ",
+        chip(ctx, branch),
+        " does. A normal push would be refused, and a pull would bring ",
+        old === 1 ? "it" : "them",
+        " back.",
+      ];
   return {
     title: `Push ${branch} to ${to.remote} with force?`,
-    body: [
-      "You rewrote commits that are already on ",
-      chip(ctx, remoteBranch),
-      `. The push replaces the old ${old === 1 ? "version" : `versions (${old})`} there with your ${plural(fresh, "commit")} of `,
-      chip(ctx, branch),
-      ". A normal push would be refused, and a pull would bring the old ones back.",
-    ],
+    body,
     icon: "push",
     tone: "warn",
     button: "Force Push",
@@ -190,6 +206,67 @@ function rewrittenPushRequest(ctx: RemoteContext, action: Action & { kind: "push
     recover: (failure) => pushRecovery(failure, ctx, forced),
     action: forced,
   };
+}
+
+/** Push after commits already on the remote were rewritten here while someone pushed on top of
+ *  their old versions. Pull and Push would drop an edited message (rebase sees the commit as
+ *  already upstream), so the push copies their commits onto the branch first, then replaces
+ *  the old versions with --force-with-lease at the tip seen at the last fetch. */
+function replayPushRequest(ctx: RemoteContext, push: Action & { kind: "push" }, tip: string, replay: { base: string; commits: CommitBrief[] }): Request {
+  const remoteBranch = `${push.remote}/${push.upstream}`;
+  const branch = push.branch;
+  const action: Action & { kind: "replayAndPush" } = {
+    kind: "replayAndPush",
+    remote: push.remote,
+    branch,
+    upstream: push.upstream,
+    base: replay.base,
+    lease: tip,
+    noVerify: push.noVerify,
+  };
+  return {
+    title: `Copy their commits and push ${branch} with force?`,
+    body: [
+      "You rewrote commits that are already on ",
+      chip(ctx, remoteBranch),
+      ", and ",
+      ...whoPushed(replay.commits),
+      " on top of the old versions. The push copies ",
+      replay.commits.length === 1 ? "it" : "them",
+      " onto ",
+      chip(ctx, branch),
+      ", then replaces the old versions on the remote. Your rewrite and their work both stay.",
+    ],
+    icon: "push",
+    tone: "warn",
+    button: "Copy and Push",
+    note: "The copies get new SHAs: whoever pushed them pulls once to pick them up. If someone pushes again before you, nothing is overwritten.",
+    status: `Copying commits and pushing ${branch}…`,
+    done: `Pushed ${branch} to ${remoteBranch} with ${plural(replay.commits.length, "copied commit")}.`,
+    recover: (failure) => replayRecovery(failure, ctx, push, action),
+    action,
+  };
+}
+
+function replayRecovery(failure: Failure, ctx: RemoteContext, push: Action & { kind: "push" }, action: Action & { kind: "replayAndPush" }): Recovery | null {
+  if (failure.kind === "conflict") return stoppedOnConflicts(failure, "cherry-pick");
+  if (failure.kind === "hook") {
+    return {
+      title: "The pre-push hook stopped the push",
+      body: ["Their commits are copied onto ", chip(ctx, action.branch), ", but nothing was sent to ", { code: action.remote }, ". The hook’s output is below: fix what it reports, then try again."],
+      icon: "hook",
+      tone: "err",
+      button: { label: "Try Again", action, status: `Pushing ${action.branch} to ${action.remote}…`, done: `Pushed ${action.branch}.` },
+      alt: {
+        label: "Push Without Hook…",
+        danger: true,
+        request: () => ({ ...noVerifyRequest(ctx, push), recover: (f) => replayRecovery(f, ctx, { ...push, noVerify: true }, { ...action, noVerify: true }), action: { ...action, noVerify: true } }),
+      },
+      close: "Close",
+    };
+  }
+  if (failure.kind === "rejected" || failure.kind === "staleLease") return pushRecovery(failure, ctx, push);
+  return networkOrAuth(failure, action, "Pushing", ctx, `Pushed ${action.branch}.`);
 }
 
 /** Who pushed what, e.g. "Kirill pushed 1a2b3c4 “Fix login”" or "Kirill and Maria pushed 3 commits". */
@@ -205,6 +282,10 @@ function pushRecovery(failure: Failure, ctx: RemoteContext, action: Action & { k
   const remoteBranch = `${action.remote}/${action.upstream}`;
   const pullAndPush: Action = { kind: "pullAndPush", remote: action.remote, branch: action.branch, upstream: action.upstream, noVerify: action.noVerify };
   const n = Math.max(ctx.unpushed.length, ctx.tracking?.ahead ?? 0);
+  const rewrite = failure.tracking;
+  if ((failure.kind === "rejected" || failure.kind === "staleLease") && rewrite?.rewritten) {
+    return rewrittenRecovery(failure, ctx, action, rewrite.rewritten, rewrite.replay);
+  }
   if (failure.kind === "rejected" || failure.kind === "staleLease") {
     const count = failure.incoming.length;
     return {
@@ -234,7 +315,42 @@ function pushRecovery(failure: Failure, ctx: RemoteContext, action: Action & { k
       close: "Close",
     };
   }
-  return conflict(failure) ?? networkOrAuth(failure, action, "Pushing", ctx, `Pushed ${action.branch}.`);
+  // Copy and Push, run from this sheet's recovery, stops in a cherry-pick, not a pull.
+  const copying = failure.output.includes("cherry-pick --continue");
+  return (copying ? stoppedOnConflicts(failure, "cherry-pick") : conflict(failure)) ?? networkOrAuth(failure, action, "Pushing", ctx, `Pushed ${action.branch}.`);
+}
+
+/** A push of commits rewritten here was refused because the remote moved: someone pushed on
+ *  top of the old versions. Pull and Push would drop an edited message, so the way out copies
+ *  their commits over and pushes with the new lease. */
+function rewrittenRecovery(failure: Failure, ctx: RemoteContext, action: Action & { kind: "push" }, tip: string, replay: { base: string; commits: CommitBrief[] } | null): Recovery {
+  const remoteBranch = `${action.remote}/${action.upstream}`;
+  const button: Step = replay
+    ? {
+        action: { kind: "replayAndPush", remote: action.remote, branch: action.branch, upstream: action.upstream, base: replay.base, lease: tip, noVerify: action.noVerify },
+        status: `Copying commits and pushing ${action.branch}…`,
+        done: `Pushed ${action.branch} to ${remoteBranch} with ${plural(replay.commits.length, "copied commit")}.`,
+      }
+    : { action: { ...action, force: true, lease: tip }, status: `Force pushing ${action.branch} to ${action.remote}…`, done: `Pushed ${action.branch} to ${remoteBranch}, replacing the old commits.` };
+  return {
+    title: `${remoteBranch} changed since your last fetch`,
+    body: replay
+      ? [
+          "Nothing was overwritten: ",
+          ...whoPushed(replay.commits),
+          " on top of the old versions of the commits you rewrote. Copy and Push puts ",
+          replay.commits.length === 1 ? "it" : "them",
+          " onto ",
+          chip(ctx, action.branch),
+          ", then pushes. A pull would drop your rewrite instead.",
+        ]
+      : ["Nothing was overwritten. ", chip(ctx, action.branch), " already has everything new there, so the push can replace the old versions now."],
+    icon: "warn",
+    tone: "warn",
+    button: { label: replay ? "Copy and Push" : "Force Push", ...button },
+    alt: failure.remoteTip ? { label: "Overwrite Anyway…", danger: true, request: () => forcePushRequest(ctx, action, failure, true) } : undefined,
+    note: replay ? "The copies get new SHAs: whoever pushed them pulls once to pick them up." : `Only if ${remoteBranch} is still ${shortId(tip)}.`,
+  };
 }
 
 function forcePushRequest(ctx: RemoteContext, action: Action & { kind: "push" }, failure: Failure, lease: boolean): Request {
