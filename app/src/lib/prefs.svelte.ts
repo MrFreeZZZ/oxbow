@@ -45,6 +45,8 @@ export const defaults = {
   "oxbow.fetch.interval": 15,
   /** Before each commit, look for passwords and keys in the staged lines. */
   "oxbow.commit.checkSecrets": true,
+  /** Your own signatures, checked together with the built-in ones. */
+  "oxbow.secrets.patterns": [] as SecretPattern[],
   /** Characters before the commit summary counter warns; 0 is off. */
   "oxbow.commit.subjectGuide": 72,
   /** Empty: the first one installed. */
@@ -96,10 +98,12 @@ export const knownSetting = (key: string) => key in defaults || key in internal;
 
 /** What is wrong with a value of settings.json, or null when Oxbow can use it. */
 export function problemOf(key: string, value: unknown): string | null {
-  const expected = key in defaults ? typeof defaults[key as PrefKey] : internal[key];
+  const fallback = key in defaults ? defaults[key as PrefKey] : undefined;
+  const expected = key in defaults ? (Array.isArray(fallback) ? "array" : typeof fallback) : internal[key];
   if (!expected) return `Oxbow has no setting “${key}”`;
   const actual = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
   if (actual !== expected) return `Expected ${named(expected)}, not ${named(actual)}`;
+  if (key === "oxbow.secrets.patterns") return patternsProblem(value as unknown[]);
   const rule = rules[key as PrefKey];
   if (!rule) return null;
   if (rule.oneOf && !rule.oneOf.includes(value as string)) return `Expected one of ${quoted(rule.oneOf)}`;
@@ -225,4 +229,28 @@ export function followLook() {
       root.style.setProperty("--tab", String(prefs.get("oxbow.text.tabWidth")));
     });
   });
+}
+
+/** A signature of your own for the secrets check. `name`: a variable or key name, `*` for any
+ *  characters, e.g. `CLIENT_ID` or `*_API_KEY*`; a line that gives it a value is flagged.
+ *  `text`: a regular expression for the secret itself, e.g. `pk_live_[0-9a-zA-Z]{24}`. */
+export interface SecretPattern {
+  kind: "name" | "text";
+  pattern: string;
+}
+
+function patternsProblem(list: unknown[]): string | null {
+  for (const item of list) {
+    const p = item as Partial<SecretPattern> | null;
+    if (!p || typeof p !== "object" || (p.kind !== "name" && p.kind !== "text") || typeof p.pattern !== "string" || !p.pattern.trim())
+      return 'Expected items like { "kind": "name", "pattern": "CLIENT_ID" } or { "kind": "text", "pattern": "pk_live_\\w+" }';
+    if (p.kind === "text") {
+      try {
+        new RegExp(p.pattern);
+      } catch {
+        return `“${p.pattern}” is not a regular expression`;
+      }
+    }
+  }
+  return null;
 }
