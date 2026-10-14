@@ -1266,6 +1266,17 @@ impl Repo {
         if let Action::Restore { id, .. } = action {
             self.prepare_restore(id)?;
         }
+        // Copy and Push writes down what it copies first: a copy resolved by hand after a
+        // conflict has other changes, and must not be copied again.
+        if let Action::ReplayAndPush {
+            branch, base, lease, ..
+        } = action
+        {
+            let commits = self.missing_commits(&format!("refs/heads/{branch}"), base, lease)?;
+            if !commits.is_empty() {
+                self.record_replay(branch, base, lease, &commits)?;
+            }
+        }
         let before = self.snapshot().ok();
         if let Action::EditStack { plan } = action {
             self.remember_return(plan);
@@ -1600,7 +1611,7 @@ impl Repo {
             )));
         }
         let mut commands = Vec::new();
-        let commits = self.missing_commits(&format!("refs/heads/{branch}"), base, lease);
+        let commits = self.missing_commits(&format!("refs/heads/{branch}"), base, lease)?;
         if !commits.is_empty() {
             let mut people: Vec<&str> = Vec::new();
             for c in &commits {

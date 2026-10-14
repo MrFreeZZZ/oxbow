@@ -215,37 +215,84 @@ impl Repo {
         Ok(tracking)
     }
 
-    /// Fill `rewritten` (and `replay`) when the remote branch still has commits this clone
-    /// pushed and the local `branch` has since rewritten or dropped: an edited message, a squash,
-    /// Undo Commit, Edit Stack. The last state this clone pushed must be in the branch's reflog
-    /// and gone from the branch. A remote state that only came in with a fetch or pull is
-    /// someone else's, even when the branch once fast-forwarded to it and an undo took that
-    /// back: replacing it would delete their commits.
+    /// Fill `rewritten` (and `replay`) when the remote branch still has old versions of commits
+    /// the local `branch` has since rewritten or dropped: an edited message, a squash, Undo
+    /// Commit, Edit Stack. See `rewrite_base` for how the old versions are told apart from
+    /// someone else's commits: a remote state that only came in with a fetch or pull, which
+    /// the branch once fast-forwarded to and an undo took back, is not replaced.
     fn find_rewrite(&self, branch: &str, t: &mut Tracking) {
         let local = format!("refs/heads/{branch}");
         let Some(tip) = self.remote_tip(&t.remote, &t.branch) else {
             return;
         };
-        let Some(pushed) = self.last_pushed(&t.remote, &t.branch) else {
+        let Some(base) = self.rewrite_base(&local, &t.remote, &t.branch, &tip) else {
             return;
         };
-        if self.is_ancestor(&pushed, &local) || !self.in_reflog(&local, &pushed) {
-            return;
-        }
-        if pushed == tip {
+        if base == tip {
             t.rewritten = Some(tip);
             return;
         }
         // Someone pushed on top of the old versions. Their commits are copied over, which a
-        // merge among them would not survive: that one is left to sort out by hand.
-        if !self.is_ancestor(&pushed, &tip) || self.has_merges(&format!("{pushed}..{tip}")).unwrap_or(true) {
+        // merge among them would not survive: that one is left to sort out by hand. So is
+        // any doubt about which of theirs the branch already has.
+        if !self.is_ancestor(&base, &tip) || self.has_merges(&format!("{base}..{tip}")).unwrap_or(true) {
             return;
         }
-        let commits = self.missing_commits(&local, &pushed, &tip);
+        let Ok(commits) = self.missing_commits(&local, &base, &tip) else {
+            return;
+        };
         t.rewritten = Some(tip);
         if !commits.is_empty() {
-            t.replay = Some(Replay { base: pushed, commits });
+            t.replay = Some(Replay { base, commits });
         }
+    }
+
+    /// Where the old versions on the remote end, when the branch rewrote them:
+    /// - the state this clone last pushed, once the branch has left it (any rewrite, dropping
+    ///   commits too); or
+    /// - for commits this clone never pushed (cloned, pulled), the newest remote commit the
+    ///   branch once pointed at, when every old version up to it has a copy with the same
+    ///   changes on the branch (an edited message, a new order): replacing them loses nothing.
+    fn rewrite_base(&self, local: &str, remote: &str, upstream: &str, tip: &str) -> Option<String> {
+        if let Some(pushed) = self.last_pushed(remote, upstream)
+            && !self.is_ancestor(&pushed, local)
+            && self.in_reflog(local, &pushed)
+        {
+            return Some(pushed);
+        }
+        let reflog = self.reflog(local)?;
+        let fork = self.run(&GitCommand::new(["merge-base", local, tip])).ok()?;
+        let fork = fork.stdout.trim();
+        let theirs = self
+            .run(&GitCommand::new(["rev-list", &format!("{fork}..{tip}")]))
+            .ok()?;
+        let base = theirs.stdout.lines().find(|id| reflog.contains(*id))?.to_owned();
+        if self.has_merges(&format!("{fork}..{base}")).unwrap_or(true) {
+            return None;
+        }
+        let lost = self
+            .run(&GitCommand::new([
+                "rev-list",
+                "--cherry-pick",
+                "--right-only",
+                "--no-merges",
+                &format!("{local}...{base}"),
+            ]))
+            .ok()?;
+        lost.stdout.trim().is_empty().then_some(base)
+    }
+
+    fn reflog(&self, reference: &str) -> Option<std::collections::HashSet<String>> {
+        let out = self
+            .run(&GitCommand::new([
+                "reflog",
+                "show",
+                "--format=%H",
+                "--max-count=500",
+                reference,
+            ]))
+            .ok()?;
+        Some(out.stdout.lines().map(str::to_owned).collect())
     }
 
     /// Where this clone last pushed `remote`/`upstream`: the newest "update by push" entry of
@@ -279,50 +326,92 @@ impl Repo {
     }
 
     /// The commits of `from..to` that `local` has no copy of, oldest first. A copy has the same
-    /// patch (as rebase sees it), or the same author, author time and subject: a cherry-pick
-    /// that stopped on conflicts and was resolved by hand keeps those.
-    pub(crate) fn missing_commits(&self, local: &str, from: &str, to: &str) -> Vec<CommitBrief> {
-        let lines = |args: &[&str]| {
-            self.run(&GitCommand::new(args.iter().copied()))
-                .map(|out| out.stdout)
-                .unwrap_or_default()
-        };
-        let same_patch = lines(&[
+    /// changes (the patch, as rebase compares them), or is one Copy and Push made: a cherry-pick
+    /// that stopped on conflicts and was resolved by hand changes the patch, so those are told
+    /// by their place in its record. Matching names, dates or messages prove nothing: a commit
+    /// wrongly taken for copied would be deleted from the remote by the force push.
+    pub(crate) fn missing_commits(&self, local: &str, from: &str, to: &str) -> Result<Vec<CommitBrief>> {
+        let uncopied = self.run(&GitCommand::new([
             "rev-list",
             "--cherry-pick",
             "--right-only",
             "--no-merges",
             &format!("{local}...{to}"),
-        ]);
-        let uncopied: std::collections::HashSet<&str> = same_patch.lines().collect();
-        const WHO: &str = "%an%x1f%ae%x1f%at%x1f%s";
-        let ours = lines(&["log", &format!("--format={WHO}"), &format!("{to}..{local}")]);
-        let copied: std::collections::HashSet<&str> = ours.lines().collect();
-        let theirs = lines(&[
+        ]))?;
+        let uncopied: std::collections::HashSet<&str> = uncopied.stdout.lines().collect();
+        let copied = self.recorded_copies(local, from, to);
+        let theirs = self.run(&GitCommand::new([
             "log",
             "--reverse",
-            &format!("--format=%H%x1e{WHO}%x1e%ct"),
+            "--format=%H%x1f%s%x1f%an%x1f%ct",
             &format!("{from}..{to}"),
-        ]);
-        theirs
-            .lines()
-            .filter_map(|line| {
-                let mut parts = line.split('\u{1e}');
-                let (id, who, time) = (parts.next()?, parts.next()?, parts.next()?);
-                if !uncopied.contains(id) || copied.contains(who) {
-                    return None;
-                }
-                let mut who = who.split('\u{1f}');
-                let author_name = who.next()?.to_owned();
-                let summary = who.nth(2)?.to_owned();
-                Some(CommitBrief {
-                    id: id.to_owned(),
-                    summary,
-                    author_name,
-                    time: time.parse().unwrap_or(0),
-                })
-            })
-            .collect()
+        ]))?;
+        Ok(parse_briefs(&theirs.stdout)
+            .into_iter()
+            .filter(|c| uncopied.contains(c.id.as_str()) && !copied.contains(&c.id))
+            .collect())
+    }
+
+    /// Remember what Copy and Push is about to copy onto `branch`, for `missing_commits`.
+    pub(crate) fn record_replay(&self, branch: &str, base: &str, lease: &str, commits: &[CommitBrief]) -> Result<()> {
+        let path = self.git_file(REPLAY_RECORD)?;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)
+                .map_err(|err| Error::Git(format!("could not write {}: {err}", dir.display())))?;
+        }
+        let start = self.run(&GitCommand::new(["rev-parse", &format!("refs/heads/{branch}")]))?;
+        let mut text = format!("{branch}\n{base}\n{lease}\n{}\n", start.stdout.trim());
+        for c in commits {
+            text.push_str(&c.id);
+            text.push('\n');
+        }
+        std::fs::write(&path, text).map_err(|err| Error::Git(format!("could not write {}: {err}", path.display())))
+    }
+
+    /// The commits of `from..to` the last Copy and Push onto `local` copied: the n-th commit it
+    /// copied is the n-th one on the branch after where it started, with the same author and
+    /// author time. An abort (the branch back where it started) leaves nothing copied.
+    fn recorded_copies(&self, local: &str, from: &str, to: &str) -> std::collections::HashSet<String> {
+        let mut copied = std::collections::HashSet::new();
+        let Some(text) = self
+            .git_file(REPLAY_RECORD)
+            .ok()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+        else {
+            return copied;
+        };
+        let mut lines = text.lines();
+        let (Some(branch), Some(base), Some(lease), Some(start)) =
+            (lines.next(), lines.next(), lines.next(), lines.next())
+        else {
+            return copied;
+        };
+        if local != format!("refs/heads/{branch}") || base != from || lease != to || !self.is_ancestor(start, local) {
+            return copied;
+        }
+        let sources: Vec<&str> = lines.collect();
+        let author = |range: &str, reverse: bool| {
+            let mut args = vec!["log", "--first-parent", "--format=%H %ae %at"];
+            if reverse {
+                args.push("--reverse");
+            }
+            args.push(range);
+            self.run(&GitCommand::new(args))
+                .map(|out| out.stdout)
+                .unwrap_or_default()
+        };
+        let copies = author(&format!("{start}..{local}"), true);
+        for (source, copy) in sources.iter().zip(copies.lines()) {
+            let original = self
+                .run(&GitCommand::new(["log", "-1", "--format=%H %ae %at", source]))
+                .map(|out| out.stdout)
+                .unwrap_or_default();
+            let same_author = |line: &str| line.split_once(' ').map(|(_, who)| who.to_owned());
+            if same_author(original.trim()).is_some() && same_author(original.trim()) == same_author(copy) {
+                copied.insert((*source).to_owned());
+            }
+        }
+        copied
     }
 
     /// Upstream of every local branch that has one, by branch name.
@@ -463,6 +552,9 @@ pub(crate) fn parse_briefs(out: &str) -> Vec<CommitBrief> {
         })
         .collect()
 }
+
+/// Where Copy and Push writes down what it copies, in the git directory.
+const REPLAY_RECORD: &str = "oxbow/replay";
 
 /// `origin\0refs/heads/main\0ahead 2, behind 1` from `git for-each-ref`.
 fn parse_tracking(line: &str) -> Option<Tracking> {

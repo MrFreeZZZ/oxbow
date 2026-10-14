@@ -282,6 +282,86 @@ fn a_copied_commit_resolved_by_hand_is_not_copied_again() {
     assert_eq!(tracking.replay, None);
 }
 
+fn replay(base: String, lease: String) -> Action {
+    Action::ReplayAndPush {
+        remote: "origin".into(),
+        branch: "main".into(),
+        upstream: "main".into(),
+        base,
+        lease,
+        no_verify: false,
+    }
+}
+
+#[test]
+fn a_teammates_commit_with_the_same_author_time_and_subject_is_still_copied() {
+    let mut team = Team::new();
+    team.me.commit("feature.txt", "feature\n", "Old message");
+    team.me.git(&["push", "-q", "origin", "main"]);
+    let old = team.me.git(&["rev-parse", "HEAD"]);
+    team.kirill.git(&["pull", "-q", "--ff-only", "origin", "main"]);
+    // Same author, same second, same subject, other changes.
+    let when = "--date=@1700099999 +0000";
+    team.me.git(&["commit", "-q", "--amend", "--only", "-m", "Fix", when]);
+    team.kirill.write("peer.txt", "peer\n");
+    team.kirill.git(&["add", "peer.txt"]);
+    team.kirill.git(&["commit", "-q", "-m", "Fix", when]);
+    team.kirill.git(&["push", "-q", "origin", "main"]);
+    team.me.git(&["fetch", "-q", "origin"]);
+    let tip = team.me.git(&["rev-parse", "origin/main"]);
+    let repo = Repo::open(team.me.path()).unwrap();
+
+    let tracking = repo.tracking().unwrap().unwrap();
+    assert_eq!(tracking.rewritten.as_deref(), Some(tip.as_str()));
+    let commits = tracking.replay.unwrap().commits;
+    assert_eq!(
+        commits.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+        [tip.as_str()]
+    );
+
+    repo.perform(&replay(old, tip)).unwrap();
+    assert_eq!(
+        team.me.git(&["ls-tree", "--name-only", "origin/main", "peer.txt"]),
+        "peer.txt"
+    );
+    assert_eq!(team.me.git(&["log", "--format=%s", "origin/main"]), "Fix\nFix\nRoot");
+}
+
+#[test]
+fn an_edited_message_on_a_pulled_commit_survives_a_teammates_push() {
+    let mut team = Team::new();
+    team.me.commit("b.txt", "mine\n", "Old message");
+    team.me.git(&["push", "-q", "origin", "main"]);
+    let old = team.me.git(&["rev-parse", "HEAD"]);
+    // Kirill never pushed from his clone: the commit only came in with a pull.
+    team.kirill.git(&["pull", "-q", "--ff-only", "origin", "main"]);
+    let repo = Repo::open(team.kirill.path()).unwrap();
+    repo.perform(&Action::Reword {
+        message: "New message".into(),
+        no_verify: false,
+    })
+    .unwrap();
+    team.me.commit("c.txt", "peer\n", "Peer change");
+    team.me.git(&["push", "-q", "origin", "main"]);
+    team.kirill.git(&["fetch", "-q", "origin"]);
+    let tip = team.kirill.git(&["rev-parse", "origin/main"]);
+
+    let tracking = repo.tracking().unwrap().unwrap();
+    assert_eq!(tracking.rewritten.as_deref(), Some(tip.as_str()));
+    let replay_of = tracking.replay.unwrap();
+    assert_eq!(replay_of.base, old);
+    assert_eq!(
+        replay_of.commits.iter().map(|c| c.summary.as_str()).collect::<Vec<_>>(),
+        ["Peer change"]
+    );
+
+    repo.perform(&replay(old, tip)).unwrap();
+    assert_eq!(
+        team.kirill.git(&["log", "--format=%s", "origin/main"]),
+        "Peer change\nNew message\nRoot"
+    );
+}
+
 #[test]
 fn a_teammates_push_on_unchanged_commits_is_still_a_plain_pull() {
     let mut team = Team::new();

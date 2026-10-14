@@ -325,13 +325,25 @@ function pushRecovery(failure: Failure, ctx: RemoteContext, action: Action & { k
  *  their commits over and pushes with the new lease. */
 function rewrittenRecovery(failure: Failure, ctx: RemoteContext, action: Action & { kind: "push" }, tip: string, replay: { base: string; commits: CommitBrief[] } | null): Recovery {
   const remoteBranch = `${action.remote}/${action.upstream}`;
-  const button: Step = replay
-    ? {
-        action: { kind: "replayAndPush", remote: action.remote, branch: action.branch, upstream: action.upstream, base: replay.base, lease: tip, noVerify: action.noVerify },
-        status: `Copying commits and pushing ${action.branch}…`,
-        done: `Pushed ${action.branch} to ${remoteBranch} with ${plural(replay.commits.length, "copied commit")}.`,
-      }
-    : { action: { ...action, force: true, lease: tip }, status: `Force pushing ${action.branch} to ${action.remote}…`, done: `Pushed ${action.branch} to ${remoteBranch}, replacing the old commits.` };
+  // Its own failures go on from what it runs, with the new lease, not from the first push.
+  const copy: Action & { kind: "replayAndPush" } | null = replay
+    ? { kind: "replayAndPush", remote: action.remote, branch: action.branch, upstream: action.upstream, base: replay.base, lease: tip, noVerify: action.noVerify }
+    : null;
+  const forced: Action & { kind: "push" } = { ...action, force: true, lease: tip };
+  const button: Step & { recover: (f: Failure) => Recovery | null } =
+    replay && copy
+      ? {
+          action: copy,
+          status: `Copying commits and pushing ${action.branch}…`,
+          done: `Pushed ${action.branch} to ${remoteBranch} with ${plural(replay.commits.length, "copied commit")}.`,
+          recover: (f) => replayRecovery(f, ctx, forced, copy),
+        }
+      : {
+          action: forced,
+          status: `Force pushing ${action.branch} to ${action.remote}…`,
+          done: `Pushed ${action.branch} to ${remoteBranch}, replacing the old commits.`,
+          recover: (f) => pushRecovery(f, ctx, forced),
+        };
   return {
     title: `${remoteBranch} changed since your last fetch`,
     body: replay
