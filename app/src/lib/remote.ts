@@ -168,6 +168,8 @@ export function pushRequest(ctx: RemoteContext): Request {
 function rewrittenPushRequest(ctx: RemoteContext, action: Action & { kind: "push" }, to: { remote: string; upstream: string }, tip: string): Request {
   const remoteBranch = `${to.remote}/${to.upstream}`;
   const branch = action.branch;
+  // Try Again and Push Without Hook repeat this push, so they keep its force and lease too.
+  const forced: Action & { kind: "push" } = { ...action, force: true, lease: tip };
   const old = ctx.tracking?.behind ?? 0;
   const fresh = Math.max(ctx.unpushed.length, ctx.tracking?.ahead ?? 0);
   return {
@@ -185,8 +187,8 @@ function rewrittenPushRequest(ctx: RemoteContext, action: Action & { kind: "push
     note: `If someone pushed to ${remoteBranch} after your last fetch, nothing is overwritten.`,
     status: `Force pushing ${branch} to ${to.remote}…`,
     done: `Pushed ${branch} to ${remoteBranch}, replacing the old commits.`,
-    recover: (failure) => pushRecovery(failure, ctx, action),
-    action: { ...action, force: true, lease: tip },
+    recover: (failure) => pushRecovery(failure, ctx, forced),
+    action: forced,
   };
 }
 
@@ -243,6 +245,7 @@ function forcePushRequest(ctx: RemoteContext, action: Action & { kind: "push" },
   if (lost.length === 1) body.push("The commit ", { code: shortId(lost[0].id) }, " ", { quote: lost[0].summary }, ` by ${lost[0].authorName} disappears from the remote.`);
   else if (lost.length) body.push(`${plural(lost.length, "commit")} disappear from the remote.`);
   if (!lease) body.push(" Without the check, anything pushed after you looked is overwritten too.");
+  const forced: Action & { kind: "push" } = { ...action, force: true, lease: lease ? tip : null };
   return {
     title: `Overwrite ${action.upstream} on ${action.remote}?`,
     body,
@@ -260,8 +263,8 @@ function forcePushRequest(ctx: RemoteContext, action: Action & { kind: "push" },
         toggle: () => forcePushRequest(ctx, action, failure, !lease),
       },
     ],
-    recover: (f) => pushRecovery(f, ctx, action),
-    action: { ...action, force: true, lease: lease ? tip : null },
+    recover: (f) => pushRecovery(f, ctx, forced),
+    action: forced,
   };
 }
 

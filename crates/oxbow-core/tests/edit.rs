@@ -142,6 +142,7 @@ fn reword_changes_only_the_message() {
     let repo = Repo::open(fx.path()).unwrap();
     let action = Action::Reword {
         message: "Say two\n\nWith a body.".into(),
+        no_verify: false,
     };
     assert_eq!(
         repo.plan(&action).unwrap().commands[0].display(),

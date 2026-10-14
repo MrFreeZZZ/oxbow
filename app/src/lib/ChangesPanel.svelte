@@ -1,6 +1,24 @@
 <script lang="ts" module>
-  // The commit message outlives the panel, so picking another commit and coming back keeps the draft.
-  const draft = $state({ summary: "", description: "", amend: false, prefilled: "" });
+  interface Draft {
+    summary: string;
+    description: string;
+    amend: boolean;
+    /** The commit Amend was turned on for: it replaces that one only. */
+    amendOn: string | null;
+    prefilled: string;
+  }
+
+  // The commit message outlives the panel, so picking another commit and coming back keeps the
+  // draft. Each repository has its own: a message or Amend from one never lands in another.
+  const drafts = new Map<string, Draft>();
+
+  function draftFor(repo: string): Draft {
+    const known = drafts.get(repo);
+    if (known) return known;
+    const draft = $state<Draft>({ summary: "", description: "", amend: false, amendOn: null, prefilled: "" });
+    drafts.set(repo, draft);
+    return draft;
+  }
 </script>
 
 <script lang="ts">
@@ -18,6 +36,7 @@
   import { commitRecovery, ignoreChoices, ignoreRequest, linesRequest, stashFilesRequest, stashMessageFor, type LinesKind } from "./changes";
 
   let {
+    repo,
     branch,
     color,
     head,
@@ -25,6 +44,8 @@
     onChanged,
     onResolve,
   }: {
+    /** Path of the repository, whose commit message draft the panel shows. */
+    repo: string;
     branch: string | null;
     color: number;
     /** The checked-out commit, for Amend. */
@@ -76,8 +97,16 @@
   /** Summary loads the diffs of this many files on each side; the rest are a tab away. */
   const SUMMARY_FILES = 300;
 
+  const draft = $derived(draftFor(repo));
+
+  // Amend replaces the commit it was turned on for. Once HEAD moves (another branch, a commit made
+  // elsewhere), it turns off, with the old commit's message if it was not edited.
+  $effect(() => {
+    if (draft.amend && head && head.id !== draft.amendOn) turnOffAmend();
+  });
+
   const message = $derived([draft.summary.trim(), draft.description.trim()].filter(Boolean).join("\n\n"));
-  const canCommit = $derived(!!draft.summary.trim() && conflicted.length === 0 && (staged.length > 0 || (draft.amend && !!head)));
+  const canCommit = $derived(!!draft.summary.trim() && conflicted.length === 0 && (staged.length > 0 || (draft.amend && !!head)) && (!draft.amend || head?.id === draft.amendOn));
   const commitHint = $derived(
     conflicted.length
       ? "Resolve the conflicts first"
@@ -339,6 +368,7 @@
       draft.summary = "";
       draft.description = "";
       draft.amend = false;
+      draft.amendOn = null;
       draft.prefilled = "";
       onChanged();
     }
@@ -354,19 +384,30 @@
 
   /** Amend starts from the last commit's message; turning it off again drops that message if it was not edited. */
   async function toggleAmend() {
-    draft.amend = !draft.amend;
-    if (draft.amend && !draft.summary.trim() && !draft.description.trim() && head) {
+    if (draft.amend) return turnOffAmend();
+    if (!head) return;
+    const own = draft;
+    own.amend = true;
+    own.amendOn = head.id;
+    if (!own.summary.trim() && !own.description.trim()) {
       const detail = await api.commitDetail(head.id).catch(() => null);
-      if (detail && draft.amend && !draft.summary.trim()) {
-        draft.summary = detail.summary;
-        draft.description = detail.body;
-        draft.prefilled = message;
+      if (detail && own.amend && own.amendOn === detail.id && !own.summary.trim()) {
+        own.summary = detail.summary;
+        own.description = detail.body;
+        own.prefilled = [own.summary.trim(), own.description.trim()].filter(Boolean).join("\n\n");
       }
-    } else if (!draft.amend && draft.prefilled && message === draft.prefilled) {
+    }
+  }
+
+  function turnOffAmend() {
+    const prefilled = draft.prefilled && message === draft.prefilled;
+    draft.amend = false;
+    draft.amendOn = null;
+    if (prefilled) {
       draft.summary = "";
       draft.description = "";
-      draft.prefilled = "";
     }
+    draft.prefilled = "";
   }
 
   /** The description grows with its text while it is being written, up to DESC_LINES, and
