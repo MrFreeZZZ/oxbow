@@ -539,15 +539,6 @@
             prefRow("oxbow.git.runHooks", "Run Git hooks", "switch", {
               sub: () => (prefs.get("oxbow.git.runHooks") ? "pre-commit, commit-msg and pre-push from .git/hooks" : "Commits, merges and pushes add --no-verify"),
             }),
-            {
-              ...prefRow("oxbow.commit.checkSecrets", "Check for secrets before committing", "switch", {
-                sub: () =>
-                  prefs.get("oxbow.commit.checkSecrets")
-                    ? "Stops a commit whose staged lines look like a password, token or private key"
-                    : "Off: commits go through without the check",
-              }),
-              control: { type: "switch", get: () => prefs.get("oxbow.commit.checkSecrets"), set: (on) => (on ? prefs.set("oxbow.commit.checkSecrets", true) : checkSecretsOff()) },
-            },
             prefRow("oxbow.commit.subjectGuide", "Subject line guide", "popup", {
               sub: "A soft marker in the commit message field",
               options: () => [
@@ -559,9 +550,18 @@
           ],
         },
         {
-          title: "Secret patterns",
-          foot: "Checked together with the built-in set: keys of AWS, GitHub, GitLab, Slack, Stripe, Google and OpenAI, private keys, and names like *KEY*, *SECRET*, *TOKEN*, *PASSWORD* that get a value.",
+          title: "Security",
+          foot: "Your patterns are checked together with the built-in set: keys of AWS, GitHub, GitLab, Slack, Stripe, Google and OpenAI, private keys, and names like *KEY*, *SECRET*, *TOKEN*, *PASSWORD* that get a value.",
           rows: [
+            {
+              ...prefRow("oxbow.commit.checkSecrets", "Check for secrets before committing", "switch", {
+                sub: () =>
+                  prefs.get("oxbow.commit.checkSecrets")
+                    ? "Stops a commit whose staged lines look like a password, token or private key"
+                    : "Off: commits go through without the check",
+              }),
+              control: { type: "switch", get: () => prefs.get("oxbow.commit.checkSecrets"), set: (on) => (on ? prefs.set("oxbow.commit.checkSecrets", true) : checkSecretsOff()) },
+            },
             ...prefs.get("oxbow.secrets.patterns").map((p, i): Row => ({
               id: `secret:${i}`,
               label: p.pattern,
