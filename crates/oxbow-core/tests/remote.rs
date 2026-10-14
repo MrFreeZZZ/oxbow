@@ -333,6 +333,96 @@ fn an_aborted_copy_leaves_nothing_counted_as_copied() {
     assert_eq!(team.me.git(&["show", "origin/main:shared.txt"]), "peer content");
 }
 
+/// Kirill pushed three commits on top of a commit we then edited: the first two conflict with
+/// our edit, the third applies cleanly.
+fn two_conflicts_ahead() -> (Team, Repo, String, String, Vec<String>) {
+    let mut team = Team::new();
+    team.me.write("one.txt", "original\n");
+    team.me.commit("two.txt", "original\n", "Original");
+    team.me.git(&["push", "-q", "origin", "main"]);
+    let old = team.me.git(&["rev-parse", "HEAD"]);
+    team.kirill.git(&["pull", "-q", "--ff-only", "origin", "main"]);
+    team.kirill.commit("one.txt", "peer one\n", "Peer one");
+    team.kirill.commit("two.txt", "peer two\n", "Peer two");
+    team.kirill.commit("three.txt", "peer three\n", "Peer three");
+    team.kirill.git(&["push", "-q", "origin", "main"]);
+    team.me.write("one.txt", "my rewritten content\n");
+    team.me.write("two.txt", "my rewritten content\n");
+    team.me.git(&["commit", "-q", "-a", "--amend", "-m", "Rewritten"]);
+    team.me.git(&["fetch", "-q", "origin"]);
+    let tip = team.me.git(&["rev-parse", "origin/main"]);
+    let peers = team.me.git(&["rev-list", "--reverse", &format!("{old}..{tip}")]);
+    let peers = peers.lines().map(str::to_owned).collect();
+    let repo = Repo::open(team.me.path()).unwrap();
+    (team, repo, old, tip, peers)
+}
+
+fn still_to_copy(repo: &Repo) -> Vec<String> {
+    let tracking = repo.tracking().unwrap().unwrap();
+    tracking
+        .replay
+        .map(|replay| replay.commits.into_iter().map(|c| c.id).collect())
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_copy_made_before_the_next_conflict_is_still_counted() {
+    let (mut team, repo, old, tip, peers) = two_conflicts_ahead();
+    let action = replay(old, tip.clone());
+    let err = repo.perform(&action).unwrap_err();
+    assert_eq!(repo.explain_failure(&action, &err).kind, FailureKind::Conflict);
+
+    // Continue makes the copy of Peer one, then stops on Peer two's conflict.
+    team.me.write("one.txt", "peer one, improved\n");
+    team.me.git(&["add", "one.txt"]);
+    let err = repo.perform(&Action::Continue { message: None }).unwrap_err();
+    let failure = repo.explain_failure(&Action::Continue { message: None }, &err);
+    assert_eq!(failure.kind, FailureKind::Conflict);
+    assert_eq!(team.me.git(&["log", "-1", "--format=%s"]), "Peer one");
+    assert_eq!(
+        team.me.git(&["rev-parse", "CHERRY_PICK_HEAD"]),
+        peers[1],
+        "the second pick is still in progress"
+    );
+    assert_eq!(still_to_copy(&repo), peers[1..]);
+
+    team.me.write("two.txt", "peer two, improved\n");
+    team.me.git(&["add", "two.txt"]);
+    repo.perform(&Action::Continue { message: None }).unwrap();
+    assert_eq!(still_to_copy(&repo), Vec::<String>::new());
+
+    // Undo of the last two copies: only their sources have to be copied again.
+    team.me.git(&["reset", "-q", "--hard", "HEAD~2"]);
+    assert_eq!(team.me.git(&["log", "-1", "--format=%s"]), "Peer one");
+    assert_eq!(still_to_copy(&repo), peers[1..]);
+}
+
+#[test]
+fn a_continue_stopped_before_its_commit_counts_nothing_as_copied() {
+    let (mut team, repo, old, tip, peers) = two_conflicts_ahead();
+    assert!(repo.perform(&replay(old, tip)).is_err());
+    let hook = team.me.path().join(".git/hooks/pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\necho 'lint failed' >&2\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    team.me.write("one.txt", "peer one, improved\n");
+    team.me.git(&["add", "one.txt"]);
+    let head = team.me.git(&["rev-parse", "HEAD"]);
+    assert!(repo.perform(&Action::Continue { message: None }).is_err());
+    assert_eq!(team.me.git(&["rev-parse", "HEAD"]), head);
+    assert_eq!(still_to_copy(&repo), peers);
+
+    // The conflict back in the file: Continue refuses, still nothing copied.
+    std::fs::remove_file(&hook).unwrap();
+    team.me.git(&["checkout", "-q", "-m", "--", "one.txt"]);
+    assert!(repo.perform(&Action::Continue { message: None }).is_err());
+    assert_eq!(team.me.git(&["rev-parse", "HEAD"]), head);
+    assert_eq!(still_to_copy(&repo), peers);
+}
+
 fn replay(base: String, lease: String) -> Action {
     Action::ReplayAndPush {
         remote: "origin".into(),
