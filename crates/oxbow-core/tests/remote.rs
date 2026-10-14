@@ -275,11 +275,62 @@ fn a_copied_commit_resolved_by_hand_is_not_copied_again() {
     assert_eq!(repo.explain_failure(&action, &err).kind, FailureKind::Conflict);
     team.me.write("b.txt", "his, better\n");
     team.me.git(&["add", "b.txt"]);
-    team.me.git(&["-c", "core.editor=true", "cherry-pick", "--continue"]);
+    repo.perform(&Action::Continue { message: None }).unwrap();
 
     let tracking = repo.tracking().unwrap().unwrap();
     assert_eq!(tracking.rewritten.as_deref(), Some(tip.as_str()));
     assert_eq!(tracking.replay, None);
+
+    // Undo Commit takes the copy back: Kirill's change has to be copied again.
+    team.me.git(&["reset", "-q", "--hard", "HEAD~1"]);
+    let tracking = repo.tracking().unwrap().unwrap();
+    assert_eq!(tracking.replay.unwrap().commits[0].id, tip);
+}
+
+#[test]
+fn an_aborted_copy_leaves_nothing_counted_as_copied() {
+    let mut team = Team::new();
+    team.me.commit("shared.txt", "original\n", "Original");
+    team.me.git(&["push", "-q", "origin", "main"]);
+    let old = team.me.git(&["rev-parse", "HEAD"]);
+    team.kirill.git(&["pull", "-q", "--ff-only", "origin", "main"]);
+    team.kirill.commit("shared.txt", "peer content\n", "Peer content");
+    team.kirill.git(&["push", "-q", "origin", "main"]);
+    team.me.write("shared.txt", "my rewritten content\n");
+    team.me.git(&["commit", "-q", "-a", "--amend", "-m", "Rewritten"]);
+    team.me.git(&["fetch", "-q", "origin"]);
+    let tip = team.me.git(&["rev-parse", "origin/main"]);
+    let peer = team.me.git(&["log", "-1", "--format=%ae %ad", "--date=raw", &tip]);
+    let repo = Repo::open(team.me.path()).unwrap();
+
+    let action = replay(old.clone(), tip.clone());
+    let err = repo.perform(&action).unwrap_err();
+    assert_eq!(repo.explain_failure(&action, &err).kind, FailureKind::Conflict);
+    repo.perform(&Action::Abort).unwrap();
+
+    // Another commit, with the author email and time of Kirill's, proves nothing.
+    let (email, date) = peer.split_once(' ').unwrap();
+    team.me.write("unrelated.txt", "unrelated\n");
+    team.me.git(&["add", "unrelated.txt"]);
+    let author = format!("Kirill <{email}>");
+    let date = format!("--date={date}");
+    team.me
+        .git(&["commit", "-q", "-m", "Unrelated work", "--author", &author, &date]);
+    let tracking = repo.tracking().unwrap().unwrap();
+    assert_eq!(
+        tracking
+            .replay
+            .unwrap()
+            .commits
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect::<Vec<_>>(),
+        [tip.as_str()]
+    );
+
+    // Copy and Push copies it again (and stops on the same conflict): nothing is pushed.
+    assert!(repo.perform(&replay(old, tip.clone())).is_err());
+    assert_eq!(team.me.git(&["show", "origin/main:shared.txt"]), "peer content");
 }
 
 fn replay(base: String, lease: String) -> Action {

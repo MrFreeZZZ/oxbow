@@ -339,7 +339,7 @@ impl Repo {
             &format!("{local}...{to}"),
         ]))?;
         let uncopied: std::collections::HashSet<&str> = uncopied.stdout.lines().collect();
-        let copied = self.recorded_copies(local, from, to);
+        let copied = self.recorded_copies(local);
         let theirs = self.run(&GitCommand::new([
             "log",
             "--reverse",
@@ -352,66 +352,108 @@ impl Repo {
             .collect())
     }
 
-    /// Remember what Copy and Push is about to copy onto `branch`, for `missing_commits`.
-    pub(crate) fn record_replay(&self, branch: &str, base: &str, lease: &str, commits: &[CommitBrief]) -> Result<()> {
+    /// Remember what Copy and Push is about to copy onto `branch`: `pick <source>` lines. A
+    /// pick that stops on conflicts and is finished by hand gets a `copy <source> <target>`
+    /// line once Continue makes its commit (`note_replay_copy`); only those count as copies
+    /// in `missing_commits`. Copies already noted for the branch are kept.
+    pub(crate) fn record_replay(&self, branch: &str, commits: &[CommitBrief]) -> Result<()> {
         let path = self.git_file(REPLAY_RECORD)?;
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)
-                .map_err(|err| Error::Git(format!("could not write {}: {err}", dir.display())))?;
-        }
-        let start = self.run(&GitCommand::new(["rev-parse", &format!("refs/heads/{branch}")]))?;
-        let mut text = format!("{branch}\n{base}\n{lease}\n{}\n", start.stdout.trim());
-        for c in commits {
-            text.push_str(&c.id);
+        let mut text = format!("branch {branch}\n");
+        for line in self.replay_record(branch).iter().filter(|l| l.starts_with("copy ")) {
+            text.push_str(line);
             text.push('\n');
         }
-        std::fs::write(&path, text).map_err(|err| Error::Git(format!("could not write {}: {err}", path.display())))
+        for c in commits {
+            text.push_str(&format!("pick {}\n", c.id));
+        }
+        write_record(&path, &text)
     }
 
-    /// The commits of `from..to` the last Copy and Push onto `local` copied: the n-th commit it
-    /// copied is the n-th one on the branch after where it started, with the same author and
-    /// author time. An abort (the branch back where it started) leaves nothing copied.
-    fn recorded_copies(&self, local: &str, from: &str, to: &str) -> std::collections::HashSet<String> {
-        let mut copied = std::collections::HashSet::new();
+    /// The lines of the Copy and Push record for `branch`, after its `branch` line; none when
+    /// there is no record, it is for another branch, or it can't be read.
+    fn replay_record(&self, branch: &str) -> Vec<String> {
         let Some(text) = self
             .git_file(REPLAY_RECORD)
             .ok()
             .and_then(|path| std::fs::read_to_string(path).ok())
         else {
-            return copied;
+            return Vec::new();
         };
         let mut lines = text.lines();
-        let (Some(branch), Some(base), Some(lease), Some(start)) =
-            (lines.next(), lines.next(), lines.next(), lines.next())
-        else {
-            return copied;
-        };
-        if local != format!("refs/heads/{branch}") || base != from || lease != to || !self.is_ancestor(start, local) {
-            return copied;
+        if lines.next() != Some(&format!("branch {branch}")) {
+            return Vec::new();
         }
-        let sources: Vec<&str> = lines.collect();
-        let author = |range: &str, reverse: bool| {
-            let mut args = vec!["log", "--first-parent", "--format=%H %ae %at"];
-            if reverse {
-                args.push("--reverse");
-            }
-            args.push(range);
-            self.run(&GitCommand::new(args))
-                .map(|out| out.stdout)
-                .unwrap_or_default()
+        lines.map(str::to_owned).collect()
+    }
+
+    /// The cherry-pick a Continue is about to finish, when Copy and Push started it: its
+    /// source commit and the branch's tip before the Continue.
+    pub(crate) fn replay_in_progress(&self) -> Option<(String, String, String)> {
+        let branch = self.head().ok()?.branch?;
+        let source = std::fs::read_to_string(self.git_file("CHERRY_PICK_HEAD").ok()?).ok()?;
+        let source = source.trim().to_owned();
+        if !self.replay_record(&branch).contains(&format!("pick {source}")) {
+            return None;
+        }
+        let tip = self
+            .run(&GitCommand::new(["rev-parse", &format!("refs/heads/{branch}")]))
+            .ok()?;
+        Some((branch, source, tip.stdout.trim().to_owned()))
+    }
+
+    /// After a Continue finished a pick of Copy and Push by hand: the commit it made right
+    /// after `before` is the copy of `source`.
+    pub(crate) fn note_replay_copy(&self, branch: &str, source: &str, before: &str) -> Result<()> {
+        let made = self.run(&GitCommand::new([
+            "rev-list",
+            "--reverse",
+            "--first-parent",
+            &format!("{before}..refs/heads/{branch}"),
+        ]))?;
+        let Some(target) = made.stdout.lines().next() else {
+            return Ok(());
         };
-        let copies = author(&format!("{start}..{local}"), true);
-        for (source, copy) in sources.iter().zip(copies.lines()) {
-            let original = self
-                .run(&GitCommand::new(["log", "-1", "--format=%H %ae %at", source]))
-                .map(|out| out.stdout)
-                .unwrap_or_default();
-            let same_author = |line: &str| line.split_once(' ').map(|(_, who)| who.to_owned());
-            if same_author(original.trim()).is_some() && same_author(original.trim()) == same_author(copy) {
-                copied.insert((*source).to_owned());
+        let path = self.git_file(REPLAY_RECORD)?;
+        let mut text = format!("branch {branch}\n");
+        for line in self.replay_record(branch) {
+            text.push_str(&line);
+            text.push('\n');
+        }
+        text.push_str(&format!("copy {source} {target}\n"));
+        write_record(&path, &text)
+    }
+
+    /// After an Abort of Copy and Push's cherry-pick: what it was about to copy is no longer
+    /// in progress, and copies the abort took back are gone. Only copies still on the branch
+    /// are kept.
+    pub(crate) fn forget_replay(&self, branch: &str) -> Result<()> {
+        let path = self.git_file(REPLAY_RECORD)?;
+        let local = format!("refs/heads/{branch}");
+        let mut text = format!("branch {branch}\n");
+        for line in self.replay_record(branch) {
+            if let Some((_, target)) = line.strip_prefix("copy ").and_then(|rest| rest.split_once(' '))
+                && self.is_ancestor(target, &local)
+            {
+                text.push_str(&line);
+                text.push('\n');
             }
         }
-        copied
+        write_record(&path, &text)
+    }
+
+    /// The commits Copy and Push copied onto `local` by hand after a conflict: each noted
+    /// target must still be on the branch. Nothing else counts, not a commit's place after
+    /// the start, nor its author or time.
+    fn recorded_copies(&self, local: &str) -> std::collections::HashSet<String> {
+        let Some(branch) = local.strip_prefix("refs/heads/") else {
+            return std::collections::HashSet::new();
+        };
+        self.replay_record(branch)
+            .iter()
+            .filter_map(|line| line.strip_prefix("copy ")?.split_once(' '))
+            .filter(|(_, target)| self.is_ancestor(target, local))
+            .map(|(source, _)| source.to_owned())
+            .collect()
     }
 
     /// Upstream of every local branch that has one, by branch name.
@@ -555,6 +597,14 @@ pub(crate) fn parse_briefs(out: &str) -> Vec<CommitBrief> {
 
 /// Where Copy and Push writes down what it copies, in the git directory.
 const REPLAY_RECORD: &str = "oxbow/replay";
+
+fn write_record(path: &std::path::Path, text: &str) -> Result<()> {
+    let failed = |err: std::io::Error| Error::Git(format!("could not write {}: {err}", path.display()));
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(failed)?;
+    }
+    std::fs::write(path, text).map_err(failed)
+}
 
 /// `origin\0refs/heads/main\0ahead 2, behind 1` from `git for-each-ref`.
 fn parse_tracking(line: &str) -> Option<Tracking> {
