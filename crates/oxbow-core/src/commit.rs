@@ -167,6 +167,10 @@ pub struct DiffLine {
     pub cr: bool,
     /// For a removed line paired with an added line: the parts of the text, marking the changed words.
     pub words: Option<Vec<WordPart>>,
+    /// An added line of the working copy that looks like it holds a secret: what it looks
+    /// like, e.g. "GitHub token".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -767,6 +771,7 @@ pub(crate) fn diff_text_within(
                     text: text(old[*o as usize]),
                     cr: cr(new[*n as usize]),
                     words: None,
+                    secret: None,
                 });
                 *o += 1;
                 *n += 1;
@@ -785,6 +790,7 @@ pub(crate) fn diff_text_within(
                     text: text(old[i as usize]),
                     cr: cr(old[i as usize]),
                     words: None,
+                    secret: None,
                 })
                 .collect();
             let mut added: Vec<DiffLine> = change
@@ -797,6 +803,7 @@ pub(crate) fn diff_text_within(
                     text: text(new[i as usize]),
                     cr: cr(new[i as usize]),
                     words: None,
+                    secret: None,
                 })
                 .collect();
             if with_words && removed.len() == added.len() {

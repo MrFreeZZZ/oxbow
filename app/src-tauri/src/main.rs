@@ -216,6 +216,16 @@ fn apply_settings(app: &AppHandle, session: &Session, settings: &serde_json::Map
             .and_then(Value::as_bool)
             .unwrap_or(true),
     );
+    oxbow_core::set_secrets_check(
+        settings
+            .get("oxbow.commit.checkSecrets")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        &settings
+            .get("oxbow.secrets.patterns")
+            .and_then(|list| serde_json::from_value::<Vec<oxbow_core::SecretPattern>>(list.clone()).ok())
+            .unwrap_or_default(),
+    );
     oxbow_core::oplog::set_keep_days(
         settings
             .get("oxbow.undo.keepDays")
@@ -898,6 +908,7 @@ async fn perform_action(
         remote_tip: None,
         hook: None,
         ssh: None,
+        secrets: None,
     })?;
     let cancel = session.cancel(&window);
     cancel.store(false, Ordering::Relaxed);
@@ -925,6 +936,7 @@ async fn perform_action(
             remote_tip: None,
             hook: None,
             ssh: None,
+            secrets: None,
         })
     })
 }
@@ -1089,6 +1101,7 @@ async fn fetch_in_background(
         remote_tip: None,
         hook: None,
         ssh: None,
+        secrets: None,
     };
     let repo = current(&session, &window).map_err(failed)?;
     let cancel = session.fetch_cancel(&window);

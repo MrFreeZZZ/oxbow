@@ -68,6 +68,7 @@ fn a_commit_and_a_hard_reset_are_undone_and_redone() {
         message: "Change a".into(),
         amend: false,
         no_verify: false,
+        allow_secrets: false,
     })
     .unwrap();
     let commit = fx.git(&["rev-parse", "HEAD"]);
@@ -114,6 +115,7 @@ fn restore_to_here_goes_back_several_steps() {
             message: text.trim().into(),
             amend: false,
             no_verify: false,
+            allow_secrets: false,
         })
         .unwrap();
     };

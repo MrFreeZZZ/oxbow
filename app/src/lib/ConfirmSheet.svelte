@@ -265,7 +265,7 @@
               {#if line.kind === "cmd"}{@render prompt(line.text)}{:else}<div class="output" style:color={OUTPUT[line.kind]}>{line.text}</div>{/if}
             {/each}
             {#if recovery?.checked?.length}
-              <div class="comment"># Oxbow checked why:</div>
+              {#if !recovery.secrets}<div class="comment"># Oxbow checked why:</div>{/if}
               {#each recovery.checked as line, i (i)}
                 {#if line.kind === "cmd"}{@render prompt(line.text)}{:else if line.kind === "hint"}<div class="comment">{line.text}</div>{:else}<div class="output" style:color={OUTPUT[line.kind]}>{line.text}</div>{/if}
               {/each}

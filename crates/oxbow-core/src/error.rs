@@ -25,6 +25,9 @@ pub enum Error {
     GitHub { status: Option<u16>, message: String },
     #[error("stopped")]
     Cancelled,
+    /// The secrets check stopped a commit: the staged lines that look like secrets.
+    #[error("the staged changes look like they hold a password or key")]
+    Secrets(Vec<crate::secrets::SecretFinding>),
 }
 
 impl Error {

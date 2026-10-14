@@ -551,7 +551,7 @@
         },
         {
           title: "Security",
-          foot: "Your patterns are checked together with the built-in set: keys of AWS, GitHub, GitLab, Slack, Stripe, Google and OpenAI, private keys, and names like *KEY*, *SECRET*, *TOKEN*, *PASSWORD* that get a value.",
+          foot: "Your patterns are checked together with the built-in set: keys of AWS, GitHub, GitLab, Slack, Stripe, Google and OpenAI, private keys, and names like *API_KEY*, *SECRET*, *TOKEN*, *PASSWORD* that get a value.",
           rows: [
             {
               ...prefRow("oxbow.commit.checkSecrets", "Check for secrets before committing", "switch", {

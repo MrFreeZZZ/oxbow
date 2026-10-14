@@ -125,6 +125,9 @@ pub enum Action {
         /// Skip the pre-commit and commit-msg hooks this one time.
         #[serde(default)]
         no_verify: bool,
+        /// Commit even though the secrets check finds something, this one time.
+        #[serde(default)]
+        allow_secrets: bool,
     },
     /// Download new commits, branches and tags from `remote`, or from every remote.
     Fetch {
@@ -589,7 +592,15 @@ impl Repo {
     fn diff_of(&self, file: FileChange, side: Side, whole_file: bool) -> Result<FileDiff> {
         let patch = self.raw_diff(&file, side, whole_file)?;
         let parsed = parse_patch(&patch);
-        let hunks: Vec<Hunk> = parsed.hunks.into_iter().map(|h| h.hunk).collect();
+        let mut hunks: Vec<Hunk> = parsed.hunks.into_iter().map(|h| h.hunk).collect();
+        // Lines the secrets check would stop a commit on get a mark before they are staged.
+        if crate::secrets::check_secrets() {
+            for line in hunks.iter_mut().flat_map(|h| &mut h.lines) {
+                if line.kind == LineKind::Added {
+                    line.secret = crate::secrets::check_line(&line.text).map(|(kind, _)| kind);
+                }
+            }
+        }
         let mut file = FileChange {
             binary: file.binary || parsed.binary,
             mode: parsed.mode,
@@ -764,6 +775,7 @@ impl Repo {
                 message,
                 amend,
                 no_verify,
+                ..
             } => {
                 let mut args = vec!["commit".to_owned()];
                 if *amend {
@@ -1179,6 +1191,17 @@ impl Repo {
         on_event: &mut dyn FnMut(ActionEvent),
         cancel: &AtomicBool,
     ) -> Result<String> {
+        // A commit the secrets check stops never starts: nothing runs, nothing to undo.
+        if let Action::Commit {
+            allow_secrets: false, ..
+        } = action
+            && crate::secrets::check_secrets()
+        {
+            let found = self.staged_secrets()?;
+            if !found.is_empty() {
+                return Err(Error::Secrets(found));
+            }
+        }
         // Loading a key changes nothing in the repository. A worktree is a folder: undoing the
         // branch a new one made would pull it from under that folder, and a removed one's files
         // were never in a snapshot.
@@ -1733,6 +1756,7 @@ fn parse_patch(patch: &str) -> ParsedPatch {
             text,
             cr,
             words: None,
+            secret: None,
         });
     }
     for hunk in &mut hunks {

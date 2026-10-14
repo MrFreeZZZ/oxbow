@@ -188,6 +188,7 @@ function secretsRecovery(found: SecretFinding[], action: Action & { kind: "commi
     icon: "key",
     tone: "warn",
     secrets: found,
+    checked: [{ kind: "hint", text: "# Oxbow searched the lines this commit adds; git commit did not run" }],
     button: {
       label: paths.length === 1 ? "Unstage File" : `Unstage ${plural(paths.length, "File")}`,
       action: { kind: "unstage", paths },
