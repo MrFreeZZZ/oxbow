@@ -6,6 +6,8 @@
   import MergePreview from "./MergePreview.svelte";
   import { prefs } from "./prefs.svelte";
   import { tokens } from "./term";
+  import { bytes } from "./unusual";
+  import type { NotKept } from "./types";
 
   let { repo, branch, color }: { repo: string; branch: string | null; color: number } = $props();
 
@@ -51,6 +53,49 @@
     if (all.length <= max) return all;
     return [...all.slice(0, max - 1), { kind: "more", word: "", rest: `… ${all.length - max + 1} more lines` }];
   }
+
+  const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
+
+  /** The headline of one thing Undo can't bring back. */
+  function gapTitle(gap: NotKept): string {
+    switch (gap.kind) {
+      case "bigFiles":
+        return `Undo can’t bring back ${gap.files.length + gap.more === 1 ? "this file" : "these files"}`;
+      case "ignored":
+        return `Files git ignores in ${gap.folder} are deleted for good`;
+      case "worktree":
+        return gap.removed ? `${plural(gap.changed, "uncommitted file")} in ${gap.folder} ${gap.changed === 1 ? "is" : "are"} lost` : `${gap.branch} is checked out in ${gap.folder}`;
+      case "notLogged":
+        return "Undo can’t put the folder back";
+      case "pushed":
+        return `${gap.remote} already has ${gap.commits.length + gap.more === 1 ? "this commit" : `${plural(gap.commits.length + gap.more, "commit")}`}`;
+    }
+  }
+
+  /** The line under the headline: why, and what to do instead. */
+  function gapWhy(gap: NotKept): string {
+    switch (gap.kind) {
+      case "bigFiles":
+        return `Untracked files over ${Math.round(gap.limit / 1048576)} MB stay out of snapshots, so the Operation Log has no copy.`;
+      case "ignored":
+        return `They are not in git or in the Operation Log, ${bytes(gap.bytes)} in all. Copy anything you need, like a .env file, first.`;
+      case "worktree":
+        return gap.removed
+          ? "Another folder’s changes are not in this repository’s Operation Log. Stash them first to keep them."
+          : "Undo moves the branch, but the files in that folder stay as they are and show up there as changes.";
+      case "notLogged":
+        return `Worktree steps are not in the Operation Log. The branch and its commits stay, so you can make the folder again.`;
+      case "pushed":
+        return `Undo changes only your copy of ${gap.branch}: ${gap.remote.split("/")[0]} keeps ${gap.commits.length + gap.more === 1 ? "it" : "them"}, and a later pull brings ${gap.commits.length + gap.more === 1 ? "it" : "them"} back. To take ${gap.commits.length + gap.more === 1 ? "it" : "them"} back for everyone, revert instead.`;
+    }
+  }
+
+  /** The footer's note; "Undo brings it back" isn't true of what the gaps above name. */
+  const note = $derived.by(() => {
+    const text = request?.note ?? "";
+    const lost = confirm.notKept.some((g) => g.kind !== "pushed" && !(g.kind === "worktree" && !g.removed));
+    return lost && /^Undo brings/.test(text) ? "Undo brings back everything else." : text;
+  });
 
   const OUTPUT: Record<string, string> = {
     out: "var(--term-out)",
@@ -235,6 +280,35 @@
         </div>
       {/if}
 
+      {#if confirm.notKept.length && confirm.phase === "ask"}
+        <div class="gaps" aria-label="What Undo can’t bring back">
+          {#each confirm.notKept as gap, i (i)}
+            <div class="gap">
+              <div class="gap-head">
+                <svg class="icon" viewBox="0 0 16 16"><path d="M8 2.5l6 11H2zM8 6.5v3.5M8 12v.01" /></svg>
+                <span class="gap-title">{gapTitle(gap)}</span>
+              </div>
+              <p class="gap-why">{gapWhy(gap)}</p>
+              {#if gap.kind === "bigFiles" || gap.kind === "ignored"}
+                <div class="gap-files">
+                  {#each gap.files as file (file.path)}
+                    <div class="gap-file"><span class="mono gap-path">{file.path}</span><span class="gap-size">{bytes(file.size)}</span></div>
+                  {/each}
+                  {#if gap.more}<div class="gap-file more">and {plural(gap.more, "more")}</div>{/if}
+                </div>
+              {:else if gap.kind === "pushed"}
+                <div class="gap-files">
+                  {#each gap.commits as commit (commit.id)}
+                    <div class="gap-file"><span class="mono gap-sha">{commit.id.slice(0, 7)}</span><span class="gap-path">{commit.summary}</span></div>
+                  {/each}
+                  {#if gap.more}<div class="gap-file more">and {plural(gap.more, "more")}</div>{/if}
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      {/if}
+
       <!-- With "Show the git command" off, the commands stay out of the question; git's output
            still shows once it runs. -->
       {#if (confirm.phase !== "ask" || prefs.get("oxbow.confirm.showCommand")) && !(request.local && !request.local.commands.length)}
@@ -294,7 +368,7 @@
             {@const alt = request.alt}
             <button class="alt" onclick={() => confirm.change(alt.request())}>{alt.label}</button>
           {/if}
-          <span class="note">{failed ? (recovery?.note ?? "Nothing else was run.") : (request.note ?? "")}</span>
+          <span class="note">{failed ? (recovery?.note ?? "Nothing else was run.") : note}</span>
           {#if failed}
             <button class="btn" onclick={() => confirm.cancel()} title={withKeys(recovery?.close ?? "Close", "Escape")}>{recovery?.close ?? "Close"}</button>
             {#if recovery?.button}
@@ -609,6 +683,68 @@
   }
   .field-note.error {
     color: var(--red);
+  }
+  .gaps {
+    margin-left: 58px;
+    padding: 4px 12px;
+    border-radius: 12px;
+    background: var(--orange-soft);
+    display: flex;
+    flex-direction: column;
+  }
+  .gap {
+    padding: 8px 0;
+  }
+  .gap + .gap {
+    border-top: 0.5px solid color-mix(in srgb, var(--orange) 25%, transparent);
+  }
+  .gap-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--orange);
+  }
+  .gap-head .icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+  .gap-title {
+    font-weight: 600;
+    font-size: 12.5px;
+  }
+  .gap-why {
+    margin: 3px 0 0 20px;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text2);
+  }
+  .gap-files {
+    margin: 6px 0 0 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .gap-file {
+    display: flex;
+    gap: 10px;
+    font-size: 12px;
+    min-width: 0;
+  }
+  .gap-file.more {
+    color: var(--text2);
+  }
+  .gap-path {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .gap-size,
+  .gap-sha {
+    flex-shrink: 0;
+    color: var(--text2);
   }
   .secrets {
     display: flex;

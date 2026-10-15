@@ -4,9 +4,9 @@
 
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
-import { oplog, undoRequest } from "./oplog.svelte";
+import { oplog, revertInsteadRequest, undoRequest } from "./oplog.svelte";
 import { prefs } from "./prefs.svelte";
-import type { Action, ActionEvent, Failure, GitCommand, SecretFinding } from "./types";
+import type { Action, ActionEvent, Failure, GitCommand, NotKept, SecretFinding } from "./types";
 
 /** What a toast reports: an action done, a note, something to look at, or a failure. */
 export type Tone = "done" | "info" | "warn" | "error";
@@ -182,6 +182,10 @@ type Phase = "ask" | "running" | "failed";
 /** Actions that throw work away or rewrite history: with "Risky only" these still ask. */
 const RISKY = new Set<Action["kind"]>(["discard", "discardHunk", "reset", "stashDrop", "deleteBranch", "deleteRemoteBranch", "deleteTag", "abort", "abortRebase", "restore", "clearOperationLog"]);
 
+/** Actions that can change something the Operation Log doesn't keep: even when the settings say
+ *  not to ask, these ask once the plan says what Undo can't bring back. */
+const GAPS = new Set<Action["kind"]>(["discard", "reset", "restore", "worktreeRemove"]);
+
 function isForcePush(action: Action): boolean {
   return (action.kind === "push" && action.force) || action.kind === "replayAndPush";
 }
@@ -201,6 +205,8 @@ function shouldAsk(request: Request): boolean {
 class ConfirmState {
   request = $state<Request | null>(null);
   commands = $state<GitCommand[]>([]);
+  /** What Undo can't bring back once the action ran, from the plan. */
+  notKept = $state<NotKept[]>([]);
   phase = $state<Phase>("ask");
   /** git's output while the action runs and after it failed. */
   lines = $state<TermLine[]>([]);
@@ -246,7 +252,7 @@ class ConfirmState {
    *  shows up while it runs. */
   async #askOrRun(request: Request) {
     this.#recover = null;
-    if (shouldAsk(request)) await this.#ask(request);
+    if (shouldAsk(request) || (await this.#losesWork(request))) await this.#ask(request);
     else if (request.local) {
       this.request = request;
       this.#runLocal(request);
@@ -344,6 +350,14 @@ class ConfirmState {
     if (this.phase !== "running") this.#finish(false);
   }
 
+  /** With confirmations off: whether the action changes something Undo can't bring back, so it
+   *  asks after all. */
+  async #losesWork(request: Request): Promise<boolean> {
+    if (!request.action || !GAPS.has(request.action.kind)) return false;
+    const plan = await api.planAction(request.action).catch(() => null);
+    return !!plan?.notKept.length;
+  }
+
   async #ask(request: Request) {
     const mine = ++this.#planned;
     this.#recover = null;
@@ -354,6 +368,7 @@ class ConfirmState {
     if (request.local) {
       const { comment = null, comments } = request.local;
       this.commands = request.local.commands.map((display, i) => ({ args: [], comment: comments ? (comments[i] ?? null) : comment, display, input: null, before: null, todo: null }));
+      this.notKept = [];
       this.phase = "ask";
       return;
     }
@@ -362,10 +377,18 @@ class ConfirmState {
       const plan = await api.planAction(request.action);
       if (mine !== this.#planned) return;
       this.commands = plan.commands;
+      this.notKept = plan.notKept;
+      // An undo of a commit the remote already has: reverting it takes it back for everyone.
+      const pushed = plan.notKept.find((n) => n.kind === "pushed");
+      if (pushed?.kind === "pushed" && pushed.revert && !request.alt) {
+        const commit = pushed.commits[0];
+        this.request = { ...request, alt: { label: "Revert Instead", request: () => revertInsteadRequest(commit.id, commit.summary, pushed.branch) } };
+      }
       this.phase = "ask";
     } catch (err) {
       if (mine !== this.#planned) return;
       this.commands = [];
+      this.notKept = [];
       this.#fail({ kind: "other", output: String(err), incoming: [], remoteTip: null, hook: null });
     }
   }
@@ -430,7 +453,7 @@ class ConfirmState {
     this.recoveryCommands = [];
     this.phase = "failed";
     const button = this.recovery?.button;
-    if (button) this.recoveryCommands = (await api.planAction(button.action).catch(() => ({ commands: [] }))).commands;
+    if (button) this.recoveryCommands = (await api.planAction(button.action).catch(() => ({ commands: [], notKept: [] }))).commands;
   }
 
   #onEvent(event: ActionEvent) {

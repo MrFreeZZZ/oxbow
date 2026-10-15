@@ -32,6 +32,7 @@ import type {
   NewRepoPlan,
   GitCommand,
   OpEntry,
+  SnapshotComparison,
   Landing,
   Stack,
   StackPlan,
@@ -138,6 +139,7 @@ export const api = {
   refreshRemoteTags: () => invoke<boolean>("refresh_remote_tags"),
   /** Newest first. */
   operationLog: () => invoke<OpEntry[]>("operation_log"),
+  compareSnapshot: (id: string, after: boolean) => invoke<SnapshotComparison>("compare_snapshot", { id, after }),
   search: (query: SearchQuery) => invoke<SearchResult>("search", { query }),
   settingsText: () => invoke<string>("settings_text"),
   saveSettingsText: (text: string) => invoke<void>("save_settings_text", { text }),

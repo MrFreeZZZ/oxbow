@@ -269,14 +269,14 @@ impl Repo {
         Ok(out)
     }
 
-    /// Changed files between two commits' trees, with line counts.
+    /// Changed files between two commits' trees (or two trees), with line counts.
     pub fn tree_files(&self, from: &str, to: &str) -> Result<Vec<FileChange>> {
         let repo = self.local();
         let changes = tree_changes(&repo, Some(&from_tree(&repo, from)?), &from_tree(&repo, to)?)?;
         Ok(counted(&repo, changes, self.diff_options().max_lines))
     }
 
-    /// Line diffs between two commits' trees, for all files or only `path`.
+    /// Line diffs between two commits' trees (or two trees), for all files or only `path`.
     pub fn tree_diff(&self, from: &str, to: &str, path: Option<&str>, context: DiffContext) -> Result<Vec<FileDiff>> {
         let repo = self.local();
         let changes = tree_changes(&repo, Some(&from_tree(&repo, from)?), &from_tree(&repo, to)?)?;
@@ -407,8 +407,13 @@ fn counted(repo: &gix::Repository, changes: Vec<Change>, max_lines: u32) -> Vec<
         .collect()
 }
 
+/// The tree of commit `id`, or `id` itself when it is a tree, as an Operation Log snapshot is.
 fn from_tree<'r>(repo: &'r gix::Repository, id: &str) -> Result<gix::Tree<'r>> {
-    find_commit(repo, id)?.tree().map_err(Error::git)
+    let oid = ObjectId::from_hex(id.as_bytes()).map_err(|_| Error::UnknownCommit(id.to_owned()))?;
+    repo.find_object(oid)
+        .map_err(|_| Error::UnknownCommit(id.to_owned()))?
+        .peel_to_tree()
+        .map_err(Error::git)
 }
 
 /// Changed files of `commit` compared to its first parent (or to nothing for a root commit).

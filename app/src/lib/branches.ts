@@ -452,7 +452,7 @@ export function deleteRequest(ctx: BranchContext, ref: RefInfo, check: DeletionC
           },
         ]
       : [],
-    note: force ? "Oxbow can’t bring deleted commits back yet." : undefined,
+    note: force ? (both ? `Undo brings the branch back here, not on ${up!.remote}.` : "Undo brings the branch back, from the toast or the Operation Log.") : undefined,
     status: `Deleting ${name}…`,
     done: `Deleted ${name}${both ? ` here and on ${up!.remote}` : ""}.`,
     recover: (failure) => notMerged(failure, ctx, action) ?? (up ? remoteTrouble(failure, action, "Deleting on", up.remote, `Deleted ${name}.`) : null),

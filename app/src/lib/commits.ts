@@ -165,7 +165,7 @@ export function resetRequest(ctx: BranchContext, row: HistoryRow, mode: ResetMod
         note: MODES.find((m) => m.mode === mode)!.keeps.replace(/^\w/, (c) => c.toUpperCase()) + ".",
       },
     ],
-    note: discards ? "Discarded changes can’t be brought back from Oxbow." : "Nothing is pushed.",
+    note: discards ? "Undo brings them back, from the toast or the Operation Log." : "Nothing is pushed.",
     status: `Resetting ${name} to ${sha}…`,
     done: `${name} is at ${sha} now.`,
     action: { kind: "reset", commit: row.id, mode },

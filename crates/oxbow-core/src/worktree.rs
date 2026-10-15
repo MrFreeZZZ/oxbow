@@ -493,6 +493,9 @@ pub enum ActionEvent {
 #[serde(rename_all = "camelCase")]
 pub struct Plan {
     pub commands: Vec<GitCommand>,
+    /// What the Operation Log can't bring back once it ran; filled in for the sheet only, by
+    /// [`Repo::not_kept`].
+    pub not_kept: Vec<crate::notkept::NotKept>,
 }
 
 impl Repo {
@@ -1210,7 +1213,10 @@ impl Repo {
                 }]
             }
         };
-        Ok(Plan { commands })
+        Ok(Plan {
+            commands,
+            not_kept: Vec::new(),
+        })
     }
 
     /// Run `action`. Returns what the last command printed.

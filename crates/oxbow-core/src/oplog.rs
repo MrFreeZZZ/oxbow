@@ -27,7 +27,7 @@ use crate::worktree::Action;
 /// The ref whose reflog keeps the entries' objects alive.
 pub const OPLOG_REF: &str = "refs/oxbow/oplog";
 /// Untracked files bigger than this stay out of snapshots, and an undo never deletes them.
-const MAX_UNTRACKED: u64 = 50 * 1024 * 1024;
+pub const MAX_UNTRACKED: u64 = 50 * 1024 * 1024;
 /// The empty tree, for a working copy or staging area with nothing in it.
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
@@ -104,6 +104,35 @@ pub struct OpEntry {
     pub stash: Option<StashMove>,
     pub before: Trees,
     pub after: Trees,
+    /// Until when the step can be gone back to, in seconds since the Unix epoch: the sooner of
+    /// Settings' "Keep undo history for" and git's expiry of the log's reflog entries.
+    #[serde(default)]
+    pub expires: i64,
+}
+
+/// Where Undo or Restore to Here takes the repository: the steps it undoes, newest first, and
+/// `HEAD`, the files and the value of every ref those steps moved, as they were then.
+#[derive(Debug, Clone)]
+pub(crate) struct RestorePoint {
+    pub undone: Vec<OpEntry>,
+    pub head: HeadState,
+    pub trees: Trees,
+    /// Local refs only: branches on remotes show what the remote has, so they are not touched.
+    pub refs: BTreeMap<String, Option<String>>,
+}
+
+/// The repository now beside how it was at a step of the log: what Undo or Restore to Here would
+/// take back. The comparison runs from the files then to the files now.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotComparison {
+    pub comparison: crate::compare::Comparison,
+    /// Refs that point elsewhere now: `before` is then, `after` is now.
+    pub refs: Vec<RefMove>,
+    pub head_then: HeadState,
+    pub head_now: HeadState,
+    /// The staging area then differs from the one now; the diff shows the files on disk only.
+    pub staging_differs: bool,
 }
 
 /// The repository at one moment, as far as an undo needs it.
@@ -144,6 +173,10 @@ impl Repo {
             .filter_map(|line| serde_json::from_str::<OpEntry>(line).ok())
             .filter(|entry| entry.time >= oldest)
             .collect();
+        let days = self.snapshot_days();
+        for entry in &mut entries {
+            entry.expires = entry.time + i64::from(days) * 86_400;
+        }
         // git may have expired the objects of old steps already.
         if let Some(first) = entries.first()
             && !self.object_exists(&first.id)
@@ -274,6 +307,7 @@ impl Repo {
             stash,
             before: before.trees.clone(),
             after: after.trees.clone(),
+            expires: 0,
         };
         let file = self.oplog_file()?;
         if let Some(dir) = file.parent() {
@@ -290,25 +324,18 @@ impl Repo {
             serde_json::to_string(&entry).map_err(|err| Error::Git(err.to_string()))?
         )
         .map_err(io)?;
-        Ok(Some(entry))
+        Ok(Some(OpEntry {
+            expires: entry.time + i64::from(self.snapshot_days()) * 86_400,
+            ..entry
+        }))
     }
 
     /// The commands that put the repository back to how it was before step `id`, or right
     /// after it with `after`. Every newer step is undone too; branches on remotes are not
     /// touched, since they show what the remote has.
     pub fn plan_restore(&self, id: &str, after: bool) -> Result<Vec<GitCommand>> {
-        let log = self.operation_log()?;
-        let at = log
-            .iter()
-            .position(|entry| entry.id == id)
-            .ok_or_else(|| Error::Git("this step is no longer in the Operation Log".into()))?;
-        let entry = &log[at];
-        let undone = &log[..if after { at } else { at + 1 }];
-        let (head, trees) = if after {
-            (&entry.head_after, &entry.after)
-        } else {
-            (&entry.head_before, &entry.before)
-        };
+        let point = self.restore_point(id, after)?;
+        let (head, trees, undone) = (&point.head, &point.trees, &point.undone);
         let index = trees.index.as_deref().ok_or_else(|| {
             Error::Git(
                 "the repository was in the middle of a merge or rebase then; pick the step before or after".into(),
@@ -328,18 +355,10 @@ impl Repo {
             return Err(Error::Git("A bisect is in progress: stop or finish it first".into()));
         }
 
-        // The value each ref had then: before the oldest undone step that moved it.
-        let mut targets: BTreeMap<&str, Option<&String>> = BTreeMap::new();
-        for step in undone.iter().rev() {
-            for moved in &step.refs {
-                if !moved.name.starts_with("refs/remotes/") {
-                    targets.entry(&moved.name).or_insert(moved.before.as_ref());
-                }
-            }
-        }
         let now = self.all_refs()?;
         let mut commands = Vec::new();
-        for (name, target) in targets {
+        for (name, target) in &point.refs {
+            let (name, target) = (name.as_str(), target.as_ref());
             if now.get(name) == target {
                 continue;
             }
@@ -413,6 +432,99 @@ impl Repo {
         Ok(commands)
     }
 
+    /// The steps Undo (`after` false) or Restore to Here (`after` true) on step `id` takes back,
+    /// and the state it goes to.
+    pub(crate) fn restore_point(&self, id: &str, after: bool) -> Result<RestorePoint> {
+        let mut log = self.operation_log()?;
+        let at = log
+            .iter()
+            .position(|entry| entry.id == id)
+            .ok_or_else(|| Error::Git("this step is no longer in the Operation Log".into()))?;
+        let entry = log[at].clone();
+        log.truncate(if after { at } else { at + 1 });
+        let (head, trees) = if after {
+            (entry.head_after, entry.after)
+        } else {
+            (entry.head_before, entry.before)
+        };
+        // The value each ref had then: before the oldest undone step that moved it.
+        let mut refs = BTreeMap::new();
+        for step in log.iter().rev() {
+            for moved in &step.refs {
+                if !moved.name.starts_with("refs/remotes/") {
+                    refs.entry(moved.name.clone()).or_insert_with(|| moved.before.clone());
+                }
+            }
+        }
+        Ok(RestorePoint {
+            undone: log,
+            head,
+            trees,
+            refs,
+        })
+    }
+
+    /// The repository now beside how it was before step `id`, or right after it with `after`:
+    /// the files that differ, and the branches and tags that point elsewhere.
+    pub fn compare_snapshot(&self, id: &str, after: bool) -> Result<SnapshotComparison> {
+        let point = self.restore_point(id, after)?;
+        let now_refs = self.all_refs()?;
+        let refs = point
+            .refs
+            .iter()
+            .filter(|(name, then)| now_refs.get(*name) != then.as_ref())
+            .map(|(name, then)| RefMove {
+                name: name.clone(),
+                before: then.clone(),
+                after: now_refs.get(name).cloned(),
+            })
+            .collect();
+        let then = point.trees.worktree.clone();
+        let now = self.worktree_tree()?;
+        let staging_now = self
+            .run(&GitCommand::new(["write-tree"]))
+            .ok()
+            .map(|o| o.stdout.trim().to_owned());
+        let files = self
+            .tree_files(&then, &now)?
+            .into_iter()
+            .map(|file| crate::compare::CompareFile {
+                file,
+                last: None,
+                only_base: false,
+            })
+            .collect();
+        Ok(SnapshotComparison {
+            comparison: crate::compare::Comparison {
+                base_id: then.clone(),
+                target_id: now.clone(),
+                merge_base: None,
+                ahead: Vec::new(),
+                behind: Vec::new(),
+                ahead_count: 0,
+                behind_count: 0,
+                mode: crate::compare::CompareMode::Tips,
+                from: then.clone(),
+                files,
+                command: format!("git diff {} {}", short_id(&then), short_id(&now)),
+            },
+            refs,
+            head_then: point.head,
+            head_now: self.head_state()?,
+            staging_differs: point.trees.index != staging_now,
+        })
+    }
+
+    /// How many days a step can be gone back to: the setting, unless git expires the entries
+    /// that keep its objects sooner.
+    fn snapshot_days(&self) -> u32 {
+        let git = self
+            .config_value(&format!("gc.{OPLOG_REF}.reflogExpireUnreachable"))
+            .or_else(|| self.config_value("gc.reflogExpireUnreachable"))
+            .map_or(Some(30), |value| expiry_days(&value));
+        git.map_or(keep_days(), |git| git.min(keep_days()))
+    }
+
     /// Bring back the objects a restore needs that git may have dropped: tag objects are
     /// written again from the text the step kept.
     pub(crate) fn prepare_restore(&self, id: &str) -> Result<()> {
@@ -465,7 +577,7 @@ impl Repo {
             .collect())
     }
 
-    fn small_file(&self, path: &str) -> bool {
+    pub(crate) fn small_file(&self, path: &str) -> bool {
         self.workdir()
             .join(path)
             .symlink_metadata()
@@ -518,7 +630,7 @@ impl Repo {
         result.map(|tree: String| if tree.is_empty() { EMPTY_TREE.to_owned() } else { tree })
     }
 
-    fn head_state(&self) -> Result<HeadState> {
+    pub(crate) fn head_state(&self) -> Result<HeadState> {
         let branch = self
             .run(&GitCommand::new(["symbolic-ref", "-q", "HEAD"]))
             .ok()
@@ -534,7 +646,7 @@ impl Repo {
 
     /// Every ref and the object it points at, except the stash (see [`Self::stash_records`])
     /// and the log's own ref.
-    fn all_refs(&self) -> Result<BTreeMap<String, String>> {
+    pub(crate) fn all_refs(&self) -> Result<BTreeMap<String, String>> {
         let out = self.run(&GitCommand::new(["for-each-ref", "--format=%(objectname) %(refname)"]))?;
         Ok(out
             .stdout
@@ -842,12 +954,42 @@ fn identity(cmd: GitCommand) -> GitCommand {
         .env("GIT_COMMITTER_EMAIL", "oxbow@localhost")
 }
 
-fn short_id(id: &str) -> String {
+/// Days in a git expiry such as `30 days`, `2.weeks` or `never`; `None` for never. What can't be
+/// read counts as git's default, 30 days.
+fn expiry_days(value: &str) -> Option<u32> {
+    let value = value.trim().to_ascii_lowercase();
+    if matches!(value.as_str(), "never" | "false") {
+        return None;
+    }
+    if value == "now" || value == "all" {
+        return Some(0);
+    }
+    let digits: String = value.chars().take_while(char::is_ascii_digit).collect();
+    let unit = value[digits.len()..].trim_start_matches(['.', ' ']);
+    let Ok(n) = digits.parse::<u32>() else {
+        return Some(30);
+    };
+    Some(if unit.starts_with("week") {
+        n.saturating_mul(7)
+    } else if unit.starts_with("month") {
+        n.saturating_mul(30)
+    } else if unit.starts_with("year") {
+        n.saturating_mul(365)
+    } else if unit.starts_with("day") {
+        n
+    } else if unit.starts_with("hour") || unit.starts_with("minute") || unit.starts_with("second") {
+        0
+    } else {
+        30
+    })
+}
+
+pub(crate) fn short_id(id: &str) -> String {
     id[..id.len().min(7)].to_owned()
 }
 
 /// `main` for `refs/heads/main`, `tag v1.0` for `refs/tags/v1.0`.
-fn short_ref(name: &str) -> String {
+pub(crate) fn short_ref(name: &str) -> String {
     if let Some(branch) = name.strip_prefix("refs/heads/") {
         branch.to_owned()
     } else if let Some(tag) = name.strip_prefix("refs/tags/") {
@@ -867,4 +1009,21 @@ fn now() -> i64 {
 
 fn io(err: std::io::Error) -> Error {
     Error::Git(err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expiry_days;
+
+    #[test]
+    fn git_expiries_read_as_days() {
+        assert_eq!(expiry_days("30 days"), Some(30));
+        assert_eq!(expiry_days("90.days.ago"), Some(90));
+        assert_eq!(expiry_days("2.weeks"), Some(14));
+        assert_eq!(expiry_days("3 months"), Some(90));
+        assert_eq!(expiry_days("never"), None);
+        assert_eq!(expiry_days("now"), Some(0));
+        assert_eq!(expiry_days("someday"), Some(30));
+        assert_eq!(expiry_days("12.hours"), Some(0));
+    }
 }

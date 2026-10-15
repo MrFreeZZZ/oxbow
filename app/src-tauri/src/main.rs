@@ -707,6 +707,18 @@ async fn operation_log(
     blocking(move || repo.operation_log()).await
 }
 
+/// The repository now beside how it was before step `id`, or right after it with `after`.
+#[tauri::command]
+async fn compare_snapshot(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    id: String,
+    after: bool,
+) -> CommandResult<oxbow_core::SnapshotComparison> {
+    let repo = current(&session, &window)?;
+    blocking(move || repo.compare_snapshot(&id, after)).await
+}
+
 /// The bytes of one side of a file diff, to show an image.
 #[tauri::command]
 async fn source_bytes(
@@ -885,7 +897,12 @@ async fn stack_preview(
 #[tauri::command]
 async fn plan_action(window: tauri::WebviewWindow, session: State<'_, Session>, action: Action) -> CommandResult<Plan> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.plan(&action)).await
+    blocking(move || {
+        let mut plan = repo.plan(&action)?;
+        plan.not_kept = repo.not_kept(&action)?;
+        Ok(plan)
+    })
+    .await
 }
 
 /// Run an action, sending each command and output line to the window as an `action-event`. A
@@ -1585,6 +1602,7 @@ fn main() {
             lfs_prune_preview,
             open_lfs_download,
             operation_log,
+            compare_snapshot,
             monospace_fonts,
             refresh_remote_tags,
             search,
