@@ -33,6 +33,7 @@
   import FindField from "./lib/FindField.svelte";
   import QuickOpen from "./lib/QuickOpen.svelte";
   import PairPanel from "./lib/PairPanel.svelte";
+  import SnapshotPanel from "./lib/SnapshotPanel.svelte";
   import { nav } from "./lib/nav.svelte";
   import type { CompareMode } from "./lib/types";
   import CloneSheet from "./lib/CloneSheet.svelte";
@@ -668,6 +669,7 @@
   function select(id: string) {
     selected = id;
     second = null;
+    oplog.compare = null;
     list?.reveal(id);
   }
 
@@ -675,6 +677,7 @@
   function pick(id: string) {
     selected = id;
     second = null;
+    oplog.compare = null;
     if (view === "history" && !showConflicts) return list?.reveal(id);
     view = "history";
     resolving = false;
@@ -751,6 +754,8 @@
       // Bisecting: G, B and S answer for the commit under test, as the banner's tooltips say.
       event.preventDefault();
       bisectKey(({ g: "good", b: "bad", s: "skip" } as const)[event.key.toLowerCase() as "g" | "b" | "s"]);
+    } else if (event.key === "Escape" && oplog.compare && view === "history" && !confirm.request && !event.defaultPrevented) {
+      oplog.compare = null;
     } else if (event.key === "Escape" && second && view === "history" && !confirm.request && !event.defaultPrevented) {
       second = null;
     } else if ((event.metaKey || event.ctrlKey) && !event.altKey && !confirm.request && !start.sheet && !loading) {
@@ -931,7 +936,16 @@
           <button class="capsule" onclick={() => api.openSettings()} aria-label="Settings" title={withKeys("Settings", "Mod+,")}>
             <svg class="icon" viewBox="0 0 16 16"><path d="M12.78 6.52L14.44 6.56L14.44 9.44L12.78 9.48L12.42 10.33L13.57 11.54L11.54 13.57L10.33 12.42L9.48 12.78L9.44 14.44L6.56 14.44L6.52 12.78L5.67 12.42L4.46 13.57L2.43 11.54L3.58 10.33L3.22 9.48L1.56 9.44L1.56 6.56L3.22 6.52L3.58 5.67L2.43 4.46L4.46 2.43L5.67 3.58L6.52 3.22L6.56 1.56L9.44 1.56L9.48 3.22L10.33 3.58L11.54 2.43L13.57 4.46L12.42 5.67zM8 5.8a2.2 2.2 0 1 0 0 4.4a2.2 2.2 0 1 0 0-4.4" /></svg>
           </button>
-          <OperationLog repo={repo.name} run={(request) => void run(request)} />
+          <OperationLog
+            repo={repo.name}
+            run={(request) => void run(request)}
+            onCompare={(entry, after) => {
+              second = null;
+              oplog.compare = { entry, after };
+              view = "history";
+              resolving = false;
+            }}
+          />
         </div>
       </header>
       {#if searching}
@@ -1026,7 +1040,17 @@
           <button class="grip" onpointerdown={startResize} aria-label="Resize commit details" title="Drag to resize"></button>
           <!-- A new repository starts the panels from scratch. -->
           {#key repo.path}
-            {#if pair}
+            {#if oplog.compare}
+              <SnapshotPanel
+                entry={oplog.compare.entry}
+                after={oplog.compare.after}
+                color={headColor}
+                {version}
+                copy={(text) => copyText(text, "Copied the command.")}
+                run={(request) => void run(request)}
+                onClose={() => (oplog.compare = null)}
+              />
+            {:else if pair}
               <PairPanel
                 older={pair.older}
                 newer={pair.newer}

@@ -13,6 +13,9 @@ class OplogState {
   entries = $state<OpEntry[]>([]);
   /** The popover under the toolbar button. */
   open = $state(false);
+  /** Compare with Now: the step, and which side of it (`after` for Restore to Here), shown in
+   *  the details panel of History. */
+  compare = $state<{ entry: OpEntry; after: boolean } | null>(null);
   #asked = 0;
 
   async load() {
@@ -29,6 +32,7 @@ class OplogState {
     this.#asked++;
     this.entries = [];
     this.open = false;
+    this.compare = null;
   }
 }
 
@@ -102,6 +106,38 @@ export function restoreRequest(entry: OpEntry, later: number): Request {
     done: `Restored to after “${entry.title}”.`,
     action: { kind: "restore", id: entry.id, after: true },
   };
+}
+
+/** Revert, offered on the Undo of a commit the remote already has: a new commit that takes it
+ *  back for everyone, where Undo only changes this copy. */
+export function revertInsteadRequest(id: string, summary: string, branch: string): Request {
+  const sha = id.slice(0, 7);
+  return {
+    title: `Revert ${sha} instead?`,
+    body: [
+      "Adds a new commit on top of ",
+      { code: branch },
+      " that undoes ",
+      { code: sha },
+      " ",
+      { quote: summary },
+      ". The original commit stays in history, so this is safe on a branch that is already pushed.",
+    ],
+    icon: "revert",
+    button: "Revert",
+    note: "Nothing is pushed.",
+    status: `Reverting ${sha}…`,
+    done: `Reverted ${sha} on ${branch}.`,
+    resolveConflicts: true,
+    action: { kind: "revert", commit: id },
+  };
+}
+
+/** "until 14 Nov": the last day a step can be gone back to. */
+export function keptUntil(entry: OpEntry): string {
+  const date = new Date(entry.expires * 1000);
+  const sameYear = date.getFullYear() === new Date().getFullYear();
+  return `until ${date.toLocaleDateString(undefined, sameYear ? { day: "numeric", month: "short" } : { day: "numeric", month: "short", year: "numeric" })}`;
 }
 
 export function clearRequest(count: number): Request {

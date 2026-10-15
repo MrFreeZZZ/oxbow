@@ -636,7 +636,23 @@ export interface GitCommand {
 
 export interface Plan {
   commands: GitCommand[];
+  /** What the Operation Log can't bring back once the action ran. */
+  notKept: NotKept[];
 }
+
+/** A file and its size in bytes; a folder (ending in /) counts everything in it. */
+export interface SizedFile {
+  path: string;
+  size: number;
+}
+
+/** Something an action changes that Undo can't bring back. */
+export type NotKept =
+  | { kind: "bigFiles"; files: SizedFile[]; more: number; limit: number }
+  | { kind: "ignored"; folder: string; files: SizedFile[]; more: number; bytes: number }
+  | { kind: "worktree"; folder: string; branch: string | null; changed: number; removed: boolean }
+  | { kind: "notLogged"; what: string }
+  | { kind: "pushed"; branch: string; remote: string; commits: { id: string; summary: string }[]; more: number; revert: string | null };
 
 /** Which config file a Git setting lives in: ~/.gitconfig or the repository's .git/config. */
 export type ConfigScope = "global" | "local";
@@ -878,6 +894,19 @@ export interface OpEntry {
   stash: { before: StashRecord[]; after: StashRecord[] } | null;
   before: Trees;
   after: Trees;
+  /** Until when the step can be gone back to, seconds since the epoch. */
+  expires: number;
+}
+
+/** The repository now beside how it was at a step of the log. */
+export interface SnapshotComparison {
+  /** From the files then to the files now. */
+  comparison: Comparison;
+  /** Refs that point elsewhere now: before is then, after is now. */
+  refs: RefMove[];
+  headThen: HeadState;
+  headNow: HeadState;
+  stagingDiffers: boolean;
 }
 
 /** A stack of branches on top of the trunk, for Edit Stack. */

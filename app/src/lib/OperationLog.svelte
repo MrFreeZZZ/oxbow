@@ -3,12 +3,22 @@
   // one has Undo; any other goes back to right after it with Restore to Here.
 
   import type { Request } from "./confirm.svelte";
-  import { cannotRestore, clearRequest, entryIcon, isRedo, oplog, restoreRequest, undoRequest } from "./oplog.svelte";
+  import { cannotRestore, clearRequest, entryIcon, isRedo, keptUntil, oplog, restoreRequest, undoRequest } from "./oplog.svelte";
   import { relativeTime } from "./format";
   import { prefs } from "./prefs.svelte";
   import { keys, withKeys } from "./keys";
+  import type { OpEntry } from "./types";
 
-  let { repo, run }: { repo: string; run: (request: Request) => void } = $props();
+  let {
+    repo,
+    run,
+    onCompare,
+  }: {
+    repo: string;
+    run: (request: Request) => void;
+    /** Show the repository now beside how it was at a step, in History's details panel. */
+    onCompare: (entry: OpEntry, after: boolean) => void;
+  } = $props();
 
   const latest = $derived(oplog.entries[0] ?? null);
   /** Steps that throw work away get the warning tint, as the design has for a reset. */
@@ -21,6 +31,11 @@
   $effect(() => {
     if (oplog.open) oplog.load();
   });
+
+  function compare(entry: OpEntry, after: boolean) {
+    oplog.open = false;
+    onCompare(entry, after);
+  }
 
   function go(request: Request) {
     oplog.open = false;
@@ -67,14 +82,25 @@
             </span>
             <span class="words">
               <span class="title">{entry.title}</span>
-              <span class="detail">{entry.failed ? "Stopped half way · " : ""}{entry.detail}{i === 0 ? ` · ${relativeTime(entry.time)}` : ""}</span>
+              <span class="detail">{entry.failed ? "Stopped half way · " : ""}{entry.detail}</span>
             </span>
+            <span class="when" title="Oxbow can go back to this step until then">
+              <span>{relativeTime(entry.time)}</span>
+              <span class="until">{keptUntil(entry)}</span>
+            </span>
+            <button
+              class="compare"
+              title={i === 0 ? "Compare the files before this step with now" : "Compare the files right after this step with now"}
+              aria-label="Compare with Now"
+              onclick={() => compare(entry, i > 0)}
+            >
+              <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 3.5h4.5v9H2.5zM9 3.5h4.5v9H9M4.75 6v3M3.25 7.5h3M10 7.5h2.5" /></svg>
+            </button>
             {#if i === 0}
               <button class="primary" disabled={!!blocked} title={blocked ?? undefined} onclick={() => go(undoRequest(entry))}>
                 {isRedo(entry) ? "Redo" : "Undo"}<span class="key">{keys("Mod+Z")}</span>
               </button>
             {:else}
-              <span class="time">{relativeTime(entry.time)}</span>
               <button class="restore" disabled={!!blocked} title={blocked ?? "Back to right after this step"} onclick={() => go(restoreRequest(entry, i))}>Restore to Here</button>
             {/if}
           </div>
@@ -83,7 +109,7 @@
         {/each}
       </div>
       <div class="foot">
-        <span>Snapshots are kept for {prefs.get("oxbow.undo.keepDays")} days</span>
+        <span>Snapshots are kept for {prefs.get("oxbow.undo.keepDays")} days. Untracked files over 50 MB and files git ignores are not in them.</span>
         {#if oplog.entries.length}
           <button class="link" onclick={() => go(clearRequest(oplog.entries.length))}>Clear Log…</button>
         {/if}
@@ -213,10 +239,38 @@
     font-size: 11.5px;
     color: var(--text2);
   }
-  .time {
+  .when {
     flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 1px;
     font-size: 11.5px;
     color: var(--text2);
+  }
+  .until {
+    font-size: 10.5px;
+    opacity: 0.8;
+  }
+  .compare {
+    display: none;
+    flex-shrink: 0;
+    width: 26px;
+    height: 26px;
+    border-radius: 13px;
+    align-items: center;
+    justify-content: center;
+    background: var(--glass);
+    border: 0.5px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    color: var(--icon);
+  }
+  .compare .icon {
+    width: 14px;
+    height: 14px;
+  }
+  .row:hover .compare {
+    display: flex;
   }
   .primary,
   .restore {
@@ -248,7 +302,7 @@
   .row:hover .restore {
     display: flex;
   }
-  .row:hover .time {
+  .row:hover .when {
     display: none;
   }
   button:disabled {
@@ -264,6 +318,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 12px;
     margin-top: 6px;
     padding: 8px 10px 4px;
     border-top: 1px solid var(--sep);
@@ -271,6 +326,7 @@
     color: var(--text2);
   }
   .link {
+    flex-shrink: 0;
     color: var(--accent-text);
     font-size: 11.5px;
   }
