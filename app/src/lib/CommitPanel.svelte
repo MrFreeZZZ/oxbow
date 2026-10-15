@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { Snippet } from "svelte";
   import { api } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { CommitDetail, FileDiff, HistoryRow } from "./types";
@@ -17,6 +18,7 @@
     find = null,
     foundFiles = [],
     foundText = null,
+    banner,
   }: {
     row: HistoryRow;
     childIds: string[];
@@ -30,6 +32,8 @@
     foundFiles?: string[];
     /** What that search looked for, shown on those files. */
     foundText?: string | null;
+    /** A card above the commit's details, e.g. where a commit from the reflog came from. */
+    banner?: Snippet;
   } = $props();
 
   let diffView = $state<DiffView>();
@@ -108,6 +112,7 @@
 </script>
 
 <div class="panel">
+  {@render banner?.()}
   <div class="head">
     <div class="message">
       <h1 class="selectable">

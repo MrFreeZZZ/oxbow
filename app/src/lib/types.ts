@@ -898,6 +898,33 @@ export interface OpEntry {
   expires: number;
 }
 
+/** A commit git's reflog of HEAD or a local branch points at: lost work, if no branch has it. */
+export interface ReflogEntry {
+  id: string;
+  /** "HEAD" or the branch whose reflog has the entry. */
+  source: string;
+  /** As git names the entry, e.g. "HEAD@{3}". */
+  selector: string;
+  /** When the ref moved there, seconds since the epoch. */
+  time: number;
+  /** The icon: commit, amend, reset, checkout, rebase, merge, pull, cherry, revert, branch, other. */
+  kind: string;
+  /** What git wrote for the move, e.g. "reset: moving to HEAD~2". */
+  message: string;
+  summary: string;
+  authorName: string;
+  authorEmail: string;
+  parents: string[];
+  /** No branch, tag or remote branch has it, and HEAD is not on it. */
+  lost: boolean;
+  /** Commits only this one keeps: itself and the lost ones before it. */
+  lostCount: number;
+  /** A lost commit in the list whose history has this one. */
+  within: string | null;
+  /** For a lost commit, until when git keeps it, seconds since the epoch; null = never expires. */
+  expires: number | null;
+}
+
 /** The repository now beside how it was at a step of the log. */
 export interface SnapshotComparison {
   /** From the files then to the files now. */

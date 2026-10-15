@@ -707,6 +707,16 @@ async fn operation_log(
     blocking(move || repo.operation_log()).await
 }
 
+/// Lost work: the commits git's reflog of `HEAD` and the local branches points at, newest first.
+#[tauri::command]
+async fn reflog_entries(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+) -> CommandResult<Vec<oxbow_core::ReflogEntry>> {
+    let repo = current(&session, &window)?;
+    blocking(move || repo.reflog_entries()).await
+}
+
 /// The repository now beside how it was before step `id`, or right after it with `after`.
 #[tauri::command]
 async fn compare_snapshot(
@@ -1602,6 +1612,7 @@ fn main() {
             lfs_prune_preview,
             open_lfs_download,
             operation_log,
+            reflog_entries,
             compare_snapshot,
             monospace_fonts,
             refresh_remote_tags,

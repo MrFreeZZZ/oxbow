@@ -956,7 +956,7 @@ fn identity(cmd: GitCommand) -> GitCommand {
 
 /// Days in a git expiry such as `30 days`, `2.weeks` or `never`; `None` for never. What can't be
 /// read counts as git's default, 30 days.
-fn expiry_days(value: &str) -> Option<u32> {
+pub(crate) fn expiry_days(value: &str) -> Option<u32> {
     let value = value.trim().to_ascii_lowercase();
     if matches!(value.as_str(), "never" | "false") {
         return None;
