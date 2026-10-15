@@ -280,7 +280,7 @@
   .link {
     padding: 0;
     font-size: 11px;
-    color: var(--accent);
+    color: var(--accent-text);
   }
   code {
     font-family: var(--code-font);

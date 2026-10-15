@@ -367,7 +367,7 @@
     color: var(--text2);
   }
   .link {
-    color: var(--accent);
+    color: var(--accent-text);
     font-size: 11px;
   }
   .failed {

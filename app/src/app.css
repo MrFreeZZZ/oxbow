@@ -21,7 +21,9 @@
   --sep: rgba(0, 0, 0, 0.08);
   --side-sel: rgba(0, 0, 0, 0.07);
   --field: rgba(0, 0, 0, 0.045);
-  --accent: #0071e3;
+  /* Action buttons, checks, toggles and focus rings: the muted steel of the main trunk, not system blue.
+     Links keep --accent-text. */
+  --accent: #4a6680;
   --accent-text: #0066cc;
   --green: #1a7f37;
   --red: #c4282c;
@@ -150,7 +152,7 @@
   --sep: rgba(255, 255, 255, 0.08);
   --side-sel: rgba(255, 255, 255, 0.1);
   --field: rgba(255, 255, 255, 0.07);
-  --accent: #0a84ff;
+  --accent: #5d7c99;
   --accent-text: #5ab0ff;
   --green: #56d364;
   --red: #ff7b72;
