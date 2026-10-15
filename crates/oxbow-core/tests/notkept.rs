@@ -151,8 +151,8 @@ fn removing_a_worktree_names_its_ignored_files_and_changes() {
             stash: true,
         })
         .unwrap();
-    assert!(matches!(stashed[0], NotKept::NotLogged { .. }), "{stashed:?}");
-    match &stashed[1..] {
+    assert!(matches!(stashed.last(), Some(NotKept::NotLogged { .. })), "{stashed:?}");
+    match &stashed[..stashed.len() - 1] {
         [
             NotKept::Ignored {
                 files, bytes, more: 0, ..

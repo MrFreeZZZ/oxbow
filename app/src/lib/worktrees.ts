@@ -241,7 +241,7 @@ export function removeWorktreeRequest(ctx: BranchContext, wt: Worktree, stash = 
     button: stash ? "Stash and Remove" : "Remove",
     danger: !stash,
     alt: dirty && !stash ? { label: "Stash Them First", request: () => removeWorktreeRequest(ctx, wt, true) } : undefined,
-    note: dirty && !stash ? "Uncommitted changes are not in Operation Log." : "The branch stays: make a worktree for it again any time.",
+    note: dirty && !stash ? "Stash Them First keeps them, under Stashes." : "The branch stays: make a worktree for it again any time.",
     status: `Removing ${wt.name}…`,
     done: `Removed ${wt.name}.${dirty && stash ? " Its changes are in the stash." : ""}`,
     after: () => void api.closeWindowOf(wt.path).catch(() => {}),

@@ -91,11 +91,8 @@
             <button
               class="compare"
               title={i === 0 ? "Compare the files before this step with now" : "Compare the files right after this step with now"}
-              aria-label="Compare with Now"
-              onclick={() => compare(entry, i > 0)}
+              onclick={() => compare(entry, i > 0)}>Compare</button
             >
-              <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 3.5h4.5v9H2.5zM9 3.5h4.5v9H9M4.75 6v3M3.25 7.5h3M10 7.5h2.5" /></svg>
-            </button>
             {#if i === 0}
               <button class="primary" disabled={!!blocked} title={blocked ?? undefined} onclick={() => go(undoRequest(entry))}>
                 {isRedo(entry) ? "Redo" : "Undo"}<span class="key">{keys("Mod+Z")}</span>
@@ -255,19 +252,16 @@
   .compare {
     display: none;
     flex-shrink: 0;
-    width: 26px;
     height: 26px;
+    padding: 0 12px;
     border-radius: 13px;
     align-items: center;
-    justify-content: center;
     background: var(--glass);
     border: 0.5px solid var(--glass-border);
     box-shadow: var(--glass-shadow);
-    color: var(--icon);
-  }
-  .compare .icon {
-    width: 14px;
-    height: 14px;
+    font-weight: 500;
+    font-size: 12px;
+    color: var(--text);
   }
   .row:hover .compare {
     display: flex;

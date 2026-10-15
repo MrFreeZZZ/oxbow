@@ -136,9 +136,6 @@ impl Repo {
             }
             Action::WorktreeRemove { path, force, stash } => {
                 let folder = self.shown_path(path);
-                out.push(NotKept::NotLogged {
-                    what: format!("removing {folder}"),
-                });
                 let worktree = self.worktrees()?.into_iter().find(|w| same_path(&w.path, path));
                 if *force && !*stash {
                     out.push(NotKept::Worktree {
@@ -148,9 +145,12 @@ impl Repo {
                         removed: true,
                     });
                 }
-                if let Some(ignored) = self.ignored_in(path, folder)? {
+                if let Some(ignored) = self.ignored_in(path, folder.clone())? {
                     out.push(ignored);
                 }
+                out.push(NotKept::NotLogged {
+                    what: format!("removing {folder}"),
+                });
             }
             _ => {}
         }

@@ -76,7 +76,7 @@
   function gapWhy(gap: NotKept): string {
     switch (gap.kind) {
       case "bigFiles":
-        return `Untracked files over ${bytes(gap.limit)} stay out of snapshots, so the Operation Log has no copy.`;
+        return `Untracked files over ${Math.round(gap.limit / 1048576)} MB stay out of snapshots, so the Operation Log has no copy.`;
       case "ignored":
         return `They are not in git or in the Operation Log, ${bytes(gap.bytes)} in all. Copy anything you need, like a .env file, first.`;
       case "worktree":
@@ -89,6 +89,13 @@
         return `Undo changes only your copy of ${gap.branch}: ${gap.remote.split("/")[0]} keeps ${gap.commits.length + gap.more === 1 ? "it" : "them"}, and a later pull brings ${gap.commits.length + gap.more === 1 ? "it" : "them"} back. To take ${gap.commits.length + gap.more === 1 ? "it" : "them"} back for everyone, revert instead.`;
     }
   }
+
+  /** The footer's note; "Undo brings it back" isn't true of what the gaps above name. */
+  const note = $derived.by(() => {
+    const text = request?.note ?? "";
+    const lost = confirm.notKept.some((g) => g.kind !== "pushed" && !(g.kind === "worktree" && !g.removed));
+    return lost && /^Undo brings/.test(text) ? "Undo brings back everything else." : text;
+  });
 
   const OUTPUT: Record<string, string> = {
     out: "var(--term-out)",
@@ -361,7 +368,7 @@
             {@const alt = request.alt}
             <button class="alt" onclick={() => confirm.change(alt.request())}>{alt.label}</button>
           {/if}
-          <span class="note">{failed ? (recovery?.note ?? "Nothing else was run.") : (request.note ?? "")}</span>
+          <span class="note">{failed ? (recovery?.note ?? "Nothing else was run.") : note}</span>
           {#if failed}
             <button class="btn" onclick={() => confirm.cancel()} title={withKeys(recovery?.close ?? "Close", "Escape")}>{recovery?.close ?? "Close"}</button>
             {#if recovery?.button}
