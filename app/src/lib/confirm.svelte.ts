@@ -67,6 +67,9 @@ export interface Request {
   status?: string;
   /** Short message shown after it succeeded. */
   done?: string;
+  /** What Activity calls it once it ran, for an action with no `done` message, e.g. "Staged
+   *  README.md"; without either, the title without its question mark. */
+  past?: string;
   /** Inputs above the commands, e.g. the name of a new branch. */
   fields?: Field[];
   /** Checkboxes that change the commands, e.g. the lease of a force push. */
@@ -179,8 +182,33 @@ export interface TermLine {
 
 type Phase = "ask" | "running" | "failed";
 
-/** Actions that throw work away or rewrite history: with "Risky only" these still ask. */
-const RISKY = new Set<Action["kind"]>(["discard", "discardHunk", "reset", "stashDrop", "deleteBranch", "deleteRemoteBranch", "deleteTag", "abort", "abortRebase", "restore", "clearOperationLog"]);
+/** Actions that throw work away, rewrite history or send commits to a remote, which Undo can't
+ *  take back: with "Risky only" these still ask. The rest (stage, commit, switch, pull…) run at
+ *  once, and Activity lists their commands. */
+const RISKY = new Set<Action["kind"]>([
+  "discard",
+  "discardHunk",
+  "reset",
+  "stashDrop",
+  "deleteBranch",
+  "deleteRemoteBranch",
+  "deleteMergedBranch",
+  "deleteTag",
+  "removeRemote",
+  "abort",
+  "abortRebase",
+  "restore",
+  "clearOperationLog",
+  "worktreeRemove",
+  "lfsPrune",
+  "editStack",
+  "addToCommit",
+  "reword",
+  "push",
+  "pullAndPush",
+  "pushBranches",
+  "pushTags",
+]);
 
 /** Actions that can change something the Operation Log doesn't keep: even when the settings say
  *  not to ask, these ask once the plan says what Undo can't bring back. */
@@ -199,7 +227,19 @@ function shouldAsk(request: Request): boolean {
   if (!prefs.get("oxbow.confirm.enabled")) return false;
   if (prefs.get("oxbow.confirm.scope") === "all") return true;
   if (!action) return !!request.danger;
-  return !!request.danger || isForcePush(action) || RISKY.has(action.kind) || (action.kind === "merge" && action.method === "rebase");
+  return !!request.danger || isRisky(action);
+}
+
+function isRisky(action: Action): boolean {
+  return isForcePush(action) || RISKY.has(action.kind) || (action.kind === "merge" && action.method === "rebase") || (action.kind === "commit" && action.amend);
+}
+
+/** An action that ran and succeeded, for Activity: what it did and the commands git ran. */
+export interface Ran {
+  title: string;
+  icon: Icon;
+  action: Action;
+  commands: string[];
 }
 
 class ConfirmState {
@@ -208,6 +248,8 @@ class ConfirmState {
   /** What Undo can't bring back once the action ran, from the plan. */
   notKept = $state<NotKept[]>([]);
   phase = $state<Phase>("ask");
+  /** Runs without having asked: the sheet stays out of sight unless it takes a while or fails. */
+  quiet = $state(false);
   /** git's output while the action runs and after it failed. */
   lines = $state<TermLine[]>([]);
   status = $state("");
@@ -225,6 +267,10 @@ class ConfirmState {
   toastUndo = $state<(() => Request) | null>(null);
   /** Runs a request the way the app does (with a reload after it); set by the app. */
   runner: ((request: Request) => void) | null = null;
+  /** Hears of every action that ran and succeeded, e.g. Activity's Done list; set by the app. */
+  onRan: ((ran: Ran) => void) | null = null;
+  /** The commands git ran for the action, and the steps after it, so far. */
+  #ranCommands: string[] = [];
   #resolve: ((done: boolean) => void) | null = null;
   /** Goes up with every plan asked for, so a slow answer can't replace a newer one. */
   #planned = 0;
@@ -254,14 +300,18 @@ class ConfirmState {
     this.#recover = null;
     if (shouldAsk(request) || (await this.#losesWork(request))) await this.#ask(request);
     else if (request.local) {
+      this.quiet = true;
       this.request = request;
       this.#runLocal(request);
     } else if (request.background) {
       this.#finish(true);
       request.background();
     } else if (request.action) {
+      this.quiet = true;
       this.request = request;
-      this.#execute(request.action, request.status ?? request.title, request.done);
+      // The sheet's own copy of the action: `#execute` knows the request's action by it, for
+      // its Undo and what comes after.
+      this.#execute(this.request.action!, request.status ?? request.title, request.done);
     }
   }
 
@@ -361,6 +411,7 @@ class ConfirmState {
   async #ask(request: Request) {
     const mine = ++this.#planned;
     this.#recover = null;
+    this.quiet = false;
     this.request = request;
     this.lines = [];
     this.failure = null;
@@ -393,8 +444,9 @@ class ConfirmState {
     }
   }
 
-  async #execute(action: Action, status: string, done?: string, next?: Step): Promise<void> {
+  async #execute(action: Action, status: string, done?: string, next?: Step, chained = false): Promise<void> {
     this.#stopPlanning();
+    if (!chained) this.#ranCommands = [];
     this.phase = "running";
     this.ran = null;
     this.status = status;
@@ -409,8 +461,13 @@ class ConfirmState {
     try {
       await api.performAction(action);
       this.ran = action;
-      if (next) return this.#execute(next.action, next.status, next.done);
+      if (next) return this.#execute(next.action, next.status, next.done, undefined, true);
+      const request = this.request;
+      // A way out offered after a failure has its own words; the request's are for its action.
+      const own = request && action === request.action;
+      const title = done ?? (own ? (request.past ?? request.title.replace(/\?$/, "")) : status);
       this.#finish(true);
+      this.onRan?.({ title: firstSentence(title), icon: request?.icon ?? "box", action, commands: this.#ranCommands });
       after?.();
       if (done) this.#showToast(done, undo ?? (await this.#undoFromLog(action, started)), "done");
     } catch (err) {
@@ -451,6 +508,7 @@ class ConfirmState {
     if (!this.lines.length && failure.output) this.lines = failure.output.split("\n").map((text) => ({ kind: lineKind(text, true), text }));
     this.recovery = (this.#recover ?? this.request?.recover)?.(failure) ?? null;
     this.recoveryCommands = [];
+    this.quiet = false;
     this.phase = "failed";
     const button = this.recovery?.button;
     if (button) this.recoveryCommands = (await api.planAction(button.action).catch(() => ({ commands: [], notKept: [] }))).commands;
@@ -460,6 +518,7 @@ class ConfirmState {
     if (this.phase !== "running") return;
     if (event.kind === "command") {
       this.lines.push({ kind: "cmd", text: event.display });
+      this.#ranCommands.push(event.display);
       this.progress = null;
       return;
     }
@@ -547,6 +606,7 @@ class ConfirmState {
   #finish(done: boolean) {
     this.#stopPlanning();
     this.#recover = null;
+    this.quiet = false;
     this.request = null;
     this.recovery = null;
     this.failure = null;
@@ -558,6 +618,11 @@ class ConfirmState {
 function toFailure(err: unknown): Failure {
   if (err && typeof err === "object" && "kind" in err) return err as Failure;
   return { kind: "other", output: String(err), incoming: [], remoteTip: null, hook: null };
+}
+
+/** "Unstaged 2 files" from "Unstaged 2 files. Your files do not change.", or "Staging" from "Staging…". */
+export function firstSentence(text: string): string {
+  return text.split(/(?<=[.!?])\s/)[0].replace(/(\.|…)$/, "");
 }
 
 export function lineKind(text: string, stderr: boolean): TermLine["kind"] {

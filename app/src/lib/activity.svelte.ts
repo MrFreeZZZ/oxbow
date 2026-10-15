@@ -1,15 +1,15 @@
-// What runs against the remotes in the background, as the toolbar's Activity popover shows it:
-// the fetch that runs now with git's progress, a Push or Pull waiting for it, and what ran
-// lately. A fetch that fails here never opens a sheet: the Fetch button gets an amber dot, and
-// Fix… in Activity opens the way out.
+// What Oxbow runs, as the toolbar's Activity popover shows it: the fetch that runs now in the
+// background with git's progress, a Push or Pull waiting for it, and under Done what ran lately
+// with its git commands, also the actions that ran without asking. A fetch that fails here never
+// opens a sheet: the Fetch button gets an amber dot, and Fix… in Activity opens the way out.
 
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
-import { lineKind, type TermLine } from "./confirm.svelte";
+import { lineKind, type Icon, type Ran, type TermLine } from "./confirm.svelte";
 import { hostName } from "./remote";
 import type { ActionEvent, Failure } from "./types";
 
-export type ActivityKind = "fetch" | "pull" | "push";
+export type ActivityKind = "fetch" | "pull" | "push" | "action";
 
 export interface ActivityItem {
   id: number;
@@ -28,10 +28,17 @@ export interface ActivityItem {
   lines?: TermLine[];
   /** A failure that a later fetch, or Fix…, put right. */
   fixed?: boolean;
+  /** The icon of the action's sheet, for an action that isn't a fetch, pull or push. */
+  icon?: Icon;
+  /** The git commands it ran, as the sheet's terminal block shows them. */
+  commands?: string[];
 }
 
 /** How many finished items Activity keeps. */
-const KEEP = 6;
+const KEEP = 30;
+
+const PUSHES = new Set(["push", "pullAndPush", "replayAndPush", "pushBranches", "pushTags"]);
+const FETCHES = new Set(["fetch", "fetchTags", "unshallow"]);
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -117,6 +124,7 @@ class Activity {
         state: "done",
         auto,
         remote,
+        commands: this.#commands(),
       });
     } catch (err) {
       const failure = toFailure(err);
@@ -162,9 +170,15 @@ class Activity {
     this.queued = this.queued.filter((item) => item.id !== id);
   }
 
-  /** Note something that ran in the sheet, e.g. a push, among the recent items. */
-  note(kind: ActivityKind, title: string, sub: string) {
-    this.#finished({ kind, title, sub, state: "done" });
+  /** Note an action that ran, in the sheet or without asking, under Done with its commands. */
+  ran(ran: Ran) {
+    const kind = PUSHES.has(ran.action.kind) ? "push" : ran.action.kind === "pull" ? "pull" : FETCHES.has(ran.action.kind) ? "fetch" : "action";
+    this.#finished({ kind, title: ran.title, sub: "", state: "done", icon: ran.icon, commands: ran.commands });
+  }
+
+  /** The commands the running fetch ran. */
+  #commands(): string[] {
+    return this.lines.filter((line) => line.kind === "cmd").map((line) => line.text);
   }
 
   /** Fix… put the failure right, e.g. the key is in the agent and the fetch went through. */
