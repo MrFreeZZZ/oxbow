@@ -179,7 +179,7 @@ export function clearRequest(count: number): Request {
 /** Why a step can't be gone back to, or null when it can. */
 export function cannotRestore(entry: OpEntry, after: boolean): string | null {
   const trees = after ? entry.after : entry.before;
-  return trees.index ? null : `The repository was in the middle of a merge or rebase ${after ? "right after" : "before"} this step`;
+  return trees.index ? null : `Can’t ${after ? "restore" : "undo"}: a merge or rebase was in progress ${after ? "right after" : "before"} this step`;
 }
 
 /** The reflog's list: lost commits only, a newer lost one standing for those it keeps, or every move. */

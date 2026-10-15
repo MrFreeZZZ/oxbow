@@ -20,7 +20,8 @@
   import { ancestors, cherryPickRequest, editMessageRequest, resetModes, resetRequest, revertRequest, undoCommitRequest } from "./lib/commits";
   import type { Operation } from "./lib/types";
   import { menuIcons, type MenuEntry } from "./lib/Menu.svelte";
-  import { canPull, canPush, fetchRequest, pullRequest, pushRequest, type RemoteContext } from "./lib/remote";
+  import { fetchRequest, pullRequest, pushRequest, syncBlock, type RemoteContext, type SyncFix } from "./lib/remote";
+  import WhyPopover from "./lib/WhyPopover.svelte";
   import Welcome from "./lib/Welcome.svelte";
   import { prefs } from "./lib/prefs.svelte";
   import { deleteTagRequest, isLocalTag, newTagRequest, pushTagsRequest } from "./lib/tags";
@@ -516,8 +517,31 @@
       remote: history.tracking?.remote ?? history.defaultRemote,
       remotes: history.remotes,
       unpushed: history.rows.filter((r) => r.unpushed && !r.worktree && r.graph.branch === history!.head.branch),
+      operation: history.operation,
+      bisect: history.bisect,
     },
   );
+  const pullBlock = $derived(remoteCtx && syncBlock(remoteCtx, "pull"));
+  const pushBlock = $derived(remoteCtx && syncBlock(remoteCtx, "push"));
+  /** The grey Pull or Push button clicked last: its reason shows under it. */
+  let why = $state<"pull" | "push" | null>(null);
+  const whyBlock = $derived(why === "pull" ? pullBlock : why === "push" ? pushBlock : null);
+  // Once the button can run again, its reason is gone for good.
+  $effect(() => {
+    if (why && !whyBlock) why = null;
+  });
+
+  /** The way out a reason offers, e.g. Publish… when the branch has no upstream to pull from. */
+  function fixSync(fix: SyncFix) {
+    why = null;
+    const op = history?.operation;
+    if (fix === "publish") void sync("push");
+    else if (fix === "newBranch") newBranch();
+    else if (fix === "finishBisect" && history?.bisect && branchCtx) run(bisectResetRequest(branchCtx, history.bisect));
+    else if (fix === "resolve" && op) resolving = true;
+    else if (fix === "continue" && op && branchCtx) run(continueRequest(branchCtx, op));
+    else if (fix === "abort" && op && branchCtx) run(abortRequest(branchCtx, op));
+  }
 
   /** A repository with no remote: make one on GitHub and push there. */
   async function publishToGitHub() {
@@ -545,6 +569,11 @@
     // Commits made outside the app since the last reload belong in the sheet.
     await refresh();
     if (!remoteCtx) return;
+    // Pull or Push that can't run says why under its button, as the grey button does.
+    if (kind !== "fetch" && syncBlock(remoteCtx, kind)) {
+      why = kind;
+      return;
+    }
     if (kind === "fetch") {
       // The sheet closes on Fetch: the fetch runs in the background, with its progress on the button.
       await confirm.run({ ...fetchRequest(remoteCtx), background: () => void backgroundFetch(false) });
@@ -951,27 +980,38 @@
                   {#if activity.problem}<span class="dot"></span>{/if}
                 {/if}
               </button>
+              <!-- Grey when it can't run, but it still answers a click: with why, under it. -->
               <button
-                onclick={() => sync("pull")}
-                disabled={!canPull(remoteCtx)}
+                class:off={!!pullBlock}
+                class:asking={why === "pull"}
+                onclick={() => (pullBlock ? (why = why === "pull" ? null : "pull") : sync("pull"))}
+                aria-disabled={!!pullBlock}
+                aria-haspopup={pullBlock ? "dialog" : undefined}
                 aria-label={t?.behind && !t.rewritten ? `Pull ${t.behind} commits` : "Pull"}
-                title={canPull(remoteCtx) ? `Pull from ${t?.remote}/${t?.branch}` : "This branch has no upstream to pull from"}
+                title={why === "pull" ? undefined : pullBlock ? `${pullBlock.title} · click for more` : `Pull from ${t?.remote}/${t?.branch}`}
               >
                 <svg class="icon" viewBox="0 0 16 16"><path d="M8 2v9M4.5 7.5 8 11l3.5-3.5M3 14h10" /></svg>
                 <!-- Old versions of commits rewritten here are nothing to pull. -->
                 {#if t?.behind && !t.rewritten}<span class="count">{t.behind}</span>{/if}
               </button>
               <button
-                onclick={() => sync("push")}
-                disabled={!canPush(remoteCtx)}
+                class:off={!!pushBlock}
+                class:asking={why === "push"}
+                onclick={() => (pushBlock ? (why = why === "push" ? null : "push") : sync("push"))}
+                aria-disabled={!!pushBlock}
+                aria-haspopup={pushBlock ? "dialog" : undefined}
                 aria-label={t ? (t.ahead ? `Push ${t.ahead} commits` : "Push") : "Publish branch"}
-                title={!canPush(remoteCtx) ? "Check out a branch to push" : t?.rewritten ? `Force push to ${t.remote}/${t.branch}: it has the old versions of commits you rewrote` : t && !t.gone ? `Push to ${t.remote}/${t.branch}` : `Publish ${history.head.branch} to ${remoteCtx.remote}`}
+                title={why === "push" ? undefined : pushBlock ? `${pushBlock.title} · click for more` : t?.rewritten ? `Force push to ${t.remote}/${t.branch}: it has the old versions of commits you rewrote` : t && !t.gone ? `Push to ${t.remote}/${t.branch}` : `Publish ${history.head.branch} to ${remoteCtx.remote}`}
               >
                 <svg class="icon" viewBox="0 0 16 16"><path d="M8 12V3M4.5 6.5 8 3l3.5 3.5M3 14h10" /></svg>
                 {#if t?.ahead}<span class="count">{t.ahead}</span>{:else if !t && history.head.branch}<span class="count">Publish</span>{/if}
               </button>
             </div>
             <ActivityPopover fix={fixFetch} retry={() => backgroundFetch(false)} settings={() => ((activity.open = false), api.openSettings())} />
+            {#if whyBlock}
+              {@const block = whyBlock}
+              <WhyPopover title={block.title} body={block.body} fixes={block.fixes} onFix={(i) => fixSync(block.fixes[i].fix)} onClose={() => (why = null)} />
+            {/if}
             </div>
           {:else if history.head.branch && history.head.commit}
             <button class="capsule publish" onclick={publishToGitHub} title="Make a repository on GitHub and push {history.head.branch} there">
@@ -1291,8 +1331,13 @@
     gap: 3px;
     border-radius: 17px;
   }
-  .group button:disabled {
+  .group button:disabled,
+  .group button.off {
     opacity: 0.4;
+  }
+  .group button.off.asking {
+    opacity: 0.55;
+    background: var(--hover-wash);
   }
   .sync {
     position: relative;

@@ -11,6 +11,7 @@
   import { lane, plate, shortId, tint } from "./format";
   import { keys, withKeys } from "./keys";
   import Menu, { type MenuEntry } from "./Menu.svelte";
+  import WhyNote from "./WhyNote.svelte";
   import { oplog, undoRequest } from "./oplog.svelte";
   import { softArrows } from "./shapes";
   import {
@@ -664,6 +665,7 @@
           <div class="buttons">
             <button class="plain" onclick={resetPlan} disabled={!edited()}>Reset Plan</button>
             <span class="grow"></span>
+            {#if !changed}<WhyNote text="Change the plan first" />{/if}
             <button class="plain" onclick={onClose}>Cancel</button>
             <button class="primary" onclick={start} disabled={!changed || checking} title={changed ? undefined : "Change the plan first"}>
               Rebase Stack <span class="key-hint">{keys("Mod+Enter")}</span>

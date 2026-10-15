@@ -4,6 +4,7 @@
   import { withKeys } from "./keys";
   import { plate, tint } from "./format";
   import MergePreview from "./MergePreview.svelte";
+  import WhyNote from "./WhyNote.svelte";
   import { prefs } from "./prefs.svelte";
   import { tokens } from "./term";
   import { bytes } from "./unusual";
@@ -91,6 +92,9 @@
   }
 
   /** The footer's note; "Undo brings it back" isn't true of what the gaps above name. */
+  /** Why the action button is grey, beside it, unless a field already says so under itself. */
+  const blocked = $derived(request?.invalid && !request.fields?.some((f) => f.error === request.invalid) ? request.invalid : null);
+
   const note = $derived.by(() => {
     const text = request?.note ?? "";
     const lost = confirm.notKept.some((g) => g.kind !== "pushed" && !(g.kind === "worktree" && !g.removed));
@@ -368,7 +372,11 @@
             {@const alt = request.alt}
             <button class="alt" onclick={() => confirm.change(alt.request())}>{alt.label}</button>
           {/if}
-          <span class="note">{failed ? (recovery?.note ?? "Nothing else was run.") : note}</span>
+          {#if !failed && blocked}
+            <WhyNote text={blocked} grow />
+          {:else}
+            <span class="note">{failed ? (recovery?.note ?? "Nothing else was run.") : note}</span>
+          {/if}
           {#if failed}
             <button class="btn" onclick={() => confirm.cancel()} title={withKeys(recovery?.close ?? "Close", "Escape")}>{recovery?.close ?? "Close"}</button>
             {#if recovery?.button}

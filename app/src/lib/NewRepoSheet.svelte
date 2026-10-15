@@ -8,6 +8,7 @@
   import { publishCommands, publishNote, repositoryName } from "./publish";
   import { join, start } from "./start.svelte";
   import TermBlock, { type TermLine } from "./TermBlock.svelte";
+  import WhyNote from "./WhyNote.svelte";
   import { tilde } from "./term";
   import type { GitHubOwners, NewRepoPlan, Publish } from "./types";
 
@@ -312,9 +313,13 @@
     {/if}
 
     <div class="foot">
+      {#if !running && !plan?.repository && !made && invalid && invalid !== "…" && invalid !== planError}
+        <WhyNote text={invalid} grow />
+      {:else}
       <span class="foot-note"
         >{publishing ? (isPrivate ? "Private on GitHub: only you can see it." : "Public on GitHub: anyone can see it.") : mac ? "Nothing leaves this Mac." : "Nothing leaves this computer."}</span
       >
+      {/if}
       <button class="btn" onclick={onClose} disabled={running}>Cancel</button>
       <button class="btn go" onclick={go} disabled={running || (!plan?.repository && !made && !!invalid)} title={plan?.repository || made ? undefined : (invalid ?? undefined)}>
         {plan?.repository || made ? "Open" : running ? (phase === "publishing" ? "Publishing…" : "Creating…") : publishing ? "Create and Publish" : "Create"}

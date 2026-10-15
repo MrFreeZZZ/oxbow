@@ -30,6 +30,7 @@
   import { lane, plate, splitPath, tabLabels, tint } from "./format";
   import DiffView, { type LinePicker } from "./DiffView.svelte";
   import FoldAll from "./FoldAll.svelte";
+  import WhyNote from "./WhyNote.svelte";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import { nav } from "./nav.svelte";
   import { BIG_FILE, bytes } from "./unusual";
@@ -107,15 +108,23 @@
 
   const message = $derived([draft.summary.trim(), draft.description.trim()].filter(Boolean).join("\n\n"));
   const canCommit = $derived(!!draft.summary.trim() && conflicted.length === 0 && (staged.length > 0 || (draft.amend && !!head)) && (!draft.amend || head?.id === draft.amendOn));
-  const commitHint = $derived(
-    conflicted.length
-      ? "Resolve the conflicts first"
-      : !staged.length && !draft.amend
-        ? "Stage the changes to commit"
-        : !draft.summary.trim()
-          ? "Write a summary"
-          : "",
-  );
+  let summaryBox = $state<HTMLInputElement>();
+  /** Why Commit is grey, beside it, with the way out when there is one. */
+  const commitHint = $derived.by((): { text: string; warn?: boolean; fix?: { label: string; run: () => void } } | null => {
+    if (conflicted.length) {
+      return {
+        text: `${conflicted.length} ${conflicted.length === 1 ? "file has" : "files have"} conflicts`,
+        warn: true,
+        fix: onResolve ? { label: "Resolve…", run: onResolve } : undefined,
+      };
+    }
+    if (!staged.length && !draft.amend) {
+      if (!unstaged.length) return { text: "No changes to commit" };
+      return { text: "Nothing staged yet", fix: { label: unstaged.length === 1 ? "Stage 1 File" : `Stage All ${unstaged.length} Files`, run: () => stage(unstaged) } };
+    }
+    if (!draft.summary.trim()) return { text: "A commit needs a summary", fix: { label: "Write It", run: () => summaryBox?.focus() } };
+    return null;
+  });
 
   async function load() {
     try {
@@ -648,7 +657,7 @@
       </button>
     </div>
     <div class="summary">
-      <input type="text" aria-label="Commit summary" placeholder="Summary" bind:value={draft.summary} onkeydown={onCommitKey} spellcheck="true" />
+      <input type="text" aria-label="Commit summary" placeholder="Summary" bind:this={summaryBox} bind:value={draft.summary} onkeydown={onCommitKey} spellcheck="true" />
       {#if SUMMARY_LIMIT}<span class="counter" class:over={draft.summary.length > SUMMARY_LIMIT}>{draft.summary.length}/{SUMMARY_LIMIT}</span>{/if}
     </div>
     <textarea
@@ -662,8 +671,12 @@
       onblur={() => (descOpen = false)}
     ></textarea>
     <div class="row">
-      <span class="grow hint-line">{commitHint}</span>
-      <button class="go" onclick={commit} disabled={!canCommit}>
+      {#if commitHint}
+        <WhyNote text={commitHint.text} warn={commitHint.warn} />
+        {#if commitHint.fix}<button class="gbtn" onclick={commitHint.fix.run}>{commitHint.fix.label}</button>{/if}
+      {/if}
+      <span class="grow"></span>
+      <button class="go" onclick={commit} disabled={!canCommit} title={commitHint?.text}>
         {draft.amend ? "Amend" : "Commit"} <span class="keys">{keys("Mod+Enter")}</span>
       </button>
     </div>
@@ -1109,10 +1122,6 @@
   textarea::placeholder {
     color: var(--text2);
     font-weight: 400;
-  }
-  .hint-line {
-    font-size: 11px;
-    color: var(--text2);
   }
   .go {
     display: flex;
