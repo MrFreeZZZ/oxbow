@@ -2,7 +2,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { listen } from "@tauri-apps/api/event";
   import { api, settings } from "./lib/api";
-  import type { History, HistoryRow, ReflogEntry, RepoSummary } from "./lib/types";
+  import { WORKTREE_ID, type History, type HistoryRow, type ReflogEntry, type RepoSummary } from "./lib/types";
   import Sidebar from "./lib/Sidebar.svelte";
   import HistoryList from "./lib/HistoryList.svelte";
   import CommitPanel from "./lib/CommitPanel.svelte";
@@ -53,6 +53,7 @@
   import { lfs } from "./lib/lfs.svelte";
   import LfsBanner from "./lib/LfsBanner.svelte";
   import BisectBanner from "./lib/BisectBanner.svelte";
+  import StatusLine from "./lib/StatusLine.svelte";
   import { bisectMarkRequest, bisectResetRequest, bisectStartRequest } from "./lib/bisect";
   import { keys } from "./lib/keys";
   import type { BisectMark } from "./lib/types";
@@ -529,7 +530,8 @@
     await run(startPublish(repo.path, repo.name, history.head.branch, headColor));
   }
 
-  async function sync(kind: "fetch" | "pull" | "push") {
+  /** `mode` picks merge or rebase for this one pull, over Settings › Git. */
+  async function sync(kind: "fetch" | "pull" | "push", mode?: "merge" | "rebase") {
     // While a fetch runs, Fetch shows its progress, and Pull or Push waits for it in line.
     if (kind === "fetch" && (activity.running || activity.problem)) {
       activity.open = !activity.open;
@@ -550,7 +552,11 @@
     }
     const setup =
       kind === "pull"
-        ? { ...(await api.pullSetup().catch(() => ({ mode: "rebase" as const, autostash: true }))), fetchFirst: prefs.get("oxbow.pull.fetchFirst") }
+        ? {
+            ...(await api.pullSetup().catch(() => ({ mode: "rebase" as const, autostash: true }))),
+            ...(mode ? { mode } : {}),
+            fetchFirst: prefs.get("oxbow.pull.fetchFirst"),
+          }
         : undefined;
     const request = kind === "pull" ? pullRequest(remoteCtx, setup) : pushRequest(remoteCtx);
     const opBefore = history?.operation ?? null;
@@ -1002,6 +1008,18 @@
       </header>
       {#if searching}
         <SearchBar {history} count={matches.length} copy={(text) => copyText(text, "Copied the command.")} />
+      {/if}
+      {#if view === "history" && !showConflicts && !searching && !operation && !history.bisect && history.head.branch}
+        <StatusLine
+          {history}
+          color={headColor}
+          onChanges={() => pick(WORKTREE_ID)}
+          onPush={() => sync("push")}
+          onPull={(mode) => sync("pull", mode)}
+          onFetch={() => sync("fetch")}
+          onTheirs={(upstream) => openCompare(history!.head.branch!, upstream, "split")}
+          onPublish={publishToGitHub}
+        />
       {/if}
       {#if operation && branchCtx}
         {@const op = operation}

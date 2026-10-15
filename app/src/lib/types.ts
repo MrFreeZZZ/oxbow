@@ -106,6 +106,12 @@ export interface Tracking {
   replay: { base: string; commits: CommitBrief[] } | null;
 }
 
+export interface RemoteFetch {
+  remote: string;
+  /** Seconds since the epoch; null when nothing shows this clone ever fetched it. */
+  time: number | null;
+}
+
 export interface History {
   head: HeadInfo;
   trunk: string | null;
@@ -124,6 +130,8 @@ export interface History {
   /** Tags the default remote doesn’t have yet, as far as Oxbow knows. */
   localTags: string[];
   remotes: string[];
+  /** When each remote was last fetched, in the order of `remotes`. */
+  fetched: RemoteFetch[];
   tracking: Tracking | null;
   defaultRemote: string | null;
   stashes: StashInfo[];
