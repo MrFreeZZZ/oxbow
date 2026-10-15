@@ -45,6 +45,7 @@
         <span class="ids">
           {#if shape.block.current}
             <span class="id mono selectable" style:color={plate(color)} title={row.id}>{shortId(row.id)}</span>
+            <span class="title current" title={row.summary}>{row.summary}</span>
           {:else}
             {#each shape.block.ids.slice(0, MAX_IDS) as id (id)}
               {@const target = lookup(id)}
@@ -52,6 +53,10 @@
                 >{shortId(id)}</button
               >
             {/each}
+            {#if shape.block.ids.length === 1}
+              {@const summary = lookup(shape.block.ids[0])?.summary}
+              {#if summary}<span class="title" title={summary}>{summary}</span>{/if}
+            {/if}
             {#if shape.block.ids.length > MAX_IDS}
               <span class="more" title={shape.block.ids.slice(MAX_IDS).map((id) => `${shortId(id)} ${lookup(id)?.summary ?? ""}`).join("\n")}
                 >+{shape.block.ids.length - MAX_IDS}</span
@@ -82,6 +87,7 @@
   }
   .content {
     position: absolute;
+    padding-right: 6px;
     top: 0;
     height: 42px;
     padding-left: 12px;
@@ -101,6 +107,18 @@
   }
   .id {
     font-size: 12px;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  /* The commit's title next to its id, cut short when the arrow is narrow. */
+  .title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 12px;
+    color: var(--text);
+  }
+  .title.current {
     font-weight: 600;
   }
   .link {
