@@ -7,7 +7,7 @@
   import { relativeTime } from "./format";
   import { actionIcons } from "./icons";
   import { prefs } from "./prefs.svelte";
-  import { tokens } from "./term";
+  import CommandWords from "./CommandWords.svelte";
 
   /** Commands a row shows before Show All. */
   const FEW = 2;
@@ -127,7 +127,7 @@
               <div class="cmds mono selectable" aria-label="Git commands">
                 <button class="copy" title="Copy the commands" onclick={() => copy(item)}>{copiedId === item.id ? "Copied" : "Copy"}</button>
                 {#each shown as command, i (i)}
-                  <div class="cmd"><span class="dollar">$</span> {#each tokens(command) as token, k (k)}<span style:color={token.color} class:bold={token.bold}>{token.text}</span>{" "}{/each}</div>
+                  <div class="cmd"><span class="dollar">$</span> <CommandWords text={command} /></div>
                 {/each}
                 {#if commands.length > shown.length}
                   <button class="more" onclick={() => (unfolded = new Set([...unfolded, item.id]))}>and {commands.length - shown.length} more</button>
@@ -296,9 +296,6 @@
   }
   .dollar {
     color: var(--term-dim);
-  }
-  .bold {
-    font-weight: 700;
   }
   .copy {
     position: absolute;

@@ -16,6 +16,10 @@ export const defaults = {
   "oxbow.confirm.enabled": true,
   "oxbow.confirm.scope": "risky" as "all" | "risky",
   "oxbow.confirm.showCommand": true,
+  /** One-time Git tips at the moment an idea first matters. */
+  "oxbow.tips.show": true,
+  /** Tips closed with Got It, by id. */
+  "oxbow.tips.seen": [] as string[],
   "oxbow.push.confirmForce": true,
   /** Days the Operation Log keeps its steps, so they can be undone. */
   "oxbow.undo.keepDays": 30,
@@ -104,6 +108,7 @@ export function problemOf(key: string, value: unknown): string | null {
   const actual = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
   if (actual !== expected) return `Expected ${named(expected)}, not ${named(actual)}`;
   if (key === "oxbow.secrets.patterns") return patternsProblem(value as unknown[]);
+  if (key === "oxbow.tips.seen" && (value as unknown[]).some((id) => typeof id !== "string")) return "Expected a list of tip names";
   const rule = rules[key as PrefKey];
   if (!rule) return null;
   if (rule.oneOf && !rule.oneOf.includes(value as string)) return `Expected one of ${quoted(rule.oneOf)}`;
@@ -159,7 +164,8 @@ class Prefs {
   /** Save a setting; its default value is saved as no value at all. Resolves once the backend
    *  follows it too. */
   set<K extends PrefKey>(key: K, value: PrefValue<K>): Promise<void> {
-    const stored = value === defaults[key] ? null : value;
+    const fallback = defaults[key];
+    const stored = value === fallback || (Array.isArray(value) && Array.isArray(fallback) && !value.length && !fallback.length) ? null : value;
     if (stored === null) delete this.#values[key];
     else this.#values[key] = stored;
     return api.setSetting(key, stored).catch(() => {});

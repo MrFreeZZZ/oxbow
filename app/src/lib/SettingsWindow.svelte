@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tips, TIP_COUNT } from "./tips.svelte";
   import { keys } from "./keys";
   // The Settings window (⌘,): sections on the left, grouped rows of controls on the right, in
   // the layout of the Settings design. Oxbow's own settings save at once to settings.json and
@@ -333,6 +334,20 @@
               ],
             }),
             prefRow("oxbow.confirm.showCommand", "Show the git command", "switch", { sub: "A terminal block with the exact commands, to learn git as you go", off: confirmOff }),
+          ],
+        },
+        {
+          title: "Learning",
+          foot: "In any terminal block, click a subcommand or flag to see what it does, or a branch name or SHA to see its commit.",
+          rows: [
+            prefRow("oxbow.tips.show", "Show Git tips", "switch", { sub: "A short card the first time an idea matters, like a partly staged file or a detached HEAD" }),
+            {
+              id: "tips-again",
+              label: "Closed tips",
+              sub: () => `${tips.closed} of ${TIP_COUNT} closed with Got It`,
+              control: { type: "button", label: "Show Again", run: () => tips.again() },
+              off: () => !prefs.get("oxbow.tips.show") || !tips.closed,
+            },
           ],
         },
         {

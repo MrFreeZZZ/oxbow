@@ -22,6 +22,7 @@
 </script>
 
 <script lang="ts">
+  import TipCard from "./TipCard.svelte";
   import { keys } from "./keys";
   import { api } from "./api";
   import { diffSettings, prefs, wholeByDefault } from "./prefs.svelte";
@@ -606,6 +607,7 @@
           {#if !staged.length}<p class="empty">Tick files above and press Stage Selected to add them to the next commit.</p>{/if}
         </div>
       </div>
+      {#if staged.some((f) => unstagedPaths.has(f.path))}<div class="tip"><TipCard id="partlyStaged" /></div>{/if}
     {/if}
     {#each [{ side: "unstaged" as Side, diffs: shown.unstaged }, { side: "staged" as Side, diffs: shown.staged }] as part (part.side)}
       {#if part.diffs.length}
@@ -784,6 +786,11 @@
     background: var(--side-sel);
     border-color: transparent;
     color: var(--text);
+  }
+  .tip {
+    margin: 0 12px 6px;
+    display: flex;
+    flex-direction: column;
   }
   .lists {
     margin: 12px 12px 6px;

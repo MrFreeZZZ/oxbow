@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { lens } from "./lens.svelte";
   import { oplog } from "./oplog.svelte";
   import { keys } from "./keys";
   import type { History, HistoryRow, RefInfo, RepoSummary } from "./types";
@@ -553,9 +554,9 @@
       <button
         class="item"
         data-ref={b.ref.name}
-        class:menu-open={menu?.ref === b.ref.name}
+        class:menu-open={menu?.ref === b.ref.name || lens.pointedRef === b.ref.name}
         style:--ring={lane(b.color)}
-        style:background={focused === b.ref.name ? tint(b.color) : undefined}
+        style:background={focused === b.ref.name || lens.pointedRef === b.ref.name ? tint(b.color) : undefined}
         onclick={() => focus(b.ref)}
         oncontextmenu={(e) => branchMenu(e, b.ref)}
       >
@@ -672,9 +673,9 @@
             <button
               class="item nested"
               data-ref={rb.ref.name}
-              class:menu-open={menu?.ref === rb.ref.name}
+              class:menu-open={menu?.ref === rb.ref.name || lens.pointedRef === rb.ref.name}
               style:--ring={lane(rb.color)}
-              style:background={focused === rb.ref.name ? tint(rb.color) : undefined}
+              style:background={focused === rb.ref.name || lens.pointedRef === rb.ref.name ? tint(rb.color) : undefined}
               onclick={() => focus(rb.ref)}
               oncontextmenu={(e) => remoteMenu(e, rb.ref, rb.author)}
             >

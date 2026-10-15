@@ -1,6 +1,7 @@
 <script lang="ts">
   // The Stashes screen: every stash on the left, the picked one on the right with whether it
   // applies to the checked-out branch, its actions, its files and their diffs.
+  import TipCard from "./TipCard.svelte";
   import { api } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { CommitDetail, FileChange, FileDiff, History, StashCheck, StashInfo } from "./types";
@@ -280,6 +281,7 @@
           <span class="grow"></span>
           <button class="action danger" disabled={busy} onclick={() => run(dropRequest(ctx, stash))}>Drop</button>
         </div>
+        {#if !busy}<TipCard id="stashApplyPop" />{/if}
       </div>
 
       <div class="scroll">

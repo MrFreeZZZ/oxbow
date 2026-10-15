@@ -2,6 +2,7 @@ import { mount } from "svelte";
 import "./app.css";
 import App from "./App.svelte";
 import SettingsWindow from "./lib/SettingsWindow.svelte";
+import WordPopover from "./lib/WordPopover.svelte";
 import { followLook } from "./lib/prefs.svelte";
 
 // Start in the system's look so nothing flashes; the Appearance setting takes over once read.
@@ -11,3 +12,5 @@ followLook();
 // The Settings window loads the same page with #settings.
 const settingsWindow = location.hash === "#settings";
 export default mount(settingsWindow ? SettingsWindow : App, { target: document.getElementById("app")! });
+// What a word of a git command means, over every window's sheets.
+mount(WordPopover, { target: document.body });

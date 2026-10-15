@@ -55,6 +55,9 @@
   import LfsBanner from "./lib/LfsBanner.svelte";
   import BisectBanner from "./lib/BisectBanner.svelte";
   import StatusLine from "./lib/StatusLine.svelte";
+  import { lens } from "./lib/lens.svelte";
+  import TipCard from "./lib/TipCard.svelte";
+  import { tips } from "./lib/tips.svelte";
   import { bisectMarkRequest, bisectResetRequest, bisectStartRequest } from "./lib/bisect";
   import { keys } from "./lib/keys";
   import type { BisectMark } from "./lib/types";
@@ -270,6 +273,16 @@
     const row = target ? rowsById.get(target) : undefined;
     return row ? row.graph.color : headColor;
   }
+
+  // Branch names and SHAs in the terminal blocks open their commit and light it up in History.
+  $effect(() => {
+    const h = history;
+    lens.know(h && { refs: h.refs, rows: h.rows, row: (id) => rowsById.get(id), colorOf });
+  });
+  $effect(() => {
+    const id = lens.pointed;
+    if (id && view === "history") untrack(() => list?.reveal(id));
+  });
 
   const branchCtx = $derived<BranchContext | null>(
     history && { history, colorOf, uncommitted: history.rows.find((r) => r.worktree)?.worktree?.files ?? 0 },
@@ -1137,6 +1150,9 @@
           onTheirs={(upstream) => openCompare(history!.head.branch!, upstream, "split")}
           onPublish={publishToGitHub}
         />
+        {@const t = history.tracking}
+        {@const tip = ([t && t.behind > 0 && "fetchedOnly", t && t.ahead > 0 && !t.rewritten && "localCommits"] as const).find((id) => id && tips.shows(id))}
+        {#if tip}<TipCard id={tip} wide />{/if}
       {/if}
       {#if operation && branchCtx}
         {@const op = operation}
@@ -1151,6 +1167,7 @@
         />
       {:else if !history.bisect && !history.head.branch && history.head.commit && branchCtx}
         <DetachedBanner {history} back={backTo} onBack={() => backTo && run(switchRequest(branchCtx!, backTo))} onKeep={newBranch} />
+        <TipCard id="detached" wide />
       {/if}
       {#if history.bisect && branchCtx}
         {@const bisect = history.bisect}
@@ -1232,6 +1249,7 @@
               {paging}
               onMore={() => loadOlder()}
               onUnshallow={history.defaultRemote ? () => run(unshallowRequest(history!.defaultRemote!)) : null}
+              pointed={lens.pointed}
             />
           {/key}
         </section>
