@@ -325,7 +325,7 @@
           rows: [
             prefRow("oxbow.confirm.enabled", "Confirm actions before running them", "switch", { sub: "Describes the action with branch and commit names before anything changes" }),
             prefRow("oxbow.confirm.scope", "Ask for", "seg", {
-              sub: "Risky: discard, reset, delete, abort, rewriting commits, force push",
+              sub: "Risky: discard, reset, delete, abort, rewriting commits, push",
               off: confirmOff,
               options: () => [
                 { value: "all", label: "All actions" },

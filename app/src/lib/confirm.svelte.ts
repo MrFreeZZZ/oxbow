@@ -182,8 +182,9 @@ export interface TermLine {
 
 type Phase = "ask" | "running" | "failed";
 
-/** Actions that throw work away or rewrite history: with "Risky only" these still ask. The rest
- *  (stage, commit, switch, pull, push…) run at once, and Activity lists their commands. */
+/** Actions that throw work away, rewrite history or send commits to a remote, which Undo can't
+ *  take back: with "Risky only" these still ask. The rest (stage, commit, switch, pull…) run at
+ *  once, and Activity lists their commands. */
 const RISKY = new Set<Action["kind"]>([
   "discard",
   "discardHunk",
@@ -203,6 +204,10 @@ const RISKY = new Set<Action["kind"]>([
   "editStack",
   "addToCommit",
   "reword",
+  "push",
+  "pullAndPush",
+  "pushBranches",
+  "pushTags",
 ]);
 
 /** Actions that can change something the Operation Log doesn't keep: even when the settings say
