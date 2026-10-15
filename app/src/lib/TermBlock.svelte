@@ -9,7 +9,7 @@
   // The terminal block of the sheets that run git outside a repository (Clone, New Repository):
   // the exact commands, then what git prints while they run.
 
-  import { tokens } from "./term";
+  import CommandWords from "./CommandWords.svelte";
 
   let { where, lines, copy }: { where: string; lines: TermLine[]; copy: string[] } = $props();
 
@@ -48,7 +48,7 @@
     {#each lines as line, i (i)}
       {#if line.kind === "cmd"}
         <div class="cmd">
-          <span class="prompt">{`${line.prompt ?? "~"} % `}</span>{#each tokens(line.text) as token, k (k)}<span style:color={token.color} class:bold={token.bold}>{token.text}</span>{" "}{/each}
+          <span class="prompt">{`${line.prompt ?? "~"} % `}</span><CommandWords text={line.text} />
         </div>
       {:else if line.kind === "comment"}
         <div class="comment"># {line.text}</div>
@@ -119,9 +119,6 @@
   }
   .prompt {
     color: var(--term-dim);
-  }
-  .bold {
-    font-weight: 600;
   }
   .comment {
     color: var(--term-comment);

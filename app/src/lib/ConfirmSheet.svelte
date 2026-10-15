@@ -6,7 +6,9 @@
   import MergePreview from "./MergePreview.svelte";
   import WhyNote from "./WhyNote.svelte";
   import { prefs } from "./prefs.svelte";
-  import { tokens } from "./term";
+  import CommandWords from "./CommandWords.svelte";
+  import TipCard from "./TipCard.svelte";
+  import { tips, type TipId } from "./tips.svelte";
   import { bytes } from "./unusual";
   import type { NotKept } from "./types";
 
@@ -102,6 +104,18 @@
     return lost && /^Undo brings/.test(text) ? "Undo brings back everything else." : text;
   });
 
+  /** A one-time tip about what the commands do, the first that hasn't been closed. */
+  const tip = $derived.by((): TipId | undefined => {
+    if (confirm.phase !== "ask") return undefined;
+    const all = confirm.commands.map((c) => c.args);
+    const found: TipId[] = [];
+    if (all.some((a) => a[0] === "push" && a.some((x) => x.startsWith("--force-with-lease")))) found.push("forceLease");
+    if (all.some((a) => a[0] === "commit" && a.includes("--amend"))) found.push("amend");
+    if (all.some((a) => (a[0] === "revert" && !a.includes("--abort") && !a.includes("--continue")) || (a[0] === "reset" && a.some((x) => x === "--soft" || x === "--mixed" || x === "--hard") && a.length > 2 && a[a.length - 1] !== "HEAD")))
+      found.push("revertReset");
+    return found.find((id) => tips.shows(id));
+  });
+
   const OUTPUT: Record<string, string> = {
     out: "var(--term-out)",
     err: "var(--term-err)",
@@ -175,7 +189,7 @@
   <div class="cmd">
     <!-- A step Oxbow does itself runs outside the repository, from the home folder. -->
     {#if request?.local}<span class="prompt">~ %</span>{:else}<span class="prompt">{`${repo} `}</span><span style:color="var(--plate-{color})">({branch ?? "HEAD"})</span><span class="prompt">{" %"}</span>{/if}
-    {#each tokens(display) as token, k (k)}<span style:color={token.color} class:bold={token.bold}>{token.text}</span>{" "}{/each}
+    <CommandWords text={display} />
   </div>
 {/snippet}
 
@@ -325,6 +339,8 @@
           <span>{note}</span>
         </div>
       {/if}
+
+      {#if tip}<TipCard id={tip} />{/if}
 
       <!-- With "Show the git command" off, the commands stay out of the question; git's output
            still shows once it runs. -->
@@ -577,9 +593,6 @@
   }
   .prompt {
     color: var(--term-dim);
-  }
-  .bold {
-    font-weight: 600;
   }
   .patch {
     white-space: pre-wrap;

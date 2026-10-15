@@ -3,6 +3,7 @@
   // (named by branch, never "ours" and "theirs") and the result underneath, where each conflict
   // gets a side, or both, before the file is marked resolved.
 
+  import TipCard from "./TipCard.svelte";
   import { untrack } from "svelte";
   import { api } from "./api";
   import type { Request } from "./confirm.svelte";
@@ -345,6 +346,7 @@
         {/each}
       {/if}
     </div>
+    {#if op.kind === "rebase"}<div class="tip"><TipCard id="rebaseConflict" /></div>{/if}
     <p class="hint">
       {#if op.kind === "stashApply"}
         Nothing here is final until you finish. Undo Apply takes back what the stash brought and keeps the stash.
@@ -541,6 +543,14 @@
   }
   .check {
     color: var(--green);
+  }
+  .tip {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+  }
+  .tip:empty {
+    display: none;
   }
   .hint {
     margin: 8px 0 0;

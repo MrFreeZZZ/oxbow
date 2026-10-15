@@ -20,6 +20,7 @@
     paging = null,
     onMore,
     onUnshallow = null,
+    pointed = null,
   }: {
     history: History;
     selected: string | null;
@@ -39,6 +40,8 @@
     onMore?: () => void;
     /** Fetch Full History, at the end of a shallow clone's history. */
     onUnshallow?: (() => void) | null;
+    /** A commit a branch name or SHA in a git command points at, lit up while its popover is open. */
+    pointed?: string | null;
   } = $props();
 
   // Geometry from the design: 44px two-line rows, lanes 18px apart, trunk lane centered 14px in.
@@ -300,6 +303,7 @@
           class:compact
           class:faded={faded(row)}
           class:flash={flash === row.id}
+          class:pointed={pointed === row.id}
           class:menu-open={menu?.id === row.id}
           role="option"
           aria-selected={picked}
@@ -585,8 +589,12 @@
   .row.flash {
     background: var(--flash);
   }
-  .row.menu-open {
+  .row.menu-open,
+  .row.pointed {
     box-shadow: inset 0 0 0 1.5px var(--ring);
+  }
+  .row.pointed {
+    background: var(--flash);
   }
   .summary {
     overflow: hidden;
