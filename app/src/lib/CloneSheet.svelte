@@ -9,6 +9,7 @@
   import { prefs } from "./prefs.svelte";
   import { join, nameFromUrl, start } from "./start.svelte";
   import TermBlock, { type TermLine } from "./TermBlock.svelte";
+  import WhyNote from "./WhyNote.svelte";
   import { tilde } from "./term";
   import type { OutputLine, RemoteProbe } from "./types";
 
@@ -333,9 +334,13 @@
     {/if}
 
     <div class="foot">
-      <span class="foot-note">
-        {#if phase === "running"}Cancelling removes the partial folder.{:else if phase === "failed"}Nothing was left behind.{/if}
-      </span>
+      {#if phase !== "running" && phase !== "failed" && invalid}
+        <WhyNote text={invalid} grow />
+      {:else}
+        <span class="foot-note">
+          {#if phase === "running"}Cancelling removes the partial folder.{:else if phase === "failed"}Nothing was left behind.{/if}
+        </span>
+      {/if}
       {#if phase === "running"}
         <button class="btn" onclick={() => api.stopAction()}>Cancel</button>
       {:else}

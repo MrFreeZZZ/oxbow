@@ -3,8 +3,8 @@
 import type { Part, Recovery, Request, Step, TermLine } from "./confirm.svelte";
 import { api } from "./api";
 import { mac } from "./keys";
-import { stoppedOnConflicts } from "./merge";
-import type { Action, CommitBrief, Failure, HistoryRow, SshCheck, Tracking } from "./types";
+import { describe, stoppedOnConflicts } from "./merge";
+import type { Action, Bisect, CommitBrief, Failure, HistoryRow, Operation, SshCheck, Tracking } from "./types";
 import { shortId } from "./format";
 
 export interface RemoteContext {
@@ -18,6 +18,20 @@ export interface RemoteContext {
   remotes: string[];
   /** Commits of the branch that the remote does not have yet, newest first. */
   unpushed: HistoryRow[];
+  /** A merge, rebase, cherry-pick, revert or stash apply waiting to be finished. */
+  operation?: Operation | null;
+  bisect?: Bisect | null;
+}
+
+/** The way out offered next to a reason, done by the caller. */
+export type SyncFix = "publish" | "resolve" | "continue" | "abort" | "newBranch" | "finishBisect";
+
+/** Why Pull or Push can't run now, shown when the grey button is clicked, with what fixes it. */
+export interface SyncBlock {
+  title: string;
+  body: Part[];
+  /** The last one is the main way out. */
+  fixes: { label: string; fix: SyncFix }[];
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -34,12 +48,82 @@ function chip(ctx: RemoteContext, name: string): Part {
   return { branch: name, color: ctx.color };
 }
 
+export function syncBlock(ctx: RemoteContext, kind: "pull" | "push"): SyncBlock | null {
+  const bisect = ctx.bisect;
+  if (bisect) {
+    return {
+      title: "Bisect in progress",
+      body: [
+        bisect.found ? "Bisect found the commit and waits to be finished. Finishing it goes back to " : "Git checks out commits one by one while you test them. Finishing it goes back to ",
+        bisect.startIsBranch ? chip(ctx, bisect.start) : { code: shortId(bisect.start) },
+        ".",
+      ],
+      fixes: [{ label: "Finish Bisect", fix: "finishBisect" }],
+    };
+  }
+  const op = ctx.operation;
+  if (op) {
+    const words = describe(op);
+    const stash = op.kind === "stashApply";
+    const commits = op.kind === "merge" || op.kind === "squash";
+    const finish = stash ? "Finish" : commits ? `Commit ${words.noun}` : `Continue ${words.noun}`;
+    const on: Part = op.branch ? chip(ctx, op.branch) : { code: "HEAD" };
+    const doing: Part[] =
+      op.kind === "rebase"
+        ? ["Push and Pull wait while ", on, " is being rebased."]
+        : stash
+          ? ["Push and Pull wait until the stash is applied to ", on, "."]
+          : ["Push and Pull wait until the ", words.verb, " on ", on, " is finished."];
+    return {
+      title: stash ? "Finish applying the stash first" : `Finish the ${words.verb} first`,
+      body: [
+        ...doing,
+        op.conflicted
+          ? ` ${plural(op.conflicted, "file")} still ${op.conflicted === 1 ? "has" : "have"} conflicts.`
+          : ` All conflicts are resolved: ${finish.toLowerCase()}, then ${kind}.`,
+      ],
+      fixes: [
+        { label: stash ? "Undo Apply" : `Abort ${words.noun}`, fix: "abort" },
+        op.conflicted ? { label: "Resolve Conflicts", fix: "resolve" } : { label: finish, fix: "continue" },
+      ],
+    };
+  }
+  if (!ctx.branch) {
+    return {
+      title: "You’re not on a branch",
+      body: ["Push and Pull work with a branch. Commits made here belong to none: put them on a branch first."],
+      fixes: [{ label: "Create Branch…", fix: "newBranch" }],
+    };
+  }
+  const t = ctx.tracking;
+  if (kind === "pull" && t?.gone) {
+    return {
+      title: `${t.remote}/${t.branch} was deleted`,
+      body: ["There is nothing left to pull. Push publishes ", chip(ctx, ctx.branch), ` to ${ctx.remote ?? t.remote} again.`],
+      fixes: ctx.remote ? [{ label: "Publish Again…", fix: "publish" }] : [],
+    };
+  }
+  if (kind === "pull" && !t) {
+    return {
+      title: "Nothing to pull from yet",
+      body: ctx.remote
+        ? [chip(ctx, ctx.branch), ` isn’t on ${ctx.remote}, so it has no upstream. Publish it, and Pull will take new commits from `, chip(ctx, `${ctx.remote}/${ctx.branch}`), "."]
+        : [chip(ctx, ctx.branch), " has no upstream to pull from."],
+      fixes: ctx.remote ? [{ label: "Publish…", fix: "publish" }] : [],
+    };
+  }
+  if (kind === "push" && !target(ctx)) {
+    return { title: "No remote to push to", body: ["Add one in Settings › Repository."], fixes: [] };
+  }
+  return null;
+}
+
 export function canPull(ctx: RemoteContext): boolean {
-  return !!ctx.branch && !!ctx.tracking && !ctx.tracking.gone;
+  return syncBlock(ctx, "pull") === null;
 }
 
 export function canPush(ctx: RemoteContext): boolean {
-  return target(ctx) !== null;
+  return syncBlock(ctx, "push") === null;
 }
 
 export function fetchRequest(ctx: RemoteContext): Request {

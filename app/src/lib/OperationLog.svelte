@@ -9,6 +9,7 @@
   import { relativeTime } from "./format";
   import { prefs } from "./prefs.svelte";
   import { keys, withKeys } from "./keys";
+  import WhyNote from "./WhyNote.svelte";
   import type { OpEntry, ReflogEntry } from "./types";
 
   let {
@@ -155,6 +156,7 @@
             <span class="words">
               <span class="title">{entry.title}</span>
               <span class="detail">{entry.failed ? "Stopped half way · " : ""}{entry.detail}</span>
+              {#if blocked}<WhyNote text={blocked} />{/if}
             </span>
             <span class="when" title="Oxbow can go back to this step until then">
               <span>{relativeTime(entry.time)}</span>
