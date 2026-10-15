@@ -189,6 +189,7 @@ impl Repo {
             | Action::ReplayAndPush { remote, .. }
             | Action::PushTags { remote, .. }
             | Action::FetchTags { remote }
+            | Action::Unshallow { remote }
             | Action::PushBranches { remote, .. }
             | Action::PullRequestMerged { remote, .. }
             | Action::DeleteRemoteBranch { remote, .. } => Some(remote.clone()),

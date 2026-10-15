@@ -350,6 +350,10 @@ pub enum Action {
     FetchTags {
         remote: String,
     },
+    /// Download the rest of the history of a shallow clone from `remote`.
+    Unshallow {
+        remote: String,
+    },
     /// Put the repository back to how it was before step `id` of the Operation Log, or right
     /// after it with `after`.
     Restore {
@@ -1144,6 +1148,11 @@ impl Repo {
             Action::PushTags { remote, names } => vec![tags::push_command(remote, names)],
             Action::DeleteTag { name, remote } => tags::plan_delete(name, remote.as_deref()),
             Action::FetchTags { remote } => tags::plan_fetch(remote),
+            Action::Unshallow { remote } => vec![
+                GitCommand::new(["fetch", "--unshallow", remote.as_str()])
+                    .comment("--unshallow: fetch the commits a shallow clone left out")
+                    .with_progress(),
+            ],
             Action::Optimize => {
                 vec![GitCommand::new(["gc"]).comment("packs loose objects and drops ones nothing points at any more")]
             }

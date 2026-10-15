@@ -9,22 +9,31 @@ use serde::Serialize;
 use crate::bisect::Bisect;
 use crate::error::{Error, Result};
 use crate::fetched::RemoteFetch;
-use crate::graph::{self, GraphCommit, LeadIn, RowLayout};
+use crate::graph::{self, GraphCommit, LeadIn, RowLayout, Run, Segment};
 use crate::operation::{Operation, OperationKind};
 use crate::remote::Tracking;
 use crate::repo::{HeadInfo, RefInfo, RefKind, Repo, StashInfo};
 use crate::worktrees::Worktree;
+
+/// Commits loaded at a time: the first load, and each one after it as the list scrolls on.
+pub const PAGE: usize = 10_000;
 
 /// Options for loading the history.
 #[derive(Debug, Clone)]
 pub struct HistoryOptions {
     /// Maximum number of commits to load, newest first.
     pub limit: usize,
+    /// A commit that must be loaded even when it is older than `limit` commits: the history goes
+    /// on to the end of the page it is on. Ignored when no branch, tag or `HEAD` reaches it.
+    pub until: Option<String>,
 }
 
 impl Default for HistoryOptions {
     fn default() -> Self {
-        HistoryOptions { limit: 10_000 }
+        HistoryOptions {
+            limit: PAGE,
+            until: None,
+        }
     }
 }
 
@@ -61,8 +70,32 @@ pub struct History {
     /// Stash entries, newest first. Each one is also a row of the graph.
     pub stashes: Vec<StashInfo>,
     pub rows: Vec<HistoryRow>,
+    /// Straight lines of the graph that run over two rows or more, ordered by their first row.
+    /// They are left out of the rows' own segments: see [`History::segments_at`].
+    pub runs: Vec<Run>,
     /// More commits exist beyond `rows`.
     pub truncated: bool,
+    /// Commits loaded, stashes aside: what to ask for to load the same history again, which may
+    /// be more than was asked for when `until` was older.
+    pub loaded: usize,
+    /// The repository is a shallow clone: its history stops at commits whose parents were not
+    /// fetched.
+    pub shallow: bool,
+}
+
+impl History {
+    /// Every line of a row: the runs over it, then its own segments.
+    pub fn segments_at(&self, row: usize) -> Vec<Segment> {
+        let mut out: Vec<Segment> = self
+            .runs
+            .iter()
+            .take_while(|run| run.first <= row)
+            .filter(|run| run.last >= row)
+            .map(Run::segment)
+            .collect();
+        out.extend(self.rows[row].graph.segments.iter().cloned());
+        out
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -157,11 +190,23 @@ impl Repo {
                 .sorting(Sorting::ByCommitTime(CommitTimeOrder::NewestFirst))
                 .all()
                 .map_err(Error::git)?;
+            let mut until = options
+                .until
+                .as_deref()
+                .and_then(|id| ObjectId::from_hex(id.as_bytes()).ok());
+            let mut limit = options.limit.max(1);
             for info in walk {
                 let info = info.map_err(Error::git)?;
-                if nodes.len() == options.limit {
-                    truncated = true;
-                    break;
+                if nodes.len() == limit {
+                    if until.is_none() {
+                        truncated = true;
+                        break;
+                    }
+                    // Still looking for `until`: one more page.
+                    limit += PAGE;
+                }
+                if until == Some(info.id) {
+                    until = None;
                 }
                 nodes.push(Node {
                     id: info.id,
@@ -169,7 +214,13 @@ impl Repo {
                     time: info.commit_time.unwrap_or_default(),
                 });
             }
+            // No branch or tag reaches `until`: back to the history asked for.
+            if until.is_some() && nodes.len() > options.limit {
+                nodes.truncate(options.limit.max(1));
+                truncated = true;
+            }
         }
+        let loaded = nodes.len();
         // Stashes hang off the commit they were made on. Only that first parent is drawn: the other
         // parents (the index and the untracked files) are internal to the stash.
         let mut stash_ids = HashSet::new();
@@ -414,7 +465,8 @@ impl Repo {
                 }
             },
         );
-        let rows: Vec<HistoryRow> = worktree_row.into_iter().chain(rows).collect();
+        let mut rows: Vec<HistoryRow> = worktree_row.into_iter().chain(rows).collect();
+        let runs = graph::take_runs(rows.iter_mut().map(|r| &mut r.graph));
         let trunk_tip_row = trunk_tip_row.map(|r| r + usize::from(changes.is_some()));
 
         Ok(History {
@@ -435,7 +487,10 @@ impl Repo {
             remotes,
             stashes,
             rows,
+            runs,
             truncated,
+            loaded,
+            shallow: repo.is_shallow(),
         })
     }
 }

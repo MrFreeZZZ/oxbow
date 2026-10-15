@@ -118,7 +118,7 @@ fn commits_missing_from_the_remote_are_unpushed() {
     assert_eq!(history.remotes, ["origin"]);
     let flags: Vec<_> = history.rows.iter().map(|r| (r.summary.as_str(), r.unpushed)).collect();
     assert_eq!(flags, [("Local only", true), ("Pushed", false)]);
-    assert!(history.rows[0].graph.segments[0].dashed);
+    assert!(history.segments_at(0)[0].dashed);
     let pushed_labels: Vec<_> = history.rows[1].labels.iter().map(|l| l.name.as_str()).collect();
     assert_eq!(pushed_labels, ["origin/main"]);
 }
@@ -131,12 +131,12 @@ fn history_limit_truncates() {
     }
     let history = Repo::open(fx.path())
         .unwrap()
-        .history(&HistoryOptions { limit: 3 })
+        .history(&HistoryOptions { limit: 3, until: None })
         .unwrap();
     assert_eq!(history.rows.len(), 3);
     assert!(history.truncated);
     // The oldest loaded commit's line keeps going down past the limit.
-    assert_eq!(history.rows[2].graph.segments.len(), 1);
+    assert_eq!(history.segments_at(2).len(), 1);
 }
 
 #[test]
@@ -230,7 +230,7 @@ fn uncommitted_changes_sit_on_top_in_the_color_of_head() {
     assert_eq!(wip.graph.color, color_for_name("feature/x"));
     assert_eq!(head.graph.color, color_for_name("feature/x"));
     assert_eq!(head.graph.branch.as_deref(), Some("feature/x"));
-    assert!(wip.graph.segments[0].dashed);
+    assert!(history.segments_at(0)[0].dashed);
     assert_eq!(history.trunk_tip_row, Some(2));
 
     // A clean working copy has no such row.
@@ -315,4 +315,112 @@ fn a_line_without_a_name_keeps_its_color_as_history_grows() {
     fx.commit("a.txt", "3\n", "Later");
     fx.commit("a.txt", "4\n", "Even later");
     assert_eq!(color(&fx), before);
+}
+
+#[test]
+fn until_loads_down_to_an_older_commit() {
+    let mut fx = Fixture::new();
+    let mut ids = Vec::new();
+    for i in 0..8 {
+        ids.push(fx.commit("a.txt", &format!("{i}\n"), &format!("Commit {i}")));
+    }
+    let repo = Repo::open(fx.path()).unwrap();
+    // Commit 1 is the 7th newest: past a limit of 3, so the history goes on to it.
+    let history = repo
+        .history(&HistoryOptions {
+            limit: 3,
+            until: Some(ids[1].clone()),
+        })
+        .unwrap();
+    assert!(history.rows.iter().any(|r| r.id == ids[1]));
+    // A whole page more was loaded, which here is the rest of the history.
+    assert_eq!(history.rows.len(), 8);
+    assert_eq!(history.loaded, 8);
+    assert!(!history.truncated);
+
+    // A commit no branch reaches: the history stays as asked for.
+    fx.git(&["switch", "-q", "--detach", &ids[0]]);
+    let lost = fx.commit("b.txt", "x\n", "Lost");
+    fx.git(&["switch", "-q", "main"]);
+    let history = Repo::open(fx.path())
+        .unwrap()
+        .history(&HistoryOptions {
+            limit: 3,
+            until: Some(lost),
+        })
+        .unwrap();
+    assert_eq!(history.rows.len(), 3);
+    assert!(history.truncated);
+}
+
+#[test]
+fn straight_lines_come_as_runs() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "1\n", "Root");
+    fx.git(&["switch", "-q", "-c", "feature"]);
+    for i in 0..3 {
+        fx.commit("b.txt", &format!("{i}\n"), &format!("Feature {i}"));
+    }
+    fx.git(&["switch", "-q", "main"]);
+    for i in 0..3 {
+        fx.commit("a.txt", &format!("main {i}\n"), &format!("Main {i}"));
+    }
+    let history = Repo::open(fx.path())
+        .unwrap()
+        .history(&HistoryOptions::default())
+        .unwrap();
+    // The trunk runs straight down column 0 through all its rows: one run, not a segment per row.
+    assert!(
+        history
+            .runs
+            .iter()
+            .any(|run| run.column == 0 && run.thick && run.last > run.first)
+    );
+    for row in &history.rows {
+        assert!(row.graph.segments.iter().all(|s| s.from != s.to));
+    }
+    // Every row but the root still has its lines.
+    let last = history.rows.len() - 1;
+    for row in 0..last {
+        assert!(!history.segments_at(row).is_empty(), "row {row}");
+    }
+    assert!(history.segments_at(last).is_empty());
+}
+
+#[test]
+fn a_shallow_clone_says_so() {
+    let mut fx = Fixture::new();
+    for i in 0..5 {
+        fx.commit("a.txt", &format!("{i}\n"), &format!("Commit {i}"));
+    }
+    let history = Repo::open(fx.path())
+        .unwrap()
+        .history(&HistoryOptions::default())
+        .unwrap();
+    assert!(!history.shallow);
+
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("file://{}", fx.path().display());
+    let clone = dir.path().join("clone");
+    let status = std::process::Command::new("git")
+        .args(["clone", "-q", "--depth", "2", &url])
+        .arg(&clone)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let repo = Repo::open(&clone).unwrap();
+    let history = repo.history(&HistoryOptions::default()).unwrap();
+    assert!(history.shallow);
+    assert_eq!(history.rows.len(), 2);
+    assert!(!history.truncated);
+
+    repo.perform(&oxbow_core::Action::Unshallow {
+        remote: "origin".into(),
+    })
+    .unwrap();
+    let history = Repo::open(&clone).unwrap().history(&HistoryOptions::default()).unwrap();
+    assert!(!history.shallow);
+    assert_eq!(history.rows.len(), 5);
 }

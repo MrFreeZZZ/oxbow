@@ -1,6 +1,6 @@
 // History search: what is typed in the toolbar field, the filters of the bar under it, and the
 // commits that matched. The search itself is `git log`, run by the backend; a SHA is looked up
-// among the loaded commits.
+// among the loaded commits, then in the whole repository.
 
 import { api } from "./api";
 import type { HistoryRow, SearchMode, SearchResult } from "./types";
@@ -156,8 +156,9 @@ class Search {
     return SINCE.find((s) => s.since === this.since)?.git ?? null;
   }
 
-  /** Run the search for the current input and filters. Older answers that arrive late are dropped. */
-  async run(rows: HistoryRow[]) {
+  /** Run the search for the current input and filters. Older answers that arrive late are dropped.
+   *  `truncated`: older commits than `rows` exist, so a SHA is looked up in the repository too. */
+  async run(rows: HistoryRow[], truncated = false) {
     const mine = ++this.#generation;
     const { mode, text } = this.parsed;
     const key = this.key;
@@ -168,7 +169,12 @@ class Search {
     }
     const since = this.sinceArg;
     if (mode === "sha") {
-      const hits = shaHits(rows, text);
+      let hits = shaHits(rows, text);
+      if (!hits.length && truncated) {
+        const id = await api.resolveCommit(text).catch(() => null);
+        if (mine !== this.#generation) return;
+        if (id) hits = [{ id, files: [] }];
+      }
       this.result = { hits, more: false, command: `git show ${text}` };
       this.resultKey = key;
       this.busy = false;

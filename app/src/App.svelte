@@ -20,7 +20,7 @@
   import { ancestors, cherryPickRequest, editMessageRequest, resetModes, resetRequest, revertRequest, undoCommitRequest } from "./lib/commits";
   import type { Operation } from "./lib/types";
   import { menuIcons, type MenuEntry } from "./lib/Menu.svelte";
-  import { fetchRequest, pullRequest, pushRequest, syncBlock, type RemoteContext, type SyncFix } from "./lib/remote";
+  import { fetchRequest, pullRequest, pushRequest, syncBlock, unshallowRequest, type RemoteContext, type SyncFix } from "./lib/remote";
   import WhyPopover from "./lib/WhyPopover.svelte";
   import Welcome from "./lib/Welcome.svelte";
   import { prefs } from "./lib/prefs.svelte";
@@ -64,6 +64,14 @@
   let selected = $state<string | null>(null);
   let error = $state<string | null>(null);
   let loading = $state(false);
+  /** Commits a page of history has: the first load, and each one after it as the list scrolls. */
+  const PAGE = 10_000;
+  /** Commits to load: a page, and more once the list has scrolled on or a commit further down was asked for. */
+  let limit = PAGE;
+  /** Older commits on their way: "more" for the next page, or the commit loaded down to. */
+  let paging = $state<string | null>(null);
+  /** Commits loaded down to that no branch reaches, so History never gets them. */
+  let unreachable = new Set<string>();
   let list = $state<HistoryList>();
   let searchField = $state<SearchField>();
   let findField = $state<FindField>();
@@ -165,8 +173,14 @@
   // Searching the history: the search runs again when the query, its filters or the commits change.
   const searching = $derived(!!history && view === "history" && !showConflicts && search.active);
   const hitMap = $derived(new Map(search.result?.hits.map((h) => [h.id, h.files]) ?? []));
-  /** Matching commits among the loaded ones, in graph order. */
-  const matches = $derived(searching && search.result ? (history?.rows.filter((r) => hitMap.has(r.id)).map((r) => r.id) ?? []) : []);
+  /** Matching commits further down than the loaded history, newest first. */
+  const olderMatches = $derived(
+    searching && search.result && history?.truncated ? search.result.hits.filter((h) => !rowsById.has(h.id) && !unreachable.has(h.id)).map((h) => h.id) : [],
+  );
+  /** Matching commits: the loaded ones in graph order, then the older ones. */
+  const matches = $derived(
+    searching && search.result ? [...(history?.rows.filter((r) => hitMap.has(r.id)).map((r) => r.id) ?? []), ...olderMatches] : [],
+  );
   const found = $derived<Found | null>(
     searching && search.result ? { hits: hitMap, mode: search.parsed.mode, text: search.parsed.text, only: search.only } : null,
   );
@@ -182,7 +196,7 @@
       untrack(() => search.run([]));
       return;
     }
-    searchTimer = setTimeout(() => search.run(untrack(() => history?.rows ?? [])), 220);
+    searchTimer = setTimeout(() => search.run(untrack(() => history?.rows ?? []), untrack(() => !!history?.truncated)), 220);
   });
   // A new search selects its first match; a reload with the same search keeps the selection.
   let selectedFor = "";
@@ -226,8 +240,10 @@
     activity.reset();
     if (view === "compare" || view === "file" || view === "stack" || view === "pull") view = "history";
     try {
+      limit = PAGE;
+      unreachable = new Set();
       const summary = await api.openRepo(path);
-      const next = await api.history();
+      const next = await api.history(limit);
       if (mine !== generation) return;
       repo = summary;
       nav.repo = summary.path;
@@ -643,9 +659,23 @@
   /** Reload after the repository changed, here or outside the app, keeping the selection when it still exists. */
   async function refresh() {
     if (!repo || loading) return;
+    // Older commits are on their way: reload once they are in, with the new limit.
+    if (paging) {
+      refreshAfterPaging = true;
+      return;
+    }
+    const done = refreshNow();
+    refreshing = done;
+    await done;
+    if (refreshing === done) refreshing = null;
+  }
+  let refreshing: Promise<void> | null = null;
+  let refreshAfterPaging = false;
+
+  async function refreshNow() {
     const mine = generation;
     try {
-      const next = await api.history();
+      const next = await api.history(limit);
       // Another repository was opened meanwhile: this answer may come from the old one.
       if (mine !== generation || loading) return;
       history = next;
@@ -656,6 +686,42 @@
     } catch (err) {
       if (mine === generation) error = String(err);
     }
+  }
+
+  /** Load the next page of older commits, or with `until` the history down to that commit.
+   *  Whether `until` is in History now. */
+  async function loadOlder(until: string | null = null): Promise<boolean> {
+    if (!repo || loading || paging || !history?.truncated) return false;
+    const mine = generation;
+    paging = until ?? "more";
+    try {
+      // A reload already on its way would land after this one, with fewer commits.
+      while (refreshing) await refreshing;
+      const next = await api.history(until ? limit : limit + PAGE, until);
+      if (mine !== generation || loading) return false;
+      limit = Math.max(limit, next.loaded);
+      history = next;
+      const found = !!until && next.rows.some((r) => r.id === until);
+      if (until && !found) unreachable.add(until);
+      return found;
+    } catch (err) {
+      if (mine === generation) error = String(err);
+      return false;
+    } finally {
+      if (mine === generation) paging = null;
+      if (refreshAfterPaging) {
+        refreshAfterPaging = false;
+        refresh();
+      }
+    }
+  }
+
+  /** Make sure History has the commit, loading older commits down to it when it is further down
+   *  than what is loaded. Whether History has it. */
+  async function ensureLoaded(id: string): Promise<boolean> {
+    if (rowsById.has(id)) return true;
+    if (!history?.truncated || unreachable.has(id)) return false;
+    return loadOlder(id);
   }
 
   // Background fetch, from Settings › General: keeps ahead/behind counts current. It skips a
@@ -707,17 +773,18 @@
     second = null;
     oplog.compare = null;
     oplog.lost = null;
-    list?.reveal(id);
+    if (rowsById.has(id)) return list?.reveal(id);
+    ensureLoaded(id).then((ok) => ok && selected === id && requestAnimationFrame(() => list?.reveal(id)));
   }
 
   /** A commit from git's reflog: selected in History when it is there, otherwise shown on its
    *  own in the details panel. */
-  function showMove(entry: ReflogEntry) {
+  async function showMove(entry: ReflogEntry) {
     second = null;
     oplog.compare = null;
     view = "history";
     resolving = false;
-    if (rowsById.has(entry.id)) {
+    if (await ensureLoaded(entry.id)) {
       oplog.lost = null;
       selected = entry.id;
       requestAnimationFrame(() => list?.reveal(entry.id));
@@ -761,6 +828,7 @@
     second = null;
     oplog.compare = null;
     oplog.lost = null;
+    if (!rowsById.has(id)) ensureLoaded(id).then((ok) => ok && selected === id && requestAnimationFrame(() => list?.reveal(id)));
     if (view === "history" && !showConflicts) return list?.reveal(id);
     view = "history";
     resolving = false;
@@ -1047,7 +1115,14 @@
         </div>
       </header>
       {#if searching}
-        <SearchBar {history} count={matches.length} copy={(text) => copyText(text, "Copied the command.")} />
+        <SearchBar
+          {history}
+          count={matches.length}
+          older={olderMatches.length}
+          loading={!!paging}
+          onLoadOlder={() => olderMatches.length && loadOlder(olderMatches[olderMatches.length - 1])}
+          copy={(text) => copyText(text, "Copied the command.")}
+        />
       {/if}
       {#if view === "history" && !showConflicts && !searching && !operation && !history.bisect && history.head.branch}
         <StatusLine
@@ -1141,9 +1216,21 @@
       {:else}
       <div class="content">
         <section class="history" aria-label="Commit history">
-          <div class="columns"><span>{#if found?.only}Matching commits · graph hidden{:else}Description{/if}</span>{#if history.truncated}<span class="note">Showing the latest {history.rows.length.toLocaleString()} commits</span>{/if}</div>
+          <div class="columns"><span>{#if found?.only}Matching commits · graph hidden{:else}Description{/if}</span>{#if history.truncated && !found?.only}<span class="note">Latest {history.loaded.toLocaleString()} commits · older ones load as you scroll</span>{/if}</div>
           {#key repo.path}
-            <HistoryList bind:this={list} {history} {selected} onSelect={select} menuFor={commitMenu} {found} second={pair ? second : null} onSecond={pickSecond} />
+            <HistoryList
+              bind:this={list}
+              {history}
+              {selected}
+              onSelect={select}
+              menuFor={commitMenu}
+              {found}
+              second={pair ? second : null}
+              onSecond={pickSecond}
+              {paging}
+              onMore={() => loadOlder()}
+              onUnshallow={history.defaultRemote ? () => run(unshallowRequest(history!.defaultRemote!)) : null}
+            />
           {/key}
         </section>
         <aside class="panel" style:width="{panelWidth}px" aria-label="Commit details">

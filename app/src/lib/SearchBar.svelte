@@ -9,11 +9,20 @@
   let {
     history,
     count,
+    older = 0,
+    loading = false,
+    onLoadOlder,
     copy,
   }: {
     history: History;
-    /** Matching commits among the loaded ones. */
+    /** Matching commits, loaded or not. */
     count: number;
+    /** Of those, the ones further down than the loaded history. */
+    older?: number;
+    /** Older commits are loading. */
+    loading?: boolean;
+    /** Load the history down to the oldest match. */
+    onLoadOlder?: () => void;
     copy: (text: string) => void;
   } = $props();
 
@@ -91,10 +100,28 @@
     {#if search.error}
       <span class="error" role="alert">{search.error}</span>
     {:else}
-      <b>{count.toLocaleString()}{result?.more ? "+" : ""} {count === 1 ? "commit" : "commits"}</b>
-      <span class="sub">{search.only ? "newest first" : count ? "others faded" : "match"}</span>
+      {#if !count && result && !search.busy}
+        <b>No matching commits</b>
+        <span class="sub">searched the whole history</span>
+      {:else}
+        <b>{count.toLocaleString()}{result?.more ? "+" : ""} {count === 1 ? "commit" : "commits"}</b>
+        {#if result?.more || older}
+          <span class="sub">
+            {[result?.more ? `search stops at ${result.hits.length.toLocaleString()}` : "", older ? `${older.toLocaleString()} in older history` : ""].filter(Boolean).join(" · ")}
+          </span>
+        {:else}
+          <span class="sub">{search.only ? "newest first" : count ? "others faded" : "match"}</span>
+        {/if}
+      {/if}
     {/if}
   </span>
+  {#if older && onLoadOlder}
+    <button class="load" onclick={onLoadOlder} disabled={loading} title="Load the history down to the oldest match">
+      {#if loading}<span class="spinner" aria-hidden="true"></span>Loading…{:else}Load Them{/if}
+    </button>
+  {:else if result?.more && !search.author && search.since === "any" && !search.branch}
+    <span class="hint">narrow it with Author, Branches or Date</span>
+  {/if}
   {#if mode !== "author" && mode !== "sha"}
     <button class="pill" class:set={!!search.author} onclick={authorMenu} aria-haspopup="menu">
       Author: <b>{search.author ?? "Anyone"}</b>
@@ -159,6 +186,42 @@
   .sub {
     font-size: 11px;
     color: var(--text2);
+  }
+  .hint {
+    font-size: 11px;
+    color: var(--text2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+  .load {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    height: 26px;
+    padding: 0 12px;
+    border-radius: 13px;
+    background: var(--field);
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .load:disabled {
+    color: var(--text2);
+  }
+  .spinner {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    border: 1.5px solid color-mix(in srgb, var(--text2) 30%, transparent);
+    border-top-color: var(--text2);
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
   .error {
     color: var(--red);

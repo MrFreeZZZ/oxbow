@@ -130,6 +130,86 @@ pub struct Segment {
     pub thick: bool,
 }
 
+/// A straight line down `column` through rows `first..=last`: each of those rows has a segment
+/// from its center straight down to the next row's center. A history with many long-running
+/// branches has a hundred lines or more in every row, so they are sent once, not row by row.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Run {
+    pub column: u16,
+    pub color: u8,
+    pub dashed: bool,
+    pub thick: bool,
+    pub first: RowIndex,
+    pub last: RowIndex,
+}
+
+impl Run {
+    pub fn segment(&self) -> Segment {
+        Segment {
+            from: self.column,
+            to: self.column,
+            color: self.color,
+            dashed: self.dashed,
+            thick: self.thick,
+        }
+    }
+}
+
+/// Take the straight segments that continue over two rows or more out of `rows`, as runs ordered
+/// by their first row. A row's lines are then the runs over it and the segments left in it.
+pub fn take_runs<'a>(rows: impl IntoIterator<Item = &'a mut RowLayout>) -> Vec<Run> {
+    let mut rows: Vec<&mut RowLayout> = rows.into_iter().collect();
+    let mut runs: Vec<Run> = Vec::new();
+    // The run that reached the previous row, per column.
+    let mut open: Vec<Option<usize>> = Vec::new();
+    // The run of each straight segment, row by row in segment order.
+    let mut run_of: Vec<Vec<usize>> = Vec::with_capacity(rows.len());
+    for (row, layout) in rows.iter().enumerate() {
+        let mut mine = Vec::new();
+        for seg in layout.segments.iter().filter(|seg| seg.from == seg.to) {
+            let column = usize::from(seg.from);
+            if open.len() <= column {
+                open.resize(column + 1, None);
+            }
+            let continues = open[column].filter(|&i| {
+                let run = &runs[i];
+                run.last + 1 == row && run.color == seg.color && run.dashed == seg.dashed && run.thick == seg.thick
+            });
+            let i = match continues {
+                Some(i) => {
+                    runs[i].last = row;
+                    i
+                }
+                None => {
+                    runs.push(Run {
+                        column: seg.from,
+                        color: seg.color,
+                        dashed: seg.dashed,
+                        thick: seg.thick,
+                        first: row,
+                        last: row,
+                    });
+                    runs.len() - 1
+                }
+            };
+            open[column] = Some(i);
+            mine.push(i);
+        }
+        run_of.push(mine);
+    }
+    // A line over a single row stays a segment of that row.
+    for (layout, mine) in rows.iter_mut().zip(run_of) {
+        let mut mine = mine.into_iter();
+        layout
+            .segments
+            .retain(|seg| seg.from != seg.to || mine.next().is_some_and(|i| runs[i].first == runs[i].last));
+    }
+    let mut kept = runs.into_iter().filter(|run| run.last > run.first).collect::<Vec<_>>();
+    kept.sort_by_key(|run| (run.first, run.column));
+    kept
+}
+
 #[derive(Debug, Clone)]
 struct Lane {
     /// Row of the commit this lane is heading to; `None` if that commit is not loaded,
@@ -150,6 +230,28 @@ struct Lane {
     /// The line of commits with a fixed color (made on a detached `HEAD`): a commit below it on a
     /// branch continues its branch's line instead, and doesn't take this color.
     fixed: bool,
+}
+
+/// What drawing a lane's line needs, copied for every row without its branch name.
+#[derive(Debug, Clone, Copy)]
+struct Drawn {
+    target: Option<RowIndex>,
+    origin: Option<u16>,
+    color: u8,
+    dashed: bool,
+    trunk: bool,
+}
+
+impl Drawn {
+    fn of(lane: &Lane) -> Drawn {
+        Drawn {
+            target: lane.target,
+            origin: lane.origin,
+            color: lane.color,
+            dashed: lane.dashed,
+            trunk: lane.trunk,
+        }
+    }
 }
 
 /// Stable color for a branch name, never the trunk color.
@@ -268,8 +370,8 @@ fn place(commits: &[GraphCommit], plan: &Plan) -> Vec<RowLayout> {
     let mut rows = Vec::with_capacity(commits.len());
     // Merge lines that join a lane which already exists, per row: (from, to column, color, dashed).
     let mut joins: Vec<Vec<Segment>> = Vec::with_capacity(commits.len());
-    // Lanes as they are after each row.
-    let mut after: Vec<Vec<Option<Lane>>> = Vec::with_capacity(commits.len());
+    // Lanes as they are after each row, as much of them as drawing needs.
+    let mut after: Vec<Vec<Option<Drawn>>> = Vec::with_capacity(commits.len());
 
     for (row, commit) in commits.iter().enumerate() {
         let trunk_column = plan.trunk_column_at(row);
@@ -425,7 +527,7 @@ fn place(commits: &[GraphCommit], plan: &Plan) -> Vec<RowLayout> {
         }
 
         trim(&mut lanes);
-        after.push(lanes.clone());
+        after.push(lanes.iter().map(|l| l.as_ref().map(Drawn::of)).collect());
         joins.push(row_joins);
         // A curve leaves its origin only in the row that created the lane.
         for lane in lanes.iter_mut().flatten() {
@@ -785,6 +887,46 @@ mod tests {
             let c = color_for_name(name);
             assert_eq!(c, color_for_name(name));
             assert!((1..=branch_colors()).contains(&c));
+        }
+    }
+
+    #[test]
+    fn runs_and_the_segments_left_draw_the_same_lines() {
+        // Two topic lines run beside the trunk for a while, then merge back.
+        // 0 merge (main) parents 1, 4
+        // 1 main -> 2;  2 main -> 3;  3 main -> 7
+        // 4 topic -> 5; 5 topic -> 6; 6 topic -> 7
+        // 7 root
+        let mut merge = commit(&[1, 4], true);
+        merge.merged_name = Some("topic".into());
+        let commits = [
+            merge,
+            commit(&[2], true),
+            commit(&[3], true),
+            commit(&[7], true),
+            commit(&[5], false),
+            commit(&[6], false),
+            commit(&[7], false),
+            commit(&[], true),
+        ];
+        let full = layout(&commits, None).rows;
+        let mut rows = full.clone();
+        let runs = take_runs(rows.iter_mut());
+        assert!(!runs.is_empty());
+        assert!(runs.iter().all(|run| run.last > run.first));
+        for (row, layout) in rows.iter().enumerate() {
+            let key = |s: &Segment| (s.from, s.to, s.color, s.dashed, s.thick);
+            let mut drawn: Vec<_> = runs
+                .iter()
+                .filter(|run| run.first <= row && row <= run.last)
+                .map(Run::segment)
+                .chain(layout.segments.iter().cloned())
+                .map(|s| key(&s))
+                .collect();
+            let mut want: Vec<_> = full[row].segments.iter().map(key).collect();
+            drawn.sort();
+            want.sort();
+            assert_eq!(drawn, want, "row {row}");
         }
     }
 }

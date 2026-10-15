@@ -42,7 +42,8 @@
       // The selected commit isn't a match: go to the nearest one in that direction.
       const index = selected ? rows.findIndex((r) => r.id === selected) : -1;
       const order = new Map(rows.map((r, i) => [r.id, i]));
-      const below = matches.findIndex((id) => (order.get(id) ?? 0) > index);
+      // Matches further down than the loaded history come after every loaded row.
+      const below = matches.findIndex((id) => (order.get(id) ?? Infinity) > index);
       next = by === 1 ? (below < 0 ? 0 : below) : below <= 0 ? matches.length - 1 : below - 1;
     }
     onGo(matches[next]);

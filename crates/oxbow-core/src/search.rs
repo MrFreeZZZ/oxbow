@@ -144,6 +144,18 @@ impl Repo {
         hits.truncate(LIMIT);
         Ok(SearchResult { hits, more, command })
     }
+
+    /// The full id of the commit whose id starts with `prefix` (4 to 40 hex digits), anywhere in
+    /// the repository; `None` when no commit or more than one does.
+    pub fn resolve_commit(&self, prefix: &str) -> Option<String> {
+        let prefix = prefix.trim();
+        if !(4..=40).contains(&prefix.len()) || !prefix.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        let repo = self.local();
+        let id = repo.rev_parse_single(format!("{prefix}^{{commit}}").as_str()).ok()?;
+        Some(id.detach().to_string())
+    }
 }
 
 fn parse_log(out: &str) -> Vec<SearchHit> {
