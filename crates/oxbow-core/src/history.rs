@@ -8,6 +8,7 @@ use serde::Serialize;
 
 use crate::bisect::Bisect;
 use crate::error::{Error, Result};
+use crate::fetched::RemoteFetch;
 use crate::graph::{self, GraphCommit, LeadIn, RowLayout};
 use crate::operation::{Operation, OperationKind};
 use crate::remote::Tracking;
@@ -51,6 +52,8 @@ pub struct History {
     /// Tags the default remote does not have yet, as far as Oxbow knows.
     pub local_tags: Vec<String>,
     pub remotes: Vec<String>,
+    /// When each remote was last fetched, in the order of `remotes`.
+    pub fetched: Vec<RemoteFetch>,
     /// Upstream of the checked-out branch, with ahead/behind counts.
     pub tracking: Option<Tracking>,
     /// Remote a branch without an upstream is published to.
@@ -424,6 +427,7 @@ impl Repo {
             bisect,
             worktrees,
             local_tags: self.local_tags(&refs),
+            fetched: self.fetch_times_of(&remotes, &refs),
             refs,
             // A failing `git for-each-ref` only hides the ahead/behind counts.
             tracking: self.tracking().ok().flatten(),
