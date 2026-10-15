@@ -1,5 +1,5 @@
 //! Load a repository's history and print how long it took:
-//! `cargo run --release -p oxbow-core --example history -- <path>`
+//! `cargo run --release -p oxbow-core --example history -- <path>`; `LIMIT=30000` loads more commits.
 
 use std::time::Instant;
 
@@ -9,7 +9,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = std::env::args().nth(1).unwrap_or_else(|| ".".into());
     let start = Instant::now();
     let repo = Repo::open(&path)?;
-    let history = repo.history(&HistoryOptions::default())?;
+    let limit = std::env::var("LIMIT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(oxbow_core::PAGE);
+    let history = repo.history(&HistoryOptions { limit, until: None })?;
     let elapsed = start.elapsed();
     let lanes = history.rows.iter().map(|r| r.graph.width).max().unwrap_or(0) + 1;
     println!(
@@ -21,9 +25,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         history.refs.len(),
         lanes,
     );
-    for row in history.rows.iter().take(15) {
+    for (i, row) in history.rows.iter().enumerate().take(15) {
         let mut graph = vec![' '; usize::from(row.graph.width) + 1];
-        for seg in &row.graph.segments {
+        for seg in &history.segments_at(i) {
             graph[usize::from(seg.from)] = '│';
         }
         graph[usize::from(row.graph.column)] = if row.parents.len() > 1 { '◉' } else { '●' };

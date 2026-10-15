@@ -136,7 +136,25 @@ export interface History {
   defaultRemote: string | null;
   stashes: StashInfo[];
   rows: HistoryRow[];
+  /** Straight lines over two rows or more, ordered by their first row. A row's own `segments`
+   *  leave them out: see `segmentsAt` in graph.ts. */
+  runs: Run[];
+  /** More commits exist beyond `rows`. */
   truncated: boolean;
+  /** Commits loaded, stashes aside: the limit that loads the same history again. */
+  loaded: number;
+  /** A shallow clone: its history stops where the fetched part ends. */
+  shallow: boolean;
+}
+
+/** A straight line down `column`, from row `first` to the row after `last`. */
+export interface Run {
+  column: number;
+  color: number;
+  dashed: boolean;
+  thick: boolean;
+  first: number;
+  last: number;
 }
 
 export interface Person {
@@ -412,6 +430,7 @@ export type Action =
   | { kind: "pushTags"; remote: string; names: string[] }
   | { kind: "deleteTag"; name: string; remote: string | null }
   | { kind: "fetchTags"; remote: string }
+  | { kind: "unshallow"; remote: string }
   /** Back to before step `id` of the Operation Log, or right after it with `after`. */
   | { kind: "restore"; id: string; after: boolean }
   | { kind: "clearOperationLog" }

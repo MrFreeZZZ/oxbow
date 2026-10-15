@@ -66,7 +66,8 @@ export const api = {
   cloneRepo: (options: CloneOptions) => invoke<string>("clone_repo", { options }),
   planNewRepo: (options: NewRepoOptions) => invoke<NewRepoPlan>("plan_new_repo", { options }),
   createRepo: (options: NewRepoOptions) => invoke<string>("create_repo", { options }),
-  history: () => invoke<History>("history"),
+  /** The latest `limit` commits, or more to reach `until`. */
+  history: (limit: number, until: string | null = null) => invoke<History>("history", { limit, until }),
   commitDetail: (id: string) => invoke<CommitDetail>("commit_detail", { id }),
   /** `full`: past the line limit in Settings (Show Diff Anyway). */
   commitDiff: (id: string, path: string | null, wholeFile: boolean, full = false) =>
@@ -74,6 +75,8 @@ export const api = {
   compare: (base: string, target: string, mode: CompareMode) => invoke<Comparison>("compare", { base, target, mode }),
   compareDiff: (from: string, to: string, path: string | null, wholeFile: boolean, full = false) =>
     invoke<FileDiff[]>("compare_diff", { from, to, path, wholeFile, full }),
+  /** The full id of the commit a SHA prefix names, anywhere in the repository. */
+  resolveCommit: (prefix: string) => invoke<string | null>("resolve_commit", { prefix }),
   fileHistory: (path: string, rev: string | null) => invoke<FileHistory>("file_history", { path, rev }),
   blame: (path: string, rev: string) => invoke<Blame>("blame", { path, rev }),
   lineHistory: (path: string, line: number, rev: string) => invoke<string[]>("line_history", { path, line, rev }),

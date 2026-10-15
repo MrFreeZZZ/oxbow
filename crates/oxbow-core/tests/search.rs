@@ -78,3 +78,19 @@ fn branch_filter_limits_the_search() {
     assert_eq!(result.hits.iter().map(|h| h.id.clone()).collect::<Vec<_>>(), [main]);
     assert_eq!(result.command, "git log main --oneline -i -F --grep=login");
 }
+
+#[test]
+fn a_sha_prefix_resolves_anywhere_in_the_repository() {
+    let mut fx = Fixture::new();
+    let root = fx.commit("a.txt", "1\n", "Root");
+    fx.commit("a.txt", "2\n", "Second");
+    let repo = Repo::open(fx.path()).unwrap();
+    assert_eq!(repo.resolve_commit(&root[..7]).as_deref(), Some(root.as_str()));
+    assert_eq!(
+        repo.resolve_commit(&root.to_uppercase()[..10]).as_deref(),
+        Some(root.as_str())
+    );
+    assert_eq!(repo.resolve_commit("main"), None);
+    assert_eq!(repo.resolve_commit("abc"), None);
+    assert_eq!(repo.resolve_commit("0000000"), None);
+}

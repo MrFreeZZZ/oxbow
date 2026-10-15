@@ -46,7 +46,7 @@ pub use edit::ResetMode;
 pub use error::{Error, Result};
 pub use fetched::RemoteFetch;
 pub use filehistory::{Blame, BlameCommit, BlameLine, FileCommit, FileHistory};
-pub use history::{History, HistoryOptions, HistoryRow, Label, WORKTREE_ID, WorktreeSummary};
+pub use history::{History, HistoryOptions, HistoryRow, Label, PAGE, WORKTREE_ID, WorktreeSummary};
 pub use lfs::{LfsChange, LfsPattern, LfsPointer, LfsStatus};
 pub use notkept::{NotKept, PushedCommit, SizedFile};
 pub use operation::{Chunk, ConflictFile, ConflictSide, MergeMethod, MergePreview, Operation, OperationKind, Pick};

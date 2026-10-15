@@ -818,6 +818,7 @@ impl Repo {
             Action::PushTags { remote, .. } => ("tag", format!("Push tags to {remote}")),
             Action::DeleteTag { name, .. } => ("tag", format!("Delete tag {name}")),
             Action::FetchTags { remote } => ("fetch", format!("Fetch tags from {remote}")),
+            Action::Unshallow { remote } => ("fetch", format!("Fetch the full history from {remote}")),
             Action::Restore { id, after } => {
                 let title = self
                     .operation_log()

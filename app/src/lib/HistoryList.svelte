@@ -7,6 +7,7 @@
   import { prefs } from "./prefs.svelte";
   import { split, type Found } from "./search.svelte";
   import { bisectPills, bisectRange, type BisectPill } from "./bisect";
+  import { segmentsAt } from "./graph";
 
   let {
     history,
@@ -16,6 +17,9 @@
     found = null,
     second = null,
     onSecond,
+    paging = null,
+    onMore,
+    onUnshallow = null,
   }: {
     history: History;
     selected: string | null;
@@ -28,6 +32,13 @@
     second?: string | null;
     /** ⌘-click (Ctrl-click off the Mac) on a commit. */
     onSecond?: (id: string) => void;
+    /** Older commits are on their way: "more" for the next page, or the id of a commit the
+     *  history is loading down to. */
+    paging?: string | null;
+    /** The list scrolled near the end of a history that has more commits. */
+    onMore?: () => void;
+    /** Fetch Full History, at the end of a shallow clone's history. */
+    onUnshallow?: (() => void) | null;
   } = $props();
 
   // Geometry from the design: 44px two-line rows, lanes 18px apart, trunk lane centered 14px in.
@@ -56,32 +67,32 @@
   // When the layout changes, e.g. a checkout moves a branch to the left column, lines and dots
   // glide from their old columns to the new ones instead of jumping.
   const MOVE_MS = 220;
-  /** Layout of each row and the lead-ins before the change, while it animates. */
-  let from = $state<{ rows: Map<string, RowLayout>; leadIns: Map<string, number> } | null>(null);
+  /** Layout and row of each commit and the lead-ins before the change, while it animates. */
+  let from = $state<{ history: History; rows: Map<string, { graph: RowLayout; index: number }>; leadIns: Map<string, number> } | null>(null);
   let progress = $state(1);
   let frame = 0;
-  let shownRows: HistoryRow[] | null = null;
+  let shown: History | null = null;
   let shownLeadIns = new Map<string, number>();
 
   $effect.pre(() => {
     const next = history;
     untrack(() => {
       const leadIns = new Map(next.leadIns.map((l) => [next.rows[l.row]?.id ?? "", l.column]));
-      if (shownRows && shownRows !== next.rows) animate(shownRows, shownLeadIns, next.rows);
-      shownRows = next.rows;
+      if (shown && shown.rows !== next.rows) animate(shown, shownLeadIns, next.rows);
+      shown = next;
       shownLeadIns = leadIns;
     });
   });
 
-  function animate(old: HistoryRow[], oldLeadIns: Map<string, number>, next: HistoryRow[]) {
-    const rows = new Map(old.map((r) => [r.id, r.graph]));
+  function animate(old: History, oldLeadIns: Map<string, number>, next: HistoryRow[]) {
+    const rows = new Map(old.rows.map((r, index) => [r.id, { graph: r.graph, index }]));
     const moved = next.some((r) => {
-      const before = rows.get(r.id);
+      const before = rows.get(r.id)?.graph;
       return before && (before.column !== r.graph.column || before.width !== r.graph.width);
     });
     if (!moved || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     cancelAnimationFrame(frame);
-    from = { rows, leadIns: oldLeadIns };
+    from = { history: old, rows, leadIns: oldLeadIns };
     progress = 0;
     const start = performance.now();
     const step = (now: number) => {
@@ -97,16 +108,17 @@
   const mix = (a: number, b: number) => a + (b - a) * progress;
 
   function columnOf(row: HistoryRow): number {
-    const old = from?.rows.get(row.id);
+    const old = from?.rows.get(row.id)?.graph;
     return old ? mix(old.column, row.graph.column) : row.graph.column;
   }
 
-  /** The row's lines, on their way from the old columns; new ones fade in. */
-  function segmentsOf(row: HistoryRow): (Segment & { opacity: number })[] {
+  /** The lines of the row at `index`, on their way from the old columns; new ones fade in. */
+  function segmentsOf(row: HistoryRow, index: number): (Segment & { opacity: number })[] {
+    const segments = segmentsAt(history, index);
     const old = from?.rows.get(row.id);
-    if (!old) return row.graph.segments.map((seg) => ({ ...seg, opacity: 1 }));
-    const pool = [...old.segments];
-    return row.graph.segments.map((seg) => {
+    if (!old || !from) return segments.map((seg) => ({ ...seg, opacity: 1 }));
+    const pool = segmentsAt(from.history, old.index);
+    return segments.map((seg) => {
       const i = pool.findIndex((o) => o.color === seg.color && o.dashed === seg.dashed && o.thick === seg.thick);
       if (i < 0) return { ...seg, opacity: progress };
       const [o] = pool.splice(i, 1);
@@ -135,6 +147,16 @@
   const visible = $derived(rows.slice(first, last).map((row, k) => ({ row, index: first + k })));
 
   const x = (column: number) => PAD_LEFT + FIRST_LANE + LANE * column;
+
+  // The end of the list: older commits load as it comes into view, or a shallow clone says why
+  // the history stops. Only Matches lists matches alone: the search bar loads theirs.
+  const loadingOlder = $derived(!only && (history.truncated || !!paging));
+  const shallowEnd = $derived(!only && !loadingOlder && history.shallow && !!onUnshallow);
+  // The shallow clone's card leaves room under it for the Top button.
+  const FOOT = $derived(loadingOlder ? ROW : shallowEnd ? 130 : 0);
+  $effect(() => {
+    if (loadingOlder && !paging && last >= rows.length - OVERSCAN) untrack(() => onMore?.());
+  });
 
   // Lines: 3px for the production branch, 2px for the others. Lanes sit on whole pixels, so a
   // 2px line covers two pixels exactly; a 3px one would smear over four on a 1x screen and moves
@@ -206,7 +228,7 @@
 
   function textStart(row: HistoryRow): number {
     if (only) return 30;
-    const old = from?.rows.get(row.id);
+    const old = from?.rows.get(row.id)?.graph;
     return FIRST_LANE + LANE * (old ? mix(old.width, row.graph.width) : row.graph.width) + 18;
   }
 
@@ -268,7 +290,7 @@
     role="listbox"
     aria-label="Commits"
   >
-    <div class="canvas" style:height="{PAD_TOP * 2 + rows.length * ROW}px">
+    <div class="canvas" style:height="{PAD_TOP * 2 + rows.length * ROW + FOOT}px">
       {#each visible as { row, index } (row.id)}
         {@const isSelected = row.id === selected}
         {@const picked = isSelected || row.id === second}
@@ -359,7 +381,7 @@
           {/if}
         {/each}
         {#each drawn as { row, index } (row.id)}
-          {#each segmentsOf(row) as seg, k (k)}
+          {#each segmentsOf(row, index) as seg, k (k)}
             <path
               d={segmentPath(index, seg.from, seg.to)}
               stroke={lane(seg.color)}
@@ -384,6 +406,26 @@
           </span>
         </span>
       {/each}
+      {/if}
+
+      {#if loadingOlder}
+        <div class="foot" style:top="{PAD_TOP + rows.length * ROW}px" style:height="{ROW}px" style:padding-left="{x(0) + 4}px" role="status">
+          <span class="spinner" aria-hidden="true"></span>
+          {#if paging && paging !== "more"}
+            Loading history down to <code>{paging.slice(0, 7)}</code>…
+          {:else}
+            Loading older commits…
+          {/if}
+        </div>
+      {:else if shallowEnd}
+        <div class="end" style:top="{PAD_TOP + rows.length * ROW + 8}px">
+          <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.3" /><path d="M8 7.2v4M8 4.9v.1" /></svg>
+          <span class="end-text">
+            History ends here
+            <span class="sub">This is a shallow clone: it has only the latest {history.loaded.toLocaleString()} {history.loaded === 1 ? "commit" : "commits"}.</span>
+          </span>
+          <button class="small-button" onclick={() => onUnshallow?.()}>Fetch Full History…</button>
+        </div>
       {/if}
     </div>
   </div>
@@ -430,6 +472,76 @@
   }
   .top span {
     color: var(--text);
+  }
+  .foot {
+    position: absolute;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text2);
+  }
+  .foot code {
+    font-family: var(--mono);
+    color: var(--text);
+  }
+  .spinner {
+    width: 11px;
+    height: 11px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    border: 1.5px solid color-mix(in srgb, var(--text2) 30%, transparent);
+    border-top-color: var(--text2);
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  .end {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: var(--glass);
+    border: 0.5px solid var(--glass-border);
+    font-size: 12.5px;
+  }
+  .end .icon {
+    width: 15px;
+    height: 15px;
+    flex-shrink: 0;
+    color: var(--text2);
+  }
+  .end-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex-grow: 1;
+    font-weight: 500;
+  }
+  .end-text .sub {
+    font-weight: 400;
+    font-size: 12px;
+    color: var(--text2);
+    white-space: normal;
+  }
+  .small-button {
+    flex-shrink: 0;
+    height: 26px;
+    padding: 0 12px;
+    border-radius: 13px;
+    background: var(--field);
+    font-size: 12px;
+    font-weight: 500;
   }
   .viewport {
     position: relative;

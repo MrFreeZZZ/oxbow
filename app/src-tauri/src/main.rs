@@ -567,7 +567,12 @@ async fn create_repo(options: oxbow_core::NewRepoOptions) -> CommandResult<Strin
 }
 
 #[tauri::command]
-async fn history(window: tauri::WebviewWindow, session: State<'_, Session>) -> CommandResult<History> {
+async fn history(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    limit: Option<usize>,
+    until: Option<String>,
+) -> CommandResult<History> {
     let repo = current(&session, &window)?;
     // Open the repository afresh: the built-in engine reads .git/config once, so a remote that
     // Publish or Settings just added would stay unseen.
@@ -582,7 +587,11 @@ async fn history(window: tauri::WebviewWindow, session: State<'_, Session>) -> C
     }
     let mut repo = fresh;
     repo.set_diff_options(*session.diff.lock().expect("session lock"));
-    blocking(move || repo.history(&HistoryOptions::default())).await
+    let options = HistoryOptions {
+        limit: limit.unwrap_or(oxbow_core::PAGE),
+        until,
+    };
+    blocking(move || repo.history(&options)).await
 }
 
 #[tauri::command]
@@ -1190,6 +1199,16 @@ async fn search(
     blocking(move || repo.search(&query)).await
 }
 
+#[tauri::command]
+async fn resolve_commit(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    prefix: String,
+) -> CommandResult<Option<String>> {
+    let repo = current(&session, &window)?;
+    blocking(move || Ok(repo.resolve_commit(&prefix))).await
+}
+
 /// Which files the repository keeps in Git LFS, and whether git-lfs is installed.
 #[tauri::command]
 async fn lfs_status(window: tauri::WebviewWindow, session: State<'_, Session>) -> CommandResult<oxbow_core::LfsStatus> {
@@ -1617,6 +1636,7 @@ fn main() {
             monospace_fonts,
             refresh_remote_tags,
             search,
+            resolve_commit,
             settings_text,
             save_settings_text,
             settings_location,

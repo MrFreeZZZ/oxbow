@@ -146,6 +146,27 @@ export function fetchRequest(ctx: RemoteContext): Request {
   };
 }
 
+/** Fetch what a shallow clone left out, so History reaches the first commit. */
+export function unshallowRequest(remote: string): Request {
+  const action: Action = { kind: "unshallow", remote };
+  const done = `Fetched the full history of ${remote}.`;
+  return {
+    title: `Fetch the full history from ${remote}?`,
+    body: [
+      "This is a shallow clone: it has only the latest commits. Downloads the older commits from ",
+      { code: remote },
+      ", so History, search and blame reach back to the first commit. On a big repository this takes a while.",
+    ],
+    icon: "fetch",
+    button: "Fetch Full History",
+    note: "Your branches and files do not change.",
+    status: `Fetching the full history from ${remote}…`,
+    done,
+    recover: (failure) => remoteTrouble(failure, action, "Fetching", remote, done),
+    action,
+  };
+}
+
 /** How Pull goes, from Settings › Git: rebase is the default. */
 export interface PullSetup {
   mode: "rebase" | "merge" | "fastForward";
@@ -541,7 +562,7 @@ function networkOrAuth(failure: Failure, action: Action, verb: string, ctx: Remo
 
 /** "Fetch", "Pull" or "Push", for "Fetch from origin connects over SSH…". */
 function verbNoun(action: Action): string {
-  if (action.kind === "fetch" || action.kind === "fetchTags") return "Fetch";
+  if (action.kind === "fetch" || action.kind === "fetchTags" || action.kind === "unshallow") return "Fetch";
   if (action.kind === "pull") return "Pull";
   return "Push";
 }
