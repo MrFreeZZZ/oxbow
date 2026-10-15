@@ -1,11 +1,26 @@
 <script lang="ts">
   // The Activity popover under Fetch / Pull / Push: the fetch that runs now with its progress,
-  // Output and Stop; a Push or Pull waiting for it; and what ran lately, with Fix… and Try Again
-  // on a fetch that failed.
+  // Output and Stop; a Push or Pull waiting for it; and under Done what ran lately with its git
+  // commands, with Fix… and Try Again on a fetch that failed.
 
   import { activity, type ActivityItem } from "./activity.svelte";
   import { relativeTime } from "./format";
+  import { actionIcons } from "./icons";
   import { prefs } from "./prefs.svelte";
+  import { tokens } from "./term";
+
+  /** Commands a row shows before Show All. */
+  const FEW = 2;
+
+  /** Rows whose commands are all shown. */
+  let unfolded = $state<Set<number>>(new Set());
+  let copiedId = $state<number | null>(null);
+
+  async function copy(item: ActivityItem) {
+    await navigator.clipboard.writeText((item.commands ?? []).join("\n")).catch(() => {});
+    copiedId = item.id;
+    setTimeout(() => copiedId === item.id && (copiedId = null), 1500);
+  }
 
   const OUTPUT: Record<string, string> = {
     out: "var(--term-out)",
@@ -41,6 +56,7 @@
     if (item.state === "failed" || item.fixed) return item.failure?.ssh || item.failure?.kind === "auth" ? ICONS.key : ICONS.fetch;
     if (item.state === "stopped") return ICONS.stopped;
     if (item.state === "done" && item.kind === "fetch") return ICONS.done;
+    if (item.kind === "action") return item.icon ? actionIcons[item.icon] : ICONS.done;
     return ICONS[item.kind];
   }
 
@@ -97,13 +113,27 @@
           </span>
         </div>
       {/each}
+      {#if activity.recent.length}<div class="section">Done</div>{/if}
       {#each activity.recent as item (item.id)}
         {@const open = item.state === "failed" && !item.fixed && activity.problem?.id === item.id}
+        {@const commands = item.commands ?? []}
+        {@const shown = unfolded.has(item.id) ? commands : commands.slice(0, FEW)}
         <div class="row" class:live={open}>
           <span class="tile" class:warn={open}><svg class="icon" viewBox="0 0 16 16"><path d={iconOf(item)} /></svg></span>
           <span class="words">
             <span class="line"><span class="title">{item.title}</span><span class="time">{relativeTime(Math.floor(item.time / 1000))}</span></span>
-            <span class="detail" class:bad={open}>{item.sub}</span>
+            {#if item.sub}<span class="detail" class:bad={open}>{item.sub}</span>{/if}
+            {#if commands.length && !open}
+              <div class="cmds mono selectable" aria-label="Git commands">
+                <button class="copy" title="Copy the commands" onclick={() => copy(item)}>{copiedId === item.id ? "Copied" : "Copy"}</button>
+                {#each shown as command, i (i)}
+                  <div class="cmd"><span class="dollar">$</span> {#each tokens(command) as token, k (k)}<span style:color={token.color} class:bold={token.bold}>{token.text}</span>{" "}{/each}</div>
+                {/each}
+                {#if commands.length > shown.length}
+                  <button class="more" onclick={() => (unfolded = new Set([...unfolded, item.id]))}>and {commands.length - shown.length} more</button>
+                {/if}
+              </div>
+            {/if}
             {#if open}
               <span class="buttons">
                 <button class="primary" onclick={() => fix(item)}>{fixable(item) ? "Fix…" : "Details…"}</button>
@@ -114,7 +144,7 @@
         </div>
       {/each}
       {#if !activity.running && !activity.queued.length && !activity.recent.length}
-        <div class="empty">Nothing ran yet. Fetches, pulls and pushes show up here.</div>
+        <div class="empty">Nothing ran yet. Every action shows up here with the git commands it ran.</div>
       {/if}
     </div>
     <div class="foot">
@@ -238,6 +268,59 @@
   }
   .detail.bad {
     color: var(--orange);
+  }
+  .section {
+    padding: 8px 10px 2px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text2);
+  }
+  .cmds {
+    position: relative;
+    margin-top: 6px;
+    padding: 6px 9px;
+    border-radius: 9px;
+    background: var(--term);
+    border: 0.5px solid var(--term-border);
+    color: var(--term-text);
+    font-size: 11px;
+    line-height: 1.45;
+  }
+  .cmd {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+  .dollar {
+    color: var(--term-dim);
+  }
+  .bold {
+    font-weight: 700;
+  }
+  .copy {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    padding: 1px 7px;
+    border-radius: 6px;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 10.5px;
+    color: var(--term-text);
+    background: var(--term-button);
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+  .cmds:hover .copy,
+  .copy:focus-visible {
+    opacity: 1;
+  }
+  .more {
+    color: var(--term-comment);
+    font-size: 11px;
+    font-family: inherit;
   }
   .track {
     margin-top: 6px;

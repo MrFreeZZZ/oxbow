@@ -228,6 +228,7 @@
       body: ["Adds the changes in ", ...name(files), " to the next commit on ", branchPart, "."],
       icon: "stage",
       button: "Stage",
+      past: `Staged ${count(files)}`,
       action: { kind: "stage", paths: files.map((f) => f.path) },
     });
   }
@@ -238,6 +239,7 @@
       body: ["Takes ", ...name(files), " out of the next commit. Your edits stay in the files."],
       icon: "unstage",
       button: "Unstage",
+      past: `Unstaged ${count(files)}`,
       action: { kind: "unstage", paths: files.map((f) => f.path) },
     });
   }
@@ -272,9 +274,10 @@
 
   function hunkAction(kind: "stageHunk" | "unstageHunk" | "discardHunk", path: string, hunk: Hunk) {
     const where: Part[] = [`${lines(hunk)} of `, { code: path }];
+    const file = path.slice(path.lastIndexOf("/") + 1);
     const request: Record<typeof kind, Omit<Request, "action">> = {
-      stageHunk: { title: "Stage this hunk?", body: ["Adds ", ...where, " to the next commit. The rest of the file stays unstaged."], icon: "stage", button: "Stage Hunk" },
-      unstageHunk: { title: "Unstage this hunk?", body: ["Takes ", ...where, " out of the next commit. Your edits stay in the file."], icon: "unstage", button: "Unstage Hunk" },
+      stageHunk: { title: "Stage this hunk?", body: ["Adds ", ...where, " to the next commit. The rest of the file stays unstaged."], icon: "stage", button: "Stage Hunk", past: `Staged ${lines(hunk)} of ${file}` },
+      unstageHunk: { title: "Unstage this hunk?", body: ["Takes ", ...where, " out of the next commit. Your edits stay in the file."], icon: "unstage", button: "Unstage Hunk", past: `Unstaged ${lines(hunk)} of ${file}` },
       discardHunk: {
         title: "Discard this hunk?",
         body: ["Throws away your edits in ", ...where, ". The rest of the file stays as it is."],
@@ -282,7 +285,7 @@
         button: "Discard",
         danger: true,
         note: "Undo brings it back, from the toast or the Operation Log.",
-        done: `Discarded ${lines(hunk)} of ${path.slice(path.lastIndexOf("/") + 1)}.`,
+        done: `Discarded ${lines(hunk)} of ${file}.`,
       },
     };
     act({ ...request[kind], action: { kind, path, header: hunk.header, check: hunk.check ?? "" } });
@@ -370,6 +373,7 @@
       button: draft.amend ? "Amend" : "Commit",
       note: pushed ? "The last commit is already pushed. After amending, pushing will need --force-with-lease." : undefined,
       status: `Committing to ${where}…`,
+      past: draft.amend ? `Amended the last commit on ${where}` : `Committed ${files} ${files === 1 ? "file" : "files"} to ${where}`,
       recover: (failure) => commitRecovery(failure, action, summary, where),
       action,
     });

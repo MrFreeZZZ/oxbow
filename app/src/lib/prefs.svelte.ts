@@ -14,7 +14,7 @@ export const defaults = {
   /** Where Clone and New Repository put repositories; empty: ~/Developer or the like. */
   "oxbow.clone.folder": "",
   "oxbow.confirm.enabled": true,
-  "oxbow.confirm.scope": "all" as "all" | "risky",
+  "oxbow.confirm.scope": "risky" as "all" | "risky",
   "oxbow.confirm.showCommand": true,
   "oxbow.push.confirmForce": true,
   /** Days the Operation Log keeps its steps, so they can be undone. */

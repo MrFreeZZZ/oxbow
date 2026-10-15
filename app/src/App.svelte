@@ -299,6 +299,7 @@
     return ok;
   }
   confirm.runner = (request) => void run(request);
+  confirm.onRan = (ran) => activity.ran(ran);
 
   /** ⌘Z: back to before the newest step of the Operation Log. */
   async function undoLatest() {
@@ -605,14 +606,15 @@
         : undefined;
     const request = kind === "pull" ? pullRequest(remoteCtx, setup) : pushRequest(remoteCtx);
     const opBefore = history?.operation ?? null;
-    const ok = await confirm.run(request);
+    await confirm.run(request);
     // Even a failed pull or push may have fetched, so the counts are worth reloading either way.
     await refresh();
     checkRemoteTags();
     openConflicts(opBefore);
-    if (ok) activity.note(kind, request.title.replace(/^Push /, "Pushed ").replace(/^Publish /, "Published ").replace(/^Pull /, "Pulled ").replace(/\?$/, ""), request.done ?? "");
   }
-  activity.startQueued = (kind) => void sync(kind);
+  activity.startQueued = (kind) => {
+    if (kind !== "action") void sync(kind);
+  };
 
   /** What Fetch fetches: the one remote, or all of them, as its sheet says. */
   function fetchTarget(): { remote: string | null; label: string } | null {

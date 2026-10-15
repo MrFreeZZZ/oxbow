@@ -321,11 +321,11 @@
         },
         {
           title: "Confirmations",
-          foot: "Background fetch and read-only actions such as Copy never ask.",
+          foot: "With Risky only, the rest runs at once, and Activity (right-click Fetch) lists its git commands. Background fetch and read-only actions such as Copy never ask.",
           rows: [
             prefRow("oxbow.confirm.enabled", "Confirm actions before running them", "switch", { sub: "Describes the action with branch and commit names before anything changes" }),
             prefRow("oxbow.confirm.scope", "Ask for", "seg", {
-              sub: "Risky: reset, drop, discard, delete, rebase, abort, force push",
+              sub: "Risky: discard, reset, delete, abort, rewriting commits, force push",
               off: confirmOff,
               options: () => [
                 { value: "all", label: "All actions" },

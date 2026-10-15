@@ -91,10 +91,11 @@
     }
   }
 
-  /** The footer's note; "Undo brings it back" isn't true of what the gaps above name. */
   /** Why the action button is grey, beside it, unless a field already says so under itself. */
   const blocked = $derived(request?.invalid && !request.fields?.some((f) => f.error === request.invalid) ? request.invalid : null);
 
+  /** How to get it back, above the commands; "Undo brings it back" isn't true of what the gaps
+   *  above it name. */
   const note = $derived.by(() => {
     const text = request?.note ?? "";
     const lost = confirm.notKept.some((g) => g.kind !== "pushed" && !(g.kind === "worktree" && !g.removed));
@@ -179,7 +180,8 @@
 {/snippet}
 
 {#if request && shown}
-  <div class="dim">
+  <!-- Run without asking: out of sight unless it takes a while, so a quick stage never flashes. -->
+  <div class="dim" class:quiet={confirm.quiet && running}>
     <div class="sheet" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-busy={running}>
       <div class="top">
         <span
@@ -313,6 +315,17 @@
         </div>
       {/if}
 
+      {#if note && confirm.phase === "ask"}
+        <div class="back">
+          {#if /\bUndo\b|\bback\b/.test(note)}
+            <svg class="icon" viewBox="0 0 16 16"><path d={icons.undo} /></svg>
+          {:else}
+            <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.75" /><path d="M8 7.2v3.6" /><path d="M8 5.2v.01" /></svg>
+          {/if}
+          <span>{note}</span>
+        </div>
+      {/if}
+
       <!-- With "Show the git command" off, the commands stay out of the question; git's output
            still shows once it runs. -->
       {#if (confirm.phase !== "ask" || prefs.get("oxbow.confirm.showCommand")) && !(request.local && !request.local.commands.length)}
@@ -375,7 +388,7 @@
           {#if !failed && blocked}
             <WhyNote text={blocked} grow />
           {:else}
-            <span class="note">{failed ? (recovery?.note ?? "Nothing else was run.") : note}</span>
+            <span class="note">{failed ? (recovery?.note ?? "Nothing else was run.") : ""}</span>
           {/if}
           {#if failed}
             <button class="btn" onclick={() => confirm.cancel()} title={withKeys(recovery?.close ?? "Close", "Escape")}>{recovery?.close ?? "Close"}</button>
@@ -433,6 +446,15 @@
     display: flex;
     align-items: center;
     justify-content: center;
+  }
+  .dim.quiet {
+    opacity: 0;
+    animation: appear 0.15s 0.6s forwards;
+  }
+  @keyframes appear {
+    to {
+      opacity: 1;
+    }
   }
   .sheet {
     width: min(620px, calc(100vw - 48px));
@@ -1023,6 +1045,21 @@
     align-items: center;
     gap: 8px;
     padding-top: 2px;
+  }
+  .back {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 0 2px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text2);
+  }
+  .back .icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    margin-top: 1px;
   }
   .note {
     flex-grow: 1;
