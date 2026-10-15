@@ -1,23 +1,32 @@
 <script lang="ts">
   // The toolbar's Undo button and its popover: every step Oxbow ran here, newest first. The top
-  // one has Undo; any other goes back to right after it with Restore to Here.
+  // one has Undo; any other goes back to right after it with Restore to Here. Its second tab
+  // reads git's reflog, which also sees what a terminal or another app did, and finds commits
+  // no branch has any more.
 
   import type { Request } from "./confirm.svelte";
-  import { cannotRestore, clearRequest, entryIcon, isRedo, keptUntil, oplog, restoreRequest, undoRequest } from "./oplog.svelte";
+  import { cannotRestore, clearRequest, entryIcon, isRedo, keptUntil, lostUntil, moveIcon, moveText, oplog, reflogRows, restoreRequest, undoRequest } from "./oplog.svelte";
   import { relativeTime } from "./format";
   import { prefs } from "./prefs.svelte";
   import { keys, withKeys } from "./keys";
-  import type { OpEntry } from "./types";
+  import type { OpEntry, ReflogEntry } from "./types";
 
   let {
     repo,
     run,
     onCompare,
+    onShow,
+    onBranch,
   }: {
     repo: string;
     run: (request: Request) => void;
     /** Show the repository now beside how it was at a step, in History's details panel. */
     onCompare: (entry: OpEntry, after: boolean) => void;
+    /** Show a commit from the reflog: selected in History, or in its details panel when History
+     *  doesn't have it. */
+    onShow: (entry: ReflogEntry) => void;
+    /** Keep a commit from the reflog on a new branch. */
+    onBranch: (entry: ReflogEntry) => void;
   } = $props();
 
   const latest = $derived(oplog.entries[0] ?? null);
@@ -31,6 +40,23 @@
   $effect(() => {
     if (oplog.open) oplog.load();
   });
+
+  const moves = $derived(reflogRows(oplog.reflog, oplog.allMoves));
+
+  function setTab(tab: "steps" | "reflog") {
+    oplog.tab = tab;
+    if (tab === "reflog") oplog.loadReflog();
+  }
+
+  function show(entry: ReflogEntry) {
+    oplog.open = false;
+    onShow(entry);
+  }
+
+  function branch(entry: ReflogEntry) {
+    oplog.open = false;
+    onBranch(entry);
+  }
 
   function compare(entry: OpEntry, after: boolean) {
     oplog.open = false;
@@ -71,7 +97,53 @@
       <div class="head">
         <span class="h">Operation Log</span>
         <span class="repo">{repo}</span>
+        <span class="grow"></span>
+        <div class="segmented" role="tablist" aria-label="Source">
+          <button role="tab" aria-selected={oplog.tab === "steps"} class:on={oplog.tab === "steps"} onclick={() => setTab("steps")} title="Every step Oxbow ran here, with Undo">Oxbow</button>
+          <button role="tab" aria-selected={oplog.tab === "reflog"} class:on={oplog.tab === "reflog"} onclick={() => setTab("reflog")} title="Where HEAD and your branches have been, from git's reflog">Git Reflog</button>
+        </div>
       </div>
+      {#if oplog.tab === "reflog"}
+        <p class="intro">
+          Where HEAD and your branches have been, from git's own log, including what a terminal or another app did.
+          {#if !oplog.allMoves}Commits no branch has any more are listed here, so you can keep them on a branch.{/if}
+        </p>
+        <div class="list">
+          {#each moves as entry (entry.id)}
+            <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+            <div class="row move" onclick={() => show(entry)}>
+              <span class="tile" class:warn={entry.lost}>
+                <svg class="icon" viewBox="0 0 16 16"><path d={moveIcon(entry)} /></svg>
+              </span>
+              <span class="words">
+                <span class="line">
+                  <span class="title">{entry.summary}</span>
+                  {#if entry.lost}
+                    <span class="lost" title={entry.lostCount === 1 ? "No branch, tag or remote branch has this commit" : `No branch, tag or remote branch has this commit or the ${entry.lostCount - 1} before it`}>{entry.lostCount > 1 ? `Lost · ${entry.lostCount}` : "Lost"}</span>
+                  {/if}
+                </span>
+                <span class="detail"><span class="mono">{entry.selector}</span> · {moveText(entry)}</span>
+              </span>
+              <span class="when" title={entry.lost ? "Git keeps this commit at least until then" : undefined}>
+                <span>{relativeTime(entry.time)}</span>
+                {#if entry.lost && entry.expires !== null}<span class="until">{lostUntil(entry)}</span>{/if}
+              </span>
+              <button class="compare" title="Show the commit and its changes" onclick={(e) => (e.stopPropagation(), show(entry))}>Show</button>
+              {#if entry.lost}
+                <button class="restore" title="Keep {entry.lostCount === 1 ? 'this commit' : `these ${entry.lostCount} commits`} on a new branch, without a reset" onclick={(e) => (e.stopPropagation(), branch(entry))}>Create Branch…</button>
+              {/if}
+            </div>
+          {:else}
+            <div class="empty">
+              {#if oplog.allMoves || !oplog.reflog.length}Git's reflog is empty here.{:else}Nothing is lost: every commit in git's reflog is on a branch.{/if}
+            </div>
+          {/each}
+        </div>
+        <div class="foot">
+          <span>Git may delete a lost commit after the date beside it.</span>
+          <button class="link" onclick={() => (oplog.allMoves = !oplog.allMoves)}>{oplog.allMoves ? "Only Lost Commits" : "Show All Moves"}</button>
+        </div>
+      {:else}
       <p class="intro">Every change to the repository is recorded. Restore any point, including after reset or rebase.</p>
       <div class="list">
         {#each oplog.entries as entry, i (entry.id)}
@@ -102,7 +174,7 @@
             {/if}
           </div>
         {:else}
-          <div class="empty">Nothing to undo yet. Every change Oxbow makes to this repository shows up here.</div>
+          <div class="empty">Nothing to undo yet. Every change Oxbow makes to this repository shows up here. What a terminal or another app did is in Git Reflog.</div>
         {/each}
       </div>
       <div class="foot">
@@ -111,6 +183,7 @@
           <button class="link" onclick={() => go(clearRequest(oplog.entries.length))}>Clear Log…</button>
         {/if}
       </div>
+      {/if}
     </div>
   {/if}
 </div>
@@ -170,8 +243,68 @@
     font-weight: 700;
   }
   .repo {
+    min-width: 0;
     font-size: 12px;
     color: var(--text2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .grow {
+    flex-grow: 1;
+  }
+  .head {
+    align-items: center;
+  }
+  .segmented {
+    flex-shrink: 0;
+    display: flex;
+    padding: 2px;
+    border-radius: 9px;
+    background: var(--field);
+  }
+  .segmented button {
+    height: 22px;
+    min-width: 64px;
+    padding: 0 10px;
+    border-radius: 7px;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--text2);
+    white-space: nowrap;
+  }
+  .segmented button.on {
+    background: var(--sheet);
+    color: var(--text);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  }
+  .move {
+    cursor: default;
+  }
+  .line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .line .title {
+    min-width: 0;
+  }
+  .lost {
+    flex-shrink: 0;
+    height: 17px;
+    padding: 0 7px;
+    border-radius: 9px;
+    display: inline-flex;
+    align-items: center;
+    font-size: 10.5px;
+    font-weight: 500;
+    background: var(--orange-soft);
+    color: var(--orange);
+  }
+  .mono {
+    font-family: var(--mono);
+    font-size: 10.5px;
   }
   .intro {
     margin: 4px 10px 8px;
@@ -265,6 +398,14 @@
   }
   .row:hover .compare {
     display: flex;
+  }
+  .move:hover .lost {
+    display: none;
+  }
+  .move .compare,
+  .move .restore {
+    min-width: 58px;
+    justify-content: center;
   }
   .primary,
   .restore {

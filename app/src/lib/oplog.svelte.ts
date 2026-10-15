@@ -5,7 +5,7 @@ import { api } from "./api";
 import type { Icon, Request } from "./confirm.svelte";
 import { relativeTime } from "./format";
 import { actionIcons } from "./icons";
-import type { OpEntry } from "./types";
+import type { HistoryRow, OpEntry, ReflogEntry } from "./types";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -16,7 +16,16 @@ class OplogState {
   /** Compare with Now: the step, and which side of it (`after` for Restore to Here), shown in
    *  the details panel of History. */
   compare = $state<{ entry: OpEntry; after: boolean } | null>(null);
+  /** The popover's tab: Oxbow's own steps, or git's reflog. */
+  tab = $state<"steps" | "reflog">("steps");
+  /** Where HEAD and the local branches have been, from git's reflog, newest first. */
+  reflog = $state<ReflogEntry[]>([]);
+  /** Every move in the reflog, not only the commits no branch has. */
+  allMoves = $state(false);
+  /** A commit from the reflog that History doesn't have, shown in its details panel. */
+  lost = $state<ReflogEntry | null>(null);
   #asked = 0;
+  #askedReflog = 0;
 
   async load() {
     const mine = ++this.#asked;
@@ -26,13 +35,27 @@ class OplogState {
     } catch {
       if (mine === this.#asked) this.entries = [];
     }
+    if (this.open && this.tab === "reflog") this.loadReflog();
+  }
+
+  async loadReflog() {
+    const mine = ++this.#askedReflog;
+    try {
+      const entries = await api.reflogEntries();
+      if (mine === this.#askedReflog) this.reflog = entries;
+    } catch {
+      if (mine === this.#askedReflog) this.reflog = [];
+    }
   }
 
   forget() {
     this.#asked++;
+    this.#askedReflog++;
     this.entries = [];
+    this.reflog = [];
     this.open = false;
     this.compare = null;
+    this.lost = null;
   }
 }
 
@@ -134,7 +157,7 @@ export function revertInsteadRequest(id: string, summary: string, branch: string
 }
 
 /** "until 14 Nov": the last day a step can be gone back to. */
-export function keptUntil(entry: OpEntry): string {
+export function keptUntil(entry: Pick<OpEntry, "expires">): string {
   const date = new Date(entry.expires * 1000);
   const sameYear = date.getFullYear() === new Date().getFullYear();
   return `until ${date.toLocaleDateString(undefined, sameYear ? { day: "numeric", month: "short" } : { day: "numeric", month: "short", year: "numeric" })}`;
@@ -157,4 +180,46 @@ export function clearRequest(count: number): Request {
 export function cannotRestore(entry: OpEntry, after: boolean): string | null {
   const trees = after ? entry.after : entry.before;
   return trees.index ? null : `The repository was in the middle of a merge or rebase ${after ? "right after" : "before"} this step`;
+}
+
+/** The reflog's list: lost commits only, a newer lost one standing for those it keeps, or every move. */
+export function reflogRows(entries: ReflogEntry[], all: boolean): ReflogEntry[] {
+  return all ? entries : entries.filter((e) => e.lost && !e.within);
+}
+
+/** What git wrote for the move, without the commit's subject it repeats: "commit (amend)",
+ *  "reset: moving to HEAD~2". */
+export function moveText(entry: ReflogEntry): string {
+  const tail = `: ${entry.summary}`;
+  return entry.summary && entry.message.endsWith(tail) ? entry.message.slice(0, -tail.length) : entry.message;
+}
+
+/** The icon of a reflog move; an amend is a commit, anything unknown gets the undo arrow. */
+export function moveIcon(entry: ReflogEntry): string {
+  const kind = entry.kind === "amend" ? "commit" : entry.kind;
+  return actionIcons[kind as Icon] ?? actionIcons.undo;
+}
+
+/** "until 14 Nov" for a lost commit; "may go soon" once git's expiry passed but no clean-up ran. */
+export function lostUntil(entry: ReflogEntry): string {
+  if (entry.expires === null) return "";
+  if (entry.expires * 1000 < Date.now()) return "may go soon";
+  return keptUntil({ expires: entry.expires });
+}
+
+/** A History row for a commit History doesn't show, so the commit panel can show it. */
+export function lostRow(entry: ReflogEntry, color: number): HistoryRow {
+  return {
+    id: entry.id,
+    summary: entry.summary,
+    authorName: entry.authorName,
+    authorEmail: entry.authorEmail,
+    time: entry.time,
+    parents: entry.parents,
+    labels: [],
+    unpushed: false,
+    noBranch: true,
+    graph: { column: 0, color, forkColors: [], mergeColors: [], segments: [], width: 0, branch: null },
+    worktree: null,
+  };
 }

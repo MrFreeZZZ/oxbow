@@ -2,7 +2,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { listen } from "@tauri-apps/api/event";
   import { api, settings } from "./lib/api";
-  import type { History, HistoryRow, RepoSummary } from "./lib/types";
+  import type { History, HistoryRow, ReflogEntry, RepoSummary } from "./lib/types";
   import Sidebar from "./lib/Sidebar.svelte";
   import HistoryList from "./lib/HistoryList.svelte";
   import CommitPanel from "./lib/CommitPanel.svelte";
@@ -34,6 +34,7 @@
   import QuickOpen from "./lib/QuickOpen.svelte";
   import PairPanel from "./lib/PairPanel.svelte";
   import SnapshotPanel from "./lib/SnapshotPanel.svelte";
+  import LostCommitPanel from "./lib/LostCommitPanel.svelte";
   import { nav } from "./lib/nav.svelte";
   import type { CompareMode } from "./lib/types";
   import CloneSheet from "./lib/CloneSheet.svelte";
@@ -42,7 +43,7 @@
   import { start } from "./lib/start.svelte";
   import OperationLog from "./lib/OperationLog.svelte";
   import { withKeys } from "./lib/keys";
-  import { oplog, undoRequest } from "./lib/oplog.svelte";
+  import { lostRow, oplog, undoRequest } from "./lib/oplog.svelte";
   import EditStackView from "./lib/EditStackView.svelte";
   import ActivityPopover from "./lib/ActivityPopover.svelte";
   import { activity, failureShort, type ActivityItem } from "./lib/activity.svelte";
@@ -670,14 +671,61 @@
     selected = id;
     second = null;
     oplog.compare = null;
+    oplog.lost = null;
     list?.reveal(id);
   }
+
+  /** A commit from git's reflog: selected in History when it is there, otherwise shown on its
+   *  own in the details panel. */
+  function showMove(entry: ReflogEntry) {
+    second = null;
+    oplog.compare = null;
+    view = "history";
+    resolving = false;
+    if (rowsById.has(entry.id)) {
+      oplog.lost = null;
+      selected = entry.id;
+      requestAnimationFrame(() => list?.reveal(entry.id));
+    } else {
+      oplog.lost = entry;
+    }
+  }
+
+  /** From the lost commit's panel: a parent History has, or another lost commit. */
+  function selectFromLost(id: string) {
+    const other = oplog.reflog.find((e) => e.id === id);
+    if (rowsById.has(id) || !other) select(id);
+    else oplog.lost = other;
+  }
+
+  /** A commit from the reflog takes the color of the branch whose reflog has it, else HEAD's. */
+  function moveColor(entry: ReflogEntry): number {
+    const branch = history?.refs.some((r) => r.kind === "local" && r.name === entry.source);
+    return branch ? colorOf(entry.source) : headColor;
+  }
+
+  /** New Branch at a commit from the reflog, staying where you are. */
+  function branchAtMove(entry: ReflogEntry) {
+    if (!branchCtx) return;
+    run(newBranchRequest(branchCtx, undefined, rowsById.get(entry.id) ?? lostRow(entry, moveColor(entry)), false));
+  }
+
+  // Once a branch keeps the lost commit shown, History has it: select it there.
+  $effect(() => {
+    const lost = oplog.lost;
+    if (lost && rowsById.has(lost.id)) {
+      oplog.lost = null;
+      selected = lost.id;
+      requestAnimationFrame(() => list?.reveal(lost.id));
+    }
+  });
 
   /** Picking a commit from the sidebar goes back to History, which mounts the graph again. */
   function pick(id: string) {
     selected = id;
     second = null;
     oplog.compare = null;
+    oplog.lost = null;
     if (view === "history" && !showConflicts) return list?.reveal(id);
     view = "history";
     resolving = false;
@@ -754,8 +802,9 @@
       // Bisecting: G, B and S answer for the commit under test, as the banner's tooltips say.
       event.preventDefault();
       bisectKey(({ g: "good", b: "bad", s: "skip" } as const)[event.key.toLowerCase() as "g" | "b" | "s"]);
-    } else if (event.key === "Escape" && oplog.compare && view === "history" && !confirm.request && !event.defaultPrevented) {
+    } else if (event.key === "Escape" && (oplog.compare || oplog.lost) && view === "history" && !confirm.request && !event.defaultPrevented) {
       oplog.compare = null;
+      oplog.lost = null;
     } else if (event.key === "Escape" && second && view === "history" && !confirm.request && !event.defaultPrevented) {
       second = null;
     } else if ((event.metaKey || event.ctrlKey) && !event.altKey && !confirm.request && !start.sheet && !loading) {
@@ -939,8 +988,11 @@
           <OperationLog
             repo={repo.name}
             run={(request) => void run(request)}
+            onShow={showMove}
+            onBranch={branchAtMove}
             onCompare={(entry, after) => {
               second = null;
+              oplog.lost = null;
               oplog.compare = { entry, after };
               view = "history";
               resolving = false;
@@ -1049,6 +1101,16 @@
                 copy={(text) => copyText(text, "Copied the command.")}
                 run={(request) => void run(request)}
                 onClose={() => (oplog.compare = null)}
+              />
+            {:else if oplog.lost}
+              {@const lost = oplog.lost}
+              <LostCommitPanel
+                entry={lost}
+                color={moveColor(lost)}
+                lookup={(id) => rowsById.get(id)}
+                onSelect={selectFromLost}
+                onBranch={branchAtMove}
+                onClose={() => (oplog.lost = null)}
               />
             {:else if pair}
               <PairPanel

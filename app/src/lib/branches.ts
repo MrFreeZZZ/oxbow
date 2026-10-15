@@ -275,7 +275,9 @@ interface Base {
 const PREFIXES = ["feature/", "fix/", "chore/"];
 
 /** The New Branch sheet. `from` is the branch it was opened on, if any; `at` a commit it was opened on. */
-export function newBranchRequest(ctx: BranchContext, from?: string, at?: HistoryRow): Request {
+/** `switchTo` is the sheet's first choice: a branch that rescues lost work starts without one,
+ *  so nothing but the new branch changes. */
+export function newBranchRequest(ctx: BranchContext, from?: string, at?: HistoryRow, switchTo = true): Request {
   const { head, trunk } = ctx.history;
   const target = (name: string) => local(ctx, name)?.target ?? null;
   const bases: Base[] = [
@@ -291,7 +293,7 @@ export function newBranchRequest(ctx: BranchContext, from?: string, at?: History
   if (from && from !== head.branch && from !== trunk) bases.push({ key: "from", label: from, ref: from, sha: target(from), color: ctx.colorOf(from) });
   if (at && at.id !== head.commit) bases.push({ key: "commit", label: shortId(at.id), ref: at.id, sha: at.id, color: at.graph.color });
   const start = at && at.id !== head.commit ? "commit" : from === head.branch ? "head" : from === trunk ? "trunk" : from ? "from" : "head";
-  return newBranchSheet(ctx, bases, { name: "", base: start, switchTo: true, publish: false });
+  return newBranchSheet(ctx, bases, { name: "", base: start, switchTo, publish: false });
 }
 
 function newBranchSheet(ctx: BranchContext, bases: Base[], state: NewBranch): Request {
