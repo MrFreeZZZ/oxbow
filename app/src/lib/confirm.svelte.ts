@@ -76,6 +76,8 @@ export interface Request {
   options?: Choice[];
   /** Why the action button is off, e.g. an invalid branch name. */
   invalid?: string | null;
+  /** Something to know before going ahead, in an orange box, e.g. submodule commits a push would leave behind. */
+  warning?: { title: string; body: Part[] };
   /** A picture of the result above the commands, e.g. the commits a merge brings in. */
   preview?: Preview;
   /** Asks even with confirmations off, e.g. turning the secrets check off. */
@@ -200,6 +202,7 @@ const RISKY = new Set<Action["kind"]>([
   "restore",
   "clearOperationLog",
   "worktreeRemove",
+  "submoduleRemove",
   "lfsPrune",
   "editStack",
   "addToCommit",

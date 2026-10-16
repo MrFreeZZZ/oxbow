@@ -232,7 +232,7 @@ fn parse_list(text: &str) -> Vec<Worktree> {
 }
 
 /// Files with uncommitted changes in the folder at `path`; 0 when git can't tell.
-fn changed_files(path: &Path) -> usize {
+pub(crate) fn changed_files(path: &Path) -> usize {
     let out = crate::cli::run_in(
         path,
         &GitCommand::new(["status", "--porcelain", "-z", "--untracked-files=all"]),

@@ -28,7 +28,9 @@
   import { github } from "./github.svelte";
   import { downloadRequest, installRequest, lfs, patternNote, pruneRequest, lfsTrackRequest, untrackRequest } from "./lfs.svelte";
   import { nav } from "./nav.svelte";
-  import type { LfsPattern, Worktree } from "./types";
+  import type { LfsPattern, Submodule, Worktree } from "./types";
+  import { addSubmoduleRequest, latestRequest, removeSubmoduleRequest, submoduleNote, submoduleWhere, syncRequest, updateRequest, followsWord } from "./submodules";
+  import { actionIcons } from "./icons";
   import { locateRequest, lockRequest, newWorktreeRequest, pruneWorktreesRequest, removeWorktreeRequest, tilde, unlockRequest, worktreeOf } from "./worktrees";
 
   const PULL_ICON = "M3 3.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M3 12.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M10 12.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M4.5 5v6M11.5 11V6.5a2 2 0 0 0-2-2H7M8.5 3 7 4.5 8.5 6";
@@ -53,6 +55,8 @@
     onCompare,
     onEditStack,
     onPullRequest,
+    submodule = null,
+    onSubmodule,
   }: {
     repo: RepoSummary;
     history: History;
@@ -76,6 +80,10 @@
     onEditStack: (branch: string) => void;
     /** Open the Pull Request screen of `branch`. */
     onPullRequest: (branch: string) => void;
+    /** The path of the submodule shown next to the sidebar, if one is. */
+    submodule?: string | null;
+    /** Show a submodule's card in place of the commit's. */
+    onSubmodule: (path: string) => void;
   } = $props();
 
   /** The checked-out branch's pull request, for the Workspace item. */
@@ -205,6 +213,9 @@
       { kind: "item", label: "Open Local Repository…", icon: FOLDER, keys: keys("Mod+O"), run: onOpen },
       { kind: "item", label: "New Repository…", icon: "M8 3v10M3 8h10", keys: keys("Mod+N"), run: () => start.newRepo() },
       { kind: "sep" },
+    );
+    if (history.head.commit) entries.push({ kind: "item", label: "Add Submodule…", icon: actionIcons.box, run: () => run(addSubmoduleRequest(submodules, repo.path)) });
+    entries.push(
       { kind: "item", label: "Open in Terminal", icon: TERMINAL, run: () => api.openInTerminal().catch((err) => confirm.fail(err)) },
       { kind: "item", label: "Welcome Window", icon: HOME, run: onWelcome },
     );
@@ -457,6 +468,50 @@
     open(event, "Worktree menu", `worktree:${wt.path}`, entries);
   }
 
+  /** Submodules: other repositories in folders here, at commits this one records. */
+  const submodules = $derived(history.submodules);
+
+  /** A submodule's folder in its own window. */
+  function openSubmodule(sub: Submodule) {
+    api.openWindow(sub.path).catch((err) => confirm.fail(err));
+  }
+
+  /** The menu of a submodule. */
+  function submoduleMenu(event: MouseEvent, sub: Submodule) {
+    const at = sub.current ? sub.current.slice(0, 7) : sub.cloned ? "no commit" : "not cloned";
+    const entries: MenuEntry[] = [{ kind: "header", label: `${sub.path} · ${at}` }];
+    if (sub.cloned) entries.push({ kind: "item", label: "Open in New Window", icon: menuIcons.open, run: () => openSubmodule(sub) });
+    if (!sub.cloned) entries.push({ kind: "item", label: "Clone…", icon: menuIcons.fetch, run: () => run(updateRequest(submodules, sub, repo.path)) });
+    else if (sub.recorded && sub.current !== sub.recorded)
+      entries.push({ kind: "item", label: `Update to ${sub.recorded.slice(0, 7)}`, icon: actionIcons.box, run: () => run(updateRequest(submodules, sub, repo.path)) });
+    if (sub.cloned) entries.push({ kind: "item", label: `Pull Latest from ${followsWord(sub)}`, icon: menuIcons.fetch, run: () => run(latestRequest(sub, repo.path)) });
+    entries.push({ kind: "item", label: "Sync URL", icon: menuIcons.compare, run: () => run(syncRequest(sub)) });
+    entries.push({ kind: "sep" });
+    if (sub.cloned) {
+      entries.push(
+        { kind: "item", label: "Show in Finder", icon: menuIcons.reveal, run: () => api.revealWorktree(sub.path).catch((err) => confirm.fail(err)) },
+        { kind: "item", label: "Open in Terminal", icon: TERMINAL, run: () => api.openInTerminal(sub.path).catch((err) => confirm.fail(err)) },
+      );
+    }
+    if (sub.url) entries.push({ kind: "item", label: "Copy URL", icon: menuIcons.copy, run: () => copy(sub.url!) });
+    entries.push({ kind: "sep" }, { kind: "item", label: "Remove Submodule…", icon: menuIcons.drop, danger: true, run: () => run(removeSubmoduleRequest(sub)) });
+    open(event, "Submodule menu", `submodule:${sub.path}`, entries);
+  }
+
+  /** The menu of the Submodules heading: all of them at once. */
+  function submodulesMenu(event: MouseEvent) {
+    const entries: MenuEntry[] = [];
+    if (submodules.length) {
+      entries.push(
+        { kind: "item", label: "Update All", icon: actionIcons.box, run: () => run(updateRequest(submodules, null, repo.path)) },
+        { kind: "item", label: "Sync All URLs", icon: menuIcons.compare, run: () => run(syncRequest(null)) },
+        { kind: "sep" },
+      );
+    }
+    entries.push({ kind: "item", label: "Add Submodule…", icon: menuIcons.folder, run: () => run(addSubmoduleRequest(submodules, repo.path)) });
+    open(event, "Submodules menu", "submodules-heading", entries);
+  }
+
   /** Select the branch's or tag's latest commit, as if it were clicked in the graph. */
   function focus(r: RefInfo) {
     clicked = r;
@@ -651,6 +706,38 @@
             <span class="ellipsis sub"><span class="mini-dot" style:background={lane(color)}></span>{wt.branch ?? (wt.head ? `detached at ${wt.head.slice(0, 7)}` : "no commits")}</span>
           </span>
           {#if note}<span class="meta nowrap" class:accent={note.tone === "accent"} class:warn={note.tone === "warn"}>{note.text}</span>{/if}
+        </button>
+      {/each}
+    {/if}
+
+    {#if history.head.commit && submodules.length}
+      <div class="heading with-button" oncontextmenu={submodulesMenu} role="group" aria-label="Submodules">
+        <span>Submodules</span>
+        <button class="add" onclick={submodulesMenu} aria-label="Submodule actions">
+          <svg class="icon" viewBox="0 0 16 16"><path d="M3.2 8a.8.8 0 1 0 1.6 0a.8.8 0 1 0-1.6 0M7.2 8a.8.8 0 1 0 1.6 0a.8.8 0 1 0-1.6 0M11.2 8a.8.8 0 1 0 1.6 0a.8.8 0 1 0-1.6 0" /></svg>
+        </button>
+        <button class="add" onclick={() => run(addSubmoduleRequest(submodules, repo.path))} aria-label="Add submodule" title="Add Submodule…">
+          <svg class="icon" viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9" /></svg>
+        </button>
+      </div>
+      {#each submodules as sub (sub.path)}
+        {@const note = submoduleNote(sub)}
+        <button
+          class="item two"
+          class:menu-open={menu?.ref === `submodule:${sub.path}`}
+          style:--ring="var(--accent)"
+          style:background={submodule === sub.path ? "var(--side-sel)" : undefined}
+          onclick={() => onSubmodule(sub.path)}
+          ondblclick={() => sub.cloned && openSubmodule(sub)}
+          oncontextmenu={(e) => submoduleMenu(e, sub)}
+          title={sub.cloned ? `${sub.path} · double-click to open its window` : `${sub.path} · not cloned yet`}
+        >
+          <svg class="icon" class:dim={!sub.cloned} viewBox="0 0 16 16"><path d={actionIcons.box} /></svg>
+          <span class="grow two-text">
+            <span class="ellipsis">{sub.title}</span>
+            <span class="ellipsis sub">{submoduleWhere(sub)}</span>
+          </span>
+          {#if note}<span class="meta nowrap" class:warn={note.warn}>{note.text}</span>{/if}
         </button>
       {/each}
     {/if}
@@ -893,6 +980,9 @@
     border-radius: 3px;
     margin-right: 5px;
     vertical-align: 1px;
+  }
+  .icon.dim {
+    color: var(--text2);
   }
   .icon.here {
     color: var(--accent-text);

@@ -45,6 +45,7 @@ export const defaults = {
   "oxbow.fetch.auto": true,
   /** Pull runs `git fetch <remote>` first, so the remote's other branches are current too. */
   "oxbow.pull.fetchFirst": true,
+  "oxbow.pull.submodules": true,
   /** Minutes between background fetches. */
   "oxbow.fetch.interval": 15,
   /** Before each commit, look for passwords and keys in the staged lines. */

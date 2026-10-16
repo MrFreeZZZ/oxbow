@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  SubmoduleMove,
+  UnpushedSubmodule,
   Blame,
   Source,
   FileHistory,
@@ -137,6 +139,8 @@ export const api = {
   revealWorktree: (path: string) => invoke<void>("reveal_worktree", { path }),
   /** A window of its own for the worktree at `path`, or the one it is already open in. */
   openWindow: (path: string) => invoke<void>("open_window", { path }),
+  submoduleMove: (path: string, old: string | null, newId: string | null, changed = 0) => invoke<SubmoduleMove>("submodule_move", { path, old, new: newId, changed }),
+  unpushedSubmodules: () => invoke<UnpushedSubmodule[]>("unpushed_submodules"),
   /** After removing the worktree at `path`, close the window that showed it. */
   closeWindowOf: (path: string) => invoke<void>("close_window_of", { path }),
   monospaceFonts: () => invoke<string[]>("monospace_fonts"),

@@ -126,6 +126,8 @@ export interface History {
   bisect: Bisect | null;
   /** Every working folder of the repository, the main one first. */
   worktrees: Worktree[];
+  /** In the order of `.gitmodules`. */
+  submodules: Submodule[];
   refs: RefInfo[];
   /** Tags the default remote doesn’t have yet, as far as Oxbow knows. */
   localTags: string[];
@@ -184,6 +186,8 @@ export interface FileChange {
   eol?: EolChange;
   /** Kept in Git LFS; the pointers before and after where they are known. */
   lfs?: LfsChange;
+  /** A submodule, not a file: another commit is recorded or checked out (`moved`), or files in its folder changed. */
+  submodule?: { moved: boolean; changed: boolean };
 }
 
 /** A pointer file: the LFS object that stands in for a file. */
@@ -357,6 +361,37 @@ export interface FileDiff {
   limited: boolean;
   old: Source | null;
   new: Source | null;
+  /** For a submodule: how its recorded commit moved, in place of lines. */
+  submodule?: SubmoduleMove;
+}
+
+/** How a submodule's commit moved. */
+export type Moved = "forward" | "back" | "sideways" | "added" | "removed" | "same" | "unknown";
+
+/** A submodule's change in a commit or in the working copy. */
+export interface SubmoduleMove {
+  path: string;
+  title: string;
+  url: string | null;
+  /** The branch Pull Latest takes, null for the remote's default. */
+  follows: string | null;
+  old: string | null;
+  new: string | null;
+  /** `old` and `new` themselves, when the clone has them. */
+  oldCommit: CommitBrief | null;
+  newCommit: CommitBrief | null;
+  moved: Moved;
+  /** The commits between the two, newest first: gained, or dropped when it moved back. At most 50. */
+  commits: CommitBrief[];
+  count: number;
+  /** Sideways: commits of `old` that `new` doesn't have. */
+  dropped: number;
+  /** A clone exists to read the commits from. */
+  cloned: boolean;
+  /** Working copy: files changed in its folder. */
+  changed: number;
+  /** `new` is on none of its remote branches yet. */
+  unpushed: boolean;
 }
 
 export interface RepoSummary {
@@ -383,7 +418,7 @@ export type Action =
   | { kind: "ignore"; pattern: string }
   | { kind: "commit"; message: string; amend: boolean; noVerify?: boolean; allowSecrets?: boolean }
   | { kind: "fetch"; remote: string | null }
-  | { kind: "pull"; remote: string; branch: string; fetchFirst?: boolean }
+  | { kind: "pull"; remote: string; branch: string; fetchFirst?: boolean; submodules?: boolean }
   | {
       kind: "push";
       remote: string;
@@ -393,6 +428,8 @@ export type Action =
       force: boolean;
       lease: string | null;
       noVerify: boolean;
+      /** Push the submodule commits it records that their remotes don't have, first. */
+      submodules?: boolean;
     }
   | { kind: "pullAndPush"; remote: string; branch: string; upstream: string; noVerify: boolean }
   | { kind: "replayAndPush"; remote: string; branch: string; upstream: string; base: string; lease: string; noVerify: boolean }
@@ -456,7 +493,12 @@ export type Action =
   | { kind: "worktreeLock"; path: string; reason: string | null }
   | { kind: "worktreeUnlock"; path: string }
   | { kind: "worktreePrune" }
-  | { kind: "worktreeRepair"; path: string };
+  | { kind: "worktreeRepair"; path: string }
+  /** Empty `paths`: every submodule. `latest`: the newest commit of the branch each follows. */
+  | { kind: "submoduleUpdate"; paths: string[]; latest: boolean }
+  | { kind: "submoduleSync"; paths: string[] }
+  | { kind: "submoduleAdd"; url: string; path: string; branch: string | null }
+  | { kind: "submoduleRemove"; path: string };
 
 /** One working folder of the repository (`git worktree`). */
 export interface Worktree {
@@ -476,6 +518,40 @@ export interface Worktree {
   missing: boolean;
   /** Files with uncommitted changes there; 0 for this window's and a missing one. */
   changed: number;
+}
+
+/** A submodule: another repository checked out in a folder here, at the commit this one records. */
+export interface Submodule {
+  name: string;
+  path: string;
+  /** The folder's name. */
+  title: string;
+  url: string | null;
+  /** The branch Pull Latest takes (`.` for the one checked out here); null for the remote's default. */
+  follows: string | null;
+  /** The commit the index records, which the next commit records too. */
+  recorded: string | null;
+  /** The commit HEAD records. */
+  committed: string | null;
+  /** Checked out in its folder; null when not cloned. */
+  current: string | null;
+  /** null while detached, as `git submodule update` leaves it. */
+  branch: string | null;
+  cloned: boolean;
+  /** Files with uncommitted changes in its folder. */
+  changed: number;
+  /** Commits checked out that `recorded` doesn't have, and the other way round. */
+  ahead: number;
+  behind: number;
+  /** The recorded commit isn't in its clone yet. */
+  missing: boolean;
+}
+
+/** A submodule whose recorded commit is on none of its remotes. */
+export interface UnpushedSubmodule {
+  path: string;
+  title: string;
+  commit: string;
 }
 
 export type BisectMark = "good" | "bad" | "skip";

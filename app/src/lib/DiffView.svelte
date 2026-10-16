@@ -11,7 +11,7 @@
 
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import type { DiffLine, FileDiff, Hunk } from "./types";
+  import type { DiffLine, FileDiff, Hunk, Side } from "./types";
   import { plate, splitPath, tint } from "./format";
   import { prefs } from "./prefs.svelte";
   import { api } from "./api";
@@ -24,6 +24,7 @@
   import ImageDiff from "./ImageDiff.svelte";
   import UnusualCard from "./UnusualCard.svelte";
   import LfsCard from "./LfsCard.svelte";
+  import SubmoduleCard from "./SubmoduleCard.svelte";
   import { BIG_FILE } from "./lfs.svelte";
   import { bytes, imageType, isSvg } from "./unusual";
 
@@ -45,6 +46,7 @@
     loadFull,
     command,
     working = false,
+    side = null,
   }: {
     diffs: FileDiff[];
     color: number;
@@ -75,6 +77,8 @@
     command?: (diff: FileDiff) => string | null;
     /** Uncommitted changes: a big file offers Git LFS, an LFS file Stop Tracking. */
     working?: boolean;
+    /** Which side of the uncommitted changes these are, for what a submodule's card says. */
+    side?: Side | null;
   } = $props();
 
   /** Diffs loaded in full with Show Diff Anyway, by the very diff they stand in for: a diff
@@ -251,7 +255,9 @@
           <span class="status">{statusLabel[diff.file.status]}</span>
           <span class="spacer"></span>
         {/if}
-        {#if diff.file.lfs}
+        {#if diff.file.submodule}
+          <span class="size">Submodule</span>
+        {:else if diff.file.lfs}
           {@const f = diff.file}
           <span class="mono size" title="Kept in Git LFS">LFS · {f.oldSize !== undefined && f.newSize !== undefined && f.oldSize !== f.newSize ? `${bytes(f.oldSize)} → ${bytes(f.newSize)}` : bytes(f.newSize ?? f.oldSize ?? 0)}</span>
         {:else if diff.file.binary}
@@ -264,12 +270,12 @@
           <span class="mono del">−{diff.file.deletions}</span>
         {/if}
         {#if fileActions}{@render fileActions(diff)}{/if}
-        {#if openable && history && diff.file.status !== "untracked"}
+        {#if openable && history && diff.file.status !== "untracked" && !diff.file.submodule}
           <button class="toggle" onclick={() => nav.openFile(diff.file.path, commit)} aria-label="File history" title="File History and Blame">
             <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.2l2 1.3" /></svg>
           </button>
         {/if}
-        {#if openable && diff.file.status !== "deleted"}
+        {#if openable && diff.file.status !== "deleted" && !diff.file.submodule}
           <button class="toggle" onclick={() => openInEditor(diff)} aria-label="Open in editor" title="Open in Editor">
             <svg class="icon" viewBox="0 0 16 16"><path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" /></svg>
           </button>
@@ -330,6 +336,8 @@
     {/if}
     {#if isShut}
       <!-- Folded: the header alone. -->
+    {:else if diff.submodule}
+      <SubmoduleCard move={diff.submodule} {side} />
     {:else if kind === "lfs" || kind === "big"}
       <LfsCard {diff} {kind} {working} />
     {:else if kind === "image"}

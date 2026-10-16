@@ -82,6 +82,20 @@ pub struct FileChange {
     /// The file is kept in Git LFS, with the pointers before and after where they are known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lfs: Option<crate::lfs::LfsChange>,
+    /// A submodule rather than a file: what changed is the commit recorded for it, or files in
+    /// its folder.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submodule: Option<SubmoduleChange>,
+}
+
+/// What changed about a submodule.
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmoduleChange {
+    /// Another commit is recorded, or checked out in its folder.
+    pub moved: bool,
+    /// Its folder has uncommitted changes of its own (working copy only).
+    pub changed: bool,
 }
 
 /// Old and new file mode, in git's octal form (`100644`, `100755`, `120000`).
@@ -127,6 +141,9 @@ pub struct FileDiff {
     /// The file before and after the change, where it exists.
     pub old: Option<Source>,
     pub new: Option<Source>,
+    /// For a submodule: how its recorded commit moved, in place of line changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submodule: Option<crate::submodules::SubmoduleMove>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -301,6 +318,20 @@ impl Repo {
                 continue;
             }
             let mut file = change.file;
+            if file.submodule.is_some() {
+                let id = |id: Option<ObjectId>| id.map(|id| id.to_string());
+                let moved = self.submodule_move(&file.path, id(change.old).as_deref(), id(change.new).as_deref(), 0);
+                out.push(FileDiff {
+                    file,
+                    hunks: Vec::new(),
+                    too_large: false,
+                    limited: false,
+                    old: None,
+                    new: None,
+                    submodule: Some(moved),
+                });
+                continue;
+            }
             let found = inspect(
                 repo,
                 &mut file,
@@ -320,6 +351,7 @@ impl Repo {
                 limited,
                 old: blob(change.old),
                 new: blob(change.new),
+                submodule: None,
             });
         }
         Ok(out)
@@ -391,6 +423,10 @@ fn counted(repo: &gix::Repository, changes: Vec<Change>, max_lines: u32) -> Vec<
         .into_iter()
         .map(|change| {
             let mut file = change.file;
+            if file.submodule.is_some() {
+                // It records a commit of another repository: there are no lines to count.
+                return file;
+            }
             // Counts are a nicety; a blob that can't be read still lists the file.
             let _ = inspect(
                 repo,
@@ -446,10 +482,15 @@ fn tree_changes(
         if change.entry_mode().is_tree() {
             continue;
         }
+        let gitlink = change.entry_mode().is_commit();
         let file = |p: &BStr, old_path: Option<String>, status| FileChange {
             path: path(p),
             old_path,
             status,
+            submodule: gitlink.then_some(SubmoduleChange {
+                moved: true,
+                changed: false,
+            }),
             ..FileChange::default()
         };
         let mode = |old: gix::object::tree::EntryMode, new: gix::object::tree::EntryMode| {

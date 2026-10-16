@@ -36,6 +36,7 @@
   import { nav } from "./nav.svelte";
   import { BIG_FILE, bytes } from "./unusual";
   import { commitRecovery, ignoreChoices, ignoreRequest, linesRequest, stashFilesRequest, stashMessageFor, type LinesKind } from "./changes";
+  import { updateFolderRequest } from "./submodules";
 
   let {
     repo,
@@ -481,7 +482,9 @@
       <span class="badge {b.tone}" title={b.title}>{b.text}</span>
       <span class="path"><span class="dir">{p.dir}</span>{p.name}</span>
       {#if partly}<span class="note">partly staged</span>{/if}
-      {#if file.lfs}
+      {#if file.submodule}
+        <span class="note" title="Another repository in a folder here">Submodule{file.submodule.changed && !file.submodule.moved ? " · changed inside" : ""}</span>
+      {:else if file.lfs}
         <span class="note" title="Kept in Git LFS: git stores a small pointer">LFS{file.newSize !== undefined ? ` · ${bytes(file.newSize)}` : ""}</span>
       {:else if (file.newSize ?? 0) >= BIG_FILE}
         <span class="note warn" title="Too big for a git repository: GitHub refuses files over 100 MB">{bytes(file.newSize!)}</span>
@@ -526,7 +529,16 @@
 
 <!-- The whole file's actions on its header bar. -->
 {#snippet unstagedFile(d: FileDiff)}
-  {#if d.file.status === "conflicted"}
+  {#if d.submodule}
+    <!-- A submodule's own files are committed in it; here only the commit it is at can be staged. -->
+    {#if d.file.submodule?.moved}
+      {@const move = d.submodule}
+      {#if move.old}<button class="hbtn" onclick={() => act(updateFolderRequest(move))} title="Check out the commit recorded here again">Update to {move.old.slice(0, 7)}</button>{/if}
+      <button class="hbtn primary" onclick={() => stage([d.file])} title="Record the commit it is at in the next commit">Stage</button>
+    {:else}
+      <button class="hbtn" onclick={() => api.openWindow(d.file.path).catch((err) => confirm.fail(err))} title="Its changes are committed in it">Open in New Window</button>
+    {/if}
+  {:else if d.file.status === "conflicted"}
     {#if onResolve}<button class="hbtn" onclick={onResolve}>Resolve Conflicts…</button>{/if}
   {:else}
     <button class="hbtn" onclick={() => discard([d.file])} title={d.file.status === "untracked" ? "Delete this new file" : "Throw away the edits in this file"}>Discard</button>
@@ -633,6 +645,7 @@
             loadFull={(d) => api.workingDiff(d.file.path, "unstaged", whole, true)}
             command={(d) => `git diff -- ${d.file.path}`}
             working
+            side="unstaged"
           />
         {:else}
           <DiffView
@@ -648,6 +661,7 @@
             loadFull={(d) => api.workingDiff(d.file.path, "staged", whole, true)}
             command={(d) => `git diff --cached -- ${d.file.path}`}
             working
+            side="staged"
           />
         {/if}
       {/if}

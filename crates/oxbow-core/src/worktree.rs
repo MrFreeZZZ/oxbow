@@ -12,7 +12,8 @@ use std::sync::atomic::AtomicBool;
 use crate::bisect::BisectMark;
 use crate::cli::{GitCommand, OutputLine, literal};
 use crate::commit::{
-    DiffLine, FileChange, FileDiff, FileStatus, Hunk, LineKind, ModeChange, Source, eol_change, over_limit, word_diff,
+    DiffLine, FileChange, FileDiff, FileStatus, Hunk, LineKind, ModeChange, Source, SubmoduleChange, eol_change,
+    over_limit, word_diff,
 };
 use crate::config;
 use crate::edit::{ResetMode, plan_reset};
@@ -142,6 +143,9 @@ pub enum Action {
         /// only updates `remote`/`branch`.
         #[serde(default)]
         fetch_first: bool,
+        /// Check out the commits the pulled commits record in the submodules too.
+        #[serde(default)]
+        submodules: bool,
     },
     /// Send the local `branch` to `remote`, where it is called `upstream`.
     Push {
@@ -156,6 +160,9 @@ pub enum Action {
         lease: Option<String>,
         /// Skip the pre-push hook.
         no_verify: bool,
+        /// Push the submodule commits this branch records that their remotes don't have, first.
+        #[serde(default)]
+        submodules: bool,
     },
     /// Pull with rebase, then push: the way out of a push rejected for new remote commits.
     PullAndPush {
@@ -464,6 +471,29 @@ pub enum Action {
     WorktreeRepair {
         path: String,
     },
+    /// Check out the commits this repository records in the submodules at `paths` (all when
+    /// empty), cloning them first where needed. With `latest`, the newest commit of the branch
+    /// each one follows instead.
+    SubmoduleUpdate {
+        paths: Vec<String>,
+        #[serde(default)]
+        latest: bool,
+    },
+    /// Copy the submodules' URLs from `.gitmodules` to their settings.
+    SubmoduleSync {
+        paths: Vec<String>,
+    },
+    /// A new submodule: `url` cloned into `path`, following `branch` when given.
+    SubmoduleAdd {
+        url: String,
+        path: String,
+        #[serde(default)]
+        branch: Option<String>,
+    },
+    /// Remove the submodule at `path`, its folder too.
+    SubmoduleRemove {
+        path: String,
+    },
 }
 
 /// A local branch and its name on the remote.
@@ -613,6 +643,9 @@ impl Repo {
 
     /// The diff of `file`, one entry of the working tree, on `side`.
     fn diff_of(&self, file: FileChange, side: Side, whole_file: bool) -> Result<FileDiff> {
+        if let Some(sub) = file.submodule {
+            return Ok(self.submodule_diff(file, sub, side));
+        }
         let patch = self.raw_diff(&file, side, whole_file)?;
         let parsed = parse_patch(&patch);
         let mut hunks: Vec<Hunk> = parsed.hunks.into_iter().map(|h| h.hunk).collect();
@@ -688,7 +721,47 @@ impl Repo {
             limited,
             old,
             new,
+            submodule: None,
         })
+    }
+
+    /// A submodule's entry on one side of the working copy: the commit the index records against
+    /// `HEAD`'s (staged), or the one checked out in its folder against the index's (unstaged).
+    fn submodule_diff(&self, file: FileChange, sub: SubmoduleChange, side: Side) -> FileDiff {
+        let id = |spec: String| {
+            self.run(&GitCommand::new(["rev-parse", "--verify", "-q", &spec]))
+                .ok()
+                .map(|out| out.stdout.trim().to_owned())
+                .filter(|id| !id.is_empty())
+        };
+        let path = &file.path;
+        let (old, new, changed) = match side {
+            Side::Staged => (id(format!("HEAD:{path}")), id(format!(":{path}")), 0),
+            Side::Unstaged => {
+                let folder = self.workdir().join(path);
+                let current =
+                    crate::cli::run_in(&folder, &GitCommand::new(["rev-parse", "--verify", "-q", "HEAD"]), None)
+                        .ok()
+                        .map(|out| out.stdout.trim().to_owned())
+                        .filter(|id| !id.is_empty());
+                let changed = if sub.changed {
+                    crate::worktrees::changed_files(&folder)
+                } else {
+                    0
+                };
+                (id(format!(":{path}")), current, changed)
+            }
+        };
+        let moved = self.submodule_move(path, old.as_deref(), new.as_deref(), changed);
+        FileDiff {
+            file,
+            hunks: Vec::new(),
+            too_large: false,
+            limited: false,
+            old: None,
+            new: None,
+            submodule: Some(moved),
+        }
     }
 
     /// The commands `action` will run.
@@ -828,12 +901,16 @@ impl Repo {
                 remote,
                 branch,
                 fetch_first,
+                submodules,
             } => {
                 let mut plan = Vec::new();
                 if *fetch_first {
                     plan.push(self.fetch_command(Some(remote)).with_progress());
                 }
                 plan.push(self.pull_command(remote, branch));
+                if *submodules {
+                    plan.extend(self.submodules_after_pull());
+                }
                 plan
             }
             Action::Push {
@@ -844,9 +921,14 @@ impl Repo {
                 force,
                 lease,
                 no_verify,
+                submodules,
             } => {
                 let mut args = vec!["push".to_owned()];
                 let mut notes = Vec::new();
+                if *submodules {
+                    args.push("--recurse-submodules=on-demand".to_owned());
+                    notes.push("--recurse-submodules=on-demand: push the submodule commits it records first".to_owned());
+                }
                 if *no_verify {
                     args.push("--no-verify".to_owned());
                     notes.push("--no-verify: skip the pre-push hook this one time".to_owned());
@@ -1201,6 +1283,10 @@ impl Repo {
             Action::WorktreeUnlock { path } => self.plan_worktree_unlock(path),
             Action::WorktreePrune => self.plan_worktree_prune(),
             Action::WorktreeRepair { path } => self.plan_worktree_repair(path),
+            Action::SubmoduleUpdate { paths, latest } => self.plan_submodule_update(paths, *latest),
+            Action::SubmoduleSync { paths } => self.plan_submodule_sync(paths),
+            Action::SubmoduleAdd { url, path, branch } => self.plan_submodule_add(url, path, branch.as_deref()),
+            Action::SubmoduleRemove { path } => self.plan_submodule_remove(path),
             Action::Reword { message, no_verify } => {
                 let mut args = vec!["commit".to_owned(), "--amend".to_owned(), "--only".to_owned()];
                 // The same hooks rule as Commit: off in Settings, or skipped this once.
@@ -1255,14 +1341,19 @@ impl Repo {
         }
         // Loading a key changes nothing in the repository. A worktree is a folder: undoing the
         // branch a new one made would pull it from under that folder, and a removed one's files
-        // were never in a snapshot.
+        // were never in a snapshot. A submodule's folder is another repository, also in no
+        // snapshot.
         if let Action::AddSshKey { .. }
         | Action::WorktreeAdd { .. }
         | Action::WorktreeRemove { .. }
         | Action::WorktreeLock { .. }
         | Action::WorktreeUnlock { .. }
         | Action::WorktreePrune
-        | Action::WorktreeRepair { .. } = action
+        | Action::WorktreeRepair { .. }
+        | Action::SubmoduleUpdate { .. }
+        | Action::SubmoduleSync { .. }
+        | Action::SubmoduleAdd { .. }
+        | Action::SubmoduleRemove { .. } = action
         {
             return self.perform_unlogged(action, on_event, cancel);
         }
@@ -1778,11 +1869,28 @@ fn parse_status(out: &str) -> WorkingTree {
                 let skip = if renamed { 7 } else { 6 };
                 let path = record.splitn(skip + 3, ' ').nth(skip + 2).unwrap_or_default();
                 let old_path = if renamed { records.next() } else { None };
+                // `S<c><m><u>` for a submodule: its commit changed, tracked or untracked files in it.
+                let sub: Vec<char> = fields.next().unwrap_or("N...").chars().collect();
+                let gitlink = sub.first() == Some(&'S');
                 if let Some(status) = status_of(xy[0]) {
-                    tree.staged.push(change(path, old_path, status));
+                    let mut file = change(path, old_path, status);
+                    if gitlink {
+                        file.submodule = Some(SubmoduleChange {
+                            moved: true,
+                            changed: false,
+                        });
+                    }
+                    tree.staged.push(file);
                 }
                 if let Some(status) = status_of(xy[1]) {
-                    tree.unstaged.push(change(path, None, status));
+                    let mut file = change(path, None, status);
+                    if gitlink {
+                        file.submodule = Some(SubmoduleChange {
+                            moved: sub.get(1) == Some(&'C'),
+                            changed: sub.get(2) == Some(&'M') || sub.get(3) == Some(&'U'),
+                        });
+                    }
+                    tree.unstaged.push(file);
                 }
             }
             Some("u") => {

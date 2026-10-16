@@ -808,6 +808,30 @@ async fn working_diff(
     blocking(move || repo.working_diff(&path, side, whole_file)).await
 }
 
+/// How the submodule at `path` moved from `old` to `new`, for its card in the sidebar's panel.
+#[tauri::command]
+async fn submodule_move(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    path: String,
+    old: Option<String>,
+    new: Option<String>,
+    changed: usize,
+) -> CommandResult<oxbow_core::SubmoduleMove> {
+    let repo = current(&session, &window)?;
+    blocking(move || Ok(repo.submodule_move(&path, old.as_deref(), new.as_deref(), changed))).await
+}
+
+/// Submodules whose recorded commit is on none of their remotes, for the warning before a push.
+#[tauri::command]
+async fn unpushed_submodules(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+) -> CommandResult<Vec<oxbow_core::submodules::UnpushedSubmodule>> {
+    let repo = current(&session, &window)?;
+    blocking(move || Ok(repo.unpushed_submodules())).await
+}
+
 /// The diffs of several files on one side of the working copy, for the Summary tab.
 #[tauri::command]
 async fn working_diffs(
@@ -1319,16 +1343,24 @@ fn open_in_terminal(
     open_in::open_terminal(&terminal, &dir)
 }
 
-/// `path` when it is one of the repository's worktrees; commands that open things take no other.
+/// `path` when it is one of the repository's worktrees or cloned submodules; commands that open
+/// things take no other.
 fn worktree_folder(repo: &Repo, path: &str) -> CommandResult<PathBuf> {
     let known = repo.worktrees().map_err(|err| err.to_string())?;
-    let wanted = Path::new(path).canonicalize().ok();
-    known
+    // A submodule's path is relative to the repository's folder.
+    let full = repo.workdir().join(path);
+    let wanted = full.canonicalize().ok();
+    let same = |folder: &Path| folder == full || wanted.is_some() && folder.canonicalize().ok() == wanted;
+    if let Some(tree) = known.iter().filter(|t| !t.missing).find(|t| same(Path::new(&t.path))) {
+        return Ok(PathBuf::from(&tree.path));
+    }
+    // A submodule's folder is a repository of its own, opened and shown like a worktree.
+    repo.submodules()
         .iter()
-        .filter(|t| !t.missing)
-        .find(|t| t.path == path || wanted.is_some() && Path::new(&t.path).canonicalize().ok() == wanted)
-        .map(|t| PathBuf::from(&t.path))
-        .ok_or_else(|| format!("{path} isn’t a worktree of this repository any more"))
+        .filter(|s| s.cloned)
+        .map(|s| repo.workdir().join(&s.path))
+        .find(|folder| same(folder))
+        .ok_or_else(|| format!("{path} isn’t a worktree or submodule of this repository any more"))
 }
 
 /// Show a worktree's folder in Finder (Explorer, or the file manager on Linux).
@@ -1361,7 +1393,7 @@ async fn open_window(
         .pending
         .lock()
         .expect("session lock")
-        .insert(label.clone(), path);
+        .insert(label.clone(), folder.display().to_string());
     // Named after the folder, so the Window menu and Mission Control tell the windows apart.
     let title = folder
         .file_name()
@@ -1624,6 +1656,8 @@ fn main() {
             open_in_terminal,
             reveal_worktree,
             open_window,
+            submodule_move,
+            unpushed_submodules,
             close_window_of,
             reveal_file,
             quick_look,

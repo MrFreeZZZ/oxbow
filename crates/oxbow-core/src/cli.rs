@@ -108,7 +108,9 @@ impl GitCommand {
     fn run_args(&self) -> Vec<&str> {
         let mut args: Vec<&str> = self.args.iter().map(String::as_str).collect();
         if self.progress && !args.is_empty() {
-            args.insert(1, "--progress");
+            // After the subcommand: `git submodule update --progress`, but `git push --progress`.
+            let at = if args[0] == "submodule" { 2.min(args.len()) } else { 1 };
+            args.insert(at, "--progress");
         }
         args
     }

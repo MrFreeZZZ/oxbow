@@ -4,7 +4,8 @@ import type { Part, Recovery, Request, Step, TermLine } from "./confirm.svelte";
 import { api } from "./api";
 import { mac } from "./keys";
 import { describe, stoppedOnConflicts } from "./merge";
-import type { Action, Bisect, CommitBrief, Failure, HistoryRow, Operation, SshCheck, Tracking } from "./types";
+import type { Action, Bisect, CommitBrief, Failure, HistoryRow, Operation, SshCheck, Tracking, UnpushedSubmodule } from "./types";
+import { unpushedWarning } from "./submodules";
 import { shortId } from "./format";
 
 export interface RemoteContext {
@@ -173,13 +174,15 @@ export interface PullSetup {
   autostash: boolean;
   /** Fetch the whole remote first, not only the branch being pulled. */
   fetchFirst?: boolean;
+  /** Check out the commits the pulled commits record in the submodules too. */
+  submodules?: boolean;
 }
 
 export function pullRequest(ctx: RemoteContext, setup: PullSetup = { mode: "rebase", autostash: true }): Request {
   const t = ctx.tracking!;
   const branch = ctx.branch!;
   const upstream = `${t.remote}/${t.branch}`;
-  const action: Action = { kind: "pull", remote: t.remote, branch: t.branch, fetchFirst: !!setup.fetchFirst };
+  const action: Action = { kind: "pull", remote: t.remote, branch: t.branch, fetchFirst: !!setup.fetchFirst, submodules: !!setup.submodules };
   const how: Part[] =
     setup.mode === "merge"
       ? [" and merges it into ", chip(ctx, branch), "; a merge commit joins the two when both have new commits."]
@@ -193,6 +196,7 @@ export function pullRequest(ctx: RemoteContext, setup: PullSetup = { mode: "reba
       chip(ctx, upstream),
       ...how,
       setup.autostash ? " Uncommitted files are stashed first and restored after." : " Uncommitted changes to the same files stop the pull.",
+      ...(setup.submodules ? [" Submodules then check out the commits the pulled commits record."] : []),
     ],
     icon: "pull",
     button: "Pull",
@@ -208,7 +212,29 @@ export function pullRequest(ctx: RemoteContext, setup: PullSetup = { mode: "reba
   };
 }
 
-export function pushRequest(ctx: RemoteContext): Request {
+/** Push, or Publish; with submodule commits their remotes don't have, the sheet says so and
+ *  pushes those first unless asked not to. */
+export function pushRequest(ctx: RemoteContext, submodules: UnpushedSubmodule[] = []): Request {
+  const request = plainPushRequest(ctx);
+  const action = request.action;
+  if (!submodules.length || action?.kind !== "push" || action.force) return request;
+  const both: Action & { kind: "push" } = { ...action, submodules: true };
+  const one = submodules.length === 1;
+  const verb = action.setUpstream ? "Publish" : "Push";
+  return {
+    ...request,
+    action: both,
+    button: `${verb} Both`,
+    warning: {
+      title: one ? `${submodules[0].title} has a commit that isn’t pushed` : `${submodules.length} submodules have commits that aren’t pushed`,
+      body: unpushedWarning(submodules, `${verb} Both`),
+    },
+    alt: { label: one ? `${verb} Without ${submodules[0].title}` : `${verb} Without Them`, request: () => request },
+    recover: (failure) => pushRecovery(failure, ctx, both),
+  };
+}
+
+function plainPushRequest(ctx: RemoteContext): Request {
   const to = target(ctx)!;
   const branch = ctx.branch!;
   const action: Action = {

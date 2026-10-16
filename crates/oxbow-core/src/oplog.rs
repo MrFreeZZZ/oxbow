@@ -868,6 +868,26 @@ impl Repo {
             Action::WorktreeUnlock { path } => ("worktree", format!("Unlock the worktree {path}")),
             Action::WorktreePrune => ("worktree", "Prune worktrees".to_owned()),
             Action::WorktreeRepair { path } => ("worktree", format!("Repair the worktree {path}")),
+            Action::SubmoduleUpdate { paths, latest } => (
+                "box",
+                match (paths.as_slice(), latest) {
+                    ([], false) => "Update submodules".to_owned(),
+                    ([], true) => "Pull the latest of every submodule".to_owned(),
+                    ([path], false) => format!("Update the submodule {path}"),
+                    ([path], true) => format!("Pull the latest of the submodule {path}"),
+                    (_, false) => format!("Update {} submodules", paths.len()),
+                    (_, true) => format!("Pull the latest of {} submodules", paths.len()),
+                },
+            ),
+            Action::SubmoduleSync { paths } => (
+                "box",
+                match paths.as_slice() {
+                    [path] => format!("Sync the URL of the submodule {path}"),
+                    _ => "Sync submodule URLs".to_owned(),
+                },
+            ),
+            Action::SubmoduleAdd { path, .. } => ("box", format!("Add the submodule {path}")),
+            Action::SubmoduleRemove { path } => ("box", format!("Remove the submodule {path}")),
             Action::PushBranches { remote, branches } => {
                 ("push", format!("Push {} branches to {remote}", branches.len()))
             }
