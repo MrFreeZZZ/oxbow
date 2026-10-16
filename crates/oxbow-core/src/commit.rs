@@ -487,7 +487,7 @@ fn tree_changes(
             path: path(p),
             old_path,
             status,
-            submodule: gitlink.then(|| SubmoduleChange {
+            submodule: gitlink.then_some(SubmoduleChange {
                 moved: true,
                 changed: false,
             }),

@@ -127,9 +127,9 @@ impl Repo {
                 name: module.name().to_str_lossy().into_owned(),
                 title: title(&path),
                 url: module.url().ok().map(|u| u.to_bstring().to_str_lossy().into_owned()),
-                follows: module.branch().ok().flatten().and_then(|b| match b {
-                    gix::submodule::config::Branch::Name(name) => Some(name.to_str_lossy().into_owned()),
-                    gix::submodule::config::Branch::CurrentInSuperproject => Some(".".to_owned()),
+                follows: module.branch().ok().flatten().map(|b| match b {
+                    gix::submodule::config::Branch::Name(name) => name.to_str_lossy().into_owned(),
+                    gix::submodule::config::Branch::CurrentInSuperproject => ".".to_owned(),
                 }),
                 path,
                 recorded,
