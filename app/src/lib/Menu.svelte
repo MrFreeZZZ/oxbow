@@ -58,6 +58,8 @@
   let sub = $state<{ index: number; item: HTMLElement } | null>(null);
   let subBox = $state<HTMLDivElement>();
   let subLeft = $state(0);
+  /** Moved through with the keyboard: the focused item shows its ×, not only the hovered one. */
+  let keyed = $state(false);
   let subTop = $state(0);
 
   // Open at the pointer, kept inside the window.
@@ -105,6 +107,7 @@
     const removable = focused?.dataset.index ? entries[Number(focused.dataset.index)] : undefined;
     if ((event.key === "Delete" || event.key === "Backspace") && removable?.kind === "item" && removable.remove) {
       event.preventDefault();
+      keyed = true;
       remove(Number(focused!.dataset.index), removable.remove.run);
     } else if (event.key === "Escape") {
       event.preventDefault();
@@ -118,6 +121,7 @@
       sub = null;
     } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
+      keyed = true;
       const inSub = !!subBox?.contains(document.activeElement);
       const items = [...((inSub ? subBox : box)?.querySelectorAll<HTMLButtonElement>("button[role=menuitem]") ?? [])];
       const at = items.indexOf(document.activeElement as HTMLButtonElement);
@@ -138,7 +142,7 @@
     onClose();
   }}
 ></div>
-<div class="menu" role="menu" aria-label={label} bind:this={box} style:left="{left}px" style:top="{top}px">
+<div class="menu" class:keyed role="menu" aria-label={label} bind:this={box} style:left="{left}px" style:top="{top}px">
   {#each entries as entry, i (i)}
     {#if entry.kind === "header"}
       <div class="header">{entry.label}</div>
@@ -339,7 +343,7 @@
     stroke-linecap: round;
   }
   .row:hover .x,
-  .row:focus-within .x {
+  .menu.keyed .row:focus-within .x {
     opacity: 1;
   }
   .x:hover {
