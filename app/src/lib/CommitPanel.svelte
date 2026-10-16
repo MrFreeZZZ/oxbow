@@ -20,6 +20,7 @@
     foundText = null,
     banner,
     version = 0,
+    onUnshallow = null,
   }: {
     row: HistoryRow;
     childIds: string[];
@@ -37,6 +38,8 @@
     banner?: Snippet;
     /** Goes up with each reload of the repository. */
     version?: number;
+    /** Fetch Full History, for a commit where a shallow clone stops. */
+    onUnshallow?: (() => void) | null;
   } = $props();
 
   let diffView = $state<DiffView>();
@@ -107,15 +110,29 @@
   });
 
   // A commit never changes, but what a submodule card says about it does: whether the submodule
-  // is cloned here, which of its commits this clone has. A reload asks again, keeping the diff
-  // on screen meanwhile.
+  // is cloned here, which of its commits this clone has. A commit where a shallow clone stops
+  // shows its changes once a fetch brings its parent, and one that failed to load may load now.
+  // A reload asks again for these, keeping the panel on screen meanwhile.
   $effect(() => {
     version;
     untrack(() => {
-      if (!diffs.some((d) => d.submodule)) return;
+      const again = !!detail?.shallowEnd || error !== null;
+      if (!again && !diffs.some((d) => d.submodule)) return;
       const current = id;
       const path = tab;
       const wholeFile = whole;
+      if (again) {
+        api.commitDetail(current).then(
+          (d) => {
+            if (id !== current) return;
+            detail = d;
+            error = null;
+          },
+          (err) => {
+            if (id === current) error = String(err);
+          },
+        );
+      }
       api.commitDiff(current, path, wholeFile).then(
         (d) => {
           if (id === current && tab === path && whole === wholeFile) diffs = d;
@@ -192,7 +209,16 @@
     {#if error}
       <p class="error" role="alert">{error}</p>
     {/if}
-    {#if tab === null && detail}
+    {#if tab === null && detail?.shallowEnd}
+      <div class="end">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.3" /><path d="M8 7.2v4M8 4.9v.1" /></svg>
+        <span class="end-text">
+          History ends here
+          <span class="sub">This is a shallow clone, and the commit before this one isn’t downloaded, so its changes can’t be shown yet.</span>
+        </span>
+        {#if onUnshallow}<button class="small-button" onclick={() => onUnshallow?.()}>Fetch Full History…</button>{/if}
+      </div>
+    {:else if tab === null && detail}
       <div class="files">
         <div class="count">
           <span class="grow">{detail.files.length} {detail.files.length === 1 ? "file" : "files"} changed</span>
@@ -384,6 +410,46 @@
     min-height: 0;
   }
   /* The file list is a card of its own, so it reads apart from the diffs below it. */
+  /* The same card as at the end of a shallow clone's history. */
+  .end {
+    margin: 12px 12px 6px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: var(--glass);
+    border: 0.5px solid var(--glass-border);
+    font-size: 12.5px;
+  }
+  .end .icon {
+    width: 15px;
+    height: 15px;
+    flex-shrink: 0;
+    color: var(--text2);
+  }
+  .end-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex-grow: 1;
+    font-weight: 500;
+  }
+  .end-text .sub {
+    font-weight: 400;
+    font-size: 12px;
+    color: var(--text2);
+  }
+  .small-button {
+    flex-shrink: 0;
+    height: 26px;
+    padding: 0 12px;
+    border-radius: 13px;
+    background: var(--field);
+    font-size: 12px;
+    font-weight: 500;
+  }
   .files {
     margin: 12px 12px 6px;
     padding: 8px 4px 6px;
