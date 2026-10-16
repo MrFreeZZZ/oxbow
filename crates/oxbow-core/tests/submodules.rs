@@ -1,6 +1,6 @@
 mod support;
 
-use oxbow_core::{Action, DiffContext, HistoryOptions, Moved, Repo, Side};
+use oxbow_core::{Action, DiffContext, HistoryOptions, Moved, NotKept, Repo, Side};
 use support::Fixture;
 
 /// Let git clone from local paths, as `submodule update` refuses by default; the tests' clones
@@ -375,8 +375,104 @@ fn pull_can_bring_the_submodules_along() {
         branch: "main".into(),
         fetch_first: false,
         submodules,
+        mode: None,
     };
     let with = shown(&repo, &pull(true));
     assert_eq!(with.last().unwrap(), "git submodule update --init --recursive");
     assert_eq!(shown(&repo, &pull(false)).len(), with.len() - 1);
+}
+
+/// A server with the app before it had submodules, a clone of it, and a teammate's clone that
+/// adds `libs/lint` and pushes.
+fn first_submodule_on_the_server() -> (tempfile::TempDir, Fixture, Fixture, Fixture) {
+    allow_file_urls();
+    let server = tempfile::tempdir().unwrap();
+    let url = server.path().join("app.git");
+    let url = url.to_str().unwrap().to_owned();
+    let mut lib = Fixture::new();
+    lib.commit("rules.txt", "one\n", "First rule");
+    let mut me = Fixture::new();
+    me.commit("app.rs", "fn main() {}\n", "Start");
+    me.git(&["init", "-q", "--bare", "-b", "main", &url]);
+    me.git(&["remote", "add", "origin", &url]);
+    me.git(&["push", "-q", "-u", "origin", "main"]);
+    let mut mate = Fixture::new();
+    mate.git(&["remote", "add", "origin", &url]);
+    mate.git(&["fetch", "-q", "origin"]);
+    mate.git(&["checkout", "-q", "-B", "main", "origin/main"]);
+    let lib_url = lib.path().display().to_string();
+    mate.git(&[
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        &lib_url,
+        "libs/lint",
+    ]);
+    mate.git(&["commit", "-q", "-m", "Add lint"]);
+    mate.git(&["push", "-q", "origin", "main"]);
+    (server, me, mate, lib)
+}
+
+#[test]
+fn pull_that_brings_the_first_submodule_clones_it() {
+    let pull = Action::Pull {
+        remote: "origin".into(),
+        branch: "main".into(),
+        fetch_first: false,
+        submodules: true,
+        mode: None,
+    };
+
+    // Fetched before: the sheet already shows the update.
+    let (_server, mut me, _mate, _lib) = first_submodule_on_the_server();
+    me.git(&["fetch", "-q", "origin"]);
+    let repo = Repo::open(me.path()).unwrap();
+    assert_eq!(
+        shown(&repo, &pull).last().unwrap(),
+        "git submodule update --init --recursive"
+    );
+    repo.perform(&pull).unwrap();
+    assert!(me.path().join("libs/lint/.git").exists());
+
+    // Not fetched yet: the pull finds it and the update still runs.
+    let (_server, me, _mate, _lib) = first_submodule_on_the_server();
+    let repo = Repo::open(me.path()).unwrap();
+    assert_eq!(shown(&repo, &pull).len(), 1);
+    repo.perform(&pull).unwrap();
+    assert!(me.path().join("libs/lint/.git").exists());
+    assert!(repo.submodules()[0].cloned);
+}
+
+#[test]
+fn removing_one_names_the_ignored_files_lost_with_its_folder() {
+    let (mut fx, _lib, _ids) = app_with_submodule();
+    let exclude = sub(
+        &mut fx,
+        &["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"],
+    );
+    std::fs::create_dir_all(std::path::Path::new(&exclude).parent().unwrap()).unwrap();
+    std::fs::write(&exclude, ".env\n").unwrap();
+    std::fs::write(fx.path().join("libs/lint/.env"), "TOKEN=1\n").unwrap();
+    // git status in the folder says nothing about it.
+    assert_eq!(sub(&mut fx, &["status", "--porcelain"]), "");
+    let repo = Repo::open(fx.path()).unwrap();
+    assert_eq!(repo.submodules()[0].changed, 0);
+
+    let gaps = repo
+        .not_kept(&Action::SubmoduleRemove {
+            path: "libs/lint".into(),
+        })
+        .unwrap();
+    let NotKept::Ignored { folder, files, .. } = &gaps[0] else {
+        panic!("{gaps:?}")
+    };
+    assert_eq!(folder, "libs/lint");
+    assert_eq!(files[0].path, ".env");
+    assert_eq!(
+        gaps[1],
+        NotKept::SubmoduleFolder {
+            folder: "libs/lint".into()
+        }
+    );
 }

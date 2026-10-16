@@ -164,9 +164,19 @@ function repoName(url: string): string {
 /** What the last check of a URL found, so the sheet can say it while it is still the URL typed. */
 let probed: { url: string; text: string; error: boolean } | null = null;
 let probing = "";
+/** Number of the sheet opened last, and what is typed in it now: a check that answers late
+ *  updates that, never the fields as they were when it started, nor a sheet closed since. */
+let form = 0;
+let typed: NewSubmodule | null = null;
 
-/** The Add Submodule sheet. */
-export function addSubmoduleRequest(subs: Submodule[], repoPath: string, state: NewSubmodule = { url: "", folder: "", edited: false, branch: "" }): Request {
+/** The Add Submodule sheet; without `state`, a new one. */
+export function addSubmoduleRequest(subs: Submodule[], repoPath: string, state?: NewSubmodule): Request {
+  if (!state) {
+    form++;
+    probing = "";
+    state = { url: "", folder: "", edited: false, branch: "" };
+  }
+  typed = state;
   const again = (change: Partial<NewSubmodule>) => addSubmoduleRequest(subs, repoPath, { ...state, ...change });
   const url = state.url.trim();
   const folder = state.folder.trim().replace(/^\.\//, "").replace(/[/\\]+$/, "");
@@ -181,17 +191,23 @@ export function addSubmoduleRequest(subs: Submodule[], repoPath: string, state: 
   const known = probed && probed.url === url ? probed : null;
   if (url && !known && probing !== url) {
     probing = url;
+    const mine = form;
     // Checked after typing stops for a moment, then shown if the URL is still the one typed.
+    const show = () => {
+      if (mine === form && probing === url && typed?.url.trim() === url && confirm.request?.action?.kind === "submoduleAdd") {
+        confirm.change(addSubmoduleRequest(subs, repoPath, typed));
+      }
+    };
     setTimeout(() => {
-      if (probing !== url) return;
+      if (mine !== form || probing !== url) return;
       api.probeRemote(url).then(
         (probe) => {
           probed = { url, error: false, text: `Found${probe.defaultBranch ? ` · default branch ${probe.defaultBranch}` : " · empty repository"}` };
-          if (probing === url && confirm.request?.action?.kind === "submoduleAdd") confirm.change(addSubmoduleRequest(subs, repoPath, state));
+          show();
         },
         () => {
           probed = { url, error: true, text: "Can’t reach it: check the address, or your access to it." };
-          if (probing === url && confirm.request?.action?.kind === "submoduleAdd") confirm.change(addSubmoduleRequest(subs, repoPath, state));
+          show();
         },
       );
     }, 500);

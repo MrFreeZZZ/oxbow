@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Snippet } from "svelte";
+  import { untrack, type Snippet } from "svelte";
   import { api } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { CommitDetail, FileDiff, HistoryRow } from "./types";
@@ -19,6 +19,7 @@
     foundFiles = [],
     foundText = null,
     banner,
+    version = 0,
   }: {
     row: HistoryRow;
     childIds: string[];
@@ -34,6 +35,8 @@
     foundText?: string | null;
     /** A card above the commit's details, e.g. where a commit from the reflog came from. */
     banner?: Snippet;
+    /** Goes up with each reload of the repository. */
+    version?: number;
   } = $props();
 
   let diffView = $state<DiffView>();
@@ -101,6 +104,25 @@
         if (id === current) error = String(err);
       },
     );
+  });
+
+  // A commit never changes, but what a submodule card says about it does: whether the submodule
+  // is cloned here, which of its commits this clone has. A reload asks again, keeping the diff
+  // on screen meanwhile.
+  $effect(() => {
+    version;
+    untrack(() => {
+      if (!diffs.some((d) => d.submodule)) return;
+      const current = id;
+      const path = tab;
+      const wholeFile = whole;
+      api.commitDiff(current, path, wholeFile).then(
+        (d) => {
+          if (id === current && tab === path && whole === wholeFile) diffs = d;
+        },
+        () => {},
+      );
+    });
   });
 
   function openTab(path: string | null) {

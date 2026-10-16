@@ -246,6 +246,7 @@
     oplog.forget();
     lfs.forget();
     activity.reset();
+    stopPaging();
     if (view === "compare" || view === "file" || view === "stack" || view === "pull") view = "history";
     try {
       limit = PAGE;
@@ -598,7 +599,7 @@
     }
     if (kind !== "fetch" && activity.running) {
       const branch = history?.head.branch ?? "HEAD";
-      activity.queue(kind, kind === "push" ? `Push ${branch}` : `Pull into ${branch}`);
+      activity.queue(kind, kind === "push" ? `Push ${branch}` : `Pull into ${branch}`, mode);
       return;
     }
     // Commits made outside the app since the last reload belong in the sheet.
@@ -620,7 +621,9 @@
             ...(await api.pullSetup().catch(() => ({ mode: "rebase" as const, autostash: true }))),
             ...(mode ? { mode } : {}),
             fetchFirst: prefs.get("oxbow.pull.fetchFirst"),
-            submodules: !!history?.submodules.length && prefs.get("oxbow.pull.submodules"),
+            // Not only when there are submodules now: the pull may bring the first one.
+            submodules: prefs.get("oxbow.pull.submodules"),
+            hasSubmodules: !!history?.submodules.length,
           }
         : undefined;
     // Submodule commits nobody else has would leave the pushed commits pointing at nothing.
@@ -633,8 +636,8 @@
     checkRemoteTags();
     openConflicts(opBefore);
   }
-  activity.startQueued = (kind) => {
-    if (kind !== "action") void sync(kind);
+  activity.startQueued = (item) => {
+    if (item.kind !== "action") void sync(item.kind, item.mode);
   };
 
   /** What Fetch fetches: the one remote, or all of them, as its sheet says. */
@@ -694,6 +697,16 @@
   }
   let refreshing: Promise<void> | null = null;
   let refreshAfterPaging = false;
+  /** Number of the page load under way: one that finishes after another started, or after the
+   *  repository changed, leaves `paging` to the newer one. */
+  let pagingToken = 0;
+
+  /** Another repository, or none: older commits on their way belong to the old one. */
+  function stopPaging() {
+    pagingToken++;
+    paging = null;
+    refreshAfterPaging = false;
+  }
 
   async function refreshNow() {
     const mine = generation;
@@ -716,6 +729,7 @@
   async function loadOlder(until: string | null = null): Promise<boolean> {
     if (!repo || loading || paging || !history?.truncated) return false;
     const mine = generation;
+    const token = ++pagingToken;
     paging = until ?? "more";
     try {
       // A reload already on its way would land after this one, with fewer commits.
@@ -731,10 +745,12 @@
       if (mine === generation) error = String(err);
       return false;
     } finally {
-      if (mine === generation) paging = null;
-      if (refreshAfterPaging) {
-        refreshAfterPaging = false;
-        refresh();
+      if (token === pagingToken) {
+        paging = null;
+        if (refreshAfterPaging) {
+          refreshAfterPaging = false;
+          refresh();
+        }
       }
     }
   }
@@ -779,6 +795,8 @@
   /** Back to the Welcome window; the repository stays in Recent Repositories. */
   function closeRepo() {
     ++generation;
+    stopPaging();
+    activity.reset();
     repo = null;
     history = null;
     selected = null;
@@ -1334,7 +1352,7 @@
                 onResolve={operation ? () => (resolving = true) : undefined}
               />
             {:else if selectedRow}
-              <CommitPanel row={selectedRow} childIds={childrenOf.get(selectedRow.id) ?? []} lookup={(id) => rowsById.get(id)} onSelect={select} localTags={history.localTags}
+              <CommitPanel row={selectedRow} childIds={childrenOf.get(selectedRow.id) ?? []} lookup={(id) => rowsById.get(id)} onSelect={select} localTags={history.localTags} {version}
                 find={found?.mode === "code" ? found.text : null}
                 foundFiles={found?.hits.get(selectedRow.id) ?? []}
                 foundText={found?.text ?? null}

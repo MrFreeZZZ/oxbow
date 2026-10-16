@@ -70,6 +70,8 @@
         return gap.removed ? `${plural(gap.changed, "uncommitted file")} in ${gap.folder} ${gap.changed === 1 ? "is" : "are"} lost` : `${gap.branch} is checked out in ${gap.folder}`;
       case "notLogged":
         return "Undo can’t put the folder back";
+      case "submoduleFolder":
+        return `Undo can’t put ${gap.folder} back`;
       case "pushed":
         return `${gap.remote} already has ${gap.commits.length + gap.more === 1 ? "this commit" : `${plural(gap.commits.length + gap.more, "commit")}`}`;
     }
@@ -88,6 +90,8 @@
           : "Undo moves the branch, but the files in that folder stay as they are and show up there as changes.";
       case "notLogged":
         return `Worktree steps are not in the Operation Log. The branch and its commits stay, so you can make the folder again.`;
+      case "submoduleFolder":
+        return "Removing a submodule is not in the Operation Log. Its commits stay, so you can add it back, but files in its folder that aren’t in a commit are gone.";
       case "pushed":
         return `Undo changes only your copy of ${gap.branch}: ${gap.remote.split("/")[0]} keeps ${gap.commits.length + gap.more === 1 ? "it" : "them"}, and a later pull brings ${gap.commits.length + gap.more === 1 ? "it" : "them"} back. To take ${gap.commits.length + gap.more === 1 ? "it" : "them"} back for everyone, revert instead.`;
     }

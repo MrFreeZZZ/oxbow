@@ -393,15 +393,20 @@ impl Repo {
         ]
     }
 
-    /// The command that brings the submodules along after a pull, when there are any.
-    pub(crate) fn submodules_after_pull(&self) -> Option<GitCommand> {
-        if self.submodules().is_empty() {
+    /// The command that brings the submodules along after pulling `remote`/`branch`: when there
+    /// are submodules, or the remote branch has them as of the last fetch, e.g. its first one.
+    pub(crate) fn submodules_after_pull(&self, remote: &str, branch: &str) -> Option<GitCommand> {
+        let incoming = format!("refs/remotes/{remote}/{branch}:.gitmodules");
+        if self.submodules().is_empty() && self.run(&GitCommand::new(["cat-file", "-e", &incoming])).is_err() {
             return None;
         }
-        Some(
-            GitCommand::new(["submodule", "update", "--init", "--recursive"])
-                .comment("the submodules follow: check out the commits the pulled commits record")
-                .with_progress(),
-        )
+        Some(submodule_update())
     }
+}
+
+/// `git submodule update` after a pull: the submodules check out the commits recorded now.
+pub(crate) fn submodule_update() -> GitCommand {
+    GitCommand::new(["submodule", "update", "--init", "--recursive"])
+        .comment("the submodules follow: check out the commits the pulled commits record")
+        .with_progress()
 }

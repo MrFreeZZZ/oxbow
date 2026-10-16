@@ -146,6 +146,9 @@ pub enum Action {
         /// Check out the commits the pulled commits record in the submodules too.
         #[serde(default)]
         submodules: bool,
+        /// Merge or rebase for this one pull, over `pull.rebase` and `pull.ff`.
+        #[serde(default)]
+        mode: Option<PullMode>,
     },
     /// Send the local `branch` to `remote`, where it is called `upstream`.
     Push {
@@ -902,14 +905,15 @@ impl Repo {
                 branch,
                 fetch_first,
                 submodules,
+                mode,
             } => {
                 let mut plan = Vec::new();
                 if *fetch_first {
                     plan.push(self.fetch_command(Some(remote)).with_progress());
                 }
-                plan.push(self.pull_command(remote, branch));
+                plan.push(self.pull_command(remote, branch, *mode));
                 if *submodules {
-                    plan.extend(self.submodules_after_pull());
+                    plan.extend(self.submodules_after_pull(remote, branch));
                 }
                 plan
             }
@@ -973,7 +977,7 @@ impl Repo {
                 }
                 push.extend([remote.clone(), refspec(branch, upstream)]);
                 vec![
-                    self.pull_command(remote, upstream),
+                    self.pull_command(remote, upstream, None),
                     GitCommand::new(push)
                         .comment("then send your commits on top")
                         .with_progress(),
@@ -1474,6 +1478,7 @@ impl Repo {
                     _ => Vec::new(),
                 };
                 let mut last = String::new();
+                let mut updated_submodules = false;
                 let stash_before = match action {
                     Action::BisectStart { stash: true, .. } => Some(self.stash_tip()),
                     _ => None,
@@ -1485,6 +1490,7 @@ impl Repo {
                         continue;
                     }
                     self.write_todo(&command)?;
+                    updated_submodules |= command.args.first().is_some_and(|a| a == "submodule");
                     let command = crate::ssh::interactive(command);
                     on_event(ActionEvent::Command {
                         display: command.display(),
@@ -1516,6 +1522,17 @@ impl Repo {
                     } else {
                         out.stdout
                     };
+                }
+                // The pull brought the first submodules, which the last fetch didn't know of.
+                if let Action::Pull { submodules: true, .. } = action
+                    && !updated_submodules
+                    && !self.submodules().is_empty()
+                {
+                    let command = crate::ssh::interactive(crate::submodules::submodule_update());
+                    on_event(ActionEvent::Command {
+                        display: command.display(),
+                    });
+                    self.run_streaming(&command, &mut |line| on_event(ActionEvent::Line(line)), cancel)?;
                 }
                 if pending {
                     self.forget_apply();
@@ -1673,7 +1690,7 @@ fn stash_before(branch: &str) -> GitCommand {
 }
 
 /// How Pull brings in the remote's commits, from `pull.rebase` and `pull.ff`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PullMode {
     /// Oxbow's default when neither is set: your commits go on top, no merge commit.
@@ -1774,8 +1791,9 @@ impl Repo {
         Ok(commands)
     }
 
-    fn pull_command(&self, remote: &str, branch: &str) -> GitCommand {
-        let (mode, note) = match self.pull_mode() {
+    /// `mode` is the one picked for this pull; without it, the repository's setting.
+    fn pull_command(&self, remote: &str, branch: &str, mode: Option<PullMode>) -> GitCommand {
+        let (mode, note) = match mode.unwrap_or_else(|| self.pull_mode()) {
             PullMode::FastForward => ("--ff-only", "--ff-only: only if your branch has no commits of its own"),
             PullMode::Merge => (
                 "--no-rebase",
