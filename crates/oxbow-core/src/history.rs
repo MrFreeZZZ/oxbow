@@ -13,6 +13,7 @@ use crate::graph::{self, GraphCommit, LeadIn, RowLayout, Run, Segment};
 use crate::operation::{Operation, OperationKind};
 use crate::remote::Tracking;
 use crate::repo::{HeadInfo, RefInfo, RefKind, Repo, StashInfo};
+use crate::submodules::Submodule;
 use crate::worktrees::Worktree;
 
 /// Commits loaded at a time: the first load, and each one after it as the list scrolls on.
@@ -57,6 +58,8 @@ pub struct History {
     /// Every working folder of the repository, the main one first. Just this one when there are
     /// no others, or when git can't list them.
     pub worktrees: Vec<Worktree>,
+    /// The repository's submodules, in the order of `.gitmodules`.
+    pub submodules: Vec<Submodule>,
     pub refs: Vec<RefInfo>,
     /// Tags the default remote does not have yet, as far as Oxbow knows.
     pub local_tags: Vec<String>,
@@ -167,6 +170,7 @@ impl Repo {
         let rebasing = operation.as_ref().is_some_and(|op| op.kind == OperationKind::Rebase);
         let bisect = self.bisect().ok().flatten();
         let worktrees = self.worktrees().unwrap_or_default();
+        let submodules = self.submodules();
 
         let mut tips: Vec<ObjectId> = refs
             .iter()
@@ -478,6 +482,7 @@ impl Repo {
             operation,
             bisect,
             worktrees,
+            submodules,
             local_tags: self.local_tags(&refs),
             fetched: self.fetch_times_of(&remotes, &refs),
             refs,

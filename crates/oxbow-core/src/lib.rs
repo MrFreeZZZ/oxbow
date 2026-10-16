@@ -30,6 +30,7 @@ pub mod setup;
 pub mod ssh;
 pub mod stack;
 pub mod stash;
+pub mod submodules;
 pub mod tags;
 pub mod worktree;
 pub mod worktrees;
@@ -38,7 +39,7 @@ pub use bisect::{Bisect, BisectMark};
 pub use cli::{CommandOutput, GitCommand, OutputLine};
 pub use commit::{
     CommitDetail, DiffContext, DiffLine, EolChange, FileChange, FileDiff, FileStatus, Hunk, LineKind, ModeChange,
-    Person, Source, WordPart,
+    Person, Source, SubmoduleChange, WordPart,
 };
 pub use compare::{CompareCommit, CompareFile, CompareMode, Comparison};
 pub use config::{ConfigScope, GitInfo, RemoteInfo, SshKey, SshSource, Storage};
@@ -63,5 +64,6 @@ pub use stack::{
     StepAction,
 };
 pub use stash::StashCheck;
+pub use submodules::{Moved, Submodule, SubmoduleMove};
 pub use worktree::{Action, ActionEvent, BranchPush, Plan, PullMode, RemoteBranch, Side, WorkingTree};
 pub use worktrees::Worktree;

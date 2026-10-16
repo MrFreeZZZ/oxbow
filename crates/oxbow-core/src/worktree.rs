@@ -12,7 +12,8 @@ use std::sync::atomic::AtomicBool;
 use crate::bisect::BisectMark;
 use crate::cli::{GitCommand, OutputLine, literal};
 use crate::commit::{
-    DiffLine, FileChange, FileDiff, FileStatus, Hunk, LineKind, ModeChange, Source, eol_change, over_limit, word_diff,
+    DiffLine, FileChange, FileDiff, FileStatus, Hunk, LineKind, ModeChange, Source, SubmoduleChange, eol_change,
+    over_limit, word_diff,
 };
 use crate::config;
 use crate::edit::{ResetMode, plan_reset};
@@ -613,6 +614,9 @@ impl Repo {
 
     /// The diff of `file`, one entry of the working tree, on `side`.
     fn diff_of(&self, file: FileChange, side: Side, whole_file: bool) -> Result<FileDiff> {
+        if let Some(sub) = file.submodule {
+            return Ok(self.submodule_diff(file, sub, side));
+        }
         let patch = self.raw_diff(&file, side, whole_file)?;
         let parsed = parse_patch(&patch);
         let mut hunks: Vec<Hunk> = parsed.hunks.into_iter().map(|h| h.hunk).collect();
@@ -688,7 +692,47 @@ impl Repo {
             limited,
             old,
             new,
+            submodule: None,
         })
+    }
+
+    /// A submodule's entry on one side of the working copy: the commit the index records against
+    /// `HEAD`'s (staged), or the one checked out in its folder against the index's (unstaged).
+    fn submodule_diff(&self, file: FileChange, sub: SubmoduleChange, side: Side) -> FileDiff {
+        let id = |spec: String| {
+            self.run(&GitCommand::new(["rev-parse", "--verify", "-q", &spec]))
+                .ok()
+                .map(|out| out.stdout.trim().to_owned())
+                .filter(|id| !id.is_empty())
+        };
+        let path = &file.path;
+        let (old, new, changed) = match side {
+            Side::Staged => (id(format!("HEAD:{path}")), id(format!(":{path}")), 0),
+            Side::Unstaged => {
+                let folder = self.workdir().join(path);
+                let current =
+                    crate::cli::run_in(&folder, &GitCommand::new(["rev-parse", "--verify", "-q", "HEAD"]), None)
+                        .ok()
+                        .map(|out| out.stdout.trim().to_owned())
+                        .filter(|id| !id.is_empty());
+                let changed = if sub.changed {
+                    crate::worktrees::changed_files(&folder)
+                } else {
+                    0
+                };
+                (id(format!(":{path}")), current, changed)
+            }
+        };
+        let moved = self.submodule_move(path, old.as_deref(), new.as_deref(), changed);
+        FileDiff {
+            file,
+            hunks: Vec::new(),
+            too_large: false,
+            limited: false,
+            old: None,
+            new: None,
+            submodule: Some(moved),
+        }
     }
 
     /// The commands `action` will run.
@@ -1778,11 +1822,28 @@ fn parse_status(out: &str) -> WorkingTree {
                 let skip = if renamed { 7 } else { 6 };
                 let path = record.splitn(skip + 3, ' ').nth(skip + 2).unwrap_or_default();
                 let old_path = if renamed { records.next() } else { None };
+                // `S<c><m><u>` for a submodule: its commit changed, tracked or untracked files in it.
+                let sub: Vec<char> = fields.next().unwrap_or("N...").chars().collect();
+                let gitlink = sub.first() == Some(&'S');
                 if let Some(status) = status_of(xy[0]) {
-                    tree.staged.push(change(path, old_path, status));
+                    let mut file = change(path, old_path, status);
+                    if gitlink {
+                        file.submodule = Some(SubmoduleChange {
+                            moved: true,
+                            changed: false,
+                        });
+                    }
+                    tree.staged.push(file);
                 }
                 if let Some(status) = status_of(xy[1]) {
-                    tree.unstaged.push(change(path, None, status));
+                    let mut file = change(path, None, status);
+                    if gitlink {
+                        file.submodule = Some(SubmoduleChange {
+                            moved: sub.get(1) == Some(&'C'),
+                            changed: sub.get(2) == Some(&'M') || sub.get(3) == Some(&'U'),
+                        });
+                    }
+                    tree.unstaged.push(file);
                 }
             }
             Some("u") => {
