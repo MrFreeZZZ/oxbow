@@ -10,6 +10,7 @@ import type {
   Action,
   CommitBrief,
   CommitDetail,
+  DiffPage,
   ConfigScope,
   GitSettings,
   RepoSettings,
@@ -53,6 +54,9 @@ import type {
 } from "./types";
 import type { PullSetup } from "./remote";
 
+/** What a read answers when a newer one in its lane, or `stopReads`, stopped it. */
+export const stopped = (err: unknown) => String(err) === "stopped";
+
 export const api = {
   initialRepo: () => invoke<string | null>("initial_repo"),
   openRepo: (path: string) => invoke<RepoSummary>("open_repo", { path }),
@@ -73,10 +77,17 @@ export const api = {
   /** The latest `limit` commits, or more to reach `until`. */
   /** With `known`, the key of the history on screen, rows that came out the same are left out. */
   history: (limit: number, until: string | null = null, known: string | null = null) => invoke<History>("history", { limit, until, known }),
-  commitDetail: (id: string) => invoke<CommitDetail>("commit_detail", { id }),
+  /** `quick`: the files without their line counts, which needs no file read. A newer read in
+   *  the same `lane` stops this one. */
+  commitDetail: (id: string, quick = false, lane: string | null = null) => invoke<CommitDetail>("commit_detail", { id, quick, lane }),
   /** `full`: past the line limit in Settings (Show Diff Anyway). */
-  commitDiff: (id: string, path: string | null, wholeFile: boolean, full = false) =>
-    invoke<FileDiff[]>("commit_diff", { id, path, wholeFile, full }),
+  commitDiff: (id: string, path: string | null, wholeFile: boolean, full = false, lane: string | null = null) =>
+    invoke<FileDiff[]>("commit_diff", { id, path, wholeFile, full, lane }),
+  /** The diffs of the commit's files from the `from`th on, as many as fit `budget` lines. */
+  commitDiffPage: (id: string, from: number, budget: number, wholeFile: boolean, lane: string | null = null) =>
+    invoke<DiffPage>("commit_diff_page", { id, from, budget, wholeFile, lane }),
+  /** Stop the reads running in these lanes: their answers are no longer wanted. */
+  stopReads: (lanes: string[]) => invoke<void>("stop_reads", { lanes }),
   compare: (base: string, target: string, mode: CompareMode) => invoke<Comparison>("compare", { base, target, mode }),
   compareDiff: (from: string, to: string, path: string | null, wholeFile: boolean, full = false) =>
     invoke<FileDiff[]>("compare_diff", { from, to, path, wholeFile, full }),

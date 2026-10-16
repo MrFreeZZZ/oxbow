@@ -9,8 +9,9 @@
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { Blame, FileCommit, FileDiff, FileHistory, History, HistoryRow } from "./types";
   import { initials, lane, person, relativeTime, shortId, splitPath, tint } from "./format";
-  import { languageOf, paint } from "./syntax";
+  import { languageOf, occurrences, paint } from "./syntax";
   import DiffView from "./DiffView.svelte";
+  import Lazy, { BLOCK } from "./Lazy.svelte";
 
   let {
     history,
@@ -128,6 +129,41 @@
     });
     return out;
   });
+  type Run = (typeof blocks)[number];
+  /** Runs drawn together, near the visible part only: a few short ones make up a group of about
+   *  a block's lines, and a long one is a group of its own, its lines drawn a block at a time. */
+  const groups = $derived.by(() => {
+    const out: { runs: Run[]; lines: number; long: boolean }[] = [];
+    let open: (typeof out)[number] | null = null;
+    for (const run of blocks) {
+      if (run.lines.length > BLOCK) {
+        out.push({ runs: [run], lines: run.lines.length, long: true });
+        open = null;
+        continue;
+      }
+      if (!open || open.lines >= BLOCK) {
+        open = { runs: [], lines: 0, long: false };
+        out.push(open);
+      }
+      open.runs.push(run);
+      open.lines += run.lines.length;
+    }
+    return out;
+  });
+
+  /** Whether these blame lines have the text being found: they are drawn wherever they are, so
+   *  that every match is there to step to. */
+  function finds(lines: { text: string }[]): boolean {
+    return !!find && lines.some((l) => occurrences(l.text, find, nav.find.matchCase).length > 0);
+  }
+
+  /** Starts of the blocks a run of `count` lines is drawn in. */
+  function starts(count: number): number[] {
+    const out: number[] = [];
+    for (let at = 0; at < count; at += BLOCK) out.push(at);
+    return out;
+  }
+
   const ages = $derived.by(() => {
     const times = blame?.commits.map((c) => c.time) ?? [];
     const min = Math.min(...times);
@@ -271,6 +307,40 @@
   const renamedAt = (c: FileCommit) => c.oldPath && (c.status === "renamed" || c.status === "copied");
 </script>
 
+{#snippet rows(lines: { no: number; text: string }[])}
+  {#each lines as l (l.no)}
+    <div class="row">
+      <button class="no" class:picked={line?.no === l.no} onclick={() => lineHistory(l.no)} title="Every change to line {l.no}">{l.no}</button>
+      <span class="text">{#each paint(l.text || " ", null, language, find || null, nav.find.matchCase) as piece, k (k)}<span class:found={piece.found} data-hit={piece.hit} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>
+    </div>
+  {/each}
+{/snippet}
+
+{#snippet run(block: Run, long: boolean)}
+  {@const c = blame!.commits[block.commit]}
+  {@const color = colorOfCommit(c.id)}
+  {@const on = c.id === selected}
+  {@const dim = !!line && !line.ids.includes(c.id)}
+  <div class="block" class:on class:dim class:first={block.from === 1} style:background={on ? tint(color) : undefined}>
+    <button class="gutter" onclick={() => select(c.id)} title="{c.summary}\n{c.authorName} · {shortId(c.id)}">
+      <span class="age" style:background={lane(color)} style:opacity={ages(c.time)}></span>
+      <span class="mini" style:background={person(c.authorEmail)}>{initials(c.authorName).slice(0, 1)}</span>
+      <span class="msg">{c.summary}</span>
+      <span class="when">{relativeTime(c.time)}</span>
+    </button>
+    <div class="rows">
+      {#if long}
+        {#each starts(block.lines.length) as start (start)}
+          {@const part = block.lines.slice(start, start + BLOCK)}
+          <Lazy lines={part.length} of={part[0]} force={finds(part)}>{@render rows(part)}</Lazy>
+        {/each}
+      {:else}
+        {@render rows(block.lines)}
+      {/if}
+    </div>
+  </div>
+{/snippet}
+
 {#snippet commitRow(c: FileCommit, other: boolean)}
   {@const color = colorOfCommit(c.id)}
   {@const dim = (!!line && !line.ids.includes(c.id)) || (!!finding && !finding.ids.includes(c.id))}
@@ -396,27 +466,14 @@
         <p class="error" role="alert">{blameError}</p>
       {:else if blame}
         <div class="code mono selectable">
-          {#each blocks as block (block.from)}
-            {@const c = blame.commits[block.commit]}
-            {@const color = colorOfCommit(c.id)}
-            {@const on = c.id === selected}
-            {@const dim = !!line && !line.ids.includes(c.id)}
-            <div class="block" class:on class:dim style:background={on ? tint(color) : undefined}>
-              <button class="gutter" onclick={() => select(c.id)} title="{c.summary}\n{c.authorName} · {shortId(c.id)}">
-                <span class="age" style:background={lane(color)} style:opacity={ages(c.time)}></span>
-                <span class="mini" style:background={person(c.authorEmail)}>{initials(c.authorName).slice(0, 1)}</span>
-                <span class="msg">{c.summary}</span>
-                <span class="when">{relativeTime(c.time)}</span>
-              </button>
-              <div class="rows">
-                {#each block.lines as l (l.no)}
-                  <div class="row">
-                    <button class="no" class:picked={line?.no === l.no} onclick={() => lineHistory(l.no)} title="Every change to line {l.no}">{l.no}</button>
-                    <span class="text">{#each paint(l.text || " ", null, language, find || null, nav.find.matchCase) as piece, k (k)}<span class:found={piece.found} data-hit={piece.hit} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>
-                  </div>
-                {/each}
-              </div>
-            </div>
+          {#each groups as group (group.runs[0].from)}
+            {#if group.long}
+              {@render run(group.runs[0], true)}
+            {:else}
+              <Lazy lines={group.lines} of={group.runs[0]} force={group.runs.some((r) => finds(r.lines))}>
+                {#each group.runs as block (block.from)}{@render run(block, false)}{/each}
+              </Lazy>
+            {/if}
           {/each}
         </div>
       {:else}
@@ -802,7 +859,6 @@
     display: flex;
     min-width: max-content;
     border-radius: 8px;
-    content-visibility: auto;
   }
   .block.dim {
     opacity: 0.45;
@@ -824,7 +880,7 @@
     color: var(--text2);
     background: inherit;
   }
-  .block:not(:first-child) .gutter {
+  .block:not(.first) .gutter {
     border-top: 1px solid var(--sep);
   }
   .gutter:hover .msg {

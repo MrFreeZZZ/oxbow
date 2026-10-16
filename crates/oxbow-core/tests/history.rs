@@ -1,7 +1,7 @@
 mod support;
 
 use oxbow_core::graph::{STASH_COLOR, TRUNK_COLOR, color_for_name};
-use oxbow_core::{HistoryOptions, RefKind, Repo};
+use oxbow_core::{History, HistoryOptions, HistoryRow, RefKind, Repo};
 use support::Fixture;
 
 #[test]
@@ -447,6 +447,8 @@ fn a_reload_with_nothing_moved_reuses_the_rows() {
     fx.write("a.txt", "3\n");
     let dirty = repo.history_with(&options, &mut cache, Some(&first.key)).unwrap();
     assert!(!dirty.same);
+    let dirty_rows = assemble(&first.rows, &dirty);
+    assert_eq!(dirty_rows.len(), 3);
     assert_eq!(dirty.rows[0].worktree.as_ref().unwrap().unstaged, 1);
     fx.write("b.txt", "new\n");
     let more = repo.history_with(&options, &mut cache, Some(&dirty.key)).unwrap();
@@ -461,7 +463,95 @@ fn a_reload_with_nothing_moved_reuses_the_rows() {
     let moved = repo.history_with(&options, &mut cache, Some(&more.key)).unwrap();
     assert!(!moved.same);
     assert_eq!(moved.rows[0].summary, "Third");
-    assert_eq!(moved.rows.len(), 3);
+    let moved_rows = assemble(&dirty_rows, &moved);
+    assert_eq!(moved_rows, repo.history(&options).unwrap().rows);
+    assert_eq!(moved_rows.len(), 3);
+}
+
+/// The rows of `answer`, put together from `known`, the rows of the key it was asked with.
+fn assemble(known: &[HistoryRow], answer: &History) -> Vec<HistoryRow> {
+    if answer.same {
+        let mut rows = answer.rows.clone();
+        rows.extend(known.iter().filter(|r| r.worktree.is_none()).cloned());
+        return rows;
+    }
+    if answer.pieces.is_empty() {
+        return answer.rows.clone();
+    }
+    let mut fresh = answer.rows.iter();
+    let mut rows = Vec::new();
+    for piece in &answer.pieces {
+        match piece.known {
+            Some(from) => rows.extend(known[from..from + piece.len].iter().cloned()),
+            None => rows.extend(fresh.by_ref().take(piece.len).cloned()),
+        }
+    }
+    assert!(fresh.next().is_none(), "every new row has its place");
+    rows
+}
+
+#[test]
+fn loading_more_commits_sends_only_the_new_rows() {
+    let mut fx = Fixture::new();
+    for n in 1..=12 {
+        let file = if (5..=8).contains(&n) { "s.txt" } else { "a.txt" };
+        fx.commit(file, &format!("{n}\n"), &format!("Commit {n}"));
+        if n == 4 {
+            fx.git(&["checkout", "-q", "-b", "side"]);
+        }
+        if n == 8 {
+            fx.git(&["checkout", "-q", "main"]);
+        }
+    }
+    fx.git(&["merge", "-q", "--no-edit", "side"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let mut cache = oxbow_core::HistoryCache::default();
+    let page = |limit| HistoryOptions { limit, until: None };
+
+    let first = repo.history_with(&page(5), &mut cache, None).unwrap();
+    assert!(first.truncated && first.pieces.is_empty());
+    assert_eq!(first.rows.len(), 5);
+
+    let more = repo.history_with(&page(10), &mut cache, Some(&first.key)).unwrap();
+    let rows = assemble(&first.rows, &more);
+    assert_eq!(
+        rows,
+        repo.history(&page(10)).unwrap().rows,
+        "the same as loaded at once"
+    );
+    assert!(
+        more.rows.len() < rows.len(),
+        "{} rows sent of {}",
+        more.rows.len(),
+        rows.len()
+    );
+    assert!(more.pieces.iter().any(|p| p.known == Some(0)));
+
+    // A new commit on top: the rows below it come from the caller.
+    fx.commit("b.txt", "1\n", "On top");
+    let after = repo.history_with(&page(10), &mut cache, Some(&more.key)).unwrap();
+    let next = assemble(&rows, &after);
+    assert_eq!(next, repo.history(&page(10)).unwrap().rows);
+    assert_eq!(next[0].summary, "On top");
+    assert!(after.rows.len() < next.len());
+}
+
+#[test]
+fn rows_asked_with_an_old_key_come_whole() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "1\n", "Root");
+    fx.commit("a.txt", "2\n", "Second");
+    let repo = Repo::open(fx.path()).unwrap();
+    let options = HistoryOptions::default();
+    let mut cache = oxbow_core::HistoryCache::default();
+    let first = repo.history_with(&options, &mut cache, None).unwrap();
+    fx.commit("a.txt", "3\n", "Third");
+    let _dropped = repo.history_with(&options, &mut cache, Some(&first.key)).unwrap();
+    fx.commit("a.txt", "4\n", "Fourth");
+    // The caller still has the first rows: the last ones built are not what it has.
+    let next = repo.history_with(&options, &mut cache, Some(&first.key)).unwrap();
+    assert!(next.pieces.is_empty());
+    assert_eq!(next.rows.len(), 4);
 }
 
 #[test]
@@ -485,7 +575,7 @@ fn a_deeper_fetch_of_a_shallow_clone_rebuilds_the_rows() {
     clone.git(&["-C", dir.to_str().unwrap(), "fetch", "-q", "--deepen=1", "origin"]);
     let deeper = repo.history_with(&options, &mut cache, Some(&first.key)).unwrap();
     assert!(!deeper.same);
-    assert_eq!(deeper.rows.len(), 4);
+    assert_eq!(assemble(&first.rows, &deeper).len(), 4);
 
     let again = repo.history_with(&options, &mut cache, Some(&deeper.key)).unwrap();
     assert!(again.same);

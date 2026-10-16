@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack, type Snippet } from "svelte";
-  import { api } from "./api";
+  import { api, stopped } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { CommitDetail, FileDiff, HistoryRow } from "./types";
   import { fullDate, initials, lane, person, plate, splitPath, tabLabels, tint } from "./format";
@@ -44,8 +44,20 @@
 
   let diffView = $state<DiffView>();
 
+  /** Lines of diff a page of the Summary brings, about what the diff shows at first. */
+  const PAGE_LINES = 4000;
+  /** Rows of the Summary's file list drawn at first, and more on each request. */
+  const LIST_STEP = 300;
+
   let detail = $state<CommitDetail | null>(null);
   let diffs = $state<FileDiff[]>([]);
+  /** In Summary, where the next page of diffs starts; null once every file is loaded. */
+  let next = $state<number | null>(null);
+  /** Changed files in all, as the pages count them. */
+  let fileCount = $state(0);
+  let loadingMore = $state(false);
+  /** Rows of the Summary's file list drawn: a commit of thousands of files draws the rest on request. */
+  let listed = $state(LIST_STEP);
   let tab = $state<string | null>(null); // null = Summary, otherwise a file path
   let whole = $state(wholeByDefault());
   // Diff & Text's default view applies again when it changes.
@@ -72,25 +84,104 @@
   const branchName = $derived(row.graph.branch ?? row.labels.find((l) => l.kind === "stash")?.name ?? null);
   const tags = $derived(row.labels.filter((l) => l.kind === "tag").map((l) => l.name));
   const labels = $derived(tabLabels(detail?.files.map((f) => f.path) ?? []));
+  /** The files as far as they are known: until the counted list comes, a loaded diff has counts. */
+  const files = $derived.by(() => {
+    if (!detail) return [];
+    if (detail.counted) return detail.files;
+    const loaded = new Map(diffs.map((d) => [d.file.path, d.file]));
+    return detail.files.map((f) => loaded.get(f.path) ?? f);
+  });
   const totals = $derived(
-    detail?.files.reduce((t, f) => ({ add: t.add + f.additions, del: t.del + f.deletions }), { add: 0, del: 0 }) ?? { add: 0, del: 0 },
+    detail?.counted ? detail.files.reduce((t, f) => ({ add: t.add + f.additions, del: t.del + f.deletions }), { add: 0, del: 0 }) : null,
   );
+  const known = $derived(new Set(detail?.counted ? [] : diffs.map((d) => d.file.path)));
+
+  /** Lanes of this panel's reads: a newer read in a lane stops the older one. */
+  const COUNTS = "panel-counts";
+  const DIFF = "panel-diff";
+
+  // The panel's reads stop when it closes: their answers would go nowhere.
+  $effect(() => () => {
+    api.stopReads([COUNTS, DIFF]).catch(() => {});
+  });
+
+  /** The commit's details: the list of files at once, then their line counts. */
+  function loadDetail(current: string) {
+    api.commitDetail(current, true).then(
+      (d) => {
+        if (id !== current) return;
+        if (!detail?.counted) detail = d;
+        error = null;
+        if (d.shallowEnd) return;
+        api.commitDetail(current, false, COUNTS).then(
+          (counted) => {
+            if (id === current) detail = counted;
+          },
+          // Counts are a nicety: the list stays without them.
+          () => {},
+        );
+      },
+      // An answer for a commit that is no longer shown must not cover the current one.
+      (err) => {
+        if (id === current && !stopped(err)) error = String(err);
+      },
+    );
+  }
+
+  /** The diffs to show: Summary's first page, or the file of the tab. */
+  function loadDiffs(current: string, path: string | null, wholeFile: boolean, keep = false) {
+    const still = () => id === current && tab === path && whole === wholeFile;
+    const failed = (err: unknown) => {
+      if (id === current && !stopped(err) && !keep) error = String(err);
+    };
+    if (path === null) {
+      api.commitDiffPage(current, 0, PAGE_LINES, wholeFile, DIFF).then((page) => {
+        if (!still()) return;
+        diffs = page.diffs;
+        next = page.next;
+        fileCount = page.files;
+      }, failed);
+    } else {
+      api.commitDiff(current, path, wholeFile, false, DIFF).then((d) => {
+        if (still()) diffs = d;
+      }, failed);
+    }
+  }
+
+  /** The next page of Summary's diffs. */
+  function loadMore() {
+    if (next === null || loadingMore || tab !== null) return;
+    const current = id;
+    const wholeFile = whole;
+    const from = next;
+    loadingMore = true;
+    api
+      .commitDiffPage(current, from, PAGE_LINES, wholeFile, DIFF)
+      .then(
+        (page) => {
+          // Cleared with the new files, so the view can ask for the next page right away.
+          if (id === current) loadingMore = false;
+          if (id !== current || tab !== null || whole !== wholeFile || next !== from) return;
+          diffs = [...diffs, ...page.diffs];
+          next = page.next;
+        },
+        (err) => {
+          if (id === current) loadingMore = false;
+          if (id === current && !stopped(err)) error = String(err);
+        },
+      );
+  }
 
   // A new commit resets the tab; the diff mode is kept.
   $effect(() => {
     const current = id;
-    tab = null;
-    detail = null;
-    error = null;
-    api.commitDetail(current).then(
-      (d) => {
-        if (id === current) detail = d;
-      },
-      // An answer for a commit that is no longer shown must not cover the current one.
-      (err) => {
-        if (id === current) error = String(err);
-      },
-    );
+    untrack(() => {
+      tab = null;
+      detail = null;
+      error = null;
+      listed = LIST_STEP;
+      loadDetail(current);
+    });
   });
 
   $effect(() => {
@@ -98,15 +189,12 @@
     const path = tab;
     const wholeFile = whole;
     diffSettings();
-    diffs = [];
-    api.commitDiff(current, path, wholeFile).then(
-      (d) => {
-        if (id === current && tab === path && whole === wholeFile) diffs = d;
-      },
-      (err) => {
-        if (id === current) error = String(err);
-      },
-    );
+    untrack(() => {
+      diffs = [];
+      next = null;
+      loadingMore = false;
+      loadDiffs(current, path, wholeFile);
+    });
   });
 
   // A commit never changes, but what a submodule card says about it does: whether the submodule
@@ -118,27 +206,8 @@
     untrack(() => {
       const again = !!detail?.shallowEnd || error !== null;
       if (!again && !diffs.some((d) => d.submodule)) return;
-      const current = id;
-      const path = tab;
-      const wholeFile = whole;
-      if (again) {
-        api.commitDetail(current).then(
-          (d) => {
-            if (id !== current) return;
-            detail = d;
-            error = null;
-          },
-          (err) => {
-            if (id === current) error = String(err);
-          },
-        );
-      }
-      api.commitDiff(current, path, wholeFile).then(
-        (d) => {
-          if (id === current && tab === path && whole === wholeFile) diffs = d;
-        },
-        () => {},
-      );
+      if (again) loadDetail(id);
+      loadDiffs(id, tab, whole, true);
     });
   });
 
@@ -221,12 +290,16 @@
     {:else if tab === null && detail}
       <div class="files">
         <div class="count">
-          <span class="grow">{detail.files.length} {detail.files.length === 1 ? "file" : "files"} changed</span>
-          <span class="add">+{totals.add}</span>
-          <span class="del">−{totals.del}</span>
+          <span class="grow">{detail.files.length.toLocaleString()} {detail.files.length === 1 ? "file" : "files"} changed</span>
+          {#if totals}
+            <span class="add">+{totals.add}</span>
+            <span class="del">−{totals.del}</span>
+          {:else}
+            <span class="counting" title="Counting the changed lines">Counting…</span>
+          {/if}
           <FoldAll onFold={(fold) => diffView?.setAll(fold)} />
         </div>
-        {#each detail.files as file (file.path)}
+        {#each files.slice(0, listed) as file (file.path)}
           {@const p = splitPath(file.path)}
           <button class="file" onclick={() => openTab(file.path)}>
             <span class="badge {file.status}">{statusIcon[file.status]}</span>
@@ -236,9 +309,14 @@
                 <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="M10.3 10.3 14 14" /></svg>{foundText ?? "match"}
               </span>
             {/if}
-            <FileBadge {file} />
+            {#if detail.counted || known.has(file.path)}
+              <FileBadge {file} />
+            {/if}
           </button>
         {/each}
+        {#if files.length > listed}
+          <button class="file more" onclick={() => (listed += LIST_STEP)}>Show {Math.min(files.length - listed, LIST_STEP).toLocaleString()} more {files.length - listed === 1 ? "file" : "files"}</button>
+        {/if}
       </div>
     {/if}
     <DiffView
@@ -249,6 +327,8 @@
       {whole}
       {find}
       commit={row.id}
+      pending={tab === null && next !== null ? fileCount - diffs.length : 0}
+      onMore={loadMore}
       onToggleWhole={() => (whole = !whole)}
       loadFull={(d) => api.commitDiff(row.id, d.file.path, whole, true).then((all) => all[0])}
       command={(d) =>
@@ -455,6 +535,13 @@
     padding: 8px 4px 6px;
     border-radius: 12px;
     border: 1px solid var(--sep);
+  }
+  .counting {
+    font-weight: 400;
+  }
+  .file.more {
+    justify-content: center;
+    color: var(--text2);
   }
   .count {
     display: flex;

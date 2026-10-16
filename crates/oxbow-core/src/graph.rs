@@ -50,6 +50,10 @@ pub fn branch_colors() -> u8 {
 /// Color of the trunk lane.
 pub const TRUNK_COLOR: u8 = 0;
 
+/// Stands for the color of the row of uncommitted changes while the layout is not yet down to
+/// the commit it was made on, whose color it takes.
+const LATER: u8 = u8::MAX;
+
 /// A commit as the layout sees it.
 #[derive(Debug, Clone, Default)]
 pub struct GraphCommit {
@@ -67,7 +71,8 @@ pub struct GraphCommit {
     /// A row on a line of its own that runs to the commit it was made on, without taking over
     /// that commit's branch line: a stash entry or the uncommitted changes.
     pub side: bool,
-    /// Fixed color for the row, instead of one derived from a branch name.
+    /// Fixed color for the row, instead of one derived from a branch name. The row of
+    /// uncommitted changes without one takes the color of the commit it was made on.
     pub color: Option<u8>,
     /// Commit id. A line that has no branch name takes its color from the id of the commit it
     /// starts at, so it keeps that color as newer commits push it down.
@@ -408,6 +413,8 @@ fn place(commits: &[GraphCommit], plan: &Plan) -> Vec<RowLayout> {
             TRUNK_COLOR
         } else if let Some(color) = commit.color {
             color
+        } else if commit.worktree {
+            LATER
         } else if inherits {
             lanes[column].as_ref().map_or(TRUNK_COLOR, |l| l.color)
         } else {
@@ -542,6 +549,41 @@ fn place(commits: &[GraphCommit], plan: &Plan) -> Vec<RowLayout> {
             width: column as u16,
             branch,
         });
+    }
+
+    // The uncommitted changes take the color of the commit they were made on, which is known now.
+    if let Some(wip) = commits.iter().position(|c| c.worktree && c.color.is_none()) {
+        let color = commits[wip]
+            .parents
+            .first()
+            .copied()
+            .flatten()
+            .map_or(TRUNK_COLOR, |head| rows[head].color);
+        let now = |c: &mut u8| {
+            if *c == LATER {
+                *c = color;
+            }
+        };
+        for row in &mut rows {
+            now(&mut row.color);
+            // The same color twice would ring the merge twice.
+            let mut colors = Vec::with_capacity(row.merge_colors.len());
+            for mut c in row.merge_colors.drain(..) {
+                now(&mut c);
+                if !colors.contains(&c) {
+                    colors.push(c);
+                }
+            }
+            row.merge_colors = colors;
+        }
+        for lanes in &mut after {
+            for lane in lanes.iter_mut().flatten() {
+                now(&mut lane.color);
+            }
+        }
+        for row in &mut joins {
+            row.iter_mut().for_each(|seg| now(&mut seg.color));
+        }
     }
 
     for row in 0..rows.len() {
@@ -842,6 +884,79 @@ mod tests {
         let columns: Vec<u16> = graph.rows.iter().map(|r| r.column).collect();
         assert_eq!(columns, [0, 1, 0, 0]);
         assert!(graph.lead_ins.is_empty());
+    }
+
+    /// The layout with uncommitted changes on top of `head`, colored as the layout without them
+    /// colors `head`: how History laid them out before it took one layout.
+    fn wip_in_two_layouts(commits: &[GraphCommit], head: RowIndex) -> Graph {
+        let color = layout(commits, Some(head)).rows[head].color;
+        layout(&with_wip(commits, head, Some(color)), Some(head + 1))
+    }
+
+    fn with_wip(commits: &[GraphCommit], head: RowIndex, color: Option<u8>) -> Vec<GraphCommit> {
+        let mut out = vec![GraphCommit {
+            parents: vec![Some(head + 1)],
+            side: true,
+            color,
+            unpushed: true,
+            worktree: true,
+            ..Default::default()
+        }];
+        out.extend(commits.iter().cloned().map(|mut c| {
+            c.parents = c.parents.into_iter().map(|p| p.map(|r| r + 1)).collect();
+            c
+        }));
+        out
+    }
+
+    #[test]
+    fn uncommitted_changes_take_heads_color_in_one_layout() {
+        let feature = || named(commit(&[2], false), "feature");
+        let stash = GraphCommit {
+            side: true,
+            color: Some(STASH_COLOR),
+            unpushed: true,
+            ..commit(&[1], false)
+        };
+        let detached = GraphCommit {
+            color: Some(NO_BRANCH_COLOR),
+            unpushed: true,
+            ..commit(&[2], false)
+        };
+        // A merge on main of the checked-out feature branch, which goes on after it.
+        let merge = GraphCommit {
+            merged_name: Some("feature".into()),
+            ..commit(&[2, 1], true)
+        };
+        let histories: Vec<(Vec<GraphCommit>, RowIndex)> = vec![
+            (vec![commit(&[1], true), commit(&[], true)], 0),
+            (vec![feature(), commit(&[2], true), commit(&[], true)], 0),
+            (vec![feature(), commit(&[2], true), commit(&[], true)], 1),
+            (vec![stash, named(commit(&[2], false), "feature"), commit(&[], true)], 1),
+            (vec![detached, feature(), commit(&[3], false), commit(&[], true)], 0),
+            (
+                vec![
+                    merge,
+                    named(commit(&[3], false), "feature"),
+                    commit(&[3], true),
+                    commit(&[], true),
+                ],
+                1,
+            ),
+            (
+                vec![
+                    named(commit(&[1], false), "top"),
+                    named(commit(&[2], false), "base"),
+                    commit(&[], true),
+                ],
+                1,
+            ),
+        ];
+        for (commits, head) in histories {
+            let one = layout(&with_wip(&commits, head, None), Some(head + 1));
+            assert_eq!(one, wip_in_two_layouts(&commits, head), "HEAD at row {head}");
+            assert_eq!(one.rows[0].color, one.rows[head + 1].color);
+        }
     }
 
     #[test]

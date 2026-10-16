@@ -156,6 +156,15 @@ export interface History {
   /** The rows of `key` the caller had were left out: `rows` holds only the row of uncommitted
    *  changes, if any, and `runs` and `leadIns` are empty. See `withRows`. */
   same: boolean;
+  /** When not empty, the rows put together from the caller's (those of the key it asked with)
+   *  and `rows`, which then holds only the others: runs of one or the other, in order. */
+  pieces: Piece[];
+}
+
+/** `len` of the caller's rows from `known` on, or with `known` null the next `len` of `rows`. */
+export interface Piece {
+  known: number | null;
+  len: number;
 }
 
 /** A straight line down `column`, from row `first` to the row after `last`. */
@@ -331,6 +340,17 @@ export interface CommitDetail {
   files: FileChange[];
   /** A shallow clone stops here: its parent isn't fetched yet, so `files` is empty. */
   shallowEnd: boolean;
+  /** `files` have their line counts and sizes; without, only paths and how each changed. */
+  counted: boolean;
+}
+
+/** Diffs of a commit's files, a few at a time. */
+export interface DiffPage {
+  diffs: FileDiff[];
+  /** Where the next page starts; null after the last file. */
+  next: number | null;
+  /** Changed files in all. */
+  files: number;
 }
 
 export type LineKind = "context" | "added" | "removed";

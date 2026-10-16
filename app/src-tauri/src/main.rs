@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex};
 
 use oxbow_core::config::{self, ConfigScope};
 use oxbow_core::{
-    Action, CommitBrief, CommitDetail, ConflictFile, DeletionCheck, DiffContext, DiffOptions, Failure, FileDiff,
-    History, HistoryCache, HistoryOptions, MergePreview, Plan, Repo, Side, Source, StashCheck, WorkingTree,
+    Action, CommitBrief, CommitDetail, ConflictFile, DeletionCheck, DiffContext, DiffOptions, DiffPage, Failure,
+    FileDiff, History, HistoryCache, HistoryOptions, MergePreview, Plan, Repo, Side, Source, StashCheck, WorkingTree,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -49,8 +49,9 @@ struct Slot {
     history: HistoryCache,
     /// The working tree read with the last history, by number, for the Changes panel's diffs.
     changes: Option<(u64, Arc<WorkingTree>)>,
-    /// Stop of the search running in each lane: a newer search in the lane stops the older.
-    searches: HashMap<String, Arc<AtomicBool>>,
+    /// Stop of the read running in each lane (a search, the commit panel's diff): a newer read
+    /// in the lane stops the older, whose answer would be dropped anyway.
+    lanes: HashMap<String, Arc<AtomicBool>>,
 }
 
 /// What [`Session::commits`] holds.
@@ -58,6 +59,7 @@ struct Slot {
 enum Cached {
     Detail(Arc<CommitDetail>),
     Diffs(Arc<Vec<FileDiff>>),
+    Page(Arc<DiffPage>),
 }
 
 /// Commit details and diffs by what they were asked with, the most recent last, kept under a
@@ -84,6 +86,7 @@ impl CommitCache {
         let size = match &value {
             Cached::Detail(detail) => 1024 + detail.files.len() * 256 + detail.body.len(),
             Cached::Diffs(diffs) => diffs_size(diffs),
+            Cached::Page(page) => diffs_size(&page.diffs),
         };
         // One answer bigger than a quarter of the budget would push out everything else.
         if size > Self::BUDGET / 4 {
@@ -154,6 +157,18 @@ impl Session {
             slot.fetch_cancel = Arc::new(AtomicBool::new(false));
             slot.fetch_cancel.clone()
         })
+    }
+
+    /// A Stop for a new read in `lane`, which stops the one running there. Without a lane the
+    /// read runs to its end.
+    fn lane(&self, window: &tauri::WebviewWindow, lane: Option<String>) -> Arc<AtomicBool> {
+        let cancel = Arc::new(AtomicBool::new(false));
+        if let Some(lane) = lane
+            && let Some(older) = self.slot(window, |slot| slot.lanes.insert(lane, cancel.clone()))
+        {
+            older.store(true, Ordering::Relaxed);
+        }
+        cancel
     }
 
     /// The window that has the repository at `path` open, if any.
@@ -711,11 +726,15 @@ async fn commit_detail(
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
     id: String,
+    quick: Option<bool>,
+    lane: Option<String>,
 ) -> CommandResult<CommitDetail> {
     let repo = current(&session, &window)?;
+    let cancel = session.lane(&window, lane);
+    let count = quick != Some(true);
     // A commit where a shallow clone stops shows no parent until a deeper fetch.
     let key = format!(
-        "detail\0{}\0{id}\0{:?}\0{}",
+        "detail\0{}\0{id}\0{count}\0{:?}\0{}",
         repo.workdir().display(),
         repo.diff_options(),
         repo.shallow_stamp()
@@ -723,7 +742,7 @@ async fn commit_detail(
     if let Some(Cached::Detail(detail)) = session.commits.lock().expect("session lock").get(&key) {
         return Ok((*detail).clone());
     }
-    let detail = blocking(move || repo.commit_detail(&id)).await?;
+    let detail = blocking(move || repo.commit_detail_with(&id, count, &cancel)).await?;
     // What a submodule says depends on its clone here, which changes.
     if !detail.files.iter().any(|f| f.submodule.is_some()) {
         let cached = Cached::Detail(Arc::new(detail.clone()));
@@ -733,6 +752,7 @@ async fn commit_detail(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn commit_diff(
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
@@ -740,8 +760,11 @@ async fn commit_diff(
     path: Option<String>,
     whole_file: bool,
     full: Option<bool>,
+    lane: Option<String>,
 ) -> CommandResult<Vec<FileDiff>> {
     let repo = current_full(&session, &window, full)?;
+    // Only a newer read in the lane stops this one; the work itself is short for one file.
+    let _ = session.lane(&window, lane);
     let context = if whole_file {
         DiffContext::WholeFile
     } else {
@@ -762,6 +785,42 @@ async fn commit_diff(
         session.commits.lock().expect("session lock").put(key, cached);
     }
     Ok(diffs)
+}
+
+/// The diffs of a commit's files from the `from`th on, as many as fit `budget` lines.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn commit_diff_page(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    id: String,
+    from: usize,
+    budget: usize,
+    whole_file: bool,
+    lane: Option<String>,
+) -> CommandResult<DiffPage> {
+    let repo = current(&session, &window)?;
+    let cancel = session.lane(&window, lane);
+    let context = if whole_file {
+        DiffContext::WholeFile
+    } else {
+        DiffContext::Compact
+    };
+    let key = format!(
+        "page\0{}\0{id}\0{from}\0{budget}\0{whole_file}\0{:?}\0{}",
+        repo.workdir().display(),
+        repo.diff_options(),
+        repo.shallow_stamp()
+    );
+    if let Some(Cached::Page(page)) = session.commits.lock().expect("session lock").get(&key) {
+        return Ok((*page).clone());
+    }
+    let page = blocking(move || repo.commit_diff_page(&id, from, budget, context, &cancel)).await?;
+    if !page.diffs.iter().any(|d| d.submodule.is_some()) {
+        let cached = Cached::Page(Arc::new(page.clone()));
+        session.commits.lock().expect("session lock").put(key, cached);
+    }
+    Ok(page)
 }
 
 #[tauri::command]
@@ -1388,15 +1447,21 @@ async fn search(
     lane: Option<String>,
 ) -> CommandResult<oxbow_core::SearchResult> {
     let repo = current(&session, &window)?;
-    // A newer search in the same lane stops this one: its answer would be dropped anyway.
-    let cancel = Arc::new(AtomicBool::new(false));
-    if let Some(lane) = lane {
-        let older = session.slot(&window, |slot| slot.searches.insert(lane, cancel.clone()));
-        if let Some(older) = older {
-            older.store(true, Ordering::Relaxed);
-        }
-    }
+    let cancel = session.lane(&window, lane);
     blocking(move || repo.search_with(&query, &cancel)).await
+}
+
+/// Stop the reads running in `lanes`: what they would answer is no longer wanted, as the
+/// search was cleared or the commit panel closed.
+#[tauri::command]
+fn stop_reads(window: tauri::WebviewWindow, session: State<'_, Session>, lanes: Vec<String>) {
+    session.slot(&window, |slot| {
+        for lane in lanes {
+            if let Some(cancel) = slot.lanes.remove(&lane) {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        }
+    });
 }
 
 #[tauri::command]
@@ -1795,6 +1860,8 @@ fn main() {
             history,
             commit_detail,
             commit_diff,
+            commit_diff_page,
+            stop_reads,
             compare,
             compare_diff,
             file_history,

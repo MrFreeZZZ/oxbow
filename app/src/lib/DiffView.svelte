@@ -16,7 +16,8 @@
   import { prefs } from "./prefs.svelte";
   import { api } from "./api";
   import { confirm } from "./confirm.svelte";
-  import { languageOf, paint } from "./syntax";
+  import { languageOf, occurrences, paint } from "./syntax";
+  import Lazy, { BLOCK } from "./Lazy.svelte";
   import { nav } from "./nav.svelte";
   import { untrack } from "svelte";
   import { foldReason, startsFolded } from "./diffFold";
@@ -47,6 +48,8 @@
     command,
     working = false,
     side = null,
+    pending = 0,
+    onMore,
   }: {
     diffs: FileDiff[];
     color: number;
@@ -79,6 +82,10 @@
     working?: boolean;
     /** Which side of the uncommitted changes these are, for what a submodule's card says. */
     side?: Side | null;
+    /** Files after `diffs` whose diffs are not loaded yet. */
+    pending?: number;
+    /** Load the diffs of more of the pending files. */
+    onMore?: () => void;
   } = $props();
 
   /** Diffs loaded in full with Show Diff Anyway, by the very diff they stand in for: a diff
@@ -138,14 +145,21 @@
   // Another commit starts from the setting; the same files loaded again (the whole-file toggle)
   // keep what was folded by hand.
   const fileSet = $derived(diffs.map((d) => d.file.path).join("\n"));
+  let foldedFor = "";
   $effect(() => {
     const key = fileSet;
     prefs.get("oxbow.diff.files");
     prefs.get("oxbow.diff.foldOver");
     if (!foldable || !key) return;
     untrack(() => {
+      // More files of the same commit keep how the ones already shown are folded.
+      const kept = foldedFor && key.startsWith(foldedFor + "\n") ? folded : {};
+      foldedFor = key;
       // A file shown on its own tab is what was asked for, so it starts open.
-      folded = Object.fromEntries(diffs.map((d) => [d.file.path, diffs.length > 1 && startsFolded(d)]));
+      const many = diffs.length + pending > 1;
+      folded = Object.fromEntries(
+        diffs.map((d) => [d.file.path, own(kept, d.file.path) ?? (many && startsFolded(d))]),
+      );
     });
   });
 
@@ -154,7 +168,7 @@
   /** Fold or unfold every file, from the file list's buttons or ⌥-click on a chevron. */
   export function setAll(fold: boolean) {
     folded = Object.fromEntries(diffs.map((d) => [d.file.path, fold]));
-    if (!fold) showAll = true;
+    if (!fold) extra += PORTION;
   }
 
   function toggle(diff: FileDiff, event: MouseEvent) {
@@ -169,22 +183,34 @@
     api.openInEditor(diff.file.path, first?.newLine ?? null).catch((err) => confirm.fail(err));
   }
 
-  let showAll = $state(false);
+  /** Lines shown past `lineBudget`: each Show More adds a portion, never everything at once. */
+  let extra = $state(0);
+  const PORTION = 20_000;
+  /** What a folded file's header costs of the budget, in lines. */
+  const FOLDED_LINES = 8;
+  // Other diffs start from the budget again; more files loaded after the first keep it.
+  const first = $derived(diffs[0]);
+  $effect(() => {
+    first;
+    untrack(() => (extra = 0));
+  });
 
   /** Files to render, cut off once the line budget is spent so huge commits stay responsive. A
    *  file much longer than what is left of the budget is cut too: `cut` is how many lines of
    *  each of its hunks to draw, and `more` how many are left out. */
   const shown = $derived.by(() => {
     type Cut = { diff: FileDiff; lines: number[]; more: number };
-    if (showAll) return { files: items, hidden: 0, cut: null as Cut | null };
-    let budget = lineBudget;
+    let budget = lineBudget + extra;
     const files: FileDiff[] = [];
     let cut: Cut | null = null;
     for (const diff of items) {
       if (budget <= 0) break;
       files.push(diff);
-      // A folded file draws no lines.
-      if (isFolded(diff)) continue;
+      // A folded file draws only its header.
+      if (isFolded(diff)) {
+        budget -= FOLDED_LINES;
+        continue;
+      }
       const total = diff.hunks.reduce((n, h) => n + h.lines.length, 0);
       if (total > budget + CUT_SLACK) {
         let left = budget;
@@ -199,8 +225,34 @@
       }
       budget -= total;
     }
-    return { files, hidden: items.length - files.length, cut };
+    return { files, hidden: items.length - files.length, cut, left: budget };
   });
+
+  // Files still to load while the budget isn't spent, e.g. as the first ones start folded.
+  $effect(() => {
+    if (pending > 0 && shown.hidden === 0 && !shown.cut && shown.left > 0) untrack(() => onMore?.());
+  });
+
+  /** More files: the ones loaded but not shown, then more of the ones still to load. */
+  function moreFiles() {
+    extra += PORTION;
+    if (shown.hidden === 0) onMore?.();
+  }
+
+  /** Starts of the blocks a run of `count` lines is drawn in. */
+  function blocks(count: number): number[] {
+    const out: number[] = [];
+    for (let at = 0; at < count; at += BLOCK) out.push(at);
+    return out;
+  }
+
+  /** Whether lines `from` to `to` have the text being found: those are drawn wherever they are,
+   *  so that every match is there to step to. */
+  function finds(lines: DiffLine[], from: number, to: number): boolean {
+    if (!find) return false;
+    for (let i = from; i < to; i++) if (occurrences(lines[i].text, find, matchCase).length) return true;
+    return false;
+  }
   /** A file is cut only when this many lines more than the budget allows would be left out. */
   const CUT_SLACK = 500;
 
@@ -385,44 +437,53 @@
           {#if hunkBar}{@render hunkBar(diff, hunk)}{/if}
           {@const picking = !!picker?.enabled(hunk)}
           {@const picked = picking ? picker!.picked(hunk) : []}
-          {#each cut ? hunk.lines.slice(0, cut.lines[h]) : hunk.lines as line, i (i)}
-            {@const on = picked.includes(i)}
-            <div
-              class="line {line.kind}"
-              class:picking
-              class:faded={picked.length > 0 && line.kind !== "context" && !on}
-              style:border-radius={radius(hunk.lines, i)}
-              style:margin-top="{gap(hunk.lines, i)}px"
-            >
-              {#if picking}
-                {#if line.kind !== "context"}
-                  <button
-                    class="pick"
-                    class:on
-                    role="checkbox"
-                    aria-checked={on}
-                    aria-label="{on ? 'Unselect' : 'Select'} line {line.newLine ?? line.oldLine}"
-                    title="Pick this line; Shift-click picks a range"
-                    onclick={(e) => picker!.toggle(hunk, i, e.shiftKey)}
-                  ><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" /></svg></button>
-                {:else}<span></span>{/if}
-              {/if}
-              <span class="no">{line.oldLine ?? ""}</span>
-              <span class="no">{line.newLine ?? ""}</span>
-              <span class="text">{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found} data-hit={piece.hit} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}{#if line.cr && own(showEol, diff.file.path)}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}{#if line.secret}<span class="secret" title="Looks like a secret: Oxbow stops the commit until it is unstaged, or you commit anyway. Add oxbow:allow to the line if it is not one."><svg viewBox="0 0 16 16"><path d="M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2" /></svg>{line.secret}</span>{/if}</span>
-            </div>
+          {@const count = cut ? cut.lines[h] : hunk.lines.length}
+          {#each blocks(count) as start (start)}
+            {@const end = Math.min(count, start + BLOCK)}
+            <Lazy lines={end - start} of={hunk.lines[start]} force={finds(hunk.lines, start, end)}>
+              {#each hunk.lines.slice(start, end) as line, j (j)}
+                {@const i = start + j}
+                {@const on = picked.includes(i)}
+                <div
+                  class="line {line.kind}"
+                  class:picking
+                  class:faded={picked.length > 0 && line.kind !== "context" && !on}
+                  style:border-radius={radius(hunk.lines, i)}
+                  style:margin-top="{gap(hunk.lines, i)}px"
+                >
+                  {#if picking}
+                    {#if line.kind !== "context"}
+                      <button
+                        class="pick"
+                        class:on
+                        role="checkbox"
+                        aria-checked={on}
+                        aria-label="{on ? 'Unselect' : 'Select'} line {line.newLine ?? line.oldLine}"
+                        title="Pick this line; Shift-click picks a range"
+                        onclick={(e) => picker!.toggle(hunk, i, e.shiftKey)}
+                      ><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" /></svg></button>
+                    {:else}<span></span>{/if}
+                  {/if}
+                  <span class="no">{line.oldLine ?? ""}</span>
+                  <span class="no">{line.newLine ?? ""}</span>
+                  <span class="text">{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found} data-hit={piece.hit} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}{#if line.cr && own(showEol, diff.file.path)}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}{#if line.secret}<span class="secret" title="Looks like a secret: Oxbow stops the commit until it is unstaged, or you commit anyway. Add oxbow:allow to the line if it is not one."><svg viewBox="0 0 16 16"><path d="M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2" /></svg>{line.secret}</span>{/if}</span>
+                </div>
+              {/each}
+            </Lazy>
           {/each}
         {/each}
       </div>
       {#if cut}
-        <button class="more lines" onclick={() => (showAll = true)}>Show {cut.more.toLocaleString()} more {cut.more === 1 ? "line" : "lines"}</button>
+        <button class="more lines" onclick={() => (extra += PORTION)}
+          >Show {Math.min(cut.more, PORTION).toLocaleString()} more {Math.min(cut.more, PORTION) === 1 ? "line" : "lines"}{#if cut.more > PORTION}<span class="of"> of {cut.more.toLocaleString()}</span>{/if}</button
+        >
       {/if}
     {/if}
   </section>
 {/each}
 
-{#if shown.hidden > 0}
-  <button class="more" onclick={() => (showAll = true)}>Show {shown.hidden} more {shown.hidden === 1 ? "file" : "files"}</button>
+{#if shown.hidden + pending > 0}
+  <button class="more" onclick={moreFiles}>Show {(shown.hidden + pending).toLocaleString()} more {shown.hidden + pending === 1 ? "file" : "files"}</button>
 {/if}
 
 <style>
@@ -695,6 +756,9 @@
   }
   .more.lines {
     margin: 10px 8px 0;
+  }
+  .of {
+    color: var(--text2);
   }
   .more {
     margin: 0 20px 20px;

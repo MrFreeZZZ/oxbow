@@ -93,6 +93,8 @@ class Search {
     this.branch = null;
     this.since = "any";
     this.#generation++;
+    // Searches still running would only be dropped: they stop now, freeing git for what's next.
+    api.stopReads(["main", ...MODES.map(({ mode }) => `count-${mode}`)]).catch(() => {});
   }
 
   /** A typed `code:` style prefix turns into the mode token. */
