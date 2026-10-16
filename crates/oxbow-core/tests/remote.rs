@@ -50,6 +50,7 @@ fn push(set_upstream: bool) -> Action {
         force: false,
         lease: None,
         no_verify: false,
+        submodules: false,
     }
 }
 
@@ -593,6 +594,7 @@ fn force_push_with_lease_refuses_when_the_remote_moved_again() {
         force: true,
         lease: Some(tip.clone()),
         no_verify: false,
+        submodules: false,
     };
     assert_eq!(
         repo.plan(&force).unwrap().commands[0].display(),
@@ -611,6 +613,7 @@ fn force_push_with_lease_refuses_when_the_remote_moved_again() {
         force: true,
         lease: Some(tip),
         no_verify: false,
+        submodules: false,
     };
     repo.perform(&force).unwrap();
     assert_eq!(
@@ -634,6 +637,7 @@ fn publishing_a_branch_sets_its_upstream() {
         force: false,
         lease: None,
         no_verify: false,
+        submodules: false,
     };
     assert_eq!(
         repo.plan(&publish).unwrap().commands[0].display(),
@@ -658,6 +662,7 @@ fn pull_fetches_every_branch_first_when_asked() {
         remote: "origin".into(),
         branch: "main".into(),
         fetch_first,
+        submodules: false,
     };
 
     // git pull alone only brings origin/main up to date.
@@ -695,6 +700,7 @@ fn pull_conflict_is_recognized_and_can_be_aborted() {
         remote: "origin".into(),
         branch: "main".into(),
         fetch_first: false,
+        submodules: false,
     };
     let error = repo.perform(&pull).unwrap_err();
     assert_eq!(repo.explain_failure(&pull, &error).kind, FailureKind::Conflict);
@@ -725,6 +731,7 @@ fn a_failing_pre_push_hook_is_recognized_and_can_be_skipped() {
         force: false,
         lease: None,
         no_verify: true,
+        submodules: false,
     };
     repo.perform(&skip).unwrap();
     assert_eq!(repo.tracking().unwrap().unwrap().ahead, 0);

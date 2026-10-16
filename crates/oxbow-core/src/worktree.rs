@@ -143,6 +143,9 @@ pub enum Action {
         /// only updates `remote`/`branch`.
         #[serde(default)]
         fetch_first: bool,
+        /// Check out the commits the pulled commits record in the submodules too.
+        #[serde(default)]
+        submodules: bool,
     },
     /// Send the local `branch` to `remote`, where it is called `upstream`.
     Push {
@@ -157,6 +160,9 @@ pub enum Action {
         lease: Option<String>,
         /// Skip the pre-push hook.
         no_verify: bool,
+        /// Push the submodule commits this branch records that their remotes don't have, first.
+        #[serde(default)]
+        submodules: bool,
     },
     /// Pull with rebase, then push: the way out of a push rejected for new remote commits.
     PullAndPush {
@@ -463,6 +469,29 @@ pub enum Action {
     WorktreePrune,
     /// A worktree folder moved by hand is now at `path`: reconnect it.
     WorktreeRepair {
+        path: String,
+    },
+    /// Check out the commits this repository records in the submodules at `paths` (all when
+    /// empty), cloning them first where needed. With `remote`, the newest commit of the branch
+    /// each one follows instead.
+    SubmoduleUpdate {
+        paths: Vec<String>,
+        #[serde(default)]
+        remote: bool,
+    },
+    /// Copy the submodules' URLs from `.gitmodules` to their settings.
+    SubmoduleSync {
+        paths: Vec<String>,
+    },
+    /// A new submodule: `url` cloned into `path`, following `branch` when given.
+    SubmoduleAdd {
+        url: String,
+        path: String,
+        #[serde(default)]
+        branch: Option<String>,
+    },
+    /// Remove the submodule at `path`, its folder too.
+    SubmoduleRemove {
         path: String,
     },
 }
@@ -872,12 +901,16 @@ impl Repo {
                 remote,
                 branch,
                 fetch_first,
+                submodules,
             } => {
                 let mut plan = Vec::new();
                 if *fetch_first {
                     plan.push(self.fetch_command(Some(remote)).with_progress());
                 }
                 plan.push(self.pull_command(remote, branch));
+                if *submodules {
+                    plan.extend(self.submodules_after_pull());
+                }
                 plan
             }
             Action::Push {
@@ -888,9 +921,14 @@ impl Repo {
                 force,
                 lease,
                 no_verify,
+                submodules,
             } => {
                 let mut args = vec!["push".to_owned()];
                 let mut notes = Vec::new();
+                if *submodules {
+                    args.push("--recurse-submodules=on-demand".to_owned());
+                    notes.push("--recurse-submodules=on-demand: push the submodule commits it records first".to_owned());
+                }
                 if *no_verify {
                     args.push("--no-verify".to_owned());
                     notes.push("--no-verify: skip the pre-push hook this one time".to_owned());
@@ -1245,6 +1283,10 @@ impl Repo {
             Action::WorktreeUnlock { path } => self.plan_worktree_unlock(path),
             Action::WorktreePrune => self.plan_worktree_prune(),
             Action::WorktreeRepair { path } => self.plan_worktree_repair(path),
+            Action::SubmoduleUpdate { paths, remote } => self.plan_submodule_update(paths, *remote),
+            Action::SubmoduleSync { paths } => self.plan_submodule_sync(paths),
+            Action::SubmoduleAdd { url, path, branch } => self.plan_submodule_add(url, path, branch.as_deref()),
+            Action::SubmoduleRemove { path } => self.plan_submodule_remove(path),
             Action::Reword { message, no_verify } => {
                 let mut args = vec!["commit".to_owned(), "--amend".to_owned(), "--only".to_owned()];
                 // The same hooks rule as Commit: off in Settings, or skipped this once.
@@ -1299,14 +1341,19 @@ impl Repo {
         }
         // Loading a key changes nothing in the repository. A worktree is a folder: undoing the
         // branch a new one made would pull it from under that folder, and a removed one's files
-        // were never in a snapshot.
+        // were never in a snapshot. A submodule's folder is another repository, also in no
+        // snapshot.
         if let Action::AddSshKey { .. }
         | Action::WorktreeAdd { .. }
         | Action::WorktreeRemove { .. }
         | Action::WorktreeLock { .. }
         | Action::WorktreeUnlock { .. }
         | Action::WorktreePrune
-        | Action::WorktreeRepair { .. } = action
+        | Action::WorktreeRepair { .. }
+        | Action::SubmoduleUpdate { .. }
+        | Action::SubmoduleSync { .. }
+        | Action::SubmoduleAdd { .. }
+        | Action::SubmoduleRemove { .. } = action
         {
             return self.perform_unlogged(action, on_event, cancel);
         }

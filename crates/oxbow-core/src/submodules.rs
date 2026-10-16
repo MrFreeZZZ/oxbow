@@ -272,3 +272,111 @@ fn briefs(dir: &Path, from: &str, to: &str) -> Vec<CommitBrief> {
     .map(|out| parse_briefs(&out))
     .unwrap_or_default()
 }
+
+/// A submodule whose recorded commit isn't on any of its remotes yet, for the warning before a
+/// push.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UnpushedSubmodule {
+    pub path: String,
+    pub title: String,
+    /// The commit `HEAD` records for it.
+    pub commit: String,
+}
+
+impl Repo {
+    /// Submodules whose commit `HEAD` records is in their clone but on none of its remote
+    /// branches: pushing this repository would record a commit nobody else can fetch. One that
+    /// isn't cloned, or lacks the commit, is left out: it came from elsewhere.
+    pub fn unpushed_submodules(&self) -> Vec<UnpushedSubmodule> {
+        self.submodules()
+            .into_iter()
+            .filter(|s| s.cloned)
+            .filter_map(|s| {
+                let commit = s.committed.clone()?;
+                let dir = self.workdir().join(&s.path);
+                if !has_commit(&dir, &commit) {
+                    return None;
+                }
+                let on_remote =
+                    git(&dir, ["branch", "-r", "--contains", &commit]).is_none_or(|out| !out.trim().is_empty());
+                (!on_remote).then_some(UnpushedSubmodule {
+                    path: s.path,
+                    title: s.title,
+                    commit,
+                })
+            })
+            .collect()
+    }
+
+    /// `git submodule update` for `paths` (all when empty): the folders get the commits this
+    /// repository records, cloned first where they aren't yet. With `remote`, they get the
+    /// newest commit of the branch each follows instead.
+    pub(crate) fn plan_submodule_update(&self, paths: &[String], remote: bool) -> Vec<GitCommand> {
+        let mut args = vec!["submodule".to_owned(), "update".to_owned()];
+        let note = if remote {
+            args.push("--remote".to_owned());
+            "--remote: fetch each one and check out the newest commit of the branch it follows; commit the result to record it"
+        } else {
+            args.push("--init".to_owned());
+            "--init: clone the ones that aren't yet; then check out the commits this repository records"
+        };
+        args.push("--recursive".to_owned());
+        if !paths.is_empty() {
+            args.push("--".to_owned());
+            args.extend(paths.iter().cloned());
+        }
+        vec![
+            GitCommand::new(args)
+                .comment(format!("{note}; --recursive: their submodules too"))
+                .with_progress(),
+        ]
+    }
+
+    /// `git submodule sync`: copy the URLs in `.gitmodules` to the settings of `paths` (all when
+    /// empty), after a submodule moved to another address.
+    pub(crate) fn plan_submodule_sync(&self, paths: &[String]) -> Vec<GitCommand> {
+        let mut args = vec!["submodule".to_owned(), "sync".to_owned(), "--recursive".to_owned()];
+        if !paths.is_empty() {
+            args.push("--".to_owned());
+            args.extend(paths.iter().cloned());
+        }
+        vec![GitCommand::new(args).comment("take the URLs from .gitmodules, so fetches go to the new address")]
+    }
+
+    /// `git submodule add`: clone `url` into `path` and stage it with its `.gitmodules` entry;
+    /// with `branch`, it follows that branch for Pull Latest.
+    pub(crate) fn plan_submodule_add(&self, url: &str, path: &str, branch: Option<&str>) -> Vec<GitCommand> {
+        let mut args = vec!["submodule".to_owned(), "add".to_owned()];
+        let mut note = "clones it and stages .gitmodules and the folder for the next commit".to_owned();
+        if let Some(branch) = branch.filter(|b| !b.is_empty()) {
+            args.extend(["-b".to_owned(), branch.to_owned()]);
+            note = format!("-b: check out {branch} and follow it; {note}");
+        }
+        args.extend(["--".to_owned(), url.to_owned(), path.to_owned()]);
+        vec![GitCommand::new(args).comment(note).with_progress()]
+    }
+
+    /// Remove the submodule at `path`: empty its folder and forget it, then delete it from the
+    /// index and `.gitmodules`. Its clone stays in `.git/modules`, so adding it back is quick.
+    pub(crate) fn plan_submodule_remove(&self, path: &str) -> Vec<GitCommand> {
+        vec![
+            GitCommand::new(["submodule", "deinit", "-f", "--", path])
+                .comment("-f: empty the folder even with changes in it, and forget its settings in .git/config"),
+            GitCommand::new(["rm", "-f", "--", path])
+                .comment("remove the folder and its .gitmodules entry, staged for the next commit"),
+        ]
+    }
+
+    /// The command that brings the submodules along after a pull, when there are any.
+    pub(crate) fn submodules_after_pull(&self) -> Option<GitCommand> {
+        if self.submodules().is_empty() {
+            return None;
+        }
+        Some(
+            GitCommand::new(["submodule", "update", "--init", "--recursive"])
+                .comment("the submodules follow: check out the commits the pulled commits record")
+                .with_progress(),
+        )
+    }
+}

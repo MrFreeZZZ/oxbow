@@ -1,11 +1,26 @@
 mod support;
 
-use oxbow_core::{DiffContext, HistoryOptions, Moved, Repo, Side};
+use oxbow_core::{Action, DiffContext, HistoryOptions, Moved, Repo, Side};
 use support::Fixture;
+
+/// Let git clone from local paths, as `submodule update` refuses by default; the tests' clones
+/// are all on disk.
+fn allow_file_urls() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        // SAFETY: set once, before any test of this file runs git through `Repo`.
+        unsafe {
+            std::env::set_var("GIT_CONFIG_COUNT", "1");
+            std::env::set_var("GIT_CONFIG_KEY_0", "protocol.file.allow");
+            std::env::set_var("GIT_CONFIG_VALUE_0", "always");
+        }
+    });
+}
 
 /// A library with three commits, and an app that has it as the submodule `libs/lint` at the
 /// third. Returns both and the library's commits, oldest first.
 fn app_with_submodule() -> (Fixture, Fixture, Vec<String>) {
+    allow_file_urls();
     let mut lib = Fixture::new();
     let ids = vec![
         lib.commit("rules.txt", "one\n", "First rule"),
@@ -166,4 +181,193 @@ fn a_clone_without_submodules_has_them_not_cloned() {
         .unwrap();
     assert_eq!(moved.moved, Moved::Added);
     assert!(!moved.cloned);
+}
+
+fn shown(repo: &Repo, action: &Action) -> Vec<String> {
+    repo.plan(action)
+        .unwrap()
+        .commands
+        .iter()
+        .map(|c| c.display())
+        .collect()
+}
+
+#[test]
+fn update_brings_the_folder_back_to_the_recorded_commit() {
+    let (mut fx, _lib, ids) = app_with_submodule();
+    sub(&mut fx, &["checkout", "-q", &ids[0]]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let update = Action::SubmoduleUpdate {
+        paths: vec!["libs/lint".into()],
+        remote: false,
+    };
+    assert_eq!(
+        shown(&repo, &update),
+        ["git submodule update --init --recursive -- libs/lint"]
+    );
+    repo.perform(&update).unwrap();
+    let lint = &repo.submodules()[0];
+    assert!(!lint.out_of_sync());
+    assert_eq!(lint.current.as_deref(), Some(ids[2].as_str()));
+    // A submodule's folder is in no snapshot, so the step isn't in the Operation Log.
+    assert!(repo.operation_log().unwrap().is_empty());
+}
+
+#[test]
+fn update_clones_the_ones_that_are_not_cloned() {
+    let (fx, _lib, ids) = app_with_submodule();
+    let mut copy = Fixture::new();
+    let target = copy.path().parent().unwrap().join("copy");
+    copy.git(&[
+        "clone",
+        "-q",
+        &fx.path().display().to_string(),
+        &target.display().to_string(),
+    ]);
+    let repo = Repo::open(&target).unwrap();
+    repo.perform(&Action::SubmoduleUpdate {
+        paths: Vec::new(),
+        remote: false,
+    })
+    .unwrap();
+    let lint = &repo.submodules()[0];
+    assert!(lint.cloned);
+    assert_eq!(lint.current.as_deref(), Some(ids[2].as_str()));
+}
+
+#[test]
+fn pull_latest_takes_the_newest_commit_of_its_branch() {
+    let (fx, mut lib, ids) = app_with_submodule();
+    let fourth = lib.commit("rules.txt", "four\n", "Fourth rule");
+    let repo = Repo::open(fx.path()).unwrap();
+    let latest = Action::SubmoduleUpdate {
+        paths: vec!["libs/lint".into()],
+        remote: true,
+    };
+    assert_eq!(
+        shown(&repo, &latest),
+        ["git submodule update --remote --recursive -- libs/lint"]
+    );
+    repo.perform(&latest).unwrap();
+    let lint = &repo.submodules()[0];
+    assert_eq!(lint.current.as_deref(), Some(fourth.as_str()));
+    assert_eq!(lint.recorded.as_deref(), Some(ids[2].as_str()));
+    assert_eq!((lint.ahead, lint.behind), (1, 0));
+}
+
+#[test]
+fn a_submodule_is_added_and_removed() {
+    let (fx, _lib, _ids) = app_with_submodule();
+    let mut other = Fixture::new();
+    other.commit("README", "other\n", "Other");
+    let repo = Repo::open(fx.path()).unwrap();
+    let url = other.path().display().to_string();
+    let add = Action::SubmoduleAdd {
+        url: url.clone(),
+        path: "libs/other".into(),
+        branch: Some("main".into()),
+    };
+    assert_eq!(
+        shown(&repo, &add),
+        [format!("git submodule add -b main -- {url} libs/other")]
+    );
+    repo.perform(&add).unwrap();
+    let list = repo.submodules();
+    assert_eq!(
+        list.iter().map(|s| s.path.as_str()).collect::<Vec<_>>(),
+        ["libs/lint", "libs/other"]
+    );
+    assert_eq!(list[1].follows.as_deref(), Some("main"));
+    assert!(list[1].cloned && list[1].committed.is_none());
+
+    let remove = Action::SubmoduleRemove {
+        path: "libs/lint".into(),
+    };
+    assert_eq!(
+        shown(&repo, &remove),
+        ["git submodule deinit -f -- libs/lint", "git rm -f -- libs/lint"]
+    );
+    repo.perform(&remove).unwrap();
+    let list = repo.submodules();
+    assert_eq!(list.iter().map(|s| s.path.as_str()).collect::<Vec<_>>(), ["libs/other"]);
+    assert!(!fx.path().join("libs/lint").exists());
+    let gitmodules = std::fs::read_to_string(fx.path().join(".gitmodules")).unwrap();
+    assert!(!gitmodules.contains("libs/lint"));
+}
+
+#[test]
+fn a_commit_only_this_clone_has_is_found_before_push_and_pushed_first() {
+    allow_file_urls();
+    // The library on a bare server, so its clone can push to it.
+    let mut lib = Fixture::new();
+    lib.commit("rules.txt", "one\n", "First rule");
+    let server = lib.path().parent().unwrap().join("lint.git");
+    lib.git(&["clone", "-q", "--bare", ".", &server.display().to_string()]);
+    let mut app = Fixture::new();
+    app.commit("app.rs", "fn main() {}\n", "Start");
+    let app_server = app.path().parent().unwrap().join("app.git");
+    app.git(&["init", "-q", "--bare", &app_server.display().to_string()]);
+    app.git(&["remote", "add", "origin", &app_server.display().to_string()]);
+    app.git(&[
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        &server.display().to_string(),
+        "libs/lint",
+    ]);
+    app.git(&["commit", "-q", "-m", "Add lint"]);
+    app.git(&["push", "-q", "-u", "origin", "main"]);
+
+    let repo = Repo::open(app.path()).unwrap();
+    assert!(repo.unpushed_submodules().is_empty());
+
+    // A new commit in the submodule, recorded here but not pushed there.
+    app.write("libs/lint/rules.txt", "two\n");
+    sub(&mut app, &["commit", "-q", "-am", "Second rule"]);
+    let second = sub(&mut app, &["rev-parse", "HEAD"]);
+    app.git(&["commit", "-q", "-am", "Update lint"]);
+    let unpushed = repo.unpushed_submodules();
+    assert_eq!(unpushed.len(), 1);
+    assert_eq!(
+        (unpushed[0].path.as_str(), unpushed[0].commit.as_str()),
+        ("libs/lint", second.as_str())
+    );
+
+    let push = Action::Push {
+        remote: "origin".into(),
+        branch: "main".into(),
+        upstream: "main".into(),
+        set_upstream: false,
+        force: false,
+        lease: None,
+        no_verify: false,
+        submodules: true,
+    };
+    assert_eq!(
+        shown(&repo, &push),
+        ["git push --recurse-submodules=on-demand origin main"]
+    );
+    repo.perform(&push).unwrap();
+    assert!(repo.unpushed_submodules().is_empty());
+    let on_server = std::process::Command::new("git")
+        .args(["--git-dir", &server.display().to_string(), "rev-parse", "main"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&on_server.stdout).trim(), second);
+}
+
+#[test]
+fn pull_can_bring_the_submodules_along() {
+    let (fx, _lib, _ids) = app_with_submodule();
+    let repo = Repo::open(fx.path()).unwrap();
+    let pull = |submodules| Action::Pull {
+        remote: "origin".into(),
+        branch: "main".into(),
+        fetch_first: false,
+        submodules,
+    };
+    let with = shown(&repo, &pull(true));
+    assert_eq!(with.last().unwrap(), "git submodule update --init --recursive");
+    assert_eq!(shown(&repo, &pull(false)).len(), with.len() - 1);
 }

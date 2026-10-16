@@ -1319,16 +1319,22 @@ fn open_in_terminal(
     open_in::open_terminal(&terminal, &dir)
 }
 
-/// `path` when it is one of the repository's worktrees; commands that open things take no other.
+/// `path` when it is one of the repository's worktrees or cloned submodules; commands that open
+/// things take no other.
 fn worktree_folder(repo: &Repo, path: &str) -> CommandResult<PathBuf> {
     let known = repo.worktrees().map_err(|err| err.to_string())?;
     let wanted = Path::new(path).canonicalize().ok();
-    known
+    let same = |folder: &Path| folder == Path::new(path) || wanted.is_some() && folder.canonicalize().ok() == wanted;
+    if let Some(tree) = known.iter().filter(|t| !t.missing).find(|t| same(Path::new(&t.path))) {
+        return Ok(PathBuf::from(&tree.path));
+    }
+    // A submodule's folder is a repository of its own, opened and shown like a worktree.
+    repo.submodules()
         .iter()
-        .filter(|t| !t.missing)
-        .find(|t| t.path == path || wanted.is_some() && Path::new(&t.path).canonicalize().ok() == wanted)
-        .map(|t| PathBuf::from(&t.path))
-        .ok_or_else(|| format!("{path} isn’t a worktree of this repository any more"))
+        .filter(|s| s.cloned)
+        .map(|s| repo.workdir().join(&s.path))
+        .find(|folder| same(folder))
+        .ok_or_else(|| format!("{path} isn’t a worktree or submodule of this repository any more"))
 }
 
 /// Show a worktree's folder in Finder (Explorer, or the file manager on Linux).
