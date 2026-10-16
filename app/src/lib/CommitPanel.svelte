@@ -159,17 +159,17 @@
       .commitDiffPage(current, from, PAGE_LINES, wholeFile, DIFF)
       .then(
         (page) => {
+          // Cleared with the new files, so the view can ask for the next page right away.
+          if (id === current) loadingMore = false;
           if (id !== current || tab !== null || whole !== wholeFile || next !== from) return;
           diffs = [...diffs, ...page.diffs];
           next = page.next;
         },
         (err) => {
+          if (id === current) loadingMore = false;
           if (id === current && !stopped(err)) error = String(err);
         },
-      )
-      .finally(() => {
-        if (id === current) loadingMore = false;
-      });
+      );
   }
 
   // A new commit resets the tab; the diff mode is kept.

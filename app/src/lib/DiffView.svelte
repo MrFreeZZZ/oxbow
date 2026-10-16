@@ -145,14 +145,21 @@
   // Another commit starts from the setting; the same files loaded again (the whole-file toggle)
   // keep what was folded by hand.
   const fileSet = $derived(diffs.map((d) => d.file.path).join("\n"));
+  let foldedFor = "";
   $effect(() => {
     const key = fileSet;
     prefs.get("oxbow.diff.files");
     prefs.get("oxbow.diff.foldOver");
     if (!foldable || !key) return;
     untrack(() => {
+      // More files of the same commit keep how the ones already shown are folded.
+      const kept = foldedFor && key.startsWith(foldedFor + "\n") ? folded : {};
+      foldedFor = key;
       // A file shown on its own tab is what was asked for, so it starts open.
-      folded = Object.fromEntries(diffs.map((d) => [d.file.path, diffs.length > 1 && startsFolded(d)]));
+      const many = diffs.length + pending > 1;
+      folded = Object.fromEntries(
+        diffs.map((d) => [d.file.path, own(kept, d.file.path) ?? (many && startsFolded(d))]),
+      );
     });
   });
 
@@ -179,6 +186,8 @@
   /** Lines shown past `lineBudget`: each Show More adds a portion, never everything at once. */
   let extra = $state(0);
   const PORTION = 20_000;
+  /** What a folded file's header costs of the budget, in lines. */
+  const FOLDED_LINES = 8;
   // Other diffs start from the budget again; more files loaded after the first keep it.
   const first = $derived(diffs[0]);
   $effect(() => {
@@ -197,8 +206,11 @@
     for (const diff of items) {
       if (budget <= 0) break;
       files.push(diff);
-      // A folded file draws no lines.
-      if (isFolded(diff)) continue;
+      // A folded file draws only its header.
+      if (isFolded(diff)) {
+        budget -= FOLDED_LINES;
+        continue;
+      }
       const total = diff.hunks.reduce((n, h) => n + h.lines.length, 0);
       if (total > budget + CUT_SLACK) {
         let left = budget;
@@ -213,7 +225,12 @@
       }
       budget -= total;
     }
-    return { files, hidden: items.length - files.length, cut };
+    return { files, hidden: items.length - files.length, cut, left: budget };
+  });
+
+  // Files still to load while the budget isn't spent, e.g. as the first ones start folded.
+  $effect(() => {
+    if (pending > 0 && shown.hidden === 0 && !shown.cut && shown.left > 0) untrack(() => onMore?.());
   });
 
   /** More files: the ones loaded but not shown, then more of the ones still to load. */
