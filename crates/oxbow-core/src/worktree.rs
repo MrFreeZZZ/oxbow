@@ -29,6 +29,9 @@ const MAX_DIFF_LINES: usize = 20_000;
 
 /// Untracked files bigger than this are not read to count their lines.
 const MAX_COUNTED_BYTES: u64 = 8 * 1024 * 1024;
+/// Bytes of a file's patch read at most: a longer one is too large to show, as a longer blob is
+/// in a commit's diff.
+const MAX_PATCH_BYTES: usize = 16 * 1024 * 1024;
 
 /// Uncommitted changes, grouped the way they are staged.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -691,9 +694,10 @@ impl Repo {
                 submodule: None,
             });
         }
-        let patch = self.raw_diff(&file, side, whole_file)?;
+        let (patch, cut) = self.raw_diff_within(&file, side, whole_file, MAX_PATCH_BYTES)?;
         // Past this many lines nothing is shown, so the rest of the patch is not turned into lines.
-        let parsed = parse_patch_within(&patch, MAX_DIFF_LINES);
+        let mut parsed = parse_patch_within(&patch, MAX_DIFF_LINES);
+        parsed.cut |= cut;
         let mut hunks: Vec<Hunk> = parsed.hunks.into_iter().map(|h| h.hunk).collect();
         // Lines the secrets check would stop a commit on get a mark before they are staged.
         if crate::secrets::check_secrets() && !parsed.cut {
@@ -1651,6 +1655,13 @@ impl Repo {
 
     /// `git diff` output for one file.
     fn raw_diff(&self, file: &FileChange, side: Side, whole_file: bool) -> Result<String> {
+        let (patch, _) = self.raw_diff_within(file, side, whole_file, usize::MAX)?;
+        Ok(patch)
+    }
+
+    /// [`Repo::raw_diff`], reading at most `max` bytes of the patch: whether it was cut there
+    /// comes with it. A whole-file patch of a huge file is never read further than shown.
+    fn raw_diff_within(&self, file: &FileChange, side: Side, whole_file: bool, max: usize) -> Result<(String, bool)> {
         let context = if whole_file {
             "-U100000000".to_owned()
         } else {
@@ -1664,18 +1675,29 @@ impl Repo {
             "--full-index",
             &context,
         ];
-        if file.status == FileStatus::Untracked {
-            // `--no-index` exits with 1 when the files differ, which they always do here.
-            args.extend(["--no-index", "--", "/dev/null", &file.path]);
-            let out = self.spawn(&GitCommand::new(args), None)?;
-            return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
-        }
-        if side == Side::Staged {
-            args.push("--cached");
-        }
         let path = literal(&file.path);
-        args.extend(["--", &path]);
-        Ok(self.run(&GitCommand::new(args))?.stdout)
+        let untracked = file.status == FileStatus::Untracked;
+        if untracked {
+            args.extend(["--no-index", "--", "/dev/null", &file.path]);
+        } else {
+            if side == Side::Staged {
+                args.push("--cached");
+            }
+            args.extend(["--", &path]);
+        }
+        let command = GitCommand::new(args);
+        let out = self.spawn_within(&command, max)?;
+        let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
+        // `--no-index` exits with 1 when the files differ, which they always do here.
+        if !out.success && !out.cut && !untracked {
+            let (stdout, stderr) = (text(&out.stdout), text(&out.stderr));
+            return Err(Error::Command {
+                command: command.display(),
+                code: out.code,
+                output: if stderr.trim().is_empty() { stdout } else { stderr },
+            });
+        }
+        Ok((text(&out.stdout), out.cut))
     }
 
     /// The blob ids of both sides of `file`'s change on `side`, as the `index` line of its patch

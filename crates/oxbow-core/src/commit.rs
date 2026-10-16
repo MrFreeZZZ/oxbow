@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use gix::ObjectId;
 use gix::bstr::{BStr, ByteSlice};
 use gix::diff::blob::{Algorithm, Diff, InternedInput};
@@ -30,6 +32,21 @@ pub struct CommitDetail {
     /// A shallow clone stops here: the first parent isn't in it yet, so `files` is empty until a
     /// fetch brings it.
     pub shallow_end: bool,
+    /// `files` have their line counts, sizes and what is unusual about them. Without, they are
+    /// only the list of paths and how each changed, which needs no file read.
+    pub counted: bool,
+}
+
+/// Diffs of a commit's files, a few at a time: as many files from `from` on as fit a budget
+/// of lines.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffPage {
+    pub diffs: Vec<FileDiff>,
+    /// Where the next page starts; `None` after the last file.
+    pub next: Option<usize>,
+    /// Changed files in all.
+    pub files: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -228,8 +245,15 @@ struct Inspected {
 }
 
 impl Repo {
-    /// Message, people, parents and changed files of a commit.
+    /// Message, people, parents and changed files of a commit, with their line counts.
     pub fn commit_detail(&self, id: &str) -> Result<CommitDetail> {
+        self.commit_detail_with(id, true, &AtomicBool::new(false))
+    }
+
+    /// [`Repo::commit_detail`], with the changed files counted only when `count` is set: the
+    /// list alone comes at once even for a commit of thousands of files, as it reads none of
+    /// them. Setting `cancel` stops the counting: a newer question took its place.
+    pub fn commit_detail_with(&self, id: &str, count: bool, cancel: &AtomicBool) -> Result<CommitDetail> {
         let repo = self.local();
         let commit = find_commit(&repo, id)?;
         let message = commit.message_raw_sloppy().to_str_lossy();
@@ -252,12 +276,18 @@ impl Repo {
         let shallow_end = parent_missing(&repo, &commit);
         let files = if shallow_end {
             Vec::new()
-        } else {
+        } else if count {
             counted(
                 &repo,
                 self.commit_changes(&repo, &commit)?,
                 self.diff_options().max_lines,
-            )
+                cancel,
+            )?
+        } else {
+            self.commit_changes(&repo, &commit)?
+                .into_iter()
+                .map(|c| c.file)
+                .collect()
         };
         Ok(CommitDetail {
             id: commit.id.to_string(),
@@ -268,6 +298,7 @@ impl Repo {
             parents,
             files,
             shallow_end,
+            counted: count,
         })
     }
 
@@ -280,6 +311,47 @@ impl Repo {
         }
         let changes = self.commit_changes(&repo, &commit)?;
         self.diffs(&repo, changes, path, context)
+    }
+
+    /// The line diffs of a commit's files from the `from`th on, as many as fit `budget` lines
+    /// (one file at least), for its Summary: a commit of thousands of files shows its first
+    /// ones without diffing the others. Setting `cancel` stops it, between files.
+    pub fn commit_diff_page(
+        &self,
+        id: &str,
+        from: usize,
+        budget: usize,
+        context: DiffContext,
+        cancel: &AtomicBool,
+    ) -> Result<DiffPage> {
+        let repo = self.local();
+        let commit = find_commit(&repo, id)?;
+        if parent_missing(&repo, &commit) {
+            return Ok(DiffPage {
+                diffs: Vec::new(),
+                next: None,
+                files: 0,
+            });
+        }
+        let changes = self.commit_changes(&repo, &commit)?;
+        let files = changes.len();
+        let mut diffs = Vec::new();
+        let mut lines = 0;
+        let mut next = None;
+        for (at, change) in changes.into_iter().enumerate().skip(from) {
+            if !diffs.is_empty() && lines >= budget {
+                next = Some(at);
+                break;
+            }
+            if cancel.load(Ordering::Relaxed) {
+                return Err(Error::Cancelled);
+            }
+            let diff = self.diff_one(&repo, change, context)?;
+            // A card (binary, too large, a picture) takes about as much room as a few lines.
+            lines += diff.hunks.iter().map(|h| h.lines.len()).sum::<usize>().max(8);
+            diffs.push(diff);
+        }
+        Ok(DiffPage { diffs, next, files })
     }
 
     /// Changed files of a commit against its first parent. A stash keeps its untracked files in a
@@ -302,7 +374,7 @@ impl Repo {
     pub fn tree_files(&self, from: &str, to: &str) -> Result<Vec<FileChange>> {
         let repo = self.local();
         let changes = tree_changes(&repo, Some(&from_tree(&repo, from)?), &from_tree(&repo, to)?)?;
-        Ok(counted(&repo, changes, self.diff_options().max_lines))
+        counted(&repo, changes, self.diff_options().max_lines, &AtomicBool::new(false))
     }
 
     /// Line diffs between two commits' trees (or two trees), for all files or only `path`.
@@ -319,54 +391,55 @@ impl Repo {
         path: Option<&str>,
         context: DiffContext,
     ) -> Result<Vec<FileDiff>> {
+        changes
+            .into_iter()
+            .filter(|change| path.is_none_or(|p| p == change.file.path))
+            .map(|change| self.diff_one(repo, change, context))
+            .collect()
+    }
+
+    /// The line diff of one changed file.
+    fn diff_one(&self, repo: &gix::Repository, change: Change, context: DiffContext) -> Result<FileDiff> {
         let options = self.diff_options();
         let context = match context {
             DiffContext::Compact => DiffContext::Lines(options.context_lines),
             other => other,
         };
-        let mut out = Vec::new();
-        for change in changes {
-            if path.is_some_and(|p| p != change.file.path) {
-                continue;
-            }
-            let mut file = change.file;
-            if file.submodule.is_some() {
-                let id = |id: Option<ObjectId>| id.map(|id| id.to_string());
-                let moved = self.submodule_move(&file.path, id(change.old).as_deref(), id(change.new).as_deref(), 0);
-                out.push(FileDiff {
-                    file,
-                    hunks: Vec::new(),
-                    too_large: false,
-                    limited: false,
-                    old: None,
-                    new: None,
-                    submodule: Some(moved),
-                });
-                continue;
-            }
-            let found = inspect(
-                repo,
-                &mut file,
-                change.old,
-                change.new,
-                context,
-                true,
-                options.ignore_whitespace,
-                options.max_lines,
-            )?;
-            let (hunks, too_large, limited) = (found.hunks.unwrap_or_default(), found.too_large, found.limited);
-            let blob = |id: Option<ObjectId>| id.map(|id| Source::Blob { id: id.to_string() });
-            out.push(FileDiff {
+        let mut file = change.file;
+        if file.submodule.is_some() {
+            let id = |id: Option<ObjectId>| id.map(|id| id.to_string());
+            let moved = self.submodule_move(&file.path, id(change.old).as_deref(), id(change.new).as_deref(), 0);
+            return Ok(FileDiff {
                 file,
-                hunks,
-                too_large,
-                limited,
-                old: blob(change.old),
-                new: blob(change.new),
-                submodule: None,
+                hunks: Vec::new(),
+                too_large: false,
+                limited: false,
+                old: None,
+                new: None,
+                submodule: Some(moved),
             });
         }
-        Ok(out)
+        let found = inspect(
+            repo,
+            &mut file,
+            change.old,
+            change.new,
+            context,
+            true,
+            options.ignore_whitespace,
+            options.max_lines,
+        )?;
+        let (hunks, too_large, limited) = (found.hunks.unwrap_or_default(), found.too_large, found.limited);
+        let blob = |id: Option<ObjectId>| id.map(|id| Source::Blob { id: id.to_string() });
+        Ok(FileDiff {
+            file,
+            hunks,
+            too_large,
+            limited,
+            old: blob(change.old),
+            new: blob(change.new),
+            submodule: None,
+        })
     }
 }
 
@@ -458,15 +531,23 @@ fn count_lines(file: &mut FileChange, hunks: &[Hunk]) {
     }
 }
 
-/// Files with their added and removed line counts.
-fn counted(repo: &gix::Repository, changes: Vec<Change>, max_lines: u32) -> Vec<FileChange> {
+/// Files with their added and removed line counts. Setting `cancel` stops it, between files.
+fn counted(
+    repo: &gix::Repository,
+    changes: Vec<Change>,
+    max_lines: u32,
+    cancel: &AtomicBool,
+) -> Result<Vec<FileChange>> {
     changes
         .into_iter()
         .map(|change| {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(Error::Cancelled);
+            }
             let mut file = change.file;
             if file.submodule.is_some() {
                 // It records a commit of another repository: there are no lines to count.
-                return file;
+                return Ok(file);
             }
             // Counts are a nicety; a blob that can't be read still lists the file.
             let _ = inspect(
@@ -479,7 +560,7 @@ fn counted(repo: &gix::Repository, changes: Vec<Change>, max_lines: u32) -> Vec<
                 false,
                 max_lines,
             );
-            file
+            Ok(file)
         })
         .collect()
 }
@@ -493,7 +574,6 @@ fn from_tree<'r>(repo: &'r gix::Repository, id: &str) -> Result<gix::Tree<'r>> {
         .map_err(Error::git)
 }
 
-/// Changed files of `commit` compared to its first parent (or to nothing for a root commit).
 /// Whether the commit's first parent is missing, as where a shallow clone stops.
 fn parent_missing(repo: &gix::Repository, commit: &gix::Commit<'_>) -> bool {
     commit
@@ -502,6 +582,7 @@ fn parent_missing(repo: &gix::Repository, commit: &gix::Commit<'_>) -> bool {
         .is_some_and(|parent| !repo.has_object(parent))
 }
 
+/// Changed files of `commit` compared to its first parent (or to nothing for a root commit).
 fn changes(repo: &gix::Repository, commit: &gix::Commit<'_>) -> Result<Vec<Change>> {
     let new_tree = commit.tree().map_err(Error::git)?;
     let old_tree = match commit.parent_ids().next() {

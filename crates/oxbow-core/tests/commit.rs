@@ -1,6 +1,8 @@
 mod support;
 
-use oxbow_core::{DiffContext, FileStatus, LineKind, Repo};
+use std::sync::atomic::AtomicBool;
+
+use oxbow_core::{DiffContext, Error, FileStatus, LineKind, Repo};
 use support::Fixture;
 
 #[test]
@@ -239,4 +241,51 @@ fn where_a_shallow_clone_stops_the_commit_waits_for_its_parent() {
     assert!(!detail.shallow_end);
     assert_eq!(detail.files.len(), 1);
     assert_eq!(repo.commit_diff(&end, None, DiffContext::Compact).unwrap().len(), 1);
+}
+
+#[test]
+fn a_big_commit_lists_its_files_at_once_and_diffs_them_a_page_at_a_time() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    for n in 0..6 {
+        fx.write(&format!("f{n}.txt"), &"line\n".repeat(10));
+    }
+    let id = fx.commit("a.txt", "b\n", "Many files");
+    let repo = Repo::open(fx.path()).unwrap();
+    let go = AtomicBool::new(false);
+
+    // The list alone: paths and how each changed, no counts.
+    let quick = repo.commit_detail_with(&id, false, &go).unwrap();
+    assert!(!quick.counted);
+    assert_eq!(quick.files.len(), 7);
+    assert!(quick.files.iter().all(|f| f.additions == 0));
+    let counted = repo.commit_detail(&id).unwrap();
+    assert!(counted.counted);
+    assert_eq!(counted.files[1].additions, 10);
+
+    // Pages of about 25 lines: the files come in order, each once.
+    let mut paths = Vec::new();
+    let mut from = Some(0);
+    let mut pages = 0;
+    while let Some(at) = from {
+        let page = repo.commit_diff_page(&id, at, 25, DiffContext::Compact, &go).unwrap();
+        assert_eq!(page.files, 7);
+        paths.extend(page.diffs.iter().map(|d| d.file.path.clone()));
+        from = page.next;
+        pages += 1;
+    }
+    let all: Vec<_> = counted.files.iter().map(|f| f.path.clone()).collect();
+    assert_eq!(paths, all);
+    assert!(pages > 1);
+
+    // A newer question stopped it.
+    let stop = AtomicBool::new(true);
+    assert!(matches!(
+        repo.commit_diff_page(&id, 0, 25, DiffContext::Compact, &stop),
+        Err(Error::Cancelled)
+    ));
+    assert!(matches!(
+        repo.commit_detail_with(&id, true, &stop),
+        Err(Error::Cancelled)
+    ));
 }

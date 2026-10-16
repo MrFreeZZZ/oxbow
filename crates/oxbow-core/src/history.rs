@@ -18,8 +18,9 @@ use crate::submodules::Submodule;
 use crate::worktree::WorkingTree;
 use crate::worktrees::Worktree;
 
-/// Commits loaded at a time: the first load, and each one after it as the list scrolls on.
-pub const PAGE: usize = 10_000;
+/// Commits of the first load. As the list scrolls on the app asks for more, and gets only the
+/// rows it does not have yet: see [`History::pieces`].
+pub const PAGE: usize = 2_000;
 
 /// Options for loading the history.
 #[derive(Debug, Clone)]
@@ -96,6 +97,20 @@ pub struct History {
     /// The caller has the rows of `key` already, so they were left out: `rows` holds only the
     /// row of uncommitted changes, if there is one, and `runs` and `lead_ins` are empty.
     pub same: bool,
+    /// When not empty, how to put the rows together from the ones the caller has (those of the
+    /// key it asked with) and `rows`, which then holds only the others: one piece after the
+    /// other, each a run of the caller's rows or of the next rows of `rows`. More commits loaded
+    /// as the list scrolls, or a new commit on top, send only what is new.
+    pub pieces: Vec<Piece>,
+}
+
+/// A run of history rows: `len` of the caller's rows from `known` on, or with `known` unset,
+/// the next `len` rows of [`History::rows`].
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Piece {
+    pub known: Option<usize>,
+    pub len: usize,
 }
 
 impl History {
@@ -113,7 +128,7 @@ impl History {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryRow {
     pub id: String,
@@ -137,7 +152,7 @@ pub struct HistoryRow {
 /// Id of the history row that stands for the uncommitted changes.
 pub const WORKTREE_ID: &str = "worktree";
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeSummary {
     /// Files with any change.
@@ -306,9 +321,12 @@ impl Repo {
             production.as_deref(),
             boundary,
         );
+        // The rows the caller has, when they are the ones built last.
+        let mut before = None;
         let built = match &cache.last {
             Some((last, built)) if *last == key => built.clone(),
-            _ => {
+            last => {
+                let previous = last.as_ref().map(|(_, rows)| rows.clone());
                 let built = Arc::new(self.build_rows(
                     &repo,
                     options,
@@ -319,13 +337,20 @@ impl Repo {
                     rebasing,
                     dirty,
                     production.as_deref(),
+                    previous.as_deref(),
                 )?);
+                if let Some((last, rows)) = last
+                    && known == Some(format!("{last:016x}").as_str())
+                {
+                    before = Some(rows.clone());
+                }
                 cache.last = Some((key, built.clone()));
                 built
             }
         };
         let key_text = format!("{key:016x}");
         let same = known == Some(key_text.as_str());
+        let mut pieces = Vec::new();
         let mut rows: Vec<HistoryRow> = if same {
             built
                 .rows
@@ -333,6 +358,10 @@ impl Repo {
                 .take_while(|r| r.worktree.is_some())
                 .cloned()
                 .collect()
+        } else if let Some(before) = before {
+            let (fresh, layout) = pieced(&before.rows, &built.rows);
+            pieces = layout;
+            fresh
         } else {
             built.rows.clone()
         };
@@ -382,6 +411,7 @@ impl Repo {
             snapshot: 0,
             key: key_text,
             same,
+            pieces,
         })
     }
 
@@ -398,6 +428,7 @@ impl Repo {
         rebasing: bool,
         dirty: bool,
         production: Option<&str>,
+        previous: Option<&Rows>,
     ) -> Result<Rows> {
         let mut tips: Vec<ObjectId> = refs
             .iter()
@@ -560,20 +591,41 @@ impl Repo {
             list.sort_by_key(|l| (!l.head, l.kind as u8, l.name.clone()));
         }
 
+        // What the last history read of each commit: a commit never changes under its id.
+        let known: HashMap<&str, &HistoryRow> = previous
+            .map(|p| {
+                p.rows
+                    .iter()
+                    .filter(|r| r.worktree.is_none())
+                    .map(|r| (r.id.as_str(), r))
+                    .collect()
+            })
+            .unwrap_or_default();
         let mut graph_input = Vec::with_capacity(nodes.len());
         let mut details = Vec::with_capacity(nodes.len());
         for (row, node) in nodes.iter().enumerate() {
-            let commit = repo.find_commit(node.id).map_err(Error::git)?;
-            let message = commit.message_raw_sloppy();
-            let summary = message
-                .lines()
-                .next()
-                .unwrap_or_default()
-                .to_str_lossy()
-                .trim()
-                .to_owned();
-            let author = commit.author().map_err(Error::git)?;
-            let author_time = author.time().map(|t| t.seconds).unwrap_or(node.time);
+            let id = node.id.to_string();
+            let (summary, author_name, author_email, author_time) = match known.get(id.as_str()) {
+                Some(r) => (r.summary.clone(), r.author_name.clone(), r.author_email.clone(), r.time),
+                None => {
+                    let commit = repo.find_commit(node.id).map_err(Error::git)?;
+                    let message = commit.message_raw_sloppy();
+                    let summary = message
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .to_str_lossy()
+                        .trim()
+                        .to_owned();
+                    let author = commit.author().map_err(Error::git)?;
+                    (
+                        summary,
+                        author.name.to_str_lossy().into_owned(),
+                        author.email.to_str_lossy().into_owned(),
+                        author.time().map(|t| t.seconds).unwrap_or(node.time),
+                    )
+                }
+            };
             let row_labels = labels.get(&node.id);
             graph_input.push(GraphCommit {
                 parents: node.parents.iter().map(|p| row_of.get(p).copied()).collect(),
@@ -584,7 +636,7 @@ impl Repo {
                     .flatten(),
                 unpushed: unpushed.contains(&node.id) || stash_ids.contains(&node.id),
                 side: stash_ids.contains(&node.id),
-                id: node.id.to_string(),
+                id,
                 color: if stash_ids.contains(&node.id) {
                     Some(graph::STASH_COLOR)
                 } else {
@@ -592,12 +644,7 @@ impl Repo {
                 },
                 worktree: false,
             });
-            details.push((
-                summary,
-                author.name.to_str_lossy().into_owned(),
-                author.email.to_str_lossy().into_owned(),
-                author_time,
-            ));
+            details.push((summary, author_name, author_email, author_time));
         }
 
         // Uncommitted changes go on a side line down to HEAD, in the color of HEAD's line.
@@ -606,18 +653,19 @@ impl Repo {
             .as_deref()
             .and_then(|h| ObjectId::from_hex(h.as_bytes()).ok());
         let head_row = head_id.and_then(|id| row_of.get(&id).copied());
-        let mut graph = graph::layout(&graph_input, head_row);
         let mut worktree_row = None;
-        if dirty {
+        let mut graph = if dirty {
+            // One layout with the row of uncommitted changes on top: it takes the color of
+            // HEAD's line as the layout finds it, or of the branch about to be born.
             let color = match head_row {
-                Some(r) => graph.rows[r].color,
-                None => head.branch.as_deref().map_or(graph::TRUNK_COLOR, graph::color_for_name),
+                Some(_) => None,
+                None => Some(head.branch.as_deref().map_or(graph::TRUNK_COLOR, graph::color_for_name)),
             };
             let mut shifted = Vec::with_capacity(graph_input.len() + 1);
             shifted.push(GraphCommit {
                 parents: vec![head_row.map(|r| r + 1)],
                 side: true,
-                color: Some(color),
+                color,
                 unpushed: true,
                 worktree: true,
                 ..Default::default()
@@ -626,7 +674,11 @@ impl Repo {
                 c.parents = c.parents.into_iter().map(|p| p.map(|r| r + 1)).collect();
                 c
             }));
-            graph = graph::layout(&shifted, head_row.map(|r| r + 1));
+            graph::layout(&shifted, head_row.map(|r| r + 1))
+        } else {
+            graph::layout(&graph_input, head_row)
+        };
+        if dirty {
             worktree_row = Some(HistoryRow {
                 id: WORKTREE_ID.to_owned(),
                 summary: String::new(),
@@ -692,6 +744,35 @@ impl Repo {
             loaded,
         })
     }
+}
+
+/// `rows` as pieces of `before`, the rows the caller has, and of the rows it lacks, which come
+/// back in order. A row is the caller's when its commit has a row there that is the same in
+/// every way; the row of uncommitted changes always comes anew.
+fn pieced(before: &[HistoryRow], rows: &[HistoryRow]) -> (Vec<HistoryRow>, Vec<Piece>) {
+    let at: HashMap<&str, usize> = before
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.worktree.is_none())
+        .map(|(i, r)| (r.id.as_str(), i))
+        .collect();
+    let mut fresh = Vec::new();
+    let mut pieces: Vec<Piece> = Vec::new();
+    for row in rows {
+        let known = at
+            .get(row.id.as_str())
+            .copied()
+            .filter(|&i| row.worktree.is_none() && before[i] == *row);
+        match (pieces.last_mut(), known) {
+            (Some(Piece { known: Some(from), len }), Some(i)) if *from + *len == i => *len += 1,
+            (Some(Piece { known: None, len }), None) => *len += 1,
+            _ => pieces.push(Piece { known, len: 1 }),
+        }
+        if known.is_none() {
+            fresh.push(row.clone());
+        }
+    }
+    (fresh, pieces)
 }
 
 impl Repo {

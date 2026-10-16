@@ -68,8 +68,10 @@
   let selected = $state<string | null>(null);
   let error = $state<string | null>(null);
   let loading = $state(false);
-  /** Commits a page of history has: the first load, and each one after it as the list scrolls. */
-  const PAGE = 10_000;
+  /** Commits of the first load. Each load as the list scrolls on doubles what is loaded, up to
+   *  `MAX_STEP` more at a time, and brings only the rows that are new. */
+  const PAGE = 2_000;
+  const MAX_STEP = 50_000;
   /** Commits to load: a page, and more once the list has scrolled on or a commit further down was asked for. */
   let limit = PAGE;
   /** Older commits on their way: "more" for the next page, or the commit loaded down to. */
@@ -740,11 +742,21 @@
   }
 
   /** `next` with the commit rows it left out because `shown`, the history it was asked with, has
-   *  them: the same key, the same rows. Only the row of uncommitted changes comes anew. */
+   *  them. The same key, the same rows: only the row of uncommitted changes comes anew.
+   *  Otherwise `pieces` say which of `shown`'s rows stand where, between the new ones. */
   function withRows(next: History, shown: History | null): History {
-    if (!next.same || !shown) return next;
-    const commits = shown.rows[0]?.worktree ? shown.rows.slice(1) : shown.rows;
-    return { ...next, rows: [...next.rows, ...commits], runs: shown.runs, leadIns: shown.leadIns };
+    if (!shown) return next;
+    if (next.same) {
+      const commits = shown.rows[0]?.worktree ? shown.rows.slice(1) : shown.rows;
+      return { ...next, rows: [...next.rows, ...commits], runs: shown.runs, leadIns: shown.leadIns };
+    }
+    if (!next.pieces.length) return next;
+    const rows: HistoryRow[] = [];
+    let fresh = 0;
+    for (const piece of next.pieces) {
+      for (let k = 0; k < piece.len; k++) rows.push(piece.known === null ? next.rows[fresh++] : shown.rows[piece.known + k]);
+    }
+    return { ...next, rows, pieces: [] };
   }
 
   /** Load the next page of older commits, or with `until` the history down to that commit.
@@ -758,7 +770,7 @@
       // A reload already on its way would land after this one, with fewer commits.
       while (refreshing) await refreshing;
       const shown = history;
-      const next = withRows(await api.history(until ? limit : limit + PAGE, until, shown?.key ?? null), shown);
+      const next = withRows(await api.history(until ? limit : limit + Math.min(limit, MAX_STEP), until, shown?.key ?? null), shown);
       if (mine !== generation || loading) return false;
       limit = Math.max(limit, next.loaded);
       history = next;

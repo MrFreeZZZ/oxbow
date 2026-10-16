@@ -38,8 +38,8 @@ pub mod worktrees;
 pub use bisect::{Bisect, BisectMark};
 pub use cli::{CommandOutput, GitCommand, OutputLine};
 pub use commit::{
-    CommitDetail, DiffContext, DiffLine, EolChange, FileChange, FileDiff, FileStatus, Hunk, LineKind, ModeChange,
-    Person, Source, SubmoduleChange, WordPart,
+    CommitDetail, DiffContext, DiffLine, DiffPage, EolChange, FileChange, FileDiff, FileStatus, Hunk, LineKind,
+    ModeChange, Person, Source, SubmoduleChange, WordPart,
 };
 pub use compare::{CompareCommit, CompareFile, CompareMode, Comparison};
 pub use config::{ConfigScope, GitInfo, RemoteInfo, SshKey, SshSource, Storage};
@@ -47,7 +47,9 @@ pub use edit::ResetMode;
 pub use error::{Error, Result};
 pub use fetched::RemoteFetch;
 pub use filehistory::{Blame, BlameCommit, BlameLine, FileCommit, FileHistory};
-pub use history::{History, HistoryCache, HistoryOptions, HistoryRow, Label, PAGE, WORKTREE_ID, WorktreeSummary};
+pub use history::{
+    History, HistoryCache, HistoryOptions, HistoryRow, Label, PAGE, Piece, WORKTREE_ID, WorktreeSummary,
+};
 pub use lfs::{LfsChange, LfsPattern, LfsPointer, LfsStatus};
 pub use notkept::{NotKept, PushedCommit, SizedFile};
 pub use operation::{Chunk, ConflictFile, ConflictSide, MergeMethod, MergePreview, Operation, OperationKind, Pick};

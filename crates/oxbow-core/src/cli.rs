@@ -182,6 +182,45 @@ impl Repo {
         spawn_in(self.workdir(), command, input)
     }
 
+    /// Run `command` and read at most `max` bytes of what it prints: past that it is stopped, and
+    /// the output is cut short. The exit code is not checked. For reads that can print more than
+    /// anything shows, such as the patch of a huge file.
+    pub(crate) fn spawn_within(&self, command: &GitCommand, max: usize) -> Result<Limited> {
+        let mut child = command_in(self.workdir(), command)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|err| Error::GitNotFound(err.to_string()))?;
+        let mut pipe = child.stderr.take().expect("stderr is piped");
+        let stderr = std::thread::spawn(move || {
+            let mut all = Vec::new();
+            let _ = pipe.read_to_end(&mut all);
+            all
+        });
+        let mut stdout = Vec::new();
+        let read = child
+            .stdout
+            .take()
+            .expect("stdout is piped")
+            .take((max as u64).saturating_add(1))
+            .read_to_end(&mut stdout);
+        let cut = stdout.len() > max;
+        if cut {
+            stdout.truncate(max);
+            let _ = child.kill();
+        }
+        let status = child.wait().map_err(|err| Error::GitNotFound(err.to_string()))?;
+        read.map_err(|err| Error::Git(err.to_string()))?;
+        Ok(Limited {
+            stdout,
+            stderr: stderr.join().unwrap_or_default(),
+            success: status.success(),
+            code: status.code(),
+            cut,
+        })
+    }
+
     /// Run `command` and wait for it, unless `cancel` is set first: the command is then stopped
     /// and fails with [`Error::Cancelled`]. For reads whose answer is no longer wanted once a
     /// newer one is asked for, such as a search.
@@ -236,6 +275,17 @@ impl Repo {
     ) -> Result<CommandOutput> {
         run_streaming_in(self.workdir(), command, on_line, cancel)
     }
+}
+
+/// What [`Repo::spawn_within`] read.
+pub(crate) struct Limited {
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    /// The command exited with 0; never set when it was cut.
+    pub success: bool,
+    pub code: Option<i32>,
+    /// It printed more than was read, and was stopped.
+    pub cut: bool,
 }
 
 /// `git` set up to run `command` in `dir`.
@@ -428,6 +478,25 @@ pub(crate) fn shell_quote(arg: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn output_past_the_limit_is_cut_and_the_command_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        let repo = Repo::open(dir.path()).unwrap();
+        // `yes` would print for ever.
+        let out = repo.spawn_within(&GitCommand::new(["y"]).program("yes"), 1000).unwrap();
+        assert!(out.cut && !out.success);
+        assert_eq!(out.stdout.len(), 1000);
+        let out = repo.spawn_within(&GitCommand::new(["--version"]), 1000).unwrap();
+        assert!(!out.cut && out.success);
+        assert!(out.stdout.starts_with(b"git version"));
+    }
 
     #[test]
     fn commands_that_reach_a_remote_are_told_apart() {
