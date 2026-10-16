@@ -1156,14 +1156,25 @@ struct Fetched {
     updated: u32,
 }
 
+/// What a background fetch printed, with the number Activity gave the fetch: a fetch of the
+/// repository open before may still be printing while the next one runs.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FetchEvent {
+    fetch: Option<u64>,
+    event: oxbow_core::ActionEvent,
+}
+
 /// Fetch one remote or all in the background: no sheet, git's progress goes to the window
-/// as `fetch-event`s, and a failure comes back explained, for Activity.
+/// as `fetch-event`s, and a failure comes back explained, for Activity. `fetch` is Activity's
+/// number for it; without one (another view's quiet fetch) Stop doesn't reach it.
 #[tauri::command]
 async fn fetch_in_background(
     app: AppHandle,
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
     remote: Option<String>,
+    fetch: Option<u64>,
 ) -> Result<Fetched, Failure> {
     let failed = |output: String| Failure {
         kind: oxbow_core::FailureKind::Other,
@@ -1176,18 +1187,21 @@ async fn fetch_in_background(
         tracking: None,
     };
     let repo = current(&session, &window).map_err(failed)?;
-    let cancel = session.new_fetch_cancel(&window);
+    let cancel = if fetch.is_some() {
+        session.new_fetch_cancel(&window)
+    } else {
+        Arc::new(AtomicBool::new(false))
+    };
     let label = window.label().to_owned();
     tauri::async_runtime::spawn_blocking(move || {
         let action = Action::Fetch { remote: remote.clone() };
         let command = repo.fetch_command(remote.as_deref()).with_progress();
-        let _ = app.emit_to(
-            label.as_str(),
-            "fetch-event",
-            oxbow_core::ActionEvent::Command {
-                display: command.display(),
-            },
-        );
+        let emit = |event| {
+            let _ = app.emit_to(label.as_str(), "fetch-event", FetchEvent { fetch, event });
+        };
+        emit(oxbow_core::ActionEvent::Command {
+            display: command.display(),
+        });
         let mut updated = 0;
         let result = repo.run_streaming(
             &command,
@@ -1195,7 +1209,7 @@ async fn fetch_in_background(
                 if !line.progress && oxbow_core::remote::is_ref_update(&line.text) {
                     updated += 1;
                 }
-                let _ = app.emit_to(label.as_str(), "fetch-event", oxbow_core::ActionEvent::Line(line));
+                emit(oxbow_core::ActionEvent::Line(line));
             },
             &cancel,
         );

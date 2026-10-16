@@ -121,8 +121,9 @@ export const api = {
   /** `null` removes the value. */
   setGitConfig: (scope: ConfigScope, key: string, value: string | null) =>
     invoke<void>("set_git_config", { scope, key, value }),
-  /** Sends `fetch-event`s while it runs; rejects with a `Failure`. */
-  fetchInBackground: (remote: string | null) => invoke<{ updated: number }>("fetch_in_background", { remote }),
+  /** Sends `fetch-event`s marked with `fetch`, Activity's number for it, while it runs; rejects
+   *  with a `Failure`. Without a number, Stop doesn't reach it. */
+  fetchInBackground: (remote: string | null, fetch: number | null = null) => invoke<{ updated: number }>("fetch_in_background", { remote, fetch }),
   stopFetch: () => invoke<void>("stop_fetch"),
   publicKey: (key: string) => invoke<string>("public_key", { key }),
   pullSetup: () => invoke<PullSetup>("pull_setup"),

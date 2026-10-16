@@ -94,7 +94,10 @@ class Activity {
   #next = 1;
 
   constructor() {
-    listen<ActionEvent>("fetch-event", (event) => this.#onEvent(event.payload)).catch(() => {});
+    // Only what the running fetch prints: one of the repository open before may still be printing.
+    listen<{ fetch: number | null; event: ActionEvent }>("fetch-event", ({ payload }) => {
+      if (payload.fetch !== null && payload.fetch === this.running?.id) this.#onEvent(payload.event);
+    }).catch(() => {});
   }
 
   /** A new repository: nothing of the old one's applies. */
@@ -119,7 +122,7 @@ class Activity {
     const current = () => this.running?.id === id;
     let ok = false;
     try {
-      const { updated } = await api.fetchInBackground(remote);
+      const { updated } = await api.fetchInBackground(remote, id);
       if (!current()) return false;
       ok = true;
       this.#fixProblem();
