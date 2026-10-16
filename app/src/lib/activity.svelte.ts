@@ -32,6 +32,8 @@ export interface ActivityItem {
   icon?: Icon;
   /** The git commands it ran, as the sheet's terminal block shows them. */
   commands?: string[];
+  /** A queued Pull: merge or rebase picked for this one pull. */
+  mode?: "merge" | "rebase";
 }
 
 /** How many finished items Activity keeps. */
@@ -88,7 +90,7 @@ class Activity {
   open = $state(false);
   showOutput = $state(false);
   /** Starts a Push or Pull that waited for the fetch; set by the app. */
-  startQueued: ((kind: ActivityKind) => void) | null = null;
+  startQueued: ((item: ActivityItem) => void) | null = null;
   #next = 1;
 
   constructor() {
@@ -112,9 +114,13 @@ class Activity {
     this.percent = null;
     this.lines = [];
     this.showOutput = false;
+    // After reset() a new repository's fetch may be running: this one's answer is the old one's.
+    const id = this.running.id;
+    const current = () => this.running?.id === id;
     let ok = false;
     try {
       const { updated } = await api.fetchInBackground(remote);
+      if (!current()) return false;
       ok = true;
       this.#fixProblem();
       this.#finished({
@@ -127,6 +133,7 @@ class Activity {
         commands: this.#commands(),
       });
     } catch (err) {
+      if (!current()) return false;
       const failure = toFailure(err);
       if (failure.kind === "cancelled") {
         this.#finished({ kind: "fetch", title: `Stopped fetching ${label}`, sub: "Nothing changed", state: "stopped", remote });
@@ -147,11 +154,13 @@ class Activity {
         if (!auto) this.open = true;
       }
     } finally {
-      this.running = null;
-      this.percent = null;
-      const waiting = this.queued[0];
-      this.queued = [];
-      if (waiting) this.startQueued?.(waiting.kind);
+      if (current()) {
+        this.running = null;
+        this.percent = null;
+        const waiting = this.queued[0];
+        this.queued = [];
+        if (waiting) this.startQueued?.(waiting);
+      }
     }
     return ok;
   }
@@ -161,8 +170,8 @@ class Activity {
   }
 
   /** Push or Pull pressed while the fetch runs: it starts when the fetch is done. */
-  queue(kind: ActivityKind, title: string) {
-    this.queued = [{ id: this.#next++, kind, title, sub: "Starts when the fetch finishes", state: "queued", time: Date.now() }];
+  queue(kind: ActivityKind, title: string, mode?: "merge" | "rebase") {
+    this.queued = [{ id: this.#next++, kind, title, sub: "Starts when the fetch finishes", state: "queued", time: Date.now(), mode }];
     this.open = true;
   }
 

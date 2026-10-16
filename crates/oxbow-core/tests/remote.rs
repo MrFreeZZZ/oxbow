@@ -2,7 +2,7 @@ mod support;
 
 use std::sync::atomic::AtomicBool;
 
-use oxbow_core::{Action, ActionEvent, FailureKind, Repo};
+use oxbow_core::{Action, ActionEvent, FailureKind, PullMode, Repo};
 use support::Fixture;
 
 /// A bare repository standing in for GitHub, and two clones of it: ours and a teammate's.
@@ -663,6 +663,7 @@ fn pull_fetches_every_branch_first_when_asked() {
         branch: "main".into(),
         fetch_first,
         submodules: false,
+        mode: None,
     };
 
     // git pull alone only brings origin/main up to date.
@@ -690,6 +691,47 @@ fn pull_fetches_every_branch_first_when_asked() {
 }
 
 #[test]
+fn merge_or_rebase_picked_for_one_pull_wins_over_the_setting() {
+    let mut team = Team::new();
+    let mine = team.me.commit("b.txt", "mine\n", "Mine");
+    team.kirill.commit("c.txt", "his\n", "His");
+    team.kirill.git(&["push", "-q", "origin", "main"]);
+    let pull = |mode| Action::Pull {
+        remote: "origin".into(),
+        branch: "main".into(),
+        fetch_first: false,
+        submodules: false,
+        mode,
+    };
+
+    // Rebase is the setting, Merge… asked for this one: the sheet and the run both merge.
+    team.me.git(&["config", "pull.rebase", "true"]);
+    let repo = Repo::open(team.me.path()).unwrap();
+    assert!(
+        repo.plan(&pull(None)).unwrap().commands[0]
+            .args
+            .contains(&"--rebase".to_owned())
+    );
+    let merge = repo.plan(&pull(Some(PullMode::Merge))).unwrap().commands;
+    assert!(merge[0].args.contains(&"--no-rebase".to_owned()));
+    repo.perform(&pull(Some(PullMode::Merge))).unwrap();
+    assert_eq!(
+        team.me
+            .git(&["rev-list", "--parents", "-n1", "HEAD"])
+            .split(' ')
+            .count(),
+        3
+    );
+    team.me.git(&["merge-base", "--is-ancestor", &mine, "HEAD"]);
+
+    // And the other way round.
+    team.me.git(&["config", "pull.rebase", "false"]);
+    let repo = Repo::open(team.me.path()).unwrap();
+    let rebase = repo.plan(&pull(Some(PullMode::Rebase))).unwrap().commands;
+    assert!(rebase[0].args.contains(&"--rebase".to_owned()));
+}
+
+#[test]
 fn pull_conflict_is_recognized_and_can_be_aborted() {
     let mut team = Team::new();
     team.me.commit("a.txt", "mine\n", "Mine");
@@ -701,6 +743,7 @@ fn pull_conflict_is_recognized_and_can_be_aborted() {
         branch: "main".into(),
         fetch_first: false,
         submodules: false,
+        mode: None,
     };
     let error = repo.perform(&pull).unwrap_err();
     assert_eq!(repo.explain_failure(&pull, &error).kind, FailureKind::Conflict);

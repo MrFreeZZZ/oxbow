@@ -298,7 +298,7 @@ function stoppedBy(op: Operation): Stopped {
 }
 
 /** After an action stopped on conflicts: resolve them, or give it up. */
-export function stoppedOnConflicts(failure: Failure, what: Stopped): Recovery | null {
+export function stoppedOnConflicts(failure: Failure, what: Stopped, then = "continue the rebase."): Recovery | null {
   if (failure.kind !== "conflict") return null;
   const undo = what === "pull" ? "Undo Pull" : what === "stash" ? "Undo Apply" : `Abort ${NOUNS[what]}`;
   return {
@@ -307,7 +307,7 @@ export function stoppedOnConflicts(failure: Failure, what: Stopped): Recovery | 
       what === "stash"
         ? "The stash and your branch change the same lines, so git needs you to choose what goes into each file. Resolve the conflicts, then "
         : "Both sides change the same lines, so git needs you to choose what goes into each file. Resolve the conflicts, then ",
-      what === "merge" ? "commit the merge." : what === "pull" ? "continue the rebase." : what === "stash" ? "finish the apply. The stash stays until then." : `continue the ${what}.`,
+      what === "merge" ? "commit the merge." : what === "pull" ? then : what === "stash" ? "finish the apply. The stash stays until then." : `continue the ${what}.`,
     ],
     icon: "warn",
     tone: "warn",

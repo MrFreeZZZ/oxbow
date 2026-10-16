@@ -70,6 +70,15 @@ impl Session {
         self.slot(window, |slot| slot.fetch_cancel.clone())
     }
 
+    /// A Stop of its own for a new background fetch: one stopped before it, e.g. of the
+    /// repository open before, stays stopped.
+    fn new_fetch_cancel(&self, window: &tauri::WebviewWindow) -> Arc<AtomicBool> {
+        self.slot(window, |slot| {
+            slot.fetch_cancel = Arc::new(AtomicBool::new(false));
+            slot.fetch_cancel.clone()
+        })
+    }
+
     /// The window that has the repository at `path` open, if any.
     fn window_of(&self, path: &Path) -> Option<String> {
         let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
@@ -1167,8 +1176,7 @@ async fn fetch_in_background(
         tracking: None,
     };
     let repo = current(&session, &window).map_err(failed)?;
-    let cancel = session.fetch_cancel(&window);
-    cancel.store(false, Ordering::Relaxed);
+    let cancel = session.new_fetch_cancel(&window);
     let label = window.label().to_owned();
     tauri::async_runtime::spawn_blocking(move || {
         let action = Action::Fetch { remote: remote.clone() };

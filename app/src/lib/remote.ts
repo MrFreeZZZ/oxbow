@@ -176,13 +176,17 @@ export interface PullSetup {
   fetchFirst?: boolean;
   /** Check out the commits the pulled commits record in the submodules too. */
   submodules?: boolean;
+  /** The repository has submodules now, so the sheet mentions them; a pull that brings the
+   *  first one clones it all the same. */
+  hasSubmodules?: boolean;
 }
 
 export function pullRequest(ctx: RemoteContext, setup: PullSetup = { mode: "rebase", autostash: true }): Request {
   const t = ctx.tracking!;
   const branch = ctx.branch!;
   const upstream = `${t.remote}/${t.branch}`;
-  const action: Action = { kind: "pull", remote: t.remote, branch: t.branch, fetchFirst: !!setup.fetchFirst, submodules: !!setup.submodules };
+  // The mode goes along, so Merge… or Rebase… picked for this one pull is what runs.
+  const action: Action = { kind: "pull", remote: t.remote, branch: t.branch, fetchFirst: !!setup.fetchFirst, submodules: !!setup.submodules, mode: setup.mode };
   const how: Part[] =
     setup.mode === "merge"
       ? [" and merges it into ", chip(ctx, branch), "; a merge commit joins the two when both have new commits."]
@@ -196,7 +200,7 @@ export function pullRequest(ctx: RemoteContext, setup: PullSetup = { mode: "reba
       chip(ctx, upstream),
       ...how,
       setup.autostash ? " Uncommitted files are stashed first and restored after." : " Uncommitted changes to the same files stop the pull.",
-      ...(setup.submodules ? [" Submodules then check out the commits the pulled commits record."] : []),
+      ...(setup.submodules && setup.hasSubmodules ? [" Submodules then check out the commits the pulled commits record."] : []),
     ],
     icon: "pull",
     button: "Pull",
@@ -207,7 +211,7 @@ export function pullRequest(ctx: RemoteContext, setup: PullSetup = { mode: "reba
         : undefined,
     status: `Pulling ${upstream} into ${branch}…`,
     done: `${branch} is up to date with ${upstream}.`,
-    recover: (failure) => conflict(failure) ?? networkOrAuth(failure, action, "Pulling", ctx, `${branch} is up to date with ${upstream}.`),
+    recover: (failure) => conflict(failure, setup.mode) ?? networkOrAuth(failure, action, "Pulling", ctx, `${branch} is up to date with ${upstream}.`),
     action,
   };
 }
@@ -542,8 +546,8 @@ function noVerifyRequest(ctx: RemoteContext, action: Action & { kind: "push" }):
   };
 }
 
-function conflict(failure: Failure): Recovery | null {
-  return stoppedOnConflicts(failure, "pull");
+function conflict(failure: Failure, mode: PullSetup["mode"] = "rebase"): Recovery | null {
+  return stoppedOnConflicts(failure, "pull", mode === "merge" ? "commit the merge." : "continue the rebase.");
 }
 
 /** Try Again after a remote could not be reached or refused the sign-in, for any action that talks to `remote`. */

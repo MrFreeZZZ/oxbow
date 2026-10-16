@@ -215,7 +215,7 @@ const RISKY = new Set<Action["kind"]>([
 
 /** Actions that can change something the Operation Log doesn't keep: even when the settings say
  *  not to ask, these ask once the plan says what Undo can't bring back. */
-const GAPS = new Set<Action["kind"]>(["discard", "reset", "restore", "worktreeRemove"]);
+const GAPS = new Set<Action["kind"]>(["discard", "reset", "restore", "worktreeRemove", "submoduleRemove"]);
 
 function isForcePush(action: Action): boolean {
   return (action.kind === "push" && action.force) || action.kind === "replayAndPush";

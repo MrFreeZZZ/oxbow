@@ -20,6 +20,8 @@ const NAMED: usize = 5;
 /// A folder of ignored files is measured up to this many entries, so a huge `node_modules`
 /// doesn't hold the sheet up; past it the size is at least what was counted.
 const MEASURED: usize = 20_000;
+/// At most this many submodule folders, nested ones included, are looked into before a removal.
+const NESTED: usize = 50;
 /// At most this many commits of a branch are looked at for being on its remote.
 const LOOKED_AT: usize = 500;
 
@@ -67,6 +69,8 @@ pub enum NotKept {
     },
     /// The step itself stays out of the log, e.g. removing a worktree.
     NotLogged { what: String },
+    /// Removing a submodule stays out of the log: its folder is another repository.
+    SubmoduleFolder { folder: String },
     /// Commits the undo takes off a branch that its remote already has: only this copy changes.
     /// `revert` is the commit to revert instead, when there is just one on the checked-out branch.
     Pushed {
@@ -152,9 +156,46 @@ impl Repo {
                     what: format!("removing {folder}"),
                 });
             }
+            Action::SubmoduleRemove { path } => {
+                // `git status` leaves ignored files out, so the folder can look clean with a
+                // `.env` in it; submodules inside it go with it too.
+                let mut folders = vec![path.clone()];
+                let mut i = 0;
+                while i < folders.len() && folders.len() < NESTED {
+                    folders.extend(self.nested_submodules(&folders[i]));
+                    i += 1;
+                }
+                for folder in folders {
+                    let dir = self.workdir().join(&folder);
+                    if let Some(ignored) = self.ignored_in(&dir.to_string_lossy(), folder)? {
+                        out.push(ignored);
+                    }
+                }
+                out.push(NotKept::SubmoduleFolder { folder: path.clone() });
+            }
             _ => {}
         }
         Ok(out)
+    }
+
+    /// The submodules checked out inside the submodule at `folder`, relative to this repository.
+    fn nested_submodules(&self, folder: &str) -> Vec<String> {
+        let dir = self.workdir().join(folder);
+        let Ok(out) = self.run(&GitCommand::new([
+            "-C",
+            &dir.to_string_lossy(),
+            "ls-files",
+            "-z",
+            "--stage",
+        ])) else {
+            return Vec::new();
+        };
+        out.stdout
+            .split('\0')
+            .filter_map(|entry| entry.strip_prefix("160000 "))
+            .filter_map(|rest| rest.split_once('\t').map(|(_, path)| format!("{folder}/{path}")))
+            .filter(|path| self.workdir().join(path).join(".git").exists())
+            .collect()
     }
 
     /// Untracked files that are not ignored, as `git status` lists them.

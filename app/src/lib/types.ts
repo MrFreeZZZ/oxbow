@@ -418,7 +418,7 @@ export type Action =
   | { kind: "ignore"; pattern: string }
   | { kind: "commit"; message: string; amend: boolean; noVerify?: boolean; allowSecrets?: boolean }
   | { kind: "fetch"; remote: string | null }
-  | { kind: "pull"; remote: string; branch: string; fetchFirst?: boolean; submodules?: boolean }
+  | { kind: "pull"; remote: string; branch: string; fetchFirst?: boolean; submodules?: boolean; mode?: "rebase" | "merge" | "fastForward" }
   | {
       kind: "push";
       remote: string;
@@ -755,6 +755,7 @@ export type NotKept =
   | { kind: "ignored"; folder: string; files: SizedFile[]; more: number; bytes: number }
   | { kind: "worktree"; folder: string; branch: string | null; changed: number; removed: boolean }
   | { kind: "notLogged"; what: string }
+  | { kind: "submoduleFolder"; folder: string }
   | { kind: "pushed"; branch: string; remote: string; commits: { id: string; summary: string }[]; more: number; revert: string | null };
 
 /** Which config file a Git setting lives in: ~/.gitconfig or the repository's .git/config. */
