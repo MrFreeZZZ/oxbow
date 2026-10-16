@@ -245,8 +245,9 @@ struct Change {
 #[derive(Clone, Default)]
 pub(crate) struct ChangesCache(Arc<Mutex<Option<ChangesOf>>>);
 
-/// A commit and its changed files.
-type ChangesOf = (ObjectId, Arc<Vec<Change>>);
+/// A commit and its changed files, once read.
+type ChangesOf = (ObjectId, Arc<ChangesSlot>);
+type ChangesSlot = Mutex<Option<Arc<Vec<Change>>>>;
 
 /// What reading both sides of a change found.
 struct Inspected {
@@ -298,7 +299,7 @@ impl Repo {
             Vec::new()
         } else if count.is_some() {
             let changes = self.commit_changes(&repo, &commit)?;
-            counted(&repo, changes.to_vec(), counted_from, options.max_lines, cancel)?
+            counted(&repo, &changes, counted_from, options.max_lines, cancel)?
         } else {
             self.commit_changes(&repo, &commit)?
                 .iter()
@@ -338,7 +339,7 @@ impl Repo {
             return Ok(Vec::new());
         }
         let changes = self.commit_changes(&repo, &commit)?;
-        self.diffs(&repo, changes.to_vec(), path, context, cancel)
+        self.diffs(&repo, &changes, path, context, cancel)
     }
 
     /// The line diffs of a commit's files from the `from`th on, as many as fit `budget` lines
@@ -385,14 +386,24 @@ impl Repo {
     /// Changed files of a commit against its first parent. A stash keeps its untracked files in a
     /// third commit; they are part of what it changes, so they come after its tracked files.
     fn commit_changes(&self, repo: &gix::Repository, commit: &gix::Commit<'_>) -> Result<Arc<Vec<Change>>> {
-        let cache = &self.changes.0;
-        if let Some((id, changes)) = &*cache.lock().expect("changes lock")
-            && *id == commit.id
-        {
+        let slot = {
+            let mut cache = self.changes.0.lock().expect("changes lock");
+            match &*cache {
+                Some((id, slot)) if *id == commit.id => slot.clone(),
+                _ => {
+                    let slot = Arc::new(Mutex::new(None));
+                    *cache = Some((commit.id, slot.clone()));
+                    slot
+                }
+            }
+        };
+        // Questions about the same commit at once wait for the one reading its changes.
+        let mut found = slot.lock().expect("changes lock");
+        if let Some(changes) = &*found {
             return Ok(changes.clone());
         }
         let changes = Arc::new(self.read_commit_changes(repo, commit)?);
-        *cache.lock().expect("changes lock") = Some((commit.id, changes.clone()));
+        *found = Some(changes.clone());
         Ok(changes)
     }
 
@@ -416,7 +427,7 @@ impl Repo {
         let changes = tree_changes(&repo, Some(&from_tree(&repo, from)?), &from_tree(&repo, to)?)?;
         counted(
             &repo,
-            changes,
+            &changes,
             0,
             self.diff_options().max_lines,
             &AtomicBool::new(false),
@@ -427,21 +438,21 @@ impl Repo {
     pub fn tree_diff(&self, from: &str, to: &str, path: Option<&str>, context: DiffContext) -> Result<Vec<FileDiff>> {
         let repo = self.local();
         let changes = tree_changes(&repo, Some(&from_tree(&repo, from)?), &from_tree(&repo, to)?)?;
-        self.diffs(&repo, changes, path, context, &AtomicBool::new(false))
+        self.diffs(&repo, &changes, path, context, &AtomicBool::new(false))
     }
 
     fn diffs(
         &self,
         repo: &gix::Repository,
-        changes: Vec<Change>,
+        changes: &[Change],
         path: Option<&str>,
         context: DiffContext,
         cancel: &AtomicBool,
     ) -> Result<Vec<FileDiff>> {
         changes
-            .into_iter()
+            .iter()
             .filter(|change| path.is_none_or(|p| p == change.file.path))
-            .map(|change| self.diff_one(repo, change, context, cancel))
+            .map(|change| self.diff_one(repo, change.clone(), context, cancel))
             .collect()
     }
 
@@ -589,16 +600,16 @@ fn count_lines(file: &mut FileChange, hunks: &[Hunk]) {
 /// listed uncounted. Setting `cancel` stops it.
 fn counted(
     repo: &gix::Repository,
-    changes: Vec<Change>,
+    changes: &[Change],
     from: usize,
     max_lines: u32,
     cancel: &AtomicBool,
 ) -> Result<Vec<FileChange>> {
     changes
-        .into_iter()
+        .iter()
         .enumerate()
         .map(|(at, change)| {
-            let mut file = change.file;
+            let mut file = change.file.clone();
             if at < from || file.submodule.is_some() {
                 // A submodule records a commit of another repository: there are no lines to count.
                 return Ok(file);

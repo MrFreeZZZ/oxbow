@@ -104,10 +104,16 @@
   /** Lanes of this panel's reads: a newer read in a lane stops the older one. */
   const COUNTS = "panel-counts";
   const DIFF = "panel-diff";
+  const FULL = "panel-full";
 
   // The panel's reads stop when it closes: their answers would go nowhere.
   $effect(() => () => {
-    api.stopReads([COUNTS, DIFF]).catch(() => {});
+    api.stopReads([COUNTS, DIFF, FULL]).catch(() => {});
+  });
+  // Show Diff Anyway's read is for the commit it was asked on.
+  $effect(() => {
+    id;
+    untrack(() => api.stopReads([FULL]).catch(() => {}));
   });
 
   /** The commit's details: the list of files at once, then their line counts. */
@@ -345,7 +351,7 @@
       pending={tab === null && next !== null ? fileCount - diffs.length : 0}
       onMore={loadMore}
       onToggleWhole={() => (whole = !whole)}
-      loadFull={(d) => api.commitDiff(row.id, d.file.path, whole, true).then((all) => all[0])}
+      loadFull={(d) => api.commitDiff(row.id, d.file.path, whole, true, FULL).then((all) => all[0])}
       command={(d) =>
         detail?.parents.length ? `git diff ${row.id.slice(0, 7)}~1 ${row.id.slice(0, 7)} -- ${d.file.path}` : `git show ${row.id.slice(0, 7)} -- ${d.file.path}`}
     />

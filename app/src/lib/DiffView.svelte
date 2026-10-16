@@ -14,7 +14,7 @@
   import type { DiffLine, FileDiff, Hunk, Side } from "./types";
   import { plate, splitPath, tint } from "./format";
   import { prefs } from "./prefs.svelte";
-  import { api } from "./api";
+  import { api, stopped } from "./api";
   import { confirm } from "./confirm.svelte";
   import { languageOf, occurrences, paint } from "./syntax";
   import Lazy, { BLOCK, type FindHits } from "./Lazy.svelte";
@@ -118,7 +118,8 @@
     loadFull?.(diff).then(
       // Only while that diff is still shown: a late answer doesn't bring back an old one.
       (d) => diffs.includes(diff) && (full = new Map(full).set(diff, d)),
-      (err) => confirm.fail(err),
+      // Stopped by a newer one, or as another commit was picked.
+      (err) => stopped(err) || confirm.fail(err),
     );
   }
 
