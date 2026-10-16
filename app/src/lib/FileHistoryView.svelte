@@ -107,9 +107,25 @@
     const wholeFile = whole;
     diffSettings();
     diffs = [];
-    api.commitDiff(commit.id, commit.path, wholeFile).then((d) => {
-      if (selected === commit.id && whole === wholeFile) diffs = d;
-    });
+    api.commitDiff(commit.id, commit.path, wholeFile, false, DIFF).then(
+      (d) => {
+        if (selected === commit.id && whole === wholeFile) diffs = d;
+      },
+      // A newer pick stopped it.
+      () => {},
+    );
+  });
+
+  /** Lanes of this view's reads: a newer read in a lane stops the older one. */
+  const DIFF = "history-diff";
+  const FULL = "history-full";
+  // Its reads stop when it closes, and Show Diff Anyway's when another commit is picked.
+  $effect(() => () => {
+    api.stopReads([DIFF, FULL]).catch(() => {});
+  });
+  $effect(() => {
+    selected;
+    untrack(() => api.stopReads([FULL]).catch(() => {}));
   });
 
   // Keep the selected commit in view in the list.
@@ -450,7 +466,7 @@
             {focus}
             bind:hits={diffHits}
             onToggleWhole={() => (whole = !whole)}
-            loadFull={(d) => api.commitDiff(pick!.id, d.file.path, whole, true).then((all) => all[0])}
+            loadFull={(d) => api.commitDiff(pick!.id, d.file.path, whole, true, FULL).then((all) => all[0])}
           />
         </div>
       {:else}
@@ -484,7 +500,7 @@
       {#if blameError}
         <p class="error" role="alert">{blameError}</p>
       {:else if blame}
-        <div class="code mono selectable">
+        <div class="code mono selectable" style:--digits={String(blame.lines.length).length}>
           {#each groups as group (group.runs[0].from)}
             {#if group.long}
               {@render run(group.runs[0], true)}
@@ -939,7 +955,8 @@
   }
   .row {
     display: grid;
-    grid-template-columns: 44px 1fr;
+    /* As wide as the file's longest line number, in the code's font, and its padding. */
+    grid-template-columns: max(44px, calc(var(--digits, 4) * 1ch + 20px)) 1fr;
   }
   .no {
     color: var(--code-dim, var(--text2));
