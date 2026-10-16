@@ -71,7 +71,8 @@ export const api = {
   planNewRepo: (options: NewRepoOptions) => invoke<NewRepoPlan>("plan_new_repo", { options }),
   createRepo: (options: NewRepoOptions) => invoke<string>("create_repo", { options }),
   /** The latest `limit` commits, or more to reach `until`. */
-  history: (limit: number, until: string | null = null) => invoke<History>("history", { limit, until }),
+  /** With `known`, the key of the history on screen, rows that came out the same are left out. */
+  history: (limit: number, until: string | null = null, known: string | null = null) => invoke<History>("history", { limit, until, known }),
   commitDetail: (id: string) => invoke<CommitDetail>("commit_detail", { id }),
   /** `full`: past the line limit in Settings (Show Diff Anyway). */
   commitDiff: (id: string, path: string | null, wholeFile: boolean, full = false) =>
@@ -90,7 +91,8 @@ export const api = {
   workingDiff: (path: string, side: Side, wholeFile: boolean, full = false) =>
     invoke<FileDiff>("working_diff", { path, side, wholeFile, full }),
   /** The diffs of `paths` on one side, in that order; files without changes there are left out. */
-  workingDiffs: (paths: string[], side: Side, wholeFile: boolean) => invoke<FileDiff[]>("working_diffs", { paths, side, wholeFile }),
+  workingDiffs: (paths: string[], side: Side, wholeFile: boolean, snapshot: number | null = null) =>
+    invoke<FileDiff[]>("working_diffs", { paths, side, wholeFile, snapshot }),
   /** The raw bytes arrive as an ArrayBuffer, or as a list of numbers when the IPC falls back to JSON. */
   sourceBytes: (source: Source) =>
     invoke<ArrayBuffer | ArrayBufferView | number[]>("source_bytes", { source }).then((data) =>
@@ -153,7 +155,8 @@ export const api = {
   /** Newest first, each commit once. */
   reflogEntries: () => invoke<ReflogEntry[]>("reflog_entries"),
   compareSnapshot: (id: string, after: boolean) => invoke<SnapshotComparison>("compare_snapshot", { id, after }),
-  search: (query: SearchQuery) => invoke<SearchResult>("search", { query }),
+  /** A newer search in the same `lane` stops this one. */
+  search: (query: SearchQuery, lane: string | null = null) => invoke<SearchResult>("search", { query, lane }),
   settingsText: () => invoke<string>("settings_text"),
   saveSettingsText: (text: string) => invoke<void>("save_settings_text", { text }),
   /** settings.json and the copy Restore Defaults keeps, as typed in a shell. */

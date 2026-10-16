@@ -400,6 +400,35 @@ impl Repo {
     }
 }
 
+impl Repo {
+    /// The size of one side of a file diff, without reading it: the object's header, or the
+    /// file's size on disk (where a symlink points, for a symlink). `None` when it is not there.
+    pub fn source_size(&self, source: &Source) -> Option<u64> {
+        match source {
+            Source::Blob { id } => {
+                let oid = ObjectId::from_hex(id.as_bytes()).ok()?;
+                let header = self.local().find_header(oid).ok()?;
+                (header.kind() == gix::object::Kind::Blob).then(|| header.size())
+            }
+            Source::Worktree { path } => {
+                let relative = std::path::Path::new(path);
+                if !relative
+                    .components()
+                    .all(|c| matches!(c, std::path::Component::Normal(_)))
+                {
+                    return None;
+                }
+                let full = self.workdir().join(relative);
+                let meta = std::fs::symlink_metadata(&full).ok()?;
+                if meta.file_type().is_symlink() {
+                    return std::fs::read_link(&full).ok().map(|t| t.as_os_str().len() as u64);
+                }
+                meta.is_file().then_some(meta.len())
+            }
+        }
+    }
+}
+
 fn find_commit<'r>(repo: &'r gix::Repository, id: &str) -> Result<gix::Commit<'r>> {
     let oid = ObjectId::from_hex(id.as_bytes()).map_err(|_| Error::UnknownCommit(id.to_owned()))?;
     repo.find_commit(oid).map_err(|_| Error::UnknownCommit(id.to_owned()))
@@ -564,6 +593,13 @@ fn blob(repo: &gix::Repository, id: Option<ObjectId>) -> Result<Vec<u8>> {
     }
 }
 
+/// The size of a blob from its header, 0 when there is none (or it is a submodule's commit).
+fn blob_size(repo: &gix::Repository, id: Option<ObjectId>) -> u64 {
+    id.and_then(|id| repo.find_header(id).ok())
+        .filter(|h| h.kind() == gix::object::Kind::Blob)
+        .map_or(0, |h| h.size())
+}
+
 fn is_binary(data: &[u8]) -> bool {
     data[..data.len().min(8000)].contains(&0)
 }
@@ -582,6 +618,20 @@ fn inspect(
     ignore_whitespace: bool,
     max_lines: u32,
 ) -> Result<Inspected> {
+    // A blob too big to diff is not read at all, binary or not: its header gives the size.
+    let sizes = (blob_size(repo, old), blob_size(repo, new));
+    if sizes.0.max(sizes.1) > MAX_BLOB_BYTES as u64 {
+        file.old_size = old.map(|_| sizes.0);
+        file.new_size = new.map(|_| sizes.1);
+        if matches!(file.status, FileStatus::Renamed | FileStatus::Copied) {
+            file.similarity = Some(if old == new { 100 } else { 0 });
+        }
+        return Ok(Inspected {
+            hunks: Some(Vec::new()),
+            too_large: true,
+            limited: false,
+        });
+    }
     let before = blob(repo, old)?;
     let after = blob(repo, new)?;
     file.old_size = old.map(|_| before.len() as u64);

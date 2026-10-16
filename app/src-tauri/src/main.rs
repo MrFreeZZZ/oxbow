@@ -7,13 +7,13 @@ mod pulls;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use oxbow_core::config::{self, ConfigScope};
 use oxbow_core::{
     Action, CommitBrief, CommitDetail, ConflictFile, DeletionCheck, DiffContext, DiffOptions, Failure, FileDiff,
-    History, HistoryOptions, MergePreview, Plan, Repo, Side, Source, StashCheck, WorkingTree,
+    History, HistoryCache, HistoryOptions, MergePreview, Plan, Repo, Side, Source, StashCheck, WorkingTree,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -32,6 +32,10 @@ struct Session {
     pending: Mutex<HashMap<String, String>>,
     /// Number of the next new window.
     next: AtomicUsize,
+    /// Number of the last reading of the working tree handed out with a history.
+    snapshots: AtomicU64,
+    /// Commit details and diffs already worked out: a commit never changes.
+    commits: Mutex<CommitCache>,
 }
 
 #[derive(Default)]
@@ -41,6 +45,79 @@ struct Slot {
     cancel: Arc<AtomicBool>,
     /// Stop of the fetch running in the background, apart from actions in the sheet.
     fetch_cancel: Arc<AtomicBool>,
+    /// The commit rows of the last history, for the next reload to reuse.
+    history: HistoryCache,
+    /// The working tree read with the last history, by number, for the Changes panel's diffs.
+    changes: Option<(u64, Arc<WorkingTree>)>,
+    /// Stop of the search running in each lane: a newer search in the lane stops the older.
+    searches: HashMap<String, Arc<AtomicBool>>,
+}
+
+/// What [`Session::commits`] holds.
+#[derive(Clone)]
+enum Cached {
+    Detail(Arc<CommitDetail>),
+    Diffs(Arc<Vec<FileDiff>>),
+}
+
+/// Commit details and diffs by what they were asked with, the most recent last, kept under a
+/// budget of memory.
+#[derive(Default)]
+struct CommitCache {
+    entries: std::collections::VecDeque<(String, Cached, usize)>,
+    bytes: usize,
+}
+
+impl CommitCache {
+    /// About what the cached answers take, in bytes.
+    const BUDGET: usize = 64 * 1024 * 1024;
+
+    fn get(&mut self, key: &str) -> Option<Cached> {
+        let at = self.entries.iter().position(|(k, ..)| k == key)?;
+        let entry = self.entries.remove(at)?;
+        let found = entry.1.clone();
+        self.entries.push_back(entry);
+        Some(found)
+    }
+
+    fn put(&mut self, key: String, value: Cached) {
+        let size = match &value {
+            Cached::Detail(detail) => 1024 + detail.files.len() * 256 + detail.body.len(),
+            Cached::Diffs(diffs) => diffs_size(diffs),
+        };
+        // One answer bigger than a quarter of the budget would push out everything else.
+        if size > Self::BUDGET / 4 {
+            return;
+        }
+        if let Some(at) = self.entries.iter().position(|(k, ..)| *k == key)
+            && let Some((.., old)) = self.entries.remove(at)
+        {
+            self.bytes -= old;
+        }
+        self.bytes += size;
+        self.entries.push_back((key, value, size));
+        while self.bytes > Self::BUDGET {
+            let Some((.., old)) = self.entries.pop_front() else {
+                break;
+            };
+            self.bytes -= old;
+        }
+    }
+}
+
+/// About what `diffs` take in memory, in bytes.
+fn diffs_size(diffs: &[FileDiff]) -> usize {
+    diffs
+        .iter()
+        .map(|d| {
+            512 + d.file.path.len()
+                + d.hunks
+                    .iter()
+                    .flat_map(|h| &h.lines)
+                    .map(|l| 96 + l.text.len() * 2)
+                    .sum::<usize>()
+        })
+        .sum()
 }
 
 impl Session {
@@ -310,7 +387,11 @@ async fn open_repo(
         let _ = std::fs::write(&file, &summary.path);
     }
     remember_repo(&app, &summary.path);
-    session.slot(&window, |slot| slot.repo = Some(repo));
+    session.slot(&window, |slot| {
+        slot.repo = Some(repo);
+        slot.history = HistoryCache::default();
+        slot.changes = None;
+    });
     // Settings shows this repository under This Repository.
     let _ = app.emit("repo-changed", ());
     Ok(summary)
@@ -589,6 +670,7 @@ async fn history(
     session: State<'_, Session>,
     limit: Option<usize>,
     until: Option<String>,
+    known: Option<String>,
 ) -> CommandResult<History> {
     let repo = current(&session, &window)?;
     // Open the repository afresh: the built-in engine reads .git/config once, so a remote that
@@ -608,7 +690,20 @@ async fn history(
         limit: limit.unwrap_or(oxbow_core::PAGE),
         until,
     };
-    blocking(move || repo.history(&options)).await
+    let mut cache = session.slot(&window, |slot| slot.history.clone());
+    let (mut history, cache) = blocking(move || {
+        let history = repo.history_with(&options, &mut cache, known.as_deref())?;
+        Ok((history, cache))
+    })
+    .await?;
+    // The diffs the Changes panel asks for next are of these files.
+    history.snapshot = session.snapshots.fetch_add(1, Ordering::Relaxed) + 1;
+    let changes = history.changes.clone().map(|tree| (history.snapshot, Arc::new(tree)));
+    session.slot(&window, |slot| {
+        slot.history = cache;
+        slot.changes = changes;
+    });
+    Ok(history)
 }
 
 #[tauri::command]
@@ -618,7 +713,17 @@ async fn commit_detail(
     id: String,
 ) -> CommandResult<CommitDetail> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.commit_detail(&id)).await
+    let key = format!("detail\0{}\0{id}\0{:?}", repo.workdir().display(), repo.diff_options());
+    if let Some(Cached::Detail(detail)) = session.commits.lock().expect("session lock").get(&key) {
+        return Ok((*detail).clone());
+    }
+    let detail = blocking(move || repo.commit_detail(&id)).await?;
+    // What a submodule says depends on its clone here, which changes.
+    if !detail.files.iter().any(|f| f.submodule.is_some()) {
+        let cached = Cached::Detail(Arc::new(detail.clone()));
+        session.commits.lock().expect("session lock").put(key, cached);
+    }
+    Ok(detail)
 }
 
 #[tauri::command]
@@ -636,7 +741,20 @@ async fn commit_diff(
     } else {
         DiffContext::Compact
     };
-    blocking(move || repo.commit_diff(&id, path.as_deref(), context)).await
+    let key = format!(
+        "diff\0{}\0{id}\0{path:?}\0{whole_file}\0{:?}",
+        repo.workdir().display(),
+        repo.diff_options()
+    );
+    if let Some(Cached::Diffs(diffs)) = session.commits.lock().expect("session lock").get(&key) {
+        return Ok((*diffs).clone());
+    }
+    let diffs = blocking(move || repo.commit_diff(&id, path.as_deref(), context)).await?;
+    if !diffs.iter().any(|d| d.submodule.is_some()) {
+        let cached = Cached::Diffs(Arc::new(diffs.clone()));
+        session.commits.lock().expect("session lock").put(key, cached);
+    }
+    Ok(diffs)
 }
 
 #[tauri::command]
@@ -857,9 +975,21 @@ async fn working_diffs(
     paths: Vec<String>,
     side: Side,
     whole_file: bool,
+    snapshot: Option<u64>,
 ) -> CommandResult<Vec<FileDiff>> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.working_diffs(&paths, side, whole_file)).await
+    // The files as the history just read them, when the panel shows that reading.
+    let tree = session.slot(&window, |slot| {
+        slot.changes
+            .as_ref()
+            .filter(|(number, _)| Some(*number) == snapshot)
+            .map(|(_, tree)| tree.clone())
+    });
+    blocking(move || match tree {
+        Some(tree) => repo.working_diffs_in(&tree, &paths, side, whole_file),
+        None => repo.working_diffs(&paths, side, whole_file),
+    })
+    .await
 }
 
 /// What deleting a local branch would lose, for the confirmation sheet.
@@ -1248,9 +1378,18 @@ async fn search(
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
     query: oxbow_core::SearchQuery,
+    lane: Option<String>,
 ) -> CommandResult<oxbow_core::SearchResult> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.search(&query)).await
+    // A newer search in the same lane stops this one: its answer would be dropped anyway.
+    let cancel = Arc::new(AtomicBool::new(false));
+    if let Some(lane) = lane {
+        let older = session.slot(&window, |slot| slot.searches.insert(lane, cancel.clone()));
+        if let Some(older) = older {
+            older.store(true, Ordering::Relaxed);
+        }
+    }
+    blocking(move || repo.search_with(&query, &cancel)).await
 }
 
 #[tauri::command]

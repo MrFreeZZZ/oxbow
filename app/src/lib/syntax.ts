@@ -94,13 +94,26 @@ function roleOf(classes: string): Role {
   return null;
 }
 
+/** Lines longer than this are drawn without syntax colors: highlighting a minified line holds up
+ *  the window, and colors would not make it readable anyway. */
+const MAX_HIGHLIGHTED = 2000;
+/** Characters of lines the cache keeps colored; the ones used longest ago go first. */
+const CACHE_CHARS = 4_000_000;
+
+/** Colored lines, the most recently used last. */
 const cache = new Map<string, { text: string; role: Role }[]>();
+let cachedChars = 0;
 
 /** The line's text in runs of one color. */
 function tokens(text: string, language: string): { text: string; role: Role }[] {
+  if (text.length > MAX_HIGHLIGHTED) return [{ text, role: null }];
   const key = `${language}\u0000${text}`;
   const hit = cache.get(key);
-  if (hit) return hit;
+  if (hit) {
+    cache.delete(key);
+    cache.set(key, hit);
+    return hit;
+  }
   const runs: { text: string; role: Role }[] = [];
   try {
     const html = hljs.highlight(text, { language, ignoreIllegals: true }).value;
@@ -121,8 +134,13 @@ function tokens(text: string, language: string): { text: string; role: Role }[] 
     runs.length = 0;
     runs.push({ text, role: null });
   }
-  if (cache.size > 20000) cache.clear();
   cache.set(key, runs);
+  cachedChars += key.length;
+  for (const old of cache.keys()) {
+    if (cachedChars <= CACHE_CHARS) break;
+    cache.delete(old);
+    cachedChars -= old.length;
+  }
   return runs;
 }
 
@@ -145,18 +163,23 @@ export function occurrences(text: string, find: string, matchCase = true): [numb
   return out;
 }
 
-/** Cut the pieces where the occurrences start and end, and flag the ones inside them with the occurrence's number. */
+/** Cut the pieces where the occurrences start and end, and flag the ones inside them with the
+ *  occurrence's number. One pass over both: the occurrences are in order and don't overlap. */
 function mark(pieces: Piece[], text: string, inside: [number, number][]): Piece[] {
   const out: Piece[] = [];
   let offset = 0;
+  // The first occurrence that ends after where the walk is.
+  let k = 0;
   for (const piece of pieces) {
     const end = offset + piece.text.length;
-    // Cut points that fall inside this piece.
-    const cuts = [offset, ...inside.flat().filter((c) => c > offset && c < end), end];
-    for (let i = 0; i + 1 < cuts.length; i++) {
-      const [a, b] = [cuts[i], cuts[i + 1]];
-      const hit = inside.findIndex(([s, e]) => a >= s && b <= e);
-      out.push({ ...piece, text: text.slice(a, b), found: hit >= 0, hit: hit >= 0 ? hit : undefined });
+    if (end === offset) out.push({ ...piece, found: false, hit: undefined });
+    for (let at = offset; at < end; ) {
+      while (k < inside.length && inside[k][1] <= at) k++;
+      const next = inside[k];
+      const within = !!next && next[0] <= at;
+      const stop = Math.min(end, within ? next[1] : next ? next[0] : end);
+      out.push({ ...piece, text: text.slice(at, stop), found: within, hit: within ? k : undefined });
+      at = stop;
     }
     offset = end;
   }

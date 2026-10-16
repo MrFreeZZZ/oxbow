@@ -632,7 +632,19 @@ impl Repo {
     /// The diffs of the files on one side of the working copy, in the order of `paths`, for
     /// the Summary of Uncommitted changes. Paths without changes on that side are left out.
     pub fn working_diffs(&self, paths: &[String], side: Side, whole_file: bool) -> Result<Vec<FileDiff>> {
-        let tree = self.working_tree()?;
+        self.working_diffs_in(&self.working_tree()?, paths, side, whole_file)
+    }
+
+    /// [`Repo::working_diffs`] of the files of `tree`, a reading of the working tree made a moment
+    /// ago, so that git is not asked for every file's status again. The diffs themselves are read
+    /// now; staging a hunk or lines checks it against the files as they are then.
+    pub fn working_diffs_in(
+        &self,
+        tree: &WorkingTree,
+        paths: &[String],
+        side: Side,
+        whole_file: bool,
+    ) -> Result<Vec<FileDiff>> {
         let list = match side {
             Side::Staged => &tree.staged,
             Side::Unstaged => &tree.unstaged,
@@ -649,11 +661,42 @@ impl Repo {
         if let Some(sub) = file.submodule {
             return Ok(self.submodule_diff(file, sub, side));
         }
+        // The counts of `git diff --numstat` say beforehand when no lines will be shown: the
+        // patch is then never read, only the ids of the two sides.
+        let max_lines = self.diff_options().max_lines;
+        let changed = (file.additions + file.deletions) as usize;
+        // An untracked file too big to have its lines counted is all added lines.
+        let uncounted = file.status == FileStatus::Untracked
+            && std::fs::symlink_metadata(self.workdir().join(&file.path))
+                .is_ok_and(|m| m.is_file() && m.len() > MAX_COUNTED_BYTES);
+        if !file.binary && file.lfs.is_none() && (over_limit(&file, max_lines) || changed > MAX_DIFF_LINES || uncounted)
+        {
+            let ids = self.blob_ids(&file, side).unwrap_or_default();
+            let blob = |id: &Option<String>| id.clone().filter(|id| id.bytes().any(|b| b != b'0'));
+            let old = blob(&ids.0).map(|id| Source::Blob { id });
+            let new = match side {
+                Side::Staged => blob(&ids.1).map(|id| Source::Blob { id }),
+                Side::Unstaged => (file.status != FileStatus::Deleted).then(|| Source::Worktree {
+                    path: file.path.clone(),
+                }),
+            };
+            let limited = over_limit(&file, max_lines);
+            return Ok(FileDiff {
+                file,
+                hunks: Vec::new(),
+                too_large: !limited,
+                limited,
+                old,
+                new,
+                submodule: None,
+            });
+        }
         let patch = self.raw_diff(&file, side, whole_file)?;
-        let parsed = parse_patch(&patch);
+        // Past this many lines nothing is shown, so the rest of the patch is not turned into lines.
+        let parsed = parse_patch_within(&patch, MAX_DIFF_LINES);
         let mut hunks: Vec<Hunk> = parsed.hunks.into_iter().map(|h| h.hunk).collect();
         // Lines the secrets check would stop a commit on get a mark before they are staged.
-        if crate::secrets::check_secrets() {
+        if crate::secrets::check_secrets() && !parsed.cut {
             for line in hunks.iter_mut().flat_map(|h| &mut h.lines) {
                 if line.kind == LineKind::Added {
                     line.secret = crate::secrets::check_line(&line.text).map(|(kind, _)| kind);
@@ -665,7 +708,8 @@ impl Repo {
             mode: parsed.mode,
             ..file
         };
-        if !file.binary {
+        // A patch cut short keeps the counts of `git diff --numstat`.
+        if !file.binary && !parsed.cut {
             file.additions = 0;
             file.deletions = 0;
             for line in hunks.iter().flat_map(|h| &h.lines) {
@@ -706,17 +750,11 @@ impl Repo {
             }
             file.lfs = Some(lfs);
         } else if file.binary {
-            file.old_size = old
-                .as_ref()
-                .and_then(|s| self.read_source(s).ok())
-                .map(|b| b.len() as u64);
-            file.new_size = new
-                .as_ref()
-                .and_then(|s| self.read_source(s).ok())
-                .map(|b| b.len() as u64);
+            file.old_size = old.as_ref().and_then(|s| self.source_size(s));
+            file.new_size = new.as_ref().and_then(|s| self.source_size(s));
         }
-        let limited = over_limit(&file, self.diff_options().max_lines);
-        let too_large = !limited && hunks.iter().map(|h| h.lines.len()).sum::<usize>() > MAX_DIFF_LINES;
+        let limited = !parsed.cut && over_limit(&file, max_lines);
+        let too_large = parsed.cut || (!limited && hunks.iter().map(|h| h.lines.len()).sum::<usize>() > MAX_DIFF_LINES);
         Ok(FileDiff {
             file,
             hunks: if too_large || limited { Vec::new() } else { hunks },
@@ -1640,6 +1678,24 @@ impl Repo {
         Ok(self.run(&GitCommand::new(args))?.stdout)
     }
 
+    /// The blob ids of both sides of `file`'s change on `side`, as the `index` line of its patch
+    /// gives them (all zeros for a side that has none), without reading the patch.
+    fn blob_ids(&self, file: &FileChange, side: Side) -> Result<(Option<String>, Option<String>)> {
+        if file.status == FileStatus::Untracked {
+            return Ok((None, None));
+        }
+        let mut args = vec!["diff", "--raw", "-z", "--no-renames", "--no-abbrev"];
+        if side == Side::Staged {
+            args.push("--cached");
+        }
+        let path = literal(&file.path);
+        args.extend(["--", &path]);
+        let out = self.run(&GitCommand::new(args))?;
+        // `:<old mode> <new mode> <old id> <new id> <status>\0<path>\0`
+        let mut fields = out.stdout.split('\0').next().unwrap_or_default().split(' ').skip(2);
+        Ok((fields.next().map(str::to_owned), fields.next().map(str::to_owned)))
+    }
+
     /// Added and deleted lines per path (`None` counts for binary files).
     fn numstat(&self, side: Side) -> Result<std::collections::HashMap<String, (u32, u32, bool)>> {
         let mut args = vec!["diff", "--numstat", "-z", "--no-renames"];
@@ -1939,11 +1995,21 @@ struct ParsedPatch {
     mode: Option<ModeChange>,
     /// The blob ids of the `index` line.
     ids: (Option<String>, Option<String>),
+    /// The hunks stop short: the patch had more lines than were asked for.
+    cut: bool,
 }
 
 /// Parse the output of `git diff` for a single file.
 fn parse_patch(patch: &str) -> ParsedPatch {
+    parse_patch_within(patch, usize::MAX)
+}
+
+/// [`parse_patch`], stopping once the hunks have more than `max` lines: the patch is then `cut`
+/// and its hunks are only good for telling that it was too long.
+fn parse_patch_within(patch: &str, max: usize) -> ParsedPatch {
     let mut file_header = String::new();
+    let mut lines = 0usize;
+    let mut cut = false;
     let mut hunks: Vec<ParsedHunk> = Vec::new();
     let mut binary = false;
     let (mut old_mode, mut new_mode, mut ids) = (None, None, (None, None));
@@ -1989,6 +2055,10 @@ fn parse_patch(patch: &str) -> ParsedPatch {
             file_header.push_str(line);
             continue;
         };
+        if lines >= max {
+            cut = true;
+            break;
+        }
         current.text.push_str(line);
         let text = body.get(1..).unwrap_or_default().trim_end_matches('\r').to_owned();
         let cr = body.ends_with('\r');
@@ -2009,6 +2079,7 @@ fn parse_patch(patch: &str) -> ParsedPatch {
             // "\ No newline at end of file" belongs to the patch but is not a line of the file.
             _ => continue,
         };
+        lines += 1;
         current.hunk.lines.push(DiffLine {
             kind,
             old_line,
@@ -2019,9 +2090,12 @@ fn parse_patch(patch: &str) -> ParsedPatch {
             secret: None,
         });
     }
-    for hunk in &mut hunks {
-        mark_words(&mut hunk.hunk.lines);
-        hunk.hunk.check = fingerprint(&hunk.text);
+    // Changed words and the fingerprint that staging checks are for hunks that are shown.
+    if !cut {
+        for hunk in &mut hunks {
+            mark_words(&mut hunk.hunk.lines);
+            hunk.hunk.check = fingerprint(&hunk.text);
+        }
     }
     let mode = match (old_mode, new_mode) {
         (Some(old), Some(new)) => Some(ModeChange { old, new }),
@@ -2033,6 +2107,7 @@ fn parse_patch(patch: &str) -> ParsedPatch {
         binary,
         mode,
         ids,
+        cut,
     }
 }
 
@@ -2145,6 +2220,19 @@ fn mark_words(lines: &mut [DiffLine]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_patch_past_the_budget_is_cut() {
+        let patch = "diff --git a/f b/f\nindex 1111111..2222222 100644\n--- a/f\n+++ b/f\n\
+                     @@ -1,2 +1,3 @@\n a\n-b\n+c\n+d\n";
+        let whole = parse_patch_within(patch, 10);
+        assert!(!whole.cut);
+        assert_eq!(whole.hunks[0].hunk.lines.len(), 4);
+        assert!(!whole.hunks[0].hunk.check.is_empty());
+        let cut = parse_patch_within(patch, 2);
+        assert!(cut.cut);
+        assert_eq!(cut.hunks[0].hunk.lines.len(), 2);
+    }
 
     #[test]
     fn commit_messages_split_into_paragraphs() {

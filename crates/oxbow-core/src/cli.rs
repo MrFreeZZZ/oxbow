@@ -182,6 +182,50 @@ impl Repo {
         spawn_in(self.workdir(), command, input)
     }
 
+    /// Run `command` and wait for it, unless `cancel` is set first: the command is then stopped
+    /// and fails with [`Error::Cancelled`]. For reads whose answer is no longer wanted once a
+    /// newer one is asked for, such as a search.
+    pub fn run_cancellable(&self, command: &GitCommand, cancel: &AtomicBool) -> Result<CommandOutput> {
+        let mut child = command_in(self.workdir(), command)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|err| Error::GitNotFound(err.to_string()))?;
+        let read = |mut pipe: Box<dyn Read + Send>| {
+            std::thread::spawn(move || {
+                let mut all = Vec::new();
+                let _ = pipe.read_to_end(&mut all);
+                all
+            })
+        };
+        let stdout = read(Box::new(child.stdout.take().expect("stdout is piped")));
+        let stderr = read(Box::new(child.stderr.take().expect("stderr is piped")));
+        let status = loop {
+            if cancel.load(Ordering::Relaxed) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(Error::Cancelled);
+            }
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => std::thread::sleep(Duration::from_millis(5)),
+                Err(err) => return Err(Error::GitNotFound(err.to_string())),
+            }
+        };
+        let stdout = String::from_utf8_lossy(&stdout.join().unwrap_or_default()).into_owned();
+        let stderr = String::from_utf8_lossy(&stderr.join().unwrap_or_default()).into_owned();
+        if status.success() {
+            Ok(CommandOutput { stdout, stderr })
+        } else {
+            Err(Error::Command {
+                command: command.display(),
+                code: status.code(),
+                output: if stderr.trim().is_empty() { stdout } else { stderr },
+            })
+        }
+    }
+
     /// Run `command`, passing each line it prints to `on_line` as it comes. Setting `cancel`
     /// stops the command; it then fails with [`Error::Cancelled`].
     pub fn run_streaming(

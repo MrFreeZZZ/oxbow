@@ -61,6 +61,7 @@ class Search {
   /** Commits each mode would find for the text, for the mode menu; null while counting. */
   counts = $state<Partial<Record<Mode, number | null>>>({});
   #generation = 0;
+  #counting = 0;
 
   /** The mode and text, read from a prefix like `code:` when there is one. */
   get parsed(): { mode: Mode; text: string } {
@@ -133,6 +134,8 @@ class Search {
   async countModes(rows: HistoryRow[]) {
     const { text } = this.parsed;
     const since = this.sinceArg;
+    // A newer count stops this one's searches (the same lane): their answers must not land.
+    const mine = ++this.#counting;
     this.counts = {};
     if (!text) return;
     for (const { mode } of MODES) {
@@ -141,12 +144,12 @@ class Search {
         continue;
       }
       this.counts[mode] = null;
-      api.search({ mode, text, branch: this.branch, since, author: mode === "author" ? null : this.author }).then(
+      api.search({ mode, text, branch: this.branch, since, author: mode === "author" ? null : this.author }, `count-${mode}`).then(
         (r) => {
-          if (this.parsed.text === text) this.counts[mode] = r.hits.length;
+          if (mine === this.#counting && this.parsed.text === text) this.counts[mode] = r.hits.length;
         },
         () => {
-          if (this.parsed.text === text) delete this.counts[mode];
+          if (mine === this.#counting && this.parsed.text === text) delete this.counts[mode];
         },
       );
     }
@@ -184,7 +187,7 @@ class Search {
     this.busy = true;
     try {
       // In Author mode the field is the author filter itself.
-      const result = await api.search({ mode, text, branch: this.branch, since, author: mode === "author" ? null : this.author });
+      const result = await api.search({ mode, text, branch: this.branch, since, author: mode === "author" ? null : this.author }, "main");
       if (mine !== this.#generation) return;
       this.result = result;
       this.resultKey = key;

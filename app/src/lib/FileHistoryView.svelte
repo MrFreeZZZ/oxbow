@@ -16,7 +16,6 @@
     history,
     path,
     start,
-    version,
     lookup,
     copy,
   }: {
@@ -24,7 +23,6 @@
     path: string;
     /** The commit to select first; HEAD's latest change when missing. */
     start: string | null;
-    version: number;
     lookup: (id: string) => HistoryRow | undefined;
     copy: (text: string) => void;
   } = $props();
@@ -52,10 +50,11 @@
   const pick = $derived(selected ? (byId.get(selected) ?? null) : null);
   const headName = $derived(history.head.branch ? `${history.head.branch} (HEAD)` : "HEAD");
 
-  // A new file, or a reload, reads the history again.
+  // A new file, or a reload that moved a branch, a tag or HEAD, reads the history again. A reload
+  // that only saw other files change (focus, staging) leaves it: `key` stays the same.
   $effect(() => {
     const p = path;
-    version;
+    history.key;
     error = null;
     api.fileHistory(p, null).then(
       (h) => {
@@ -83,7 +82,8 @@
   $effect(() => {
     if (mode !== "blame") return;
     const target = blameAt;
-    version;
+    // A commit's blame never changes; HEAD's does once HEAD moves.
+    if (target.rev === "HEAD") history.head.commit;
     blameError = null;
     api.blame(target.path, target.rev).then(
       (b) => {
@@ -248,7 +248,7 @@
     const text = find;
     const matchCase = nav.find.matchCase;
     const p = path;
-    version;
+    history.head.commit;
     if (!text) {
       finding = null;
       return;

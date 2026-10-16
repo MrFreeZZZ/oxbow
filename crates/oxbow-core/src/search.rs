@@ -108,6 +108,11 @@ impl SearchQuery {
 
 impl Repo {
     pub fn search(&self, query: &SearchQuery) -> Result<SearchResult> {
+        self.search_with(query, &std::sync::atomic::AtomicBool::new(false))
+    }
+
+    /// [`Repo::search`], stopped as soon as `cancel` is set: a newer search took its place.
+    pub fn search_with(&self, query: &SearchQuery, cancel: &std::sync::atomic::AtomicBool) -> Result<SearchResult> {
         let command = query.command().display();
         if query.text.trim().is_empty() {
             return Ok(SearchResult {
@@ -129,7 +134,7 @@ impl Repo {
             args.push("--".to_owned());
             args.push(path);
         }
-        let out = self.run(&GitCommand::new(args))?;
+        let out = self.run_cancellable(&GitCommand::new(args), cancel)?;
         let mut hits = parse_log(&out.stdout);
         // File search: only the files whose path matched, not every file of the commit.
         if query.mode == SearchMode::File {

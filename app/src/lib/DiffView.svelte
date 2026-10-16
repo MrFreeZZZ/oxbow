@@ -171,19 +171,38 @@
 
   let showAll = $state(false);
 
-  /** Files to render, cut off once the line budget is spent so huge commits stay responsive. */
+  /** Files to render, cut off once the line budget is spent so huge commits stay responsive. A
+   *  file much longer than what is left of the budget is cut too: `cut` is how many lines of
+   *  each of its hunks to draw, and `more` how many are left out. */
   const shown = $derived.by(() => {
-    if (showAll) return { files: items, hidden: 0 };
+    type Cut = { diff: FileDiff; lines: number[]; more: number };
+    if (showAll) return { files: items, hidden: 0, cut: null as Cut | null };
     let budget = lineBudget;
     const files: FileDiff[] = [];
+    let cut: Cut | null = null;
     for (const diff of items) {
       if (budget <= 0) break;
       files.push(diff);
       // A folded file draws no lines.
-      if (!isFolded(diff)) budget -= diff.hunks.reduce((n, h) => n + h.lines.length, 0);
+      if (isFolded(diff)) continue;
+      const total = diff.hunks.reduce((n, h) => n + h.lines.length, 0);
+      if (total > budget + CUT_SLACK) {
+        let left = budget;
+        const lines = diff.hunks.map((h) => {
+          const take = Math.min(left, h.lines.length);
+          left -= take;
+          return take;
+        });
+        cut = { diff, lines, more: total - budget };
+        budget = 0;
+        break;
+      }
+      budget -= total;
     }
-    return { files, hidden: items.length - files.length };
+    return { files, hidden: items.length - files.length, cut };
   });
+  /** A file is cut only when this many lines more than the budget allows would be left out. */
+  const CUT_SLACK = 500;
 
   const statusLabel: Record<string, string> = {
     added: "Added",
@@ -356,8 +375,9 @@
       </p>
     {:else}
       {@const language = languageOf(diff.file.path)}
+      {@const cut = shown.cut?.diff === diff ? shown.cut : null}
       <div class="code mono selectable" style:--digits={digits(diff)}>
-        {#each diff.hunks as hunk, h (h)}
+        {#each cut ? diff.hunks.filter((_, h) => cut.lines[h] > 0) : diff.hunks as hunk, h (h)}
           {@const before = h === 0 ? hunk.oldStart - 1 : hunk.oldStart - (diff.hunks[h - 1].oldStart + diff.hunks[h - 1].oldLines)}
           {#if before > 0 && !whole}
             <button class="fold" onclick={onToggleWhole} title="Show whole file">⋯ {before} unchanged {before === 1 ? "line" : "lines"}</button>
@@ -365,7 +385,7 @@
           {#if hunkBar}{@render hunkBar(diff, hunk)}{/if}
           {@const picking = !!picker?.enabled(hunk)}
           {@const picked = picking ? picker!.picked(hunk) : []}
-          {#each hunk.lines as line, i (i)}
+          {#each cut ? hunk.lines.slice(0, cut.lines[h]) : hunk.lines as line, i (i)}
             {@const on = picked.includes(i)}
             <div
               class="line {line.kind}"
@@ -394,6 +414,9 @@
           {/each}
         {/each}
       </div>
+      {#if cut}
+        <button class="more lines" onclick={() => (showAll = true)}>Show {cut.more.toLocaleString()} more {cut.more === 1 ? "line" : "lines"}</button>
+      {/if}
     {/if}
   </section>
 {/each}
@@ -669,6 +692,9 @@
     color: var(--code-dim, var(--text2));
     font-family: var(--font);
     font-size: 11px;
+  }
+  .more.lines {
+    margin: 10px 8px 0;
   }
   .more {
     margin: 0 20px 20px;

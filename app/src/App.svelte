@@ -682,20 +682,34 @@
     if (await api.refreshRemoteTags().catch(() => false)) await refresh();
   }
 
-  /** Reload after the repository changed, here or outside the app, keeping the selection when it still exists. */
-  async function refresh() {
-    if (!repo || loading) return;
+  /** Reload after the repository changed, here or outside the app, keeping the selection when it still exists.
+   *  One reload runs at a time: asked for meanwhile (focus, a fetch, an action finishing), one more
+   *  follows it, for everyone who asked, so that it sees what changed. */
+  function refresh(): Promise<void> {
+    if (!repo || loading) return Promise.resolve();
     // Older commits are on their way: reload once they are in, with the new limit.
     if (paging) {
       refreshAfterPaging = true;
-      return;
+      return Promise.resolve();
     }
-    const done = refreshNow();
+    if (refreshQueued) return refreshQueued;
+    if (refreshing) {
+      const queued = refreshing.then(() => {
+        if (refreshQueued === queued) refreshQueued = null;
+        return refresh();
+      });
+      refreshQueued = queued;
+      return queued;
+    }
+    const done = refreshNow().finally(() => {
+      if (refreshing === done) refreshing = null;
+    });
     refreshing = done;
-    await done;
-    if (refreshing === done) refreshing = null;
+    return done;
   }
   let refreshing: Promise<void> | null = null;
+  /** The reload that follows the one under way. */
+  let refreshQueued: Promise<void> | null = null;
   let refreshAfterPaging = false;
   /** Number of the page load under way: one that finishes after another started, or after the
    *  repository changed, leaves `paging` to the newer one. */
@@ -710,8 +724,9 @@
 
   async function refreshNow() {
     const mine = generation;
+    const shown = history;
     try {
-      const next = await api.history(limit);
+      const next = withRows(await api.history(limit, null, shown?.key ?? null), shown);
       // Another repository was opened meanwhile: this answer may come from the old one.
       if (mine !== generation || loading) return;
       history = next;
@@ -724,6 +739,14 @@
     }
   }
 
+  /** `next` with the commit rows it left out because `shown`, the history it was asked with, has
+   *  them: the same key, the same rows. Only the row of uncommitted changes comes anew. */
+  function withRows(next: History, shown: History | null): History {
+    if (!next.same || !shown) return next;
+    const commits = shown.rows[0]?.worktree ? shown.rows.slice(1) : shown.rows;
+    return { ...next, rows: [...next.rows, ...commits], runs: shown.runs, leadIns: shown.leadIns };
+  }
+
   /** Load the next page of older commits, or with `until` the history down to that commit.
    *  Whether `until` is in History now. */
   async function loadOlder(until: string | null = null): Promise<boolean> {
@@ -734,7 +757,8 @@
     try {
       // A reload already on its way would land after this one, with fewer commits.
       while (refreshing) await refreshing;
-      const next = await api.history(until ? limit : limit + PAGE, until);
+      const shown = history;
+      const next = withRows(await api.history(until ? limit : limit + PAGE, until, shown?.key ?? null), shown);
       if (mine !== generation || loading) return false;
       limit = Math.max(limit, next.loaded);
       history = next;
@@ -1237,7 +1261,7 @@
         {/key}
       {:else if view === "file" && nav.file}
         {#key repo.path + nav.file.path}
-          <FileHistoryView {history} path={nav.file.path} start={nav.file.commit} {version} lookup={(id) => rowsById.get(id)} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "the command" : text}.`)} />
+          <FileHistoryView {history} path={nav.file.path} start={nav.file.commit} lookup={(id) => rowsById.get(id)} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "the command" : text}.`)} />
         {/key}
       {:else if view === "compare"}
         {#key repo.path}
@@ -1348,6 +1372,8 @@
                 color={selectedRow.graph.color}
                 head={headRow}
                 {version}
+                changes={history.changes}
+                snapshot={history.snapshot}
                 onChanged={refresh}
                 onResolve={operation ? () => (resolving = true) : undefined}
               />
