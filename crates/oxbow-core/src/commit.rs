@@ -27,6 +27,9 @@ pub struct CommitDetail {
     pub parents: Vec<String>,
     /// Files changed compared to the first parent.
     pub files: Vec<FileChange>,
+    /// A shallow clone stops here: the first parent isn't in it yet, so `files` is empty until a
+    /// fetch brings it.
+    pub shallow_end: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -246,11 +249,16 @@ impl Repo {
         let author = person(commit.author().map_err(Error::git)?);
         let committer = person(commit.committer().map_err(Error::git)?);
         let parents = commit.parent_ids().map(|p| p.to_string()).collect();
-        let files = counted(
-            &repo,
-            self.commit_changes(&repo, &commit)?,
-            self.diff_options().max_lines,
-        );
+        let shallow_end = parent_missing(&repo, &commit);
+        let files = if shallow_end {
+            Vec::new()
+        } else {
+            counted(
+                &repo,
+                self.commit_changes(&repo, &commit)?,
+                self.diff_options().max_lines,
+            )
+        };
         Ok(CommitDetail {
             id: commit.id.to_string(),
             summary,
@@ -259,6 +267,7 @@ impl Repo {
             committer,
             parents,
             files,
+            shallow_end,
         })
     }
 
@@ -266,6 +275,9 @@ impl Repo {
     pub fn commit_diff(&self, id: &str, path: Option<&str>, context: DiffContext) -> Result<Vec<FileDiff>> {
         let repo = self.local();
         let commit = find_commit(&repo, id)?;
+        if parent_missing(&repo, &commit) {
+            return Ok(Vec::new());
+        }
         let changes = self.commit_changes(&repo, &commit)?;
         self.diffs(&repo, changes, path, context)
     }
@@ -482,6 +494,14 @@ fn from_tree<'r>(repo: &'r gix::Repository, id: &str) -> Result<gix::Tree<'r>> {
 }
 
 /// Changed files of `commit` compared to its first parent (or to nothing for a root commit).
+/// Whether the commit's first parent is missing, as where a shallow clone stops.
+fn parent_missing(repo: &gix::Repository, commit: &gix::Commit<'_>) -> bool {
+    commit
+        .parent_ids()
+        .next()
+        .is_some_and(|parent| !repo.has_object(parent))
+}
+
 fn changes(repo: &gix::Repository, commit: &gix::Commit<'_>) -> Result<Vec<Change>> {
     let new_tree = commit.tree().map_err(Error::git)?;
     let old_tree = match commit.parent_ids().next() {

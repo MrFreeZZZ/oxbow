@@ -329,6 +329,8 @@ export interface CommitDetail {
   committer: Person;
   parents: string[];
   files: FileChange[];
+  /** A shallow clone stops here: its parent isn't fetched yet, so `files` is empty. */
+  shallowEnd: boolean;
 }
 
 export type LineKind = "context" | "added" | "removed";

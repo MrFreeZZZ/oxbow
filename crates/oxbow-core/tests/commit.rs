@@ -213,3 +213,30 @@ fn a_blob_too_big_to_diff_still_shows_whether_it_is_binary() {
     let text = diff("big.txt");
     assert!(!text.file.binary && text.too_large);
 }
+
+#[test]
+fn where_a_shallow_clone_stops_the_commit_waits_for_its_parent() {
+    let mut origin = Fixture::new();
+    for n in 1..=4 {
+        origin.commit("a.txt", &format!("{n}\n"), &format!("Commit {n}"));
+    }
+    let mut clone = Fixture::new();
+    let url = format!("file://{}", origin.path().display());
+    let dir = clone.path().join("shallow");
+    let dir = dir.to_str().unwrap();
+    clone.git(&["clone", "-q", "--depth=2", &url, dir]);
+    let end = clone.git(&["-C", dir, "rev-parse", "HEAD~1"]);
+    let repo = Repo::open(dir).unwrap();
+
+    let detail = repo.commit_detail(&end).unwrap();
+    assert!(detail.shallow_end);
+    assert_eq!(detail.parents.len(), 1);
+    assert!(detail.files.is_empty());
+    assert!(repo.commit_diff(&end, None, DiffContext::Compact).unwrap().is_empty());
+
+    clone.git(&["-C", dir, "fetch", "-q", "--deepen=1", "origin"]);
+    let detail = repo.commit_detail(&end).unwrap();
+    assert!(!detail.shallow_end);
+    assert_eq!(detail.files.len(), 1);
+    assert_eq!(repo.commit_diff(&end, None, DiffContext::Compact).unwrap().len(), 1);
+}
