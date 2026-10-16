@@ -255,13 +255,18 @@ fn a_big_commit_lists_its_files_at_once_and_diffs_them_a_page_at_a_time() {
     let go = AtomicBool::new(false);
 
     // The list alone: paths and how each changed, no counts.
-    let quick = repo.commit_detail_with(&id, false, &go).unwrap();
+    let quick = repo.commit_detail_with(&id, None, &go).unwrap();
     assert!(!quick.counted);
     assert_eq!(quick.files.len(), 7);
     assert!(quick.files.iter().all(|f| f.additions == 0));
     let counted = repo.commit_detail(&id).unwrap();
     assert!(counted.counted);
     assert_eq!(counted.files[1].additions, 10);
+    // Files whose diffs are shown already are not counted again.
+    let rest = repo.commit_detail_with(&id, Some(3), &go).unwrap();
+    assert_eq!(rest.counted_from, 3);
+    assert_eq!(rest.files[1].additions, 0);
+    assert_eq!(rest.files[4].additions, 10);
 
     // Pages of about 25 lines: the files come in order, each once.
     let mut paths = Vec::new();
@@ -285,7 +290,19 @@ fn a_big_commit_lists_its_files_at_once_and_diffs_them_a_page_at_a_time() {
         Err(Error::Cancelled)
     ));
     assert!(matches!(
-        repo.commit_detail_with(&id, true, &stop),
+        repo.commit_detail_with(&id, Some(0), &stop),
         Err(Error::Cancelled)
     ));
+    // So does a file's diff of its own.
+    assert!(matches!(
+        repo.commit_diff_with(&id, Some("f0.txt"), DiffContext::Compact, &stop),
+        Err(Error::Cancelled)
+    ));
+    assert_eq!(
+        repo.commit_diff_with(&id, Some("f0.txt"), DiffContext::Compact, &go)
+            .unwrap()[0]
+            .file
+            .additions,
+        10
+    );
 }

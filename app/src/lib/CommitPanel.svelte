@@ -2,7 +2,7 @@
   import { untrack, type Snippet } from "svelte";
   import { api, stopped } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
-  import type { CommitDetail, FileDiff, HistoryRow } from "./types";
+  import type { CommitDetail, FileChange, FileDiff, HistoryRow } from "./types";
   import { fullDate, initials, lane, person, plate, splitPath, tabLabels, tint } from "./format";
   import DiffView from "./DiffView.svelte";
   import FoldAll from "./FoldAll.svelte";
@@ -55,6 +55,10 @@
   let next = $state<number | null>(null);
   /** Changed files in all, as the pages count them. */
   let fileCount = $state(0);
+  /** Summary's first page of diffs for a commit, whose files the counted list then skips. */
+  let firstPage: { id: string; files: Promise<FileChange[]> } | null = null;
+  /** The files of that first page, with their counts. */
+  let firstFiles = $state<Map<string, FileChange>>(new Map());
   let loadingMore = $state(false);
   /** Rows of the Summary's file list drawn: a commit of thousands of files draws the rest on request. */
   let listed = $state(LIST_STEP);
@@ -87,12 +91,13 @@
   /** The files as far as they are known: until the counted list comes, a loaded diff has counts. */
   const files = $derived.by(() => {
     if (!detail) return [];
-    if (detail.counted) return detail.files;
+    const from = detail.countedFrom;
+    if (detail.counted) return from ? detail.files.map((f, i) => (i < from ? (firstFiles.get(f.path) ?? f) : f)) : detail.files;
     const loaded = new Map(diffs.map((d) => [d.file.path, d.file]));
     return detail.files.map((f) => loaded.get(f.path) ?? f);
   });
   const totals = $derived(
-    detail?.counted ? detail.files.reduce((t, f) => ({ add: t.add + f.additions, del: t.del + f.deletions }), { add: 0, del: 0 }) : null,
+    detail?.counted ? files.reduce((t, f) => ({ add: t.add + f.additions, del: t.del + f.deletions }), { add: 0, del: 0 }) : null,
   );
   const known = $derived(new Set(detail?.counted ? [] : diffs.map((d) => d.file.path)));
 
@@ -113,13 +118,21 @@
         if (!detail?.counted) detail = d;
         error = null;
         if (d.shallowEnd) return;
-        api.commitDetail(current, false, COUNTS).then(
-          (counted) => {
-            if (id === current) detail = counted;
-          },
-          // Counts are a nicety: the list stays without them.
-          () => {},
-        );
+        // The files of Summary's first page are counted by their diffs already.
+        const first = firstPage?.id === current ? firstPage.files : Promise.resolve([]);
+        first
+          .then((known) => {
+            if (id !== current) return null;
+            firstFiles = new Map(known.map((f) => [f.path, f]));
+            return api.commitDetail(current, false, COUNTS, known.length);
+          })
+          .then(
+            (counted) => {
+              if (counted && id === current) detail = counted;
+            },
+            // Counts are a nicety: the list stays without them.
+            () => {},
+          );
       },
       // An answer for a commit that is no longer shown must not cover the current one.
       (err) => {
@@ -135,7 +148,9 @@
       if (id === current && !stopped(err) && !keep) error = String(err);
     };
     if (path === null) {
-      api.commitDiffPage(current, 0, PAGE_LINES, wholeFile, DIFF).then((page) => {
+      const page = api.commitDiffPage(current, 0, PAGE_LINES, wholeFile, DIFF);
+      if (!keep) firstPage = { id: current, files: page.then((p) => p.diffs.map((d) => d.file), () => []) };
+      page.then((page) => {
         if (!still()) return;
         diffs = page.diffs;
         next = page.next;

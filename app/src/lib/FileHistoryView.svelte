@@ -3,7 +3,7 @@
   // changed (Changes) or who last changed every line (Blame). A line number shows every commit
   // that changed that line (git log -L).
 
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import { api } from "./api";
   import { nav } from "./nav.svelte";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
@@ -11,7 +11,7 @@
   import { initials, lane, person, relativeTime, shortId, splitPath, tint } from "./format";
   import { languageOf, occurrences, paint } from "./syntax";
   import DiffView from "./DiffView.svelte";
-  import Lazy, { BLOCK } from "./Lazy.svelte";
+  import Lazy, { BLOCK, matchesIn, placeOf, type FindHits } from "./Lazy.svelte";
 
   let {
     history,
@@ -151,12 +151,6 @@
     return out;
   });
 
-  /** Whether these blame lines have the text being found: they are drawn wherever they are, so
-   *  that every match is there to step to. */
-  function finds(lines: { text: string }[]): boolean {
-    return !!find && lines.some((l) => occurrences(l.text, find, nav.find.matchCase).length > 0);
-  }
-
   /** Starts of the blocks a run of `count` lines is drawn in. */
   function starts(count: number): number[] {
     const out: number[] = [];
@@ -229,26 +223,52 @@
     return before < 0 || i > before;
   }
 
-  // Find in file: the matches on screen, in order, each one the spans it was cut into.
+  // Find in file: the matches are counted from the lines (the diff's by DiffView), not from what
+  // is drawn, and only the block with the current one is drawn wherever it is: drawing every
+  // block with a match would undo drawing only what is seen.
   const find = $derived(nav.find.text);
-  let matches: HTMLElement[][] = [];
+  let diffHits = $state<FindHits>([]);
+  const blameHits = $derived.by(() => {
+    const out: FindHits = [];
+    if (!find || !blame) return out;
+    const matchCase = nav.find.matchCase;
+    const count = (lines: { text: string }[]) => lines.reduce((n, l) => n + occurrences(l.text || " ", find, matchCase).length, 0);
+    for (const group of groups) {
+      const first = group.runs[0];
+      if (group.long) {
+        for (const start of starts(first.lines.length)) {
+          const n = count(first.lines.slice(start, start + BLOCK));
+          if (n) out.push({ key: `${first.from}:${start}`, count: n });
+        }
+      } else {
+        const n = group.runs.reduce((k, r) => k + count(r.lines), 0);
+        if (n) out.push({ key: `${first.from}`, count: n });
+      }
+    }
+    return out;
+  });
+  const hits = $derived(mode === "changes" ? diffHits : blameHits);
+  /** The block with the current match. */
+  let focus = $state<string | null>(null);
   let findKey = "";
   let findShown: unknown = null;
   let shownAt = -1;
+  /** New code starts at its first match, scrolled to once its matches are counted. */
+  let scrollDue = false;
 
   $effect(() => {
     const key = `${find}\u0000${nav.find.matchCase}\u0000${mode}\u0000${path}`;
-    // Collected again whenever the code on screen changes; new code starts at its first match.
     const shown = mode === "changes" ? diffs : blame;
-    tick().then(() => {
-      matches = collect();
+    const count = hits.reduce((n, h) => n + h.count, 0);
+    untrack(() => {
       const fresh = key !== findKey || shown !== findShown;
       findKey = key;
       findShown = shown;
-      const at = fresh ? 0 : Math.min(nav.found.at, Math.max(0, matches.length - 1));
+      if (fresh) scrollDue = true;
+      const at = fresh ? 0 : Math.min(nav.found.at, Math.max(0, count - 1));
       shownAt = at;
-      nav.found = { count: matches.length, at };
-      show(at, fresh);
+      nav.found = { count, at };
+      show(at, false);
     });
   });
 
@@ -260,27 +280,24 @@
     show(at, true);
   });
 
-  function collect(): HTMLElement[][] {
-    if (!main || !find) return [];
-    const out: HTMLElement[][] = [];
-    let line: Element | null = null;
-    let hit: string | null = null;
-    for (const el of main.querySelectorAll<HTMLElement>(".found")) {
-      if (el.parentElement === line && el.dataset.hit === hit) out[out.length - 1].push(el);
-      else out.push([el]);
-      line = el.parentElement;
-      hit = el.dataset.hit ?? null;
-    }
-    return out;
-  }
-
-  /** Ring the current match, and scroll to it. */
+  /** Ring the current match, and scroll to it: its block is drawn first if it is far away. */
+  let showing = 0;
   function show(at: number, scroll: boolean) {
-    main?.querySelectorAll(".found.current").forEach((el) => el.classList.remove("current"));
-    const match = matches[at];
-    if (!match) return;
-    match.forEach((el) => el.classList.add("current"));
-    if (scroll) match[0].scrollIntoView({ block: "center", inline: "nearest" });
+    const place = placeOf(hits, at);
+    focus = place?.key ?? null;
+    const call = ++showing;
+    tick().then(() => {
+      if (call !== showing || !main) return;
+      main.querySelectorAll(".found.current").forEach((el) => el.classList.remove("current"));
+      const block = place && main.querySelector(`[data-block="${CSS.escape(place.key)}"]`);
+      const match = block ? matchesIn(block)[place.nth] : undefined;
+      if (!match) return;
+      match.forEach((el) => el.classList.add("current"));
+      if (scroll || scrollDue) {
+        scrollDue = false;
+        match[0].scrollIntoView({ block: "center", inline: "nearest" });
+      }
+    });
   }
 
   // The commits that added or removed the text, asked of git a moment after typing stops.
@@ -332,7 +349,7 @@
       {#if long}
         {#each starts(block.lines.length) as start (start)}
           {@const part = block.lines.slice(start, start + BLOCK)}
-          <Lazy lines={part.length} of={part[0]} force={finds(part)}>{@render rows(part)}</Lazy>
+          <Lazy lines={part.length} of={part[0]} name={`${block.from}:${start}`} force={focus === `${block.from}:${start}`}>{@render rows(part)}</Lazy>
         {/each}
       {:else}
         {@render rows(block.lines)}
@@ -430,6 +447,8 @@
             history={false}
             find={find || null}
             matchCase={nav.find.matchCase}
+            {focus}
+            bind:hits={diffHits}
             onToggleWhole={() => (whole = !whole)}
             loadFull={(d) => api.commitDiff(pick!.id, d.file.path, whole, true).then((all) => all[0])}
           />
@@ -470,7 +489,7 @@
             {#if group.long}
               {@render run(group.runs[0], true)}
             {:else}
-              <Lazy lines={group.lines} of={group.runs[0]} force={group.runs.some((r) => finds(r.lines))}>
+              <Lazy lines={group.lines} of={group.runs[0]} name={`${group.runs[0].from}`} force={focus === `${group.runs[0].from}`}>
                 {#each group.runs as block (block.from)}{@render run(block, false)}{/each}
               </Lazy>
             {/if}

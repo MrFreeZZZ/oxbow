@@ -49,6 +49,32 @@
     return box.bottom >= view.top - AHEAD && box.top <= view.bottom + AHEAD;
   }
 
+  /** Blocks with matches of Find in file, in order, and how many each has. */
+  export type FindHits = { key: string; count: number }[];
+
+  /** Which block the `at`th match is in, and which of its matches it is. */
+  export function placeOf(hits: FindHits, at: number): { key: string; nth: number } | null {
+    for (const hit of hits) {
+      if (at < hit.count) return { key: hit.key, nth: at };
+      at -= hit.count;
+    }
+    return null;
+  }
+
+  /** The matches drawn in `el`, in order, each the spans it was cut into by the colors. */
+  export function matchesIn(el: Element): HTMLElement[][] {
+    const out: HTMLElement[][] = [];
+    let line: Element | null = null;
+    let hit: string | null = null;
+    for (const span of el.querySelectorAll<HTMLElement>(".found")) {
+      if (span.parentElement === line && span.dataset.hit === hit) out[out.length - 1].push(span);
+      else out.push([span]);
+      line = span.parentElement;
+      hit = span.dataset.hit ?? null;
+    }
+    return out;
+  }
+
   /** Whether the user has text selected inside `el`: its lines stay, or copying would lose them. */
   function holdsSelection(el: Element): boolean {
     const selection = document.getSelection();
@@ -63,14 +89,17 @@
     lines,
     of,
     force = false,
+    name,
     children,
   }: {
     /** Lines in the block, for its height before it is drawn. */
     lines: number;
     /** What the block shows: another one is measured afresh. */
     of: unknown;
-    /** Draw the block wherever it is, e.g. as it has text Find in file looks for. */
+    /** Draw the block wherever it is, e.g. as Find in file is on one of its matches. */
     force?: boolean;
+    /** Name of the block, for Find in file to find it on the page. */
+    name?: string;
     children: Snippet;
   } = $props();
 
@@ -134,7 +163,7 @@
   const estimate = $derived(lines * lineHeight);
 </script>
 
-<div bind:this={box} class="lazy" style:height={live ? undefined : `${height ?? estimate}px`}>
+<div bind:this={box} class="lazy" data-block={name} style:height={live ? undefined : `${height ?? estimate}px`}>
   {#if live}{@render children()}{/if}
 </div>
 

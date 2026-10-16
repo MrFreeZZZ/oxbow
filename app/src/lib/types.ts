@@ -342,6 +342,8 @@ export interface CommitDetail {
   shallowEnd: boolean;
   /** `files` have their line counts and sizes; without, only paths and how each changed. */
   counted: boolean;
+  /** Files before this one are not counted though `counted` is set: their diffs have the counts. */
+  countedFrom: number;
 }
 
 /** Diffs of a commit's files, a few at a time. */

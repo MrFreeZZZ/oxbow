@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use gix::ObjectId;
 use gix::bstr::{BStr, ByteSlice};
@@ -35,6 +36,9 @@ pub struct CommitDetail {
     /// `files` have their line counts, sizes and what is unusual about them. Without, they are
     /// only the list of paths and how each changed, which needs no file read.
     pub counted: bool,
+    /// The files before this one are not counted, though `counted` is set: the caller has
+    /// their counts from their diffs.
+    pub counted_from: usize,
 }
 
 /// Diffs of a commit's files, a few at a time: as many files from `from` on as fit a budget
@@ -229,11 +233,20 @@ pub enum DiffContext {
     WholeFile,
 }
 
+#[derive(Clone)]
 struct Change {
     file: FileChange,
     old: Option<ObjectId>,
     new: Option<ObjectId>,
 }
+
+/// The changed files of the commit asked for last: its file list, its counts and each page of
+/// its diffs all start from them, and a commit's changes never change.
+#[derive(Clone, Default)]
+pub(crate) struct ChangesCache(Arc<Mutex<Option<ChangesOf>>>);
+
+/// A commit and its changed files.
+type ChangesOf = (ObjectId, Arc<Vec<Change>>);
 
 /// What reading both sides of a change found.
 struct Inspected {
@@ -247,13 +260,14 @@ struct Inspected {
 impl Repo {
     /// Message, people, parents and changed files of a commit, with their line counts.
     pub fn commit_detail(&self, id: &str) -> Result<CommitDetail> {
-        self.commit_detail_with(id, true, &AtomicBool::new(false))
+        self.commit_detail_with(id, Some(0), &AtomicBool::new(false))
     }
 
-    /// [`Repo::commit_detail`], with the changed files counted only when `count` is set: the
-    /// list alone comes at once even for a commit of thousands of files, as it reads none of
-    /// them. Setting `cancel` stops the counting: a newer question took its place.
-    pub fn commit_detail_with(&self, id: &str, count: bool, cancel: &AtomicBool) -> Result<CommitDetail> {
+    /// [`Repo::commit_detail`], with the changed files counted from the `count`th on, or not at
+    /// all: the list alone comes at once even for a commit of thousands of files, as it reads
+    /// none of them, and the files whose diffs are shown already have their counts. Setting
+    /// `cancel` stops the counting: a newer question took its place.
+    pub fn commit_detail_with(&self, id: &str, count: Option<usize>, cancel: &AtomicBool) -> Result<CommitDetail> {
         let repo = self.local();
         let commit = find_commit(&repo, id)?;
         let message = commit.message_raw_sloppy().to_str_lossy();
@@ -274,19 +288,21 @@ impl Repo {
         let committer = person(commit.committer().map_err(Error::git)?);
         let parents = commit.parent_ids().map(|p| p.to_string()).collect();
         let shallow_end = parent_missing(&repo, &commit);
+        let options = self.diff_options();
+        // A diff that ignores whitespace counts fewer lines than the list does.
+        let counted_from = match count {
+            Some(from) if !options.ignore_whitespace => from,
+            _ => 0,
+        };
         let files = if shallow_end {
             Vec::new()
-        } else if count {
-            counted(
-                &repo,
-                self.commit_changes(&repo, &commit)?,
-                self.diff_options().max_lines,
-                cancel,
-            )?
+        } else if count.is_some() {
+            let changes = self.commit_changes(&repo, &commit)?;
+            counted(&repo, changes.to_vec(), counted_from, options.max_lines, cancel)?
         } else {
             self.commit_changes(&repo, &commit)?
-                .into_iter()
-                .map(|c| c.file)
+                .iter()
+                .map(|c| c.file.clone())
                 .collect()
         };
         Ok(CommitDetail {
@@ -298,19 +314,31 @@ impl Repo {
             parents,
             files,
             shallow_end,
-            counted: count,
+            counted: count.is_some(),
+            counted_from,
         })
     }
 
     /// Line diffs of a commit against its first parent, for all files or only `path`.
     pub fn commit_diff(&self, id: &str, path: Option<&str>, context: DiffContext) -> Result<Vec<FileDiff>> {
+        self.commit_diff_with(id, path, context, &AtomicBool::new(false))
+    }
+
+    /// [`Repo::commit_diff`]; setting `cancel` stops it: a newer question took its place.
+    pub fn commit_diff_with(
+        &self,
+        id: &str,
+        path: Option<&str>,
+        context: DiffContext,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<FileDiff>> {
         let repo = self.local();
         let commit = find_commit(&repo, id)?;
         if parent_missing(&repo, &commit) {
             return Ok(Vec::new());
         }
         let changes = self.commit_changes(&repo, &commit)?;
-        self.diffs(&repo, changes, path, context)
+        self.diffs(&repo, changes.to_vec(), path, context, cancel)
     }
 
     /// The line diffs of a commit's files from the `from`th on, as many as fit `budget` lines
@@ -338,7 +366,7 @@ impl Repo {
         let mut diffs = Vec::new();
         let mut lines = 0;
         let mut next = None;
-        for (at, change) in changes.into_iter().enumerate().skip(from) {
+        for (at, change) in changes.iter().enumerate().skip(from) {
             if !diffs.is_empty() && lines >= budget {
                 next = Some(at);
                 break;
@@ -346,7 +374,7 @@ impl Repo {
             if cancel.load(Ordering::Relaxed) {
                 return Err(Error::Cancelled);
             }
-            let diff = self.diff_one(&repo, change, context)?;
+            let diff = self.diff_one(&repo, change.clone(), context, cancel)?;
             // A card (binary, too large, a picture) takes about as much room as a few lines.
             lines += diff.hunks.iter().map(|h| h.lines.len()).sum::<usize>().max(8);
             diffs.push(diff);
@@ -356,7 +384,19 @@ impl Repo {
 
     /// Changed files of a commit against its first parent. A stash keeps its untracked files in a
     /// third commit; they are part of what it changes, so they come after its tracked files.
-    fn commit_changes(&self, repo: &gix::Repository, commit: &gix::Commit<'_>) -> Result<Vec<Change>> {
+    fn commit_changes(&self, repo: &gix::Repository, commit: &gix::Commit<'_>) -> Result<Arc<Vec<Change>>> {
+        let cache = &self.changes.0;
+        if let Some((id, changes)) = &*cache.lock().expect("changes lock")
+            && *id == commit.id
+        {
+            return Ok(changes.clone());
+        }
+        let changes = Arc::new(self.read_commit_changes(repo, commit)?);
+        *cache.lock().expect("changes lock") = Some((commit.id, changes.clone()));
+        Ok(changes)
+    }
+
+    fn read_commit_changes(&self, repo: &gix::Repository, commit: &gix::Commit<'_>) -> Result<Vec<Change>> {
         let mut out = changes(repo, commit)?;
         let id = commit.id.to_string();
         let untracked = self
@@ -374,14 +414,20 @@ impl Repo {
     pub fn tree_files(&self, from: &str, to: &str) -> Result<Vec<FileChange>> {
         let repo = self.local();
         let changes = tree_changes(&repo, Some(&from_tree(&repo, from)?), &from_tree(&repo, to)?)?;
-        counted(&repo, changes, self.diff_options().max_lines, &AtomicBool::new(false))
+        counted(
+            &repo,
+            changes,
+            0,
+            self.diff_options().max_lines,
+            &AtomicBool::new(false),
+        )
     }
 
     /// Line diffs between two commits' trees (or two trees), for all files or only `path`.
     pub fn tree_diff(&self, from: &str, to: &str, path: Option<&str>, context: DiffContext) -> Result<Vec<FileDiff>> {
         let repo = self.local();
         let changes = tree_changes(&repo, Some(&from_tree(&repo, from)?), &from_tree(&repo, to)?)?;
-        self.diffs(&repo, changes, path, context)
+        self.diffs(&repo, changes, path, context, &AtomicBool::new(false))
     }
 
     fn diffs(
@@ -390,16 +436,23 @@ impl Repo {
         changes: Vec<Change>,
         path: Option<&str>,
         context: DiffContext,
+        cancel: &AtomicBool,
     ) -> Result<Vec<FileDiff>> {
         changes
             .into_iter()
             .filter(|change| path.is_none_or(|p| p == change.file.path))
-            .map(|change| self.diff_one(repo, change, context))
+            .map(|change| self.diff_one(repo, change, context, cancel))
             .collect()
     }
 
-    /// The line diff of one changed file.
-    fn diff_one(&self, repo: &gix::Repository, change: Change, context: DiffContext) -> Result<FileDiff> {
+    /// The line diff of one changed file. Setting `cancel` stops it.
+    fn diff_one(
+        &self,
+        repo: &gix::Repository,
+        change: Change,
+        context: DiffContext,
+        cancel: &AtomicBool,
+    ) -> Result<FileDiff> {
         let options = self.diff_options();
         let context = match context {
             DiffContext::Compact => DiffContext::Lines(options.context_lines),
@@ -428,6 +481,7 @@ impl Repo {
             true,
             options.ignore_whitespace,
             options.max_lines,
+            cancel,
         )?;
         let (hunks, too_large, limited) = (found.hunks.unwrap_or_default(), found.too_large, found.limited);
         let blob = |id: Option<ObjectId>| id.map(|id| Source::Blob { id: id.to_string() });
@@ -531,26 +585,26 @@ fn count_lines(file: &mut FileChange, hunks: &[Hunk]) {
     }
 }
 
-/// Files with their added and removed line counts. Setting `cancel` stops it, between files.
+/// Files with their added and removed line counts, from the `from`th on: the ones before are
+/// listed uncounted. Setting `cancel` stops it.
 fn counted(
     repo: &gix::Repository,
     changes: Vec<Change>,
+    from: usize,
     max_lines: u32,
     cancel: &AtomicBool,
 ) -> Result<Vec<FileChange>> {
     changes
         .into_iter()
-        .map(|change| {
-            if cancel.load(Ordering::Relaxed) {
-                return Err(Error::Cancelled);
-            }
+        .enumerate()
+        .map(|(at, change)| {
             let mut file = change.file;
-            if file.submodule.is_some() {
-                // It records a commit of another repository: there are no lines to count.
+            if at < from || file.submodule.is_some() {
+                // A submodule records a commit of another repository: there are no lines to count.
                 return Ok(file);
             }
             // Counts are a nicety; a blob that can't be read still lists the file.
-            let _ = inspect(
+            match inspect(
                 repo,
                 &mut file,
                 change.old,
@@ -559,8 +613,11 @@ fn counted(
                 false,
                 false,
                 max_lines,
-            );
-            Ok(file)
+                cancel,
+            ) {
+                Err(Error::Cancelled) => Err(Error::Cancelled),
+                _ => Ok(file),
+            }
         })
         .collect()
 }
@@ -733,6 +790,7 @@ fn is_binary(data: &[u8]) -> bool {
 /// Read both sides of a change and diff them line by line, filling in what `file` can tell
 /// about them: sizes, line counts, binary content, rename similarity and line-ending changes.
 /// With more than `max_lines` changed lines (0: no limit) only the counts are worked out.
+/// Setting `cancel` stops it before each costly step: reading the blobs, diffing them.
 #[allow(clippy::too_many_arguments)]
 fn inspect(
     repo: &gix::Repository,
@@ -743,7 +801,16 @@ fn inspect(
     with_words: bool,
     ignore_whitespace: bool,
     max_lines: u32,
+    cancel: &AtomicBool,
 ) -> Result<Inspected> {
+    let stop = || {
+        if cancel.load(Ordering::Relaxed) {
+            Err(Error::Cancelled)
+        } else {
+            Ok(())
+        }
+    };
+    stop()?;
     // A blob too big to diff is not read at all, binary or not: its header gives the size.
     let sizes = (blob_size(repo, old), blob_size(repo, new));
     if sizes.0.max(sizes.1) > MAX_BLOB_BYTES as u64 {
@@ -799,6 +866,7 @@ fn inspect(
             limited: false,
         });
     }
+    stop()?;
     let before = String::from_utf8_lossy(&before);
     let after = String::from_utf8_lossy(&after);
     let budget = if max_lines == 0 {

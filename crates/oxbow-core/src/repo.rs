@@ -14,6 +14,8 @@ pub struct Repo {
     shared: gix::ThreadSafeRepository,
     workdir: PathBuf,
     diff: DiffOptions,
+    /// The changed files of the commit read last, shared by every clone.
+    pub(crate) changes: crate::commit::ChangesCache,
 }
 
 /// How diffs are shown, from the user's settings.
@@ -87,6 +89,7 @@ impl Repo {
             shared,
             workdir,
             diff: DiffOptions::default(),
+            changes: Default::default(),
         })
     }
 

@@ -17,7 +17,7 @@
   import { api } from "./api";
   import { confirm } from "./confirm.svelte";
   import { languageOf, occurrences, paint } from "./syntax";
-  import Lazy, { BLOCK } from "./Lazy.svelte";
+  import Lazy, { BLOCK, type FindHits } from "./Lazy.svelte";
   import { nav } from "./nav.svelte";
   import { untrack } from "svelte";
   import { foldReason, startsFolded } from "./diffFold";
@@ -50,6 +50,8 @@
     side = null,
     pending = 0,
     onMore,
+    focus = null,
+    hits = $bindable([]),
   }: {
     diffs: FileDiff[];
     color: number;
@@ -86,6 +88,10 @@
     pending?: number;
     /** Load the diffs of more of the pending files. */
     onMore?: () => void;
+    /** The block with the current match of `find`, drawn wherever it is so it can be scrolled to. */
+    focus?: string | null;
+    /** The blocks of lines drawn with matches of `find`, in order, and how many each has. */
+    hits?: FindHits;
   } = $props();
 
   /** Diffs loaded in full with Show Diff Anyway, by the very diff they stand in for: a diff
@@ -246,13 +252,31 @@
     return out;
   }
 
-  /** Whether lines `from` to `to` have the text being found: those are drawn wherever they are,
-   *  so that every match is there to step to. */
-  function finds(lines: DiffLine[], from: number, to: number): boolean {
-    if (!find) return false;
-    for (let i = from; i < to; i++) if (occurrences(lines[i].text, find, matchCase).length) return true;
-    return false;
-  }
+  /** Name of the block of a hunk's lines from `start`, for Find in file to step to it. */
+  const blockKey = (diff: FileDiff, h: number, start: number) => `${diff.file.path}:${h}:${start}`;
+
+  // The matches counted from the lines, not from what is drawn: a block far from the screen
+  // isn't drawn, and drawing every block with a match would undo drawing only what is seen.
+  const found = $derived.by(() => {
+    const out: FindHits = [];
+    if (!find) return out;
+    for (const diff of shown.files) {
+      if (isFolded(diff) || diff.submodule || special(diff) || diff.hunks.length === 0) continue;
+      const cut = shown.cut?.diff === diff ? shown.cut : null;
+      diff.hunks.forEach((hunk, h) => {
+        const count = cut ? cut.lines[h] : hunk.lines.length;
+        for (const start of blocks(count)) {
+          let n = 0;
+          for (let i = start; i < Math.min(count, start + BLOCK); i++) n += occurrences(hunk.lines[i].text || " ", find, matchCase).length;
+          if (n) out.push({ key: blockKey(diff, h, start), count: n });
+        }
+      });
+    }
+    return out;
+  });
+  $effect(() => {
+    hits = found;
+  });
   /** A file is cut only when this many lines more than the budget allows would be left out. */
   const CUT_SLACK = 500;
 
@@ -440,7 +464,7 @@
           {@const count = cut ? cut.lines[h] : hunk.lines.length}
           {#each blocks(count) as start (start)}
             {@const end = Math.min(count, start + BLOCK)}
-            <Lazy lines={end - start} of={hunk.lines[start]} force={finds(hunk.lines, start, end)}>
+            <Lazy lines={end - start} of={hunk.lines[start]} name={blockKey(diff, h, start)} force={focus === blockKey(diff, h, start)}>
               {#each hunk.lines.slice(start, end) as line, j (j)}
                 {@const i = start + j}
                 {@const on = picked.includes(i)}
