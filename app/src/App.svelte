@@ -36,6 +36,7 @@
   import PairPanel from "./lib/PairPanel.svelte";
   import SnapshotPanel from "./lib/SnapshotPanel.svelte";
   import LostCommitPanel from "./lib/LostCommitPanel.svelte";
+  import SubmodulePanel from "./lib/SubmodulePanel.svelte";
   import { nav } from "./lib/nav.svelte";
   import type { CompareMode } from "./lib/types";
   import CloneSheet from "./lib/CloneSheet.svelte";
@@ -143,6 +144,9 @@
   const selectedRow = $derived(selected ? (rowsById.get(selected) ?? null) : null);
   /** A second commit, ⌘-clicked, compared with the selected one in the details panel. */
   let second = $state<string | null>(null);
+  /** The path of the submodule picked in the sidebar, shown in place of the commit's details. */
+  let submoduleSel = $state<string | null>(null);
+  const pickedSubmodule = $derived(submoduleSel ? (history?.submodules.find((s) => s.path === submoduleSel) ?? null) : null);
   const pair = $derived.by(() => {
     const other = second ? rowsById.get(second) : undefined;
     if (!history || !selectedRow || selectedRow.worktree || !other || other.worktree || other.id === selectedRow.id) return null;
@@ -237,6 +241,7 @@
     // The commit panel must not ask the new repository about the old one's commits.
     selected = null;
     second = null;
+    submoduleSel = null;
     search.clear();
     oplog.forget();
     lfs.forget();
@@ -615,9 +620,12 @@
             ...(await api.pullSetup().catch(() => ({ mode: "rebase" as const, autostash: true }))),
             ...(mode ? { mode } : {}),
             fetchFirst: prefs.get("oxbow.pull.fetchFirst"),
+            submodules: !!history?.submodules.length && prefs.get("oxbow.pull.submodules"),
           }
         : undefined;
-    const request = kind === "pull" ? pullRequest(remoteCtx, setup) : pushRequest(remoteCtx);
+    // Submodule commits nobody else has would leave the pushed commits pointing at nothing.
+    const unpushedSubs = kind === "push" && history?.submodules.length ? await api.unpushedSubmodules().catch(() => []) : [];
+    const request = kind === "pull" ? pullRequest(remoteCtx, setup) : pushRequest(remoteCtx, unpushedSubs);
     const opBefore = history?.operation ?? null;
     await confirm.run(request);
     // Even a failed pull or push may have fetched, so the counts are worth reloading either way.
@@ -786,6 +794,7 @@
   function select(id: string) {
     selected = id;
     second = null;
+    submoduleSel = null;
     oplog.compare = null;
     oplog.lost = null;
     if (rowsById.has(id)) return list?.reveal(id);
@@ -841,6 +850,7 @@
   function pick(id: string) {
     selected = id;
     second = null;
+    submoduleSel = null;
     oplog.compare = null;
     oplog.lost = null;
     if (!rowsById.has(id)) ensureLoaded(id).then((ok) => ok && selected === id && requestAnimationFrame(() => list?.reveal(id)));
@@ -848,6 +858,19 @@
     view = "history";
     resolving = false;
     requestAnimationFrame(() => list?.reveal(id));
+  }
+
+  /** A submodule from the sidebar: its card in the details panel, next to History. */
+  function showSubmodule(path: string) {
+    submoduleSel = path;
+    second = null;
+    oplog.compare = null;
+    oplog.lost = null;
+    if (view !== "history" || showConflicts) {
+      view = "history";
+      resolving = false;
+      if (selected) requestAnimationFrame(() => list?.reveal(selected!));
+    }
   }
 
   function startResize(event: PointerEvent) {
@@ -920,6 +943,8 @@
       // Bisecting: G, B and S answer for the commit under test, as the banner's tooltips say.
       event.preventDefault();
       bisectKey(({ g: "good", b: "bad", s: "skip" } as const)[event.key.toLowerCase() as "g" | "b" | "s"]);
+    } else if (event.key === "Escape" && submoduleSel && view === "history" && !confirm.request && !event.defaultPrevented) {
+      submoduleSel = null;
     } else if (event.key === "Escape" && (oplog.compare || oplog.lost) && view === "history" && !confirm.request && !event.defaultPrevented) {
       oplog.compare = null;
       oplog.lost = null;
@@ -959,6 +984,8 @@
       onCompare={openCompare}
       onEditStack={openStack}
       onPullRequest={openPull}
+      submodule={pickedSubmodule?.path ?? null}
+      onSubmodule={showSubmodule}
     />
     <div class="main">
       <header data-tauri-drag-region>
@@ -1257,7 +1284,16 @@
           <button class="grip" onpointerdown={startResize} aria-label="Resize commit details" title="Drag to resize"></button>
           <!-- A new repository starts the panels from scratch. -->
           {#key repo.path}
-            {#if oplog.compare}
+            {#if pickedSubmodule}
+              <SubmodulePanel
+                sub={pickedSubmodule}
+                subs={history.submodules}
+                repoPath={repo.path}
+                {version}
+                run={(request) => void run(request)}
+                onClose={() => (submoduleSel = null)}
+              />
+            {:else if oplog.compare}
               <SnapshotPanel
                 entry={oplog.compare.entry}
                 after={oplog.compare.after}

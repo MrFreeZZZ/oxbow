@@ -90,6 +90,9 @@ pub struct SubmoduleMove {
     pub follows: Option<String>,
     pub old: Option<String>,
     pub new: Option<String>,
+    /// `old` and `new` themselves, when the clone has them.
+    pub old_commit: Option<CommitBrief>,
+    pub new_commit: Option<CommitBrief>,
     pub moved: Moved,
     /// The commits between the two, newest first, at most [`LISTED`].
     pub commits: Vec<CommitBrief>,
@@ -101,6 +104,8 @@ pub struct SubmoduleMove {
     pub cloned: bool,
     /// For the working copy: files with uncommitted changes in its folder.
     pub changed: usize,
+    /// `new` is in its clone but on none of its remote branches: nobody else can fetch it yet.
+    pub unpushed: bool,
 }
 
 impl Repo {
@@ -199,13 +204,21 @@ impl Repo {
             follows: info.as_ref().and_then(|s| s.follows.clone()),
             old: old.map(str::to_owned),
             new: new.map(str::to_owned),
+            old_commit: None,
+            new_commit: None,
             moved: Moved::Unknown,
             commits: Vec::new(),
             count: 0,
             dropped: 0,
             cloned: dir.is_some(),
             changed,
+            unpushed: false,
         };
+        if let Some(dir) = dir.as_deref() {
+            out.old_commit = old.and_then(|id| brief(dir, id));
+            out.new_commit = new.and_then(|id| brief(dir, id));
+            out.unpushed = out.new_commit.is_some() && new.is_some_and(|id| !on_remote(dir, id));
+        }
         out.moved = match (old, new) {
             (None, _) => Moved::Added,
             (_, None) => Moved::Removed,
@@ -246,6 +259,11 @@ fn git<const N: usize>(dir: &Path, args: [&str; N]) -> Option<String> {
         .map(|out| out.stdout)
 }
 
+/// Some remote branch of the clone in `dir` has commit `id`; also when that can't be told.
+fn on_remote(dir: &Path, id: &str) -> bool {
+    git(dir, ["branch", "-r", "--contains", id]).is_none_or(|out| !out.trim().is_empty())
+}
+
 fn has_commit(dir: &Path, id: &str) -> bool {
     git(dir, ["cat-file", "-e", &format!("{id}^{{commit}}")]).is_some()
 }
@@ -255,6 +273,13 @@ fn counts(dir: &Path, from: &str, to: &str) -> Option<(usize, usize)> {
     let out = git(dir, ["rev-list", "--count", "--left-right", &format!("{to}...{from}")])?;
     let mut parts = out.split_whitespace().map(|n| n.parse::<usize>().ok());
     Some((parts.next()??, parts.next()??))
+}
+
+/// Commit `id` of the clone in `dir`, when it has it.
+fn brief(dir: &Path, id: &str) -> Option<CommitBrief> {
+    let commit = format!("{id}^{{commit}}");
+    git(dir, ["log", "-1", "--format=%H%x1f%s%x1f%an%x1f%ct", &commit, "--"])
+        .and_then(|out| parse_briefs(&out).into_iter().next())
 }
 
 /// Commits of `to` that `from` doesn't have, newest first, at most [`LISTED`].
@@ -310,11 +335,11 @@ impl Repo {
     }
 
     /// `git submodule update` for `paths` (all when empty): the folders get the commits this
-    /// repository records, cloned first where they aren't yet. With `remote`, they get the
+    /// repository records, cloned first where they aren't yet. With `latest`, they get the
     /// newest commit of the branch each follows instead.
-    pub(crate) fn plan_submodule_update(&self, paths: &[String], remote: bool) -> Vec<GitCommand> {
+    pub(crate) fn plan_submodule_update(&self, paths: &[String], latest: bool) -> Vec<GitCommand> {
         let mut args = vec!["submodule".to_owned(), "update".to_owned()];
-        let note = if remote {
+        let note = if latest {
             args.push("--remote".to_owned());
             "--remote: fetch each one and check out the newest commit of the branch it follows; commit the result to record it"
         } else {

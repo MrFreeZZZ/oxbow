@@ -289,6 +289,23 @@
         <MergePreview preview={request.preview} />
       {/if}
 
+      {#if request.warning && confirm.phase === "ask"}
+        <div class="gaps" role="note">
+          <div class="gap">
+            <div class="gap-head">
+              <svg class="icon" viewBox="0 0 16 16"><path d="M8 2.5l6 11H2zM8 6.5v3.5M8 12v.01" /></svg>
+              <span class="gap-title">{request.warning.title}</span>
+            </div>
+            <p class="gap-why">
+              {#each request.warning.body as part, i (i)}
+                {#if typeof part === "string"}{part}{:else if "branch" in part}<span class="chip" style:background={tint(part.color, "label")} style:color={plate(part.color)}>{part.branch}</span
+                  >{:else if "code" in part}<span class="chip mono">{part.code}</span>{:else}<span class="quote">“{part.quote}”</span>{/if}
+              {/each}
+            </p>
+          </div>
+        </div>
+      {/if}
+
       {#if request.options?.length && confirm.phase === "ask"}
         <div class="options">
           {#each request.options as option (option.label)}

@@ -93,6 +93,9 @@ fn a_folder_at_an_older_commit_is_out_of_sync() {
     assert_eq!(moved.count, 2);
     let summaries: Vec<_> = moved.commits.iter().map(|c| c.summary.as_str()).collect();
     assert_eq!(summaries, ["Third rule", "Second rule"]);
+    let summary = |c: Option<oxbow_core::CommitBrief>| c.map(|c| c.summary);
+    assert_eq!(summary(moved.old_commit).as_deref(), Some("Third rule"));
+    assert_eq!(summary(moved.new_commit).as_deref(), Some("First rule"));
 }
 
 #[test]
@@ -199,7 +202,7 @@ fn update_brings_the_folder_back_to_the_recorded_commit() {
     let repo = Repo::open(fx.path()).unwrap();
     let update = Action::SubmoduleUpdate {
         paths: vec!["libs/lint".into()],
-        remote: false,
+        latest: false,
     };
     assert_eq!(
         shown(&repo, &update),
@@ -227,7 +230,7 @@ fn update_clones_the_ones_that_are_not_cloned() {
     let repo = Repo::open(&target).unwrap();
     repo.perform(&Action::SubmoduleUpdate {
         paths: Vec::new(),
-        remote: false,
+        latest: false,
     })
     .unwrap();
     let lint = &repo.submodules()[0];
@@ -242,7 +245,7 @@ fn pull_latest_takes_the_newest_commit_of_its_branch() {
     let repo = Repo::open(fx.path()).unwrap();
     let latest = Action::SubmoduleUpdate {
         paths: vec!["libs/lint".into()],
-        remote: true,
+        latest: true,
     };
     assert_eq!(
         shown(&repo, &latest),
@@ -328,6 +331,12 @@ fn a_commit_only_this_clone_has_is_found_before_push_and_pushed_first() {
     let second = sub(&mut app, &["rev-parse", "HEAD"]);
     app.git(&["commit", "-q", "-am", "Update lint"]);
     let unpushed = repo.unpushed_submodules();
+    let head = app.git(&["rev-parse", "HEAD"]);
+    let moved = repo
+        .commit_diff(&head, Some("libs/lint"), DiffContext::Compact)
+        .unwrap()
+        .remove(0);
+    assert!(moved.submodule.unwrap().unpushed);
     assert_eq!(unpushed.len(), 1);
     assert_eq!(
         (unpushed[0].path.as_str(), unpushed[0].commit.as_str()),

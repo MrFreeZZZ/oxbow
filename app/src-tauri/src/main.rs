@@ -808,6 +808,30 @@ async fn working_diff(
     blocking(move || repo.working_diff(&path, side, whole_file)).await
 }
 
+/// How the submodule at `path` moved from `old` to `new`, for its card in the sidebar's panel.
+#[tauri::command]
+async fn submodule_move(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    path: String,
+    old: Option<String>,
+    new: Option<String>,
+    changed: usize,
+) -> CommandResult<oxbow_core::SubmoduleMove> {
+    let repo = current(&session, &window)?;
+    blocking(move || Ok(repo.submodule_move(&path, old.as_deref(), new.as_deref(), changed))).await
+}
+
+/// Submodules whose recorded commit is on none of their remotes, for the warning before a push.
+#[tauri::command]
+async fn unpushed_submodules(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+) -> CommandResult<Vec<oxbow_core::submodules::UnpushedSubmodule>> {
+    let repo = current(&session, &window)?;
+    blocking(move || Ok(repo.unpushed_submodules())).await
+}
+
 /// The diffs of several files on one side of the working copy, for the Summary tab.
 #[tauri::command]
 async fn working_diffs(
@@ -1323,8 +1347,10 @@ fn open_in_terminal(
 /// things take no other.
 fn worktree_folder(repo: &Repo, path: &str) -> CommandResult<PathBuf> {
     let known = repo.worktrees().map_err(|err| err.to_string())?;
-    let wanted = Path::new(path).canonicalize().ok();
-    let same = |folder: &Path| folder == Path::new(path) || wanted.is_some() && folder.canonicalize().ok() == wanted;
+    // A submodule's path is relative to the repository's folder.
+    let full = repo.workdir().join(path);
+    let wanted = full.canonicalize().ok();
+    let same = |folder: &Path| folder == full || wanted.is_some() && folder.canonicalize().ok() == wanted;
     if let Some(tree) = known.iter().filter(|t| !t.missing).find(|t| same(Path::new(&t.path))) {
         return Ok(PathBuf::from(&tree.path));
     }
@@ -1367,7 +1393,7 @@ async fn open_window(
         .pending
         .lock()
         .expect("session lock")
-        .insert(label.clone(), path);
+        .insert(label.clone(), folder.display().to_string());
     // Named after the folder, so the Window menu and Mission Control tell the windows apart.
     let title = folder
         .file_name()
@@ -1630,6 +1656,8 @@ fn main() {
             open_in_terminal,
             reveal_worktree,
             open_window,
+            submodule_move,
+            unpushed_submodules,
             close_window_of,
             reveal_file,
             quick_look,

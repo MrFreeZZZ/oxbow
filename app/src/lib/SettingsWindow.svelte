@@ -538,6 +538,12 @@
             prefRow("oxbow.pull.fetchFirst", "Fetch from the remote before pulling", "switch", {
               sub: () => (prefs.get("oxbow.pull.fetchFirst") ? "Pull runs git fetch first, so every remote branch is current" : "git pull updates only the branch it pulls"),
             }),
+            prefRow("oxbow.pull.submodules", "Update submodules after pulling", "switch", {
+              sub: () =>
+                prefs.get("oxbow.pull.submodules")
+                  ? "Then git submodule update --init --recursive, so their folders have the commits the pulled commits record"
+                  : "Submodule folders stay where they are and show as out of sync until updated",
+            }),
           ],
         },
         {

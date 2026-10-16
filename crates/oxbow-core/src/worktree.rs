@@ -472,12 +472,12 @@ pub enum Action {
         path: String,
     },
     /// Check out the commits this repository records in the submodules at `paths` (all when
-    /// empty), cloning them first where needed. With `remote`, the newest commit of the branch
+    /// empty), cloning them first where needed. With `latest`, the newest commit of the branch
     /// each one follows instead.
     SubmoduleUpdate {
         paths: Vec<String>,
         #[serde(default)]
-        remote: bool,
+        latest: bool,
     },
     /// Copy the submodules' URLs from `.gitmodules` to their settings.
     SubmoduleSync {
@@ -1283,7 +1283,7 @@ impl Repo {
             Action::WorktreeUnlock { path } => self.plan_worktree_unlock(path),
             Action::WorktreePrune => self.plan_worktree_prune(),
             Action::WorktreeRepair { path } => self.plan_worktree_repair(path),
-            Action::SubmoduleUpdate { paths, remote } => self.plan_submodule_update(paths, *remote),
+            Action::SubmoduleUpdate { paths, latest } => self.plan_submodule_update(paths, *latest),
             Action::SubmoduleSync { paths } => self.plan_submodule_sync(paths),
             Action::SubmoduleAdd { url, path, branch } => self.plan_submodule_add(url, path, branch.as_deref()),
             Action::SubmoduleRemove { path } => self.plan_submodule_remove(path),

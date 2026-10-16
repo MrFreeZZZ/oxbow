@@ -868,9 +868,9 @@ impl Repo {
             Action::WorktreeUnlock { path } => ("worktree", format!("Unlock the worktree {path}")),
             Action::WorktreePrune => ("worktree", "Prune worktrees".to_owned()),
             Action::WorktreeRepair { path } => ("worktree", format!("Repair the worktree {path}")),
-            Action::SubmoduleUpdate { paths, remote } => (
+            Action::SubmoduleUpdate { paths, latest } => (
                 "box",
-                match (paths.as_slice(), remote) {
+                match (paths.as_slice(), latest) {
                     ([], false) => "Update submodules".to_owned(),
                     ([], true) => "Pull the latest of every submodule".to_owned(),
                     ([path], false) => format!("Update the submodule {path}"),

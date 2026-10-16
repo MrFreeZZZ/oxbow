@@ -62,6 +62,11 @@ const SUBCOMMANDS: Record<string, Meaning> = {
   "worktree lock": { title: "Keep a folder from prune", text: "For a folder on a disk that is sometimes unplugged." },
   "worktree unlock": { title: "Allow prune again", text: "The folder can be pruned once it’s gone." },
   "worktree repair": { title: "Reconnect a moved folder", text: "Fixes the links between the repository and a worktree folder that was moved." },
+  submodule: { title: "Repositories inside this one", text: "Another repository checked out in a folder here, at the commit this one records." },
+  "submodule update": { title: "Check out the recorded commit", text: "Puts each submodule’s folder at the commit this repository records, fetching it when needed." },
+  "submodule sync": { title: "Take the URL from .gitmodules", text: "Copies each submodule’s address from .gitmodules to the settings, after it moved." },
+  "submodule add": { title: "Add a submodule", text: "Clones the repository into the folder and stages it with its entry in .gitmodules." },
+  "submodule deinit": { title: "Empty the folder", text: "Clears the submodule’s folder and settings. Its commits stay in .git/modules." },
 };
 
 const FLAGS: Record<string, Meaning> = {
@@ -183,6 +188,16 @@ const FLAGS: Record<string, Meaning> = {
   "worktree -b": { title: "With a new branch", text: "Creates the branch and checks it out in the new folder." },
   "worktree --verbose": { title: "Say what it does", text: "Lists each worktree it prunes." },
 
+  "submodule --init": { title: "Clone it if needed", text: "Sets up and clones submodules that aren’t yet." },
+  "submodule --recursive": { title: "Their submodules too", text: "Does the same in submodules inside submodules." },
+  "submodule --remote": { title: "Newest commit of its branch", text: "Fetches and checks out the latest commit of the branch it follows, not the one recorded here." },
+  "submodule --progress": { title: "Show progress", text: "Reports how far the clone or fetch is." },
+  "submodule -b": { title: "Follow this branch", text: "The branch Pull Latest takes new commits from." },
+  "submodule -f": { title: "Even with changes", text: "Empties the folder even though it has uncommitted changes." },
+  "submodule --force": { title: "Even with changes", text: "Empties the folder even though it has uncommitted changes." },
+  "push --recurse-submodules": { title: "Submodule commits first", text: "Pushes the commits submodules are at, if their remotes lack them, before this branch." },
+  "rm -f": { title: "Even with changes", text: "Removes it from the folder and the staging area even if it has changes." },
+
   "clone --depth": { title: "Only the latest commits", text: "A shallow clone: faster, with older history left on the server." },
   "clone --branch": { title: "Check out this branch", text: "Instead of the server’s default branch." },
   "clone -b": { title: "Check out this branch", text: "Instead of the server’s default branch." },
@@ -203,7 +218,7 @@ export interface Word {
   sub: string | null;
 }
 
-const MULTI = new Set(["stash", "worktree", "lfs", "remote", "bisect"]);
+const MULTI = new Set(["stash", "worktree", "lfs", "remote", "bisect", "submodule"]);
 
 /** Split a shell-quoted command into words and tell subcommands, flags and arguments apart. */
 export function words(display: string): Word[] {

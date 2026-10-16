@@ -64,6 +64,11 @@ export const maxLines = () => prefs.get("oxbow.diff.maxLines");
 /** The badge and the short note a file list shows for an unusual change, or null for plain text. */
 export function fileBadge(file: FileChange): { badge: string; note: string; title: string; warn?: boolean } | null {
   const sizes = file.oldSize !== undefined && file.newSize !== undefined;
+  if (file.submodule) {
+    const { moved, changed } = file.submodule;
+    const note = file.status === "added" ? "added" : file.status === "deleted" ? "removed" : moved && changed ? "moved · changed inside" : changed ? "changed inside" : moved ? "moved" : "";
+    return { badge: "Submodule", note, title: "Another repository in a folder here: this one records which of its commits to use" };
+  }
   if (file.lfs) {
     const size = file.newSize ?? file.oldSize;
     return { badge: "LFS", note: size !== undefined ? bytes(size) : "", title: "Kept in Git LFS: git stores a small pointer" };
