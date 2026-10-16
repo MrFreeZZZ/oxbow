@@ -713,7 +713,13 @@ async fn commit_detail(
     id: String,
 ) -> CommandResult<CommitDetail> {
     let repo = current(&session, &window)?;
-    let key = format!("detail\0{}\0{id}\0{:?}", repo.workdir().display(), repo.diff_options());
+    // A commit where a shallow clone stops shows no parent until a deeper fetch.
+    let key = format!(
+        "detail\0{}\0{id}\0{:?}\0{}",
+        repo.workdir().display(),
+        repo.diff_options(),
+        repo.shallow_stamp()
+    );
     if let Some(Cached::Detail(detail)) = session.commits.lock().expect("session lock").get(&key) {
         return Ok((*detail).clone());
     }
@@ -742,9 +748,10 @@ async fn commit_diff(
         DiffContext::Compact
     };
     let key = format!(
-        "diff\0{}\0{id}\0{path:?}\0{whole_file}\0{:?}",
+        "diff\0{}\0{id}\0{path:?}\0{whole_file}\0{:?}\0{}",
         repo.workdir().display(),
-        repo.diff_options()
+        repo.diff_options(),
+        repo.shallow_stamp()
     );
     if let Some(Cached::Diffs(diffs)) = session.commits.lock().expect("session lock").get(&key) {
         return Ok((*diffs).clone());

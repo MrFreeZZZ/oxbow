@@ -463,3 +463,30 @@ fn a_reload_with_nothing_moved_reuses_the_rows() {
     assert_eq!(moved.rows[0].summary, "Third");
     assert_eq!(moved.rows.len(), 3);
 }
+
+#[test]
+fn a_deeper_fetch_of_a_shallow_clone_rebuilds_the_rows() {
+    let mut origin = Fixture::new();
+    for n in 1..=6 {
+        origin.commit("a.txt", &format!("{n}\n"), &format!("Commit {n}"));
+    }
+    let mut clone = Fixture::new();
+    let url = format!("file://{}", origin.path().display());
+    let dir = clone.path().join("shallow");
+    clone.git(&["clone", "-q", "--depth=3", &url, dir.to_str().unwrap()]);
+    let repo = Repo::open(&dir).unwrap();
+    let options = HistoryOptions::default();
+    let mut cache = oxbow_core::HistoryCache::default();
+
+    let first = repo.history_with(&options, &mut cache, None).unwrap();
+    assert_eq!(first.rows.len(), 3);
+
+    // No ref moves, but the history now stops one commit further back.
+    clone.git(&["-C", dir.to_str().unwrap(), "fetch", "-q", "--deepen=1", "origin"]);
+    let deeper = repo.history_with(&options, &mut cache, Some(&first.key)).unwrap();
+    assert!(!deeper.same);
+    assert_eq!(deeper.rows.len(), 4);
+
+    let again = repo.history_with(&options, &mut cache, Some(&deeper.key)).unwrap();
+    assert!(again.same);
+}

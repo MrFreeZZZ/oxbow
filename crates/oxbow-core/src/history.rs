@@ -199,7 +199,7 @@ fn rows_key(
     rebasing: bool,
     changes: bool,
     production: Option<&str>,
-    shallow: bool,
+    shallow: u64,
 ) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -244,6 +244,18 @@ fn fill_worktree_row(row: &mut HistoryRow, tree: &WorkingTree, operation: Option
 }
 
 impl Repo {
+    /// Stands for the commits where a shallow clone's history stops, as `.git/shallow` lists
+    /// them; 0 for a full clone. It changes when a fetch deepens the history, which moves no ref.
+    pub fn shallow_stamp(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let Ok(list) = std::fs::read(self.local().shallow_file()) else {
+            return 0;
+        };
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        list.hash(&mut hasher);
+        hasher.finish().max(1)
+    }
+
     /// Load the commit history of all branches and tags with its graph layout.
     pub fn history(&self, options: &HistoryOptions) -> Result<History> {
         self.history_with(options, &mut HistoryCache::default(), None)
@@ -279,6 +291,8 @@ impl Repo {
         let dirty = changes.as_ref().is_some_and(|tree| !tree.is_empty());
         let production = self.production_setting();
         let shallow = repo.is_shallow();
+        // A deeper fetch moves where the history stops without moving any ref.
+        let boundary = self.shallow_stamp();
 
         let key = rows_key(
             self.workdir(),
@@ -290,7 +304,7 @@ impl Repo {
             rebasing,
             dirty,
             production.as_deref(),
-            shallow,
+            boundary,
         );
         let built = match &cache.last {
             Some((last, built)) if *last == key => built.clone(),
