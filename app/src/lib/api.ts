@@ -79,7 +79,7 @@ export const api = {
   history: (limit: number, until: string | null = null, known: string | null = null) => invoke<History>("history", { limit, until, known }),
   /** `quick`: the files without their line counts, which needs no file read. A newer read in
    *  the same `lane` stops this one. */
-  commitDetail: (id: string, quick = false, lane: string | null = null) => invoke<CommitDetail>("commit_detail", { id, quick, lane }),
+  commitDetail: (id: string, quick = false, lane: string | null = null, countFrom = 0) => invoke<CommitDetail>("commit_detail", { id, quick, countFrom, lane }),
   /** `full`: past the line limit in Settings (Show Diff Anyway). */
   commitDiff: (id: string, path: string | null, wholeFile: boolean, full = false, lane: string | null = null) =>
     invoke<FileDiff[]>("commit_diff", { id, path, wholeFile, full, lane }),

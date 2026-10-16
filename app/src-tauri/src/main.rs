@@ -727,14 +727,16 @@ async fn commit_detail(
     session: State<'_, Session>,
     id: String,
     quick: Option<bool>,
+    count_from: Option<usize>,
     lane: Option<String>,
 ) -> CommandResult<CommitDetail> {
     let repo = current(&session, &window)?;
     let cancel = session.lane(&window, lane);
-    let count = quick != Some(true);
+    // Files before `count_from` are counted by the diffs shown of them.
+    let count = (quick != Some(true)).then_some(count_from.unwrap_or(0));
     // A commit where a shallow clone stops shows no parent until a deeper fetch.
     let key = format!(
-        "detail\0{}\0{id}\0{count}\0{:?}\0{}",
+        "detail\0{}\0{id}\0{count:?}\0{:?}\0{}",
         repo.workdir().display(),
         repo.diff_options(),
         repo.shallow_stamp()
@@ -763,8 +765,7 @@ async fn commit_diff(
     lane: Option<String>,
 ) -> CommandResult<Vec<FileDiff>> {
     let repo = current_full(&session, &window, full)?;
-    // Only a newer read in the lane stops this one; the work itself is short for one file.
-    let _ = session.lane(&window, lane);
+    let cancel = session.lane(&window, lane);
     let context = if whole_file {
         DiffContext::WholeFile
     } else {
@@ -779,7 +780,7 @@ async fn commit_diff(
     if let Some(Cached::Diffs(diffs)) = session.commits.lock().expect("session lock").get(&key) {
         return Ok((*diffs).clone());
     }
-    let diffs = blocking(move || repo.commit_diff(&id, path.as_deref(), context)).await?;
+    let diffs = blocking(move || repo.commit_diff_with(&id, path.as_deref(), context, &cancel)).await?;
     if !diffs.iter().any(|d| d.submodule.is_some()) {
         let cached = Cached::Diffs(Arc::new(diffs.clone()));
         session.commits.lock().expect("session lock").put(key, cached);
