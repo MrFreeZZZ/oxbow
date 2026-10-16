@@ -116,34 +116,30 @@ impl Repo {
 
     /// `git log` of one file, with its path and added/removed line counts in each commit.
     fn file_log(&self, revs: &[String], path: &str) -> Result<Vec<FileCommit>> {
-        let run = |flag: &str| {
-            let mut args = vec![
-                "log".to_owned(),
-                "-M".to_owned(),
-                format!("--max-count={}", LIMIT + 1),
-                FORMAT.to_owned(),
-                flag.to_owned(),
-            ];
-            args.extend(revs.iter().cloned());
-            args.push("--".to_owned());
-            args.push(literal(path));
-            self.run(&GitCommand::new(args))
-        };
-        let names = run("--name-status")?;
-        let numbers = run("--numstat")?;
-        let mut counts: HashMap<String, (u32, u32)> = HashMap::new();
-        for (head, body) in chunks(&numbers.stdout) {
-            let id = head.split('\u{1f}').next().unwrap_or_default().to_owned();
-            if let Some(line) = body.first() {
-                let mut fields = line.split('\t');
-                // Binary files count as "-".
-                let add = fields.next().and_then(|n| n.parse().ok()).unwrap_or(0);
-                let del = fields.next().and_then(|n| n.parse().ok()).unwrap_or(0);
-                counts.insert(id, (add, del));
-            }
-        }
-        Ok(chunks(&names.stdout)
+        // One walk gives both: `--raw` the status and paths (`:<modes> <ids> R075\told\tnew`),
+        // `--numstat` the line counts after them.
+        let mut args = vec![
+            "log".to_owned(),
+            "-M".to_owned(),
+            format!("--max-count={}", LIMIT + 1),
+            FORMAT.to_owned(),
+            "--raw".to_owned(),
+            "--numstat".to_owned(),
+        ];
+        args.extend(revs.iter().cloned());
+        args.push("--".to_owned());
+        args.push(literal(path));
+        let out = self.run(&GitCommand::new(args))?;
+        Ok(chunks(&out.stdout)
             .filter_map(|(head, body)| {
+                let raw = body.iter().find_map(|line| raw_status(line));
+                let numbers = body.iter().find(|line| !line.starts_with(':')).map(|line| {
+                    let mut fields = line.split('\t');
+                    // Binary files count as "-".
+                    let add: u32 = fields.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+                    let del: u32 = fields.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+                    (add, del)
+                });
                 let mut f = head.split('\u{1f}');
                 let id = f.next()?.to_owned();
                 let parents = f
@@ -158,10 +154,9 @@ impl Repo {
                 let time = f.next().and_then(|t| t.parse().ok()).unwrap_or(0);
                 // A merge lists no files of its own; it keeps the path of the commit after it.
                 let (status, path, old_path) =
-                    body.first()
-                        .map(|line| name_status(line))
+                    raw.map(name_status)
                         .unwrap_or((FileStatus::Modified, path.to_owned(), None));
-                let (additions, deletions) = counts.get(&id).copied().unwrap_or((0, 0));
+                let (additions, deletions) = numbers.unwrap_or((0, 0));
                 Some(FileCommit {
                     id,
                     parents,
@@ -250,6 +245,13 @@ fn chunks(out: &str) -> impl Iterator<Item = (&str, Vec<&str>)> {
         }
         Some((head, lines.map(str::trim).filter(|l| !l.is_empty()).collect()))
     })
+}
+
+/// The `M\tpath` part of a `--raw` line: `:100644 100644 <old id> <new id> M\tpath`.
+fn raw_status(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix(':')?;
+    // The modes and ids hold no spaces; the status and paths come after the fourth.
+    rest.splitn(5, ' ').nth(4)
 }
 
 /// `M\tpath`, `A\tpath`, `R075\told\tnew`.

@@ -221,7 +221,7 @@ impl Repo {
     /// Commit, Edit Stack. See `rewrite_base` for how the old versions are told apart from
     /// someone else's commits: a remote state that only came in with a fetch or pull, which
     /// the branch once fast-forwarded to and an undo took back, is not replaced.
-    fn find_rewrite(&self, branch: &str, t: &mut Tracking) {
+    pub(crate) fn find_rewrite(&self, branch: &str, t: &mut Tracking) {
         let local = format!("refs/heads/{branch}");
         let Some(tip) = self.remote_tip(&t.remote, &t.branch) else {
             return;

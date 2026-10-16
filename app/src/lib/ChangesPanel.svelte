@@ -22,6 +22,7 @@
 </script>
 
 <script lang="ts">
+  import { untrack } from "svelte";
   import TipCard from "./TipCard.svelte";
   import { keys } from "./keys";
   import { api } from "./api";
@@ -44,6 +45,8 @@
     color,
     head,
     version,
+    changes,
+    snapshot,
     onChanged,
     onResolve,
   }: {
@@ -55,6 +58,11 @@
     head: HistoryRow | null;
     /** Goes up whenever the history is reloaded; the panel reloads with it. */
     version: number;
+    /** The files the reload read, and which reading that was: the panel shows those, so git
+     *  lists them once per reload. Null when git could not list them; the panel then asks itself
+     *  to show why. */
+    changes: WorkingTree | null;
+    snapshot: number;
     /** Called after an action changed the repository. */
     onChanged: () => void;
     /** Opens the Conflicts screen. */
@@ -131,9 +139,14 @@
     return null;
   });
 
+  /** Which reading of the files `tree` is, for diffs of the same one; null for one of its own. */
+  let reading: number | null = null;
+
   async function load() {
     try {
-      const next = await api.workingTree();
+      const given = changes;
+      const next = given ?? (await api.workingTree());
+      reading = given ? snapshot : null;
       tree = next;
       error = null;
       const unstagedNow = new Set([...next.unstaged, ...next.conflicted].map((f) => f.path));
@@ -149,7 +162,9 @@
 
   $effect(() => {
     version;
-    load();
+    // The files often come with the reload, so `load` runs at once: what it reads must not tie
+    // this effect to it.
+    untrack(load);
   });
 
   // The selected tab may be scrolled out of the tab bar.
@@ -173,8 +188,8 @@
     const unstagedList = side([...t.conflicted, ...t.unstaged]);
     const stagedList = side(t.staged);
     Promise.all([
-      unstagedList.length ? api.workingDiffs(unstagedList, "unstaged", wholeFile) : [],
-      stagedList.length ? api.workingDiffs(stagedList, "staged", wholeFile) : [],
+      unstagedList.length ? api.workingDiffs(unstagedList, "unstaged", wholeFile, reading) : [],
+      stagedList.length ? api.workingDiffs(stagedList, "staged", wholeFile, reading) : [],
     ]).then(
       ([u, st]) => {
         if (tab === current && whole === wholeFile && tree === t) {

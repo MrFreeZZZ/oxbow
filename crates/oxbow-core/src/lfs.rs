@@ -224,17 +224,18 @@ pub(crate) fn read_attributes(workdir: &Path) -> Option<String> {
 impl Repo {
     /// Which files the repository keeps in LFS, and whether `git lfs` is there to fetch them.
     pub fn lfs_status(&self) -> Result<LfsStatus> {
-        let version = self.run(&GitCommand::new(["lfs", "version"])).ok().map(|out| {
-            let first = out.stdout.split_whitespace().next().unwrap_or_default().to_owned();
-            first.strip_prefix("git-lfs/").map_or(first.clone(), str::to_owned)
-        });
+        let version = self.lfs_version();
         let text = read_attributes(self.workdir()).unwrap_or_default();
-        let committed = self
-            .run(&GitCommand::new(["cat-file", "-p", "HEAD:.gitattributes"]))
-            .map(|out| lfs_patterns(&out.stdout))
-            .unwrap_or_default();
+        let wanted = lfs_patterns(&text);
+        let committed = if wanted.is_empty() {
+            Vec::new()
+        } else {
+            self.run(&GitCommand::new(["cat-file", "-p", "HEAD:.gitattributes"]))
+                .map(|out| lfs_patterns(&out.stdout))
+                .unwrap_or_default()
+        };
         let mut patterns = Vec::new();
-        for pattern in lfs_patterns(&text) {
+        for pattern in wanted {
             let out = self.run(&GitCommand::new(["ls-files", "-z", "--", &pathspec(&pattern)]))?;
             let mut entry = LfsPattern {
                 new: !committed.contains(&pattern),
@@ -264,6 +265,24 @@ impl Repo {
             patterns,
             brew: brew().map(|p| p.display().to_string()),
         })
+    }
+
+    /// The version of git-lfs, `None` when it is not installed. Once found it is not asked again
+    /// while the app runs: starting git-lfs on every reload costs more than the rest of the status.
+    /// Not having it is asked again each time, so installing it in a terminal shows at once.
+    fn lfs_version(&self) -> Option<String> {
+        static FOUND: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+        if let Some(version) = FOUND.lock().ok().and_then(|found| found.clone()) {
+            return Some(version);
+        }
+        let version = self.run(&GitCommand::new(["lfs", "version"])).ok().map(|out| {
+            let first = out.stdout.split_whitespace().next().unwrap_or_default().to_owned();
+            first.strip_prefix("git-lfs/").map_or(first.clone(), str::to_owned)
+        })?;
+        if let Ok(mut found) = FOUND.lock() {
+            *found = Some(version.clone());
+        }
+        Some(version)
     }
 
     /// The size of a file in the working copy, and whether it is only a pointer; `None` when it

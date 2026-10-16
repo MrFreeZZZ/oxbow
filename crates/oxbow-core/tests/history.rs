@@ -424,3 +424,42 @@ fn a_shallow_clone_says_so() {
     assert!(!history.shallow);
     assert_eq!(history.rows.len(), 5);
 }
+
+#[test]
+fn a_reload_with_nothing_moved_reuses_the_rows() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "1\n", "Root");
+    fx.commit("a.txt", "2\n", "Second");
+    let repo = Repo::open(fx.path()).unwrap();
+    let options = HistoryOptions::default();
+    let mut cache = oxbow_core::HistoryCache::default();
+
+    let first = repo.history_with(&options, &mut cache, None).unwrap();
+    assert!(!first.same);
+    assert_eq!(first.rows.len(), 2);
+
+    // Nothing moved: the caller's rows stand, only the key comes back.
+    let again = repo.history_with(&options, &mut cache, Some(&first.key)).unwrap();
+    assert_eq!(again.key, first.key);
+    assert!(again.same && again.rows.is_empty() && again.runs.is_empty());
+
+    // Edited files add the row of uncommitted changes: new rows. Its counts follow the files.
+    fx.write("a.txt", "3\n");
+    let dirty = repo.history_with(&options, &mut cache, Some(&first.key)).unwrap();
+    assert!(!dirty.same);
+    assert_eq!(dirty.rows[0].worktree.as_ref().unwrap().unstaged, 1);
+    fx.write("b.txt", "new\n");
+    let more = repo.history_with(&options, &mut cache, Some(&dirty.key)).unwrap();
+    assert!(more.same);
+    assert_eq!(more.rows.len(), 1, "only the row of uncommitted changes");
+    assert_eq!(more.rows[0].worktree.as_ref().unwrap().unstaged, 2);
+    assert_eq!(more.changes.as_ref().unwrap().unstaged.len(), 2);
+
+    // A commit moves the branch: the rows are built again.
+    fx.git(&["add", "-A"]);
+    fx.git(&["commit", "-q", "-m", "Third"]);
+    let moved = repo.history_with(&options, &mut cache, Some(&more.key)).unwrap();
+    assert!(!moved.same);
+    assert_eq!(moved.rows[0].summary, "Third");
+    assert_eq!(moved.rows.len(), 3);
+}

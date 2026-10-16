@@ -147,6 +147,15 @@ export interface History {
   loaded: number;
   /** A shallow clone: its history stops where the fetched part ends. */
   shallow: boolean;
+  /** The uncommitted changes the row of uncommitted changes counts; null when git could not list them. */
+  changes: WorkingTree | null;
+  /** Which reading of `changes` this is: the Changes panel asks for diffs of the same one. */
+  snapshot: number;
+  /** Stands for what the commit rows were built from: the same key, the same rows. */
+  key: string;
+  /** The rows of `key` the caller had were left out: `rows` holds only the row of uncommitted
+   *  changes, if any, and `runs` and `leadIns` are empty. See `withRows`. */
+  same: boolean;
 }
 
 /** A straight line down `column`, from row `first` to the row after `last`. */

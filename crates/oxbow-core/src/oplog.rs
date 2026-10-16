@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -164,15 +165,11 @@ impl Repo {
     /// Steps of the log, newest first, without the ones older than Settings allows.
     pub fn operation_log(&self) -> Result<Vec<OpEntry>> {
         let file = self.oplog_file()?;
-        let Ok(text) = std::fs::read_to_string(&file) else {
+        let oldest = now() - i64::from(keep_days()) * 86_400;
+        let Some(all) = read_log(&file) else {
             return Ok(Vec::new());
         };
-        let oldest = now() - i64::from(keep_days()) * 86_400;
-        let mut entries: Vec<OpEntry> = text
-            .lines()
-            .filter_map(|line| serde_json::from_str::<OpEntry>(line).ok())
-            .filter(|entry| entry.time >= oldest)
-            .collect();
+        let mut entries: Vec<OpEntry> = all.iter().filter(|entry| entry.time >= oldest).cloned().collect();
         let days = self.snapshot_days();
         for entry in &mut entries {
             entry.expires = entry.time + i64::from(days) * 86_400;
@@ -1020,6 +1017,37 @@ pub(crate) fn short_ref(name: &str) -> String {
     } else {
         name.to_owned()
     }
+}
+
+/// Every step in the log file, read again only when the file changed: every reload of the
+/// History asks for the log, and it grows with each action for weeks. `None` when there is none.
+fn read_log(file: &std::path::Path) -> Option<Arc<Vec<OpEntry>>> {
+    type Read = (std::path::PathBuf, std::time::SystemTime, u64, Arc<Vec<OpEntry>>);
+    static LAST: Mutex<Vec<Read>> = Mutex::new(Vec::new());
+    let meta = std::fs::metadata(file).ok()?;
+    let stamp = (meta.modified().ok()?, meta.len());
+    if let Ok(last) = LAST.lock()
+        && let Some((_, _, _, entries)) = last
+            .iter()
+            .find(|(path, modified, len, _)| path == file && (*modified, *len) == stamp)
+    {
+        return Some(entries.clone());
+    }
+    let text = std::fs::read_to_string(file).ok()?;
+    let entries: Arc<Vec<OpEntry>> = Arc::new(
+        text.lines()
+            .filter_map(|line| serde_json::from_str::<OpEntry>(line).ok())
+            .collect(),
+    );
+    if let Ok(mut last) = LAST.lock() {
+        last.retain(|(path, ..)| path != file);
+        // One per repository open in a window; a handful at most.
+        if last.len() >= 8 {
+            last.remove(0);
+        }
+        last.push((file.to_path_buf(), stamp.0, stamp.1, entries.clone()));
+    }
+    Some(entries)
 }
 
 fn now() -> i64 {

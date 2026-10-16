@@ -1,4 +1,5 @@
 use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::sync::Arc;
 
 use gix::ObjectId;
 use gix::bstr::ByteSlice;
@@ -14,6 +15,7 @@ use crate::operation::{Operation, OperationKind};
 use crate::remote::Tracking;
 use crate::repo::{HeadInfo, RefInfo, RefKind, Repo, StashInfo};
 use crate::submodules::Submodule;
+use crate::worktree::WorkingTree;
 use crate::worktrees::Worktree;
 
 /// Commits loaded at a time: the first load, and each one after it as the list scrolls on.
@@ -84,6 +86,16 @@ pub struct History {
     /// The repository is a shallow clone: its history stops at commits whose parents were not
     /// fetched.
     pub shallow: bool,
+    /// The uncommitted changes the row of uncommitted changes counts; `None` when git could not
+    /// list them. The Changes panel shows these, so a reload asks git for them once.
+    pub changes: Option<WorkingTree>,
+    /// Which reading of `changes` this is, for diffs of the same files: set by the app, 0 here.
+    pub snapshot: u64,
+    /// Stands for what the commit rows were built from: the same key, the same rows.
+    pub key: String,
+    /// The caller has the rows of `key` already, so they were left out: `rows` holds only the
+    /// row of uncommitted changes, if there is one, and `runs` and `lead_ins` are empty.
+    pub same: bool,
 }
 
 impl History {
@@ -152,9 +164,100 @@ struct Node {
     time: i64,
 }
 
+/// The commit rows of the last history built, to build the next one without walking the commits
+/// and laying out the graph again while nothing they depend on changed: a refresh after the
+/// window comes back to the front, a staged file, a fetch that brought nothing.
+#[derive(Debug, Default, Clone)]
+pub struct HistoryCache {
+    last: Option<(u64, Arc<Rows>)>,
+}
+
+/// The part of [`History`] that comes from walking the commits.
+#[derive(Debug)]
+struct Rows {
+    /// With the row of uncommitted changes on top when there are any, its counts and summary
+    /// filled in afresh each time by [`fill_worktree_row`].
+    rows: Vec<HistoryRow>,
+    runs: Vec<Run>,
+    lead_ins: Vec<LeadIn>,
+    trunk: Option<String>,
+    trunk_tip_row: Option<usize>,
+    truncated: bool,
+    loaded: usize,
+}
+
+/// What the commit rows are built from. The commits themselves never change under their ids,
+/// so the refs that reach them stand for them.
+#[allow(clippy::too_many_arguments)]
+fn rows_key(
+    workdir: &std::path::Path,
+    options: &HistoryOptions,
+    head: &HeadInfo,
+    refs: &[RefInfo],
+    stashes: &[StashInfo],
+    remotes: &[String],
+    rebasing: bool,
+    changes: bool,
+    production: Option<&str>,
+    shallow: bool,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    workdir.hash(&mut hasher);
+    options.limit.hash(&mut hasher);
+    options.until.hash(&mut hasher);
+    head.branch.hash(&mut hasher);
+    head.commit.hash(&mut hasher);
+    for r in refs {
+        (&r.name, r.kind as u8, &r.target, &r.remote).hash(&mut hasher);
+    }
+    for stash in stashes {
+        (&stash.id, stash.index).hash(&mut hasher);
+    }
+    remotes.hash(&mut hasher);
+    (rebasing, changes, production, shallow, graph::branch_colors()).hash(&mut hasher);
+    hasher.finish()
+}
+
+/// What the row of uncommitted changes says: the operation under way and the file counts.
+fn fill_worktree_row(row: &mut HistoryRow, tree: &WorkingTree, operation: Option<&Operation>, branch: Option<&str>) {
+    row.summary = operation
+        .map_or("Uncommitted changes", |op| match op.kind {
+            OperationKind::Merge => "Merge in progress",
+            OperationKind::Squash => "Squash merge in progress",
+            OperationKind::Rebase => "Rebase in progress",
+            OperationKind::CherryPick => "Cherry-pick in progress",
+            OperationKind::Revert => "Revert in progress",
+            OperationKind::StashApply => "Stash apply in progress",
+        })
+        .to_owned();
+    row.time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    row.graph.branch = branch.map(str::to_owned);
+    row.worktree = Some(WorktreeSummary {
+        files: tree.file_count(),
+        staged: tree.staged.len(),
+        unstaged: tree.unstaged.len(),
+        conflicted: tree.conflicted.len(),
+    });
+}
+
 impl Repo {
     /// Load the commit history of all branches and tags with its graph layout.
     pub fn history(&self, options: &HistoryOptions) -> Result<History> {
+        self.history_with(options, &mut HistoryCache::default(), None)
+    }
+
+    /// [`Repo::history`], reusing the commit rows of `cache` when nothing they depend on changed
+    /// and keeping the new ones there. With `known`, the key of rows the caller has already, the
+    /// same rows are left out of the answer: see [`History::same`].
+    pub fn history_with(
+        &self,
+        options: &HistoryOptions,
+        cache: &mut HistoryCache,
+        known: Option<&str>,
+    ) -> Result<History> {
         let repo = self.local();
         let head = self.head()?;
         let mut refs = self.refs()?;
@@ -171,7 +274,117 @@ impl Repo {
         let bisect = self.bisect().ok().flatten();
         let worktrees = self.worktrees().unwrap_or_default();
         let submodules = self.submodules();
+        // Uncommitted changes get a row of their own on top. A failing `git status` only hides the row.
+        let changes = self.working_tree().ok();
+        let dirty = changes.as_ref().is_some_and(|tree| !tree.is_empty());
+        let production = self.production_setting();
+        let shallow = repo.is_shallow();
 
+        let key = rows_key(
+            self.workdir(),
+            options,
+            &head,
+            &refs,
+            &stashes,
+            &remotes,
+            rebasing,
+            dirty,
+            production.as_deref(),
+            shallow,
+        );
+        let built = match &cache.last {
+            Some((last, built)) if *last == key => built.clone(),
+            _ => {
+                let built = Arc::new(self.build_rows(
+                    &repo,
+                    options,
+                    &head,
+                    &refs,
+                    &stashes,
+                    &remotes,
+                    rebasing,
+                    dirty,
+                    production.as_deref(),
+                )?);
+                cache.last = Some((key, built.clone()));
+                built
+            }
+        };
+        let key_text = format!("{key:016x}");
+        let same = known == Some(key_text.as_str());
+        let mut rows: Vec<HistoryRow> = if same {
+            built
+                .rows
+                .iter()
+                .take_while(|r| r.worktree.is_some())
+                .cloned()
+                .collect()
+        } else {
+            built.rows.clone()
+        };
+        if let (Some(row), Some(tree)) = (rows.first_mut().filter(|r| r.worktree.is_some()), &changes) {
+            fill_worktree_row(row, tree, operation.as_ref(), head.branch.as_deref());
+        }
+
+        let previous_branch = head.branch.is_none().then(|| self.previous_branch(&refs)).flatten();
+        // The checked-out branch's upstream was read with the others. A failing `git for-each-ref`
+        // only hides the ahead/behind counts.
+        let tracking = match &head.branch {
+            Some(branch) => refs
+                .iter()
+                .find(|r| r.kind == RefKind::Local && &r.name == branch)
+                .and_then(|r| r.tracking.clone())
+                .map(|mut t| {
+                    if t.behind > 0 {
+                        self.find_rewrite(branch, &mut t);
+                    }
+                    t
+                }),
+            None => None,
+        };
+        Ok(History {
+            head,
+            trunk: built.trunk.clone(),
+            trunk_tip_row: built.trunk_tip_row,
+            lead_ins: if same { Vec::new() } else { built.lead_ins.clone() },
+            previous_branch,
+            operation,
+            bisect,
+            worktrees,
+            submodules,
+            local_tags: self.local_tags(&refs),
+            fetched: self.fetch_times_of(&remotes, &refs),
+            refs,
+            tracking,
+            default_remote: self.default_remote(),
+            remotes,
+            stashes,
+            rows,
+            runs: if same { Vec::new() } else { built.runs.clone() },
+            truncated: built.truncated,
+            loaded: built.loaded,
+            shallow,
+            changes,
+            snapshot: 0,
+            key: key_text,
+            same,
+        })
+    }
+
+    /// Walk the commits and lay out the graph.
+    #[allow(clippy::too_many_arguments)]
+    fn build_rows(
+        &self,
+        repo: &gix::Repository,
+        options: &HistoryOptions,
+        head: &HeadInfo,
+        refs: &[RefInfo],
+        stashes: &[StashInfo],
+        remotes: &[String],
+        rebasing: bool,
+        dirty: bool,
+        production: Option<&str>,
+    ) -> Result<Rows> {
         let mut tips: Vec<ObjectId> = refs
             .iter()
             .filter_map(|r| ObjectId::from_hex(r.target.as_bytes()).ok())
@@ -228,7 +441,7 @@ impl Repo {
         // Stashes hang off the commit they were made on. Only that first parent is drawn: the other
         // parents (the index and the untracked files) are internal to the stash.
         let mut stash_ids = HashSet::new();
-        for stash in &stashes {
+        for stash in stashes {
             let Ok(id) = ObjectId::from_hex(stash.id.as_bytes()) else {
                 continue;
             };
@@ -248,8 +461,7 @@ impl Repo {
         let row_of: HashMap<ObjectId, usize> = nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
 
         // The trunk: first-parent chain of the main branch.
-        let production = self.production_setting();
-        let trunk_ref = pick_trunk(&refs, production.as_deref());
+        let trunk_ref = pick_trunk(refs, production);
         let mut on_trunk = vec![false; nodes.len()];
         let mut trunk_tip_row = None;
         if let Some(tip) = trunk_ref.and_then(|r| ObjectId::from_hex(r.target.as_bytes()).ok()) {
@@ -261,13 +473,13 @@ impl Repo {
             }
         }
 
-        let unpushed = unpushed_commits(&repo, &refs, &head)?;
+        let unpushed = unpushed_commits(repo, refs, head)?;
 
         // Commits a branch or tag keeps. While HEAD is detached, the others were made there and
         // belong to no branch. Children come before parents, so one pass reaches every ancestor.
         // A rebase detaches HEAD while it works; its commits will be the branch's.
         let mut kept = vec![head.branch.is_some() || rebasing; nodes.len()];
-        for r in &refs {
+        for r in refs {
             if let Some(&row) = ObjectId::from_hex(r.target.as_bytes())
                 .ok()
                 .and_then(|id| row_of.get(&id))
@@ -292,7 +504,7 @@ impl Repo {
 
         // Labels per commit.
         let mut labels: HashMap<ObjectId, Vec<Label>> = HashMap::new();
-        for r in &refs {
+        for r in refs {
             let Ok(id) = ObjectId::from_hex(r.target.as_bytes()) else {
                 continue;
             };
@@ -319,7 +531,7 @@ impl Repo {
                 head: true,
             });
         }
-        for stash in &stashes {
+        for stash in stashes {
             let Ok(id) = ObjectId::from_hex(stash.id.as_bytes()) else {
                 continue;
             };
@@ -352,9 +564,9 @@ impl Repo {
             graph_input.push(GraphCommit {
                 parents: node.parents.iter().map(|p| row_of.get(p).copied()).collect(),
                 trunk: on_trunk[row],
-                tip_name: row_labels.and_then(|l| tip_name(l, &remotes)),
+                tip_name: row_labels.and_then(|l| tip_name(l, remotes)),
                 merged_name: (node.parents.len() > 1)
-                    .then(|| merged_branch(&summary, &remotes))
+                    .then(|| merged_branch(&summary, remotes))
                     .flatten(),
                 unpushed: unpushed.contains(&node.id) || stash_ids.contains(&node.id),
                 side: stash_ids.contains(&node.id),
@@ -374,9 +586,7 @@ impl Repo {
             ));
         }
 
-        // Uncommitted changes get a row of their own on top, on a side line down to HEAD in the
-        // color of HEAD's line. A failing `git status` only hides the row.
-        let changes = self.working_tree().ok().filter(|tree| !tree.is_empty());
+        // Uncommitted changes go on a side line down to HEAD, in the color of HEAD's line.
         let head_id = head
             .commit
             .as_deref()
@@ -384,7 +594,7 @@ impl Repo {
         let head_row = head_id.and_then(|id| row_of.get(&id).copied());
         let mut graph = graph::layout(&graph_input, head_row);
         let mut worktree_row = None;
-        if let Some(tree) = &changes {
+        if dirty {
             let color = match head_row {
                 Some(r) => graph.rows[r].color,
                 None => head.branch.as_deref().map_or(graph::TRUNK_COLOR, graph::color_for_name),
@@ -403,46 +613,31 @@ impl Repo {
                 c
             }));
             graph = graph::layout(&shifted, head_row.map(|r| r + 1));
-            let mut wip = graph.rows.remove(0);
-            wip.branch = head.branch.clone();
             worktree_row = Some(HistoryRow {
                 id: WORKTREE_ID.to_owned(),
-                summary: operation
-                    .as_ref()
-                    .map_or("Uncommitted changes", |op| match op.kind {
-                        OperationKind::Merge => "Merge in progress",
-                        OperationKind::Squash => "Squash merge in progress",
-                        OperationKind::Rebase => "Rebase in progress",
-                        OperationKind::CherryPick => "Cherry-pick in progress",
-                        OperationKind::Revert => "Revert in progress",
-                        OperationKind::StashApply => "Stash apply in progress",
-                    })
-                    .to_owned(),
+                summary: String::new(),
                 author_name: String::new(),
                 author_email: String::new(),
-                time: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_secs() as i64),
+                time: 0,
                 parents: head_id.iter().map(ToString::to_string).collect(),
                 labels: Vec::new(),
                 unpushed: true,
                 no_branch: false,
-                graph: wip,
+                graph: graph.rows.remove(0),
                 worktree: Some(WorktreeSummary {
-                    files: tree.file_count(),
-                    staged: tree.staged.len(),
-                    unstaged: tree.unstaged.len(),
-                    conflicted: tree.conflicted.len(),
+                    files: 0,
+                    staged: 0,
+                    unstaged: 0,
+                    conflicted: 0,
                 }),
             });
         }
         // Trunk commits belong to the trunk branch, named without its remote (`origin/main` -> `main`).
         let trunk_name = trunk_ref.map(|r| match r.kind {
-            RefKind::Remote => strip_remote(&r.name, &remotes).to_owned(),
+            RefKind::Remote => strip_remote(&r.name, remotes).to_owned(),
             _ => r.name.clone(),
         });
         let lead_ins = graph.lead_ins;
-        let previous_branch = head.branch.is_none().then(|| self.previous_branch(&refs)).flatten();
         let rows = nodes.iter().zip(details).zip(graph.rows).enumerate().map(
             |(row, ((node, (summary, author_name, author_email, time)), graph))| {
                 let mut labels = labels.remove(&node.id).unwrap_or_default();
@@ -471,31 +666,16 @@ impl Repo {
         );
         let mut rows: Vec<HistoryRow> = worktree_row.into_iter().chain(rows).collect();
         let runs = graph::take_runs(rows.iter_mut().map(|r| &mut r.graph));
-        let trunk_tip_row = trunk_tip_row.map(|r| r + usize::from(changes.is_some()));
+        let trunk_tip_row = trunk_tip_row.map(|r| r + usize::from(dirty));
 
-        Ok(History {
-            head,
-            trunk: trunk_ref.map(|r| r.name.clone()),
-            trunk_tip_row,
-            lead_ins,
-            previous_branch,
-            operation,
-            bisect,
-            worktrees,
-            submodules,
-            local_tags: self.local_tags(&refs),
-            fetched: self.fetch_times_of(&remotes, &refs),
-            refs,
-            // A failing `git for-each-ref` only hides the ahead/behind counts.
-            tracking: self.tracking().ok().flatten(),
-            default_remote: self.default_remote(),
-            remotes,
-            stashes,
+        Ok(Rows {
             rows,
             runs,
+            lead_ins,
+            trunk: trunk_ref.map(|r| r.name.clone()),
+            trunk_tip_row,
             truncated,
             loaded,
-            shallow: repo.is_shallow(),
         })
     }
 }

@@ -159,3 +159,37 @@ fn working_copy_reports_mode_and_line_endings() {
         .unwrap();
     assert_eq!(mode.file.mode.unwrap().new, "100755");
 }
+
+#[test]
+fn working_diff_over_the_limit_reads_no_patch() {
+    let mut fx = Fixture::new();
+    fx.commit("data.txt", "start\n", "Root");
+    let long: String = (0..30).map(|i| format!("line {i}\n")).collect();
+    fx.write("data.txt", &long);
+
+    let mut repo = Repo::open(fx.path()).unwrap();
+    repo.set_diff_options(oxbow_core::DiffOptions {
+        max_lines: 10,
+        ..repo.diff_options()
+    });
+    let diff = repo
+        .working_diff("data.txt", oxbow_core::Side::Unstaged, false)
+        .unwrap();
+    assert!(diff.limited && !diff.too_large && diff.hunks.is_empty());
+    assert_eq!((diff.file.additions, diff.file.deletions), (30, 1));
+    assert!(matches!(diff.old, Some(oxbow_core::Source::Blob { .. })));
+    assert!(matches!(diff.new, Some(oxbow_core::Source::Worktree { .. })));
+
+    // Staged, both sides are blobs, read from `git diff --raw`.
+    fx.git(&["add", "data.txt"]);
+    let staged = repo.working_diff("data.txt", oxbow_core::Side::Staged, false).unwrap();
+    assert!(staged.limited);
+    let (Some(oxbow_core::Source::Blob { id: old }), Some(oxbow_core::Source::Blob { id: new })) =
+        (&staged.old, &staged.new)
+    else {
+        panic!("no blob sides");
+    };
+    assert_eq!(repo.read_source(&staged.new.clone().unwrap()).unwrap(), long.as_bytes());
+    assert_ne!(old, new);
+    assert_eq!(repo.source_size(&staged.new.clone().unwrap()), Some(long.len() as u64));
+}
