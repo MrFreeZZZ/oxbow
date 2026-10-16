@@ -1,7 +1,8 @@
 <script lang="ts" module>
   export type MenuEntry =
-    /** `keys`: its shortcut, grey on the right, e.g. "⌘O". `detail`: a grey second line, e.g. a folder's path. */
-    | { kind: "item"; label: string; icon: string; danger?: boolean; keys?: string; detail?: string; run: () => void }
+    /** `keys`: its shortcut, grey on the right, e.g. "⌘O". `detail`: a grey second line, e.g. a folder's path.
+     *  `remove`: a × on hover (or Delete on the focused item) that takes the item off a list and keeps the menu open. */
+    | { kind: "item"; label: string; icon: string; danger?: boolean; keys?: string; detail?: string; run: () => void; remove?: { label: string; run: () => void } }
     /** Opens a submenu to the side, e.g. Reset ▸ Soft / Mixed / Hard. */
     | { kind: "sub"; label: string; icon: string; entries: SubEntry[] }
     | { kind: "header"; label: string }
@@ -65,7 +66,7 @@
     const { width, height } = box.getBoundingClientRect();
     left = Math.max(8, Math.min(x, window.innerWidth - width - 8));
     top = Math.max(8, Math.min(y, window.innerHeight - height - 8));
-    box.querySelector<HTMLButtonElement>("button")?.focus();
+    box.querySelector<HTMLButtonElement>("button[role=menuitem]")?.focus();
   });
 
   // Beside the menu, on the right unless there is no room there.
@@ -88,8 +89,24 @@
     run();
   }
 
+  /** Take an item off its list; focus moves to the item that takes its place. */
+  function remove(index: number, run: () => void) {
+    const items = [...(box?.querySelectorAll<HTMLButtonElement>("button[role=menuitem]") ?? [])];
+    const at = items.findIndex((b) => b.dataset.index === String(index));
+    run();
+    requestAnimationFrame(() => {
+      const now = [...(box?.querySelectorAll<HTMLButtonElement>("button[role=menuitem]") ?? [])];
+      now[Math.min(at, now.length - 1)]?.focus();
+    });
+  }
+
   function onKey(event: KeyboardEvent) {
-    if (event.key === "Escape") {
+    const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const removable = focused?.dataset.index ? entries[Number(focused.dataset.index)] : undefined;
+    if ((event.key === "Delete" || event.key === "Backspace") && removable?.kind === "item" && removable.remove) {
+      event.preventDefault();
+      remove(Number(focused!.dataset.index), removable.remove.run);
+    } else if (event.key === "Escape") {
       event.preventDefault();
       onClose();
     } else if (event.key === "ArrowRight" && document.activeElement instanceof HTMLElement && document.activeElement.dataset.sub) {
@@ -102,7 +119,7 @@
     } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       const inSub = !!subBox?.contains(document.activeElement);
-      const items = [...((inSub ? subBox : box)?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
+      const items = [...((inSub ? subBox : box)?.querySelectorAll<HTMLButtonElement>("button[role=menuitem]") ?? [])];
       const at = items.indexOf(document.activeElement as HTMLButtonElement);
       const next = event.key === "ArrowDown" ? (at + 1) % items.length : (at - 1 + items.length) % items.length;
       items[next]?.focus();
@@ -145,18 +162,26 @@
       </button>
     {:else}
       {@const run = entry.run}
-      <button role="menuitem" class:danger={entry.danger} class:two={entry.detail} onmouseenter={() => (sub = null)} onclick={() => choose(run)}>
-        <svg class="icon" viewBox="0 0 16 16"><path d={entry.icon} /></svg>
-        {#if entry.detail}
-          <span class="lines">
+      {@const drop = entry.remove}
+      <div class="row" class:removable={drop}>
+        <button role="menuitem" data-index={i} class:danger={entry.danger} class:two={entry.detail} onmouseenter={() => (sub = null)} onclick={() => choose(run)}>
+          <svg class="icon" viewBox="0 0 16 16"><path d={entry.icon} /></svg>
+          {#if entry.detail}
+            <span class="lines">
+              <span>{entry.label}</span>
+              <span class="detail" title={entry.detail}>{entry.detail}</span>
+            </span>
+          {:else}
             <span>{entry.label}</span>
-            <span class="detail" title={entry.detail}>{entry.detail}</span>
-          </span>
-        {:else}
-          <span>{entry.label}</span>
+          {/if}
+          {#if entry.keys}<span class="keys">{entry.keys}</span>{/if}
+        </button>
+        {#if drop}
+          <button class="x" tabindex="-1" aria-label={drop.label} title={drop.label} onclick={() => remove(i, drop.run)}>
+            <svg viewBox="0 0 16 16"><path d="M5 5l6 6M11 5l-6 6" /></svg>
+          </button>
         {/if}
-        {#if entry.keys}<span class="keys">{entry.keys}</span>{/if}
-      </button>
+      </div>
     {/if}
   {/each}
 </div>
@@ -243,7 +268,8 @@
   }
   button:hover,
   button:focus-visible,
-  button.open {
+  button.open,
+  .row:hover > button[role="menuitem"] {
     background: var(--side-sel);
   }
   button.two {
@@ -280,6 +306,45 @@
     flex-grow: 0;
     font-size: 12px;
     color: var(--text2);
+  }
+  .row {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+  /* Room for the × so a long path never runs under it. */
+  .row.removable > button[role="menuitem"] {
+    padding-right: 34px;
+  }
+  .x {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    justify-content: center;
+    border-radius: 10px;
+    transform: translateY(-50%);
+    color: var(--text2);
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+  .x svg {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+  }
+  .row:hover .x,
+  .row:focus-within .x {
+    opacity: 1;
+  }
+  .x:hover {
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+    color: var(--text);
   }
   button.danger,
   button.danger .icon {

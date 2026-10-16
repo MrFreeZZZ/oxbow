@@ -448,6 +448,14 @@ fn forget_repo(app: AppHandle, path: String, to: Option<String>) {
     write_recent(&app, &list);
 }
 
+/// Empty Recent Repositories but for the repositories in `keep` (the one open now).
+#[tauri::command]
+fn clear_recent(app: AppHandle, keep: Vec<String>) {
+    let mut list = read_recent(&app);
+    list.retain(|r| keep.contains(&r.path));
+    write_recent(&app, &list);
+}
+
 /// Where a recent repository stands, for its row.
 #[tauri::command]
 async fn repo_glance(path: String) -> CommandResult<oxbow_core::RepoGlance> {
@@ -1629,6 +1637,7 @@ fn main() {
             initial_repo,
             recent_repos,
             forget_repo,
+            clear_recent,
             repo_glance,
             welcome_info,
             folder_state,

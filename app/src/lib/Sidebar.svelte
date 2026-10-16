@@ -28,7 +28,7 @@
   import { github } from "./github.svelte";
   import { downloadRequest, installRequest, lfs, patternNote, pruneRequest, lfsTrackRequest, untrackRequest } from "./lfs.svelte";
   import { nav } from "./nav.svelte";
-  import type { LfsPattern, Submodule, Worktree } from "./types";
+  import type { LfsPattern, RecentRepo, Submodule, Worktree } from "./types";
   import { addSubmoduleRequest, latestRequest, removeSubmoduleRequest, submoduleNote, submoduleWhere, syncRequest, updateRequest, followsWord } from "./submodules";
   import { actionIcons } from "./icons";
   import { locateRequest, lockRequest, newWorktreeRequest, pruneWorktreesRequest, removeWorktreeRequest, tilde, unlockRequest, worktreeOf } from "./worktrees";
@@ -37,6 +37,8 @@
   const TERMINAL = "M2.5 3.5h11v9h-11zM5 7l2 1.5L5 10M8.5 10.5h2.5";
   const FOLDER = "M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z";
   const HOME = "M2.5 7.5 8 3l5.5 4.5M4 6.5v6.5h8V6.5";
+  /** A list with a ×: Clear Recent. */
+  const CLEAR = "M2.5 4h11M2.5 8h6M2.5 12h4M10 9.5l3.5 3.5M13.5 9.5 10 13";
   const LOCK = "M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2";
 
   let {
@@ -201,12 +203,28 @@
   /** The repository button's menu: recent repositories, then clone, open, new. */
   async function repoMenu(event: MouseEvent) {
     const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    const recent = (await api.recentRepos().catch(() => [])).filter((r) => r.path !== repo.path && !r.missing).slice(0, 8);
+    const recent = (await api.recentRepos().catch(() => [])).filter((r) => r.path !== repo.path && !r.missing);
+    menu = { x: box.left, y: box.bottom + 4, label: `Repository ${repo.name}`, ref: repo.path, entries: repoEntries(recent) };
+  }
+
+  /** How many recent repositories the repository menu lists. */
+  const RECENT_IN_MENU = 8;
+
+  function repoEntries(recent: RecentRepo[]): MenuEntry[] {
     const entries: MenuEntry[] = [];
     if (recent.length) {
       entries.push({ kind: "header", label: "Recent" });
-      for (const r of recent) entries.push({ kind: "item", label: r.name, detail: tilde(r.path), icon: FOLDER, run: () => onOpenPath(r.path) });
-      entries.push({ kind: "sep" });
+      for (const r of recent.slice(0, RECENT_IN_MENU)) {
+        entries.push({
+          kind: "item",
+          label: r.name,
+          detail: tilde(r.path),
+          icon: FOLDER,
+          run: () => onOpenPath(r.path),
+          remove: { label: "Remove from Recent", run: () => forgetRecent(recent, r.path) },
+        });
+      }
+      entries.push({ kind: "item", label: "Clear Recent", icon: CLEAR, run: clearRecent }, { kind: "sep" });
     }
     entries.push(
       { kind: "item", label: "Clone Repository…", icon: "M8 2.5v8M5 7.5l3 3 3-3M3 13.5h10", keys: keys("Mod+Shift+C"), run: () => start.clone() },
@@ -219,7 +237,23 @@
       { kind: "item", label: "Open in Terminal", icon: TERMINAL, run: () => api.openInTerminal().catch((err) => confirm.fail(err)) },
       { kind: "item", label: "Welcome Window", icon: HOME, run: onWelcome },
     );
-    menu = { x: box.left, y: box.bottom + 4, label: `Repository ${repo.name}`, ref: repo.path, entries };
+    return entries;
+  }
+
+  /** × on a recent repository: off the list, the menu stays open and the next one moves up. */
+  function forgetRecent(recent: RecentRepo[], path: string) {
+    api.forgetRepo(path).catch((err) => confirm.fail(err));
+    if (menu) menu = { ...menu, entries: repoEntries(recent.filter((r) => r.path !== path)) };
+  }
+
+  /** Clear Recent: every repository but the one open now. */
+  async function clearRecent() {
+    try {
+      await api.clearRecent([repo.path]);
+      confirm.say("Cleared Recent Repositories.", "done");
+    } catch (err) {
+      confirm.fail(err);
+    }
   }
 
   /** The right-click menu of a local branch. */

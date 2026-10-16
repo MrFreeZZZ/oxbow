@@ -91,8 +91,11 @@
   const conflicted = $derived(tree?.conflicted ?? []);
   const stagedPaths = $derived(new Set(staged.map((f) => f.path)));
   const unstagedPaths = $derived(new Set(unstaged.map((f) => f.path)));
-  /** Every changed file once, in list order, for the tabs. */
-  const paths = $derived([...new Set([...conflicted, ...unstaged, ...staged].map((f) => f.path))]);
+  /** Every changed file once, for the tabs: staged first, then the rest, each in list order. A file
+   *  staged in part sits with the staged ones. */
+  const stagedTabs = $derived(staged.map((f) => f.path));
+  const otherTabs = $derived([...new Set([...conflicted, ...unstaged].map((f) => f.path))].filter((path) => !stagedPaths.has(path)));
+  const paths = $derived([...stagedTabs, ...otherTabs]);
   const labels = $derived(tabLabels(paths));
   const fileCount = $derived(paths.length);
   const branchPart = $derived<Part>(branch ? { branch, color } : { code: "HEAD" });
@@ -581,7 +584,13 @@
       >
       <span class="divider" aria-hidden="true"></span>
       <div class="file-tabs" bind:this={tabBar}>
-        {#each paths as path (path)}
+        {#each stagedTabs as path (path)}
+          <button role="tab" aria-selected={tab === path} class="tab staged" class:on={tab === path} onclick={() => openTab(path)} title="Staged · {path}"
+            >{labels.get(path)}</button
+          >
+        {/each}
+        {#if stagedTabs.length && otherTabs.length}<span class="divider" aria-hidden="true"></span>{/if}
+        {#each otherTabs as path (path)}
           <button role="tab" aria-selected={tab === path} class="tab neutral" class:on={tab === path} onclick={() => openTab(path)} title={path}
             >{labels.get(path)}</button
           >
@@ -795,6 +804,16 @@
   }
   .tab.on {
     font-weight: 600;
+  }
+  /* Staged files: Steel, the color of Commit, which takes them. */
+  .tab.staged {
+    background: color-mix(in srgb, var(--accent) 9%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 26%, transparent);
+    color: color-mix(in srgb, var(--accent) 75%, var(--text));
+  }
+  .tab.staged.on {
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
   }
   .tab.neutral.on {
     background: var(--side-sel);

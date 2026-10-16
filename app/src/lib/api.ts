@@ -59,6 +59,8 @@ export const api = {
   recentRepos: () => invoke<RecentRepo[]>("recent_repos"),
   /** With `to`, the repository moved there. */
   forgetRepo: (path: string, to: string | null = null) => invoke<void>("forget_repo", { path, to }),
+  /** Empty Recent Repositories but for `keep`. */
+  clearRecent: (keep: string[]) => invoke<void>("clear_recent", { keep }),
   repoGlance: (path: string) => invoke<RepoGlance>("repo_glance", { path }),
   welcomeInfo: () => invoke<WelcomeInfo>("welcome_info"),
   folderState: (path: string) => invoke<"missing" | "empty" | "files" | "file">("folder_state", { path }),
