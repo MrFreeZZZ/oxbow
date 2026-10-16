@@ -600,6 +600,31 @@ fn blob_size(repo: &gix::Repository, id: Option<ObjectId>) -> u64 {
         .map_or(0, |h| h.size())
 }
 
+/// Whether a blob looks binary from its first bytes, the way git decides, without reading the
+/// rest: `git cat-file` streams it and is stopped once they are in.
+fn starts_binary(repo: &gix::Repository, id: ObjectId) -> bool {
+    use std::io::Read;
+    use std::process::Stdio;
+    let Ok(mut child) = crate::config::git()
+        .arg("--git-dir")
+        .arg(repo.git_dir())
+        .args(["cat-file", "blob", &id.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    let mut head = Vec::with_capacity(8000);
+    if let Some(out) = child.stdout.take() {
+        let _ = out.take(8000).read_to_end(&mut head);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    is_binary(&head)
+}
+
 fn is_binary(data: &[u8]) -> bool {
     data[..data.len().min(8000)].contains(&0)
 }
@@ -625,6 +650,15 @@ fn inspect(
         file.new_size = new.map(|_| sizes.1);
         if matches!(file.status, FileStatus::Renamed | FileStatus::Copied) {
             file.similarity = Some(if old == new { 100 } else { 0 });
+        }
+        // Its first bytes still tell a picture or other binary file from big text.
+        if [old, new].into_iter().flatten().any(|id| starts_binary(repo, id)) {
+            file.binary = true;
+            return Ok(Inspected {
+                hunks: None,
+                too_large: false,
+                limited: false,
+            });
         }
         return Ok(Inspected {
             hunks: Some(Vec::new()),

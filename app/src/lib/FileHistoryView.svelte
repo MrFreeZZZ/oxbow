@@ -50,11 +50,15 @@
   const pick = $derived(selected ? (byId.get(selected) ?? null) : null);
   const headName = $derived(history.head.branch ? `${history.head.branch} (HEAD)` : "HEAD");
 
+  // Every reload hands over a new history object; these change only when what they stand for does.
+  const historyKey = $derived(history.key);
+  const headCommit = $derived(history.head.commit);
+
   // A new file, or a reload that moved a branch, a tag or HEAD, reads the history again. A reload
   // that only saw other files change (focus, staging) leaves it: `key` stays the same.
   $effect(() => {
     const p = path;
-    history.key;
+    historyKey;
     error = null;
     api.fileHistory(p, null).then(
       (h) => {
@@ -83,7 +87,7 @@
     if (mode !== "blame") return;
     const target = blameAt;
     // A commit's blame never changes; HEAD's does once HEAD moves.
-    if (target.rev === "HEAD") history.head.commit;
+    if (target.rev === "HEAD") headCommit;
     blameError = null;
     api.blame(target.path, target.rev).then(
       (b) => {
@@ -248,7 +252,7 @@
     const text = find;
     const matchCase = nav.find.matchCase;
     const p = path;
-    history.head.commit;
+    headCommit;
     if (!text) {
       finding = null;
       return;

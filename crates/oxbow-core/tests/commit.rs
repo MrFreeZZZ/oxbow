@@ -193,3 +193,23 @@ fn working_diff_over_the_limit_reads_no_patch() {
     assert_ne!(old, new);
     assert_eq!(repo.source_size(&staged.new.clone().unwrap()), Some(long.len() as u64));
 }
+
+#[test]
+fn a_blob_too_big_to_diff_still_shows_whether_it_is_binary() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "1\n", "Root");
+    let big = 17 * 1024 * 1024;
+    fx.write("large.bmp", &format!("BM\0{}", "x".repeat(big)));
+    let id = fx.commit("big.txt", &"line\n".repeat(big / 5 + 1), "Big files");
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let diffs = repo.commit_diff(&id, None, DiffContext::Compact).unwrap();
+    let diff = |p: &str| diffs.iter().find(|d| d.file.path == p).unwrap();
+    // A picture keeps its preview: binary, not "too large to diff".
+    let picture = diff("large.bmp");
+    assert!(picture.file.binary && !picture.too_large);
+    assert_eq!(picture.file.new_size, Some(big as u64 + 3));
+    assert!(picture.new.is_some());
+    let text = diff("big.txt");
+    assert!(!text.file.binary && text.too_large);
+}
