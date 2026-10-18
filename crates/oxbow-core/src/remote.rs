@@ -67,6 +67,8 @@ pub enum FailureKind {
     Cancelled,
     /// The secrets check found what looks like a password or key in the staged lines.
     Secrets,
+    /// The repository changed since the action was planned, so nothing ran.
+    Changed,
     Other,
 }
 
@@ -668,6 +670,7 @@ pub fn classify_failure(error: &Error, pushing_with_hook: bool) -> FailureKind {
         Error::Command { output, .. } => output,
         Error::Cancelled => return FailureKind::Cancelled,
         Error::Secrets(_) => return FailureKind::Secrets,
+        Error::Changed(_) => return FailureKind::Changed,
         _ => return FailureKind::Other,
     };
     let has = |needle: &str| output.contains(needle);

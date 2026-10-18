@@ -500,6 +500,12 @@ pub enum Action {
     SubmoduleRemove {
         path: String,
     },
+    /// A way out of a typical mistake, in a few steps, planned when the repository looked like
+    /// `expect`: it runs only while it still does.
+    Fix {
+        fix: crate::fix::Fix,
+        expect: crate::fix::FixExpect,
+    },
 }
 
 /// A local branch and its name on the remote.
@@ -536,6 +542,9 @@ pub struct Plan {
     /// What the Operation Log can't bring back once it ran; filled in for the sheet only, by
     /// [`Repo::not_kept`].
     pub not_kept: Vec<crate::notkept::NotKept>,
+    /// For a fix: its steps in words, each with how many of `commands` are its own.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<crate::fix::FixStep>,
 }
 
 impl Repo {
@@ -819,6 +828,7 @@ impl Repo {
                     .chain(paths.iter().map(|p| literal(p))),
             )
         };
+        let mut steps = Vec::new();
         let commands = match action {
             Action::Stage { paths: p } => vec![paths(&["add"], p).comment("add the files to the next commit")],
             Action::Unstage { paths: p } => {
@@ -1333,6 +1343,11 @@ impl Repo {
             Action::SubmoduleSync { paths } => self.plan_submodule_sync(paths),
             Action::SubmoduleAdd { url, path, branch } => self.plan_submodule_add(url, path, branch.as_deref()),
             Action::SubmoduleRemove { path } => self.plan_submodule_remove(path),
+            Action::Fix { fix, .. } => {
+                let plan = self.plan_fix(fix)?;
+                steps = plan.steps;
+                plan.commands
+            }
             Action::Reword { message, no_verify } => {
                 let mut args = vec!["commit".to_owned(), "--amend".to_owned(), "--only".to_owned()];
                 // The same hooks rule as Commit: off in Settings, or skipped this once.
@@ -1357,6 +1372,7 @@ impl Repo {
         Ok(Plan {
             commands,
             not_kept: Vec::new(),
+            steps,
         })
     }
 
@@ -1374,6 +1390,10 @@ impl Repo {
         on_event: &mut dyn FnMut(ActionEvent),
         cancel: &AtomicBool,
     ) -> Result<String> {
+        // A fix planned for another state never starts: the sheet shows the new plan.
+        if let Action::Fix { expect, .. } = action {
+            self.check_fix(expect)?;
+        }
         // A commit the secrets check stops never starts: nothing runs, nothing to undo.
         if let Action::Commit {
             allow_secrets: false, ..
@@ -1530,6 +1550,29 @@ impl Repo {
                         && !self.is_ancestor(ancestor, of)
                     {
                         continue;
+                    }
+                    if let Some((name, was)) = &command.only_if_moved
+                        && self.rev(name) == *was
+                    {
+                        continue;
+                    }
+                    if command.secrets_check
+                        && !matches!(
+                            action,
+                            Action::Fix {
+                                fix: crate::fix::Fix::AddToLast {
+                                    allow_secrets: true,
+                                    ..
+                                },
+                                ..
+                            }
+                        )
+                        && crate::secrets::check_secrets()
+                    {
+                        let found = self.staged_secrets()?;
+                        if !found.is_empty() {
+                            return Err(Error::Secrets(found));
+                        }
                     }
                     self.write_todo(&command)?;
                     updated_submodules |= command.args.first().is_some_and(|a| a == "submodule");

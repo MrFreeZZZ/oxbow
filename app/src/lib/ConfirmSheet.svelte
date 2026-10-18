@@ -97,6 +97,36 @@
     }
   }
 
+  /** A fix's steps in words, numbered above the commands. */
+  const stepLines = $derived(request?.stepWords && confirm.steps.length && confirm.phase === "ask" ? request.stepWords(confirm.steps) : []);
+  /** Where each step's commands start, for its title in the terminal, and the branch checked
+   *  out when each command runs, for its prompt: a fix switches branches along the way. */
+  const stepPlaces = $derived.by(() => {
+    const starts = new Map<number, number>();
+    const branches: (string | null)[] = [];
+    let at = 0;
+    let here = branch;
+    confirm.steps.forEach((step, n) => {
+      starts.set(at, n);
+      for (let i = 0; i < step.commands; i++) branches[at + i] = here;
+      at += step.commands;
+      if (step.kind === "switch") here = step.branch;
+      else if (step.kind === "createBranch" && step.switch) here = step.name || "…";
+    });
+    return { starts, branches };
+  });
+
+  /** The branch each command that ran was run on, by its line: a fix's steps switch branches. */
+  const ranOn = $derived.by(() => {
+    const out: (string | null)[] = [];
+    if (request?.action?.kind !== "fix") return out;
+    let n = 0;
+    confirm.lines.forEach((line, i) => {
+      if (line.kind === "cmd") out[i] = stepPlaces.branches[n++] ?? null;
+    });
+    return out;
+  });
+
   /** Why the action button is grey, beside it, unless a field already says so under itself. */
   const blocked = $derived(request?.invalid && !request.fields?.some((f) => f.error === request.invalid) ? request.invalid : null);
 
@@ -189,10 +219,10 @@
 
 <svelte:window onkeydown={onKey} />
 
-{#snippet prompt(display: string)}
+{#snippet prompt(display: string, at: string | null = branch)}
   <div class="cmd">
     <!-- A step Oxbow does itself runs outside the repository, from the home folder. -->
-    {#if request?.local}<span class="prompt">~ %</span>{:else}<span class="prompt">{`${repo} `}</span><span style:color="var(--plate-{color})">({branch ?? "HEAD"})</span><span class="prompt">{" %"}</span>{/if}
+    {#if request?.local}<span class="prompt">~ %</span>{:else}<span class="prompt">{`${repo} `}</span><span style:color={at === branch ? `var(--plate-${color})` : "var(--term-sub)"}>({at ?? "HEAD"})</span><span class="prompt">{" %"}</span>{/if}
     <CommandWords text={display} />
   </div>
 {/snippet}
@@ -321,6 +351,25 @@
         </div>
       {/if}
 
+      {#if stepLines.length}
+        <ol class="steps" aria-label="Steps">
+          {#each stepLines as line, n (n)}
+            <li class="step">
+              <span class="num">{n + 1}</span>
+              <span class="step-words">
+                <span>
+                  {#each line.parts as part, i (i)}
+                    {#if typeof part === "string"}{part}{:else if "branch" in part}<span class="chip" style:background={tint(part.color, "label")} style:color={plate(part.color)}>{part.branch}</span
+                      >{:else if "code" in part}<span class="chip mono">{part.code}</span>{:else}<span class="quote">“{part.quote}”</span>{/if}
+                  {/each}
+                </span>
+                {#if line.sub}<span class="step-sub">{line.sub}</span>{/if}
+              </span>
+            </li>
+          {/each}
+        </ol>
+      {/if}
+
       {#if confirm.notKept.length && confirm.phase === "ask"}
         <div class="gaps" aria-label="What Undo can’t bring back">
           {#each confirm.notKept as gap, i (i)}
@@ -378,12 +427,16 @@
         <div class="lines mono selectable" bind:this={linesBox} aria-live="polite">
           {#if confirm.phase === "ask"}
             {#each confirm.commands as command, i (i)}
+              {#if stepPlaces.starts.has(i) && stepLines.length}
+                {@const n = stepPlaces.starts.get(i)!}
+                <div class="comment step-head">{`# ${n + 1} · ${stepLines[n]?.head ?? ""}`}</div>
+              {/if}
               {#if command.before}{@render prompt(command.before)}{/if}
               {#if command.input}
                 <div class="comment"># Oxbow writes a patch with just these lines and feeds it on stdin:</div>
                 {#each patchLines(command.input) as line, k (k)}<div class="patch {line.kind}">{line.text}</div>{/each}
               {/if}
-              {@render prompt(command.display)}
+              {@render prompt(command.display, stepPlaces.branches[i] ?? branch)}
               {#if command.comment}<div class="comment"># {command.comment}</div>{/if}
               {#if command.todo}
                 <div class="comment"># Oxbow hands git this todo list instead of opening an editor:</div>
@@ -392,7 +445,7 @@
             {/each}
           {:else}
             {#each confirm.lines as line, i (i)}
-              {#if line.kind === "cmd"}{@render prompt(line.text)}{:else}<div class="output" style:color={OUTPUT[line.kind]}>{line.text}</div>{/if}
+              {#if line.kind === "cmd"}{@render prompt(line.text, ranOn[i] ?? branch)}{:else}<div class="output" style:color={OUTPUT[line.kind]}>{line.text}</div>{/if}
             {/each}
             {#if recovery?.checked?.length}
               {#if !recovery.secrets}<div class="comment"># Oxbow checked why:</div>{/if}
@@ -416,6 +469,16 @@
         </div>
       {:else}
         <div class="foot">
+          {#if !failed && request.back}
+            {@const back = request.back}
+            <button
+              class="alt back-button"
+              onclick={() => {
+                confirm.cancel();
+                back.run();
+              }}><svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>{back.label}</button
+            >
+          {/if}
           {#if recovery?.alt}
             <button class="alt" class:danger={recovery.alt.danger} onclick={() => confirm.alternative()}>{recovery.alt.label}</button>
           {:else if !failed && request.alt}
@@ -1101,6 +1164,67 @@
     font-size: 11px;
     line-height: 1.35;
     color: var(--text2);
+  }
+  /* A fix's plan: numbered steps in words, above the commands they run. */
+  .steps {
+    margin: 0 0 0 58px;
+    padding: 4px 12px;
+    list-style: none;
+    border-radius: 12px;
+    background: var(--panel);
+    border: 0.5px solid var(--panel-border);
+    display: flex;
+    flex-direction: column;
+  }
+  .step {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 6px 0;
+    line-height: 1.6;
+  }
+  .step + .step {
+    border-top: 0.5px solid var(--sep);
+  }
+  .num {
+    width: 20px;
+    height: 20px;
+    margin-top: 1px;
+    flex-shrink: 0;
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    font-size: 11px;
+    font-weight: 700;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--plate-0);
+  }
+  .step-words {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-wrap: anywhere;
+  }
+  .step-sub {
+    font-size: 11.5px;
+    line-height: 1.4;
+    color: var(--text2);
+  }
+  .step-head {
+    font-weight: 600;
+    font-style: normal;
+  }
+  .step-head:not(:first-child) {
+    margin-top: 6px;
+  }
+  .back-button {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .back-button .icon {
+    width: 14px;
+    height: 14px;
   }
   .btn {
     flex-shrink: 0;

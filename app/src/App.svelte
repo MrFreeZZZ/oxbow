@@ -59,6 +59,8 @@
   import { lens } from "./lib/lens.svelte";
   import TipCard from "./lib/TipCard.svelte";
   import { tips } from "./lib/tips.svelte";
+  import FixSheet from "./lib/FixSheet.svelte";
+  import { fixChoices, fixRequest, fixStateLine, loadFixState, type FixContext, type FixId } from "./lib/fixes";
   import { bisectMarkRequest, bisectResetRequest, bisectStartRequest } from "./lib/bisect";
   import { keys } from "./lib/keys";
   import type { BisectMark } from "./lib/types";
@@ -140,6 +142,8 @@
   }
   /** The stash picked on the Stashes screen. */
   let stashSel = $state<string | null>(null);
+  /** Fix a Mistake's list, open, with what it planned from. */
+  let fixing = $state<FixContext | null>(null);
 
   const branchCount = $derived(history ? history.refs.filter((r) => r.kind === "local").length : 0);
   const rowsById = $derived(new Map(history?.rows.map((r) => [r.id, r]) ?? []));
@@ -373,6 +377,37 @@
     return out;
   });
 
+  /** Open Fix a Mistake, from the repository as it is now; `commit` is a commit it was opened on. */
+  async function openFixes(commit: string | null = null) {
+    if (!branchCtx || confirm.request) return;
+    try {
+      fixing = await fixContext(commit);
+    } catch (err) {
+      confirm.fail(err);
+    }
+  }
+
+  async function fixContext(commit: string | null): Promise<FixContext> {
+    const state = await loadFixState();
+    const fc: FixContext = {
+      ctx: branchCtx!,
+      state,
+      commit,
+      back: () => void openFixes(commit),
+      reopen: async (id) => fixRequest(await fixContext(commit), id),
+    };
+    return fc;
+  }
+
+  /** Open the sheet of the fix picked in Fix a Mistake. `fc` is taken before the picker closes. */
+  function pickFix(fc: FixContext, id: FixId) {
+    fixing = null;
+    void run(fixRequest(fc, id));
+  }
+
+  /** Why no fix can run now: something git is in the middle of comes first. */
+  const fixBusy = $derived(operation ? `Finish or abort the ${describe(operation).noun.toLowerCase()} in progress first.` : history?.bisect ? "Finish the bisect first." : null);
+
   /** The right-click menu of a commit in the graph. */
   function commitMenu(row: HistoryRow): MenuEntry[] {
     const ctx = branchCtx;
@@ -431,6 +466,7 @@
       if (own) editing.push(item("Edit Stack…", menuIcons.rebase, () => openStack(null)));
       if (!inHead && history.head.commit) editing.push(item(`Cherry-Pick onto ${here}`, menuIcons.cherry, () => run(cherryPickRequest(ctx, row))));
       if (inHead) editing.push(item("Revert Commit…", menuIcons.revert, () => run(revertRequest(ctx, row))));
+      if (inHead && history.head.branch) editing.push(item("Fix a Mistake…", menuIcons.fix, () => openFixes(row.id)));
       if (!isHead && history.head.commit) {
         editing.push({
           kind: "sub",
@@ -989,6 +1025,10 @@
       view = "history";
       resolving = false;
       requestAnimationFrame(() => searchField?.focus());
+    } else if ((event.metaKey || event.ctrlKey) && event.altKey && !event.shiftKey && event.code === "KeyZ" && history && !confirm.request && !start.sheet && !fixing) {
+      // ⌥⌘Z: Fix a Mistake.
+      event.preventDefault();
+      openFixes();
     } else if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "z" && history && !confirm.request && !start.sheet && !typing(event)) {
       // ⌘Z undoes the newest step of the Operation Log. In a text field it stays the field's own.
       event.preventDefault();
@@ -1194,6 +1234,9 @@
           </button>
           <button class="capsule" onclick={() => api.openSettings()} aria-label="Settings" title={withKeys("Settings", "Mod+,")}>
             <svg class="icon" viewBox="0 0 16 16"><path d="M12.78 6.52L14.44 6.56L14.44 9.44L12.78 9.48L12.42 10.33L13.57 11.54L11.54 13.57L10.33 12.42L9.48 12.78L9.44 14.44L6.56 14.44L6.52 12.78L5.67 12.42L4.46 13.57L2.43 11.54L3.58 10.33L3.22 9.48L1.56 9.44L1.56 6.56L3.22 6.52L3.58 5.67L2.43 4.46L4.46 2.43L5.67 3.58L6.52 3.22L6.56 1.56L9.44 1.56L9.48 3.22L10.33 3.58L11.54 2.43L13.57 4.46L12.42 5.67zM8 5.8a2.2 2.2 0 1 0 0 4.4a2.2 2.2 0 1 0 0-4.4" /></svg>
+          </button>
+          <button class="capsule" onclick={() => openFixes()} aria-label="Fix a mistake" title={withKeys("Fix a Mistake…", "Alt+Mod+Z")}>
+            <svg class="icon" viewBox="0 0 16 16"><path d="M8 1.8a6.2 6.2 0 1 0 0 12.4a6.2 6.2 0 1 0 0-12.4M8 5.4a2.6 2.6 0 1 0 0 5.2a2.6 2.6 0 1 0 0-5.2M3.6 3.6l2.6 2.6M12.4 3.6 9.8 6.2M3.6 12.4l2.6-2.6M12.4 12.4 9.8 9.8" /></svg>
           </button>
           <OperationLog
             repo={repo.name}
@@ -1405,6 +1448,15 @@
   </div>
   {#if nav.quickOpen}
     <QuickOpen commit={selectedRow && !selectedRow.worktree ? { id: selectedRow.id, summary: selectedRow.summary } : null} onClose={() => (nav.quickOpen = false)} />
+  {/if}
+  {#if fixing}
+    {@const fc = fixing}
+    <FixSheet
+      choices={fixChoices(fc, fixBusy)}
+      summary={fixStateLine(fc)}
+      onPick={(id) => pickFix(fc, id)}
+      onClose={() => (fixing = null)}
+    />
   {/if}
   <ConfirmSheet repo={repo.name} branch={history.head.branch ?? operation?.branch ?? null} color={headColor} />
 {/if}

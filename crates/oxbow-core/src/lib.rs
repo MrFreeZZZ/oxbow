@@ -13,6 +13,7 @@ pub mod edit;
 pub mod error;
 pub mod fetched;
 pub mod filehistory;
+pub mod fix;
 pub mod github;
 pub mod graph;
 pub mod history;
@@ -47,6 +48,7 @@ pub use edit::ResetMode;
 pub use error::{Error, Result};
 pub use fetched::RemoteFetch;
 pub use filehistory::{Blame, BlameCommit, BlameLine, FileCommit, FileHistory};
+pub use fix::{Fix, FixExpect, FixFile, FixState, FixStep, StepKind};
 pub use history::{
     History, HistoryCache, HistoryOptions, HistoryRow, Label, PAGE, Piece, WORKTREE_ID, WorktreeSummary,
 };

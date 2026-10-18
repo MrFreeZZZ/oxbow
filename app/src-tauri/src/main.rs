@@ -928,6 +928,14 @@ async fn reflog_entries(
     blocking(move || repo.reflog_entries()).await
 }
 
+/// What Fix a Mistake plans from: the state to check again before a fix runs, the changed files
+/// and commits only the reflog keeps.
+#[tauri::command]
+async fn fix_state(window: tauri::WebviewWindow, session: State<'_, Session>) -> CommandResult<oxbow_core::FixState> {
+    let repo = current(&session, &window)?;
+    blocking(move || repo.fix_state()).await
+}
+
 /// The repository now beside how it was before step `id`, or right after it with `after`.
 #[tauri::command]
 async fn compare_snapshot(
@@ -1911,6 +1919,7 @@ fn main() {
             open_lfs_download,
             operation_log,
             reflog_entries,
+            fix_state,
             compare_snapshot,
             monospace_fonts,
             refresh_remote_tags,

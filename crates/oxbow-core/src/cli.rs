@@ -43,6 +43,12 @@ pub struct GitCommand {
     /// turn comes, after the commands before it ran; otherwise it is left out. For a
     /// fast-forward that depends on what a fetch before it brings.
     pub only_if_ancestor: Option<(String, String)>,
+    /// Run only when the ref has moved from this commit (`None`: it did not exist) by the time
+    /// the command's turn comes, e.g. a `stash pop` after a `stash push` that may save nothing.
+    pub only_if_moved: Option<(String, Option<String>)>,
+    /// Before running, stop when the secrets check finds something in the staged lines, as a
+    /// commit does; for a commit that stages its files in an earlier command of the same action.
+    pub secrets_check: bool,
 }
 
 impl GitCommand {
@@ -61,6 +67,8 @@ impl GitCommand {
             todo: None,
             program: None,
             only_if_ancestor: None,
+            only_if_moved: None,
+            secrets_check: false,
         }
     }
 
