@@ -89,6 +89,10 @@ export const BRANCH_PALETTES: BranchPalette[] = [
 
 export const branchPaletteById = (id: string): BranchPalette => BRANCH_PALETTES.find((p) => p.id === id) ?? BRANCH_PALETTES[0];
 
+/** In the dark the graph keeps only a trace of the palette's paper: mostly the neutral gray of the
+ *  window, so the graph and the details beside it don't read as two temperatures. */
+const darkPaper = (bg: string) => `color-mix(in srgb, ${bg} 30%, #222225)`;
+
 /** CSS variables for a palette in a look. Oxbow's are app.css's own, so it sets none and the
  *  others' are removed (`null`). */
 export function branchVariables(palette: BranchPalette, look: "light" | "dark"): Record<string, string | null> {
@@ -99,7 +103,7 @@ export function branchVariables(palette: BranchPalette, look: "light" | "dark"):
   }
   if (palette.id === "oxbow") return vars;
   const { bg, lines, plates } = palette[look];
-  vars["--graph-bg"] = bg;
+  vars["--graph-bg"] = look === "dark" ? darkPaper(bg) : bg;
   lines.forEach((color, i) => (vars[`--lane-${i}`] = color));
   plates.forEach((color, i) => (vars[`--plate-${i}`] = color));
   return vars;
