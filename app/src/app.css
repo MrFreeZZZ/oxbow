@@ -5,6 +5,8 @@
   --win: #ffffff;
   /* Laid over a button's own color on hover and while pressed. */
   --hover-wash: rgba(0, 0, 0, 0.065);
+  /* A list row under the pointer, such as a commit in the history. */
+  --row-hover: rgba(0, 0, 0, 0.035);
   --press-wash: rgba(0, 0, 0, 0.1);
   /* The graph sits on its own warm tint, apart from the white commit panel. */
   --graph-bg: #f7f6f2;
@@ -73,6 +75,8 @@
   --tint-soft: 10%;
   --tint-label: 12%;
   --tint-bar: 16%;
+  /* A file's header bar over its diff: a whisper of the branch color, half of a banner's. */
+  --tint-head: 8%;
 
   --dim: rgba(0, 0, 0, 0.16);
   --sheet: rgba(252, 252, 253, 0.98);
@@ -172,8 +176,10 @@
   color-scheme: dark;
   --win: #1e1e21;
   --hover-wash: rgba(255, 255, 255, 0.08);
+  --row-hover: rgba(255, 255, 255, 0.045);
   --press-wash: rgba(255, 255, 255, 0.14);
-  --graph-bg: #252422;
+  /* Oxbow's warm paper, mostly neutral in the dark (darkPaper in branchPalettes.ts). */
+  --graph-bg: color-mix(in srgb, #252422 30%, #222225);
   --side: rgba(44, 44, 48, 0.96);
   --side-border: rgba(255, 255, 255, 0.07);
   --panel-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
@@ -233,6 +239,7 @@
   --tint-soft: 19%;
   --tint-label: 18%;
   --tint-bar: 15%;
+  --tint-head: 8%;
 
   --dim: rgba(0, 0, 0, 0.35);
   --sheet: rgba(44, 44, 48, 0.98);

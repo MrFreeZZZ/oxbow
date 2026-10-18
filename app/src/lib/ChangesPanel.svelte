@@ -741,7 +741,7 @@
   }
   /* No frame: the head sits on the panel itself, like the commit details. */
   .head {
-    padding: 16px 20px 6px;
+    padding: var(--space-4) var(--space-5) var(--space-2);
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -779,7 +779,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 10px 0 10px 20px;
+    padding: var(--space-2) 0 var(--space-2) var(--space-5);
     border-bottom: 1px solid var(--sep);
     flex-shrink: 0;
   }
@@ -805,7 +805,7 @@
     display: flex;
     align-items: center;
     height: 26px;
-    padding: 0 11px;
+    padding: 0 var(--space-3);
     border-radius: var(--radius-pill);
     border: 1px solid var(--sep);
     font-size: var(--text-small);
@@ -833,7 +833,7 @@
     color: var(--text);
   }
   .tip {
-    margin: 0 12px 6px;
+    margin: 0 var(--space-3) var(--space-2);
     display: flex;
     flex-direction: column;
   }
@@ -844,14 +844,14 @@
   .group {
     display: flex;
     flex-direction: column;
-    padding: 2px 8px 4px;
+    padding: var(--space-1) var(--space-2);
   }
   .ghead {
     display: flex;
     align-items: center;
     gap: 6px;
     height: 28px;
-    padding: 0 10px;
+    padding: 0 var(--space-3);
     font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
@@ -869,8 +869,8 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    margin: 10px 12px 0;
-    padding: 0 10px;
+    margin: var(--space-3) var(--space-3) 0;
+    padding: 0 var(--space-3);
     font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
@@ -880,7 +880,7 @@
   }
   .empty {
     margin: 0;
-    padding: 2px 10px 4px;
+    padding: var(--space-1) var(--space-3);
     font-size: var(--text-small);
     color: var(--text2);
   }
@@ -889,7 +889,7 @@
     align-items: center;
     gap: 8px;
     height: 28px;
-    padding: 0 4px 0 10px;
+    padding: 0 var(--space-1) 0 var(--space-3);
     border-radius: var(--radius-s);
   }
   .file:hover {
@@ -898,12 +898,26 @@
   .file.ticked {
     background: var(--side-sel);
   }
+  /* Drawn like the line checkboxes of a diff, so they match the theme on every system:
+     an outline on the panel, Steel with a white tick when on. */
   input[type="checkbox"] {
+    -webkit-appearance: none;
+    appearance: none;
     margin: 0;
     width: 14px;
     height: 14px;
-    accent-color: var(--accent);
+    border: 1.2px solid var(--text2);
+    border-radius: var(--radius-xs);
+    background: transparent center / 11px 11px no-repeat;
     flex-shrink: 0;
+  }
+  input[type="checkbox"]:checked {
+    border-color: var(--accent);
+    background-color: var(--accent);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
+  input[type="checkbox"]:focus-visible {
+    box-shadow: var(--focus-ring);
   }
   .name {
     flex-grow: 1;
@@ -995,8 +1009,8 @@
     align-items: center;
     gap: 8px;
     height: 34px;
-    margin: 6px 0 4px;
-    padding: 0 6px 0 12px;
+    margin: var(--space-2) 0 var(--space-1);
+    padding: 0 var(--space-2) 0 var(--space-3);
     border-radius: var(--radius-m);
     background: var(--hunk-bg);
     color: var(--hunk-text);
@@ -1029,7 +1043,7 @@
 
   .commit {
     flex-shrink: 0;
-    margin: 10px 12px 12px;
+    margin: var(--space-3);
     padding: 12px;
     border-radius: var(--radius-xl);
     background: var(--field);
@@ -1092,7 +1106,7 @@
     align-items: center;
     gap: 8px;
     height: 34px;
-    padding: 0 10px;
+    padding: 0 var(--space-3);
     border-radius: var(--radius-m);
     background: var(--win);
     border: 0.5px solid var(--glass-border);
@@ -1121,7 +1135,7 @@
   textarea {
     resize: none;
     border-radius: var(--radius-m);
-    padding: 8px 10px;
+    padding: var(--space-2) var(--space-3);
     background: var(--win);
     border: 0.5px solid var(--glass-border);
     outline: 0;
@@ -1140,7 +1154,7 @@
     align-items: center;
     gap: 8px;
     height: 32px;
-    padding: 0 14px;
+    padding: 0 var(--space-4);
   }
 
   .keys {

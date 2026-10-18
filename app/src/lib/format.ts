@@ -8,7 +8,7 @@ export const lane = (color: number) => `var(--lane-${color})`;
 /** Darker (light theme) or brighter (dark theme) text color for labels on a lane tint. */
 export const plate = (color: number) => `var(--plate-${color})`;
 /** A soft tint of a lane color, for selection and label fills. */
-export const tint = (color: number, strength: "soft" | "label" | "bar" = "soft") =>
+export const tint = (color: number, strength: "soft" | "label" | "bar" | "head" = "soft") =>
   `color-mix(in srgb, var(--lane-${color}) var(--tint-${strength}), transparent)`;
 
 export const shortId = (id: string) => id.slice(0, 7);

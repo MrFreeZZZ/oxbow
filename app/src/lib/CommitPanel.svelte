@@ -368,7 +368,7 @@
   }
   /* The commit's details sit on the panel itself, with no frame; a hairline parts them from the tabs. */
   .head {
-    padding: 16px 20px 6px;
+    padding: var(--space-4) var(--space-5) var(--space-2);
     display: flex;
     flex-direction: column;
     gap: 14px;
@@ -461,7 +461,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 10px 0 10px 20px;
+    padding: var(--space-2) 0 var(--space-2) var(--space-5);
     border-bottom: 1px solid var(--sep);
     flex-shrink: 0;
   }
@@ -487,7 +487,7 @@
     display: flex;
     align-items: center;
     height: 26px;
-    padding: 0 11px;
+    padding: 0 var(--space-3);
     border-radius: var(--radius-pill);
     border: 1px solid var(--sep);
     font-size: var(--text-small);
@@ -510,11 +510,11 @@
   }
   /* The same card as at the end of a shallow clone's history. */
   .end {
-    margin: 12px 12px 6px;
+    margin: var(--space-3) var(--space-3) var(--space-2);
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 10px 12px;
+    padding: var(--space-3);
     border-radius: var(--radius-l);
     background: var(--glass);
     border: 0.5px solid var(--glass-border);

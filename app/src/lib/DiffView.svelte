@@ -332,7 +332,7 @@
   {@const kind = isShut ? null : special(diff)}
   <section class="file" class:shut={isShut} data-path={diff.file.path}>
     <header>
-      <div class="bar" style:background={tint(color, "bar")} style:--name={plate(color)}>
+      <div class="bar" style:background={tint(color, "head")} style:--name={plate(color)}>
         {#if foldable}
           <button
             class="head"
@@ -513,7 +513,7 @@
 
 <style>
   .file {
-    padding: 0 12px 14px;
+    padding: 0 var(--space-3) var(--space-4);
   }
   .file.shut {
     padding-bottom: 0;
@@ -548,7 +548,7 @@
     position: sticky;
     top: 0;
     z-index: 1;
-    padding: 6px 0;
+    padding: var(--space-2) 0;
     background: var(--win);
   }
   .bar {
@@ -556,7 +556,7 @@
     align-items: center;
     gap: 8px;
     height: 34px;
-    padding: 0 4px 0 10px;
+    padding: 0 var(--space-1) 0 var(--space-3);
     border-radius: var(--radius-m);
     font-size: var(--text-small);
   }
@@ -616,7 +616,7 @@
     gap: 8px;
     min-height: 30px;
     margin: 2px 0 8px;
-    padding: 4px 4px 4px 10px;
+    padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
     border-radius: var(--radius-m);
     background: var(--field);
     font-size: var(--text-small);

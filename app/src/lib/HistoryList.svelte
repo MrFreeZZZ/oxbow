@@ -1,7 +1,7 @@
 <script lang="ts">
   import { withKeys } from "./keys";
   import { untrack } from "svelte";
-  import type { History, HistoryRow, RowLayout, Segment, WorktreeSummary } from "./types";
+  import type { History, HistoryRow, Label, RowLayout, Segment, WorktreeSummary } from "./types";
   import { lane, plate, relativeTime, tint } from "./format";
   import Menu, { type MenuEntry } from "./Menu.svelte";
   import { prefs } from "./prefs.svelte";
@@ -284,6 +284,73 @@
   const hasLocal = (row: HistoryRow, name: string) => row.labels.some((l) => l.kind === "local" && l.name === name);
   /** The remote branch at the same commit as the local branch `name`, as origin/x for x. */
   const remoteTwin = (row: HistoryRow, name: string) => row.labels.find((l) => l.kind === "remote" && l.name.slice(l.name.indexOf("/") + 1) === name)?.name ?? null;
+
+  // Capsules that don't fit beside the author and time fold into a "+N" chip, instead of being
+  // cut down to a letter or two. Widths come from the text in the app's own font, so no row is
+  // laid out twice.
+  let width = $state(0);
+  let pen: CanvasRenderingContext2D | null = null;
+  const widths = new Map<string, number>();
+  function textWidth(text: string, weight: number, size = 11): number {
+    const key = `${weight} ${size} ${text}`;
+    let w = widths.get(key);
+    if (w === undefined) {
+      pen ??= document.createElement("canvas").getContext("2d");
+      if (!pen) return text.length * size * 0.6;
+      pen.font = `${weight} ${size}px ${getComputedStyle(document.documentElement).getPropertyValue("--font")}`;
+      w = pen.measureText(text).width;
+      widths.set(key, w);
+    }
+    return w;
+  }
+  const PILL_GAP = 6;
+  /** A capsule's width: its text, 6 px each side, the border, and an icon for some. */
+  const pillWidth = (text: string, weight: number, icon: boolean) => Math.min(190, Math.ceil(textWidth(text, weight)) + 14 + (icon ? 13 : 0));
+  /** Narrower than this, a cut capsule says too little to be worth showing. */
+  const CUT_MIN = 64;
+
+  /** Which capsule shows first: the checked-out branch, then the production branch, then the
+   *  rest as git lists them. */
+  const rank = (l: Label) => (l.kind === "head" ? 0 : l.head ? 1 : l.color === 0 && isProduction(l.name) ? 2 : 3);
+
+  /** The labels a row shows as capsules, in order, and those folded into "+N". HEAD and the
+   *  bisect marks always show; the rest give way from the end. */
+  function fitLabels(row: HistoryRow, pill: BisectPill | undefined): { shown: Label[]; folded: Label[]; last: Label | null } {
+    const own = row.labels
+      .filter((l) => !(l.kind === "remote" && hasLocal(row, l.name.slice(l.name.indexOf("/") + 1))))
+      .map((l, i) => ({ l, i }))
+      .sort((a, b) => rank(a.l) - rank(b.l) || a.i - b.i)
+      .map(({ l }) => l);
+    const foldable = own.filter((l) => l.kind !== "head");
+    if (!width || !foldable.length) return { shown: own, folded: [], last: own.at(-1) ?? null };
+    const content = width - 16 - textStart(row) - 12;
+    let room = content;
+    if (compact) room -= 10 + Math.min(Math.ceil(textWidth(row.summary, 400, 13)), content * 0.55);
+    const byline = row.worktree ? worktreeLine(row.worktree) : `${row.authorName} · ${relativeTime(row.time)}`;
+    room -= Math.ceil(textWidth(byline, 400));
+    if (pill && pill !== "testing") room -= pillWidth(PILL[pill], 600, false) + PILL_GAP;
+    for (const l of own) if (l.kind === "head") room -= pillWidth(pill === "testing" ? PILL.testing : "HEAD", 600, false) + PILL_GAP;
+    const shown = new Set(own.filter((l) => l.kind === "head"));
+    let used = 0;
+    for (let i = 0; i < foldable.length; i++) {
+      const l = foldable[i];
+      const twin = l.kind === "local" && !!remoteTwin(row, l.name);
+      const w = pillWidth(l.name, l.color === 0 ? 700 : 500, twin || l.kind === "tag" || l.kind === "stash") + PILL_GAP;
+      const rest = foldable.length - i - 1;
+      const chip = rest ? pillWidth(`+${rest}`, 600, false) + PILL_GAP : 0;
+      if (used + w + chip <= room) {
+        shown.add(l);
+        used += w;
+        continue;
+      }
+      // The first capsule that doesn't fit whole is cut with an ellipsis, if enough of it shows.
+      const chipAfter = rest ? chip : 0;
+      if (room - used - chipAfter - PILL_GAP >= CUT_MIN) shown.add(l);
+      break;
+    }
+    const list = own.filter((l) => shown.has(l));
+    return { shown: list, folded: foldable.filter((l) => !shown.has(l)), last: list.at(-1) ?? null };
+  }
 </script>
 
 <div class="wrap">
@@ -292,6 +359,7 @@
     class="viewport"
     bind:this={viewport}
     bind:clientHeight={height}
+    bind:clientWidth={width}
     onscroll={() => (scrollTop = viewport?.scrollTop ?? 0)}
     onkeydown={onKey}
     tabindex="0"
@@ -303,6 +371,7 @@
         {@const isSelected = row.id === selected}
         {@const picked = isSelected || row.id === second}
         {@const pill = pills.get(row.id)}
+        {@const fit = fitLabels(row, pill)}
         <div
           class="row"
           class:compact
@@ -333,17 +402,16 @@
             {#if pill && pill !== "testing"}
               <span class="pill bisect {pill}">{pill === "found" && history.bisect?.termBad !== "bad" ? `first ${history.bisect?.termBad} commit` : PILL[pill]}</span>
             {/if}
-            {#each row.labels as label (label.kind + label.name)}
+            <!-- origin/x at the same commit as x rides on x's capsule; the ones with no room are in "+N". -->
+            {#each fit.shown as label (label.kind + label.name)}
               {@const twin = label.kind === "local" ? remoteTwin(row, label.name) : null}
-              {#if label.kind === "remote" && hasLocal(row, label.name.slice(label.name.indexOf("/") + 1))}
-                <!-- origin/x at the same commit as x rides on x's capsule. -->
-              {:else if label.kind === "tag"}
-                <span class="pill tag" class:local={history.localTags.includes(label.name)} title={history.localTags.includes(label.name) ? `Not on ${history.defaultRemote} yet` : undefined}>
+              {#if label.kind === "tag"}
+                <span class="pill tag" style:flex-shrink={label === fit.last ? 1 : 0} class:local={history.localTags.includes(label.name)} title={history.localTags.includes(label.name) ? `Not on ${history.defaultRemote} yet` : undefined}>
                   <svg class="icon tiny" viewBox="0 0 16 16"><path d="M2.5 2.5h5l6 6-5 5-6-6z" /><circle cx="5.5" cy="5.5" r="0.8" /></svg>
                   {label.name}
                 </span>
               {:else if label.kind === "stash"}
-                <span class="pill" style:color={plate(label.color)} style:background={tint(label.color, "label")}>
+                <span class="pill" style:flex-shrink={label === fit.last ? 1 : 0} style:color={plate(label.color)} style:background={tint(label.color, "label")}>
                   <svg class="icon tiny" viewBox="0 0 16 16"><rect x="3" y="6.5" width="10" height="7" rx="1.5" /><path d="M4.5 4.5h7M6 2.5h4" /></svg>
                   {label.name}
                 </span>
@@ -352,12 +420,15 @@
               {:else if label.kind === "head"}
                 <span class="pill head" style:color={plate(label.color)} style:border-color="color-mix(in srgb, {lane(label.color)} 55%, transparent)">HEAD</span>
               {:else if label.kind === "remote"}
-                <span class="pill" class:production={label.color === 0 && isProduction(label.name)} style:flex-shrink={label.name.length} style:color={plate(label.color)} style:border-color="color-mix(in srgb, {lane(label.color)} 40%, transparent)" title={label.name}>{label.name}</span>
+                <span class="pill" class:production={label.color === 0 && isProduction(label.name)} style:flex-shrink={label === fit.last ? 1 : 0} style:color={plate(label.color)} style:border-color="color-mix(in srgb, {lane(label.color)} 40%, transparent)" title={label.name}>{label.name}</span>
               {:else}
-                <!-- Long names give way first: each shrinks in step with its length. -->
-                <span class="pill" class:head={label.head} class:twin class:production={label.color === 0 && isProduction(label.name)} style:flex-shrink={label.name.length} style:color={plate(label.color)} style:background={tint(label.color, "label")} title={twin ? `${label.name}, same as ${twin}` : label.name}>{#if twin}<svg class="icon tiny" viewBox="0 0 16 16"><path d="M4.5 12.5h7a3 3 0 0 0 .4-6 4 4 0 0 0-7.6-1A3.5 3.5 0 0 0 4.5 12.5z" /></svg>{/if}{label.name}</span>
+                <!-- Only the last capsule gives way, with an ellipsis; the others show whole. -->
+                <span class="pill" class:head={label.head} class:twin class:production={label.color === 0 && isProduction(label.name)} style:flex-shrink={label === fit.last ? 1 : 0} style:color={plate(label.color)} style:background={tint(label.color, "label")} title={twin ? `${label.name}, same as ${twin}` : label.name}>{#if twin}<svg class="icon tiny" viewBox="0 0 16 16"><path d="M4.5 12.5h7a3 3 0 0 0 .4-6 4 4 0 0 0-7.6-1A3.5 3.5 0 0 0 4.5 12.5z" /></svg>{/if}{label.name}</span>
               {/if}
             {/each}
+            {#if fit.folded.length}
+              <span class="pill more" title={fit.folded.map((l) => l.name).join("\n")}>+{fit.folded.length}</span>
+            {/if}
             {#if row.worktree}
               <span class="byline">{worktreeLine(row.worktree)}</span>
             {:else}
@@ -521,7 +592,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 10px 12px;
+    padding: var(--space-3);
     border-radius: var(--radius-l);
     background: var(--glass);
     border: 0.5px solid var(--glass-border);
@@ -567,7 +638,7 @@
     flex-direction: column;
     justify-content: center;
     gap: 3px;
-    padding-right: 10px;
+    padding-right: var(--space-3);
     border-radius: var(--radius-m);
     transition: background-color 0.3s;
   }
@@ -586,6 +657,11 @@
   .row.compact .meta {
     flex: 0 1 auto;
     margin-left: auto;
+  }
+  /* A soft wash under the pointer, so it's clear which commit a click picks. */
+  .row:hover {
+    background: var(--row-hover);
+    transition-duration: 0.1s;
   }
   .row.flash {
     background: var(--flash);
@@ -613,7 +689,7 @@
     font-size: var(--text-caption);
     overflow: hidden;
   }
-  /* Labels give way first, with an ellipsis; author and time keep their room. */
+  /* Capsules show whole; the last one may give way with an ellipsis. Author and time keep their room. */
   .pill {
     display: inline-block;
     height: 16px;
@@ -622,7 +698,7 @@
     border-radius: var(--radius-pill);
     border: 1px solid transparent;
     font-weight: 500;
-    flex-shrink: 1;
+    flex-shrink: 0;
     min-width: 34px;
     max-width: 190px;
     white-space: nowrap;
@@ -636,8 +712,15 @@
   .pill.twin {
     min-width: 48px;
   }
-  /* HEAD and the bisect marks are short and say what the row is: they keep their whole word.
-     A branch capsule's own flex-shrink, set inline, outweighs this. */
+  /* The capsules with no room: "+2", their names in the tooltip. */
+  .pill.more {
+    flex-shrink: 0;
+    min-width: 0;
+    background: var(--field);
+    color: var(--text2);
+    font-weight: 600;
+  }
+  /* HEAD and the bisect marks are short and say what the row is: they keep their whole word. */
   .pill.head,
   .pill.bisect {
     flex-shrink: 0;
