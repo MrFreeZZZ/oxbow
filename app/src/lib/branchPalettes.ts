@@ -35,7 +35,7 @@ export const BRANCH_PALETTES: BranchPalette[] = [
       plates: ["#3B5A77", "#645478", "#286266", "#5A3B21", "#2D2F34", "#436073", "#3F3C60", "#916030"],
     },
     dark: {
-      bg: "#181D27",
+      bg: "#1E2026",
       lines: ["#73B4EB", "#CDAFF5", "#6DD7E4", "#C59175", "#DADEEB", "#789CAB", "#9890DB", "#F9C191"],
       plates: ["#C2E2FE", "#ECE2FC", "#BBF5FD", "#F7CBB3", "#F7F9FF", "#B2D8E8", "#D2CFFA", "#F9C191"],
     },

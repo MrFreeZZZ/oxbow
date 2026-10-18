@@ -26,7 +26,14 @@
     return list;
   });
 
-  const shapes = $derived(softArrows(blocks.length, width, HEIGHT).map((shape, i) => ({ ...shape, block: blocks[i] })));
+  // The commit itself is shown above, so its block holds only the SHA and "this commit"; the
+  // neighbors get the rest of the room for their titles.
+  const CURRENT = 112;
+  const shapes = $derived.by(() => {
+    const others = Math.max(CURRENT, (width - CURRENT) / Math.max(1, blocks.length - 1));
+    const weights = blocks.map((b) => (b.current ? CURRENT : others));
+    return softArrows(blocks.length, width, HEIGHT, weights).map((shape, i) => ({ ...shape, block: blocks[i] }));
+  });
 
   const color = $derived(row.graph.color);
 </script>
@@ -45,7 +52,6 @@
         <span class="ids">
           {#if shape.block.current}
             <span class="id mono selectable" style:color={plate(color)} title={row.id}>{shortId(row.id)}</span>
-            <span class="title current" title={row.summary}>{row.summary}</span>
           {:else}
             {#each shape.block.ids.slice(0, MAX_IDS) as id (id)}
               {@const target = lookup(id)}
@@ -118,11 +124,8 @@
     font-size: 12px;
     color: var(--text);
   }
-  .title.current {
-    font-weight: 600;
-  }
   .link {
-    color: var(--accent-text);
+    color: var(--text2);
   }
   .link:hover:not(:disabled) {
     text-decoration: underline;
@@ -135,5 +138,8 @@
   .label {
     font-size: 11px;
     color: var(--text2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 </style>

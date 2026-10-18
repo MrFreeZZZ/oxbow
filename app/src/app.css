@@ -11,6 +11,8 @@
   --side: rgba(243, 243, 246, 0.96);
   --side-border: rgba(0, 0, 0, 0.06);
   --panel-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+  /* The sidebar slid in over a narrow window. */
+  --overlay-shadow: 8px 0 24px rgba(0, 0, 0, 0.12);
   --glass: rgba(255, 255, 255, 0.92);
   --glass-border: rgba(0, 0, 0, 0.08);
   --glass-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 4px 14px rgba(0, 0, 0, 0.06);
@@ -24,6 +26,9 @@
   /* Action buttons, checks, toggles and focus rings: the muted steel of the main trunk, not system blue.
      Links keep --accent-text. */
   --accent: #4a6680;
+  /* A quiet Steel button, such as Stage next to the one filled Commit: a soft tint, darker text. */
+  --accent-quiet: rgba(74, 102, 128, 0.14);
+  --accent-ink: #3b5266;
   --accent-text: #0066cc;
   --green: #1a7f37;
   --red: #c4282c;
@@ -142,6 +147,7 @@
   --side: rgba(44, 44, 48, 0.96);
   --side-border: rgba(255, 255, 255, 0.07);
   --panel-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+  --overlay-shadow: 8px 0 28px rgba(0, 0, 0, 0.5);
   --glass: rgba(56, 56, 60, 0.92);
   --glass-border: rgba(255, 255, 255, 0.1);
   --glass-shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 4px 14px rgba(0, 0, 0, 0.3);
@@ -153,6 +159,8 @@
   --side-sel: rgba(255, 255, 255, 0.1);
   --field: rgba(255, 255, 255, 0.07);
   --accent: #5d7c99;
+  --accent-quiet: rgba(148, 178, 204, 0.16);
+  --accent-ink: #a9c4dc;
   --accent-text: #5ab0ff;
   --green: #56d364;
   --red: #ff7b72;
@@ -194,7 +202,7 @@
   --person-9: #99745b;
   --tint-soft: 19%;
   --tint-label: 18%;
-  --tint-bar: 26%;
+  --tint-bar: 15%;
 
   --dim: rgba(0, 0, 0, 0.35);
   --sheet: rgba(44, 44, 48, 0.98);
@@ -308,6 +316,7 @@ button {
     .swap,
     .resolve,
     .stash-now,
+    .reload,
     .amend,
     .open,
     .top,
@@ -347,6 +356,7 @@ button {
     .swap,
     .resolve,
     .stash-now,
+    .reload,
     .amend,
     .open,
     .top,

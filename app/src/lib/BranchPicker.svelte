@@ -130,11 +130,12 @@
 </div>
 
 <style>
+  /* In a narrow toolbar the title gives way first (it shrinks 100 times faster), then this. A
+     shrink factor under 1 would leave the picker overflowing once the title is gone. */
   .picker {
     position: relative;
     display: flex;
     min-width: 0;
-    flex-shrink: 0.02;
   }
   .capsule {
     display: flex;

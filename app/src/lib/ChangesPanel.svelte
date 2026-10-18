@@ -739,15 +739,12 @@
     flex-direction: column;
     min-height: 0;
   }
-  /* A card, like the commit details and the graph. */
+  /* No frame: the head sits on the panel itself, like the commit details. */
   .head {
-    margin: 4px 12px 0;
-    padding: 14px 16px 12px;
+    padding: 16px 20px 6px;
     display: flex;
     flex-direction: column;
     gap: 4px;
-    border: 1px solid var(--sep);
-    border-radius: 12px;
   }
   h1 {
     margin: 0;
@@ -777,13 +774,13 @@
     font-size: 11px;
     color: var(--text2);
   }
-  /* The file lists are a card too, like the file list in a commit's Summary. */
   /* Tabs, as in a commit's details: Summary in the branch color, then a tab per file. */
   .tabs {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 10px 0 0 12px;
+    padding: 10px 0 10px 20px;
+    border-bottom: 1px solid var(--sep);
     flex-shrink: 0;
   }
   .divider {
@@ -841,10 +838,8 @@
     flex-direction: column;
   }
   .lists {
-    margin: 12px 12px 6px;
-    padding: 6px 0;
-    border: 1px solid var(--sep);
-    border-radius: 12px;
+    margin: 8px 8px 4px;
+    padding: 4px 0;
   }
   .group {
     display: flex;
@@ -1068,14 +1063,14 @@
     border-radius: 12px;
     font-size: 12px;
     font-weight: 500;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    color: var(--text);
+    background: transparent;
+    border: 0;
+    color: var(--text2);
   }
+  /* Commit is the one filled button: Stage is a quiet Steel tint, Discard and the rest plain text. */
   .hbtn.primary {
-    background: var(--accent);
-    border-color: transparent;
-    color: #fff;
+    background: var(--accent-quiet);
+    color: var(--accent-ink);
     font-weight: 600;
   }
   .commit {

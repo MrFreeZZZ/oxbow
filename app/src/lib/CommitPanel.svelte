@@ -366,15 +366,12 @@
     flex-direction: column;
     min-height: 0;
   }
-  /* The commit's details are a card, like the graph and the file list in Summary. */
+  /* The commit's details sit on the panel itself, with no frame; a hairline parts them from the tabs. */
   .head {
-    margin: 4px 12px 0;
-    padding: 14px 16px 16px;
+    padding: 16px 20px 6px;
     display: flex;
     flex-direction: column;
     gap: 14px;
-    border: 1px solid var(--sep);
-    border-radius: 12px;
   }
   .message {
     display: flex;
@@ -464,7 +461,8 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 10px 0 10px 12px;
+    padding: 10px 0 10px 20px;
+    border-bottom: 1px solid var(--sep);
     flex-shrink: 0;
   }
   .divider {
@@ -510,7 +508,6 @@
     overflow-y: auto;
     min-height: 0;
   }
-  /* The file list is a card of its own, so it reads apart from the diffs below it. */
   /* The same card as at the end of a shallow clone's history. */
   .end {
     margin: 12px 12px 6px;
@@ -552,10 +549,8 @@
     font-weight: 500;
   }
   .files {
-    margin: 12px 12px 6px;
-    padding: 8px 4px 6px;
-    border-radius: 12px;
-    border: 1px solid var(--sep);
+    margin: 8px 12px 4px;
+    padding: 4px 0 6px;
   }
   .counting {
     font-weight: 400;

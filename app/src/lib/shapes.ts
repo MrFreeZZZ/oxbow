@@ -24,13 +24,18 @@ export const ARROW_TIP = 14;
 const GAP = 4;
 
 /** `n` arrows filling `width`, newest (index 0) on the left: each one's path, and the box its
- *  text goes in. */
-export function softArrows(n: number, width: number, height: number): { path: string; left: number; width: number }[] {
-  const cw = (width + (n - 1) * (ARROW_TIP - GAP)) / n;
+ *  text goes in. `weights`, one per arrow in the same order, share the width out; equal without. */
+export function softArrows(n: number, width: number, height: number, weights?: number[]): { path: string; left: number; width: number }[] {
+  const total = width + (n - 1) * (ARROW_TIP - GAP);
+  const w = weights && weights.length === n ? weights : Array<number>(n).fill(1);
+  const sum = w.reduce((a, b) => a + b, 0);
+  // Widths in build order: oldest first, left to right.
+  const widths = Array.from({ length: n }, (_, i) => (total * w[n - 1 - i]) / sum);
   return Array.from({ length: n }, (_, display) => {
     // Built oldest first, left to right (tip on the right, notch on the left), then mirrored.
     const i = n - 1 - display;
-    const x0 = i * (cw - ARROW_TIP + GAP);
+    const cw = widths[i];
+    const x0 = widths.slice(0, i).reduce((x, c) => x + c - ARROW_TIP + GAP, 0);
     const x1 = x0 + cw;
     const points: [number, number][] = [
       [x0, 0],

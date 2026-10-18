@@ -19,7 +19,7 @@
   import StashesView from "./lib/StashesView.svelte";
   import { ancestors, cherryPickRequest, editMessageRequest, resetModes, resetRequest, revertRequest, undoCommitRequest } from "./lib/commits";
   import type { Operation } from "./lib/types";
-  import { menuIcons, type MenuEntry } from "./lib/Menu.svelte";
+  import Menu, { menuIcons, type MenuEntry } from "./lib/Menu.svelte";
   import { fetchRequest, pullRequest, pushRequest, syncBlock, unshallowRequest, type RemoteContext, type SyncFix } from "./lib/remote";
   import WhyPopover from "./lib/WhyPopover.svelte";
   import Welcome from "./lib/Welcome.svelte";
@@ -62,7 +62,7 @@
   import FixSheet from "./lib/FixSheet.svelte";
   import { fixChoices, fixRequest, fixStateLine, loadFixState, type FixContext, type FixId } from "./lib/fixes";
   import { bisectMarkRequest, bisectResetRequest, bisectStartRequest } from "./lib/bisect";
-  import { keys } from "./lib/keys";
+  import { keys, mac } from "./lib/keys";
   import type { BisectMark } from "./lib/types";
 
   let repo = $state<RepoSummary | null>(null);
@@ -90,6 +90,42 @@
   let resolving = $state(false);
   const operation = $derived(history?.operation ?? null);
   const showConflicts = $derived(resolving && !!operation);
+  /** Below this width the sidebar steps aside, so the graph keeps its room: a toolbar button
+   *  slides it in over the content, and Settings and New Branch go into the «…» menu. */
+  const NARROW = 1180;
+  let windowWidth = $state(1360);
+  /** The sidebar slid in over a narrow window. */
+  let sideShown = $state(false);
+  const narrow = $derived(windowWidth < NARROW);
+  $effect(() => {
+    if (!narrow) sideShown = false;
+  });
+  /** A sidebar action that also slides the sidebar of a narrow window out of the way. */
+  function aside<A extends unknown[]>(act: (...args: A) => void): (...args: A) => void {
+    return (...args) => {
+      sideShown = false;
+      act(...args);
+    };
+  }
+  /** The «…» menu of a narrow window, open under its button. */
+  let moreMenu = $state<{ x: number; y: number } | null>(null);
+  /** The details panel never takes more than 58% of the room, nor leaves the graph under 360 px. */
+  const GRAPH_MIN = 360;
+  const PANEL_MIN = 320;
+  const SIDEBAR = 248;
+  const SETTINGS_ICON =
+    "M12.78 6.52L14.44 6.56L14.44 9.44L12.78 9.48L12.42 10.33L13.57 11.54L11.54 13.57L10.33 12.42L9.48 12.78L9.44 14.44L6.56 14.44L6.52 12.78L5.67 12.42L4.46 13.57L2.43 11.54L3.58 10.33L3.22 9.48L1.56 9.44L1.56 6.56L3.22 6.52L3.58 5.67L2.43 4.46L4.46 2.43L5.67 3.58L6.52 3.22L6.56 1.56L9.44 1.56L9.48 3.22L10.33 3.58L11.54 2.43L13.57 4.46L12.42 5.67zM8 5.8a2.2 2.2 0 1 0 0 4.4a2.2 2.2 0 1 0 0-4.4";
+  const NEW_BRANCH_ICON = "M3 3.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M3 12.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M4.5 5v6M11.5 2.5v6M8.5 5.5h6";
+  /** New Branch and Settings, which a narrow window's toolbar has no room for. */
+  function moreEntries(): MenuEntry[] {
+    const entries: MenuEntry[] = [];
+    if (view !== "file" || showConflicts) entries.push({ kind: "item", label: history?.head.branch ? "New Branch…" : "Create a Branch at HEAD…", icon: NEW_BRANCH_ICON, run: newBranch });
+    entries.push({ kind: "item", label: "Settings…", icon: SETTINGS_ICON, keys: keys("Mod+,"), run: () => api.openSettings() });
+    return entries;
+  }
+  const contentWidth = $derived(windowWidth - (narrow ? 0 : SIDEBAR));
+  const panelMax = $derived(Math.max(PANEL_MIN, Math.min(contentWidth - GRAPH_MIN, contentWidth * 0.58)));
+  const shownPanelWidth = $derived(Math.min(Math.max(panelWidth, PANEL_MIN), panelMax));
   /** The screen next to the sidebar. */
   let view = $state<"history" | "stashes" | "compare" | "file" | "stack" | "pull">("history");
   /** The branch whose stack Edit Stack shows; the checked-out one when null. */
@@ -965,11 +1001,12 @@
 
   function startResize(event: PointerEvent) {
     const startX = event.clientX;
-    const startWidth = panelWidth;
+    // From the width it shows, which a narrow window may have cut down from the one saved.
+    const startWidth = shownPanelWidth;
     const target = event.currentTarget as HTMLElement;
     target.setPointerCapture(event.pointerId);
     const move = (e: PointerEvent) => {
-      panelWidth = Math.min(Math.max(startWidth - (e.clientX - startX), 360), window.innerWidth - 560);
+      panelWidth = Math.min(Math.max(startWidth - (e.clientX - startX), PANEL_MIN), panelMax);
     };
     const up = () => {
       target.removeEventListener("pointermove", move);
@@ -990,7 +1027,7 @@
 
   $effect(() => {
     api.getSetting<number>(settings.detailsWidth).then((width) => {
-      if (typeof width === "number") panelWidth = Math.min(Math.max(width, 360), window.innerWidth - 560);
+      if (typeof width === "number") panelWidth = Math.max(width, PANEL_MIN);
     });
     api.initialRepo().then((path) => {
       if (path) load(path);
@@ -1007,6 +1044,7 @@
 </script>
 
 <svelte:window
+  bind:innerWidth={windowWidth}
   onfocus={refresh}
   onkeydown={(event) => {
     if ((event.metaKey || event.ctrlKey) && event.key === ",") {
@@ -1037,6 +1075,12 @@
       // Bisecting: G, B and S answer for the commit under test, as the banner's tooltips say.
       event.preventDefault();
       bisectKey(({ g: "good", b: "bad", s: "skip" } as const)[event.key.toLowerCase() as "g" | "b" | "s"]);
+    } else if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "r" && history) {
+      // ⌘R reloads, as Reload in the repository menu and in Activity do; the webview never reloads itself.
+      event.preventDefault();
+      refresh();
+    } else if (event.key === "Escape" && sideShown && !confirm.request && !event.defaultPrevented) {
+      sideShown = false;
     } else if (event.key === "Escape" && submoduleSel && view === "history" && !confirm.request && !event.defaultPrevented) {
       submoduleSel = null;
     } else if (event.key === "Escape" && (oplog.compare || oplog.lost) && view === "history" && !confirm.request && !event.defaultPrevented) {
@@ -1064,26 +1108,38 @@
 {#if !repo || !history}
   <Welcome {loading} {error} onOpen={chooseRepo} onOpenPath={load} />
 {:else}
-  <div class="window">
+  <div class="window" class:narrow class:mac class:side-shown={sideShown}>
+    {#if narrow && sideShown}
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+      <div class="side-catcher" onclick={() => (sideShown = false)}></div>
+    {/if}
+    <!-- Over a narrow window the sidebar steps aside again once something in it is picked. -->
     <Sidebar {repo} {history} {selectedRow} ctx={branchCtx!} onOpen={chooseRepo} onOpenPath={load} onWelcome={closeRepo}
-      onPick={pick}
+      onPick={aside(pick)}
       {run}
       {view}
       onView={(v) => {
+        sideShown = false;
         view = v;
         resolving = false;
         if (v === "history" && selected) requestAnimationFrame(() => list?.reveal(selected!));
       }}
-      onPickStash={(id) => (stashSel = id)}
-      onCompare={openCompare}
-      onEditStack={openStack}
-      onPullRequest={openPull}
+      onPickStash={aside((id: string) => (stashSel = id))}
+      onCompare={aside(openCompare)}
+      onEditStack={aside(openStack)}
+      onPullRequest={aside(openPull)}
       submodule={pickedSubmodule?.path ?? null}
-      onSubmodule={showSubmodule}
+      onSubmodule={aside(showSubmodule)}
+      onReload={refresh}
     />
     <div class="main">
       <header data-tauri-drag-region>
         <div class="lead" data-tauri-drag-region>
+          {#if narrow}
+            <button class="capsule side-toggle" onclick={() => (sideShown = !sideShown)} aria-label={sideShown ? "Hide sidebar" : "Show sidebar"} aria-expanded={sideShown} title={sideShown ? "Hide Sidebar" : "Show Sidebar"}>
+              <svg class="icon" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2" /><path d="M6 3v10" /></svg>
+            </button>
+          {/if}
           {#if view === "file" && !showConflicts}
             {@const back = fileBack === "compare" ? "Compare" : fileBack === "stashes" ? "Stashes" : "History"}
             <button class="back" onclick={() => ((view = fileBack), (nav.file = null))} aria-label="Back to {back}" title="Back to {back}">
@@ -1116,16 +1172,18 @@
               {:else if activity.problem?.failure}
                 <span class="sub amber">Fetch failed · {failureShort(activity.problem.failure)}</span>
               {:else}
-                <span class="sub">{branchCount} {branchCount === 1 ? "branch" : "branches"} · {history.bisect ? (history.bisect.found ? "Bisect done" : "Bisecting") : (history.head.branch ?? operation?.branch ?? "detached HEAD")}</span>
+                <span class="sub">{branchCount} {branchCount === 1 ? "branch" : "branches"}{history.bisect ? (history.bisect.found ? " · Bisect done" : " · Bisecting") : !history.head.branch && !operation?.branch ? " · detached HEAD" : ""}</span>
               {/if}
             {/if}
           </div>
           <!-- File History is about one file: a plain back arrow and no branch picker, as in the design, leave room for Find in file. -->
           {#if view !== "file" || showConflicts}
             <BranchPicker {history} {colorOf} onPick={(name) => branchCtx && run(switchRequest(branchCtx, name))} />
+            {#if !narrow}
             <button class="capsule" onclick={newBranch} aria-label="New branch" title={history.head.branch ? "New Branch…" : "Create a branch at HEAD…"}>
-              <svg class="icon" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><path d="M4.5 5v6M11.5 2.5v6M8.5 5.5h6" /></svg>
+              <svg class="icon" viewBox="0 0 16 16"><path d={NEW_BRANCH_ICON} /></svg>
             </button>
+            {/if}
           {/if}
           {#if view === "file" && !showConflicts}
             <div class="segmented" role="radiogroup" aria-label="File history mode">
@@ -1211,7 +1269,7 @@
                 {#if t?.ahead}<span class="count">{t.ahead}</span>{:else if !t && history.head.branch}<span class="count">Publish</span>{/if}
               </button>
             </div>
-            <ActivityPopover fix={fixFetch} retry={() => backgroundFetch(false)} settings={() => ((activity.open = false), api.openSettings())} />
+            <ActivityPopover fix={fixFetch} retry={() => backgroundFetch(false)} settings={() => ((activity.open = false), api.openSettings())} reload={refresh} />
             {#if whyBlock}
               {@const block = whyBlock}
               <WhyPopover title={block.title} body={block.body} fixes={block.fixes} onFix={(i) => fixSync(block.fixes[i].fix)} onClose={() => (why = null)} />
@@ -1229,12 +1287,25 @@
               Open on GitHub
             </button>
           {/if}
-          <button class="capsule" onclick={refresh} aria-label="Reload history" title="Reload">
-            <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5" /></svg>
-          </button>
-          <button class="capsule" onclick={() => api.openSettings()} aria-label="Settings" title={withKeys("Settings", "Mod+,")}>
-            <svg class="icon" viewBox="0 0 16 16"><path d="M12.78 6.52L14.44 6.56L14.44 9.44L12.78 9.48L12.42 10.33L13.57 11.54L11.54 13.57L10.33 12.42L9.48 12.78L9.44 14.44L6.56 14.44L6.52 12.78L5.67 12.42L4.46 13.57L2.43 11.54L3.58 10.33L3.22 9.48L1.56 9.44L1.56 6.56L3.22 6.52L3.58 5.67L2.43 4.46L4.46 2.43L5.67 3.58L6.52 3.22L6.56 1.56L9.44 1.56L9.48 3.22L10.33 3.58L11.54 2.43L13.57 4.46L12.42 5.67zM8 5.8a2.2 2.2 0 1 0 0 4.4a2.2 2.2 0 1 0 0-4.4" /></svg>
-          </button>
+          {#if narrow}
+            <button
+              class="capsule"
+              onclick={(event) => {
+                const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+                moreMenu = moreMenu ? null : { x: box.left, y: box.bottom + 6 };
+              }}
+              aria-label="More"
+              aria-haspopup="menu"
+              aria-expanded={!!moreMenu}
+              title={view !== "file" || showConflicts ? "New Branch, Settings" : "Settings"}
+            >
+              <svg class="icon" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6" /><circle cx="8" cy="8" r=".6" /><circle cx="12.5" cy="8" r=".6" /></svg>
+            </button>
+          {:else}
+            <button class="capsule" onclick={() => api.openSettings()} aria-label="Settings" title={withKeys("Settings", "Mod+,")}>
+              <svg class="icon" viewBox="0 0 16 16"><path d={SETTINGS_ICON} /></svg>
+            </button>
+          {/if}
           <button class="capsule" onclick={() => openFixes()} aria-label="Fix a mistake" title={withKeys("Fix a Mistake…", "Alt+Mod+Z")}>
             <svg class="icon" viewBox="0 0 16 16"><path d="M8 1.8a6.2 6.2 0 1 0 0 12.4a6.2 6.2 0 1 0 0-12.4M8 5.4a2.6 2.6 0 1 0 0 5.2a2.6 2.6 0 1 0 0-5.2M3.6 3.6l2.6 2.6M12.4 3.6 9.8 6.2M3.6 12.4l2.6-2.6M12.4 12.4 9.8 9.8" /></svg>
           </button>
@@ -1331,7 +1402,7 @@
             childrenOf={(id) => childrenOf.get(id) ?? []}
             onChange={(next) => (comparing = next)}
             copy={(text) => copyText(text, "Copied the command.")}
-            {panelWidth}
+            panelWidth={shownPanelWidth}
             onGrip={startResize}
           />
         {/key}
@@ -1377,7 +1448,7 @@
             />
           {/key}
         </section>
-        <aside class="panel" style:width="{panelWidth}px" aria-label="Commit details">
+        <aside class="panel" style:width="{shownPanelWidth}px" aria-label="Commit details">
           <button class="grip" onpointerdown={startResize} aria-label="Resize commit details" title="Drag to resize"></button>
           <!-- A new repository starts the panels from scratch. -->
           {#key repo.path}
@@ -1446,6 +1517,9 @@
       {/if}
     </div>
   </div>
+  {#if moreMenu && narrow}
+    <Menu x={moreMenu.x} y={moreMenu.y} label="More" entries={moreEntries()} onClose={() => (moreMenu = null)} />
+  {/if}
   {#if nav.quickOpen}
     <QuickOpen commit={selectedRow && !selectedRow.worktree ? { id: selectedRow.id, summary: selectedRow.summary } : null} onClose={() => (nav.quickOpen = false)} />
   {/if}
@@ -1474,12 +1548,60 @@
   }
   .main {
     position: absolute;
-    left: 264px;
+    left: 248px;
     top: 0;
     right: 0;
     bottom: 0;
     display: flex;
     flex-direction: column;
+  }
+  /* A narrow window gives the content the whole width; the sidebar slides in over it, on an
+     opaque background, and slides out once something in it is picked or the content is clicked. */
+  .window.narrow .main {
+    left: 0;
+  }
+  .window.narrow > :global(nav) {
+    z-index: 20;
+    background: linear-gradient(var(--side), var(--side)), var(--win);
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition:
+      transform 0.22s ease,
+      visibility 0s linear 0.22s;
+  }
+  .window.narrow.side-shown > :global(nav) {
+    transform: none;
+    visibility: visible;
+    box-shadow: var(--overlay-shadow);
+    transition: transform 0.22s ease;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .window.narrow > :global(nav),
+    .window.narrow.side-shown > :global(nav) {
+      transition: none;
+    }
+  }
+  .side-catcher {
+    position: absolute;
+    inset: 0;
+    z-index: 19;
+  }
+  /* A narrow window gives up centering the search: the search gives way first, down to 200 px,
+     then the title and the branch picker, and the buttons on the right keep their size. */
+  .window.narrow .lead {
+    flex: 0 1 auto;
+  }
+  .window.narrow .center {
+    flex: 1 1 200px;
+    min-width: 200px;
+    justify-content: center;
+  }
+  .window.narrow .trail {
+    flex: 0 0 auto;
+  }
+  /* The traffic lights sit on the sidebar; without it, the toolbar makes room for them. */
+  .window.narrow.mac header {
+    padding-left: 84px;
   }
   /* Three zones: the two sides share the room equally, so the search sits in the middle of the
      toolbar. In a narrow window the buttons on the right keep their size, and the title and then
@@ -1520,6 +1642,7 @@
     line-height: 1.2;
     margin-right: 4px;
     min-width: 0;
+    flex-shrink: 100;
   }
   .title span {
     white-space: nowrap;
@@ -1639,7 +1762,7 @@
   .count {
     font-size: 11px;
     font-weight: 600;
-    color: var(--accent-text);
+    color: var(--text);
   }
   .segmented {
     display: flex;
@@ -1673,13 +1796,11 @@
     display: flex;
     min-height: 0;
   }
-  /* The graph is a card of its own, like the file list in Summary. */
+  /* The graph, the details and the status line have no frames of their own: hairlines part them. */
   .history {
     flex-grow: 1;
     min-width: 0;
-    margin: 4px 12px 12px;
-    border: 1px solid var(--sep);
-    border-radius: 12px;
+    border-top: 1px solid var(--sep);
     overflow: hidden;
     background: var(--graph-bg);
     display: flex;
@@ -1702,9 +1823,12 @@
   .note {
     font-weight: 400;
   }
+  /* Its width comes from shownPanelWidth: never past 58%, never leaving the graph under 360 px. */
   .panel {
     position: relative;
     flex-shrink: 0;
+    border-top: 1px solid var(--sep);
+    border-left: 1px solid var(--sep);
     display: flex;
     flex-direction: column;
     min-height: 0;

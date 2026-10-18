@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The Activity popover under Fetch / Pull / Push: the fetch that runs now with its progress,
+  // The Activity popover under Fetch / Pull / Push, with Reload at the top: the fetch that runs now with its progress,
   // Output and Stop; a Push or Pull waiting for it; and under Done what ran lately with its git
   // commands, with Fix… and Try Again on a fetch that failed.
 
@@ -8,6 +8,7 @@
   import { actionIcons } from "./icons";
   import { prefs } from "./prefs.svelte";
   import CommandWords from "./CommandWords.svelte";
+  import { keys } from "./keys";
 
   /** Commands a row shows before Show All. */
   const FEW = 2;
@@ -33,11 +34,14 @@
     fix,
     retry,
     settings,
+    reload,
   }: {
     /** Open the way out of a failed fetch. */
     fix: (item: ActivityItem) => void;
     retry: (item: ActivityItem) => void;
     settings: () => void;
+    /** Read the repository again, without asking the remote. */
+    reload: () => void;
   } = $props();
 
   const auto = $derived(prefs.get("oxbow.fetch.auto"));
@@ -79,6 +83,11 @@
     <div class="head">
       <span class="h">Activity</span>
       <span class="every">{auto ? `Auto-fetch every ${every} min` : "Auto-fetch is off"}</span>
+      <!-- Reload lives here and in the repository menu: the toolbar keeps only Fetch. -->
+      <button class="reload" onclick={() => ((activity.open = false), reload())} title="Read the repository again, without asking the remote">
+        <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5" /></svg>
+        Reload <span class="keys">{keys("Mod+R")}</span>
+      </button>
     </div>
     <div class="list">
       {#if activity.running}
@@ -181,17 +190,42 @@
   }
   .head {
     display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    padding: 0 10px 6px;
+    align-items: center;
+    gap: 10px;
+    padding: 0 6px 6px 10px;
   }
   .h {
     font-size: 14px;
     font-weight: 700;
   }
   .every {
+    flex-grow: 1;
     font-size: 11.5px;
     color: var(--text2);
+  }
+  .reload {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    flex-shrink: 0;
+    background: var(--glass);
+    border: 0.5px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    color: var(--text);
+  }
+  .reload .icon {
+    width: 13px;
+    height: 13px;
+  }
+  .keys {
+    color: var(--text2);
+    font-weight: 400;
   }
   .list {
     max-height: 460px;
