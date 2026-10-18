@@ -1211,12 +1211,16 @@
           </div>
           <!-- File History is about one file: a plain back arrow and no branch picker, as in the design, leave room for Find in file. -->
           {#if view !== "file" || showConflicts}
-            <BranchPicker {history} {colorOf} onPick={(name) => branchCtx && run(switchRequest(branchCtx, name))} />
-            {#if !narrow}
-            <button class="capsule" onclick={newBranch} aria-label="New branch" title={history.head.branch ? "New Branch…" : "Create a branch at HEAD…"}>
-              <svg class="icon" viewBox="0 0 16 16"><path d={NEW_BRANCH_ICON} /></svg>
-            </button>
-            {/if}
+            <!-- The branch and a new one beside it: one control, as Fetch, Pull and Push are. -->
+            <div class="joined branch" role="group" aria-label="Branch">
+              <BranchPicker {history} {colorOf} onPick={(name) => branchCtx && run(switchRequest(branchCtx, name))} />
+              {#if !narrow}
+                <span class="divider"></span>
+                <button onclick={newBranch} aria-label="New branch" title={history.head.branch ? "New Branch…" : "Create a branch at HEAD…"}>
+                  <svg class="icon" viewBox="0 0 16 16"><path d={NEW_BRANCH_ICON} /></svg>
+                </button>
+              {/if}
+            </div>
           {/if}
           {#if view === "file" && !showConflicts}
             <div class="segmented" role="radiogroup" aria-label="File history mode">
@@ -1320,6 +1324,26 @@
               Open on GitHub
             </button>
           {/if}
+          <!-- Undo and Fix a Mistake: the two ways back, side by side. -->
+          <div class="joined" role="group" aria-label="Undo">
+            <OperationLog
+              repo={repo.name}
+              run={(request) => void run(request)}
+              onShow={showMove}
+              onBranch={branchAtMove}
+              onCompare={(entry, after) => {
+                second = null;
+                oplog.lost = null;
+                oplog.compare = { entry, after };
+                view = "history";
+                resolving = false;
+              }}
+            />
+            <span class="divider"></span>
+            <button onclick={() => openFixes()} aria-label="Fix a mistake" title={withKeys("Fix a Mistake…", "Alt+Mod+Z")}>
+              <svg class="icon" viewBox="0 0 16 16"><path d="M8 1.8a6.2 6.2 0 1 0 0 12.4a6.2 6.2 0 1 0 0-12.4M8 5.4a2.6 2.6 0 1 0 0 5.2a2.6 2.6 0 1 0 0-5.2M3.6 3.6l2.6 2.6M12.4 3.6 9.8 6.2M3.6 12.4l2.6-2.6M12.4 12.4 9.8 9.8" /></svg>
+            </button>
+          </div>
           {#if narrow}
             <button
               class="capsule"
@@ -1339,22 +1363,6 @@
               <svg class="icon" viewBox="0 0 16 16"><path d={SETTINGS_ICON} /></svg>
             </button>
           {/if}
-          <button class="capsule" onclick={() => openFixes()} aria-label="Fix a mistake" title={withKeys("Fix a Mistake…", "Alt+Mod+Z")}>
-            <svg class="icon" viewBox="0 0 16 16"><path d="M8 1.8a6.2 6.2 0 1 0 0 12.4a6.2 6.2 0 1 0 0-12.4M8 5.4a2.6 2.6 0 1 0 0 5.2a2.6 2.6 0 1 0 0-5.2M3.6 3.6l2.6 2.6M12.4 3.6 9.8 6.2M3.6 12.4l2.6-2.6M12.4 12.4 9.8 9.8" /></svg>
-          </button>
-          <OperationLog
-            repo={repo.name}
-            run={(request) => void run(request)}
-            onShow={showMove}
-            onBranch={branchAtMove}
-            onCompare={(entry, after) => {
-              second = null;
-              oplog.lost = null;
-              oplog.compare = { entry, after };
-              view = "history";
-              resolving = false;
-            }}
-          />
         </div>
       </header>
       {#if searching}
@@ -1750,6 +1758,59 @@
   .sync {
     position: relative;
     display: flex;
+  }
+  /* Controls that belong together share one glass capsule, split by a hairline. The parts drop
+     their own glass; a hover washes just the part under the pointer. */
+  .joined {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    height: 34px;
+    border-radius: var(--radius-pill);
+    background: var(--glass);
+    border: 0.5px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    color: var(--icon);
+  }
+  .joined.branch {
+    flex-shrink: 1;
+    min-width: 0;
+  }
+  .joined > button,
+  .joined :global(.capsule) {
+    height: 32px;
+    min-width: 36px;
+    padding: 0 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    border-radius: var(--radius-pill);
+    background: none;
+    border: 0;
+    box-shadow: none;
+  }
+  .joined.branch :global(.picker .capsule) {
+    justify-content: flex-start;
+    gap: 6px;
+    padding: 0 10px 0 12px;
+  }
+  .joined > button:hover {
+    background: var(--hover-wash);
+  }
+  .joined > :first-child,
+  .joined > :first-child :global(.capsule) {
+    margin-left: 1px;
+  }
+  .joined > :last-child,
+  .joined > :last-child :global(.capsule) {
+    margin-right: 1px;
+  }
+  .divider {
+    flex-shrink: 0;
+    width: 1px;
+    height: 18px;
+    background: var(--sep);
   }
   .fetch {
     position: relative;
