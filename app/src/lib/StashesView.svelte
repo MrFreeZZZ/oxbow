@@ -274,12 +274,12 @@
           {#if busy}
             <span class="busy">Finish or abort the operation in progress first.</span>
           {:else}
-            <button class="action primary" onclick={() => run(applyRequest(ctx, stash, false, keepIndex, check ?? undefined))}>Apply</button>
-            <button class="action" onclick={() => run(applyRequest(ctx, stash, true, keepIndex, check ?? undefined))}>Pop</button>
-            <button class="action" onclick={() => run(stashBranchRequest(ctx, stash))}>New Branch…</button>
+            <button class="button primary" onclick={() => run(applyRequest(ctx, stash, false, keepIndex, check ?? undefined))}>Apply</button>
+            <button class="button" onclick={() => run(applyRequest(ctx, stash, true, keepIndex, check ?? undefined))}>Pop</button>
+            <button class="button" onclick={() => run(stashBranchRequest(ctx, stash))}>New Branch…</button>
           {/if}
           <span class="grow"></span>
-          <button class="action danger" disabled={busy} onclick={() => run(dropRequest(ctx, stash))}>Drop</button>
+          <button class="button" disabled={busy} onclick={() => run(dropRequest(ctx, stash))}>Drop</button>
         </div>
         {#if !busy}<TipCard id="stashApplyPop" />{/if}
       </div>
@@ -335,7 +335,7 @@
     min-height: 0;
     margin: 4px 12px 12px;
     border: 1px solid var(--sep);
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     overflow: hidden;
   }
   .list {
@@ -352,7 +352,7 @@
     align-items: center;
     gap: 8px;
     padding: 10px 12px 8px 16px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
   }
@@ -362,10 +362,10 @@
     gap: 5px;
     height: 26px;
     padding: 0 10px;
-    border-radius: 13px;
+    border-radius: var(--radius-pill);
     background: var(--field);
     color: var(--text);
-    font-size: 12px;
+    font-size: var(--text-small);
     font-weight: 500;
   }
   .stash-now:disabled {
@@ -386,7 +386,7 @@
     gap: 5px;
     width: 100%;
     padding: 10px 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     text-align: left;
   }
   .card:hover:not(.on) {
@@ -404,12 +404,12 @@
     min-width: 0;
   }
   .name {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     flex-shrink: 0;
   }
   .meta {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .chip {
@@ -417,8 +417,8 @@
     align-items: center;
     height: 18px;
     padding: 0 7px;
-    border-radius: 9px;
-    font-size: 11px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-caption);
     font-weight: 500;
     white-space: nowrap;
     max-width: 180px;
@@ -432,9 +432,9 @@
   .badge-untracked {
     height: 16px;
     padding: 0 6px;
-    border-radius: 8px;
+    border-radius: var(--radius-pill);
     border: 1px solid var(--sep);
-    font-size: 10px;
+    font-size: var(--text-caption);
     line-height: 14px;
     white-space: nowrap;
   }
@@ -451,7 +451,7 @@
   }
   .empty strong {
     color: var(--text);
-    font-size: 14px;
+    font-size: var(--text-heading);
   }
   .big {
     width: 32px;
@@ -478,7 +478,7 @@
   }
   h1 {
     margin: 0;
-    font-size: 17px;
+    font-size: var(--text-title);
     font-weight: 700;
     line-height: 1.3;
   }
@@ -487,7 +487,7 @@
     align-items: center;
     gap: 6px;
     min-width: 0;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .sha {
@@ -506,10 +506,10 @@
     align-items: center;
     gap: 12px;
     padding: 8px 10px 8px 12px;
-    border-radius: 10px;
+    border-radius: var(--radius-l);
     background: var(--field);
     color: var(--text2);
-    font-size: 12px;
+    font-size: var(--text-small);
     min-height: 36px;
   }
   .check.ok {
@@ -529,13 +529,13 @@
     gap: 6px;
     flex-shrink: 0;
     color: var(--text);
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .track {
     position: relative;
     width: 26px;
     height: 16px;
-    border-radius: 8px;
+    border-radius: var(--radius-pill);
     background: var(--switch-off);
     transition: background 0.15s;
   }
@@ -548,7 +548,7 @@
     top: 2px;
     width: 12px;
     height: 12px;
-    border-radius: 6px;
+    border-radius: var(--radius-pill);
     background: #fff;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
     transition: left 0.15s;
@@ -561,34 +561,12 @@
     align-items: center;
     gap: 8px;
   }
-  .action {
+  .button {
     min-width: 96px;
-    height: 30px;
-    padding: 0 14px;
-    border-radius: 15px;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--text);
-    font-weight: 500;
   }
-  .action.primary {
-    background: var(--accent);
-    border-color: transparent;
-    color: #fff;
-    font-weight: 600;
-  }
-  .action.danger {
-    background: var(--danger-soft);
-    border-color: transparent;
-    box-shadow: none;
-    color: var(--danger);
-  }
-  .action:disabled {
-    opacity: 0.45;
-  }
+
   .busy {
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .scroll {
@@ -599,7 +577,7 @@
   .files {
     margin: 12px 12px 6px;
     padding: 8px 4px 6px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     border: 1px solid var(--sep);
   }
   .count {
@@ -607,7 +585,7 @@
     align-items: center;
     gap: 8px;
     padding: 0 8px 6px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
   }
@@ -618,7 +596,7 @@
     width: 100%;
     height: 26px;
     padding: 0 8px;
-    border-radius: 7px;
+    border-radius: var(--radius-s);
   }
   .file:hover {
     background: var(--field);
@@ -629,8 +607,8 @@
   .badge {
     width: 16px;
     height: 16px;
-    border-radius: 5px;
-    font-size: 10px;
+    border-radius: var(--radius-s);
+    font-size: var(--text-caption);
     font-weight: 700;
     display: flex;
     align-items: center;
@@ -659,11 +637,11 @@
   }
   .add {
     color: var(--green);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .del {
     color: var(--red);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .num {
     min-width: 22px;

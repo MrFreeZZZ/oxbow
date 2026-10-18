@@ -51,7 +51,7 @@
     text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
     text-underline-offset: 3px;
     text-decoration-thickness: 1px;
-    border-radius: 3px;
+    border-radius: var(--radius-xs);
   }
   .word:hover {
     text-decoration-color: currentColor;

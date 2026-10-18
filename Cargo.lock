@@ -3783,6 +3783,7 @@ version = "0.1.0"
 dependencies = [
  "fontdb",
  "keyring",
+ "objc2-app-kit",
  "oxbow-core",
  "serde",
  "serde_json",

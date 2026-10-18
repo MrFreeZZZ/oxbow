@@ -37,7 +37,7 @@
     display: flex;
     gap: 10px;
     padding: 10px 12px 10px 10px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: color-mix(in srgb, var(--accent) 7%, var(--win));
     border: 0.5px solid color-mix(in srgb, var(--accent) 22%, transparent);
     text-align: left;
@@ -58,7 +58,7 @@
   .bulb {
     width: 24px;
     height: 24px;
-    border-radius: 7px;
+    border-radius: var(--radius-s);
     flex-shrink: 0;
     display: flex;
     align-items: center;
@@ -83,21 +83,21 @@
     flex-grow: 1;
   }
   .title {
-    font-size: 12.5px;
+    font-size: var(--text-body);
     font-weight: 600;
     line-height: 24px;
     height: 24px;
     margin-bottom: -3px;
   }
   .body {
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.45;
     color: var(--text2);
   }
   .code {
-    font-size: 11px;
+    font-size: var(--text-caption);
     padding: 0 4px;
-    border-radius: 5px;
+    border-radius: var(--radius-s);
     background: var(--field);
   }
   .buttons {
@@ -122,8 +122,8 @@
     height: 24px;
     min-width: 72px;
     padding: 0 11px;
-    border-radius: 12px;
-    font-size: 12px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-small);
     font-weight: 500;
     white-space: nowrap;
     flex-shrink: 0;

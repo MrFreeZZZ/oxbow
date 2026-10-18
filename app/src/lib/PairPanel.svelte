@@ -134,11 +134,11 @@
           {/if}
         </button>
         <span class="grow"></span>
-        <button class="button" onclick={() => (swapped = !swapped)} title="Read the diff the other way">
+        <button class="button small" onclick={() => (swapped = !swapped)} title="Read the diff the other way">
           <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 5.5h11M10.5 2.5l3 3-3 3M13.5 10.5h-11M5.5 7.5l-3 3 3 3" /></svg>
           Swap
         </button>
-        <button class="button primary" onclick={() => onOpenCompare(from.id, to.id)} title="See the commits in between, and more">Open in Compare</button>
+        <button class="button small primary" onclick={() => onOpenCompare(from.id, to.id)} title="See the commits in between, and more">Open in Compare</button>
       </div>
     {/if}
   </div>
@@ -167,14 +167,14 @@
     flex-direction: column;
     gap: 8px;
     border: 1px solid var(--sep);
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     flex-shrink: 0;
   }
   .top {
     display: flex;
     align-items: center;
     gap: 5px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .count {
@@ -194,7 +194,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 11px;
+    border-radius: var(--radius-pill);
     color: var(--icon);
     flex-shrink: 0;
   }
@@ -224,12 +224,12 @@
     align-items: flex-start;
     gap: 3px;
     padding: 9px 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     border: 1px solid transparent;
     text-align: left;
   }
   .label {
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
   }
@@ -249,12 +249,12 @@
     align-items: center;
     gap: 6px;
     max-width: 100%;
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .pill {
     height: 16px;
     padding: 0 6px;
-    border-radius: 8px;
+    border-radius: var(--radius-pill);
     font-weight: 500;
     line-height: 16px;
     white-space: nowrap;
@@ -272,14 +272,14 @@
   }
   h1 {
     margin: 4px 0 0;
-    font-size: 15px;
+    font-size: var(--text-heading);
     font-weight: 600;
     line-height: 1.3;
   }
   .sub {
     margin: 0;
     color: var(--text2);
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .actions {
     display: flex;
@@ -294,11 +294,11 @@
     height: 28px;
     min-width: 0;
     padding: 0 10px;
-    border-radius: 8px;
+    border-radius: var(--radius-m);
     background: var(--term);
     border: 1px solid var(--term-border);
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .prompt {
     color: var(--term-dim);
@@ -314,32 +314,12 @@
     color: var(--term-dim);
     flex-shrink: 0;
   }
-  .button {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    height: 28px;
-    padding: 0 12px;
-    border-radius: 14px;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text);
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
+
   .button .icon {
     width: 13px;
     height: 13px;
   }
-  .button.primary {
-    background: var(--accent);
-    border-color: transparent;
-    color: #fff;
-    font-weight: 600;
-  }
+
   .error {
     margin: 20px;
     color: var(--red);

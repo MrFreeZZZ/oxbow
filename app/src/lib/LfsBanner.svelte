@@ -26,8 +26,8 @@
     <span class="title">{installed ? "Git LFS isn’t turned on" : "Git LFS isn’t installed"}</span>
     <span class="sub">{plural(lfs.files, "file")} in {repoName} {lfs.files === 1 ? "is" : "are"} stored with Git LFS, so here {lfs.files === 1 ? "it is" : "they are"} only pointer text files.</span>
   </span>
-  <button class="btn" onclick={() => (lfs.dismissed = true)}>Not Now</button>
-  <button class="btn go" onclick={act}>{installed ? "Turn On Git LFS…" : lfs.status?.brew ? "Install Git LFS…" : "Download Git LFS…"}</button>
+  <button class="button" onclick={() => (lfs.dismissed = true)}>Not Now</button>
+  <button class="button primary" onclick={act}>{installed ? "Turn On Git LFS…" : lfs.status?.brew ? "Install Git LFS…" : "Download Git LFS…"}</button>
 </section>
 
 <style>
@@ -39,7 +39,7 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     border: 0.5px solid color-mix(in srgb, var(--orange) 30%, transparent);
     background: color-mix(in srgb, var(--orange-soft) 55%, transparent);
   }
@@ -47,7 +47,7 @@
     width: 32px;
     height: 32px;
     flex-shrink: 0;
-    border-radius: 10px;
+    border-radius: var(--radius-m);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -68,28 +68,14 @@
     text-overflow: ellipsis;
   }
   .sub {
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .btn {
-    flex-shrink: 0;
+  .button {
     min-width: 120px;
-    height: 30px;
-    padding: 0 14px;
-    border-radius: 15px;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    font-weight: 500;
-    white-space: nowrap;
   }
-  .btn.go {
-    background: var(--accent);
-    border-color: transparent;
-    color: #fff;
-    font-weight: 600;
-  }
+
 </style>

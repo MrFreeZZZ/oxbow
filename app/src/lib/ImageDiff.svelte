@@ -171,14 +171,14 @@
     width: max-content;
     margin: 0 0 12px auto;
     padding: 2px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     background: var(--field);
   }
   .modes button {
     height: 22px;
     padding: 0 10px;
-    border-radius: 7px;
-    font-size: 12px;
+    border-radius: var(--radius-s);
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .modes button.on {
@@ -205,8 +205,8 @@
   .cap {
     height: 18px;
     padding: 0 8px;
-    border-radius: 9px;
-    font-size: 11px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-caption);
     font-weight: 600;
     display: inline-flex;
     align-items: center;
@@ -220,7 +220,7 @@
     color: var(--green);
   }
   .dims {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .frame {
@@ -229,7 +229,7 @@
     justify-content: center;
     height: 220px;
     padding: 12px;
-    border-radius: 10px;
+    border-radius: var(--radius-l);
     border: 1px solid var(--sep);
   }
   .frame img {
@@ -261,7 +261,7 @@
     position: relative;
     width: 100%;
     max-height: 360px;
-    border-radius: 10px;
+    border-radius: var(--radius-l);
     border: 1px solid var(--sep);
     overflow: hidden;
   }
@@ -292,13 +292,13 @@
     transform: translate(-50%, -50%);
     width: 22px;
     height: 22px;
-    border-radius: 11px;
+    border-radius: var(--radius-pill);
     background: var(--win);
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text);
   }
   .black {
@@ -312,7 +312,7 @@
     align-items: center;
     gap: 8px;
     margin-top: 10px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .slider input {
@@ -322,7 +322,7 @@
   .note {
     margin: 10px 0 0;
     text-align: center;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
 </style>

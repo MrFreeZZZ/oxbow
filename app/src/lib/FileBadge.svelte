@@ -24,10 +24,10 @@
   .badge {
     height: 17px;
     padding: 0 6px;
-    border-radius: 6px;
+    border-radius: var(--radius-s);
     background: var(--field);
     color: var(--text2);
-    font-size: 10.5px;
+    font-size: var(--text-caption);
     font-weight: 600;
     display: inline-flex;
     align-items: center;
@@ -35,7 +35,7 @@
     flex-shrink: 0;
   }
   .note {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     white-space: nowrap;
     flex-shrink: 0;
@@ -45,11 +45,11 @@
   }
   .add {
     color: var(--green);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .del {
     color: var(--red);
-    font-size: 11px;
+    font-size: var(--text-caption);
     min-width: 22px;
     text-align: right;
   }

@@ -527,7 +527,7 @@
     gap: 8px;
     margin-left: -6px;
     padding-left: 4px;
-    border-radius: 8px;
+    border-radius: var(--radius-m);
   }
   .chevron {
     width: 14px;
@@ -540,7 +540,7 @@
   }
   .why {
     color: var(--text2);
-    font-size: 11px;
+    font-size: var(--text-caption);
     white-space: nowrap;
   }
   /* Each file starts with a bar in the branch color, so files don't run together. */
@@ -557,8 +557,8 @@
     gap: 8px;
     height: 34px;
     padding: 0 4px 0 10px;
-    border-radius: 10px;
-    font-size: 12px;
+    border-radius: var(--radius-m);
+    font-size: var(--text-small);
   }
   .path {
     font-weight: 600;
@@ -574,7 +574,7 @@
   .from,
   .status {
     color: var(--text2);
-    font-size: 11px;
+    font-size: var(--text-caption);
     white-space: nowrap;
   }
   .spacer {
@@ -582,16 +582,16 @@
   }
   .add {
     color: var(--green);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .del {
     color: var(--red);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .toggle {
     width: 26px;
     height: 26px;
-    border-radius: 13px;
+    border-radius: var(--radius-pill);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -607,7 +607,7 @@
   }
   .size {
     color: var(--text2);
-    font-size: 11px;
+    font-size: var(--text-caption);
     white-space: nowrap;
   }
   .banner {
@@ -617,9 +617,9 @@
     min-height: 30px;
     margin: 2px 0 8px;
     padding: 4px 4px 4px 10px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     background: var(--field);
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .banner .icon {
     width: 13px;
@@ -634,9 +634,9 @@
   .chip {
     height: 22px;
     padding: 0 10px;
-    border-radius: 11px;
+    border-radius: var(--radius-pill);
     background: var(--win);
-    font-size: 12px;
+    font-size: var(--text-small);
     white-space: nowrap;
     flex-shrink: 0;
   }
@@ -650,9 +650,9 @@
     gap: 3px;
     margin-left: 8px;
     padding: 0 7px 0 5px;
-    border-radius: 7px;
+    border-radius: var(--radius-s);
     font-family: var(--font);
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 500;
     color: var(--orange);
     background: var(--orange-soft);
@@ -671,7 +671,7 @@
   .cr {
     margin-left: 4px;
     padding: 0 4px;
-    border-radius: 5px;
+    border-radius: var(--radius-s);
     font-size: 0.85em;
     color: var(--text2);
     background: var(--field);
@@ -685,7 +685,7 @@
     tab-size: var(--tab);
     color: var(--code-fg, var(--code));
     background: var(--code-bg, transparent);
-    border-radius: 10px;
+    border-radius: var(--radius-l);
   }
   /* The number columns fit the longest line number at the code's size. */
   .line {
@@ -707,7 +707,7 @@
     justify-self: center;
     width: 14px;
     height: 14px;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     border: 1.2px solid var(--text2);
     display: flex;
     align-items: center;
@@ -748,17 +748,17 @@
   }
   .added .word {
     background: var(--add-word);
-    border-radius: 5px;
+    border-radius: var(--radius-s);
     padding: 1px 0;
   }
   .removed .word {
     background: var(--del-word);
-    border-radius: 5px;
+    border-radius: var(--radius-s);
     padding: 1px 0;
   }
   /* Searched code: an outlined neutral capsule, since yellow is for tags. */
   .found {
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     box-shadow: 0 0 0 1.5px var(--found-ring);
     background: var(--found-bg);
   }
@@ -773,11 +773,11 @@
     padding: 0 12px;
     height: 22px;
     line-height: 22px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     background: var(--fold-bg, var(--field));
     color: var(--code-dim, var(--text2));
     font-family: var(--font);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .more.lines {
     margin: 10px 8px 0;
@@ -789,7 +789,7 @@
     margin: 0 20px 20px;
     height: 28px;
     padding: 0 12px;
-    border-radius: 14px;
+    border-radius: var(--radius-pill);
     background: var(--field);
   }
 </style>

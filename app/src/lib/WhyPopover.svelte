@@ -21,7 +21,7 @@
 
   let box = $state<HTMLDivElement>();
   $effect(() => {
-    box?.querySelector<HTMLButtonElement>("button.go")?.focus();
+    box?.querySelector<HTMLButtonElement>("button.primary")?.focus();
   });
 
   function onKey(event: KeyboardEvent) {
@@ -50,7 +50,7 @@
   {#if fixes.length}
     <span class="buttons">
       {#each fixes as fix, i (i)}
-        <button class:go={i === fixes.length - 1} onclick={() => onFix(i)}>{fix.label}</button>
+        <button class="button small" class:primary={i === fixes.length - 1} onclick={() => onFix(i)}>{fix.label}</button>
       {/each}
     </span>
   {/if}
@@ -70,12 +70,12 @@
     width: 300px;
     max-width: calc(100vw - 32px);
     padding: 14px 14px 12px;
-    border-radius: 18px;
+    border-radius: var(--radius-xl);
     background: var(--sheet);
     -webkit-backdrop-filter: blur(30px) saturate(1.8);
     backdrop-filter: blur(30px) saturate(1.8);
     border: 0.5px solid var(--glass-border);
-    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.22);
+    box-shadow: var(--shadow-pop);
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -86,7 +86,7 @@
     display: flex;
     align-items: center;
     gap: 7px;
-    font-size: 13px;
+    font-size: var(--text-body);
     font-weight: 600;
   }
   .title .icon {
@@ -96,13 +96,13 @@
     color: var(--text2);
   }
   .body {
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.45;
     color: var(--text2);
   }
   .chip {
     padding: 1px 6px;
-    border-radius: 7px;
+    border-radius: var(--radius-s);
     background: var(--field);
     font-weight: 500;
     white-space: pre-wrap;
@@ -110,7 +110,7 @@
   .chip.mono {
     font-family: var(--mono);
     font-weight: 400;
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .quote {
     font-weight: 600;
@@ -121,23 +121,5 @@
     gap: 6px;
     margin-top: 6px;
   }
-  button {
-    height: 26px;
-    padding: 0 12px;
-    border-radius: 13px;
-    font-size: 12px;
-    font-weight: 500;
-    white-space: nowrap;
-    flex-shrink: 0;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--text);
-  }
-  button.go {
-    background: var(--accent);
-    border-color: transparent;
-    color: #fff;
-    font-weight: 600;
-  }
+
 </style>

@@ -184,11 +184,11 @@
     font-weight: 700;
   }
   .sub {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .hint {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     white-space: nowrap;
     overflow: hidden;
@@ -202,9 +202,9 @@
     flex-shrink: 0;
     height: 26px;
     padding: 0 12px;
-    border-radius: 13px;
+    border-radius: var(--radius-pill);
     background: var(--field);
-    font-size: 12px;
+    font-size: var(--text-small);
     font-weight: 500;
   }
   .load:disabled {
@@ -225,7 +225,7 @@
   }
   .error {
     color: var(--red);
-    font-size: 12px;
+    font-size: var(--text-small);
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 360px;
@@ -236,10 +236,10 @@
     gap: 4px;
     height: 28px;
     padding: 0 8px 0 11px;
-    border-radius: 14px;
+    border-radius: var(--radius-pill);
     border: 1px solid var(--sep);
     color: var(--text2);
-    font-size: 12px;
+    font-size: var(--text-small);
     white-space: nowrap;
     flex-shrink: 0;
   }
@@ -269,11 +269,11 @@
     min-width: 0;
     flex-shrink: 1;
     padding: 0 10px;
-    border-radius: 8px;
+    border-radius: var(--radius-m);
     background: var(--term);
     border: 1px solid var(--term-border);
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .prompt {
     color: var(--term-dim);
@@ -297,14 +297,14 @@
     display: flex;
     flex-shrink: 0;
     padding: 2px;
-    border-radius: 15px;
+    border-radius: var(--radius-pill);
     background: var(--field);
   }
   .segmented button {
     height: 26px;
     padding: 0 12px;
-    border-radius: 13px;
-    font-size: 12px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-small);
     color: var(--text2);
     white-space: nowrap;
   }

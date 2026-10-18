@@ -140,14 +140,14 @@
 
   <div class="actions">
     {#if !sub.cloned}
-      <button class="button primary" onclick={() => run(updateRequest(subs, sub, repoPath))}>Clone</button>
+      <button class="button small primary" onclick={() => run(updateRequest(subs, sub, repoPath))}>Clone</button>
     {:else if !synced && sub.recorded}
-      <button class="button primary" onclick={() => run(updateRequest(subs, sub, repoPath))}>Update to {shortId(sub.recorded)}</button>
+      <button class="button small primary" onclick={() => run(updateRequest(subs, sub, repoPath))}>Update to {shortId(sub.recorded)}</button>
     {/if}
     {#if sub.cloned}
-      {#if synced}<button class="button" onclick={() => run(latestRequest(sub, repoPath))}>Pull Latest</button>{/if}
-      <button class="button" onclick={openWindow}>Open in New Window</button>
-      <button class="button" onclick={reveal}>Show in Finder</button>
+      {#if synced}<button class="button small" onclick={() => run(latestRequest(sub, repoPath))}>Pull Latest</button>{/if}
+      <button class="button small" onclick={openWindow}>Open in New Window</button>
+      <button class="button small" onclick={reveal}>Show in Finder</button>
     {/if}
   </div>
 
@@ -211,23 +211,23 @@
   }
   h2 {
     margin: 0 0 3px;
-    font-size: 15px;
+    font-size: var(--text-heading);
     font-weight: 700;
     display: flex;
     align-items: center;
     gap: 8px;
   }
   .cap {
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 500;
     padding: 2px 8px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: var(--field);
     color: var(--text2);
   }
   .sub {
     margin: 0;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .ellipsis {
@@ -242,7 +242,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 11px;
+    border-radius: var(--radius-pill);
     color: var(--icon);
   }
   .close:hover {
@@ -264,16 +264,16 @@
     gap: 2px;
     padding: 10px 12px;
     border: 1px solid var(--sep);
-    border-radius: 11px;
+    border-radius: var(--radius-l);
   }
   .label {
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 500;
     color: var(--text2);
   }
   .sha {
     margin-top: 2px;
-    font-size: 13px;
+    font-size: var(--text-body);
     font-weight: 600;
   }
   .sha.empty {
@@ -283,14 +283,14 @@
   .extra {
     font-family: var(--font);
     font-weight: 400;
-    font-size: 11.5px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .summary {
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .who {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .note {
@@ -298,7 +298,7 @@
     display: flex;
     gap: 8px;
     align-items: flex-start;
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.45;
     color: var(--text2);
   }
@@ -321,30 +321,16 @@
     flex-wrap: wrap;
     gap: 8px;
   }
-  .button {
-    height: 28px;
-    flex-shrink: 0;
-    white-space: nowrap;
-    padding: 0 14px;
-    border-radius: 14px;
-    border: 1px solid var(--sep);
-    font-size: 12px;
-  }
-  .button.primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
-    font-weight: 600;
-  }
+
   .list-label {
     margin: 4px 0 -6px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
   }
   .commits {
     border: 1px solid var(--sep);
-    border-radius: 10px;
+    border-radius: var(--radius-l);
     overflow: hidden;
     flex-shrink: 0;
   }
@@ -372,14 +358,14 @@
     line-height: 1.3;
   }
   .sha-small {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     flex-shrink: 0;
   }
   .more {
     padding: 6px 12px 7px 32px;
     border-top: 1px solid var(--sep);
-    font-size: 11.5px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .mono {

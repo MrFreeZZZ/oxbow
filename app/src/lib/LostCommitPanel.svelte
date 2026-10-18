@@ -55,7 +55,7 @@
         {:else}
           <span class="note">A branch here keeps {entry.lostCount > 1 ? `all ${entry.lostCount}` : "it"}. Nothing else changes: no reset, your files stay as they are.</span>
         {/if}
-        <button class="button" onclick={() => onBranch(entry)}>Create Branch…</button>
+        <button class="button small primary" onclick={() => onBranch(entry)}>Create Branch…</button>
       </div>
     {/if}
   </div>
@@ -70,7 +70,7 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: var(--orange-soft);
     flex-shrink: 0;
   }
@@ -83,7 +83,7 @@
     width: 26px;
     height: 26px;
     flex-shrink: 0;
-    border-radius: 13px;
+    border-radius: var(--radius-pill);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -105,13 +105,13 @@
     font-weight: 600;
   }
   .detail {
-    font-size: 11.5px;
+    font-size: var(--text-small);
     color: var(--text2);
     line-height: 1.4;
   }
   .mono {
     font-family: var(--mono);
-    font-size: 10.5px;
+    font-size: var(--text-caption);
   }
   .close {
     width: 22px;
@@ -120,7 +120,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 11px;
+    border-radius: var(--radius-pill);
     color: var(--icon);
   }
   .close:hover {
@@ -139,7 +139,7 @@
   .note {
     flex-grow: 1;
     min-width: 0;
-    font-size: 11.5px;
+    font-size: var(--text-small);
     line-height: 1.4;
     color: var(--text2);
   }
@@ -147,15 +147,5 @@
     color: var(--accent-text);
     font-size: inherit;
   }
-  .button {
-    flex-shrink: 0;
-    height: 28px;
-    padding: 0 12px;
-    border-radius: 14px;
-    background: var(--accent);
-    color: #fff;
-    font-weight: 600;
-    font-size: 12px;
-    white-space: nowrap;
-  }
+
 </style>

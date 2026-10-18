@@ -465,7 +465,7 @@
       {#if running}
         <div class="run">
           <span class="track"><span class="fill" class:busy={confirm.progress === null} style:width="{confirm.progress ?? 30}%"></span></span>
-          <button class="btn" onclick={() => confirm.stop()} title={withKeys("Stop", "Escape")}>Stop</button>
+          <button class="button" onclick={() => confirm.stop()} title={withKeys("Stop", "Escape")}>Stop</button>
         </div>
       {:else}
         <div class="foot">
@@ -491,15 +491,15 @@
             <span class="note">{failed ? (recovery?.note ?? "Nothing else was run.") : ""}</span>
           {/if}
           {#if failed}
-            <button class="btn" onclick={() => confirm.cancel()} title={withKeys(recovery?.close ?? "Close", "Escape")}>{recovery?.close ?? "Close"}</button>
+            <button class="button" onclick={() => confirm.cancel()} title={withKeys(recovery?.close ?? "Close", "Escape")}>{recovery?.close ?? "Close"}</button>
             {#if recovery?.button}
-              <button class="btn go" class:danger={recovery.button.danger} bind:this={goButton} onclick={() => confirm.recover()}>{recovery.button.label}</button>
+              <button class="button primary" class:danger={recovery.button.danger} bind:this={goButton} onclick={() => confirm.recover()}>{recovery.button.label}</button>
             {:else if recovery?.act}
-              <button class="btn go" bind:this={goButton} onclick={() => confirm.act()}>{recovery.act.label}</button>
+              <button class="button primary" bind:this={goButton} onclick={() => confirm.act()}>{recovery.act.label}</button>
             {/if}
           {:else}
-            <button class="btn" onclick={() => confirm.cancel()} title={withKeys("Cancel", "Escape")}>Cancel</button>
-            <button class="btn go" class:danger={request.danger} bind:this={goButton} disabled={!!request.invalid} title={request.invalid ?? withKeys(request.button, multiline ? "Mod+Enter" : "Enter")} onclick={() => confirm.go()}>{request.button}</button>
+            <button class="button" onclick={() => confirm.cancel()} title={withKeys("Cancel", "Escape")}>Cancel</button>
+            <button class="button primary" class:danger={request.danger} bind:this={goButton} disabled={!!request.invalid} title={request.invalid ?? withKeys(request.button, multiline ? "Mod+Enter" : "Enter")} onclick={() => confirm.go()}>{request.button}</button>
           {/if}
         </div>
       {/if}
@@ -561,10 +561,10 @@
     max-height: calc(100vh - 48px);
     overflow-y: auto;
     padding: 22px 22px 18px;
-    border-radius: 22px;
+    border-radius: var(--radius-sheet);
     background: var(--sheet);
     border: 0.5px solid var(--glass-border);
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+    box-shadow: var(--shadow-sheet);
     display: flex;
     flex-direction: column;
     gap: 14px;
@@ -578,7 +578,7 @@
     width: 44px;
     height: 44px;
     flex-shrink: 0;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -596,7 +596,7 @@
     gap: 6px;
   }
   .title {
-    font-size: 15px;
+    font-size: var(--text-heading);
     font-weight: 700;
     line-height: 1.3;
   }
@@ -606,7 +606,7 @@
   }
   .chip {
     padding: 1px 6px;
-    border-radius: 7px;
+    border-radius: var(--radius-s);
     background: var(--field);
     font-weight: 500;
     white-space: pre-wrap;
@@ -614,13 +614,13 @@
   .chip.mono {
     padding: 1px 5px;
     font-weight: 400;
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .quote {
     font-weight: 600;
   }
   .term {
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     overflow: hidden;
     background: var(--term);
     border: 0.5px solid var(--term-border);
@@ -638,13 +638,13 @@
   .light {
     width: 9px;
     height: 9px;
-    border-radius: 5px;
+    border-radius: var(--radius-pill);
     background: var(--term-dot);
   }
   .where {
     flex-grow: 1;
     text-align: center;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--term-dim);
   }
   .copy {
@@ -653,8 +653,8 @@
     gap: 4px;
     height: 20px;
     padding: 0 8px;
-    border-radius: 10px;
-    font-size: 11px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-caption);
     color: var(--term-dim);
     background: var(--term-button);
   }
@@ -664,7 +664,7 @@
   }
   .lines {
     padding: 10px 14px 12px;
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.7;
     max-height: 240px;
     overflow-y: auto;
@@ -742,7 +742,7 @@
   .label {
     width: 70px;
     flex-shrink: 0;
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 28px;
     color: var(--text2);
   }
@@ -756,12 +756,12 @@
   .text {
     height: 28px;
     padding: 0 10px;
-    border-radius: 8px;
+    border-radius: var(--radius-m);
     background: var(--win);
     border: 1px solid var(--sep);
     color: var(--text);
     font: inherit;
-    font-size: 13px;
+    font-size: var(--text-body);
     outline: none;
     user-select: text;
     -webkit-user-select: text;
@@ -775,22 +775,22 @@
   }
   .text:focus {
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+    box-shadow: var(--focus-ring);
   }
   .chips {
     display: flex;
     flex-wrap: wrap;
     gap: 2px;
     padding: 2px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     background: var(--field);
     align-self: flex-start;
   }
   .chip-button {
     height: 24px;
     padding: 0 11px;
-    border-radius: 7px;
-    font-size: 12px;
+    border-radius: var(--radius-s);
+    font-size: var(--text-small);
   }
   .chip-button.on {
     background: var(--glass);
@@ -804,7 +804,7 @@
     opacity: 0.4;
   }
   .field-note {
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.4;
     color: var(--text2);
   }
@@ -814,7 +814,7 @@
   .gaps {
     margin-left: 58px;
     padding: 4px 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: var(--orange-soft);
     display: flex;
     flex-direction: column;
@@ -838,11 +838,11 @@
   }
   .gap-title {
     font-weight: 600;
-    font-size: 12.5px;
+    font-size: var(--text-body);
   }
   .gap-why {
     margin: 3px 0 0 20px;
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.45;
     color: var(--text2);
   }
@@ -855,7 +855,7 @@
   .gap-file {
     display: flex;
     gap: 10px;
-    font-size: 12px;
+    font-size: var(--text-small);
     min-width: 0;
   }
   .gap-file.more {
@@ -877,7 +877,7 @@
     display: flex;
     flex-direction: column;
     margin-left: 58px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: var(--field);
     overflow: hidden;
   }
@@ -906,7 +906,7 @@
     stroke-linejoin: round;
   }
   .where-line {
-    font-size: 12px;
+    font-size: var(--text-small);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -918,14 +918,14 @@
     margin-left: auto;
     flex-shrink: 0;
     padding: 1px 8px;
-    border-radius: 8px;
+    border-radius: var(--radius-m);
     background: var(--orange-soft);
     color: var(--orange);
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 500;
   }
   .masked {
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
     padding-left: 19px;
     white-space: pre;
@@ -950,7 +950,7 @@
     height: 14px;
     margin-top: 2px;
     flex-shrink: 0;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     border: 1px solid var(--text2);
     display: flex;
     align-items: center;
@@ -977,7 +977,7 @@
     gap: 1px;
   }
   .sub {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .run {
@@ -989,14 +989,14 @@
   .track {
     flex-grow: 1;
     height: 4px;
-    border-radius: 2px;
+    border-radius: var(--radius-pill);
     background: var(--field);
     overflow: hidden;
   }
   .fill {
     display: block;
     height: 4px;
-    border-radius: 2px;
+    border-radius: var(--radius-pill);
     background: var(--accent);
     transition: width 0.25s;
   }
@@ -1017,7 +1017,7 @@
     height: 30px;
     padding: 0 12px;
     margin-left: -12px;
-    border-radius: 15px;
+    border-radius: var(--radius-pill);
     font-weight: 500;
   }
   .alt.danger {
@@ -1037,7 +1037,7 @@
     min-width: 300px;
     max-width: min(440px, calc(100vw - 32px));
     padding: 12px 10px 13px 12px;
-    border-radius: 14px;
+    border-radius: var(--radius-l);
     overflow: hidden;
     background: var(--sheet);
     border: 0.5px solid var(--glass-border);
@@ -1072,7 +1072,7 @@
     place-items: center;
     width: 24px;
     height: 24px;
-    border-radius: 12px;
+    border-radius: var(--radius-pill);
     background: var(--tone-soft);
     color: var(--tone);
   }
@@ -1096,7 +1096,7 @@
     flex-shrink: 0;
     height: 24px;
     padding: 0 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-pill);
     background: var(--field);
     font-weight: 600;
   }
@@ -1106,7 +1106,7 @@
     place-items: center;
     width: 24px;
     height: 24px;
-    border-radius: 12px;
+    border-radius: var(--radius-pill);
     color: var(--text2);
   }
   .toast .close:hover {
@@ -1148,7 +1148,7 @@
     align-items: flex-start;
     gap: 8px;
     padding: 0 2px;
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.4;
     color: var(--text2);
   }
@@ -1161,7 +1161,7 @@
   .note {
     flex-grow: 1;
     min-width: 0;
-    font-size: 11px;
+    font-size: var(--text-caption);
     line-height: 1.35;
     color: var(--text2);
   }
@@ -1170,7 +1170,7 @@
     margin: 0 0 0 58px;
     padding: 4px 12px;
     list-style: none;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: var(--panel);
     border: 0.5px solid var(--panel-border);
     display: flex;
@@ -1191,10 +1191,10 @@
     height: 20px;
     margin-top: 1px;
     flex-shrink: 0;
-    border-radius: 10px;
+    border-radius: var(--radius-pill);
     display: grid;
     place-items: center;
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 700;
     background: color-mix(in srgb, var(--accent) 14%, transparent);
     color: var(--plate-0);
@@ -1206,7 +1206,7 @@
     overflow-wrap: anywhere;
   }
   .step-sub {
-    font-size: 11.5px;
+    font-size: var(--text-small);
     line-height: 1.4;
     color: var(--text2);
   }
@@ -1226,32 +1226,9 @@
     width: 14px;
     height: 14px;
   }
-  .btn {
-    flex-shrink: 0;
+
+  .button {
     min-width: 96px;
-    height: 30px;
     padding: 0 16px;
-    border-radius: 15px;
-    text-align: center;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    font-weight: 500;
-  }
-  .btn.go {
-    background: var(--accent);
-    border-color: transparent;
-    color: #fff;
-    font-weight: 600;
-  }
-  .btn.go.danger {
-    background: var(--danger);
-  }
-  .btn:disabled {
-    opacity: 0.6;
-  }
-  .btn:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
   }
 </style>

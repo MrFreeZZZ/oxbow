@@ -61,7 +61,7 @@
 
 <style>
   .term {
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     overflow: hidden;
     background: var(--term);
     border: 0.5px solid var(--term-border);
@@ -80,13 +80,13 @@
   .light {
     width: 9px;
     height: 9px;
-    border-radius: 5px;
+    border-radius: var(--radius-pill);
     background: var(--term-dot);
   }
   .where {
     flex-grow: 1;
     text-align: center;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--term-dim);
   }
   .copy {
@@ -95,8 +95,8 @@
     gap: 4px;
     height: 20px;
     padding: 0 8px;
-    border-radius: 10px;
-    font-size: 11px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-caption);
     color: var(--term-dim);
     background: var(--term-button);
   }
@@ -106,7 +106,7 @@
   }
   .lines {
     padding: 10px 14px 12px;
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.7;
     max-height: 200px;
     overflow-y: auto;

@@ -370,8 +370,8 @@
         <span class="title">{splitPath(file.path).name}</span>
         <span class="explain">{wholeOnly}</span>
         <div class="buttons">
-          <button class="btn" onclick={() => takeFile(leftSide)}>{(leftSide === "ours" ? file.ours : file.theirs) ? `Use ${leftLabel}’s Version` : `Delete, as on ${leftLabel}`}</button>
-          <button class="btn" onclick={() => takeFile(rightSide)}>{(rightSide === "ours" ? file.ours : file.theirs) ? `Use ${rightLabel}’s Version` : `Delete, as on ${rightLabel}`}</button>
+          <button class="button" onclick={() => takeFile(leftSide)}>{(leftSide === "ours" ? file.ours : file.theirs) ? `Use ${leftLabel}’s Version` : `Delete, as on ${leftLabel}`}</button>
+          <button class="button" onclick={() => takeFile(rightSide)}>{(rightSide === "ours" ? file.ours : file.theirs) ? `Use ${rightLabel}’s Version` : `Delete, as on ${rightLabel}`}</button>
         </div>
       </div>
     {:else if file}
@@ -389,9 +389,9 @@
           {:else}
             <span class="green small">All decided</span>
           {/if}
-          <button class="btn small-btn" onclick={() => takeFile(leftSide)} title="Use {leftLabel}’s whole file">All {leftLabel}</button>
-          <button class="btn small-btn" onclick={() => takeFile(rightSide)} title="Use {rightLabel}’s whole file">All {rightLabel}</button>
-          <button class="btn go small-btn" disabled={open_ > 0} title={open_ ? "Pick a side in every conflict first" : undefined} onclick={markResolved}>Mark Resolved</button>
+          <button class="button small" onclick={() => takeFile(leftSide)} title="Use {leftLabel}’s whole file">All {leftLabel}</button>
+          <button class="button small" onclick={() => takeFile(rightSide)} title="Use {rightLabel}’s whole file">All {rightLabel}</button>
+          <button class="button primary small" disabled={open_ > 0} title={open_ ? "Pick a side in every conflict first" : undefined} onclick={markResolved}>Mark Resolved</button>
         </header>
         <div class="code mono selectable">
           {#each resultItems as item, i (i)}
@@ -450,7 +450,7 @@
     align-items: baseline;
     justify-content: space-between;
     padding: 6px 8px 6px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
   }
@@ -463,7 +463,7 @@
   .track {
     margin: 0 8px 8px;
     height: 4px;
-    border-radius: 2px;
+    border-radius: var(--radius-pill);
     background: var(--field);
     overflow: hidden;
   }
@@ -485,7 +485,7 @@
     align-items: flex-start;
     gap: 8px;
     padding: 7px 8px;
-    border-radius: 10px;
+    border-radius: var(--radius-l);
     text-align: left;
     width: 100%;
   }
@@ -497,8 +497,8 @@
     height: 16px;
     flex-shrink: 0;
     margin-top: 1px;
-    border-radius: 8px;
-    font-size: 10px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-caption);
     font-weight: 700;
     display: flex;
     align-items: center;
@@ -522,7 +522,7 @@
     color: var(--text2);
   }
   .sub {
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .orange {
     color: var(--orange);
@@ -531,14 +531,14 @@
     color: var(--green);
   }
   .small {
-    font-size: 12px;
+    font-size: var(--text-small);
     white-space: nowrap;
   }
   .auto {
     display: flex;
     gap: 8px;
     padding: 4px 8px 4px 12px;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .check {
@@ -555,9 +555,9 @@
   .hint {
     margin: 8px 0 0;
     padding: 10px 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: var(--field);
-    font-size: 11px;
+    font-size: var(--text-caption);
     line-height: 1.45;
     color: var(--text2);
   }
@@ -582,7 +582,7 @@
     display: flex;
     flex-direction: column;
     border: 1px solid var(--sep);
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: var(--win);
     overflow: hidden;
   }
@@ -597,11 +597,11 @@
     flex-shrink: 0;
     padding: 0 10px;
     border-bottom: 1px solid var(--sep);
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .cap {
     padding: 1px 8px;
-    border-radius: 8px;
+    border-radius: var(--radius-m);
     font-weight: 500;
     white-space: nowrap;
   }
@@ -633,7 +633,6 @@
   }
   /* Side panes are narrow: lines scroll sideways instead of wrapping. */
 
-
   .no {
     color: var(--text2);
     opacity: 0.7;
@@ -659,21 +658,21 @@
     height: 26px;
     margin-top: 4px;
     padding: 0 4px 0 10px;
-    border-radius: 9px 9px 0 0;
+    border-radius: var(--radius-m) var(--radius-m) 0 0;
     font-family: var(--font);
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
   }
   .take,
   .pick {
     height: 20px;
     padding: 0 9px;
-    border-radius: 10px;
+    border-radius: var(--radius-pill);
     background: var(--glass);
     border: 0.5px solid var(--glass-border);
     box-shadow: var(--glass-shadow);
     font-family: var(--font);
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
   }
   .in {
@@ -682,7 +681,7 @@
   }
   .inblock:last-child,
   .inblock:has(+ :not(.inblock)) {
-    border-radius: 0 0 9px 9px;
+    border-radius: 0 0 var(--radius-m) var(--radius-m);
     margin-bottom: 4px;
   }
   .fold {
@@ -690,15 +689,15 @@
     padding: 0 12px;
     height: 22px;
     line-height: 22px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     background: var(--field);
     color: var(--text2);
     font-family: var(--font);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .open {
     margin: 4px 0;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     background: var(--orange-soft);
   }
   .open-head {
@@ -708,7 +707,7 @@
     height: 28px;
     padding: 0 6px 0 10px;
     font-family: var(--font);
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--orange);
   }
@@ -724,11 +723,11 @@
     margin-top: 4px;
     padding: 0 6px 2px 46px;
     font-family: var(--font);
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .undo {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--accent-text);
   }
   .empty {
@@ -740,18 +739,18 @@
     gap: 8px;
     color: var(--text2);
     border: 1px solid var(--sep);
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: var(--win);
     text-align: center;
     padding: 24px;
   }
   .empty .title {
-    font-size: 15px;
+    font-size: var(--text-heading);
     font-weight: 700;
     color: var(--text);
   }
   .empty .big {
-    font-size: 28px;
+    font-size: var(--text-display);
     color: var(--green);
   }
   .explain {
@@ -766,31 +765,5 @@
     gap: 8px;
     margin-top: 8px;
   }
-  .btn {
-    flex-shrink: 0;
-    height: 30px;
-    padding: 0 14px;
-    border-radius: 15px;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    font-weight: 500;
-    white-space: nowrap;
-  }
-  .small-btn {
-    height: 26px;
-    padding: 0 11px;
-    font-size: 12px;
-  }
-  .btn.go {
-    background: var(--accent);
-    border-color: transparent;
-    color: #fff;
-    font-weight: 600;
-  }
-  .btn:disabled {
-    background: var(--field);
-    color: var(--text2);
-    box-shadow: none;
-  }
+
 </style>

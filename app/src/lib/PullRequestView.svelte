@@ -704,7 +704,7 @@
             <span class="block"><span class="bullet">•</span><span>{b}</span></span>
           {/each}
           {#if pr.draft && pr.settings.canPush}
-            <button class="small-btn" onclick={() => pr && act(readyRequest(pr))}>Ready for Review…</button>
+            <button class="button small" onclick={() => pr && act(readyRequest(pr))}>Ready for Review…</button>
           {/if}
         </div>
       {/if}
@@ -741,7 +741,7 @@
             ><path d={baseLine.tone === "ok" ? ICONS.ok : baseLine.tone === "stack" ? "M3 6.5h10v7H3zM4.5 4.5h7M6 2.5h4" : "M8 3.5v5.5M8 12.2v.1"} /></svg
           >
           <span class="grow">{baseLine.text}</span>
-          {#if mergedBelow}<button class="small-btn" onclick={() => mergedBelow && startRestack(mergedBelow)}>Restack…</button>{/if}
+          {#if mergedBelow}<button class="button small" onclick={() => mergedBelow && startRestack(mergedBelow)}>Restack…</button>{/if}
         </div>
       {/if}
       <div class="sep"></div>
@@ -766,7 +766,7 @@
       {:else}
         {@render toggle(!!pr.autoMerge, "Merge automatically when ready", autoMergeNote, autoMergeOff, toggleAutoMerge)}
       {/if}
-      <button class="primary merge" disabled={!canMerge} onclick={merge}>
+      <button class="button primary merge" disabled={!canMerge} onclick={merge}>
         {pr.autoMerge && !canMerge ? "Will Merge When Ready" : METHODS.find((m) => m.id === chosen)?.button}
       </button>
       <span class="note center">
@@ -799,13 +799,13 @@
           {/each}
           <div class="buttons">
             <button class="capsule" onclick={() => (restackSkipped = true)}>Later</button>
-            <button class="primary small" disabled={!!restack.problem} onclick={() => restack && startRestack(restack.merged)}>Restack…</button>
+            <button class="button primary" disabled={!!restack.problem} onclick={() => restack && startRestack(restack.merged)}>Restack…</button>
           </div>
         </div>
       {:else if restack}
         <div class="skipped">
           <span class="grow">Restack skipped. The pull requests built on it still say “Restack” until it is done.</span>
-          <button class="small-btn" onclick={() => (restackSkipped = false)}>Undo</button>
+          <button class="button small" onclick={() => (restackSkipped = false)}>Undo</button>
         </div>
       {/if}
     {:else if pr && pr.state === "closed"}
@@ -825,7 +825,7 @@
       {/if}
       <div class="sep"></div>
       {@render toggle(form.draft, "Create as draft", "Reviewers hear about it when you mark it ready", false, () => form && (form.draft = !form.draft))}
-      <button class="primary merge" disabled={!form.title.trim()} onclick={create}>{newPull.push ? "Push and Create" : "Create Pull Request"}</button>
+      <button class="button primary merge" disabled={!form.title.trim()} onclick={create}>{newPull.push ? "Push and Create" : "Create Pull Request"}</button>
     {/if}
   </aside>
 </div>
@@ -870,7 +870,7 @@
     color: var(--text2);
   }
   .small-text {
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .selectable {
     user-select: text;
@@ -909,7 +909,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
     flex-shrink: 0;
@@ -947,13 +947,13 @@
     overflow: hidden;
   }
   .arrow-name {
-    font-size: 12px;
+    font-size: var(--text-small);
     font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .arrow-sub {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -974,7 +974,7 @@
   }
   h1 {
     margin: 0;
-    font-size: 18px;
+    font-size: var(--text-title);
     font-weight: 600;
     line-height: 1.3;
     min-width: 0;
@@ -983,7 +983,7 @@
     text-overflow: ellipsis;
   }
   .number {
-    font-size: 18px;
+    font-size: var(--text-title);
     color: var(--text2);
     flex-shrink: 0;
   }
@@ -991,8 +991,8 @@
     line-height: 22px;
     height: 22px;
     padding: 0 10px;
-    border-radius: 11px;
-    font-size: 12px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-small);
     font-weight: 600;
     white-space: nowrap;
     flex-shrink: 0;
@@ -1001,7 +1001,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
     white-space: nowrap;
     min-width: 0;
@@ -1010,8 +1010,8 @@
     line-height: 20px;
     height: 20px;
     padding: 0 9px;
-    border-radius: 10px;
-    font-size: 11px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-caption);
     font-weight: 500;
     flex-shrink: 0;
   }
@@ -1024,9 +1024,9 @@
   .tab {
     height: 26px;
     padding: 0 12px;
-    border-radius: 13px;
+    border-radius: var(--radius-pill);
     border: 1px solid var(--sep);
-    font-size: 12px;
+    font-size: var(--text-small);
     font-weight: 500;
   }
   .tab.on {
@@ -1036,7 +1036,7 @@
     font-weight: 600;
   }
   .load-error {
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--red);
     margin-left: 8px;
   }
@@ -1080,7 +1080,7 @@
   .card {
     flex-grow: 1;
     min-width: 0;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: var(--panel);
     border: 0.5px solid var(--panel-border);
     padding: 9px 12px 10px;
@@ -1092,7 +1092,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
     white-space: nowrap;
     min-width: 0;
@@ -1104,18 +1104,18 @@
   }
   .when {
     flex-shrink: 0;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .card-head .when {
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .badge {
     line-height: 20px;
     height: 20px;
     padding: 0 9px;
-    border-radius: 10px;
-    font-size: 11px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-caption);
     font-weight: 600;
     flex-shrink: 0;
   }
@@ -1130,12 +1130,12 @@
     flex-direction: column;
     gap: 3px;
     padding: 7px 10px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     background: var(--field);
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .stack-title {
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
   }
@@ -1152,7 +1152,7 @@
     align-items: center;
     gap: 10px;
     padding-left: 7px;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
     min-width: 0;
   }
@@ -1162,7 +1162,7 @@
   .dot {
     width: 16px;
     height: 16px;
-    border-radius: 8px;
+    border-radius: var(--radius-pill);
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1178,7 +1178,7 @@
     stroke-linejoin: round;
   }
   .code {
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     overflow: hidden;
     border: 0.5px solid var(--panel-border);
     background: var(--win);
@@ -1188,7 +1188,7 @@
     display: flex;
     align-items: center;
     padding: 0 10px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     background: var(--field);
   }
   .code-line {
@@ -1196,7 +1196,7 @@
     align-items: center;
     min-height: 19px;
     font-family: var(--mono);
-    font-size: 11.5px;
+    font-size: var(--text-small);
   }
   .code-line.mark {
     background: var(--found-bg);
@@ -1221,7 +1221,7 @@
     gap: 8px;
     padding-top: 6px;
     border-top: 0.5px solid var(--sep);
-    font-size: 12px;
+    font-size: var(--text-small);
     min-width: 0;
   }
   .reply-text {
@@ -1243,13 +1243,13 @@
     gap: 10px;
     height: 44px;
     padding: 0 12px;
-    border-radius: 10px;
+    border-radius: var(--radius-m);
     background: var(--panel);
   }
   .commit-dot {
     width: 10px;
     height: 10px;
-    border-radius: 5px;
+    border-radius: var(--radius-pill);
     border: 2px solid;
     box-sizing: border-box;
     flex-shrink: 0;
@@ -1262,19 +1262,19 @@
     line-height: 1.3;
   }
   .sub {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .add {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--green);
   }
   .del {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--red);
   }
   .sha {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     width: 56px;
     text-align: right;
@@ -1284,7 +1284,7 @@
   .form {
     display: flex;
     flex-direction: column;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: var(--panel);
     border: 0.5px solid var(--panel-border);
     overflow-y: auto;
@@ -1309,7 +1309,7 @@
     flex-grow: 1;
     min-width: 0;
     padding: 4px 9px;
-    border-radius: 7px;
+    border-radius: var(--radius-s);
     background: var(--win);
     border: 0.5px solid var(--glass-border);
     line-height: 1.45;
@@ -1331,9 +1331,9 @@
     gap: 6px;
     height: 24px;
     padding: 0 10px;
-    border-radius: 12px;
+    border-radius: var(--radius-pill);
     background: var(--field);
-    font-size: 12px;
+    font-size: var(--text-small);
     font-weight: 500;
     white-space: nowrap;
   }
@@ -1342,7 +1342,7 @@
   }
   .remove {
     color: var(--text2);
-    font-size: 14px;
+    font-size: var(--text-heading);
     line-height: 1;
   }
   .add-reviewer {
@@ -1352,11 +1352,11 @@
     background: transparent;
     color: var(--accent-text);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-small);
     outline: none;
   }
   .note {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     line-height: 1.4;
   }
@@ -1370,9 +1370,9 @@
     flex-direction: column;
     gap: 5px;
     padding: 10px 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: var(--orange-soft);
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .blocks-title {
     font-weight: 600;
@@ -1386,20 +1386,11 @@
   .bullet {
     color: var(--orange);
   }
-  .blocks .small-btn {
+  .blocks .button {
     align-self: flex-start;
     margin-top: 4px;
   }
-  .small-btn {
-    flex-shrink: 0;
-    height: 26px;
-    padding: 0 12px;
-    border-radius: 13px;
-    background: var(--win);
-    border: 0.5px solid var(--glass-border);
-    font-weight: 500;
-    font-size: 12px;
-  }
+
   .group {
     display: flex;
     flex-direction: column;
@@ -1409,7 +1400,7 @@
   .group-title {
     display: flex;
     align-items: center;
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
     padding: 0 2px 2px;
@@ -1429,8 +1420,8 @@
     gap: 8px;
     height: 24px;
     padding: 0 2px;
-    font-size: 12px;
-    border-radius: 6px;
+    font-size: var(--text-small);
+    border-radius: var(--radius-s);
     width: 100%;
   }
   .check:disabled {
@@ -1442,15 +1433,15 @@
     gap: 8px;
     height: 26px;
     padding: 0 2px;
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .base-line {
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 8px 10px;
-    border-radius: 10px;
-    font-size: 12px;
+    border-radius: var(--radius-l);
+    font-size: var(--text-small);
     line-height: 1.35;
   }
   .sep {
@@ -1462,22 +1453,22 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .segmented {
     display: flex;
     gap: 2px;
     padding: 2px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     background: var(--field);
   }
   .segmented button {
     min-width: 70px;
     height: 24px;
     padding: 0 10px;
-    border-radius: 7px;
+    border-radius: var(--radius-s);
     text-align: center;
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .segmented button.on {
     background: var(--seg-on);
@@ -1489,10 +1480,10 @@
     flex-direction: column;
     gap: 3px;
     padding: 8px 10px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     background: var(--win);
     border: 0.5px solid var(--glass-border);
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .message-title {
     font-weight: 600;
@@ -1510,7 +1501,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    font-size: 12px;
+    font-size: var(--text-small);
     width: 100%;
     white-space: normal;
   }
@@ -1527,7 +1518,7 @@
     position: relative;
     width: 32px;
     height: 18px;
-    border-radius: 9px;
+    border-radius: var(--radius-pill);
     background: var(--switch-off);
     flex-shrink: 0;
     transition: background-color 0.15s;
@@ -1541,7 +1532,7 @@
     top: 2px;
     width: 14px;
     height: 14px;
-    border-radius: 7px;
+    border-radius: var(--radius-pill);
     background: #fff;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
     transition: transform 0.15s;
@@ -1549,39 +1540,23 @@
   .switch.on .knob {
     transform: translateX(14px);
   }
-  .primary {
-    border-radius: 17px;
-    text-align: center;
-    background: var(--accent);
-    color: #fff;
-    font-weight: 600;
-    flex-shrink: 0;
-  }
-  .primary.merge {
+
+  .merge {
     height: 34px;
   }
-  .primary:disabled {
-    background: var(--field);
-    color: var(--text2);
-  }
-  .primary.small {
-    min-width: 88px;
-    height: 30px;
-    padding: 0 16px;
-    border-radius: 15px;
-  }
+
   .merged {
     display: flex;
     align-items: center;
     gap: 10px;
     padding: 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: var(--green-soft);
   }
   .merged-icon {
     width: 28px;
     height: 28px;
-    border-radius: 14px;
+    border-radius: var(--radius-pill);
     background: var(--green);
     color: #fff;
     display: flex;
@@ -1603,18 +1578,18 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .merged-title {
     font-weight: 600;
-    font-size: 13px;
+    font-size: var(--text-body);
   }
   .restack {
     display: flex;
     flex-direction: column;
     gap: 10px;
     padding: 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     border: 1.5px solid;
   }
   .restack-title {
@@ -1623,7 +1598,7 @@
   .step {
     display: flex;
     gap: 8px;
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.4;
   }
   .step .dot {
@@ -1632,13 +1607,13 @@
   .num {
     width: 18px;
     height: 18px;
-    border-radius: 9px;
+    border-radius: var(--radius-pill);
     display: flex;
     align-items: center;
     justify-content: center;
     background: var(--field);
     color: var(--text2);
-    font-size: 10px;
+    font-size: var(--text-caption);
     font-weight: 700;
     flex-shrink: 0;
   }
@@ -1651,7 +1626,7 @@
     min-width: 88px;
     height: 30px;
     padding: 0 14px;
-    border-radius: 15px;
+    border-radius: var(--radius-pill);
     text-align: center;
     background: var(--glass);
     border: 0.5px solid var(--glass-border);
@@ -1663,9 +1638,9 @@
     align-items: center;
     gap: 10px;
     padding: 10px 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: var(--field);
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.4;
   }
 </style>

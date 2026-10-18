@@ -220,7 +220,7 @@
     gap: 8px;
     margin: 4px 12px 8px;
     padding: 8px;
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     background: var(--field);
   }
   .swap {
@@ -230,7 +230,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 16px;
+    border-radius: var(--radius-pill);
     background: var(--win);
     border: 0.5px solid var(--glass-border);
     box-shadow: var(--glass-shadow);
@@ -251,7 +251,7 @@
     text-overflow: ellipsis;
   }
   .sub {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     white-space: nowrap;
     overflow: hidden;
@@ -261,14 +261,14 @@
     display: flex;
     flex-shrink: 0;
     padding: 2px;
-    border-radius: 15px;
+    border-radius: var(--radius-pill);
     background: var(--field);
   }
   .segmented button {
     height: 28px;
     padding: 0 12px;
-    border-radius: 14px;
-    font-size: 12px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-small);
     color: var(--text2);
     white-space: nowrap;
   }
@@ -296,7 +296,7 @@
     min-width: 0;
     margin: 0 12px 12px;
     border: 1px solid var(--sep);
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     overflow: hidden;
     background: var(--graph-bg);
     display: flex;
@@ -315,7 +315,7 @@
     gap: 10px;
     width: 100%;
     padding: 6px 10px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     text-align: left;
   }
   .all {
@@ -346,7 +346,7 @@
     font-weight: 600;
   }
   .byline {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     white-space: nowrap;
     overflow: hidden;
@@ -354,19 +354,19 @@
   }
   .mono {
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .dot {
     width: 10px;
     height: 10px;
-    border-radius: 5px;
+    border-radius: var(--radius-pill);
     flex-shrink: 0;
     margin-left: 2px;
   }
   .ring {
     width: 10px;
     height: 10px;
-    border-radius: 5px;
+    border-radius: var(--radius-pill);
     flex-shrink: 0;
     margin-left: 2px;
     border: 1.5px dashed var(--text2);
@@ -376,7 +376,7 @@
     align-items: baseline;
     gap: 8px;
     padding: 14px 10px 4px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .section > span {
@@ -402,13 +402,13 @@
   }
   .more {
     margin: 2px 10px 4px 34px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .ancestor {
     margin-top: 12px;
     border-top: 1px dashed var(--sep);
-    border-radius: 0 0 9px 9px;
+    border-radius: 0 0 var(--radius-m) var(--radius-m);
     padding-top: 10px;
   }
   .panel {
@@ -425,7 +425,7 @@
     width: 7px;
     height: 36px;
     margin-top: -18px;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     background: var(--win);
     border: 1px solid var(--glass-border);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
@@ -444,11 +444,11 @@
     height: 28px;
     min-width: 0;
     padding: 0 10px;
-    border-radius: 8px;
+    border-radius: var(--radius-m);
     background: var(--term);
     border: 1px solid var(--term-border);
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .prompt {
     color: var(--term-dim);

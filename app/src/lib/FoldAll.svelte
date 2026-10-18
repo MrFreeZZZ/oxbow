@@ -22,7 +22,7 @@
   button {
     width: 22px;
     height: 22px;
-    border-radius: 11px;
+    border-radius: var(--radius-pill);
     display: flex;
     align-items: center;
     justify-content: center;

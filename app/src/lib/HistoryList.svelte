@@ -436,7 +436,7 @@
             History ends here
             <span class="sub">This is a shallow clone: it has only the latest {history.loaded.toLocaleString()} {history.loaded === 1 ? "commit" : "commits"}.</span>
           </span>
-          <button class="small-button" onclick={() => onUnshallow?.()}>Fetch Full History…</button>
+          <button class="button small" onclick={() => onUnshallow?.()}>Fetch Full History…</button>
         </div>
       {/if}
     </div>
@@ -472,14 +472,14 @@
     gap: 4px;
     height: 32px;
     padding: 0 12px 0 10px;
-    border-radius: 16px;
+    border-radius: var(--radius-pill);
     background: var(--glass);
     border: 0.5px solid var(--glass-border);
     box-shadow: var(--glass-shadow);
     -webkit-backdrop-filter: blur(20px);
     backdrop-filter: blur(20px);
     color: var(--icon);
-    font-size: 12px;
+    font-size: var(--text-small);
     font-weight: 600;
   }
   .top span {
@@ -492,7 +492,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .foot code {
@@ -521,10 +521,10 @@
     align-items: center;
     gap: 10px;
     padding: 10px 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: var(--glass);
     border: 0.5px solid var(--glass-border);
-    font-size: 12.5px;
+    font-size: var(--text-body);
   }
   .end .icon {
     width: 15px;
@@ -542,19 +542,11 @@
   }
   .end-text .sub {
     font-weight: 400;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
     white-space: normal;
   }
-  .small-button {
-    flex-shrink: 0;
-    height: 26px;
-    padding: 0 12px;
-    border-radius: 13px;
-    background: var(--field);
-    font-size: 12px;
-    font-weight: 500;
-  }
+
   .viewport {
     position: relative;
     flex-grow: 1;
@@ -575,7 +567,7 @@
     justify-content: center;
     gap: 3px;
     padding-right: 10px;
-    border-radius: 8px;
+    border-radius: var(--radius-m);
     transition: background-color 0.3s;
   }
   /* One line: the message, then labels, author and time at the right. */
@@ -617,7 +609,7 @@
     align-items: center;
     gap: 6px;
     min-width: 0;
-    font-size: 11px;
+    font-size: var(--text-caption);
     overflow: hidden;
   }
   /* Labels give way first, with an ellipsis; author and time keep their room. */
@@ -626,7 +618,7 @@
     height: 16px;
     line-height: 14px;
     padding: 0 6px;
-    border-radius: 8px;
+    border-radius: var(--radius-pill);
     border: 1px solid transparent;
     font-weight: 500;
     flex-shrink: 1;
@@ -716,7 +708,7 @@
     font-weight: 600;
     background: var(--found-bg);
     box-shadow: 0 0 0 1px var(--found-ring);
-    border-radius: 3px;
+    border-radius: var(--radius-xs);
     padding: 0 1px;
   }
   .found-note {
@@ -735,7 +727,7 @@
     left: 22px;
     width: 8px;
     height: 8px;
-    border-radius: 4px;
+    border-radius: var(--radius-pill);
     pointer-events: none;
   }
   .lines {

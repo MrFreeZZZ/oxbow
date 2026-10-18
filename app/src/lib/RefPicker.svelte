@@ -133,7 +133,7 @@
     width: 210px;
     height: 40px;
     padding: 0 10px 0 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: var(--win);
     border: 0.5px solid var(--glass-border);
     box-shadow: var(--glass-shadow);
@@ -153,7 +153,7 @@
     line-height: 1.2;
   }
   .label {
-    font-size: 10px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .value {
@@ -180,12 +180,12 @@
     z-index: 20;
     width: 300px;
     padding: 6px;
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     background: var(--sheet);
     -webkit-backdrop-filter: blur(30px) saturate(1.8);
     backdrop-filter: blur(30px) saturate(1.8);
     border: 0.5px solid var(--glass-border);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+    box-shadow: var(--shadow-pop);
     display: flex;
     flex-direction: column;
   }
@@ -196,9 +196,12 @@
     height: 30px;
     margin: 0 2px 4px;
     padding: 0 10px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     background: var(--field);
     color: var(--text2);
+  }
+  .search:focus-within {
+    box-shadow: var(--focus-ring);
   }
   .search input {
     flex-grow: 1;
@@ -208,9 +211,10 @@
     background: none;
     color: var(--text);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-small);
     user-select: text;
     -webkit-user-select: text;
+    box-shadow: none;
   }
   .list {
     max-height: 360px;
@@ -219,7 +223,7 @@
     flex-direction: column;
   }
   .heading {
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
     padding: 6px 10px 3px;
@@ -231,7 +235,7 @@
     height: 26px;
     flex-shrink: 0;
     padding: 0 10px;
-    border-radius: 8px;
+    border-radius: var(--radius-m);
     text-align: left;
   }
   .row:hover:not(:disabled),
@@ -247,7 +251,7 @@
   .dot {
     width: 8px;
     height: 8px;
-    border-radius: 4px;
+    border-radius: var(--radius-pill);
     flex-shrink: 0;
   }
   .dot.diamond {
@@ -269,21 +273,21 @@
   }
   .mono {
     font-family: var(--mono);
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .note {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     white-space: nowrap;
   }
   .check {
     width: 12px;
-    font-size: 12px;
+    font-size: var(--text-small);
     font-weight: 700;
   }
   .empty {
     padding: 10px;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
 </style>

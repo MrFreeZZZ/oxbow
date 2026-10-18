@@ -450,7 +450,7 @@
             <span class="title">{pick.summary}</span>
             <span class="byline">{pick.authorName} · {relativeTime(pick.time)} · <button class="mono link" onclick={() => copy(pick.id)} title="Copy the SHA">{shortId(pick.id)}</button></span>
           </span>
-          <button class="action" onclick={() => blameHere(pick)} disabled={pick.status === "deleted"}>Blame Here</button>
+          <button class="button" onclick={() => blameHere(pick)} disabled={pick.status === "deleted"}>Blame Here</button>
         </div>
         {#if pick.status === "added"}<p class="note">This commit created the file.</p>{/if}
         {#if renamedAt(pick)}<p class="note">This commit renamed it from <span class="mono">{pick.oldPath}</span>.</p>{/if}
@@ -480,11 +480,11 @@
             <span class="title">{pick.summary}</span>
             <span class="byline">{pick.authorName} · {relativeTime(pick.time)} · {shortId(pick.id)} · {linesHere} {linesHere === 1 ? "line" : "lines"} here</span>
           </span>
-          <button class="action" onclick={() => (nav.fileMode = "changes")}>Changes</button>
+          <button class="button" onclick={() => (nav.fileMode = "changes")}>Changes</button>
           {#if !inRevision(pick)}
-            <button class="action" onclick={() => blameHere(pick)} disabled={pick.status === "deleted"}>Blame Here</button>
+            <button class="button" onclick={() => blameHere(pick)} disabled={pick.status === "deleted"}>Blame Here</button>
           {:else if pick.parents[0] && pick.status !== "added"}
-            <button class="action" onclick={() => blameBefore(pick)}>
+            <button class="button" onclick={() => blameBefore(pick)}>
               <svg class="icon" viewBox="0 0 16 16"><path d="M3 6.5h7a3.5 3.5 0 0 1 0 7H6M5.5 4 3 6.5 5.5 9" /></svg>Blame Before
             </button>
           {/if}
@@ -533,7 +533,7 @@
     min-height: 0;
     margin: 4px 0 12px 12px;
     border: 1px solid var(--sep);
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: var(--graph-bg);
     overflow: hidden;
   }
@@ -543,7 +543,7 @@
     justify-content: space-between;
     gap: 8px;
     padding: 12px 14px 6px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
   }
@@ -565,9 +565,9 @@
     margin: 4px 8px;
     padding: 0 6px 0 12px;
     height: 32px;
-    border-radius: 10px;
+    border-radius: var(--radius-m);
     background: var(--field);
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .chip span,
   .elsewhere span {
@@ -580,8 +580,8 @@
   .chip button {
     width: 22px;
     height: 22px;
-    border-radius: 11px;
-    font-size: 15px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-heading);
     color: var(--text2);
     text-align: center;
   }
@@ -593,10 +593,10 @@
   .elsewhere button {
     height: 24px;
     padding: 0 10px;
-    border-radius: 12px;
+    border-radius: var(--radius-pill);
     background: var(--win);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .list {
     flex-grow: 1;
@@ -611,7 +611,7 @@
     width: 100%;
     min-height: 52px;
     padding: 6px 10px 6px 4px;
-    border-radius: 10px;
+    border-radius: var(--radius-l);
     text-align: left;
   }
   .commit:hover:not(.on) {
@@ -647,7 +647,7 @@
     margin-top: -5px;
     width: 10px;
     height: 10px;
-    border-radius: 5px;
+    border-radius: var(--radius-pill);
     background: var(--lane);
     box-shadow: 0 0 0 2px var(--graph-bg);
   }
@@ -682,7 +682,7 @@
     font-weight: 600;
   }
   .byline {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     white-space: nowrap;
     overflow: hidden;
@@ -694,7 +694,7 @@
     align-items: flex-end;
     gap: 2px;
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: var(--text-caption);
     flex-shrink: 0;
   }
   .sha {
@@ -711,7 +711,7 @@
     align-items: center;
     gap: 6px;
     padding: 6px 12px 6px 34px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .renamed .icon {
@@ -729,7 +729,7 @@
   .hint {
     margin: 0;
     padding: 10px 14px 12px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     line-height: 1.45;
   }
@@ -750,7 +750,7 @@
     margin: 4px 12px 0;
     padding: 10px 12px;
     border: 1px solid var(--sep);
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     flex-shrink: 0;
   }
   .avatar,
@@ -765,8 +765,8 @@
   .avatar {
     width: 30px;
     height: 30px;
-    border-radius: 15px;
-    font-size: 12px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-small);
   }
   .who {
     flex-grow: 1;
@@ -779,37 +779,20 @@
     font-weight: 600;
   }
   .link {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .link:hover {
     color: var(--text);
   }
-  .action {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    height: 30px;
-    padding: 0 14px;
-    border-radius: 15px;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--text);
-    font-size: 12px;
-    font-weight: 500;
-    flex-shrink: 0;
-  }
-  .action:disabled {
-    opacity: 0.4;
-  }
-  .action .icon {
+
+  .button .icon {
     width: 13px;
     height: 13px;
   }
   .note {
     margin: 8px 16px 0;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .scroll {
@@ -822,7 +805,7 @@
     align-items: center;
     gap: 10px;
     padding: 10px 16px 6px;
-    font-size: 12px;
+    font-size: var(--text-small);
     flex-shrink: 0;
     min-width: 0;
   }
@@ -839,16 +822,16 @@
   .back {
     height: 24px;
     padding: 0 10px;
-    border-radius: 12px;
+    border-radius: var(--radius-pill);
     background: var(--field);
-    font-size: 12px;
+    font-size: var(--text-small);
     flex-shrink: 0;
   }
   .spacer {
     flex-grow: 1;
   }
   .cmd {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     white-space: nowrap;
     overflow: hidden;
@@ -863,7 +846,7 @@
     display: flex;
     align-items: center;
     gap: 5px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     flex-shrink: 0;
   }
@@ -888,12 +871,12 @@
     tab-size: var(--tab);
     color: var(--code-fg, var(--code));
     background: var(--code-bg, transparent);
-    border-radius: 10px;
+    border-radius: var(--radius-l);
   }
   .block {
     display: flex;
     min-width: max-content;
-    border-radius: 8px;
+    border-radius: var(--radius-m);
   }
   .block.dim {
     opacity: 0.45;
@@ -909,7 +892,7 @@
     flex-shrink: 0;
     padding: 0 8px 0 10px;
     font-family: var(--font);
-    font-size: 11px;
+    font-size: var(--text-caption);
     line-height: var(--code-line);
     text-align: left;
     color: var(--text2);
@@ -932,8 +915,8 @@
   .mini {
     width: 15px;
     height: 15px;
-    border-radius: 8px;
-    font-size: 9px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-caption);
     margin-top: 2px;
   }
   .msg {
@@ -966,7 +949,7 @@
     font: inherit;
     user-select: none;
     -webkit-user-select: none;
-    border-radius: 6px;
+    border-radius: var(--radius-s);
   }
   .no:hover {
     opacity: 1;
@@ -989,7 +972,7 @@
   }
   /* Found text: an outlined neutral capsule, as in History search; the current one gets a strong ring. */
   .found {
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     box-shadow: 0 0 0 1.5px var(--found-ring);
     background: var(--found-bg);
   }

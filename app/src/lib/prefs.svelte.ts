@@ -261,3 +261,29 @@ function patternsProblem(list: unknown[]): string | null {
   }
   return null;
 }
+
+/** Mirror the system's Reduce Transparency and Increase Contrast on the page as `data-transparency`
+ *  and `data-contrast` (app.css). The media queries cover what WebKit knows; macOS answers the rest,
+ *  asked again whenever the window comes back to the front, as after a visit to System Settings. */
+export function followDisplay() {
+  const root = document.documentElement;
+  const transparency = matchMedia("(prefers-reduced-transparency: reduce)");
+  const contrast = matchMedia("(prefers-contrast: more)");
+  let native = { reduceTransparency: false, increaseContrast: false };
+  const apply = () => {
+    if (transparency.matches || native.reduceTransparency) root.dataset.transparency = "reduce";
+    else delete root.dataset.transparency;
+    if (contrast.matches || native.increaseContrast) root.dataset.contrast = "more";
+    else delete root.dataset.contrast;
+  };
+  const ask = () =>
+    api
+      .displayOptions()
+      .then((options) => ((native = options), apply()))
+      .catch(() => {});
+  transparency.addEventListener("change", apply);
+  contrast.addEventListener("change", apply);
+  window.addEventListener("focus", ask);
+  apply();
+  ask();
+}

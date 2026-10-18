@@ -199,7 +199,7 @@
     min-width: 200px;
     height: 34px;
     padding: 0 6px 0 10px;
-    border-radius: 17px;
+    border-radius: var(--radius-pill);
     background: var(--glass);
     border: 0.5px solid var(--glass-border);
     box-shadow: var(--glass-shadow);
@@ -208,7 +208,7 @@
   .field:focus-within {
     box-shadow:
       var(--glass-shadow),
-      0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+      var(--focus-ring);
   }
   .glass {
     flex-shrink: 0;
@@ -220,10 +220,10 @@
     gap: 2px;
     height: 22px;
     padding: 0 5px 0 8px;
-    border-radius: 11px;
+    border-radius: var(--radius-pill);
     background: var(--side-sel);
     color: var(--text);
-    font-size: 12px;
+    font-size: var(--text-small);
     font-weight: 600;
     flex-shrink: 0;
   }
@@ -240,15 +240,16 @@
     background: none;
     color: var(--text);
     font: inherit;
-    font-size: 13px;
+    font-size: var(--text-body);
     user-select: text;
     -webkit-user-select: text;
+    box-shadow: none;
   }
   input::placeholder {
     color: var(--text3, var(--text2));
   }
   .place {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
@@ -260,7 +261,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 11px;
+    border-radius: var(--radius-pill);
     flex-shrink: 0;
   }
   .arrow:disabled {
@@ -309,18 +310,18 @@
     z-index: 20;
     width: 380px;
     padding: 6px;
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     background: var(--sheet);
     -webkit-backdrop-filter: blur(30px) saturate(1.8);
     backdrop-filter: blur(30px) saturate(1.8);
     border: 0.5px solid var(--glass-border);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+    box-shadow: var(--shadow-pop);
     display: flex;
     flex-direction: column;
     color: var(--text);
   }
   .heading {
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
     padding: 6px 10px 4px;
@@ -331,7 +332,7 @@
     align-items: center;
     gap: 8px;
     padding: 0 10px 0 6px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     text-align: left;
   }
   .mode {
@@ -349,7 +350,7 @@
   }
   .check {
     width: 14px;
-    font-size: 12px;
+    font-size: var(--text-small);
     font-weight: 700;
     flex-shrink: 0;
     text-align: center;
@@ -365,20 +366,20 @@
     font-weight: 600;
   }
   .sub {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .n {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     white-space: nowrap;
   }
   .flag {
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     background: var(--field);
-    border-radius: 6px;
+    border-radius: var(--radius-s);
     padding: 2px 6px;
     min-width: 52px;
     text-align: center;
@@ -388,10 +389,10 @@
     flex-shrink: 0;
   }
   .chip {
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     background: var(--field);
-    border-radius: 6px;
+    border-radius: var(--radius-s);
     padding: 1px 7px;
   }
   .recent .name {
@@ -407,7 +408,7 @@
     margin: 5px 8px;
   }
   .tip {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     padding: 4px 10px 6px;
   }

@@ -306,7 +306,7 @@
           History ends here
           <span class="sub">This is a shallow clone, and the commit before this one isn’t downloaded, so its changes can’t be shown yet.</span>
         </span>
-        {#if onUnshallow}<button class="small-button" onclick={() => onUnshallow?.()}>Fetch Full History…</button>{/if}
+        {#if onUnshallow}<button class="button small" onclick={() => onUnshallow?.()}>Fetch Full History…</button>{/if}
       </div>
     {:else if tab === null && detail}
       <div class="files">
@@ -385,8 +385,8 @@
     height: 20px;
     margin-left: 6px;
     padding: 0 8px;
-    border-radius: 10px;
-    font-size: 12px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-small);
     font-weight: 500;
     line-height: 1;
     white-space: nowrap;
@@ -413,7 +413,7 @@
   }
   h1 {
     margin: 0;
-    font-size: 17px;
+    font-size: var(--text-title);
     font-weight: 600;
     line-height: 1.3;
   }
@@ -434,13 +434,13 @@
   .avatar {
     width: 30px;
     height: 30px;
-    border-radius: 15px;
+    border-radius: var(--radius-pill);
     color: #fff;
     display: flex;
     align-items: center;
     justify-content: center;
     font-weight: 600;
-    font-size: 12px;
+    font-size: var(--text-small);
     flex-shrink: 0;
   }
   .who {
@@ -454,7 +454,7 @@
     font-weight: 600;
   }
   .date {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .tabs {
@@ -488,9 +488,9 @@
     align-items: center;
     height: 26px;
     padding: 0 11px;
-    border-radius: 13px;
+    border-radius: var(--radius-pill);
     border: 1px solid var(--sep);
-    font-size: 12px;
+    font-size: var(--text-small);
     font-weight: 500;
     color: var(--text2);
     flex-shrink: 0;
@@ -515,10 +515,10 @@
     align-items: center;
     gap: 10px;
     padding: 10px 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: var(--glass);
     border: 0.5px solid var(--glass-border);
-    font-size: 12.5px;
+    font-size: var(--text-body);
   }
   .end .icon {
     width: 15px;
@@ -536,18 +536,10 @@
   }
   .end-text .sub {
     font-weight: 400;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
-  .small-button {
-    flex-shrink: 0;
-    height: 26px;
-    padding: 0 12px;
-    border-radius: 13px;
-    background: var(--field);
-    font-size: 12px;
-    font-weight: 500;
-  }
+
   .files {
     margin: 8px 12px 4px;
     padding: 4px 0 6px;
@@ -564,7 +556,7 @@
     align-items: center;
     gap: 8px;
     padding: 0 8px 6px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
   }
@@ -575,10 +567,10 @@
     max-width: 40%;
     height: 18px;
     padding: 0 7px 0 5px;
-    border-radius: 9px;
+    border-radius: var(--radius-pill);
     background: var(--found-bg);
     box-shadow: inset 0 0 0 1px var(--found-ring);
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 500;
     white-space: nowrap;
     overflow: hidden;
@@ -597,7 +589,7 @@
     width: 100%;
     height: 26px;
     padding: 0 8px;
-    border-radius: 7px;
+    border-radius: var(--radius-s);
   }
   .file:hover {
     background: var(--field);
@@ -605,8 +597,8 @@
   .badge {
     width: 16px;
     height: 16px;
-    border-radius: 5px;
-    font-size: 10px;
+    border-radius: var(--radius-s);
+    font-size: var(--text-caption);
     font-weight: 700;
     display: flex;
     align-items: center;
@@ -635,18 +627,18 @@
   }
   .add {
     color: var(--green);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .del {
     color: var(--red);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .num {
     min-width: 22px;
     text-align: right;
   }
   .meta {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .error {

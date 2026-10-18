@@ -183,26 +183,26 @@
     flex-direction: column;
     gap: 6px;
     border: 1px solid var(--sep);
-    border-radius: 12px;
+    border-radius: var(--radius-l);
   }
   h1 {
     margin: 0;
-    font-size: 17px;
+    font-size: var(--text-title);
     font-weight: 600;
     line-height: 1.3;
   }
   .sub {
     margin: 0;
     color: var(--text2);
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .warn {
     margin: 4px 0 0;
     padding: 8px 12px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     background: var(--orange-soft);
     color: var(--orange);
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.45;
   }
   .tabs {
@@ -235,9 +235,9 @@
     align-items: center;
     height: 26px;
     padding: 0 11px;
-    border-radius: 13px;
+    border-radius: var(--radius-pill);
     border: 1px solid var(--sep);
-    font-size: 12px;
+    font-size: var(--text-small);
     font-weight: 500;
     color: var(--text2);
     flex-shrink: 0;
@@ -258,7 +258,7 @@
   .files {
     margin: 12px 12px 6px;
     padding: 8px 4px 6px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     border: 1px solid var(--sep);
   }
   .count {
@@ -266,7 +266,7 @@
     align-items: center;
     gap: 8px;
     padding: 0 8px 6px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
   }
@@ -276,7 +276,7 @@
     gap: 8px;
     height: 26px;
     padding: 0 8px 0 0;
-    border-radius: 7px;
+    border-radius: var(--radius-s);
   }
   .file:hover {
     background: var(--field);
@@ -294,8 +294,8 @@
   .badge {
     width: 16px;
     height: 16px;
-    border-radius: 5px;
-    font-size: 10px;
+    border-radius: var(--radius-s);
+    font-size: var(--text-caption);
     font-weight: 700;
     display: flex;
     align-items: center;
@@ -326,10 +326,10 @@
     font-family: var(--mono);
   }
   .sha {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     padding: 1px 5px;
-    border-radius: 5px;
+    border-radius: var(--radius-s);
   }
   .sha:hover {
     background: var(--side-sel);
@@ -337,18 +337,18 @@
   }
   .add {
     color: var(--green);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .del {
     color: var(--red);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .num {
     min-width: 22px;
     text-align: right;
   }
   .meta {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     white-space: nowrap;
   }

@@ -1249,15 +1249,15 @@
         </button>
       {/if}
       <span class="spacer" data-tauri-drag-region></span>
-      <button class="pill" onclick={restoreDefaults} disabled={!customized} title={customized ? "Put every Oxbow setting back to its default. Git’s own settings stay as they are" : "Every Oxbow setting is at its default"}>
+      <button class="button pill" onclick={restoreDefaults} disabled={!customized} title={customized ? "Put every Oxbow setting back to its default. Git’s own settings stay as they are" : "Every Oxbow setting is at its default"}>
         <svg class="icon small" viewBox="0 0 16 16"><path d={menuIcons.reset} /></svg>Restore defaults
       </button>
       {#if json}
-        <button class="pill" onclick={() => (json = false)} title="Back to the Settings window">
+        <button class="button pill" onclick={() => (json = false)} title="Back to the Settings window">
           <svg class="icon small" viewBox="0 0 16 16"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" /></svg>Open Settings UI
         </button>
       {:else}
-        <button class="pill" onclick={openJson} title="The same settings as a JSON file">
+        <button class="button pill" onclick={openJson} title="The same settings as a JSON file">
           <svg class="icon small" viewBox="0 0 16 16"
             ><path
               d="M5.5 2.5c-1.6 0-2 .7-2 2v1.6c0 .9-.5 1.5-1.5 1.9 1 .4 1.5 1 1.5 1.9v1.6c0 1.3.4 2 2 2M10.5 2.5c1.6 0 2 .7 2 2v1.6c0 .9.5 1.5 1.5 1.9-1 .4-1.5 1-1.5 1.9v1.6c0 1.3-.4 2-2 2"
@@ -1325,8 +1325,8 @@
             <span class="sub">{jsonText === jsonSaved ? "Saved" : "Not saved yet"}</span>
           {/if}
           <span class="spacer"></span>
-          <button class="plain" disabled={jsonText === jsonSaved} onclick={() => ((jsonText = jsonSaved), (jsonError = null))}>Revert</button>
-          <button class="primary" disabled={jsonText === jsonSaved || errors.length > 0} onclick={saveJson} title={errors.length ? "Fix the errors underlined in red to save" : undefined}>Save <span class="keys">{keys("Mod+S")}</span></button>
+          <button class="button small" disabled={jsonText === jsonSaved} onclick={() => ((jsonText = jsonSaved), (jsonError = null))}>Revert</button>
+          <button class="button small primary" disabled={jsonText === jsonSaved || errors.length > 0} onclick={saveJson} title={errors.length ? "Fix the errors underlined in red to save" : undefined}>Save <span class="keys">{keys("Mod+S")}</span></button>
         </div>
       </div>
     {:else}
@@ -1418,14 +1418,14 @@
                           else if (event.key === "Escape") editing = null;
                         }}
                       />
-                      <button class="small-button" onclick={() => (editing = null)}>Cancel</button>
-                      <button class="small-button primary" onclick={() => saveEdit(row)}>Save</button>
+                      <button class="button small" onclick={() => (editing = null)}>Cancel</button>
+                      <button class="button small primary" onclick={() => saveEdit(row)}>Save</button>
                     {:else}
                       <span class="value" class:off>{control.shown?.() ?? control.get()}</span>
-                      <button class="small-button" disabled={off} onclick={() => (editing = { id: row.id, value: control.get() })}>Edit</button>
+                      <button class="button small" disabled={off} onclick={() => (editing = { id: row.id, value: control.get() })}>Edit</button>
                     {/if}
                   {:else if control?.type === "button"}
-                    <button class="small-button" class:danger={control.danger} disabled={off} onclick={control.run}>{text(control.label)}</button>
+                    <button class="button small" class:danger={control.danger} disabled={off} onclick={control.run}>{text(control.label)}</button>
                   {/if}
                 </div>
               {/each}
@@ -1535,7 +1535,7 @@
     margin: 8px 0 8px 8px;
     width: 222px;
     flex-shrink: 0;
-    border-radius: 18px;
+    border-radius: var(--radius-xl);
     background: var(--side);
     border: 0.5px solid var(--side-border);
     box-shadow: var(--panel-shadow);
@@ -1562,10 +1562,13 @@
     height: 30px;
     margin: 0 10px 8px;
     padding: 0 10px;
-    border-radius: 15px;
+    border-radius: var(--radius-pill);
     background: var(--field);
     color: var(--text2);
     flex-shrink: 0;
+  }
+  .search:focus-within {
+    box-shadow: var(--focus-ring);
   }
 
   .search input {
@@ -1576,10 +1579,11 @@
     background: transparent;
     font: inherit;
     color: var(--text);
+    box-shadow: none;
   }
 
   .head {
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
     padding: 14px 18px 4px;
@@ -1592,7 +1596,7 @@
     height: 32px;
     margin: 0 8px;
     padding: 0 8px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     flex-shrink: 0;
   }
 
@@ -1608,7 +1612,7 @@
   .badge {
     width: 22px;
     height: 22px;
-    border-radius: 6px;
+    border-radius: var(--radius-s);
     color: #ffffff;
     display: flex;
     align-items: center;
@@ -1654,7 +1658,7 @@
     align-items: center;
     height: 30px;
     padding: 0 2px;
-    border-radius: 15px;
+    border-radius: var(--radius-pill);
     background: var(--glass);
     border: 0.5px solid var(--glass-border);
     box-shadow: var(--glass-shadow);
@@ -1667,7 +1671,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 15px;
+    border-radius: var(--radius-pill);
   }
 
   .nav-buttons button:disabled {
@@ -1675,17 +1679,8 @@
   }
 
   .pill {
-    display: flex;
-    align-items: center;
     gap: 7px;
-    height: 30px;
     padding: 0 14px 0 11px;
-    border-radius: 15px;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    font-size: 12px;
-    font-weight: 500;
   }
 
   .pill .icon {
@@ -1694,7 +1689,7 @@
 
   h1 {
     margin: 0;
-    font-size: 15px;
+    font-size: var(--text-heading);
     font-weight: 700;
     white-space: nowrap;
   }
@@ -1718,7 +1713,7 @@
   h2 {
     margin: 0;
     padding: 0 12px;
-    font-size: 13px;
+    font-size: var(--text-body);
     font-weight: 600;
   }
 
@@ -1737,7 +1732,7 @@
   }
 
   .panel {
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: var(--panel);
     border: 0.5px solid var(--panel-border);
   }
@@ -1765,7 +1760,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 10px;
+    border-radius: var(--radius-pill);
     color: var(--text2);
     opacity: 0;
   }
@@ -1804,11 +1799,11 @@
 
   .name.mono {
     font-family: var(--mono);
-    font-size: 12px;
+    font-size: var(--text-small);
   }
 
   .sub {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
 
@@ -1819,7 +1814,7 @@
   .avatar {
     width: 30px;
     height: 30px;
-    border-radius: 15px;
+    border-radius: var(--radius-pill);
     flex-shrink: 0;
     background: var(--field);
   }
@@ -1829,8 +1824,8 @@
     height: 20px;
     line-height: 20px;
     padding: 0 9px;
-    border-radius: 10px;
-    font-size: 11px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-caption);
     font-weight: 500;
     background: var(--field);
     color: var(--text2);
@@ -1843,7 +1838,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
 
@@ -1852,46 +1847,25 @@
     min-width: 120px;
     height: 26px;
     padding: 0 9px;
-    border-radius: 8px;
+    border-radius: var(--radius-m);
     border: 0.5px solid var(--glass-border);
     background: var(--win);
     color: var(--text);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-small);
     outline: 2px solid var(--accent);
     outline-offset: 0;
   }
 
-  .small-button {
-    flex-shrink: 0;
+  .button.small {
     min-width: 72px;
-    height: 26px;
-    padding: 0 12px;
-    border-radius: 13px;
-    text-align: center;
-    background: var(--field);
-    font-size: 12px;
-    font-weight: 500;
-  }
-
-  .small-button.primary {
-    background: var(--accent);
-    color: #ffffff;
-  }
-
-  .small-button.danger {
-    color: var(--danger);
-  }
-
-  .small-button:disabled {
-    opacity: 0.4;
   }
 
   .seg {
     display: flex;
     gap: 2px;
     padding: 2px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     background: var(--field);
     flex-shrink: 0;
   }
@@ -1900,9 +1874,9 @@
     min-width: 72px;
     height: 24px;
     padding: 0 12px;
-    border-radius: 7px;
+    border-radius: var(--radius-s);
     text-align: center;
-    font-size: 12px;
+    font-size: var(--text-small);
   }
 
   .seg button[aria-checked="true"] {
@@ -1923,19 +1897,14 @@
     appearance: none;
     height: 26px;
     padding: 0 26px 0 11px;
-    border-radius: 8px;
+    border-radius: var(--radius-m);
     background: var(--glass);
     border: 0.5px solid var(--glass-border);
     box-shadow: var(--ctrl-shadow);
     color: var(--text);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-small);
     outline: 0;
-  }
-
-  .popup select:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 1px;
   }
 
   .popup .icon {
@@ -1950,7 +1919,7 @@
   .switch {
     width: 36px;
     height: 20px;
-    border-radius: 10px;
+    border-radius: var(--radius-pill);
     background: var(--switch-off);
     position: relative;
     flex-shrink: 0;
@@ -1963,7 +1932,7 @@
     left: 2px;
     width: 16px;
     height: 16px;
-    border-radius: 8px;
+    border-radius: var(--radius-pill);
     background: #ffffff;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
     transition: left 0.15s;
@@ -1981,28 +1950,28 @@
   .empty {
     margin: 0;
     padding: 0 12px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     line-height: 1.4;
     color: var(--text2);
   }
 
   .empty {
     padding-top: 8px;
-    font-size: 13px;
+    font-size: var(--text-body);
   }
 
   .problem {
     margin: 0;
     padding: 8px 12px;
-    border-radius: 10px;
+    border-radius: var(--radius-l);
     background: var(--danger-soft);
     color: var(--danger);
-    font-size: 12px;
+    font-size: var(--text-small);
   }
 
   /* Themes */
   .theme-preview {
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     border: 0.5px solid var(--panel-border);
     padding-top: 8px;
     background: var(--win);
@@ -2026,7 +1995,7 @@
     display: block;
     width: 100%;
     height: 56px;
-    border-radius: 10px;
+    border-radius: var(--radius-l);
     border: 0.5px solid var(--panel-border);
     overflow: hidden;
   }
@@ -2038,7 +2007,7 @@
   .swatch span {
     position: absolute;
     height: 5px;
-    border-radius: 3px;
+    border-radius: var(--radius-pill);
   }
 
   .card-name {
@@ -2046,7 +2015,7 @@
     align-items: baseline;
     gap: 5px;
     padding: 0 2px;
-    font-size: 12px;
+    font-size: var(--text-small);
     min-width: 0;
   }
 
@@ -2058,7 +2027,7 @@
 
   .rank {
     color: var(--text2);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
 
   .strong {
@@ -2068,7 +2037,7 @@
   .card-sub {
     margin-top: -4px;
     padding: 0 2px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     white-space: nowrap;
     overflow: hidden;
@@ -2088,17 +2057,17 @@
   .banner {
     margin: 0;
     padding: 9px 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: var(--panel);
     border: 0.5px solid var(--panel-border);
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.4;
     color: var(--text2);
   }
 
   .banner code {
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
 
   /* The text box draws only the caret and selection; the colored copy of its text lies under it,
@@ -2107,13 +2076,14 @@
     position: relative;
     flex-grow: 1;
     min-height: 0;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     border: 0.5px solid var(--panel-border);
     background: var(--code-bg, var(--win));
   }
 
   .code:focus-within {
     border-color: var(--accent);
+    box-shadow: var(--focus-ring);
   }
 
   .painted,
@@ -2146,6 +2116,7 @@
     outline: 0;
     user-select: text;
     -webkit-user-select: text;
+    box-shadow: none;
   }
 
   .editor::selection {
@@ -2199,13 +2170,13 @@
     z-index: 20;
     max-width: 360px;
     padding: 6px 10px;
-    border-radius: 8px;
+    border-radius: var(--radius-m);
     background: var(--glass);
     border: 0.5px solid var(--glass-border);
     box-shadow: var(--glass-shadow);
     -webkit-backdrop-filter: blur(20px);
     backdrop-filter: blur(20px);
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.35;
     color: var(--danger);
     pointer-events: none;
@@ -2219,7 +2190,7 @@
     min-width: 0;
     padding: 0;
     background: none;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--danger);
     white-space: nowrap;
     overflow: hidden;
@@ -2240,7 +2211,7 @@
     place-items: center;
     width: 26px;
     height: 26px;
-    border-radius: 13px;
+    border-radius: var(--radius-pill);
     color: var(--icon);
   }
 
@@ -2248,40 +2219,15 @@
     background: var(--field);
   }
 
-  .pill:disabled {
-    opacity: 0.45;
-  }
-
   .json-bar {
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 12px;
+    font-size: var(--text-small);
   }
 
   .json-bar .error {
     color: var(--danger);
-  }
-
-
-  .plain,
-  .primary {
-    height: 28px;
-    padding: 0 14px;
-    border-radius: 14px;
-    font-size: 12px;
-    font-weight: 500;
-    background: var(--field);
-  }
-
-  .json-bar .primary {
-    background: var(--accent);
-    color: #ffffff;
-  }
-
-  .plain:disabled,
-  .primary:disabled {
-    opacity: 0.4;
   }
 
   .keys {
@@ -2292,7 +2238,7 @@
 
   /* Diff & Text preview */
   .preview {
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: var(--code-bg, var(--win));
     border: 0.5px solid var(--panel-border);
     padding: 6px 0 8px;
@@ -2340,7 +2286,7 @@
 
   .line.fold {
     margin-top: 4px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     background: var(--fold-bg, var(--field));
     color: var(--code-dim, var(--text2));
   }
@@ -2379,7 +2325,7 @@
   }
 
   .words .word {
-    border-radius: 5px;
+    border-radius: var(--radius-s);
     padding: 0 2px;
   }
 </style>

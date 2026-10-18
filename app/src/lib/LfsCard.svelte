@@ -78,8 +78,8 @@
     </p>
     {#if working}
       <div class="actions">
-        <button class="button primary" onclick={track}>{lfs.ready ? "Track with Git LFS…" : lfs.status?.version ? "Turn On Git LFS…" : lfs.status?.brew ? "Install Git LFS…" : "Download Git LFS…"}</button>
-        {#if canPreview}<button class="button" onclick={preview}>{mac ? "Quick Look" : "Open"}</button>{/if}
+        <button class="button small primary" onclick={track}>{lfs.ready ? "Track with Git LFS…" : lfs.status?.version ? "Turn On Git LFS…" : lfs.status?.brew ? "Install Git LFS…" : "Download Git LFS…"}</button>
+        {#if canPreview}<button class="button small" onclick={preview}>{mac ? "Quick Look" : "Open"}</button>{/if}
       </div>
     {/if}
   {:else}
@@ -118,8 +118,8 @@
     {/if}
     {#if working}
       <div class="actions">
-        {#if canPreview}<button class="button" onclick={preview}>{mac ? "Quick Look" : "Open"}</button>{/if}
-        {#if pattern && lfs.ready}<button class="button" onclick={() => run(untrackRequest(pattern!))}>Stop Tracking…</button>{/if}
+        {#if canPreview}<button class="button small" onclick={preview}>{mac ? "Quick Look" : "Open"}</button>{/if}
+        {#if pattern && lfs.ready}<button class="button small" onclick={() => run(untrackRequest(pattern!))}>Stop Tracking…</button>{/if}
       </div>
     {/if}
   {/if}
@@ -140,7 +140,7 @@
   .badge {
     width: 40px;
     height: 40px;
-    border-radius: 10px;
+    border-radius: var(--radius-m);
     background: var(--field);
     display: flex;
     align-items: center;
@@ -158,7 +158,7 @@
   }
   h3 {
     margin: 2px 0 4px;
-    font-size: 13px;
+    font-size: var(--text-body);
     font-weight: 600;
   }
   p {
@@ -167,7 +167,7 @@
     line-height: 1.4;
   }
   .sub {
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .facts {
     display: grid;
@@ -175,9 +175,9 @@
     row-gap: 6px;
     margin: 0;
     padding: 9px 12px;
-    border-radius: 10px;
+    border-radius: var(--radius-l);
     background: var(--field);
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   dt {
     color: var(--text2);
@@ -195,19 +195,7 @@
     gap: 8px;
   }
   .button {
-    height: 28px;
     min-width: 120px;
-    flex-shrink: 0;
-    white-space: nowrap;
-    padding: 0 14px;
-    border-radius: 14px;
-    border: 1px solid var(--sep);
-    font-size: 12px;
   }
-  .button.primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
-    font-weight: 600;
-  }
+
 </style>

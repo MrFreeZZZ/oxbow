@@ -483,7 +483,7 @@
 {#if error}
   <div class="empty-state">
     <p>{error}</p>
-    <button class="plain" onclick={onClose}>Back to History</button>
+    <button class="button" onclick={onClose}>Back to History</button>
   </div>
 {:else if stack}
   {@const trunkColor = colorOf(stack.trunk)}
@@ -654,20 +654,20 @@
         <span class="grow"></span>
         {#if done}
           <div class="buttons">
-            <button class="plain" onclick={undo}>Undo</button>
+            <button class="button" onclick={undo}>Undo</button>
             <span class="grow"></span>
-            <button class="plain" onclick={onClose}>Back to History</button>
+            <button class="button" onclick={onClose}>Back to History</button>
             {#if done.push.length}
-              <button class="primary" onclick={push}>Push {done.push.length} {done.push.length === 1 ? "Branch" : "Branches"}</button>
+              <button class="button primary" onclick={push}>Push {done.push.length} {done.push.length === 1 ? "Branch" : "Branches"}</button>
             {/if}
           </div>
         {:else}
           <div class="buttons">
-            <button class="plain" onclick={resetPlan} disabled={!edited()}>Reset Plan</button>
+            <button class="button" onclick={resetPlan} disabled={!edited()}>Reset Plan</button>
             <span class="grow"></span>
             {#if !changed}<WhyNote text="Change the plan first" />{/if}
-            <button class="plain" onclick={onClose}>Cancel</button>
-            <button class="primary" onclick={start} disabled={!changed || checking} title={changed ? undefined : "Change the plan first"}>
+            <button class="button" onclick={onClose}>Cancel</button>
+            <button class="button primary" onclick={start} disabled={!changed || checking} title={changed ? undefined : "Change the plan first"}>
               Rebase Stack <span class="key-hint">{keys("Mod+Enter")}</span>
             </button>
           </div>
@@ -707,7 +707,7 @@
     color: var(--text2);
   }
   .small-text {
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .strip {
     display: flex;
@@ -716,7 +716,7 @@
     height: 50px;
     flex-shrink: 0;
     padding: 0 6px 0 14px;
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     background: var(--field);
   }
   .top-name {
@@ -727,8 +727,8 @@
     align-items: center;
     height: 20px;
     padding: 0 9px;
-    border-radius: 10px;
-    font-size: 11px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-caption);
     font-weight: 600;
     white-space: nowrap;
   }
@@ -737,7 +737,7 @@
     align-items: center;
     gap: 9px;
     padding: 4px 8px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
   }
   .switch-row:disabled {
     opacity: 0.55;
@@ -752,14 +752,14 @@
     font-weight: 500;
   }
   .switch-sub {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .switch {
     position: relative;
     width: 30px;
     height: 18px;
-    border-radius: 9px;
+    border-radius: var(--radius-pill);
     background: var(--switch-off);
     flex-shrink: 0;
     transition: background 0.15s;
@@ -773,7 +773,7 @@
     left: 2px;
     width: 14px;
     height: 14px;
-    border-radius: 7px;
+    border-radius: var(--radius-pill);
     background: #fff;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
     transition: left 0.15s;
@@ -802,7 +802,7 @@
     align-items: center;
     height: 30px;
     padding: 0 10px 0 16px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
     flex-shrink: 0;
@@ -829,9 +829,9 @@
   }
   .item.dragging {
     z-index: 5;
-    border-radius: 10px;
+    border-radius: var(--radius-l);
     background: var(--win);
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+    box-shadow: var(--shadow-pop);
   }
   .item.dragging .line {
     visibility: hidden;
@@ -867,7 +867,7 @@
     margin-top: -6px;
     width: 12px;
     height: 12px;
-    border-radius: 6px;
+    border-radius: var(--radius-pill);
     box-sizing: border-box;
     background: var(--win);
     border: 2.5px solid;
@@ -911,7 +911,7 @@
     min-height: 36px;
     margin: 2px 0;
     padding-right: 10px;
-    border-radius: 10px;
+    border-radius: var(--radius-l);
   }
   .row.tall {
     min-height: 44px;
@@ -923,7 +923,7 @@
     margin-top: -5px;
     width: 10px;
     height: 10px;
-    border-radius: 5px;
+    border-radius: var(--radius-pill);
     box-sizing: border-box;
     border: 2px solid;
   }
@@ -947,8 +947,8 @@
     flex-shrink: 0;
     height: 22px;
     padding: 0 7px 0 9px;
-    border-radius: 11px;
-    font-size: 11px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-caption);
     font-weight: 600;
     background: var(--field);
     color: var(--text);
@@ -995,7 +995,7 @@
     color: var(--text2);
   }
   .note {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     white-space: nowrap;
     overflow: hidden;
@@ -1010,7 +1010,7 @@
     height: 26px;
     box-sizing: border-box;
     padding: 0 8px;
-    border-radius: 7px;
+    border-radius: var(--radius-s);
     border: 1px solid var(--accent);
     background: var(--win);
     outline: 0;
@@ -1018,12 +1018,12 @@
     color: var(--text);
   }
   .sha {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     flex-shrink: 0;
   }
   .stat {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     width: 58px;
     text-align: right;
@@ -1038,7 +1038,7 @@
   .moves button {
     width: 22px;
     height: 22px;
-    border-radius: 11px;
+    border-radius: var(--radius-pill);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1064,7 +1064,7 @@
     margin-top: -7px;
     width: 14px;
     height: 14px;
-    border-radius: 7px;
+    border-radius: var(--radius-pill);
     box-sizing: border-box;
     border: 3px solid var(--win);
     box-shadow: 0 0 0 2px var(--lane-0);
@@ -1088,9 +1088,9 @@
     gap: 6px 14px;
     margin: 8px 0 0 16px;
     padding: 10px 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     background: var(--field);
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     flex-shrink: 0;
   }
@@ -1104,7 +1104,7 @@
     height: 16px;
     padding: 0 3px;
     box-sizing: border-box;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1129,7 +1129,7 @@
     flex-wrap: wrap;
   }
   .after-title {
-    font-size: 15px;
+    font-size: var(--text-heading);
     font-weight: 700;
   }
   .done {
@@ -1137,13 +1137,13 @@
     align-items: center;
     gap: 12px;
     padding: 12px 14px;
-    border-radius: 14px;
+    border-radius: var(--radius-l);
     background: var(--green-soft);
   }
   .done-icon {
     width: 28px;
     height: 28px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1202,7 +1202,7 @@
     text-overflow: ellipsis;
   }
   .arrow-name {
-    font-size: 12px;
+    font-size: var(--text-small);
     font-weight: 600;
   }
   .facts {
@@ -1214,7 +1214,7 @@
     display: flex;
     gap: 10px;
     padding: 9px 10px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
   }
   .fact.warn {
     background: var(--orange-soft);
@@ -1222,7 +1222,7 @@
   .fact-icon {
     width: 22px;
     height: 22px;
-    border-radius: 7px;
+    border-radius: var(--radius-s);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1257,7 +1257,7 @@
     color: var(--orange);
   }
   .fact-detail {
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
     overflow-wrap: anywhere;
   }
@@ -1267,13 +1267,13 @@
     gap: 6px;
   }
   .combined-title {
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
   }
   .combined textarea {
     resize: vertical;
-    border-radius: 10px;
+    border-radius: var(--radius-l);
     padding: 8px 10px;
     background: var(--win);
     border: 0.5px solid var(--glass-border);
@@ -1289,30 +1289,13 @@
     padding-bottom: 2px;
     flex-shrink: 0;
   }
-  .buttons button {
-    height: 30px;
-    padding: 0 16px;
-    border-radius: 15px;
-    font-weight: 500;
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
-  .buttons .plain {
-    background: var(--field);
-  }
+
   .buttons .primary {
-    display: flex;
-    align-items: center;
     gap: 8px;
-    background: var(--accent);
-    color: #fff;
-    font-weight: 600;
   }
-  .buttons button:disabled {
-    opacity: 0.45;
-  }
+
   .key-hint {
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 500;
     opacity: 0.85;
   }

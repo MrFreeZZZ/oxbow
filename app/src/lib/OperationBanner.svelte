@@ -88,14 +88,14 @@
   {:else}
     <span class="done">All resolved</span>
   {/if}
-  <button class="btn" onclick={onAbort}>{stash ? "Undo Apply" : `Abort ${words.noun}`}</button>
+  <button class="button" onclick={onAbort}>{stash ? "Undo Apply" : `Abort ${words.noun}`}</button>
   {#if resolving && (op.kind === "rebase" || op.kind === "cherryPick")}
-    <button class="btn" onclick={onSkip}>Skip Commit</button>
+    <button class="button" onclick={onSkip}>Skip Commit</button>
   {/if}
   {#if !resolving && op.conflicted}
-    <button class="btn go" onclick={onResolve}>Resolve Conflicts</button>
+    <button class="button primary" onclick={onResolve}>Resolve Conflicts</button>
   {:else}
-    <button class="btn go" disabled={op.conflicted > 0} title={op.conflicted ? "Resolve every conflict first" : undefined} onclick={onContinue}>{finish}</button>
+    <button class="button primary" disabled={op.conflicted > 0} title={op.conflicted ? "Resolve every conflict first" : undefined} onclick={onContinue}>{finish}</button>
   {/if}
 </section>
 
@@ -108,14 +108,14 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     border: 0.5px solid;
   }
   .tile {
     width: 32px;
     height: 32px;
     flex-shrink: 0;
-    border-radius: 10px;
+    border-radius: var(--radius-m);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -134,7 +134,7 @@
     text-overflow: ellipsis;
   }
   .sub {
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
     white-space: nowrap;
     overflow: hidden;
@@ -142,7 +142,7 @@
   }
   .left,
   .done {
-    font-size: 12px;
+    font-size: var(--text-small);
     white-space: nowrap;
     flex-shrink: 0;
   }
@@ -152,27 +152,8 @@
   .done {
     color: var(--green);
   }
-  .btn {
-    flex-shrink: 0;
+  .button {
     min-width: 110px;
-    height: 30px;
-    padding: 0 14px;
-    border-radius: 15px;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    font-weight: 500;
-    white-space: nowrap;
   }
-  .btn.go {
-    background: var(--accent);
-    border-color: transparent;
-    color: #fff;
-    font-weight: 600;
-  }
-  .btn:disabled {
-    background: var(--field);
-    color: var(--text2);
-    box-shadow: none;
-  }
+
 </style>

@@ -112,7 +112,7 @@
     white-space: nowrap;
   }
   .id {
-    font-size: 12px;
+    font-size: var(--text-small);
     font-weight: 600;
     flex-shrink: 0;
   }
@@ -121,7 +121,7 @@
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text);
   }
   .link {
@@ -136,7 +136,7 @@
   }
   .more,
   .label {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     white-space: nowrap;
     overflow: hidden;

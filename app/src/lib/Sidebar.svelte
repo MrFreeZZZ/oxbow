@@ -878,7 +878,7 @@
     height: 36px;
     margin: 0 8px 6px;
     padding: 0 10px;
-    border-radius: 10px;
+    border-radius: var(--radius-m);
     background: var(--field);
     color: var(--icon);
     flex-shrink: 0;
@@ -895,7 +895,7 @@
     color: var(--text);
   }
   .repo-path {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -911,7 +911,7 @@
     padding-bottom: 10px;
   }
   .heading {
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
     padding: 14px 18px 4px;
@@ -927,7 +927,7 @@
     height: 28px;
     margin: 0 8px;
     padding: 0 10px;
-    border-radius: 8px;
+    border-radius: var(--radius-m);
     color: var(--icon);
   }
   .item .grow {
@@ -952,12 +952,12 @@
   .dot {
     width: 8px;
     height: 8px;
-    border-radius: 4px;
+    border-radius: var(--radius-pill);
     margin: 0 4px;
     flex-shrink: 0;
   }
   .head {
-    font-size: 10px;
+    font-size: var(--text-caption);
     font-weight: 700;
     color: var(--text2);
   }
@@ -965,7 +965,7 @@
     color: var(--orange);
   }
   .meta {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .with-button {
@@ -982,7 +982,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 6px;
+    border-radius: var(--radius-s);
     color: var(--text2);
   }
   .add:hover {
@@ -1007,14 +1007,14 @@
     text-align: left;
   }
   .two-text .sub {
-    font-size: 10.5px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .mini-dot {
     display: inline-block;
     width: 6px;
     height: 6px;
-    border-radius: 3px;
+    border-radius: var(--radius-pill);
     margin-right: 5px;
     vertical-align: 1px;
   }
@@ -1035,10 +1035,10 @@
     text-align: left;
   }
   .lfs-text .pattern {
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .lfs-text .sub {
-    font-size: 10.5px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .icon.off,
@@ -1065,16 +1065,16 @@
     white-space: nowrap;
   }
   .badge {
-    font-size: 10px;
+    font-size: var(--text-caption);
     font-weight: 600;
     padding: 1px 6px;
-    border-radius: 7px;
+    border-radius: var(--radius-s);
     background: var(--field);
     color: var(--text2);
   }
   .tracked {
     padding: 4px 18px 0 52px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .more {
@@ -1084,8 +1084,8 @@
     height: 26px;
     margin: 2px 8px 0;
     padding: 0 10px;
-    border-radius: 8px;
-    font-size: 12px;
+    border-radius: var(--radius-m);
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .more:hover {
