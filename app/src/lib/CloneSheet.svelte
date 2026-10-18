@@ -2,6 +2,7 @@
   // Clone Repository: a URL checked as it is typed, the folder it goes to, submodules and shallow
   // switches, the exact command, then git's three phases as it runs.
 
+  import { modal } from "./modal";
   import { listen } from "@tauri-apps/api/event";
   import { open as chooseFolder } from "@tauri-apps/plugin-dialog";
   import { api } from "./api";
@@ -217,7 +218,7 @@
 <svelte:window onkeydown={onKey} />
 
 <div class="dim">
-  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="clone-title" aria-busy={phase === "running"}>
+  <div class="sheet" use:modal role="dialog" aria-modal="true" aria-labelledby="clone-title" aria-busy={phase === "running"}>
     <div class="head">
       <span class="title" id="clone-title">Clone Repository</span>
       <span class="sub">Any Git URL works: SSH or HTTPS, GitHub, GitLab, Bitbucket or your own server.</span>

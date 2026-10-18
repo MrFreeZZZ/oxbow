@@ -3,6 +3,7 @@
   // `gh auth login --web` does), or with a personal access token pasted here. Either way the
   // token goes to the computer's credential store and the requests show in the terminal block.
 
+  import { modal } from "./modal";
   import { onDestroy } from "svelte";
   import { api } from "./api";
   import { prefs } from "./prefs.svelte";
@@ -130,7 +131,7 @@
 <svelte:window onkeydown={onKey} />
 
 <div class="dim">
-  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="github-title" aria-busy={phase !== "ask"}>
+  <div class="sheet" use:modal role="dialog" aria-modal="true" aria-labelledby="github-title" aria-busy={phase !== "ask"}>
     <div class="head">
       <span class="mark" aria-hidden="true">
         <svg viewBox="0 0 16 16"><path d="M8 1.3a6.7 6.7 0 0 0-2.1 13.1c.3 0 .5-.2.5-.4v-1.3c-1.9.4-2.3-.9-2.3-.9-.3-.8-.7-1-.7-1-.6-.4 0-.4 0-.4.7 0 1 .7 1 .7.6 1 1.6.7 2 .5 0-.4.2-.7.4-.9-1.5-.2-3-.7-3-3.3 0-.7.2-1.3.7-1.8-.1-.2-.3-.9.1-1.8 0 0 .6-.2 1.8.7a6 6 0 0 1 3.3 0c1.3-.9 1.8-.7 1.8-.7.4.9.2 1.6.1 1.8.4.5.7 1.1.7 1.8 0 2.6-1.6 3.1-3 3.3.2.2.4.6.4 1.2V14c0 .2.2.5.5.4A6.7 6.7 0 0 0 8 1.3" /></svg>

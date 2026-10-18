@@ -9,6 +9,11 @@ import { followDisplay, followLook } from "./lib/prefs.svelte";
 document.documentElement.dataset.theme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 followLook();
 followDisplay();
+// Selected rows go grey while the window is in the background, as in macOS lists.
+const windowState = () => (document.documentElement.dataset.window = document.hasFocus() ? "active" : "inactive");
+addEventListener("focus", windowState);
+addEventListener("blur", windowState);
+windowState();
 
 // The Settings window loads the same page with #settings.
 const settingsWindow = location.hash === "#settings";

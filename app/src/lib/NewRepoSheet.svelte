@@ -2,6 +2,7 @@
   // New Repository: git init in a new or existing folder, starter files, and the first commit,
   // with the exact commands. A folder that is a repository already is opened instead.
 
+  import { modal } from "./modal";
   import { open as chooseFolder } from "@tauri-apps/plugin-dialog";
   import { api } from "./api";
   import { prefs } from "./prefs.svelte";
@@ -203,7 +204,7 @@
 <svelte:window onkeydown={onKey} />
 
 <div class="dim">
-  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="new-title" aria-busy={running}>
+  <div class="sheet" use:modal role="dialog" aria-modal="true" aria-labelledby="new-title" aria-busy={running}>
     <div class="head">
       <span class="title" id="new-title">New Repository</span>
       <span class="sub">Starts version control in a new folder, or in a folder you already have.</span>

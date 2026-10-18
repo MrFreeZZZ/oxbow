@@ -431,12 +431,12 @@
 </div>
 
 <style>
+  /* No cards: the files on the graph's paper, the two sides and the result parted by hairlines. */
   .conflicts {
     flex-grow: 1;
     display: flex;
-    gap: 12px;
     min-height: 0;
-    padding: 0 12px 12px;
+    border-top: 1px solid var(--sep);
   }
   .files {
     width: 260px;
@@ -444,6 +444,9 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+    padding: var(--space-2) var(--space-2) var(--space-3);
+    border-right: 1px solid var(--sep);
+    background: var(--graph-bg);
   }
   .ghead {
     display: flex;
@@ -485,7 +488,7 @@
     align-items: flex-start;
     gap: 8px;
     padding: 7px 8px;
-    border-radius: var(--radius-l);
+    border-radius: var(--radius-m);
     text-align: left;
     width: 100%;
   }
@@ -566,14 +569,16 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 10px;
     min-height: 0;
   }
   .sides {
     display: flex;
-    gap: 10px;
     height: 42%;
     min-height: 150px;
+    border-bottom: 1px solid var(--sep);
+  }
+  .sides > .pane + .pane {
+    border-left: 1px solid var(--sep);
   }
   .pane {
     flex: 1;
@@ -581,8 +586,6 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    border: 1px solid var(--sep);
-    border-radius: var(--radius-l);
     background: var(--win);
     overflow: hidden;
   }
@@ -738,9 +741,6 @@
     justify-content: center;
     gap: 8px;
     color: var(--text2);
-    border: 1px solid var(--sep);
-    border-radius: var(--radius-l);
-    background: var(--win);
     text-align: center;
     padding: 24px;
   }

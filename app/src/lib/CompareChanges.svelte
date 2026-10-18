@@ -176,14 +176,12 @@
     flex-direction: column;
     min-height: 0;
   }
+  /* Headed like a commit's details: no box, the files follow under it. */
   .head {
-    margin: 4px 12px 0;
-    padding: 14px 16px 14px;
+    padding: var(--space-1) var(--space-5) var(--space-2);
     display: flex;
     flex-direction: column;
     gap: 6px;
-    border: 1px solid var(--sep);
-    border-radius: var(--radius-l);
   }
   h1 {
     margin: 0;
@@ -256,10 +254,8 @@
     min-height: 0;
   }
   .files {
-    margin: 12px 12px 6px;
-    padding: 8px 4px 6px;
-    border-radius: var(--radius-l);
-    border: 1px solid var(--sep);
+    margin: var(--space-2) var(--space-3) var(--space-1);
+    padding: var(--space-1) 0 6px;
   }
   .count {
     display: flex;

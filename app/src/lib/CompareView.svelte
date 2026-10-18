@@ -214,14 +214,14 @@
     flex-direction: column;
     min-height: 0;
   }
+  /* The two refs and the mode: a strip between hairlines, no box of its own. */
   .bar {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin: 4px 12px 8px;
-    padding: 8px;
-    border-radius: var(--radius-xl);
-    background: var(--field);
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-top: 1px solid var(--sep);
+    border-bottom: 1px solid var(--sep);
   }
   .swap {
     width: 32px;
@@ -294,9 +294,6 @@
   .list {
     flex-grow: 1;
     min-width: 0;
-    margin: 0 12px 12px;
-    border: 1px solid var(--sep);
-    border-radius: var(--radius-l);
     overflow: hidden;
     background: var(--graph-bg);
     display: flex;
@@ -324,7 +321,7 @@
   }
   .commit:hover:not(.on),
   .ancestor:hover:not(.on) {
-    background: var(--field);
+    background: var(--row-hover);
   }
   .ancestor.on {
     background: var(--side-sel);
@@ -414,6 +411,7 @@
   .panel {
     position: relative;
     flex-shrink: 0;
+    border-left: 1px solid var(--sep);
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -434,7 +432,7 @@
   }
   .command {
     display: flex;
-    padding: 0 12px 8px;
+    padding: var(--space-2) var(--space-3);
     flex-shrink: 0;
   }
   .term {

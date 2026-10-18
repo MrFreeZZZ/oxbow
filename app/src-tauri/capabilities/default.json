@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Permissions of the repository windows (main, and repo-N from Open in New Window) and Settings",
   "windows": ["main", "repo-*", "settings"],
-  "permissions": ["core:default", "core:window:allow-start-dragging", "dialog:allow-open"]
+  "permissions": ["core:default", "core:window:allow-start-dragging", "core:window:allow-set-size", "core:window:allow-set-min-size", "core:window:allow-center", "dialog:allow-open"]
 }

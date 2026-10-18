@@ -377,7 +377,7 @@
 {#snippet commitRow(c: FileCommit, other: boolean)}
   {@const color = colorOfCommit(c.id)}
   {@const dim = (!!line && !line.ids.includes(c.id)) || (!!finding && !finding.ids.includes(c.id))}
-  <button class="commit" class:on={selected === c.id} class:dim class:other style:--lane={lane(color)} style:background={selected === c.id ? tint(color) : undefined} onclick={() => select(c.id)}>
+  <button class="commit" class:on={selected === c.id} class:dim class:other style:--lane={lane(color)} style:--sel={tint(color)} onclick={() => select(c.id)}>
     <span class="rail"><span class="dot" class:hollow={other}></span></span>
     <span class="lines">
       <span class="summary">{c.summary}</span>
@@ -519,11 +519,13 @@
 </div>
 
 <style>
+  /* No frames: the list of changes on the graph's paper, a hairline to the file. */
   .screen {
     flex-grow: 1;
     display: flex;
     min-height: 0;
     gap: 0;
+    border-top: 1px solid var(--sep);
   }
   .side {
     width: 340px;
@@ -531,9 +533,7 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
-    margin: 4px 0 12px 12px;
-    border: 1px solid var(--sep);
-    border-radius: var(--radius-l);
+    border-right: 1px solid var(--sep);
     background: var(--graph-bg);
     overflow: hidden;
   }
@@ -611,11 +611,14 @@
     width: 100%;
     min-height: 52px;
     padding: 6px 10px 6px 4px;
-    border-radius: var(--radius-l);
+    border-radius: var(--radius-m);
     text-align: left;
   }
   .commit:hover:not(.on) {
-    background: var(--field);
+    background: var(--row-hover);
+  }
+  .commit.on {
+    background: var(--sel);
   }
   .commit.dim {
     opacity: 0.4;
@@ -747,10 +750,8 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    margin: 4px 12px 0;
-    padding: 10px 12px;
-    border: 1px solid var(--sep);
-    border-radius: var(--radius-l);
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--sep);
     flex-shrink: 0;
   }
   .avatar,

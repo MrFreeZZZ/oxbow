@@ -74,8 +74,8 @@
     /** Confirm and run a change to the repository. */
     run: (request: Request | Promise<Request>) => void;
     /** The screen shown next to the sidebar. */
-    view: "history" | "stashes" | "compare" | "file" | "stack" | "pull";
-    onView: (view: "history" | "stashes") => void;
+    view: "history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull";
+    onView: (view: "history" | "stashes" | "oplog") => void;
     /** On the Stashes screen a stash in the list is picked there instead of in History. */
     onPickStash: (id: string) => void;
     /** Open Compare: what `target` has against `base`. */
@@ -614,7 +614,7 @@
         {#if headPull}<span class="meta">#{headPull.number}</span>{/if}
       </button>
     {/if}
-    <button class="item" class:current={oplog.open} onclick={() => (oplog.open = !oplog.open)} title="Every step Oxbow ran here, to undo or restore">
+    <button class="item" class:current={view === "oplog"} onclick={() => onView("oplog")} title="Every step Oxbow ran here, to undo or restore">
       <svg class="icon" viewBox="0 0 16 16"><path d="M5.5 4 2.5 7l3 3M3 7h6.5a3.5 3.5 0 0 1 0 7H7" /></svg>
       <span class="grow">Operation Log</span>
       {#if oplog.entries.length}<span class="meta">{oplog.entries.length}</span>{/if}

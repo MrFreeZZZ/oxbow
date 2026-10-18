@@ -211,7 +211,7 @@
 <div class="welcome" ondragover={(e) => e.preventDefault()} ondrop={onDrop}>
   <section class="start" aria-label="Start">
     <div class="drag" data-tauri-drag-region></div>
-    <img class="app-icon" src="/app-icon.png" alt="Oxbow app icon" width="112" height="112" />
+    <img class="app-icon" src="/app-icon.png" alt="Oxbow app icon" width="96" height="96" />
     <div class="app-name">Oxbow</div>
     <div class="version">{info ? `Version ${info.version}` : ""}</div>
 
@@ -373,18 +373,18 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 66px 28px 22px;
+    padding: 48px 28px 20px;
   }
   .app-icon {
-    width: 112px;
-    height: 112px;
+    width: 96px;
+    height: 96px;
     filter: drop-shadow(0 6px 14px rgba(40, 60, 80, 0.28));
   }
   .app-name {
     font-size: var(--text-display);
     font-weight: 700;
     letter-spacing: -0.4px;
-    margin-top: 14px;
+    margin-top: 10px;
   }
   .version {
     min-height: 16px;
@@ -397,7 +397,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    margin-top: 26px;
+    margin-top: 22px;
   }
   .action {
     display: flex;
@@ -449,6 +449,7 @@
   }
   .env {
     align-self: stretch;
+    margin-top: var(--space-4);
     display: flex;
     flex-direction: column;
     gap: 5px;
@@ -540,10 +541,8 @@
     position: relative;
     flex-grow: 1;
     min-width: 0;
-    margin: 8px 8px 8px 0;
-    border-radius: var(--radius-xl);
     background: var(--side);
-    border: 0.5px solid var(--side-border);
+    border-left: 1px solid var(--side-border);
     display: flex;
     flex-direction: column;
     overflow: hidden;

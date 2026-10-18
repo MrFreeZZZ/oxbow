@@ -263,6 +263,11 @@
   }
 
   /** Back to the newest commit: scroll to the top and select it. */
+  /** Hands the keyboard to the list, as Tab from the details panel or opening History do. */
+  export function focus() {
+    viewport?.focus({ preventScroll: true });
+  }
+
   export function toTop() {
     if (viewport) viewport.scrollTo({ top: 0, behavior: "smooth" });
     if (rows[0]) onSelect(rows[0].id);
@@ -384,7 +389,7 @@
           tabindex="-1"
           style:top="{PAD_TOP + index * ROW}px"
           style:padding-left="{textStart(row)}px"
-          style:background={picked ? tint(row.graph.color) : undefined}
+          class:picked
           style:--flash={tint(row.graph.color)}
           style:--ring={lane(row.graph.color)}
           onclick={(e) => ((e.metaKey || e.ctrlKey) && onSecond && !row.worktree ? onSecond(row.id) : onSelect(row.id))}
@@ -662,6 +667,17 @@
   .row:hover {
     background: var(--row-hover);
     transition-duration: 0.1s;
+  }
+  /* The selected commit: its branch tint while the list has the focus, grey once the focus is
+     elsewhere or the window is in the background, as macOS lists do. */
+  .row.picked {
+    background: var(--sel-idle);
+  }
+  .viewport:focus-within .row.picked {
+    background: var(--flash);
+  }
+  :global(:root[data-window="inactive"]) .viewport .row.picked {
+    background: var(--sel-idle);
   }
   .row.flash {
     background: var(--flash);

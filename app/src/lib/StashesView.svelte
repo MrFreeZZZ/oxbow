@@ -191,7 +191,8 @@
       </button>
     </div>
     {#if stashes.length}
-      <div class="cards" role="listbox" tabindex="0" aria-label="Stashes, newest first" onkeydown={onKey}>
+      <!-- Clicking a card hands the list the keyboard, also where buttons don't take the focus (macOS). -->
+      <div class="cards" role="listbox" tabindex="0" aria-label="Stashes, newest first" onkeydown={onKey} onpointerdown={(e) => (e.currentTarget as HTMLElement).focus({ preventScroll: true })}>
         {#each stashes as s (s.id)}
           {@const t = totals(files[s.id])}
           {@const on = s.id === stash?.id}
@@ -201,7 +202,7 @@
             data-id={s.id}
             role="option"
             aria-selected={on}
-            style:background={on ? tint(branchColor(s)) : undefined}
+            style:--sel={tint(branchColor(s))}
             onclick={() => pick(s)}
             oncontextmenu={(e) => openMenu(e, s)}
           >
@@ -329,13 +330,13 @@
 {/if}
 
 <style>
+  /* No frame of its own, as in History: a hairline under the toolbar and one between the list
+     and the details. */
   .screen {
     flex-grow: 1;
     display: flex;
     min-height: 0;
-    margin: 4px 12px 12px;
-    border: 1px solid var(--sep);
-    border-radius: var(--radius-l);
+    border-top: 1px solid var(--sep);
     overflow: hidden;
   }
   .list {
@@ -386,11 +387,21 @@
     gap: 5px;
     width: 100%;
     padding: 10px 12px;
-    border-radius: var(--radius-l);
+    border-radius: var(--radius-m);
     text-align: left;
   }
   .card:hover:not(.on) {
-    background: var(--field);
+    background: var(--row-hover);
+  }
+  /* The selected stash: its branch tint while the list has the focus, grey otherwise. */
+  .card.on {
+    background: var(--sel-idle);
+  }
+  .cards:focus-within .card.on {
+    background: var(--sel);
+  }
+  :global(:root[data-window="inactive"]) .cards .card.on {
+    background: var(--sel-idle);
   }
   .line {
     display: flex;
@@ -491,7 +502,6 @@
     color: var(--text2);
   }
   .sha {
-    color: var(--accent-text);
     flex-shrink: 0;
   }
   .base {
@@ -575,10 +585,8 @@
     min-height: 0;
   }
   .files {
-    margin: 12px 12px 6px;
-    padding: 8px 4px 6px;
-    border-radius: var(--radius-l);
-    border: 1px solid var(--sep);
+    margin: var(--space-2) var(--space-3) var(--space-1);
+    padding: var(--space-1) 0 6px;
   }
   .count {
     display: flex;
