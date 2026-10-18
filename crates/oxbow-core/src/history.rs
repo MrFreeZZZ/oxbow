@@ -102,6 +102,9 @@ pub struct History {
     /// other, each a run of the caller's rows or of the next rows of `rows`. More commits loaded
     /// as the list scrolls, or a new commit on top, send only what is new.
     pub pieces: Vec<Piece>,
+    /// The git commands this read ran, as typed in a shell; commits and refs are read from
+    /// `.git` directly. What Reload shows in Activity.
+    pub reads: Vec<String>,
 }
 
 /// A run of history rows: `len` of the caller's rows from `known` on, or with `known` unset,
@@ -285,6 +288,11 @@ impl Repo {
         cache: &mut HistoryCache,
         known: Option<&str>,
     ) -> Result<History> {
+        let (history, reads) = crate::cli::recording(|| self.read_history(options, cache, known));
+        history.map(|history| History { reads, ..history })
+    }
+
+    fn read_history(&self, options: &HistoryOptions, cache: &mut HistoryCache, known: Option<&str>) -> Result<History> {
         let repo = self.local();
         let head = self.head()?;
         let mut refs = self.refs()?;
@@ -412,6 +420,7 @@ impl Repo {
             key: key_text,
             same,
             pieces,
+            reads: Vec::new(),
         })
     }
 

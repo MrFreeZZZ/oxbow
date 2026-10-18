@@ -296,8 +296,35 @@ pub(crate) struct Limited {
     pub cut: bool,
 }
 
+thread_local! {
+    /// The commands run on this thread while [`recording`] listens, as typed in a shell.
+    static RAN: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` and list the commands it ran on this thread, as typed in a shell: what a read such
+/// as Reload shows it did.
+pub(crate) fn recording<T>(f: impl FnOnce() -> T) -> (T, Vec<String>) {
+    let outer = RAN.with(|ran| ran.borrow_mut().replace(Vec::new()));
+    let value = f();
+    let mine = RAN
+        .with(|ran| std::mem::replace(&mut *ran.borrow_mut(), outer))
+        .unwrap_or_default();
+    // A recording around this one sees these commands too.
+    RAN.with(|ran| {
+        if let Some(outer) = ran.borrow_mut().as_mut() {
+            outer.extend(mine.iter().cloned());
+        }
+    });
+    (value, mine)
+}
+
 /// `git` set up to run `command` in `dir`.
 fn command_in(dir: &Path, command: &GitCommand) -> Command {
+    RAN.with(|ran| {
+        if let Some(ran) = ran.borrow_mut().as_mut() {
+            ran.push(command.display());
+        }
+    });
     let mut git = match &command.program {
         Some(program) => Command::new(program),
         None => crate::config::git(),

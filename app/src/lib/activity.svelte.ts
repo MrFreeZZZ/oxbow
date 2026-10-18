@@ -9,7 +9,7 @@ import { lineKind, type Icon, type Ran, type TermLine } from "./confirm.svelte";
 import { hostName } from "./remote";
 import type { ActionEvent, Failure } from "./types";
 
-export type ActivityKind = "fetch" | "pull" | "push" | "action";
+export type ActivityKind = "fetch" | "pull" | "push" | "action" | "reload";
 
 export interface ActivityItem {
   id: number;
@@ -188,6 +188,11 @@ class Activity {
     this.#finished({ kind, title: ran.title, sub: "", state: "done", icon: ran.icon, commands: ran.commands });
   }
 
+  /** Reload read the repository again: what changed, and the git commands it ran. */
+  reloaded(sub: string, commands: string[]) {
+    this.#finished({ kind: "reload", title: "Reloaded", sub, state: "done", commands });
+  }
+
   /** The commands the running fetch ran. */
   #commands(): string[] {
     return this.lines.filter((line) => line.kind === "cmd").map((line) => line.text);
@@ -212,7 +217,8 @@ class Activity {
     const full: ActivityItem = { ...item, id: this.#next++, time: Date.now() };
     const last = this.recent[0];
     // The timer fetches every few minutes: "Nothing new" again just moves the time on.
-    const same = last && last.state === "done" && full.state === "done" && last.kind === "fetch" && full.kind === "fetch" && last.title === full.title && last.sub === full.sub;
+    // So does Reload pressed again with nothing new.
+    const same = last && last.state === "done" && full.state === "done" && last.kind === full.kind && (full.kind === "fetch" || full.kind === "reload") && last.title === full.title && last.sub === full.sub;
     this.recent = [full, ...(same ? this.recent.slice(1) : this.recent)].slice(0, KEEP);
     return full;
   }

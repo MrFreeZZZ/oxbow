@@ -120,7 +120,8 @@
     const segments = segmentsAt(history, index);
     const old = from?.rows.get(row.id);
     if (!old || !from) return segments.map((seg) => ({ ...seg, opacity: 1 }));
-    const pool = segmentsAt(from.history, old.index);
+    // A copy: the segments may be the old history's own, which a template must not change.
+    const pool = [...segmentsAt(from.history, old.index)];
     return segments.map((seg) => {
       const i = pool.findIndex((o) => o.color === seg.color && o.dashed === seg.dashed && o.thick === seg.thick);
       if (i < 0) return { ...seg, opacity: progress };
