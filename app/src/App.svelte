@@ -109,7 +109,7 @@
   }
   /** The «…» menu of a narrow window, open under its button. */
   let moreMenu = $state<{ x: number; y: number } | null>(null);
-  /** The details panel never takes more than 58% of the room, nor leaves the graph under 360 px. */
+  /** The details panel can take any width that leaves the graph 360 px. */
   const GRAPH_MIN = 360;
   const PANEL_MIN = 320;
   const SIDEBAR = 248;
@@ -124,7 +124,7 @@
     return entries;
   }
   const contentWidth = $derived(windowWidth - (narrow ? 0 : SIDEBAR));
-  const panelMax = $derived(Math.max(PANEL_MIN, Math.min(contentWidth - GRAPH_MIN, contentWidth * 0.58)));
+  const panelMax = $derived(Math.max(PANEL_MIN, contentWidth - GRAPH_MIN));
   const shownPanelWidth = $derived(Math.min(Math.max(panelWidth, PANEL_MIN), panelMax));
   /** The screen next to the sidebar. */
   let view = $state<"history" | "stashes" | "compare" | "file" | "stack" | "pull">("history");
@@ -1823,7 +1823,7 @@
   .note {
     font-weight: 400;
   }
-  /* Its width comes from shownPanelWidth: never past 58%, never leaving the graph under 360 px. */
+  /* Its width comes from shownPanelWidth: never leaving the graph under 360 px. */
   .panel {
     position: relative;
     flex-shrink: 0;
