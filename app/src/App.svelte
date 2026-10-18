@@ -2,7 +2,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { listen } from "@tauri-apps/api/event";
   import { api, settings } from "./lib/api";
-  import { WORKTREE_ID, type History, type HistoryRow, type ReflogEntry, type RepoSummary } from "./lib/types";
+  import { WORKTREE_ID, type History, type HistoryRow, type RefInfo, type ReflogEntry, type RepoSummary } from "./lib/types";
   import Sidebar from "./lib/Sidebar.svelte";
   import HistoryList from "./lib/HistoryList.svelte";
   import CommitPanel from "./lib/CommitPanel.svelte";
@@ -711,7 +711,7 @@
     openConflicts(opBefore);
   }
   activity.startQueued = (item) => {
-    if (item.kind !== "action") void sync(item.kind, item.mode);
+    if (item.kind !== "action" && item.kind !== "reload") void sync(item.kind, item.mode);
   };
 
   /** What Fetch fetches: the one remote, or all of them, as its sheet says. */
@@ -781,6 +781,39 @@
     refreshing = done;
     return done;
   }
+  /** Reload, asked for: Activity gets what changed and the git commands it ran, and unless
+   *  Activity is open to show it, so does a toast. */
+  async function reload() {
+    const before = history;
+    await refresh();
+    const after = history;
+    if (!before || !after || after === before) return;
+    const sub = reloadNews(before, after);
+    activity.reloaded(sub, after.reads);
+    if (!activity.open) confirm.say(`Reloaded. ${sub}.`, "done");
+  }
+
+  /** What a reload found: "Nothing new", or "3 new commits · origin/main moved · 2 uncommitted files". */
+  function reloadNews(before: History, after: History): string {
+    const parts: string[] = [];
+    const known = new Set(before.rows.map((r) => r.id));
+    const fresh = after.rows.filter((r) => !r.worktree && !known.has(r.id)).length;
+    if (fresh) parts.push(`${fresh} new ${fresh === 1 ? "commit" : "commits"}`);
+    const key = (r: RefInfo) => `${r.kind} ${r.name}`;
+    const was = new Map(before.refs.map((r) => [key(r), r.target]));
+    const now = new Set(after.refs.map(key));
+    const refs = [
+      ...after.refs.filter((r) => was.get(key(r)) !== r.target).map((r) => `${r.name} ${was.has(key(r)) ? "moved" : "is new"}`),
+      ...before.refs.filter((r) => !now.has(key(r))).map((r) => `${r.name} is gone`),
+    ];
+    if (refs.length === 1) parts.push(refs[0]);
+    else if (refs.length) parts.push(`${refs.length} branches and tags changed`);
+    const files = (h: History) => h.rows[0]?.worktree?.files ?? 0;
+    if (files(after) !== files(before)) parts.push(files(after) ? `${files(after)} uncommitted ${files(after) === 1 ? "file" : "files"}` : "No uncommitted changes");
+    if (after.stashes.length !== before.stashes.length) parts.push(`${after.stashes.length} ${after.stashes.length === 1 ? "stash" : "stashes"}`);
+    return parts.length ? parts.join(" · ") : "Nothing new";
+  }
+
   let refreshing: Promise<void> | null = null;
   /** The reload that follows the one under way. */
   let refreshQueued: Promise<void> | null = null;
@@ -1078,7 +1111,7 @@
     } else if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "r" && history) {
       // ⌘R reloads, as Reload in the repository menu and in Activity do; the webview never reloads itself.
       event.preventDefault();
-      refresh();
+      reload();
     } else if (event.key === "Escape" && sideShown && !confirm.request && !event.defaultPrevented) {
       sideShown = false;
     } else if (event.key === "Escape" && submoduleSel && view === "history" && !confirm.request && !event.defaultPrevented) {
@@ -1130,7 +1163,7 @@
       onPullRequest={aside(openPull)}
       submodule={pickedSubmodule?.path ?? null}
       onSubmodule={aside(showSubmodule)}
-      onReload={refresh}
+      onReload={reload}
     />
     <div class="main">
       <header data-tauri-drag-region>
@@ -1269,7 +1302,7 @@
                 {#if t?.ahead}<span class="count">{t.ahead}</span>{:else if !t && history.head.branch}<span class="count">Publish</span>{/if}
               </button>
             </div>
-            <ActivityPopover fix={fixFetch} retry={() => backgroundFetch(false)} settings={() => ((activity.open = false), api.openSettings())} reload={refresh} />
+            <ActivityPopover fix={fixFetch} retry={() => backgroundFetch(false)} settings={() => ((activity.open = false), api.openSettings())} reload={reload} />
             {#if whyBlock}
               {@const block = whyBlock}
               <WhyPopover title={block.title} body={block.body} fixes={block.fixes} onFix={(i) => fixSync(block.fixes[i].fix)} onClose={() => (why = null)} />

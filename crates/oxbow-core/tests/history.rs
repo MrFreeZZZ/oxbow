@@ -580,3 +580,20 @@ fn a_deeper_fetch_of_a_shallow_clone_rebuilds_the_rows() {
     let again = repo.history_with(&options, &mut cache, Some(&deeper.key)).unwrap();
     assert!(again.same);
 }
+
+#[test]
+fn history_lists_the_git_commands_it_ran() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "1\n", "Root");
+    let repo = Repo::open(fx.path()).unwrap();
+    let history = repo.history(&HistoryOptions::default()).unwrap();
+    assert!(
+        history.reads.iter().any(|c| c.starts_with("git status --porcelain=v2")),
+        "{:?}",
+        history.reads
+    );
+    assert!(history.reads.iter().any(|c| c.starts_with("git for-each-ref")));
+    // Each read lists its own commands only.
+    let again = repo.history(&HistoryOptions::default()).unwrap();
+    assert_eq!(again.reads, history.reads);
+}
