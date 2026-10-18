@@ -279,6 +279,10 @@
     const next = Math.min(rows.length - 1, Math.max(0, current + (event.key === "ArrowDown" ? 1 : -1)));
     if (rows[next]) onSelect(rows[next].id);
   }
+  // A local branch and its copy on a remote at the same commit share one capsule, with a cloud.
+  const hasLocal = (row: HistoryRow, name: string) => row.labels.some((l) => l.kind === "local" && l.name === name);
+  /** The remote branch at the same commit as the local branch `name`, as origin/x for x. */
+  const remoteTwin = (row: HistoryRow, name: string) => row.labels.find((l) => l.kind === "remote" && l.name.slice(l.name.indexOf("/") + 1) === name)?.name ?? null;
 </script>
 
 <div class="wrap">
@@ -329,7 +333,10 @@
               <span class="pill bisect {pill}">{pill === "found" && history.bisect?.termBad !== "bad" ? `first ${history.bisect?.termBad} commit` : PILL[pill]}</span>
             {/if}
             {#each row.labels as label (label.kind + label.name)}
-              {#if label.kind === "tag"}
+              {@const twin = label.kind === "local" ? remoteTwin(row, label.name) : null}
+              {#if label.kind === "remote" && hasLocal(row, label.name.slice(label.name.indexOf("/") + 1))}
+                <!-- origin/x at the same commit as x rides on x's capsule. -->
+              {:else if label.kind === "tag"}
                 <span class="pill tag" class:local={history.localTags.includes(label.name)} title={history.localTags.includes(label.name) ? `Not on ${history.defaultRemote} yet` : undefined}>
                   <svg class="icon tiny" viewBox="0 0 16 16"><path d="M2.5 2.5h5l6 6-5 5-6-6z" /><circle cx="5.5" cy="5.5" r="0.8" /></svg>
                   {label.name}
@@ -344,9 +351,10 @@
               {:else if label.kind === "head"}
                 <span class="pill head" style:color={plate(label.color)} style:border-color="color-mix(in srgb, {lane(label.color)} 55%, transparent)">HEAD</span>
               {:else if label.kind === "remote"}
-                <span class="pill" class:production={label.color === 0 && isProduction(label.name)} style:color={plate(label.color)} style:border-color="color-mix(in srgb, {lane(label.color)} 40%, transparent)">{label.name}</span>
+                <span class="pill" class:production={label.color === 0 && isProduction(label.name)} style:flex-shrink={label.name.length} style:color={plate(label.color)} style:border-color="color-mix(in srgb, {lane(label.color)} 40%, transparent)" title={label.name}>{label.name}</span>
               {:else}
-                <span class="pill" class:head={label.head} class:production={label.color === 0 && isProduction(label.name)} style:color={plate(label.color)} style:background={tint(label.color, "label")}>{label.name}</span>
+                <!-- Long names give way first: each shrinks in step with its length. -->
+                <span class="pill" class:head={label.head} class:twin class:production={label.color === 0 && isProduction(label.name)} style:flex-shrink={label.name.length} style:color={plate(label.color)} style:background={tint(label.color, "label")} title={twin ? `${label.name}, same as ${twin}` : label.name}>{#if twin}<svg class="icon tiny" viewBox="0 0 16 16"><path d="M4.5 12.5h7a3 3 0 0 0 .4-6 4 4 0 0 0-7.6-1A3.5 3.5 0 0 0 4.5 12.5z" /></svg>{/if}{label.name}</span>
               {/if}
             {/each}
             {#if row.worktree}
@@ -612,17 +620,34 @@
     font-size: 11px;
     overflow: hidden;
   }
+  /* Labels give way first, with an ellipsis; author and time keep their room. */
   .pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
+    display: inline-block;
     height: 16px;
+    line-height: 14px;
     padding: 0 6px;
     border-radius: 8px;
     border: 1px solid transparent;
     font-weight: 500;
-    flex-shrink: 0;
+    flex-shrink: 1;
+    min-width: 34px;
+    max-width: 190px;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .pill .tiny {
+    vertical-align: -1px;
+    margin-right: 3px;
+  }
+  .pill.twin {
+    min-width: 48px;
+  }
+  /* HEAD and the bisect marks are short and say what the row is: they keep their whole word.
+     A branch capsule's own flex-shrink, set inline, outweighs this. */
+  .pill.head,
+  .pill.bisect {
+    flex-shrink: 0;
   }
   .pill.head {
     font-weight: 600;
@@ -674,8 +699,7 @@
   .byline {
     color: var(--text2);
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    flex-shrink: 0;
   }
   /* A search fades the commits that don't match, and the lines between them. */
   .row.faded {

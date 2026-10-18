@@ -39,6 +39,7 @@
   const HOME = "M2.5 7.5 8 3l5.5 4.5M4 6.5v6.5h8V6.5";
   /** A list with a ×: Clear Recent. */
   const CLEAR = "M2.5 4h11M2.5 8h6M2.5 12h4M10 9.5l3.5 3.5M13.5 9.5 10 13";
+  const RELOAD = "M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5";
   const LOCK = "M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2";
 
   let {
@@ -59,6 +60,7 @@
     onPullRequest,
     submodule = null,
     onSubmodule,
+    onReload,
   }: {
     repo: RepoSummary;
     history: History;
@@ -86,6 +88,8 @@
     submodule?: string | null;
     /** Show a submodule's card in place of the commit's. */
     onSubmodule: (path: string) => void;
+    /** Read the repository again, for changes the app hasn't noticed yet. */
+    onReload: () => void;
   } = $props();
 
   /** The checked-out branch's pull request, for the Workspace item. */
@@ -234,6 +238,7 @@
     );
     if (history.head.commit) entries.push({ kind: "item", label: "Add Submodule…", icon: actionIcons.box, run: () => run(addSubmoduleRequest(submodules, repo.path)) });
     entries.push(
+      { kind: "item", label: "Reload", icon: RELOAD, keys: keys("Mod+R"), run: onReload },
       { kind: "item", label: "Open in Terminal", icon: TERMINAL, run: () => api.openInTerminal().catch((err) => confirm.fail(err)) },
       { kind: "item", label: "Welcome Window", icon: HOME, run: onWelcome },
     );
@@ -852,14 +857,12 @@
 <style>
   nav {
     position: absolute;
-    left: 8px;
-    top: 8px;
-    bottom: 8px;
+    left: 0;
+    top: 0;
+    bottom: 0;
     width: 248px;
-    border-radius: 18px;
     background: var(--side);
-    border: 0.5px solid var(--side-border);
-    box-shadow: var(--panel-shadow);
+    border-right: 1px solid var(--sep);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -956,7 +959,7 @@
   .head {
     font-size: 10px;
     font-weight: 700;
-    color: var(--accent-text);
+    color: var(--text2);
   }
   .head.busy {
     color: var(--orange);
@@ -1019,10 +1022,10 @@
     color: var(--text2);
   }
   .icon.here {
-    color: var(--accent-text);
+    color: var(--icon);
   }
   .meta.accent {
-    color: var(--accent-text);
+    color: var(--text2);
     font-weight: 600;
   }
   .lfs-text {

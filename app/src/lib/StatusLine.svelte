@@ -234,7 +234,7 @@
 <style>
   .status {
     position: relative;
-    margin: 0 12px 6px;
+    margin: 0;
     flex-shrink: 0;
   }
   .line {
@@ -243,10 +243,7 @@
     display: flex;
     align-items: center;
     gap: 7px;
-    padding: 0 10px 0 12px;
-    border-radius: 10px;
-    background: var(--panel);
-    border: 0.5px solid var(--panel-border);
+    padding: 0 14px 0 16px;
     color: var(--text2);
     font-size: 12px;
     white-space: nowrap;
