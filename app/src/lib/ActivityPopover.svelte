@@ -106,8 +106,8 @@
               </div>
             {/if}
             <span class="buttons">
-              <button class="plain" onclick={() => (activity.showOutput = !activity.showOutput)}>{activity.showOutput ? "Hide Output" : "Show Output"}</button>
-              <button class="plain" onclick={() => activity.stop()}>Stop</button>
+              <button class="button small" onclick={() => (activity.showOutput = !activity.showOutput)}>{activity.showOutput ? "Hide Output" : "Show Output"}</button>
+              <button class="button small" onclick={() => activity.stop()}>Stop</button>
             </span>
           </span>
         </div>
@@ -118,7 +118,7 @@
           <span class="words">
             <span class="line"><span class="title">{item.title}</span><span class="time">next</span></span>
             <span class="detail">{item.sub}</span>
-            <span class="buttons"><button class="plain" onclick={() => activity.unqueue(item.id)}>Cancel</button></span>
+            <span class="buttons"><button class="button small" onclick={() => activity.unqueue(item.id)}>Cancel</button></span>
           </span>
         </div>
       {/each}
@@ -145,8 +145,8 @@
             {/if}
             {#if open}
               <span class="buttons">
-                <button class="primary" onclick={() => fix(item)}>{fixable(item) ? "Fix…" : "Details…"}</button>
-                <button class="plain" disabled={!!activity.running} onclick={() => retry(item)}>Try Again</button>
+                <button class="button small primary" onclick={() => fix(item)}>{fixable(item) ? "Fix…" : "Details…"}</button>
+                <button class="button small" disabled={!!activity.running} onclick={() => retry(item)}>Try Again</button>
               </span>
             {/if}
           </span>
@@ -177,12 +177,12 @@
     width: 360px;
     max-width: calc(100vw - 32px);
     padding: 14px 8px 8px;
-    border-radius: 22px;
+    border-radius: var(--radius-sheet);
     background: var(--sheet);
     -webkit-backdrop-filter: blur(30px) saturate(1.8);
     backdrop-filter: blur(30px) saturate(1.8);
     border: 0.5px solid var(--glass-border);
-    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.22);
+    box-shadow: var(--shadow-pop);
     display: flex;
     flex-direction: column;
     text-align: left;
@@ -195,12 +195,12 @@
     padding: 0 6px 6px 10px;
   }
   .h {
-    font-size: 14px;
+    font-size: var(--text-heading);
     font-weight: 700;
   }
   .every {
     flex-grow: 1;
-    font-size: 11.5px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .reload {
@@ -209,8 +209,8 @@
     gap: 5px;
     height: 24px;
     padding: 0 10px;
-    border-radius: 12px;
-    font-size: 12px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-small);
     font-weight: 500;
     white-space: nowrap;
     flex-shrink: 0;
@@ -239,7 +239,7 @@
     align-items: flex-start;
     gap: 10px;
     padding: 8px 10px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
   }
   .row.live {
     background: var(--field);
@@ -248,7 +248,7 @@
     width: 30px;
     height: 30px;
     flex-shrink: 0;
-    border-radius: 15px;
+    border-radius: var(--radius-pill);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -293,11 +293,11 @@
   .pct,
   .time {
     flex-shrink: 0;
-    font-size: 11.5px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .detail {
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .detail.bad {
@@ -305,7 +305,7 @@
   }
   .section {
     padding: 8px 10px 2px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
   }
@@ -313,11 +313,11 @@
     position: relative;
     margin-top: 6px;
     padding: 6px 9px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     background: var(--term);
     border: 0.5px solid var(--term-border);
     color: var(--term-text);
-    font-size: 11px;
+    font-size: var(--text-caption);
     line-height: 1.45;
   }
   .cmd {
@@ -336,9 +336,9 @@
     top: 4px;
     right: 6px;
     padding: 1px 7px;
-    border-radius: 6px;
+    border-radius: var(--radius-s);
     font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-    font-size: 10.5px;
+    font-size: var(--text-caption);
     color: var(--term-text);
     background: var(--term-button);
     opacity: 0;
@@ -350,20 +350,20 @@
   }
   .more {
     color: var(--term-comment);
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-family: inherit;
   }
   .track {
     margin-top: 6px;
     height: 4px;
-    border-radius: 2px;
+    border-radius: var(--radius-pill);
     background: var(--sep);
     overflow: hidden;
   }
   .fill {
     display: block;
     height: 100%;
-    border-radius: 2px;
+    border-radius: var(--radius-xs);
     background: var(--accent);
     transition: width 0.2s;
   }
@@ -383,11 +383,11 @@
     max-height: 120px;
     overflow-y: auto;
     padding: 8px 10px;
-    border-radius: 10px;
+    border-radius: var(--radius-l);
     background: var(--term);
     border: 0.5px solid var(--term-border);
     color: var(--term-text);
-    font-size: 11px;
+    font-size: var(--text-caption);
     line-height: 1.45;
     white-space: pre-wrap;
     word-break: break-all;
@@ -397,29 +397,13 @@
     gap: 8px;
     margin-top: 8px;
   }
-  .buttons button {
-    height: 26px;
-    padding: 0 14px;
-    border-radius: 13px;
-    font-size: 12px;
-    font-weight: 500;
-  }
-  .plain {
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--text);
-  }
-  .primary {
-    background: var(--accent);
-    color: #fff;
-  }
+
   button:disabled {
     opacity: 0.45;
   }
   .empty {
     padding: 14px 10px;
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.45;
     color: var(--text2);
   }
@@ -430,11 +414,11 @@
     margin-top: 6px;
     padding: 8px 10px 4px;
     border-top: 1px solid var(--sep);
-    font-size: 11.5px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .link {
     color: var(--accent-text);
-    font-size: 11.5px;
+    font-size: var(--text-small);
   }
 </style>

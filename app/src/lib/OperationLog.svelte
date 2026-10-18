@@ -131,7 +131,7 @@
               </span>
               <button class="compare" title="Show the commit and its changes" onclick={(e) => (e.stopPropagation(), show(entry))}>Show</button>
               {#if entry.lost}
-                <button class="restore" title="Keep {entry.lostCount === 1 ? 'this commit' : `these ${entry.lostCount} commits`} on a new branch, without a reset" onclick={(e) => (e.stopPropagation(), branch(entry))}>Create Branch…</button>
+                <button class="button small restore" title="Keep {entry.lostCount === 1 ? 'this commit' : `these ${entry.lostCount} commits`} on a new branch, without a reset" onclick={(e) => (e.stopPropagation(), branch(entry))}>Create Branch…</button>
               {/if}
             </div>
           {:else}
@@ -168,11 +168,11 @@
               onclick={() => compare(entry, i > 0)}>Compare</button
             >
             {#if i === 0}
-              <button class="primary" disabled={!!blocked} title={blocked ?? undefined} onclick={() => go(undoRequest(entry))}>
+              <button class="button small primary" disabled={!!blocked} title={blocked ?? undefined} onclick={() => go(undoRequest(entry))}>
                 {isRedo(entry) ? "Redo" : "Undo"}<span class="key">{keys("Mod+Z")}</span>
               </button>
             {:else}
-              <button class="restore" disabled={!!blocked} title={blocked ?? "Back to right after this step"} onclick={() => go(restoreRequest(entry, i))}>Restore to Here</button>
+              <button class="button small restore" disabled={!!blocked} title={blocked ?? "Back to right after this step"} onclick={() => go(restoreRequest(entry, i))}>Restore to Here</button>
             {/if}
           </div>
         {:else}
@@ -201,7 +201,7 @@
     gap: 4px;
     height: 34px;
     padding: 0 10px 0 12px;
-    border-radius: 17px;
+    border-radius: var(--radius-pill);
     background: var(--glass);
     border: 0.5px solid var(--glass-border);
     box-shadow: var(--glass-shadow);
@@ -225,12 +225,12 @@
     width: 440px;
     max-width: calc(100vw - 32px);
     padding: 14px 8px 8px;
-    border-radius: 22px;
+    border-radius: var(--radius-sheet);
     background: var(--sheet);
     -webkit-backdrop-filter: blur(30px) saturate(1.8);
     backdrop-filter: blur(30px) saturate(1.8);
     border: 0.5px solid var(--glass-border);
-    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.22);
+    box-shadow: var(--shadow-pop);
     display: flex;
     flex-direction: column;
   }
@@ -241,12 +241,12 @@
     padding: 0 10px;
   }
   .h {
-    font-size: 14px;
+    font-size: var(--text-heading);
     font-weight: 700;
   }
   .repo {
     min-width: 0;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
     white-space: nowrap;
     overflow: hidden;
@@ -262,15 +262,15 @@
     flex-shrink: 0;
     display: flex;
     padding: 2px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     background: var(--field);
   }
   .segmented button {
     height: 22px;
     min-width: 64px;
     padding: 0 10px;
-    border-radius: 7px;
-    font-size: 11.5px;
+    border-radius: var(--radius-s);
+    font-size: var(--text-small);
     font-weight: 500;
     color: var(--text2);
     white-space: nowrap;
@@ -296,21 +296,21 @@
     flex-shrink: 0;
     height: 17px;
     padding: 0 7px;
-    border-radius: 9px;
+    border-radius: var(--radius-pill);
     display: inline-flex;
     align-items: center;
-    font-size: 10.5px;
+    font-size: var(--text-caption);
     font-weight: 500;
     background: var(--orange-soft);
     color: var(--orange);
   }
   .mono {
     font-family: var(--mono);
-    font-size: 10.5px;
+    font-size: var(--text-caption);
   }
   .intro {
     margin: 4px 10px 8px;
-    font-size: 11.5px;
+    font-size: var(--text-small);
     line-height: 1.4;
     color: var(--text2);
   }
@@ -327,7 +327,7 @@
     gap: 10px;
     min-height: 46px;
     padding: 6px 10px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
   }
   .row:hover,
   .row.top {
@@ -337,7 +337,7 @@
     width: 30px;
     height: 30px;
     flex-shrink: 0;
-    border-radius: 15px;
+    border-radius: var(--radius-pill);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -368,7 +368,7 @@
     font-weight: 600;
   }
   .detail {
-    font-size: 11.5px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .when {
@@ -377,11 +377,11 @@
     flex-direction: column;
     align-items: flex-end;
     gap: 1px;
-    font-size: 11.5px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .until {
-    font-size: 10.5px;
+    font-size: var(--text-caption);
     opacity: 0.8;
   }
   .compare {
@@ -389,13 +389,13 @@
     flex-shrink: 0;
     height: 26px;
     padding: 0 12px;
-    border-radius: 13px;
+    border-radius: var(--radius-pill);
     align-items: center;
     background: var(--glass);
     border: 0.5px solid var(--glass-border);
     box-shadow: var(--glass-shadow);
     font-weight: 500;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text);
   }
   .row:hover .compare {
@@ -409,32 +409,13 @@
     min-width: 58px;
     justify-content: center;
   }
-  .primary,
-  .restore {
-    flex-shrink: 0;
-    height: 26px;
-    padding: 0 12px;
-    border-radius: 13px;
-    font-weight: 500;
-    font-size: 12px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .primary {
-    background: var(--accent);
-    color: #fff;
-  }
+
   .key {
     opacity: 0.75;
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .restore {
     display: none;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--text);
   }
   .row:hover .restore {
     display: flex;
@@ -447,7 +428,7 @@
   }
   .empty {
     padding: 14px 10px;
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.45;
     color: var(--text2);
   }
@@ -459,12 +440,12 @@
     margin-top: 6px;
     padding: 8px 10px 4px;
     border-top: 1px solid var(--sep);
-    font-size: 11.5px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .link {
     flex-shrink: 0;
     color: var(--accent-text);
-    font-size: 11.5px;
+    font-size: var(--text-small);
   }
 </style>

@@ -217,19 +217,19 @@
     min-width: 230px;
     max-width: 380px;
     padding: 5px;
-    border-radius: 14px;
+    border-radius: var(--radius-xl);
     background: var(--sheet);
     -webkit-backdrop-filter: blur(30px) saturate(1.8);
     backdrop-filter: blur(30px) saturate(1.8);
     border: 0.5px solid var(--glass-border);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+    box-shadow: var(--shadow-pop);
     display: flex;
     flex-direction: column;
   }
   .header {
     height: 24px;
     padding: 0 10px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     line-height: 24px;
     color: var(--text2);
@@ -244,7 +244,7 @@
   }
   .note {
     padding: 1px 10px 4px 34px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     line-height: 1.35;
     color: var(--text2);
   }
@@ -254,7 +254,7 @@
     gap: 9px;
     height: 26px;
     padding: 0 10px;
-    border-radius: 8px;
+    border-radius: var(--radius-m);
     color: var(--text);
     text-align: left;
     outline: none;
@@ -286,7 +286,7 @@
     line-height: 1.25;
   }
   .lines .detail {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   button .chevron {
@@ -304,12 +304,12 @@
   button .keys {
     flex-grow: 0;
     margin-left: 18px;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .submenu .hint {
     flex-grow: 0;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .row {
@@ -329,7 +329,7 @@
     height: 20px;
     padding: 0;
     justify-content: center;
-    border-radius: 10px;
+    border-radius: var(--radius-pill);
     transform: translateY(-50%);
     color: var(--text2);
     opacity: 0;

@@ -69,7 +69,7 @@
       <span>Every fix goes into the Operation Log, so Undo can take it back.</span>
     </div>
     <div class="foot">
-      <button class="btn" onclick={onClose} title={withKeys("Cancel", "Escape")}>Cancel</button>
+      <button class="button" onclick={onClose} title={withKeys("Cancel", "Escape")}>Cancel</button>
     </div>
   </div>
 </div>
@@ -89,10 +89,10 @@
     max-height: calc(100vh - 48px);
     overflow-y: auto;
     padding: 22px 22px 18px;
-    border-radius: 22px;
+    border-radius: var(--radius-sheet);
     background: var(--sheet);
     border: 0.5px solid var(--glass-border);
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+    box-shadow: var(--shadow-sheet);
     display: flex;
     flex-direction: column;
     gap: 14px;
@@ -106,7 +106,7 @@
     width: 44px;
     height: 44px;
     flex-shrink: 0;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -126,7 +126,7 @@
     gap: 6px;
   }
   .title {
-    font-size: 15px;
+    font-size: var(--text-heading);
     font-weight: 700;
     line-height: 1.3;
   }
@@ -134,13 +134,13 @@
     line-height: 1.75;
   }
   .state {
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.7;
     color: var(--text2);
   }
   .chip {
     padding: 1px 6px;
-    border-radius: 7px;
+    border-radius: var(--radius-s);
     background: var(--field);
     font-weight: 500;
   }
@@ -149,7 +149,7 @@
     font-weight: 400;
   }
   .fixes {
-    border-radius: 14px;
+    border-radius: var(--radius-l);
     background: var(--panel);
     border: 0.5px solid var(--panel-border);
     display: flex;
@@ -175,7 +175,7 @@
     width: 30px;
     height: 30px;
     flex-shrink: 0;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     display: grid;
     place-items: center;
     background: color-mix(in srgb, var(--lane-0) var(--tint-label), transparent);
@@ -192,7 +192,7 @@
     font-weight: 600;
   }
   .fix-sub {
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.4;
     color: var(--text2);
   }
@@ -226,7 +226,7 @@
     align-items: flex-start;
     gap: 8px;
     padding: 0 2px;
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.4;
     color: var(--text2);
   }
@@ -241,15 +241,9 @@
     justify-content: flex-end;
     padding-top: 2px;
   }
-  .btn {
+
+  .button {
     min-width: 96px;
-    height: 30px;
     padding: 0 16px;
-    border-radius: 15px;
-    text-align: center;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    font-weight: 500;
   }
 </style>

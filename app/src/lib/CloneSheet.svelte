@@ -284,7 +284,7 @@
             disabled={phase === "running"}
           />
         </div>
-        <button class="btn" onclick={choose} disabled={phase === "running"}>Choose…</button>
+        <button class="button" onclick={choose} disabled={phase === "running"}>Choose…</button>
       </div>
       {#if taken}
         <div class="probe warn">
@@ -342,10 +342,10 @@
         </span>
       {/if}
       {#if phase === "running"}
-        <button class="btn" onclick={() => api.stopAction()}>Cancel</button>
+        <button class="button" onclick={() => api.stopAction()}>Cancel</button>
       {:else}
-        <button class="btn" onclick={onClose}>Cancel</button>
-        <button class="btn go" onclick={go} disabled={!!invalid} title={invalid ?? undefined}>{phase === "failed" ? "Try Again" : "Clone"}</button>
+        <button class="button" onclick={onClose}>Cancel</button>
+        <button class="button primary" onclick={go} disabled={!!invalid} title={invalid ?? undefined}>{phase === "failed" ? "Try Again" : "Clone"}</button>
       {/if}
     </div>
   </div>
@@ -367,10 +367,10 @@
     max-height: calc(100vh - 68px);
     overflow-y: auto;
     padding: 20px 22px 18px;
-    border-radius: 22px;
+    border-radius: var(--radius-sheet);
     background: var(--sheet);
     border: 0.5px solid var(--glass-border);
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+    box-shadow: var(--shadow-sheet);
     display: flex;
     flex-direction: column;
     gap: 14px;
@@ -381,11 +381,11 @@
     gap: 3px;
   }
   .title {
-    font-size: 15px;
+    font-size: var(--text-heading);
     font-weight: 700;
   }
   .sub {
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .group {
@@ -394,7 +394,7 @@
     gap: 6px;
   }
   .label {
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
   }
@@ -409,7 +409,7 @@
     gap: 8px;
     height: 34px;
     padding: 0 10px;
-    border-radius: 10px;
+    border-radius: var(--radius-m);
     background: var(--field);
     border: 0.5px solid var(--glass-border);
     color: var(--text2);
@@ -417,7 +417,7 @@
     min-width: 0;
   }
   .field:focus-within {
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+    box-shadow: var(--focus-ring);
   }
   .field input {
     flex-grow: 1;
@@ -426,14 +426,15 @@
     outline: 0;
     background: transparent;
     font: inherit;
-    font-size: 13px;
+    font-size: var(--text-body);
     color: var(--text);
     user-select: text;
     -webkit-user-select: text;
+    box-shadow: none;
   }
   .field input.mono {
     font-family: var(--mono);
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .folder {
     color: var(--accent);
@@ -458,7 +459,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     min-width: 0;
   }
@@ -494,7 +495,7 @@
     align-items: center;
     height: 16px;
     padding: 0 7px;
-    border-radius: 8px;
+    border-radius: var(--radius-pill);
     font-weight: 500;
   }
   .options {
@@ -511,7 +512,7 @@
   .switch {
     width: 30px;
     height: 18px;
-    border-radius: 9px;
+    border-radius: var(--radius-pill);
     background: var(--switch-off);
     position: relative;
     flex-shrink: 0;
@@ -527,7 +528,7 @@
     left: 2px;
     width: 14px;
     height: 14px;
-    border-radius: 7px;
+    border-radius: var(--radius-pill);
     background: #fff;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
     transition: left 0.15s;
@@ -541,7 +542,7 @@
     gap: 1px;
   }
   .note {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .progress {
@@ -549,11 +550,11 @@
     flex-direction: column;
     gap: 8px;
     padding: 14px;
-    border-radius: 14px;
+    border-radius: var(--radius-l);
     background: var(--field);
   }
   .submodule {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .phase {
@@ -569,7 +570,7 @@
   .mark {
     width: 14px;
     height: 14px;
-    border-radius: 7px;
+    border-radius: var(--radius-pill);
     border: 1px solid color-mix(in srgb, var(--text2) 45%, transparent);
     display: flex;
     align-items: center;
@@ -597,21 +598,21 @@
     flex-grow: 1;
   }
   .meta {
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 400;
     color: var(--text2);
   }
   .bar {
     height: 5px;
     margin-left: 22px;
-    border-radius: 3px;
+    border-radius: var(--radius-pill);
     background: color-mix(in srgb, var(--text2) 18%, transparent);
     overflow: hidden;
   }
   .fill {
     display: block;
     height: 100%;
-    border-radius: 3px;
+    border-radius: var(--radius-xs);
     background: var(--lane-0);
     transition: width 0.2s;
   }
@@ -628,7 +629,7 @@
     }
   }
   .failed {
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.4;
     color: var(--red);
     overflow-wrap: anywhere;
@@ -641,28 +642,12 @@
   }
   .foot-note {
     flex-grow: 1;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
-  .btn {
-    flex-shrink: 0;
+
+  .button {
     min-width: 84px;
-    height: 30px;
     padding: 0 16px;
-    border-radius: 15px;
-    text-align: center;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    font-weight: 500;
-  }
-  .btn.go {
-    background: var(--accent);
-    border-color: transparent;
-    color: #fff;
-    font-weight: 600;
-  }
-  .btn:disabled {
-    opacity: 0.5;
   }
 </style>

@@ -91,13 +91,13 @@
     </span>
     {#if progress}<span class="steps" title={total && !bisect.found ? `About ${plural(total, "step")} for the whole range` : undefined}>{progress}</span>{/if}
     {#if bisect.found || stuck}
-      {#if bisect.found}<button class="btn" onclick={() => onShow(bisect.found!)}>Show Commit</button>{/if}
-      <button class="btn go" onclick={onFinish} title="Back to {bisect.startIsBranch ? bisect.start : shortId(bisect.start)}">Finish</button>
+      {#if bisect.found}<button class="button" onclick={() => onShow(bisect.found!)}>Show Commit</button>{/if}
+      <button class="button primary" onclick={onFinish} title="Back to {bisect.startIsBranch ? bisect.start : shortId(bisect.start)}">Finish</button>
     {:else}
-      <button class="btn" onclick={onStop} title="Stop bisecting and go back to {bisect.startIsBranch ? bisect.start : shortId(bisect.start)}">Stop</button>
-      {#if ready}<button class="btn" onclick={onSkip} title={withKeys("Can’t test this commit: skip it", "S")}>Skip</button>{/if}
-      <button class="btn good" onclick={onGood} title={withKeys(`It works here: mark as ${bisect.termGood}`, "G")}>{bisect.termGood === "good" ? "Good" : bisect.termGood}</button>
-      <button class="btn bad" onclick={onBad} title={withKeys(`It is broken here: mark as ${bisect.termBad}`, "B")}>{bisect.termBad === "bad" ? "Bad" : bisect.termBad}</button>
+      <button class="button" onclick={onStop} title="Stop bisecting and go back to {bisect.startIsBranch ? bisect.start : shortId(bisect.start)}">Stop</button>
+      {#if ready}<button class="button" onclick={onSkip} title={withKeys("Can’t test this commit: skip it", "S")}>Skip</button>{/if}
+      <button class="button good" onclick={onGood} title={withKeys(`It works here: mark as ${bisect.termGood}`, "G")}>{bisect.termGood === "good" ? "Good" : bisect.termGood}</button>
+      <button class="button bad" onclick={onBad} title={withKeys(`It is broken here: mark as ${bisect.termBad}`, "B")}>{bisect.termBad === "bad" ? "Bad" : bisect.termBad}</button>
     {/if}
   </div>
   {#if bisect.output.length}
@@ -118,7 +118,7 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     border: 0.5px solid;
   }
   .top {
@@ -131,7 +131,7 @@
     width: 32px;
     height: 32px;
     flex-shrink: 0;
-    border-radius: 10px;
+    border-radius: var(--radius-m);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -150,53 +150,41 @@
     text-overflow: ellipsis;
   }
   .sub {
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .steps {
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
     white-space: nowrap;
     flex-shrink: 0;
   }
-  .btn {
-    flex-shrink: 0;
+  .button {
     min-width: 76px;
-    height: 30px;
-    padding: 0 14px;
-    border-radius: 15px;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    font-weight: 500;
-    white-space: nowrap;
   }
-  .btn.good {
+  .button.primary {
+    min-width: 110px;
+  }
+  .button.good {
     color: var(--green);
     font-weight: 600;
   }
-  .btn.bad {
+  .button.bad {
     color: var(--red);
     font-weight: 600;
   }
-  .btn.go {
-    background: var(--accent);
-    border-color: transparent;
-    color: #fff;
-    font-weight: 600;
-    min-width: 110px;
-  }
+
   .log {
     position: relative;
     background: var(--term);
     border: 0.5px solid var(--term-border);
     box-shadow: var(--term-shadow);
-    border-radius: 10px;
+    border-radius: var(--radius-l);
     padding: 8px 96px 8px 12px;
-    font-size: 11.5px;
+    font-size: var(--text-small);
     line-height: 16px;
     color: var(--term-out);
     max-height: 82px;
@@ -220,8 +208,8 @@
     right: 8px;
     height: 22px;
     padding: 0 8px;
-    border-radius: 6px;
-    font-size: 11px;
+    border-radius: var(--radius-s);
+    font-size: var(--text-caption);
     color: var(--term-dim);
     background: var(--term-button);
   }

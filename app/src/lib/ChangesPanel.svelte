@@ -525,18 +525,18 @@
       {#if n}
         <button class="state picked" onclick={() => (sel = null)} title="Clear the picked lines">{n} of {hunk.lines.filter((l) => l.kind !== "context").length} lines</button>
         {#if side === "unstaged"}
-          <button class="hbtn" onclick={() => linesAction("discardHunk", d.file.path, hunk)}>Discard {n} {lineWord}</button>
-          <button class="hbtn primary" onclick={() => linesAction("stageHunk", d.file.path, hunk)}>Stage {n} {lineWord}</button>
+          <button class="button mini text" onclick={() => linesAction("discardHunk", d.file.path, hunk)}>Discard {n} {lineWord}</button>
+          <button class="button mini quiet" onclick={() => linesAction("stageHunk", d.file.path, hunk)}>Stage {n} {lineWord}</button>
         {:else}
-          <button class="hbtn" onclick={() => linesAction("unstageHunk", d.file.path, hunk)}>Unstage {n} {lineWord}</button>
+          <button class="button mini text" onclick={() => linesAction("unstageHunk", d.file.path, hunk)}>Unstage {n} {lineWord}</button>
         {/if}
       {:else}
         <span class="state" class:staged={side === "staged"}>{side === "staged" ? "Staged" : "Unstaged"}</span>
         {#if side === "unstaged"}
-          <button class="hbtn" onclick={() => hunkAction("discardHunk", d.file.path, hunk)}>Discard</button>
-          <button class="hbtn primary" onclick={() => hunkAction("stageHunk", d.file.path, hunk)}>Stage Hunk</button>
+          <button class="button mini text" onclick={() => hunkAction("discardHunk", d.file.path, hunk)}>Discard</button>
+          <button class="button mini quiet" onclick={() => hunkAction("stageHunk", d.file.path, hunk)}>Stage Hunk</button>
         {:else}
-          <button class="hbtn" onclick={() => hunkAction("unstageHunk", d.file.path, hunk)}>Unstage Hunk</button>
+          <button class="button mini text" onclick={() => hunkAction("unstageHunk", d.file.path, hunk)}>Unstage Hunk</button>
         {/if}
       {/if}
     </div>
@@ -551,20 +551,20 @@
     <!-- A submodule's own files are committed in it; here only the commit it is at can be staged. -->
     {#if d.file.submodule?.moved}
       {@const move = d.submodule}
-      {#if move.old}<button class="hbtn" onclick={() => act(updateFolderRequest(move))} title="Check out the commit recorded here again">Update to {move.old.slice(0, 7)}</button>{/if}
-      <button class="hbtn primary" onclick={() => stage([d.file])} title="Record the commit it is at in the next commit">Stage</button>
+      {#if move.old}<button class="button mini text" onclick={() => act(updateFolderRequest(move))} title="Check out the commit recorded here again">Update to {move.old.slice(0, 7)}</button>{/if}
+      <button class="button mini quiet" onclick={() => stage([d.file])} title="Record the commit it is at in the next commit">Stage</button>
     {:else}
-      <button class="hbtn" onclick={() => api.openWindow(d.file.path).catch((err) => confirm.fail(err))} title="Its changes are committed in it">Open in New Window</button>
+      <button class="button mini text" onclick={() => api.openWindow(d.file.path).catch((err) => confirm.fail(err))} title="Its changes are committed in it">Open in New Window</button>
     {/if}
   {:else if d.file.status === "conflicted"}
-    {#if onResolve}<button class="hbtn" onclick={onResolve}>Resolve Conflicts…</button>{/if}
+    {#if onResolve}<button class="button mini text" onclick={onResolve}>Resolve Conflicts…</button>{/if}
   {:else}
-    <button class="hbtn" onclick={() => discard([d.file])} title={d.file.status === "untracked" ? "Delete this new file" : "Throw away the edits in this file"}>Discard</button>
-    <button class="hbtn primary" onclick={() => stage([d.file])} title="Add the whole file to the next commit">Stage</button>
+    <button class="button mini text" onclick={() => discard([d.file])} title={d.file.status === "untracked" ? "Delete this new file" : "Throw away the edits in this file"}>Discard</button>
+    <button class="button mini quiet" onclick={() => stage([d.file])} title="Add the whole file to the next commit">Stage</button>
   {/if}
 {/snippet}
 {#snippet stagedFile(d: FileDiff)}
-  <button class="hbtn" onclick={() => unstage([d.file])} title="Take the whole file out of the next commit">Unstage</button>
+  <button class="button mini text" onclick={() => unstage([d.file])} title="Take the whole file out of the next commit">Unstage</button>
 {/snippet}
 
 <div class="panel">
@@ -627,8 +627,8 @@
         <div class="group">
           <div class="ghead">
             <span>Unstaged</span><span class="n">{unstaged.length}</span><span class="grow"></span>
-            {#if ticked.unstaged.length}<button class="gbtn primary" onclick={() => actOnTicked("unstaged")}>Stage Selected ({ticked.unstaged.length})</button>{/if}
-            {#if unstaged.length}<button class="gbtn" onclick={() => stage(unstaged)}>Stage All</button>{/if}
+            {#if ticked.unstaged.length}<button class="button mini primary" onclick={() => actOnTicked("unstaged")}>Stage Selected ({ticked.unstaged.length})</button>{/if}
+            {#if unstaged.length}<button class="button mini" onclick={() => stage(unstaged)}>Stage All</button>{/if}
           </div>
           {#each unstaged as file (file.path)}{@render fileRow(file, "unstaged")}{/each}
           {#if !unstaged.length}<p class="empty">Nothing left to stage.</p>{/if}
@@ -636,8 +636,8 @@
         <div class="group">
           <div class="ghead">
             <span>Staged</span><span class="n">{staged.length}</span><span class="grow"></span>
-            {#if ticked.staged.length}<button class="gbtn primary" onclick={() => actOnTicked("staged")}>Unstage Selected ({ticked.staged.length})</button>{/if}
-            {#if staged.length}<button class="gbtn" onclick={() => unstage(staged)}>Unstage All</button>{/if}
+            {#if ticked.staged.length}<button class="button mini primary" onclick={() => actOnTicked("staged")}>Unstage Selected ({ticked.staged.length})</button>{/if}
+            {#if staged.length}<button class="button mini" onclick={() => unstage(staged)}>Unstage All</button>{/if}
           </div>
           {#each staged as file (file.path)}{@render fileRow(file, "staged")}{/each}
           {#if !staged.length}<p class="empty">Tick files above and press Stage Selected to add them to the next commit.</p>{/if}
@@ -717,10 +717,10 @@
     <div class="row">
       {#if commitHint}
         <WhyNote text={commitHint.text} warn={commitHint.warn} />
-        {#if commitHint.fix}<button class="gbtn" onclick={commitHint.fix.run}>{commitHint.fix.label}</button>{/if}
+        {#if commitHint.fix}<button class="button mini" onclick={commitHint.fix.run}>{commitHint.fix.label}</button>{/if}
       {/if}
       <span class="grow"></span>
-      <button class="go" onclick={commit} disabled={!canCommit} title={commitHint?.text}>
+      <button class="button primary go" onclick={commit} disabled={!canCommit} title={commitHint?.text}>
         {draft.amend ? "Amend" : "Commit"} <span class="keys">{keys("Mod+Enter")}</span>
       </button>
     </div>
@@ -748,7 +748,7 @@
   }
   h1 {
     margin: 0;
-    font-size: 17px;
+    font-size: var(--text-title);
     font-weight: 600;
     line-height: 1.3;
   }
@@ -759,8 +759,8 @@
     height: 20px;
     margin-left: 6px;
     padding: 0 8px;
-    border-radius: 10px;
-    font-size: 12px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-small);
     font-weight: 500;
     line-height: 1;
     white-space: nowrap;
@@ -771,7 +771,7 @@
     height: 12px;
   }
   .sub {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   /* Tabs, as in a commit's details: Summary in the branch color, then a tab per file. */
@@ -806,9 +806,9 @@
     align-items: center;
     height: 26px;
     padding: 0 11px;
-    border-radius: 13px;
+    border-radius: var(--radius-pill);
     border: 1px solid var(--sep);
-    font-size: 12px;
+    font-size: var(--text-small);
     font-weight: 500;
     color: var(--text2);
     white-space: nowrap;
@@ -852,7 +852,7 @@
     gap: 6px;
     height: 28px;
     padding: 0 10px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
   }
@@ -863,30 +863,7 @@
     flex-grow: 1;
     min-width: 0;
   }
-  /* Stage All, Stage Selected and the like: small capsules, the blue one does what was ticked. */
-  .gbtn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    height: 22px;
-    padding: 0 10px;
-    border-radius: 11px;
-    font-family: var(--font);
-    font-size: 12px;
-    font-weight: 500;
-    line-height: 1;
-    white-space: nowrap;
-    flex-shrink: 0;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    color: var(--text);
-  }
-  .gbtn.primary {
-    background: var(--accent);
-    border-color: transparent;
-    color: #fff;
-    font-weight: 600;
-  }
+
   /* A heading over each side's diffs in Summary. */
   .part {
     display: flex;
@@ -894,7 +871,7 @@
     gap: 8px;
     margin: 10px 12px 0;
     padding: 0 10px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
   }
@@ -904,7 +881,7 @@
   .empty {
     margin: 0;
     padding: 2px 10px 4px;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .file {
@@ -913,7 +890,7 @@
     gap: 8px;
     height: 28px;
     padding: 0 4px 0 10px;
-    border-radius: 7px;
+    border-radius: var(--radius-s);
   }
   .file:hover {
     background: var(--field);
@@ -939,11 +916,11 @@
   .badge {
     width: 16px;
     height: 16px;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 10px;
+    font-size: var(--text-caption);
     font-weight: 700;
     flex-shrink: 0;
   }
@@ -970,7 +947,7 @@
     color: var(--text2);
   }
   .note {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     flex-shrink: 0;
   }
@@ -980,7 +957,7 @@
   .discard {
     width: 24px;
     height: 24px;
-    border-radius: 12px;
+    border-radius: var(--radius-pill);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1007,7 +984,7 @@
   }
   .error {
     margin: 12px 20px 0;
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .error {
     color: var(--red);
@@ -1020,11 +997,11 @@
     height: 34px;
     margin: 6px 0 4px;
     padding: 0 6px 0 12px;
-    border-radius: 10px;
+    border-radius: var(--radius-m);
     background: var(--hunk-bg);
     color: var(--hunk-text);
     font-family: var(--mono);
-    font-size: 11.5px;
+    font-size: var(--text-small);
     line-height: normal;
   }
   .hunk .header {
@@ -1034,12 +1011,11 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .state,
-  .hbtn {
+  .state {
     font-family: var(--font);
   }
   .state {
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
   }
@@ -1050,34 +1026,12 @@
     color: var(--text);
     padding: 0 4px;
   }
-  /* Buttons over the code: their own line height, or the code's would push the label down. */
-  .hbtn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    height: 24px;
-    padding: 0 10px;
-    line-height: 1;
-    white-space: nowrap;
-    flex-shrink: 0;
-    border-radius: 12px;
-    font-size: 12px;
-    font-weight: 500;
-    background: transparent;
-    border: 0;
-    color: var(--text2);
-  }
-  /* Commit is the one filled button: Stage is a quiet Steel tint, Discard and the rest plain text. */
-  .hbtn.primary {
-    background: var(--accent-quiet);
-    color: var(--accent-ink);
-    font-weight: 600;
-  }
+
   .commit {
     flex-shrink: 0;
     margin: 10px 12px 12px;
     padding: 12px;
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     background: var(--field);
     display: flex;
     flex-direction: column;
@@ -1089,7 +1043,7 @@
     gap: 8px;
   }
   .to {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1103,7 +1057,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .amend:disabled {
     opacity: 0.5;
@@ -1112,7 +1066,7 @@
     position: relative;
     width: 28px;
     height: 16px;
-    border-radius: 8px;
+    border-radius: var(--radius-pill);
     background: var(--switch-off);
     transition: background-color 0.15s;
   }
@@ -1125,7 +1079,7 @@
     top: 2px;
     width: 12px;
     height: 12px;
-    border-radius: 6px;
+    border-radius: var(--radius-pill);
     background: #fff;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
     transition: transform 0.15s;
@@ -1139,9 +1093,12 @@
     gap: 8px;
     height: 34px;
     padding: 0 10px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     background: var(--win);
     border: 0.5px solid var(--glass-border);
+  }
+  .summary:focus-within {
+    box-shadow: var(--focus-ring);
   }
   .summary input {
     flex-grow: 1;
@@ -1152,9 +1109,10 @@
     font: inherit;
     font-weight: 600;
     color: var(--text);
+    box-shadow: none;
   }
   .counter {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .counter.over {
@@ -1162,7 +1120,7 @@
   }
   textarea {
     resize: none;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     padding: 8px 10px;
     background: var(--win);
     border: 0.5px solid var(--glass-border);
@@ -1183,16 +1141,10 @@
     gap: 8px;
     height: 32px;
     padding: 0 14px;
-    border-radius: 16px;
-    background: var(--accent);
-    color: #fff;
-    font-weight: 600;
   }
-  .go:disabled {
-    opacity: 0.45;
-  }
+
   .keys {
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 500;
     opacity: 0.85;
   }

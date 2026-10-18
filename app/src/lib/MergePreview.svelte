@@ -91,7 +91,7 @@
     display: flex;
     gap: 6px;
     padding: 10px 12px 10px 6px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     border: 1px solid var(--sep);
     background: var(--graph-bg);
     max-height: 250px;
@@ -108,7 +108,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .row.muted {
     color: var(--text2);
@@ -124,18 +124,18 @@
     white-space: nowrap;
   }
   .tag {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .sha {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .new {
-    font-size: 10px;
+    font-size: var(--text-caption);
     font-weight: 600;
     padding: 0 6px;
-    border-radius: 6px;
+    border-radius: var(--radius-s);
     line-height: 16px;
   }
   .verdict {
@@ -143,8 +143,8 @@
     align-items: flex-start;
     gap: 8px;
     padding: 9px 12px;
-    border-radius: 10px;
-    font-size: 12px;
+    border-radius: var(--radius-l);
+    font-size: var(--text-small);
     line-height: 1.45;
   }
   .verdict.ok {
@@ -167,7 +167,7 @@
     height: 16px;
     flex-shrink: 0;
     margin-top: 0.5px;
-    border-radius: 8px;
+    border-radius: var(--radius-pill);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -194,9 +194,9 @@
     stroke-linejoin: round;
   }
   .code {
-    font-size: 11px;
+    font-size: var(--text-caption);
     padding: 0 4px;
-    border-radius: 5px;
+    border-radius: var(--radius-s);
     background: var(--field);
   }
 </style>

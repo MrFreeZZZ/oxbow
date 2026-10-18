@@ -256,6 +256,32 @@ fn all_settings(app: AppHandle) -> serde_json::Map<String, Value> {
     read_settings(&app)
 }
 
+/// The system's Accessibility › Display switches the page can't read itself: WebKit has no media
+/// query for Reduce Transparency, and Increase Contrast is read here too so both come from one place.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DisplayOptions {
+    reduce_transparency: bool,
+    increase_contrast: bool,
+}
+
+#[tauri::command]
+fn display_options() -> DisplayOptions {
+    #[cfg(target_os = "macos")]
+    {
+        let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+        DisplayOptions {
+            reduce_transparency: workspace.accessibilityDisplayShouldReduceTransparency(),
+            increase_contrast: workspace.accessibilityDisplayShouldIncreaseContrast(),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    DisplayOptions {
+        reduce_transparency: false,
+        increase_contrast: false,
+    }
+}
+
 #[derive(Clone, Serialize)]
 struct SettingChanged {
     key: String,
@@ -1853,6 +1879,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            display_options,
             open_repo,
             initial_repo,
             recent_repos,

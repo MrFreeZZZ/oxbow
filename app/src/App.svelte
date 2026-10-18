@@ -1650,11 +1650,11 @@
     text-overflow: ellipsis;
   }
   .name {
-    font-size: 15px;
+    font-size: var(--text-heading);
     font-weight: 700;
   }
   .sub {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .capsule {
@@ -1664,7 +1664,7 @@
     gap: 6px;
     height: 34px;
     padding: 0 12px;
-    border-radius: 17px;
+    border-radius: var(--radius-pill);
     background: var(--glass);
     border: 0.5px solid var(--glass-border);
     box-shadow: var(--glass-shadow);
@@ -1678,7 +1678,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 14px;
+    border-radius: var(--radius-pill);
     color: var(--icon);
     flex-shrink: 0;
   }
@@ -1690,7 +1690,7 @@
     align-items: center;
     height: 34px;
     padding: 0 4px;
-    border-radius: 17px;
+    border-radius: var(--radius-pill);
     background: var(--glass);
     border: 0.5px solid var(--glass-border);
     box-shadow: var(--glass-shadow);
@@ -1704,7 +1704,7 @@
     align-items: center;
     justify-content: center;
     gap: 3px;
-    border-radius: 17px;
+    border-radius: var(--radius-pill);
   }
   .group button:disabled,
   .group button.off {
@@ -1760,14 +1760,14 @@
     color: var(--orange);
   }
   .count {
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text);
   }
   .segmented {
     display: flex;
     padding: 3px;
-    border-radius: 17px;
+    border-radius: var(--radius-pill);
     background: var(--glass);
     border: 0.5px solid var(--glass-border);
     box-shadow: var(--glass-shadow);
@@ -1775,7 +1775,7 @@
   .segmented button {
     height: 28px;
     padding: 0 16px;
-    border-radius: 14px;
+    border-radius: var(--radius-pill);
     color: var(--text);
     font-weight: 500;
   }
@@ -1785,7 +1785,7 @@
   }
   .error {
     color: var(--red);
-    font-size: 12px;
+    font-size: var(--text-small);
     max-width: 360px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1813,7 +1813,7 @@
     height: 28px;
     flex-shrink: 0;
     padding: 0 18px 0 40px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
   }
@@ -1840,7 +1840,7 @@
     width: 7px;
     height: 36px;
     margin-top: -18px;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     background: var(--win);
     border: 1px solid var(--glass-border);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);

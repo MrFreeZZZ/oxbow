@@ -99,10 +99,10 @@
     </dl>
     <TermBlock where={name} lines={binaryLines} copy={command ? [command] : []} />
     <div class="actions">
-      {#if diff.old}<button class="button" onclick={() => open(diff.old!, "old")}>Open Old Version</button>{/if}
-      {#if diff.new}<button class="button" onclick={() => open(diff.new!, "new")}>Open New Version</button>{/if}
+      {#if diff.old}<button class="button small" onclick={() => open(diff.old!, "old")}>Open Old Version</button>{/if}
+      {#if diff.new}<button class="button small" onclick={() => open(diff.new!, "new")}>Open New Version</button>{/if}
       {#if openable && file.status !== "deleted"}
-        <button class="button" onclick={() => api.revealFile(file.path).catch((err) => confirm.fail(err))}>{mac ? "Show in Finder" : "Show in Folder"}</button>
+        <button class="button small" onclick={() => api.revealFile(file.path).catch((err) => confirm.fail(err))}>{mac ? "Show in Finder" : "Show in Folder"}</button>
       {/if}
     </div>
     <p class="tip">Tip: a <code>textconv</code> rule in .gitattributes lets git diff some binary formats as text.</p>
@@ -130,9 +130,9 @@
     {/if}
     <div class="actions">
       {#if kind === "limited" && onShowAnyway}
-        <button class="button primary" disabled={busy} onclick={showAnyway}>{busy ? "Loading…" : "Show Diff Anyway"}</button>
+        <button class="button small primary" disabled={busy} onclick={showAnyway}>{busy ? "Loading…" : "Show Diff Anyway"}</button>
       {/if}
-      {#if openable && file.status !== "deleted"}<button class="button" onclick={openInEditor}>Open in Editor</button>{/if}
+      {#if openable && file.status !== "deleted"}<button class="button small" onclick={openInEditor}>Open in Editor</button>{/if}
     </div>
     {#if kind === "limited"}
       <p class="tip">Change the limit in <button class="link" onclick={() => api.openSettings()}>Settings › Diff & Text</button>.</p>
@@ -198,7 +198,7 @@
   .badge {
     width: 40px;
     height: 40px;
-    border-radius: 10px;
+    border-radius: var(--radius-m);
     background: var(--field);
     display: flex;
     align-items: center;
@@ -212,7 +212,7 @@
   }
   h3 {
     margin: 2px 0 4px;
-    font-size: 13px;
+    font-size: var(--text-body);
     font-weight: 600;
   }
   p {
@@ -226,9 +226,9 @@
     row-gap: 6px;
     margin: 0;
     padding: 9px 12px;
-    border-radius: 10px;
+    border-radius: var(--radius-l);
     background: var(--field);
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   dt {
     color: var(--text2);
@@ -256,34 +256,19 @@
     gap: 8px;
   }
   .button {
-    height: 28px;
     min-width: 120px;
-    flex-shrink: 0;
-    white-space: nowrap;
-    padding: 0 14px;
-    border-radius: 14px;
-    border: 1px solid var(--sep);
-    font-size: 12px;
   }
-  .button.primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
-    font-weight: 600;
-  }
-  .button:disabled {
-    opacity: 0.6;
-  }
+
   .tip {
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .link {
     padding: 0;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--accent-text);
   }
   code {
     font-family: var(--code-font);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
 </style>

@@ -115,12 +115,12 @@
     width: 300px;
     max-width: calc(100vw - 24px);
     padding: 12px 14px;
-    border-radius: 14px;
+    border-radius: var(--radius-xl);
     background: var(--sheet);
     -webkit-backdrop-filter: blur(30px) saturate(1.8);
     backdrop-filter: blur(30px) saturate(1.8);
     border: 0.5px solid var(--glass-border);
-    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.22);
+    box-shadow: var(--shadow-pop);
     display: flex;
     flex-direction: column;
     gap: 5px;
@@ -147,7 +147,7 @@
     min-width: 0;
   }
   .token {
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--term-flag);
     font-weight: 600;
   }
@@ -155,33 +155,33 @@
     color: var(--term-sub);
   }
   .title {
-    font-size: 13px;
+    font-size: var(--text-body);
     font-weight: 600;
   }
   .text,
   .meta {
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.45;
     color: var(--text2);
   }
   .manual {
     margin-top: 3px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .manual .mono,
   .meta .mono {
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .kind {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .capsule,
   .tag {
     padding: 1px 7px;
-    border-radius: 8px;
-    font-size: 11px;
+    border-radius: var(--radius-m);
+    font-size: var(--text-caption);
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
@@ -193,12 +193,12 @@
     color: var(--tag-fg);
   }
   .sha {
-    font-size: 12px;
+    font-size: var(--text-small);
     font-weight: 600;
     color: var(--term-sha);
   }
   .summary {
-    font-size: 13px;
+    font-size: var(--text-body);
     font-weight: 500;
     overflow: hidden;
     display: -webkit-box;
@@ -216,7 +216,7 @@
     align-items: center;
     gap: 5px;
     margin-top: 2px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .lit svg {

@@ -73,7 +73,7 @@
     flex-direction: column;
     gap: 10px;
     padding: 4px 0 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-l);
     border: 0.5px solid var(--panel-border);
     background: var(--graph-bg);
     overflow: hidden;
@@ -98,7 +98,7 @@
   }
   .bar {
     height: 6px;
-    border-radius: 3px;
+    border-radius: var(--radius-pill);
     background: var(--text2);
     opacity: 0.35;
     flex-shrink: 0;
@@ -108,8 +108,8 @@
     align-items: center;
     height: 16px;
     padding: 0 6px;
-    border-radius: 8px;
-    font-size: 11px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-caption);
     font-weight: 500;
     white-space: nowrap;
   }
@@ -128,8 +128,8 @@
     gap: 5px;
     height: 18px;
     padding: 0 7px 0 5px;
-    border-radius: 9px;
-    font-size: 11px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-caption);
     font-weight: 500;
   }
   .dot {

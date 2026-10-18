@@ -114,7 +114,7 @@
   <!-- In Changes the file's header has the button already. -->
   {#if move.cloned && move.moved !== "removed" && !side}
     <div class="actions">
-      <button class="button" onclick={open}>Open in New Window</button>
+      <button class="button small" onclick={open}>Open in New Window</button>
     </div>
   {/if}
 
@@ -141,7 +141,7 @@
   .tile {
     width: 40px;
     height: 40px;
-    border-radius: 10px;
+    border-radius: var(--radius-m);
     background: var(--field);
     display: flex;
     align-items: center;
@@ -159,12 +159,12 @@
   }
   h3 {
     margin: 0 0 3px;
-    font-size: 13px;
+    font-size: var(--text-body);
     font-weight: 600;
   }
   .sub {
     margin: 0;
-    font-size: 11.5px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .ellipsis {
@@ -177,11 +177,11 @@
     align-items: center;
     gap: 5px;
     flex-shrink: 0;
-    font-size: 11.5px;
+    font-size: var(--text-small);
   }
   .shas span {
     padding: 2px 7px;
-    border-radius: 6px;
+    border-radius: var(--radius-s);
     background: var(--field);
     color: var(--text2);
   }
@@ -201,13 +201,13 @@
   }
   .label {
     margin: 0 0 -6px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
   }
   .commits {
     border: 1px solid var(--sep);
-    border-radius: 10px;
+    border-radius: var(--radius-l);
     overflow: hidden;
   }
   .commit {
@@ -240,18 +240,18 @@
     line-height: 1.3;
   }
   .meta {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .sha {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     flex-shrink: 0;
   }
   .more {
     padding: 6px 12px 7px 32px;
     border-top: 1px solid var(--sep);
-    font-size: 11.5px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .note {
@@ -259,7 +259,7 @@
     display: flex;
     gap: 7px;
     align-items: flex-start;
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.4;
     color: var(--text2);
   }
@@ -277,20 +277,12 @@
     flex-wrap: wrap;
     gap: 8px;
   }
-  .button {
-    height: 28px;
-    flex-shrink: 0;
-    white-space: nowrap;
-    padding: 0 14px;
-    border-radius: 14px;
-    border: 1px solid var(--sep);
-    font-size: 12px;
-  }
+
   .raw {
     padding: 8px 12px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     background: var(--field);
-    font-size: 11px;
+    font-size: var(--text-caption);
     line-height: 1.6;
     overflow-x: auto;
     white-space: nowrap;

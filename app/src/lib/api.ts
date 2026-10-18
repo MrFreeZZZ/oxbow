@@ -59,6 +59,8 @@ import type { PullSetup } from "./remote";
 export const stopped = (err: unknown) => String(err) === "stopped";
 
 export const api = {
+  /** Reduce Transparency and Increase Contrast from the system (always off outside macOS). */
+  displayOptions: () => invoke<{ reduceTransparency: boolean; increaseContrast: boolean }>("display_options"),
   initialRepo: () => invoke<string | null>("initial_repo"),
   openRepo: (path: string) => invoke<RepoSummary>("open_repo", { path }),
   recentRepos: () => invoke<RecentRepo[]>("recent_repos"),

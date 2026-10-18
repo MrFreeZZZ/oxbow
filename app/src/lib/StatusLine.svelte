@@ -141,7 +141,7 @@
           <span class="n" class:zero={!(changes?.unstaged ?? 0)}>{changes?.unstaged ?? 0}</span>
           <span class="what">{changes?.conflicted ? `${plural(changes.unstaged, "file")}, ${changes.conflicted} conflicted` : `${(changes?.unstaged ?? 0) === 1 ? "file" : "files"} changed`}</span>
           <span class="detail">Edited, not staged yet</span>
-          <button class="act" disabled={!changes} onclick={then(onChanges)}>Review</button>
+          <button class="button small act" disabled={!changes} onclick={then(onChanges)}>Review</button>
         </div>
         <svg class="arrow" viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
         <div class="place">
@@ -149,7 +149,7 @@
           <span class="n" class:zero={!changes?.staged}>{changes?.staged ?? 0}</span>
           <span class="what">{(changes?.staged ?? 0) === 1 ? "file" : "files"} staged</span>
           <span class="detail">Go into the next commit</span>
-          <button class="act" disabled={!changes?.staged} onclick={then(onChanges)}>Commit…</button>
+          <button class="button small act" disabled={!changes?.staged} onclick={then(onChanges)}>Commit…</button>
         </div>
         <svg class="arrow" viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
         <div class="place mine" style:background={tint(color, "soft")} style:border-color="color-mix(in srgb, {lane(color)} 28%, transparent)">
@@ -158,15 +158,15 @@
             <span class="n" class:zero={!ahead}>{ahead}</span>
             <span class="what">{ahead === 1 ? "commit" : "commits"} to push</span>
             <span class="detail">{t.rewritten ? `Replace old versions on ${t.remote}` : ahead ? `Not on ${t.remote} yet` : `All on ${t.remote}`}</span>
-            <button class="act" disabled={!ahead && !t.rewritten} onclick={then(onPush)}>{t.rewritten ? "Force Push…" : "Push…"}</button>
+            <button class="button small act" disabled={!ahead && !t.rewritten} onclick={then(onPush)}>{t.rewritten ? "Force Push…" : "Push…"}</button>
           {:else}
             <span class="n">{history.head.commit ? "—" : 0}</span>
             <span class="what">{history.head.commit ? "no upstream" : "no commits yet"}</span>
             <span class="detail">{t?.gone ? `${t.remote}/${t.branch} was deleted` : remote ? `Publish creates it on ${remote}` : "Only on this computer"}</span>
             {#if remote}
-              <button class="act" disabled={!history.head.commit} onclick={then(onPush)}>Publish…</button>
+              <button class="button small act" disabled={!history.head.commit} onclick={then(onPush)}>Publish…</button>
             {:else}
-              <button class="act" disabled={!history.head.commit} onclick={then(onPublish)}>Publish to GitHub…</button>
+              <button class="button small act" disabled={!history.head.commit} onclick={then(onPublish)}>Publish to GitHub…</button>
             {/if}
           {/if}
         </div>
@@ -178,15 +178,15 @@
             <span class="what">{t.rewritten ? "old versions there" : `new ${behind === 1 ? "commit" : "commits"} there`}</span>
             <span class="detail" class:warn={stale}>{checked === null ? "Not fetched yet" : `As of the fetch ${ago(checked)}`}</span>
             {#if behind}
-              <button class="act" onclick={then(() => onPull())}>Pull…</button>
+              <button class="button small act" onclick={then(() => onPull())}>Pull…</button>
             {:else}
-              <button class="act" disabled={!!activity.running} onclick={then(onFetch)}>Fetch</button>
+              <button class="button small act" disabled={!!activity.running} onclick={then(onFetch)}>Fetch</button>
             {/if}
           {:else}
             <span class="n zero">—</span>
             <span class="what">{remote ? "nothing to compare" : "no remote"}</span>
             <span class="detail">{remote ? "The branch isn’t there" : "Add one in Settings"}</span>
-            <button class="act" disabled={!remote || !!activity.running} onclick={then(onFetch)}>Fetch</button>
+            <button class="button small act" disabled={!remote || !!activity.running} onclick={then(onFetch)}>Fetch</button>
           {/if}
         </div>
       </div>
@@ -197,9 +197,9 @@
             <span class="title">Both sides have new commits</span>
             <span class="detail">{plural(ahead, "commit")} here, {behind} on {upstream}. Pull has to combine them.</span>
           </span>
-          <button class="act" onclick={then(() => onTheirs(upstream!))}>See Their Commits</button>
-          <button class="act" disabled={!!activity.running} onclick={then(() => onPull("merge"))} title="Pull and join both sides with a merge commit">Merge…</button>
-          <button class="act" disabled={!!activity.running} onclick={then(() => onPull("rebase"))} title="Pull and replay your commits on top of theirs">Rebase…</button>
+          <button class="button small act" onclick={then(() => onTheirs(upstream!))}>See Their Commits</button>
+          <button class="button small act" disabled={!!activity.running} onclick={then(() => onPull("merge"))} title="Pull and join both sides with a merge commit">Merge…</button>
+          <button class="button small act" disabled={!!activity.running} onclick={then(() => onPull("rebase"))} title="Pull and replay your commits on top of theirs">Rebase…</button>
         </div>
       {/if}
 
@@ -245,7 +245,7 @@
     gap: 7px;
     padding: 0 14px 0 16px;
     color: var(--text2);
-    font-size: 12px;
+    font-size: var(--text-small);
     white-space: nowrap;
     overflow: hidden;
     text-align: left;
@@ -316,12 +316,12 @@
     width: 760px;
     max-width: 100%;
     padding: 16px 14px 10px;
-    border-radius: 22px;
+    border-radius: var(--radius-sheet);
     background: var(--sheet);
     -webkit-backdrop-filter: blur(30px) saturate(1.8);
     backdrop-filter: blur(30px) saturate(1.8);
     border: 0.5px solid var(--glass-border);
-    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.22);
+    box-shadow: var(--shadow-pop);
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -335,11 +335,11 @@
     padding: 0 4px;
   }
   .h {
-    font-size: 14px;
+    font-size: var(--text-heading);
     font-weight: 700;
   }
   .hint {
-    font-size: 11.5px;
+    font-size: var(--text-small);
     color: var(--text2);
     white-space: nowrap;
     overflow: hidden;
@@ -368,12 +368,12 @@
     flex-direction: column;
     gap: 1px;
     padding: 10px 12px 12px;
-    border-radius: 14px;
+    border-radius: var(--radius-l);
     background: var(--panel);
     border: 0.5px solid var(--panel-border);
   }
   .label {
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
     white-space: nowrap;
@@ -382,7 +382,7 @@
   }
   .n {
     margin-top: 4px;
-    font-size: 22px;
+    font-size: var(--text-large);
     font-weight: 700;
     line-height: 1.15;
   }
@@ -391,14 +391,14 @@
     font-weight: 600;
   }
   .what {
-    font-size: 12px;
+    font-size: var(--text-small);
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .detail {
-    font-size: 11.5px;
+    font-size: var(--text-small);
     color: var(--text2);
     white-space: nowrap;
     overflow: hidden;
@@ -408,31 +408,17 @@
     color: var(--orange);
   }
   .act {
-    flex-shrink: 0;
     align-self: flex-start;
     margin-top: 10px;
     min-width: 76px;
-    height: 26px;
-    padding: 0 12px;
-    border-radius: 13px;
-    font-size: 12px;
-    font-weight: 500;
-    white-space: nowrap;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--text);
   }
-  .act:disabled {
-    opacity: 0.45;
-    box-shadow: none;
-  }
+
   .split {
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 10px 12px;
-    border-radius: 14px;
+    border-radius: var(--radius-l);
     background: var(--field);
   }
   .split .act {
@@ -447,7 +433,7 @@
     gap: 1px;
   }
   .title {
-    font-size: 12.5px;
+    font-size: var(--text-body);
     font-weight: 600;
   }
   .remotes {
@@ -457,7 +443,7 @@
     padding: 0 4px;
   }
   .sub {
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
     margin-bottom: 2px;
@@ -467,7 +453,7 @@
     align-items: center;
     gap: 7px;
     height: 22px;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .remote .name {
@@ -485,13 +471,13 @@
     gap: 12px;
     padding: 8px 4px 2px;
     border-top: 1px solid var(--sep);
-    font-size: 11.5px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .link {
     flex-shrink: 0;
     color: var(--accent-text);
-    font-size: 11.5px;
+    font-size: var(--text-small);
     white-space: nowrap;
   }
   .link:disabled {

@@ -153,7 +153,7 @@
         <div class="code-box">
           <span class="label">Enter this code on github.com/login/device</span>
           <span class="code mono selectable" aria-label="One-time code">{code.userCode}</span>
-          <button class="btn" onclick={copyAndOpen}>{copied ? "Copied · opening GitHub…" : "Copy Code and Open GitHub"}</button>
+          <button class="button" onclick={copyAndOpen}>{copied ? "Copied · opening GitHub…" : "Copy Code and Open GitHub"}</button>
           <span class="waiting"><span class="spinner"></span>Waiting for you to approve Oxbow in the browser…</span>
         </div>
       {:else}
@@ -195,13 +195,13 @@
 
     <div class="foot">
       <span class="foot-note"></span>
-      <button class="btn" onclick={cancel}>Cancel</button>
+      <button class="button" onclick={cancel}>Cancel</button>
       {#if mode === "browser"}
         {#if !code}
-          <button class="btn go" onclick={startBrowser} disabled={phase !== "ask"}>{phase === "starting" ? "Asking GitHub…" : "Continue in Browser"}</button>
+          <button class="button primary" onclick={startBrowser} disabled={phase !== "ask"}>{phase === "starting" ? "Asking GitHub…" : "Continue in Browser"}</button>
         {/if}
       {:else}
-        <button class="btn go" onclick={signInWithToken} disabled={!token.trim() || phase !== "ask"}>{phase === "checking" ? "Checking…" : "Sign In"}</button>
+        <button class="button primary" onclick={signInWithToken} disabled={!token.trim() || phase !== "ask"}>{phase === "checking" ? "Checking…" : "Sign In"}</button>
       {/if}
     </div>
   </div>
@@ -223,10 +223,10 @@
     max-height: calc(100vh - 68px);
     overflow-y: auto;
     padding: 20px 22px 18px;
-    border-radius: 22px;
+    border-radius: var(--radius-sheet);
     background: var(--sheet);
     border: 0.5px solid var(--glass-border);
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+    box-shadow: var(--shadow-sheet);
     display: flex;
     flex-direction: column;
     gap: 14px;
@@ -239,7 +239,7 @@
   .mark {
     width: 38px;
     height: 38px;
-    border-radius: 11px;
+    border-radius: var(--radius-l);
     flex-shrink: 0;
     display: flex;
     align-items: center;
@@ -258,33 +258,33 @@
     gap: 3px;
   }
   .title {
-    font-size: 15px;
+    font-size: var(--text-heading);
     font-weight: 700;
   }
   .sub,
   .text {
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.45;
     color: var(--text2);
     margin: 0;
   }
   code {
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .seg {
     display: flex;
     align-self: flex-start;
     padding: 2px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     background: var(--field);
     border: 0.5px solid var(--glass-border);
   }
   .seg button {
     height: 24px;
     padding: 0 14px;
-    border-radius: 7px;
-    font-size: 12px;
+    border-radius: var(--radius-s);
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .seg button[aria-checked="true"] {
@@ -299,11 +299,11 @@
     align-items: center;
     gap: 10px;
     padding: 16px;
-    border-radius: 14px;
+    border-radius: var(--radius-l);
     background: var(--field);
   }
   .code {
-    font-size: 28px;
+    font-size: var(--text-display);
     font-weight: 600;
     letter-spacing: 0.12em;
   }
@@ -311,7 +311,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .spinner {
@@ -333,7 +333,7 @@
     gap: 6px;
   }
   .label {
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
   }
@@ -342,12 +342,12 @@
     align-items: center;
     height: 34px;
     padding: 0 10px;
-    border-radius: 10px;
+    border-radius: var(--radius-m);
     background: var(--field);
     border: 0.5px solid var(--glass-border);
   }
   .field:focus-within {
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+    box-shadow: var(--focus-ring);
   }
   .field input {
     flex-grow: 1;
@@ -356,22 +356,23 @@
     outline: 0;
     background: transparent;
     font-family: var(--mono);
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text);
     user-select: text;
     -webkit-user-select: text;
+    box-shadow: none;
   }
   .note {
-    font-size: 11px;
+    font-size: var(--text-caption);
     line-height: 1.45;
     color: var(--text2);
   }
   .link {
     color: var(--accent-text);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
   .failed {
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.4;
     color: var(--red);
     overflow-wrap: anywhere;
@@ -384,28 +385,12 @@
   }
   .foot-note {
     flex-grow: 1;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
-  .btn {
-    flex-shrink: 0;
+
+  .button {
     min-width: 84px;
-    height: 30px;
     padding: 0 16px;
-    border-radius: 15px;
-    text-align: center;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    font-weight: 500;
-  }
-  .btn.go {
-    background: var(--accent);
-    border-color: transparent;
-    color: #fff;
-    font-weight: 600;
-  }
-  .btn:disabled {
-    opacity: 0.5;
   }
 </style>

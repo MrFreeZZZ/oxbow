@@ -219,7 +219,7 @@
           <svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5a1 1 0 0 1 1-1H6l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" /></svg>
           <span class="clip"><span class="grey">{tilde(parent, home)}{parent.endsWith("/") || parent.endsWith("\\") ? "" : "/"}</span>{name.trim()}</span>
         </div>
-        <button class="btn" onclick={choose}>Choose…</button>
+        <button class="button" onclick={choose}>Choose…</button>
       </div>
 
       {#if plan?.repository}
@@ -320,8 +320,8 @@
         >{publishing ? (isPrivate ? "Private on GitHub: only you can see it." : "Public on GitHub: anyone can see it.") : mac ? "Nothing leaves this Mac." : "Nothing leaves this computer."}</span
       >
       {/if}
-      <button class="btn" onclick={onClose} disabled={running}>Cancel</button>
-      <button class="btn go" onclick={go} disabled={running || (!plan?.repository && !made && !!invalid)} title={plan?.repository || made ? undefined : (invalid ?? undefined)}>
+      <button class="button" onclick={onClose} disabled={running}>Cancel</button>
+      <button class="button primary" onclick={go} disabled={running || (!plan?.repository && !made && !!invalid)} title={plan?.repository || made ? undefined : (invalid ?? undefined)}>
         {plan?.repository || made ? "Open" : running ? (phase === "publishing" ? "Publishing…" : "Creating…") : publishing ? "Create and Publish" : "Create"}
       </button>
     </div>
@@ -344,10 +344,10 @@
     max-height: calc(100vh - 36px);
     overflow-y: auto;
     padding: 18px 20px 16px;
-    border-radius: 22px;
+    border-radius: var(--radius-sheet);
     background: var(--sheet);
     border: 0.5px solid var(--glass-border);
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+    box-shadow: var(--shadow-sheet);
     display: flex;
     flex-direction: column;
     gap: 14px;
@@ -358,11 +358,11 @@
     gap: 3px;
   }
   .title {
-    font-size: 15px;
+    font-size: var(--text-heading);
     font-weight: 700;
   }
   .sub {
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .grid {
@@ -372,7 +372,7 @@
     gap: 10px 10px;
   }
   .label {
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
     text-align: right;
   }
@@ -383,19 +383,19 @@
   .text {
     height: 30px;
     padding: 0 10px;
-    border-radius: 8px;
+    border-radius: var(--radius-m);
     background: var(--win);
     border: 1px solid var(--sep);
     color: var(--text);
     font: inherit;
-    font-size: 13px;
+    font-size: var(--text-body);
     outline: none;
     user-select: text;
     -webkit-user-select: text;
   }
   .text:focus {
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+    box-shadow: var(--focus-ring);
   }
   .row {
     display: flex;
@@ -415,7 +415,7 @@
     gap: 8px;
     height: 30px;
     padding: 0 10px;
-    border-radius: 8px;
+    border-radius: var(--radius-m);
     background: var(--field);
     border: 0.5px solid var(--glass-border);
   }
@@ -442,15 +442,15 @@
     display: flex;
     gap: 2px;
     padding: 2px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     background: var(--field);
   }
   .seg button {
     height: 24px;
     min-width: 72px;
     padding: 0 12px;
-    border-radius: 7px;
-    font-size: 12px;
+    border-radius: var(--radius-s);
+    font-size: var(--text-small);
   }
   .seg button.on {
     background: var(--glass);
@@ -458,7 +458,7 @@
     font-weight: 600;
   }
   .hint {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .warn-text {
@@ -482,7 +482,7 @@
   .box {
     width: 14px;
     height: 14px;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     border: 1px solid var(--text2);
     display: flex;
     align-items: center;
@@ -508,24 +508,24 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .popup select {
     height: 24px;
     padding: 0 6px;
-    border-radius: 7px;
+    border-radius: var(--radius-s);
     border: 0.5px solid var(--glass-border);
     background: var(--glass);
     box-shadow: var(--glass-shadow);
     color: var(--text);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-small);
   }
   .note {
     display: flex;
     align-items: flex-start;
     gap: 6px;
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.4;
   }
   .note.warn {
@@ -543,7 +543,7 @@
     stroke-linejoin: round;
   }
   .failed {
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.4;
     color: var(--red);
     overflow-wrap: anywhere;
@@ -555,28 +555,12 @@
   }
   .foot-note {
     flex-grow: 1;
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
-  .btn {
-    flex-shrink: 0;
+
+  .button {
     min-width: 84px;
-    height: 30px;
     padding: 0 16px;
-    border-radius: 15px;
-    text-align: center;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    font-weight: 500;
-  }
-  .btn.go {
-    background: var(--accent);
-    border-color: transparent;
-    color: #fff;
-    font-weight: 600;
-  }
-  .btn:disabled {
-    opacity: 0.5;
   }
 </style>

@@ -74,7 +74,7 @@
     min-width: 180px;
     height: 34px;
     padding: 0 6px 0 10px;
-    border-radius: 17px;
+    border-radius: var(--radius-pill);
     background: var(--glass);
     border: 0.5px solid var(--glass-border);
     box-shadow: var(--glass-shadow);
@@ -87,7 +87,7 @@
   .field:focus-within {
     box-shadow:
       var(--glass-shadow),
-      0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+      var(--focus-ring);
   }
   .glass {
     flex-shrink: 0;
@@ -101,9 +101,10 @@
     background: none;
     color: var(--text);
     font: inherit;
-    font-size: 13px;
+    font-size: var(--text-body);
     user-select: text;
     -webkit-user-select: text;
+    box-shadow: none;
   }
   input::placeholder {
     color: var(--text3, var(--text2));
@@ -111,8 +112,8 @@
   .case {
     height: 22px;
     padding: 0 6px;
-    border-radius: 7px;
-    font-size: 11px;
+    border-radius: var(--radius-s);
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
     flex-shrink: 0;
@@ -125,7 +126,7 @@
     color: var(--text);
   }
   .place {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
@@ -137,7 +138,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 11px;
+    border-radius: var(--radius-pill);
     flex-shrink: 0;
   }
   .arrow:disabled {

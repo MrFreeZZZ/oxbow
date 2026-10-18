@@ -40,8 +40,8 @@
     </span>
   </span>
   {#if lost.length}<span class="warn">{plural(lost.length, "commit")} on no branch</span>{/if}
-  {#if back}<button class="btn" onclick={onBack}>Back to {back}</button>{/if}
-  <button class="btn go" onclick={onKeep}>Create Branch…</button>
+  {#if back}<button class="button" onclick={onBack}>Back to {back}</button>{/if}
+  <button class="button primary" onclick={onKeep}>Create Branch…</button>
 </section>
 
 <style>
@@ -53,14 +53,14 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     border: 0.5px solid;
   }
   .tile {
     width: 32px;
     height: 32px;
     flex-shrink: 0;
-    border-radius: 10px;
+    border-radius: var(--radius-m);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -79,34 +79,20 @@
     text-overflow: ellipsis;
   }
   .sub {
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .warn {
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--orange);
     white-space: nowrap;
     flex-shrink: 0;
   }
-  .btn {
-    flex-shrink: 0;
+  .button {
     min-width: 120px;
-    height: 30px;
-    padding: 0 14px;
-    border-radius: 15px;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    font-weight: 500;
-    white-space: nowrap;
   }
-  .btn.go {
-    background: var(--accent);
-    border-color: transparent;
-    color: #fff;
-    font-weight: 600;
-  }
+
 </style>

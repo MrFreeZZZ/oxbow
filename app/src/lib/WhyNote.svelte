@@ -17,7 +17,7 @@
     align-items: center;
     gap: 6px;
     min-width: 0;
-    font-size: 12px;
+    font-size: var(--text-small);
     line-height: 1.35;
     color: var(--text2);
   }

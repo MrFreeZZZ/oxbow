@@ -143,7 +143,7 @@
     gap: 6px;
     height: 34px;
     padding: 0 12px;
-    border-radius: 17px;
+    border-radius: var(--radius-pill);
     background: var(--glass);
     border: 0.5px solid var(--glass-border);
     box-shadow: var(--glass-shadow);
@@ -177,12 +177,12 @@
     z-index: 20;
     width: 300px;
     padding: 6px;
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     background: var(--sheet);
     -webkit-backdrop-filter: blur(30px) saturate(1.8);
     backdrop-filter: blur(30px) saturate(1.8);
     border: 0.5px solid var(--glass-border);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+    box-shadow: var(--shadow-pop);
     display: flex;
     flex-direction: column;
   }
@@ -193,9 +193,12 @@
     height: 30px;
     margin: 0 2px 4px;
     padding: 0 10px;
-    border-radius: 9px;
+    border-radius: var(--radius-m);
     background: var(--field);
     color: var(--text2);
+  }
+  .search:focus-within {
+    box-shadow: var(--focus-ring);
   }
   .search input {
     flex-grow: 1;
@@ -205,12 +208,13 @@
     background: none;
     color: var(--text);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-small);
     user-select: text;
     -webkit-user-select: text;
+    box-shadow: none;
   }
   .heading {
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
     padding: 6px 10px 4px;
@@ -228,7 +232,7 @@
     height: 28px;
     flex-shrink: 0;
     padding: 0 10px;
-    border-radius: 8px;
+    border-radius: var(--radius-m);
   }
   .list button:hover {
     background: var(--side-sel);
@@ -236,7 +240,7 @@
   .dot {
     width: 8px;
     height: 8px;
-    border-radius: 4px;
+    border-radius: var(--radius-pill);
     flex-shrink: 0;
   }
   .name {
@@ -250,17 +254,17 @@
     font-weight: 600;
   }
   .note {
-    font-size: 11px;
+    font-size: var(--text-caption);
     color: var(--text2);
   }
   .check {
     width: 14px;
-    font-size: 12px;
+    font-size: var(--text-small);
     font-weight: 700;
   }
   .empty {
     padding: 6px 10px;
-    font-size: 12px;
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .sep {
@@ -269,7 +273,7 @@
     background: var(--sep);
   }
   .foot {
-    font-size: 11.5px;
+    font-size: var(--text-small);
     color: var(--text2);
     padding: 2px 10px 6px;
     line-height: 1.4;
