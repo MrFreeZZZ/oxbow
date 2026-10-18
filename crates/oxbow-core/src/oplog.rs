@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::cli::{GitCommand, literal};
 use crate::edit::ResetMode;
 use crate::error::{Error, Result};
+use crate::fix::Fix;
 use crate::operation::{MergeMethod, OperationKind};
 use crate::repo::Repo;
 use crate::worktree::Action;
@@ -892,6 +893,22 @@ impl Repo {
                 "commit",
                 format!("Add staged changes to {}", &commit[..commit.len().min(7)]),
             ),
+            Action::Fix { fix, .. } => match fix {
+                Fix::MoveCommits { count: 1, to, .. } => ("branch", format!("Move 1 commit from {here} to {to}")),
+                Fix::MoveCommits { count, to, .. } => ("branch", format!("Move {count} commits from {here} to {to}")),
+                Fix::AddToLast { paths, .. } if paths.is_empty() => {
+                    ("commit", format!("Add staged changes to the last commit on {here}"))
+                }
+                Fix::AddToLast { paths, .. } => {
+                    ("commit", format!("Add {} to the last commit on {here}", files(paths)))
+                }
+                Fix::UndoLast { .. } => ("undo", format!("Undo the last commit on {here}")),
+                Fix::RevertPushed { commit, push: true } => {
+                    ("revert", format!("Revert {} and push {here}", short_id(commit)))
+                }
+                Fix::RevertPushed { commit, .. } => ("revert", format!("Revert {}", short_id(commit))),
+                Fix::SaveDetached { name, .. } => ("branch", format!("Keep work on the new branch {name}")),
+            },
         }
     }
 

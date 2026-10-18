@@ -531,7 +531,58 @@ export type Action =
   | { kind: "submoduleUpdate"; paths: string[]; latest: boolean }
   | { kind: "submoduleSync"; paths: string[] }
   | { kind: "submoduleAdd"; url: string; path: string; branch: string | null }
-  | { kind: "submoduleRemove"; path: string };
+  | { kind: "submoduleRemove"; path: string }
+  /** A way out of a typical mistake, planned when the repository looked like `expect`. */
+  | { kind: "fix"; fix: Fix; expect: FixExpect };
+
+/** One way out of a typical mistake (Fix a Mistake), with what was picked in its sheet. */
+export type Fix =
+  /** The last `count` commits go to `to`, a new branch with `create`; pushed ones are reverted and copied. */
+  | { kind: "moveCommits"; count: number; to: string; create: boolean }
+  | { kind: "addToLast"; paths: string[]; allowSecrets?: boolean }
+  | { kind: "undoLast"; mode: ResetMode }
+  | { kind: "revertPushed"; commit: string; push: boolean }
+  /** `commit`: a commit only the reflog keeps; without it, where HEAD is. */
+  | { kind: "saveDetached"; name: string; commit: string | null; switch: boolean };
+
+/** How the repository looked when a fix was planned; it runs only while it still does. */
+export interface FixExpect {
+  head: string | null;
+  branch: string | null;
+  upstream: string | null;
+  files: string;
+}
+
+export interface FixFile {
+  path: string;
+  status: "modified" | "new" | "deleted" | "renamed";
+  /** Some changes are staged: they go into the commit anyway. */
+  staged: boolean;
+  /** Some changes are not staged: picking it stages them. */
+  unstaged: boolean;
+}
+
+export interface FixState {
+  expect: FixExpect;
+  changed: FixFile[];
+  /** Commits made without a branch that only the reflog keeps, newest first. */
+  lost: ReflogEntry[];
+}
+
+/** A step of a fix's plan in words; `commands` of the plan's commands are its own. */
+export type FixStep = { commands: number } & (
+  | { kind: "stash"; files: number }
+  | { kind: "createBranch"; name: string; at: string | null; switch: boolean }
+  | { kind: "moveBranch"; branch: string; to: string }
+  | { kind: "switch"; branch: string }
+  | { kind: "copy"; count: number }
+  | { kind: "revert"; count: number; branch: string | null }
+  | { kind: "stage"; paths: string[] }
+  | { kind: "amend" }
+  | { kind: "reset"; mode: ResetMode }
+  | { kind: "push"; remote: string; branch: string }
+  | { kind: "pop" }
+);
 
 /** One working folder of the repository (`git worktree`). */
 export interface Worktree {
@@ -704,6 +755,7 @@ export type FailureKind =
   | "localChanges"
   | "notMerged"
   | "cancelled"
+  | "changed"
   | "other";
 
 export interface CommitBrief {
@@ -774,6 +826,8 @@ export interface Plan {
   commands: GitCommand[];
   /** What the Operation Log can't bring back once the action ran. */
   notKept: NotKept[];
+  /** For a fix: its steps, in order. */
+  steps?: FixStep[];
 }
 
 /** A file and its size in bytes; a folder (ending in /) counts everything in it. */

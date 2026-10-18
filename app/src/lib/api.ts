@@ -36,6 +36,7 @@ import type {
   GitCommand,
   OpEntry,
   ReflogEntry,
+  FixState,
   SnapshotComparison,
   Landing,
   Stack,
@@ -165,6 +166,8 @@ export const api = {
   operationLog: () => invoke<OpEntry[]>("operation_log"),
   /** Newest first, each commit once. */
   reflogEntries: () => invoke<ReflogEntry[]>("reflog_entries"),
+  /** What Fix a Mistake plans from. */
+  fixState: () => invoke<FixState>("fix_state"),
   compareSnapshot: (id: string, after: boolean) => invoke<SnapshotComparison>("compare_snapshot", { id, after }),
   /** A newer search in the same `lane` stops this one. */
   search: (query: SearchQuery, lane: string | null = null) => invoke<SearchResult>("search", { query, lane }),

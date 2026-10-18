@@ -6,7 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import { oplog, revertInsteadRequest, undoRequest } from "./oplog.svelte";
 import { prefs } from "./prefs.svelte";
-import type { Action, ActionEvent, Failure, GitCommand, NotKept, SecretFinding } from "./types";
+import type { Action, ActionEvent, Failure, FixStep, GitCommand, NotKept, SecretFinding } from "./types";
 
 /** What a toast reports: an action done, a note, something to look at, or a failure. */
 export type Tone = "done" | "info" | "warn" | "error";
@@ -45,7 +45,8 @@ export type Icon =
   | "lines"
   | "lfs"
   | "bisect"
-  | "worktree";
+  | "worktree"
+  | "fix";
 
 export interface Request {
   /** A question, e.g. "Discard changes in 2 files?" */
@@ -61,6 +62,10 @@ export interface Request {
   tone?: "warn";
   /** Another way to go, as a new confirmation, e.g. Create Branch First. */
   alt?: { label: string; request: () => Request };
+  /** A way back, e.g. to the list of fixes: the sheet closes and this runs. */
+  back?: { label: string; run: () => void };
+  /** For a fix: its plan's steps, numbered above the commands, in these words. */
+  stepWords?: (steps: FixStep[]) => StepLine[];
   /** Extra line in the footer, e.g. how to undo a discard. */
   note?: string;
   /** Title while it runs, e.g. "Pushing main to origin…". */
@@ -99,6 +104,14 @@ export interface Request {
    *  defaults: the sheet shows the same step as shell commands, the button runs it, and the
    *  toast says what it returned. `comments` gives each command its own. */
   local?: { commands: string[]; comment?: string; comments?: (string | null)[]; run: () => Promise<string> };
+}
+
+/** A step of a fix as the sheet shows it: words with chips, a line under them, and the short
+ *  title its commands get in the terminal. */
+export interface StepLine {
+  parts: Part[];
+  sub?: string;
+  head: string;
 }
 
 /** A small graph of what the action makes, and a verdict under it. */
@@ -161,8 +174,8 @@ export interface Recovery {
   checked?: TermLine[];
   /** The lines the secrets check stopped a commit on, listed above the commands. */
   secrets?: SecretFinding[];
-  /** Opens another confirmation, e.g. Force Push… */
-  alt?: { label: string; danger?: boolean; request: () => Request };
+  /** Opens another confirmation, e.g. Force Push…, or a new plan once the repository changed. */
+  alt?: { label: string; danger?: boolean; request: () => Request | Promise<Request> };
   note?: string;
   /** Label of the button that closes the sheet. */
   close?: string;
@@ -250,6 +263,8 @@ class ConfirmState {
   commands = $state<GitCommand[]>([]);
   /** What Undo can't bring back once the action ran, from the plan. */
   notKept = $state<NotKept[]>([]);
+  /** For a fix: the plan's steps. */
+  steps = $state<FixStep[]>([]);
   phase = $state<Phase>("ask");
   /** Runs without having asked: the sheet stays out of sight unless it takes a while or fails. */
   quiet = $state(false);
@@ -392,7 +407,12 @@ class ConfirmState {
   /** Open the recovery's other choice, e.g. Force Push…, as a new confirmation. */
   async alternative() {
     const alt = this.recovery?.alt;
-    if (alt) await this.#askOrRun(alt.request());
+    if (!alt) return;
+    try {
+      await this.#askOrRun(await alt.request());
+    } catch (err) {
+      this.#showToast(String(err), null, "error");
+    }
   }
 
   stop() {
@@ -423,6 +443,7 @@ class ConfirmState {
       const { comment = null, comments } = request.local;
       this.commands = request.local.commands.map((display, i) => ({ args: [], comment: comments ? (comments[i] ?? null) : comment, display, input: null, before: null, todo: null }));
       this.notKept = [];
+      this.steps = [];
       this.phase = "ask";
       return;
     }
@@ -432,6 +453,7 @@ class ConfirmState {
       if (mine !== this.#planned) return;
       this.commands = plan.commands;
       this.notKept = plan.notKept;
+      this.steps = plan.steps ?? [];
       // An undo of a commit the remote already has: reverting it takes it back for everyone.
       const pushed = plan.notKept.find((n) => n.kind === "pushed");
       if (pushed?.kind === "pushed" && pushed.revert && !request.alt) {
@@ -443,6 +465,7 @@ class ConfirmState {
       if (mine !== this.#planned) return;
       this.commands = [];
       this.notKept = [];
+      this.steps = [];
       this.#fail({ kind: "other", output: String(err), incoming: [], remoteTip: null, hook: null });
     }
   }
