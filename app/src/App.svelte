@@ -18,7 +18,7 @@
   import { stashMenu, stashRequest } from "./lib/stash";
   import StashesView from "./lib/StashesView.svelte";
   import { ancestors, cherryPickRequest, editMessageRequest, resetModes, resetRequest, revertRequest, undoCommitRequest } from "./lib/commits";
-  import type { Operation } from "./lib/types";
+  import type { FileChange, Operation } from "./lib/types";
   import Menu, { menuIcons, type MenuEntry } from "./lib/Menu.svelte";
   import { fetchRequest, pullRequest, pushRequest, syncBlock, unshallowRequest, type RemoteContext, type SyncFix } from "./lib/remote";
   import WhyPopover from "./lib/WhyPopover.svelte";
@@ -811,8 +811,20 @@
     else if (refs.length) parts.push(`${refs.length} branches and tags changed`);
     const files = (h: History) => h.rows[0]?.worktree?.files ?? 0;
     if (files(after) !== files(before)) parts.push(files(after) ? `${files(after)} uncommitted ${files(after) === 1 ? "file" : "files"}` : "No uncommitted changes");
+    // The same number of files can still be other files, or other edits in them.
+    else if (changesKey(after) !== changesKey(before) || after.changesStamp !== before.changesStamp) parts.push("Uncommitted changes updated");
     if (after.stashes.length !== before.stashes.length) parts.push(`${after.stashes.length} ${after.stashes.length === 1 ? "stash" : "stashes"}`);
+    else if (after.stashes.map((s) => s.id).join() !== before.stashes.map((s) => s.id).join()) parts.push("Stashes changed");
     return parts.length ? parts.join(" · ") : "Nothing new";
+  }
+
+  /** Which files are changed, staged or not, and by how many lines: staging part of a file
+   *  changes it, which the files on disk don't show. */
+  function changesKey(h: History): string {
+    const c = h.changes;
+    if (!c) return "";
+    const side = (name: string, files: FileChange[]) => files.map((f) => `${name} ${f.status} ${f.path} ${f.additions} ${f.deletions}`);
+    return [...side("s", c.staged), ...side("u", c.unstaged), ...side("c", c.conflicted)].join("\n");
   }
 
   let refreshing: Promise<void> | null = null;

@@ -213,7 +213,10 @@ fn a_forgotten_file_goes_into_the_last_commit_with_its_message() {
     );
     assert_eq!(
         displays(&repo, &action),
-        ["git add -- forgotten.txt", "git commit --amend --no-edit"]
+        [
+            "git add -- forgotten.txt",
+            "git commit --amend --no-edit --only -- forgotten.txt"
+        ]
     );
     repo.perform(&action).unwrap();
 
@@ -405,4 +408,267 @@ fn a_forgotten_file_with_a_secret_stops_until_allowed() {
         fx.git(&["show", "--format=", "--name-only", "HEAD"]),
         "a.txt\ndeploy.env"
     );
+}
+
+#[test]
+fn files_left_unpicked_stay_out_of_the_last_commit_even_when_staged() {
+    let mut fx = Fixture::new();
+    fx.commit("b.txt", "one\ntwo\n", "Root");
+    fx.commit("a.txt", "a\n", "Last commit");
+    // b.txt has a staged edit and an unstaged one on top.
+    fx.write("b.txt", "ONE\ntwo\n");
+    fx.git(&["add", "b.txt"]);
+    fx.write("b.txt", "ONE\nTWO\n");
+    fx.write("forgotten.txt", "f\n");
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let action = fix(
+        &repo,
+        Fix::AddToLast {
+            paths: vec!["forgotten.txt".into()],
+            allow_secrets: false,
+        },
+    );
+    repo.perform(&action).unwrap();
+
+    assert_eq!(
+        fx.git(&["show", "--format=", "--name-only", "HEAD"]),
+        "a.txt\nforgotten.txt"
+    );
+    assert_eq!(fx.git(&["show", "HEAD:b.txt"]), "one\ntwo");
+    // Its staged edit is still staged, the other one still not.
+    assert_eq!(fx.git(&["status", "--porcelain"]), "MM b.txt");
+    assert_eq!(fx.git(&["show", ":b.txt"]), "ONE\ntwo");
+}
+
+#[test]
+fn a_staged_file_can_be_added_to_the_last_commit() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    fx.commit("a.txt", "a2\n", "Change a");
+    fx.write("forgotten.txt", "f\n");
+    fx.git(&["add", "forgotten.txt"]);
+    fx.git(&["mv", "a.txt", "b.txt"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let state = repo.fix_state().unwrap();
+    assert!(state.changed.iter().all(|f| f.staged && !f.unstaged));
+
+    let action = fix(
+        &repo,
+        Fix::AddToLast {
+            paths: vec!["b.txt".into(), "forgotten.txt".into()],
+            allow_secrets: false,
+        },
+    );
+    repo.perform(&action).unwrap();
+    // A rename goes in whole: the old path is gone from the commit too.
+    assert_eq!(
+        fx.git(&["show", "--format=", "--name-status", "--no-renames", "HEAD"]),
+        "D\ta.txt\nA\tb.txt\nA\tforgotten.txt"
+    );
+    assert_eq!(fx.git(&["status", "--porcelain"]), "");
+}
+
+#[test]
+fn a_push_after_the_plan_was_made_stops_the_fix() {
+    let mut fx = Fixture::new();
+    let root = fx.commit("a.txt", "a\n", "Root");
+    let tip = fx.commit("b.txt", "b\n", "Move me");
+    let remote = tempfile::tempdir().unwrap();
+    let url = remote.path().join("origin.git");
+    fx.git(&["init", "-q", "--bare", "-b", "main", url.to_str().unwrap()]);
+    fx.git(&["remote", "add", "origin", url.to_str().unwrap()]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let action = fix(
+        &repo,
+        Fix::MoveCommits {
+            count: 1,
+            to: "feature/rescue".into(),
+            create: true,
+        },
+    );
+    assert_eq!(kinds(&repo.plan(&action).unwrap().steps), ["create", "move"]);
+
+    // Pushed meanwhile, without -u: HEAD, the branch and its upstream are as they were.
+    fx.git(&["push", "-q", "origin", "main"]);
+    let err = repo.perform(&action).unwrap_err();
+    assert!(matches!(err, Error::Changed(_)), "{err:?}");
+    assert_eq!(fx.git(&["rev-parse", "main"]), tip);
+    assert_eq!(fx.git(&["branch", "--list", "feature/rescue"]), "");
+    assert_ne!(fx.git(&["rev-parse", "main~1"]), "");
+    assert_eq!(fx.git(&["rev-parse", "main~1"]), root);
+
+    // Planned again, the commit is pushed: it is reverted, not taken off.
+    let action = fix(
+        &repo,
+        Fix::MoveCommits {
+            count: 1,
+            to: "feature/rescue".into(),
+            create: true,
+        },
+    );
+    assert_eq!(kinds(&repo.plan(&action).unwrap().steps), ["revert", "create", "copy"]);
+}
+
+#[test]
+fn staging_something_else_since_the_plan_stops_the_fix() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    fx.commit("b.txt", "b\n", "Add b");
+    fx.write("a.txt", "edit\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    let action = fix(&repo, Fix::UndoLast { mode: ResetMode::Soft });
+    fx.git(&["add", "a.txt"]);
+    assert!(matches!(repo.perform(&action).unwrap_err(), Error::Changed(_)));
+}
+
+/// main with a commit meant for `feature`, which changes the same line of a.txt.
+fn conflicting_move(fx: &mut Fixture) -> (String, String) {
+    let base = fx.commit("a.txt", "a\n", "Root");
+    fx.git(&["branch", "feature"]);
+    fx.git(&["switch", "-q", "feature"]);
+    fx.commit("a.txt", "feature\n", "Feature work");
+    fx.git(&["switch", "-q", "main"]);
+    let tip = fx.commit("a.txt", "main\n", "Move me");
+    (base, tip)
+}
+
+#[test]
+fn continue_after_a_conflict_finishes_the_move() {
+    let mut fx = Fixture::new();
+    let (base, _) = conflicting_move(&mut fx);
+    fx.write("notes.txt", "staged\n");
+    fx.git(&["add", "notes.txt"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let action = fix(
+        &repo,
+        Fix::MoveCommits {
+            count: 1,
+            to: "feature".into(),
+            create: false,
+        },
+    );
+    assert_eq!(
+        kinds(&repo.plan(&action).unwrap().steps),
+        ["stash", "switch", "copy", "move", "pop"]
+    );
+    assert!(repo.perform(&action).is_err());
+    assert_eq!(fx.git(&["branch", "--show-current"]), "feature");
+
+    // Continue shows the steps left after its own.
+    let cont = Action::Continue { message: None };
+    let shown = displays(&repo, &cont);
+    assert_eq!(shown[0], "git cherry-pick --continue");
+    assert_eq!(shown[1], format!("git branch -f main {}", &base[..7]));
+    assert_eq!(shown[2], "git stash pop --index");
+
+    fx.write("a.txt", "both\n");
+    fx.git(&["add", "a.txt"]);
+    repo.perform(&cont).unwrap();
+    assert_eq!(fx.git(&["rev-parse", "main"]), base);
+    assert_eq!(fx.git(&["log", "-1", "--format=%s", "feature"]), "Move me");
+    assert_eq!(fx.git(&["status", "--porcelain"]), "A  notes.txt");
+    assert_eq!(fx.git(&["stash", "list"]), "");
+    // Nothing is left for a later Continue.
+    assert!(!fx.path().join(".git/oxbow/fix-rest.json").exists());
+}
+
+#[test]
+fn abort_after_a_conflict_goes_back_to_where_the_fix_started() {
+    let mut fx = Fixture::new();
+    let (_, tip) = conflicting_move(&mut fx);
+    fx.write("notes.txt", "staged\n");
+    fx.git(&["add", "notes.txt"]);
+    fx.write("loose.txt", "untracked\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    let action = fix(
+        &repo,
+        Fix::MoveCommits {
+            count: 1,
+            to: "feature".into(),
+            create: false,
+        },
+    );
+    assert!(repo.perform(&action).is_err());
+    assert_eq!(
+        displays(&repo, &Action::Abort),
+        ["git cherry-pick --abort", "git switch main", "git stash pop --index"]
+    );
+    repo.perform(&Action::Abort).unwrap();
+    assert_eq!(fx.git(&["branch", "--show-current"]), "main");
+    assert_eq!(fx.git(&["rev-parse", "main"]), tip);
+    assert_eq!(fx.git(&["status", "--porcelain"]), "A  notes.txt\n?? loose.txt");
+    assert_eq!(fx.git(&["stash", "list"]), "");
+}
+
+#[test]
+fn a_staged_file_out_of_the_way_is_put_aside_and_comes_back_staged() {
+    // Moving to an existing branch: git picks only with nothing staged.
+    let mut fx = Fixture::new();
+    let root = fx.commit("a.txt", "a\n", "Root");
+    fx.git(&["branch", "feature"]);
+    fx.commit("b.txt", "b\n", "Add b");
+    fx.write("notes.txt", "staged\n");
+    fx.git(&["add", "notes.txt"]);
+    fx.write("notes.txt", "staged\nand not\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    let action = fix(
+        &repo,
+        Fix::MoveCommits {
+            count: 1,
+            to: "feature".into(),
+            create: false,
+        },
+    );
+    assert_eq!(
+        kinds(&repo.plan(&action).unwrap().steps),
+        ["stash", "switch", "copy", "move", "pop"]
+    );
+    repo.perform(&action).unwrap();
+    assert_eq!(fx.git(&["rev-parse", "main"]), root);
+    assert_eq!(fx.git(&["log", "-1", "--format=%s", "feature"]), "Add b");
+    assert_eq!(fx.git(&["status", "--porcelain"]), "AM notes.txt");
+    assert_eq!(fx.git(&["show", ":notes.txt"]), "staged");
+
+    // Reverting, the same.
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    fx.commit("notes.txt", "n\n", "Notes");
+    let bad = fx.commit("a.txt", "bad\n", "Break a");
+    fx.write("notes.txt", "n2\n");
+    fx.git(&["add", "notes.txt"]);
+    fx.write("a.txt", "bad\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    let action = fix(
+        &repo,
+        Fix::RevertPushed {
+            commit: bad,
+            push: false,
+        },
+    );
+    assert_eq!(kinds(&repo.plan(&action).unwrap().steps), ["stash", "revert", "pop"]);
+    repo.perform(&action).unwrap();
+    assert_eq!(read(&fx, "a.txt").unwrap(), "a\n");
+    assert_eq!(fx.git(&["status", "--porcelain"]), "M  notes.txt");
+}
+
+#[test]
+fn staged_changes_the_revert_moved_from_under_come_back_unstaged() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "1\n2\n3\n4\n5\n6\n7\n8\n", "Root");
+    let bad = fx.commit("a.txt", "1\nX\n3\n4\n5\n6\n7\n8\n", "Break 2");
+    // A staged edit three lines below: its patch has the reverted line as context.
+    fx.write("a.txt", "1\nX\n3\n4\nY\n6\n7\n8\n");
+    fx.git(&["add", "a.txt"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let action = fix(
+        &repo,
+        Fix::RevertPushed {
+            commit: bad,
+            push: false,
+        },
+    );
+    repo.perform(&action).unwrap();
+    assert_eq!(read(&fx, "a.txt").unwrap(), "1\n2\n3\n4\nY\n6\n7\n8\n");
+    assert_eq!(fx.git(&["stash", "list"]), "");
 }

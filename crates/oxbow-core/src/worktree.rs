@@ -1454,12 +1454,17 @@ impl Repo {
             Action::Continue { .. } | Action::Abort => self.replay_in_progress(),
             _ => None,
         };
+        // Steps of a fix noted for a pick or revert that is over by now, finished elsewhere.
+        self.forget_fix_rest();
         let before = self.snapshot().ok();
         if let Action::EditStack { plan } = action {
             self.remember_return(plan);
         }
         let result = self.perform_unlogged(action, on_event, cancel);
         self.forget_return();
+        if let Action::Continue { .. } | Action::Abort | Action::Skip = action {
+            self.forget_fix_rest();
+        }
         if let Some((branch, source, tip)) = &replaying {
             match action {
                 // Continue goes on with the picks left and can stop on the next one's conflict
@@ -1545,7 +1550,14 @@ impl Repo {
                     Action::BisectStart { stash: true, .. } => Some(self.stash_tip()),
                     _ => None,
                 };
-                for command in self.plan(action)?.commands {
+                // A fix, or a Continue of one, that stops on conflicts notes the steps left.
+                let fix_start = match action {
+                    Action::Fix { .. } => Some(self.head()?.branch),
+                    Action::Continue { .. } if self.has_fix_rest() => Some(None),
+                    _ => None,
+                };
+                let commands = self.plan(action)?.commands;
+                for (at, command) in commands.iter().enumerate() {
                     if let Some((ancestor, of)) = &command.only_if_ancestor
                         && !self.is_ancestor(ancestor, of)
                     {
@@ -1556,47 +1568,62 @@ impl Repo {
                     {
                         continue;
                     }
-                    if command.secrets_check
-                        && !matches!(
-                            action,
+                    if command.secrets_check {
+                        let found = match action {
                             Action::Fix {
-                                fix: crate::fix::Fix::AddToLast {
-                                    allow_secrets: true,
-                                    ..
-                                },
+                                fix:
+                                    crate::fix::Fix::AddToLast {
+                                        allow_secrets: true, ..
+                                    },
                                 ..
-                            }
-                        )
-                        && crate::secrets::check_secrets()
-                    {
-                        let found = self.staged_secrets()?;
+                            } => Vec::new(),
+                            _ if !crate::secrets::check_secrets() => Vec::new(),
+                            // Only the picked files go into the commit: other staged lines don't.
+                            Action::Fix {
+                                fix: crate::fix::Fix::AddToLast { paths, .. },
+                                ..
+                            } if !paths.is_empty() => self.staged_secrets_in(&self.amend_paths(paths)?)?,
+                            _ => self.staged_secrets()?,
+                        };
                         if !found.is_empty() {
                             return Err(Error::Secrets(found));
                         }
                     }
-                    self.write_todo(&command)?;
+                    self.write_todo(command)?;
                     updated_submodules |= command.args.first().is_some_and(|a| a == "submodule");
-                    let command = crate::ssh::interactive(command);
+                    let command = crate::ssh::interactive(command.clone());
                     on_event(ActionEvent::Command {
                         display: command.display(),
                     });
-                    let out = self
-                        .run_streaming(&command, &mut |line| on_event(ActionEvent::Line(line)), cancel)
-                        .inspect_err(|_| {
-                            if let Action::Merge {
-                                branch,
-                                method: MergeMethod::Squash,
-                                message,
-                            } = action
-                            {
-                                self.remember_squash(branch, message.as_deref());
-                            }
-                            if let Action::StashApply { id, pop, .. } = action
-                                && self.conflicted_paths().is_ok_and(|p| !p.is_empty())
-                            {
-                                self.remember_apply(id, *pop, &in_the_way);
-                            }
-                        })?;
+                    let mut ran = self.run_streaming(&command, &mut |line| on_event(ActionEvent::Line(line)), cancel);
+                    if ran.is_err()
+                        && !cancel.load(std::sync::atomic::Ordering::Relaxed)
+                        && let Some(fallback) = &command.fallback
+                    {
+                        let fallback = crate::ssh::interactive((**fallback).clone());
+                        on_event(ActionEvent::Command {
+                            display: fallback.display(),
+                        });
+                        ran = self.run_streaming(&fallback, &mut |line| on_event(ActionEvent::Line(line)), cancel);
+                    }
+                    let out = ran.inspect_err(|_| {
+                        if let Some(start) = &fix_start {
+                            self.note_fix_rest(action, start.clone(), &commands, at);
+                        }
+                        if let Action::Merge {
+                            branch,
+                            method: MergeMethod::Squash,
+                            message,
+                        } = action
+                        {
+                            self.remember_squash(branch, message.as_deref());
+                        }
+                        if let Action::StashApply { id, pop, .. } = action
+                            && self.conflicted_paths().is_ok_and(|p| !p.is_empty())
+                        {
+                            self.remember_apply(id, *pop, &in_the_way);
+                        }
+                    })?;
                     if let Some(before) = &stash_before
                         && command.args.first().is_some_and(|a| a == "stash")
                     {
