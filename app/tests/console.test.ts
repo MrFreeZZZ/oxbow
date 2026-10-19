@@ -107,3 +107,14 @@ assert.equal(duration(64_000), "1 min 4 s");
   assert.deepEqual(afterClear(pending, ["a"]).map((p) => p.entry.id), [2, 3]);
   assert.deepEqual(afterClear(pending, ["a", "b"]).map((p) => p.entry.id), [2]);
 }
+
+// An entry that started and finished before the clear leaves nothing behind, not its running update.
+{
+  const pending = [
+    { log: "a", entry: entry(44, { running: true }) },
+    { log: "a", entry: entry(44) },
+    { log: "a", entry: entry(45, { running: true }) },
+    { log: "b", entry: entry(46) },
+  ];
+  assert.deepEqual(afterClear(pending, ["a"]).map((p) => p.entry.id), [45, 46]);
+}
