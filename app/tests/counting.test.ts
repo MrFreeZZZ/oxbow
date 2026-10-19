@@ -51,4 +51,3 @@ import assert from "node:assert/strict";
   const a2 = t.read("A", false);
   assert.equal(t.start("A", a2, "A"), true);
 }
-

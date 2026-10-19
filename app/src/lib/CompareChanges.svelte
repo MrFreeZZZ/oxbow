@@ -39,6 +39,8 @@
   /** Lanes of this view's reads: a newer read in a lane stops the older one. */
   const COUNTS = "compare-counts";
   const DIFF = "compare-diff";
+  /** Show Diff Anyway: a whole diff past the limits, asked for on purpose. */
+  const FULL = "compare-full";
 
   let tab = $state<string | null>(null);
   let whole = $state(wholeByDefault());
@@ -81,7 +83,7 @@
 
   // The view's reads stop when it closes: their answers would go nowhere.
   $effect(() => () => {
-    api.stopReads([COUNTS, DIFF]).catch(() => {});
+    api.stopReads([COUNTS, DIFF, FULL]).catch(() => {});
   });
 
   // A new comparison starts on Summary.
@@ -91,6 +93,8 @@
     untrack(() => {
       tab = null;
       listed = LIST_STEP;
+      // A whole diff of the comparison before is no longer wanted.
+      api.stopReads([FULL]).catch(() => {});
     });
   });
 
@@ -287,7 +291,7 @@
       pending={tab === null && next !== null ? c.files.length - diffs.length : 0}
       onMore={loadMore}
       onToggleWhole={() => (whole = !whole)}
-      loadFull={(d) => api.compareDiff(c.from, c.targetId, d.file.path, whole, true).then((all) => all[0])}
+      loadFull={(d) => api.compareDiff(c.from, c.targetId, d.file.path, whole, true, FULL).then((all) => all[0])}
       command={(d) => `git diff ${c.from.slice(0, 7)} ${c.targetId.slice(0, 7)} -- ${d.file.path}`}
     />
   </div>
