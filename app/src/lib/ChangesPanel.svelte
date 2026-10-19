@@ -89,11 +89,11 @@
   import { untrack } from "svelte";
   import TipCard from "./TipCard.svelte";
   import { keys } from "./keys";
-  import { api } from "./api";
+  import { api, stopped } from "./api";
   import { diffSettings, prefs, wholeByDefault } from "./prefs.svelte";
   import { confirm, type Part, type Request } from "./confirm.svelte";
   import type { FileChange, FileDiff, Hunk, HistoryRow, Side, WorkingTree } from "./types";
-  import { lane, plate, splitPath, tabLabels, tint } from "./format";
+  import { lane, plate, splitPath, tabLabels, tabWindow, tint } from "./format";
   import DiffView, { type LinePicker } from "./DiffView.svelte";
   import FoldAll from "./FoldAll.svelte";
   import WhyNote from "./WhyNote.svelte";
@@ -173,11 +173,21 @@
   const otherTabs = $derived([...new Set([...conflicted, ...unstaged].map((f) => f.path))].filter((path) => !stagedPaths.has(path)));
   const paths = $derived([...stagedTabs, ...otherTabs]);
   const labels = $derived(tabLabels(paths));
+  const shownTabs = $derived(tabWindow(paths.length, tab === null ? -1 : paths.indexOf(tab)));
   const fileCount = $derived(paths.length);
   const branchPart = $derived<Part>(branch ? { branch, color } : { code: "HEAD" });
 
-  /** Summary loads the diffs of this many files on each side; the rest are a tab away. */
-  const SUMMARY_FILES = 300;
+  /** Lines of diff a page of the Summary brings on each side, about what the diff shows at first. */
+  const PAGE_LINES = 4000;
+  /** Lanes of the diff reads of each side: a newer read in a lane stops the older one. */
+  const LANES: Record<Side, string> = { unstaged: "changes-unstaged", staged: "changes-staged" };
+  /** On each side, where the next page of Summary's diffs starts (null once all are loaded), and
+   *  how many files are still to come. */
+  let more = $state<Record<Side, number | null>>({ unstaged: null, staged: null });
+  let pending = $state<Record<Side, number>>({ unstaged: 0, staged: 0 });
+  let loadingMore: Record<Side, boolean> = { unstaged: false, staged: false };
+  /** What the diffs shown were asked for: later pages must be of the same. */
+  let asked: { lists: Record<Side, string[]>; whole: boolean; reading: number | null } | null = null;
 
   const draft = $derived(draftFor(repo));
 
@@ -200,6 +210,23 @@
     const timer = setTimeout(() => (diffNeedle = next), 200);
     return () => clearTimeout(timer);
   });
+
+  /** Rows drawn at first in each list, and more on each request: thousands of files draw the
+   *  rest when asked. */
+  const LIST_STEP = 300;
+  let listed = $state<Record<Side | "conflicted", number>>({ unstaged: LIST_STEP, staged: LIST_STEP, conflicted: LIST_STEP });
+
+  /** Each folder with how many of its files' rows are drawn: the files of an open folder count
+   *  toward `limit`, a closed one as one row, and a folder past the limit waits with its files. */
+  function foldersWithin(folders: { dir: string; files: FileChange[] }[], group: Side | "conflicted", limit: number) {
+    let used = 0;
+    const out = folders.map((folder) => {
+      const room = Math.max(0, limit - used);
+      used += folded.has(`${group}:${folder.dir}`) ? 1 : folder.files.length;
+      return { folder, room };
+    });
+    return { folders: out, hidden: used - limit };
+  }
 
   /** Folders closed in each list, as "list:folder/". */
   let folded = $state(new Set<string>());
@@ -280,26 +307,51 @@
     const side = (list: FileChange[]) =>
       list
         .filter((f) => (current === null ? !n || f.path.toLowerCase().includes(n) || !!f.oldPath?.toLowerCase().includes(n) : f.path === current))
-        .map((f) => f.path)
-        .slice(0, SUMMARY_FILES);
-    const unstagedList = side([...t.conflicted, ...t.unstaged]);
-    const stagedList = side(t.staged);
-    Promise.all([
-      unstagedList.length ? api.workingDiffs(unstagedList, "unstaged", wholeFile, reading) : [],
-      stagedList.length ? api.workingDiffs(stagedList, "staged", wholeFile, reading) : [],
-    ]).then(
+        .map((f) => f.path);
+    const ask = { lists: { unstaged: side([...t.conflicted, ...t.unstaged]), staged: side(t.staged) }, whole: wholeFile, reading };
+    asked = ask;
+    const first = (s: Side) =>
+      ask.lists[s].length ? api.workingDiffPage(ask.lists[s], s, wholeFile, reading, 0, PAGE_LINES, LANES[s]) : Promise.resolve({ diffs: [], next: null, files: 0 });
+    Promise.all([first("unstaged"), first("staged")]).then(
       ([u, st]) => {
-        if (tab === current && whole === wholeFile && tree === t && diffNeedle === n) {
-          shown = { unstaged: u, staged: st };
-          // Picked lines belong to the hunks they were picked in.
-          sel = null;
-        }
+        if (asked !== ask) return;
+        shown = { unstaged: u.diffs, staged: st.diffs };
+        more = { unstaged: u.next, staged: st.next };
+        pending = { unstaged: u.files - u.diffs.length, staged: st.files - st.diffs.length };
+        // Picked lines belong to the hunks they were picked in.
+        sel = null;
       },
       (err) => {
-        if (tab === current) error = String(err);
+        if (asked === ask && !stopped(err)) error = String(err);
       },
     );
   });
+
+  // The panel's reads stop when it closes: their answers would go nowhere.
+  $effect(() => () => {
+    api.stopReads(Object.values(LANES)).catch(() => {});
+  });
+
+  /** The next page of Summary's diffs on one side. */
+  function loadMore(s: Side) {
+    const ask = asked;
+    const from = more[s];
+    if (!ask || from === null || loadingMore[s] || tab !== null) return;
+    loadingMore[s] = true;
+    api.workingDiffPage(ask.lists[s], s, ask.whole, ask.reading, from, PAGE_LINES, LANES[s]).then(
+      (page) => {
+        loadingMore[s] = false;
+        if (asked !== ask || more[s] !== from) return;
+        shown = { ...shown, [s]: [...shown[s], ...page.diffs] };
+        more = { ...more, [s]: page.next };
+        pending = { ...pending, [s]: Math.max(0, pending[s] - page.diffs.length) };
+      },
+      (err) => {
+        loadingMore[s] = false;
+        if (asked === ask && !stopped(err)) error = String(err);
+      },
+    );
+  }
 
   function openTab(path: string | null) {
     tab = path;
@@ -694,10 +746,13 @@
 {/snippet}
 
 {#snippet fileList(files: FileChange[], group: Side | "conflicted")}
+  {@const limit = listed[group]}
   {#if view.folders}
-    {#each byFolder(files) as folder (folder.dir)}
+    {@const cut = foldersWithin(byFolder(files), group, limit)}
+    {#each cut.folders as { folder, room } (folder.dir)}
       {@const key = `${group}:${folder.dir}`}
       {@const open = !folded.has(key)}
+      {#if room > 0}
       {@const n = group === "conflicted" ? 0 : folder.files.filter((f) => tickedSet[group].has(f.path)).length}
       <div class="folder">
         {#if group !== "conflicted"}
@@ -717,11 +772,20 @@
           <span class="n">{folder.files.length}</span>
         </button>
       </div>
-      {#if open}{#each folder.files as file (file.path)}{@render fileRow(file, group, true)}{/each}{/if}
+      {#if open}{#each folder.files.slice(0, room) as file (file.path)}{@render fileRow(file, group, true)}{/each}{/if}
+      {/if}
     {/each}
+    {#if cut.hidden > 0}{@render moreRows(group, cut.hidden)}{/if}
   {:else}
-    {#each files as file (file.path)}{@render fileRow(file, group, false)}{/each}
+    {#each files.slice(0, limit) as file (file.path)}{@render fileRow(file, group, false)}{/each}
+    {#if files.length > limit}{@render moreRows(group, files.length - limit)}{/if}
   {/if}
+{/snippet}
+
+{#snippet moreRows(group: Side | "conflicted", left: number)}
+  <button class="more-rows" onclick={() => (listed = { ...listed, [group]: listed[group] + LIST_STEP })}
+    >Show {Math.min(left, LIST_STEP).toLocaleString()} more {Math.min(left, LIST_STEP) === 1 ? "file" : "files"}</button
+  >
 {/snippet}
 
 {#snippet hunkBar(d: FileDiff, hunk: Hunk, side: Side)}
@@ -807,17 +871,22 @@
       >
       <span class="divider" aria-hidden="true"></span>
       <div class="file-tabs" bind:this={tabBar}>
-        {#each stagedTabs as path (path)}
-          <button role="tab" aria-selected={tab === path} class="tab staged" class:on={tab === path} onclick={() => openTab(path)} title="Staged · {path}"
-            >{labels.get(path)}</button
-          >
+        <!-- Thousands of files draw only the tabs around the open one. -->
+        {#if shownTabs.start}<button class="tab neutral more" onclick={() => openTab(paths[shownTabs.start - 1])} title="Open the file before these">+{shownTabs.start.toLocaleString()}</button>{/if}
+        {#each paths.slice(shownTabs.start, shownTabs.end) as path, i (path)}
+          {@const at = shownTabs.start + i}
+          {#if at === stagedTabs.length && at > 0}<span class="divider" aria-hidden="true"></span>{/if}
+          {#if at < stagedTabs.length}
+            <button role="tab" aria-selected={tab === path} class="tab staged" class:on={tab === path} onclick={() => openTab(path)} title="Staged · {path}"
+              >{labels.get(path)}</button
+            >
+          {:else}
+            <button role="tab" aria-selected={tab === path} class="tab neutral" class:on={tab === path} onclick={() => openTab(path)} title={path}
+              >{labels.get(path)}</button
+            >
+          {/if}
         {/each}
-        {#if stagedTabs.length && otherTabs.length}<span class="divider" aria-hidden="true"></span>{/if}
-        {#each otherTabs as path (path)}
-          <button role="tab" aria-selected={tab === path} class="tab neutral" class:on={tab === path} onclick={() => openTab(path)} title={path}
-            >{labels.get(path)}</button
-          >
-        {/each}
+        {#if shownTabs.end < paths.length}<button class="tab neutral more" onclick={() => openTab(paths[shownTabs.end])} title="Open the file after these">+{(paths.length - shownTabs.end).toLocaleString()}</button>{/if}
       </div>
     </div>
   {/if}
@@ -908,11 +977,9 @@
     {/if}
     {#each [{ side: "unstaged" as Side, diffs: shown.unstaged }, { side: "staged" as Side, diffs: shown.staged }] as part (part.side)}
       {#if part.diffs.length}
-        {@const total = tab === null ? (part.side === "staged" ? shownStaged.length : shownUnstaged.length + shownConflicted.length) : 1}
         {#if tab === null || (shown.unstaged.length && shown.staged.length)}
           <div class="part">
             <span class="grow">{part.side === "staged" ? "Staged · in the commit" : "Unstaged · stays out of the commit"}</span>
-            {#if total > part.diffs.length}<span class="cut">first {part.diffs.length} of {total} files; the rest are on their tabs</span>{/if}
             {#if tab === null}<FoldAll onFold={(fold) => (part.side === "staged" ? stagedView : unstagedView)?.setAll(fold)} />{/if}
           </div>
         {/if}
@@ -927,6 +994,8 @@
             hunkBar={unstagedHunk}
             fileActions={unstagedFile}
             {picker}
+            pending={tab === null ? pending.unstaged : 0}
+            onMore={() => loadMore("unstaged")}
             loadFull={(d) => api.workingDiff(d.file.path, "unstaged", whole, true)}
             command={(d) => `git diff -- ${d.file.path}`}
             working
@@ -943,6 +1012,8 @@
             hunkBar={stagedHunk}
             fileActions={stagedFile}
             {picker}
+            pending={tab === null ? pending.staged : 0}
+            onMore={() => loadMore("staged")}
             loadFull={(d) => api.workingDiff(d.file.path, "staged", whole, true)}
             command={(d) => `git diff --cached -- ${d.file.path}`}
             working
@@ -1079,6 +1150,22 @@
     font-weight: 600;
   }
   /* Staged files: Steel, the color of Commit, which takes them. */
+  .tab.more {
+    color: var(--text2);
+    font-weight: 400;
+  }
+  .more-rows {
+    display: block;
+    width: 100%;
+    height: 26px;
+    border-radius: var(--radius-s);
+    color: var(--text2);
+    font-size: var(--text-small);
+    text-align: center;
+  }
+  .more-rows:hover {
+    background: var(--field);
+  }
   .tab.staged {
     background: color-mix(in srgb, var(--accent) 9%, transparent);
     border-color: color-mix(in srgb, var(--accent) 26%, transparent);
@@ -1135,9 +1222,6 @@
     font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
-  }
-  .cut {
-    font-weight: 400;
   }
   .empty {
     margin: 0;

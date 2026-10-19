@@ -11,6 +11,7 @@ import type {
   CommitBrief,
   CommitDetail,
   DiffPage,
+  FileChange,
   ConfigScope,
   GitSettings,
   RepoSettings,
@@ -94,6 +95,12 @@ export const api = {
   compare: (base: string, target: string, mode: CompareMode) => invoke<Comparison>("compare", { base, target, mode }),
   compareDiff: (from: string, to: string, path: string | null, wholeFile: boolean, full = false) =>
     invoke<FileDiff[]>("compare_diff", { from, to, path, wholeFile, full }),
+  /** A page of a comparison's diffs, from the `start`th file until about `budget` lines. */
+  compareDiffPage: (from: string, to: string, start: number, budget: number, wholeFile: boolean, lane: string | null = null) =>
+    invoke<DiffPage>("compare_diff_page", { from, to, start, budget, wholeFile, lane }),
+  /** A comparison's files with their line counts from the `countFrom`th on. */
+  compareCounts: (from: string, to: string, countFrom: number, lane: string | null = null) =>
+    invoke<FileChange[]>("compare_counts", { from, to, countFrom, lane }),
   /** The full id of the commit a SHA prefix names, anywhere in the repository. */
   resolveCommit: (prefix: string) => invoke<string | null>("resolve_commit", { prefix }),
   fileHistory: (path: string, rev: string | null) => invoke<FileHistory>("file_history", { path, rev }),
@@ -104,9 +111,11 @@ export const api = {
   workingTree: () => invoke<WorkingTree>("working_tree"),
   workingDiff: (path: string, side: Side, wholeFile: boolean, full = false) =>
     invoke<FileDiff>("working_diff", { path, side, wholeFile, full }),
-  /** The diffs of `paths` on one side, in that order; files without changes there are left out. */
-  workingDiffs: (paths: string[], side: Side, wholeFile: boolean, snapshot: number | null = null) =>
-    invoke<FileDiff[]>("working_diffs", { paths, side, wholeFile, snapshot }),
+  /** A page of the diffs of `paths` on one side, in that order, from the `from`th file with
+   *  changes there until about `budget` lines; files without changes there are left out. A newer
+   *  read in the same `lane` stops this one. */
+  workingDiffPage: (paths: string[], side: Side, wholeFile: boolean, snapshot: number | null, from: number, budget: number, lane: string | null = null) =>
+    invoke<DiffPage>("working_diff_page", { paths, side, wholeFile, snapshot, from, budget, lane }),
   /** The raw bytes arrive as an ArrayBuffer, or as a list of numbers when the IPC falls back to JSON. */
   sourceBytes: (source: Source) =>
     invoke<ArrayBuffer | ArrayBufferView | number[]>("source_bytes", { source }).then((data) =>

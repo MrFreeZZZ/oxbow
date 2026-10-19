@@ -68,6 +68,8 @@ pub struct Comparison {
 }
 
 impl Repo {
+    /// The comparison of `base` and `target`, its files without line counts: those come with
+    /// the pages of the diff and from [`Repo::tree_files_with`].
     pub fn compare(&self, base: &str, target: &str, mode: CompareMode) -> Result<Comparison> {
         let base_id = self.commit_id(base)?;
         let target_id = self.commit_id(target)?;
@@ -108,7 +110,7 @@ impl Repo {
             CompareMode::Split => HashMap::new(),
         };
         let files = self
-            .tree_files(&from, &target_id)?
+            .tree_files_with(&from, &target_id, None, &std::sync::atomic::AtomicBool::new(false))?
             .into_iter()
             .map(|file| {
                 let last = touched_ahead.get(&file.path).cloned();

@@ -363,6 +363,19 @@ impl Repo {
             });
         }
         let changes = self.commit_changes(&repo, &commit)?;
+        self.page_of(&repo, &changes, from, budget, context, cancel)
+    }
+
+    /// The diffs of `changes` from the `from`th on, until they have `budget` lines.
+    fn page_of(
+        &self,
+        repo: &gix::Repository,
+        changes: &[Change],
+        from: usize,
+        budget: usize,
+        context: DiffContext,
+        cancel: &AtomicBool,
+    ) -> Result<DiffPage> {
         let files = changes.len();
         let mut diffs = Vec::new();
         let mut lines = 0;
@@ -375,7 +388,7 @@ impl Repo {
             if cancel.load(Ordering::Relaxed) {
                 return Err(Error::Cancelled);
             }
-            let diff = self.diff_one(&repo, change.clone(), context, cancel)?;
+            let diff = self.diff_one(repo, change.clone(), context, cancel)?;
             // A card (binary, too large, a picture) takes about as much room as a few lines.
             lines += diff.hunks.iter().map(|h| h.lines.len()).sum::<usize>().max(8);
             diffs.push(diff);
@@ -423,15 +436,41 @@ impl Repo {
 
     /// Changed files between two commits' trees (or two trees), with line counts.
     pub fn tree_files(&self, from: &str, to: &str) -> Result<Vec<FileChange>> {
+        self.tree_files_with(from, to, Some(0), &AtomicBool::new(false))
+    }
+
+    /// [`Repo::tree_files`], counting lines from the `count`th file on (the ones before are
+    /// counted by the diffs shown of them), or not at all without `count`. Setting `cancel`
+    /// stops it.
+    pub fn tree_files_with(
+        &self,
+        from: &str,
+        to: &str,
+        count: Option<usize>,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<FileChange>> {
         let repo = self.local();
         let changes = tree_changes(&repo, Some(&from_tree(&repo, from)?), &from_tree(&repo, to)?)?;
-        counted(
-            &repo,
-            &changes,
-            0,
-            self.diff_options().max_lines,
-            &AtomicBool::new(false),
-        )
+        match count {
+            Some(at) => counted(&repo, &changes, at, self.diff_options().max_lines, cancel),
+            None => Ok(changes.into_iter().map(|c| c.file).collect()),
+        }
+    }
+
+    /// A page of [`Repo::tree_diff`] of every file: the diffs from the `from`th file on, until
+    /// they have `budget` lines. Setting `cancel` stops it.
+    pub fn tree_diff_page(
+        &self,
+        from_tree_id: &str,
+        to: &str,
+        from: usize,
+        budget: usize,
+        context: DiffContext,
+        cancel: &AtomicBool,
+    ) -> Result<DiffPage> {
+        let repo = self.local();
+        let changes = tree_changes(&repo, Some(&from_tree(&repo, from_tree_id)?), &from_tree(&repo, to)?)?;
+        self.page_of(&repo, &changes, from, budget, context, cancel)
     }
 
     /// Line diffs between two commits' trees (or two trees), for all files or only `path`.

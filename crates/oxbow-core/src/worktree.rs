@@ -7,13 +7,14 @@
 
 use serde::{Deserialize, Serialize};
 
-use std::sync::atomic::AtomicBool;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::bisect::BisectMark;
 use crate::cli::{GitCommand, OutputLine, literal};
 use crate::commit::{
-    DiffLine, FileChange, FileDiff, FileStatus, Hunk, LineKind, ModeChange, Source, SubmoduleChange, eol_change,
-    over_limit, word_diff,
+    DiffLine, DiffPage, FileChange, FileDiff, FileStatus, Hunk, LineKind, ModeChange, Source, SubmoduleChange,
+    eol_change, over_limit, word_diff,
 };
 use crate::config;
 use crate::edit::{ResetMode, plan_reset};
@@ -32,6 +33,9 @@ const MAX_COUNTED_BYTES: u64 = 8 * 1024 * 1024;
 /// Bytes of a file's patch read at most: a longer one is too large to show, as a longer blob is
 /// in a commit's diff.
 const MAX_PATCH_BYTES: usize = 16 * 1024 * 1024;
+/// Files a page of the Summary's diffs takes at most, whatever its line budget: each is a path
+/// on one `git diff` command line.
+const PAGE_FILES: usize = 100;
 
 /// Uncommitted changes, grouped the way they are staged.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -657,15 +661,193 @@ impl Repo {
         side: Side,
         whole_file: bool,
     ) -> Result<Vec<FileDiff>> {
+        let never = AtomicBool::new(false);
+        let mut diffs = Vec::new();
+        let mut from = Some(0);
+        while let Some(at) = from {
+            let page = self.working_diff_page(tree, paths, side, whole_file, at, usize::MAX, &never)?;
+            diffs.extend(page.diffs);
+            from = page.next;
+        }
+        Ok(diffs)
+    }
+
+    /// A page of [`Repo::working_diffs_in`]: the diffs of the files of `paths` from the `from`th
+    /// on, until they have about `budget` lines or [`PAGE_FILES`] files. The patches of tracked
+    /// files come from one `git diff`, and new files are read here, so a page of hundreds of
+    /// small changes runs a few git commands, not one per file. Setting `cancel` stops it between
+    /// commands.
+    #[allow(clippy::too_many_arguments)]
+    pub fn working_diff_page(
+        &self,
+        tree: &WorkingTree,
+        paths: &[String],
+        side: Side,
+        whole_file: bool,
+        from: usize,
+        budget: usize,
+        cancel: &AtomicBool,
+    ) -> Result<DiffPage> {
         let list = match side {
             Side::Staged => &tree.staged,
             Side::Unstaged => &tree.unstaged,
         };
-        paths
+        // A path in both lists is the side's own change.
+        let mut by_path: HashMap<&str, &FileChange> = tree.conflicted.iter().map(|f| (f.path.as_str(), f)).collect();
+        by_path.extend(list.iter().map(|f| (f.path.as_str(), f)));
+        let files: Vec<&FileChange> = paths.iter().filter_map(|p| by_path.get(p.as_str()).copied()).collect();
+        let mut end = from.min(files.len());
+        let mut lines = 0usize;
+        while end < files.len() && (end == from || (lines < budget && end - from < PAGE_FILES)) {
+            // A card (binary, too large, a submodule) takes about as much room as a few lines.
+            lines += (files[end].additions + files[end].deletions) as usize + 6;
+            end += 1;
+        }
+        let page = &files[from.min(end)..end];
+        let next = (end < files.len()).then_some(end);
+        let stopped = || cancel.load(Ordering::Relaxed);
+        if stopped() {
+            return Err(Error::Cancelled);
+        }
+
+        let max_lines = self.diff_options().max_lines;
+        let mut patches: HashMap<String, String> = HashMap::new();
+        let tracked: Vec<&str> = page
             .iter()
-            .filter_map(|path| list.iter().chain(&tree.conflicted).find(|f| &f.path == path))
-            .map(|file| self.diff_of(file.clone(), side, whole_file))
+            .filter(|f| {
+                f.submodule.is_none()
+                    && !matches!(f.status, FileStatus::Untracked | FileStatus::Conflicted)
+                    && !self.needs_no_patch(f, max_lines)
+            })
+            .map(|f| f.path.as_str())
+            .collect();
+        if !tracked.is_empty() {
+            patches.extend(self.batch_patches(&tracked, side, whole_file)?);
+        }
+        let fresh: Vec<&FileChange> = page
+            .iter()
+            .copied()
+            .filter(|f| f.status == FileStatus::Untracked && !self.needs_no_patch(f, max_lines))
+            .collect();
+        if !fresh.is_empty() {
+            if stopped() {
+                return Err(Error::Cancelled);
+            }
+            patches.extend(self.untracked_patches(&fresh));
+        }
+
+        let mut diffs = Vec::with_capacity(page.len());
+        for file in page {
+            let file = (*file).clone();
+            diffs.push(match patches.remove(&file.path) {
+                Some(patch) => self.diff_from_patch(file, side, &patch, false),
+                // Files outside the batch, or whose part of it git did not print as expected,
+                // take a command of their own.
+                None => {
+                    if stopped() {
+                        return Err(Error::Cancelled);
+                    }
+                    self.diff_of(file, side, whole_file)?
+                }
+            });
+        }
+        Ok(DiffPage {
+            diffs,
+            next,
+            files: files.len(),
+        })
+    }
+
+    /// The patches of tracked `paths` on `side` from one `git diff`, by path. A path whose part
+    /// is missing or cut short is left out, for a command of its own.
+    fn batch_patches(&self, paths: &[&str], side: Side, whole_file: bool) -> Result<HashMap<String, String>> {
+        let context = self.context_arg(whole_file);
+        let mut args: Vec<String> = [
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-renames",
+            "--full-index",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            &context,
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        if side == Side::Staged {
+            args.push("--cached".into());
+        }
+        args.push("--".into());
+        args.extend(paths.iter().map(|p| literal(p)));
+        let out = self.spawn_within(&GitCommand::new(args), MAX_PATCH_BYTES)?;
+        // A failed batch leaves every file to its own command, which says what went wrong.
+        if !out.success && !out.cut {
+            return Ok(HashMap::new());
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut parts = split_patches(&text);
+        // The last part of a cut patch stops short.
+        if out.cut {
+            parts.pop();
+        }
+        let wanted: std::collections::HashSet<&str> = paths.iter().copied().collect();
+        Ok(parts
+            .into_iter()
+            .filter(|(path, _)| wanted.contains(path.as_str()))
+            .map(|(path, patch)| (path, patch.to_owned()))
+            .collect())
+    }
+
+    /// The patches of new files, as `git diff --no-index /dev/null <file>` prints them, made from
+    /// the files themselves. Files git would show another way (a symlink, an attribute that
+    /// turns off or changes their diff, one that can't be read) are left out, for git itself.
+    fn untracked_patches(&self, files: &[&FileChange]) -> HashMap<String, String> {
+        let mut args = vec![
+            "check-attr".to_owned(),
+            "-z".to_owned(),
+            "diff".to_owned(),
+            "--".to_owned(),
+        ];
+        args.extend(files.iter().map(|f| f.path.clone()));
+        let Ok(out) = self.run(&GitCommand::new(args)) else {
+            return HashMap::new();
+        };
+        // `<path>\0diff\0<value>\0` for each path.
+        let fields: Vec<&str> = out.stdout.split('\0').collect();
+        let plain: std::collections::HashSet<&str> = fields
+            .chunks(3)
+            .filter(|f| f.len() == 3 && matches!(f[2], "unspecified" | "set"))
+            .map(|f| f[0])
+            .collect();
+        files
+            .iter()
+            .filter(|f| plain.contains(f.path.as_str()))
+            .filter_map(|f| {
+                let path = self.workdir().join(&f.path);
+                let meta = std::fs::symlink_metadata(&path).ok().filter(|m| m.is_file())?;
+                let data = crate::lfs::read_regular(&path, MAX_COUNTED_BYTES)?;
+                Some((f.path.clone(), untracked_patch(&f.path, &data, executable(&meta))))
+            })
             .collect()
+    }
+
+    /// The `-U` option for a compact or whole-file diff.
+    fn context_arg(&self, whole_file: bool) -> String {
+        if whole_file {
+            "-U100000000".to_owned()
+        } else {
+            format!("-U{}", self.diff_options().context_lines)
+        }
+    }
+
+    /// Whether `file`'s lines are not shown, so its patch is never read: past the line limit, or
+    /// a new file too big to have its lines counted.
+    fn needs_no_patch(&self, file: &FileChange, max_lines: u32) -> bool {
+        let changed = (file.additions + file.deletions) as usize;
+        let uncounted = file.status == FileStatus::Untracked
+            && std::fs::symlink_metadata(self.workdir().join(&file.path))
+                .is_ok_and(|m| m.is_file() && m.len() > MAX_COUNTED_BYTES);
+        !file.binary && file.lfs.is_none() && (over_limit(file, max_lines) || changed > MAX_DIFF_LINES || uncounted)
     }
 
     /// The diff of `file`, one entry of the working tree, on `side`.
@@ -674,15 +856,10 @@ impl Repo {
             return Ok(self.submodule_diff(file, sub, side));
         }
         // The counts of `git diff --numstat` say beforehand when no lines will be shown: the
-        // patch is then never read, only the ids of the two sides.
+        // patch is then never read, only the ids of the two sides. An untracked file too big to
+        // have its lines counted is all added lines.
         let max_lines = self.diff_options().max_lines;
-        let changed = (file.additions + file.deletions) as usize;
-        // An untracked file too big to have its lines counted is all added lines.
-        let uncounted = file.status == FileStatus::Untracked
-            && std::fs::symlink_metadata(self.workdir().join(&file.path))
-                .is_ok_and(|m| m.is_file() && m.len() > MAX_COUNTED_BYTES);
-        if !file.binary && file.lfs.is_none() && (over_limit(&file, max_lines) || changed > MAX_DIFF_LINES || uncounted)
-        {
+        if self.needs_no_patch(&file, max_lines) {
             let ids = self.blob_ids(&file, side).unwrap_or_default();
             let blob = |id: &Option<String>| id.clone().filter(|id| id.bytes().any(|b| b != b'0'));
             let old = blob(&ids.0).map(|id| Source::Blob { id });
@@ -704,8 +881,14 @@ impl Repo {
             });
         }
         let (patch, cut) = self.raw_diff_within(&file, side, whole_file, MAX_PATCH_BYTES)?;
+        Ok(self.diff_from_patch(file, side, &patch, cut))
+    }
+
+    /// The diff of `file` on `side` from its `patch`, which was `cut` short when too long.
+    fn diff_from_patch(&self, file: FileChange, side: Side, patch: &str, cut: bool) -> FileDiff {
+        let max_lines = self.diff_options().max_lines;
         // Past this many lines nothing is shown, so the rest of the patch is not turned into lines.
-        let mut parsed = parse_patch_within(&patch, MAX_DIFF_LINES);
+        let mut parsed = parse_patch_within(patch, MAX_DIFF_LINES);
         parsed.cut |= cut;
         let mut hunks: Vec<Hunk> = parsed.hunks.into_iter().map(|h| h.hunk).collect();
         // Lines the secrets check would stop a commit on get a mark before they are staged.
@@ -768,7 +951,7 @@ impl Repo {
         }
         let limited = !parsed.cut && over_limit(&file, max_lines);
         let too_large = parsed.cut || (!limited && hunks.iter().map(|h| h.lines.len()).sum::<usize>() > MAX_DIFF_LINES);
-        Ok(FileDiff {
+        FileDiff {
             file,
             hunks: if too_large || limited { Vec::new() } else { hunks },
             too_large,
@@ -776,7 +959,7 @@ impl Repo {
             old,
             new,
             submodule: None,
-        })
+        }
     }
 
     /// A submodule's entry on one side of the working copy: the commit the index records against
@@ -1731,11 +1914,7 @@ impl Repo {
     /// [`Repo::raw_diff`], reading at most `max` bytes of the patch: whether it was cut there
     /// comes with it. A whole-file patch of a huge file is never read further than shown.
     fn raw_diff_within(&self, file: &FileChange, side: Side, whole_file: bool, max: usize) -> Result<(String, bool)> {
-        let context = if whole_file {
-            "-U100000000".to_owned()
-        } else {
-            format!("-U{}", self.diff_options().context_lines)
-        };
+        let context = self.context_arg(whole_file);
         let mut args = vec![
             "diff",
             "--no-color",
@@ -2067,6 +2246,127 @@ fn parse_status(out: &str) -> WorkingTree {
         }
     }
     tree
+}
+
+/// Split the output of `git diff` (with `a/` and `b/` prefixes and no renames) into each file's
+/// part, by path. A part whose path can't be read from its `diff --git` line is left out.
+fn split_patches(text: &str) -> Vec<(String, &str)> {
+    let mut starts: Vec<usize> = Vec::new();
+    let mut at = 0;
+    for line in text.split_inclusive('\n') {
+        if line.starts_with("diff --git ") {
+            starts.push(at);
+        }
+        at += line.len();
+    }
+    starts.push(text.len());
+    starts
+        .windows(2)
+        .filter_map(|w| {
+            let part = &text[w[0]..w[1]];
+            let first = part.lines().next()?;
+            Some((patch_path(first.strip_prefix("diff --git ")?)?, part))
+        })
+        .collect()
+}
+
+/// The path of a `diff --git a/<path> b/<path>` line without renames: both halves are the same
+/// path, quoted by git when it has unusual characters.
+fn patch_path(rest: &str) -> Option<String> {
+    if rest.starts_with('"') {
+        let (old, tail) = unquote(rest)?;
+        let new = tail.strip_prefix(' ')?;
+        let new = if new.starts_with('"') {
+            unquote(new)?.0
+        } else {
+            new.to_owned()
+        };
+        let path = old.strip_prefix("a/")?;
+        return (new.strip_prefix("b/")? == path).then(|| path.to_owned());
+    }
+    // `a/` + path + ` b/` + path.
+    let len = rest.len().checked_sub(5)? / 2;
+    let path = rest.get(2..2 + len)?;
+    (rest.get(..2)? == "a/" && rest.get(2 + len..5 + len)? == " b/" && rest.get(5 + len..)? == path)
+        .then(|| path.to_owned())
+}
+
+/// A path git quoted C-style (`"dir/\303\244.txt"`), and what follows it.
+fn unquote(text: &str) -> Option<(String, &str)> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 1;
+    loop {
+        match *bytes.get(i)? {
+            b'"' => return Some((String::from_utf8_lossy(&out).into_owned(), &text[i + 1..])),
+            b'\\' => {
+                let c = *bytes.get(i + 1)?;
+                if c.is_ascii_digit() {
+                    let digits = text.get(i + 1..i + 4)?;
+                    out.push(u8::from_str_radix(digits, 8).ok()?);
+                    i += 4;
+                    continue;
+                }
+                out.push(match c {
+                    b'a' => 7,
+                    b'b' => 8,
+                    b't' => b'\t',
+                    b'n' => b'\n',
+                    b'v' => 11,
+                    b'f' => 12,
+                    b'r' => b'\r',
+                    other => other,
+                });
+                i += 2;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+}
+
+/// Whether a file has its executable bit, which git records as mode 100755.
+#[cfg(unix)]
+fn executable(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    meta.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn executable(_meta: &std::fs::Metadata) -> bool {
+    false
+}
+
+/// The patch `git diff --no-index /dev/null <path>` prints for a new file holding `data`: every
+/// line added, or a note that the file is binary.
+fn untracked_patch(path: &str, data: &[u8], executable: bool) -> String {
+    let mode = if executable { "100755" } else { "100644" };
+    let mut patch = format!("diff --git a/{path} b/{path}\nnew file mode {mode}\n");
+    if data.iter().take(8000).any(|&b| b == 0) {
+        patch.push_str(&format!("Binary files /dev/null and b/{path} differ\n"));
+        return patch;
+    }
+    if data.is_empty() {
+        return patch;
+    }
+    let text = String::from_utf8_lossy(data);
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let range = if lines.len() == 1 {
+        "+1".to_owned()
+    } else {
+        format!("+1,{}", lines.len())
+    };
+    patch.push_str(&format!("--- /dev/null\n+++ b/{path}\n@@ -0,0 {range} @@\n"));
+    for line in &lines {
+        patch.push('+');
+        patch.push_str(line);
+    }
+    if !text.ends_with('\n') {
+        patch.push_str("\n\\ No newline at end of file\n");
+    }
+    patch
 }
 
 struct ParsedHunk {

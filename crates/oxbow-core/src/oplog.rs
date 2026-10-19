@@ -484,7 +484,8 @@ impl Repo {
             .ok()
             .map(|o| o.stdout.trim().to_owned());
         let files = self
-            .tree_files(&then, &now)?
+            // Counted by the Compare view, after the first page of diffs.
+            .tree_files_with(&then, &now, None, &std::sync::atomic::AtomicBool::new(false))?
             .into_iter()
             .map(|file| crate::compare::CompareFile {
                 file,

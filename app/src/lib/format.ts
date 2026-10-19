@@ -84,6 +84,16 @@ export function splitPath(path: string): { dir: string; name: string } {
   return i < 0 ? { dir: "", name: path } : { dir: path.slice(0, i + 1), name: path.slice(i + 1) };
 }
 
+/** File tabs drawn at most: thousands of files draw the ones around the open tab. */
+export const TAB_WINDOW = 100;
+
+/** Which of `count` file tabs to draw, around the open one at `at` (-1 when none is). */
+export function tabWindow(count: number, at: number): { start: number; end: number } {
+  if (count <= TAB_WINDOW) return { start: 0, end: count };
+  const start = Math.max(0, Math.min(Math.max(at, 0) - TAB_WINDOW / 2, count - TAB_WINDOW));
+  return { start, end: start + TAB_WINDOW };
+}
+
 /**
  * Short labels for file tabs: the file name, and for files that share a name, as many parent
  * folders as it takes to tell them apart, like PyCharm: "email/README.md", "resetpwd/README.md".

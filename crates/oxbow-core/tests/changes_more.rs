@@ -284,3 +284,79 @@ fn working_diffs_follow_the_paths_on_one_side() {
     assert_eq!(staged[0].hunks.len(), 1);
     assert_eq!(paths(staged), ["b.txt"]);
 }
+
+#[test]
+fn a_page_of_working_diffs_matches_each_file_read_alone() {
+    use std::sync::atomic::AtomicBool;
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", BEFORE, "Root");
+    fx.commit("dir with space/b.txt", BEFORE, "Second");
+    fx.commit("ünï \"q\".txt", BEFORE, "Third");
+    fx.commit("gone.txt", BEFORE, "Fourth");
+    fx.commit("x b/x", BEFORE, "Fifth");
+    fx.write("a.txt", AFTER);
+    fx.write("dir with space/b.txt", AFTER);
+    fx.git(&["add", "dir with space/b.txt"]);
+    fx.write("dir with space/b.txt", "zero\none\nTWO\n2a\n2b\nthree\nfour\nfive\n");
+    fx.write("ünï \"q\".txt", "one\ntwo\n");
+    fx.write("x b/x", AFTER);
+    std::fs::remove_file(fx.path().join("gone.txt")).unwrap();
+    // New files of every kind the page reads itself, or leaves to git.
+    fx.write("new/plain.txt", "fresh\nlines\n");
+    fx.write("new/one.txt", "single");
+    fx.write("new/crlf.txt", "a\r\nb\r\n");
+    fx.write("new/empty.txt", "");
+    fx.write("new/ünï.txt", "ü\n");
+    std::fs::write(fx.path().join("new/blob.bin"), b"\0\x01\x02").unwrap();
+    fx.write("new/nodiff.dat", "text\n");
+    fx.write(".gitattributes", "*.dat -diff\n");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fx.write("new/run.sh", "#!/bin/sh\necho hi\n");
+        std::fs::set_permissions(fx.path().join("new/run.sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink("plain.txt", fx.path().join("new/link")).unwrap();
+    }
+    let repo = Repo::open(fx.path()).unwrap();
+    let tree = repo.working_tree().unwrap();
+
+    for side in [Side::Unstaged, Side::Staged] {
+        let list = if side == Side::Staged {
+            &tree.staged
+        } else {
+            &tree.unstaged
+        };
+        let paths: Vec<String> = list.iter().map(|f| f.path.clone()).collect();
+        for whole in [false, true] {
+            let never = AtomicBool::new(false);
+            let page = repo
+                .working_diff_page(&tree, &paths, side, whole, 0, usize::MAX, &never)
+                .unwrap();
+            assert_eq!(page.next, None);
+            assert_eq!(page.diffs.len(), paths.len());
+            for (diff, path) in page.diffs.iter().zip(&paths) {
+                let alone = repo.working_diff(path, side, whole).unwrap();
+                assert_eq!(
+                    serde_json::to_value(diff).unwrap(),
+                    serde_json::to_value(&alone).unwrap(),
+                    "{path} on {side:?}, whole file: {whole}"
+                );
+            }
+        }
+    }
+
+    // Pages follow the budget, each with at least one file, and a set Stop stops them.
+    let paths: Vec<String> = tree.unstaged.iter().map(|f| f.path.clone()).collect();
+    let never = AtomicBool::new(false);
+    let first = repo
+        .working_diff_page(&tree, &paths, Side::Unstaged, false, 0, 1, &never)
+        .unwrap();
+    assert_eq!(first.diffs.len(), 1);
+    assert_eq!(first.next, Some(1));
+    assert_eq!(first.files, paths.len());
+    let stop = AtomicBool::new(true);
+    assert!(matches!(
+        repo.working_diff_page(&tree, &paths, Side::Unstaged, false, 0, 1, &stop),
+        Err(oxbow_core::Error::Cancelled)
+    ));
+}
