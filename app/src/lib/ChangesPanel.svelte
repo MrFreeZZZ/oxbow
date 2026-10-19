@@ -143,6 +143,8 @@
   let shown = $state<{ unstaged: FileDiff[]; staged: FileDiff[] }>({ unstaged: [], staged: [] });
   /** Files ticked in each list, for Stage Selected and Unstage Selected. */
   let ticked = $state<{ unstaged: string[]; staged: string[] }>({ unstaged: [], staged: [] });
+  /** The same ticks as sets, so a list of thousands of files checks each one at once. */
+  const tickedSet = $derived({ unstaged: new Set(ticked.unstaged), staged: new Set(ticked.staged) });
   let whole = $state(wholeByDefault());
   // Diff & Text's default view applies again when it changes.
   $effect(() => {
@@ -162,7 +164,9 @@
   const unstaged = $derived(tree?.unstaged ?? []);
   const conflicted = $derived(tree?.conflicted ?? []);
   const stagedPaths = $derived(new Set(staged.map((f) => f.path)));
-  const unstagedPaths = $derived(new Set(unstaged.map((f) => f.path)));
+  /** Each list's files by path, for the other side of a file staged in part. */
+  const stagedByPath = $derived(new Map(staged.map((f) => [f.path, f])));
+  const unstagedByPath = $derived(new Map(unstaged.map((f) => [f.path, f])));
   /** Every changed file once, for the tabs: staged first, then the rest, each in list order. A file
    *  staged in part sits with the staged ones. */
   const stagedTabs = $derived(staged.map((f) => f.path));
@@ -323,25 +327,28 @@
   /** Ticks or unticks a file; with `range`, ticks every file from the last one clicked to it. */
   function tick(group: Side, path: string, range = false) {
     const list = ticked[group];
+    const on = tickedSet[group];
     if (range && anchor?.group === group) {
       const seq = order(group);
       const from = seq.indexOf(anchor.path);
       const to = seq.indexOf(path);
       if (from >= 0 && to >= 0) {
         const span = seq.slice(Math.min(from, to), Math.max(from, to) + 1);
-        ticked = { ...ticked, [group]: [...new Set([...list, ...span])] };
+        ticked = { ...ticked, [group]: [...list, ...span.filter((p) => !on.has(p))] };
         return;
       }
     }
-    ticked = { ...ticked, [group]: list.includes(path) ? list.filter((p) => p !== path) : [...list, path] };
+    ticked = { ...ticked, [group]: on.has(path) ? list.filter((p) => p !== path) : [...list, path] };
     anchor = { group, path };
   }
 
   /** Ticks all of these files, or unticks them when they all are. */
   function tickAll(group: Side, paths: string[]) {
     const list = ticked[group];
-    const all = paths.length > 0 && paths.every((p) => list.includes(p));
-    ticked = { ...ticked, [group]: all ? list.filter((p) => !paths.includes(p)) : [...new Set([...list, ...paths])] };
+    const on = tickedSet[group];
+    const all = paths.length > 0 && paths.every((p) => on.has(p));
+    const these = new Set(paths);
+    ticked = { ...ticked, [group]: all ? list.filter((p) => !these.has(p)) : [...list, ...[...these].filter((p) => !on.has(p))] };
   }
 
   /** A click on a checkbox: the browser has already flipped it, so it shows the tick as kept. */
@@ -359,7 +366,7 @@
   }
 
   /** Only ticked files that are listed: the filter can hide some. */
-  const pickedFiles = (group: Side) => (group === "staged" ? shownStaged : shownUnstaged).filter((f) => ticked[group].includes(f.path));
+  const pickedFiles = (group: Side) => (group === "staged" ? shownStaged : shownUnstaged).filter((f) => tickedSet[group].has(f.path));
   const tickedUnstaged = $derived(pickedFiles("unstaged"));
   const tickedStaged = $derived(pickedFiles("staged"));
 
@@ -381,7 +388,8 @@
     const files = pickedFiles(group);
     if (!files.length) return;
     const done = await (how === "discard" ? discard(files) : group === "staged" ? unstage(files) : stage(files));
-    if (done) ticked = { ...ticked, [group]: ticked[group].filter((p) => !files.some((f) => f.path === p)) };
+    const gone = new Set(files.map((f) => f.path));
+    if (done) ticked = { ...ticked, [group]: ticked[group].filter((p) => !gone.has(p)) };
   }
 
   const name = (files: FileChange[]): Part[] =>
@@ -632,9 +640,9 @@
 {#snippet fileRow(file: FileChange, group: "staged" | "unstaged" | "conflicted", nested: boolean)}
   {@const p = splitPath(file.path)}
   {@const b = badge[file.status]}
-  {@const on = group !== "conflicted" && ticked[group].includes(file.path)}
+  {@const on = group !== "conflicted" && tickedSet[group].has(file.path)}
   <!-- The part of a file staged in part that the other list holds. -->
-  {@const other = group === "staged" ? unstaged.find((f) => f.path === file.path) : group === "unstaged" ? staged.find((f) => f.path === file.path) : undefined}
+  {@const other = group === "staged" ? unstagedByPath.get(file.path) : group === "unstaged" ? stagedByPath.get(file.path) : undefined}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="file" class:ticked={on} class:nested oncontextmenu={(e) => fileMenu(e, file, group)}>
     {#if group !== "conflicted"}
@@ -643,7 +651,7 @@
         checked={on}
         aria-label="Select {file.path}"
         title={group === "staged" ? "Select for Unstage Selected · Shift-click selects a range" : "Select for Stage or Discard Selected · Shift-click selects a range"}
-        onclick={(e) => tickBox(e, group, () => tick(group, file.path, e.shiftKey), () => ticked[group].includes(file.path))}
+        onclick={(e) => tickBox(e, group, () => tick(group, file.path, e.shiftKey), () => tickedSet[group].has(file.path))}
       />
     {/if}
     <button class="name" onclick={(e) => rowClick(e, file, group)} title="{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}{group === 'conflicted' ? '' : ` · ${modClick} to select`}">
@@ -673,14 +681,14 @@
 <!-- Ticks every listed file of a list, or none. -->
 {#snippet groupBox(group: Side, files: FileChange[])}
   {#if files.length}
-    {@const n = files.filter((f) => ticked[group].includes(f.path)).length}
+    {@const n = files.filter((f) => tickedSet[group].has(f.path)).length}
     <input
       type="checkbox"
       checked={n === files.length}
       indeterminate={n > 0 && n < files.length}
       aria-label={group === "staged" ? "Select every staged file" : "Select every unstaged file"}
       title={n === files.length ? "Select none" : "Select all"}
-      onclick={(e) => tickBox(e, group, () => tickAll(group, files.map((f) => f.path)), () => files.every((f) => ticked[group].includes(f.path)))}
+      onclick={(e) => tickBox(e, group, () => tickAll(group, files.map((f) => f.path)), () => files.every((f) => tickedSet[group].has(f.path)))}
     />
   {/if}
 {/snippet}
@@ -690,7 +698,7 @@
     {#each byFolder(files) as folder (folder.dir)}
       {@const key = `${group}:${folder.dir}`}
       {@const open = !folded.has(key)}
-      {@const n = group === "conflicted" ? 0 : folder.files.filter((f) => ticked[group].includes(f.path)).length}
+      {@const n = group === "conflicted" ? 0 : folder.files.filter((f) => tickedSet[group].has(f.path)).length}
       <div class="folder">
         {#if group !== "conflicted"}
           <input
@@ -699,7 +707,7 @@
             indeterminate={n > 0 && n < folder.files.length}
             aria-label="Select the files in {folder.dir || 'the top folder'}"
             title="Select the files in this folder"
-            onclick={(e) => tickBox(e, group, () => tickAll(group, folder.files.map((f) => f.path)), () => folder.files.every((f) => ticked[group].includes(f.path)))}
+            onclick={(e) => tickBox(e, group, () => tickAll(group, folder.files.map((f) => f.path)), () => folder.files.every((f) => tickedSet[group].has(f.path)))}
           />
         {/if}
         <button class="fold" aria-expanded={open} onclick={() => fold(key)} title={folder.dir || "The repository's top folder"}>
@@ -880,9 +888,9 @@
           {/if}
         </div>
       </div>
-      {#if staged.some((f) => unstagedPaths.has(f.path))}<div class="tip"><TipCard id="partlyStaged" /></div>{/if}
+      {#if staged.some((f) => unstagedByPath.has(f.path))}<div class="tip"><TipCard id="partlyStaged" /></div>{/if}
     {:else}
-      {@const inCommit = staged.find((f) => f.path === tab)}
+      {@const inCommit = stagedByPath.get(tab)}
       {@const out = [...conflicted, ...unstaged].find((f) => f.path === tab)}
       <!-- What of this file the next commit takes, and what it leaves in the folder. -->
       <div class="split" aria-label="This file and the next commit">

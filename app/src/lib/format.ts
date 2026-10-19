@@ -97,7 +97,10 @@ export function tabLabels(paths: string[]): Map<string, string> {
     const seen = new Map<string, string[]>();
     for (const p of paths) {
       const l = label(p, depth.get(p)!);
-      seen.set(l, [...(seen.get(l) ?? []), p]);
+      // Grow the group in place: copying it on every add costs N² for thousands of index.ts.
+      const group = seen.get(l);
+      if (group) group.push(p);
+      else seen.set(l, [p]);
     }
     let grew = false;
     for (const group of seen.values()) {
