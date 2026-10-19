@@ -5,8 +5,13 @@
 //! Each fix is a few steps of commands Oxbow already runs elsewhere (switch, branch, cherry-pick,
 //! revert, reset, stash), chosen from how the repository looks: whether the commits are pushed,
 //! and whether uncommitted files are in a step's way. The plan is made from the state the sheet
-//! showed, so before anything runs that state is checked again: if HEAD, the branch, its upstream
-//! or the changed files moved meanwhile, nothing runs and the sheet asks again with a new plan.
+//! showed, so before anything runs that state is checked again: if HEAD, the branch, its upstream,
+//! the remote branches or the changed files moved meanwhile, nothing runs and the sheet asks again
+//! with a new plan.
+//!
+//! A step can stop on conflicts part way. The steps left are written down then, so Continue runs
+//! them after the picked or reverted commit, and Abort goes back to the branch the fix started on
+//! with the files that were put aside.
 
 use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
@@ -17,6 +22,7 @@ use crate::cli::{GitCommand, literal};
 use crate::config;
 use crate::edit::{ResetMode, plan_reset};
 use crate::error::{Error, Result};
+use crate::operation::OperationKind;
 use crate::reflog::ReflogEntry;
 use crate::repo::Repo;
 use crate::worktree::Action;
@@ -58,8 +64,12 @@ pub struct FixExpect {
     pub branch: Option<String>,
     /// Where the checked-out branch's upstream is; `None` without one.
     pub upstream: Option<String>,
-    /// A fingerprint of the paths with uncommitted changes, staged or not: what decides whether
-    /// a step needs them put aside.
+    /// A fingerprint of every remote-tracking branch and where it is: what decides whether
+    /// commits are pushed, and so whether they are moved or reverted.
+    #[serde(default)]
+    pub remotes: String,
+    /// A fingerprint of the paths with uncommitted changes and whether each is staged, unstaged
+    /// or conflicted: what decides whether a step needs them put aside.
     pub files: String,
 }
 
@@ -70,7 +80,7 @@ pub struct FixFile {
     pub path: String,
     /// `modified`, `new`, `deleted` or `renamed`.
     pub status: String,
-    /// Some of its changes are staged: they go into the commit whether it is picked or not.
+    /// Some of its changes are staged.
     pub staged: bool,
     /// Some of its changes are not staged: picking it stages them.
     pub unstaged: bool,
@@ -223,20 +233,24 @@ impl Repo {
     fn fix_expect_from(&self, tree: &crate::worktree::WorkingTree) -> Result<FixExpect> {
         let head = self.head()?;
         let upstream = head.branch.as_deref().and_then(|branch| self.upstream_tip(branch));
-        let paths: BTreeSet<&str> = tree
-            .staged
-            .iter()
-            .chain(&tree.unstaged)
-            .chain(&tree.conflicted)
-            .map(|f| f.path.as_str())
+        let paths: BTreeSet<(u8, &str)> = [&tree.staged, &tree.unstaged, &tree.conflicted]
+            .into_iter()
+            .enumerate()
+            .flat_map(|(side, files)| files.iter().map(move |f| (side as u8, f.path.as_str())))
             .collect();
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        paths.hash(&mut hasher);
+        let remotes = self
+            .run(&GitCommand::new([
+                "for-each-ref",
+                "--format=%(objectname) %(refname)",
+                "refs/remotes",
+            ]))?
+            .stdout;
         Ok(FixExpect {
             head: head.commit,
             branch: head.branch,
             upstream,
-            files: format!("{:016x}", hasher.finish()),
+            remotes: fingerprint(&remotes),
+            files: fingerprint(&paths),
         })
     }
 
@@ -260,6 +274,8 @@ impl Repo {
             "HEAD moved"
         } else if now.upstream != expect.upstream {
             "the upstream branch moved"
+        } else if now.remotes != expect.remotes {
+            "a remote branch moved"
         } else if now.files != expect.files {
             "the changed files are different"
         } else {
@@ -473,6 +489,12 @@ impl Repo {
             return Err(Error::Git("there is no commit yet".into()));
         }
         let mut plan = FixPlan::new();
+        let mut args: Vec<String> = ["commit", "--amend", "--no-edit"].map(str::to_owned).into();
+        let mut comment = "--no-edit: keep the message as it is".to_owned();
+        if !config::run_hooks() {
+            args.push("--no-verify".to_owned());
+            comment.push_str("; --no-verify: Git hooks are turned off in Settings");
+        }
         if !paths.is_empty() {
             let add = GitCommand::new(
                 ["add".to_owned(), "--".to_owned()]
@@ -481,17 +503,31 @@ impl Repo {
             )
             .comment("stage them, new files included");
             plan.step(StepKind::Stage { paths: paths.to_vec() }, vec![add]);
-        }
-        let mut args = vec!["commit", "--amend", "--no-edit"];
-        let mut comment = "--no-edit: keep the message as it is".to_owned();
-        if !config::run_hooks() {
-            args.push("--no-verify");
-            comment.push_str("; --no-verify: Git hooks are turned off in Settings");
+            // Only the picked files: other staged changes stay staged, out of the commit.
+            args.push("--only".to_owned());
+            args.push("--".to_owned());
+            args.extend(self.amend_paths(paths)?.iter().map(|p| literal(p)));
+            comment.push_str("; --only: just these files, other staged changes stay staged");
         }
         let mut amend = GitCommand::new(args).comment(comment);
         amend.secrets_check = true;
         plan.step(StepKind::Amend, vec![amend]);
         Ok(plan)
+    }
+
+    /// The picked files of Add to the Last Commit, with the old path of a staged rename: the
+    /// commit takes both halves of it.
+    pub(crate) fn amend_paths(&self, paths: &[String]) -> Result<Vec<String>> {
+        let tree = self.working_tree()?;
+        let mut out = paths.to_vec();
+        for file in &tree.staged {
+            if let Some(old) = file.old_path.as_ref().filter(|_| paths.contains(&file.path))
+                && !out.contains(old)
+            {
+                out.push(old.clone());
+            }
+        }
+        Ok(out)
     }
 
     fn plan_revert_pushed(&self, commit: &str, push: bool) -> Result<FixPlan> {
@@ -545,8 +581,10 @@ impl Repo {
         Ok(plan)
     }
 
-    /// Whether uncommitted files are in the way of a step that changes `touched`: then they go
-    /// in the stash first. Untracked files count, since a branch may have a file of that name.
+    /// Whether uncommitted files are in the way of a cherry-pick or revert that changes
+    /// `touched`: then they go in the stash first. Untracked files count, since a branch may have
+    /// a file of that name. Any staged change counts, wherever it is: git picks and reverts only
+    /// with nothing staged.
     fn aside_for(&self, touched: &BTreeSet<String>) -> Result<Option<Aside>> {
         let tree = self.working_tree()?;
         let dirty: BTreeSet<&str> = tree
@@ -555,7 +593,7 @@ impl Repo {
             .chain(&tree.unstaged)
             .flat_map(|f| std::iter::once(f.path.as_str()).chain(f.old_path.as_deref()))
             .collect();
-        if !dirty.iter().any(|p| touched.contains(*p)) {
+        if tree.staged.is_empty() && !dirty.iter().any(|p| touched.contains(*p)) {
             return Ok(None);
         }
         Ok(Some(Aside {
@@ -569,13 +607,18 @@ impl Repo {
             StepKind::Stash { files: aside.files },
             vec![
                 GitCommand::new(["stash", "push", "--include-untracked", "-m", message])
-                    .comment("a later step changes files you have uncommitted edits in; they wait in the stash"),
+                    .comment("a later step needs your uncommitted files out of the way; they wait in the stash"),
             ],
         );
     }
 
     fn pop_step(&self, plan: &mut FixPlan, aside: &Aside) {
-        let mut pop = GitCommand::new(["stash", "pop"]).comment("your uncommitted files come back");
+        let mut pop = GitCommand::new(["stash", "pop", "--index"])
+            .comment("--index: your uncommitted files come back, the staged ones staged too")
+            .fallback(
+                GitCommand::new(["stash", "pop"])
+                    .comment("the staged changes no longer apply on their own: they come back unstaged"),
+            );
         pop.only_if_moved = Some(("refs/stash".to_owned(), aside.before.clone()));
         plan.step(StepKind::Pop, vec![pop]);
     }
@@ -644,7 +687,181 @@ impl Repo {
     }
 }
 
+/// A short hash of `value`, to compare one state with another.
+fn fingerprint(value: impl Hash) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
 /// A full sha reads better short.
 fn short(commit: &str) -> String {
     commit[..commit.len().min(7)].to_owned()
+}
+
+/// Where the steps left of a fix that stopped on conflicts are written down.
+const REST_FILE: &str = "oxbow/fix-rest.json";
+
+/// The steps left of a fix whose cherry-pick or revert stopped on conflicts.
+#[derive(Debug, Serialize, Deserialize)]
+struct FixRest {
+    /// `cherry-pick` or `revert`: the operation the steps wait for.
+    kind: String,
+    /// The branch the operation runs on.
+    branch: Option<String>,
+    /// The branch the fix started on, where Abort goes back to.
+    start: Option<String>,
+    /// The commands after the one that stopped.
+    rest: Vec<SavedCommand>,
+    /// The pop of the files the fix put aside, for Abort.
+    pop: Option<SavedCommand>,
+}
+
+/// A command of a plan as it is written down, to run later.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SavedCommand {
+    args: Vec<String>,
+    comment: Option<String>,
+    #[serde(default)]
+    progress: bool,
+    #[serde(default)]
+    env: Vec<(String, String)>,
+    #[serde(default)]
+    only_if_moved: Option<(String, Option<String>)>,
+    #[serde(default)]
+    fallback: Option<Box<SavedCommand>>,
+}
+
+impl From<&GitCommand> for SavedCommand {
+    fn from(c: &GitCommand) -> Self {
+        SavedCommand {
+            args: c.args.clone(),
+            comment: c.comment.clone(),
+            progress: c.progress,
+            env: c.env.clone(),
+            only_if_moved: c.only_if_moved.clone(),
+            fallback: c.fallback.as_deref().map(|f| Box::new(f.into())),
+        }
+    }
+}
+
+impl From<&SavedCommand> for GitCommand {
+    fn from(c: &SavedCommand) -> Self {
+        let mut command = GitCommand::new(c.args.clone());
+        command.comment = c.comment.clone();
+        command.progress = c.progress;
+        command.env = c.env.clone();
+        command.only_if_moved = c.only_if_moved.clone();
+        command.fallback = c.fallback.as_deref().map(|f| Box::new(f.into()));
+        command
+    }
+}
+
+fn kind_word(kind: OperationKind) -> Option<&'static str> {
+    match kind {
+        OperationKind::CherryPick => Some("cherry-pick"),
+        OperationKind::Revert => Some("revert"),
+        _ => None,
+    }
+}
+
+fn is_pop(command: &GitCommand) -> bool {
+    command.args.len() >= 2 && command.args[0] == "stash" && command.args[1] == "pop"
+}
+
+impl Repo {
+    /// After a command of a fix, or of a Continue of one, failed: when a cherry-pick or revert
+    /// waits on conflicts now, note the commands after it, for Continue and Abort. `start` is the
+    /// branch the fix started on, `commands` the plan that ran.
+    pub(crate) fn note_fix_rest(&self, action: &Action, start: Option<String>, commands: &[GitCommand], failed: usize) {
+        let Some(kind) = self.operation().ok().flatten().and_then(|op| kind_word(op.kind)) else {
+            return;
+        };
+        let (start, pop) = match action {
+            Action::Fix { .. } => (
+                start,
+                // The files were put aside when the first step was a stash, which ran by now.
+                commands
+                    .iter()
+                    .find(|c| is_pop(c))
+                    .filter(|_| {
+                        commands
+                            .first()
+                            .is_some_and(|c| c.args.first().is_some_and(|a| a == "stash"))
+                    })
+                    .map(SavedCommand::from),
+            ),
+            // A Continue that stopped again keeps what the fix noted.
+            _ => match self.read_fix_rest() {
+                Some(rest) => (rest.start, rest.pop),
+                None => return,
+            },
+        };
+        let rest = FixRest {
+            kind: kind.to_owned(),
+            branch: self.head().ok().and_then(|h| h.branch),
+            start,
+            rest: commands[failed + 1..].iter().map(SavedCommand::from).collect(),
+            pop,
+        };
+        if let Ok(file) = self.git_file(REST_FILE)
+            && let Ok(json) = serde_json::to_string(&rest)
+        {
+            if let Some(dir) = file.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(file, json);
+        }
+    }
+
+    fn read_fix_rest(&self) -> Option<FixRest> {
+        serde_json::from_str(&std::fs::read_to_string(self.git_file(REST_FILE).ok()?).ok()?).ok()
+    }
+
+    /// The steps of a fix left for after the operation in progress, if it is a fix's.
+    fn fix_rest(&self, kind: OperationKind) -> Option<FixRest> {
+        let rest = self.read_fix_rest()?;
+        (Some(rest.kind.as_str()) == kind_word(kind) && rest.branch == self.head().ok()?.branch).then_some(rest)
+    }
+
+    /// Whether Continue of the operation in progress runs steps of a fix after it.
+    pub(crate) fn has_fix_rest(&self) -> bool {
+        self.read_fix_rest().is_some()
+    }
+
+    /// What goes after Continue of a cherry-pick or revert of a fix: the fix's steps left.
+    pub(crate) fn fix_rest_after_continue(&self, kind: OperationKind) -> Vec<GitCommand> {
+        self.fix_rest(kind)
+            .map(|rest| rest.rest.iter().map(GitCommand::from).collect())
+            .unwrap_or_default()
+    }
+
+    /// What goes after Abort of a cherry-pick or revert of a fix: back to the branch the fix
+    /// started on, and the files it put aside back. Commits steps before made stay.
+    pub(crate) fn fix_rest_after_abort(&self, kind: OperationKind) -> Vec<GitCommand> {
+        let Some(rest) = self.fix_rest(kind) else {
+            return Vec::new();
+        };
+        let mut commands = Vec::new();
+        if let Some(start) = rest.start.filter(|s| Some(s) != rest.branch.as_ref()) {
+            commands
+                .push(GitCommand::new(["switch", &start]).comment(format!("back to {start}, where the fix started")));
+        }
+        commands.extend(rest.pop.as_ref().map(GitCommand::from));
+        commands
+    }
+
+    /// Forget the steps of a fix once no cherry-pick or revert waits for them.
+    pub(crate) fn forget_fix_rest(&self) {
+        if self.has_fix_rest()
+            && !self
+                .operation()
+                .ok()
+                .flatten()
+                .is_some_and(|op| kind_word(op.kind).is_some())
+            && let Ok(file) = self.git_file(REST_FILE)
+        {
+            let _ = std::fs::remove_file(file);
+        }
+    }
 }

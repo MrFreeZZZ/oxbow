@@ -107,7 +107,7 @@ export function fixChoices(fc: FixContext, busy: string | null): FixChoice[] {
       title: "I forgot a file in the last commit",
       sub: head ? `Add some of your ${plural(state.changed.length, "changed file")} to “${head.summary}”.` : "",
       icon: "stage",
-      off: noCommit ?? (!state.changed.some((f) => f.unstaged) ? "There are no changed files to add." : null),
+      off: noCommit ?? (!state.changed.length ? "There are no changed files to add." : null),
     },
     {
       id: "undo",
@@ -151,8 +151,10 @@ export function fixRequest(fc: FixContext, id: FixId): Request {
       return moveSheet(fc, { count, create: true, to: "", name: "" });
     }
     case "forgot": {
-      const pickable = fc.state.changed.filter((f) => f.unstaged);
-      return forgotSheet(fc, new Set(pickable.length === 1 ? [pickable[0].path] : []));
+      // Files staged already are the ones made ready for it; otherwise a single changed file.
+      const changed = fc.state.changed;
+      const staged = changed.filter((f) => f.staged && !f.unstaged).map((f) => f.path);
+      return forgotSheet(fc, new Set(staged.length ? staged : changed.length === 1 ? [changed[0].path] : []));
     }
     case "undo":
       return undoSheet(fc, "soft");
@@ -179,7 +181,7 @@ function stepWords(ctx: BranchContext, opts: { them?: string; subject?: Part[]; 
         case "stash":
           return {
             parts: ["Put your ", plural(step.files, "uncommitted file"), " aside"],
-            sub: "A later step changes some of them. They come back in the last step.",
+            sub: "A later step needs them out of the way. They come back in the last step, staged ones staged.",
             head: "Put your uncommitted files aside",
           };
         case "createBranch":
@@ -241,12 +243,12 @@ function fixRecovery(fc: FixContext, id: FixId, failure: Failure): Recovery | nu
     return {
       title: "A step stopped on conflicts",
       body: [
-        "The steps before it ran; the rest did not. Pick what goes into each file in the banner above History and continue, or abort there. To go back to how it all was, use Undo in the Operation Log.",
+        "The steps before it ran; the rest wait. Pick what goes into each file in the banner above History, then Continue: it runs the steps left too. Abort there instead takes back this step and goes back to the branch you started on. To go back to how it all was, use Undo in the Operation Log.",
       ],
       icon: "warn",
       tone: "warn",
       close: "OK",
-      note: "If your uncommitted files were put aside, they wait in the stash.",
+      note: "If your uncommitted files were put aside, they come back after Continue or Abort.",
     };
   }
   if (failure.kind === "localChanges") {
@@ -395,8 +397,8 @@ function moveSheet(fc: FixContext, s: Move): Request {
 function forgotSheet(fc: FixContext, picked: Set<string>): Request {
   const { ctx, state } = fc;
   const head = chain(ctx)[0];
-  const pickable = state.changed.filter((f) => f.unstaged);
-  const stagedOnly = state.changed.filter((f) => f.staged && !f.unstaged).map((f) => f.path);
+  // Staged files first: they are the likely ones, and the list shows 15 at most.
+  const pickable = [...state.changed].sort((a, b) => Number(b.staged) - Number(a.staged));
   const paths = pickable.filter((f) => picked.has(f.path)).map((f) => f.path);
   const toggle = (path: string) => {
     const next = new Set(picked);
@@ -405,12 +407,10 @@ function forgotSheet(fc: FixContext, picked: Set<string>): Request {
     return forgotSheet(fc, next);
   };
   const body: Part[] = ["Puts the files you pick into ", { code: shortId(head.id) }, " ", { quote: head.summary }, " on ", here(ctx), ". Its message stays; the commit gets a new SHA."];
-  if (stagedOnly.length) body.push(` Already staged, so ${stagedOnly.length === 1 ? "it goes" : "they go"} in too: `, ...pathList(stagedOnly), ".");
-  if (paths.length < pickable.length) body.push(" The other changed files stay uncommitted.");
+  if (paths.length < pickable.length) body.push(" The other changed files stay as they are, staged or not.");
   const pushed = onRemote(ctx, head);
   const remote = remoteName(ctx);
   const shown = pickable.slice(0, 15);
-  const all = [...stagedOnly, ...paths];
   const action: Action = fixAction(fc, { kind: "addToLast", paths });
   return {
     title: "Add files to the last commit?",
@@ -420,7 +420,7 @@ function forgotSheet(fc: FixContext, picked: Set<string>): Request {
     button: "Add to Commit",
     options: shown.map((f) => ({
       label: f.path,
-      sub: f.staged ? `${f.status}, partly staged` : f.status,
+      sub: f.staged && f.unstaged ? `${f.status}, partly staged: all of it goes in` : f.staged ? `${f.status}, staged` : f.status,
       on: picked.has(f.path),
       toggle: () => toggle(f.path),
     })),
@@ -430,15 +430,15 @@ function forgotSheet(fc: FixContext, picked: Set<string>): Request {
           body: [`The commit gets a new SHA, so the next push has to replace the old one with a force push. Anyone who pulled it keeps the old version.`],
         }
       : pickable.length > shown.length
-        ? { title: `${pickable.length - shown.length} more changed files`, body: ["Only the first 15 are listed. Stage the others in Changes first; staged files go in too."] }
+        ? { title: `${pickable.length - shown.length} more changed files`, body: ["Only the first 15 are listed, staged files first. To add others, stage them in Changes first."] }
         : undefined,
-    invalid: all.length ? null : "Pick the files to add.",
+    invalid: paths.length ? null : "Pick the files to add.",
     note: "Nothing is pushed. Undo takes it back, from the toast or the Operation Log.",
     stepWords: stepWords(ctx),
     back: { label: "Other Fixes", run: fc.back },
     always: true,
     status: "Adding to the last commit…",
-    done: `Added ${all.length === 1 ? all[0] : plural(all.length, "file")} to “${head.summary}”.`,
+    done: `Added ${paths.length === 1 ? paths[0] : plural(paths.length, "file")} to “${head.summary}”.`,
     recover: (failure) =>
       failure.kind === "secrets"
         ? {

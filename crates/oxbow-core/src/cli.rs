@@ -49,6 +49,9 @@ pub struct GitCommand {
     /// Before running, stop when the secrets check finds something in the staged lines, as a
     /// commit does; for a commit that stages its files in an earlier command of the same action.
     pub secrets_check: bool,
+    /// What runs instead when the command fails, e.g. `stash pop` without `--index` when the
+    /// staged changes no longer apply on their own. Shown in the command's comment, not as a line.
+    pub fallback: Option<Box<GitCommand>>,
 }
 
 impl GitCommand {
@@ -69,6 +72,7 @@ impl GitCommand {
             only_if_ancestor: None,
             only_if_moved: None,
             secrets_check: false,
+            fallback: None,
         }
     }
 
@@ -104,6 +108,11 @@ impl GitCommand {
 
     pub fn only_if_ancestor(mut self, ancestor: impl Into<String>, of: impl Into<String>) -> Self {
         self.only_if_ancestor = Some((ancestor.into(), of.into()));
+        self
+    }
+
+    pub fn fallback(mut self, command: GitCommand) -> Self {
+        self.fallback = Some(Box::new(command));
         self
     }
 

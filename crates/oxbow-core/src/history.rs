@@ -90,6 +90,9 @@ pub struct History {
     /// The uncommitted changes the row of uncommitted changes counts; `None` when git could not
     /// list them. The Changes panel shows these, so a reload asks git for them once.
     pub changes: Option<WorkingTree>,
+    /// Stands for the files on disk of `changes`, by size and modification time: an edit that
+    /// keeps the line counts still changes it. For Reload to tell whether anything changed.
+    pub changes_stamp: String,
     /// Which reading of `changes` this is, for diffs of the same files: set by the app, 0 here.
     pub snapshot: u64,
     /// Stands for what the commit rows were built from: the same key, the same rows.
@@ -262,6 +265,17 @@ fn fill_worktree_row(row: &mut HistoryRow, tree: &WorkingTree, operation: Option
 }
 
 impl Repo {
+    /// A hash of the size and modification time of each changed file on disk.
+    fn files_stamp(&self, tree: &WorkingTree) -> String {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for file in tree.staged.iter().chain(&tree.unstaged).chain(&tree.conflicted) {
+            let meta = std::fs::symlink_metadata(self.workdir().join(&file.path)).ok();
+            (&file.path, meta.as_ref().map(|m| (m.len(), m.modified().ok()))).hash(&mut hasher);
+        }
+        format!("{:016x}", hasher.finish())
+    }
+
     /// Stands for the commits where a shallow clone's history stops, as `.git/shallow` lists
     /// them; 0 for a full clone. It changes when a fetch deepens the history, which moves no ref.
     pub fn shallow_stamp(&self) -> u64 {
@@ -415,6 +429,7 @@ impl Repo {
             truncated: built.truncated,
             loaded: built.loaded,
             shallow,
+            changes_stamp: changes.as_ref().map_or_else(String::new, |tree| self.files_stamp(tree)),
             changes,
             snapshot: 0,
             key: key_text,

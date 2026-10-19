@@ -342,17 +342,27 @@ pub(crate) fn scan_patch(patch: &str) -> Vec<SecretFinding> {
 impl Repo {
     /// What looks like a secret in the lines the next commit adds.
     pub fn staged_secrets(&self) -> Result<Vec<SecretFinding>> {
-        let patch = self
-            .run(&GitCommand::new([
-                "diff",
-                "--cached",
-                "--no-color",
-                "--no-ext-diff",
-                "--no-renames",
-                "--text",
-                "-U0",
-            ]))?
-            .stdout;
+        self.staged_secrets_in(&[])
+    }
+
+    /// The same for the staged lines of `paths` only; all of them without any.
+    pub(crate) fn staged_secrets_in(&self, paths: &[String]) -> Result<Vec<SecretFinding>> {
+        let mut args: Vec<String> = [
+            "diff",
+            "--cached",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-renames",
+            "--text",
+            "-U0",
+        ]
+        .map(str::to_owned)
+        .into();
+        if !paths.is_empty() {
+            args.push("--".to_owned());
+            args.extend(paths.iter().map(|p| crate::cli::literal(p)));
+        }
+        let patch = self.run(&GitCommand::new(args))?.stdout;
         Ok(scan_patch(&patch))
     }
 }

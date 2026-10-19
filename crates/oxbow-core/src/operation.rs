@@ -638,6 +638,8 @@ impl Repo {
         if op.kind == OperationKind::Rebase {
             commands.extend(self.return_after(false));
         }
+        // A fix that stopped on this pick or revert goes on with its steps left.
+        commands.extend(self.fix_rest_after_continue(op.kind));
         Ok(commands)
     }
 
@@ -667,6 +669,7 @@ impl Repo {
         if op.kind == OperationKind::Rebase {
             commands.extend(self.return_after(true));
         }
+        commands.extend(self.fix_rest_after_abort(op.kind));
         Ok(commands)
     }
 

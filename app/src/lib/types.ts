@@ -149,6 +149,8 @@ export interface History {
   shallow: boolean;
   /** The uncommitted changes the row of uncommitted changes counts; null when git could not list them. */
   changes: WorkingTree | null;
+  /** Stands for the changed files on disk, by size and modification time. */
+  changesStamp: string;
   /** Which reading of `changes` this is: the Changes panel asks for diffs of the same one. */
   snapshot: number;
   /** Stands for what the commit rows were built from: the same key, the same rows. */
@@ -553,6 +555,7 @@ export interface FixExpect {
   head: string | null;
   branch: string | null;
   upstream: string | null;
+  remotes: string;
   files: string;
 }
 
