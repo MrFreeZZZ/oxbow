@@ -131,6 +131,9 @@
   /** Whether the sidebar is out now: docked in a wide window, slid in over a narrow one. */
   const sideOut = $derived(narrow ? sideShown : !sideHidden);
   const SIDEBAR_KEYS = mac ? "Ctrl+Mod+S" : "Ctrl+Alt+S";
+  /** The sidebar is sliding in or out of a wide window. */
+  let sliding = $state(false);
+  let slideTimer: ReturnType<typeof setTimeout> | undefined;
   /** The sidebar button, always next to the traffic lights as in Mail: a narrow window slides the
    *  sidebar in over the content, a wide one docks or hides it and remembers that. */
   function toggleSidebar() {
@@ -140,6 +143,10 @@
     }
     sideHidden = !sideHidden;
     api.setSetting(settings.sidebarHidden, sideHidden).catch(() => {});
+    // The details panel grows or shrinks in step with the sidebar sliding, so the graph doesn't jump.
+    sliding = true;
+    clearTimeout(slideTimer);
+    slideTimer = setTimeout(() => (sliding = false), 300);
   }
   /** A sidebar action that also slides the sidebar of a narrow window out of the way. */
   function aside<A extends unknown[]>(act: (...args: A) => void): (...args: A) => void {
@@ -166,7 +173,9 @@
   }
   const contentWidth = $derived(windowWidth - (narrow || sideHidden ? 0 : SIDEBAR));
   const panelMax = $derived(Math.max(PANEL_MIN, contentWidth - GRAPH_MIN));
-  const shownPanelWidth = $derived(Math.min(Math.max(panelWidth, PANEL_MIN), panelMax));
+  /** A hidden sidebar's room goes to the details panel, as in Mail: the graph keeps its width and only moves to the edge. */
+  const panelBonus = $derived(!narrow && sideHidden ? SIDEBAR : 0);
+  const shownPanelWidth = $derived(Math.min(Math.max(panelWidth + panelBonus, PANEL_MIN), panelMax));
   /** The screen next to the sidebar. */
   let view = $state<"history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull">("history");
   /** The branch whose stack Edit Stack shows; the checked-out one when null. */
@@ -1184,7 +1193,8 @@
     const target = event.currentTarget as HTMLElement;
     target.setPointerCapture(event.pointerId);
     const move = (e: PointerEvent) => {
-      panelWidth = Math.min(Math.max(startWidth - (e.clientX - startX), PANEL_MIN), panelMax);
+      // Saved without the hidden sidebar's room, so the graph keeps its width when the sidebar comes back.
+      panelWidth = Math.max(Math.min(Math.max(startWidth - (e.clientX - startX), PANEL_MIN), panelMax) - panelBonus, PANEL_MIN);
     };
     const up = () => {
       target.removeEventListener("pointermove", move);
@@ -1294,7 +1304,7 @@
 {#if !repo || !history}
   <Welcome {loading} {error} onOpen={chooseRepo} onOpenPath={load} />
 {:else}
-  <div class="window" class:narrow class:mac class:side-shown={sideShown} class:side-hidden={sideHidden && !narrow}>
+  <div class="window" class:narrow class:mac class:side-shown={sideShown} class:side-hidden={sideHidden && !narrow} class:sliding>
     <button class="capsule side-toggle" onclick={toggleSidebar} aria-label={sideOut ? "Hide sidebar" : "Show sidebar"} aria-expanded={sideOut} title={withKeys(sideOut ? "Hide Sidebar" : "Show Sidebar", SIDEBAR_KEYS)}>
       <svg class="icon" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2" /><path d="M6 3v10" /></svg>
     </button>
@@ -1792,6 +1802,9 @@
       left 0.22s ease,
       padding-left 0.22s ease;
   }
+  .window.sliding :global(aside.panel) {
+    transition: width 0.22s ease;
+  }
   /* A hidden sidebar, or a narrow window, gives the content the whole width. */
   .window.narrow .main,
   .window.side-hidden .main {
@@ -1822,6 +1835,7 @@
     .window.narrow > :global(nav),
     .window.side-hidden > :global(nav),
     .window.narrow.side-shown > :global(nav),
+    .window.sliding :global(aside.panel),
     .main,
     header {
       transition: none;
