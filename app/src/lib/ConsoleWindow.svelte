@@ -533,10 +533,14 @@
     padding: 8px 18px;
     border-top: 0.5px solid var(--term-border);
   }
+  /* The Console keeps the sizes of the window's own text, not the code size of Settings › Text,
+     so its columns line up whatever size the diffs are read in. */
   .time {
     color: var(--term-dim);
-    font-size: var(--code-size);
-    padding-top: 1px;
+    font-size: var(--text-caption);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    padding-top: 2px;
   }
   .head {
     display: flex;
@@ -620,7 +624,7 @@
     margin-top: 3px;
     color: var(--term-dim);
     font-style: italic;
-    font-size: var(--code-size);
+    font-size: var(--text-small);
   }
   .own {
     display: flex;
@@ -630,7 +634,7 @@
   .cmd {
     margin-top: 3px;
     color: var(--term-git);
-    font-size: var(--code-size);
+    font-size: var(--text-small);
     line-height: 1.55;
     white-space: pre-wrap;
     word-break: break-word;
@@ -650,7 +654,7 @@
     padding-left: 14px;
     border-left: 2px solid var(--term-border);
     color: var(--term-out);
-    font-size: var(--code-size);
+    font-size: var(--text-small);
     line-height: 1.6;
     white-space: pre-wrap;
     word-break: break-word;
@@ -716,7 +720,7 @@
     font-size: var(--text-caption);
   }
   .helper .mono {
-    font-size: var(--code-size);
+    font-size: var(--text-small);
     line-height: 1.6;
     word-break: break-word;
   }
