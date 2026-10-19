@@ -35,14 +35,19 @@
     );
     input?.focus();
   });
-  // Show Matching Files lasts until Quick Open closes.
-  $effect(() => () => (nav.quickPattern = null));
+  // Show Matching Files lasts until Quick Open closes, and so does reading the commit's files.
+  const QUICK_LANE = "quick-open";
+  $effect(() => () => {
+    nav.quickPattern = null;
+    api.stopReads([QUICK_LANE]).catch(() => {});
+  });
 
   $effect(() => {
     const id = commit?.id;
     changed = [];
     if (!id) return;
-    api.commitDetail(id).then(
+    // Only the paths are wanted: the quick detail lists them without counting lines.
+    api.commitDetail(id, true, QUICK_LANE).then(
       (d) => {
         if (commit?.id === id) changed = d.files.filter((f) => f.status !== "deleted").map((f) => f.path);
       },
@@ -52,6 +57,8 @@
 
   const present = $derived(new Set(files ?? []));
   const recent = $derived((nav.recentFiles[nav.repo] ?? []).filter((p) => present.has(p)));
+  const recentSet = $derived(new Set(recent));
+  const changedSet = $derived(new Set(changed));
 
   /** Letters of the query in order inside the path; a run inside the file name ranks first. */
   function fuzzy(path: string, q: string): { score: number; hits: number[] } | null {
@@ -112,7 +119,7 @@
       const m = fuzzy(path, q);
       if (!m) continue;
       // Files opened lately or in the selected commit are the likelier ones.
-      const bonus = recent.includes(path) ? 40 : changed.includes(path) ? 20 : 0;
+      const bonus = recentSet.has(path) ? 40 : changedSet.has(path) ? 20 : 0;
       ranked.push({ path, hits: m.hits, from: "all", score: m.score + bonus });
     }
     ranked.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
