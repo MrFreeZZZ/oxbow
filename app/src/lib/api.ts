@@ -223,4 +223,5 @@ export const api = {
 /** Keys of `settings.json`. */
 export const settings = {
   detailsWidth: "oxbow.history.detailsWidth",
+  sidebarHidden: "oxbow.sidebar.hidden",
 };

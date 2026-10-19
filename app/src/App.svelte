@@ -126,6 +126,21 @@
   $effect(() => {
     if (!narrow) sideShown = false;
   });
+  /** The sidebar of a wide window put away with its button, kept in settings.json between launches. */
+  let sideHidden = $state(false);
+  /** Whether the sidebar is out now: docked in a wide window, slid in over a narrow one. */
+  const sideOut = $derived(narrow ? sideShown : !sideHidden);
+  const SIDEBAR_KEYS = mac ? "Ctrl+Mod+S" : "Ctrl+Alt+S";
+  /** The sidebar button, always next to the traffic lights as in Mail: a narrow window slides the
+   *  sidebar in over the content, a wide one docks or hides it and remembers that. */
+  function toggleSidebar() {
+    if (narrow) {
+      sideShown = !sideShown;
+      return;
+    }
+    sideHidden = !sideHidden;
+    api.setSetting(settings.sidebarHidden, sideHidden).catch(() => {});
+  }
   /** A sidebar action that also slides the sidebar of a narrow window out of the way. */
   function aside<A extends unknown[]>(act: (...args: A) => void): (...args: A) => void {
     return (...args) => {
@@ -149,7 +164,7 @@
     entries.push({ kind: "item", label: "Settings…", icon: SETTINGS_ICON, keys: keys("Mod+,"), run: () => api.openSettings() });
     return entries;
   }
-  const contentWidth = $derived(windowWidth - (narrow ? 0 : SIDEBAR));
+  const contentWidth = $derived(windowWidth - (narrow || sideHidden ? 0 : SIDEBAR));
   const panelMax = $derived(Math.max(PANEL_MIN, contentWidth - GRAPH_MIN));
   const shownPanelWidth = $derived(Math.min(Math.max(panelWidth, PANEL_MIN), panelMax));
   /** The screen next to the sidebar. */
@@ -1192,6 +1207,9 @@
     api.getSetting<number>(settings.detailsWidth).then((width) => {
       if (typeof width === "number") panelWidth = Math.max(width, PANEL_MIN);
     });
+    api.getSetting<boolean>(settings.sidebarHidden).then((hidden) => {
+      if (typeof hidden === "boolean") sideHidden = hidden;
+    });
     api.initialRepo().then((path) => {
       if (path) load(path);
       launched = true;
@@ -1243,6 +1261,10 @@
       // ⌘R reloads, as Reload in the repository menu and in Activity do; the webview never reloads itself.
       event.preventDefault();
       reload();
+    } else if ((mac ? event.metaKey && event.ctrlKey && !event.altKey : event.ctrlKey && event.altKey && !event.metaKey) && !event.shiftKey && event.code === "KeyS" && history && !confirm.request && !start.sheet) {
+      // ⌃⌘S shows and hides the sidebar, as in Mail.
+      event.preventDefault();
+      toggleSidebar();
     } else if (event.key === "Escape" && sideShown && !confirm.request && !event.defaultPrevented) {
       sideShown = false;
     } else if (event.key === "Escape" && submoduleSel && view === "history" && !confirm.request && !event.defaultPrevented) {
@@ -1272,7 +1294,10 @@
 {#if !repo || !history}
   <Welcome {loading} {error} onOpen={chooseRepo} onOpenPath={load} />
 {:else}
-  <div class="window" class:narrow class:mac class:side-shown={sideShown}>
+  <div class="window" class:narrow class:mac class:side-shown={sideShown} class:side-hidden={sideHidden && !narrow}>
+    <button class="capsule side-toggle" onclick={toggleSidebar} aria-label={sideOut ? "Hide sidebar" : "Show sidebar"} aria-expanded={sideOut} title={withKeys(sideOut ? "Hide Sidebar" : "Show Sidebar", SIDEBAR_KEYS)}>
+      <svg class="icon" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2" /><path d="M6 3v10" /></svg>
+    </button>
     {#if narrow && sideShown}
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
       <div class="side-catcher" onclick={() => (sideShown = false)}></div>
@@ -1299,11 +1324,6 @@
     <div class="main">
       <header data-tauri-drag-region>
         <div class="lead" data-tauri-drag-region>
-          {#if narrow}
-            <button class="capsule side-toggle" onclick={() => (sideShown = !sideShown)} aria-label={sideShown ? "Hide sidebar" : "Show sidebar"} aria-expanded={sideShown} title={sideShown ? "Hide Sidebar" : "Show Sidebar"}>
-              <svg class="icon" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2" /><path d="M6 3v10" /></svg>
-            </button>
-          {/if}
           {#if view === "file" && !showConflicts}
             {@const back = fileBack === "compare" ? "Compare" : fileBack === "stashes" ? "Stashes" : fileBack === "oplog" ? "Operation Log" : "History"}
             <button class="back" onclick={() => ((view = fileBack), (nav.file = null))} aria-label="Back to {back}" title="Back to {back}">
@@ -1750,19 +1770,46 @@
     display: flex;
     flex-direction: column;
   }
-  /* A narrow window gives the content the whole width; the sidebar slides in over it, on an
-     opaque background, and slides out once something in it is picked or the content is clicked. */
-  .window.narrow .main {
+  /* The sidebar button stays where Mail has it, just right of the traffic lights and on the
+     toolbar's middle line, whether the sidebar is out or not. Elsewhere it opens the toolbar. */
+  .window .side-toggle {
+    position: absolute;
+    z-index: 21;
+    top: 11px;
+    left: 14px;
+    width: 34px;
+    padding: 0;
+    justify-content: center;
+  }
+  .window.mac .side-toggle {
+    left: 88px;
+  }
+  .window > :global(nav),
+  .main,
+  header {
+    transition:
+      transform 0.22s ease,
+      left 0.22s ease,
+      padding-left 0.22s ease;
+  }
+  /* A hidden sidebar, or a narrow window, gives the content the whole width. */
+  .window.narrow .main,
+  .window.side-hidden .main {
     left: 0;
   }
-  .window.narrow > :global(nav) {
-    z-index: 20;
-    background: linear-gradient(var(--side), var(--side)), var(--win);
+  .window.narrow > :global(nav),
+  .window.side-hidden > :global(nav) {
     transform: translateX(-100%);
     visibility: hidden;
     transition:
       transform 0.22s ease,
       visibility 0s linear 0.22s;
+  }
+  /* Over a narrow window the sidebar slides in on an opaque background, and slides out once
+     something in it is picked or the content is clicked. */
+  .window.narrow > :global(nav) {
+    z-index: 20;
+    background: linear-gradient(var(--side), var(--side)), var(--win);
   }
   .window.narrow.side-shown > :global(nav) {
     transform: none;
@@ -1771,8 +1818,12 @@
     transition: transform 0.22s ease;
   }
   @media (prefers-reduced-motion: reduce) {
+    .window > :global(nav),
     .window.narrow > :global(nav),
-    .window.narrow.side-shown > :global(nav) {
+    .window.side-hidden > :global(nav),
+    .window.narrow.side-shown > :global(nav),
+    .main,
+    header {
       transition: none;
     }
   }
@@ -1794,9 +1845,14 @@
   .window.narrow .trail {
     flex: 0 0 auto;
   }
-  /* The traffic lights sit on the sidebar; without it, the toolbar makes room for them. */
-  .window.narrow.mac header {
-    padding-left: 84px;
+  /* The traffic lights and the sidebar button sit on the sidebar; without it, the toolbar makes room for them. */
+  .window.narrow header,
+  .window.side-hidden header {
+    padding-left: 60px;
+  }
+  .window.narrow.mac header,
+  .window.side-hidden.mac header {
+    padding-left: 134px;
   }
   /* Three zones: the two sides share the room equally, so the search sits in the middle of the
      toolbar. In a narrow window the buttons on the right keep their size, and the title and then

@@ -868,7 +868,7 @@
     overflow: hidden;
   }
   .lights {
-    height: 44px;
+    height: 56px;
     flex-shrink: 0;
   }
   .repo {
