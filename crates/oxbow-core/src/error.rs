@@ -31,6 +31,12 @@ pub enum Error {
     /// The secrets check stopped a commit: the staged lines that look like secrets.
     #[error("the staged changes look like they hold a password or key")]
     Secrets(Vec<crate::secrets::SecretFinding>),
+    /// The steps ran, but the files put aside could not come back as they were: their staged
+    /// changes no longer fit on the new commits. The stash keeps them.
+    #[error(
+        "the steps ran, but your uncommitted files are still in the stash: their staged changes no longer fit on top of the new commits. Apply the stash in Stashes to bring them back, unstaged"
+    )]
+    StashKept,
 }
 
 impl Error {

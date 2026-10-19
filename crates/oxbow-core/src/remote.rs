@@ -69,6 +69,8 @@ pub enum FailureKind {
     Secrets,
     /// The repository changed since the action was planned, so nothing ran.
     Changed,
+    /// A fix ran, but the files it put aside stay in the stash: their staged changes no longer fit.
+    StashKept,
     Other,
 }
 
@@ -120,6 +122,10 @@ impl Repo {
         );
         let pre_push = pushing && self.has_pre_push_hook();
         let mut kind = classify_failure(error, pre_push);
+        // git's words depend on its language; files left in conflict don't.
+        if kind == FailureKind::Other && self.conflicted_paths().is_ok_and(|p| !p.is_empty()) {
+            kind = FailureKind::Conflict;
+        }
         let mut hook = pre_push.then(|| "pre-push".to_owned());
         // A commit or an edited message the pre-commit or commit-msg hook stopped. With hooks off
         // in Settings they did not run, so they are not to blame.
@@ -671,6 +677,7 @@ pub fn classify_failure(error: &Error, pushing_with_hook: bool) -> FailureKind {
         Error::Cancelled => return FailureKind::Cancelled,
         Error::Secrets(_) => return FailureKind::Secrets,
         Error::Changed(_) => return FailureKind::Changed,
+        Error::StashKept => return FailureKind::StashKept,
         _ => return FailureKind::Other,
     };
     let has = |needle: &str| output.contains(needle);

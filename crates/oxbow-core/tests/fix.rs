@@ -653,7 +653,7 @@ fn a_staged_file_out_of_the_way_is_put_aside_and_comes_back_staged() {
 }
 
 #[test]
-fn staged_changes_the_revert_moved_from_under_come_back_unstaged() {
+fn staged_changes_the_revert_moved_from_under_stay_in_the_stash() {
     let mut fx = Fixture::new();
     fx.commit("a.txt", "1\n2\n3\n4\n5\n6\n7\n8\n", "Root");
     let bad = fx.commit("a.txt", "1\nX\n3\n4\n5\n6\n7\n8\n", "Break 2");
@@ -668,7 +668,69 @@ fn staged_changes_the_revert_moved_from_under_come_back_unstaged() {
             push: false,
         },
     );
-    repo.perform(&action).unwrap();
-    assert_eq!(read(&fx, "a.txt").unwrap(), "1\n2\n3\n4\nY\n6\n7\n8\n");
+    let err = repo.perform(&action).unwrap_err();
+    assert!(matches!(err, Error::StashKept), "{err:?}");
+    assert_eq!(
+        repo.explain_failure(&action, &err).kind,
+        oxbow_core::FailureKind::StashKept
+    );
+    // The revert is made; the edit waits in the stash, still staged there.
+    assert_eq!(fx.git(&["log", "-1", "--format=%s"]), "Revert \"Break 2\"");
+    assert_eq!(read(&fx, "a.txt").unwrap(), "1\n2\n3\n4\n5\n6\n7\n8\n");
+    assert_eq!(fx.git(&["status", "--porcelain"]), "");
+    assert_eq!(fx.git(&["stash", "list"]).lines().count(), 1);
+    assert_eq!(fx.git(&["show", "stash@{0}^2:a.txt"]), "1\nX\n3\n4\nY\n6\n7\n8");
+}
+
+#[test]
+fn skip_after_a_conflict_keeps_the_commits_where_they_were() {
+    let mut fx = Fixture::new();
+    let (_, tip) = conflicting_move(&mut fx);
+    fx.write("notes.txt", "staged\n");
+    fx.git(&["add", "notes.txt"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let action = fix(
+        &repo,
+        Fix::MoveCommits {
+            count: 1,
+            to: "feature".into(),
+            create: false,
+        },
+    );
+    assert!(repo.perform(&action).is_err());
+    // Skip leaves the commit out of the copy: main is not moved back, the files come back.
+    assert_eq!(
+        displays(&repo, &Action::Skip),
+        ["git cherry-pick --skip", "git stash pop --index"]
+    );
+    repo.perform(&Action::Skip).unwrap();
+    assert_eq!(fx.git(&["rev-parse", "main"]), tip);
+    assert_eq!(fx.git(&["log", "-1", "--format=%s", "feature"]), "Feature work");
+    assert_eq!(fx.git(&["status", "--porcelain"]), "A  notes.txt");
     assert_eq!(fx.git(&["stash", "list"]), "");
+}
+
+#[test]
+fn a_conflict_is_told_apart_whatever_language_git_speaks() {
+    let mut fx = Fixture::new();
+    conflicting_move(&mut fx);
+    let repo = Repo::open(fx.path()).unwrap();
+    let action = fix(
+        &repo,
+        Fix::MoveCommits {
+            count: 1,
+            to: "feature".into(),
+            create: false,
+        },
+    );
+    assert!(repo.perform(&action).is_err());
+    let russian = Error::Command {
+        command: "git cherry-pick".into(),
+        code: Some(1),
+        output: "КОНФЛИКТ (содержимое): Конфликт слияния в a.txt\nerror: не удалось применить коммит".into(),
+    };
+    assert_eq!(
+        repo.explain_failure(&action, &russian).kind,
+        oxbow_core::FailureKind::Conflict
+    );
 }

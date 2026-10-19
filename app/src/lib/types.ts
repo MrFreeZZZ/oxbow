@@ -762,6 +762,7 @@ export type FailureKind =
   | "notMerged"
   | "cancelled"
   | "changed"
+  | "stashKept"
   | "other";
 
 export interface CommitBrief {

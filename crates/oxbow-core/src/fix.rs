@@ -614,11 +614,7 @@ impl Repo {
 
     fn pop_step(&self, plan: &mut FixPlan, aside: &Aside) {
         let mut pop = GitCommand::new(["stash", "pop", "--index"])
-            .comment("--index: your uncommitted files come back, the staged ones staged too")
-            .fallback(
-                GitCommand::new(["stash", "pop"])
-                    .comment("the staged changes no longer apply on their own: they come back unstaged"),
-            );
+            .comment("--index: your uncommitted files come back, the staged ones staged too");
         pop.only_if_moved = Some(("refs/stash".to_owned(), aside.before.clone()));
         plan.step(StepKind::Pop, vec![pop]);
     }
@@ -728,8 +724,6 @@ struct SavedCommand {
     env: Vec<(String, String)>,
     #[serde(default)]
     only_if_moved: Option<(String, Option<String>)>,
-    #[serde(default)]
-    fallback: Option<Box<SavedCommand>>,
 }
 
 impl From<&GitCommand> for SavedCommand {
@@ -740,7 +734,6 @@ impl From<&GitCommand> for SavedCommand {
             progress: c.progress,
             env: c.env.clone(),
             only_if_moved: c.only_if_moved.clone(),
-            fallback: c.fallback.as_deref().map(|f| Box::new(f.into())),
         }
     }
 }
@@ -752,7 +745,6 @@ impl From<&SavedCommand> for GitCommand {
         command.progress = c.progress;
         command.env = c.env.clone();
         command.only_if_moved = c.only_if_moved.clone();
-        command.fallback = c.fallback.as_deref().map(|f| Box::new(f.into()));
         command
     }
 }
@@ -833,6 +825,14 @@ impl Repo {
     pub(crate) fn fix_rest_after_continue(&self, kind: OperationKind) -> Vec<GitCommand> {
         self.fix_rest(kind)
             .map(|rest| rest.rest.iter().map(GitCommand::from).collect())
+            .unwrap_or_default()
+    }
+
+    /// What goes after Skip of a cherry-pick of a fix: only the files put aside come back. The
+    /// skipped commit is not copied, so the branch the commits came from keeps all of them.
+    pub(crate) fn fix_rest_after_skip(&self, kind: OperationKind) -> Vec<GitCommand> {
+        self.fix_rest(kind)
+            .map(|rest| rest.rest.iter().map(GitCommand::from).filter(is_pop).collect())
             .unwrap_or_default()
     }
 
