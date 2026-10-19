@@ -81,6 +81,9 @@ export const api = {
   /** The latest `limit` commits, or more to reach `until`. */
   /** With `known`, the key of the history on screen, rows that came out the same are left out. */
   history: (limit: number, until: string | null = null, known: string | null = null) => invoke<History>("history", { limit, until, known }),
+  /** Which of `ids`, loaded commits the history could not tell, are unpushed: the next load
+   *  marks them. Whether it found out anything. */
+  settleUnpushed: (ids: string[], lane: string | null = null) => invoke<boolean>("settle_unpushed", { ids, lane }),
   /** `quick`: the files without their line counts, which needs no file read. A newer read in
    *  the same `lane` stops this one. */
   commitDetail: (id: string, quick = false, lane: string | null = null, countFrom = 0) => invoke<CommitDetail>("commit_detail", { id, quick, countFrom, lane }),
@@ -93,8 +96,8 @@ export const api = {
   /** Stop the reads running in these lanes: their answers are no longer wanted. */
   stopReads: (lanes: string[]) => invoke<void>("stop_reads", { lanes }),
   compare: (base: string, target: string, mode: CompareMode) => invoke<Comparison>("compare", { base, target, mode }),
-  compareDiff: (from: string, to: string, path: string | null, wholeFile: boolean, full = false) =>
-    invoke<FileDiff[]>("compare_diff", { from, to, path, wholeFile, full }),
+  compareDiff: (from: string, to: string, path: string | null, wholeFile: boolean, full = false, lane: string | null = null) =>
+    invoke<FileDiff[]>("compare_diff", { from, to, path, wholeFile, full, lane }),
   /** A page of a comparison's diffs, from the `start`th file until about `budget` lines. */
   compareDiffPage: (from: string, to: string, start: number, budget: number, wholeFile: boolean, lane: string | null = null) =>
     invoke<DiffPage>("compare_diff_page", { from, to, start, budget, wholeFile, lane }),

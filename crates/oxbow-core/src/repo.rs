@@ -19,6 +19,8 @@ pub struct Repo {
     /// Lines counted in new files, shared by every clone, so a refresh reads only the new
     /// files that changed.
     pub(crate) untracked: crate::worktree::UntrackedCounts,
+    pub(crate) pair_changes: crate::commit::PairChangesCache,
+    pub(crate) unpushed: crate::history::UnpushedAnswers,
 }
 
 /// How diffs are shown, from the user's settings.
@@ -94,7 +96,24 @@ impl Repo {
             diff: DiffOptions::default(),
             changes: Default::default(),
             untracked: Default::default(),
+            pair_changes: Default::default(),
+            unpushed: Default::default(),
         })
+    }
+
+    /// The same repository opened afresh, so that settings changed since (a remote Publish just
+    /// added) are seen, keeping what was learned about its working tree: the line counts of new
+    /// files, the change lists last read, and which commits are unpushed.
+    pub fn reopen(&self) -> Result<Self> {
+        let mut fresh = Repo::open(&self.workdir)?;
+        if fresh.workdir == self.workdir {
+            fresh.untracked = self.untracked.clone();
+            fresh.changes = self.changes.clone();
+            fresh.pair_changes = self.pair_changes.clone();
+            fresh.unpushed = self.unpushed.clone();
+            fresh.diff = self.diff;
+        }
+        Ok(fresh)
     }
 
     /// Show diffs with these options from now on.

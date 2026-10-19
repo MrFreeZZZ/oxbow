@@ -190,45 +190,6 @@ impl Repo {
         spawn_in(self.workdir(), command, input)
     }
 
-    /// Run `command` and read at most `max` bytes of what it prints: past that it is stopped, and
-    /// the output is cut short. The exit code is not checked. For reads that can print more than
-    /// anything shows, such as the patch of a huge file.
-    pub(crate) fn spawn_within(&self, command: &GitCommand, max: usize) -> Result<Limited> {
-        let mut child = command_in(self.workdir(), command)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|err| Error::GitNotFound(err.to_string()))?;
-        let mut pipe = child.stderr.take().expect("stderr is piped");
-        let stderr = std::thread::spawn(move || {
-            let mut all = Vec::new();
-            let _ = pipe.read_to_end(&mut all);
-            all
-        });
-        let mut stdout = Vec::new();
-        let read = child
-            .stdout
-            .take()
-            .expect("stdout is piped")
-            .take((max as u64).saturating_add(1))
-            .read_to_end(&mut stdout);
-        let cut = stdout.len() > max;
-        if cut {
-            stdout.truncate(max);
-            let _ = child.kill();
-        }
-        let status = child.wait().map_err(|err| Error::GitNotFound(err.to_string()))?;
-        read.map_err(|err| Error::Git(err.to_string()))?;
-        Ok(Limited {
-            stdout,
-            stderr: stderr.join().unwrap_or_default(),
-            success: status.success(),
-            code: status.code(),
-            cut,
-        })
-    }
-
     /// Run `command` and wait for it, unless `cancel` is set first: the command is then stopped
     /// and fails with [`Error::Cancelled`]. For reads whose answer is no longer wanted once a
     /// newer one is asked for, such as a search.
@@ -273,8 +234,10 @@ impl Repo {
         }
     }
 
-    /// [`Repo::spawn_within`] that also stops when `cancel` is set, failing with
-    /// [`Error::Cancelled`]: for a long read whose answer may stop being wanted, such as blame.
+    /// Run `command` and read at most `max` bytes of what it prints: past that it is stopped, and
+    /// the output is cut short. The exit code is not checked. For reads that can print more than
+    /// anything shows, such as the patch of a huge file. Setting `cancel` stops it too, failing
+    /// with [`Error::Cancelled`].
     pub(crate) fn spawn_cancellable_within(
         &self,
         command: &GitCommand,
@@ -294,33 +257,54 @@ impl Repo {
             all
         });
         let out = child.stdout.take().expect("stdout is piped");
-        let stdout = std::thread::spawn(move || {
+        let mut reader = Some(std::thread::spawn(move || {
             let mut all = Vec::new();
             let read = out.take((max as u64).saturating_add(1)).read_to_end(&mut all);
             (all, read)
-        });
-        // Past `max` bytes the reader stops; the command is then stopped too.
+        }));
+        let mut stdout = Vec::new();
+        let mut cut = false;
+        // The reader stops at the end of the output, past `max` bytes, or on an error. Only the
+        // last two stop the command: one may close its output a moment before it exits.
         let status = loop {
             if cancel.load(Ordering::Relaxed) {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(Error::Cancelled);
             }
-            if stdout.is_finished() {
-                let _ = child.kill();
-                break child.wait().map_err(|err| Error::GitNotFound(err.to_string()))?;
+            if reader.as_ref().is_some_and(|r| r.is_finished()) {
+                let (all, read) = reader
+                    .take()
+                    .expect("reader is running")
+                    .join()
+                    .map_err(|_| Error::Git("reading the output of git failed".into()))?;
+                stdout = all;
+                cut = stdout.len() > max;
+                if let Err(err) = read {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(Error::Git(err.to_string()));
+                }
+                if cut {
+                    let _ = child.kill();
+                    break child.wait().map_err(|err| Error::GitNotFound(err.to_string()))?;
+                }
             }
             match child.try_wait() {
                 Ok(Some(status)) => break status,
-                Ok(None) => std::thread::sleep(Duration::from_millis(5)),
+                Ok(None) => std::thread::sleep(Duration::from_millis(2)),
                 Err(err) => return Err(Error::GitNotFound(err.to_string())),
             }
         };
-        let (mut stdout, read) = stdout
-            .join()
-            .map_err(|_| Error::Git("reading the output of git failed".into()))?;
-        read.map_err(|err| Error::Git(err.to_string()))?;
-        let cut = stdout.len() > max;
+        // Exited while its output was still being read: the rest is in the pipe.
+        if let Some(reader) = reader {
+            let (all, read) = reader
+                .join()
+                .map_err(|_| Error::Git("reading the output of git failed".into()))?;
+            read.map_err(|err| Error::Git(err.to_string()))?;
+            stdout = all;
+            cut = stdout.len() > max;
+        }
         if cut {
             stdout.truncate(max);
         }
@@ -345,7 +329,7 @@ impl Repo {
     }
 }
 
-/// What [`Repo::spawn_within`] read.
+/// What [`Repo::spawn_cancellable_within`] read.
 pub(crate) struct Limited {
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
@@ -585,12 +569,58 @@ mod tests {
             .unwrap();
         let repo = Repo::open(dir.path()).unwrap();
         // `yes` would print for ever.
-        let out = repo.spawn_within(&GitCommand::new(["y"]).program("yes"), 1000).unwrap();
+        let never = AtomicBool::new(false);
+        let out = repo
+            .spawn_cancellable_within(&GitCommand::new(["y"]).program("yes"), 1000, &never)
+            .unwrap();
         assert!(out.cut && !out.success);
         assert_eq!(out.stdout.len(), 1000);
-        let out = repo.spawn_within(&GitCommand::new(["--version"]), 1000).unwrap();
+        let out = repo
+            .spawn_cancellable_within(&GitCommand::new(["--version"]), 1000, &never)
+            .unwrap();
         assert!(!out.cut && out.success);
         assert!(out.stdout.starts_with(b"git version"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_bounded_read_waits_for_a_command_that_closes_its_output_early() {
+        let dir = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        let repo = Repo::open(dir.path()).unwrap();
+        let never = AtomicBool::new(false);
+        let sh = |script: &str| GitCommand::new(["-c", script]).program("sh");
+        // Prints its output, closes it, and exits a moment later.
+        let early = sh("printf 0123456789abcdef; exec 1>&-; sleep 0.2; exit 0");
+        for max in [100, 16] {
+            let out = repo.spawn_cancellable_within(&early, max, &never).unwrap();
+            assert!(out.success && !out.cut, "max {max}");
+            assert_eq!(out.stdout, b"0123456789abcdef");
+        }
+        let out = repo.spawn_cancellable_within(&early, 15, &never).unwrap();
+        assert!(out.cut && !out.success);
+        assert_eq!(out.stdout, b"0123456789abcde");
+        // A command that fails is not taken for one cut short.
+        let out = repo
+            .spawn_cancellable_within(&sh("printf x; exit 3"), 100, &never)
+            .unwrap();
+        assert!(!out.success && !out.cut && out.code == Some(3));
+        // Stopped while it still prints.
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let stop = cancel.clone();
+        let later = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            stop.store(true, Ordering::Relaxed);
+        });
+        let started = std::time::Instant::now();
+        let out = repo.spawn_cancellable_within(&sh("printf x; sleep 5"), 100, &cancel);
+        later.join().unwrap();
+        assert!(matches!(out, Err(Error::Cancelled)));
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]

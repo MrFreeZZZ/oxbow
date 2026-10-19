@@ -7,6 +7,7 @@
   import { diffSettings, prefs, wholeByDefault } from "./prefs.svelte";
   import type { CompareFile, Comparison, FileChange, FileDiff } from "./types";
   import { lane, plate, shortId, splitPath, tabLabels, tabWindow, tint } from "./format";
+  import { CountTurns } from "./counting";
   import DiffView from "./DiffView.svelte";
   import FileBadge from "./FileBadge.svelte";
   import FoldAll from "./FoldAll.svelte";
@@ -47,8 +48,8 @@
   let loadingMore = $state(false);
   /** The files with their line counts, once counted, and what they were counted for. */
   let counted = $state<{ key: string; files: FileChange[]; from: number } | null>(null);
-  /** The files of Summary's first page, counted by their diffs. */
-  let firstFiles = $state<Map<string, FileChange>>(new Map());
+  /** The files of Summary's first page, counted by their diffs, and what they were read for. */
+  let firstFiles = $state<{ key: string; files: Map<string, FileChange> }>({ key: "", files: new Map() });
   /** Rows of the Summary's file list drawn: thousands of files draw the rest on request. */
   let listed = $state(LIST_STEP);
   let error = $state<string | null>(null);
@@ -63,7 +64,8 @@
   /** The files as far as they are known: until the counts come, a loaded diff has them. */
   const files = $derived.by<CompareFile[]>(() => {
     const done = counted?.key === countKey ? counted : null;
-    if (done) return c.files.map((f, i) => ({ ...f, ...(i < done.from ? (firstFiles.get(f.path) ?? done.files[i]) : done.files[i]) }));
+    const first = firstFiles.key === done?.key ? firstFiles.files : null;
+    if (done) return c.files.map((f, i) => ({ ...f, ...(i < done.from ? (first?.get(f.path) ?? done.files[i]) : done.files[i]) }));
     const loaded = new Map(diffs.map((d) => [d.file.path, d.file]));
     return c.files.map((f) => {
       const file = loaded.get(f.path);
@@ -98,20 +100,22 @@
     requestAnimationFrame(() => tabBar?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ inline: "nearest", block: "nearest" }));
   });
 
-  /** The counts asked for last, so a new tab or diff mode does not ask again. */
-  let countingFor: string | null = null;
+  /** Which read counts the lines: a new tab or diff mode does not ask again. */
+  const turns = new CountTurns();
 
   /** Counts the lines of the files after Summary's first page, whose diffs counted theirs. */
-  function count(key: string, from: string, to: string, first: FileChange[]) {
+  function count(key: string, run: number, from: string, to: string, first: FileChange[]) {
+    if (!turns.start(key, run, countKey)) return;
     // A diff that ignores whitespace counts fewer lines than the list does: count them all.
     const skip = prefs.get("oxbow.diff.ignoreWhitespace") ? 0 : first.length;
-    firstFiles = new Map(first.map((f) => [f.path, f]));
+    firstFiles = { key, files: new Map(first.map((f) => [f.path, f])) };
     api.compareCounts(from, to, skip, COUNTS).then(
       (list) => {
+        turns.end(run);
         if (countKey === key) counted = { key, files: list, from: skip };
       },
-      // Counts are a nicety: the list stays without them.
-      () => {},
+      // Counts are a nicety: the list stays without them, and the next read asks again.
+      () => turns.end(run),
     );
   }
 
@@ -131,21 +135,21 @@
       const failed = (err: unknown) => {
         if (still() && !stopped(err)) error = String(err);
       };
-      const counting = counted?.key !== key && countingFor !== key;
-      if (counting) countingFor = key;
+      const run = turns.read(key, counted?.key === key);
       if (path === null) {
         api.compareDiffPage(from, to, 0, PAGE_LINES, wholeFile, DIFF).then((page) => {
-          if (counting) count(key, from, to, page.diffs.map((d) => d.file));
+          count(key, run, from, to, page.diffs.map((d) => d.file));
           if (!still()) return;
           diffs = page.diffs;
           next = page.next;
         }, (err) => {
-          if (counting) count(key, from, to, []);
+          // A stopped read has a newer one, which counts in its place.
+          if (!stopped(err)) count(key, run, from, to, []);
           failed(err);
         });
       } else {
-        if (counting) count(key, from, to, []);
-        api.compareDiff(from, to, path, wholeFile).then((d) => {
+        count(key, run, from, to, []);
+        api.compareDiff(from, to, path, wholeFile, false, DIFF).then((d) => {
           if (still()) diffs = d;
         }, failed);
       }

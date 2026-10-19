@@ -685,7 +685,7 @@ impl Repo {
             .find(|f| f.path == path)
             .cloned()
             .ok_or_else(|| Error::Git(format!("{path} has no {} changes", side.word())))?;
-        self.diff_of(file, side, whole_file)
+        self.diff_of(file, side, whole_file, &AtomicBool::new(false))
     }
 
     /// The diffs of the files on one side of the working copy, in the order of `paths`, for
@@ -739,21 +739,36 @@ impl Repo {
         let mut by_path: HashMap<&str, &FileChange> = tree.conflicted.iter().map(|f| (f.path.as_str(), f)).collect();
         by_path.extend(list.iter().map(|f| (f.path.as_str(), f)));
         let files: Vec<&FileChange> = paths.iter().filter_map(|p| by_path.get(p.as_str()).copied()).collect();
+        let max_lines = self.diff_options().max_lines;
+        let context = self.diff_options().context_lines as usize;
+        // The files of one batch are guessed from their counts beforehand; the page itself stops
+        // at the lines actually read, and files of the batch past that wait for the next page.
+        let guess = |file: &FileChange| -> usize {
+            if self.needs_no_patch(file, max_lines) || file.binary || file.submodule.is_some() {
+                return 8;
+            }
+            let changed = (file.additions + file.deletions) as usize;
+            // A new file not counted yet shows all its lines too.
+            if whole_file || file.uncounted {
+                // Every line of the file: about one in 16 bytes, unless it was all added or removed.
+                let size = std::fs::symlink_metadata(self.workdir().join(&file.path)).map_or(0, |m| m.len());
+                changed.max((size / 16) as usize) + 6
+            } else {
+                changed + 6 + 2 * context
+            }
+        };
         let mut end = from.min(files.len());
-        let mut lines = 0usize;
-        while end < files.len() && (end == from || (lines < budget && end - from < PAGE_FILES)) {
-            // A card (binary, too large, a submodule) takes about as much room as a few lines.
-            lines += (files[end].additions + files[end].deletions) as usize + 6;
+        let mut guessed = 0usize;
+        while end < files.len() && (end == from || (guessed < budget && end - from < PAGE_FILES)) {
+            guessed = guessed.saturating_add(guess(files[end]));
             end += 1;
         }
         let page = &files[from.min(end)..end];
-        let next = (end < files.len()).then_some(end);
         let stopped = || cancel.load(Ordering::Relaxed);
         if stopped() {
             return Err(Error::Cancelled);
         }
 
-        let max_lines = self.diff_options().max_lines;
         let mut patches: HashMap<String, String> = HashMap::new();
         let tracked: Vec<&str> = page
             .iter()
@@ -765,7 +780,7 @@ impl Repo {
             .map(|f| f.path.as_str())
             .collect();
         if !tracked.is_empty() {
-            patches.extend(self.batch_patches(&tracked, side, whole_file)?);
+            patches.extend(self.batch_patches(&tracked, side, whole_file, cancel)?);
         }
         let fresh: Vec<&FileChange> = page
             .iter()
@@ -776,23 +791,30 @@ impl Repo {
             if stopped() {
                 return Err(Error::Cancelled);
             }
-            patches.extend(self.untracked_patches(&fresh));
+            patches.extend(self.untracked_patches(&fresh, cancel)?);
         }
 
         let mut diffs = Vec::with_capacity(page.len());
-        for file in page {
+        let mut lines = 0usize;
+        let mut next = (end < files.len()).then_some(end);
+        for (at, file) in page.iter().enumerate() {
+            if !diffs.is_empty() && lines >= budget {
+                next = Some(from + at);
+                break;
+            }
+            if stopped() {
+                return Err(Error::Cancelled);
+            }
             let file = (*file).clone();
-            diffs.push(match patches.remove(&file.path) {
+            let diff = match patches.remove(&file.path) {
                 Some(patch) => self.diff_from_patch(file, side, &patch, false),
                 // Files outside the batch, or whose part of it git did not print as expected,
                 // take a command of their own.
-                None => {
-                    if stopped() {
-                        return Err(Error::Cancelled);
-                    }
-                    self.diff_of(file, side, whole_file)?
-                }
-            });
+                None => self.diff_of(file, side, whole_file, cancel)?,
+            };
+            // A card (binary, too large, a submodule) takes about as much room as a few lines.
+            lines += diff.hunks.iter().map(|h| h.lines.len()).sum::<usize>().max(8);
+            diffs.push(diff);
         }
         Ok(DiffPage {
             diffs,
@@ -803,7 +825,13 @@ impl Repo {
 
     /// The patches of tracked `paths` on `side` from one `git diff`, by path. A path whose part
     /// is missing or cut short is left out, for a command of its own.
-    fn batch_patches(&self, paths: &[&str], side: Side, whole_file: bool) -> Result<HashMap<String, String>> {
+    fn batch_patches(
+        &self,
+        paths: &[&str],
+        side: Side,
+        whole_file: bool,
+        cancel: &AtomicBool,
+    ) -> Result<HashMap<String, String>> {
         let context = self.context_arg(whole_file);
         let mut args: Vec<String> = [
             "diff",
@@ -822,7 +850,7 @@ impl Repo {
         }
         args.push("--".into());
         args.extend(paths.iter().map(|p| literal(p)));
-        let out = self.spawn_within(&GitCommand::new(args), MAX_PATCH_BYTES)?;
+        let out = self.spawn_cancellable_within(&GitCommand::new(args), MAX_PATCH_BYTES, cancel)?;
         // A failed batch leaves every file to its own command, which says what went wrong.
         if !out.success && !out.cut {
             return Ok(HashMap::new());
@@ -844,7 +872,7 @@ impl Repo {
     /// The patches of new files, as `git diff --no-index /dev/null <file>` prints them, made from
     /// the files themselves. Files git would show another way (a symlink, an attribute that
     /// turns off or changes their diff, one that can't be read) are left out, for git itself.
-    fn untracked_patches(&self, files: &[&FileChange]) -> HashMap<String, String> {
+    fn untracked_patches(&self, files: &[&FileChange], cancel: &AtomicBool) -> Result<HashMap<String, String>> {
         let mut args = vec![
             "check-attr".to_owned(),
             "-z".to_owned(),
@@ -852,8 +880,10 @@ impl Repo {
             "--".to_owned(),
         ];
         args.extend(files.iter().map(|f| f.path.clone()));
-        let Ok(out) = self.run(&GitCommand::new(args)) else {
-            return HashMap::new();
+        let out = match self.run_cancellable(&GitCommand::new(args), cancel) {
+            Ok(out) => out,
+            Err(Error::Cancelled) => return Err(Error::Cancelled),
+            Err(_) => return Ok(HashMap::new()),
         };
         // `<path>\0diff\0<value>\0` for each path.
         let fields: Vec<&str> = out.stdout.split('\0').collect();
@@ -862,16 +892,20 @@ impl Repo {
             .filter(|f| f.len() == 3 && matches!(f[2], "unspecified" | "set"))
             .map(|f| f[0])
             .collect();
-        files
-            .iter()
-            .filter(|f| plain.contains(f.path.as_str()))
-            .filter_map(|f| {
-                let path = self.workdir().join(&f.path);
-                let meta = std::fs::symlink_metadata(&path).ok().filter(|m| m.is_file())?;
-                let data = crate::lfs::read_regular(&path, MAX_COUNTED_BYTES)?;
-                Some((f.path.clone(), untracked_patch(&f.path, &data, executable(&meta))))
-            })
-            .collect()
+        let mut patches = HashMap::new();
+        for file in files.iter().filter(|f| plain.contains(f.path.as_str())) {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(Error::Cancelled);
+            }
+            let path = self.workdir().join(&file.path);
+            let Some(meta) = std::fs::symlink_metadata(&path).ok().filter(|m| m.is_file()) else {
+                continue;
+            };
+            if let Some(data) = crate::lfs::read_regular(&path, MAX_COUNTED_BYTES) {
+                patches.insert(file.path.clone(), untracked_patch(&file.path, &data, executable(&meta)));
+            }
+        }
+        Ok(patches)
     }
 
     /// The `-U` option for a compact or whole-file diff.
@@ -894,7 +928,7 @@ impl Repo {
     }
 
     /// The diff of `file`, one entry of the working tree, on `side`.
-    fn diff_of(&self, file: FileChange, side: Side, whole_file: bool) -> Result<FileDiff> {
+    fn diff_of(&self, file: FileChange, side: Side, whole_file: bool, cancel: &AtomicBool) -> Result<FileDiff> {
         if let Some(sub) = file.submodule {
             return Ok(self.submodule_diff(file, sub, side));
         }
@@ -923,7 +957,7 @@ impl Repo {
                 submodule: None,
             });
         }
-        let (patch, cut) = self.raw_diff_within(&file, side, whole_file, MAX_PATCH_BYTES)?;
+        let (patch, cut) = self.raw_diff_within(&file, side, whole_file, MAX_PATCH_BYTES, cancel)?;
         Ok(self.diff_from_patch(file, side, &patch, cut))
     }
 
@@ -1950,13 +1984,20 @@ impl Repo {
 
     /// `git diff` output for one file.
     fn raw_diff(&self, file: &FileChange, side: Side, whole_file: bool) -> Result<String> {
-        let (patch, _) = self.raw_diff_within(file, side, whole_file, usize::MAX)?;
+        let (patch, _) = self.raw_diff_within(file, side, whole_file, usize::MAX, &AtomicBool::new(false))?;
         Ok(patch)
     }
 
     /// [`Repo::raw_diff`], reading at most `max` bytes of the patch: whether it was cut there
     /// comes with it. A whole-file patch of a huge file is never read further than shown.
-    fn raw_diff_within(&self, file: &FileChange, side: Side, whole_file: bool, max: usize) -> Result<(String, bool)> {
+    fn raw_diff_within(
+        &self,
+        file: &FileChange,
+        side: Side,
+        whole_file: bool,
+        max: usize,
+        cancel: &AtomicBool,
+    ) -> Result<(String, bool)> {
         let context = self.context_arg(whole_file);
         let mut args = vec![
             "diff",
@@ -1977,7 +2018,7 @@ impl Repo {
             args.extend(["--", &path]);
         }
         let command = GitCommand::new(args);
-        let out = self.spawn_within(&command, max)?;
+        let out = self.spawn_cancellable_within(&command, max, cancel)?;
         let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
         // `--no-index` exits with 1 when the files differ, which they always do here.
         if !out.success && !out.cut && !untracked {
