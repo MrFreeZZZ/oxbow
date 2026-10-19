@@ -3,7 +3,7 @@
   import { api, stopped } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { CommitDetail, FileChange, FileDiff, HistoryRow } from "./types";
-  import { fullDate, initials, lane, person, plate, splitPath, tabLabels, tint } from "./format";
+  import { fullDate, initials, lane, person, plate, splitPath, tabLabels, tabWindow, tint } from "./format";
   import DiffView from "./DiffView.svelte";
   import FoldAll from "./FoldAll.svelte";
   import CommitChain from "./CommitChain.svelte";
@@ -87,7 +87,9 @@
   // A stash has no branch line of its own; its capsule names the stash entry.
   const branchName = $derived(row.graph.branch ?? row.labels.find((l) => l.kind === "stash")?.name ?? null);
   const tags = $derived(row.labels.filter((l) => l.kind === "tag").map((l) => l.name));
-  const labels = $derived(tabLabels(detail?.files.map((f) => f.path) ?? []));
+  const paths = $derived(detail?.files.map((f) => f.path) ?? []);
+  const labels = $derived(tabLabels(paths));
+  const shownTabs = $derived(tabWindow(paths.length, tab === null ? -1 : paths.indexOf(tab)));
   /** The files as far as they are known: until the counted list comes, a loaded diff has counts. */
   const files = $derived.by(() => {
     if (!detail) return [];
@@ -286,11 +288,14 @@
     {#if detail?.files.length}
       <span class="divider" aria-hidden="true"></span>
       <div class="file-tabs" bind:this={tabBar}>
-        {#each detail.files as file (file.path)}
-          <button role="tab" aria-selected={tab === file.path} class="tab neutral" class:on={tab === file.path} onclick={() => openTab(file.path)} title={file.path}
-            >{labels.get(file.path)}</button
+        <!-- Thousands of files draw only the tabs around the open one. -->
+        {#if shownTabs.start}<button class="tab neutral more" onclick={() => openTab(paths[shownTabs.start - 1])} title="Open the file before these">+{shownTabs.start.toLocaleString()}</button>{/if}
+        {#each paths.slice(shownTabs.start, shownTabs.end) as path (path)}
+          <button role="tab" aria-selected={tab === path} class="tab neutral" class:on={tab === path} onclick={() => openTab(path)} title={path}
+            >{labels.get(path)}</button
           >
         {/each}
+        {#if shownTabs.end < paths.length}<button class="tab neutral more" onclick={() => openTab(paths[shownTabs.end])} title="Open the file after these">+{(paths.length - shownTabs.end).toLocaleString()}</button>{/if}
       </div>
     {/if}
   </div>
@@ -545,6 +550,10 @@
     padding: 4px 0 6px;
   }
   .counting {
+    font-weight: 400;
+  }
+  .tab.more {
+    color: var(--text2);
     font-weight: 400;
   }
   .file.more {

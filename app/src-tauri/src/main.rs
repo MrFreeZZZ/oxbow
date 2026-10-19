@@ -862,6 +862,45 @@ async fn compare(
     blocking(move || repo.compare(&base, &target, mode)).await
 }
 
+/// The changed files of a comparison with their line counts, from the `count_from`th on: the
+/// ones before are counted by the first page of diffs.
+#[tauri::command]
+async fn compare_counts(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    from: String,
+    to: String,
+    count_from: usize,
+    lane: Option<String>,
+) -> CommandResult<Vec<oxbow_core::FileChange>> {
+    let repo = current(&session, &window)?;
+    let cancel = session.lane(&window, lane);
+    blocking(move || repo.tree_files_with(&from, &to, Some(count_from), &cancel)).await
+}
+
+/// A page of a comparison's diffs: from the `start`th file on, until they have `budget` lines.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn compare_diff_page(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    from: String,
+    to: String,
+    start: usize,
+    budget: usize,
+    whole_file: bool,
+    lane: Option<String>,
+) -> CommandResult<DiffPage> {
+    let repo = current(&session, &window)?;
+    let cancel = session.lane(&window, lane);
+    let context = if whole_file {
+        DiffContext::WholeFile
+    } else {
+        DiffContext::Compact
+    };
+    blocking(move || repo.tree_diff_page(&from, &to, start, budget, context, &cancel)).await
+}
+
 #[tauri::command]
 async fn compare_diff(
     window: tauri::WebviewWindow,
@@ -1070,15 +1109,20 @@ async fn unpushed_submodules(
 
 /// The diffs of several files on one side of the working copy, for the Summary tab.
 #[tauri::command]
-async fn working_diffs(
+#[allow(clippy::too_many_arguments)]
+async fn working_diff_page(
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
     paths: Vec<String>,
     side: Side,
     whole_file: bool,
     snapshot: Option<u64>,
-) -> CommandResult<Vec<FileDiff>> {
+    from: usize,
+    budget: usize,
+    lane: Option<String>,
+) -> CommandResult<DiffPage> {
     let repo = current(&session, &window)?;
+    let cancel = session.lane(&window, lane);
     // The files as the history just read them, when the panel shows that reading.
     let tree = session.slot(&window, |slot| {
         slot.changes
@@ -1086,9 +1130,12 @@ async fn working_diffs(
             .filter(|(number, _)| Some(*number) == snapshot)
             .map(|(_, tree)| tree.clone())
     });
-    blocking(move || match tree {
-        Some(tree) => repo.working_diffs_in(&tree, &paths, side, whole_file),
-        None => repo.working_diffs(&paths, side, whole_file),
+    blocking(move || {
+        let tree = match tree {
+            Some(tree) => tree,
+            None => Arc::new(repo.working_tree()?),
+        };
+        repo.working_diff_page(&tree, &paths, side, whole_file, from, budget, &cancel)
     })
     .await
 }
@@ -1900,6 +1947,8 @@ fn main() {
             stop_reads,
             compare,
             compare_diff,
+            compare_diff_page,
+            compare_counts,
             file_history,
             blame,
             line_history,
@@ -1907,7 +1956,7 @@ fn main() {
             files,
             working_tree,
             working_diff,
-            working_diffs,
+            working_diff_page,
             source_bytes,
             open_source,
             deletion_check,

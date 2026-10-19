@@ -57,3 +57,54 @@ fn unknown_names_are_errors() {
     assert!(repo.compare("main", "--output=x", CompareMode::Split).is_err());
     assert!(repo.compare("main", "nope", CompareMode::Split).is_err());
 }
+
+#[test]
+fn pages_and_counts_add_up_to_the_whole_diff() {
+    use std::sync::atomic::AtomicBool;
+    let (fx, _, _, feature) = diverged();
+    let repo = Repo::open(fx.path()).unwrap();
+    let c = repo.compare("main", "feature", CompareMode::Tips).unwrap();
+    // The list comes at once, its counts later.
+    assert!(c.files.iter().all(|f| f.file.additions == 0 && f.file.deletions == 0));
+    let never = AtomicBool::new(false);
+    let counted = repo.tree_files_with(&c.from, &feature, Some(0), &never).unwrap();
+    assert_eq!(counted.len(), c.files.len());
+    assert!(counted.iter().any(|f| f.additions + f.deletions > 0));
+    let skipped = repo.tree_files_with(&c.from, &feature, Some(1), &never).unwrap();
+    assert_eq!((skipped[0].additions, skipped[0].deletions), (0, 0));
+    assert_eq!(
+        skipped[1..].iter().map(|f| f.additions).collect::<Vec<_>>(),
+        counted[1..].iter().map(|f| f.additions).collect::<Vec<_>>()
+    );
+
+    let whole = repo
+        .tree_diff(&c.from, &feature, None, oxbow_core::DiffContext::Compact)
+        .unwrap();
+    let mut paged = Vec::new();
+    let mut at = Some(0);
+    while let Some(from) = at {
+        // A budget of one line still brings a file per page.
+        let page = repo
+            .tree_diff_page(&c.from, &feature, from, 1, oxbow_core::DiffContext::Compact, &never)
+            .unwrap();
+        assert_eq!(page.files, whole.len());
+        assert_eq!(page.diffs.len(), 1);
+        paged.extend(page.diffs);
+        at = page.next;
+    }
+    assert_eq!(
+        serde_json::to_value(&paged).unwrap(),
+        serde_json::to_value(&whole).unwrap()
+    );
+    assert!(matches!(
+        repo.tree_diff_page(
+            &c.from,
+            &feature,
+            0,
+            1,
+            oxbow_core::DiffContext::Compact,
+            &AtomicBool::new(true)
+        ),
+        Err(oxbow_core::Error::Cancelled)
+    ));
+}
