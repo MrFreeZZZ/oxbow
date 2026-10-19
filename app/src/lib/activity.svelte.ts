@@ -122,7 +122,7 @@ class Activity {
     const current = () => this.running?.id === id;
     let ok = false;
     try {
-      const { updated } = await api.fetchInBackground(remote, id);
+      const { updated } = await api.fetchInBackground(remote, id, auto);
       if (!current()) return false;
       ok = true;
       this.#fixProblem();

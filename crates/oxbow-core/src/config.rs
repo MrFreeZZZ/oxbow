@@ -90,10 +90,22 @@ pub(crate) fn git() -> Command {
 fn run_global(args: &[&str]) -> Result<String> {
     let mut git = git();
     git.args(args).stdin(Stdio::null());
-    if let Some(home) = home_dir() {
+    let home = home_dir();
+    if let Some(home) = &home {
         git.current_dir(home);
     }
-    let output = git.output().map_err(|err| Error::GitNotFound(err.to_string()))?;
+    let log = crate::console::started(
+        home.as_deref().unwrap_or(Path::new("")),
+        &GitCommand::new(args.iter().copied()).display(),
+    );
+    let output = match git.output() {
+        Ok(output) => output,
+        Err(err) => {
+            log.not_started(&err.to_string());
+            return Err(Error::GitNotFound(err.to_string()));
+        }
+    };
+    log.done(output.status.code(), &output.stdout, &output.stderr);
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {

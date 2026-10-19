@@ -9,6 +9,7 @@ pub mod cli;
 pub mod commit;
 pub mod compare;
 pub mod config;
+pub mod console;
 pub mod edit;
 pub mod error;
 pub mod fetched;

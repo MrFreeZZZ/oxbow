@@ -163,11 +163,13 @@
   const SIDEBAR = 248;
   const SETTINGS_ICON =
     "M12.78 6.52L14.44 6.56L14.44 9.44L12.78 9.48L12.42 10.33L13.57 11.54L11.54 13.57L10.33 12.42L9.48 12.78L9.44 14.44L6.56 14.44L6.52 12.78L5.67 12.42L4.46 13.57L2.43 11.54L3.58 10.33L3.22 9.48L1.56 9.44L1.56 6.56L3.22 6.52L3.58 5.67L2.43 4.46L4.46 2.43L5.67 3.58L6.52 3.22L6.56 1.56L9.44 1.56L9.48 3.22L10.33 3.58L11.54 2.43L13.57 4.46L12.42 5.67zM8 5.8a2.2 2.2 0 1 0 0 4.4a2.2 2.2 0 1 0 0-4.4";
+  const CONSOLE_ICON = "M1.8 4a1.5 1.5 0 0 1 1.5-1.5h9.4A1.5 1.5 0 0 1 14.2 4v8a1.5 1.5 0 0 1-1.5 1.5H3.3A1.5 1.5 0 0 1 1.8 12zM4.8 6.2 6.8 8l-2 1.8M8.3 10H11";
   const NEW_BRANCH_ICON = "M3 3.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M3 12.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M4.5 5v6M11.5 2.5v6M8.5 5.5h6";
-  /** New Branch and Settings, which a narrow window's toolbar has no room for. */
+  /** New Branch, Console and Settings, which a narrow window's toolbar has no room for. */
   function moreEntries(): MenuEntry[] {
     const entries: MenuEntry[] = [];
     if (view !== "file" || showConflicts) entries.push({ kind: "item", label: history?.head.branch ? "New Branch…" : "Create a Branch at HEAD…", icon: NEW_BRANCH_ICON, run: newBranch });
+    entries.push({ kind: "item", label: "Console", icon: CONSOLE_ICON, keys: keys("Alt+Mod+C"), run: () => api.openConsole() });
     entries.push({ kind: "item", label: "Settings…", icon: SETTINGS_ICON, keys: keys("Mod+,"), run: () => api.openSettings() });
     return entries;
   }
@@ -1293,6 +1295,9 @@
     if ((event.metaKey || event.ctrlKey) && event.key === ",") {
       event.preventDefault();
       api.openSettings();
+    } else if ((event.metaKey || event.ctrlKey) && event.altKey && !event.shiftKey && event.code === "KeyC") {
+      event.preventDefault();
+      api.openConsole();
     } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "p" && history && !confirm.request) {
       // Quick Open: any file's history.
       event.preventDefault();
@@ -1571,11 +1576,14 @@
               aria-label="More"
               aria-haspopup="menu"
               aria-expanded={!!moreMenu}
-              title={view !== "file" || showConflicts ? "New Branch, Settings" : "Settings"}
+              title={view !== "file" || showConflicts ? "New Branch, Console, Settings" : "Console, Settings"}
             >
               <svg class="icon" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6" /><circle cx="8" cy="8" r=".6" /><circle cx="12.5" cy="8" r=".6" /></svg>
             </button>
           {:else}
+            <button class="capsule" onclick={() => api.openConsole()} aria-label="Console" title={withKeys("Console", "Alt+Mod+C")}>
+              <svg class="icon" viewBox="0 0 16 16"><path d={CONSOLE_ICON} /></svg>
+            </button>
             <button class="capsule" onclick={() => api.openSettings()} aria-label="Settings" title={withKeys("Settings", "Mod+,")}>
               <svg class="icon" viewBox="0 0 16 16"><path d={SETTINGS_ICON} /></svg>
             </button>

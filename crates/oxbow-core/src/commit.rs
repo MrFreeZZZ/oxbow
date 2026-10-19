@@ -876,7 +876,10 @@ fn blob_size(repo: &gix::Repository, id: Option<ObjectId>) -> u64 {
 fn starts_binary(repo: &gix::Repository, id: ObjectId) -> bool {
     use std::io::Read;
     use std::process::Stdio;
-    let Ok(mut child) = crate::config::git()
+    let display = format!("git cat-file blob {id}");
+    let dir = repo.workdir().unwrap_or(repo.git_dir());
+    let log = crate::console::started(dir, &display);
+    let mut child = match crate::config::git()
         .arg("--git-dir")
         .arg(repo.git_dir())
         .args(["cat-file", "blob", &id.to_string()])
@@ -884,16 +887,30 @@ fn starts_binary(repo: &gix::Repository, id: ObjectId) -> bool {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-    else {
-        return false;
+    {
+        Ok(child) => child,
+        Err(err) => {
+            log.not_started(&err.to_string());
+            return false;
+        }
     };
     let mut head = Vec::with_capacity(8000);
     if let Some(out) = child.stdout.take() {
         let _ = out.take(8000).read_to_end(&mut head);
     }
     let _ = child.kill();
-    let _ = child.wait();
-    is_binary(&head)
+    let status = child.wait().ok();
+    // Only its first bytes are read, and they are file content, not something to show.
+    let binary = is_binary(&head);
+    let note = format!(
+        "read the first {} bytes: {}",
+        head.len(),
+        if binary { "binary" } else { "text" }
+    );
+    let mut output = log.output();
+    output.push(&note, false);
+    log.done_lines(status.and_then(|s| s.code()).or(Some(0)), output);
+    binary
 }
 
 fn is_binary(data: &[u8]) -> bool {
