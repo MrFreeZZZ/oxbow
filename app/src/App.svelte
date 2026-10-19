@@ -425,6 +425,9 @@
   }
 
   async function fixContext(commit: string | null): Promise<FixContext> {
+    // The sheet's words come from History, its steps from the core: both from the repository as
+    // it is now, e.g. after a push that turned a move into a revert.
+    await refresh();
     const state = await loadFixState();
     const fc: FixContext = {
       ctx: branchCtx!,

@@ -1553,7 +1553,7 @@ impl Repo {
                 // A fix, or a Continue of one, that stops on conflicts notes the steps left.
                 let fix_start = match action {
                     Action::Fix { .. } => Some(self.head()?.branch),
-                    Action::Continue { .. } if self.has_fix_rest() => Some(None),
+                    Action::Continue { .. } | Action::Skip if self.has_fix_rest() => Some(None),
                     _ => None,
                 };
                 let commands = self.plan(action)?.commands;
@@ -1595,16 +1595,15 @@ impl Repo {
                     on_event(ActionEvent::Command {
                         display: command.display(),
                     });
-                    let mut ran = self.run_streaming(&command, &mut |line| on_event(ActionEvent::Line(line)), cancel);
+                    let ran = self.run_streaming(&command, &mut |line| on_event(ActionEvent::Line(line)), cancel);
+                    // The files a fix put aside whose staged changes no longer fit: git changed
+                    // nothing and kept the stash. Say so rather than bring them back unstaged.
                     if ran.is_err()
-                        && !cancel.load(std::sync::atomic::Ordering::Relaxed)
-                        && let Some(fallback) = &command.fallback
+                        && command.args == ["stash", "pop", "--index"]
+                        && (fix_start.is_some() || matches!(action, Action::Abort))
+                        && self.conflicted_paths().is_ok_and(|p| p.is_empty())
                     {
-                        let fallback = crate::ssh::interactive((**fallback).clone());
-                        on_event(ActionEvent::Command {
-                            display: fallback.display(),
-                        });
-                        ran = self.run_streaming(&fallback, &mut |line| on_event(ActionEvent::Line(line)), cancel);
+                        return Err(Error::StashKept);
                     }
                     let out = ran.inspect_err(|_| {
                         if let Some(start) = &fix_start {

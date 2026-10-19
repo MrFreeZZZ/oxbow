@@ -243,12 +243,23 @@ function fixRecovery(fc: FixContext, id: FixId, failure: Failure): Recovery | nu
     return {
       title: "A step stopped on conflicts",
       body: [
-        "The steps before it ran; the rest wait. Pick what goes into each file in the banner above History, then Continue: it runs the steps left too. Abort there instead takes back this step and goes back to the branch you started on. To go back to how it all was, use Undo in the Operation Log.",
+        "The steps before it ran; the rest wait. Pick what goes into each file in the banner above History, then Continue: it runs the steps left too. Skip leaves the commit out of the copy, and the branch it came from keeps all its commits. Abort takes back this step and goes back to the branch you started on. To go back to how it all was, use Undo in the Operation Log.",
       ],
       icon: "warn",
       tone: "warn",
       close: "OK",
       note: "If your uncommitted files were put aside, they come back after Continue or Abort.",
+    };
+  }
+  if (failure.kind === "stashKept") {
+    return {
+      title: "Your files wait in the stash",
+      body: [
+        "The fix ran, but your uncommitted files could not come back as they were: their staged changes no longer fit on top of the new commits. Nothing is lost: the stash keeps them, staged and unstaged parts apart. Apply it in Stashes to bring them back unstaged.",
+      ],
+      icon: "warn",
+      tone: "warn",
+      close: "OK",
     };
   }
   if (failure.kind === "localChanges") {

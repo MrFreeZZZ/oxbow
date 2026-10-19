@@ -687,6 +687,7 @@ impl Repo {
         if op.kind == OperationKind::Rebase {
             commands.extend(self.return_after(false));
         }
+        commands.extend(self.fix_rest_after_skip(op.kind));
         Ok(commands)
     }
 
