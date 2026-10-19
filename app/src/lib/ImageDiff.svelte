@@ -11,6 +11,7 @@
   import { api } from "./api";
   import type { FileDiff, Source } from "./types";
   import { bytes, imageType } from "./unusual";
+  import { MAX_PIXELS, inTurn, pictureSize } from "./pictures";
 
   let { diff }: { diff: FileDiff } = $props();
 
@@ -20,11 +21,31 @@
   let error = $state<string | null>(null);
   let swipe = $state(50);
   let onion = $state(50);
+  /** The pictures are read once they come into view. */
+  let box = $state<HTMLDivElement>();
+  let near = $state(false);
+  /** A side of too many pixels to draw without asking, until Show Anyway. */
+  let huge = $state<{ width: number; height: number } | null>(null);
+  let anyway = $state(false);
 
-  async function load(source: Source | null, type: string): Promise<Side | null> {
+  $effect(() => {
+    const el = box;
+    if (!el || near) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) near = true;
+    }, { rootMargin: "400px 0px" });
+    observer.observe(el);
+    return () => observer.disconnect();
+  });
+
+  /** One side, or the size that stops it from being drawn. */
+  async function load(source: Source | null, type: string, all: boolean): Promise<Side | { width: number; height: number } | null> {
     if (!source) return null;
     const data = await api.sourceBytes(source);
-    const url = URL.createObjectURL(new Blob([data as Uint8Array<ArrayBuffer>], { type }));
+    const raw = data as Uint8Array<ArrayBuffer>;
+    const size = pictureSize(raw);
+    if (!all && size && size.width * size.height > MAX_PIXELS) return size;
+    const url = URL.createObjectURL(new Blob([raw], { type }));
     const img = new Image();
     img.src = url;
     await img.decode().catch(() => {});
@@ -33,14 +54,26 @@
 
   $effect(() => {
     const d = diff;
+    const all = anyway;
+    if (!near) return;
     const type = imageType(d.file.path) ?? "application/octet-stream";
     let gone = false;
     let urls: string[] = [];
     error = null;
-    Promise.all([load(d.old, type), load(d.new, type)]).then(
-      ([b, a]) => {
-        urls = [b, a].filter((s): s is Side => !!s).map((s) => s.url);
+    huge = null;
+    inTurn(() => Promise.all([load(d.old, type, all), load(d.new, type, all)]), () => gone).then(
+      (sides) => {
+        if (!sides) return;
+        const drawn = sides.filter((s): s is Side => !!s && "url" in s);
+        urls = drawn.map((s) => s.url);
         if (gone) return urls.forEach((u) => URL.revokeObjectURL(u));
+        const big = sides.find((s) => !!s && !("url" in s));
+        if (big) {
+          urls.forEach((u) => URL.revokeObjectURL(u));
+          huge = big;
+          return;
+        }
+        const [b, a] = sides as (Side | null)[];
         before = b;
         after = a;
       },
@@ -93,7 +126,7 @@
   <span class="dims">{side.width}×{side.height} · {bytes(side.size)}</span>
 {/snippet}
 
-<div class="image">
+<div class="image" bind:this={box}>
   {#if both}
     <div class="modes" role="tablist" aria-label="Compare pictures">
       {#each MODES as [value, label] (value)}
@@ -104,8 +137,13 @@
 
   {#if error}
     <p class="note">Could not load the picture: {error}</p>
+  {:else if huge}
+    <p class="note">
+      {huge.width.toLocaleString()} × {huge.height.toLocaleString()} pixels: too many to draw without asking.
+      <button class="button mini" onclick={() => (anyway = true)}>Show Anyway</button>
+    </p>
   {:else if !before && !after}
-    <p class="note">Loading…</p>
+    <p class="note">{near ? "Loading…" : ""}</p>
   {:else if mode === "2up"}
     <div class="two">
       {#if before}
@@ -164,6 +202,8 @@
   .image {
     position: relative;
     padding: 8px 6px 4px;
+    /* Holds a picture's place until it is read. */
+    min-height: 120px;
   }
   .modes {
     display: flex;

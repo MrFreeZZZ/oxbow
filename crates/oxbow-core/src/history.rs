@@ -21,6 +21,8 @@ use crate::worktrees::Worktree;
 /// Commits of the first load. As the list scrolls on the app asks for more, and gets only the
 /// rows it does not have yet: see [`History::pieces`].
 pub const PAGE: usize = 2_000;
+/// Unpushed commits walked at most: past them, the loaded rows tell which are.
+const UNPUSHED_WALK: usize = 5 * PAGE;
 
 /// Options for loading the history.
 #[derive(Debug, Clone)]
@@ -542,7 +544,7 @@ impl Repo {
             }
         }
 
-        let unpushed = unpushed_commits(repo, refs, head)?;
+        let unpushed = unpushed_commits(repo, refs, head, &nodes, &row_of)?;
 
         // Commits a branch or tag keeps. While HEAD is detached, the others were made there and
         // belong to no branch. Children come before parents, so one pass reaches every ancestor.
@@ -903,8 +905,16 @@ impl Repo {
 }
 
 /// Commits reachable from local branches or `HEAD` but from no remote-tracking branch.
-/// Without any remote-tracking branches nothing counts as unpushed.
-fn unpushed_commits(repo: &gix::Repository, refs: &[RefInfo], head: &HeadInfo) -> Result<HashSet<ObjectId>> {
+/// Without any remote-tracking branches nothing counts as unpushed. When more than
+/// [`UNPUSHED_WALK`] commits are, as when the remote-tracking branches are far behind or of
+/// another history, the walk stops there and the rows loaded tell: see [`unpushed_in`].
+fn unpushed_commits(
+    repo: &gix::Repository,
+    refs: &[RefInfo],
+    head: &HeadInfo,
+    nodes: &[Node],
+    row_of: &HashMap<ObjectId, usize>,
+) -> Result<HashSet<ObjectId>> {
     let ids = |kind: RefKind| -> Vec<ObjectId> {
         refs.iter()
             .filter(|r| r.kind == kind)
@@ -923,12 +933,55 @@ fn unpushed_commits(repo: &gix::Repository, refs: &[RefInfo], head: &HeadInfo) -
     {
         local.push(id);
     }
-    let walk = repo.rev_walk(local).with_hidden(remote).all().map_err(Error::git)?;
+    let walk = repo
+        .rev_walk(local.iter().copied())
+        .with_hidden(remote.iter().copied())
+        .all()
+        .map_err(Error::git)?;
     let mut out = HashSet::new();
     for info in walk {
         out.insert(info.map_err(Error::git)?.id);
+        if out.len() > UNPUSHED_WALK {
+            return Ok(unpushed_in(nodes, row_of, &local, &remote));
+        }
     }
     Ok(out)
+}
+
+/// The loaded commits that `local` tips reach and `remote` ones don't, going down the loaded
+/// rows alone (children come before parents). A row is loaded only once every newer commit is,
+/// so the rows reaching it are loaded too; only commit dates out of order can hide one.
+fn unpushed_in(
+    nodes: &[Node],
+    row_of: &HashMap<ObjectId, usize>,
+    local: &[ObjectId],
+    remote: &[ObjectId],
+) -> HashSet<ObjectId> {
+    let reached = |tips: &[ObjectId]| {
+        let mut on = vec![false; nodes.len()];
+        for tip in tips {
+            if let Some(&row) = row_of.get(tip) {
+                on[row] = true;
+            }
+        }
+        for row in 0..nodes.len() {
+            if on[row] {
+                for parent in &nodes[row].parents {
+                    if let Some(&r) = row_of.get(parent) {
+                        on[r] = true;
+                    }
+                }
+            }
+        }
+        on
+    };
+    let (mine, pushed) = (reached(local), reached(remote));
+    nodes
+        .iter()
+        .enumerate()
+        .filter(|&(row, _)| mine[row] && !pushed[row])
+        .map(|(_, node)| node.id)
+        .collect()
 }
 
 /// Branch name that colors a line starting at a commit with these labels.

@@ -103,11 +103,12 @@ export const api = {
     invoke<FileChange[]>("compare_counts", { from, to, countFrom, lane }),
   /** The full id of the commit a SHA prefix names, anywhere in the repository. */
   resolveCommit: (prefix: string) => invoke<string | null>("resolve_commit", { prefix }),
-  fileHistory: (path: string, rev: string | null) => invoke<FileHistory>("file_history", { path, rev }),
-  blame: (path: string, rev: string) => invoke<Blame>("blame", { path, rev }),
-  lineHistory: (path: string, line: number, rev: string) => invoke<string[]>("line_history", { path, line, rev }),
+  fileHistory: (path: string, rev: string | null, lane: string | null = null) => invoke<FileHistory>("file_history", { path, rev, lane }),
+  blame: (path: string, rev: string, lane: string | null = null) => invoke<Blame>("blame", { path, rev, lane }),
+  lineHistory: (path: string, line: number, rev: string, lane: string | null = null) => invoke<string[]>("line_history", { path, line, rev, lane }),
   files: () => invoke<string[]>("files"),
-  filePickaxe: (path: string, text: string, matchCase: boolean, rev: string) => invoke<string[]>("file_pickaxe", { path, text, matchCase, rev }),
+  filePickaxe: (path: string, text: string, matchCase: boolean, rev: string, lane: string | null = null) =>
+    invoke<string[]>("file_pickaxe", { path, text, matchCase, rev, lane }),
   workingTree: () => invoke<WorkingTree>("working_tree"),
   workingDiff: (path: string, side: Side, wholeFile: boolean, full = false) =>
     invoke<FileDiff>("working_diff", { path, side, wholeFile, full }),

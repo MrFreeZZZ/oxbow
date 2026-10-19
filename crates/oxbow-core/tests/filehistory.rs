@@ -74,3 +74,39 @@ fn history_follows_renames_and_blame_names_each_line() {
         std::slice::from_ref(&side)
     );
 }
+
+#[test]
+fn a_huge_blame_stops_at_its_last_whole_line_and_reads_stop() {
+    use std::sync::atomic::AtomicBool;
+    let mut fx = Fixture::new();
+    // About 12 MiB of porcelain: more than blame reads.
+    let text: String = (0..150_000)
+        .map(|i| format!("line {i:06} of a file far too long to blame\n"))
+        .collect();
+    fx.commit("big.txt", &text, "Big");
+    let repo = Repo::open(fx.path()).unwrap();
+    let blame = repo.blame("big.txt", "HEAD").unwrap();
+    assert!(blame.cut);
+    assert!(blame.lines.len() > 1000 && blame.lines.len() < 150_000);
+    for (i, line) in blame.lines.iter().enumerate() {
+        assert_eq!(line.text, format!("line {i:06} of a file far too long to blame"));
+    }
+
+    let stop = AtomicBool::new(true);
+    assert!(matches!(
+        repo.blame_with("big.txt", "HEAD", &stop),
+        Err(oxbow_core::Error::Cancelled)
+    ));
+    assert!(matches!(
+        repo.file_history_with("big.txt", None, &stop),
+        Err(oxbow_core::Error::Cancelled)
+    ));
+    assert!(matches!(
+        repo.line_history_with("big.txt", 1, "HEAD", &stop),
+        Err(oxbow_core::Error::Cancelled)
+    ));
+    assert!(matches!(
+        repo.file_pickaxe_with("big.txt", "line", true, "HEAD", &stop),
+        Err(oxbow_core::Error::Cancelled)
+    ));
+}

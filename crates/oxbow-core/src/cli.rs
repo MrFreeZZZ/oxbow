@@ -273,6 +273,66 @@ impl Repo {
         }
     }
 
+    /// [`Repo::spawn_within`] that also stops when `cancel` is set, failing with
+    /// [`Error::Cancelled`]: for a long read whose answer may stop being wanted, such as blame.
+    pub(crate) fn spawn_cancellable_within(
+        &self,
+        command: &GitCommand,
+        max: usize,
+        cancel: &AtomicBool,
+    ) -> Result<Limited> {
+        let mut child = command_in(self.workdir(), command)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|err| Error::GitNotFound(err.to_string()))?;
+        let mut pipe = child.stderr.take().expect("stderr is piped");
+        let stderr = std::thread::spawn(move || {
+            let mut all = Vec::new();
+            let _ = pipe.read_to_end(&mut all);
+            all
+        });
+        let out = child.stdout.take().expect("stdout is piped");
+        let stdout = std::thread::spawn(move || {
+            let mut all = Vec::new();
+            let read = out.take((max as u64).saturating_add(1)).read_to_end(&mut all);
+            (all, read)
+        });
+        // Past `max` bytes the reader stops; the command is then stopped too.
+        let status = loop {
+            if cancel.load(Ordering::Relaxed) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(Error::Cancelled);
+            }
+            if stdout.is_finished() {
+                let _ = child.kill();
+                break child.wait().map_err(|err| Error::GitNotFound(err.to_string()))?;
+            }
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => std::thread::sleep(Duration::from_millis(5)),
+                Err(err) => return Err(Error::GitNotFound(err.to_string())),
+            }
+        };
+        let (mut stdout, read) = stdout
+            .join()
+            .map_err(|_| Error::Git("reading the output of git failed".into()))?;
+        read.map_err(|err| Error::Git(err.to_string()))?;
+        let cut = stdout.len() > max;
+        if cut {
+            stdout.truncate(max);
+        }
+        Ok(Limited {
+            stdout,
+            stderr: stderr.join().unwrap_or_default(),
+            success: status.success() && !cut,
+            code: status.code(),
+            cut,
+        })
+    }
+
     /// Run `command`, passing each line it prints to `on_line` as it comes. Setting `cancel`
     /// stops the command; it then fails with [`Error::Cancelled`].
     pub fn run_streaming(

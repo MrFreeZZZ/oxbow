@@ -110,6 +110,10 @@ pub struct FileChange {
     /// its folder.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub submodule: Option<SubmoduleChange>,
+    /// A new file whose lines were not counted this time (working copy only): many big new
+    /// files are counted over a few reads, not all at once.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub uncounted: bool,
 }
 
 /// What changed about a submodule.
@@ -554,6 +558,25 @@ pub(crate) fn over_limit(file: &FileChange, max: u32) -> bool {
 
 impl Repo {
     /// The bytes of one side of a file diff.
+    /// [`Repo::read_source`] of a side no bigger than `max` bytes, as a preview takes: a bigger
+    /// one is not read, and the error says how big it is.
+    pub fn read_source_within(&self, source: &Source, max: u64) -> Result<Vec<u8>> {
+        if let Some(size) = self.source_size(source).filter(|&size| size > max) {
+            return Err(Error::Git(format!(
+                "it is {} MB, too big to preview here; Open shows it in its own app",
+                size.div_ceil(1024 * 1024)
+            )));
+        }
+        let data = self.read_source(source)?;
+        // A file that grew since it was measured.
+        if data.len() as u64 > max {
+            return Err(Error::Git(
+                "it is too big to preview here; Open shows it in its own app".into(),
+            ));
+        }
+        Ok(data)
+    }
+
     pub fn read_source(&self, source: &Source) -> Result<Vec<u8>> {
         match source {
             Source::Blob { id } => {

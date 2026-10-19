@@ -597,3 +597,55 @@ fn history_lists_the_git_commands_it_ran() {
     let again = repo.history(&HistoryOptions::default()).unwrap();
     assert_eq!(again.reads, history.reads);
 }
+
+#[test]
+fn far_behind_remote_branches_still_mark_the_loaded_commits() {
+    use std::io::Write;
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "root\n", "Root");
+    let root = fx.git(&["rev-parse", "HEAD"]);
+    // 12,000 commits on top of the root, more than the walk of unpushed ones takes.
+    let mut script = String::new();
+    for i in 1..=12_000 {
+        script.push_str(&format!(
+            "commit refs/heads/main\ncommitter A <a@x> {} +0000\ndata 3\nc{}\n{}M 644 inline a.txt\ndata 2\n{}\n\n",
+            1_700_000_000 + i,
+            i % 10,
+            if i == 1 {
+                format!("from {root}\n")
+            } else {
+                String::new()
+            },
+            i % 10
+        ));
+    }
+    let mut child = std::process::Command::new("git")
+        .args(["fast-import", "--quiet"])
+        .current_dir(fx.path())
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+    assert!(child.wait().unwrap().success());
+    fx.git(&["reset", "-q", "--hard", "main"]);
+
+    // The remote is still at the root: every loaded commit is unpushed.
+    fx.git(&["update-ref", "refs/remotes/origin/main", &root]);
+    let history = Repo::open(fx.path())
+        .unwrap()
+        .history(&HistoryOptions::default())
+        .unwrap();
+    assert_eq!(history.rows.len(), 2000);
+    assert!(history.rows.iter().all(|r| r.unpushed));
+
+    // A thousand commits ahead: the exact walk.
+    let pushed = fx.git(&["rev-parse", "main~1000"]);
+    fx.git(&["update-ref", "refs/remotes/origin/main", &pushed]);
+    let history = Repo::open(fx.path())
+        .unwrap()
+        .history(&HistoryOptions::default())
+        .unwrap();
+    let ahead = history.rows.iter().take_while(|r| r.unpushed).count();
+    assert_eq!(ahead, 1000);
+    assert!(history.rows[1000..].iter().all(|r| !r.unpushed));
+}

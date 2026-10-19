@@ -211,6 +211,8 @@ export interface FileChange {
   lfs?: LfsChange;
   /** A submodule, not a file: another commit is recorded or checked out (`moved`), or files in its folder changed. */
   submodule?: { moved: boolean; changed: boolean };
+  /** A new file whose lines were not counted this time: many big new files are counted over a few reloads. */
+  uncounted?: boolean;
 }
 
 /** A pointer file: the LFS object that stands in for a file. */
@@ -302,6 +304,8 @@ export interface Blame {
   commits: BlameCommit[];
   lines: { commit: number; text: string }[];
   command: string;
+  /** The file is too long to blame whole: `lines` are its first ones. */
+  cut: boolean;
 }
 
 export type CompareMode = "split" | "tips";
