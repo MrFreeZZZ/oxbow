@@ -319,8 +319,9 @@
     background: var(--term);
     border: 0.5px solid var(--term-border);
     color: var(--term-text);
-    font-size: var(--text-caption);
-    line-height: 1.45;
+    font-family: var(--term-font);
+    font-size: var(--term-size);
+    line-height: var(--term-line);
   }
   .cmd {
     display: -webkit-box;
@@ -389,8 +390,9 @@
     background: var(--term);
     border: 0.5px solid var(--term-border);
     color: var(--term-text);
-    font-size: var(--text-caption);
-    line-height: 1.45;
+    font-family: var(--term-font);
+    font-size: var(--term-size);
+    line-height: var(--term-line);
     white-space: pre-wrap;
     word-break: break-all;
   }

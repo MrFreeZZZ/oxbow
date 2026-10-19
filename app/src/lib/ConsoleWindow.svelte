@@ -529,14 +529,22 @@
   }
   .entry {
     display: grid;
-    grid-template-columns: 74px minmax(0, 1fr);
+    grid-template-columns: max-content minmax(0, 1fr);
+    column-gap: 18px;
     padding: 8px 18px;
     border-top: 0.5px solid var(--term-border);
   }
+  /* Commands, their output and the times follow Diff & Text › Console & Activity; the time column
+     grows with them, so it never runs into the titles. */
+  .mono {
+    font-family: var(--term-font);
+  }
   .time {
     color: var(--term-dim);
-    font-size: var(--code-size);
-    padding-top: 1px;
+    font-size: calc(var(--term-size) - 1px);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    padding-top: 2px;
   }
   .head {
     display: flex;
@@ -620,7 +628,7 @@
     margin-top: 3px;
     color: var(--term-dim);
     font-style: italic;
-    font-size: var(--code-size);
+    font-size: var(--term-size);
   }
   .own {
     display: flex;
@@ -630,8 +638,8 @@
   .cmd {
     margin-top: 3px;
     color: var(--term-git);
-    font-size: var(--code-size);
-    line-height: 1.55;
+    font-size: var(--term-size);
+    line-height: var(--term-line);
     white-space: pre-wrap;
     word-break: break-word;
     text-indent: -1.3em;
@@ -650,8 +658,8 @@
     padding-left: 14px;
     border-left: 2px solid var(--term-border);
     color: var(--term-out);
-    font-size: var(--code-size);
-    line-height: 1.6;
+    font-size: var(--term-size);
+    line-height: var(--term-line);
     white-space: pre-wrap;
     word-break: break-word;
   }
@@ -716,8 +724,8 @@
     font-size: var(--text-caption);
   }
   .helper .mono {
-    font-size: var(--code-size);
-    line-height: 1.6;
+    font-size: var(--term-size);
+    line-height: var(--term-line);
     word-break: break-word;
   }
   /* Quieter than the action's own commands: there to check, not to read first. */

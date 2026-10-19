@@ -39,6 +39,12 @@ export const defaults = {
   /** Line height of code, as a multiple of the font size. */
   "oxbow.text.lineHeight": 1.6,
   "oxbow.text.tabWidth": 4,
+  /** The font of git commands and their output in the Console, Activity and the sheets; empty:
+   *  the font of Text. */
+  "oxbow.console.font": "" as string,
+  "oxbow.console.fontSize": 12,
+  /** Line height of commands, as a multiple of the font size. */
+  "oxbow.console.lineHeight": 1.6,
   "oxbow.git.englishOutput": true,
   "oxbow.git.path": "",
   "oxbow.git.runHooks": true,
@@ -85,6 +91,8 @@ export const rules: Partial<Record<PrefKey, Rule>> = {
   "oxbow.text.fontSize": { min: 6, max: 72 },
   "oxbow.text.lineHeight": { min: 1, max: 3 },
   "oxbow.text.tabWidth": { min: 1, max: 16, whole: true },
+  "oxbow.console.fontSize": { min: 9, max: 24 },
+  "oxbow.console.lineHeight": { min: 1, max: 3 },
   "oxbow.fetch.interval": { min: 1, max: 1440, whole: true },
   "oxbow.commit.subjectGuide": { min: 0, max: 500, whole: true },
   "oxbow.theme": { oneOf: THEMES.map((theme) => theme.id) },
@@ -234,6 +242,12 @@ export function followLook() {
       root.style.setProperty("--code-size", `${size}px`);
       root.style.setProperty("--code-line", `${Math.round(size * prefs.get("oxbow.text.lineHeight"))}px`);
       root.style.setProperty("--tab", String(prefs.get("oxbow.text.tabWidth")));
+    });
+    // Git commands and their output, from Diff & Text › Console & Activity.
+    $effect(() => {
+      root.style.setProperty("--term-font", fontStack(prefs.get("oxbow.console.font") || prefs.get("oxbow.text.font")));
+      root.style.setProperty("--term-size", `${prefs.get("oxbow.console.fontSize")}px`);
+      root.style.setProperty("--term-line", String(prefs.get("oxbow.console.lineHeight")));
     });
   });
 }
