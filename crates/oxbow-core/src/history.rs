@@ -282,7 +282,9 @@ fn rows_key(
     head.branch.hash(&mut hasher);
     head.commit.hash(&mut hasher);
     for r in refs {
-        (&r.name, r.kind as u8, &r.target, &r.remote).hash(&mut hasher);
+        // The focused graph follows the upstream of the branch, which changes without a ref moving.
+        let upstream = r.tracking.as_ref().map(|t| (&t.remote, &t.branch));
+        (&r.name, r.kind as u8, &r.target, &r.remote, upstream).hash(&mut hasher);
     }
     for stash in stashes {
         (&stash.id, stash.index).hash(&mut hasher);

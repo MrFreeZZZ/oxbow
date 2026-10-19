@@ -53,3 +53,65 @@ fn an_allowed_line_commits() {
     repo.perform(&commit(false)).unwrap();
     assert_eq!(fx.git(&["log", "-1", "--format=%s"]), "Add deploy settings");
 }
+
+#[test]
+fn the_console_keeps_no_secret() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "First");
+    // Fake keys, split so that secret scanners don't take this file for a leak.
+    let secrets = [
+        concat!("sk-proj-", "Q7XKZ3M4P2LJ6WVBq7xkz3m4p2lj6wvbQ7XK"),
+        concat!("AKIA", "Q7XKZ3M4P2LJ6WVB"),
+        concat!("sk_", "live_4eC39HqLyjWDarjtT1zdp7dc"),
+        "audit-password-123",
+        "a8f3k29dk3m1xq",
+        "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun",
+        "acme_0badf00d",
+    ];
+    oxbow_core::set_secrets_check(
+        true,
+        &[oxbow_core::SecretPattern {
+            kind: oxbow_core::PatternKind::Text,
+            pattern: r"acme_[0-9a-f]{8}".into(),
+        }],
+    );
+    fx.write(
+        "deploy.env",
+        &format!(
+            "OPENAI = {}\nAWS_ACCESS_KEY_ID={}\nstripe: '{}'\nPASSWORD = \"{}\"\nAPI_KEY=\"{}\"\n\
+             -----BEGIN RSA PRIVATE KEY-----\n{}\n-----END RSA PRIVATE KEY-----\nid = {}\n",
+            secrets[0], secrets[1], secrets[2], secrets[3], secrets[4], secrets[5], secrets[6]
+        ),
+    );
+    // What the check before a commit lets through is still masked in the log.
+    fx.write(
+        "notes.txt",
+        &format!(
+            "{aws} # oxbow:allow\n{aws} {long}\n{nine}\n",
+            aws = secrets[1],
+            long = "x".repeat(4100),
+            nine = [secrets[1]; 9].join(" ")
+        ),
+    );
+    fx.git(&["add", "deploy.env", "notes.txt"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let stopped: Result<String, Error> = oxbow_core::console::scope(
+        Some(fx.path()),
+        oxbow_core::console::EntryKind::Action,
+        "Commit",
+        || repo.perform(&commit(false)),
+    );
+    assert!(matches!(stopped, Err(Error::Secrets(_))));
+    // Other commands that print the file are masked line by line.
+    repo.run(&oxbow_core::GitCommand::new(["diff", "--cached"])).unwrap();
+    repo.run(&oxbow_core::GitCommand::new(["show", ":deploy.env"])).unwrap();
+    repo.run(&oxbow_core::GitCommand::new(["show", ":notes.txt"])).unwrap();
+
+    let log = std::fs::read_to_string(fx.path().join(".git/oxbow/console.jsonl")).unwrap();
+    assert!(log.contains("secrets check"), "{log}");
+    assert!(log.contains("not kept"), "{log}");
+    for secret in secrets {
+        assert!(!log.contains(secret), "{secret} is in the log:\n{log}");
+    }
+    oxbow_core::set_secrets_check(true, &[]);
+}

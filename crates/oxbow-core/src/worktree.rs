@@ -2384,6 +2384,15 @@ fn patch_path(rest: &str) -> Option<String> {
         .then(|| path.to_owned())
 }
 
+/// A path as git prints it: as it is, or quoted C-style when it holds a tab, a line break, a
+/// quote or a backslash, which `core.quotePath=false` still quotes.
+pub(crate) fn path_field(field: &str) -> String {
+    match unquote(field) {
+        Some((path, "")) if field.starts_with('"') => path,
+        _ => field.to_owned(),
+    }
+}
+
 /// A path git quoted C-style (`"dir/\303\244.txt"`), and what follows it.
 fn unquote(text: &str) -> Option<(String, &str)> {
     let bytes = text.as_bytes();

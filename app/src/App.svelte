@@ -305,6 +305,8 @@
   function pickSecond(id: string) {
     if (!selectedRow || selectedRow.worktree) return select(id);
     second = id === selected ? null : id;
+    // The comparison is only in the details panel.
+    if (second) showDetails();
   }
   const headRow = $derived(history?.head.commit ? (rowsById.get(history.head.commit) ?? null) : null);
   // The line the next commit goes on: the uncommitted row's, or HEAD's.
@@ -1107,6 +1109,7 @@
     oplog.compare = null;
     view = "history";
     resolving = false;
+    showDetails();
     if (await ensureLoaded(entry.id)) {
       oplog.lost = null;
       selected = entry.id;
@@ -1123,6 +1126,7 @@
     oplog.compare = { entry, after };
     view = "history";
     resolving = false;
+    showDetails();
   }
 
   /** From the lost commit's panel: a parent History has, or another lost commit. */
@@ -1171,6 +1175,7 @@
 
   /** A submodule from the sidebar: its card in the details panel, next to History. */
   function showSubmodule(path: string) {
+    showDetails();
     submoduleSel = path;
     second = null;
     oplog.compare = null;

@@ -794,3 +794,41 @@ fn current_branch_only_shows_the_branch_its_upstream_and_the_trunk() {
     assert_eq!(history.rows.len(), 7);
     assert!(history.rows.iter().all(|r| r.graph.cuts.is_empty()));
 }
+
+#[test]
+fn current_branch_only_follows_a_new_upstream_without_a_ref_moving() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "1\n", "Root");
+    fx.git(&["checkout", "-q", "-b", "old"]);
+    fx.commit("o.txt", "1\n", "Old upstream work");
+    fx.git(&["checkout", "-q", "-b", "new", "main"]);
+    fx.commit("n.txt", "1\n", "New upstream work");
+    fx.git(&["checkout", "-q", "-b", "feature", "main"]);
+    fx.commit("f.txt", "1\n", "Feature work");
+    fx.git(&["remote", "add", "origin", "https://example.com/r.git"]);
+    fx.git(&["update-ref", "refs/remotes/origin/old", "old"]);
+    fx.git(&["update-ref", "refs/remotes/origin/new", "new"]);
+    fx.git(&["branch", "-q", "-D", "old", "new"]);
+    fx.git(&["branch", "-q", "--set-upstream-to=origin/old", "feature"]);
+
+    let repo = Repo::open(fx.path()).unwrap();
+    let options = HistoryOptions {
+        focus: true,
+        ..Default::default()
+    };
+    let mut cache = oxbow_core::HistoryCache::default();
+    let shown = |h: &oxbow_core::History, rows: &[oxbow_core::HistoryRow]| -> Vec<String> {
+        let focus = h.focus.as_ref().unwrap();
+        focus.rows.iter().map(|&r| rows[r].summary.clone()).collect()
+    };
+    let first = repo.history_with(&options, &mut cache, None).unwrap();
+    let rows = first.rows.clone();
+    assert!(shown(&first, &rows).contains(&"Old upstream work".to_owned()));
+
+    fx.git(&["branch", "-q", "--set-upstream-to=origin/new", "feature"]);
+    let again = repo.history_with(&options, &mut cache, Some(&first.key)).unwrap();
+    assert!(!again.same, "a new upstream makes a new focused graph");
+    let now = shown(&again, &assemble(&rows, &again));
+    assert!(now.contains(&"New upstream work".to_owned()), "{now:?}");
+    assert!(!now.contains(&"Old upstream work".to_owned()), "{now:?}");
+}

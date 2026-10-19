@@ -223,22 +223,44 @@ fn check_with(line: &str, own: &[OwnRule]) -> Option<(String, (usize, usize))> {
     if line.len() > MAX_LINE || line.contains("oxbow:allow") || line.contains("gitleaks:allow") {
         return None;
     }
+    scan(line, own, false).into_iter().next()
+}
+
+/// The spans of everything on `line` that looks like a secret, for the Console to hide: unlike
+/// the check before a commit, a long line or one marked `oxbow:allow` is no reason to keep one.
+pub(crate) fn secret_spans(line: &str) -> Vec<(usize, usize)> {
+    scan(line, &OWN.read().expect("secret patterns lock"), true)
+        .into_iter()
+        .map(|(_, span)| span)
+        .collect()
+}
+
+/// What on `line` looks like a secret: only the first thing found, or with `all` everything.
+fn scan(line: &str, own: &[OwnRule], all: bool) -> Vec<(String, (usize, usize))> {
+    let mut found = Vec::new();
+    macro_rules! found {
+        ($kind:expr, $span:expr) => {{
+            found.push(($kind, $span));
+            if !all {
+                return found;
+            }
+        }};
+    }
     for rule in own {
-        if let OwnRule::Text { text, label } = rule
-            && let Some(m) = text.find(line)
-            && !m.as_str().trim().is_empty()
-        {
-            return Some((label.clone(), (m.start(), m.end())));
+        if let OwnRule::Text { text, label } = rule {
+            for m in text.find_iter(line).filter(|m| !m.as_str().trim().is_empty()) {
+                found!(label.clone(), (m.start(), m.end()));
+            }
         }
     }
     for (kind, re) in FORMATS.iter() {
-        if let Some(caps) = re.captures(line) {
+        for caps in re.captures_iter(line) {
             // A password in a URL masks only the password.
             let m = caps.get(1).unwrap_or_else(|| caps.get(0).expect("whole match"));
             if *kind == "Password in URL" && placeholder(m.as_str(), true) {
                 continue;
             }
-            return Some((kind.to_string(), (m.start(), m.end())));
+            found!(kind.to_string(), (m.start(), m.end()));
         }
     }
     for caps in ASSIGNMENT.captures_iter(line) {
@@ -258,19 +280,21 @@ fn check_with(line: &str, own: &[OwnRule]) -> Option<(String, (usize, usize))> {
         }
         let value = &line[start..end];
         let bare = name.as_str().rsplit('.').next().unwrap_or(name.as_str());
-        for rule in own {
-            if let OwnRule::Name { name: re, label } = rule
-                && (re.is_match(name.as_str()) || re.is_match(bare))
-                && !placeholder(value, quoted)
+        let own_name = own.iter().find_map(|rule| match rule {
+            OwnRule::Name { name: re, label }
+                if (re.is_match(name.as_str()) || re.is_match(bare)) && !placeholder(value, quoted) =>
             {
-                return Some((label.clone(), (start, end)));
+                Some(label.clone())
             }
-        }
-        if SECRET_NAME.is_match(bare) && !placeholder(value, quoted) && looks_random(value) {
-            return Some((name_kind(bare).to_owned(), (start, end)));
+            _ => None,
+        });
+        if let Some(label) = own_name {
+            found!(label, (start, end));
+        } else if SECRET_NAME.is_match(bare) && !placeholder(value, quoted) && looks_random(value) {
+            found!(name_kind(bare).to_owned(), (start, end));
         }
     }
-    None
+    found
 }
 
 /// `line` with the secret in `span` replaced by dots, keeping a few characters at each end so
@@ -362,7 +386,8 @@ impl Repo {
             args.push("--".to_owned());
             args.extend(paths.iter().map(|p| crate::cli::literal(p)));
         }
-        let patch = self.run(&GitCommand::new(args))?.stdout;
+        // The Console keeps the command, not the lines it read: they are what is checked.
+        let patch = crate::console::without_output(|| self.run(&GitCommand::new(args)))?.stdout;
         Ok(scan_patch(&patch))
     }
 }

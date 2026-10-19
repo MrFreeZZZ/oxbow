@@ -43,6 +43,8 @@ export interface ConsoleRepo {
   name: string;
   /** null: what ran outside any repository. */
   path: string | null;
+  /** Its log file: one for all worktrees of a repository, which tells logs apart. */
+  log: string | null;
   count: number;
 }
 
@@ -57,6 +59,8 @@ export type ConsoleFilter = "all" | "mine" | "background";
 
 /** How many entries a repository's log keeps, as oxbow_core::console::KEEP. */
 export const CONSOLE_KEEP = 1000;
+/** Of those, how many reads at most, as oxbow_core::console::KEEP_READS. */
+export const CONSOLE_KEEP_READS = 300;
 
 /** Whether `entry` is shown under `filter` with the search `needle`. */
 export function shows(entry: ConsoleEntry, filter: ConsoleFilter, needle: string): boolean {
@@ -115,13 +119,50 @@ export function dayOf(time: number, now: number = Date.now()): string {
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
-/** `list` with `entry` in it: in place of the one with its id, or added in time order. */
+/** `list` with `entry` in it: in place of the one with its id, or added in time order. A running
+ *  one never takes the place of the same entry done: an update can come after the log has it. */
 export function upsert<T extends ConsoleEntry>(list: T[], entry: T): T[] {
   const at = list.findIndex((e) => e.id === entry.id);
+  if (at >= 0 && entry.running && !list[at].running) return list;
   if (at >= 0) return [...list.slice(0, at), entry, ...list.slice(at + 1)];
   let i = list.length;
   while (i > 0 && list[i - 1].time > entry.time) i--;
   return [...list.slice(0, i), entry, ...list.slice(i)];
+}
+
+/** `list` kept as each log keeps it: the newest {@link CONSOLE_KEEP} entries of each log `logOf`
+ *  tells apart, of them at most {@link CONSOLE_KEEP_READS} reads. What still runs always stays. */
+export function trimmed<T extends ConsoleEntry>(list: T[], logOf: (entry: T) => string | null): T[] {
+  const entries = new Map<string | null, number>();
+  const reads = new Map<string | null, number>();
+  const drop = new Set<T>();
+  for (let i = list.length - 1; i >= 0; i--) {
+    const entry = list[i];
+    if (entry.running) continue;
+    const log = logOf(entry);
+    if (entry.kind === "read") {
+      const n = (reads.get(log) ?? 0) + 1;
+      reads.set(log, n);
+      if (n > CONSOLE_KEEP_READS) {
+        drop.add(entry);
+        continue;
+      }
+    }
+    const n = (entries.get(log) ?? 0) + 1;
+    entries.set(log, n);
+    if (n > CONSOLE_KEEP) drop.add(entry);
+  }
+  return drop.size ? list.filter((e) => !drop.has(e)) : list;
+}
+
+/** Of entries that came for logs while a load was on its way, the ones still to show once
+ *  `cleared` were cleared: what still runs. A done one was in the log, and is gone with it,
+ *  its earlier running updates too. */
+export function afterClear<T extends { log: string | null; entry: ConsoleEntry }>(pending: T[], cleared: (string | null)[]): T[] {
+  const logs = new Set(cleared);
+  const key = (p: T) => `${p.log}\u0000${p.entry.id}`;
+  const done = new Set(pending.filter((p) => logs.has(p.log) && !p.entry.running).map(key));
+  return pending.filter((p) => !logs.has(p.log) || (p.entry.running && !done.has(key(p))));
 }
 
 /** Lines of output shown at once under an action's own command; more fold under "N lines of output". */
