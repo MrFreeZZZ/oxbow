@@ -11,13 +11,77 @@
   // The commit message outlives the panel, so picking another commit and coming back keeps the
   // draft. Each repository has its own: a message or Amend from one never lands in another.
   const drafts = new Map<string, Draft>();
+  // It outlives the app too. Each folder has its own key, so a worktree keeps its own draft and
+  // two windows never write over each other's.
+  const DRAFT_KEY = "oxbow.commitDraft:";
+
+  function savedDraft(repo: string): Partial<Draft> {
+    try {
+      const saved = JSON.parse(localStorage.getItem(DRAFT_KEY + repo) ?? "null");
+      return saved && typeof saved === "object" ? saved : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function saveDraft(repo: string, draft: Draft) {
+    try {
+      if (!draft.summary.trim() && !draft.description.trim() && !draft.amend) localStorage.removeItem(DRAFT_KEY + repo);
+      else localStorage.setItem(DRAFT_KEY + repo, JSON.stringify(draft));
+    } catch {
+      // Private mode or full storage: the draft lasts until the app quits.
+    }
+  }
 
   function draftFor(repo: string): Draft {
     const known = drafts.get(repo);
     if (known) return known;
-    const draft = $state<Draft>({ summary: "", description: "", amend: false, amendOn: null, prefilled: "" });
+    const saved = savedDraft(repo);
+    const text = (value: unknown) => (typeof value === "string" ? value : "");
+    const draft = $state<Draft>({
+      summary: text(saved.summary),
+      description: text(saved.description),
+      amend: saved.amend === true,
+      amendOn: typeof saved.amendOn === "string" ? saved.amendOn : null,
+      prefilled: text(saved.prefilled),
+    });
     drafts.set(repo, draft);
     return draft;
+  }
+
+  const FOLDERS_KEY = "oxbow.changes.folders";
+  /** The lists show files under their folders; every window and repository shares the choice. */
+  const view = $state({ folders: readFolders() });
+
+  function readFolders(): boolean {
+    try {
+      return localStorage.getItem(FOLDERS_KEY) === "true";
+    } catch {
+      return false;
+    }
+  }
+
+  function setFolders(on: boolean) {
+    view.folders = on;
+    try {
+      localStorage.setItem(FOLDERS_KEY, String(on));
+    } catch {
+      // Lasts until the app quits.
+    }
+  }
+
+  /** Files grouped by the folder they are in: the top folder first, then by name. */
+  function byFolder(files: FileChange[]): { dir: string; files: FileChange[] }[] {
+    const map = new Map<string, FileChange[]>();
+    for (const file of files) {
+      const dir = file.path.slice(0, file.path.lastIndexOf("/") + 1);
+      const list = map.get(dir);
+      if (list) list.push(file);
+      else map.set(dir, [file]);
+    }
+    return [...map]
+      .sort(([a], [b]) => (a === "" ? -1 : b === "" ? 1 : a.localeCompare(b)))
+      .map(([dir, files]) => ({ dir, files }));
   }
 </script>
 
@@ -113,6 +177,34 @@
 
   const draft = $derived(draftFor(repo));
 
+  $effect(() => {
+    const { summary, description, amend, amendOn, prefilled } = draft;
+    saveDraft(repo, { summary, description, amend, amendOn, prefilled });
+  });
+
+  /** Only files whose path has this text are listed, and their diffs shown in Summary. */
+  let filter = $state("");
+  const needle = $derived(filter.trim().toLowerCase());
+  const matches = (file: FileChange) => !needle || file.path.toLowerCase().includes(needle) || !!file.oldPath?.toLowerCase().includes(needle);
+  const shownConflicted = $derived(conflicted.filter(matches));
+  const shownUnstaged = $derived(unstaged.filter(matches));
+  const shownStaged = $derived(staged.filter(matches));
+  /** The filter the Summary diffs follow, a moment after typing stops. */
+  let diffNeedle = $state("");
+  $effect(() => {
+    const next = needle;
+    const timer = setTimeout(() => (diffNeedle = next), 200);
+    return () => clearTimeout(timer);
+  });
+
+  /** Folders closed in each list, as "list:folder/". */
+  let folded = $state(new Set<string>());
+  function fold(key: string) {
+    const next = new Set(folded);
+    if (!next.delete(key)) next.add(key);
+    folded = next;
+  }
+
   // Amend replaces the commit it was turned on for. Once HEAD moves (another branch, a commit made
   // elsewhere), it turns off, with the old commit's message if it was not edited.
   $effect(() => {
@@ -180,10 +272,11 @@
     loads;
     const t = tree;
     if (!t) return;
+    const n = diffNeedle;
     const side = (list: FileChange[]) =>
       list
+        .filter((f) => (current === null ? !n || f.path.toLowerCase().includes(n) || !!f.oldPath?.toLowerCase().includes(n) : f.path === current))
         .map((f) => f.path)
-        .filter((p) => current === null || p === current)
         .slice(0, SUMMARY_FILES);
     const unstagedList = side([...t.conflicted, ...t.unstaged]);
     const stagedList = side(t.staged);
@@ -192,7 +285,7 @@
       stagedList.length ? api.workingDiffs(stagedList, "staged", wholeFile, reading) : [],
     ]).then(
       ([u, st]) => {
-        if (tab === current && whole === wholeFile && tree === t) {
+        if (tab === current && whole === wholeFile && tree === t && diffNeedle === n) {
           shown = { unstaged: u, staged: st };
           // Picked lines belong to the hunks they were picked in.
           sel = null;
@@ -217,12 +310,65 @@
     return map;
   });
 
-  function tick(group: Side, path: string) {
-    const list = ticked[group];
-    ticked = { ...ticked, [group]: list.includes(path) ? list.filter((p) => p !== path) : [...list, path] };
+  /** The file ticked or unticked last, where Shift-click starts a range. */
+  let anchor: { group: Side; path: string } | null = null;
+
+  /** The files of a list in the order they are shown, without those in closed folders. */
+  function order(group: Side): string[] {
+    const list = group === "staged" ? shownStaged : shownUnstaged;
+    if (!view.folders) return list.map((f) => f.path);
+    return byFolder(list).flatMap((g) => (folded.has(`${group}:${g.dir}`) ? [] : g.files.map((f) => f.path)));
   }
 
-  const pickedFiles = (group: Side) => (group === "staged" ? staged : unstaged).filter((f) => ticked[group].includes(f.path));
+  /** Ticks or unticks a file; with `range`, ticks every file from the last one clicked to it. */
+  function tick(group: Side, path: string, range = false) {
+    const list = ticked[group];
+    if (range && anchor?.group === group) {
+      const seq = order(group);
+      const from = seq.indexOf(anchor.path);
+      const to = seq.indexOf(path);
+      if (from >= 0 && to >= 0) {
+        const span = seq.slice(Math.min(from, to), Math.max(from, to) + 1);
+        ticked = { ...ticked, [group]: [...new Set([...list, ...span])] };
+        return;
+      }
+    }
+    ticked = { ...ticked, [group]: list.includes(path) ? list.filter((p) => p !== path) : [...list, path] };
+    anchor = { group, path };
+  }
+
+  /** Ticks all of these files, or unticks them when they all are. */
+  function tickAll(group: Side, paths: string[]) {
+    const list = ticked[group];
+    const all = paths.length > 0 && paths.every((p) => list.includes(p));
+    ticked = { ...ticked, [group]: all ? list.filter((p) => !paths.includes(p)) : [...new Set([...list, ...paths])] };
+  }
+
+  /** A click on a checkbox: the browser has already flipped it, so it shows the tick as kept. */
+  function tickBox(event: MouseEvent, group: Side, run: () => void, on: () => boolean) {
+    run();
+    (event.currentTarget as HTMLInputElement).checked = on();
+  }
+
+  /** A file's name opens its tab; with ⌘ (Ctrl) it ticks the file, with Shift a range. */
+  function rowClick(event: MouseEvent, file: FileChange, group: Side | "conflicted") {
+    if (group !== "conflicted" && (event.metaKey || event.ctrlKey || event.shiftKey)) {
+      event.preventDefault();
+      tick(group, file.path, event.shiftKey);
+    } else openTab(file.path);
+  }
+
+  /** Only ticked files that are listed: the filter can hide some. */
+  const pickedFiles = (group: Side) => (group === "staged" ? shownStaged : shownUnstaged).filter((f) => ticked[group].includes(f.path));
+  const tickedUnstaged = $derived(pickedFiles("unstaged"));
+  const tickedStaged = $derived(pickedFiles("staged"));
+
+  /** Changed lines, "+12 −3", or what the change is when it has none. */
+  function counts(file: FileChange): string {
+    if (file.binary) return "binary";
+    const parts = [file.additions ? `+${file.additions}` : "", file.deletions ? `−${file.deletions}` : ""].filter(Boolean);
+    return parts.length ? parts.join(" ") : "no lines";
+  }
 
   async function act(request: Request): Promise<boolean> {
     const done = await confirm.run(request);
@@ -230,11 +376,11 @@
     return done;
   }
 
-  /** Stage Selected or Unstage Selected: the ticked files of one list, then their ticks go. */
-  async function actOnTicked(group: Side) {
+  /** Stage, Unstage or Discard Selected: the ticked files of one list, then their ticks go. */
+  async function actOnTicked(group: Side, how: "move" | "discard" = "move") {
     const files = pickedFiles(group);
     if (!files.length) return;
-    const done = await (group === "staged" ? unstage(files) : stage(files));
+    const done = await (how === "discard" ? discard(files) : group === "staged" ? unstage(files) : stage(files));
     if (done) ticked = { ...ticked, [group]: ticked[group].filter((p) => !files.some((f) => f.path === p)) };
   }
 
@@ -269,7 +415,9 @@
     const body: Part[] =
       fresh.length === files.length
         ? ["Deletes ", ...name(files), ". Git does not track ", files.length === 1 ? "it" : "them", " yet."]
-        : ["Throws away your edits in ", ...name(files), " and puts back the staged or committed version."];
+        : fresh.length
+          ? ["Throws away your edits in ", ...name(files.filter((f) => !fresh.includes(f))), " and deletes ", ...name(fresh), ", which git does not track yet."]
+          : ["Throws away your edits in ", ...name(files), " and puts back the staged or committed version."];
     return act({
       title: `Discard changes in ${count(files)}?`,
       body,
@@ -342,6 +490,7 @@
     return [...seen.values()];
   }
 
+  const modClick = navigator.platform.startsWith("Mac") ? "⌘-click" : "Ctrl-click";
   const revealLabel = navigator.platform.startsWith("Mac") ? "Reveal in Finder" : navigator.platform.startsWith("Win") ? "Show in Explorer" : "Open Containing Folder";
 
   function fileMenu(event: MouseEvent, file: FileChange, group: "staged" | "unstaged" | "conflicted") {
@@ -480,26 +629,31 @@
   };
 </script>
 
-{#snippet fileRow(file: FileChange, group: "staged" | "unstaged" | "conflicted")}
+{#snippet fileRow(file: FileChange, group: "staged" | "unstaged" | "conflicted", nested: boolean)}
   {@const p = splitPath(file.path)}
   {@const b = badge[file.status]}
   {@const on = group !== "conflicted" && ticked[group].includes(file.path)}
-  {@const partly = group === "staged" ? unstagedPaths.has(file.path) : group === "unstaged" && stagedPaths.has(file.path)}
+  <!-- The part of a file staged in part that the other list holds. -->
+  {@const other = group === "staged" ? unstaged.find((f) => f.path === file.path) : group === "unstaged" ? staged.find((f) => f.path === file.path) : undefined}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="file" class:ticked={on} oncontextmenu={(e) => fileMenu(e, file, group)}>
+  <div class="file" class:ticked={on} class:nested oncontextmenu={(e) => fileMenu(e, file, group)}>
     {#if group !== "conflicted"}
       <input
         type="checkbox"
         checked={on}
         aria-label="Select {file.path}"
-        title={group === "staged" ? "Select for Unstage Selected" : "Select for Stage Selected"}
-        onchange={() => tick(group, file.path)}
+        title={group === "staged" ? "Select for Unstage Selected · Shift-click selects a range" : "Select for Stage or Discard Selected · Shift-click selects a range"}
+        onclick={(e) => tickBox(e, group, () => tick(group, file.path, e.shiftKey), () => ticked[group].includes(file.path))}
       />
     {/if}
-    <button class="name" onclick={() => openTab(file.path)} title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
+    <button class="name" onclick={(e) => rowClick(e, file, group)} title="{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}{group === 'conflicted' ? '' : ` · ${modClick} to select`}">
       <span class="badge {b.tone}" title={b.title}>{b.text}</span>
-      <span class="path"><span class="dir">{p.dir}</span>{p.name}</span>
-      {#if partly}<span class="note">partly staged</span>{/if}
+      <span class="path">{#if !nested}<span class="dir">{p.dir}</span>{/if}{p.name}</span>
+      {#if other}
+        <span class="note" title={group === "staged" ? `Staged in part: ${counts(file)} go into the commit, ${counts(other)} stay out` : `Staged in part: ${counts(other)} go into the commit, ${counts(file)} stay out`}
+          >{group === "staged" ? `${counts(other)} stay out` : `${counts(other)} in the commit`}</span
+        >
+      {/if}
       {#if file.submodule}
         <span class="note" title="Another repository in a folder here">Submodule{file.submodule.changed && !file.submodule.moved ? " · changed inside" : ""}</span>
       {:else if file.lfs}
@@ -514,6 +668,52 @@
       </button>
     {/if}
   </div>
+{/snippet}
+
+<!-- Ticks every listed file of a list, or none. -->
+{#snippet groupBox(group: Side, files: FileChange[])}
+  {#if files.length}
+    {@const n = files.filter((f) => ticked[group].includes(f.path)).length}
+    <input
+      type="checkbox"
+      checked={n === files.length}
+      indeterminate={n > 0 && n < files.length}
+      aria-label={group === "staged" ? "Select every staged file" : "Select every unstaged file"}
+      title={n === files.length ? "Select none" : "Select all"}
+      onclick={(e) => tickBox(e, group, () => tickAll(group, files.map((f) => f.path)), () => files.every((f) => ticked[group].includes(f.path)))}
+    />
+  {/if}
+{/snippet}
+
+{#snippet fileList(files: FileChange[], group: Side | "conflicted")}
+  {#if view.folders}
+    {#each byFolder(files) as folder (folder.dir)}
+      {@const key = `${group}:${folder.dir}`}
+      {@const open = !folded.has(key)}
+      {@const n = group === "conflicted" ? 0 : folder.files.filter((f) => ticked[group].includes(f.path)).length}
+      <div class="folder">
+        {#if group !== "conflicted"}
+          <input
+            type="checkbox"
+            checked={n === folder.files.length}
+            indeterminate={n > 0 && n < folder.files.length}
+            aria-label="Select the files in {folder.dir || 'the top folder'}"
+            title="Select the files in this folder"
+            onclick={(e) => tickBox(e, group, () => tickAll(group, folder.files.map((f) => f.path)), () => folder.files.every((f) => ticked[group].includes(f.path)))}
+          />
+        {/if}
+        <button class="fold" aria-expanded={open} onclick={() => fold(key)} title={folder.dir || "The repository's top folder"}>
+          <svg class="chevron" class:open viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" /></svg>
+          <svg class="icon folder-icon" viewBox="0 0 16 16"><path d="M1.5 4.5a1 1 0 0 1 1-1H6l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" /></svg>
+          <span class="dirname">{folder.dir ? folder.dir.slice(0, -1) : "Top folder"}</span>
+          <span class="n">{folder.files.length}</span>
+        </button>
+      </div>
+      {#if open}{#each folder.files as file (file.path)}{@render fileRow(file, group, true)}{/each}{/if}
+    {/each}
+  {:else}
+    {#each files as file (file.path)}{@render fileRow(file, group, false)}{/each}
+  {/if}
 {/snippet}
 
 {#snippet hunkBar(d: FileDiff, hunk: Hunk, side: Side)}
@@ -618,39 +818,92 @@
     {#if error}<p class="error" role="alert">{error}</p>{/if}
     {#if tab === null}
       <div class="lists" aria-label="Working copy">
-        {#if conflicted.length}
+        {#if fileCount > 1}
+          <div class="tools">
+            <label class="filter">
+              <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
+              <input
+                bind:value={filter}
+                placeholder="Filter files"
+                aria-label="Filter files"
+                spellcheck="false"
+                autocomplete="off"
+                onkeydown={(e) => {
+                  if (e.key === "Escape" && filter) {
+                    e.stopPropagation();
+                    filter = "";
+                  }
+                }}
+              />
+              {#if filter}<button class="clear" onclick={() => (filter = "")} aria-label="Clear the filter" title="Clear the filter">×</button>{/if}
+            </label>
+            <span class="grow"></span>
+            <div class="segmented" role="radiogroup" aria-label="Show files">
+              <button role="radio" aria-checked={!view.folders} class:on={!view.folders} onclick={() => setFolders(false)} title="One list of paths">List</button>
+              <button role="radio" aria-checked={view.folders} class:on={view.folders} onclick={() => setFolders(true)} title="Files under their folders">Folders</button>
+            </div>
+          </div>
+        {/if}
+        {#if shownConflicted.length}
           <div class="group">
-            <div class="ghead"><span>Conflicted</span><span class="n">{conflicted.length}</span></div>
-            {#each conflicted as file (file.path)}{@render fileRow(file, "conflicted")}{/each}
+            <div class="ghead"><span>Conflicted</span><span class="n">{shownConflicted.length}</span></div>
+            {@render fileList(shownConflicted, "conflicted")}
           </div>
         {/if}
         <div class="group">
           <div class="ghead">
-            <span>Unstaged</span><span class="n">{unstaged.length}</span><span class="grow"></span>
-            {#if ticked.unstaged.length}<button class="button mini primary" onclick={() => actOnTicked("unstaged")}>Stage Selected ({ticked.unstaged.length})</button>{/if}
-            {#if unstaged.length}<button class="button mini" onclick={() => stage(unstaged)}>Stage All</button>{/if}
+            {@render groupBox("unstaged", shownUnstaged)}
+            <span>Unstaged</span><span class="n">{needle ? `${shownUnstaged.length} of ${unstaged.length}` : unstaged.length}</span><span class="grow"></span>
+            {#if tickedUnstaged.length}
+              <button class="button mini" onclick={() => actOnTicked("unstaged", "discard")} title="Throw away the edits in the selected files">Discard Selected ({tickedUnstaged.length})</button>
+              <button class="button mini primary" onclick={() => actOnTicked("unstaged")}>Stage Selected ({tickedUnstaged.length})</button>
+            {:else if shownUnstaged.length}
+              <button class="button mini" onclick={() => stage(shownUnstaged)}>{needle && shownUnstaged.length < unstaged.length ? "Stage Shown" : "Stage All"}</button>
+            {/if}
           </div>
-          {#each unstaged as file (file.path)}{@render fileRow(file, "unstaged")}{/each}
-          {#if !unstaged.length}<p class="empty">Nothing left to stage.</p>{/if}
+          {@render fileList(shownUnstaged, "unstaged")}
+          {#if !shownUnstaged.length}<p class="empty">{needle && unstaged.length ? "No unstaged files match the filter." : "Nothing left to stage."}</p>{/if}
         </div>
         <div class="group">
           <div class="ghead">
-            <span>Staged</span><span class="n">{staged.length}</span><span class="grow"></span>
-            {#if ticked.staged.length}<button class="button mini primary" onclick={() => actOnTicked("staged")}>Unstage Selected ({ticked.staged.length})</button>{/if}
-            {#if staged.length}<button class="button mini" onclick={() => unstage(staged)}>Unstage All</button>{/if}
+            {@render groupBox("staged", shownStaged)}
+            <span>Staged</span><span class="n">{needle ? `${shownStaged.length} of ${staged.length}` : staged.length}</span><span class="grow"></span>
+            {#if tickedStaged.length}
+              <button class="button mini primary" onclick={() => actOnTicked("staged")}>Unstage Selected ({tickedStaged.length})</button>
+            {:else if shownStaged.length}
+              <button class="button mini" onclick={() => unstage(shownStaged)}>{needle && shownStaged.length < staged.length ? "Unstage Shown" : "Unstage All"}</button>
+            {/if}
           </div>
-          {#each staged as file (file.path)}{@render fileRow(file, "staged")}{/each}
-          {#if !staged.length}<p class="empty">Tick files above and press Stage Selected to add them to the next commit.</p>{/if}
+          {@render fileList(shownStaged, "staged")}
+          {#if !shownStaged.length}
+            <p class="empty">{needle && staged.length ? "No staged files match the filter." : "Tick files above and press Stage Selected to add them to the next commit."}</p>
+          {/if}
         </div>
       </div>
       {#if staged.some((f) => unstagedPaths.has(f.path))}<div class="tip"><TipCard id="partlyStaged" /></div>{/if}
+    {:else}
+      {@const inCommit = staged.find((f) => f.path === tab)}
+      {@const out = [...conflicted, ...unstaged].find((f) => f.path === tab)}
+      <!-- What of this file the next commit takes, and what it leaves in the folder. -->
+      <div class="split" aria-label="This file and the next commit">
+        <div class="side" class:none={!out}>
+          <span class="label">Stays out of the commit</span>
+          <span class="what">{out ? (out.status === "conflicted" ? "conflicts" : counts(out)) : "Nothing"}</span>
+          {#if out && out.status !== "conflicted"}<button class="button mini text" onclick={() => stage([out])} title="Add the rest of the file to the next commit">{inCommit ? "Stage the Rest" : "Stage"}</button>{/if}
+        </div>
+        <div class="side in" class:none={!inCommit}>
+          <span class="label">In the commit</span>
+          <span class="what">{inCommit ? counts(inCommit) : "Nothing yet"}</span>
+          {#if inCommit}<button class="button mini text" onclick={() => unstage([inCommit])} title="Take the whole file out of the next commit">Unstage</button>{/if}
+        </div>
+      </div>
     {/if}
     {#each [{ side: "unstaged" as Side, diffs: shown.unstaged }, { side: "staged" as Side, diffs: shown.staged }] as part (part.side)}
       {#if part.diffs.length}
-        {@const total = tab === null ? (part.side === "staged" ? staged.length : unstaged.length + conflicted.length) : 1}
+        {@const total = tab === null ? (part.side === "staged" ? shownStaged.length : shownUnstaged.length + shownConflicted.length) : 1}
         {#if tab === null || (shown.unstaged.length && shown.staged.length)}
           <div class="part">
-            <span class="grow">{part.side === "staged" ? "Staged" : "Unstaged"} changes</span>
+            <span class="grow">{part.side === "staged" ? "Staged · in the commit" : "Unstaged · stays out of the commit"}</span>
             {#if total > part.diffs.length}<span class="cut">first {part.diffs.length} of {total} files; the rest are on their tabs</span>{/if}
             {#if tab === null}<FoldAll onFold={(fold) => (part.side === "staged" ? stagedView : unstagedView)?.setAll(fold)} />{/if}
           </div>
@@ -895,6 +1148,172 @@
   .file:hover {
     background: var(--field);
   }
+  .file.nested {
+    padding-left: calc(var(--space-3) + 22px);
+  }
+  /* Filter and List / Folders over the lists. */
+  .tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 var(--space-2) var(--space-1);
+  }
+  .filter {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 220px;
+    min-width: 0;
+    flex-shrink: 1;
+    height: 26px;
+    padding: 0 6px 0 10px;
+    border-radius: var(--radius-pill);
+    background: var(--field);
+    color: var(--text2);
+  }
+  .filter:focus-within {
+    box-shadow: var(--focus-ring);
+  }
+  .filter .icon {
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+  }
+  .filter input {
+    flex-grow: 1;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    font: inherit;
+    font-size: var(--text-small);
+    color: var(--text);
+    user-select: text;
+    -webkit-user-select: text;
+    box-shadow: none;
+  }
+  .clear {
+    width: 18px;
+    height: 18px;
+    border-radius: var(--radius-pill);
+    color: var(--text2);
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .clear:hover {
+    background: var(--side-sel);
+    color: var(--text);
+  }
+  .segmented {
+    flex-shrink: 0;
+    display: flex;
+    padding: 2px;
+    border-radius: var(--radius-m);
+    background: var(--field);
+  }
+  .segmented button {
+    height: 22px;
+    min-width: 58px;
+    padding: 0 10px;
+    border-radius: var(--radius-s);
+    font-size: var(--text-small);
+    font-weight: 500;
+    color: var(--text2);
+    white-space: nowrap;
+  }
+  .segmented button.on {
+    background: var(--sheet);
+    color: var(--text);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  }
+  /* A folder over its files: tick them all, or fold them away. */
+  .folder {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 26px;
+    padding: 0 var(--space-1) 0 var(--space-3);
+    border-radius: var(--radius-s);
+  }
+  .folder:hover {
+    background: var(--field);
+  }
+  .fold {
+    flex-grow: 1;
+    min-width: 0;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: var(--text-small);
+    color: var(--text2);
+  }
+  .chevron {
+    width: 10px;
+    height: 10px;
+    flex-shrink: 0;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform 0.15s;
+  }
+  .chevron.open {
+    transform: rotate(90deg);
+  }
+  .folder-icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+  .dirname {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+    color: var(--text);
+  }
+  /* A file tab: what the next commit takes of the file, and what it leaves. */
+  .split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin: var(--space-3) var(--space-3) 0;
+  }
+  .side {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    height: 34px;
+    padding: 0 var(--space-1) 0 var(--space-3);
+    border-radius: var(--radius-m);
+    background: var(--field);
+    font-size: var(--text-small);
+  }
+  .side.in {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+  .side .label {
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .side.in .label {
+    color: color-mix(in srgb, var(--accent) 75%, var(--text));
+  }
+  .side .what {
+    flex-grow: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text2);
+  }
+  .side.none .what {
+    font-style: italic;
+  }
   .file.ticked {
     background: var(--side-sel);
   }
@@ -915,6 +1334,11 @@
     border-color: var(--accent);
     background-color: var(--accent);
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
+  input[type="checkbox"]:indeterminate {
+    border-color: var(--accent);
+    background-color: var(--accent);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8h8' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
   }
   input[type="checkbox"]:focus-visible {
     box-shadow: var(--focus-ring);
