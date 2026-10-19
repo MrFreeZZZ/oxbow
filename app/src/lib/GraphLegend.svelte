@@ -52,7 +52,7 @@
       { mark: "noBranch", name: "On no branch", text: "Gray: made on a detached HEAD. Nothing keeps it once you switch away.", row: find((r) => r.noBranch) },
     ];
     if (cut) list.push({ mark: "cut", name: "Hidden line", text: "Current Branch Only hides where this line goes: it stops short.", row: cut });
-    list.push({ mark: "parent", name: "Parent", text: "Select a commit: the commits it was made on get a ring and say so." });
+    list.push({ mark: "parent", name: "Parent", text: "Select a commit: the commits it was made on say ↑ parent (↑ parent 1 and 2 for a merge)." });
     return list;
   });
 
@@ -145,7 +145,7 @@
                 <path d="M14 0V34" stroke={lane(4)} stroke-width="2" />
                 <circle cx="14" cy="8" r="5" fill={lane(4)} />
                 <circle cx="14" cy="25" r="5" fill={lane(4)} />
-                <circle cx="14" cy="25" r="8.5" fill="none" stroke={lane(4)} stroke-width="1.5" opacity="0.55" />
+                <text x="22" y="28" fill={lane(4)}>↑</text>
               {/if}
             </svg>
             <span class="words">
