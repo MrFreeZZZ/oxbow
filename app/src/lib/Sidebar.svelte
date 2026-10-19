@@ -54,6 +54,7 @@
     run,
     view,
     onView,
+    onChanges,
     onPickStash,
     onCompare,
     onEditStack,
@@ -76,6 +77,8 @@
     /** The screen shown next to the sidebar. */
     view: "history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull";
     onView: (view: "history" | "stashes" | "oplog") => void;
+    /** Open the uncommitted changes in the details panel, next to History. */
+    onChanges: () => void;
     /** On the Stashes screen a stash in the list is picked there instead of in History. */
     onPickStash: (id: string) => void;
     /** Open Compare: what `target` has against `base`. */
@@ -91,6 +94,10 @@
     /** Read the repository again, for changes the app hasn't noticed yet. */
     onReload: () => void;
   } = $props();
+
+  /** The uncommitted changes, counted on their row above HEAD; null when there are none. */
+  const changes = $derived(history.rows.find((r) => r.worktree)?.worktree ?? null);
+  const showingChanges = $derived(view === "history" && !!selectedRow?.worktree);
 
   /** The checked-out branch's pull request, for the Workspace item. */
   const headPull = $derived(history.head.branch ? github.pullOf(history.head.branch) : null);
@@ -597,9 +604,21 @@
 
   <div class="scroll" bind:this={list}>
     <div class="heading">Workspace</div>
-    <button class="item" class:current={view === "history"} onclick={() => onView("history")}>
+    <button class="item" class:current={view === "history" && !showingChanges} onclick={() => onView("history")}>
       <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" /><path d="M8 4.5V8l2.5 1.5" /></svg>
       <span class="grow">History</span>
+    </button>
+    <!-- Always here, as in the design: the same panel as the row of uncommitted changes above HEAD. -->
+    <button
+      class="item"
+      class:current={showingChanges}
+      disabled={!changes}
+      onclick={onChanges}
+      title={!changes ? "No uncommitted changes" : changes.conflicted ? `${changes.conflicted} conflicted` : `${changes.staged} staged · ${changes.unstaged} not staged`}
+    >
+      <svg class="icon" viewBox="0 0 16 16"><path d="M4 1.5h5.5l3 3v10h-8.5zM6.5 7h3M8 5.5v3M6.5 11h3" /></svg>
+      <span class="grow">Changes</span>
+      {#if changes}<span class="meta" class:warn={changes.conflicted > 0}>{changes.files}</span>{/if}
     </button>
     <button class="item" class:current={view === "stashes"} onclick={() => onView("stashes")}>
       <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.stash} /></svg>
@@ -936,6 +955,10 @@
   .item.current {
     background: var(--side-sel);
     font-weight: 600;
+  }
+  /* A clean working tree: Changes stays in its place, greyed. */
+  .item:disabled {
+    opacity: 0.5;
   }
   .grow {
     flex-grow: 1;

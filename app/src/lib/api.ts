@@ -224,4 +224,5 @@ export const api = {
 export const settings = {
   detailsWidth: "oxbow.history.detailsWidth",
   sidebarHidden: "oxbow.sidebar.hidden",
+  detailsHidden: "oxbow.history.detailsHidden",
 };
