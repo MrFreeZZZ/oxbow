@@ -716,8 +716,8 @@ async fn history(
     let repo = current(&session, &window)?;
     // Open the repository afresh: the built-in engine reads .git/config once, so a remote that
     // Publish or Settings just added would stay unseen.
-    let workdir = repo.workdir().to_path_buf();
-    let fresh = blocking(move || Repo::open(&workdir)).await.unwrap_or(repo);
+    let old = repo.clone();
+    let fresh = blocking(move || old.reopen()).await.unwrap_or(repo);
     {
         session.slot(&window, |slot| {
             if slot.repo.as_ref().is_some_and(|open| open.workdir() == fresh.workdir()) {
@@ -902,6 +902,7 @@ async fn compare_diff_page(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn compare_diff(
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
@@ -910,14 +911,16 @@ async fn compare_diff(
     path: Option<String>,
     whole_file: bool,
     full: Option<bool>,
+    lane: Option<String>,
 ) -> CommandResult<Vec<FileDiff>> {
     let repo = current_full(&session, &window, full)?;
+    let cancel = session.lane(&window, lane);
     let context = if whole_file {
         DiffContext::WholeFile
     } else {
         DiffContext::Compact
     };
-    blocking(move || repo.tree_diff(&from, &to, path.as_deref(), context)).await
+    blocking(move || repo.tree_diff_with(&from, &to, path.as_deref(), context, &cancel)).await
 }
 
 #[tauri::command]
@@ -1544,6 +1547,20 @@ async fn search(
     blocking(move || repo.search_with(&query, &cancel)).await
 }
 
+/// Tell which of `ids`, loaded commits the history could not, are unpushed, for the next load
+/// to mark: whether it found out anything.
+#[tauri::command]
+async fn settle_unpushed(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    ids: Vec<String>,
+    lane: Option<String>,
+) -> CommandResult<bool> {
+    let repo = current(&session, &window)?;
+    let cancel = session.lane(&window, lane);
+    blocking(move || repo.settle_unpushed(&ids, &cancel)).await
+}
+
 /// Stop the reads running in `lanes`: what they would answer is no longer wanted, as the
 /// search was cleared or the commit panel closed.
 #[tauri::command]
@@ -1956,6 +1973,7 @@ fn main() {
             commit_diff,
             commit_diff_page,
             stop_reads,
+            settle_unpushed,
             compare,
             compare_diff,
             compare_diff_page,

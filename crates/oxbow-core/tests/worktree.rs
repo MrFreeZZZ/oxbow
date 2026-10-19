@@ -336,4 +336,34 @@ fn new_files_are_counted_once_until_they_change() {
             .filter(|f| f.path.starts_with("big"))
             .all(|f| f.uncounted || f.additions == 4 * 1024 * 1024)
     );
+
+    // Each refresh of the app opens the repository afresh: the counts stay, so the files left
+    // waiting get theirs in the next readings instead of the first ones being read again.
+    for i in 0..5 {
+        let status = std::process::Command::new("touch")
+            .args(["-d", "2020-01-01 00:00:00", &format!("big{i}.txt")])
+            .current_dir(fx.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+    let mut repo = repo;
+    let mut waiting = usize::MAX;
+    for _ in 0..4 {
+        repo = repo.reopen().unwrap();
+        let now = repo
+            .working_tree()
+            .unwrap()
+            .unstaged
+            .iter()
+            .filter(|f| f.uncounted)
+            .count();
+        assert!(now < waiting || now == 0, "{now} still waiting after {waiting}");
+        waiting = now;
+    }
+    assert_eq!(waiting, 0);
+    // A count kept from before the reopen: same size and time of change.
+    fx.write("new.txt", "a\nb\nc\n");
+    old(&mut fx, "2021-01-01 00:00:00");
+    assert_eq!(count(&repo.reopen().unwrap()), (1, false));
 }

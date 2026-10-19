@@ -68,6 +68,27 @@
 
   let repo = $state<RepoSummary | null>(null);
   let history = $state<History | null>(null);
+
+  /** Past the unpushed commits a load walks, the rest are told in the background, and a reload
+   *  marks them. */
+  let settling = false;
+  $effect(() => {
+    const h = history;
+    if (!h?.unpushedPending) return;
+    untrack(() => {
+      if (settling) return;
+      const mine = generation;
+      settling = true;
+      const ids = h.rows.filter((r) => !r.unpushed && !r.worktree).map((r) => r.id);
+      api.settleUnpushed(ids, "history-unpushed").then(
+        (found) => {
+          settling = false;
+          if (found && mine === generation) refresh();
+        },
+        () => (settling = false),
+      );
+    });
+  });
   let selected = $state<string | null>(null);
   let error = $state<string | null>(null);
   let loading = $state(false);
@@ -843,6 +864,8 @@
     pagingToken++;
     paging = null;
     refreshAfterPaging = false;
+    settling = false;
+    api.stopReads(["history-unpushed"]).catch(() => {});
   }
 
   async function refreshNow() {

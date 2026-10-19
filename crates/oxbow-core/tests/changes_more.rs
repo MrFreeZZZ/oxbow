@@ -360,3 +360,88 @@ fn a_page_of_working_diffs_matches_each_file_read_alone() {
         Err(oxbow_core::Error::Cancelled)
     ));
 }
+
+/// `count` committed files of `lines` lines each, with only their last line changed since.
+fn long_files_with_a_last_line_changed(count: usize, lines: usize) -> (Fixture, Vec<String>) {
+    let mut fx = Fixture::new();
+    let text: String = (0..lines).map(|i| format!("line {i}\n")).collect();
+    let paths: Vec<String> = (0..count).map(|i| format!("f{i:03}.txt")).collect();
+    for path in &paths {
+        fx.write(path, &text);
+    }
+    fx.git(&["add", "."]);
+    fx.git(&["commit", "-q", "-m", "Long files"]);
+    for path in &paths {
+        fx.write(path, &format!("{text}changed\n"));
+    }
+    (fx, paths)
+}
+
+#[test]
+fn a_whole_file_page_keeps_to_its_budget_in_lines_read() {
+    use std::sync::atomic::AtomicBool;
+    // Each file changes by one line but shows 10,001 as a whole file: the counts alone would put
+    // all 100 in the first page of 4,000 lines.
+    let (fx, paths) = long_files_with_a_last_line_changed(100, 10_000);
+    let repo = Repo::open(fx.path()).unwrap();
+    let tree = repo.working_tree().unwrap();
+    let never = AtomicBool::new(false);
+    let lines = |page: &oxbow_core::DiffPage| -> usize {
+        page.diffs.iter().flat_map(|d| &d.hunks).map(|h| h.lines.len()).sum()
+    };
+    let mut from = Some(0);
+    let mut seen = Vec::new();
+    while let Some(at) = from {
+        let page = repo
+            .working_diff_page(&tree, &paths, Side::Unstaged, true, at, 4000, &never)
+            .unwrap();
+        // One file over the budget is a page of its own.
+        assert_eq!(page.diffs.len(), 1, "page from {at}");
+        assert_eq!(lines(&page), 10_001);
+        seen.extend(page.diffs.iter().map(|d| d.file.path.clone()));
+        from = page.next;
+    }
+    assert_eq!(seen, paths);
+    // Compact, they still fit in one page.
+    let page = repo
+        .working_diff_page(&tree, &paths, Side::Unstaged, false, 0, 4000, &never)
+        .unwrap();
+    assert_eq!(page.diffs.len(), 100);
+    assert!(lines(&page) < 4000);
+}
+
+#[test]
+fn a_page_stops_while_it_is_read() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+    let (fx, paths) = long_files_with_a_last_line_changed(60, 20_000);
+    let repo = Repo::open(fx.path()).unwrap();
+    let tree = repo.working_tree().unwrap();
+    // Read whole, all of it takes a while: long enough to be stopped on the way.
+    let never = AtomicBool::new(false);
+    let started = Instant::now();
+    let all = repo
+        .working_diff_page(&tree, &paths, Side::Unstaged, true, 0, usize::MAX, &never)
+        .unwrap();
+    let whole = started.elapsed();
+    assert_eq!(all.diffs.len(), 60);
+    drop(all);
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let stop = cancel.clone();
+    let wait = whole / 10;
+    let later = std::thread::spawn(move || {
+        std::thread::sleep(wait);
+        stop.store(true, Ordering::Relaxed);
+    });
+    let started = Instant::now();
+    let out = repo.working_diff_page(&tree, &paths, Side::Unstaged, true, 0, usize::MAX, &cancel);
+    later.join().unwrap();
+    assert!(matches!(out, Err(oxbow_core::Error::Cancelled)));
+    assert!(
+        started.elapsed() < wait + whole / 2 + Duration::from_millis(50),
+        "stopped after {:?} of {whole:?}",
+        started.elapsed()
+    );
+}

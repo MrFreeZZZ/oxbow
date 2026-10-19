@@ -11,7 +11,7 @@
   import { api } from "./api";
   import type { FileDiff, Source } from "./types";
   import { bytes, imageType } from "./unusual";
-  import { MAX_PIXELS, inTurn, pictureSize } from "./pictures";
+  import { Urls, inTurn, loadPair, type Size } from "./pictures";
 
   let { diff }: { diff: FileDiff } = $props();
 
@@ -21,35 +21,41 @@
   let error = $state<string | null>(null);
   let swipe = $state(50);
   let onion = $state(50);
-  /** The pictures are read once they come into view. */
+  /** The pictures are read once they come into view, and let go when scrolled far away. */
   let box = $state<HTMLDivElement>();
   let near = $state(false);
+  /** The height the pictures took, kept while they are let go so the page does not jump. */
+  let kept = $state(0);
   /** A side of too many pixels to draw without asking, until Show Anyway. */
   let huge = $state<{ width: number; height: number } | null>(null);
   let anyway = $state(false);
 
   $effect(() => {
     const el = box;
-    if (!el || near) return;
-    const observer = new IntersectionObserver((entries) => {
+    if (!el) return;
+    const coming = new IntersectionObserver((entries) => {
       if (entries.some((e) => e.isIntersecting)) near = true;
     }, { rootMargin: "400px 0px" });
-    observer.observe(el);
-    return () => observer.disconnect();
+    const leaving = new IntersectionObserver((entries) => {
+      if (near && entries.every((e) => !e.isIntersecting)) {
+        kept = el.offsetHeight;
+        near = false;
+      }
+    }, { rootMargin: "3000px 0px" });
+    coming.observe(el);
+    leaving.observe(el);
+    return () => {
+      coming.disconnect();
+      leaving.disconnect();
+    };
   });
 
-  /** One side, or the size that stops it from being drawn. */
-  async function load(source: Source | null, type: string, all: boolean): Promise<Side | { width: number; height: number } | null> {
-    if (!source) return null;
-    const data = await api.sourceBytes(source);
-    const raw = data as Uint8Array<ArrayBuffer>;
-    const size = pictureSize(raw);
-    if (!all && size && size.width * size.height > MAX_PIXELS) return size;
-    const url = URL.createObjectURL(new Blob([raw], { type }));
+  /** The size a picture is drawn at; one that can't be decoded draws at none. */
+  async function decode(url: string): Promise<Size> {
     const img = new Image();
     img.src = url;
     await img.decode().catch(() => {});
-    return { url, width: img.naturalWidth, height: img.naturalHeight, size: data.byteLength };
+    return { width: img.naturalWidth, height: img.naturalHeight };
   }
 
   $effect(() => {
@@ -58,18 +64,16 @@
     if (!near) return;
     const type = imageType(d.file.path) ?? "application/octet-stream";
     let gone = false;
-    let urls: string[] = [];
+    const urls = new Urls();
     error = null;
     huge = null;
-    inTurn(() => Promise.all([load(d.old, type, all), load(d.new, type, all)]), () => gone).then(
+    const sources: [Source | null, Source | null] = [d.old, d.new];
+    inTurn(() => loadPair(sources, type, all, urls, api.sourceBytes, decode), () => gone).then(
       (sides) => {
-        if (!sides) return;
-        const drawn = sides.filter((s): s is Side => !!s && "url" in s);
-        urls = drawn.map((s) => s.url);
-        if (gone) return urls.forEach((u) => URL.revokeObjectURL(u));
+        if (!sides || gone) return;
         const big = sides.find((s) => !!s && !("url" in s));
         if (big) {
-          urls.forEach((u) => URL.revokeObjectURL(u));
+          urls.close();
           huge = big;
           return;
         }
@@ -83,7 +87,7 @@
     );
     return () => {
       gone = true;
-      urls.forEach((u) => URL.revokeObjectURL(u));
+      urls.close();
       before = after = null;
     };
   });
@@ -126,7 +130,7 @@
   <span class="dims">{side.width}×{side.height} · {bytes(side.size)}</span>
 {/snippet}
 
-<div class="image" bind:this={box}>
+<div class="image" bind:this={box} style:min-height={kept && !before && !after ? `${kept}px` : null}>
   {#if both}
     <div class="modes" role="tablist" aria-label="Compare pictures">
       {#each MODES as [value, label] (value)}

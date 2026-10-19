@@ -1,5 +1,6 @@
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use gix::ObjectId;
 use gix::bstr::ByteSlice;
@@ -21,8 +22,23 @@ use crate::worktrees::Worktree;
 /// Commits of the first load. As the list scrolls on the app asks for more, and gets only the
 /// rows it does not have yet: see [`History::pieces`].
 pub const PAGE: usize = 2_000;
-/// Unpushed commits walked at most: past them, the loaded rows tell which are.
+/// Unpushed commits walked at most while the history loads: past them, the loaded rows not met
+/// yet wait for [`Repo::settle_unpushed`].
 const UNPUSHED_WALK: usize = 5 * PAGE;
+
+/// Which loaded commits are unpushed, as [`Repo::settle_unpushed`] found past the walk the
+/// history takes, for the branches and remote-tracking branches where they were then.
+#[derive(Clone, Default)]
+pub(crate) struct UnpushedAnswers(std::sync::Arc<std::sync::Mutex<Answers>>);
+
+#[derive(Default)]
+struct Answers {
+    /// The tips the answers are for: [`tips_key`].
+    tips: u64,
+    unpushed: HashMap<ObjectId, bool>,
+    /// Counts the answers added, so that rows built before them are built again.
+    added: u64,
+}
 
 /// Options for loading the history.
 #[derive(Debug, Clone)]
@@ -110,6 +126,10 @@ pub struct History {
     /// The git commands this read ran, as typed in a shell; commits and refs are read from
     /// `.git` directly. What Reload shows in Activity.
     pub reads: Vec<String>,
+    /// Some loaded commits not marked unpushed may be: more were unpushed than the history
+    /// walks while it loads. [`Repo::settle_unpushed`] tells, and the next load marks them.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unpushed_pending: bool,
 }
 
 /// A run of history rows: `len` of the caller's rows from `known` on, or with `known` unset,
@@ -207,6 +227,7 @@ struct Rows {
     trunk_tip_row: Option<usize>,
     truncated: bool,
     loaded: usize,
+    unpushed_pending: bool,
 }
 
 /// What the commit rows are built from. The commits themselves never change under their ids,
@@ -223,6 +244,7 @@ fn rows_key(
     changes: bool,
     production: Option<&str>,
     shallow: u64,
+    settled: u64,
 ) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -238,7 +260,7 @@ fn rows_key(
         (&stash.id, stash.index).hash(&mut hasher);
     }
     remotes.hash(&mut hasher);
-    (rebasing, changes, production, shallow, graph::branch_colors()).hash(&mut hasher);
+    (rebasing, changes, production, shallow, settled, graph::branch_colors()).hash(&mut hasher);
     hasher.finish()
 }
 
@@ -344,6 +366,7 @@ impl Repo {
             dirty,
             production.as_deref(),
             boundary,
+            self.unpushed.0.lock().expect("unpushed lock").added,
         );
         // The rows the caller has, when they are the ones built last.
         let mut before = None;
@@ -438,6 +461,7 @@ impl Repo {
             same,
             pieces,
             reads: Vec::new(),
+            unpushed_pending: built.unpushed_pending,
         })
     }
 
@@ -544,7 +568,7 @@ impl Repo {
             }
         }
 
-        let unpushed = unpushed_commits(repo, refs, head, &nodes, &row_of)?;
+        let (unpushed, unpushed_pending) = self.unpushed_commits(repo, refs, head, &nodes)?;
 
         // Commits a branch or tag keeps. While HEAD is detached, the others were made there and
         // belong to no branch. Children come before parents, so one pass reaches every ancestor.
@@ -768,6 +792,7 @@ impl Repo {
             trunk_tip_row,
             truncated,
             loaded,
+            unpushed_pending,
         })
     }
 }
@@ -904,84 +929,131 @@ impl Repo {
     }
 }
 
-/// Commits reachable from local branches or `HEAD` but from no remote-tracking branch.
-/// Without any remote-tracking branches nothing counts as unpushed. When more than
-/// [`UNPUSHED_WALK`] commits are, as when the remote-tracking branches are far behind or of
-/// another history, the walk stops there and the rows loaded tell: see [`unpushed_in`].
-fn unpushed_commits(
-    repo: &gix::Repository,
-    refs: &[RefInfo],
-    head: &HeadInfo,
-    nodes: &[Node],
-    row_of: &HashMap<ObjectId, usize>,
-) -> Result<HashSet<ObjectId>> {
+/// The tips of local branches and `HEAD`, and of remote-tracking branches.
+fn unpushed_tips(refs: &[RefInfo], head: &HeadInfo) -> (Vec<ObjectId>, Vec<ObjectId>) {
     let ids = |kind: RefKind| -> Vec<ObjectId> {
-        refs.iter()
+        let mut ids: Vec<ObjectId> = refs
+            .iter()
             .filter(|r| r.kind == kind)
             .filter_map(|r| ObjectId::from_hex(r.target.as_bytes()).ok())
-            .collect()
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
     };
-    let remote = ids(RefKind::Remote);
-    if remote.is_empty() {
-        return Ok(HashSet::new());
-    }
-    let mut local = ids(RefKind::Local);
+    let (mut local, remote) = (ids(RefKind::Local), ids(RefKind::Remote));
     if let Some(id) = head
         .commit
         .as_deref()
         .and_then(|h| ObjectId::from_hex(h.as_bytes()).ok())
+        && !local.contains(&id)
     {
         local.push(id);
     }
-    let walk = repo
-        .rev_walk(local.iter().copied())
-        .with_hidden(remote.iter().copied())
-        .all()
-        .map_err(Error::git)?;
-    let mut out = HashSet::new();
-    for info in walk {
-        out.insert(info.map_err(Error::git)?.id);
-        if out.len() > UNPUSHED_WALK {
-            return Ok(unpushed_in(nodes, row_of, &local, &remote));
-        }
-    }
-    Ok(out)
+    (local, remote)
 }
 
-/// The loaded commits that `local` tips reach and `remote` ones don't, going down the loaded
-/// rows alone (children come before parents). A row is loaded only once every newer commit is,
-/// so the rows reaching it are loaded too; only commit dates out of order can hide one.
-fn unpushed_in(
-    nodes: &[Node],
-    row_of: &HashMap<ObjectId, usize>,
-    local: &[ObjectId],
-    remote: &[ObjectId],
-) -> HashSet<ObjectId> {
-    let reached = |tips: &[ObjectId]| {
-        let mut on = vec![false; nodes.len()];
-        for tip in tips {
-            if let Some(&row) = row_of.get(tip) {
-                on[row] = true;
+/// What the answers of [`Repo::settle_unpushed`] hold for: the tips both ways.
+fn tips_key(local: &[ObjectId], remote: &[ObjectId]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (local, remote).hash(&mut hasher);
+    hasher.finish()
+}
+
+impl Repo {
+    /// Commits reachable from local branches or `HEAD` but from no remote-tracking branch, and
+    /// whether some of `nodes` are still unknown. Without any remote-tracking branches nothing
+    /// counts as unpushed. The walk stops past [`UNPUSHED_WALK`] commits, as when the
+    /// remote-tracking branches are far behind or of another history: every commit it met is
+    /// unpushed, and the loaded ones it did not meet take what [`Repo::settle_unpushed`] found
+    /// for the same tips, or wait for it.
+    fn unpushed_commits(
+        &self,
+        repo: &gix::Repository,
+        refs: &[RefInfo],
+        head: &HeadInfo,
+        nodes: &[Node],
+    ) -> Result<(HashSet<ObjectId>, bool)> {
+        let (local, remote) = unpushed_tips(refs, head);
+        if remote.is_empty() || local.is_empty() {
+            return Ok((HashSet::new(), false));
+        }
+        let walk = repo
+            .rev_walk(local.iter().copied())
+            .with_hidden(remote.iter().copied())
+            .all()
+            .map_err(Error::git)?;
+        let mut out = HashSet::new();
+        for info in walk {
+            out.insert(info.map_err(Error::git)?.id);
+            if out.len() > UNPUSHED_WALK {
+                let answers = self.unpushed.0.lock().expect("unpushed lock");
+                let known = (answers.tips == tips_key(&local, &remote)).then_some(&answers.unpushed);
+                let mut pending = false;
+                let mut more = Vec::new();
+                for node in nodes.iter().filter(|n| !out.contains(&n.id)) {
+                    match known.and_then(|k| k.get(&node.id)) {
+                        Some(true) => more.push(node.id),
+                        Some(false) => {}
+                        None => pending = true,
+                    }
+                }
+                out.extend(more);
+                return Ok((out, pending));
             }
         }
-        for row in 0..nodes.len() {
-            if on[row] {
-                for parent in &nodes[row].parents {
-                    if let Some(&r) = row_of.get(parent) {
-                        on[r] = true;
-                    }
+        Ok((out, false))
+    }
+
+    /// Which of `ids`, loaded commits the history could not tell, are unpushed: the whole walk
+    /// of unpushed commits, which can be long, stopping when `cancel` is set or every one of
+    /// `ids` is met. The answers are kept for the history's next load; whether any were added.
+    pub fn settle_unpushed(&self, ids: &[String], cancel: &AtomicBool) -> Result<bool> {
+        let (local, remote) = unpushed_tips(&self.refs()?, &self.head()?);
+        let tips = tips_key(&local, &remote);
+        let mut asked: HashMap<ObjectId, bool> = ids
+            .iter()
+            .filter_map(|id| ObjectId::from_hex(id.as_bytes()).ok())
+            .map(|id| (id, false))
+            .collect();
+        {
+            let answers = self.unpushed.0.lock().expect("unpushed lock");
+            if answers.tips == tips {
+                asked.retain(|id, _| !answers.unpushed.contains_key(id));
+            }
+        }
+        if asked.is_empty() || remote.is_empty() || local.is_empty() {
+            return Ok(false);
+        }
+        let repo = self.local();
+        let walk = repo
+            .rev_walk(local.iter().copied())
+            .with_hidden(remote.iter().copied())
+            .all()
+            .map_err(Error::git)?;
+        let mut left = asked.len();
+        for (n, info) in walk.enumerate() {
+            if n % 1024 == 0 && cancel.load(Ordering::Relaxed) {
+                return Err(Error::Cancelled);
+            }
+            if let Some(found) = asked.get_mut(&info.map_err(Error::git)?.id) {
+                *found = true;
+                left -= 1;
+                if left == 0 {
+                    break;
                 }
             }
         }
-        on
-    };
-    let (mine, pushed) = (reached(local), reached(remote));
-    nodes
-        .iter()
-        .enumerate()
-        .filter(|&(row, _)| mine[row] && !pushed[row])
-        .map(|(_, node)| node.id)
-        .collect()
+        let mut answers = self.unpushed.0.lock().expect("unpushed lock");
+        if answers.tips != tips {
+            answers.tips = tips;
+            answers.unpushed.clear();
+        }
+        answers.unpushed.extend(asked);
+        answers.added += 1;
+        Ok(true)
+    }
 }
 
 /// Branch name that colors a line starting at a commit with these labels.

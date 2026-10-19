@@ -649,3 +649,90 @@ fn far_behind_remote_branches_still_mark_the_loaded_commits() {
     assert_eq!(ahead, 1000);
     assert!(history.rows[1000..].iter().all(|r| !r.unpushed));
 }
+
+#[test]
+fn unpushed_marks_match_git_however_far_the_walk_would_go() {
+    use std::collections::HashSet;
+    use std::io::Write;
+    use std::sync::atomic::AtomicBool;
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "root\n", "Root");
+    let root = fx.git(&["rev-parse", "HEAD"]);
+    // main and side each 12,000 commits on the root, their dates interleaved. origin/main is a
+    // commit of its own on main~50, dated before all of them: the loaded commits it reaches
+    // are pushed, though it is not loaded itself.
+    let mut script = String::new();
+    let mut add = |branch: &str, mark: usize, from: Option<String>, time: i64| {
+        script.push_str(&format!(
+            "commit refs/heads/{branch}\nmark :{mark}\ncommitter A <a@x> {time} +0000\ndata 2\nc\n{}M 644 inline a.txt\ndata 2\n{}\n\n",
+            from.map_or_else(String::new, |f| format!("from {f}\n")),
+            mark % 10
+        ));
+    };
+    for i in 1..=12_000 {
+        let first = (i == 1).then(|| root.clone());
+        add("main", i, first.clone(), 1_700_000_000 + 2 * i as i64);
+        add("side", 20_000 + i, first, 1_700_000_001 + 2 * i as i64);
+    }
+    add("pushed", 40_000, Some(":11950".into()), 1_600_000_000);
+    let mut child = std::process::Command::new("git")
+        .args(["fast-import", "--quiet"])
+        .current_dir(fx.path())
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+    assert!(child.wait().unwrap().success());
+    fx.git(&["update-ref", "refs/remotes/origin/main", "pushed"]);
+    fx.git(&["update-ref", "-d", "refs/heads/pushed"]);
+    fx.git(&["reset", "-q", "--hard", "main"]);
+    let exact: HashSet<String> = fx
+        .git(&["rev-list", "--branches", "--not", "--remotes"])
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(exact.len(), 12_050);
+
+    let repo = Repo::open(fx.path()).unwrap();
+    let history = repo.history(&HistoryOptions::default()).unwrap();
+    assert_eq!(history.rows.len(), 2000);
+    // Past the walk it takes, the commits it met are marked and the others wait.
+    assert!(history.unpushed_pending);
+    assert!(
+        history
+            .rows
+            .iter()
+            .filter(|r| r.unpushed)
+            .all(|r| exact.contains(&r.id))
+    );
+    let unknown: Vec<String> = history
+        .rows
+        .iter()
+        .filter(|r| !r.unpushed)
+        .map(|r| r.id.clone())
+        .collect();
+    assert!(repo.settle_unpushed(&unknown, &AtomicBool::new(false)).unwrap());
+
+    // Opened afresh, as each reload does, it marks them as git does.
+    for history in [
+        repo.history(&HistoryOptions::default()).unwrap(),
+        repo.reopen().unwrap().history(&HistoryOptions::default()).unwrap(),
+    ] {
+        assert!(!history.unpushed_pending);
+        let wrong: Vec<&str> = history
+            .rows
+            .iter()
+            .filter(|r| r.unpushed != exact.contains(&r.id))
+            .map(|r| r.summary.as_str())
+            .collect();
+        assert!(wrong.is_empty(), "{} rows marked wrong", wrong.len());
+        assert!(history.rows.iter().any(|r| !r.unpushed));
+    }
+    // A stopped settling keeps nothing.
+    assert!(matches!(
+        repo.reopen()
+            .unwrap()
+            .settle_unpushed(&["0".repeat(40)], &AtomicBool::new(true)),
+        Err(oxbow_core::Error::Cancelled)
+    ));
+}

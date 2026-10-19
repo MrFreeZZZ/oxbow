@@ -249,6 +249,14 @@ struct Change {
 #[derive(Clone, Default)]
 pub(crate) struct ChangesCache(Arc<Mutex<Option<ChangesOf>>>);
 
+/// The changed files between the two trees compared last: Compare's file list, its counts and
+/// each page of its diffs all start from them.
+#[derive(Clone, Default)]
+pub(crate) struct PairChangesCache(Arc<Mutex<Option<PairChanges>>>);
+
+/// The trees of a comparison, old and new, and the files changed between them.
+type PairChanges = ((ObjectId, ObjectId), Arc<Vec<Change>>);
+
 /// A commit and its changed files, once read.
 type ChangesOf = (ObjectId, Arc<ChangesSlot>);
 type ChangesSlot = Mutex<Option<Arc<Vec<Change>>>>;
@@ -454,10 +462,10 @@ impl Repo {
         cancel: &AtomicBool,
     ) -> Result<Vec<FileChange>> {
         let repo = self.local();
-        let changes = tree_changes(&repo, Some(&from_tree(&repo, from)?), &from_tree(&repo, to)?)?;
+        let changes = self.pair_changes(&repo, from, to)?;
         match count {
             Some(at) => counted(&repo, &changes, at, self.diff_options().max_lines, cancel),
-            None => Ok(changes.into_iter().map(|c| c.file).collect()),
+            None => Ok(changes.iter().map(|c| c.file.clone()).collect()),
         }
     }
 
@@ -473,15 +481,41 @@ impl Repo {
         cancel: &AtomicBool,
     ) -> Result<DiffPage> {
         let repo = self.local();
-        let changes = tree_changes(&repo, Some(&from_tree(&repo, from_tree_id)?), &from_tree(&repo, to)?)?;
+        let changes = self.pair_changes(&repo, from_tree_id, to)?;
         self.page_of(&repo, &changes, from, budget, context, cancel)
     }
 
     /// Line diffs between two commits' trees (or two trees), for all files or only `path`.
     pub fn tree_diff(&self, from: &str, to: &str, path: Option<&str>, context: DiffContext) -> Result<Vec<FileDiff>> {
+        self.tree_diff_with(from, to, path, context, &AtomicBool::new(false))
+    }
+
+    /// [`Repo::tree_diff`] that setting `cancel` stops.
+    pub fn tree_diff_with(
+        &self,
+        from: &str,
+        to: &str,
+        path: Option<&str>,
+        context: DiffContext,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<FileDiff>> {
         let repo = self.local();
-        let changes = tree_changes(&repo, Some(&from_tree(&repo, from)?), &from_tree(&repo, to)?)?;
-        self.diffs(&repo, &changes, path, context, &AtomicBool::new(false))
+        let changes = self.pair_changes(&repo, from, to)?;
+        self.diffs(&repo, &changes, path, context, cancel)
+    }
+
+    /// The changes between the trees of `from` and `to`, kept for the pair compared last.
+    fn pair_changes(&self, repo: &gix::Repository, from: &str, to: &str) -> Result<Arc<Vec<Change>>> {
+        let (old, new) = (from_tree(repo, from)?, from_tree(repo, to)?);
+        let key = (old.id, new.id);
+        if let Some((pair, changes)) = &*self.pair_changes.0.lock().expect("pair changes lock")
+            && *pair == key
+        {
+            return Ok(changes.clone());
+        }
+        let changes = Arc::new(tree_changes(repo, Some(&old), &new)?);
+        *self.pair_changes.0.lock().expect("pair changes lock") = Some((key, changes.clone()));
+        Ok(changes)
     }
 
     fn diffs(
@@ -557,7 +591,6 @@ pub(crate) fn over_limit(file: &FileChange, max: u32) -> bool {
 }
 
 impl Repo {
-    /// The bytes of one side of a file diff.
     /// [`Repo::read_source`] of a side no bigger than `max` bytes, as a preview takes: a bigger
     /// one is not read, and the error says how big it is.
     pub fn read_source_within(&self, source: &Source, max: u64) -> Result<Vec<u8>> {
@@ -567,8 +600,8 @@ impl Repo {
                 size.div_ceil(1024 * 1024)
             )));
         }
-        let data = self.read_source(source)?;
-        // A file that grew since it was measured.
+        // A file that grew since it was measured is read no further than shows that.
+        let data = self.read_source_upto(source, max.saturating_add(1))?;
         if data.len() as u64 > max {
             return Err(Error::Git(
                 "it is too big to preview here; Open shows it in its own app".into(),
@@ -577,7 +610,14 @@ impl Repo {
         Ok(data)
     }
 
+    /// The bytes of one side of a file diff.
     pub fn read_source(&self, source: &Source) -> Result<Vec<u8>> {
+        self.read_source_upto(source, u64::MAX)
+    }
+
+    /// [`Repo::read_source`], reading at most `limit` bytes of a file in the working tree. An
+    /// object never changes, so its size, checked beforehand, holds.
+    fn read_source_upto(&self, source: &Source, limit: u64) -> Result<Vec<u8>> {
         match source {
             Source::Blob { id } => {
                 let oid =
@@ -605,7 +645,7 @@ impl Repo {
                         .map(|target| target.to_string_lossy().into_owned().into_bytes())
                         .map_err(|err| Error::Git(format!("could not read {path}: {err}")));
                 }
-                crate::lfs::read_regular(&full, u64::MAX)
+                crate::lfs::read_regular(&full, limit)
                     .ok_or_else(|| Error::Git(format!("could not read {path}: not a plain file")))
             }
         }
