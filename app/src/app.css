@@ -167,6 +167,10 @@
   --code-size: 12px;
   --code-line: 20px;
   --tab: 4;
+  /* Git commands and their output follow Console & Activity in Settings. */
+  --term-font: var(--mono);
+  --term-size: 12px;
+  --term-line: 1.6;
 }
 
 :root[data-theme="light"] {

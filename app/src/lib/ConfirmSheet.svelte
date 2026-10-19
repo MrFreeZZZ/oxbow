@@ -665,8 +665,9 @@
   }
   .lines {
     padding: 10px 14px 12px;
-    font-size: var(--text-small);
-    line-height: 1.7;
+    font-family: var(--term-font);
+    font-size: var(--term-size);
+    line-height: var(--term-line);
     max-height: 240px;
     overflow-y: auto;
   }

@@ -659,6 +659,20 @@
             prefRow("oxbow.text.tabWidth", "Tab width", "popup", { options: () => opts(2, 4, 8) }),
           ],
         },
+        {
+          title: "Console & Activity",
+          rows: [
+            prefRow("oxbow.console.font", "Font", "popup", {
+              sub: "Of git commands and their output, also in the sheets",
+              options: () => [{ value: "", label: "Same as Text" }, ...opts(...new Set(["SF Mono", ...fonts]))],
+            }),
+            prefRow("oxbow.console.fontSize", "Size", "popup", { options: () => opts(10, 11, 12, 13, 14, 15, 16, 17, 18) }),
+            prefRow("oxbow.console.lineHeight", "Line height", "popup", {
+              sub: () => `${Math.round(prefs.get("oxbow.console.fontSize") * prefs.get("oxbow.console.lineHeight"))} px per line at size ${prefs.get("oxbow.console.fontSize")}`,
+              options: () => opts(1.2, 1.4, 1.5, 1.6, 1.8, 2),
+            }),
+          ],
+        },
       ],
     },
     {
@@ -1432,6 +1446,34 @@
             </div>
             {#if text(group.foot)}<p class="foot">{text(group.foot)}</p>{/if}
           </section>
+          {#if !needle && group.key === "diff:1"}
+            <section>
+              <h2>Preview</h2>
+              <div class="preview" class:words={prefs.get("oxbow.diff.wordHighlight")}>
+                {#each preview as line, i (i)}
+                  <div class="line {line.kind}" class:first={line.kind !== preview[i - 1]?.kind} class:last={line.kind !== preview[i + 1]?.kind}>
+                    {#if line.kind === "fold"}
+                      <span class="fold">{line.before}</span>
+                    {:else}
+                      <span class="n">{line.old ?? ""}</span>
+                      <span class="n">{line.new ?? ""}</span>
+                      <span class="code">{line.before}{#if line.word}<span class="word">{line.word}</span>{line.after}{/if}</span>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            </section>
+          {/if}
+          {#if !needle && group.key === "diff:2"}
+            <section>
+              <h2>Preview</h2>
+              <div class="term-preview" aria-label="Git commands">
+                <div><span class="dim">%</span> <span class="git">git</span> push origin main</div>
+                <div class="dim">To github.com:acme/api.git</div>
+                <div class="dim">{"   3f2a1c9..7c1e9a2  main -> main"}</div>
+              </div>
+            </section>
+          {/if}
           {#if !needle && group.key === "theme:0"}
             <section>
               <div class="title-line">
@@ -1462,26 +1504,6 @@
         {:else}
           {#if needle}<p class="empty">No settings match “{query.trim()}”.</p>{/if}
         {/each}
-
-
-        {#if !needle && current.id === "diff"}
-          <section>
-            <h2>Preview</h2>
-            <div class="preview" class:words={prefs.get("oxbow.diff.wordHighlight")}>
-              {#each preview as line, i (i)}
-                <div class="line {line.kind}" class:first={line.kind !== preview[i - 1]?.kind} class:last={line.kind !== preview[i + 1]?.kind}>
-                  {#if line.kind === "fold"}
-                    <span class="fold">{line.before}</span>
-                  {:else}
-                    <span class="n">{line.old ?? ""}</span>
-                    <span class="n">{line.new ?? ""}</span>
-                    <span class="code">{line.before}{#if line.word}<span class="word">{line.word}</span>{line.after}{/if}</span>
-                  {/if}
-                </div>
-              {/each}
-            </div>
-          </section>
-        {/if}
       </div>
     {/if}
   </div>
@@ -2237,6 +2259,26 @@
   }
 
   /* Diff & Text preview */
+  .term-preview {
+    border-radius: var(--radius-l);
+    background: var(--term);
+    border: 0.5px solid var(--term-border);
+    padding: 10px 14px;
+    color: var(--term-text);
+    font-family: var(--term-font);
+    font-size: var(--term-size);
+    line-height: var(--term-line);
+  }
+  .term-preview div {
+    white-space: pre-wrap;
+  }
+  .term-preview .dim {
+    color: var(--term-dim);
+  }
+  .term-preview .git {
+    color: var(--term-git);
+    font-weight: 600;
+  }
   .preview {
     border-radius: var(--radius-l);
     background: var(--code-bg, var(--win));
