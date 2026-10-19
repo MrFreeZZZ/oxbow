@@ -1,4 +1,4 @@
-import { dayOf, duration, exitOf, outputOpen, shows, trimmed, upsert, type ConsoleEntry, type ConsoleRan } from "../src/lib/console.ts";
+import { afterClear, dayOf, duration, exitOf, outputOpen, shows, trimmed, upsert, type ConsoleEntry, type ConsoleRan } from "../src/lib/console.ts";
 import assert from "node:assert/strict";
 
 const ran = (display: string, extra: Partial<ConsoleRan> = {}): ConsoleRan => ({ display, time: 0, millis: 5, code: 0, stopped: false, ...extra });
@@ -95,4 +95,15 @@ assert.equal(duration(64_000), "1 min 4 s");
   for (let i = 1; i <= 1200; i++) actions.push(of(i, "a"));
   assert.equal(trimmed(actions, (e) => e.log).length, 1000);
   assert.equal(trimmed(actions, (e) => e.log)[0].id, 201);
+}
+
+// Clear History drops what came for the cleared logs while a load was on its way, except what runs.
+{
+  const pending = [
+    { log: "a", entry: entry(1) },
+    { log: "a", entry: entry(2, { running: true }) },
+    { log: "b", entry: entry(3) },
+  ];
+  assert.deepEqual(afterClear(pending, ["a"]).map((p) => p.entry.id), [2, 3]);
+  assert.deepEqual(afterClear(pending, ["a", "b"]).map((p) => p.entry.id), [2]);
 }

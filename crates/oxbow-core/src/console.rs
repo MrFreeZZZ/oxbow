@@ -690,10 +690,17 @@ fn plain(text: &str) -> std::borrow::Cow<'_, str> {
 
 /// A line printed by a running command, as the log keeps it.
 pub(crate) fn line(text: &str, stderr: bool) -> Line {
-    Line {
-        text: mask(&plain(text)),
-        stderr,
+    // A log that cuts keeps at most an eighth of its bytes of a line (see [`keep`]): past twice
+    // that, a line is cut here, before masking all of it would only take time.
+    let mut end = text.len().min(2 * MAIN_OUTPUT.1 / 8);
+    while !text.is_char_boundary(end) {
+        end -= 1;
     }
+    let mut kept = mask(&plain(&text[..end]));
+    if end < text.len() {
+        kept.push('…');
+    }
+    Line { text: kept, stderr }
 }
 
 /// At most `max_lines` lines and about `max_bytes` of `lines`: the first ones and the last few,
@@ -753,13 +760,18 @@ static SECRET_VALUE: LazyLock<Regex> = LazyLock::new(|| {
 /// `ssh://git@host`, except in an http address, where it is often a token.
 pub fn mask(text: &str) -> String {
     let mut text = mask_known(text);
-    // A line may hold more than one; a pattern of the user's that matches the dots must not
-    // keep it going.
-    for _ in 0..8 {
-        match crate::secrets::check_line(&text) {
-            Some((_, (start, end))) if &text[start..end] != MASK => text.replace_range(start..end, MASK),
-            _ => break,
+    // All of them at once, overlapping ones as one, from the end so the spans stay right.
+    let mut spans = crate::secrets::secret_spans(&text);
+    spans.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for (start, end) in spans {
+        match merged.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
         }
+    }
+    for &(start, end) in merged.iter().rev() {
+        text.replace_range(start..end, MASK);
     }
     text
 }
@@ -829,6 +841,18 @@ mod tests {
         assert_eq!(mask("password=hunter2"), "password=••••••");
         assert_eq!(mask(r#"PASSWORD = "audit-password-123""#), r#"PASSWORD = "••••••""#);
         assert_eq!(mask(r#"+password="audit-password-123""#), r#"+password="••••••""#);
+        // Fake keys, split so that secret scanners don't take this file for a leak.
+        let aws = concat!("AKIA", "Q7XKZ3M4P2LJ6WVB");
+        assert_eq!(mask(&format!("{aws} # oxbow:allow")), "•••••• # oxbow:allow");
+        let long = format!("{aws} {}", "x".repeat(4100));
+        assert!(!mask(&long).contains(aws));
+        let nine = [aws; 9].join(" ");
+        assert_eq!(mask(&nine), [MASK; 9].join(" "));
+        assert_eq!(
+            mask(&format!(r#"TOKEN = "{aws}""#)),
+            r#"TOKEN = "••••••""#,
+            "a key in a secret's value is masked once"
+        );
         assert_eq!(
             mask("git commit -m 'Add the console window'"),
             "git commit -m 'Add the console window'"
@@ -915,7 +939,17 @@ mod tests {
         };
         std::fs::create_dir(dir.path().join("main")).unwrap();
         git(&["init", "-q"]);
-        git(&["-c", "user.name=A", "-c", "user.email=a@b", "commit", "-q", "--allow-empty", "-m", "One"]);
+        git(&[
+            "-c",
+            "user.name=A",
+            "-c",
+            "user.email=a@b",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "One",
+        ]);
         git(&["worktree", "add", "-q", "../linked"]);
         let main = log_file(&dir.path().join("main")).unwrap();
         assert_eq!(log_file(&dir.path().join("linked")), Some(main.clone()));

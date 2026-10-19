@@ -155,6 +155,13 @@ export function trimmed<T extends ConsoleEntry>(list: T[], logOf: (entry: T) => 
   return drop.size ? list.filter((e) => !drop.has(e)) : list;
 }
 
+/** Of entries that came for logs while a load was on its way, the ones still to show once
+ *  `cleared` were cleared: what still runs. A done one was in the log, and is gone with it. */
+export function afterClear<T extends { log: string | null; entry: ConsoleEntry }>(pending: T[], cleared: (string | null)[]): T[] {
+  const logs = new Set(cleared);
+  return pending.filter((p) => p.entry.running || !logs.has(p.log));
+}
+
 /** Lines of output shown at once under an action's own command; more fold under "N lines of output". */
 export const OPEN_LINES = 8;
 

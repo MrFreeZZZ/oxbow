@@ -19,7 +19,7 @@ pub struct ConsoleRepo {
     path: Option<String>,
     /// Its log file: the same for all worktrees of one repository.
     log: Option<String>,
-    /// Entries in its log.
+    /// Entries in its log, the done ones: what Clear History takes away.
     count: usize,
 }
 
@@ -124,7 +124,9 @@ pub async fn console_repos(app: AppHandle, session: State<'_, Session>) -> Comma
                 continue;
             }
             let count = console::entries(Some(Path::new(path))).len();
-            if count == 0 && Some(path) != current.as_ref() {
+            // A log whose first entry still runs is listed too, so All Repositories shows it.
+            let running = !console::running(Some(Path::new(path))).is_empty();
+            if count == 0 && !running && Some(path) != current.as_ref() {
                 continue;
             }
             repos.push(ConsoleRepo {
@@ -137,7 +139,7 @@ pub async fn console_repos(app: AppHandle, session: State<'_, Session>) -> Comma
             });
         }
         let outside = console::entries(None).len();
-        if outside > 0 {
+        if outside > 0 || !console::running(None).is_empty() {
             repos.push(ConsoleRepo {
                 name: "Outside Repositories".into(),
                 path: None,

@@ -83,7 +83,17 @@ fn the_console_keeps_no_secret() {
             secrets[0], secrets[1], secrets[2], secrets[3], secrets[4], secrets[5], secrets[6]
         ),
     );
-    fx.git(&["add", "deploy.env"]);
+    // What the check before a commit lets through is still masked in the log.
+    fx.write(
+        "notes.txt",
+        &format!(
+            "{aws} # oxbow:allow\n{aws} {long}\n{nine}\n",
+            aws = secrets[1],
+            long = "x".repeat(4100),
+            nine = [secrets[1]; 9].join(" ")
+        ),
+    );
+    fx.git(&["add", "deploy.env", "notes.txt"]);
     let repo = Repo::open(fx.path()).unwrap();
     let stopped: Result<String, Error> = oxbow_core::console::scope(
         Some(fx.path()),
@@ -95,6 +105,7 @@ fn the_console_keeps_no_secret() {
     // Other commands that print the file are masked line by line.
     repo.run(&oxbow_core::GitCommand::new(["diff", "--cached"])).unwrap();
     repo.run(&oxbow_core::GitCommand::new(["show", ":deploy.env"])).unwrap();
+    repo.run(&oxbow_core::GitCommand::new(["show", ":notes.txt"])).unwrap();
 
     let log = std::fs::read_to_string(fx.path().join(".git/oxbow/console.jsonl")).unwrap();
     assert!(log.contains("secrets check"), "{log}");

@@ -11,6 +11,7 @@
   import { lineKind } from "./confirm.svelte";
   import {
     CONSOLE_KEEP,
+    afterClear,
     clock,
     dayOf,
     duration,
@@ -205,7 +206,15 @@
   async function clearHistory(all: boolean) {
     const paths = all ? (repos?.repos.map((r) => r.path) ?? []) : [path === undefined ? (repos?.current ?? null) : path];
     clearing = null;
-    await api.consoleClear(paths).catch(() => {});
+    const cleared = await api.consoleClear(paths).then(
+      () => true,
+      () => false,
+    );
+    // What came for these logs while a load was on its way is gone from them now: only what
+    // still runs stays for the next load. What finishes from now on comes again.
+    if (cleared && pending) {
+      pending = afterClear(pending, paths.map((p) => logOf(p) ?? null));
+    }
     await load();
   }
 
