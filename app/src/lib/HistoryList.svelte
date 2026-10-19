@@ -353,7 +353,7 @@
     room -= Math.ceil(textWidth(byline, 400));
     if (pill && pill !== "testing") room -= pillWidth(PILL[pill], 600, false) + PILL_GAP;
     const mark = kin.marks.get(row.id);
-    if (mark) room -= pillWidth(mark, 600, false) + PILL_GAP;
+    if (mark) room -= Math.ceil(textWidth(`↑ ${mark} · `, 600));
     for (const l of own) if (l.kind === "head") room -= pillWidth(pill === "testing" ? PILL.testing : "HEAD", 600, false) + PILL_GAP;
     const shown = new Set(own.filter((l) => l.kind === "head"));
     let used = 0;
@@ -454,13 +454,11 @@
             {#if fit.folded.length}
               <span class="pill more" title={fit.folded.map((l) => l.name).join("\n")}>+{fit.folded.length}</span>
             {/if}
-            {#if kin.marks.has(row.id)}
-              <span class="pill kin" style:color={plate(kin.color)} style:border-color="color-mix(in srgb, {lane(kin.color)} 55%, transparent)" title="The selected commit was made on this one">{kin.marks.get(row.id)}</span>
-            {/if}
             {#if row.worktree}
               <span class="byline">{worktreeLine(row.worktree)}</span>
             {:else}
               <span class="byline">
+                {#if kin.marks.has(row.id)}<span class="kin" style:color={plate(kin.color)} title="The selected commit was made on this one">↑ {kin.marks.get(row.id)}</span> ·{/if}
                 {#if found?.mode === "author"}
                   {#each split(row.authorName, found.text) as piece, k (k)}{#if piece.hit}<mark>{piece.text}</mark>{:else}{piece.text}{/if}{/each}
                 {:else}
@@ -517,9 +515,6 @@
 
       {#each visible as { row, index } (row.id)}
         {@const d = dot(row, index)}
-        {#if kin.marks.has(row.id)}
-          <span class="kin-ring" style:left="{d.left - 2}px" style:top="{d.top - 2}px" style:width="{d.outer + 4}px" style:height="{d.outer + 4}px" style:border-color={lane(kin.color)}></span>
-        {/if}
         <span class="halo" class:faded={faded(row)} style:left="{d.left}px" style:top="{d.top}px" style:width="{d.outer}px" style:height="{d.outer}px" style:background={d.halo}>
           <span class="gap" style:width="{d.size + 4}px" style:height="{d.size + 4}px" style:background={d.gap}>
             <span class="dot" style:width="{d.size}px" style:height="{d.size}px" style:background={d.fill} style:border-color={d.ring}>
@@ -780,17 +775,9 @@
   .pill.production {
     font-weight: 700;
   }
-  /* A parent of the selected commit. */
-  .pill.kin {
-    min-width: 0;
+  /* "↑ parent": a parent of the selected commit, in its branch color. */
+  .kin {
     font-weight: 600;
-  }
-  .kin-ring {
-    position: absolute;
-    border-radius: 50%;
-    border: 1.5px solid;
-    opacity: 0.55;
-    pointer-events: none;
   }
   /* Bisect answers, in the colors of the banner's Good and Bad. */
   .pill.bisect {
