@@ -293,3 +293,47 @@ fn a_hunk_whose_line_endings_changed_after_it_was_shown_is_refused() {
         assert_eq!(fx.git(&["diff", "--cached", "--name-only"]), "");
     }
 }
+
+#[test]
+fn new_files_are_counted_once_until_they_change() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    fx.write("new.txt", "a\nb\nc\n");
+    let old = |fx: &mut Fixture, when: &str| {
+        let status = std::process::Command::new("touch")
+            .args(["-d", when, "new.txt"])
+            .current_dir(fx.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    old(&mut fx, "2020-01-01 00:00:00");
+    let repo = Repo::open(fx.path()).unwrap();
+    let count = |repo: &Repo| {
+        let tree = repo.working_tree().unwrap();
+        let file = tree.unstaged.iter().find(|f| f.path == "new.txt").unwrap().clone();
+        (file.additions, file.uncounted)
+    };
+    assert_eq!(count(&repo), (3, false));
+    // Same size and time of change: the count is not read again.
+    fx.write("new.txt", "abcde\n");
+    old(&mut fx, "2020-01-01 00:00:00");
+    assert_eq!(count(&repo), (3, false));
+    old(&mut fx, "2021-01-01 00:00:00");
+    assert_eq!(count(&repo), (1, false));
+
+    // Past the bytes one reading counts, the rest wait for the next ones.
+    let big = "x\n".repeat(4 * 1024 * 1024);
+    for i in 0..5 {
+        fx.write(&format!("big{i}.txt"), &big);
+    }
+    let tree = repo.working_tree().unwrap();
+    let waiting = tree.unstaged.iter().filter(|f| f.uncounted).count();
+    assert!(waiting >= 1);
+    assert!(
+        tree.unstaged
+            .iter()
+            .filter(|f| f.path.starts_with("big"))
+            .all(|f| f.uncounted || f.additions == 4 * 1024 * 1024)
+    );
+}

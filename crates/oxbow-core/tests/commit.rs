@@ -194,6 +194,13 @@ fn working_diff_over_the_limit_reads_no_patch() {
     assert_eq!(repo.read_source(&staged.new.clone().unwrap()).unwrap(), long.as_bytes());
     assert_ne!(old, new);
     assert_eq!(repo.source_size(&staged.new.clone().unwrap()), Some(long.len() as u64));
+    // A preview reads a side only up to its size limit.
+    let side = staged.new.clone().unwrap();
+    assert!(repo.read_source_within(&side, long.len() as u64 - 1).is_err());
+    assert_eq!(
+        repo.read_source_within(&side, long.len() as u64).unwrap(),
+        long.as_bytes()
+    );
 }
 
 #[test]

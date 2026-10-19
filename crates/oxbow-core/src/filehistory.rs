@@ -2,6 +2,7 @@
 //! line (`git blame`), and every commit that touched one line (`git log -L`).
 
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 
 use serde::Serialize;
 
@@ -12,6 +13,8 @@ use crate::repo::Repo;
 
 /// At most this many commits of a file are listed.
 const LIMIT: usize = 2000;
+/// Bytes of `git blame --porcelain` read at most: past them the blame stops at the lines read.
+const MAX_BLAME_BYTES: usize = 8 * 1024 * 1024;
 const FORMAT: &str = "--format=%x01%H%x1f%P%x1f%s%x1f%an%x1f%ae%x1f%at";
 
 /// A commit that changed the file, with the file's path in it.
@@ -76,6 +79,8 @@ pub struct Blame {
     /// One per line of the file, in order.
     pub lines: Vec<BlameLine>,
     pub command: String,
+    /// The file is too long to blame whole: `lines` are its first ones.
+    pub cut: bool,
 }
 
 impl Repo {
@@ -100,11 +105,16 @@ impl Repo {
     /// The commits that changed `path`, from `rev` (HEAD when missing) back, across renames;
     /// and the ones on other branches.
     pub fn file_history(&self, path: &str, rev: Option<&str>) -> Result<FileHistory> {
+        self.file_history_with(path, rev, &AtomicBool::new(false))
+    }
+
+    /// [`Repo::file_history`]; setting `cancel` stops it.
+    pub fn file_history_with(&self, path: &str, rev: Option<&str>, cancel: &AtomicBool) -> Result<FileHistory> {
         let rev = self.commit_id(rev.unwrap_or("HEAD"))?;
-        let mut commits = self.file_log(&["--follow".to_owned(), rev.clone()], path)?;
+        let mut commits = self.file_log(&["--follow".to_owned(), rev.clone()], path, cancel)?;
         let more = commits.len() > LIMIT;
         commits.truncate(LIMIT);
-        let mut elsewhere = self.file_log(&["--all".to_owned(), "--not".to_owned(), rev], path)?;
+        let mut elsewhere = self.file_log(&["--all".to_owned(), "--not".to_owned(), rev], path, cancel)?;
         elsewhere.truncate(LIMIT);
         Ok(FileHistory {
             path: path.to_owned(),
@@ -115,7 +125,7 @@ impl Repo {
     }
 
     /// `git log` of one file, with its path and added/removed line counts in each commit.
-    fn file_log(&self, revs: &[String], path: &str) -> Result<Vec<FileCommit>> {
+    fn file_log(&self, revs: &[String], path: &str, cancel: &AtomicBool) -> Result<Vec<FileCommit>> {
         // One walk gives both: `--raw` the status and paths (`:<modes> <ids> R075\told\tnew`),
         // `--numstat` the line counts after them.
         let mut args = vec![
@@ -129,7 +139,7 @@ impl Repo {
         args.extend(revs.iter().cloned());
         args.push("--".to_owned());
         args.push(literal(path));
-        let out = self.run(&GitCommand::new(args))?;
+        let out = self.run_cancellable(&GitCommand::new(args), cancel)?;
         Ok(chunks(&out.stdout)
             .filter_map(|(head, body)| {
                 let raw = body.iter().find_map(|line| raw_status(line));
@@ -176,29 +186,59 @@ impl Repo {
 
     /// Who last changed each line of `path` as of `rev`.
     pub fn blame(&self, path: &str, rev: &str) -> Result<Blame> {
+        self.blame_with(path, rev, &AtomicBool::new(false))
+    }
+
+    /// [`Repo::blame`]; setting `cancel` stops it. A file whose blame is longer than
+    /// [`MAX_BLAME_BYTES`] is blamed as far as that, and comes `cut`.
+    pub fn blame_with(&self, path: &str, rev: &str, cancel: &AtomicBool) -> Result<Blame> {
         let rev = self.commit_id(rev)?;
         let command = GitCommand::new(["blame", "--porcelain", &rev, "--", path]);
-        let out = self.run(&command)?;
-        let (commits, lines) = parse_porcelain(&out.stdout);
+        let out = self.spawn_cancellable_within(&command, MAX_BLAME_BYTES, cancel)?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        if !out.success && !out.cut {
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            return Err(Error::Command {
+                command: command.display(),
+                code: out.code,
+                output: if stderr.trim().is_empty() {
+                    text.into_owned()
+                } else {
+                    stderr
+                },
+            });
+        }
+        // A cut blame ends with the last line read whole: its text line comes last.
+        let whole = if out.cut { whole_lines(&text) } else { &text };
+        let (commits, lines) = parse_porcelain(whole);
         Ok(Blame {
             command: GitCommand::new(["blame", &rev[..7], "--", path]).display(),
             rev,
             path: path.to_owned(),
             commits,
             lines,
+            cut: out.cut,
         })
     }
 
     /// The commits that changed line `line` of `path`, as of `rev`, newest first (`git log -L`).
     pub fn line_history(&self, path: &str, line: u32, rev: &str) -> Result<Vec<String>> {
+        self.line_history_with(path, line, rev, &AtomicBool::new(false))
+    }
+
+    /// [`Repo::line_history`]; setting `cancel` stops it.
+    pub fn line_history_with(&self, path: &str, line: u32, rev: &str, cancel: &AtomicBool) -> Result<Vec<String>> {
         let rev = self.commit_id(rev)?;
-        let out = self.run(&GitCommand::new([
-            "log".to_owned(),
-            "--no-patch".to_owned(),
-            "--format=%H".to_owned(),
-            format!("-L{line},{line}:{path}"),
-            rev,
-        ]))?;
+        let out = self.run_cancellable(
+            &GitCommand::new([
+                "log".to_owned(),
+                "--no-patch".to_owned(),
+                "--format=%H".to_owned(),
+                format!("-L{line},{line}:{path}"),
+                rev,
+            ]),
+            cancel,
+        )?;
         Ok(out
             .stdout
             .lines()
@@ -211,6 +251,18 @@ impl Repo {
     /// The commits that added or removed `text` in `path` (`git log -S`), from `rev` back across
     /// renames, then on other branches.
     pub fn file_pickaxe(&self, path: &str, text: &str, match_case: bool, rev: &str) -> Result<Vec<String>> {
+        self.file_pickaxe_with(path, text, match_case, rev, &AtomicBool::new(false))
+    }
+
+    /// [`Repo::file_pickaxe`]; setting `cancel` stops it.
+    pub fn file_pickaxe_with(
+        &self,
+        path: &str,
+        text: &str,
+        match_case: bool,
+        rev: &str,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<String>> {
         let rev = self.commit_id(rev)?;
         let run = |revs: &[&str]| -> Result<Vec<String>> {
             let mut args = vec!["log".to_owned(), "--format=%H".to_owned(), format!("-S{text}")];
@@ -220,7 +272,7 @@ impl Repo {
             args.extend(revs.iter().map(|r| (*r).to_owned()));
             args.push("--".to_owned());
             args.push(literal(path));
-            let out = self.run(&GitCommand::new(args))?;
+            let out = self.run_cancellable(&GitCommand::new(args), cancel)?;
             Ok(out
                 .stdout
                 .lines()
@@ -266,6 +318,19 @@ fn name_status(line: &str) -> (FileStatus, String, Option<String>) {
         (Some('D'), _) => (FileStatus::Deleted, first, None),
         _ => (FileStatus::Modified, first, None),
     }
+}
+
+/// The part of cut `git blame --porcelain` output up to its last whole line of the file: each
+/// line of the file is a line starting with a tab.
+fn whole_lines(text: &str) -> &str {
+    let mut end = text.len();
+    while let Some(at) = text[..end].rfind("\n\t") {
+        if let Some(stop) = text[at + 2..].find('\n') {
+            return &text[..at + 3 + stop];
+        }
+        end = at;
+    }
+    ""
 }
 
 fn parse_porcelain(out: &str) -> (Vec<BlameCommit>, Vec<BlameLine>) {

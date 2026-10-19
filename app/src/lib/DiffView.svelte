@@ -193,8 +193,10 @@
   /** Lines shown past `lineBudget`: each Show More adds a portion, never everything at once. */
   let extra = $state(0);
   const PORTION = 20_000;
-  /** What a folded file's header costs of the budget, in lines. */
+  /** What a folded file's header, or a card in place of the code, costs of the budget, in lines. */
   const FOLDED_LINES = 8;
+  /** What a picture costs of the budget, in lines: about the room it takes. */
+  const PICTURE_LINES = 24;
   // Other diffs start from the budget again; more files loaded after the first keep it.
   const first = $derived(diffs[0]);
   $effect(() => {
@@ -218,15 +220,18 @@
         budget -= FOLDED_LINES;
         continue;
       }
-      const total = diff.hunks.reduce((n, h) => n + h.lines.length, 0);
-      if (total > budget + CUT_SLACK) {
+      // A card or a picture takes room too: without a cost, a run of them would never spend
+      // the budget, and pages would load on and on.
+      const drawn = diff.hunks.reduce((n, h) => n + h.lines.length, 0);
+      const total = Math.max(drawn, special(diff) === "image" ? PICTURE_LINES : FOLDED_LINES);
+      if (drawn > budget + CUT_SLACK) {
         let left = budget;
         const lines = diff.hunks.map((h) => {
           const take = Math.min(left, h.lines.length);
           left -= take;
           return take;
         });
-        cut = { diff, lines, more: total - budget };
+        cut = { diff, lines, more: drawn - budget };
         budget = 0;
         break;
       }

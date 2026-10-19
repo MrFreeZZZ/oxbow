@@ -30,6 +30,22 @@ const MAX_DIFF_LINES: usize = 20_000;
 
 /// Untracked files bigger than this are not read to count their lines.
 const MAX_COUNTED_BYTES: u64 = 8 * 1024 * 1024;
+/// Bytes of new files a reading of the working tree reads at most to count their lines; the
+/// files past them are counted by the readings after.
+const MAX_FRESH_BYTES: u64 = 32 * 1024 * 1024;
+
+/// What counting a new file's lines found, with the size and time of change it had then.
+#[derive(Clone, Copy)]
+struct Counted {
+    len: u64,
+    modified: std::time::SystemTime,
+    binary: bool,
+    additions: u32,
+}
+
+/// Lines counted in new files by path, kept while the files keep their size and time of change.
+#[derive(Clone, Default)]
+pub(crate) struct UntrackedCounts(std::sync::Arc<std::sync::Mutex<HashMap<String, Counted>>>);
 /// Bytes of a file's patch read at most: a longer one is too large to show, as a longer blob is
 /// in a commit's diff.
 const MAX_PATCH_BYTES: usize = 16 * 1024 * 1024;
@@ -573,30 +589,57 @@ impl Repo {
                 }
             }
         }
+        let known = std::mem::take(&mut *self.untracked.0.lock().expect("counts lock"));
+        let mut kept = HashMap::new();
+        let mut budget = MAX_FRESH_BYTES;
         for file in tree.unstaged.iter_mut().filter(|f| f.status == FileStatus::Untracked) {
             let path = self.workdir().join(&file.path);
             // A symlink counts as one, as for git: what it points at may never end (/dev/zero).
-            let Ok(len) = std::fs::symlink_metadata(&path)
-                .ok()
-                .filter(|m| m.is_file())
-                .map(|m| m.len())
-                .ok_or(())
-            else {
+            let Some(meta) = std::fs::symlink_metadata(&path).ok().filter(|m| m.is_file()) else {
                 continue;
             };
-            // A big file is not read whole on every refresh: its start says whether it is binary.
-            let data = if len > MAX_COUNTED_BYTES {
-                let mut start = Vec::new();
-                let _ = std::fs::File::open(&path).and_then(|f| f.take(8000).read_to_end(&mut start));
-                start
-            } else {
-                crate::lfs::read_regular(&path, MAX_COUNTED_BYTES).unwrap_or_default()
-            };
-            file.binary = data.iter().take(8000).any(|&b| b == 0);
-            if !file.binary && len <= MAX_COUNTED_BYTES {
+            let len = meta.len();
+            let modified = meta.modified().ok();
+            // A file with the size and time of change it was counted with is not read again.
+            if let Some(seen) = known
+                .get(&file.path)
+                .filter(|c| c.len == len && Some(c.modified) == modified)
+            {
+                file.binary = seen.binary;
+                file.additions = seen.additions;
+                kept.insert(file.path.clone(), *seen);
+                continue;
+            }
+            // Its start says whether it is binary; only a text file is read whole, unless it is
+            // too big or past this reading's budget.
+            let mut start = Vec::new();
+            let _ = std::fs::File::open(&path).and_then(|f| f.take(8000).read_to_end(&mut start));
+            file.binary = start.contains(&0);
+            if !file.binary {
+                if len > MAX_COUNTED_BYTES {
+                    continue;
+                }
+                if len > budget {
+                    file.uncounted = true;
+                    continue;
+                }
+                budget -= len;
+                let data = crate::lfs::read_regular(&path, MAX_COUNTED_BYTES).unwrap_or_default();
                 file.additions = data.split(|&b| b == b'\n').filter(|l| !l.is_empty()).count() as u32;
             }
+            // A file changed within the last moments may change again with the same size and
+            // time: it is counted again next time.
+            if let Some(modified) = modified.filter(|m| m.elapsed().is_ok_and(|age| age.as_secs() >= 2)) {
+                let counted = Counted {
+                    len,
+                    modified,
+                    binary: file.binary,
+                    additions: file.additions,
+                };
+                kept.insert(file.path.clone(), counted);
+            }
         }
+        *self.untracked.0.lock().expect("counts lock") = kept;
         self.mark_lfs_and_sizes(&mut tree);
         Ok(tree)
     }

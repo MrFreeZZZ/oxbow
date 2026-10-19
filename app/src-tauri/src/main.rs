@@ -926,9 +926,11 @@ async fn file_history(
     session: State<'_, Session>,
     path: String,
     rev: Option<String>,
+    lane: Option<String>,
 ) -> CommandResult<oxbow_core::FileHistory> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.file_history(&path, rev.as_deref())).await
+    let cancel = session.lane(&window, lane);
+    blocking(move || repo.file_history_with(&path, rev.as_deref(), &cancel)).await
 }
 
 #[tauri::command]
@@ -937,9 +939,11 @@ async fn blame(
     session: State<'_, Session>,
     path: String,
     rev: String,
+    lane: Option<String>,
 ) -> CommandResult<oxbow_core::Blame> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.blame(&path, &rev)).await
+    let cancel = session.lane(&window, lane);
+    blocking(move || repo.blame_with(&path, &rev, &cancel)).await
 }
 
 #[tauri::command]
@@ -949,9 +953,11 @@ async fn line_history(
     path: String,
     line: u32,
     rev: String,
+    lane: Option<String>,
 ) -> CommandResult<Vec<String>> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.line_history(&path, line, &rev)).await
+    let cancel = session.lane(&window, lane);
+    blocking(move || repo.line_history_with(&path, line, &rev, &cancel)).await
 }
 
 #[tauri::command]
@@ -968,9 +974,11 @@ async fn file_pickaxe(
     text: String,
     match_case: bool,
     rev: String,
+    lane: Option<String>,
 ) -> CommandResult<Vec<String>> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.file_pickaxe(&path, &text, match_case, &rev)).await
+    let cancel = session.lane(&window, lane);
+    blocking(move || repo.file_pickaxe_with(&path, &text, match_case, &rev, &cancel)).await
 }
 
 /// The Operation Log, newest step first.
@@ -1013,6 +1021,9 @@ async fn compare_snapshot(
     blocking(move || repo.compare_snapshot(&id, after)).await
 }
 
+/// Bytes of one side of a picture read at most to preview it.
+const MAX_PREVIEW_BYTES: u64 = 32 * 1024 * 1024;
+
 /// The bytes of one side of a file diff, to show an image.
 #[tauri::command]
 async fn source_bytes(
@@ -1021,7 +1032,7 @@ async fn source_bytes(
     source: Source,
 ) -> CommandResult<tauri::ipc::Response> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.read_source(&source))
+    blocking(move || repo.read_source_within(&source, MAX_PREVIEW_BYTES))
         .await
         .map(tauri::ipc::Response::new)
 }

@@ -16,6 +16,9 @@ pub struct Repo {
     diff: DiffOptions,
     /// The changed files of the commit read last, shared by every clone.
     pub(crate) changes: crate::commit::ChangesCache,
+    /// Lines counted in new files, shared by every clone, so a refresh reads only the new
+    /// files that changed.
+    pub(crate) untracked: crate::worktree::UntrackedCounts,
 }
 
 /// How diffs are shown, from the user's settings.
@@ -90,6 +93,7 @@ impl Repo {
             workdir,
             diff: DiffOptions::default(),
             changes: Default::default(),
+            untracked: Default::default(),
         })
     }
 

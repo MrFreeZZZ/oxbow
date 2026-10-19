@@ -4,7 +4,7 @@
   // that changed that line (git log -L).
 
   import { tick, untrack } from "svelte";
-  import { api } from "./api";
+  import { api, stopped } from "./api";
   import { nav } from "./nav.svelte";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { Blame, FileCommit, FileDiff, FileHistory, History, HistoryRow } from "./types";
@@ -61,7 +61,7 @@
     const p = path;
     historyKey;
     error = null;
-    api.fileHistory(p, null).then(
+    api.fileHistory(p, null, LOG).then(
       (h) => {
         if (path !== p) return;
         file = h;
@@ -71,7 +71,9 @@
           selected = wanted;
         }
       },
-      (err) => (error = String(err)),
+      (err) => {
+        if (path === p && !stopped(err)) error = String(err);
+      },
     );
   });
 
@@ -90,11 +92,13 @@
     // A commit's blame never changes; HEAD's does once HEAD moves.
     if (target.rev === "HEAD") headCommit;
     blameError = null;
-    api.blame(target.path, target.rev).then(
+    api.blame(target.path, target.rev, BLAME).then(
       (b) => {
         if (blameAt.rev === target.rev && blameAt.path === target.path) blame = b;
       },
       (err) => {
+        // A newer blame, or leaving the screen, stopped it.
+        if (stopped(err)) return;
         blame = null;
         blameError = String(err);
       },
@@ -119,9 +123,13 @@
   /** Lanes of this view's reads: a newer read in a lane stops the older one. */
   const DIFF = "history-diff";
   const FULL = "history-full";
+  const LOG = "history-log";
+  const BLAME = "history-blame";
+  const LINE = "history-line";
+  const PICKAXE = "history-pickaxe";
   // Its reads stop when it closes, and Show Diff Anyway's when another commit is picked.
   $effect(() => () => {
-    api.stopReads([DIFF, FULL]).catch(() => {});
+    api.stopReads([DIFF, FULL, LOG, BLAME, LINE, PICKAXE]).catch(() => {});
   });
   $effect(() => {
     selected;
@@ -212,11 +220,11 @@
       return;
     }
     try {
-      const ids = await api.lineHistory(blameAt.path, no, blameAt.rev);
+      const ids = await api.lineHistory(blameAt.path, no, blameAt.rev, LINE);
       line = { no, ids };
       if (ids[0]) selected = ids[0];
     } catch (err) {
-      blameError = String(err);
+      if (!stopped(err)) blameError = String(err);
     }
   }
 
@@ -327,7 +335,7 @@
       return;
     }
     const timer = setTimeout(() => {
-      api.filePickaxe(p, text, matchCase, "HEAD").then(
+      api.filePickaxe(p, text, matchCase, "HEAD", PICKAXE).then(
         (ids) => {
           if (nav.find.text === text && nav.find.matchCase === matchCase && path === p) finding = { text, ids };
         },
@@ -511,6 +519,7 @@
             {/if}
           {/each}
         </div>
+        {#if blame.cut}<p class="hint pad">Blame stops at line {blame.lines.length.toLocaleString()}: the file is too long to read whole here. <code>{blame.command}</code> in a terminal shows the rest.</p>{/if}
       {:else}
         <p class="hint pad">Reading who changed each line…</p>
       {/if}

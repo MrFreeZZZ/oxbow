@@ -425,6 +425,7 @@
   /** Changed lines, "+12 −3", or what the change is when it has none. */
   function counts(file: FileChange): string {
     if (file.binary) return "binary";
+    if (file.uncounted) return "new";
     const parts = [file.additions ? `+${file.additions}` : "", file.deletions ? `−${file.deletions}` : ""].filter(Boolean);
     return parts.length ? parts.join(" ") : "no lines";
   }
