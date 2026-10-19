@@ -506,6 +506,13 @@ pub fn run_streaming_in(
     ];
     let mut output = CommandOutput::default();
     let status = loop {
+        // Before each line: a command that prints without a pause still stops at once.
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            log.stopped(logged);
+            return Err(Error::Cancelled);
+        }
         match receive.recv_timeout(Duration::from_millis(50)) {
             Ok(line) => {
                 if !line.progress {
@@ -519,7 +526,6 @@ pub fn run_streaming_in(
                     logged.push(&line.text, line.stderr);
                 }
                 on_line(line);
-                continue;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             // Both pipes are closed: the command is done, or about to be.
@@ -530,12 +536,6 @@ pub fn run_streaming_in(
                     return Err(Error::GitNotFound(err.to_string()));
                 }
             },
-        }
-        if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
-            log.stopped(logged);
-            return Err(Error::Cancelled);
         }
     };
     for reader in readers {
@@ -614,6 +614,31 @@ pub(crate) fn shell_quote(arg: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_stops_a_command_that_prints_without_a_pause() {
+        let dir = tempfile::tempdir().unwrap();
+        let cancel = AtomicBool::new(false);
+        let mut lines = 0;
+        let started = std::time::Instant::now();
+        // `yes` prints for ever, faster than the lines are taken: there is always one waiting.
+        let result = run_streaming_in(
+            dir.path(),
+            &GitCommand::new(["y"]).program("yes"),
+            &mut |_| {
+                lines += 1;
+                if lines == 200 {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+                std::thread::sleep(Duration::from_micros(200));
+            },
+            &cancel,
+        );
+        assert!(matches!(result, Err(Error::Cancelled)), "{result:?}");
+        assert!(lines < 300, "{lines} lines after Stop");
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
 
     #[cfg(unix)]
     #[test]

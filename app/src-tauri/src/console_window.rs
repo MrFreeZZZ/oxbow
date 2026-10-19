@@ -17,6 +17,8 @@ pub struct ConsoleRepo {
     name: String,
     /// Its working tree; none for what ran outside any repository.
     path: Option<String>,
+    /// Its log file: the same for all worktrees of one repository.
+    log: Option<String>,
     /// Entries in its log.
     count: usize,
 }
@@ -34,6 +36,8 @@ pub struct ConsoleRepos {
 #[serde(rename_all = "camelCase")]
 struct Followed<'a> {
     repo: Option<String>,
+    /// The log it goes to, as [`ConsoleRepo::log`].
+    log: Option<String>,
     entry: &'a Entry,
 }
 
@@ -50,11 +54,16 @@ pub fn follow(app: &AppHandle) {
                 "console-entry",
                 Followed {
                     repo: repo.map(|p| p.display().to_string()),
+                    log: shown(console::log_of(repo)),
                     entry,
                 },
             );
         }
     });
+}
+
+fn shown(log: Option<PathBuf>) -> Option<String> {
+    log.map(|p| p.display().to_string())
 }
 
 /// Open the Console window, or bring it to the front. Async, because making a window in a
@@ -111,7 +120,7 @@ pub async fn console_repos(app: AppHandle, session: State<'_, Session>) -> Comma
             let Some(file) = console::log_file(Path::new(path)) else {
                 continue;
             };
-            if !seen.insert(file) {
+            if !seen.insert(file.clone()) {
                 continue;
             }
             let count = console::entries(Some(Path::new(path))).len();
@@ -123,6 +132,7 @@ pub async fn console_repos(app: AppHandle, session: State<'_, Session>) -> Comma
                     .file_name()
                     .map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned()),
                 path: Some(path.clone()),
+                log: shown(Some(file)),
                 count,
             });
         }
@@ -131,6 +141,7 @@ pub async fn console_repos(app: AppHandle, session: State<'_, Session>) -> Comma
             repos.push(ConsoleRepo {
                 name: "Outside Repositories".into(),
                 path: None,
+                log: shown(console::log_of(None)),
                 count: outside,
             });
         }
@@ -140,12 +151,18 @@ pub async fn console_repos(app: AppHandle, session: State<'_, Session>) -> Comma
     .map_err(|err| err.to_string())
 }
 
-/// The log of the repository at `path` (none: what ran outside any), oldest first.
+/// The log of the repository at `path` (none: what ran outside any), oldest first, with what
+/// runs in it now.
 #[tauri::command]
 pub async fn console_entries(path: Option<String>) -> CommandResult<Vec<Entry>> {
-    tauri::async_runtime::spawn_blocking(move || console::entries(path.as_deref().map(Path::new)))
-        .await
-        .map_err(|err| err.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = path.as_deref().map(Path::new);
+        let mut list = console::entries(dir);
+        list.extend(console::running(dir));
+        list
+    })
+    .await
+    .map_err(|err| err.to_string())
 }
 
 /// Clear the logs of these repositories (none: of what ran outside any).

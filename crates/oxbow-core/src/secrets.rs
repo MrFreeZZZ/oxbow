@@ -362,7 +362,8 @@ impl Repo {
             args.push("--".to_owned());
             args.extend(paths.iter().map(|p| crate::cli::literal(p)));
         }
-        let patch = self.run(&GitCommand::new(args))?.stdout;
+        // The Console keeps the command, not the lines it read: they are what is checked.
+        let patch = crate::console::without_output(|| self.run(&GitCommand::new(args)))?.stdout;
         Ok(scan_patch(&patch))
     }
 }

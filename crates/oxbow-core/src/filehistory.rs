@@ -10,6 +10,7 @@ use crate::cli::{GitCommand, literal};
 use crate::commit::FileStatus;
 use crate::error::{Error, Result};
 use crate::repo::Repo;
+use crate::worktree::path_field;
 
 /// At most this many commits of a file are listed.
 const LIMIT: usize = 2000;
@@ -295,7 +296,14 @@ fn chunks(out: &str) -> impl Iterator<Item = (&str, Vec<&str>)> {
         if head.is_empty() {
             return None;
         }
-        Some((head, lines.map(str::trim).filter(|l| !l.is_empty()).collect()))
+        // Only the line ends go: a path may end in a space.
+        Some((
+            head,
+            lines
+                .map(|l| l.trim_end_matches('\r'))
+                .filter(|l| !l.trim().is_empty())
+                .collect(),
+        ))
     })
 }
 
@@ -310,10 +318,10 @@ fn raw_status(line: &str) -> Option<&str> {
 fn name_status(line: &str) -> (FileStatus, String, Option<String>) {
     let mut fields = line.split('\t');
     let code = fields.next().unwrap_or_default();
-    let first = fields.next().unwrap_or_default().to_owned();
-    match (code.chars().next(), fields.next()) {
-        (Some('R'), Some(new)) => (FileStatus::Renamed, new.to_owned(), Some(first)),
-        (Some('C'), Some(new)) => (FileStatus::Copied, new.to_owned(), Some(first)),
+    let first = path_field(fields.next().unwrap_or_default());
+    match (code.chars().next(), fields.next().map(path_field)) {
+        (Some('R'), Some(new)) => (FileStatus::Renamed, new, Some(first)),
+        (Some('C'), Some(new)) => (FileStatus::Copied, new, Some(first)),
         (Some('A'), _) => (FileStatus::Added, first, None),
         (Some('D'), _) => (FileStatus::Deleted, first, None),
         _ => (FileStatus::Modified, first, None),
@@ -368,7 +376,7 @@ fn parse_porcelain(out: &str) -> (Vec<BlameCommit>, Vec<BlameLine>) {
             "author-mail" => c.author_email = value.trim_matches(['<', '>']).to_owned(),
             "author-time" => c.time = value.parse().unwrap_or(0),
             "summary" => c.summary = value.to_owned(),
-            "filename" => c.path = value.to_owned(),
+            "filename" => c.path = path_field(value),
             "boundary" => c.boundary = true,
             _ => {}
         }

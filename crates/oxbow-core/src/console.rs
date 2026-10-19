@@ -115,6 +115,8 @@ enum Role {
 struct Open {
     /// The repository's working tree; none outside any repository.
     repo: Option<PathBuf>,
+    /// The log it goes to, see [`log_of`].
+    log: Option<PathBuf>,
     entry: Entry,
     started: Instant,
 }
@@ -122,6 +124,7 @@ struct Open {
 thread_local! {
     static OPEN: RefCell<Option<Open>> = const { RefCell::new(None) };
     static ROLE: Cell<Option<Role>> = const { Cell::new(None) };
+    static UNKEPT: Cell<bool> = const { Cell::new(false) };
 }
 
 type Listener = Box<dyn Fn(Option<&Path>, &Entry) + Send + Sync>;
@@ -129,6 +132,10 @@ type Listener = Box<dyn Fn(Option<&Path>, &Entry) + Send + Sync>;
 static LISTENER: RwLock<Option<Listener>> = RwLock::new(None);
 /// Where the log of what runs outside any repository goes, e.g. `git config --global`.
 static OUTSIDE: RwLock<Option<PathBuf>> = RwLock::new(None);
+/// An entry still running, with the log it goes to.
+type Running = (Option<PathBuf>, Entry);
+/// The entries still running: a window that opens meanwhile shows them too.
+static RUNNING: LazyLock<Mutex<HashMap<u64, Running>>> = LazyLock::new(Default::default);
 /// Lines in each log file, once counted; also what keeps two threads from writing one at once.
 static LINES: LazyLock<Mutex<HashMap<PathBuf, usize>>> = LazyLock::new(Default::default);
 static NEXT_ID: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(now_ms().max(0) as u64 * 1000));
@@ -159,6 +166,7 @@ pub fn scope<T, E>(
     OPEN.with(|open| {
         *open.borrow_mut() = Some(Open {
             repo: repo.map(Path::to_path_buf),
+            log: log_of(repo),
             entry: Entry {
                 id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
                 time: now_ms(),
@@ -184,10 +192,12 @@ pub fn scope<T, E>(
         repo,
         mut entry,
         started,
+        ..
     }) = open
     else {
         return result;
     };
+    running_done(entry.id);
     entry.millis = elapsed_ms(started);
     entry.running = false;
     entry.stopped = entry.commands.iter().any(|c| c.stopped);
@@ -212,6 +222,19 @@ pub fn role<T>(label: &'static str, f: impl FnOnce() -> T) -> T {
     with(Role::Helper(label), f)
 }
 
+/// Run `f` keeping only how many lines its processes print, not the lines: what they print may
+/// hold secrets, e.g. the staged lines the secrets check reads.
+pub(crate) fn without_output<T>(f: impl FnOnce() -> T) -> T {
+    struct Back(bool);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            UNKEPT.with(|unkept| unkept.set(self.0));
+        }
+    }
+    let _back = Back(UNKEPT.with(|unkept| unkept.replace(true)));
+    f()
+}
+
 fn with<T>(role: Role, f: impl FnOnce() -> T) -> T {
     let _reset = Reset(ROLE.with(|r| r.replace(Some(role))));
     f()
@@ -223,8 +246,10 @@ struct Reset(Option<Role>);
 impl Drop for Reset {
     fn drop(&mut self) {
         ROLE.with(|role| role.set(self.0));
-        if std::thread::panicking() {
-            OPEN.with(|open| open.borrow_mut().take());
+        if std::thread::panicking()
+            && let Some(open) = OPEN.with(|open| open.borrow_mut().take())
+        {
+            running_done(open.entry.id);
         }
     }
 }
@@ -247,6 +272,7 @@ pub(crate) struct Started {
     time: i64,
     at: Instant,
     role: Option<Role>,
+    unkept: bool,
 }
 
 /// Note that `display` starts in `dir`.
@@ -257,6 +283,7 @@ pub(crate) fn started(dir: &Path, display: &str) -> Started {
         time: now_ms(),
         at: Instant::now(),
         role: ROLE.with(Cell::get),
+        unkept: UNKEPT.with(Cell::get),
     };
     // Actions and fetches show what runs now; a read only once it is done.
     let live = OPEN.with(|open| {
@@ -265,10 +292,10 @@ pub(crate) fn started(dir: &Path, display: &str) -> Started {
         let mut ran = started.ran(None, false, started.output());
         ran.running = true;
         open.entry.commands.push(ran);
-        Some((open.repo.clone(), open.entry.clone()))
+        Some((open.repo.clone(), open.log.clone(), open.entry.clone()))
     });
-    if let Some((repo, entry)) = live {
-        tell(repo.as_deref(), &entry);
+    if let Some((repo, log, entry)) = live {
+        tell_running(repo.as_deref(), log, &entry);
     }
     started
 }
@@ -298,12 +325,7 @@ impl Started {
 
     /// Where to collect what it prints, line by line.
     pub(crate) fn output(&self) -> Output {
-        Output {
-            max: self.limit().0,
-            head: Vec::new(),
-            tail: VecDeque::new(),
-            skipped: 0,
-        }
+        Output::new(self.limit().0, self.unkept)
     }
 
     fn limit(&self) -> (usize, usize) {
@@ -370,10 +392,10 @@ impl Started {
                 Some(last) if last.running => *last = ran,
                 _ => open.entry.commands.push(ran),
             }
-            (open.entry.kind != EntryKind::Read).then(|| (open.repo.clone(), open.entry.clone()))
+            (open.entry.kind != EntryKind::Read).then(|| (open.repo.clone(), open.log.clone(), open.entry.clone()))
         });
-        if let Some((repo, entry)) = live {
-            tell(repo.as_deref(), &entry);
+        if let Some((repo, log, entry)) = live {
+            tell_running(repo.as_deref(), log, &entry);
         }
     }
 }
@@ -392,6 +414,34 @@ fn finish(repo: Option<&Path>, entry: &Entry) {
     tell(shown, entry);
 }
 
+/// Tell the listener of `entry`, still running, and keep it for [`running`].
+fn tell_running(repo: Option<&Path>, log: Option<PathBuf>, entry: &Entry) {
+    RUNNING
+        .lock()
+        .expect("console running lock")
+        .insert(entry.id, (log, entry.clone()));
+    tell(repo, entry);
+}
+
+fn running_done(id: u64) {
+    RUNNING.lock().expect("console running lock").remove(&id);
+}
+
+/// The entries of the log of `dir` (see [`log_of`]) still running, oldest first: they are in
+/// the log only once they are done.
+pub fn running(dir: Option<&Path>) -> Vec<Entry> {
+    let log = log_of(dir);
+    let mut list: Vec<Entry> = RUNNING
+        .lock()
+        .expect("console running lock")
+        .values()
+        .filter(|(of, _)| *of == log)
+        .map(|(_, entry)| entry.clone())
+        .collect();
+    list.sort_by_key(|e| e.time);
+    list
+}
+
 fn tell(repo: Option<&Path>, entry: &Entry) {
     if let Some(listener) = LISTENER.read().expect("console listener lock").as_ref() {
         listener(repo, entry);
@@ -406,8 +456,15 @@ fn outside_file() -> Option<PathBuf> {
         .map(|dir| dir.join(FILE))
 }
 
+/// The log what runs in `dir` goes to: of its repository, or of what runs outside any. Two
+/// worktrees of one repository give the same one, so it tells their logs apart from others.
+pub fn log_of(dir: Option<&Path>) -> Option<PathBuf> {
+    dir.and_then(log_file).or_else(outside_file)
+}
+
 /// The log file of the repository whose working tree (or git folder) is `dir`: in its git
-/// folder, shared by all its worktrees. None when `dir` is no repository.
+/// folder, shared by all its worktrees, as one path whichever of them it is reached from.
+/// None when `dir` is no repository.
 pub fn log_file(dir: &Path) -> Option<PathBuf> {
     let dot = dir.join(".git");
     let git_dir = if dot.is_dir() {
@@ -426,6 +483,8 @@ pub fn log_file(dir: &Path) -> Option<PathBuf> {
         Ok(path) => git_dir.join(path.trim()),
         Err(_) => git_dir,
     };
+    // `.git/worktrees/x/../..` and `/tmp` against `/private/tmp` are one folder.
+    let common = std::fs::canonicalize(&common).unwrap_or(common);
     Some(common.join("oxbow").join(FILE))
 }
 
@@ -534,11 +593,47 @@ pub(crate) struct Output {
     head: Vec<Line>,
     tail: VecDeque<(String, bool)>,
     skipped: usize,
+    /// Only counted, see [`without_output`].
+    unkept: bool,
+    /// Between the first and the last line of a private key.
+    in_key: bool,
 }
 
 impl Output {
+    fn new(max: usize, unkept: bool) -> Self {
+        Output {
+            max,
+            head: Vec::new(),
+            tail: VecDeque::new(),
+            skipped: 0,
+            unkept,
+            in_key: false,
+        }
+    }
+
     /// Add a line it printed.
     pub(crate) fn push(&mut self, text: &str, stderr: bool) {
+        if self.unkept {
+            self.skipped += 1;
+            return;
+        }
+        // The lines of a private key hold no word a mask finds: they go as a whole.
+        let key_body;
+        let text = if self.in_key {
+            if text.contains("-----END") {
+                self.in_key = false;
+                text
+            } else {
+                let marker = text.chars().next().filter(|c| matches!(c, '+' | '-' | ' '));
+                key_body = format!("{}{MASK}", marker.map(String::from).unwrap_or_default());
+                &key_body
+            }
+        } else {
+            if text.contains("-----BEGIN") && text.contains("PRIVATE KEY") {
+                self.in_key = true;
+            }
+            text
+        };
         if self.head.len() < self.max {
             let line = line(text, stderr);
             if !line.text.trim().is_empty() {
@@ -555,6 +650,16 @@ impl Output {
 
     /// The lines kept, and how many were left out between them.
     fn lines(self) -> (Vec<Line>, usize) {
+        if self.unkept {
+            let lines = (self.skipped > 0)
+                .then(|| Line {
+                    text: format!("⋯ {} lines not kept: they may hold secrets ⋯", self.skipped),
+                    stderr: false,
+                })
+                .into_iter()
+                .collect();
+            return (lines, 0);
+        }
         let mut lines = self.head;
         lines.extend(
             self.tail
@@ -636,14 +741,30 @@ static TOKEN: LazyLock<Regex> = LazyLock::new(|| {
         .expect("valid regex")
 });
 static SECRET_VALUE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(authorization:\s*(?:basic|bearer|token)?\s*|\bpassword[=:]\s*|\baccess_token=)[^\s'\x22&]+")
-        .expect("valid regex")
+    Regex::new(
+        r"(?i)(authorization:\s*(?:basic|bearer|token)?\s*|\bpassword\s*[=:]\s*['\x22]?|\baccess_token=)[^\s'\x22&]+",
+    )
+    .expect("valid regex")
 });
 
 /// `text` with passwords and tokens hidden: in addresses (`https://user:token@host`), sign-in
-/// headers and tokens of GitHub, GitLab and Slack. A user name alone stays, as in `git@github.com`
-/// or `ssh://git@host`, except in an http address, where it is often a token.
+/// headers, tokens of GitHub, GitLab and Slack, and whatever the secrets check would stop in a
+/// commit, the user's own patterns too. A user name alone stays, as in `git@github.com` or
+/// `ssh://git@host`, except in an http address, where it is often a token.
 pub fn mask(text: &str) -> String {
+    let mut text = mask_known(text);
+    // A line may hold more than one; a pattern of the user's that matches the dots must not
+    // keep it going.
+    for _ in 0..8 {
+        match crate::secrets::check_line(&text) {
+            Some((_, (start, end))) if &text[start..end] != MASK => text.replace_range(start..end, MASK),
+            _ => break,
+        }
+    }
+    text
+}
+
+fn mask_known(text: &str) -> String {
     let text = URL_USER.replace_all(text, |caps: &regex::Captures| {
         let scheme = &caps[1];
         let user = &caps[2];
@@ -706,6 +827,8 @@ mod tests {
             "-c http.extraHeader='Authorization: Bearer ••••••'"
         );
         assert_eq!(mask("password=hunter2"), "password=••••••");
+        assert_eq!(mask(r#"PASSWORD = "audit-password-123""#), r#"PASSWORD = "••••••""#);
+        assert_eq!(mask(r#"+password="audit-password-123""#), r#"+password="••••••""#);
         assert_eq!(
             mask("git commit -m 'Add the console window'"),
             "git commit -m 'Add the console window'"
@@ -716,12 +839,7 @@ mod tests {
     fn output_is_split_into_lines() {
         let texts: Vec<&str> = pieces("a\0b\nCounting 10%\rCounting 100%\n\n").collect();
         assert_eq!(texts, ["a", "b", "Counting 100%"]);
-        let mut output = Output {
-            max: 40,
-            head: Vec::new(),
-            tail: VecDeque::new(),
-            skipped: 0,
-        };
+        let mut output = Output::new(40, false);
         for line in pieces("\x1b[KSuccessfully rebased\n\x1b[K\n") {
             output.push(line, true);
         }
@@ -744,12 +862,7 @@ mod tests {
         assert_eq!(kept[34].text, "⋯ 61 more lines ⋯");
         assert_eq!(kept[39].text, "line 99");
         // Of a very long one, only what is kept is masked: the lines between are counted.
-        let mut output = Output {
-            max: 40,
-            head: Vec::new(),
-            tail: VecDeque::new(),
-            skipped: 0,
-        };
+        let mut output = Output::new(40, false);
         for n in 0..10_000 {
             output.push(&format!("line {n}"), false);
         }
@@ -788,6 +901,25 @@ mod tests {
         let kept = trimmed((0..1200).map(|n| entry(EntryKind::Action, n)).collect());
         assert_eq!(kept.len(), KEEP);
         assert_eq!(kept[0].id, 200);
+    }
+
+    #[test]
+    fn worktrees_of_a_repository_share_one_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir.path().join("main"))
+                .output()
+                .unwrap()
+        };
+        std::fs::create_dir(dir.path().join("main")).unwrap();
+        git(&["init", "-q"]);
+        git(&["-c", "user.name=A", "-c", "user.email=a@b", "commit", "-q", "--allow-empty", "-m", "One"]);
+        git(&["worktree", "add", "-q", "../linked"]);
+        let main = log_file(&dir.path().join("main")).unwrap();
+        assert_eq!(log_file(&dir.path().join("linked")), Some(main.clone()));
+        assert!(!main.components().any(|c| c == std::path::Component::ParentDir));
     }
 
     #[test]

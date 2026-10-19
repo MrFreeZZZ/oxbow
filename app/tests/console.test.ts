@@ -1,4 +1,4 @@
-import { dayOf, duration, exitOf, outputOpen, shows, upsert, type ConsoleEntry, type ConsoleRan } from "../src/lib/console.ts";
+import { dayOf, duration, exitOf, outputOpen, shows, trimmed, upsert, type ConsoleEntry, type ConsoleRan } from "../src/lib/console.ts";
 import assert from "node:assert/strict";
 
 const ran = (display: string, extra: Partial<ConsoleRan> = {}): ConsoleRan => ({ display, time: 0, millis: 5, code: 0, stopped: false, ...extra });
@@ -69,4 +69,30 @@ assert.equal(duration(64_000), "1 min 4 s");
   assert.equal(dayOf(new Date(2026, 9, 18, 23, 59).getTime(), now), "Yesterday");
   assert.equal(dayOf(new Date(2026, 9, 13, 9, 0).getTime(), now), "Tuesday, 13 October");
   assert.equal(dayOf(new Date(2025, 9, 13, 9, 0).getTime(), now), "Monday, 13 October 2025");
+}
+
+// An update of a running entry that comes after the log has it done changes nothing.
+{
+  const done = entry(1, { commands: [ran("git push")] });
+  const list = upsert([done], entry(1, { running: true }));
+  assert.equal(list[0].running, undefined);
+  assert.equal(upsert(list, entry(1, { title: "Push", millis: 20 }))[0].millis, 20);
+}
+
+// The live list keeps what the log keeps: per log, reads first to go, what runs always stays.
+{
+  type Of = ConsoleEntry & { log: string };
+  const of = (id: number, log: string, extra: Partial<ConsoleEntry> = {}): Of => ({ ...entry(id, extra), log });
+  let list: Of[] = [of(0, "a", { running: true })];
+  for (let i = 1; i <= 1100; i++) list = upsert(list, of(i, "a", { kind: "read" }));
+  list = upsert(list, of(2000, "b", { kind: "read" }));
+  const kept = trimmed(list, (e) => e.log);
+  assert.equal(kept.filter((e) => e.log === "a" && e.kind === "read").length, 300);
+  assert.equal(kept[0].id, 0, "what runs stays");
+  assert.equal(kept[1].id, 801);
+  assert.ok(kept.some((e) => e.log === "b"));
+  let actions: Of[] = [];
+  for (let i = 1; i <= 1200; i++) actions.push(of(i, "a"));
+  assert.equal(trimmed(actions, (e) => e.log).length, 1000);
+  assert.equal(trimmed(actions, (e) => e.log)[0].id, 201);
 }

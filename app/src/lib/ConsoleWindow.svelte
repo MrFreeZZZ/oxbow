@@ -20,6 +20,7 @@
     outputOpen,
     ownCommands,
     shows,
+    trimmed,
     upsert,
     type ConsoleEntry,
     type ConsoleFilter,
@@ -30,8 +31,10 @@
   import { mac } from "./keys";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
 
-  /** An entry with the repository it is of, for All Repositories. */
-  type Shown = ConsoleEntry & { repo: string | null };
+  /** An entry with the repository it is of, for All Repositories, and the log it is in. */
+  type Shown = ConsoleEntry & { repo: string | null; log: string | null };
+  /** What the core sends of each entry as it is filled and once it is done. */
+  type Followed = { repo: string | null; log: string | null; entry: ConsoleEntry };
   /** This Repository follows the window used last; a picked one stays. */
   type Source = { kind: "current" } | { kind: "repo"; path: string | null } | { kind: "all" };
 
@@ -63,8 +66,9 @@
   const pickerLabel = $derived(source.kind === "current" ? "This Repository" : sourceName);
   const shown = $derived(entries.filter((e) => shows(e, filter, query)));
   const commandTotal = $derived(entries.reduce((n, e) => n + e.commands.length, 0));
-  const currentCount = $derived(repos?.repos.find((r) => r.path === (repos?.current ?? null))?.count ?? 0);
   const allCount = $derived(repos?.repos.reduce((n, r) => n + r.count, 0) ?? 0);
+  /** The log of the repository at `p`; undefined while the list of logs has none for it. */
+  const logOf = (p: string | null) => repos?.repos.find((r) => r.path === p)?.log;
 
   /** The days of the shown entries, each with its entries in time order. */
   const days = $derived.by(() => {
@@ -79,18 +83,53 @@
   });
 
   let generation = 0;
+  /** What came while a load was on its way: laid over what it read once it is in. */
+  let pending: Followed[] | null = null;
   async function load() {
     const mine = ++generation;
+    pending ??= [];
     const next = await api.consoleRepos().catch(() => null);
     if (mine !== generation) return;
     repos = next;
     const paths: (string | null)[] = path === undefined ? (next?.repos.map((r) => r.path) ?? []) : [path];
-    const lists = await Promise.all(paths.map((p) => api.consoleEntries(p).then((list) => list.map((e): Shown => ({ ...e, repo: p }))).catch(() => [] as Shown[])));
+    const lists = await Promise.all(
+      paths.map((p) => {
+        const log = logOf(p) ?? null;
+        return api
+          .consoleEntries(p)
+          .then((list) => list.map((e): Shown => ({ ...e, repo: p, log })))
+          .catch(() => [] as Shown[]);
+      }),
+    );
     if (mine !== generation) return;
+    const late = pending ?? [];
+    pending = null;
     entries = lists.flat().sort((a, b) => a.time - b.time);
     loaded = true;
+    for (const payload of late) take(payload, false);
     following = true;
     await toBottom();
+  }
+
+  /** Show an entry the core sent, when it is of the shown source; `reload` when that may be
+   *  one the list of logs doesn't know yet. */
+  function take(payload: Followed, reload = true) {
+    if (pending) {
+      pending.push(payload);
+      return;
+    }
+    const known = path === undefined ? (repos?.repos.some((r) => r.log === payload.log) ?? false) : payload.log === (logOf(path) ?? null);
+    // A repository new to All Repositories, or a source before its first entry.
+    if (!known && reload && (path === undefined || (logOf(path) === undefined && payload.repo === path))) {
+      pending = [payload];
+      void load();
+      return;
+    }
+    if (!known) return;
+    // In All Repositories it shows under the repository listed for its log.
+    const repo = path === undefined ? (repos?.repos.find((r) => r.log === payload.log)?.path ?? payload.repo) : path;
+    entries = trimmed(upsert(entries, { ...payload.entry, repo, log: payload.log }), (e) => e.log);
+    if (following) void toBottom();
   }
 
   async function toBottom() {
@@ -110,18 +149,7 @@
   });
 
   $effect(() => {
-    const entry = listen<{ repo: string | null; entry: ConsoleEntry }>("console-entry", ({ payload }) => {
-      if (!loaded) return;
-      const known = path === undefined ? (repos?.repos.some((r) => r.path === payload.repo) ?? false) : payload.repo === path;
-      // A repository new to All Repositories, or This Repository before its first entry.
-      if (!known && path === undefined) {
-        void load();
-        return;
-      }
-      if (!known) return;
-      entries = upsert(entries, { ...payload.entry, repo: payload.repo });
-      if (following) void toBottom();
-    });
+    const entry = listen<Followed>("console-entry", ({ payload }) => take(payload));
     const changed = listen("repo-changed", () => {
       if (source.kind === "current") void load();
     });
@@ -158,6 +186,20 @@
     }
     list.push({ kind: "sep" }, { kind: "item", label: "All Repositories", icon: menuIcons.history, run: () => (source = { kind: "all" }) });
     return list;
+  }
+
+  /** The entries in the log of `p`, as the list of logs last counted them. */
+  const countOf = (p: string | null) => repos?.repos.find((r) => r.path === p)?.count ?? 0;
+
+  /** Ask which logs to clear, with them counted again: the list of logs is not kept up to date
+   *  as entries come. With nothing in this one's, all of them start picked, as the sheet shows. */
+  async function askClear() {
+    const was = repos?.current;
+    const next = await api.consoleRepos().catch(() => null);
+    if (next) repos = next;
+    if (source.kind === "current" && next && next.current !== was) void load();
+    const only = path === undefined ? (repos?.current ?? null) : path;
+    clearing = { all: source.kind === "all" || !countOf(only) };
   }
 
   async function clearHistory(all: boolean) {
@@ -324,7 +366,7 @@
       <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5 14 14" /></svg>
       <input bind:this={search} type="search" aria-label="Filter commands and output" placeholder="Filter commands and output" bind:value={query} spellcheck="false" />
     </label>
-    <button class="button icon-only trash" aria-label="Clear History…" title="Clear History…" disabled={!allCount} onclick={() => (clearing = { all: source.kind === "all" })}>
+    <button class="button icon-only trash" aria-label="Clear History…" title="Clear History…" disabled={!allCount && !entries.length} onclick={askClear}>
       <svg class="icon" viewBox="0 0 16 16"><path d={TRASH} /></svg>
     </button>
   </header>
@@ -367,7 +409,7 @@
 
   {#if clearing}
     {@const only = path === undefined ? (repos?.current ?? null) : path}
-    {@const onlyCount = path === undefined ? currentCount : (repos?.repos.find((r) => r.path === path)?.count ?? entries.length)}
+    {@const onlyCount = countOf(only)}
     {@const withLogs = repos?.repos.length ?? 0}
     <div class="dim" role="presentation" onclick={() => (clearing = null)}></div>
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="clear-title">
@@ -387,7 +429,7 @@
       </div>
       <div class="buttons">
         <button class="button" onclick={() => (clearing = null)}>Cancel</button>
-        <button class="button primary danger" onclick={() => clearing && clearHistory(clearing.all || !onlyCount)}>Clear History</button>
+        <button class="button primary danger" disabled={!(clearing.all ? allCount : onlyCount)} onclick={() => clearing && clearHistory(clearing.all)}>Clear History</button>
       </div>
     </div>
   {/if}

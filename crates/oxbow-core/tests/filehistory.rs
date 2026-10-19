@@ -110,3 +110,29 @@ fn a_huge_blame_stops_at_its_last_whole_line_and_reads_stop() {
         Err(oxbow_core::Error::Cancelled)
     ));
 }
+
+#[cfg(unix)]
+#[test]
+fn names_git_quotes_come_back_as_they_are() {
+    let mut fx = Fixture::new();
+    let tab = "tab\tname \"x\" \\ é.txt";
+    let first = fx.commit(tab, "one\n", "Add it");
+    fx.git(&["mv", tab, "new\tname.txt"]);
+    let renamed = fx.commit("new\tname.txt", "one\ntwo\n", "Rename it");
+
+    let repo = Repo::open(fx.path()).unwrap();
+    let h = repo.file_history("new\tname.txt", None).unwrap();
+    let ids: Vec<_> = h.commits.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids, [renamed.as_str(), first.as_str()]);
+    assert_eq!(h.commits[0].path, "new\tname.txt");
+    assert_eq!(h.commits[0].old_path.as_deref(), Some(tab));
+    assert_eq!(h.commits[1].path, tab);
+
+    let blame = repo.blame("new\tname.txt", "HEAD").unwrap();
+    let paths: Vec<_> = blame
+        .lines
+        .iter()
+        .map(|l| blame.commits[l.commit].path.as_str())
+        .collect();
+    assert_eq!(paths, [tab, "new\tname.txt"]);
+}
