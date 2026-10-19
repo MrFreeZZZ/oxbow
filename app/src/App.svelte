@@ -1782,7 +1782,7 @@
     justify-content: center;
   }
   .window.mac .side-toggle {
-    left: 88px;
+    left: 96px;
   }
   .window > :global(nav),
   .main,
@@ -1852,7 +1852,7 @@
   }
   .window.narrow.mac header,
   .window.side-hidden.mac header {
-    padding-left: 134px;
+    padding-left: 142px;
   }
   /* Three zones: the two sides share the room equally, so the search sits in the middle of the
      toolbar. In a narrow window the buttons on the right keep their size, and the title and then
