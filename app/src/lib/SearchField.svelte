@@ -12,12 +12,15 @@
     matches,
     selected,
     onGo,
+    onLeave,
   }: {
     rows: HistoryRow[];
     /** Matching commits in graph order. */
     matches: string[];
     selected: string | null;
     onGo: (id: string) => void;
+    /** Escape on an empty field hands the keyboard to the commit list. */
+    onLeave?: () => void;
   } = $props();
 
   let input = $state<HTMLInputElement>();
@@ -58,6 +61,7 @@
       event.preventDefault();
       if (menu) menu = false;
       else if (search.input) search.clear();
+      else if (onLeave) onLeave();
       else input?.blur();
     } else if (event.key === "ArrowDown" && (event.metaKey || event.ctrlKey || event.altKey)) {
       event.preventDefault();

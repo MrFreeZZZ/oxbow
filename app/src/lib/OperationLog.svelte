@@ -18,6 +18,7 @@
     onCompare,
     onShow,
     onBranch,
+    screen = false,
   }: {
     repo: string;
     run: (request: Request) => void;
@@ -28,6 +29,8 @@
     onShow: (entry: ReflogEntry) => void;
     /** Keep a commit from the reflog on a new branch. */
     onBranch: (entry: ReflogEntry) => void;
+    /** Shown as a screen of its own, opened from the sidebar, instead of the toolbar's popover. */
+    screen?: boolean;
   } = $props();
 
   const latest = $derived(oplog.entries[0] ?? null);
@@ -39,7 +42,8 @@
   }
 
   $effect(() => {
-    if (oplog.open) oplog.load();
+    if (oplog.open || screen) oplog.load();
+    if (screen && oplog.tab === "reflog") oplog.loadReflog();
   });
 
   const moves = $derived(reflogRows(oplog.reflog, oplog.allMoves));
@@ -79,121 +83,162 @@
 
 <svelte:window onkeydown={onKey} />
 
-<div class="anchor">
-  <button
-    class="capsule"
-    onclick={toggle}
-    aria-haspopup="dialog"
-    aria-expanded={oplog.open}
-    aria-label={latest ? `Undo ${latest.title}, open operation log` : "Open operation log"}
-    title={latest ? withKeys(isRedo(latest) ? "Redo, from the Operation Log" : `Undo “${latest.title}”`, "Mod+Z") : "Operation Log"}
-  >
-    <svg class="icon" viewBox="0 0 16 16"><path d="M5.5 4 2.5 7l3 3M3 7h6.5a3.5 3.5 0 0 1 0 7H7" /></svg>
-    <svg class="icon small" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>
-  </button>
-  {#if oplog.open}
-    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div class="catcher" onclick={() => (oplog.open = false)}></div>
-    <div class="pop" role="dialog" aria-label="Operation Log">
-      <div class="head">
-        <span class="h">Operation Log</span>
-        <span class="repo">{repo}</span>
-        <span class="grow"></span>
-        <div class="segmented" role="tablist" aria-label="Source">
-          <button role="tab" aria-selected={oplog.tab === "steps"} class:on={oplog.tab === "steps"} onclick={() => setTab("steps")} title="Every step Oxbow ran here, with Undo">Oxbow</button>
-          <button role="tab" aria-selected={oplog.tab === "reflog"} class:on={oplog.tab === "reflog"} onclick={() => setTab("reflog")} title="Where HEAD and your branches have been, from git's reflog">Git Reflog</button>
-        </div>
-      </div>
-      {#if oplog.tab === "reflog"}
-        <p class="intro">
-          Where HEAD and your branches have been, from git's own log, including what a terminal or another app did.
-          {#if !oplog.allMoves}Commits no branch has any more are listed here, so you can keep them on a branch.{/if}
-        </p>
-        <div class="list">
-          {#each moves as entry (entry.id)}
-            <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-            <div class="row move" onclick={() => show(entry)}>
-              <span class="tile" class:warn={entry.lost}>
-                <svg class="icon" viewBox="0 0 16 16"><path d={moveIcon(entry)} /></svg>
-              </span>
-              <span class="words">
-                <span class="line">
-                  <span class="title">{entry.summary}</span>
-                  {#if entry.lost}
-                    <span class="lost" title={entry.lostCount === 1 ? "No branch, tag or remote branch has this commit" : `No branch, tag or remote branch has this commit or the ${entry.lostCount - 1} before it`}>{entry.lostCount > 1 ? `Lost · ${entry.lostCount}` : "Lost"}</span>
-                  {/if}
-                </span>
-                <span class="detail"><span class="mono">{entry.selector}</span> · {moveText(entry)}</span>
-              </span>
-              <span class="when" title={entry.lost ? "Git keeps this commit at least until then" : undefined}>
-                <span>{relativeTime(entry.time)}</span>
-                {#if entry.lost && entry.expires !== null}<span class="until">{lostUntil(entry)}</span>{/if}
-              </span>
-              <button class="compare" title="Show the commit and its changes" onclick={(e) => (e.stopPropagation(), show(entry))}>Show</button>
+{#snippet body()}
+  <div class="head">
+    <!-- On the screen the toolbar already names it. -->
+    {#if !screen}
+      <span class="h">Operation Log</span>
+      <span class="repo">{repo}</span>
+    {/if}
+    <span class="grow"></span>
+    <div class="segmented" role="tablist" aria-label="Source">
+      <button role="tab" aria-selected={oplog.tab === "steps"} class:on={oplog.tab === "steps"} onclick={() => setTab("steps")} title="Every step Oxbow ran here, with Undo">Oxbow</button>
+      <button role="tab" aria-selected={oplog.tab === "reflog"} class:on={oplog.tab === "reflog"} onclick={() => setTab("reflog")} title="Where HEAD and your branches have been, from git's reflog">Git Reflog</button>
+    </div>
+  </div>
+  {#if oplog.tab === "reflog"}
+    <p class="intro">
+      Where HEAD and your branches have been, from git's own log, including what a terminal or another app did.
+      {#if !oplog.allMoves}Commits no branch has any more are listed here, so you can keep them on a branch.{/if}
+    </p>
+    <div class="list">
+      {#each moves as entry (entry.id)}
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+        <div class="row move" onclick={() => show(entry)}>
+          <span class="tile" class:warn={entry.lost}>
+            <svg class="icon" viewBox="0 0 16 16"><path d={moveIcon(entry)} /></svg>
+          </span>
+          <span class="words">
+            <span class="line">
+              <span class="title">{entry.summary}</span>
               {#if entry.lost}
-                <button class="button small restore" title="Keep {entry.lostCount === 1 ? 'this commit' : `these ${entry.lostCount} commits`} on a new branch, without a reset" onclick={(e) => (e.stopPropagation(), branch(entry))}>Create Branch…</button>
+                <span class="lost" title={entry.lostCount === 1 ? "No branch, tag or remote branch has this commit" : `No branch, tag or remote branch has this commit or the ${entry.lostCount - 1} before it`}>{entry.lostCount > 1 ? `Lost · ${entry.lostCount}` : "Lost"}</span>
               {/if}
-            </div>
-          {:else}
-            <div class="empty">
-              {#if oplog.allMoves || !oplog.reflog.length}Git's reflog is empty here.{:else}Nothing is lost: every commit in git's reflog is on a branch.{/if}
-            </div>
-          {/each}
-        </div>
-        <div class="foot">
-          <span>Git may delete a lost commit after the date beside it.</span>
-          <button class="link" onclick={() => (oplog.allMoves = !oplog.allMoves)}>{oplog.allMoves ? "Only Lost Commits" : "Show All Moves"}</button>
+            </span>
+            <span class="detail"><span class="mono">{entry.selector}</span> · {moveText(entry)}</span>
+          </span>
+          <span class="when" title={entry.lost ? "Git keeps this commit at least until then" : undefined}>
+            <span>{relativeTime(entry.time)}</span>
+            {#if entry.lost && entry.expires !== null}<span class="until">{lostUntil(entry)}</span>{/if}
+          </span>
+          <button class="compare" title="Show the commit and its changes" onclick={(e) => (e.stopPropagation(), show(entry))}>Show</button>
+          {#if entry.lost}
+            <button class="button small restore" title="Keep {entry.lostCount === 1 ? 'this commit' : `these ${entry.lostCount} commits`} on a new branch, without a reset" onclick={(e) => (e.stopPropagation(), branch(entry))}>Create Branch…</button>
+          {/if}
         </div>
       {:else}
-      <p class="intro">Every change to the repository is recorded. Restore any point, including after reset or rebase.</p>
-      <div class="list">
-        {#each oplog.entries as entry, i (entry.id)}
-          {@const blocked = cannotRestore(entry, i > 0)}
-          <div class="row" class:top={i === 0}>
-            <span class="tile" class:warn={warn.has(entry.kind)}>
-              <svg class="icon" viewBox="0 0 16 16"><path d={entryIcon(entry)} /></svg>
-            </span>
-            <span class="words">
-              <span class="title">{entry.title}</span>
-              <span class="detail">{entry.failed ? "Stopped half way · " : ""}{entry.detail}</span>
-              {#if blocked}<WhyNote text={blocked} />{/if}
-            </span>
-            <span class="when" title="Oxbow can go back to this step until then">
-              <span>{relativeTime(entry.time)}</span>
-              <span class="until">{keptUntil(entry)}</span>
-            </span>
-            <button
-              class="compare"
-              title={i === 0 ? "Compare the files before this step with now" : "Compare the files right after this step with now"}
-              onclick={() => compare(entry, i > 0)}>Compare</button
-            >
-            {#if i === 0}
-              <button class="button small primary" disabled={!!blocked} title={blocked ?? undefined} onclick={() => go(undoRequest(entry))}>
-                {isRedo(entry) ? "Redo" : "Undo"}<span class="key">{keys("Mod+Z")}</span>
-              </button>
-            {:else}
-              <button class="button small restore" disabled={!!blocked} title={blocked ?? "Back to right after this step"} onclick={() => go(restoreRequest(entry, i))}>Restore to Here</button>
-            {/if}
-          </div>
+        <div class="empty">
+          {#if oplog.allMoves || !oplog.reflog.length}Git's reflog is empty here.{:else}Nothing is lost: every commit in git's reflog is on a branch.{/if}
+        </div>
+      {/each}
+    </div>
+    <div class="foot">
+      <span>Git may delete a lost commit after the date beside it.</span>
+      <button class="link" onclick={() => (oplog.allMoves = !oplog.allMoves)}>{oplog.allMoves ? "Only Lost Commits" : "Show All Moves"}</button>
+    </div>
+  {:else}
+  <p class="intro">Every change to the repository is recorded. Restore any point, including after reset or rebase.</p>
+  <div class="list">
+    {#each oplog.entries as entry, i (entry.id)}
+      {@const blocked = cannotRestore(entry, i > 0)}
+      <div class="row" class:top={i === 0}>
+        <span class="tile" class:warn={warn.has(entry.kind)}>
+          <svg class="icon" viewBox="0 0 16 16"><path d={entryIcon(entry)} /></svg>
+        </span>
+        <span class="words">
+          <span class="title">{entry.title}</span>
+          <span class="detail">{entry.failed ? "Stopped half way · " : ""}{entry.detail}</span>
+          {#if blocked}<WhyNote text={blocked} />{/if}
+        </span>
+        <span class="when" title="Oxbow can go back to this step until then">
+          <span>{relativeTime(entry.time)}</span>
+          <span class="until">{keptUntil(entry)}</span>
+        </span>
+        <button
+          class="compare"
+          title={i === 0 ? "Compare the files before this step with now" : "Compare the files right after this step with now"}
+          onclick={() => compare(entry, i > 0)}>Compare</button
+        >
+        {#if i === 0}
+          <button class="button small primary" disabled={!!blocked} title={blocked ?? undefined} onclick={() => go(undoRequest(entry))}>
+            {isRedo(entry) ? "Redo" : "Undo"}<span class="key">{keys("Mod+Z")}</span>
+          </button>
         {:else}
-          <div class="empty">Nothing to undo yet. Every change Oxbow makes to this repository shows up here. What a terminal or another app did is in Git Reflog.</div>
-        {/each}
-      </div>
-      <div class="foot">
-        <span>Snapshots are kept for {prefs.get("oxbow.undo.keepDays")} days. Untracked files over 50 MB and files git ignores are not in them.</span>
-        {#if oplog.entries.length}
-          <button class="link" onclick={() => go(clearRequest(oplog.entries.length))}>Clear Log…</button>
+          <button class="button small restore" disabled={!!blocked} title={blocked ?? "Back to right after this step"} onclick={() => go(restoreRequest(entry, i))}>Restore to Here</button>
         {/if}
       </div>
-      {/if}
-    </div>
+    {:else}
+      <div class="empty">Nothing to undo yet. Every change Oxbow makes to this repository shows up here. What a terminal or another app did is in Git Reflog.</div>
+    {/each}
+  </div>
+  <div class="foot">
+    <span>Snapshots are kept for {prefs.get("oxbow.undo.keepDays")} days. Untracked files over 50 MB and files git ignores are not in them.</span>
+    {#if oplog.entries.length}
+      <button class="link" onclick={() => go(clearRequest(oplog.entries.length))}>Clear Log…</button>
+    {/if}
+  </div>
   {/if}
-</div>
+{/snippet}
+
+{#if screen}
+  <!-- From the sidebar: a screen of its own, like Stashes. -->
+  <section class="screen" aria-label="Operation Log">
+    {@render body()}
+  </section>
+{:else}
+  <div class="anchor">
+    <button
+      class="capsule"
+      onclick={toggle}
+      aria-haspopup="dialog"
+      aria-expanded={oplog.open}
+      aria-label={latest ? `Undo ${latest.title}, open operation log` : "Open operation log"}
+      title={latest ? withKeys(isRedo(latest) ? "Redo, from the Operation Log" : `Undo “${latest.title}”`, "Mod+Z") : "Operation Log"}
+    >
+      <svg class="icon" viewBox="0 0 16 16"><path d="M5.5 4 2.5 7l3 3M3 7h6.5a3.5 3.5 0 0 1 0 7H7" /></svg>
+      <svg class="icon chevron" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>
+    </button>
+    {#if oplog.open}
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+      <div class="catcher" onclick={() => (oplog.open = false)}></div>
+      <div class="pop" role="dialog" aria-label="Operation Log">
+        {@render body()}
+      </div>
+    {/if}
+  </div>
+{/if}
 
 <style>
   .anchor {
     position: relative;
     display: flex;
+  }
+  /* The screen: the popover's content with room to breathe, under a hairline like Stashes. */
+  .screen {
+    flex-grow: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid var(--sep);
+    padding: var(--space-4) var(--space-4) 0;
+  }
+  .screen > * {
+    width: 100%;
+    max-width: 880px;
+  }
+  .screen .list {
+    flex-grow: 1;
+    max-height: none;
+  }
+  .screen .row {
+    border-radius: var(--radius-m);
+  }
+  .screen .row:hover {
+    background: var(--row-hover);
+  }
+  .screen .foot {
+    margin-top: 0;
+    padding: var(--space-3) 10px;
   }
   .capsule {
     display: flex;
@@ -207,7 +252,7 @@
     box-shadow: var(--glass-shadow);
     color: var(--icon);
   }
-  .small {
+  .chevron {
     width: 12px;
     height: 12px;
     color: var(--text2);

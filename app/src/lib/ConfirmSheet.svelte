@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { modal } from "./modal";
   import { confirm, type Part } from "./confirm.svelte";
   import { actionIcons as icons } from "./icons";
   import { withKeys } from "./keys";
@@ -230,7 +231,7 @@
 {#if request && shown}
   <!-- Run without asking: out of sight unless it takes a while, so a quick stage never flashes. -->
   <div class="dim" class:quiet={confirm.quiet && running}>
-    <div class="sheet" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-busy={running}>
+    <div class="sheet" use:modal role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-busy={running}>
       <div class="top">
         <span
           class="tile"

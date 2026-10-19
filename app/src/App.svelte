@@ -63,7 +63,8 @@
   import { fixChoices, fixRequest, fixStateLine, loadFixState, type FixContext, type FixId } from "./lib/fixes";
   import { bisectMarkRequest, bisectResetRequest, bisectStartRequest } from "./lib/bisect";
   import { keys, mac } from "./lib/keys";
-  import type { BisectMark } from "./lib/types";
+  import type { BisectMark, OpEntry } from "./lib/types";
+  import { fitWindow } from "./lib/windowSize";
 
   let repo = $state<RepoSummary | null>(null);
   let history = $state<History | null>(null);
@@ -127,7 +128,7 @@
   const panelMax = $derived(Math.max(PANEL_MIN, contentWidth - GRAPH_MIN));
   const shownPanelWidth = $derived(Math.min(Math.max(panelWidth, PANEL_MIN), panelMax));
   /** The screen next to the sidebar. */
-  let view = $state<"history" | "stashes" | "compare" | "file" | "stack" | "pull">("history");
+  let view = $state<"history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull">("history");
   /** The branch whose stack Edit Stack shows; the checked-out one when null. */
   let stackBranch = $state<string | null>(null);
 
@@ -148,7 +149,7 @@
   const shownPull = $derived(view === "pull" && pullBranch ? github.pullOf(pullBranch) : null);
 
   /** The screen File History goes back to. */
-  let fileBack = $state<"history" | "stashes" | "compare">("history");
+  let fileBack = $state<"history" | "stashes" | "oplog" | "compare">("history");
   // A diff's File History button opens the screen.
   $effect(() => {
     if (!nav.file) return;
@@ -976,6 +977,15 @@
     }
   }
 
+  /** The repository now beside how it was at a step of the Operation Log, in History's details. */
+  function compareStep(entry: OpEntry, after: boolean) {
+    second = null;
+    oplog.lost = null;
+    oplog.compare = { entry, after };
+    view = "history";
+    resolving = false;
+  }
+
   /** From the lost commit's panel: a parent History has, or another lost commit. */
   function selectFromLost(id: string) {
     const other = oplog.reflog.find((e) => e.id === id);
@@ -1032,6 +1042,60 @@
     }
   }
 
+  /** Once the repository to open at launch is known, so Welcome doesn't shrink the window first. */
+  let launched = $state(false);
+  // Welcome is a compact window; a repository gets the repository window's size back.
+  $effect(() => {
+    const welcome = !repo || !history;
+    if (launched && !(welcome && loading)) fitWindow(welcome);
+  });
+
+  let content = $state<HTMLDivElement>();
+  // The commit list has the keyboard when History opens and nothing else asked for it, so ↑ ↓
+  // work at once and the selection shows in its branch color.
+  $effect(() => {
+    if (view !== "history" || !list || showConflicts) return;
+    requestAnimationFrame(() => {
+      if (document.activeElement === document.body || document.activeElement === null) list?.focus();
+    });
+  });
+
+  /** Tab moves between the commit list and the details panel, as a whole: from the list to the
+   *  open tab of the details, and Shift+Tab from that tab back to the list. Inside the details Tab
+   *  keeps its usual way through buttons and fields, and ← → step through the tabs. */
+  function paneKeys(event: KeyboardEvent) {
+    const target = event.target as HTMLElement;
+    const panel = content?.querySelector<HTMLElement>("aside.panel");
+    if (!panel || event.metaKey || event.ctrlKey || event.altKey) return;
+    const tab = target.closest<HTMLElement>('[role="tab"]');
+    // Shift+Tab comes as ISO_Left_Tab on Linux, which names no key; its code is still Tab.
+    const isTab = event.key === "Tab" || event.code === "Tab";
+    if (isTab && !event.shiftKey && target.closest(".history")) {
+      const open = panel.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? panel.querySelector<HTMLElement>("button, input, textarea, [tabindex='0']");
+      if (!open) return;
+      event.preventDefault();
+      keyFocus(open);
+    } else if (isTab && event.shiftKey && tab && panel.contains(tab)) {
+      event.preventDefault();
+      list?.focus();
+    } else if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && tab && panel.contains(tab)) {
+      const tabs = [...(tab.closest('[role="tablist"]')?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])];
+      const next = tabs[tabs.indexOf(tab) + (event.key === "ArrowRight" ? 1 : -1)];
+      if (!next) return;
+      event.preventDefault();
+      next.click();
+      keyFocus(next);
+    }
+  }
+
+  /** Focus moved by a key shows its ring, also after a click put the focus where it came from
+   *  (the browser then counts the move as a mouse one). */
+  function keyFocus(el: HTMLElement) {
+    el.focus({ focusVisible: true } as FocusOptions);
+    el.classList.add("key-focus");
+    el.addEventListener("blur", () => el.classList.remove("key-focus"), { once: true });
+  }
+
   function startResize(event: PointerEvent) {
     const startX = event.clientX;
     // From the width it shows, which a narrow window may have cut down from the one saved.
@@ -1064,6 +1128,7 @@
     });
     api.initialRepo().then((path) => {
       if (path) load(path);
+      launched = true;
     });
     // Settings changed remotes or packed the repository.
     const unlisten = listen("repo-touched", () => refresh());
@@ -1148,7 +1213,7 @@
     {/if}
     <!-- Over a narrow window the sidebar steps aside again once something in it is picked. -->
     <Sidebar {repo} {history} {selectedRow} ctx={branchCtx!} onOpen={chooseRepo} onOpenPath={load} onWelcome={closeRepo}
-      onPick={aside(pick)}
+      onPick={aside((id: string) => (pick(id), requestAnimationFrame(() => list?.focus())))}
       {run}
       {view}
       onView={(v) => {
@@ -1174,7 +1239,7 @@
             </button>
           {/if}
           {#if view === "file" && !showConflicts}
-            {@const back = fileBack === "compare" ? "Compare" : fileBack === "stashes" ? "Stashes" : "History"}
+            {@const back = fileBack === "compare" ? "Compare" : fileBack === "stashes" ? "Stashes" : fileBack === "oplog" ? "Operation Log" : "History"}
             <button class="back" onclick={() => ((view = fileBack), (nav.file = null))} aria-label="Back to {back}" title="Back to {back}">
               <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>
             </button>
@@ -1198,6 +1263,9 @@
             {:else if view === "stashes"}
               <span class="name">Stashes</span>
               <span class="sub">{repo.name} · on {history.head.branch ?? "detached HEAD"}</span>
+            {:else if view === "oplog"}
+              <span class="name">Operation Log</span>
+              <span class="sub">{repo.name} · every step, to undo or restore</span>
             {:else}
               <span class="name">History</span>
               {#if activity.running}
@@ -1244,7 +1312,7 @@
             <FindField bind:this={findField} />
           {/if}
           {#if view === "history" && !showConflicts}
-            <SearchField bind:this={searchField} rows={history.rows} {matches} {selected} onGo={select} />
+            <SearchField bind:this={searchField} onLeave={() => list?.focus()} rows={history.rows} {matches} {selected} onGo={select} />
           {/if}
         </div>
         <div class="trail" data-tauri-drag-region>
@@ -1331,13 +1399,7 @@
               run={(request) => void run(request)}
               onShow={showMove}
               onBranch={branchAtMove}
-              onCompare={(entry, after) => {
-                second = null;
-                oplog.lost = null;
-                oplog.compare = { entry, after };
-                view = "history";
-                resolving = false;
-              }}
+              onCompare={compareStep}
             />
             <span class="divider"></span>
             <button onclick={() => openFixes()} aria-label="Fix a mistake" title={withKeys("Fix a Mistake…", "Alt+Mod+Z")}>
@@ -1464,12 +1526,17 @@
         {#key repo.path}
           <EditStackView branch={stackBranch} ctx={branchCtx} {colorOf} {version} {run} onClose={() => (view = "history")} />
         {/key}
+      {:else if view === "oplog"}
+        {#key repo.path}
+          <OperationLog screen repo={repo.name} run={(request) => void run(request)} onShow={showMove} onBranch={branchAtMove} onCompare={compareStep} />
+        {/key}
       {:else if view === "stashes" && branchCtx}
         {#key repo.path}
           <StashesView {history} ctx={branchCtx} {colorOf} bind:selected={stashSel} {version} {run} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "it" : text}.`)} />
         {/key}
       {:else}
-      <div class="content">
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="content" bind:this={content} onkeydown={paneKeys}>
         <section class="history" aria-label="Commit history">
           <div class="columns"><span>{#if found?.only}Matching commits · graph hidden{:else}Description{/if}</span>{#if history.truncated && !found?.only}<span class="note">Latest {history.loaded.toLocaleString()} commits · older ones load as you scroll</span>{/if}</div>
           {#key repo.path}
@@ -1490,7 +1557,7 @@
           {/key}
         </section>
         <aside class="panel" style:width="{shownPanelWidth}px" aria-label="Commit details">
-          <button class="grip" onpointerdown={startResize} aria-label="Resize commit details" title="Drag to resize"></button>
+          <button class="grip" tabindex="-1" onpointerdown={startResize} aria-label="Resize commit details" title="Drag to resize"></button>
           <!-- A new repository starts the panels from scratch. -->
           {#key repo.path}
             {#if pickedSubmodule}

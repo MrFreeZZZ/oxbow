@@ -121,16 +121,19 @@
 </div>
 
 <style>
+  /* Up to 210 px, narrower when the window is: the field never spills over what follows it. */
   .picker {
     position: relative;
     display: flex;
-    min-width: 0;
+    flex: 0 1 210px;
+    min-width: 120px;
   }
   .field {
     display: flex;
     align-items: center;
     gap: 8px;
-    width: 210px;
+    width: 100%;
+    min-width: 0;
     height: 40px;
     padding: 0 10px 0 12px;
     border-radius: var(--radius-l);

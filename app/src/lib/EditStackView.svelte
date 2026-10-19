@@ -682,12 +682,15 @@
 {/if}
 
 <style>
+  /* No cards: the branch and its base in a strip under the toolbar, the plan and the preview
+     beside each other, parted by hairlines. */
   .editor {
     flex-grow: 1;
     min-height: 0;
     display: flex;
     flex-direction: column;
-    padding: 0 12px 12px 4px;
+    padding: 0 var(--space-3) var(--space-3) 0;
+    border-top: 1px solid var(--sep);
   }
   .empty-state {
     flex-grow: 1;
@@ -715,9 +718,7 @@
     gap: 12px;
     height: 50px;
     flex-shrink: 0;
-    padding: 0 6px 0 14px;
-    border-radius: var(--radius-xl);
-    background: var(--field);
+    padding: 0 var(--space-1) 0 var(--space-4);
   }
   .top-name {
     font-weight: 600;
@@ -785,7 +786,6 @@
     flex-grow: 1;
     min-height: 0;
     display: flex;
-    margin-top: 10px;
     border-top: 1px solid var(--sep);
   }
   .plan {
@@ -1086,10 +1086,9 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px 14px;
-    margin: 8px 0 0 16px;
-    padding: 10px 12px;
-    border-radius: var(--radius-l);
-    background: var(--field);
+    margin: var(--space-2) 0 0;
+    padding: var(--space-3) var(--space-4) 0;
+    border-top: 1px solid var(--sep);
     font-size: var(--text-caption);
     color: var(--text2);
     flex-shrink: 0;

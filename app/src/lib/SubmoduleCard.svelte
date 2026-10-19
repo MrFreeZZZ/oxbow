@@ -266,7 +266,8 @@
   .note.warn {
     color: var(--orange);
   }
-  .small {
+  /* Only the icons: a small button shares the class name. */
+  .icon.small {
     width: 14px;
     height: 14px;
     flex-shrink: 0;

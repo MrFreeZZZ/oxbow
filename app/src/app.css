@@ -24,6 +24,8 @@
   --code: #24292f;
   --sep: rgba(0, 0, 0, 0.08);
   --side-sel: rgba(0, 0, 0, 0.07);
+  /* A selected row in a list that doesn't have the focus, or in a window in the background. */
+  --sel-idle: rgba(0, 0, 0, 0.11);
   --field: rgba(0, 0, 0, 0.045);
   /* Action buttons, checks, toggles and focus rings: the muted steel of the main trunk, not system blue.
      Links keep --accent-text. */
@@ -193,6 +195,7 @@
   --code: #e6edf3;
   --sep: rgba(255, 255, 255, 0.08);
   --side-sel: rgba(255, 255, 255, 0.1);
+  --sel-idle: rgba(255, 255, 255, 0.18);
   --field: rgba(255, 255, 255, 0.07);
   --accent: #5d7c99;
   --accent-quiet: rgba(148, 178, 204, 0.16);
@@ -392,7 +395,8 @@ button {
   background-image: linear-gradient(var(--press-wash), var(--press-wash));
 }
 
-button:focus-visible {
+button:focus-visible,
+button.key-focus {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }

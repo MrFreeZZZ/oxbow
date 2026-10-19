@@ -2,6 +2,7 @@
   // Fix a Mistake: what happened, in the words people search for. Picking a row opens that
   // fix's sheet, planned from the repository as it is; a row that can't be used says why.
 
+  import { modal } from "./modal";
   import type { Part } from "./confirm.svelte";
   import type { FixChoice, FixId } from "./fixes";
   import { actionIcons as icons } from "./icons";
@@ -34,7 +35,7 @@
 <svelte:window onkeydown={onKey} />
 
 <div class="dim">
-  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="fix-title" bind:this={box}>
+  <div class="sheet" use:modal role="dialog" aria-modal="true" aria-labelledby="fix-title" bind:this={box}>
     <div class="top">
       <span class="tile"><svg class="icon" viewBox="0 0 16 16"><path d={icons.fix} /></svg></span>
       <div class="words">
