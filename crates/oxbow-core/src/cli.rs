@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
+use crate::console;
 use crate::error::{Error, Result};
 use crate::repo::Repo;
 
@@ -194,12 +195,19 @@ impl Repo {
     /// and fails with [`Error::Cancelled`]. For reads whose answer is no longer wanted once a
     /// newer one is asked for, such as a search.
     pub fn run_cancellable(&self, command: &GitCommand, cancel: &AtomicBool) -> Result<CommandOutput> {
-        let mut child = command_in(self.workdir(), command)
+        let log = console::started(self.workdir(), &command.display());
+        let mut child = match command_in(self.workdir(), command)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|err| Error::GitNotFound(err.to_string()))?;
+        {
+            Ok(child) => child,
+            Err(err) => {
+                log.not_started(&err.to_string());
+                return Err(Error::GitNotFound(err.to_string()));
+            }
+        };
         let read = |mut pipe: Box<dyn Read + Send>| {
             std::thread::spawn(move || {
                 let mut all = Vec::new();
@@ -213,16 +221,24 @@ impl Repo {
             if cancel.load(Ordering::Relaxed) {
                 let _ = child.kill();
                 let _ = child.wait();
+                let output = log.output();
+                log.stopped(output);
                 return Err(Error::Cancelled);
             }
             match child.try_wait() {
                 Ok(Some(status)) => break status,
                 Ok(None) => std::thread::sleep(Duration::from_millis(5)),
-                Err(err) => return Err(Error::GitNotFound(err.to_string())),
+                Err(err) => {
+                    log.not_started(&err.to_string());
+                    return Err(Error::GitNotFound(err.to_string()));
+                }
             }
         };
-        let stdout = String::from_utf8_lossy(&stdout.join().unwrap_or_default()).into_owned();
-        let stderr = String::from_utf8_lossy(&stderr.join().unwrap_or_default()).into_owned();
+        let stdout = stdout.join().unwrap_or_default();
+        let stderr = stderr.join().unwrap_or_default();
+        log.done(status.code(), &stdout, &stderr);
+        let stdout = String::from_utf8_lossy(&stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&stderr).into_owned();
         if status.success() {
             Ok(CommandOutput { stdout, stderr })
         } else {
@@ -244,12 +260,19 @@ impl Repo {
         max: usize,
         cancel: &AtomicBool,
     ) -> Result<Limited> {
-        let mut child = command_in(self.workdir(), command)
+        let log = console::started(self.workdir(), &command.display());
+        let mut child = match command_in(self.workdir(), command)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|err| Error::GitNotFound(err.to_string()))?;
+        {
+            Ok(child) => child,
+            Err(err) => {
+                log.not_started(&err.to_string());
+                return Err(Error::GitNotFound(err.to_string()));
+            }
+        };
         let mut pipe = child.stderr.take().expect("stderr is piped");
         let stderr = std::thread::spawn(move || {
             let mut all = Vec::new();
@@ -270,6 +293,8 @@ impl Repo {
             if cancel.load(Ordering::Relaxed) {
                 let _ = child.kill();
                 let _ = child.wait();
+                let output = log.output();
+                log.stopped(output);
                 return Err(Error::Cancelled);
             }
             if reader.as_ref().is_some_and(|r| r.is_finished()) {
@@ -308,9 +333,11 @@ impl Repo {
         if cut {
             stdout.truncate(max);
         }
+        let stderr = stderr.join().unwrap_or_default();
+        log.done(status.code(), &stdout, &stderr);
         Ok(Limited {
             stdout,
-            stderr: stderr.join().unwrap_or_default(),
+            stderr,
             success: status.success() && !cut,
             code: status.code(),
             cut,
@@ -419,20 +446,34 @@ pub fn run_in(dir: &Path, command: &GitCommand, input: Option<&[u8]>) -> Result<
 }
 
 fn spawn_in(dir: &Path, command: &GitCommand, input: Option<&[u8]>) -> Result<std::process::Output> {
-    let mut child = command_in(dir, command)
+    let log = console::started(dir, &command.display());
+    let mut child = match command_in(dir, command)
         .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|err| Error::GitNotFound(err.to_string()))?;
+    {
+        Ok(child) => child,
+        Err(err) => {
+            log.not_started(&err.to_string());
+            return Err(Error::GitNotFound(err.to_string()));
+        }
+    };
     if let Some(input) = input {
         let mut stdin = child.stdin.take().expect("stdin is piped");
         // A command that exits early closes its end; its exit status tells what went wrong.
         let _ = stdin.write_all(input);
     }
-    child
-        .wait_with_output()
-        .map_err(|err| Error::GitNotFound(err.to_string()))
+    match child.wait_with_output() {
+        Ok(output) => {
+            log.done(output.status.code(), &output.stdout, &output.stderr);
+            Ok(output)
+        }
+        Err(err) => {
+            log.not_started(&err.to_string());
+            Err(Error::GitNotFound(err.to_string()))
+        }
+    }
 }
 
 /// Run `command` in `dir`, passing each line it prints to `on_line` as it comes. Setting
@@ -443,13 +484,22 @@ pub fn run_streaming_in(
     on_line: &mut dyn FnMut(OutputLine),
     cancel: &AtomicBool,
 ) -> Result<CommandOutput> {
-    let mut child = command_in(dir, command)
+    let log = console::started(dir, &command.display());
+    let mut child = match command_in(dir, command)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|err| Error::GitNotFound(err.to_string()))?;
+    {
+        Ok(child) => child,
+        Err(err) => {
+            log.not_started(&err.to_string());
+            return Err(Error::GitNotFound(err.to_string()));
+        }
+    };
     let (send, receive) = mpsc::channel();
+    // What the Console shows: the lines in the order they came, without progress.
+    let mut logged = log.output();
     let readers = [
         read_lines(child.stdout.take().expect("stdout is piped"), false, send.clone()),
         read_lines(child.stderr.take().expect("stderr is piped"), true, send),
@@ -466,25 +516,32 @@ pub fn run_streaming_in(
                     };
                     all.push_str(&line.text);
                     all.push('\n');
+                    logged.push(&line.text, line.stderr);
                 }
                 on_line(line);
                 continue;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             // Both pipes are closed: the command is done, or about to be.
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                break child.wait().map_err(|err| Error::GitNotFound(err.to_string()))?;
-            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => match child.wait() {
+                Ok(status) => break status,
+                Err(err) => {
+                    log.not_started(&err.to_string());
+                    return Err(Error::GitNotFound(err.to_string()));
+                }
+            },
         }
         if cancel.load(Ordering::Relaxed) {
             let _ = child.kill();
             let _ = child.wait();
+            log.stopped(logged);
             return Err(Error::Cancelled);
         }
     };
     for reader in readers {
         let _ = reader.join();
     }
+    log.done_lines(status.code(), logged);
     if status.success() {
         Ok(output)
     } else {

@@ -11,7 +11,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::accounts::Accounts;
-use crate::{CommandResult, Session, blocking, current};
+use crate::{CommandResult, Session, at, blocking, current, read};
 
 fn github_repo_of(
     session: &State<'_, Session>,
@@ -31,7 +31,7 @@ pub async fn github_repo(
     session: State<'_, Session>,
 ) -> CommandResult<Option<GitHubRepo>> {
     let repo = current(&session, &window)?;
-    blocking(move || Ok(repo.github_repo())).await
+    read(at(&repo), "Find the GitHub repository", move || Ok(repo.github_repo())).await
 }
 
 /// Its pull requests, open and recently closed, the latest updated first.
@@ -151,5 +151,8 @@ pub async fn code_owners(
     branch: String,
 ) -> CommandResult<Vec<String>> {
     let repo = current(&session, &window)?;
-    blocking(move || Ok(repo.code_owners(&base, &branch))).await
+    read(at(&repo), "Read the code owners", move || {
+        Ok(repo.code_owners(&base, &branch))
+    })
+    .await
 }

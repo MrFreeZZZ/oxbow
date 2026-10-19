@@ -234,6 +234,13 @@ pub struct HistoryCache {
     last: Option<(u64, Arc<Rows>)>,
 }
 
+impl HistoryCache {
+    /// Nothing was read yet.
+    pub fn is_empty(&self) -> bool {
+        self.last.is_none()
+    }
+}
+
 /// The part of [`History`] that comes from walking the commits.
 #[derive(Debug)]
 struct Rows {
@@ -348,6 +355,16 @@ impl Repo {
         known: Option<&str>,
     ) -> Result<History> {
         let (history, reads) = crate::cli::recording(|| self.read_history(options, cache, known));
+        if let Ok(history) = &history {
+            let changes = history.changes.as_ref().map_or(0, WorkingTree::file_count);
+            crate::console::read_note(format!(
+                "refs {} · commits {} · status {} {}",
+                crate::console::grouped(history.refs.len()),
+                crate::console::grouped(history.loaded),
+                crate::console::grouped(changes),
+                if changes == 1 { "change" } else { "changes" }
+            ));
+        }
         history.map(|history| History { reads, ..history })
     }
 

@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod accounts;
+mod console_window;
 mod open_in;
 mod pulls;
 
@@ -11,6 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use oxbow_core::config::{self, ConfigScope};
+use oxbow_core::console;
 use oxbow_core::{
     Action, CommitBrief, CommitDetail, ConflictFile, DeletionCheck, DiffContext, DiffOptions, DiffPage, Failure,
     FileDiff, History, HistoryCache, HistoryOptions, MergePreview, Plan, Repo, Side, Source, StashCheck, WorkingTree,
@@ -226,6 +228,33 @@ async fn blocking<T: Send + 'static>(
         .await
         .map_err(|err| err.to_string())?
         .map_err(|err| err.to_string())
+}
+
+/// The working tree of `repo`, for the Console entry of work on it.
+fn at(repo: &Repo) -> PathBuf {
+    repo.workdir().to_path_buf()
+}
+
+/// [`blocking`], as one entry of the Console of the repository at `dir` (none: outside any
+/// repository).
+async fn logged<T: Send + 'static>(
+    dir: Option<PathBuf>,
+    kind: console::EntryKind,
+    title: impl Into<String>,
+    work: impl FnOnce() -> oxbow_core::Result<T> + Send + 'static,
+) -> CommandResult<T> {
+    let title = title.into();
+    blocking(move || console::scope(dir.as_deref(), kind, title, work)).await
+}
+
+/// [`blocking`] for a read of the repository at `dir`, shown in the Console as `title` when it
+/// runs git.
+async fn read<T: Send + 'static>(
+    dir: PathBuf,
+    title: &'static str,
+    work: impl FnOnce() -> oxbow_core::Result<T> + Send + 'static,
+) -> CommandResult<T> {
+    logged(Some(dir), console::EntryKind::Read, title, work).await
 }
 
 /// User settings live in `settings.json` in the app's config folder, as flat `oxbow.*` keys,
@@ -581,7 +610,10 @@ fn clear_recent(app: AppHandle, keep: Vec<String>) {
 /// Where a recent repository stands, for its row.
 #[tauri::command]
 async fn repo_glance(path: String) -> CommandResult<oxbow_core::RepoGlance> {
-    blocking(move || oxbow_core::setup::glance(Path::new(&path))).await
+    read(PathBuf::from(&path), "Look at a repository", move || {
+        oxbow_core::setup::glance(Path::new(&path))
+    })
+    .await
 }
 
 #[derive(Serialize)]
@@ -605,7 +637,7 @@ struct WelcomeInfo {
 #[tauri::command]
 async fn welcome_info(app: AppHandle) -> CommandResult<WelcomeInfo> {
     let version = app.package_info().version.to_string();
-    blocking(move || {
+    logged(None, console::EntryKind::Read, "Read the Git setup", move || {
         let global = config::global_config();
         let home = config::home_dir().unwrap_or_default();
         let projects = ["Developer", "Projects", "projects", "src", "Code", "code"]
@@ -661,7 +693,10 @@ async fn probe_remote(
     if let Some(token) = accounts.token(&app) {
         github = github.with_token(token);
     }
-    blocking(move || oxbow_core::setup::probe_remote(&url, &github)).await
+    logged(None, console::EntryKind::Read, "Check the remote", move || {
+        oxbow_core::setup::probe_remote(&url, &github)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -680,15 +715,21 @@ async fn clone_repo(
     let cancel = session.cancel(&window);
     cancel.store(false, Ordering::Relaxed);
     let path = options.path.display().to_string();
-    blocking(move || {
-        oxbow_core::setup::clone(
-            &options,
-            &mut |line| {
-                let _ = window.emit_to(window.label(), "clone-line", line);
-            },
-            &cancel,
-        )
-    })
+    let title = format!("Clone {}", console::mask(&options.url));
+    logged(
+        Some(options.path.clone()),
+        console::EntryKind::Action,
+        title,
+        move || {
+            oxbow_core::setup::clone(
+                &options,
+                &mut |line| {
+                    let _ = window.emit_to(window.label(), "clone-line", line);
+                },
+                &cancel,
+            )
+        },
+    )
     .await?;
     Ok(path)
 }
@@ -701,7 +742,13 @@ async fn plan_new_repo(options: oxbow_core::NewRepoOptions) -> CommandResult<oxb
 #[tauri::command]
 async fn create_repo(options: oxbow_core::NewRepoOptions) -> CommandResult<String> {
     let path = options.path.display().to_string();
-    blocking(move || oxbow_core::setup::create_repo(&options)).await?;
+    logged(
+        Some(options.path.clone()),
+        console::EntryKind::Action,
+        "Create a repository",
+        move || oxbow_core::setup::create_repo(&options),
+    )
+    .await?;
     Ok(path)
 }
 
@@ -734,7 +781,12 @@ async fn history(
         focus: focus.unwrap_or(false),
     };
     let mut cache = session.slot(&window, |slot| slot.history.clone());
-    let (mut history, cache) = blocking(move || {
+    let title = if cache.is_empty() {
+        "Read the repository"
+    } else {
+        "Read the repository again"
+    };
+    let (mut history, cache) = read(at(&repo), title, move || {
         let history = repo.history_with(&options, &mut cache, known.as_deref())?;
         Ok((history, cache))
     })
@@ -772,7 +824,10 @@ async fn commit_detail(
     if let Some(Cached::Detail(detail)) = session.commits.lock().expect("session lock").get(&key) {
         return Ok((*detail).clone());
     }
-    let detail = blocking(move || repo.commit_detail_with(&id, count, &cancel)).await?;
+    let detail = read(at(&repo), "Read a commit", move || {
+        repo.commit_detail_with(&id, count, &cancel)
+    })
+    .await?;
     // What a submodule says depends on its clone here, which changes.
     if !detail.files.iter().any(|f| f.submodule.is_some()) {
         let cached = Cached::Detail(Arc::new(detail.clone()));
@@ -808,7 +863,10 @@ async fn commit_diff(
     if let Some(Cached::Diffs(diffs)) = session.commits.lock().expect("session lock").get(&key) {
         return Ok((*diffs).clone());
     }
-    let diffs = blocking(move || repo.commit_diff_with(&id, path.as_deref(), context, &cancel)).await?;
+    let diffs = read(at(&repo), "Read a commit's changes", move || {
+        repo.commit_diff_with(&id, path.as_deref(), context, &cancel)
+    })
+    .await?;
     if !diffs.iter().any(|d| d.submodule.is_some()) {
         let cached = Cached::Diffs(Arc::new(diffs.clone()));
         session.commits.lock().expect("session lock").put(key, cached);
@@ -844,7 +902,10 @@ async fn commit_diff_page(
     if let Some(Cached::Page(page)) = session.commits.lock().expect("session lock").get(&key) {
         return Ok((*page).clone());
     }
-    let page = blocking(move || repo.commit_diff_page(&id, from, budget, context, &cancel)).await?;
+    let page = read(at(&repo), "Read a commit's changes", move || {
+        repo.commit_diff_page(&id, from, budget, context, &cancel)
+    })
+    .await?;
     if !page.diffs.iter().any(|d| d.submodule.is_some()) {
         let cached = Cached::Page(Arc::new(page.clone()));
         session.commits.lock().expect("session lock").put(key, cached);
@@ -861,7 +922,7 @@ async fn compare(
     mode: oxbow_core::CompareMode,
 ) -> CommandResult<oxbow_core::Comparison> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.compare(&base, &target, mode)).await
+    read(at(&repo), "Compare", move || repo.compare(&base, &target, mode)).await
 }
 
 /// The changed files of a comparison with their line counts, from the `count_from`th on: the
@@ -877,7 +938,10 @@ async fn compare_counts(
 ) -> CommandResult<Vec<oxbow_core::FileChange>> {
     let repo = current(&session, &window)?;
     let cancel = session.lane(&window, lane);
-    blocking(move || repo.tree_files_with(&from, &to, Some(count_from), &cancel)).await
+    read(at(&repo), "Compare", move || {
+        repo.tree_files_with(&from, &to, Some(count_from), &cancel)
+    })
+    .await
 }
 
 /// A page of a comparison's diffs: from the `start`th file on, until they have `budget` lines.
@@ -900,7 +964,10 @@ async fn compare_diff_page(
     } else {
         DiffContext::Compact
     };
-    blocking(move || repo.tree_diff_page(&from, &to, start, budget, context, &cancel)).await
+    read(at(&repo), "Compare", move || {
+        repo.tree_diff_page(&from, &to, start, budget, context, &cancel)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -922,7 +989,10 @@ async fn compare_diff(
     } else {
         DiffContext::Compact
     };
-    blocking(move || repo.tree_diff_with(&from, &to, path.as_deref(), context, &cancel)).await
+    read(at(&repo), "Compare", move || {
+        repo.tree_diff_with(&from, &to, path.as_deref(), context, &cancel)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -935,7 +1005,10 @@ async fn file_history(
 ) -> CommandResult<oxbow_core::FileHistory> {
     let repo = current(&session, &window)?;
     let cancel = session.lane(&window, lane);
-    blocking(move || repo.file_history_with(&path, rev.as_deref(), &cancel)).await
+    read(at(&repo), "Read a file's history", move || {
+        repo.file_history_with(&path, rev.as_deref(), &cancel)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -948,7 +1021,7 @@ async fn blame(
 ) -> CommandResult<oxbow_core::Blame> {
     let repo = current(&session, &window)?;
     let cancel = session.lane(&window, lane);
-    blocking(move || repo.blame_with(&path, &rev, &cancel)).await
+    read(at(&repo), "Blame", move || repo.blame_with(&path, &rev, &cancel)).await
 }
 
 #[tauri::command]
@@ -962,13 +1035,16 @@ async fn line_history(
 ) -> CommandResult<Vec<String>> {
     let repo = current(&session, &window)?;
     let cancel = session.lane(&window, lane);
-    blocking(move || repo.line_history_with(&path, line, &rev, &cancel)).await
+    read(at(&repo), "Read a line's history", move || {
+        repo.line_history_with(&path, line, &rev, &cancel)
+    })
+    .await
 }
 
 #[tauri::command]
 async fn files(window: tauri::WebviewWindow, session: State<'_, Session>) -> CommandResult<Vec<String>> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.files()).await
+    read(at(&repo), "List the files", move || repo.files()).await
 }
 
 #[tauri::command]
@@ -983,7 +1059,10 @@ async fn file_pickaxe(
 ) -> CommandResult<Vec<String>> {
     let repo = current(&session, &window)?;
     let cancel = session.lane(&window, lane);
-    blocking(move || repo.file_pickaxe_with(&path, &text, match_case, &rev, &cancel)).await
+    read(at(&repo), "Search a file's history", move || {
+        repo.file_pickaxe_with(&path, &text, match_case, &rev, &cancel)
+    })
+    .await
 }
 
 /// The Operation Log, newest step first.
@@ -993,7 +1072,7 @@ async fn operation_log(
     session: State<'_, Session>,
 ) -> CommandResult<Vec<oxbow_core::OpEntry>> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.operation_log()).await
+    read(at(&repo), "Read the Undo history", move || repo.operation_log()).await
 }
 
 /// Lost work: the commits git's reflog of `HEAD` and the local branches points at, newest first.
@@ -1003,7 +1082,7 @@ async fn reflog_entries(
     session: State<'_, Session>,
 ) -> CommandResult<Vec<oxbow_core::ReflogEntry>> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.reflog_entries()).await
+    read(at(&repo), "Read the reflog", move || repo.reflog_entries()).await
 }
 
 /// What Fix a Mistake plans from: the state to check again before a fix runs, the changed files
@@ -1011,7 +1090,7 @@ async fn reflog_entries(
 #[tauri::command]
 async fn fix_state(window: tauri::WebviewWindow, session: State<'_, Session>) -> CommandResult<oxbow_core::FixState> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.fix_state()).await
+    read(at(&repo), "Look for mistakes to fix", move || repo.fix_state()).await
 }
 
 /// The repository now beside how it was before step `id`, or right after it with `after`.
@@ -1023,7 +1102,10 @@ async fn compare_snapshot(
     after: bool,
 ) -> CommandResult<oxbow_core::SnapshotComparison> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.compare_snapshot(&id, after)).await
+    read(at(&repo), "Compare with a step of Undo", move || {
+        repo.compare_snapshot(&id, after)
+    })
+    .await
 }
 
 /// Bytes of one side of a picture read at most to preview it.
@@ -1037,9 +1119,11 @@ async fn source_bytes(
     source: Source,
 ) -> CommandResult<tauri::ipc::Response> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.read_source_within(&source, MAX_PREVIEW_BYTES))
-        .await
-        .map(tauri::ipc::Response::new)
+    read(at(&repo), "Read a file", move || {
+        repo.read_source_within(&source, MAX_PREVIEW_BYTES)
+    })
+    .await
+    .map(tauri::ipc::Response::new)
 }
 
 /// Open one side of a file diff in the app the system picks for it: the working-tree file as it
@@ -1056,7 +1140,7 @@ async fn open_source(
     let file = match &source {
         Source::Worktree { path } => repo.workdir().join(Path::new(path)),
         Source::Blob { id } => {
-            let data = blocking({
+            let data = read(at(&repo), "Read a file", {
                 let source = source.clone();
                 move || repo.read_source(&source)
             })
@@ -1083,7 +1167,7 @@ async fn open_source(
 #[tauri::command]
 async fn working_tree(window: tauri::WebviewWindow, session: State<'_, Session>) -> CommandResult<WorkingTree> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.working_tree()).await
+    read(at(&repo), "Read the changes", move || repo.working_tree()).await
 }
 
 #[tauri::command]
@@ -1096,7 +1180,10 @@ async fn working_diff(
     full: Option<bool>,
 ) -> CommandResult<FileDiff> {
     let repo = current_full(&session, &window, full)?;
-    blocking(move || repo.working_diff(&path, side, whole_file)).await
+    read(at(&repo), "Read a change", move || {
+        repo.working_diff(&path, side, whole_file)
+    })
+    .await
 }
 
 /// How the submodule at `path` moved from `old` to `new`, for its card in the sidebar's panel.
@@ -1110,7 +1197,10 @@ async fn submodule_move(
     changed: usize,
 ) -> CommandResult<oxbow_core::SubmoduleMove> {
     let repo = current(&session, &window)?;
-    blocking(move || Ok(repo.submodule_move(&path, old.as_deref(), new.as_deref(), changed))).await
+    read(at(&repo), "Read a submodule", move || {
+        Ok(repo.submodule_move(&path, old.as_deref(), new.as_deref(), changed))
+    })
+    .await
 }
 
 /// Submodules whose recorded commit is on none of their remotes, for the warning before a push.
@@ -1120,7 +1210,10 @@ async fn unpushed_submodules(
     session: State<'_, Session>,
 ) -> CommandResult<Vec<oxbow_core::submodules::UnpushedSubmodule>> {
     let repo = current(&session, &window)?;
-    blocking(move || Ok(repo.unpushed_submodules())).await
+    read(at(&repo), "Check submodules for unpushed commits", move || {
+        Ok(repo.unpushed_submodules())
+    })
+    .await
 }
 
 /// The diffs of several files on one side of the working copy, for the Summary tab.
@@ -1146,7 +1239,7 @@ async fn working_diff_page(
             .filter(|(number, _)| Some(*number) == snapshot)
             .map(|(_, tree)| tree.clone())
     });
-    blocking(move || {
+    read(at(&repo), "Read a change", move || {
         let tree = match tree {
             Some(tree) => tree,
             None => Arc::new(repo.working_tree()?),
@@ -1164,7 +1257,10 @@ async fn deletion_check(
     branch: String,
 ) -> CommandResult<DeletionCheck> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.deletion_check(&branch)).await
+    read(at(&repo), "Check a branch before deleting", move || {
+        repo.deletion_check(&branch)
+    })
+    .await
 }
 
 /// Commits that deleting a remote branch (`origin/x`) on its remote would lose.
@@ -1175,7 +1271,10 @@ async fn remote_deletion_check(
     branch: String,
 ) -> CommandResult<Vec<CommitBrief>> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.remote_deletion_check(&branch)).await
+    read(at(&repo), "Check a branch before deleting", move || {
+        repo.remote_deletion_check(&branch)
+    })
+    .await
 }
 
 /// What merging `branch` into the checked-out branch would bring, for the merge sheet.
@@ -1186,7 +1285,7 @@ async fn merge_preview(
     branch: String,
 ) -> CommandResult<MergePreview> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.merge_preview(&branch)).await
+    read(at(&repo), "Preview a merge", move || repo.merge_preview(&branch)).await
 }
 
 /// Both sides of a conflicted file, for the Conflicts screen.
@@ -1197,7 +1296,7 @@ async fn conflict_file(
     path: String,
 ) -> CommandResult<ConflictFile> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.conflict_file(&path)).await
+    read(at(&repo), "Read a conflict", move || repo.conflict_file(&path)).await
 }
 
 /// Whether `stash@{index}` applies cleanly to the checked-out commit.
@@ -1209,7 +1308,7 @@ async fn stash_check(
     id: String,
 ) -> CommandResult<StashCheck> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.stash_check(index, &id)).await
+    read(at(&repo), "Check a stash", move || repo.stash_check(index, &id)).await
 }
 
 /// The stack `branch` belongs to (the checked-out branch without one), for Edit Stack.
@@ -1220,7 +1319,7 @@ async fn stack(
     branch: Option<String>,
 ) -> CommandResult<oxbow_core::Stack> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.stack(branch.as_deref())).await
+    read(at(&repo), "Read the stack", move || repo.stack(branch.as_deref())).await
 }
 
 /// Which of `candidates` has the merged pull request's commit `merged`, for a restack to move
@@ -1233,7 +1332,10 @@ async fn landed_on(
     candidates: Vec<String>,
 ) -> CommandResult<Option<oxbow_core::Landing>> {
     let repo = current(&session, &window)?;
-    blocking(move || Ok(repo.landed_on(&merged, &candidates))).await
+    read(at(&repo), "Read the stack", move || {
+        Ok(repo.landed_on(&merged, &candidates))
+    })
+    .await
 }
 
 /// A dry run of an Edit Stack plan: what it changes, where it would stop, what to push.
@@ -1244,14 +1346,14 @@ async fn stack_preview(
     plan: oxbow_core::StackPlan,
 ) -> CommandResult<oxbow_core::StackPreview> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.stack_preview(&plan)).await
+    read(at(&repo), "Preview the stack", move || repo.stack_preview(&plan)).await
 }
 
 /// The git commands an action will run, for the confirmation sheet.
 #[tauri::command]
 async fn plan_action(window: tauri::WebviewWindow, session: State<'_, Session>, action: Action) -> CommandResult<Plan> {
     let repo = current(&session, &window)?;
-    blocking(move || {
+    read(at(&repo), "Prepare an action", move || {
         let mut plan = repo.plan(&action)?;
         plan.not_kept = repo.not_kept(&action)?;
         Ok(plan)
@@ -1286,14 +1388,17 @@ async fn perform_action(
     cancel.store(false, Ordering::Relaxed);
     let events = app.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
-        let result = repo.perform_with(
-            &action,
-            &mut |event| {
-                let _ = events.emit_to(label.as_str(), "action-event", event);
-            },
-            &cancel,
-        );
-        result.map_err(|err| repo.explain_failure(&action, &err))
+        let title = repo.action_title(&action);
+        console::scope(Some(repo.workdir()), console::EntryKind::Action, title, || {
+            let result = repo.perform_with(
+                &action,
+                &mut |event| {
+                    let _ = events.emit_to(label.as_str(), "action-event", event);
+                },
+                &cancel,
+            );
+            result.map_err(|err| repo.explain_failure(&action, &err))
+        })
     })
     .await;
     // The repository window shows the remotes and branches Settings just changed.
@@ -1328,7 +1433,7 @@ struct GitSettings {
 /// What Settings shows from Git's own config and the computer.
 #[tauri::command]
 async fn git_settings() -> CommandResult<GitSettings> {
-    blocking(|| {
+    logged(None, console::EntryKind::Read, "Read the Git setup", || {
         Ok(GitSettings {
             git: config::git_info(),
             global: config::global_config(),
@@ -1375,7 +1480,7 @@ async fn repo_settings(
     let Ok(repo) = current(&session, &window) else {
         return Ok(None);
     };
-    blocking(move || {
+    read(at(&repo), "Read repository settings", move || {
         Ok(Some(RepoSettings {
             name: repo.name(),
             path: repo.workdir().display().to_string(),
@@ -1419,7 +1524,12 @@ async fn set_git_config(
     };
     // The production branch changes how the main window draws the graph.
     let redraw = key.eq_ignore_ascii_case(oxbow_core::history::PRODUCTION_KEY);
-    blocking(move || match repo {
+    let dir = repo.as_ref().map(at);
+    let title = match value {
+        Some(_) => format!("Set {key}"),
+        None => format!("Unset {key}"),
+    };
+    logged(dir, console::EntryKind::Action, title, move || match repo {
         Some(repo) => repo.set_local_config(&key, value.as_deref()),
         None => config::set_global_config(&key, value.as_deref()),
     })
@@ -1441,7 +1551,7 @@ struct PullSetup {
 #[tauri::command]
 async fn pull_setup(window: tauri::WebviewWindow, session: State<'_, Session>) -> CommandResult<PullSetup> {
     let repo = current(&session, &window)?;
-    blocking(move || {
+    read(at(&repo), "Read pull settings", move || {
         Ok(PullSetup {
             mode: repo.pull_mode(),
             autostash: repo.pull_autostash(),
@@ -1477,6 +1587,7 @@ async fn fetch_in_background(
     session: State<'_, Session>,
     remote: Option<String>,
     fetch: Option<u64>,
+    auto: Option<bool>,
 ) -> Result<Fetched, Failure> {
     let failed = |output: String| Failure {
         kind: oxbow_core::FailureKind::Other,
@@ -1497,28 +1608,40 @@ async fn fetch_in_background(
     let label = window.label().to_owned();
     tauri::async_runtime::spawn_blocking(move || {
         let action = Action::Fetch { remote: remote.clone() };
-        let command = repo.fetch_command(remote.as_deref()).with_progress();
-        let emit = |event| {
-            let _ = app.emit_to(label.as_str(), "fetch-event", FetchEvent { fetch, event });
+        let (kind, title) = if auto == Some(true) {
+            (console::EntryKind::Background, "Auto fetch".to_owned())
+        } else {
+            (
+                console::EntryKind::Action,
+                format!("Fetch {}", remote.as_deref().unwrap_or("all remotes")),
+            )
         };
-        emit(oxbow_core::ActionEvent::Command {
-            display: command.display(),
-        });
-        let mut updated = 0;
-        let result = repo.run_streaming(
-            &command,
-            &mut |line| {
-                if !line.progress && oxbow_core::remote::is_ref_update(&line.text) {
-                    updated += 1;
-                }
-                emit(oxbow_core::ActionEvent::Line(line));
-            },
-            &cancel,
-        );
-        match result {
-            Ok(_) => Ok(Fetched { updated }),
-            Err(err) => Err(repo.explain_failure(&action, &err)),
-        }
+        console::scope(Some(repo.workdir()), kind, title, || {
+            let command = repo.fetch_command(remote.as_deref()).with_progress();
+            let emit = |event| {
+                let _ = app.emit_to(label.as_str(), "fetch-event", FetchEvent { fetch, event });
+            };
+            emit(oxbow_core::ActionEvent::Command {
+                display: command.display(),
+            });
+            let mut updated = 0;
+            let result = console::main(|| {
+                repo.run_streaming(
+                    &command,
+                    &mut |line| {
+                        if !line.progress && oxbow_core::remote::is_ref_update(&line.text) {
+                            updated += 1;
+                        }
+                        emit(oxbow_core::ActionEvent::Line(line));
+                    },
+                    &cancel,
+                )
+            });
+            match result {
+                Ok(_) => Ok(Fetched { updated }),
+                Err(err) => Err(repo.explain_failure(&action, &err)),
+            }
+        })
     })
     .await
     .unwrap_or_else(|err| Err(failed(err.to_string())))
@@ -1546,7 +1669,7 @@ async fn search(
 ) -> CommandResult<oxbow_core::SearchResult> {
     let repo = current(&session, &window)?;
     let cancel = session.lane(&window, lane);
-    blocking(move || repo.search_with(&query, &cancel)).await
+    read(at(&repo), "Search", move || repo.search_with(&query, &cancel)).await
 }
 
 /// Tell which of `ids`, loaded commits the history could not, are unpushed, for the next load
@@ -1560,7 +1683,10 @@ async fn settle_unpushed(
 ) -> CommandResult<bool> {
     let repo = current(&session, &window)?;
     let cancel = session.lane(&window, lane);
-    blocking(move || repo.settle_unpushed(&ids, &cancel)).await
+    read(at(&repo), "Check unpushed commits", move || {
+        repo.settle_unpushed(&ids, &cancel)
+    })
+    .await
 }
 
 /// Stop the reads running in `lanes`: what they would answer is no longer wanted, as the
@@ -1583,21 +1709,21 @@ async fn resolve_commit(
     prefix: String,
 ) -> CommandResult<Option<String>> {
     let repo = current(&session, &window)?;
-    blocking(move || Ok(repo.resolve_commit(&prefix))).await
+    read(at(&repo), "Find a commit", move || Ok(repo.resolve_commit(&prefix))).await
 }
 
 /// Which files the repository keeps in Git LFS, and whether git-lfs is installed.
 #[tauri::command]
 async fn lfs_status(window: tauri::WebviewWindow, session: State<'_, Session>) -> CommandResult<oxbow_core::LfsStatus> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.lfs_status()).await
+    read(at(&repo), "Read Git LFS", move || repo.lfs_status()).await
 }
 
 /// What Free Up Space would delete, e.g. `3 files would be pruned (1.4 GB)`.
 #[tauri::command]
 async fn lfs_prune_preview(window: tauri::WebviewWindow, session: State<'_, Session>) -> CommandResult<Option<String>> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.lfs_prune_preview()).await
+    read(at(&repo), "Preview Git LFS cleanup", move || repo.lfs_prune_preview()).await
 }
 
 /// The Git LFS download page, for installing it without Homebrew.
@@ -1618,10 +1744,15 @@ fn quick_look(window: tauri::WebviewWindow, session: State<'_, Session>, path: S
 #[tauri::command]
 async fn refresh_remote_tags(window: tauri::WebviewWindow, session: State<'_, Session>) -> CommandResult<bool> {
     let repo = current(&session, &window)?;
-    blocking(move || match repo.default_remote() {
-        Some(remote) => repo.refresh_remote_tags(&remote),
-        None => Ok(false),
-    })
+    logged(
+        Some(at(&repo)),
+        console::EntryKind::Background,
+        "Check the remote's tags",
+        move || match repo.default_remote() {
+            Some(remote) => repo.refresh_remote_tags(&remote),
+            None => Ok(false),
+        },
+    )
     .await
 }
 
@@ -1925,10 +2056,11 @@ fn main() {
             let label = window.label().to_owned();
             match event {
                 // Settings shows and changes the repository of the window used last.
-                tauri::WindowEvent::Focused(true) if label != "settings" => {
+                tauri::WindowEvent::Focused(true) if label != "settings" && label != "console" => {
                     let changed = session.focused.lock().expect("session lock").replace(label.clone()) != Some(label);
                     if changed {
                         let _ = window.emit_to("settings", "repo-changed", ());
+                        let _ = window.emit_to("console", "repo-changed", ());
                     }
                 }
                 tauri::WindowEvent::Destroyed => {
@@ -1953,6 +2085,7 @@ fn main() {
             let handle = app.handle();
             apply_settings(handle, &handle.state::<Session>(), &read_settings(handle));
             accounts::lend_to_git(handle);
+            console_window::follow(handle);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2038,6 +2171,10 @@ fn main() {
             restore_default_settings,
             restore_settings_backup,
             reveal_settings,
+            console_window::open_console,
+            console_window::console_repos,
+            console_window::console_entries,
+            console_window::console_clear,
             accounts::github_account,
             accounts::github_sign_in_setup,
             accounts::github_device_start,

@@ -55,6 +55,7 @@ import type {
   LfsStatus,
 } from "./types";
 import type { PullSetup } from "./remote";
+import type { ConsoleEntry, ConsoleRepos } from "./console";
 
 /** What a read answers when a newer one in its lane, or `stopReads`, stopped it. */
 export const stopped = (err: unknown) => String(err) === "stopped";
@@ -148,6 +149,11 @@ export const api = {
   getSetting: <T>(key: string) => invoke<T | null>("get_setting", { key }),
   allSettings: () => invoke<Record<string, unknown>>("all_settings"),
   openSettings: () => invoke<void>("open_settings"),
+  openConsole: () => invoke<void>("open_console"),
+  consoleRepos: () => invoke<ConsoleRepos>("console_repos"),
+  /** The log of a repository (null: what ran outside any), oldest first. */
+  consoleEntries: (path: string | null) => invoke<ConsoleEntry[]>("console_entries", { path }),
+  consoleClear: (paths: (string | null)[]) => invoke<void>("console_clear", { paths }),
   setSetting: (key: string, value: unknown) => invoke<void>("set_setting", { key, value }),
   gitSettings: () => invoke<GitSettings>("git_settings"),
   repoSettings: () => invoke<RepoSettings | null>("repo_settings"),
@@ -156,7 +162,8 @@ export const api = {
     invoke<void>("set_git_config", { scope, key, value }),
   /** Sends `fetch-event`s marked with `fetch`, Activity's number for it, while it runs; rejects
    *  with a `Failure`. Without a number, Stop doesn't reach it. */
-  fetchInBackground: (remote: string | null, fetch: number | null = null) => invoke<{ updated: number }>("fetch_in_background", { remote, fetch }),
+  fetchInBackground: (remote: string | null, fetch: number | null = null, auto = false) =>
+    invoke<{ updated: number }>("fetch_in_background", { remote, fetch, auto }),
   stopFetch: () => invoke<void>("stop_fetch"),
   publicKey: (key: string) => invoke<string>("public_key", { key }),
   pullSetup: () => invoke<PullSetup>("pull_setup"),

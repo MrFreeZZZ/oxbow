@@ -25,6 +25,9 @@ use crate::repo::Repo;
 use crate::tags;
 use std::io::Read;
 
+/// What the Console calls the commands that take the snapshots an Undo goes back to.
+const UNDO_SNAPSHOT: &str = "snapshot for Undo";
+
 /// Files with more changed lines than this are not shown line by line.
 const MAX_DIFF_LINES: usize = 20_000;
 
@@ -1660,7 +1663,7 @@ impl Repo {
         } = action
             && crate::secrets::check_secrets()
         {
-            let found = self.staged_secrets()?;
+            let found = crate::console::role("secrets check", || self.staged_secrets())?;
             if !found.is_empty() {
                 return Err(Error::Secrets(found));
             }
@@ -1716,7 +1719,7 @@ impl Repo {
         };
         // Steps of a fix noted for a pick or revert that is over by now, finished elsewhere.
         self.forget_fix_rest();
-        let before = self.snapshot().ok();
+        let before = crate::console::role(UNDO_SNAPSHOT, || self.snapshot().ok());
         if let Action::EditStack { plan } = action {
             self.remember_return(plan);
         }
@@ -1744,11 +1747,13 @@ impl Repo {
             // read-tree forgets what git knew about the files on disk.
             let _ = self.run(&GitCommand::new(["update-index", "-q", "--refresh"]));
         }
-        if let Some(before) = before
-            && let Ok(after) = self.snapshot()
-        {
-            let _ = self.record(action, &before, &after, result.is_err());
-        }
+        crate::console::role(UNDO_SNAPSHOT, || {
+            if let Some(before) = before
+                && let Ok(after) = self.snapshot()
+            {
+                let _ = self.record(action, &before, &after, result.is_err());
+            }
+        });
         result
     }
 
@@ -1829,22 +1834,22 @@ impl Repo {
                         continue;
                     }
                     if command.secrets_check {
-                        let found = match action {
+                        let found = crate::console::role("secrets check", || match action {
                             Action::Fix {
                                 fix:
                                     crate::fix::Fix::AddToLast {
                                         allow_secrets: true, ..
                                     },
                                 ..
-                            } => Vec::new(),
-                            _ if !crate::secrets::check_secrets() => Vec::new(),
+                            } => Ok(Vec::new()),
+                            _ if !crate::secrets::check_secrets() => Ok(Vec::new()),
                             // Only the picked files go into the commit: other staged lines don't.
                             Action::Fix {
                                 fix: crate::fix::Fix::AddToLast { paths, .. },
                                 ..
-                            } if !paths.is_empty() => self.staged_secrets_in(&self.amend_paths(paths)?)?,
-                            _ => self.staged_secrets()?,
-                        };
+                            } if !paths.is_empty() => self.staged_secrets_in(&self.amend_paths(paths)?),
+                            _ => self.staged_secrets(),
+                        })?;
                         if !found.is_empty() {
                             return Err(Error::Secrets(found));
                         }
@@ -1855,7 +1860,9 @@ impl Repo {
                     on_event(ActionEvent::Command {
                         display: command.display(),
                     });
-                    let ran = self.run_streaming(&command, &mut |line| on_event(ActionEvent::Line(line)), cancel);
+                    let ran = crate::console::main(|| {
+                        self.run_streaming(&command, &mut |line| on_event(ActionEvent::Line(line)), cancel)
+                    });
                     // The files a fix put aside whose staged changes no longer fit: git changed
                     // nothing and kept the stash. Say so rather than bring them back unstaged.
                     if ran.is_err()
@@ -1903,7 +1910,9 @@ impl Repo {
                     on_event(ActionEvent::Command {
                         display: command.display(),
                     });
-                    self.run_streaming(&command, &mut |line| on_event(ActionEvent::Line(line)), cancel)?;
+                    crate::console::main(|| {
+                        self.run_streaming(&command, &mut |line| on_event(ActionEvent::Line(line)), cancel)
+                    })?;
                 }
                 if pending {
                     self.forget_apply();
@@ -1919,7 +1928,7 @@ impl Repo {
         on_event(ActionEvent::Command {
             display: command.display(),
         });
-        let out = self.run_with_input(command, Some(patch.as_bytes()))?;
+        let out = crate::console::main(|| self.run_with_input(command, Some(patch.as_bytes())))?;
         Ok(out.stdout)
     }
 

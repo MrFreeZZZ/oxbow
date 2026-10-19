@@ -159,6 +159,8 @@ fn has_passphrase(key: &Path) -> bool {
 
 /// Run a command and return its exit code and what it printed.
 fn ask(program: &str, args: &[String]) -> (Option<i32>, String) {
+    let display = crate::GitCommand::new(args.iter().cloned()).program(program).display();
+    let log = crate::console::started(&home_dir().unwrap_or_default(), &display);
     match Command::new(program)
         .args(args)
         .stdin(Stdio::null())
@@ -166,11 +168,15 @@ fn ask(program: &str, args: &[String]) -> (Option<i32>, String) {
         .output()
     {
         Ok(output) => {
+            log.done(output.status.code(), &output.stdout, &output.stderr);
             let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
             text.push_str(&String::from_utf8_lossy(&output.stderr));
             (output.status.code(), text.trim().to_owned())
         }
-        Err(err) => (None, format!("{program}: {err}")),
+        Err(err) => {
+            log.not_started(&err.to_string());
+            (None, format!("{program}: {err}"))
+        }
     }
 }
 

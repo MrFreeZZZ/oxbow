@@ -731,6 +731,21 @@ impl Repo {
         }
     }
 
+    /// What `action` does, in a few words, as the Undo history names it: "Commit to main".
+    pub fn action_title(&self, action: &Action) -> String {
+        let head = self.head().map_or(
+            HeadState {
+                branch: None,
+                commit: None,
+            },
+            |h| HeadState {
+                branch: h.branch,
+                commit: h.commit,
+            },
+        );
+        self.describe(action, &head).1
+    }
+
     /// The icon and title of the step `action` makes.
     fn describe(&self, action: &Action, head: &HeadState) -> (&'static str, String) {
         let here = head.branch.clone().unwrap_or_else(|| "HEAD".to_owned());

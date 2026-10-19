@@ -4,6 +4,7 @@
   // commands, with Fix… and Try Again on a fetch that failed.
 
   import { activity, type ActivityItem } from "./activity.svelte";
+  import { api } from "./api";
   import { relativeTime } from "./format";
   import { actionIcons } from "./icons";
   import { prefs } from "./prefs.svelte";
@@ -158,8 +159,8 @@
       {/if}
     </div>
     <div class="foot">
-      <span>{activity.running ? "Keep working while it runs." : "Fetching never changes your branches."}</span>
       <button class="link" onclick={settings}>Fetch Settings…</button>
+      <button class="link" onclick={() => ((activity.open = false), api.openConsole())} title={`Every git command Oxbow ran, with its output (${keys("Alt+Mod+C")})`}>Open Console</button>
     </div>
   </div>
 {/if}
