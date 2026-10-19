@@ -171,6 +171,34 @@
     entries.push({ kind: "item", label: "Settings…", icon: SETTINGS_ICON, keys: keys("Mod+,"), run: () => api.openSettings() });
     return entries;
   }
+  /** The details panel put away, so the graph takes the whole width; kept in settings.json. */
+  let detailsHidden = $state(false);
+  /** The details panel over the whole content, for a long diff; the graph comes back with the same button or Esc. */
+  let expanded = $state(false);
+  const DETAILS_KEYS = mac ? "Ctrl+Mod+I" : "Ctrl+Alt+I";
+  const EXPAND_KEYS = mac ? "Ctrl+Mod+E" : "Ctrl+Alt+E";
+  function toggleDetails() {
+    expanded = false;
+    detailsHidden = !detailsHidden;
+    api.setSetting(settings.detailsHidden, detailsHidden).catch(() => {});
+    // Back from the whole width, the list keeps the selected commit in view.
+    if (selected) requestAnimationFrame(() => list?.reveal(selected!));
+  }
+  function showDetails() {
+    if (!detailsHidden) return;
+    detailsHidden = false;
+    api.setSetting(settings.detailsHidden, false).catch(() => {});
+  }
+  function toggleExpanded() {
+    if (!expanded) showDetails();
+    expanded = !expanded;
+    if (!expanded && selected) requestAnimationFrame(() => list?.reveal(selected!));
+  }
+  /** Changes from the sidebar or the status line: the panel of the row above HEAD, shown even if put away. */
+  function showChanges() {
+    showDetails();
+    pick(WORKTREE_ID);
+  }
   const contentWidth = $derived(windowWidth - (narrow || sideHidden ? 0 : SIDEBAR));
   const panelMax = $derived(Math.max(PANEL_MIN, contentWidth - GRAPH_MIN));
   /** A hidden sidebar's room goes to the details panel, as in Mail: the graph keeps its width and only moves to the edge. */
@@ -238,6 +266,10 @@
   /** The commits Current Branch Only shows; null while it is off. */
   const focusIds = $derived(focusOnly && history?.focus ? new Set(history.focus.rows.map((i) => history!.rows[i].id)) : null);
   const selectedRow = $derived(selected ? (rowsById.get(selected) ?? null) : null);
+  // Another screen gives the graph back.
+  $effect(() => {
+    if (view !== "history" || showConflicts) expanded = false;
+  });
   /** A second commit, ⌘-clicked, compared with the selected one in the details panel. */
   let second = $state<string | null>(null);
   /** The path of the submodule picked in the sidebar, shown in place of the commit's details. */
@@ -250,6 +282,22 @@
     const rows = history.rows;
     return rows.indexOf(other) > rows.indexOf(selectedRow) ? { older: other, newer: selectedRow } : { older: selectedRow, newer: other };
   });
+  /** What the details panel shows, named in its bar. */
+  const panelLabel = $derived(
+    pickedSubmodule
+      ? "Submodule"
+      : oplog.compare
+        ? "Compared with a step"
+        : oplog.lost
+          ? "Lost commit"
+          : pair
+            ? "Two commits"
+            : selectedRow?.worktree
+              ? (selectedRow.summary === "Uncommitted changes" ? "Changes" : selectedRow.summary)
+              : selectedRow
+                ? "Commit"
+                : "Details",
+  );
 
   /** ⌘-click: compare with the selected commit; on the selected one itself, or with nothing to compare against, just select. */
   function pickSecond(id: string) {
@@ -1220,6 +1268,9 @@
     api.getSetting<boolean>(settings.sidebarHidden).then((hidden) => {
       if (typeof hidden === "boolean") sideHidden = hidden;
     });
+    api.getSetting<boolean>(settings.detailsHidden).then((hidden) => {
+      if (typeof hidden === "boolean") detailsHidden = hidden;
+    });
     api.initialRepo().then((path) => {
       if (path) load(path);
       launched = true;
@@ -1275,6 +1326,11 @@
       // ⌃⌘S shows and hides the sidebar, as in Mail.
       event.preventDefault();
       toggleSidebar();
+    } else if ((mac ? event.metaKey && event.ctrlKey && !event.altKey : event.ctrlKey && event.altKey && !event.metaKey) && !event.shiftKey && (event.code === "KeyI" || event.code === "KeyE") && history && view === "history" && !showConflicts && !confirm.request && !start.sheet) {
+      // ⌃⌘I hides and shows the details, ⌃⌘E gives them the whole width.
+      event.preventDefault();
+      if (event.code === "KeyI") toggleDetails();
+      else toggleExpanded();
     } else if (event.key === "Escape" && sideShown && !confirm.request && !event.defaultPrevented) {
       sideShown = false;
     } else if (event.key === "Escape" && submoduleSel && view === "history" && !confirm.request && !event.defaultPrevented) {
@@ -1284,6 +1340,8 @@
       oplog.lost = null;
     } else if (event.key === "Escape" && second && view === "history" && !confirm.request && !event.defaultPrevented) {
       second = null;
+    } else if (event.key === "Escape" && expanded && view === "history" && !confirm.request && !event.defaultPrevented) {
+      toggleExpanded();
     } else if ((event.metaKey || event.ctrlKey) && !event.altKey && !confirm.request && !start.sheet && !loading) {
       // Clone ⇧⌘C, Open ⌘O, New ⌘N, here and on the Welcome window.
       const key = event.key.toLowerCase();
@@ -1314,7 +1372,7 @@
     {/if}
     <!-- Over a narrow window the sidebar steps aside again once something in it is picked. -->
     <Sidebar {repo} {history} {selectedRow} ctx={branchCtx!} onOpen={chooseRepo} onOpenPath={load} onWelcome={closeRepo}
-      onPick={aside((id: string) => (pick(id), requestAnimationFrame(() => list?.focus())))}
+      onPick={aside((id: string) => ((expanded = false), pick(id), requestAnimationFrame(() => list?.focus())))}
       {run}
       {view}
       onView={(v) => {
@@ -1323,6 +1381,7 @@
         resolving = false;
         if (v === "history" && selected) requestAnimationFrame(() => list?.reveal(selected!));
       }}
+      onChanges={aside(showChanges)}
       onPickStash={aside((id: string) => (stashSel = id))}
       onCompare={aside(openCompare)}
       onEditStack={aside(openStack)}
@@ -1537,7 +1596,7 @@
         <StatusLine
           {history}
           color={headColor}
-          onChanges={() => pick(WORKTREE_ID)}
+          onChanges={showChanges}
           onPush={() => sync("push")}
           onPull={(mode) => sync("pull", mode)}
           onFetch={() => sync("fetch")}
@@ -1632,8 +1691,8 @@
         {/key}
       {:else}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="content" bind:this={content} onkeydown={paneKeys}>
-        <section class="history" aria-label="Commit history">
+      <div class="content" class:expanded bind:this={content} onkeydown={paneKeys}>
+        <section class="history" aria-label="Commit history" aria-hidden={expanded}>
           <div class="columns">
             <span class="what">
               {#if found?.only}Matching commits · graph hidden{:else if focusOnly && history.focus}
@@ -1655,6 +1714,11 @@
               </button>
               <GraphLegend {history} shown={graphHistory!} onShow={select} />
             {/if}
+            {#if detailsHidden}
+              <button class="bar-button" onclick={toggleDetails} aria-label="Show details" title={withKeys("Show Details", DETAILS_KEYS)}>
+                <svg class="icon" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2" /><path d="M10 3v10" /></svg>
+              </button>
+            {/if}
           </div>
           {#key repo.path}
             <HistoryList
@@ -1673,8 +1737,24 @@
             />
           {/key}
         </section>
-        <aside class="panel" style:width="{shownPanelWidth}px" aria-label="Commit details">
-          <button class="grip" tabindex="-1" onpointerdown={startResize} aria-label="Resize commit details" title="Drag to resize"></button>
+        {#if !detailsHidden}
+        <aside class="panel" style:width={expanded ? null : `${shownPanelWidth}px`} aria-label="Commit details">
+          {#if !expanded}
+            <button class="grip" tabindex="-1" onpointerdown={startResize} aria-label="Resize commit details" title="Drag to resize"></button>
+          {/if}
+          <!-- In line with the graph's column bar: what the panel shows, and the room it takes. -->
+          <div class="columns panel-bar">
+            <span class="what">{panelLabel}</span>
+            <button class="bar-button" class:on={expanded} onclick={toggleExpanded} aria-pressed={expanded} aria-label={expanded ? "Show the graph again" : "Expand details"} title={withKeys(expanded ? "Show Graph" : "Expand Details", EXPAND_KEYS)}>
+              <svg class="icon" viewBox="0 0 16 16"><path d={expanded ? "M13.5 2.5 9.5 6.5M9.5 3.2v3.3h3.3M2.5 13.5l4-4M6.5 12.8V9.5H3.2" : "M9.5 2.5h4v4M13.5 2.5 9.5 6.5M6.5 13.5h-4v-4M2.5 13.5l4-4"} /></svg>
+            </button>
+            {#if !expanded}
+              <button class="bar-button" onclick={toggleDetails} aria-label="Hide details" title={withKeys("Hide Details", DETAILS_KEYS)}>
+                <svg class="icon" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2" /><path d="M10 3v10" /></svg>
+              </button>
+            {/if}
+          </div>
+          <div class="panel-body">
           <!-- A new repository starts the panels from scratch. -->
           {#key repo.path}
             {#if pickedSubmodule}
@@ -1737,7 +1817,9 @@
               />
             {/if}
           {/key}
+          </div>
         </aside>
+        {/if}
       </div>
       {/if}
     </div>
@@ -2174,6 +2256,46 @@
   .focus-toggle.on {
     background: color-mix(in srgb, var(--accent) 16%, transparent);
     color: var(--accent);
+  }
+  /* The details over the whole content: the graph steps aside, kept as it was. */
+  .content.expanded .history {
+    display: none;
+  }
+  .content.expanded .panel {
+    flex-grow: 1;
+    min-width: 0;
+    border-left: none;
+  }
+  .panel-body {
+    position: relative;
+    flex-grow: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  /* The details panel's bar, level with the graph's. */
+  .panel-bar {
+    padding: 0 8px 0 16px;
+    gap: 2px;
+  }
+  .bar-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--radius-pill);
+    color: var(--text2);
+  }
+  .bar-button:hover,
+  .bar-button.on {
+    background: var(--field);
+    color: var(--text);
+  }
+  .bar-button .icon {
+    width: 15px;
+    height: 15px;
   }
   /* Its width comes from shownPanelWidth: never leaving the graph under 360 px. */
   .panel {
