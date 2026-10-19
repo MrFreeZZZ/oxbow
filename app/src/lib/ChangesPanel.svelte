@@ -415,7 +415,9 @@
     const body: Part[] =
       fresh.length === files.length
         ? ["Deletes ", ...name(files), ". Git does not track ", files.length === 1 ? "it" : "them", " yet."]
-        : ["Throws away your edits in ", ...name(files), " and puts back the staged or committed version."];
+        : fresh.length
+          ? ["Throws away your edits in ", ...name(files.filter((f) => !fresh.includes(f))), " and deletes ", ...name(fresh), ", which git does not track yet."]
+          : ["Throws away your edits in ", ...name(files), " and puts back the staged or committed version."];
     return act({
       title: `Discard changes in ${count(files)}?`,
       body,
@@ -488,6 +490,7 @@
     return [...seen.values()];
   }
 
+  const modClick = navigator.platform.startsWith("Mac") ? "⌘-click" : "Ctrl-click";
   const revealLabel = navigator.platform.startsWith("Mac") ? "Reveal in Finder" : navigator.platform.startsWith("Win") ? "Show in Explorer" : "Open Containing Folder";
 
   function fileMenu(event: MouseEvent, file: FileChange, group: "staged" | "unstaged" | "conflicted") {
@@ -643,7 +646,7 @@
         onclick={(e) => tickBox(e, group, () => tick(group, file.path, e.shiftKey), () => ticked[group].includes(file.path))}
       />
     {/if}
-    <button class="name" onclick={(e) => rowClick(e, file, group)} title="{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}{group === 'conflicted' ? '' : ' · ⌘-click to select'}">
+    <button class="name" onclick={(e) => rowClick(e, file, group)} title="{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}{group === 'conflicted' ? '' : ` · ${modClick} to select`}">
       <span class="badge {b.tone}" title={b.title}>{b.text}</span>
       <span class="path">{#if !nested}<span class="dir">{p.dir}</span>{/if}{p.name}</span>
       {#if other}
