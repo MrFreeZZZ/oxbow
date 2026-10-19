@@ -13,7 +13,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(oxbow_core::PAGE);
-    let history = repo.history(&HistoryOptions { limit, until: None })?;
+    let history = repo.history(&HistoryOptions {
+        limit,
+        ..Default::default()
+    })?;
     let elapsed = start.elapsed();
     let lanes = history.rows.iter().map(|r| r.graph.width).max().unwrap_or(0) + 1;
     println!(

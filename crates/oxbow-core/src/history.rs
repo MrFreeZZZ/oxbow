@@ -48,6 +48,8 @@ pub struct HistoryOptions {
     /// A commit that must be loaded even when it is older than `limit` commits: the history goes
     /// on to the end of the page it is on. Ignored when no branch, tag or `HEAD` reaches it.
     pub until: Option<String>,
+    /// Also lay out the graph of the checked-out branch and its base alone: [`History::focus`].
+    pub focus: bool,
 }
 
 impl Default for HistoryOptions {
@@ -55,6 +57,7 @@ impl Default for HistoryOptions {
         HistoryOptions {
             limit: PAGE,
             until: None,
+            focus: false,
         }
     }
 }
@@ -130,6 +133,22 @@ pub struct History {
     /// walks while it loads. [`Repo::settle_unpushed`] tells, and the next load marks them.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub unpushed_pending: bool,
+    /// With [`HistoryOptions::focus`], the graph of the checked-out branch and its base alone.
+    pub focus: Option<Focus>,
+}
+
+/// The history as "Current Branch Only" shows it: the commits of the checked-out branch, of its
+/// upstream and of the trunk's first-parent line, laid out on their own. A line to a commit left
+/// out stops short ([`RowLayout::cuts`]) rather than running on to another commit.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Focus {
+    /// The rows shown, as indexes into [`History::rows`], in order.
+    pub rows: Vec<usize>,
+    /// The graph of each row shown, without the straight lines in `runs`.
+    pub graph: Vec<RowLayout>,
+    pub runs: Vec<Run>,
+    pub lead_ins: Vec<LeadIn>,
 }
 
 /// A run of history rows: `len` of the caller's rows from `known` on, or with `known` unset,
@@ -228,6 +247,7 @@ struct Rows {
     truncated: bool,
     loaded: usize,
     unpushed_pending: bool,
+    focus: Option<Focus>,
 }
 
 /// What the commit rows are built from. The commits themselves never change under their ids,
@@ -251,6 +271,7 @@ fn rows_key(
     workdir.hash(&mut hasher);
     options.limit.hash(&mut hasher);
     options.until.hash(&mut hasher);
+    options.focus.hash(&mut hasher);
     head.branch.hash(&mut hasher);
     head.commit.hash(&mut hasher);
     for r in refs {
@@ -462,6 +483,7 @@ impl Repo {
             pieces,
             reads: Vec::new(),
             unpushed_pending: built.unpushed_pending,
+            focus: built.focus.clone(),
         })
     }
 
@@ -693,6 +715,7 @@ impl Repo {
                     no_branch[row].then_some(graph::NO_BRANCH_COLOR)
                 },
                 worktree: false,
+                cut: Vec::new(),
             });
             details.push((summary, author_name, author_email, author_time));
         }
@@ -703,15 +726,17 @@ impl Repo {
             .as_deref()
             .and_then(|h| ObjectId::from_hex(h.as_bytes()).ok());
         let head_row = head_id.and_then(|id| row_of.get(&id).copied());
-        let mut worktree_row = None;
-        let mut graph = if dirty {
+        let lay = |input: Vec<GraphCommit>, head_row: Option<usize>| {
+            if !dirty {
+                return graph::layout(&input, head_row);
+            }
             // One layout with the row of uncommitted changes on top: it takes the color of
             // HEAD's line as the layout finds it, or of the branch about to be born.
             let color = match head_row {
                 Some(_) => None,
                 None => Some(head.branch.as_deref().map_or(graph::TRUNK_COLOR, graph::color_for_name)),
             };
-            let mut shifted = Vec::with_capacity(graph_input.len() + 1);
+            let mut shifted = Vec::with_capacity(input.len() + 1);
             shifted.push(GraphCommit {
                 parents: vec![head_row.map(|r| r + 1)],
                 side: true,
@@ -720,14 +745,38 @@ impl Repo {
                 worktree: true,
                 ..Default::default()
             });
-            shifted.extend(graph_input.into_iter().map(|mut c| {
+            shifted.extend(input.into_iter().map(|mut c| {
                 c.parents = c.parents.into_iter().map(|p| p.map(|r| r + 1)).collect();
                 c
             }));
             graph::layout(&shifted, head_row.map(|r| r + 1))
-        } else {
-            graph::layout(&graph_input, head_row)
         };
+        let focus = options.focus.then(|| {
+            let upstream = head
+                .branch
+                .as_deref()
+                .and_then(|branch| refs.iter().find(|r| r.kind == RefKind::Local && r.name == branch))
+                .and_then(|r| r.tracking.as_ref())
+                .map(|t| format!("{}/{}", t.remote, t.branch))
+                .and_then(|name| refs.iter().find(|r| r.kind == RefKind::Remote && r.name == name))
+                .and_then(|r| ObjectId::from_hex(r.target.as_bytes()).ok())
+                .and_then(|id| row_of.get(&id).copied());
+            let shown = focus_rows(&nodes, &row_of, &on_trunk, &[head_row, upstream]);
+            let (input, head_at) = focus_input(&graph_input, &shown, head_row);
+            let laid = lay(input, head_at);
+            let mut graph = laid.rows;
+            let offset = usize::from(dirty);
+            let rows: Vec<usize> = (0..offset).chain(shown.iter().map(|&r| r + offset)).collect();
+            let runs = graph::take_runs(graph.iter_mut());
+            Focus {
+                rows,
+                graph,
+                runs,
+                lead_ins: laid.lead_ins,
+            }
+        });
+        let mut worktree_row = None;
+        let mut graph = lay(graph_input, head_row);
         if dirty {
             worktree_row = Some(HistoryRow {
                 id: WORKTREE_ID.to_owned(),
@@ -793,8 +842,51 @@ impl Repo {
             truncated,
             loaded,
             unpushed_pending,
+            focus,
         })
     }
+}
+
+/// Rows of `nodes` that "Current Branch Only" shows, in order: the trunk's first-parent line, and
+/// the first-parent line down from each of `tips` until it meets a row already shown.
+fn focus_rows(
+    nodes: &[Node],
+    row_of: &HashMap<ObjectId, usize>,
+    on_trunk: &[bool],
+    tips: &[Option<usize>],
+) -> Vec<usize> {
+    let mut shown = on_trunk.to_vec();
+    for &tip in tips {
+        let mut row = tip;
+        while let Some(r) = row.filter(|&r| !shown[r]) {
+            shown[r] = true;
+            row = nodes[r].parents.first().and_then(|p| row_of.get(p)).copied();
+        }
+    }
+    (0..nodes.len()).filter(|&r| shown[r]).collect()
+}
+
+/// The commits of `shown` alone, for the layout, and the row of `head_row` among them. Parents
+/// left out are cut, not taken for commits that weren't loaded.
+fn focus_input(all: &[GraphCommit], shown: &[usize], head_row: Option<usize>) -> (Vec<GraphCommit>, Option<usize>) {
+    let mut index = vec![None; all.len()];
+    for (i, &row) in shown.iter().enumerate() {
+        index[row] = Some(i);
+    }
+    let input = shown
+        .iter()
+        .map(|&row| {
+            let mut commit = all[row].clone();
+            commit.cut = commit
+                .parents
+                .iter()
+                .map(|p| p.is_some_and(|p| index[p].is_none()))
+                .collect();
+            commit.parents = commit.parents.iter().map(|p| p.and_then(|p| index[p])).collect();
+            commit
+        })
+        .collect();
+    (input, head_row.and_then(|r| index[r]))
 }
 
 /// `rows` as pieces of `before`, the rows the caller has, and of the rows it lacks, which come

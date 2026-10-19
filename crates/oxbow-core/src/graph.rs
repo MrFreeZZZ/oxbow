@@ -79,6 +79,15 @@ pub struct GraphCommit {
     pub id: String,
     /// The row of uncommitted changes, a side row on top of `HEAD`.
     pub worktree: bool,
+    /// Parents left out of a filtered history, by parent index; empty when none are. Their
+    /// lines stop just below the commit instead of running on to some other commit.
+    pub cut: Vec<bool>,
+}
+
+impl GraphCommit {
+    fn is_cut(&self, index: usize) -> bool {
+        self.cut.get(index).copied().unwrap_or(false)
+    }
 }
 
 /// The layout of a whole history.
@@ -119,6 +128,10 @@ pub struct RowLayout {
     /// merge brought it in from. `None` for trunk commits (the caller knows the trunk's name) and
     /// for lines whose branch is unknown.
     pub branch: Option<String>,
+    /// Lines to parents a filtered history left out: each stops half a row below the commit,
+    /// on its way from `from` to `to`, instead of running on to some other commit.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cuts: Vec<Segment>,
 }
 
 /// A line from the center of row `i` (at column `from`) to the center of row `i + 1`
@@ -319,7 +332,14 @@ impl Plan {
 
     /// The plan that puts the line of `head` in column 0, from the layout without one.
     fn focused(commits: &[GraphCommit], plain: &[RowLayout], head: RowIndex) -> Option<Plan> {
-        let first_parent = |row: RowIndex| commits[row].parents.first().copied().flatten();
+        let first_parent = |row: RowIndex| {
+            commits[row]
+                .parents
+                .first()
+                .copied()
+                .flatten()
+                .filter(|_| !commits[row].is_cut(0))
+        };
         let mut plan = Plan::plain(commits.len());
         let mut top = head;
         if commits[head].trunk {
@@ -457,7 +477,31 @@ fn place(commits: &[GraphCommit], plan: &Plan) -> Vec<RowLayout> {
         // Lines that leave here.
         let mut merge_colors = Vec::new();
         let mut row_joins = Vec::new();
+        let mut cuts = Vec::new();
         for (index, &parent) in commit.parents.iter().enumerate() {
+            // A parent the filter left out: its line stops just below, heading where it would go.
+            if commit.is_cut(index) {
+                let (to, cut_color) = if index == 0 {
+                    (column, color)
+                } else {
+                    let cut_color = match &commit.merged_name {
+                        Some(name) => color_for_name(name),
+                        None => color_for_name(&format!("#{}:{index}", commit.id)),
+                    };
+                    if !merge_colors.contains(&cut_color) {
+                        merge_colors.push(cut_color);
+                    }
+                    (free_column(&lanes, &[column, trunk_column]), cut_color)
+                };
+                cuts.push(Segment {
+                    from: column as u16,
+                    to: to as u16,
+                    color: cut_color,
+                    dashed: commit.unpushed,
+                    thick: false,
+                });
+                continue;
+            }
             if index == 0 {
                 lanes[column] = Some(Lane {
                     target: parent,
@@ -548,6 +592,7 @@ fn place(commits: &[GraphCommit], plan: &Plan) -> Vec<RowLayout> {
             segments: Vec::new(),
             width: column as u16,
             branch,
+            cuts,
         });
     }
 
@@ -610,11 +655,11 @@ fn place(commits: &[GraphCommit], plan: &Plan) -> Vec<RowLayout> {
     // The commit text starts after the rightmost dot or line entering or leaving the row.
     for row in 0..rows.len() {
         let mut width = rows[row].column;
-        for seg in &rows[row].segments {
+        for seg in rows[row].segments.iter().chain(&rows[row].cuts) {
             width = width.max(seg.from).max(seg.to);
         }
         if row > 0 {
-            for seg in &rows[row - 1].segments {
+            for seg in rows[row - 1].segments.iter().chain(&rows[row - 1].cuts) {
                 width = width.max(seg.to);
             }
         }
@@ -804,6 +849,33 @@ mod tests {
         let rows = layout(&[tip, commit(&[2], false), commit(&[], true)], None).rows;
         assert!(rows[0].segments[0].dashed);
         assert!(!rows[1].segments[0].dashed);
+    }
+
+    #[test]
+    fn a_cut_parent_stops_short_and_takes_no_column() {
+        // 0 merge (main) parents 1 (trunk) and a commit left out
+        // 1 trunk root
+        let mut merge = commit(&[1, 1], true);
+        merge.merged_name = Some("topic".into());
+        merge.cut = vec![false, true];
+        let rows = layout(&[merge, commit(&[], true)], None).rows;
+        let topic = color_for_name("topic");
+        assert_eq!(rows[0].segments, vec![straight(0, 0)]);
+        assert_eq!(
+            rows[0].cuts,
+            vec![Segment {
+                from: 0,
+                to: 1,
+                color: topic,
+                dashed: false,
+                thick: false,
+            }]
+        );
+        assert_eq!(rows[0].merge_colors, vec![topic]);
+        assert_eq!(rows[0].width, 1);
+        assert!(rows[1].segments.is_empty() && rows[1].fork_colors.is_empty());
+        // The commit text below starts after where the cut line stops.
+        assert_eq!(rows[1].width, 1);
     }
 
     #[test]

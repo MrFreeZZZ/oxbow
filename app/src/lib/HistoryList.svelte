@@ -146,6 +146,16 @@
   const PILL: Record<BisectPill, string> = { good: "good", bad: "bad", skipped: "skipped", testing: "HEAD · testing", found: "first bad commit", possible: "maybe first bad" };
   const faded = (row: HistoryRow) => (!!found && !found.hits.has(row.id)) || (!!inRange && !row.worktree && !inRange.has(row.id));
   const indexOf = $derived(new Map(rows.map((row, i) => [row.id, i])));
+  /** The selected commit's parents, each with what it is called: "parent", or for a merge
+   *  "parent 1" (the line it continues) and "parent 2" (the branch it brought in). */
+  const kin = $derived.by(() => {
+    const at = selected ? indexOf.get(selected) : undefined;
+    const row = at === undefined ? null : rows[at];
+    const marks = new Map<string, string>();
+    if (!row || row.worktree) return { marks, color: 0 };
+    row.parents.forEach((id, i) => marks.set(id, row.parents.length > 1 ? `parent ${i + 1}` : "parent"));
+    return { marks, color: row.graph.color };
+  });
   const first = $derived(Math.max(0, Math.floor((scrollTop - PAD_TOP) / ROW) - OVERSCAN));
   const last = $derived(Math.min(rows.length, Math.ceil((scrollTop + height) / ROW) + OVERSCAN));
   const visible = $derived(rows.slice(first, last).map((row, k) => ({ row, index: first + k })));
@@ -176,6 +186,14 @@
   /** The production branch's name, local or on a remote. */
   const isProduction = (name: string) => !!history.trunk && (name === history.trunk || name.endsWith(`/${history.trunk}`));
   const y = (index: number) => PAD_TOP + ROW / 2 + ROW * index;
+
+  /** A line to a parent Current Branch Only hides: half a row down, curving out if it changes column. */
+  function cutPath(index: number, from: number, to: number): string {
+    const y0 = y(index);
+    const y1 = y0 + ROW * 0.36;
+    if (from === to) return `M${x(from)} ${y0}V${y1}`;
+    return `M${x(from)} ${y0}C${x(from)} ${y0 + ROW * 0.3} ${x(to)} ${y0 + ROW * 0.12} ${x(to)} ${y1}`;
+  }
 
   /** Straight line, or an S-curve over one row when the column changes. */
   function segmentPath(index: number, from: number, to: number): string {
@@ -334,6 +352,8 @@
     const byline = row.worktree ? worktreeLine(row.worktree) : `${row.authorName} · ${relativeTime(row.time)}`;
     room -= Math.ceil(textWidth(byline, 400));
     if (pill && pill !== "testing") room -= pillWidth(PILL[pill], 600, false) + PILL_GAP;
+    const mark = kin.marks.get(row.id);
+    if (mark) room -= pillWidth(mark, 600, false) + PILL_GAP;
     for (const l of own) if (l.kind === "head") room -= pillWidth(pill === "testing" ? PILL.testing : "HEAD", 600, false) + PILL_GAP;
     const shown = new Set(own.filter((l) => l.kind === "head"));
     let used = 0;
@@ -434,6 +454,9 @@
             {#if fit.folded.length}
               <span class="pill more" title={fit.folded.map((l) => l.name).join("\n")}>+{fit.folded.length}</span>
             {/if}
+            {#if kin.marks.has(row.id)}
+              <span class="pill kin" style:color={plate(kin.color)} style:border-color="color-mix(in srgb, {lane(kin.color)} 55%, transparent)" title="The selected commit was made on this one">{kin.marks.get(row.id)}</span>
+            {/if}
             {#if row.worktree}
               <span class="byline">{worktreeLine(row.worktree)}</span>
             {:else}
@@ -482,11 +505,21 @@
               fill="none"
             />
           {/each}
+          <!-- Where the line goes is hidden: it stops, and three dots say it goes on. -->
+          {#each row.graph.cuts ?? [] as cut, k (k)}
+            <path d={cutPath(index, cut.from, cut.to)} stroke={lane(cut.color)} stroke-width="2" stroke-dasharray={cut.dashed ? "2 5" : undefined} stroke-linecap="round" fill="none" />
+            {#each [0, 1, 2] as d (d)}
+              <circle cx={x(cut.to)} cy={y(index) + ROW * 0.36 + 4.5 + d * 4} r="1.3" fill={lane(cut.color)} opacity={1 - d * 0.25} />
+            {/each}
+          {/each}
         {/each}
       </svg>
 
       {#each visible as { row, index } (row.id)}
         {@const d = dot(row, index)}
+        {#if kin.marks.has(row.id)}
+          <span class="kin-ring" style:left="{d.left - 2}px" style:top="{d.top - 2}px" style:width="{d.outer + 4}px" style:height="{d.outer + 4}px" style:border-color={lane(kin.color)}></span>
+        {/if}
         <span class="halo" class:faded={faded(row)} style:left="{d.left}px" style:top="{d.top}px" style:width="{d.outer}px" style:height="{d.outer}px" style:background={d.halo}>
           <span class="gap" style:width="{d.size + 4}px" style:height="{d.size + 4}px" style:background={d.gap}>
             <span class="dot" style:width="{d.size}px" style:height="{d.size}px" style:background={d.fill} style:border-color={d.ring}>
@@ -746,6 +779,18 @@
   }
   .pill.production {
     font-weight: 700;
+  }
+  /* A parent of the selected commit. */
+  .pill.kin {
+    min-width: 0;
+    font-weight: 600;
+  }
+  .kin-ring {
+    position: absolute;
+    border-radius: 50%;
+    border: 1.5px solid;
+    opacity: 0.55;
+    pointer-events: none;
   }
   /* Bisect answers, in the colors of the banner's Good and Bad. */
   .pill.bisect {
