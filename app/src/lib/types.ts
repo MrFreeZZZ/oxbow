@@ -33,6 +33,8 @@ export interface RowLayout {
   segments: Segment[];
   width: number;
   branch: string | null;
+  /** Lines to parents Current Branch Only leaves out: they stop half a row down. */
+  cuts?: Segment[];
 }
 
 export interface Label {
@@ -167,6 +169,18 @@ export interface History {
   /** Some loaded commits not marked unpushed may be: more were unpushed than the history walks
    *  while it loads. `settleUnpushed` tells, and the next load marks them. */
   unpushedPending?: boolean;
+  /** Asked for with `focus`: the checked-out branch, its upstream and the trunk, laid out alone. */
+  focus: Focus | null;
+}
+
+/** History as Current Branch Only shows it. */
+export interface Focus {
+  /** The rows shown, as indexes into `History.rows`. */
+  rows: number[];
+  /** The graph of each row shown, its straight lines in `runs`. */
+  graph: RowLayout[];
+  runs: Run[];
+  leadIns: { column: number; row: number }[];
 }
 
 /** `len` of the caller's rows from `known` on, or with `known` null the next `len` of `rows`. */

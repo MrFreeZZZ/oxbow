@@ -131,7 +131,10 @@ fn history_limit_truncates() {
     }
     let history = Repo::open(fx.path())
         .unwrap()
-        .history(&HistoryOptions { limit: 3, until: None })
+        .history(&HistoryOptions {
+            limit: 3,
+            ..Default::default()
+        })
         .unwrap();
     assert_eq!(history.rows.len(), 3);
     assert!(history.truncated);
@@ -330,6 +333,7 @@ fn until_loads_down_to_an_older_commit() {
         .history(&HistoryOptions {
             limit: 3,
             until: Some(ids[1].clone()),
+            ..Default::default()
         })
         .unwrap();
     assert!(history.rows.iter().any(|r| r.id == ids[1]));
@@ -347,6 +351,7 @@ fn until_loads_down_to_an_older_commit() {
         .history(&HistoryOptions {
             limit: 3,
             until: Some(lost),
+            ..Default::default()
         })
         .unwrap();
     assert_eq!(history.rows.len(), 3);
@@ -506,7 +511,10 @@ fn loading_more_commits_sends_only_the_new_rows() {
     fx.git(&["merge", "-q", "--no-edit", "side"]);
     let repo = Repo::open(fx.path()).unwrap();
     let mut cache = oxbow_core::HistoryCache::default();
-    let page = |limit| HistoryOptions { limit, until: None };
+    let page = |limit| HistoryOptions {
+        limit,
+        ..Default::default()
+    };
 
     let first = repo.history_with(&page(5), &mut cache, None).unwrap();
     assert!(first.truncated && first.pieces.is_empty());
@@ -735,4 +743,54 @@ fn unpushed_marks_match_git_however_far_the_walk_would_go() {
             .settle_unpushed(&["0".repeat(40)], &AtomicBool::new(true)),
         Err(oxbow_core::Error::Cancelled)
     ));
+}
+
+#[test]
+fn current_branch_only_shows_the_branch_its_upstream_and_the_trunk() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "1\n", "Root");
+    fx.git(&["checkout", "-q", "-b", "topic"]);
+    fx.commit("t.txt", "1\n", "Topic work");
+    fx.git(&["checkout", "-q", "main"]);
+    fx.commit("a.txt", "2\n", "Main work");
+    fx.git(&["merge", "-q", "--no-edit", "topic"]);
+    fx.git(&["checkout", "-q", "-b", "other", "main~1"]);
+    fx.commit("o.txt", "1\n", "Other work");
+    fx.git(&["checkout", "-q", "-b", "feature", "main"]);
+    fx.commit("f.txt", "1\n", "Feature work");
+    fx.write("f.txt", "2\n");
+
+    let repo = Repo::open(fx.path()).unwrap();
+    assert!(repo.history(&HistoryOptions::default()).unwrap().focus.is_none());
+    let history = repo
+        .history(&HistoryOptions {
+            focus: true,
+            ..Default::default()
+        })
+        .unwrap();
+    let focus = history.focus.as_ref().unwrap();
+    let shown: Vec<_> = focus.rows.iter().map(|&r| history.rows[r].summary.as_str()).collect();
+    assert_eq!(
+        shown,
+        [
+            "Uncommitted changes",
+            "Feature work",
+            "Merge branch 'topic'",
+            "Main work",
+            "Root"
+        ]
+    );
+    assert_eq!(focus.graph.len(), focus.rows.len());
+    // The feature line sits in column 0, the trunk beside it until the fork point.
+    assert_eq!(focus.graph[1].column, 0);
+    // The merged topic line is left out: it stops short instead of running on.
+    let merge = &focus.graph[2];
+    assert_eq!(merge.cuts.len(), 1);
+    assert_eq!(merge.cuts[0].color, color_for_name("topic"));
+    assert_ne!(merge.cuts[0].to, merge.column);
+    assert!(merge.width >= merge.cuts[0].to);
+    assert_eq!(merge.merge_colors, [color_for_name("topic")]);
+    // The whole history keeps every commit.
+    assert_eq!(history.rows.len(), 7);
+    assert!(history.rows.iter().all(|r| r.graph.cuts.is_empty()));
 }

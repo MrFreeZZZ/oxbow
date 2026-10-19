@@ -5,6 +5,8 @@
   import { WORKTREE_ID, type History, type HistoryRow, type RefInfo, type ReflogEntry, type RepoSummary } from "./lib/types";
   import Sidebar from "./lib/Sidebar.svelte";
   import HistoryList from "./lib/HistoryList.svelte";
+  import GraphLegend from "./lib/GraphLegend.svelte";
+  import { focusedView } from "./lib/graph";
   import CommitPanel from "./lib/CommitPanel.svelte";
   import ChangesPanel from "./lib/ChangesPanel.svelte";
   import ConfirmSheet from "./lib/ConfirmSheet.svelte";
@@ -103,6 +105,8 @@
   /** Commits loaded down to that no branch reaches, so History never gets them. */
   let unreachable = new Set<string>();
   let list = $state<HistoryList>();
+  /** Current Branch Only: History shows the checked-out branch, its upstream and the trunk alone. */
+  let focusOnly = $state(false);
   let searchField = $state<SearchField>();
   let findField = $state<FindField>();
   let panelWidth = $state(640);
@@ -205,6 +209,10 @@
 
   const branchCount = $derived(history ? history.refs.filter((r) => r.kind === "local").length : 0);
   const rowsById = $derived(new Map(history?.rows.map((r) => [r.id, r]) ?? []));
+  /** What the graph shows: the whole history, or Current Branch Only once its rows are in. */
+  const graphHistory = $derived(history && focusOnly ? focusedView(history) : history);
+  /** The commits Current Branch Only shows; null while it is off. */
+  const focusIds = $derived(focusOnly && history?.focus ? new Set(history.focus.rows.map((i) => history!.rows[i].id)) : null);
   const selectedRow = $derived(selected ? (rowsById.get(selected) ?? null) : null);
   /** A second commit, ⌘-clicked, compared with the selected one in the details panel. */
   let second = $state<string | null>(null);
@@ -315,6 +323,7 @@
     try {
       limit = PAGE;
       unreachable = new Set();
+      focusOnly = false;
       const summary = await api.openRepo(path);
       const next = await api.history(limit);
       if (mine !== generation) return;
@@ -872,7 +881,7 @@
     const mine = generation;
     const shown = history;
     try {
-      const next = withRows(await api.history(limit, null, shown?.key ?? null), shown);
+      const next = withRows(await api.history(limit, null, shown?.key ?? null, focusOnly), shown);
       // Another repository was opened meanwhile: this answer may come from the old one.
       if (mine !== generation || loading) return;
       history = next;
@@ -880,6 +889,8 @@
       oplog.load();
       lfs.load();
       if (!selected || !next.rows.some((r) => r.id === selected)) selected = next.head.commit ?? next.rows[0]?.id ?? null;
+      // Current Branch Only follows a checkout: a commit it no longer shows gives way to HEAD.
+      else if (next.focus && !next.focus.rows.some((i) => next.rows[i].id === selected)) selected = next.head.commit ?? selected;
     } catch (err) {
       if (mine === generation) error = String(err);
     }
@@ -914,7 +925,7 @@
       // A reload already on its way would land after this one, with fewer commits.
       while (refreshing) await refreshing;
       const shown = history;
-      const next = withRows(await api.history(until ? limit : limit + Math.min(limit, MAX_STEP), until, shown?.key ?? null), shown);
+      const next = withRows(await api.history(until ? limit : limit + Math.min(limit, MAX_STEP), until, shown?.key ?? null, focusOnly), shown);
       if (mine !== generation || loading) return false;
       limit = Math.max(limit, next.loaded);
       history = next;
@@ -989,7 +1000,23 @@
     loading = false;
   }
 
+  /** Current Branch Only on or off. Off shows the whole history at once; on loads its rows. */
+  async function setFocusOnly(on: boolean) {
+    focusOnly = on;
+    if (on && !history?.focus) await refresh();
+    // The selected commit stays in view, or gives way to HEAD when the filter hides it.
+    if (focusIds && selected && !focusIds.has(selected)) selected = history?.head.commit ?? selected;
+    const keep = selected;
+    requestAnimationFrame(() => keep && keep === selected && list?.reveal(keep));
+  }
+
+  /** A commit Current Branch Only hides turns it off, so the graph shows what is selected. */
+  function unhide(id: string) {
+    if (focusIds && !focusIds.has(id)) focusOnly = false;
+  }
+
   function select(id: string) {
+    unhide(id);
     selected = id;
     second = null;
     submoduleSel = null;
@@ -1055,6 +1082,7 @@
 
   /** Picking a commit from the sidebar goes back to History, which mounts the graph again. */
   function pick(id: string) {
+    unhide(id);
     selected = id;
     second = null;
     submoduleSel = null;
@@ -1576,11 +1604,32 @@
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="content" bind:this={content} onkeydown={paneKeys}>
         <section class="history" aria-label="Commit history">
-          <div class="columns"><span>{#if found?.only}Matching commits · graph hidden{:else}Description{/if}</span>{#if history.truncated && !found?.only}<span class="note">Latest {history.loaded.toLocaleString()} commits · older ones load as you scroll</span>{/if}</div>
+          <div class="columns">
+            <span class="what">
+              {#if found?.only}Matching commits · graph hidden{:else if focusOnly && history.focus}
+                {@const hidden = history.rows.length - history.focus.rows.length}
+                {history.head.branch ?? "HEAD"}{history.trunk && history.head.branch !== history.trunk ? ` with ${history.trunk}` : ""} · {hidden.toLocaleString()} {hidden === 1 ? "commit" : "commits"} hidden
+              {:else}Description{/if}
+            </span>
+            {#if history.truncated && !found?.only}<span class="note">Latest {history.loaded.toLocaleString()} commits · older ones load as you scroll</span>{/if}
+            {#if !found?.only}
+              <button
+                class="focus-toggle"
+                class:on={focusOnly}
+                aria-pressed={focusOnly}
+                onclick={() => setFocusOnly(!focusOnly)}
+                title={focusOnly ? "Show All Branches" : `Show only ${history.head.branch ?? "HEAD"}, its upstream and ${history.trunk ?? "its base"}`}
+              >
+                <svg class="icon" viewBox="0 0 16 16"><circle cx="5" cy="3.8" r="1.6" /><circle cx="5" cy="12.2" r="1.6" /><circle cx="11" cy="6.4" r="1.6" /><path d="M5 5.4v5.2M11 8c0 2-3 2.2-5.4 3.2" /></svg>
+                Current Branch Only
+              </button>
+              <GraphLegend {history} shown={graphHistory!} onShow={select} />
+            {/if}
+          </div>
           {#key repo.path}
             <HistoryList
               bind:this={list}
-              {history}
+              history={graphHistory!}
               {selected}
               onSelect={select}
               menuFor={commitMenu}
@@ -2011,16 +2060,50 @@
     gap: 12px;
     height: 28px;
     flex-shrink: 0;
-    padding: 0 18px 0 40px;
+    padding: 0 10px 0 40px;
     font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
   }
-  .columns span:first-child {
+  .columns .what {
     flex-grow: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .note {
     font-weight: 400;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Current Branch Only: a soft chip, Steel while on. */
+  .focus-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+    height: 22px;
+    padding: 0 9px 0 7px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-caption);
+    font-weight: 600;
+    color: var(--text2);
+    white-space: nowrap;
+  }
+  .focus-toggle .icon {
+    width: 13px;
+    height: 13px;
+  }
+  .focus-toggle:hover {
+    background: var(--field);
+    color: var(--text);
+  }
+  .focus-toggle.on {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    color: var(--accent);
   }
   /* Its width comes from shownPanelWidth: never leaving the graph under 360 px. */
   .panel {

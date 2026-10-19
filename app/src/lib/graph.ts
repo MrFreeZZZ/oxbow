@@ -33,3 +33,24 @@ export function segmentsAt(history: History, row: number): Segment[] {
   if (!runs.length) return own;
   return [...runs.map((r) => ({ from: r.column, to: r.column, color: r.color, dashed: r.dashed, thick: r.thick })), ...own];
 }
+
+const focusedViews = new WeakMap<History, History>();
+
+/** `history` as Current Branch Only shows it: only the rows of its `focus`, with their own graph.
+ *  Labels take the color of the line they sit on there. The whole history when it has no focus. */
+export function focusedView(history: History): History {
+  const focus = history.focus;
+  if (!focus) return history;
+  let view = focusedViews.get(history);
+  if (!view) {
+    const rows = focus.rows.map((index, k) => {
+      const row = history.rows[index];
+      const graph = focus.graph[k];
+      const labels = row.labels.some((l) => l.color !== graph.color) ? row.labels.map((l) => ({ ...l, color: graph.color })) : row.labels;
+      return { ...row, graph, labels };
+    });
+    view = { ...history, rows, runs: focus.runs, leadIns: focus.leadIns };
+    focusedViews.set(history, view);
+  }
+  return view;
+}

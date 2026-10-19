@@ -712,6 +712,7 @@ async fn history(
     limit: Option<usize>,
     until: Option<String>,
     known: Option<String>,
+    focus: Option<bool>,
 ) -> CommandResult<History> {
     let repo = current(&session, &window)?;
     // Open the repository afresh: the built-in engine reads .git/config once, so a remote that
@@ -730,6 +731,7 @@ async fn history(
     let options = HistoryOptions {
         limit: limit.unwrap_or(oxbow_core::PAGE),
         until,
+        focus: focus.unwrap_or(false),
     };
     let mut cache = session.slot(&window, |slot| slot.history.clone());
     let (mut history, cache) = blocking(move || {

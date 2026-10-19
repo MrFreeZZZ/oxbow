@@ -80,7 +80,9 @@ export const api = {
   createRepo: (options: NewRepoOptions) => invoke<string>("create_repo", { options }),
   /** The latest `limit` commits, or more to reach `until`. */
   /** With `known`, the key of the history on screen, rows that came out the same are left out. */
-  history: (limit: number, until: string | null = null, known: string | null = null) => invoke<History>("history", { limit, until, known }),
+  /** With `focus`, also the history of Current Branch Only: `History.focus`. */
+  history: (limit: number, until: string | null = null, known: string | null = null, focus = false) =>
+    invoke<History>("history", { limit, until, known, focus }),
   /** Which of `ids`, loaded commits the history could not tell, are unpushed: the next load
    *  marks them. Whether it found out anything. */
   settleUnpushed: (ids: string[], lane: string | null = null) => invoke<boolean>("settle_unpushed", { ids, lane }),
