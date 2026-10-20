@@ -1,13 +1,13 @@
 <script lang="ts">
   // The Stashes screen: every stash on the left, the picked one on the right with whether it
   // applies to the checked-out branch, its actions, its files and their diffs.
-  import TipCard from "./TipCard.svelte";
   import { api } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { CommitDetail, FileChange, FileDiff, History, StashCheck, StashInfo } from "./types";
   import type { Request } from "./confirm.svelte";
   import type { BranchContext } from "./branches";
   import { applyRequest, dropRequest, stashBranchRequest, stashMenu, stashName, stashRequest } from "./stash";
+  import { filesBrief, filterWords, stashMatches } from "./stashFilter";
   import { plate, relativeTime, shortId, splitPath, tint } from "./format";
   import DiffView from "./DiffView.svelte";
   import FileBadge from "./FileBadge.svelte";
@@ -59,8 +59,26 @@
   let error = $state<string | null>(null);
   let menu = $state<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
 
+  let filter = $state("");
+  let filterInput = $state<HTMLInputElement>();
+  const words = $derived(filterWords(filter));
+
   const stashes = $derived(history.stashes);
+  const pathsOf = (s: StashInfo) => {
+    const f = files[s.id];
+    return f ? [...f.tracked, ...f.untracked].map((x) => x.path) : null;
+  };
+  /** The cards the filter leaves. */
+  const shown = $derived(
+    words.length ? stashes.filter((s) => stashMatches({ name: stashName(s), title: s.title, branch: s.branch, base: s.base, paths: pathsOf(s) }, words)) : stashes,
+  );
   const stash = $derived(stashes.find((s) => s.id === selected) ?? stashes[0] ?? null);
+
+  /** ⌘F on this screen. */
+  export function focusFilter() {
+    filterInput?.focus();
+    filterInput?.select();
+  }
   const locals = $derived(new Set(history.refs.filter((r) => r.kind === "local").map((r) => r.name)));
   const here = $derived(history.head.branch ?? "HEAD");
   const busy = $derived(!!history.operation);
@@ -76,9 +94,11 @@
     return { count: all.length, add: all.reduce((n, x) => n + x.additions, 0), del: all.reduce((n, x) => n + x.deletions, 0) };
   };
 
-  // Keep the picked stash when the list reloads; pick the newest when it is gone.
+  // Keep the picked stash when the list reloads; pick the newest when it is gone, or the first
+  // card the filter leaves when it hides the picked one.
   $effect(() => {
     if (!stashes.some((s) => s.id === selected)) selected = stashes[0]?.id ?? null;
+    else if (shown.length && !shown.some((s) => s.id === selected)) selected = shown[0].id;
   });
 
   // Files of every stash, for the counts on the cards. A stash's commits never change, so each
@@ -158,12 +178,12 @@
   }
 
   function onKey(event: KeyboardEvent) {
-    const i = stashes.findIndex((s) => s.id === stash?.id);
+    const i = shown.findIndex((s) => s.id === stash?.id);
     const next = event.key === "ArrowDown" ? i + 1 : event.key === "ArrowUp" ? i - 1 : -1;
-    if (next < 0 || next >= stashes.length || (event.key !== "ArrowDown" && event.key !== "ArrowUp")) return;
+    if (next < 0 || next >= shown.length || (event.key !== "ArrowDown" && event.key !== "ArrowUp")) return;
     event.preventDefault();
-    pick(stashes[next]);
-    (event.currentTarget as HTMLElement).querySelector<HTMLElement>(`[data-id="${stashes[next].id}"]`)?.focus();
+    pick(shown[next]);
+    (event.currentTarget as HTMLElement).querySelector<HTMLElement>(`[data-id="${shown[next].id}"]`)?.focus();
   }
 
   const statusIcon: Record<string, string> = { added: "A", deleted: "D", modified: "M", renamed: "R", copied: "C" };
@@ -191,10 +211,40 @@
       </button>
     </div>
     {#if stashes.length}
+      <label class="filter">
+        <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
+        <input
+          bind:this={filterInput}
+          bind:value={filter}
+          placeholder="Filter by message, branch or file"
+          aria-label="Filter stashes"
+          spellcheck="false"
+          autocomplete="off"
+          onkeydown={(e) => {
+            if (e.key === "Escape" && filter) {
+              e.stopPropagation();
+              filter = "";
+            } else if (e.key === "ArrowDown" && shown.length) {
+              // On to the cards, as from a search field in Finder.
+              e.preventDefault();
+              (e.currentTarget as HTMLElement).closest(".list")?.querySelector<HTMLElement>(`.card.on`)?.focus();
+            }
+          }}
+        />
+        {#if filter}<span class="found">{shown.length} of {stashes.length}</span><button class="clear" onclick={() => (filter = "")} aria-label="Clear the filter" title="Clear the filter">×</button>{/if}
+      </label>
+    {/if}
+    {#if stashes.length && !shown.length}
+      <div class="empty">
+        <strong>No stashes match</strong>
+        <span>Nothing has “{filter.trim()}” in its message, branch or files.</span>
+      </div>
+    {:else if stashes.length}
       <!-- Clicking a card hands the list the keyboard, also where buttons don't take the focus (macOS). -->
       <div class="cards" role="listbox" tabindex="0" aria-label="Stashes, newest first" onkeydown={onKey} onpointerdown={(e) => (e.currentTarget as HTMLElement).focus({ preventScroll: true })}>
-        {#each stashes as s (s.id)}
+        {#each shown as s (s.id)}
           {@const t = totals(files[s.id])}
+          {@const brief = files[s.id] ? filesBrief(pathsOf(s) ?? [], words) : null}
           {@const on = s.id === stash?.id}
           <button
             class="card"
@@ -221,6 +271,12 @@
                 <span class="mono del">−{t.del}</span>
               {/if}
             </span>
+            {#if brief?.names.length}
+              <span class="line files-brief">
+                <span class="ellipsis">{brief.names.join(", ")}</span>
+                {#if brief.more}<span class="nowrap">+{brief.more}</span>{/if}
+              </span>
+            {/if}
           </button>
         {/each}
       </div>
@@ -282,7 +338,12 @@
           <span class="grow"></span>
           <button class="button" disabled={busy} onclick={() => run(dropRequest(ctx, stash))}>Drop</button>
         </div>
-        {#if !busy}<TipCard id="stashApplyPop" />{/if}
+        {#if !busy}
+          <p class="explain">
+            <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" /><path d="M8 7.2v3.6M8 5.1v.1" /></svg>
+            <span><b>Apply</b> brings the changes back and keeps the stash. <b>Pop</b> does the same, then drops the stash once it applies without conflicts. <b>New Branch…</b> pops it onto a new branch made at {shortId(stash.base)}.</span>
+          </p>
+        {/if}
       </div>
 
       <div class="scroll">
@@ -459,6 +520,80 @@
     padding: 24px;
     text-align: center;
     color: var(--text2);
+  }
+  .filter {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    margin: 0 12px 8px;
+    padding: 0 6px 0 10px;
+    border-radius: var(--radius-pill);
+    background: var(--field);
+    color: var(--text2);
+    flex-shrink: 0;
+  }
+  .filter:focus-within {
+    box-shadow: var(--focus-ring);
+  }
+  .filter .icon {
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+  }
+  .filter input {
+    flex-grow: 1;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    font: inherit;
+    font-size: var(--text-small);
+    color: var(--text);
+    user-select: text;
+    -webkit-user-select: text;
+    box-shadow: none;
+  }
+  .found {
+    font-size: var(--text-caption);
+    white-space: nowrap;
+  }
+  .clear {
+    width: 18px;
+    height: 18px;
+    border-radius: var(--radius-pill);
+    color: var(--text2);
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .clear:hover {
+    background: var(--side-sel);
+    color: var(--text);
+  }
+  .files-brief {
+    gap: 6px;
+    font-size: var(--text-caption);
+    color: var(--text2);
+  }
+  .explain {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin: 0;
+    font-size: var(--text-small);
+    line-height: 1.4;
+    color: var(--text2);
+  }
+  .explain .icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .explain b {
+    font-weight: 600;
+    white-space: nowrap;
+    color: var(--text);
   }
   .empty strong {
     color: var(--text);

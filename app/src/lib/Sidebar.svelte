@@ -28,7 +28,7 @@
   import { github } from "./github.svelte";
   import { downloadRequest, installRequest, lfs, patternNote, pruneRequest, lfsTrackRequest, untrackRequest } from "./lfs.svelte";
   import { nav } from "./nav.svelte";
-  import type { LfsPattern, RecentRepo, Submodule, Worktree } from "./types";
+  import type { LfsPattern, RecentRepo, Submodule, Tracking, Worktree } from "./types";
   import { addSubmoduleRequest, latestRequest, removeSubmoduleRequest, submoduleNote, submoduleWhere, syncRequest, updateRequest, followsWord } from "./submodules";
   import { actionIcons } from "./icons";
   import { locateRequest, lockRequest, newWorktreeRequest, pruneWorktreesRequest, removeWorktreeRequest, tilde, unlockRequest, worktreeOf } from "./worktrees";
@@ -474,8 +474,30 @@
     if (wt.current) return { text: "this window", tone: "accent" };
     if (wt.missing) return { text: "missing", tone: "warn" };
     if (wt.changed) return { text: `${wt.changed} changed` };
-    if (wt.locked !== null) return { text: "locked" };
     return null;
+  }
+
+  /** How far a worktree's branch is ahead of and behind its upstream, when it has one. */
+  function worktreeTracking(wt: Worktree): Tracking | null {
+    if (!wt.branch) return null;
+    const tracking = history.refs.find((r) => r.kind === "local" && r.name === wt.branch)?.tracking;
+    return tracking && !tracking.gone ? tracking : null;
+  }
+
+  /** What locking does, for the row's tooltip and the menu. */
+  const LOCK_WHY = "Git won’t prune or remove a locked worktree, so it stays known while its folder is away, e.g. on a drive that isn’t connected.";
+
+  /** The tooltip of a worktree's row. */
+  function worktreeTitle(wt: Worktree): string {
+    const lines = [wt.missing ? `Folder not found at ${tilde(wt.path)}` : wt.current ? tilde(wt.path) : `${tilde(wt.path)} · double-click to open its window`];
+    if (wt.changed) lines.push(`${wt.changed} ${wt.changed === 1 ? "file" : "files"} with uncommitted changes there`);
+    const tracking = worktreeTracking(wt);
+    if (tracking && (tracking.ahead || tracking.behind))
+      lines.push(`${wt.branch}: ${[tracking.ahead && `${tracking.ahead} to push`, tracking.behind && `${tracking.behind} to pull`].filter(Boolean).join(", ")} (${tracking.remote}/${tracking.branch})`);
+    const pull = wt.branch && github.repo ? github.pullOf(wt.branch) : null;
+    if (pull) lines.push(`Pull request #${pull.number} (${pull.draft && pull.state === "open" ? "draft" : pull.state}): ${pull.title}`);
+    if (wt.locked !== null) lines.push(`Locked${wt.locked ? `: ${wt.locked}` : ""}. ${LOCK_WHY}`);
+    return lines.join("\n");
   }
 
   /** The menu of a worktree. */
@@ -507,10 +529,11 @@
     const removable = !wt.main && !wt.current;
     if (lock.length || removable) entries.push({ kind: "sep" });
     entries.push(...lock);
+    if (wt.locked !== null) entries.push({ kind: "note", label: `Locked${wt.locked ? `: ${wt.locked}` : ""}. Prune leaves it, and Remove unlocks it first.` });
+    else if (!wt.main) entries.push({ kind: "note", label: "Lock keeps Prune from forgetting it while its folder is away, e.g. on a drive that isn’t connected." });
     if (removable) entries.push({ kind: "item", label: "Remove Worktree…", icon: menuIcons.drop, danger: true, run: () => run(removeWorktreeRequest(ctx, wt)) });
     if (wt.main) entries.push({ kind: "note", label: "The main folder: it holds the repository, so it can’t be removed." });
     else if (wt.current) entries.push({ kind: "note", label: "Open in this window. To remove it, use the main folder’s window." });
-    if (wt.locked) entries.push({ kind: "note", label: `Locked: ${wt.locked}` });
     open(event, "Worktree menu", `worktree:${wt.path}`, entries);
   }
 
@@ -745,6 +768,8 @@
       {#each worktrees as wt (wt.path)}
         {@const color = wt.branch ? ctx.colorOf(wt.branch) : NO_BRANCH_COLOR}
         {@const note = worktreeNote(wt)}
+        {@const tracking = worktreeTracking(wt)}
+        {@const pull = wt.branch && github.repo ? github.pullOf(wt.branch) : null}
         <button
           class="item two"
           class:menu-open={menu?.ref === `worktree:${wt.path}`}
@@ -752,7 +777,7 @@
           onclick={() => (wt.missing ? undefined : showWorktree(wt))}
           ondblclick={() => !wt.current && !wt.missing && openWorktree(wt)}
           oncontextmenu={(e) => worktreeMenu(e, wt)}
-          title={wt.missing ? `Folder not found at ${tilde(wt.path)}` : wt.current ? tilde(wt.path) : `${tilde(wt.path)} · double-click to open its window`}
+          title={worktreeTitle(wt)}
         >
           {#if wt.missing}
             <svg class="icon off" viewBox="0 0 16 16"><path d="M8 2 1.5 13.5h13zM8 6.5v3.5M8 12v.2" /></svg>
@@ -760,8 +785,16 @@
             <svg class="icon" class:here={wt.current} viewBox="0 0 16 16"><path d={menuIcons.folder} /></svg>
           {/if}
           <span class="grow two-text">
-            <span class="ellipsis" class:bold={wt.current}>{wt.name}</span>
-            <span class="ellipsis sub"><span class="mini-dot" style:background={lane(color)}></span>{wt.branch ?? (wt.head ? `detached at ${wt.head.slice(0, 7)}` : "no commits")}</span>
+            <span class="wt-line">
+              <span class="ellipsis" class:bold={wt.current}>{wt.name}</span>
+              {#if wt.locked !== null}<svg class="icon tiny" viewBox="0 0 16 16" role="img" aria-label="Locked"><path d={LOCK} /></svg>{/if}
+            </span>
+            <span class="wt-line sub">
+              <span class="ellipsis"><span class="mini-dot" style:background={lane(color)}></span>{wt.branch ?? (wt.head ? `detached at ${wt.head.slice(0, 7)}` : "no commits")}</span>
+              {#if tracking?.ahead}<span class="mono nowrap" aria-label="{tracking.ahead} to push">↑{tracking.ahead}</span>{/if}
+              {#if tracking?.behind}<span class="mono nowrap" aria-label="{tracking.behind} to pull">↓{tracking.behind}</span>{/if}
+              {#if pull}<span class="nowrap pr" class:closed={pull.state !== "open"}>#{pull.number}</span>{/if}
+            </span>
           </span>
           {#if note}<span class="meta nowrap" class:accent={note.tone === "accent"} class:warn={note.tone === "warn"}>{note.text}</span>{/if}
         </button>
@@ -1032,6 +1065,24 @@
   .two-text .sub {
     font-size: var(--text-caption);
     color: var(--text2);
+  }
+  .wt-line {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+  }
+  .wt-line .ellipsis {
+    min-width: 0;
+  }
+  .wt-line .tiny {
+    flex-shrink: 0;
+  }
+  .wt-line .mono {
+    font-size: var(--text-caption);
+  }
+  .pr.closed {
+    opacity: 0.6;
   }
   .mini-dot {
     display: inline-block;

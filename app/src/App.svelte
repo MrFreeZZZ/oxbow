@@ -18,6 +18,7 @@
   import ConflictsView from "./lib/ConflictsView.svelte";
   import { abortRequest, continueRequest, describe, mergeRequest, skipRequest } from "./lib/merge";
   import { stashMenu, stashRequest } from "./lib/stash";
+  import { newWorktreeRequest } from "./lib/worktrees";
   import StashesView from "./lib/StashesView.svelte";
   import { ancestors, cherryPickRequest, editMessageRequest, resetModes, resetRequest, revertRequest, undoCommitRequest } from "./lib/commits";
   import type { FileChange, Operation } from "./lib/types";
@@ -115,6 +116,7 @@
   let focusOnly = $state(false);
   let searchField = $state<SearchField>();
   let findField = $state<FindField>();
+  let stashesView = $state<StashesView>();
   let panelWidth = $state(640);
   /** Goes up on every reload of the history, so the changes panel reloads too. */
   let version = $state(0);
@@ -583,6 +585,12 @@
     requestAnimationFrame(() => searchField?.focus());
   }
 
+  function findInStashes() {
+    view = "stashes";
+    resolving = false;
+    requestAnimationFrame(() => stashesView?.focusFilter());
+  }
+
   /** Every command there is here and now, for the Command Palette. */
   function paletteCommands(): PaletteItem[] {
     const out: PaletteItem[] = [];
@@ -605,6 +613,7 @@
     add("quickOpen", "Go", "Go to File History…", () => (nav.quickOpen = true), "quickOpen");
     add("find", "Search", "Find in History", () => findInHistory(), "find");
     add("findCode", "Search", "Find in Changed Code", () => findInHistory("code"), "findCode");
+    if (h.stashes.length) add("findStashes", "Search", "Find in Stashes", findInStashes, view === "stashes" ? "find" : undefined);
     add("sidebar", "View", sideOut ? "Hide Sidebar" : "Show Sidebar", toggleSidebar, "sidebar");
     add("diffLayout", "View", prefs.get("oxbow.diff.layout") === "split" ? "Show Diffs Unified" : "Show Diffs Side by Side", () => void prefs.set("oxbow.diff.layout", prefs.get("oxbow.diff.layout") === "split" ? "unified" : "split"));
     add("nextChange", "Go", "Go to Next Change", () => void stepChange(1), "nextChange");
@@ -621,6 +630,10 @@
       add("changes", "View", "Show Changes", () => ((view = "history"), (resolving = false), showChanges()), "changes");
       add("commit", "Git", "Commit…", commitChanges);
       if (!busy) add("stash", "Git", "Stash", () => void run(stashRequest(branchCtx!)));
+    }
+    if (h.head.commit && repo) {
+      const path = repo.path;
+      add("newWorktree", "Git", "New Worktree…", () => void run(newWorktreeRequest(branchCtx!, path)));
     }
     if (h.remotes.length && remoteCtx) {
       add("fetch", "Git", "Fetch", () => void sync("fetch"));
@@ -711,6 +724,8 @@
       case "find":
         // In File History, ⌘F finds in the file.
         if (view === "file" && !showConflicts) findField?.focus();
+        // In Stashes, it filters the stashes.
+        else if (view === "stashes" && !showConflicts && history.stashes.length) stashesView?.focusFilter();
         else findInHistory();
         return true;
       case "findCode":
@@ -1962,7 +1977,7 @@
         {/key}
       {:else if view === "stashes" && branchCtx}
         {#key repo.path}
-          <StashesView {history} ctx={branchCtx} {colorOf} bind:selected={stashSel} {version} {run} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "it" : text}.`)} />
+          <StashesView bind:this={stashesView} {history} ctx={branchCtx} {colorOf} bind:selected={stashSel} {version} {run} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "it" : text}.`)} />
         {/key}
       {:else}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
