@@ -38,6 +38,7 @@
   import CommandPalette from "./lib/CommandPalette.svelte";
   import type { PaletteItem } from "./lib/palette";
   import { Keymap, combo, type ShortcutId } from "./lib/shortcuts";
+  import { stepChange } from "./lib/diffRows";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import PairPanel from "./lib/PairPanel.svelte";
   import SnapshotPanel from "./lib/SnapshotPanel.svelte";
@@ -582,6 +583,9 @@
     add("find", "Search", "Find in History", () => findInHistory(), "find");
     add("findCode", "Search", "Find in Changed Code", () => findInHistory("code"), "findCode");
     add("sidebar", "View", sideOut ? "Hide Sidebar" : "Show Sidebar", toggleSidebar, "sidebar");
+    add("diffLayout", "View", prefs.get("oxbow.diff.layout") === "split" ? "Show Diffs Unified" : "Show Diffs Side by Side", () => void prefs.set("oxbow.diff.layout", prefs.get("oxbow.diff.layout") === "split" ? "unified" : "split"));
+    add("nextChange", "Go", "Go to Next Change", () => void stepChange(1), "nextChange");
+    add("previousChange", "Go", "Go to Previous Change", () => void stepChange(-1), "previousChange");
     add("history", "View", "Show History", () => ((view = "history"), (resolving = false)));
     add("stashes", "View", "Show Stashes", () => ((view = "stashes"), (resolving = false)));
     add("oplog", "View", "Show Operation Log", () => ((view = "oplog"), (resolving = false)));
@@ -687,6 +691,9 @@
         else return false;
         return true;
       }
+      case "nextChange":
+      case "previousChange":
+        return stepChange(id === "nextChange" ? 1 : -1);
       case "reload":
         reload();
         return true;

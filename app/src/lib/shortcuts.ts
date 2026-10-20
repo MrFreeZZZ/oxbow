@@ -19,6 +19,8 @@ export type ShortcutId =
   | "findCode"
   | "findNext"
   | "findPrevious"
+  | "nextChange"
+  | "previousChange"
   | "undo"
   | "redo"
   | "fixMistake"
@@ -60,6 +62,9 @@ export const BINDINGS: Record<ShortcutId, Binding> = {
   findCode: { mac: ["Mod+Shift+F"], other: ["Mod+Shift+F"] },
   findNext: { mac: ["Mod+G"], other: ["F3"] },
   findPrevious: { mac: ["Mod+Shift+G"], other: ["Shift+F3"] },
+  // Go to Next Change and Go to Previous Change, of the diff on screen.
+  nextChange: { mac: ["Alt+F5"], other: ["Alt+F5"] },
+  previousChange: { mac: ["Alt+Shift+F5"], other: ["Alt+Shift+F5"] },
   // Undo and Redo: the steps of the Operation Log, outside text fields.
   undo: { mac: ["Mod+Z"], other: ["Mod+Z"] },
   redo: { mac: ["Mod+Shift+Z"], other: ["Mod+Y", "Mod+Shift+Z"] },

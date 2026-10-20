@@ -618,6 +618,13 @@
                 { value: "full", label: "Full file" },
               ],
             }),
+            prefRow("oxbow.diff.layout", "Layout", "seg", {
+              sub: "Side by Side puts the old lines next to the new ones",
+              options: () => [
+                { value: "unified", label: "Unified" },
+                { value: "split", label: "Side by Side" },
+              ],
+            }),
             prefRow("oxbow.diff.contextLines", "Context lines", "popup", { sub: "Unchanged lines kept around each change", options: () => opts(1, 3, 5, 10) }),
             prefRow("oxbow.diff.wordHighlight", "Highlight changed words", "switch"),
             prefRow("oxbow.diff.ignoreWhitespace", "Ignore whitespace changes", "switch", {
@@ -1217,6 +1224,18 @@
       ...(full ? [] : [fold(9 + 3 - context)]),
     ];
   });
+  /** The preview Side by Side: the removed line faces the added one. */
+  const previewRows = $derived.by(() => {
+    const rows: { fold?: Line; left?: Line; right?: Line }[] = [];
+    for (let i = 0; i < preview.length; i++) {
+      const line = preview[i];
+      if (line.kind === "fold") rows.push({ fold: line });
+      else if (line.kind === "ctx") rows.push({ left: line, right: line });
+      else if (line.kind === "del" && preview[i + 1]?.kind === "add") rows.push({ left: line, right: preview[++i] });
+      else rows.push(line.kind === "del" ? { left: line } : { right: line });
+    }
+    return rows;
+  });
 </script>
 
 <svelte:window onfocus={load} />
@@ -1450,6 +1469,26 @@
             <section>
               <h2>Preview</h2>
               <div class="preview" class:words={prefs.get("oxbow.diff.wordHighlight")}>
+                {#if prefs.get("oxbow.diff.layout") === "split"}
+                  {#each previewRows as row, i (i)}
+                    {#if row.fold}
+                      <div class="line fold first"><span class="fold">{row.fold.before}</span></div>
+                    {:else}
+                      <div class="pair">
+                        {#each [row.left, row.right] as line, s (s)}
+                          {#if line}
+                            <div class="line half {line.kind}" class:first={line.kind !== "ctx"} class:last={line.kind !== "ctx"}>
+                              <span class="n">{(s === 0 ? line.old : line.new) ?? ""}</span>
+                              <span class="src">{line.before}{#if line.word}<span class="word">{line.word}</span>{line.after}{/if}</span>
+                            </div>
+                          {:else}
+                            <div class="line half"></div>
+                          {/if}
+                        {/each}
+                      </div>
+                    {/if}
+                  {/each}
+                {:else}
                 {#each preview as line, i (i)}
                   <div class="line {line.kind}" class:first={line.kind !== preview[i - 1]?.kind} class:last={line.kind !== preview[i + 1]?.kind}>
                     {#if line.kind === "fold"}
@@ -1457,10 +1496,11 @@
                     {:else}
                       <span class="n">{line.old ?? ""}</span>
                       <span class="n">{line.new ?? ""}</span>
-                      <span class="code">{line.before}{#if line.word}<span class="word">{line.word}</span>{line.after}{/if}</span>
+                      <span class="src">{line.before}{#if line.word}<span class="word">{line.word}</span>{line.after}{/if}</span>
                     {/if}
                   </div>
                 {/each}
+                {/if}
               </div>
             </section>
           {/if}
@@ -2326,6 +2366,35 @@
     margin-top: 3px;
   }
 
+  /* Side by Side: the old side and the new side as two columns. */
+  .pair {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: 4px;
+    margin: 0 8px;
+  }
+
+  .pair .line {
+    margin: 0;
+    min-width: 0;
+    align-items: flex-start;
+  }
+
+  .pair .line.first {
+    margin-top: 2px;
+  }
+
+  .half .n {
+    padding-right: 12px;
+    width: 42px;
+  }
+
+  .half .src {
+    min-width: 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
   .line.fold {
     margin-top: 4px;
     border-radius: var(--radius-m);
@@ -2354,7 +2423,7 @@
     width: 42px;
   }
 
-  .code {
+  .src {
     white-space: pre;
   }
 
