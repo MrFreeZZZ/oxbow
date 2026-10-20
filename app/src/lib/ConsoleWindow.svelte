@@ -76,7 +76,7 @@
   /** Ids are of one log; in All Repositories the log tells them apart. */
   const keyOf = (e: Shown) => `${e.log}\u0000${e.id}`;
   const picks = $derived(shown.filter((e) => selected.has(keyOf(e))));
-  const commandTotal = $derived(entries.reduce((n, e) => n + e.commands.length, 0));
+  const commandTotal = $derived(shown.reduce((n, e) => n + e.commands.length, 0));
   const allCount = $derived(repos?.repos.reduce((n, r) => n + r.count, 0) ?? 0);
   /** The log of the repository at `p`; undefined while the list of logs has none for it. */
   const logOf = (p: string | null) => repos?.repos.find((r) => r.path === p)?.log;
@@ -253,7 +253,7 @@
     const n = picks.length;
     const list: MenuEntry[] = [];
     if (text) list.push({ kind: "item", label: "Copy Selected Text", icon: menuIcons.copy, run: () => void copy(text) });
-    list.push({ kind: "item", label: n > 1 ? `Copy ${entryCount(n)}` : "Copy", icon: menuIcons.copy, keys: text ? undefined : mac ? "⌘C" : "Ctrl+C", run: copyPicked });
+    list.push({ kind: "item", label: n > 1 ? `Copy ${n} Entries` : "Copy", icon: menuIcons.copy, keys: text ? undefined : mac ? "⌘C" : "Ctrl+C", run: copyPicked });
     return list;
   }
 
