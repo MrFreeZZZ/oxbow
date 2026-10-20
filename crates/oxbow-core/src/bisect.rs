@@ -392,13 +392,23 @@ fn parse_log(log: &str, term_bad: &str, term_good: &str) -> ParsedLog {
             .and_then(|r| r.split_once(']'))
             .map(|(sha, _)| sha.to_owned())
     };
+    // Newer git puts the term in quotes: "# first 'bad' commit:".
+    let result = |line: &str, lead: &str| {
+        [
+            format!("{lead} {term_bad} commit:"),
+            format!("{lead} '{term_bad}' commit:"),
+        ]
+        .iter()
+        .find_map(|prefix| line.strip_prefix(prefix.as_str()))
+        .map(str::to_owned)
+    };
     for line in log.lines() {
-        if let Some(rest) = line.strip_prefix(&format!("# first {term_bad} commit:")) {
-            parsed.found = bracketed(rest);
+        if let Some(rest) = result(line, "# first") {
+            parsed.found = bracketed(&rest);
             continue;
         }
-        if let Some(rest) = line.strip_prefix(&format!("# possible first {term_bad} commit:")) {
-            parsed.possible.extend(bracketed(rest));
+        if let Some(rest) = result(line, "# possible first") {
+            parsed.possible.extend(bracketed(&rest));
             continue;
         }
         let Some(rest) = line.strip_prefix("git bisect ") else {
@@ -488,6 +498,17 @@ git bisect good b0783d7651a9e81c1accd7681338c8fdfd5827e0
         assert_eq!(
             parsed.found.as_deref(),
             Some("33de29d6fe752c594ed6b48b6946722497351a4b")
+        );
+    }
+
+    #[test]
+    fn newer_git_quotes_the_term() {
+        let log = "git bisect start\ngit bisect new aaaa\ngit bisect old bbbb\n# first 'new' commit: [aaaa] x\n";
+        assert_eq!(parse_log(log, "new", "old").found.as_deref(), Some("aaaa"));
+        let log = "git bisect start\ngit bisect bad aaaa\ngit bisect good bbbb\ngit bisect skip cccc\n# possible first 'bad' commit: [aaaa] x\n# possible first 'bad' commit: [cccc] y\n";
+        assert_eq!(
+            parse_log(log, "bad", "good").possible,
+            vec!["aaaa".to_owned(), "cccc".to_owned()]
         );
     }
 

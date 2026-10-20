@@ -507,6 +507,11 @@
     picker = picker?.kind === "commands" ? null : { kind: "commands", initial: "" };
   }
 
+  function closePickers() {
+    picker = null;
+    nav.quickOpen = false;
+  }
+
   async function openRecent() {
     nav.quickOpen = false;
     const repos = await api.recentRepos().catch(() => []);
@@ -671,16 +676,21 @@
         if (picker?.kind === "recent") picker = null;
         else void openRecent();
         return true;
+      // These take the window over: the palette or Quick Open closes first, as when the command
+      // is picked in the palette, so only one layer has the keyboard.
       case "open":
         if (!free || loading) return false;
+        closePickers();
         chooseRepo();
         return true;
       case "clone":
         if (!free || loading) return false;
+        closePickers();
         start.clone();
         return true;
       case "newRepo":
         if (!free || loading) return false;
+        closePickers();
         start.newRepo();
         return true;
       case "zoomIn":
