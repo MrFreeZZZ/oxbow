@@ -1,6 +1,6 @@
-// Code themes: Oxbow's own and the ten most installed color themes of the VS Code Marketplace
-// (by installs, checked 2026-10-01). A theme colors code views only; the window keeps the macOS
-// look. Colors come from the Themes design.
+// Code themes: Oxbow's own, Estuary, and the ten most installed color themes of the VS Code
+// Marketplace (by installs, checked 2026-10-01). A theme colors code views only; the window
+// keeps the macOS look. Colors come from the Themes design.
 
 /** Background, text, keyword, string, type, function, number, comment, added, removed. */
 export interface Palette {
@@ -14,6 +14,20 @@ export interface Palette {
   com: string;
   add: string;
   del: string;
+  /** Diff colors of their own, used as they are instead of tints of `add` and `del`. */
+  diff?: DiffColors;
+}
+
+/** Changed lines and words, line numbers, the empty side of Side by Side, and the hidden
+ *  lines bar. */
+export interface DiffColors {
+  addLine: string;
+  addWord: string;
+  delLine: string;
+  delWord: string;
+  ln: string;
+  filler: string;
+  hunk: string;
 }
 
 export interface Theme {
@@ -35,6 +49,20 @@ export const THEMES: Theme[] = [
     id: "oxbow", name: "Oxbow", rank: null, installs: null,
     light: p("#FFFFFF", "#24292F", "#8A5DB0", "#4F8A5E", "#A0663A", "#3E6A9E", "#B0587A", "#8C8C92", "#2E9E4F", "#D73A3A"),
     dark: p("#1E1E21", "#E6EDF3", "#C4A0DE", "#8FCB9F", "#E0B184", "#94B8E0", "#E69AB8", "#8B8B92", "#3FB950", "#F85149"),
+  },
+  // Estuary: Light was picked by eye from screenshots of a diff tool we like; Dark is the
+  // Oceanic Next palette by Dmitri Voronianski (MIT, credited in About and THIRD-PARTY-NOTICES.md).
+  // One color for functions, called or declared.
+  {
+    id: "estuary", name: "Estuary", rank: null, installs: null,
+    light: {
+      ...p("#FCFDFD", "#3A3A3A", "#894D89", "#579150", "#2B577E", "#2C5E5E", "#BB6D02", "#717171", "#4E9F45", "#C25450"),
+      diff: { addLine: "#CDF2C9", addWord: "#A8E2A1", delLine: "#F2C9C9", delWord: "#E6A6A6", ln: "#A2A2A2", filler: "#F3F5F5", hunk: "#E7EFF7" },
+    },
+    dark: {
+      ...p("#343D46", "#D8DEE9", "#C594C5", "#99C794", "#EC5F67", "#6699CC", "#F99157", "#A7ADBA", "#5FB3B3", "#EC5F67"),
+      diff: { addLine: "#406B71", addWord: "#4F777C", delLine: "#65464E", delWord: "#866E74", ln: "#868E98", filler: "#3B454F", hunk: "#4C5966" },
+    },
   },
   {
     id: "github", name: "GitHub", rank: 1, installs: "18.8M",
@@ -101,10 +129,28 @@ export function themeVariables(theme: Theme, palette: Palette, dark: boolean, lo
     "--syn-com": palette.com,
   };
   if (own) {
-    for (const name of ["--code-bg", "--code-fg", "--code-dim", "--add", "--del", "--add-word", "--del-word", "--fold-bg"]) vars[name] = "";
+    for (const name of ["--code-bg", "--code-fg", "--code-dim", "--code-ln", "--code-filler", "--add", "--del", "--add-word", "--del-word", "--fold-bg"]) vars[name] = "";
     return vars;
   }
+  const diff = palette.diff;
+  if (diff) {
+    return {
+      ...vars,
+      "--code-bg": palette.bg,
+      "--code-fg": palette.fg,
+      "--code-dim": palette.com,
+      "--code-ln": diff.ln,
+      "--code-filler": diff.filler,
+      "--add": diff.addLine,
+      "--del": diff.delLine,
+      "--add-word": diff.addWord,
+      "--del-word": diff.delWord,
+      "--fold-bg": diff.hunk,
+    };
+  }
   return {
+    "--code-ln": "",
+    "--code-filler": "",
     ...vars,
     "--code-bg": palette.bg,
     "--code-fg": palette.fg,

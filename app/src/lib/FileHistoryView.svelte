@@ -952,8 +952,8 @@
     grid-template-columns: max(44px, calc(var(--digits, 4) * 1ch + 20px)) 1fr;
   }
   .no {
-    color: var(--code-dim, var(--text2));
-    opacity: 0.7;
+    /* A theme's own line number color, or the comment color softened. */
+    color: var(--code-ln, color-mix(in srgb, var(--code-dim, var(--text2)) 70%, transparent));
     text-align: right;
     padding-right: 12px;
     font: inherit;
