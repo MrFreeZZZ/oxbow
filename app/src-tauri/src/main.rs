@@ -635,8 +635,8 @@ struct WelcomeInfo {
 
 /// What the Welcome window says about this computer's Git setup.
 #[tauri::command]
-async fn welcome_info(app: AppHandle) -> CommandResult<WelcomeInfo> {
-    let version = app.package_info().version.to_string();
+async fn welcome_info() -> CommandResult<WelcomeInfo> {
+    let version = format!("{} ({})", env!("OXBOW_VERSION"), env!("OXBOW_COMMIT"));
     logged(None, console::EntryKind::Read, "Read the Git setup", move || {
         let global = config::global_config();
         let home = config::home_dir().unwrap_or_default();
@@ -2028,11 +2028,22 @@ fn stop_action(window: tauri::WebviewWindow, session: State<'_, Session>) {
     session.cancel(&window).store(true, Ordering::Relaxed);
 }
 
-/// The default macOS menu, with Settings… (⌘,) after About in the app menu.
+/// The default macOS menu, with Settings… (⌘,) after About in the app menu. About shows the
+/// version, the commit the build is of and when it was built (build.rs).
 #[cfg(target_os = "macos")]
 fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let menu = tauri::menu::Menu::default(app)?;
     if let Some(app_menu) = menu.items()?.first().and_then(|item| item.as_submenu().cloned()) {
+        let about = tauri::menu::AboutMetadata {
+            name: Some(app.package_info().name.clone()),
+            // "Version 0.1.113 (b5cc367)": macOS puts the short version in the parentheses.
+            version: Some(env!("OXBOW_VERSION").to_owned()),
+            short_version: Some(env!("OXBOW_COMMIT").to_owned()),
+            copyright: Some(format!("Built {}", env!("OXBOW_BUILT"))),
+            ..Default::default()
+        };
+        app_menu.remove_at(0)?;
+        app_menu.insert(&tauri::menu::PredefinedMenuItem::about(app, None, Some(about))?, 0)?;
         let settings = tauri::menu::MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
         app_menu.insert(&settings, 2)?;
         app_menu.insert(&tauri::menu::PredefinedMenuItem::separator(app)?, 3)?;
