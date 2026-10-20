@@ -1117,6 +1117,8 @@ export interface OpEntry {
   after: Trees;
   /** Until when the step can be gone back to, seconds since the epoch. */
   expires: number;
+  /** Local branches (full names) the step rewrote rather than moved forward: a rebase, an amend. */
+  rewrites: string[] | null;
 }
 
 /** A commit git's reflog of HEAD or a local branch points at: lost work, if no branch has it. */
@@ -1352,3 +1354,71 @@ export type PullCall =
   | { kind: "update"; number: number; base?: string | null; body?: string | null }
   | { kind: "readyForReview"; number: number; id: string }
   | { kind: "autoMerge"; number: number; id: string; method?: MergeMethodName | null };
+
+/** A commit of a series before or after a rewrite. */
+export interface SeriesCommit {
+  id: string;
+  summary: string;
+  authorName: string;
+  authorEmail: string;
+  time: number;
+  parents: string[];
+}
+
+export type PairKind = "same" | "changed" | "added" | "dropped";
+
+/** A line of the diff between two versions of a commit: `outer` says which version has it,
+ *  `inner` what it is in that commit's own change. */
+export interface InterLine {
+  outer: "both" | "old" | "new";
+  inner: "context" | "added" | "removed" | "hunk" | "text" | "gap";
+  text: string;
+}
+
+export interface InterSection {
+  kind: "metadata" | "message" | "file";
+  /** The file's path, with git's note such as "(new)"; empty for the message and the author. */
+  title: string;
+  changed: boolean;
+  lines: InterLine[];
+}
+
+/** An old commit and its new version, or a commit only one series has. */
+export interface SeriesPair {
+  kind: PairKind;
+  old: SeriesCommit | null;
+  new: SeriesCommit | null;
+  /** Where the commit is in its series, 1 for the oldest. */
+  oldIndex: number | null;
+  newIndex: number | null;
+  message: boolean;
+  code: boolean;
+  author: boolean;
+  sections: InterSection[];
+}
+
+/** The old series of a rewrite beside the new one, from `git range-diff`. */
+export interface Series {
+  oldTip: string;
+  newTip: string;
+  oldBase: string | null;
+  newBase: string | null;
+  /** A branch, tag or remote branch at the new base, when it moved. */
+  baseName: string | null;
+  /** Commits the new base has that the old one didn't. */
+  baseCommits: number;
+  oldCount: number;
+  newCount: number;
+  /** Newest first; a dropped commit sits where it was. */
+  pairs: SeriesPair[];
+  command: string;
+}
+
+/** The latest rewrite of a branch as its remote branch knows it. */
+export interface Rewrite {
+  old: string;
+  new: string;
+  source: "notPushed" | "pushed" | "fetched";
+  time: number | null;
+  rewritten: string[];
+}

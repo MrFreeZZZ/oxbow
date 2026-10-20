@@ -1065,6 +1065,33 @@ async fn file_pickaxe(
     .await
 }
 
+/// A series of commits before and after a rewrite, paired by `git range-diff`.
+#[tauri::command]
+async fn series(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    old: String,
+    new: String,
+    rewritten: Vec<String>,
+) -> CommandResult<oxbow_core::Series> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "Compare the series", move || {
+        repo.series(&old, &new, &rewritten)
+    })
+    .await
+}
+
+/// The latest rewrite of a branch as its remote branch knows it.
+#[tauri::command]
+async fn last_rewrite(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    branch: String,
+) -> CommandResult<Option<oxbow_core::Rewrite>> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "Find the latest rewrite", move || repo.last_rewrite(&branch)).await
+}
+
 /// The Operation Log, newest step first.
 #[tauri::command]
 async fn operation_log(
@@ -2040,10 +2067,8 @@ fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
             version: Some(env!("OXBOW_VERSION").to_owned()),
             short_version: Some(env!("OXBOW_COMMIT").to_owned()),
             copyright: Some(format!("Built {}", env!("OXBOW_BUILT"))),
-            // The Estuary code theme's dark version is Oceanic Next (THIRD-PARTY-NOTICES.md).
-            credits: Some(
-                "Estuary Dark uses the Oceanic Next color scheme by Dmitri Voronianski, MIT License.".to_owned(),
-            ),
+            // No credits: macOS draws them larger than the version. Third-party notices ship in
+            // the bundle's Resources (THIRD-PARTY-NOTICES.md).
             ..Default::default()
         };
         app_menu.remove_at(0)?;
@@ -2173,6 +2198,8 @@ fn main() {
             lfs_prune_preview,
             open_lfs_download,
             operation_log,
+            series,
+            last_rewrite,
             reflog_entries,
             fix_state,
             compare_snapshot,

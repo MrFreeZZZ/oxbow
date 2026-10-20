@@ -18,6 +18,7 @@
     onCompare,
     onShow,
     onBranch,
+    onSeries,
     screen = false,
   }: {
     repo: string;
@@ -29,6 +30,8 @@
     onShow: (entry: ReflogEntry) => void;
     /** Keep a commit from the reflog on a new branch. */
     onBranch: (entry: ReflogEntry) => void;
+    /** The commits a rebase, an amend or Edit Stack rewrote, before beside after. */
+    onSeries: (entry: OpEntry) => void;
     /** Shown as a screen of its own, opened from the sidebar, instead of the toolbar's popover. */
     screen?: boolean;
   } = $props();
@@ -66,6 +69,11 @@
   function compare(entry: OpEntry, after: boolean) {
     oplog.open = false;
     onCompare(entry, after);
+  }
+
+  function series(entry: OpEntry) {
+    oplog.open = false;
+    onSeries(entry);
   }
 
   function go(request: Request) {
@@ -163,6 +171,9 @@
             aria-label="Compare {i === 0 ? 'before' : 'after'} “{entry.title}” with now"
             onclick={() => compare(entry, i > 0)}>Compare</button
           >
+          {#if entry.rewrites?.length}
+            <button class="compare" title="The commits this step rewrote, before beside after (git range-diff)" aria-label="Compare the series “{entry.title}” rewrote" onclick={() => series(entry)}>Compare Series</button>
+          {/if}
           {#if i > 0}
             <button class="button small restore" disabled={!!blocked} title={blocked ?? "Back to right after this step"} aria-label="Restore to right after “{entry.title}”" onclick={() => go(restoreRequest(entry, i))}>Restore to Here</button>
           {/if}
@@ -448,7 +459,7 @@
   }
   .row:hover .actions,
   .row:focus-within .actions {
-    max-width: 260px;
+    max-width: 380px;
     opacity: 1;
     /* Room for the focus ring of the buttons. */
     overflow: visible;
