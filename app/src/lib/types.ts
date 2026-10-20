@@ -66,6 +66,8 @@ export interface WorktreeSummary {
   files: number;
   staged: number;
   unstaged: number;
+  /** Of the unstaged files, the new ones git does not track yet. */
+  untracked: number;
   conflicted: number;
 }
 

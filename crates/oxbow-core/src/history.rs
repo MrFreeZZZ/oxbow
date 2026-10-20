@@ -206,6 +206,8 @@ pub struct WorktreeSummary {
     pub files: usize,
     pub staged: usize,
     pub unstaged: usize,
+    /// Of the unstaged files, the new ones git does not track yet.
+    pub untracked: usize,
     pub conflicted: usize,
 }
 
@@ -314,6 +316,11 @@ fn fill_worktree_row(row: &mut HistoryRow, tree: &WorkingTree, operation: Option
         files: tree.file_count(),
         staged: tree.staged.len(),
         unstaged: tree.unstaged.len(),
+        untracked: tree
+            .unstaged
+            .iter()
+            .filter(|f| matches!(f.status, crate::commit::FileStatus::Untracked))
+            .count(),
         conflicted: tree.conflicted.len(),
     });
 }
@@ -812,6 +819,7 @@ impl Repo {
                     files: 0,
                     staged: 0,
                     unstaged: 0,
+                    untracked: 0,
                     conflicted: 0,
                 }),
             });
