@@ -20,6 +20,7 @@
     paging = null,
     onMore,
     onUnshallow = null,
+    onClearSearch,
     pointed = null,
   }: {
     history: History;
@@ -40,6 +41,8 @@
     onMore?: () => void;
     /** Fetch Full History, at the end of a shallow clone's history. */
     onUnshallow?: (() => void) | null;
+    /** Clear the search, from the empty state Only Matches gets when it finds nothing. */
+    onClearSearch?: () => void;
     /** A commit a branch name or SHA in a git command points at, lit up while its popover is open. */
     pointed?: string | null;
   } = $props();
@@ -392,6 +395,15 @@
     role="listbox"
     aria-label="Commits"
   >
+    {#if only && !rows.length}
+      <!-- Only Matches with nothing found: the list says so itself, since no row can. -->
+      <div class="none">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
+        <strong>No matching commits</strong>
+        <span>Nothing in the history matches the search. In Graph keeps the commits in place and fades them instead.</span>
+        {#if onClearSearch}<button class="button small" onclick={onClearSearch}>Clear Search</button>{/if}
+      </div>
+    {/if}
     <div class="canvas" style:height="{PAD_TOP * 2 + rows.length * ROW + FOOT}px">
       {#each visible as { row, index } (row.id)}
         {@const isSelected = row.id === selected}
@@ -645,6 +657,33 @@
     min-width: 0;
     flex-grow: 1;
     font-weight: 500;
+  }
+  /* Only Matches, nothing found: the empty state in the graph's place. */
+  .none {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 56px 24px 24px;
+    text-align: center;
+    color: var(--text2);
+  }
+  .none strong {
+    color: var(--text);
+    font-size: var(--text-heading);
+  }
+  .none > span {
+    max-width: 420px;
+    line-height: 1.45;
+    font-size: var(--text-small);
+  }
+  .none .icon {
+    width: 26px;
+    height: 26px;
+    margin-bottom: 2px;
+  }
+  .none .button {
+    margin-top: 8px;
   }
   .end-text .sub {
     font-weight: 400;

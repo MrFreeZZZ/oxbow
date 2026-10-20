@@ -22,13 +22,15 @@
   import { untrack } from "svelte";
   import { foldReason, startsFolded } from "./diffFold";
   import { changedRow, changeStarts, rowsOf, sideKind, type Row } from "./diffRows";
-  import { mac } from "./keys";
+  import { mac, withKeys } from "./keys";
+  import { combo } from "./shortcuts";
   import ImageDiff from "./ImageDiff.svelte";
   import UnusualCard from "./UnusualCard.svelte";
   import LfsCard from "./LfsCard.svelte";
   import SubmoduleCard from "./SubmoduleCard.svelte";
   import { BIG_FILE } from "./lfs.svelte";
   import { bytes, imageType, isSvg } from "./unusual";
+  import { hscroll, widestLine } from "./hscroll";
 
   let {
     diffs,
@@ -263,6 +265,29 @@
   const split = $derived(prefs.get("oxbow.diff.layout") === "split");
   /** As VS Code's Toggle Inline View, the button changes the setting, so every diff follows. */
   const toggleLayout = () => prefs.set("oxbow.diff.layout", split ? "unified" : "split");
+  /** Long lines wrap, or run on and scroll sideways: VS Code's Toggle Word Wrap, for every diff. */
+  const wrap = $derived(prefs.get("oxbow.diff.wrap"));
+  const toggleWrap = () => prefs.set("oxbow.diff.wrap", !wrap);
+  /** The sideways scrolling of a file's lines, under No Wrap only. */
+  const sideways = (node: HTMLElement, on: boolean) => (on ? hscroll(node) : undefined);
+  /** Whitespace changes left out, from Settings › Diff & Text or this view's button. Not in
+   *  uncommitted changes, which stay exact so staging matches what is seen. */
+  const ignoring = $derived(!working && prefs.get("oxbow.diff.ignoreWhitespace"));
+  const toggleWhitespace = () => prefs.set("oxbow.diff.ignoreWhitespace", !prefs.get("oxbow.diff.ignoreWhitespace"));
+  /** Columns of a file's longest line, so every line of it scrolls the same way under No Wrap.
+   *  Walking every line is worth measuring once per file: the diff's lines don't change. */
+  let widths = new WeakMap<FileDiff, { tab: number; cols: number }>();
+  function columns(diff: FileDiff): number {
+    const tab = prefs.get("oxbow.text.tabWidth");
+    const had = widths.get(diff);
+    if (had && had.tab === tab) return had.cols;
+    const cols = widestLine(
+      diff.hunks.flatMap((h) => h.lines.map((l) => l.text)),
+      tab,
+    );
+    widths.set(diff, { tab, cols });
+    return cols;
+  }
 
   /** Where changes start among a hunk's lines `start` to `end`, for Next Change. */
   const lineMarks = (hunk: Hunk, start: number, end: number) => changeStarts((i) => hunk.lines[i].kind !== "context", start, end);
@@ -366,7 +391,7 @@
 
 <!-- A line's code: syntax colors, changed words, matches of Find. `counted` is false for the
      old side of an unchanged line in Side by Side, whose matches are the new side's again. -->
-{#snippet code(diff: FileDiff, line: DiffLine, language: ReturnType<typeof languageOf>, counted: boolean)}<span class="text">{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found && counted} class:twin={piece.found && !counted} data-hit={counted ? piece.hit : undefined} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}{#if line.cr && own(showEol, diff.file.path)}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}{#if line.secret}<span class="secret" title="Looks like a secret: Oxbow stops the commit until it is unstaged, or you commit anyway. Add oxbow:allow to the line if it is not one."><svg viewBox="0 0 16 16"><path d="M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2" /></svg>{line.secret}</span>{/if}</span>{/snippet}
+{#snippet code(diff: FileDiff, line: DiffLine, language: ReturnType<typeof languageOf>, counted: boolean)}<span class="text"><span class="ink">{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found && counted} class:twin={piece.found && !counted} data-hit={counted ? piece.hit : undefined} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}{#if line.cr && own(showEol, diff.file.path)}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}{#if line.secret}<span class="secret" title="Looks like a secret: Oxbow stops the commit until it is unstaged, or you commit anyway. Add oxbow:allow to the line if it is not one."><svg viewBox="0 0 16 16"><path d="M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2" /></svg>{line.secret}</span>{/if}</span></span>{/snippet}
 
 {#snippet pickBox(hunk: Hunk, line: DiffLine, i: number, on: boolean)}
   <button
@@ -436,8 +461,10 @@
         {:else if diff.file.mode && diff.file.additions + diff.file.deletions === 0}
           <span class="mono size">mode {diff.file.mode.old} → {diff.file.mode.new}</span>
         {:else}
-          <span class="mono add">+{diff.file.additions}</span>
-          <span class="mono del">−{diff.file.deletions}</span>
+          <span class="counts" title={ignoring ? "Lines changed besides whitespace. The list of files counts every line." : undefined}>
+            <span class="mono add">+{diff.file.additions}</span>
+            <span class="mono del">−{diff.file.deletions}</span>
+          </span>
         {/if}
         {#if fileActions}{@render fileActions(diff)}{/if}
         {#if openable && history && diff.file.status !== "untracked" && !diff.file.submodule}
@@ -450,6 +477,31 @@
             <svg class="icon" viewBox="0 0 16 16"><path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" /></svg>
           </button>
         {/if}
+        {#if !working}
+          <button
+            class="toggle"
+            class:on={ignoring}
+            onclick={toggleWhitespace}
+            aria-pressed={ignoring}
+            aria-label="Ignore whitespace changes"
+            title={ignoring ? "Whitespace changes are left out, so the counts can be lower than in the list of files. Click to show them" : "Leave out changes of whitespace only"}
+          >
+            <!-- The space mark: lit while whitespace changes are left out, as the other toggles are. -->
+            <svg class="icon" viewBox="0 0 16 16"><path d="M3.5 5.5v5h9v-5" /><path d="M2 13.5h12" /></svg>
+          </button>
+        {/if}
+        <button
+          class="toggle"
+          class:on={!wrap}
+          onclick={toggleWrap}
+          aria-pressed={!wrap}
+          aria-label="No wrap"
+          title={withKeys(wrap ? "Don't wrap long lines: they run on and scroll sideways" : "Wrap long lines at the edge", combo("wrap"))}
+        >
+          <svg class="icon" viewBox="0 0 16 16">
+            {#if wrap}<path d="M2.5 4h11M2.5 8h9a2 2 0 0 1 0 4H8.5M10 10.5 8.5 12l1.5 1.5M2.5 12h3" />{:else}<path d="M2.5 4h11M2.5 8h11M2.5 12h6M11.5 10.5 13 12l-1.5 1.5" />{/if}
+          </svg>
+        </button>
         <button
           class="toggle"
           class:on={split}
@@ -539,7 +591,8 @@
     {:else}
       {@const language = languageOf(diff.file.path)}
       {@const cut = shown.cut?.diff === diff ? shown.cut : null}
-      <div class="code mono selectable" style:--digits={digits(diff)}>
+      {#key wrap}
+      <div class="code mono selectable" class:nowrap={!wrap} style:--digits={digits(diff)} style:--cols={wrap ? null : columns(diff)} use:sideways={!wrap}>
         {#each cut ? diff.hunks.filter((_, h) => cut.lines[h] > 0) : diff.hunks as hunk, h (h)}
           {@const before = h === 0 ? hunk.oldStart - 1 : hunk.oldStart - (diff.hunks[h - 1].oldStart + diff.hunks[h - 1].oldLines)}
           {#if before > 0 && !whole}
@@ -594,7 +647,9 @@
             {/each}
           {/if}
         {/each}
+        {#if !wrap}<div class="hbar" aria-hidden="true"><div></div></div>{/if}
       </div>
+      {/key}
       {#if cut}
         <button class="more lines" onclick={() => (extra += PORTION)}
           >Show {Math.min(cut.more, PORTION).toLocaleString()} more {Math.min(cut.more, PORTION) === 1 ? "line" : "lines"}{#if cut.more > PORTION}<span class="of"> of {cut.more.toLocaleString()}</span>{/if}</button
@@ -868,10 +923,33 @@
     user-select: none;
     -webkit-user-select: none;
   }
+  /* Wrapped, a long line breaks between words, and inside a word only one longer than the line. */
   .text {
     white-space: pre-wrap;
-    word-break: break-all;
+    overflow-wrap: anywhere;
     padding-right: 10px;
+  }
+  /* No Wrap: each line runs on, clipped at its column; every line of the file is as wide as the
+     longest, so they all slide together (hscroll.ts). */
+  .nowrap .text {
+    display: block;
+    white-space: pre;
+    overflow: hidden;
+    padding-right: 0;
+  }
+  .nowrap .ink {
+    display: inline-block;
+    min-width: calc(var(--cols, 0) * 1ch + 10px);
+  }
+  .hbar {
+    position: sticky;
+    bottom: 0;
+    height: 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .hbar > div {
+    height: 1px;
   }
   .added .word {
     background: var(--add-word);

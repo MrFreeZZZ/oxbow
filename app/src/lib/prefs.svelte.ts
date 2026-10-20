@@ -29,6 +29,8 @@ export const defaults = {
   "oxbow.diff.contextLines": 3,
   "oxbow.diff.wordHighlight": true,
   "oxbow.diff.ignoreWhitespace": false,
+  /** Long lines wrap at the edge; off, they run on and the lines of a file scroll sideways. */
+  "oxbow.diff.wrap": true,
   /** Which files of a commit start open in its diff. */
   "oxbow.diff.files": "smart" as "smart" | "expanded" | "collapsed",
   /** Smart folds files with more changed lines than this. */
