@@ -15,11 +15,13 @@
     clock,
     dayOf,
     duration,
+    entryText,
     exitOf,
     failed,
     helperCommands,
     outputOpen,
     ownCommands,
+    picked,
     shows,
     trimmed,
     upsert,
@@ -49,7 +51,8 @@
   let source = $state<Source>({ kind: "current" });
   let entries = $state<Shown[]>([]);
   let loaded = $state(false);
-  let filter = $state<ConsoleFilter>("all");
+  // What the user did comes first; All and Background are a click away.
+  let filter = $state<ConsoleFilter>("mine");
   let query = $state("");
   /** Outputs and folds opened or closed by a click, against how they start. */
   let flipped = $state(new Set<string>());
@@ -57,6 +60,10 @@
   let following = $state(true);
   let picker = $state<{ x: number; y: number } | null>(null);
   let clearing = $state<{ all: boolean } | null>(null);
+  /** The picked entries, by {@link keyOf}, and the one a Shift-click picks from. */
+  let selected = $state(new Set<string>());
+  let anchor: string | null = null;
+  let rowMenu = $state<{ x: number; y: number; text: string } | null>(null);
   let log = $state<HTMLDivElement>();
   let search = $state<HTMLInputElement>();
 
@@ -66,6 +73,9 @@
   const sourceName = $derived(path === undefined ? "All Repositories" : nameOf(path));
   const pickerLabel = $derived(source.kind === "current" ? "This Repository" : sourceName);
   const shown = $derived(entries.filter((e) => shows(e, filter, query)));
+  /** Ids are of one log; in All Repositories the log tells them apart. */
+  const keyOf = (e: Shown) => `${e.log}\u0000${e.id}`;
+  const picks = $derived(shown.filter((e) => selected.has(keyOf(e))));
   const commandTotal = $derived(entries.reduce((n, e) => n + e.commands.length, 0));
   const allCount = $derived(repos?.repos.reduce((n, r) => n + r.count, 0) ?? 0);
   /** The log of the repository at `p`; undefined while the list of logs has none for it. */
@@ -218,6 +228,41 @@
     await load();
   }
 
+  /** Pick the entry clicked; Shift picks the run from the last one, ⌘ (Ctrl) adds or takes it away.
+   *  A drag that selected text keeps it. */
+  function pick(event: MouseEvent, entry: Shown) {
+    if (!event.shiftKey && !window.getSelection()?.isCollapsed) return;
+    const key = keyOf(entry);
+    selected = picked(shown.map(keyOf), selected, anchor, key, { range: event.shiftKey, toggle: keyed(event) });
+    if (!event.shiftKey) anchor = key;
+  }
+
+  function openRowMenu(event: MouseEvent, entry: Shown) {
+    event.preventDefault();
+    const key = keyOf(entry);
+    // A right-click on one not picked picks it alone, as in Finder.
+    if (!selected.has(key)) {
+      selected = new Set([key]);
+      anchor = key;
+    }
+    const text = window.getSelection()?.toString() ?? "";
+    rowMenu = { x: event.clientX, y: event.clientY, text };
+  }
+
+  function rowMenuEntries(text: string): MenuEntry[] {
+    const n = picks.length;
+    const list: MenuEntry[] = [];
+    if (text) list.push({ kind: "item", label: "Copy Selected Text", icon: menuIcons.copy, run: () => void copy(text) });
+    list.push({ kind: "item", label: n > 1 ? `Copy ${entryCount(n)}` : "Copy", icon: menuIcons.copy, keys: text ? undefined : mac ? "⌘C" : "Ctrl+C", run: copyPicked });
+    return list;
+  }
+
+  const copy = (text: string) => navigator.clipboard.writeText(text).catch(() => {});
+  function copyPicked() {
+    if (!picks.length) return;
+    void copy(picks.map((e) => entryText(e, source.kind === "all" ? nameOf(e.repo) : undefined)).join("\n\n") + "\n");
+  }
+
   /** Parts of an output line: masked secrets and commit ids get their own color. */
   function parts(text: string): { text: string; kind: "text" | "mask" | "sha" }[] {
     const out: { text: string; kind: "text" | "mask" | "sha" }[] = [];
@@ -231,7 +276,7 @@
 
   const plural = (n: number, word: string) => `${n.toLocaleString("en-US")} ${word}${n === 1 ? "" : "s"}`;
   const entryCount = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "entry" : "entries"}`;
-  const keyed = (event: KeyboardEvent) => event.metaKey || event.ctrlKey;
+  const keyed = (event: KeyboardEvent | MouseEvent) => event.metaKey || event.ctrlKey;
 </script>
 
 <svelte:window
@@ -242,6 +287,18 @@
       search?.select();
     } else if (event.key === "Escape" && clearing) {
       clearing = null;
+    } else if (clearing || rowMenu || picker || (event.target as HTMLElement)?.closest?.("input, textarea")) {
+      // Fields and sheets keep their own keys.
+    } else if (keyed(event) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "c" && picks.length && window.getSelection()?.isCollapsed) {
+      event.preventDefault();
+      copyPicked();
+    } else if (keyed(event) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "a" && shown.length) {
+      event.preventDefault();
+      window.getSelection()?.removeAllRanges();
+      selected = new Set(shown.map(keyOf));
+    } else if (event.key === "Escape" && selected.size) {
+      selected = new Set();
+      anchor = null;
     }
   }}
 />
@@ -299,7 +356,19 @@
   {@const exit = exitOf(entry)}
   {@const foldKey = `${entry.id}:h`}
   {@const folded = !isOpen(foldKey, false)}
-  <div class="entry" class:quiet={entry.kind !== "action"} class:failed={entry.failed}>
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div
+    class="entry"
+    class:quiet={entry.kind !== "action"}
+    class:failed={entry.failed}
+    class:picked={selected.has(keyOf(entry))}
+    onmousedown={(event) => {
+      // Shift-click picks entries, not the text between them.
+      if (event.shiftKey) event.preventDefault();
+    }}
+    onclick={(event) => pick(event, entry)}
+    oncontextmenu={(event) => openRowMenu(event, entry)}
+  >
     <span class="time mono">{clock(entry.time)}</span>
     <div class="body">
       <div class="head">
@@ -414,6 +483,10 @@
 
   {#if picker}
     <Menu x={picker.x} y={picker.y} label="Repository" entries={pickerEntries()} onClose={() => (picker = null)} />
+  {/if}
+
+  {#if rowMenu}
+    <Menu x={rowMenu.x} y={rowMenu.y} label="Entry" entries={rowMenuEntries(rowMenu.text)} onClose={() => (rowMenu = null)} />
   {/if}
 
   {#if clearing}
@@ -584,6 +657,10 @@
     column-gap: 18px;
     padding: 8px 18px;
     border-top: 0.5px solid var(--term-border);
+  }
+  /* Picked: a soft grey wash, as other lists that are not the graph. */
+  .entry.picked {
+    background: var(--hover-wash);
   }
   /* Commands, their output and the times follow Diff & Text › Console & Activity; the time column
      grows with them, so it never runs into the titles. */

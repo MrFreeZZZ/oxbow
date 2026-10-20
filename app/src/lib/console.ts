@@ -175,3 +175,50 @@ export function outputOpen(entry: ConsoleEntry, ran: ConsoleRan): boolean {
   if (failed(ran) || ran.running) return true;
   return entry.kind === "action" && lines <= OPEN_LINES;
 }
+
+/** The keys picked after a click on `key` in `order`: Shift picks the run from `anchor` to it,
+ *  ⌘ (Ctrl elsewhere) adds or takes away that one, a plain click picks it alone. */
+export function picked(order: string[], current: Set<string>, anchor: string | null, key: string, how: { range: boolean; toggle: boolean }): Set<string> {
+  if (how.range && anchor !== null) {
+    const from = order.indexOf(anchor);
+    const to = order.indexOf(key);
+    if (from >= 0 && to >= 0) {
+      const run = order.slice(Math.min(from, to), Math.max(from, to) + 1);
+      return new Set(how.toggle ? [...current, ...run] : run);
+    }
+  }
+  if (how.toggle) {
+    const next = new Set(current);
+    if (!next.delete(key)) next.add(key);
+    return next;
+  }
+  return new Set([key]);
+}
+
+/** "2026-10-20 07:12:03", in the computer's time zone. */
+export function stamp(time: number): string {
+  const d = new Date(time);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${clock(time)}`;
+}
+
+function ranState(ran: ConsoleRan): string {
+  if (ran.running) return " · running…";
+  if (ran.stopped) return " · stopped";
+  if (failed(ran)) return ran.code === null ? " · did not start" : ` · exit ${ran.code}`;
+  return "";
+}
+
+/** An entry as text for the clipboard: its time, title and how it ended, then every command it
+ *  ran with what it printed, the ones Oxbow ran for it marked with what for. */
+export function entryText(entry: ConsoleEntry, repo?: string): string {
+  const exit = exitOf(entry);
+  const end = entry.running ? "running…" : entry.stopped ? "stopped" : entry.failed ? (exit === null ? "failed" : `exit ${exit}`) : duration(entry.millis);
+  const head = [stamp(entry.time), entry.title, repo, entry.gitoxide ? (entry.commands.length ? "gitoxide" : "gitoxide · no git process") : undefined, end];
+  const lines = [head.filter(Boolean).join("  ·  ")];
+  if (entry.note) lines.push(entry.note);
+  for (const ran of entry.commands) {
+    lines.push(`${ran.role ? `[${ran.role}] ` : ""}% ${ran.display}${ranState(ran)}`);
+    for (const line of ran.output ?? []) lines.push(`  ${line.t}`);
+  }
+  return lines.join("\n");
+}

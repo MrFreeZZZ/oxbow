@@ -1,4 +1,4 @@
-import { afterClear, dayOf, duration, exitOf, outputOpen, shows, trimmed, upsert, type ConsoleEntry, type ConsoleRan } from "../src/lib/console.ts";
+import { afterClear, dayOf, duration, entryText, exitOf, outputOpen, picked, shows, stamp, trimmed, upsert, type ConsoleEntry, type ConsoleRan } from "../src/lib/console.ts";
 import assert from "node:assert/strict";
 
 const ran = (display: string, extra: Partial<ConsoleRan> = {}): ConsoleRan => ({ display, time: 0, millis: 5, code: 0, stopped: false, ...extra });
@@ -117,4 +117,38 @@ assert.equal(duration(64_000), "1 min 4 s");
     { log: "b", entry: entry(46) },
   ];
   assert.deepEqual(afterClear(pending, ["a"]).map((p) => p.entry.id), [45, 46]);
+}
+
+// Picking entries: a click picks one, Shift the run from the last click, ⌘ adds or takes one away.
+{
+  const order = ["a", "b", "c", "d", "e"];
+  const plain = { range: false, toggle: false };
+  assert.deepEqual([...picked(order, new Set(["a", "b"]), "a", "c", plain)], ["c"]);
+  assert.deepEqual([...picked(order, new Set(["b"]), "b", "d", { range: true, toggle: false })], ["b", "c", "d"]);
+  assert.deepEqual([...picked(order, new Set(["d"]), "d", "b", { range: true, toggle: false })], ["b", "c", "d"]);
+  assert.deepEqual([...picked(order, new Set(["a", "c"]), "c", "a", { range: false, toggle: true })], ["c"]);
+  assert.deepEqual([...picked(order, new Set(["a"]), "a", "e", { range: false, toggle: true })], ["a", "e"]);
+  // Shift with nothing to start from picks the one clicked.
+  assert.deepEqual([...picked(order, new Set(), null, "c", { range: true, toggle: false })], ["c"]);
+  // ⌘⇧ adds the run to what is picked.
+  assert.deepEqual([...picked(order, new Set(["a"]), "c", "e", { range: true, toggle: true })].sort(), ["a", "c", "d", "e"]);
+}
+
+// Copied text: time, title and how it ended, then every command with its output.
+{
+  const time = new Date(2026, 9, 20, 7, 12, 3).getTime();
+  assert.equal(stamp(time), "2026-10-20 07:12:03");
+  const push = entry(5, {
+    time,
+    title: "Push main",
+    failed: true,
+    millis: 1200,
+    commands: [
+      ran("git diff --cached", { role: "secrets check", output: [] }),
+      ran("git push origin main", { code: 1, output: [{ t: "! [rejected] main -> main (fetch first)", e: true }] }),
+    ],
+  });
+  assert.equal(entryText(push), ["2026-10-20 07:12:03  ·  Push main  ·  exit 1", "[secrets check] % git diff --cached", "% git push origin main · exit 1", "  ! [rejected] main -> main (fetch first)"].join("\n"));
+  const read = entry(6, { time, kind: "read", title: "Read by Oxbow", gitoxide: true, millis: 4, note: "Read the history" });
+  assert.equal(entryText(read, "oxbow"), ["2026-10-20 07:12:03  ·  Read by Oxbow  ·  oxbow  ·  gitoxide · no git process  ·  4 ms", "Read the history"].join("\n"));
 }
