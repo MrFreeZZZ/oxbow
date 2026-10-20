@@ -239,12 +239,13 @@
     };
   }
 
-  /** "5 files · 3 staged · 2 unstaged" for the row of uncommitted changes. */
+  /** "5 files · 3 staged · 1 unstaged · 1 untracked" for the row of uncommitted changes. */
   function worktreeLine(w: WorktreeSummary): string {
     const parts = [`${w.files} ${w.files === 1 ? "file" : "files"}`];
     if (w.conflicted) parts.push(`${w.conflicted} conflicted`);
     if (w.staged) parts.push(`${w.staged} staged`);
-    if (w.unstaged) parts.push(`${w.unstaged} unstaged`);
+    if (w.unstaged > w.untracked) parts.push(`${w.unstaged - w.untracked} unstaged`);
+    if (w.untracked) parts.push(`${w.untracked} untracked`);
     return parts.join(" · ");
   }
 
