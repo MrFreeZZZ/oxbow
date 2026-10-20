@@ -24,6 +24,8 @@ export const defaults = {
   /** Days the Operation Log keeps its steps, so they can be undone. */
   "oxbow.undo.keepDays": 30,
   "oxbow.diff.view": "changes" as "changes" | "full",
+  /** Old and new lines one under the other, or next to each other. */
+  "oxbow.diff.layout": "unified" as "unified" | "split",
   "oxbow.diff.contextLines": 3,
   "oxbow.diff.wordHighlight": true,
   "oxbow.diff.ignoreWhitespace": false,
@@ -84,6 +86,7 @@ export const rules: Partial<Record<PrefKey, Rule>> = {
   "oxbow.confirm.scope": { oneOf: ["all", "risky"] },
   "oxbow.undo.keepDays": { min: 1, max: 3650, whole: true },
   "oxbow.diff.view": { oneOf: ["changes", "full"] },
+  "oxbow.diff.layout": { oneOf: ["unified", "split"] },
   "oxbow.diff.contextLines": { min: 0, max: 100, whole: true },
   "oxbow.diff.files": { oneOf: ["smart", "expanded", "collapsed"] },
   "oxbow.diff.foldOver": { min: 1, max: 100000, whole: true },

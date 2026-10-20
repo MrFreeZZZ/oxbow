@@ -90,6 +90,7 @@
     of,
     force = false,
     name,
+    marks = [],
     children,
   }: {
     /** Lines in the block, for its height before it is drawn. */
@@ -100,6 +101,8 @@
     force?: boolean;
     /** Name of the block, for Find in file to find it on the page. */
     name?: string;
+    /** Rows of the block where a change starts, for Next Change to step to them drawn or not. */
+    marks?: number[];
     children: Snippet;
   } = $props();
 
@@ -163,7 +166,7 @@
   const estimate = $derived(lines * lineHeight);
 </script>
 
-<div bind:this={box} class="lazy" data-block={name} style:height={live ? undefined : `${height ?? estimate}px`}>
+<div bind:this={box} class="lazy" data-block={name} data-marks={marks.length ? marks.join(",") : undefined} style:height={live ? undefined : `${height ?? estimate}px`}>
   {#if live}{@render children()}{/if}
 </div>
 

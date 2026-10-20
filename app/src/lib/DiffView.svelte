@@ -21,6 +21,7 @@
   import { nav } from "./nav.svelte";
   import { untrack } from "svelte";
   import { foldReason, startsFolded } from "./diffFold";
+  import { changedRow, changeStarts, rowsOf, sideKind, type Row } from "./diffRows";
   import { mac } from "./keys";
   import ImageDiff from "./ImageDiff.svelte";
   import UnusualCard from "./UnusualCard.svelte";
@@ -258,6 +259,16 @@
     return out;
   }
 
+  /** Old and new lines next to each other, from Settings › Diff & Text or this view's button. */
+  const split = $derived(prefs.get("oxbow.diff.layout") === "split");
+  /** As VS Code's Toggle Inline View, the button changes the setting, so every diff follows. */
+  const toggleLayout = () => prefs.set("oxbow.diff.layout", split ? "unified" : "split");
+
+  /** Where changes start among a hunk's lines `start` to `end`, for Next Change. */
+  const lineMarks = (hunk: Hunk, start: number, end: number) => changeStarts((i) => hunk.lines[i].kind !== "context", start, end);
+  /** Where changes start among Side by Side rows `start` to `end`. */
+  const rowMarks = (rows: Row[], start: number, end: number) => changeStarts((i) => changedRow(rows[i]), start, end);
+
   /** Name of the block of a hunk's lines from `start`, for Find in file to step to it. */
   const blockKey = (diff: FileDiff, h: number, start: number) => `${diff.file.path}:${h}:${start}`;
 
@@ -271,6 +282,20 @@
       const cut = shown.cut?.diff === diff ? shown.cut : null;
       diff.hunks.forEach((hunk, h) => {
         const count = cut ? cut.lines[h] : hunk.lines.length;
+        if (split) {
+          // Side by Side draws an unchanged line twice: its matches count once, on the new side.
+          const rows = rowsOf(hunk, count);
+          const hitsOf = (at: number | null) => (at === null ? 0 : occurrences(hunk.lines[at].text || " ", find, matchCase).length);
+          for (const start of blocks(rows.length)) {
+            let n = 0;
+            for (let r = start; r < Math.min(rows.length, start + BLOCK); r++) {
+              const row = rows[r];
+              n += (changedRow(row) ? hitsOf(row.left) : 0) + hitsOf(row.right);
+            }
+            if (n) out.push({ key: blockKey(diff, h, start), count: n });
+          }
+          return;
+        }
         for (const start of blocks(count)) {
           let n = 0;
           for (let i = start; i < Math.min(count, start + BLOCK); i++) n += occurrences(hunk.lines[i].text || " ", find, matchCase).length;
@@ -311,6 +336,15 @@
     return Math.max(3, String(last).length);
   }
 
+  /** Rounded corners of one side of a Side by Side row, at the ends of a run of its kind. */
+  function sideRadius(lines: DiffLine[], rows: Row[], r: number, side: "left" | "right"): string {
+    const kind = sideKind(lines, rows[r], side);
+    if (kind === "context") return "0";
+    const top = sideKind(lines, rows[r - 1], side) !== kind ? 9 : 0;
+    const bottom = sideKind(lines, rows[r + 1], side) !== kind ? 9 : 0;
+    return `${top}px ${top}px ${bottom}px ${bottom}px`;
+  }
+
   function gap(lines: DiffLine[], i: number): number {
     if (i === 0) return 0;
     const line = lines[i];
@@ -328,6 +362,41 @@
     <span class="path"><span class="dir">{path.dir}</span>{path.name}</span>
     {#if diff.file.oldPath}<span class="from">from {diff.file.oldPath}</span>{/if}
   {/if}
+{/snippet}
+
+<!-- A line's code: syntax colors, changed words, matches of Find. `counted` is false for the
+     old side of an unchanged line in Side by Side, whose matches are the new side's again. -->
+{#snippet code(diff: FileDiff, line: DiffLine, language: ReturnType<typeof languageOf>, counted: boolean)}<span class="text">{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found && counted} class:twin={piece.found && !counted} data-hit={counted ? piece.hit : undefined} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}{#if line.cr && own(showEol, diff.file.path)}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}{#if line.secret}<span class="secret" title="Looks like a secret: Oxbow stops the commit until it is unstaged, or you commit anyway. Add oxbow:allow to the line if it is not one."><svg viewBox="0 0 16 16"><path d="M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2" /></svg>{line.secret}</span>{/if}</span>{/snippet}
+
+{#snippet pickBox(hunk: Hunk, line: DiffLine, i: number, on: boolean)}
+  <button
+    class="pick"
+    class:on
+    role="checkbox"
+    aria-checked={on}
+    aria-label="{on ? 'Unselect' : 'Select'} line {line.newLine ?? line.oldLine}"
+    title="Pick this line; Shift-click picks a range"
+    onclick={(e) => picker!.toggle(hunk, i, e.shiftKey)}
+  ><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" /></svg></button>
+{/snippet}
+
+<!-- One side of a Side by Side row: the old line on the left, the new one on the right. -->
+{#snippet half(diff: FileDiff, hunk: Hunk, rows: Row[], r: number, side: "left" | "right", language: ReturnType<typeof languageOf>, picking: boolean, picked: number[])}
+  {@const at = side === "left" ? rows[r].left : rows[r].right}
+  {@const line = at === null ? null : hunk.lines[at]}
+  {@const on = at !== null && picked.includes(at)}
+  <div
+    class="half {line ? line.kind : 'empty'}"
+    class:picking
+    class:faded={picked.length > 0 && !!line && line.kind !== "context" && !on}
+    style:border-radius={sideRadius(hunk.lines, rows, r, side)}
+  >
+    {#if picking}
+      {#if line && at !== null && line.kind !== "context"}{@render pickBox(hunk, line, at, on)}{:else}<span></span>{/if}
+    {/if}
+    <span class="no">{line ? ((side === "left" ? line.oldLine : line.newLine) ?? "") : ""}</span>
+    {#if line}{@render code(diff, line, language, side === "right" || line.kind !== "context")}{/if}
+  </div>
 {/snippet}
 
 {#each shown.files as diff (diff.file.path)}
@@ -381,6 +450,18 @@
             <svg class="icon" viewBox="0 0 16 16"><path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" /></svg>
           </button>
         {/if}
+        <button
+          class="toggle"
+          class:on={split}
+          onclick={toggleLayout}
+          aria-pressed={split}
+          aria-label={split ? "Show unified" : "Show side by side"}
+          title={split ? "Show old and new lines one under the other" : "Show old and new lines side by side"}
+        >
+          <svg class="icon" viewBox="0 0 16 16">
+            {#if split}<rect x="2" y="2.5" width="12" height="11" rx="2" /><path d="M8 2.5v11M4 6h2M10 6h2M4 9h2M10 9h2" />{:else}<rect x="2" y="2.5" width="12" height="11" rx="2" /><path d="M5 6h6M5 9h6" />{/if}
+          </svg>
+        </button>
         <button
           class="toggle"
           class:on={whole}
@@ -468,39 +549,50 @@
           {@const picking = !!picker?.enabled(hunk)}
           {@const picked = picking ? picker!.picked(hunk) : []}
           {@const count = cut ? cut.lines[h] : hunk.lines.length}
-          {#each blocks(count) as start (start)}
-            {@const end = Math.min(count, start + BLOCK)}
-            <Lazy lines={end - start} of={hunk.lines[start]} name={blockKey(diff, h, start)} force={focus === blockKey(diff, h, start)}>
-              {#each hunk.lines.slice(start, end) as line, j (j)}
-                {@const i = start + j}
-                {@const on = picked.includes(i)}
-                <div
-                  class="line {line.kind}"
-                  class:picking
-                  class:faded={picked.length > 0 && line.kind !== "context" && !on}
-                  style:border-radius={radius(hunk.lines, i)}
-                  style:margin-top="{gap(hunk.lines, i)}px"
-                >
-                  {#if picking}
-                    {#if line.kind !== "context"}
-                      <button
-                        class="pick"
-                        class:on
-                        role="checkbox"
-                        aria-checked={on}
-                        aria-label="{on ? 'Unselect' : 'Select'} line {line.newLine ?? line.oldLine}"
-                        title="Pick this line; Shift-click picks a range"
-                        onclick={(e) => picker!.toggle(hunk, i, e.shiftKey)}
-                      ><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" /></svg></button>
-                    {:else}<span></span>{/if}
-                  {/if}
-                  <span class="no">{line.oldLine ?? ""}</span>
-                  <span class="no">{line.newLine ?? ""}</span>
-                  <span class="text">{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found} data-hit={piece.hit} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}{#if line.cr && own(showEol, diff.file.path)}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}{#if line.secret}<span class="secret" title="Looks like a secret: Oxbow stops the commit until it is unstaged, or you commit anyway. Add oxbow:allow to the line if it is not one."><svg viewBox="0 0 16 16"><path d="M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2" /></svg>{line.secret}</span>{/if}</span>
-                </div>
-              {/each}
-            </Lazy>
-          {/each}
+          {#if split}
+            {@const rows = rowsOf(hunk, count)}
+            {#each blocks(rows.length) as start (start)}
+              {@const end = Math.min(rows.length, start + BLOCK)}
+              <Lazy
+                lines={end - start}
+                of={hunk.lines[rows[start].left ?? rows[start].right ?? 0]}
+                name={blockKey(diff, h, start)}
+                force={focus === blockKey(diff, h, start)}
+                marks={rowMarks(rows, start, end)}
+              >
+                {#each rows.slice(start, end) as _, j (j)}
+                  <div class="row">
+                    {@render half(diff, hunk, rows, start + j, "left", language, picking, picked)}
+                    {@render half(diff, hunk, rows, start + j, "right", language, picking, picked)}
+                  </div>
+                {/each}
+              </Lazy>
+            {/each}
+          {:else}
+            {#each blocks(count) as start (start)}
+              {@const end = Math.min(count, start + BLOCK)}
+              <Lazy lines={end - start} of={hunk.lines[start]} name={blockKey(diff, h, start)} force={focus === blockKey(diff, h, start)} marks={lineMarks(hunk, start, end)}>
+                {#each hunk.lines.slice(start, end) as line, j (j)}
+                  {@const i = start + j}
+                  {@const on = picked.includes(i)}
+                  <div
+                    class="line {line.kind}"
+                    class:picking
+                    class:faded={picked.length > 0 && line.kind !== "context" && !on}
+                    style:border-radius={radius(hunk.lines, i)}
+                    style:margin-top="{gap(hunk.lines, i)}px"
+                  >
+                    {#if picking}
+                      {#if line.kind !== "context"}{@render pickBox(hunk, line, i, on)}{:else}<span></span>{/if}
+                    {/if}
+                    <span class="no">{line.oldLine ?? ""}</span>
+                    <span class="no">{line.newLine ?? ""}</span>
+                    {@render code(diff, line, language, true)}
+                  </div>
+                {/each}
+              </Lazy>
+            {/each}
+          {/if}
         {/each}
       </div>
       {#if cut}
@@ -693,6 +785,9 @@
     border-radius: var(--radius-l);
   }
   /* The number columns fit the longest line number at the code's size. */
+  .code {
+    --empty-side: color-mix(in srgb, var(--text2) 10%, transparent);
+  }
   .line {
     --no: calc(var(--digits, 3) * 1ch + 18px);
     display: grid;
@@ -701,8 +796,35 @@
   .line.picking {
     grid-template-columns: 24px var(--no) var(--no) 1fr;
   }
-  .line.faded > :not(.pick) {
+  .line.faded > :not(.pick),
+  .half.faded > :not(.pick) {
     opacity: 0.45;
+  }
+  /* Side by Side: the old side and the new side as two equal columns, a row as tall as the
+     taller of its lines, so the sides stay level as they wrap. */
+  .row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: 4px;
+  }
+  .half {
+    --no: calc(var(--digits, 3) * 1ch + 18px);
+    display: grid;
+    grid-template-columns: var(--no) minmax(0, 1fr);
+    align-content: start;
+  }
+  .half.picking {
+    grid-template-columns: 24px var(--no) minmax(0, 1fr);
+  }
+  .half.added {
+    background: var(--add);
+  }
+  .half.removed {
+    background: var(--del);
+  }
+  /* No line on this side: soft hatching, as VS Code marks it, so the eye keeps the rows level. */
+  .half.empty {
+    background: repeating-linear-gradient(-45deg, transparent 0 6px, var(--empty-side) 6px 7px);
   }
   .line.added {
     background: var(--add);
@@ -763,6 +885,11 @@
   }
   /* Searched code: an outlined neutral capsule, since yellow is for tags. */
   .found {
+    border-radius: var(--radius-xs);
+    box-shadow: 0 0 0 1.5px var(--found-ring);
+    background: var(--found-bg);
+  }
+  .twin {
     border-radius: var(--radius-xs);
     box-shadow: 0 0 0 1.5px var(--found-ring);
     background: var(--found-bg);
