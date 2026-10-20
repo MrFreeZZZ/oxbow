@@ -91,7 +91,8 @@ fn bisecting_finds_the_first_bad_commit_and_brings_the_stash_back() {
         "{:?}",
         state.output
     );
-    assert!(state.log.contains("# first bad commit:"));
+    // Git 2.56 and newer put the term in quotes.
+    assert!(state.log.contains("# first bad commit:") || state.log.contains("# first 'bad' commit:"));
 
     let finish = repo.plan(&Action::BisectReset).unwrap();
     let shown: Vec<String> = finish.commands.iter().map(|c| c.display()).collect();
