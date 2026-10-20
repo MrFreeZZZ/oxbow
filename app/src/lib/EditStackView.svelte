@@ -40,6 +40,7 @@
     version,
     run,
     onClose,
+    onSeries,
   }: {
     /** A branch of the stack; the checked-out one when null. */
     branch: string | null;
@@ -49,6 +50,8 @@
     version: number;
     run: (request: Request | Promise<Request>) => Promise<boolean>;
     onClose: () => void;
+    /** The commits the edit rewrote, before beside after. */
+    onSeries: () => void;
   } = $props();
 
   let stack = $state<Stack | null>(null);
@@ -655,6 +658,7 @@
         {#if done}
           <div class="buttons">
             <button class="button" onclick={undo}>Undo</button>
+            <button class="button" onclick={onSeries} title="Each commit before and after the edit, side by side (git range-diff)">Compare Series</button>
             <span class="grow"></span>
             <button class="button" onclick={onClose}>Back to History</button>
             {#if done.push.length}

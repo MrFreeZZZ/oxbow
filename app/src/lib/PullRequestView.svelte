@@ -8,7 +8,8 @@
   import { github } from "./github.svelte";
   import type { Request } from "./confirm.svelte";
   import type { BranchContext } from "./branches";
-  import type { Action, History, MergeMethodName, Landing, PullCheck, PullEntry, PullRequest, PullSummary, ReviewState, Stack, StackPreview } from "./types";
+  import type { Action, History, MergeMethodName, Landing, PullCheck, PullEntry, PullRequest, PullSummary, ReviewState, Rewrite, Stack, StackPreview } from "./types";
+  import type { SeriesQuery } from "./series";
   import { lane, person, plate, relativeTime, shortId, splitPath, tint } from "./format";
   import { softArrows } from "./shapes";
   import { editStackRequest, freshDraft, planOf } from "./stack";
@@ -35,6 +36,7 @@
     run,
     onBranch,
     copy,
+    onSeries,
   }: {
     branch: string;
     history: History;
@@ -46,6 +48,8 @@
     /** Show another branch of the stack. */
     onBranch: (name: string) => void;
     copy: (text: string) => void;
+    /** The branch's commits before and after its latest rewrite. */
+    onSeries: (query: SeriesQuery) => void;
   } = $props();
 
   const HEIGHT = 42;
@@ -63,6 +67,34 @@
   let stripWidth = $state(0);
 
   api.githubAccount().then((account) => (me = account?.login ?? null), () => {});
+
+  /** The latest rewrite of the branch: rewritten here and not pushed yet, or force pushed. */
+  let rewrite = $state<Rewrite | null>(null);
+  $effect(() => {
+    void version;
+    const name = branch;
+    let latest = true;
+    api.lastRewrite(name).then(
+      (r) => latest && (rewrite = r),
+      () => latest && (rewrite = null),
+    );
+    return () => {
+      latest = false;
+    };
+  });
+
+  const rewriteText = $derived(
+    !rewrite
+      ? ""
+      : rewrite.source === "notPushed"
+        ? "Rewritten here since the last push"
+        : `${rewrite.source === "pushed" ? "Force pushed from here" : "Force pushed by someone else"}${rewrite.time ? ` ${relativeTime(rewrite.time)}` : ""}`,
+  );
+
+  function openSeries() {
+    if (!rewrite) return;
+    onSeries({ branch, old: rewrite.old, new: rewrite.new, rewritten: rewrite.rewritten, branches: [], from: rewriteText });
+  }
 
   // The pull request, again after every change; GitHub works out mergeability a moment later.
   let checksAgain = 0;
@@ -541,6 +573,13 @@
         <button role="tab" class="tab" class:on={tab === "commits"} aria-selected={tab === "commits"} onclick={() => (tab = "commits")}
           style:--on-bg={tint(colorOf(pr.head))} style:--on-fg={plate(colorOf(pr.head))}>Commits {pr.commits.length}</button>
         {#if error}<span class="load-error">{error}</span>{/if}
+        {#if rewrite}
+          <span class="grow"></span>
+          <button class="rewrite" onclick={openSeries} title="{rewriteText}: each commit before and after, side by side (git range-diff)">
+            <svg class="icon small" viewBox="0 0 16 16"><path d="M2.5 5h8M8 2.5 10.5 5 8 7.5M13.5 11h-8M8 8.5 5.5 11 8 13.5" /></svg>
+            <span class="rewrite-why">{rewriteText} ·</span> Compare Series
+          </button>
+        {/if}
       </div>
 
       <div class="scroll">
@@ -1039,6 +1078,27 @@
     font-size: var(--text-small);
     color: var(--red);
     margin-left: 8px;
+  }
+  .rewrite {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    height: 26px;
+    padding: 0 12px;
+    border-radius: var(--radius-pill);
+    background: var(--glass);
+    border: 0.5px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    font-size: var(--text-small);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .rewrite-why {
+    color: var(--text2);
+    font-weight: 400;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .scroll {
     flex-grow: 1;

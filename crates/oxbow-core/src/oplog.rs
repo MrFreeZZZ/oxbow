@@ -110,6 +110,11 @@ pub struct OpEntry {
     /// Settings' "Keep undo history for" and git's expiry of the log's reflog entries.
     #[serde(default)]
     pub expires: i64,
+    /// Local branches (full names) the step rewrote rather than moved forward, e.g. by a rebase
+    /// or an amend: their old and new commits can be compared as a series. `None` in entries
+    /// written before Oxbow kept it.
+    #[serde(default)]
+    pub rewrites: Option<Vec<String>>,
 }
 
 /// Where Undo or Restore to Here takes the repository: the steps it undoes, newest first, and
@@ -174,6 +179,13 @@ impl Repo {
         let days = self.snapshot_days();
         for entry in &mut entries {
             entry.expires = entry.time + i64::from(days) * 86_400;
+            if entry.rewrites.is_none() {
+                // Older entries: only the kinds of step that rewrite are worth asking git about.
+                let may = matches!(entry.kind.as_str(), "rebase" | "edit" | "push")
+                    || entry.title.starts_with("Amend ")
+                    || entry.title.starts_with("Add ");
+                entry.rewrites = Some(if may { self.rewrites(&entry.refs) } else { Vec::new() });
+            }
         }
         // git may have expired the objects of old steps already.
         if let Some(first) = entries.first()
@@ -292,6 +304,7 @@ impl Repo {
         }
         self.keep_long_enough();
 
+        let rewrites = Some(self.rewrites(&refs));
         let entry = OpEntry {
             id,
             time: now(),
@@ -306,6 +319,7 @@ impl Repo {
             before: before.trees.clone(),
             after: after.trees.clone(),
             expires: 0,
+            rewrites,
         };
         let file = self.oplog_file()?;
         if let Some(dir) = file.parent() {
@@ -684,6 +698,17 @@ impl Repo {
             .collect())
     }
 
+    /// The local branches among `refs` that moved to a commit that doesn't have the old one.
+    fn rewrites(&self, refs: &[RefMove]) -> Vec<String> {
+        refs.iter()
+            .filter(|m| m.name.starts_with("refs/heads/"))
+            .filter_map(|m| match (&m.before, &m.after) {
+                (Some(before), Some(after)) if !self.is_ancestor(before, after) => Some(m.name.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The kind of each object that exists: `commit`, `tag`, `tree` or `blob`.
     fn object_kinds(&self, ids: &[String]) -> Result<Vec<(String, String)>> {
         let unique: BTreeSet<&String> = ids.iter().collect();
@@ -704,7 +729,7 @@ impl Repo {
             .collect())
     }
 
-    fn object_exists(&self, id: &str) -> bool {
+    pub(crate) fn object_exists(&self, id: &str) -> bool {
         self.run(&GitCommand::new(["cat-file", "-e", id])).is_ok()
     }
 

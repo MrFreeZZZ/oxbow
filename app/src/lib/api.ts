@@ -36,6 +36,8 @@ import type {
   NewRepoPlan,
   GitCommand,
   OpEntry,
+  Rewrite,
+  Series,
   ReflogEntry,
   FixState,
   SnapshotComparison,
@@ -188,6 +190,8 @@ export const api = {
   refreshRemoteTags: () => invoke<boolean>("refresh_remote_tags"),
   /** Newest first. */
   operationLog: () => invoke<OpEntry[]>("operation_log"),
+  series: (old: string, next: string, rewritten: string[]) => invoke<Series>("series", { old, new: next, rewritten }),
+  lastRewrite: (branch: string) => invoke<Rewrite | null>("last_rewrite", { branch }),
   /** Newest first, each commit once. */
   reflogEntries: () => invoke<ReflogEntry[]>("reflog_entries"),
   /** What Fix a Mistake plans from. */

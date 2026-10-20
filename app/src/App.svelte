@@ -55,6 +55,9 @@
   import { withKeys } from "./lib/keys";
   import { isRedo, lostRow, oplog, undoRequest } from "./lib/oplog.svelte";
   import EditStackView from "./lib/EditStackView.svelte";
+  import SeriesView from "./lib/SeriesView.svelte";
+  import { stepQuery, type SeriesQuery } from "./lib/series";
+  import { relativeTime } from "./lib/format";
   import ActivityPopover from "./lib/ActivityPopover.svelte";
   import { activity, failureShort, type ActivityItem } from "./lib/activity.svelte";
   import { addToCommitRequest, dropCommitRequest, rewordRequest, squashRequest } from "./lib/stack";
@@ -215,7 +218,7 @@
   const panelBonus = $derived(!narrow && sideHidden ? SIDEBAR : 0);
   const shownPanelWidth = $derived(Math.min(Math.max(panelWidth + panelBonus, PANEL_MIN), panelMax));
   /** The screen next to the sidebar. */
-  let view = $state<"history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull">("history");
+  let view = $state<"history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull" | "series">("history");
   /** The branch whose stack Edit Stack shows; the checked-out one when null. */
   let stackBranch = $state<string | null>(null);
 
@@ -236,7 +239,7 @@
   const shownPull = $derived(view === "pull" && pullBranch ? github.pullOf(pullBranch) : null);
 
   /** The screen File History goes back to. */
-  let fileBack = $state<"history" | "stashes" | "oplog" | "compare">("history");
+  let fileBack = $state<"history" | "stashes" | "oplog" | "compare" | "series">("history");
   // A diff's File History button opens the screen.
   $effect(() => {
     if (!nav.file) return;
@@ -256,6 +259,30 @@
     nav.focusFind = false;
     requestAnimationFrame(() => findField?.focus());
   });
+  /** What Compare Series shows, and the screen its back button returns to. */
+  let seriesQuery = $state<SeriesQuery | null>(null);
+  let seriesBack = $state<"history" | "oplog" | "pull" | "stack">("history");
+
+  function openSeries(query: SeriesQuery) {
+    if (view !== "series") seriesBack = view === "oplog" || view === "pull" || view === "stack" ? view : "history";
+    seriesQuery = query;
+    view = "series";
+    resolving = false;
+  }
+
+  /** Compare Series for a step of the Operation Log that rewrote branches. */
+  function seriesOfStep(entry: OpEntry) {
+    const query = stepQuery(entry, `${entry.title} · ${relativeTime(entry.time)}`);
+    if (query) openSeries(query);
+  }
+
+  /** Compare Series for the newest step, right after Edit Stack rewrote the stack. */
+  async function seriesOfLastStep() {
+    await oplog.load();
+    const entry = oplog.entries.find((e) => e.rewrites?.length);
+    if (entry) seriesOfStep(entry);
+  }
+
   /** What Compare shows: `target` against `base`. */
   let comparing = $state<{ base: string; target: string; mode: CompareMode }>({ base: "", target: "", mode: "split" });
 
@@ -409,7 +436,7 @@
     lfs.forget();
     activity.reset();
     stopPaging();
-    if (view === "compare" || view === "file" || view === "stack" || view === "pull") view = "history";
+    if (view === "compare" || view === "file" || view === "stack" || view === "pull" || view === "series") view = "history";
     try {
       limit = PAGE;
       unreachable = new Set();
@@ -1682,7 +1709,7 @@
     <Sidebar {repo} {history} {selectedRow} ctx={branchCtx!} onOpen={chooseRepo} onOpenPath={load} onWelcome={closeRepo}
       onPick={aside((id: string) => ((expanded = false), pick(id), requestAnimationFrame(() => list?.focus())))}
       {run}
-      {view}
+      view={view === "series" ? seriesBack : view}
       onView={(v) => {
         sideShown = false;
         view = v;
@@ -1703,7 +1730,7 @@
       <header data-tauri-drag-region>
         <div class="lead" data-tauri-drag-region>
           {#if view === "file" && !showConflicts}
-            {@const back = fileBack === "compare" ? "Compare" : fileBack === "stashes" ? "Stashes" : fileBack === "oplog" ? "Operation Log" : "History"}
+            {@const back = fileBack === "compare" ? "Compare" : fileBack === "series" ? "Compare Series" : fileBack === "stashes" ? "Stashes" : fileBack === "oplog" ? "Operation Log" : "History"}
             <button class="back" onclick={() => ((view = fileBack), (nav.file = null))} aria-label="Back to {back}" title="Back to {back}">
               <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>
             </button>
@@ -1721,6 +1748,9 @@
             {:else if view === "stack"}
               <span class="name">Edit Stack</span>
               <span class="sub">Interactive rebase · {repo.name}</span>
+            {:else if view === "series" && seriesQuery}
+              <span class="name">Compare Series</span>
+              <span class="sub">{seriesQuery.branch} · {seriesQuery.from}</span>
             {:else if view === "compare"}
               <span class="name">Compare</span>
               <span class="sub">{comparing.target} with {comparing.base}</span>
@@ -1759,6 +1789,12 @@
               <button role="radio" aria-checked={nav.fileMode === "changes"} class:on={nav.fileMode === "changes"} onclick={() => (nav.fileMode = "changes")}>Changes</button>
               <button role="radio" aria-checked={nav.fileMode === "blame"} class:on={nav.fileMode === "blame"} onclick={() => (nav.fileMode = "blame")}>Blame</button>
             </div>
+          {/if}
+          {#if view === "series" && !showConflicts}
+            {@const back = seriesBack === "oplog" ? "Operation Log" : seriesBack === "pull" ? "Pull Request" : seriesBack === "stack" ? "Edit Stack" : "History"}
+            <button class="capsule" onclick={() => (view = seriesBack)} title="Back to {back}">
+              <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>{back}
+            </button>
           {/if}
           {#if (view === "compare" || view === "stack" || view === "pull") && !showConflicts}
             <button class="capsule" onclick={() => (view = "history")} title="Back to the commit graph">
@@ -1864,6 +1900,7 @@
               onShow={showMove}
               onBranch={branchAtMove}
               onCompare={compareStep}
+              onSeries={seriesOfStep}
             />
             <span class="divider"></span>
             <button onclick={() => openFixes()} aria-label="Fix a mistake" title={withKeys("Fix a Mistake…", combo("fixMistake"))}>
@@ -1976,6 +2013,20 @@
             onGrip={startResize}
           />
         {/key}
+      {:else if view === "series" && seriesQuery}
+        {#key repo.path}
+          <SeriesView
+            query={seriesQuery}
+            {version}
+            {colorOf}
+            lookup={(id) => rowsById.get(id)}
+            onBranch={(name) => {
+              const b = seriesQuery?.branches.find((x) => x.branch === name);
+              if (seriesQuery && b) seriesQuery = { ...seriesQuery, ...b };
+            }}
+            copy={(text) => copyText(text, "Copied the command.")}
+          />
+        {/key}
       {:else if view === "pull" && pullBranch && branchCtx}
         {#key repo.path}
           <PullRequestView
@@ -1987,15 +2038,16 @@
             {run}
             onBranch={(name) => (pullBranch = name)}
             copy={(text) => copyText(text, `Copied ${text.length > 40 ? "it" : text}.`)}
+            onSeries={openSeries}
           />
         {/key}
       {:else if view === "stack" && branchCtx}
         {#key repo.path}
-          <EditStackView branch={stackBranch} ctx={branchCtx} {colorOf} {version} {run} onClose={() => (view = "history")} />
+          <EditStackView branch={stackBranch} ctx={branchCtx} {colorOf} {version} {run} onClose={() => (view = "history")} onSeries={seriesOfLastStep} />
         {/key}
       {:else if view === "oplog"}
         {#key repo.path}
-          <OperationLog screen repo={repo.name} run={(request) => void run(request)} onShow={showMove} onBranch={branchAtMove} onCompare={compareStep} />
+          <OperationLog screen repo={repo.name} run={(request) => void run(request)} onShow={showMove} onBranch={branchAtMove} onCompare={compareStep} onSeries={seriesOfStep} />
         {/key}
       {:else if view === "stashes" && branchCtx}
         {#key repo.path}

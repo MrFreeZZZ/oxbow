@@ -28,6 +28,7 @@ pub mod remote;
 pub mod repo;
 pub mod search;
 pub mod secrets;
+pub mod series;
 pub mod setup;
 pub mod ssh;
 pub mod stack;
@@ -62,6 +63,10 @@ pub use remote::{CommitBrief, DeletionCheck, Failure, FailureKind, Replay, Track
 pub use repo::{DiffOptions, HeadInfo, RefInfo, RefKind, Repo, StashInfo};
 pub use search::{SearchHit, SearchMode, SearchQuery, SearchResult};
 pub use secrets::{PatternKind, SecretFinding, SecretPattern, set_secrets_check};
+pub use series::{
+    Inner, InterLine, InterSection, Outer, PairKind, Rewrite, RewriteSource, SectionKind, Series, SeriesCommit,
+    SeriesPair,
+};
 pub use setup::{CloneOptions, NewRepoOptions, NewRepoPlan, RemoteProbe, RepoGlance};
 pub use ssh::{SshCheck, SshProblem, SshStep};
 pub use stack::{
