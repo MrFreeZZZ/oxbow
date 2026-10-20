@@ -1534,7 +1534,7 @@
                       {#if theme.rank}<span class="rank">{theme.rank}</span>{/if}
                       <span class:strong={on}>{theme.name}</span>
                     </span>
-                    <span class="card-sub">{theme.installs ? `${theme.installs} · ` : "Default · "}{theme.light && theme.dark ? "Light, Dark" : theme.dark ? "Dark" : "Light"}</span>
+                    <span class="card-sub">{theme.installs ? `${theme.installs} · ` : theme.id === "oxbow" ? "Default · " : ""}{theme.light && theme.dark ? "Light, Dark" : theme.dark ? "Dark" : "Light"}</span>
                   </button>
                 {/each}
               </div>
@@ -2413,8 +2413,7 @@
   .n {
     width: 30px;
     text-align: right;
-    color: var(--code-dim, var(--text2));
-    opacity: 0.7;
+    color: var(--code-ln, color-mix(in srgb, var(--code-dim, var(--text2)) 70%, transparent));
     flex-shrink: 0;
   }
 

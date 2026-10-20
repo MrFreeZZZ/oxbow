@@ -824,7 +824,7 @@
   }
   /* No line on this side: soft hatching, as VS Code marks it, so the eye keeps the rows level. */
   .half.empty {
-    background: repeating-linear-gradient(-45deg, transparent 0 6px, var(--empty-side) 6px 7px);
+    background: repeating-linear-gradient(-45deg, transparent 0 6px, var(--empty-side) 6px 7px) var(--code-filler, transparent);
   }
   .line.added {
     background: var(--add);
@@ -861,8 +861,8 @@
     background: var(--del);
   }
   .no {
-    color: var(--code-dim, var(--text2));
-    opacity: 0.7;
+    /* A theme's own line number color, or the comment color softened. */
+    color: var(--code-ln, color-mix(in srgb, var(--code-dim, var(--text2)) 70%, transparent));
     text-align: right;
     padding-right: 10px;
     user-select: none;
