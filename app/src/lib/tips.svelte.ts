@@ -57,10 +57,6 @@ export const TIPS = {
     title: "Amend makes a new commit",
     body: ["The old last commit is replaced by a new one with a new SHA. That’s fine before you push; after a push, the server still has the old one and needs a force push."],
   },
-  stashApplyPop: {
-    title: "Apply or Pop?",
-    body: ["Both bring the stashed changes back into your files. Pop also deletes the stash once they apply without conflicts; Apply keeps it, so you can apply it again elsewhere."],
-  },
 } satisfies Record<string, Tip>;
 
 export type TipId = keyof typeof TIPS;
