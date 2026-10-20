@@ -155,6 +155,23 @@ fn a_file_is_ignored_with_a_staged_rule() {
 }
 
 #[test]
+fn ignoring_keeps_a_gitignore_that_is_not_utf8() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    std::fs::write(fx.path().join(".gitignore"), b"# caf\xe9\nimportant/\n").unwrap();
+    fx.write("new-file.log", "noise\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&Action::Ignore {
+        pattern: "new-file.log".into(),
+    })
+    .unwrap();
+    assert_eq!(
+        std::fs::read(fx.path().join(".gitignore")).unwrap(),
+        b"# caf\xe9\nimportant/\nnew-file.log\n"
+    );
+}
+
+#[test]
 fn chosen_files_are_stashed_and_the_rest_stays() {
     let mut fx = Fixture::new();
     fx.commit("a.txt", "a\n", "Root");

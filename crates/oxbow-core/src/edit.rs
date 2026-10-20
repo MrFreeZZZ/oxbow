@@ -29,7 +29,8 @@ impl Repo {
         } else {
             "the same changes and message, as a new commit with a new SHA"
         };
-        args.push(short(commit));
+        // The whole sha: seven characters can match more than one object in a big repository.
+        args.push(commit.to_owned());
         Ok(vec![GitCommand::new(args).comment(comment)])
     }
 
@@ -41,7 +42,7 @@ impl Repo {
         } else {
             "a new commit with the opposite changes; the original stays in history"
         };
-        args.push(short(commit));
+        args.push(commit.to_owned());
         Ok(vec![GitCommand::new(args).comment(comment)])
     }
 
@@ -64,17 +65,7 @@ pub(crate) fn plan_reset(commit: &str, mode: ResetMode) -> Vec<GitCommand> {
             "--hard: move the branch and overwrite the index and your files",
         ),
     };
-    vec![GitCommand::new(["reset".to_owned(), flag.to_owned(), short(commit)]).comment(comment)]
-}
-
-/// A full sha reads better short; `HEAD~1` and names stay as they are.
-fn short(commit: &str) -> String {
-    let full_sha = commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit());
-    if full_sha {
-        commit[..7].to_owned()
-    } else {
-        commit.to_owned()
-    }
+    vec![GitCommand::new(["reset", flag, commit]).comment(comment)]
 }
 
 #[cfg(test)]
@@ -82,9 +73,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_reset_shows_the_short_sha_and_what_it_keeps() {
+    fn a_reset_names_the_whole_sha_and_what_it_keeps() {
+        // Seven characters could match another object; the command names exactly this one.
         let plan = plan_reset("0123456789abcdef0123456789abcdef01234567", ResetMode::Hard);
-        assert_eq!(plan[0].display(), "git reset --hard 0123456");
+        assert_eq!(
+            plan[0].display(),
+            "git reset --hard 0123456789abcdef0123456789abcdef01234567"
+        );
         let plan = plan_reset("HEAD~1", ResetMode::Soft);
         assert_eq!(plan[0].display(), "git reset --soft HEAD~1");
     }

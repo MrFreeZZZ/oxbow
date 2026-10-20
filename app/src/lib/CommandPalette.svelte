@@ -3,6 +3,7 @@
   // shortcut, the ones used lately first. The field starts with ">"; taking it away turns the
   // palette into Quick Open, as in VS Code. The same list picks a recent repository (⌃R).
 
+  import { untrack } from "svelte";
   import { keys, shortcut } from "./keys";
   import { labelOf, rank, recentCommands, rememberCommand, type PaletteItem } from "./palette";
   import { combo } from "./shortcuts";
@@ -41,10 +42,13 @@
     commands ? rank(items, query, recent) : query.trim() ? rank(items, query, []) : items.map((item) => ({ item, hits: [], recent: false })),
   );
 
+  // Once, when the field is there: typing in the middle of the query keeps the cursor there.
   $effect(() => {
-    input?.focus();
+    if (!input) return;
+    input.focus();
     // The cursor after the ">", as in VS Code.
-    input?.setSelectionRange(text.length, text.length);
+    const end = untrack(() => text.length);
+    input.setSelectionRange(end, end);
   });
 
   $effect(() => {

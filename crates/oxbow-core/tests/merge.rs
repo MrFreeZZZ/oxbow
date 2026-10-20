@@ -152,6 +152,36 @@ fn a_merge_that_conflicts_is_resolved_pick_by_pick_and_committed() {
 }
 
 #[test]
+fn resolving_keeps_bytes_that_are_not_utf8() {
+    // `café` in Latin-1 on a line both sides keep; the next line conflicts.
+    let mut fx = Fixture::new();
+    let write = |fx: &Fixture, bytes: &[u8]| std::fs::write(fx.path().join("a.txt"), bytes).unwrap();
+    write(&fx, b"caf\xe9\nbase\n");
+    fx.git(&["add", "a.txt"]);
+    fx.git(&["commit", "-q", "-m", "Root"]);
+    fx.git(&["switch", "-q", "-c", "feature"]);
+    write(&fx, b"caf\xe9\ntheirs \xe9\n");
+    fx.git(&["commit", "-q", "-am", "Theirs"]);
+    fx.git(&["switch", "-q", "main"]);
+    write(&fx, b"caf\xe9\nours\n");
+    fx.git(&["commit", "-q", "-am", "Ours"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+
+    let file = repo.conflict_file("a.txt").unwrap();
+    assert_eq!(file.chunks.len(), 2);
+    repo.perform(&Action::Resolve {
+        path: "a.txt".into(),
+        picks: vec![Pick::OursThenTheirs],
+    })
+    .unwrap();
+    let bytes = std::fs::read(fx.path().join("a.txt")).unwrap();
+    assert_eq!(bytes, b"caf\xe9\nours\ntheirs \xe9\n");
+    // The index holds the same bytes.
+    assert_eq!(fx.git(&["rev-parse", ":a.txt"]), fx.git(&["hash-object", "a.txt"]));
+}
+
+#[test]
 fn abort_puts_everything_back() {
     let mut fx = diverged();
     let before = fx.git(&["rev-parse", "HEAD"]);

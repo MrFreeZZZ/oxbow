@@ -26,7 +26,7 @@ fn cherry_pick_copies_a_commit_onto_the_branch() {
     let action = Action::CherryPick { commit: add_b.clone() };
     assert_eq!(
         repo.plan(&action).unwrap().commands[0].display(),
-        format!("git cherry-pick {}", &add_b[..7])
+        format!("git cherry-pick {}", add_b)
     );
     repo.perform(&action).unwrap();
     assert_eq!(fx.git(&["log", "-1", "--format=%s"]), "Add b");
@@ -66,7 +66,7 @@ fn revert_adds_a_commit_with_the_opposite_changes() {
     let action = Action::Revert { commit: change.clone() };
     assert_eq!(
         repo.plan(&action).unwrap().commands[0].display(),
-        format!("git revert --no-edit {}", &change[..7])
+        format!("git revert --no-edit {}", change)
     );
     repo.perform(&action).unwrap();
     assert_eq!(read(&fx, "a.txt"), "one\n");
@@ -92,7 +92,7 @@ fn a_merge_commit_is_reverted_against_its_first_parent() {
     let action = Action::Revert { commit: merge.clone() };
     assert_eq!(
         repo.plan(&action).unwrap().commands[0].display(),
-        format!("git revert --no-edit -m 1 {}", &merge[..7])
+        format!("git revert --no-edit -m 1 {}", merge)
     );
     repo.perform(&action).unwrap();
     assert!(!fx.path().join("c.txt").exists());

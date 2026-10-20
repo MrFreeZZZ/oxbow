@@ -1326,7 +1326,8 @@ impl Repo {
                 commands
             }
             Action::Detach { commit, stash } => {
-                // A full sha reads better short; a tag name stays as it is.
+                // The stash message reads better with a short sha; the command takes the whole
+                // one, since seven characters can match more than one object.
                 let full_sha = commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit());
                 let short = if full_sha { &commit[..7] } else { commit.as_str() };
                 let mut commands = Vec::new();
@@ -1334,7 +1335,7 @@ impl Repo {
                     commands.push(stash_before(short));
                 }
                 commands.push(
-                    GitCommand::new(["switch", "--detach", short])
+                    GitCommand::new(["switch", "--detach", commit.as_str()])
                         .comment("--detach: HEAD points at a commit, not at a branch"),
                 );
                 commands
@@ -1979,15 +1980,22 @@ impl Repo {
             return Err(Error::Git("an ignore rule is one line of text".into()));
         }
         let file = self.workdir().join(".gitignore");
-        let mut text = std::fs::read_to_string(&file).unwrap_or_default();
-        if text.lines().any(|line| line == pattern) {
+        // Bytes, not text: git reads a `.gitignore` that isn't UTF-8 just fine, and its rules
+        // must stay. Only a missing file starts empty; any other read error stops here.
+        let mut text = match std::fs::read(&file) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(err) => return Err(Error::Git(format!("could not read .gitignore: {err}"))),
+        };
+        let line = |l: &[u8]| l.strip_suffix(b"\r").unwrap_or(l) == pattern.as_bytes();
+        if text.split(|&c| c == b'\n').any(line) {
             return Ok(());
         }
-        if !text.is_empty() && !text.ends_with('\n') {
-            text.push('\n');
+        if !text.is_empty() && !text.ends_with(b"\n") {
+            text.push(b'\n');
         }
-        text.push_str(pattern);
-        text.push('\n');
+        text.extend_from_slice(pattern.as_bytes());
+        text.push(b'\n');
         std::fs::write(&file, text).map_err(|err| Error::Git(format!("could not write .gitignore: {err}")))
     }
 

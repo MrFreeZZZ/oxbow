@@ -85,7 +85,7 @@ fn unpushed_commits_move_to_a_new_branch_without_touching_the_files() {
         displays(&repo, &action),
         [
             "git switch -c feature/b".to_owned(),
-            format!("git branch -f main {}", &root[..7])
+            format!("git branch -f main {}", root)
         ]
     );
     repo.perform(&action).unwrap();
@@ -559,7 +559,7 @@ fn continue_after_a_conflict_finishes_the_move() {
     let cont = Action::Continue { message: None };
     let shown = displays(&repo, &cont);
     assert_eq!(shown[0], "git cherry-pick --continue");
-    assert_eq!(shown[1], format!("git branch -f main {}", &base[..7]));
+    assert_eq!(shown[1], format!("git branch -f main {}", base));
     assert_eq!(shown[2], "git stash pop --index");
 
     fx.write("a.txt", "both\n");

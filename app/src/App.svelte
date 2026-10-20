@@ -30,7 +30,7 @@
   import SearchField from "./lib/SearchField.svelte";
   import SearchBar from "./lib/SearchBar.svelte";
   import { search, type Found } from "./lib/search.svelte";
-  import { untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import CompareView from "./lib/CompareView.svelte";
   import FileHistoryView from "./lib/FileHistoryView.svelte";
   import FindField from "./lib/FindField.svelte";
@@ -72,6 +72,7 @@
   import { keys, mac } from "./lib/keys";
   import type { BisectMark, OpEntry } from "./lib/types";
   import { fitWindow } from "./lib/windowSize";
+  import { stepperOf } from "./lib/tabs";
 
   let repo = $state<RepoSummary | null>(null);
   let history = $state<History | null>(null);
@@ -506,6 +507,11 @@
     picker = picker?.kind === "commands" ? null : { kind: "commands", initial: "" };
   }
 
+  function closePickers() {
+    picker = null;
+    nav.quickOpen = false;
+  }
+
   async function openRecent() {
     nav.quickOpen = false;
     const repos = await api.recentRepos().catch(() => []);
@@ -535,11 +541,28 @@
   function stepTab(by: 1 | -1): boolean {
     const tabs = [...(content?.querySelectorAll<HTMLElement>('aside.panel [role="tablist"] [role="tab"]') ?? [])];
     if (!tabs.length) return false;
+    const focused = document.activeElement && tabs.includes(document.activeElement as HTMLElement);
+    // File tabs go by their whole list: of thousands of files only some tabs are drawn.
+    const list = tabs[0].closest('[role="tablist"]');
+    const step = stepperOf(list);
+    if (step) {
+      step(by, true);
+      if (focused) focusOpenTab(list!);
+      return true;
+    }
     const at = tabs.findIndex((tab) => tab.getAttribute("aria-selected") === "true");
     const next = tabs[(at + by + tabs.length) % tabs.length];
     next.click();
-    if (document.activeElement && tabs.includes(document.activeElement as HTMLElement)) keyFocus(next);
+    if (focused) keyFocus(next);
     return true;
+  }
+
+  /** Once a stepped tab list has drawn its new tab, the focus goes to it. */
+  function focusOpenTab(list: Element) {
+    tick().then(() => {
+      const open = list.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+      if (open) keyFocus(open);
+    });
   }
 
   /** The window's zoom as VS Code counts it: each step is 20% more or less. Kept in settings.json. */
@@ -633,7 +656,9 @@
   /** Run a window-wide shortcut. False when it can't run here and now, so the key does what it
    *  would do anyway, e.g. ⌘Z in a text field. */
   function shortcutKey(id: ShortcutId, event: KeyboardEvent): boolean {
-    const free = !confirm.request && !start.sheet;
+    // A sheet keeps the keyboard: the window's commands wait until it closes, but for those
+    // that open another window or zoom.
+    const free = !confirm.request && !start.sheet && !document.querySelector('[aria-modal="true"]');
     const inRepo = !!history && free;
     switch (id) {
       case "settings":
@@ -651,16 +676,21 @@
         if (picker?.kind === "recent") picker = null;
         else void openRecent();
         return true;
+      // These take the window over: the palette or Quick Open closes first, as when the command
+      // is picked in the palette, so only one layer has the keyboard.
       case "open":
         if (!free || loading) return false;
+        closePickers();
         chooseRepo();
         return true;
       case "clone":
         if (!free || loading) return false;
+        closePickers();
         start.clone();
         return true;
       case "newRepo":
         if (!free || loading) return false;
+        closePickers();
         start.newRepo();
         return true;
       case "zoomIn":
@@ -669,7 +699,10 @@
         zoom(id === "zoomReset" ? 0 : zoomLevel + (id === "zoomIn" ? 1 : -1));
         return true;
     }
-    if (!history || confirm.request) return false;
+    if (!history || !free) return false;
+    // The palette and Quick Open keep the keyboard too: what's typed stays in them. Only Quick
+    // Open's own key passes, to switch over from the palette or close it.
+    if ((picker || nav.quickOpen) && id !== "quickOpen") return false;
     switch (id) {
       case "quickOpen":
         picker = null;
@@ -1482,7 +1515,14 @@
       event.preventDefault();
       list?.focus();
     } else if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && tab && panel.contains(tab)) {
-      const tabs = [...(tab.closest('[role="tablist"]')?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])];
+      const list = tab.closest('[role="tablist"]');
+      const step = stepperOf(list);
+      if (step) {
+        event.preventDefault();
+        if (step(event.key === "ArrowRight" ? 1 : -1, false)) focusOpenTab(list!);
+        return;
+      }
+      const tabs = [...(list?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])];
       const next = tabs[tabs.indexOf(tab) + (event.key === "ArrowRight" ? 1 : -1)];
       if (!next) return;
       event.preventDefault();

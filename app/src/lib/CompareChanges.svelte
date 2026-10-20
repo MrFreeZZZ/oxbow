@@ -7,6 +7,7 @@
   import { diffSettings, prefs, wholeByDefault } from "./prefs.svelte";
   import type { CompareFile, Comparison, FileChange, FileDiff } from "./types";
   import { lane, plate, shortId, splitPath, tabLabels, tabWindow, tint } from "./format";
+  import { fileTabs, tabStepper } from "./tabs";
   import { CountTurns } from "./counting";
   import DiffView from "./DiffView.svelte";
   import FileBadge from "./FileBadge.svelte";
@@ -220,7 +221,7 @@
     </div>
   {/if}
 
-  <div class="tabs" role="tablist" aria-label="Changes">
+  <div class="tabs" role="tablist" aria-label="Changes" use:tabStepper={fileTabs(paths, tab, openTab)}>
     <button
       role="tab"
       aria-selected={tab === null}

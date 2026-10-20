@@ -588,7 +588,8 @@ impl Repo {
         if plan.onto != plan.base {
             args.extend(["--onto".to_owned(), plan.onto.clone()]);
         }
-        args.push(short(&plan.base));
+        // Whole shas in commands: seven characters can match more than one object.
+        args.push(plan.base.clone());
         args.push(plan.top.clone());
         let mut comment = if plan.onto != plan.base {
             format!("--onto {onto_shown}: replay the stack on top of it")
@@ -679,7 +680,7 @@ impl Repo {
             .branch
             .ok_or_else(|| Error::Git("check out a branch first: HEAD is not on one".into()))?;
         let sha = short(commit);
-        let mut commit_args = vec!["commit".to_owned(), format!("--fixup={sha}")];
+        let mut commit_args = vec!["commit".to_owned(), format!("--fixup={commit}")];
         if !crate::config::run_hooks() {
             commit_args.push("--no-verify".to_owned());
         }
@@ -701,7 +702,7 @@ impl Repo {
         {
             rebase.push("--autostash".to_owned());
         }
-        rebase.push(format!("{sha}~1"));
+        rebase.push(format!("{commit}~1"));
         Ok(vec![
             GitCommand::new(commit_args).comment(format!(
                 "a commit named \"fixup! …\" with the staged changes, on {branch}"
