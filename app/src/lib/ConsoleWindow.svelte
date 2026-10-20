@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The Console window (⌥⌘C): every process Oxbow ran, oldest at the top and the newest at the
+  // The Console window (⇧⌘U, as VS Code's Output): every process Oxbow ran, oldest at the top and the newest at the
   // bottom as in a terminal, with its output, exit code and how long it took. The commands Oxbow
   // runs for an action (checks, the secrets check, the snapshot for Undo) fold under it; reads of
   // the repository and the timer's fetches are quieter. Read-only: nothing here runs git.

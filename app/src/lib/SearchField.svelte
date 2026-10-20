@@ -37,7 +37,7 @@
   }
 
   /** The next match below the selected commit, or the previous one above it. */
-  function step(by: 1 | -1) {
+  export function step(by: 1 | -1) {
     if (!matches.length) return;
     let next: number;
     if (at >= 0) next = (at + by + matches.length) % matches.length;

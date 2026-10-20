@@ -1,7 +1,7 @@
 <script lang="ts">
   import { lens } from "./lens.svelte";
   import { oplog } from "./oplog.svelte";
-  import { keys } from "./keys";
+  import { shortcut } from "./keys";
   import type { History, HistoryRow, RefInfo, RepoSummary } from "./types";
   import { lane, NO_BRANCH_COLOR, shortTime, tint } from "./format";
   import type { Request } from "./confirm.svelte";
@@ -238,14 +238,14 @@
       entries.push({ kind: "item", label: "Clear Recent", icon: CLEAR, run: clearRecent }, { kind: "sep" });
     }
     entries.push(
-      { kind: "item", label: "Clone Repository…", icon: "M8 2.5v8M5 7.5l3 3 3-3M3 13.5h10", keys: keys("Mod+Shift+C"), run: () => start.clone() },
-      { kind: "item", label: "Open Local Repository…", icon: FOLDER, keys: keys("Mod+O"), run: onOpen },
-      { kind: "item", label: "New Repository…", icon: "M8 3v10M3 8h10", keys: keys("Mod+N"), run: () => start.newRepo() },
+      { kind: "item", label: "Clone Repository…", icon: "M8 2.5v8M5 7.5l3 3 3-3M3 13.5h10", keys: shortcut("clone"), run: () => start.clone() },
+      { kind: "item", label: "Open Local Repository…", icon: FOLDER, keys: shortcut("open"), run: onOpen },
+      { kind: "item", label: "New Repository…", icon: "M8 3v10M3 8h10", keys: shortcut("newRepo"), run: () => start.newRepo() },
       { kind: "sep" },
     );
     if (history.head.commit) entries.push({ kind: "item", label: "Add Submodule…", icon: actionIcons.box, run: () => run(addSubmoduleRequest(submodules, repo.path)) });
     entries.push(
-      { kind: "item", label: "Reload", icon: RELOAD, keys: keys("Mod+R"), run: onReload },
+      { kind: "item", label: "Reload", icon: RELOAD, keys: shortcut("reload"), run: onReload },
       { kind: "item", label: "Open in Terminal", icon: TERMINAL, run: () => api.openInTerminal().catch((err) => confirm.fail(err)) },
       { kind: "item", label: "Welcome Window", icon: HOME, run: onWelcome },
     );

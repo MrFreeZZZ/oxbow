@@ -1,7 +1,8 @@
 <script lang="ts">
   import { keys } from "./keys";
   // Quick Open (⌘P): pick any file in HEAD to open its File History, by typing a few letters of
-  // its path. Files opened lately and the ones the selected commit changed come first.
+  // its path. Files opened lately and the ones the selected commit changed come first. A ">"
+  // typed first turns it into the Command Palette, as in VS Code.
 
   import { api } from "./api";
   import { nav } from "./nav.svelte";
@@ -10,11 +11,17 @@
 
   let {
     commit,
+    initial = "",
     onClose,
+    onCommands,
   }: {
     /** The commit selected in History, whose files are offered first; none for the working copy. */
     commit: { id: string; summary: string } | null;
+    /** What the field starts with, from the Command Palette. */
+    initial?: string;
     onClose: () => void;
+    /** A ">" was typed first: the Command Palette, with what follows it. */
+    onCommands: (query: string) => void;
   } = $props();
 
   type Item = { path: string; hits: number[]; from: "recent" | "commit" | "all" };
@@ -22,7 +29,8 @@
   let files = $state<string[] | null>(null);
   let changed = $state<string[]>([]);
   let error = $state<string | null>(null);
-  let query = $state("");
+  // svelte-ignore state_referenced_locally
+  let query = $state(initial);
   let active = $state(0);
   let input = $state<HTMLInputElement>();
   let listEl = $state<HTMLDivElement>();
@@ -53,6 +61,10 @@
       },
       () => {},
     );
+  });
+
+  $effect(() => {
+    if (query.startsWith(">")) onCommands(query.slice(1));
   });
 
   const present = $derived(new Set(files ?? []));

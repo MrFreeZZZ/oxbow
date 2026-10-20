@@ -1,0 +1,100 @@
+import { BINDINGS, Keymap, strokeOf, type ShortcutId } from "../src/lib/shortcuts.ts";
+import { fit, rank, type PaletteItem } from "../src/lib/palette.ts";
+import assert from "node:assert/strict";
+
+type Press = Partial<Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">>;
+const press = (p: Press) => ({ key: "", code: "", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...p }) as KeyboardEvent;
+const id = (hit: ReturnType<Keymap["match"]>) => (hit && "id" in hit ? hit.id : null);
+
+// The Mac's keys are VS Code's: ⇧⌘P, ⌘B, ⌥⌘B, ⇧⌘U, ⌃⇧G, ⌘G.
+{
+  const map = new Keymap(true);
+  assert.equal(id(map.match(press({ key: "P", code: "KeyP", metaKey: true, shiftKey: true }))), "palette");
+  assert.equal(id(map.match(press({ key: "F1", code: "F1" }))), "palette");
+  assert.equal(id(map.match(press({ key: "p", code: "KeyP", metaKey: true }))), "quickOpen");
+  assert.equal(id(map.match(press({ key: "b", code: "KeyB", metaKey: true }))), "sidebar");
+  // ⌥ turns B into ∫ on the Mac: the key's place still says B.
+  assert.equal(id(map.match(press({ key: "∫", code: "KeyB", metaKey: true, altKey: true }))), "details");
+  assert.equal(id(map.match(press({ key: "U", code: "KeyU", metaKey: true, shiftKey: true }))), "console");
+  assert.equal(id(map.match(press({ key: "`", code: "Backquote", ctrlKey: true }))), "console");
+  assert.equal(id(map.match(press({ key: "G", code: "KeyG", ctrlKey: true, shiftKey: true }))), "changes");
+  assert.equal(id(map.match(press({ key: "g", code: "KeyG", metaKey: true }))), "findNext");
+  assert.equal(id(map.match(press({ key: "G", code: "KeyG", metaKey: true, shiftKey: true }))), "findPrevious");
+  assert.equal(id(map.match(press({ key: "Z", code: "KeyZ", metaKey: true, shiftKey: true }))), "redo");
+  assert.equal(id(map.match(press({ key: "r", code: "KeyR", ctrlKey: true }))), "openRecent");
+  assert.equal(id(map.match(press({ key: "r", code: "KeyR", metaKey: true }))), "reload");
+  assert.equal(id(map.match(press({ key: "+", code: "Equal", metaKey: true, shiftKey: true }))), "zoomIn");
+  assert.equal(id(map.match(press({ key: "Tab", code: "Tab", ctrlKey: true }))), "nextTab");
+  assert.equal(id(map.match(press({ key: "ArrowLeft", code: "ArrowLeft", metaKey: true, altKey: true }))), "previousTab");
+  // The old keys still work.
+  assert.equal(id(map.match(press({ key: "s", code: "KeyS", metaKey: true, ctrlKey: true }))), "sidebar");
+  // A plain letter is no shortcut, and neither is a modifier on its own.
+  assert.equal(map.match(press({ key: "b", code: "KeyB" })), null);
+  assert.equal(map.match(press({ key: "Meta", code: "MetaLeft", metaKey: true })), null);
+}
+
+// A Russian layout types no Latin letters: ⌘P and ⌘, are still found by the key's place.
+{
+  const map = new Keymap(true);
+  assert.equal(id(map.match(press({ key: "з", code: "KeyP", metaKey: true }))), "quickOpen");
+  assert.equal(id(map.match(press({ key: "б", code: "Comma", metaKey: true }))), "settings");
+  assert.equal(id(map.match(press({ key: "ё", code: "Backquote", ctrlKey: true }))), "console");
+}
+
+// Chords: ⌘K then ⌘M, or F; anything else after ⌘K is missed; the second key must come soon.
+{
+  const map = new Keymap(true);
+  assert.deepEqual(map.match(press({ key: "k", code: "KeyK", metaKey: true }), 0), { chord: "Mod+K" });
+  // Holding ⌘ down again between the two keys changes nothing.
+  assert.equal(map.match(press({ key: "Meta", code: "MetaLeft", metaKey: true }), 100), null);
+  assert.equal(id(map.match(press({ key: "m", code: "KeyM", metaKey: true }), 200)), "expand");
+  map.match(press({ key: "k", code: "KeyK", metaKey: true }), 1000);
+  assert.equal(id(map.match(press({ key: "f", code: "KeyF" }), 1500)), "closeRepo");
+  map.match(press({ key: "k", code: "KeyK", metaKey: true }), 2000);
+  assert.deepEqual(map.match(press({ key: "x", code: "KeyX" }), 2500), { missed: "Mod+K X" });
+  map.match(press({ key: "k", code: "KeyK", metaKey: true }), 3000);
+  assert.equal(id(map.match(press({ key: "b", code: "KeyB", metaKey: true }), 9000)), "sidebar");
+}
+
+// Elsewhere Ctrl is Mod, and the Windows key is part of no combo.
+{
+  const map = new Keymap(false);
+  assert.equal(id(map.match(press({ key: "P", code: "KeyP", ctrlKey: true, shiftKey: true }))), "palette");
+  assert.equal(id(map.match(press({ key: "b", code: "KeyB", ctrlKey: true, altKey: true }))), "details");
+  assert.equal(id(map.match(press({ key: "r", code: "KeyR", ctrlKey: true }))), "openRecent");
+  assert.equal(id(map.match(press({ key: "F5", code: "F5" }))), "reload");
+  assert.equal(id(map.match(press({ key: "y", code: "KeyY", ctrlKey: true }))), "redo");
+  assert.equal(id(map.match(press({ key: "F3", code: "F3", shiftKey: true }))), "findPrevious");
+  assert.equal(map.match(press({ key: "b", code: "KeyB", metaKey: true })), null);
+  assert.equal(strokeOf(press({ key: "Unidentified", code: "Tab", ctrlKey: true, shiftKey: true }), false), "Shift+Mod+Tab");
+}
+
+// No two shortcuts share a combo.
+for (const platform of ["mac", "other"] as const) {
+  const seen = new Map<string, ShortcutId>();
+  for (const [name, binding] of Object.entries(BINDINGS)) {
+    for (const c of binding[platform]) {
+      assert.ok(!seen.has(c), `${platform}: ${c} is both ${seen.get(c)} and ${name}`);
+      seen.set(c, name as ShortcutId);
+    }
+  }
+}
+
+// The palette finds commands by words, word starts and initials.
+{
+  assert.deepEqual(fit("Git: Push", "push")?.hits, [5, 6, 7, 8]);
+  assert.ok(fit("View: Toggle Sidebar", "tog side"));
+  assert.deepEqual(fit("View: Show Current Branch Only", "scb")?.hits, [6, 11, 19]);
+  assert.equal(fit("Git: Fetch", "pull"), null);
+  // At a word's start beats inside a word.
+  assert.ok(fit("Git: Stash", "st")!.score > fit("View: Show History", "st")!.score);
+
+  const item = (id: string, category: string, title: string): PaletteItem => ({ id, category, title, run: () => {} });
+  const items = [item("push", "Git", "Push"), item("pull", "Git", "Pull"), item("fetch", "Git", "Fetch"), item("settings", "Preferences", "Open Settings")];
+  // Nothing typed: the ones used lately, newest first, then the rest by name.
+  assert.deepEqual(
+    rank(items, "", ["settings", "push"]).map((r) => [r.item.id, r.recent]),
+    [["settings", true], ["push", true], ["fetch", false], ["pull", false]],
+  );
+  assert.deepEqual(rank(items, "pu", ["pull"]).map((r) => r.item.id), ["pull", "push"]);
+}
