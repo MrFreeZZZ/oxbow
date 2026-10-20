@@ -627,6 +627,7 @@
             }),
             prefRow("oxbow.diff.contextLines", "Context lines", "popup", { sub: "Unchanged lines kept around each change", options: () => opts(1, 3, 5, 10) }),
             prefRow("oxbow.diff.wordHighlight", "Highlight changed words", "switch"),
+            prefRow("oxbow.diff.wrap", "Wrap long lines", "switch", { sub: `Off, long lines run on and scroll sideways · ${keys("Alt+Z")}` }),
             prefRow("oxbow.diff.ignoreWhitespace", "Ignore whitespace changes", "switch", {
               sub: "In commits and stashes. Changes stays exact, so staging matches what you see",
             }),

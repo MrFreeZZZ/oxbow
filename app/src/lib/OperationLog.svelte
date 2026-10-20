@@ -121,10 +121,12 @@
             <span>{relativeTime(entry.time)}</span>
             {#if entry.lost && entry.expires !== null}<span class="until">{lostUntil(entry)}</span>{/if}
           </span>
-          <button class="compare" title="Show the commit and its changes" onclick={(e) => (e.stopPropagation(), show(entry))}>Show</button>
-          {#if entry.lost}
-            <button class="button small restore" title="Keep {entry.lostCount === 1 ? 'this commit' : `these ${entry.lostCount} commits`} on a new branch, without a reset" onclick={(e) => (e.stopPropagation(), branch(entry))}>Create Branch…</button>
-          {/if}
+          <span class="actions">
+            <button class="compare" title="Show the commit and its changes" aria-label="Show {entry.summary}" onclick={(e) => (e.stopPropagation(), show(entry))}>Show</button>
+            {#if entry.lost}
+              <button class="button small restore" title="Keep {entry.lostCount === 1 ? 'this commit' : `these ${entry.lostCount} commits`} on a new branch, without a reset" aria-label="Create a branch for {entry.summary}" onclick={(e) => (e.stopPropagation(), branch(entry))}>Create Branch…</button>
+            {/if}
+          </span>
         </div>
       {:else}
         <div class="empty">
@@ -154,17 +156,21 @@
           <span>{relativeTime(entry.time)}</span>
           <span class="until">{keptUntil(entry)}</span>
         </span>
-        <button
-          class="compare"
-          title={i === 0 ? "Compare the files before this step with now" : "Compare the files right after this step with now"}
-          onclick={() => compare(entry, i > 0)}>Compare</button
-        >
+        <span class="actions">
+          <button
+            class="compare"
+            title={i === 0 ? "Compare the files before this step with now" : "Compare the files right after this step with now"}
+            aria-label="Compare {i === 0 ? 'before' : 'after'} “{entry.title}” with now"
+            onclick={() => compare(entry, i > 0)}>Compare</button
+          >
+          {#if i > 0}
+            <button class="button small restore" disabled={!!blocked} title={blocked ?? "Back to right after this step"} aria-label="Restore to right after “{entry.title}”" onclick={() => go(restoreRequest(entry, i))}>Restore to Here</button>
+          {/if}
+        </span>
         {#if i === 0}
           <button class="button small primary" disabled={!!blocked} title={blocked ?? undefined} onclick={() => go(undoRequest(entry))}>
             {isRedo(entry) ? "Redo" : "Undo"}<span class="key">{keys("Mod+Z")}</span>
           </button>
-        {:else}
-          <button class="button small restore" disabled={!!blocked} title={blocked ?? "Back to right after this step"} onclick={() => go(restoreRequest(entry, i))}>Restore to Here</button>
         {/if}
       </div>
     {:else}
@@ -267,7 +273,7 @@
     right: 0;
     top: 40px;
     z-index: 20;
-    width: 440px;
+    width: 480px;
     max-width: calc(100vw - 32px);
     padding: 14px 8px 8px;
     border-radius: var(--radius-sheet);
@@ -429,8 +435,29 @@
     font-size: var(--text-caption);
     opacity: 0.8;
   }
+  /* A row's actions show on hover, and as the keyboard reaches them: folded to no width, not
+     display: none, so Tab still stops on them. The time stays beside them. */
+  .actions {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 0;
+    overflow: hidden;
+    opacity: 0;
+  }
+  .row:hover .actions,
+  .row:focus-within .actions {
+    max-width: 260px;
+    opacity: 1;
+    /* Room for the focus ring of the buttons. */
+    overflow: visible;
+  }
+  .row:focus-within {
+    background: var(--field);
+  }
   .compare {
-    display: none;
+    display: flex;
     flex-shrink: 0;
     height: 26px;
     padding: 0 12px;
@@ -443,10 +470,9 @@
     font-size: var(--text-small);
     color: var(--text);
   }
-  .row:hover .compare {
-    display: flex;
-  }
-  .move:hover .lost {
+
+  .move:hover .lost,
+  .move:focus-within .lost {
     display: none;
   }
   .move .compare,
@@ -459,13 +485,9 @@
     opacity: 0.75;
     font-size: var(--text-caption);
   }
-  .restore {
-    display: none;
-  }
-  .row:hover .restore {
-    display: flex;
-  }
-  .row:hover .when {
+  /* While the actions show, the time keeps its first line: when the step was. */
+  .row:hover .until,
+  .row:focus-within .until {
     display: none;
   }
   button:disabled {

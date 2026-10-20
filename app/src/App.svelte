@@ -347,6 +347,12 @@
   const found = $derived<Found | null>(
     searching && search.result ? { hits: hitMap, mode: search.parsed.mode, text: search.parsed.text, only: search.only } : null,
   );
+  /** A search is on and the commit in the details panel is not one it found: it stays from
+   *  before, which the panel says, so it isn't taken for a match. */
+  const offSearch = $derived(
+    searching && !!search.result && !search.busy && !search.error && !!selectedRow && !selectedRow.worktree && !hitMap.has(selectedRow.id) &&
+      !pickedSubmodule && !oplog.compare && !oplog.lost && !pair,
+  );
   // Cheap to compare, so a reload that changed nothing doesn't search again.
   const historyKey = $derived(history ? `${history.rows.length}:${history.rows[0]?.id}:${history.head.commit}:${history.refs.map((r) => r.target).join()}` : "");
   const searchKey = $derived(search.key);
@@ -591,6 +597,13 @@
     requestAnimationFrame(() => stashesView?.focusFilter());
   }
 
+  /** Activity, under Fetch: what runs in the background, what failed, and Reload. */
+  function showActivity() {
+    view = view === "file" ? "history" : view;
+    resolving = false;
+    activity.open = true;
+  }
+
   /** Every command there is here and now, for the Command Palette. */
   function paletteCommands(): PaletteItem[] {
     const out: PaletteItem[] = [];
@@ -616,6 +629,8 @@
     if (h.stashes.length) add("findStashes", "Search", "Find in Stashes", findInStashes, view === "stashes" ? "find" : undefined);
     add("sidebar", "View", sideOut ? "Hide Sidebar" : "Show Sidebar", toggleSidebar, "sidebar");
     add("diffLayout", "View", prefs.get("oxbow.diff.layout") === "split" ? "Show Diffs Unified" : "Show Diffs Side by Side", () => void prefs.set("oxbow.diff.layout", prefs.get("oxbow.diff.layout") === "split" ? "unified" : "split"));
+    add("wrap", "View", "Toggle Word Wrap", () => void prefs.set("oxbow.diff.wrap", !prefs.get("oxbow.diff.wrap")), "wrap");
+    add("whitespace", "View", prefs.get("oxbow.diff.ignoreWhitespace") ? "Show Whitespace Changes" : "Ignore Whitespace Changes", () => void prefs.set("oxbow.diff.ignoreWhitespace", !prefs.get("oxbow.diff.ignoreWhitespace")));
     add("nextChange", "Go", "Go to Next Change", () => void stepChange(1), "nextChange");
     add("previousChange", "Go", "Go to Previous Change", () => void stepChange(-1), "previousChange");
     add("history", "View", "Show History", () => ((view = "history"), (resolving = false)));
@@ -637,6 +652,7 @@
     }
     if (h.remotes.length && remoteCtx) {
       add("fetch", "Git", "Fetch", () => void sync("fetch"));
+      add("activity", "View", "Show Activity", showActivity);
       if (t) {
         add("pull", "Git", "Pull", () => void sync("pull"));
         if (!pullBlock) {
@@ -744,6 +760,11 @@
         return stepChange(id === "nextChange" ? 1 : -1);
       case "reload":
         reload();
+        return true;
+      case "wrap":
+        // ⌥Z types a letter in a text field.
+        if (typing(event)) return false;
+        void prefs.set("oxbow.diff.wrap", !prefs.get("oxbow.diff.wrap"));
         return true;
     }
     if (!inRepo) return false;
@@ -1676,6 +1697,7 @@
       submodule={pickedSubmodule?.path ?? null}
       onSubmodule={aside(showSubmodule)}
       onReload={reload}
+      onActivity={history.remotes.length && remoteCtx ? showActivity : null}
     />
     <div class="main">
       <header data-tauri-drag-region>
@@ -1777,7 +1799,7 @@
                   ? `${activity.running.title} · click for Activity`
                   : activity.problem
                     ? `${activity.problem.sub} · click for Activity`
-                    : `Fetch from ${history.remotes.length > 1 ? "all remotes" : remoteCtx.remote} · right-click for Activity`}
+                    : `Fetch from ${history.remotes.length > 1 ? "all remotes" : remoteCtx.remote} · right-click, or the repository menu, for Activity`}
               >
                 {#if activity.running}
                   <svg class="icon ring" class:spin={activity.percent === null} viewBox="0 0 16 16">
@@ -2023,6 +2045,7 @@
               {paging}
               onMore={() => loadOlder()}
               onUnshallow={history.defaultRemote ? () => run(unshallowRequest(history!.defaultRemote!)) : null}
+              onClearSearch={() => search.clear()}
               pointed={lens.pointed}
             />
           {/key}
@@ -2044,6 +2067,13 @@
               </button>
             {/if}
           </div>
+          {#if offSearch}
+            <div class="off-search" role="status">
+              <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
+              <span class="grow">{matches.length ? "This commit doesn't match the search." : "No commit matches the search."} It stays here from before.</span>
+              <button class="button small" onclick={() => search.clear()}>Clear Search</button>
+            </div>
+          {/if}
           <div class="panel-body">
           <!-- A new repository starts the panels from scratch. -->
           {#key repo.path}
@@ -2595,6 +2625,27 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
+  }
+  /* Over the details, while a search is on and they show a commit it didn't find. */
+  .off-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: var(--space-2) var(--space-3) 0;
+    padding: 6px 6px 6px 10px;
+    border-radius: var(--radius-m);
+    background: var(--field);
+    font-size: var(--text-small);
+    color: var(--text2);
+  }
+  .off-search .icon {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+  }
+  .off-search .grow {
+    flex-grow: 1;
+    min-width: 0;
   }
   /* The details panel's bar, level with the graph's. */
   .panel-bar {

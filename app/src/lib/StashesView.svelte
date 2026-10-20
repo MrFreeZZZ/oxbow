@@ -202,6 +202,21 @@
 {/snippet}
 
 <div class="screen">
+  {#if !stashes.length}
+  <!-- No stashes at all: one message across the screen, not a list beside empty details. -->
+  <section class="empty whole" aria-label="Stashes">
+    <svg class="icon big" viewBox="0 0 16 16"><path d="M2.5 3.5h11v3h-11zM3.5 6.5v6h9v-6M6.5 9h3" /></svg>
+    <strong>No stashes</strong>
+    <span>A stash puts uncommitted changes aside, so you can switch branches without committing them, and bring them back later.</span>
+    {#if ctx.uncommitted}
+      <button class="button primary" onclick={() => run(stashRequest(ctx))} disabled={busy} title={busy ? "Finish or abort what is under way first" : "Stash your uncommitted changes"}>
+        Stash {plural(ctx.uncommitted, "Change")}
+      </button>
+    {:else}
+      <span class="nothing">Nothing to stash now: there are no uncommitted changes.</span>
+    {/if}
+  </section>
+  {:else}
   <section class="list" aria-label="Stashes">
     <div class="list-head">
       <span class="grow">{stashes.length} {stashes.length === 1 ? "stash" : "stashes"}{stashes.length > 1 ? " · newest first" : ""}</span>
@@ -279,12 +294,6 @@
             {/if}
           </button>
         {/each}
-      </div>
-    {:else}
-      <div class="empty">
-        <svg class="icon big" viewBox="0 0 16 16"><path d="M2.5 3.5h11v3h-11zM3.5 6.5v6h9v-6M6.5 9h3" /></svg>
-        <strong>No stashes</strong>
-        <span>Stash uncommitted changes to switch branches without committing them.</span>
       </div>
     {/if}
   </section>
@@ -384,6 +393,7 @@
       </div>
     {/if}
   </section>
+  {/if}
 </div>
 
 {#if menu}
@@ -594,6 +604,20 @@
     font-weight: 600;
     white-space: nowrap;
     color: var(--text);
+  }
+  .empty.whole {
+    gap: 8px;
+  }
+  .empty.whole > span {
+    max-width: 420px;
+    line-height: 1.45;
+  }
+  .empty.whole .button {
+    margin-top: 8px;
+  }
+  .nothing {
+    margin-top: 4px;
+    font-size: var(--text-small);
   }
   .empty strong {
     color: var(--text);

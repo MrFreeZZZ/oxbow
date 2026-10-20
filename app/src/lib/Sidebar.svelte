@@ -4,6 +4,7 @@
   import { shortcut } from "./keys";
   import type { History, HistoryRow, RefInfo, RepoSummary } from "./types";
   import { lane, NO_BRANCH_COLOR, shortTime, tint } from "./format";
+  import { sharedLeads } from "./refNames";
   import type { Request } from "./confirm.svelte";
   import { confirm } from "./confirm.svelte";
   import { api } from "./api";
@@ -40,6 +41,7 @@
   /** A list with a ×: Clear Recent. */
   const CLEAR = "M2.5 4h11M2.5 8h6M2.5 12h4M10 9.5l3.5 3.5M13.5 9.5 10 13";
   const RELOAD = "M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5";
+  const ACTIVITY = "M1.5 8.5h3l2-5 3 9 2-4h3";
   const LOCK = "M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2";
 
   let {
@@ -62,6 +64,7 @@
     submodule = null,
     onSubmodule,
     onReload,
+    onActivity,
   }: {
     repo: RepoSummary;
     history: History;
@@ -93,6 +96,8 @@
     onSubmodule: (path: string) => void;
     /** Read the repository again, for changes the app hasn't noticed yet. */
     onReload: () => void;
+    /** Open Activity, under Fetch; null with no remote to fetch from. */
+    onActivity: (() => void) | null;
   } = $props();
 
   /** The uncommitted changes, counted on their row above HEAD; null when there are none. */
@@ -157,6 +162,8 @@
         return hb - ha || b.time - a.time || a.ref.name.localeCompare(b.ref.name);
       }),
   );
+  /** How much of each local branch's name is a start it shares with another, to give way first. */
+  const branchLeads = $derived(sharedLeads(branches.map((b) => b.ref.name)));
   const tags = $derived(
     history.refs
       .filter((r) => r.kind === "tag")
@@ -246,6 +253,7 @@
     if (history.head.commit) entries.push({ kind: "item", label: "Add Submodule…", icon: actionIcons.box, run: () => run(addSubmoduleRequest(submodules, repo.path)) });
     entries.push(
       { kind: "item", label: "Reload", icon: RELOAD, keys: shortcut("reload"), run: onReload },
+      ...(onActivity ? [{ kind: "item" as const, label: "Activity", icon: ACTIVITY, run: onActivity }] : []),
       { kind: "item", label: "Open in Terminal", icon: TERMINAL, run: () => api.openInTerminal().catch((err) => confirm.fail(err)) },
       { kind: "item", label: "Welcome Window", icon: HOME, run: onWelcome },
     );
@@ -596,6 +604,12 @@
   }
 </script>
 
+<!-- A branch's name: a start it shares with others in the list gives way first, so what tells
+     it apart stays in sight; the whole name is in the row's tooltip. -->
+{#snippet refName(name: string, lead: number, bold = false)}
+  <span class="grow ref-name" class:bold>{#if lead}<span class="lead">{name.slice(0, lead)}</span>{/if}<span class="rest">{name.slice(lead)}</span></span>
+{/snippet}
+
 {#snippet more(key: string, count: number)}
   {#if count > COLLAPSED}
     <button class="more" onclick={() => (expanded[key] = !expanded[key])} aria-expanded={!!expanded[key]}>
@@ -693,11 +707,12 @@
         class:menu-open={menu?.ref === b.ref.name || lens.pointedRef === b.ref.name}
         style:--ring={lane(b.color)}
         style:background={focused === b.ref.name || lens.pointedRef === b.ref.name ? tint(b.color) : undefined}
+        title={b.ref.name}
         onclick={() => focus(b.ref)}
         oncontextmenu={(e) => branchMenu(e, b.ref)}
       >
         <span class="dot" style:background={lane(b.color)}></span>
-        <span class="grow ellipsis" class:bold={head}>{b.ref.name}</span>
+        {@render refName(b.ref.name, branchLeads.get(b.ref.name) ?? 0, head)}
         {#if b.ref.tracking?.gone}<span class="badge" title="Its branch on {b.ref.tracking.remote} was deleted">gone</span>{/if}
         {#if worktreeOf(history, b.ref.name)}
           {@const wt = worktreeOf(history, b.ref.name)!}
@@ -837,6 +852,7 @@
       <div class="heading">Remotes</div>
       {#each history.remotes as remote (remote)}
         {@const lists = remoteBranches.get(remote)!}
+        {@const leads = sharedLeads(lists.own.map((rb) => rb.ref.name.slice(remote.length + 1)))}
         {@const count = lists.own.length + lists.tracked.length}
         {@const expandedRemote = !collapsedRemotes[remote]}
         <button class="item" onclick={() => (collapsedRemotes[remote] = expandedRemote)} aria-expanded={expandedRemote} title="{expandedRemote ? 'Hide' : 'Show'} the branches on {remote}">
@@ -854,14 +870,17 @@
               class:menu-open={menu?.ref === rb.ref.name || lens.pointedRef === rb.ref.name}
               style:--ring={lane(rb.color)}
               style:background={focused === rb.ref.name || lens.pointedRef === rb.ref.name ? tint(rb.color) : undefined}
+              title="{rb.ref.name}{rb.author ? ` · ${rb.author}` : ''}{rb.time ? ` · ${shortTime(rb.time)}` : ''}"
               onclick={() => focus(rb.ref)}
               oncontextmenu={(e) => remoteMenu(e, rb.ref, rb.author)}
             >
               <svg class="icon small" viewBox="0 0 16 16"
                 ><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg
               >
-              <span class="grow ellipsis">{short}</span>
-              <span class="meta nowrap">{[firstName(rb.author), rb.time ? shortTime(rb.time) : ""].filter(Boolean).join(" · ")}</span>
+              {@render refName(short, leads.get(short) ?? 0)}
+              <!-- The name matters more than who moved it: only the time stays, and the row's
+                   tooltip has the author. -->
+              <span class="meta when">{rb.time ? shortTime(rb.time) : firstName(rb.author)}</span>
             </button>
           {/each}
           {@render more(`remote:${remote}`, lists.own.length)}
@@ -996,6 +1015,33 @@
   .grow {
     flex-grow: 1;
     min-width: 0;
+  }
+  /* Small enough to keep whole: the name takes the room that is left. */
+  .when {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .ref-name {
+    display: flex;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  /* The shared start gives way first, down to "…", so the part that tells the branch apart is
+     the last thing to go. */
+  .lead {
+    flex: 0 1000 auto;
+    min-width: 2ch;
+    /* A hair of air, so the cut start doesn't run into the part that was kept. */
+    margin-right: 1px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text2);
+  }
+  .rest {
+    flex: 0 1 auto;
+    min-width: 8ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .ellipsis {
     overflow: hidden;

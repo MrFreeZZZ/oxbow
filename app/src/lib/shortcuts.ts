@@ -21,6 +21,7 @@ export type ShortcutId =
   | "findPrevious"
   | "nextChange"
   | "previousChange"
+  | "wrap"
   | "undo"
   | "redo"
   | "fixMistake"
@@ -65,6 +66,8 @@ export const BINDINGS: Record<ShortcutId, Binding> = {
   // Go to Next Change and Go to Previous Change, of the diff on screen.
   nextChange: { mac: ["Alt+F5"], other: ["Alt+F5"] },
   previousChange: { mac: ["Alt+Shift+F5"], other: ["Alt+Shift+F5"] },
+  // View: Toggle Word Wrap, for the diffs.
+  wrap: { mac: ["Alt+Z"], other: ["Alt+Z"] },
   // Undo and Redo: the steps of the Operation Log, outside text fields.
   undo: { mac: ["Mod+Z"], other: ["Mod+Z"] },
   redo: { mac: ["Mod+Shift+Z"], other: ["Mod+Y", "Mod+Shift+Z"] },
