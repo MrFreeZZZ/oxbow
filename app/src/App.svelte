@@ -690,6 +690,9 @@
         return true;
     }
     if (!history || !free) return false;
+    // The palette and Quick Open keep the keyboard too: what's typed stays in them. Only Quick
+    // Open's own key passes, to switch over from the palette or close it.
+    if ((picker || nav.quickOpen) && id !== "quickOpen") return false;
     switch (id) {
       case "quickOpen":
         picker = null;
