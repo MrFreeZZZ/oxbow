@@ -59,6 +59,9 @@ export function sideKind(lines: DiffLine[], row: Row | undefined, side: "left" |
 /** How far below the top of its list the change stepped to sits: clear of a file's sticky bar. */
 const BELOW_TOP = 64;
 
+/** The change each list was last stepped to, and where it was scrolled then. */
+const lastStep = new WeakMap<HTMLElement, { block: HTMLElement; at: number; scrollTop: number }>();
+
 function scrollerOf(el: Element): HTMLElement | null {
   for (let up = el.parentElement; up; up = up.parentElement) {
     const overflow = getComputedStyle(up).overflowY;
@@ -88,17 +91,31 @@ export function stepChange(by: 1 | -1): boolean {
   };
   const marks = blocks.flatMap((block) => block.dataset.marks!.split(",").map((at) => ({ block, at: Number(at) })));
   const line = scroller.getBoundingClientRect().top + BELOW_TOP;
+  // Near the end of the list a change can't scroll up to the line, nor near the start down to
+  // it: by position it would be picked again and again. So while the list stays where the last
+  // step left it, the next step goes by order from that change.
+  const last = lastStep.get(scroller);
+  const from =
+    last && Math.abs(scroller.scrollTop - last.scrollTop) <= 1
+      ? marks.findIndex((m) => m.block === last.block && m.at === last.at)
+      : -1;
   const target =
-    by > 0
-      ? (marks.find((m) => top(m.block, m.at) > line + 4) ?? marks[0])
-      : ([...marks].reverse().find((m) => top(m.block, m.at) < line - 4) ?? marks[marks.length - 1]);
+    from >= 0
+      ? marks[(from + by + marks.length) % marks.length]
+      : by > 0
+        ? (marks.find((m) => top(m.block, m.at) > line + 4) ?? marks[0])
+        : ([...marks].reverse().find((m) => top(m.block, m.at) < line - 4) ?? marks[marks.length - 1]);
   scroller.scrollTop += top(target.block, target.at) - line;
+  const remember = () => lastStep.set(scroller, { block: target.block, at: target.at, scrollTop: scroller.scrollTop });
+  remember();
   // A block far away is drawn once it is near, and those above it may change height as they
   // are: once they have, the change is put in its place again.
   requestAnimationFrame(() =>
     requestAnimationFrame(() => {
+      if (lastStep.get(scroller)?.block !== target.block || lastStep.get(scroller)?.at !== target.at) return;
       const off = top(target.block, target.at) - line;
       if (Math.abs(off) > 1) scroller.scrollTop += off;
+      remember();
     }),
   );
   return true;

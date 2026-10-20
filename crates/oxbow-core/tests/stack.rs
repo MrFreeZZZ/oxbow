@@ -168,7 +168,7 @@ fn reword_and_reorder_keep_every_branch_on_its_commits() {
     let commands = repo.plan(&Action::EditStack { plan: plan.clone() }).unwrap().commands;
     assert_eq!(
         commands[0].display(),
-        format!("git rebase --interactive {} auth/3", &stack.base.id[..7])
+        format!("git rebase --interactive {} auth/3", stack.base.id)
     );
     let todo = commands[0].todo.clone().unwrap();
     assert!(todo.contains("update-ref refs/heads/auth/1\n"), "{todo}");
@@ -295,8 +295,7 @@ fn moving_onto_the_newest_main_finds_the_conflict_first() {
         commands[0].display(),
         format!(
             "git rebase --interactive --onto {} {} auth/3",
-            stack.trunk_tip.id,
-            &stack.base.id[..7]
+            stack.trunk_tip.id, stack.base.id
         )
     );
     repo.perform(&Action::EditStack { plan }).unwrap_err();

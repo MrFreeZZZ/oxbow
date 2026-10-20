@@ -147,14 +147,15 @@ pub enum Pick {
     TheirsThenOurs,
 }
 
-/// A chunk with its lines as they are in the file, line endings included.
+/// A chunk with its lines as they are in the file, as bytes with line endings included: the
+/// file need not be UTF-8, and lines nobody picked must be written back unchanged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RawChunk {
-    Same(Vec<String>),
+    Same(Vec<Vec<u8>>),
     Conflict {
-        ours: Vec<String>,
-        base: Vec<String>,
-        theirs: Vec<String>,
+        ours: Vec<Vec<u8>>,
+        base: Vec<Vec<u8>>,
+        theirs: Vec<Vec<u8>>,
     },
 }
 
@@ -486,7 +487,7 @@ impl Repo {
     }
 
     /// The file with `picks` in place of its conflicts, in order.
-    pub(crate) fn resolved_text(&self, path: &str, picks: &[Pick]) -> Result<String> {
+    pub(crate) fn resolved_text(&self, path: &str, picks: &[Pick]) -> Result<Vec<u8>> {
         let ([base, ours, theirs], link) = self.stages(path)?;
         let (Some(ours), Some(theirs), false) = (ours, theirs, link) else {
             return Err(Error::Git(format!("{path} can only be taken whole from one side")));
@@ -497,19 +498,19 @@ impl Repo {
             return Err(Error::Git(format!("{path} changed since it was shown; open it again")));
         }
         let mut picks = picks.iter();
-        let mut out = String::new();
+        let mut out = Vec::new();
         for chunk in chunks {
             match chunk {
-                RawChunk::Same(lines) => out.extend(lines),
+                RawChunk::Same(lines) => out.extend(lines.concat()),
                 RawChunk::Conflict { ours, theirs, .. } => {
-                    let parts: [&[String]; 2] = match picks.next().expect("one pick per conflict") {
+                    let parts: [&[Vec<u8>]; 2] = match picks.next().expect("one pick per conflict") {
                         Pick::Ours => [&ours, &[]],
                         Pick::Theirs => [&theirs, &[]],
                         Pick::OursThenTheirs => [&ours, &theirs],
                         Pick::TheirsThenOurs => [&theirs, &ours],
                     };
                     for part in parts {
-                        out.extend(part.iter().cloned());
+                        out.extend(part.concat());
                     }
                 }
             }
@@ -764,7 +765,7 @@ impl Repo {
             if out.status.code().is_none_or(|code| !(0..=127).contains(&code)) {
                 return Err(Error::Git(String::from_utf8_lossy(&out.stderr).trim().to_owned()));
             }
-            Ok(parse_merged(&String::from_utf8_lossy(&out.stdout)))
+            Ok(parse_merged(&out.stdout))
         })();
         let _ = std::fs::remove_dir_all(&dir);
         result
@@ -772,22 +773,22 @@ impl Repo {
 }
 
 /// Split `git merge-file --diff3` output into agreed lines and conflicts.
-fn parse_merged(text: &str) -> Vec<RawChunk> {
+fn parse_merged(text: &[u8]) -> Vec<RawChunk> {
     enum In {
         Same,
         Ours,
         Base,
         Theirs,
     }
-    let marker = |c: char| c.to_string().repeat(MARKER);
-    let (start, mid_base, mid, end) = (marker('<'), marker('|'), marker('='), marker('>'));
+    let marker = |c: u8| vec![c; MARKER];
+    let (start, mid_base, mid, end) = (marker(b'<'), marker(b'|'), marker(b'='), marker(b'>'));
     let mut chunks = Vec::new();
     let mut same = Vec::new();
     let (mut ours, mut base, mut theirs) = (Vec::new(), Vec::new(), Vec::new());
     let mut state = In::Same;
-    for line in text.split_inclusive('\n') {
-        let bare = line.trim_end_matches(['\n', '\r']);
-        let is = |m: &str| bare == m || bare.strip_prefix(m).is_some_and(|rest| rest.starts_with(' '));
+    for line in text.split_inclusive(|&c| c == b'\n') {
+        let bare = trim_eol(line);
+        let is = |m: &[u8]| bare == m || bare.strip_prefix(m).is_some_and(|rest| rest.starts_with(b" "));
         match state {
             In::Same if is(&start) => {
                 if !same.is_empty() {
@@ -795,11 +796,11 @@ fn parse_merged(text: &str) -> Vec<RawChunk> {
                 }
                 state = In::Ours;
             }
-            In::Same => same.push(line.to_owned()),
+            In::Same => same.push(line.to_vec()),
             In::Ours if is(&mid_base) => state = In::Base,
-            In::Ours | In::Base if bare == mid => state = In::Theirs,
-            In::Ours => ours.push(line.to_owned()),
-            In::Base => base.push(line.to_owned()),
+            In::Ours | In::Base if bare == mid.as_slice() => state = In::Theirs,
+            In::Ours => ours.push(line.to_vec()),
+            In::Base => base.push(line.to_vec()),
             In::Theirs if is(&end) => {
                 chunks.push(RawChunk::Conflict {
                     ours: std::mem::take(&mut ours),
@@ -808,7 +809,7 @@ fn parse_merged(text: &str) -> Vec<RawChunk> {
                 });
                 state = In::Same;
             }
-            In::Theirs => theirs.push(line.to_owned()),
+            In::Theirs => theirs.push(line.to_vec()),
         }
     }
     if !same.is_empty() {
@@ -817,11 +818,20 @@ fn parse_merged(text: &str) -> Vec<RawChunk> {
     chunks
 }
 
-fn bare(lines: Vec<String>) -> Vec<String> {
+/// Lines for showing, without line endings. Bytes that aren't UTF-8 show as `�`; the file
+/// itself is written from the bytes.
+fn bare(lines: Vec<Vec<u8>>) -> Vec<String> {
     lines
-        .into_iter()
-        .map(|l| l.trim_end_matches(['\n', '\r']).to_owned())
+        .iter()
+        .map(|l| String::from_utf8_lossy(trim_eol(l)).into_owned())
         .collect()
+}
+
+fn trim_eol(mut line: &[u8]) -> &[u8] {
+    while let [rest @ .., b'\n' | b'\r'] = line {
+        line = rest;
+    }
+    line
 }
 
 fn short(sha: &str) -> String {
@@ -881,18 +891,19 @@ mod tests {
             m('='),
             m('>')
         );
-        let chunks = parse_merged(&text);
+        let chunks = parse_merged(text.as_bytes());
+        let l = |s: &str| s.as_bytes().to_vec();
         assert_eq!(
             chunks,
             [
-                RawChunk::Same(vec!["a\n".into()]),
+                RawChunk::Same(vec![l("a\n")]),
                 RawChunk::Conflict {
-                    ours: vec!["ours 1\n".into(), "ours 2\n".into()],
-                    base: vec!["old\n".into()],
-                    theirs: vec!["theirs\n".into()],
+                    ours: vec![l("ours 1\n"), l("ours 2\n")],
+                    base: vec![l("old\n")],
+                    theirs: vec![l("theirs\n")],
                 },
                 // A line of seven `=` in the file is just a line.
-                RawChunk::Same(vec!["z\n".into(), "=======\n".into()]),
+                RawChunk::Same(vec![l("z\n"), l("=======\n")]),
             ]
         );
     }

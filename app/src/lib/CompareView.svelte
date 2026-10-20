@@ -49,21 +49,27 @@
     version;
     loading = true;
     error = null;
+    // Only the latest request counts: one for the same refs from before a reload may answer
+    // after it, with what the branches were then.
+    let latest = true;
     api.compare(query.base, query.target, query.mode).then(
       (c) => {
-        if (base !== query.base || target !== query.target || mode !== query.mode) return;
+        if (!latest) return;
         comparison = c;
         loading = false;
         // A commit that is no longer on either side goes back to all the changes.
         if (picked && ![...c.ahead, ...c.behind].some((x) => x.id === picked) && c.mergeBase?.id !== picked) picked = null;
       },
       (err) => {
-        if (base !== query.base || target !== query.target || mode !== query.mode) return;
+        if (!latest) return;
         comparison = null;
         loading = false;
         error = String(err);
       },
     );
+    return () => {
+      latest = false;
+    };
   });
 
   // Other refs start over on all the changes.

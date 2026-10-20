@@ -278,7 +278,7 @@ fn detaching_and_keeping_commits_made_without_a_branch() {
     };
     assert_eq!(
         repo.plan(&detach).unwrap().commands[0].display(),
-        format!("git switch --detach {}", &root[..7])
+        format!("git switch --detach {}", root)
     );
     repo.perform(&detach).unwrap();
     assert_eq!(head(&mut fx), "");

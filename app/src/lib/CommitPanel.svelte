@@ -4,6 +4,7 @@
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { CommitDetail, FileChange, FileDiff, HistoryRow } from "./types";
   import { fullDate, initials, lane, person, plate, splitPath, tabLabels, tabWindow, tint } from "./format";
+  import { fileTabs, tabStepper } from "./tabs";
   import DiffView from "./DiffView.svelte";
   import FoldAll from "./FoldAll.svelte";
   import CommitChain from "./CommitChain.svelte";
@@ -273,7 +274,7 @@
     <CommitChain {row} {childIds} {lookup} {onSelect} />
   </div>
 
-  <div class="tabs" role="tablist" aria-label="Changes in this commit">
+  <div class="tabs" role="tablist" aria-label="Changes in this commit" use:tabStepper={fileTabs(paths, tab, openTab)}>
     <!-- Summary stays pinned first; only the file tabs scroll. -->
     <button
       role="tab"

@@ -94,6 +94,7 @@
   import { confirm, type Part, type Request } from "./confirm.svelte";
   import type { FileChange, FileDiff, Hunk, HistoryRow, Side, WorkingTree } from "./types";
   import { lane, plate, splitPath, tabLabels, tabWindow, tint } from "./format";
+  import { fileTabs, tabStepper } from "./tabs";
   import DiffView, { type LinePicker } from "./DiffView.svelte";
   import FoldAll from "./FoldAll.svelte";
   import WhyNote from "./WhyNote.svelte";
@@ -858,7 +859,7 @@
   </div>
 
   {#if fileCount}
-    <div class="tabs" role="tablist" aria-label="Uncommitted changes">
+    <div class="tabs" role="tablist" aria-label="Uncommitted changes" use:tabStepper={fileTabs(paths, tab, openTab)}>
       <!-- Summary stays pinned first; only the file tabs scroll. -->
       <button
         role="tab"

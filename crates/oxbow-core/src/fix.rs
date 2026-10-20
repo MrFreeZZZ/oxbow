@@ -332,7 +332,7 @@ impl Repo {
                                 switch: false,
                             },
                             vec![
-                                GitCommand::new(["branch".to_owned(), name.clone(), short(commit)])
+                                GitCommand::new(["branch".to_owned(), name.clone(), commit.clone()])
                                     .comment("a branch keeps the commit and everything before it"),
                             ],
                         );
@@ -385,10 +385,11 @@ impl Repo {
                 "a merge commit is among them, and merges can't be copied one by one: use Edit Stack instead".into(),
             ));
         }
+        // Whole shas in commands: seven characters can match more than one object.
         let range = if count == 1 {
-            short(&tip)
+            tip.clone()
         } else {
-            format!("{}..{}", short(&base), short(&tip))
+            format!("{base}..{tip}")
         };
         let them = if count == 1 { "it" } else { "them" };
 
@@ -427,7 +428,7 @@ impl Repo {
                     to: base.clone(),
                 },
                 vec![
-                    GitCommand::new(["branch".to_owned(), "-f".to_owned(), branch.clone(), short(&base)]).comment(
+                    GitCommand::new(["branch".to_owned(), "-f".to_owned(), branch.clone(), base.clone()]).comment(
                         format!("-f: point an existing branch somewhere else; {branch} isn’t checked out now"),
                     ),
                 ],
@@ -472,7 +473,7 @@ impl Repo {
                     to: base.clone(),
                 },
                 vec![
-                    GitCommand::new(["branch".to_owned(), "-f".to_owned(), branch.clone(), short(&base)]).comment(
+                    GitCommand::new(["branch".to_owned(), "-f".to_owned(), branch.clone(), base.clone()]).comment(
                         format!("-f: point an existing branch somewhere else; {branch} isn’t checked out now"),
                     ),
                 ],
@@ -690,7 +691,7 @@ fn fingerprint(value: impl Hash) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-/// A full sha reads better short.
+/// A full sha reads better short, in comments and messages; commands take it whole.
 fn short(commit: &str) -> String {
     commit[..commit.len().min(7)].to_owned()
 }
