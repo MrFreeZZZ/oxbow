@@ -55,6 +55,8 @@
   import { withKeys } from "./lib/keys";
   import { isRedo, lostRow, oplog, undoRequest } from "./lib/oplog.svelte";
   import EditStackView from "./lib/EditStackView.svelte";
+  import { amend, canBack, canForward, crumbs, emptyTrail, go, visit, type Place, type Trail } from "./lib/backStack";
+  import { kept } from "./lib/kept";
   import SeriesView from "./lib/SeriesView.svelte";
   import { stepQuery, type SeriesQuery } from "./lib/series";
   import { relativeTime } from "./lib/format";
@@ -238,17 +240,12 @@
   }
   const shownPull = $derived(view === "pull" && pullBranch ? github.pullOf(pullBranch) : null);
 
-  /** The screen File History goes back to. */
-  let fileBack = $state<"history" | "stashes" | "oplog" | "compare" | "series">("history");
   // A diff's File History button opens the screen.
   $effect(() => {
     if (!nav.file) return;
     untrack(() => {
       // Coming from another screen starts without a find.
-      if (view !== "file") {
-        fileBack = view === "stack" || view === "pull" ? "history" : view;
-        nav.find = { ...nav.find, text: "" };
-      }
+      if (view !== "file") nav.find = { ...nav.find, text: "" };
       view = "file";
       resolving = false;
     });
@@ -259,7 +256,7 @@
     nav.focusFind = false;
     requestAnimationFrame(() => findField?.focus());
   });
-  /** What Compare Series shows, and the screen its back button returns to. */
+  /** What Compare Series shows, and the screen the sidebar marks while it is open. */
   let seriesQuery = $state<SeriesQuery | null>(null);
   let seriesBack = $state<"history" | "oplog" | "pull" | "stack">("history");
 
@@ -281,6 +278,202 @@
     await oplog.load();
     const entry = oplog.entries.find((e) => e.rewrites?.length);
     if (entry) seriesOfStep(entry);
+  }
+
+  // --- Back and Forward ---
+
+  /** The places visited in this repository, and which one is current. */
+  let trail = $state<Trail>(emptyTrail());
+  /** The next change of the selected commit is a leap (a search result, a parent, a sidebar
+   *  branch), which History keeps as a place of its own. */
+  let jumping = false;
+  /** How far History's graph is scrolled, kept for its place when you leave it. */
+  let historyScroll: number | null = null;
+  /** The list of places behind or ahead, from a right-click on Back or Forward. */
+  let placesMenu = $state<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
+
+  /** Where you are now, as Back would bring you back to it. */
+  const here = $derived.by((): Place | null => {
+    if (!repo || !history) return null;
+    switch (view) {
+      case "history":
+        return { view, commit: selected, scroll: null };
+      case "file": {
+        if (!nav.file) return null;
+        const live = nav.fileHere?.path === nav.file.path ? nav.fileHere : null;
+        const { path, commit, at, line } = live ?? { ...nav.file, at: nav.file.at ?? null, line: nav.file.line ?? null };
+        return { view, path, commit, mode: nav.fileMode, at, line };
+      }
+      case "stashes":
+        return { view, stash: stashSel };
+      case "oplog":
+        return { view };
+      case "compare":
+        return { view, ...comparing };
+      case "series":
+        return seriesQuery ? { view, query: seriesQuery } : null;
+      case "pull":
+        return pullBranch ? { view, branch: pullBranch } : null;
+      case "stack":
+        return { view, branch: stackBranch };
+    }
+  });
+
+  $effect(() => {
+    const place = here;
+    if (!place) return;
+    untrack(() => {
+      // History is left as scrolled now.
+      const scroll = historyScroll;
+      const before = amend(trail, (p) => (p.view === "history" ? { ...p, scroll } : p));
+      trail = visit(before, place.view === "history" ? { ...place, scroll } : place, jumping);
+      jumping = false;
+    });
+  });
+
+  /** Select a commit by a leap: History keeps the commit you leave as a place to come back to. */
+  function jump(id: string) {
+    if (id !== selected && view === "history" && !showConflicts) jumping = true;
+    select(id);
+  }
+
+  /** What a place is called, in the header's path and the list of places. */
+  function placeName(p: Place): string {
+    switch (p.view) {
+      case "history":
+        return "History";
+      case "file":
+        return p.line ? `Line ${p.line}` : p.path.slice(p.path.lastIndexOf("/") + 1);
+      case "stashes":
+        return "Stashes";
+      case "oplog":
+        return "Operation Log";
+      case "compare":
+        return "Compare";
+      case "series":
+        return "Compare Series";
+      case "pull": {
+        const pull = github.pullOf(p.branch);
+        return pull ? `PR #${pull.number}` : `Pull Request ${p.branch}`;
+      }
+      case "stack":
+        return "Edit Stack";
+    }
+  }
+
+  /** The grey line under a place's name in the list of places. */
+  function placeDetail(p: Place): string | undefined {
+    switch (p.view) {
+      case "history": {
+        const row = p.commit ? rowsById.get(p.commit) : undefined;
+        return row ? (row.worktree ? "Uncommitted changes" : row.summary) : undefined;
+      }
+      case "file":
+        return p.line ? `${p.path} · Blame` : `${p.path} · ${p.mode === "blame" ? "Blame" : "Changes"}`;
+      case "compare":
+        return `${p.target} with ${p.base}`;
+      case "series":
+        return p.query.branch;
+      case "pull":
+        return p.branch;
+      case "stack":
+        return p.branch ?? history?.head.branch ?? undefined;
+      default:
+        return undefined;
+    }
+  }
+
+  const placeIcons: Record<Place["view"], string> = {
+    history: menuIcons.branch,
+    file: menuIcons.history,
+    stashes: menuIcons.stash,
+    oplog: menuIcons.undo,
+    compare: menuIcons.compare,
+    series: menuIcons.compare,
+    pull: menuIcons.merge,
+    stack: menuIcons.rebase,
+  };
+
+  const stepBack = $derived(canBack(trail) ? placeName(trail.places[trail.at - 1]) : null);
+  const stepForward = $derived(canForward(trail) ? placeName(trail.places[trail.at + 1]) : null);
+  /** The places that led here, for the header. History is home: it shows its own status instead. */
+  const trailPath = $derived(view === "history" ? [] : crumbs(trail, placeName, 2));
+
+  /** Go to a place on the trail, as it was left. */
+  function goTo(index: number) {
+    // History is left as scrolled now, for Forward to come back to.
+    const scroll = historyScroll;
+    const next = go(view === "history" ? amend(trail, (p) => (p.view === "history" ? { ...p, scroll } : p)) : trail, index);
+    if (!next) return;
+    trail = next;
+    const p = next.places[next.at];
+    resolving = false;
+    switch (p.view) {
+      case "history": {
+        view = "history";
+        second = null;
+        submoduleSel = null;
+        oplog.compare = null;
+        oplog.lost = null;
+        if (p.commit) {
+          unhide(p.commit);
+          selected = p.commit;
+        }
+        const id = selected;
+        const place = () => (p.scroll !== null ? list?.scrollTo(p.scroll) : id && list?.reveal(id));
+        if (!id || rowsById.has(id)) requestAnimationFrame(place);
+        else ensureLoaded(id).then((ok) => ok && selected === id && requestAnimationFrame(place));
+        break;
+      }
+      case "file":
+        nav.fileMode = p.mode;
+        nav.file = { path: p.path, commit: p.commit, at: p.at, line: p.line };
+        break;
+      case "stashes":
+        stashSel = p.stash;
+        view = "stashes";
+        break;
+      case "oplog":
+        view = "oplog";
+        break;
+      case "compare":
+        comparing = { base: p.base, target: p.target, mode: p.mode };
+        view = "compare";
+        break;
+      case "series":
+        seriesQuery = p.query;
+        view = "series";
+        break;
+      case "pull":
+        openPull(p.branch);
+        break;
+      case "stack":
+        openStack(p.branch);
+        break;
+    }
+  }
+
+  const goBack = () => goTo(trail.at - 1);
+  const goForward = () => goTo(trail.at + 1);
+
+  /** Right-click on Back or Forward: the places that way, nearest first, as in Safari. */
+  function showPlaces(event: MouseEvent, ahead: boolean) {
+    event.preventDefault();
+    const indexes = ahead ? trail.places.map((_, i) => i).slice(trail.at + 1) : trail.places.map((_, i) => i).slice(0, trail.at).reverse();
+    if (!indexes.length) return;
+    const entries: MenuEntry[] = indexes.slice(0, 15).map((i) => {
+      const p = trail.places[i];
+      return { kind: "item", label: placeName(p), detail: placeDetail(p), icon: placeIcons[p.view], run: () => goTo(i) };
+    });
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    placesMenu = { x: box.left, y: box.bottom + 4, entries };
+  }
+
+  /** Another repository starts a trail of its own, and what its screens kept is let go. */
+  function forgetPlaces() {
+    trail = emptyTrail();
+    historyScroll = null;
+    kept.clear();
   }
 
   /** What Compare shows: `target` against `base`. */
@@ -433,6 +626,7 @@
     submoduleSel = null;
     search.clear();
     oplog.forget();
+    forgetPlaces();
     lfs.forget();
     activity.reset();
     stopPaging();
@@ -503,7 +697,7 @@
     // A stash made or put back is the newest, and the Stashes screen shows it.
     if (ok && (request.action?.kind === "stashPush" || request.action?.kind === "stashStore")) stashSel = history?.stashes[0]?.id ?? null;
     const after = history?.head;
-    if (after?.commit && (after.branch !== before?.branch || after.commit !== before?.commit)) select(after.commit);
+    if (after?.commit && (after.branch !== before?.branch || after.commit !== before?.commit)) (after.branch !== before?.branch ? jump : select)(after.commit);
     openConflicts(opBefore);
     return ok;
   }
@@ -658,6 +852,8 @@
     add("diffLayout", "View", prefs.get("oxbow.diff.layout") === "split" ? "Show Diffs Unified" : "Show Diffs Side by Side", () => void prefs.set("oxbow.diff.layout", prefs.get("oxbow.diff.layout") === "split" ? "unified" : "split"));
     add("wrap", "View", "Toggle Word Wrap", () => void prefs.set("oxbow.diff.wrap", !prefs.get("oxbow.diff.wrap")), "wrap");
     add("whitespace", "View", prefs.get("oxbow.diff.ignoreWhitespace") ? "Show Whitespace Changes" : "Ignore Whitespace Changes", () => void prefs.set("oxbow.diff.ignoreWhitespace", !prefs.get("oxbow.diff.ignoreWhitespace")));
+    if (canBack(trail)) add("back", "Go", `Go Back to ${placeName(trail.places[trail.at - 1])}`, goBack, "back");
+    if (canForward(trail)) add("forward", "Go", `Go Forward to ${placeName(trail.places[trail.at + 1])}`, goForward, "forward");
     add("nextChange", "Go", "Go to Next Change", () => void stepChange(1), "nextChange");
     add("previousChange", "Go", "Go to Previous Change", () => void stepChange(-1), "previousChange");
     add("history", "View", "Show History", () => ((view = "history"), (resolving = false)));
@@ -809,6 +1005,14 @@
         return true;
       case "sidebar":
         toggleSidebar();
+        return true;
+      case "back":
+      case "forward":
+        // ⌥← and ⌥→ move by a word in a text field off the Mac.
+        if (typing(event) && event.altKey) return false;
+        if (id === "back" ? !canBack(trail) : !canForward(trail)) return false;
+        if (id === "back") goBack();
+        else goForward();
         return true;
       case "details":
       case "expand":
@@ -1424,6 +1628,7 @@
     second = null;
     search.clear();
     oplog.forget();
+    forgetPlaces();
     view = "history";
     nav.quickOpen = false;
     error = null;
@@ -1459,6 +1664,7 @@
   /** A commit from git's reflog: selected in History when it is there, otherwise shown on its
    *  own in the details panel. */
   async function showMove(entry: ReflogEntry) {
+    const leap = view === "history" && !showConflicts;
     second = null;
     oplog.compare = null;
     view = "history";
@@ -1466,6 +1672,7 @@
     showDetails();
     if (await ensureLoaded(entry.id)) {
       oplog.lost = null;
+      if (leap && entry.id !== selected) jumping = true;
       selected = entry.id;
       requestAnimationFrame(() => list?.reveal(entry.id));
     } else {
@@ -1486,7 +1693,7 @@
   /** From the lost commit's panel: a parent History has, or another lost commit. */
   function selectFromLost(id: string) {
     const other = oplog.reflog.find((e) => e.id === id);
-    if (rowsById.has(id) || !other) select(id);
+    if (rowsById.has(id) || !other) jump(id);
     else oplog.lost = other;
   }
 
@@ -1514,6 +1721,7 @@
 
   /** Picking a commit from the sidebar goes back to History, which mounts the graph again. */
   function pick(id: string) {
+    if (id !== selected && view === "history" && !showConflicts) jumping = true;
     unhide(id);
     selected = id;
     second = null;
@@ -1660,6 +1868,13 @@
 <svelte:window
   bind:innerWidth={windowWidth}
   onfocus={refresh}
+  onmouseup={(event) => {
+    // A mouse's own Back and Forward buttons.
+    if ((event.button !== 3 && event.button !== 4) || !history || confirm.request || start.sheet) return;
+    event.preventDefault();
+    if (event.button === 3) goBack();
+    else goForward();
+  }}
   onkeydown={(event) => {
     const hit = keymap.match(event);
     // The chord's note goes once its second key came.
@@ -1729,37 +1944,48 @@
     <div class="main">
       <header data-tauri-drag-region>
         <div class="lead" data-tauri-drag-region>
-          {#if view === "file" && !showConflicts}
-            {@const back = fileBack === "compare" ? "Compare" : fileBack === "series" ? "Compare Series" : fileBack === "stashes" ? "Stashes" : fileBack === "oplog" ? "Operation Log" : "History"}
-            <button class="back" onclick={() => ((view = fileBack), (nav.file = null))} aria-label="Back to {back}" title="Back to {back}">
-              <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>
-            </button>
+          {#if !showConflicts}
+            <!-- Back and Forward, as in Safari and Finder: a right-click lists the places that way. -->
+            <div class="joined steps" role="group" aria-label="Back and Forward">
+              <button onclick={goBack} oncontextmenu={(event) => showPlaces(event, false)} disabled={!stepBack} aria-label={stepBack ? `Back to ${stepBack}` : "Back"} title={withKeys(stepBack ? `Back to ${stepBack}` : "Back", combo("back"))}>
+                <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>
+              </button>
+              <button onclick={goForward} oncontextmenu={(event) => showPlaces(event, true)} disabled={!stepForward} aria-label={stepForward ? `Forward to ${stepForward}` : "Forward"} title={withKeys(stepForward ? `Forward to ${stepForward}` : "Forward", combo("forward"))}>
+                <svg class="icon" viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
+              </button>
+            </div>
           {/if}
+          {#snippet steps()}
+            {#each trailPath as crumb (crumb.at)}
+              <button class="crumb" onclick={() => goTo(crumb.at)} title="Back to {crumb.label}">{crumb.label}</button><span class="crumb-sep" aria-hidden="true">›</span>
+            {/each}
+          {/snippet}
           <div class="title" data-tauri-drag-region>
             {#if showConflicts && operation}
               <span class="name">Resolve Conflicts</span>
               <span class="sub">{describe(operation).noun} in progress · {operation.conflicted} {operation.conflicted === 1 ? "file" : "files"} left</span>
             {:else if view === "file" && nav.file}
               <span class="name">{nav.file.path.slice(nav.file.path.lastIndexOf("/") + 1)}</span>
-              <span class="sub">{repo.name} · {nav.file.path}</span>
+              {@const line = nav.fileHere?.path === nav.file.path ? nav.fileHere.line : null}
+              <span class="sub">{@render steps()}{#if trailPath.length && line}Line {line}{:else}{trailPath.length ? "" : `${repo.name} · `}{nav.file.path}{line ? ` · line ${line}` : ""}{/if}</span>
             {:else if view === "pull" && pullBranch}
               <span class="name">{pullBranch}</span>
-              <span class="sub">{shownPull ? `Pull request #${shownPull.number}` : "No pull request yet"}{github.repo ? ` · ${github.repo.owner}/${github.repo.name}` : ""}</span>
+              <span class="sub">{@render steps()}{shownPull ? `Pull request #${shownPull.number}` : "No pull request yet"}{github.repo && !trailPath.length ? ` · ${github.repo.owner}/${github.repo.name}` : ""}</span>
             {:else if view === "stack"}
               <span class="name">Edit Stack</span>
-              <span class="sub">Interactive rebase · {repo.name}</span>
+              <span class="sub">{@render steps()}Interactive rebase{trailPath.length ? "" : ` · ${repo.name}`}</span>
             {:else if view === "series" && seriesQuery}
               <span class="name">Compare Series</span>
-              <span class="sub">{seriesQuery.branch} · {seriesQuery.from}</span>
+              <span class="sub">{@render steps()}{seriesQuery.branch} · {seriesQuery.from}</span>
             {:else if view === "compare"}
               <span class="name">Compare</span>
-              <span class="sub">{comparing.target} with {comparing.base}</span>
+              <span class="sub">{@render steps()}{comparing.target} with {comparing.base}</span>
             {:else if view === "stashes"}
               <span class="name">Stashes</span>
-              <span class="sub">{repo.name} · on {history.head.branch ?? "detached HEAD"}</span>
+              <span class="sub">{@render steps()}{trailPath.length ? "" : `${repo.name} · `}on {history.head.branch ?? "detached HEAD"}</span>
             {:else if view === "oplog"}
               <span class="name">Operation Log</span>
-              <span class="sub">{repo.name} · every step, to undo or restore</span>
+              <span class="sub">{@render steps()}{trailPath.length ? "" : `${repo.name} · `}every step, to undo or restore</span>
             {:else}
               <span class="name">History</span>
               {#if activity.running}
@@ -1790,17 +2016,6 @@
               <button role="radio" aria-checked={nav.fileMode === "blame"} class:on={nav.fileMode === "blame"} onclick={() => (nav.fileMode = "blame")}>Blame</button>
             </div>
           {/if}
-          {#if view === "series" && !showConflicts}
-            {@const back = seriesBack === "oplog" ? "Operation Log" : seriesBack === "pull" ? "Pull Request" : seriesBack === "stack" ? "Edit Stack" : "History"}
-            <button class="capsule" onclick={() => (view = seriesBack)} title="Back to {back}">
-              <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>{back}
-            </button>
-          {/if}
-          {#if (view === "compare" || view === "stack" || view === "pull") && !showConflicts}
-            <button class="capsule" onclick={() => (view = "history")} title="Back to the commit graph">
-              <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>History
-            </button>
-          {/if}
           {#if showConflicts}
             <button class="capsule" onclick={() => (resolving = false)} title={view === "stashes" ? "Back to Stashes" : "Back to the commit graph"}>
               <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>{view === "stashes" ? "Stashes" : "History"}
@@ -1812,7 +2027,7 @@
             <FindField bind:this={findField} />
           {/if}
           {#if view === "history" && !showConflicts}
-            <SearchField bind:this={searchField} onLeave={() => list?.focus()} rows={history.rows} {matches} {selected} onGo={select} />
+            <SearchField bind:this={searchField} onLeave={() => list?.focus()} rows={history.rows} {matches} {selected} onGo={jump} />
           {/if}
         </div>
         <div class="trail" data-tauri-drag-region>
@@ -2076,7 +2291,7 @@
                 <svg class="icon" viewBox="0 0 16 16"><circle cx="5" cy="3.8" r="1.6" /><circle cx="5" cy="12.2" r="1.6" /><circle cx="11" cy="6.4" r="1.6" /><path d="M5 5.4v5.2M11 8c0 2-3 2.2-5.4 3.2" /></svg>
                 Current Branch Only
               </button>
-              <GraphLegend {history} shown={graphHistory!} onShow={select} />
+              <GraphLegend {history} shown={graphHistory!} onShow={jump} />
             {/if}
             {#if detailsHidden}
               <button class="bar-button" onclick={toggleDetails} aria-label="Show details" title={withKeys("Show Details", DETAILS_KEYS)}>
@@ -2090,6 +2305,7 @@
               history={graphHistory!}
               {selected}
               onSelect={select}
+              onScroll={(top) => (historyScroll = top)}
               menuFor={commitMenu}
               {found}
               second={pair ? second : null}
@@ -2181,7 +2397,7 @@
                 onResolve={operation ? () => (resolving = true) : undefined}
               />
             {:else if selectedRow}
-              <CommitPanel row={selectedRow} childIds={childrenOf.get(selectedRow.id) ?? []} lookup={(id) => rowsById.get(id)} onSelect={select} localTags={history.localTags} {version}
+              <CommitPanel row={selectedRow} childIds={childrenOf.get(selectedRow.id) ?? []} lookup={(id) => rowsById.get(id)} onSelect={jump} localTags={history.localTags} {version}
                 onUnshallow={history.shallow && history.defaultRemote ? () => run(unshallowRequest(history!.defaultRemote!)) : null}
                 find={found?.mode === "code" ? found.text : null}
                 foundFiles={found?.hits.get(selectedRow.id) ?? []}
@@ -2198,6 +2414,9 @@
   </div>
   {#if moreMenu && narrow}
     <Menu x={moreMenu.x} y={moreMenu.y} label="More" entries={moreEntries()} onClose={() => (moreMenu = null)} />
+  {/if}
+  {#if placesMenu}
+    <Menu x={placesMenu.x} y={placesMenu.y} label="Places" entries={placesMenu.entries} onClose={() => (placesMenu = null)} />
   {/if}
   {#if nav.quickOpen}
     <QuickOpen
@@ -2423,19 +2642,27 @@
     color: var(--icon);
     font-weight: 500;
   }
-  .back {
-    width: 28px;
-    height: 28px;
-    margin-right: -4px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius-pill);
-    color: var(--icon);
-    flex-shrink: 0;
+  .joined.steps > button {
+    min-width: 32px;
+    padding: 0 7px;
   }
-  .back:hover {
-    background: var(--field);
+  .joined.steps > button:disabled {
+    opacity: 0.4;
+    background: none;
+  }
+  /* The path that led here, before the screen's own subtitle: quiet links, as in Finder's path bar. */
+  .crumb {
+    padding: 0;
+    color: inherit;
+    font: inherit;
+  }
+  .crumb:hover {
+    color: var(--accent-text);
+    text-decoration: underline;
+  }
+  .crumb-sep {
+    margin: 0 5px;
+    opacity: 0.7;
   }
   .group {
     display: flex;

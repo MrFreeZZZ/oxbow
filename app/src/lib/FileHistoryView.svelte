@@ -86,6 +86,24 @@
 
   const blameAt = $derived(at ?? { rev: "HEAD", path });
 
+  // Back and Forward bring the file back as it was left: its commit, Blame's revision and the
+  // line that was followed.
+  $effect(() => {
+    const goal = nav.file;
+    if (!goal || goal.path !== path) return;
+    untrack(() => {
+      if (goal.commit && file && byId.has(goal.commit)) selected = goal.commit;
+      at = goal.at ?? null;
+      if (goal.line) void followLine(goal.line, goal.commit);
+      else line = null;
+    });
+  });
+
+  // How the file is now, for Back to come back to.
+  $effect(() => {
+    nav.fileHere = { path, commit: selected, at: at ? { ...at } : null, line: line?.no ?? null };
+  });
+
   $effect(() => {
     if (mode !== "blame") return;
     const target = blameAt;
@@ -219,10 +237,17 @@
       line = null;
       return;
     }
+    await followLine(no);
+  }
+
+  /** The commits that changed line `no`, with `prefer` selected if it is one of them, else the newest. */
+  async function followLine(no: number, prefer: string | null = null) {
+    if (line?.no === no) return;
     try {
       const ids = await api.lineHistory(blameAt.path, no, blameAt.rev, LINE);
       line = { no, ids };
-      if (ids[0]) selected = ids[0];
+      const first = prefer && ids.includes(prefer) ? prefer : ids[0];
+      if (first) selected = first;
     } catch (err) {
       if (!stopped(err)) blameError = String(err);
     }
