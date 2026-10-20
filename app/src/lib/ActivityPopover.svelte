@@ -9,7 +9,7 @@
   import { actionIcons } from "./icons";
   import { prefs } from "./prefs.svelte";
   import CommandWords from "./CommandWords.svelte";
-  import { keys } from "./keys";
+  import { shortcut } from "./keys";
 
   /** Commands a row shows before Show All. */
   const FEW = 2;
@@ -88,7 +88,7 @@
       <!-- Reload lives here and in the repository menu: the toolbar keeps only Fetch. -->
       <button class="reload" onclick={reload} title="Read the repository again, without asking the remote">
         <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5" /></svg>
-        Reload <span class="keys">{keys("Mod+R")}</span>
+        Reload <span class="keys">{shortcut("reload")}</span>
       </button>
     </div>
     <div class="list">
@@ -160,7 +160,7 @@
     </div>
     <div class="foot">
       <button class="link" onclick={settings}>Fetch Settings…</button>
-      <button class="link" onclick={() => ((activity.open = false), api.openConsole())} title={`Every git command Oxbow ran, with its output (${keys("Alt+Mod+C")})`}>Open Console</button>
+      <button class="link" onclick={() => ((activity.open = false), api.openConsole())} title={`Every git command Oxbow ran, with its output (${shortcut("console")})`}>Open Console</button>
     </div>
   </div>
 {/if}

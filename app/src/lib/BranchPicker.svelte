@@ -60,6 +60,11 @@
     if (open) requestAnimationFrame(() => field?.focus());
   }
 
+  /** Open the list, from the Command Palette. */
+  export function show() {
+    if (!open) toggle();
+  }
+
   function pick(name: string) {
     open = false;
     if (name !== head) onPick(name);

@@ -2,7 +2,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { listen } from "@tauri-apps/api/event";
   import { api, settings } from "./lib/api";
-  import { WORKTREE_ID, type History, type HistoryRow, type RefInfo, type ReflogEntry, type RepoSummary } from "./lib/types";
+  import { WORKTREE_ID, type History, type HistoryRow, type RecentRepo, type RefInfo, type ReflogEntry, type RepoSummary } from "./lib/types";
   import Sidebar from "./lib/Sidebar.svelte";
   import HistoryList from "./lib/HistoryList.svelte";
   import GraphLegend from "./lib/GraphLegend.svelte";
@@ -35,6 +35,10 @@
   import FileHistoryView from "./lib/FileHistoryView.svelte";
   import FindField from "./lib/FindField.svelte";
   import QuickOpen from "./lib/QuickOpen.svelte";
+  import CommandPalette from "./lib/CommandPalette.svelte";
+  import type { PaletteItem } from "./lib/palette";
+  import { Keymap, combo, type ShortcutId } from "./lib/shortcuts";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
   import PairPanel from "./lib/PairPanel.svelte";
   import SnapshotPanel from "./lib/SnapshotPanel.svelte";
   import LostCommitPanel from "./lib/LostCommitPanel.svelte";
@@ -47,7 +51,7 @@
   import { start } from "./lib/start.svelte";
   import OperationLog from "./lib/OperationLog.svelte";
   import { withKeys } from "./lib/keys";
-  import { lostRow, oplog, undoRequest } from "./lib/oplog.svelte";
+  import { isRedo, lostRow, oplog, undoRequest } from "./lib/oplog.svelte";
   import EditStackView from "./lib/EditStackView.svelte";
   import ActivityPopover from "./lib/ActivityPopover.svelte";
   import { activity, failureShort, type ActivityItem } from "./lib/activity.svelte";
@@ -130,7 +134,7 @@
   let sideHidden = $state(false);
   /** Whether the sidebar is out now: docked in a wide window, slid in over a narrow one. */
   const sideOut = $derived(narrow ? sideShown : !sideHidden);
-  const SIDEBAR_KEYS = mac ? "Ctrl+Mod+S" : "Ctrl+Alt+S";
+  const SIDEBAR_KEYS = combo("sidebar");
   /** The sidebar is sliding in or out of a wide window. */
   let sliding = $state(false);
   let slideTimer: ReturnType<typeof setTimeout> | undefined;
@@ -169,7 +173,7 @@
   function moreEntries(): MenuEntry[] {
     const entries: MenuEntry[] = [];
     if (view !== "file" || showConflicts) entries.push({ kind: "item", label: history?.head.branch ? "New Branch…" : "Create a Branch at HEAD…", icon: NEW_BRANCH_ICON, run: newBranch });
-    entries.push({ kind: "item", label: "Console", icon: CONSOLE_ICON, keys: keys("Alt+Mod+C"), run: () => api.openConsole() });
+    entries.push({ kind: "item", label: "Console", icon: CONSOLE_ICON, keys: keys(combo("console")), run: () => api.openConsole() });
     entries.push({ kind: "item", label: "Settings…", icon: SETTINGS_ICON, keys: keys("Mod+,"), run: () => api.openSettings() });
     return entries;
   }
@@ -177,8 +181,8 @@
   let detailsHidden = $state(false);
   /** The details panel over the whole content, for a long diff; the graph comes back with the same button or Esc. */
   let expanded = $state(false);
-  const DETAILS_KEYS = mac ? "Ctrl+Mod+I" : "Ctrl+Alt+I";
-  const EXPAND_KEYS = mac ? "Ctrl+Mod+E" : "Ctrl+Alt+E";
+  const DETAILS_KEYS = combo("details");
+  const EXPAND_KEYS = combo("expand");
   function toggleDetails() {
     expanded = false;
     detailsHidden = !detailsHidden;
@@ -476,6 +480,253 @@
     const latest = oplog.entries[0];
     if (latest) run(undoRequest(latest));
     else confirm.say("Nothing to undo yet.");
+  }
+
+  /** ⇧⌘Z: redo, when the newest step of the Operation Log is an undo. */
+  async function redoLatest() {
+    oplog.open = false;
+    await oplog.load();
+    const latest = oplog.entries[0];
+    if (latest && isRedo(latest)) run(undoRequest(latest));
+    else confirm.say("Nothing to redo: the newest step isn’t an undo.");
+  }
+
+  /** The Command Palette, or the list of recent repositories (⌃R), over the window. */
+  let picker = $state<{ kind: "commands"; initial: string } | { kind: "recent"; repos: RecentRepo[] } | null>(null);
+  /** What Quick Open starts with when the palette's ">" was taken away. */
+  let quickInitial = $state("");
+  let branchPicker = $state<BranchPicker>();
+  const keymap = new Keymap();
+  /** The toast saying a chord waits for its second key. */
+  let chordNote: string | null = null;
+
+  function openPalette() {
+    nav.quickOpen = false;
+    picker = picker?.kind === "commands" ? null : { kind: "commands", initial: "" };
+  }
+
+  async function openRecent() {
+    nav.quickOpen = false;
+    const repos = await api.recentRepos().catch(() => []);
+    picker = { kind: "recent", repos: repos.filter((r) => !r.missing && r.path !== repo?.path) };
+  }
+
+  /** Changes, with the cursor in the commit's summary, as VS Code's Source Control view has it. */
+  function commitChanges() {
+    view = "history";
+    resolving = false;
+    if (!history?.rows.some((r) => r.worktree)) {
+      confirm.say("Nothing to commit: there are no uncommitted changes.");
+      return;
+    }
+    showChanges();
+    // The panel comes up a frame or two later.
+    let tries = 0;
+    const focus = () => {
+      const box = content?.querySelector<HTMLInputElement>('input[aria-label="Commit summary"]');
+      if (box) box.focus();
+      else if (++tries < 20) requestAnimationFrame(focus);
+    };
+    requestAnimationFrame(focus);
+  }
+
+  /** The next or the previous tab of the details panel, as ⌥⌘→ steps through VS Code's editors. */
+  function stepTab(by: 1 | -1): boolean {
+    const tabs = [...(content?.querySelectorAll<HTMLElement>('aside.panel [role="tablist"] [role="tab"]') ?? [])];
+    if (!tabs.length) return false;
+    const at = tabs.findIndex((tab) => tab.getAttribute("aria-selected") === "true");
+    const next = tabs[(at + by + tabs.length) % tabs.length];
+    next.click();
+    if (document.activeElement && tabs.includes(document.activeElement as HTMLElement)) keyFocus(next);
+    return true;
+  }
+
+  /** The window's zoom as VS Code counts it: each step is 20% more or less. Kept in settings.json. */
+  let zoomLevel = 0;
+  function zoom(level: number, save = true) {
+    zoomLevel = Math.max(-3, Math.min(5, Math.round(level)));
+    getCurrentWebview()
+      .setZoom(1.2 ** zoomLevel)
+      .catch(() => {});
+    if (save) api.setSetting(settings.zoomLevel, zoomLevel).catch(() => {});
+  }
+
+  /** History's search on, in the given mode: ⌘F for messages and the rest, ⇧⌘F for changed code. */
+  function findInHistory(mode?: "code") {
+    view = "history";
+    resolving = false;
+    if (mode) search.pick(mode);
+    requestAnimationFrame(() => searchField?.focus());
+  }
+
+  /** Every command there is here and now, for the Command Palette. */
+  function paletteCommands(): PaletteItem[] {
+    const out: PaletteItem[] = [];
+    const add = (id: string, category: string, title: string, run: () => void, keys?: ShortcutId) => out.push({ id, category, title, run, keys });
+    add("settings", "Preferences", "Open Settings", () => api.openSettings(), "settings");
+    add("console", "View", "Show Console", () => api.openConsole(), "console");
+    add("open", "File", "Open Repository…", chooseRepo, "open");
+    add("openRecent", "File", "Open Recent…", () => void openRecent(), "openRecent");
+    add("clone", "Git", "Clone…", () => start.clone(), "clone");
+    add("newRepo", "Git", "Initialize Repository…", () => start.newRepo(), "newRepo");
+    add("zoomIn", "View", "Zoom In", () => zoom(zoomLevel + 1), "zoomIn");
+    add("zoomOut", "View", "Zoom Out", () => zoom(zoomLevel - 1), "zoomOut");
+    add("zoomReset", "View", "Reset Zoom", () => zoom(0), "zoomReset");
+    if (!repo || !history || !branchCtx) return out;
+    const h = history;
+    const t = h.tracking;
+    const busy = !!h.operation || !!h.bisect;
+    add("closeRepo", "File", "Close Repository", closeRepo, "closeRepo");
+    add("reload", "File", "Reload Repository", () => void reload(), "reload");
+    add("quickOpen", "Go", "Go to File History…", () => (nav.quickOpen = true), "quickOpen");
+    add("find", "Search", "Find in History", () => findInHistory(), "find");
+    add("findCode", "Search", "Find in Changed Code", () => findInHistory("code"), "findCode");
+    add("sidebar", "View", sideOut ? "Hide Sidebar" : "Show Sidebar", toggleSidebar, "sidebar");
+    add("history", "View", "Show History", () => ((view = "history"), (resolving = false)));
+    add("stashes", "View", "Show Stashes", () => ((view = "stashes"), (resolving = false)));
+    add("oplog", "View", "Show Operation Log", () => ((view = "oplog"), (resolving = false)));
+    if (view === "history" && !showConflicts) {
+      add("details", "View", detailsHidden ? "Show Details" : "Hide Details", toggleDetails, "details");
+      add("expand", "View", expanded ? "Show Graph" : "Expand Details", toggleExpanded, "expand");
+      add("focusOnly", "View", focusOnly ? "Show All Branches" : "Show Current Branch Only", () => void setFocusOnly(!focusOnly));
+    }
+    if (h.rows.some((r) => r.worktree)) {
+      add("changes", "View", "Show Changes", () => ((view = "history"), (resolving = false), showChanges()), "changes");
+      add("commit", "Git", "Commit…", commitChanges);
+      if (!busy) add("stash", "Git", "Stash", () => void run(stashRequest(branchCtx!)));
+    }
+    if (h.remotes.length && remoteCtx) {
+      add("fetch", "Git", "Fetch", () => void sync("fetch"));
+      if (t) {
+        add("pull", "Git", "Pull", () => void sync("pull"));
+        if (!pullBlock) {
+          add("pullRebase", "Git", "Pull (Rebase)", () => void sync("pull", "rebase"));
+          add("pullMerge", "Git", "Pull (Merge)", () => void sync("pull", "merge"));
+        }
+        add("push", "Git", "Push", () => void sync("push"));
+      } else if (h.head.branch) {
+        add("publish", "Git", "Publish Branch…", () => void sync("push"));
+      }
+    } else if (h.head.branch && h.head.commit) {
+      add("publishGitHub", "Git", "Publish to GitHub…", () => void publishToGitHub());
+    }
+    if (!busy) {
+      add("checkout", "Git", "Checkout to…", () => {
+        view = view === "file" ? "history" : view;
+        resolving = false;
+        requestAnimationFrame(() => branchPicker?.show());
+      });
+    }
+    add("branch", "Git", h.head.branch ? "Create Branch…" : "Create Branch at HEAD…", newBranch);
+    if (h.head.branch && !busy) add("editStack", "Git", "Edit Stack…", () => openStack(null));
+    if (operation?.conflicted) add("resolve", "Git", "Resolve Conflicts", () => (resolving = true));
+    add("undo", "Git", "Undo Last Step", () => void undoLatest(), "undo");
+    add("redo", "Git", "Redo", () => void redoLatest(), "redo");
+    add("fixMistake", "Git", "Fix a Mistake…", () => void openFixes(), "fixMistake");
+    return out;
+  }
+
+  /** Run a window-wide shortcut. False when it can't run here and now, so the key does what it
+   *  would do anyway, e.g. ⌘Z in a text field. */
+  function shortcutKey(id: ShortcutId, event: KeyboardEvent): boolean {
+    const free = !confirm.request && !start.sheet;
+    const inRepo = !!history && free;
+    switch (id) {
+      case "settings":
+        api.openSettings();
+        return true;
+      case "console":
+        api.openConsole();
+        return true;
+      case "palette":
+        if (!free) return false;
+        openPalette();
+        return true;
+      case "openRecent":
+        if (!free || loading) return false;
+        if (picker?.kind === "recent") picker = null;
+        else void openRecent();
+        return true;
+      case "open":
+        if (!free || loading) return false;
+        chooseRepo();
+        return true;
+      case "clone":
+        if (!free || loading) return false;
+        start.clone();
+        return true;
+      case "newRepo":
+        if (!free || loading) return false;
+        start.newRepo();
+        return true;
+      case "zoomIn":
+      case "zoomOut":
+      case "zoomReset":
+        zoom(id === "zoomReset" ? 0 : zoomLevel + (id === "zoomIn" ? 1 : -1));
+        return true;
+    }
+    if (!history || confirm.request) return false;
+    switch (id) {
+      case "quickOpen":
+        picker = null;
+        nav.quickOpen = !nav.quickOpen;
+        return true;
+      case "find":
+        // In File History, ⌘F finds in the file.
+        if (view === "file" && !showConflicts) findField?.focus();
+        else findInHistory();
+        return true;
+      case "findCode":
+        findInHistory("code");
+        return true;
+      case "findNext":
+      case "findPrevious": {
+        const by = id === "findNext" ? 1 : -1;
+        if (view === "file" && !showConflicts) nav.findStep(by);
+        else if (view === "history" && !showConflicts) searchField?.step(by);
+        else return false;
+        return true;
+      }
+      case "reload":
+        reload();
+        return true;
+    }
+    if (!inRepo) return false;
+    switch (id) {
+      case "fixMistake":
+        if (fixing) return false;
+        openFixes();
+        return true;
+      case "undo":
+      case "redo":
+        // In a text field ⌘Z stays the field's own.
+        if (typing(event)) return false;
+        if (id === "undo") undoLatest();
+        else redoLatest();
+        return true;
+      case "sidebar":
+        toggleSidebar();
+        return true;
+      case "details":
+      case "expand":
+        if (view !== "history" || showConflicts) return false;
+        if (id === "details") toggleDetails();
+        else toggleExpanded();
+        return true;
+      case "changes":
+        view = "history";
+        resolving = false;
+        if (history.rows.some((r) => r.worktree)) showChanges();
+        else confirm.say("No uncommitted changes.");
+        return true;
+      case "closeRepo":
+        closeRepo();
+        return true;
+      case "nextTab":
+      case "previousTab":
+        return stepTab(id === "nextTab" ? 1 : -1);
+    }
+    return false;
   }
 
   /** The key went to a text field, where ⌘Z undoes typing. */
@@ -1278,6 +1529,9 @@
     api.getSetting<boolean>(settings.detailsHidden).then((hidden) => {
       if (typeof hidden === "boolean") detailsHidden = hidden;
     });
+    api.getSetting<number>(settings.zoomLevel).then((level) => {
+      if (typeof level === "number" && level !== 0) zoom(level, false);
+    });
     api.initialRepo().then((path) => {
       if (path) load(path);
       launched = true;
@@ -1297,50 +1551,24 @@
   bind:innerWidth={windowWidth}
   onfocus={refresh}
   onkeydown={(event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key === ",") {
+    const hit = keymap.match(event);
+    // The chord's note goes once its second key came.
+    if (hit && chordNote && confirm.toast?.text === chordNote) confirm.dismiss();
+    if (hit) chordNote = null;
+    if (hit && "chord" in hit) {
+      // As VS Code says it in its status bar.
       event.preventDefault();
-      api.openSettings();
-    } else if ((event.metaKey || event.ctrlKey) && event.altKey && !event.shiftKey && event.code === "KeyC") {
+      chordNote = `(${keys(hit.chord)}) was pressed. Waiting for the second key of the chord…`;
+      confirm.say(chordNote);
+    } else if (hit && "missed" in hit) {
       event.preventDefault();
-      api.openConsole();
-    } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "p" && history && !confirm.request) {
-      // Quick Open: any file's history.
+      confirm.say(`The key combination (${keys(hit.missed).replace(" ", ", ")}) is not a command.`);
+    } else if (hit && "id" in hit && shortcutKey(hit.id, event)) {
       event.preventDefault();
-      nav.quickOpen = !nav.quickOpen;
-    } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f" && history && !confirm.request && view === "file" && !showConflicts) {
-      // In File History, ⌘F finds in the file.
-      event.preventDefault();
-      findField?.focus();
-    } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f" && history && !confirm.request) {
-      event.preventDefault();
-      view = "history";
-      resolving = false;
-      requestAnimationFrame(() => searchField?.focus());
-    } else if ((event.metaKey || event.ctrlKey) && event.altKey && !event.shiftKey && event.code === "KeyZ" && history && !confirm.request && !start.sheet && !fixing) {
-      // ⌥⌘Z: Fix a Mistake.
-      event.preventDefault();
-      openFixes();
-    } else if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "z" && history && !confirm.request && !start.sheet && !typing(event)) {
-      // ⌘Z undoes the newest step of the Operation Log. In a text field it stays the field's own.
-      event.preventDefault();
-      undoLatest();
-    } else if (history?.bisect && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && ["g", "b", "s"].includes(event.key.toLowerCase()) && view === "history" && !showConflicts && !confirm.request && !start.sheet && !nav.quickOpen && !typing(event)) {
+    } else if (history?.bisect && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && ["g", "b", "s"].includes(event.key.toLowerCase()) && view === "history" && !showConflicts && !confirm.request && !start.sheet && !nav.quickOpen && !picker && !typing(event)) {
       // Bisecting: G, B and S answer for the commit under test, as the banner's tooltips say.
       event.preventDefault();
       bisectKey(({ g: "good", b: "bad", s: "skip" } as const)[event.key.toLowerCase() as "g" | "b" | "s"]);
-    } else if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "r" && history) {
-      // ⌘R reloads, as Reload in the repository menu and in Activity do; the webview never reloads itself.
-      event.preventDefault();
-      reload();
-    } else if ((mac ? event.metaKey && event.ctrlKey && !event.altKey : event.ctrlKey && event.altKey && !event.metaKey) && !event.shiftKey && event.code === "KeyS" && history && !confirm.request && !start.sheet) {
-      // ⌃⌘S shows and hides the sidebar, as in Mail.
-      event.preventDefault();
-      toggleSidebar();
-    } else if ((mac ? event.metaKey && event.ctrlKey && !event.altKey : event.ctrlKey && event.altKey && !event.metaKey) && !event.shiftKey && (event.code === "KeyI" || event.code === "KeyE") && history && view === "history" && !showConflicts && !confirm.request && !start.sheet) {
-      // ⌃⌘I hides and shows the details, ⌃⌘E gives them the whole width.
-      event.preventDefault();
-      if (event.code === "KeyI") toggleDetails();
-      else toggleExpanded();
     } else if (event.key === "Escape" && sideShown && !confirm.request && !event.defaultPrevented) {
       sideShown = false;
     } else if (event.key === "Escape" && submoduleSel && view === "history" && !confirm.request && !event.defaultPrevented) {
@@ -1352,19 +1580,6 @@
       second = null;
     } else if (event.key === "Escape" && expanded && view === "history" && !confirm.request && !event.defaultPrevented) {
       toggleExpanded();
-    } else if ((event.metaKey || event.ctrlKey) && !event.altKey && !confirm.request && !start.sheet && !loading) {
-      // Clone ⇧⌘C, Open ⌘O, New ⌘N, here and on the Welcome window.
-      const key = event.key.toLowerCase();
-      if (key === "c" && event.shiftKey) {
-        event.preventDefault();
-        start.clone();
-      } else if (key === "o" && !event.shiftKey) {
-        event.preventDefault();
-        chooseRepo();
-      } else if (key === "n" && !event.shiftKey) {
-        event.preventDefault();
-        start.newRepo();
-      }
     }
   }}
 />
@@ -1446,7 +1661,7 @@
           {#if view !== "file" || showConflicts}
             <!-- The branch and a new one beside it: one control, as Fetch, Pull and Push are. -->
             <div class="joined branch" role="group" aria-label="Branch">
-              <BranchPicker {history} {colorOf} onPick={(name) => branchCtx && run(switchRequest(branchCtx, name))} />
+              <BranchPicker bind:this={branchPicker} {history} {colorOf} onPick={(name) => branchCtx && run(switchRequest(branchCtx, name))} />
               {#if !narrow}
                 <span class="divider"></span>
                 <button onclick={newBranch} aria-label="New branch" title={history.head.branch ? "New Branch…" : "Create a branch at HEAD…"}>
@@ -1567,7 +1782,7 @@
               onCompare={compareStep}
             />
             <span class="divider"></span>
-            <button onclick={() => openFixes()} aria-label="Fix a mistake" title={withKeys("Fix a Mistake…", "Alt+Mod+Z")}>
+            <button onclick={() => openFixes()} aria-label="Fix a mistake" title={withKeys("Fix a Mistake…", combo("fixMistake"))}>
               <svg class="icon" viewBox="0 0 16 16"><path d="M8 1.8a6.2 6.2 0 1 0 0 12.4a6.2 6.2 0 1 0 0-12.4M8 5.4a2.6 2.6 0 1 0 0 5.2a2.6 2.6 0 1 0 0-5.2M3.6 3.6l2.6 2.6M12.4 3.6 9.8 6.2M3.6 12.4l2.6-2.6M12.4 12.4 9.8 9.8" /></svg>
             </button>
           </div>
@@ -1586,7 +1801,7 @@
               <svg class="icon" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6" /><circle cx="8" cy="8" r=".6" /><circle cx="12.5" cy="8" r=".6" /></svg>
             </button>
           {:else}
-            <button class="capsule" onclick={() => api.openConsole()} aria-label="Console" title={withKeys("Console", "Alt+Mod+C")}>
+            <button class="capsule" onclick={() => api.openConsole()} aria-label="Console" title={withKeys("Console", combo("console"))}>
               <svg class="icon" viewBox="0 0 16 16"><path d={CONSOLE_ICON} /></svg>
             </button>
             <button class="capsule" onclick={() => api.openSettings()} aria-label="Settings" title={withKeys("Settings", "Mod+,")}>
@@ -1841,7 +2056,16 @@
     <Menu x={moreMenu.x} y={moreMenu.y} label="More" entries={moreEntries()} onClose={() => (moreMenu = null)} />
   {/if}
   {#if nav.quickOpen}
-    <QuickOpen commit={selectedRow && !selectedRow.worktree ? { id: selectedRow.id, summary: selectedRow.summary } : null} onClose={() => (nav.quickOpen = false)} />
+    <QuickOpen
+      commit={selectedRow && !selectedRow.worktree ? { id: selectedRow.id, summary: selectedRow.summary } : null}
+      initial={quickInitial}
+      onClose={() => ((nav.quickOpen = false), (quickInitial = ""))}
+      onCommands={(query) => {
+        nav.quickOpen = false;
+        quickInitial = "";
+        picker = { kind: "commands", initial: query };
+      }}
+    />
   {/if}
   {#if fixing}
     {@const fc = fixing}
@@ -1853,6 +2077,30 @@
     />
   {/if}
   <ConfirmSheet repo={repo.name} branch={history.head.branch ?? operation?.branch ?? null} color={headColor} />
+{/if}
+{#if picker?.kind === "commands"}
+  <CommandPalette
+    items={paletteCommands()}
+    initial={picker.initial}
+    placeholder="Type the name of a command to run"
+    empty={() => "No matching commands"}
+    onClose={() => (picker = null)}
+    onFiles={repo && history
+      ? (query) => {
+          picker = null;
+          quickInitial = query;
+          nav.quickOpen = true;
+        }
+      : undefined}
+  />
+{:else if picker?.kind === "recent"}
+  <CommandPalette
+    commands={false}
+    items={picker.repos.map((r) => ({ id: r.path, title: r.name, detail: r.path, run: () => void load(r.path) }))}
+    placeholder="Open a recent repository"
+    empty={(query) => (query.trim() ? `No recent repository matches “${query.trim()}”.` : "No other repositories opened lately.")}
+    onClose={() => (picker = null)}
+  />
 {/if}
 {#if start.sheet?.kind === "clone"}
   <CloneSheet url={start.sheet.url} onDone={started} onClose={() => (start.sheet = null)} />
