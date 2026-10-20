@@ -2041,7 +2041,9 @@ fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
             short_version: Some(env!("OXBOW_COMMIT").to_owned()),
             copyright: Some(format!("Built {}", env!("OXBOW_BUILT"))),
             // The Estuary code theme's dark version is Oceanic Next (THIRD-PARTY-NOTICES.md).
-            credits: Some("Estuary Dark uses the Oceanic Next color scheme by Dmitri Voronianski, MIT License.".to_owned()),
+            credits: Some(
+                "Estuary Dark uses the Oceanic Next color scheme by Dmitri Voronianski, MIT License.".to_owned(),
+            ),
             ..Default::default()
         };
         app_menu.remove_at(0)?;
