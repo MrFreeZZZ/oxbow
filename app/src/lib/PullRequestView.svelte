@@ -11,6 +11,7 @@
   import type { Action, History, MergeMethodName, Landing, PullCheck, PullEntry, PullRequest, PullSummary, ReviewState, Rewrite, Stack, StackPreview } from "./types";
   import type { SeriesQuery } from "./series";
   import { lane, person, plate, relativeTime, shortId, splitPath, tint } from "./format";
+  import { kept } from "./kept";
   import { softArrows } from "./shapes";
   import { editStackRequest, freshDraft, planOf } from "./stack";
   import {
@@ -136,13 +137,21 @@
     );
   });
 
-  // Coming to another branch starts on its conversation.
+  type Left = { tab: typeof tab; method: typeof method; deleteBranch: boolean; form: typeof form };
+
+  // Coming to another branch starts on its conversation, or as it was left there.
   $effect(() => {
-    void branch;
-    tab = "conversation";
-    method = null;
-    deleteBranch = true;
+    const left = kept.get<Left>(`pull\0${branch}`);
+    tab = left?.tab ?? "conversation";
+    method = left?.method ?? null;
+    deleteBranch = left?.deleteBranch ?? true;
+    form = left?.form ?? null;
     restackSkipped = false;
+  });
+
+  // How the screen is left, for coming back to it.
+  $effect(() => {
+    kept.set(`pull\0${branch}`, { tab, method, deleteBranch, form: $state.snapshot(form) } satisfies Left);
   });
 
   async function reload() {

@@ -21,6 +21,8 @@ export type ShortcutId =
   | "findPrevious"
   | "nextChange"
   | "previousChange"
+  | "back"
+  | "forward"
   | "wrap"
   | "undo"
   | "redo"
@@ -66,6 +68,9 @@ export const BINDINGS: Record<ShortcutId, Binding> = {
   // Go to Next Change and Go to Previous Change, of the diff on screen.
   nextChange: { mac: ["Alt+F5"], other: ["Alt+F5"] },
   previousChange: { mac: ["Alt+Shift+F5"], other: ["Alt+Shift+F5"] },
+  // Go Back and Go Forward: VS Code's keys, then ⌘[ and ⌘] as in Safari, Finder and Xcode.
+  back: { mac: ["Ctrl+-", "Mod+["], other: ["Alt+Left", "Ctrl+Alt+-"] },
+  forward: { mac: ["Ctrl+Shift+-", "Mod+]"], other: ["Alt+Right", "Ctrl+Shift+-"] },
   // View: Toggle Word Wrap, for the diffs.
   wrap: { mac: ["Alt+Z"], other: ["Alt+Z"] },
   // Undo and Redo: the steps of the Operation Log, outside text fields.

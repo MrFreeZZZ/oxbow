@@ -10,6 +10,7 @@
   import type { BranchContext } from "./branches";
   import { lane, plate, shortId, tint } from "./format";
   import { keys, withKeys } from "./keys";
+  import { kept as keptPlans } from "./kept";
   import Menu, { type MenuEntry } from "./Menu.svelte";
   import WhyNote from "./WhyNote.svelte";
   import { oplog, undoRequest } from "./oplog.svelte";
@@ -85,7 +86,14 @@
       const next = await api.stack(branch);
       stack = next;
       error = null;
-      draft = freshDraft(next, next.newer > 0 && (firstLoad || draft.onto));
+      // A plan left half made comes back while the stack is as it was.
+      const plan = keptPlans.get<{ sig: string; draft: Draft; selected: string | null }>(keptKey());
+      if (plan && plan.sig === signature(next)) {
+        draft = plan.draft;
+        selected = plan.selected;
+      } else {
+        draft = freshDraft(next, next.newer > 0 && (firstLoad || draft.onto));
+      }
       firstLoad = false;
       selected ??= next.commits[0]?.id ?? null;
       if (selected && !next.commits.some((c) => c.id === selected)) selected = next.commits[0]?.id ?? null;
@@ -93,6 +101,22 @@
       stack = null;
       error = String(err);
     }
+  }
+
+  const keptKey = () => `stack\0${branch ?? ""}`;
+  /** The stack's commits, branches and trunk: a plan fits only the stack it was made for. */
+  const signature = (s: Stack) => JSON.stringify([s.trunkTip.id, s.commits.map((c) => c.id), s.branches.map((b) => [b.name, b.tip])]);
+
+  // A plan being made is kept for coming back to it; Cancel and a plan back as it was let it go.
+  $effect(() => {
+    if (!stack) return;
+    if (edited()) keptPlans.set(keptKey(), { sig: signature(stack), draft: $state.snapshot(draft), selected });
+    else keptPlans.drop(keptKey());
+  });
+
+  function cancel() {
+    keptPlans.drop(keptKey());
+    onClose();
   }
 
   /** The plan differs from the stack as it is. */
@@ -670,7 +694,7 @@
             <button class="button" onclick={resetPlan} disabled={!edited()}>Reset Plan</button>
             <span class="grow"></span>
             {#if !changed}<WhyNote text="Change the plan first" />{/if}
-            <button class="button" onclick={onClose}>Cancel</button>
+            <button class="button" onclick={cancel}>Cancel</button>
             <button class="button primary" onclick={start} disabled={!changed || checking} title={changed ? undefined : "Change the plan first"}>
               Rebase Stack <span class="key-hint">{keys("Mod+Enter")}</span>
             </button>

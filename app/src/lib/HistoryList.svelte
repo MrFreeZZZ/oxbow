@@ -22,6 +22,7 @@
     onUnshallow = null,
     onClearSearch,
     pointed = null,
+    onScroll,
   }: {
     history: History;
     selected: string | null;
@@ -45,6 +46,8 @@
     onClearSearch?: () => void;
     /** A commit a branch name or SHA in a git command points at, lit up while its popover is open. */
     pointed?: string | null;
+    /** How far down the list is scrolled, as it scrolls: Back returns to the same spot. */
+    onScroll?: (top: number) => void;
   } = $props();
 
   // Geometry from the design: 44px two-line rows, lanes 18px apart, trunk lane centered 14px in.
@@ -284,12 +287,17 @@
     }
   }
 
-  /** Back to the newest commit: scroll to the top and select it. */
+  /** Scroll to where the list was, after Back or Forward. */
+  export function scrollTo(top: number) {
+    if (viewport) viewport.scrollTop = top;
+  }
+
   /** Hands the keyboard to the list, as Tab from the details panel or opening History do. */
   export function focus() {
     viewport?.focus({ preventScroll: true });
   }
 
+  /** Back to the newest commit: scroll to the top and select it. */
   export function toTop() {
     if (viewport) viewport.scrollTo({ top: 0, behavior: "smooth" });
     if (rows[0]) onSelect(rows[0].id);
@@ -389,7 +397,10 @@
     bind:this={viewport}
     bind:clientHeight={height}
     bind:clientWidth={width}
-    onscroll={() => (scrollTop = viewport?.scrollTop ?? 0)}
+    onscroll={() => {
+      scrollTop = viewport?.scrollTop ?? 0;
+      onScroll?.(scrollTop);
+    }}
     onkeydown={onKey}
     tabindex="0"
     role="listbox"
