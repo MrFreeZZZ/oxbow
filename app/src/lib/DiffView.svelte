@@ -12,7 +12,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import type { DiffLine, FileDiff, Hunk, Side } from "./types";
-  import { plate, splitPath, tint } from "./format";
+  import { lane, plate, splitPath, tint } from "./format";
   import { prefs } from "./prefs.svelte";
   import { api, stopped } from "./api";
   import { confirm } from "./confirm.svelte";
@@ -21,7 +21,7 @@
   import { nav } from "./nav.svelte";
   import { untrack } from "svelte";
   import { foldReason, startsFolded } from "./diffFold";
-  import { changedRow, changeStarts, rowsOf, sideKind, type Row } from "./diffRows";
+  import { addKnown, changedRow, changeStarts, pieces, rowsOf, sideKind, type Known, type Piece, type Row } from "./diffRows";
   import { mac, withKeys } from "./keys";
   import { combo } from "./shortcuts";
   import ImageDiff from "./ImageDiff.svelte";
@@ -104,12 +104,23 @@
   let showEol = $state<Record<string, boolean>>({});
   /** SVG files shown as code instead of as a picture, by path. */
   let showCode = $state<Record<string, boolean>>({});
+  /** Unchanged lines opened between hunks, and how many lines the old side has, by file and
+   *  old side: a diff loaded again (a refresh, a setting, another file staged) keeps them while
+   *  its old side is the same, since that is where they are read from. */
+  let opened = $state.raw(new Map<string, Known>());
+  let totals = $state.raw(new Map<string, number>());
   $effect(() => {
     fileSet;
     untrack(() => {
       full = new Map();
       showEol = {};
       showCode = {};
+      // Kept for the files shown; none shown is a reload on its way.
+      const keys = new Set(diffs.map(openKey));
+      if (keys.size) {
+        opened = new Map([...opened].filter(([key]) => keys.has(key)));
+        totals = new Map([...totals].filter(([key]) => keys.has(key)));
+      }
     });
   });
   const items = $derived(diffs.map((d) => full.get(d) ?? d));
@@ -254,6 +265,53 @@
     if (shown.hidden === 0) onMore?.();
   }
 
+  /** Lines one click opens over or under a hunk. */
+  const STEP = 20;
+
+  /** Where a file's unchanged lines are read from: its old side, which never moves under it. */
+  const openKey = (diff: FileDiff): string | null => (diff.old ? `${diff.file.path}\0${JSON.stringify(diff.old)}` : null);
+
+  /** What a file draws in order: its hunks, and around them the unchanged lines, folded or
+   *  opened. A file cut short by the budget leaves out the lines after its last hunk drawn. */
+  function piecesOf(diff: FileDiff, count: number, cut: boolean): Piece[] {
+    const hunks = diff.hunks.slice(0, count);
+    if (whole) return hunks.map((_, h) => ({ kind: "hunk", h }));
+    const key = openKey(diff);
+    return pieces(hunks, (key && opened.get(key)) || [], key && !cut ? (totals.get(key) ?? null) : null);
+  }
+
+  /** Old lines `from` to `to` of a file, opened. */
+  function reveal(diff: FileDiff, from: number, to: number) {
+    const key = openKey(diff);
+    if (!key || !diff.old) return;
+    api.sourceLines(diff.old, from, to - from + 1).then(
+      (read) => {
+        opened = new Map(opened).set(key, addKnown(opened.get(key) ?? [], from, read.lines));
+        totals = new Map(totals).set(key, read.total);
+      },
+      (err) => stopped(err) || confirm.fail(err),
+    );
+  }
+
+  // How long each file drawn is, so the lines after its last hunk can be opened too.
+  const measuring = new Set<string>();
+  $effect(() => {
+    if (whole) return;
+    for (const diff of shown.files) {
+      const key = openKey(diff);
+      if (!key || !diff.old || totals.has(key) || measuring.has(key) || isFolded(diff) || special(diff) || !diff.hunks.length) continue;
+      measuring.add(key);
+      api
+        .sourceLines(diff.old, 1, 0)
+        .then(
+          (read) => (totals = new Map(totals).set(key, read.total)),
+          // Without its length the lines after the last hunk just stay folded away.
+          () => {},
+        )
+        .finally(() => measuring.delete(key));
+    }
+  });
+
   /** Starts of the blocks a run of `count` lines is drawn in. */
   function blocks(count: number): number[] {
     const out: number[] = [];
@@ -276,17 +334,21 @@
   const toggleWhitespace = () => prefs.set("oxbow.diff.ignoreWhitespace", !prefs.get("oxbow.diff.ignoreWhitespace"));
   /** Columns of a file's longest line, so every line of it scrolls the same way under No Wrap.
    *  Walking every line is worth measuring once per file: the diff's lines don't change. */
-  let widths = new WeakMap<FileDiff, { tab: number; cols: number }>();
-  function columns(diff: FileDiff): number {
+  let widths = new WeakMap<object, { tab: number; cols: number }>();
+  function widest(of: object, texts: () => string[]): number {
     const tab = prefs.get("oxbow.text.tabWidth");
-    const had = widths.get(diff);
+    const had = widths.get(of);
     if (had && had.tab === tab) return had.cols;
-    const cols = widestLine(
-      diff.hunks.flatMap((h) => h.lines.map((l) => l.text)),
-      tab,
-    );
-    widths.set(diff, { tab, cols });
+    const cols = widestLine(texts(), tab);
+    widths.set(of, { tab, cols });
     return cols;
+  }
+  /** The widest of the hunks' lines and the unchanged lines opened around them. */
+  function columns(diff: FileDiff): number {
+    const key = openKey(diff);
+    const known = key ? opened.get(key) : undefined;
+    const cols = widest(diff, () => diff.hunks.flatMap((h) => h.lines.map((l) => l.text)));
+    return known ? Math.max(cols, widest(known, () => known.flatMap((run) => run.lines.map((l) => l.text)))) : cols;
   }
 
   /** Where changes start among a hunk's lines `start` to `end`, for Next Change. */
@@ -295,7 +357,10 @@
   const rowMarks = (rows: Row[], start: number, end: number) => changeStarts((i) => changedRow(rows[i]), start, end);
 
   /** Name of the block of a hunk's lines from `start`, for Find in file to step to it. */
-  const blockKey = (diff: FileDiff, h: number, start: number) => `${diff.file.path}:${h}:${start}`;
+  const blockKey = (diff: FileDiff, part: number | string, start: number) => `${diff.file.path}:${part}:${start}`;
+  /** The part of a file's code a piece draws, in its blocks' names: a hunk by its index, lines
+   *  opened by where they start. */
+  const partOf = (piece: Piece) => (piece.kind === "hunk" ? piece.h : `x${piece.from}`);
 
   // The matches counted from the lines, not from what is drawn: a block far from the screen
   // isn't drawn, and drawing every block with a match would undo drawing only what is seen.
@@ -305,8 +370,11 @@
     for (const diff of shown.files) {
       if (isFolded(diff) || diff.submodule || special(diff) || diff.hunks.length === 0) continue;
       const cut = shown.cut?.diff === diff ? shown.cut : null;
-      diff.hunks.forEach((hunk, h) => {
-        const count = cut ? cut.lines[h] : hunk.lines.length;
+      for (const piece of piecesOf(diff, drawnHunks(diff, cut), !!cut)) {
+        if (piece.kind === "folded") continue;
+        const hunk = piece.kind === "hunk" ? diff.hunks[piece.h] : piece.hunk;
+        const count = cut && piece.kind === "hunk" ? cut.lines[piece.h] : hunk.lines.length;
+        const h = partOf(piece);
         if (split) {
           // Side by Side draws an unchanged line twice: its matches count once, on the new side.
           const rows = rowsOf(hunk, count);
@@ -319,14 +387,14 @@
             }
             if (n) out.push({ key: blockKey(diff, h, start), count: n });
           }
-          return;
+          continue;
         }
         for (const start of blocks(count)) {
           let n = 0;
           for (let i = start; i < Math.min(count, start + BLOCK); i++) n += occurrences(hunk.lines[i].text || " ", find, matchCase).length;
           if (n) out.push({ key: blockKey(diff, h, start), count: n });
         }
-      });
+      }
     }
     return out;
   });
@@ -355,9 +423,15 @@
     return `${top}px ${top}px ${bottom}px ${bottom}px`;
   }
 
+  /** How many of a file's hunks are drawn: all but those a cut leaves out. */
+  const drawnHunks = (diff: FileDiff, cut: { lines: number[] } | null) => (cut ? cut.lines.filter((n) => n > 0).length : diff.hunks.length);
+
   /** Digits of the longest line number, so the number columns fit it. */
   function digits(diff: FileDiff): number {
-    const last = diff.hunks.reduce((n, h) => Math.max(n, h.oldStart + h.oldLines, h.newStart + h.newLines), 0);
+    const key = openKey(diff);
+    // Lines opened after the last hunk are numbered up to the file's end, on either side.
+    const total = key && opened.has(key) ? (totals.get(key) ?? 0) + Math.max(0, diff.file.additions - diff.file.deletions) : 0;
+    const last = diff.hunks.reduce((n, h) => Math.max(n, h.oldStart + h.oldLines, h.newStart + h.newLines), total);
     return Math.max(3, String(last).length);
   }
 
@@ -424,6 +498,78 @@
   </div>
 {/snippet}
 
+<!-- A hunk's lines, or unchanged lines opened around hunks, in blocks drawn near the screen. -->
+{#snippet hunkLines(diff: FileDiff, hunk: Hunk, h: number | string, count: number, language: ReturnType<typeof languageOf>, picking: boolean, picked: number[])}
+  {#if split}
+    {@const rows = rowsOf(hunk, count)}
+    {#each blocks(rows.length) as start (start)}
+      {@const end = Math.min(rows.length, start + BLOCK)}
+      <Lazy
+        lines={end - start}
+        of={hunk.lines[rows[start].left ?? rows[start].right ?? 0]}
+        name={blockKey(diff, h, start)}
+        force={focus === blockKey(diff, h, start)}
+        marks={rowMarks(rows, start, end)}
+      >
+        {#each rows.slice(start, end) as _, j (j)}
+          <div class="row">
+            {@render half(diff, hunk, rows, start + j, "left", language, picking, picked)}
+            {@render half(diff, hunk, rows, start + j, "right", language, picking, picked)}
+          </div>
+        {/each}
+      </Lazy>
+    {/each}
+  {:else}
+    {#each blocks(count) as start (start)}
+      {@const end = Math.min(count, start + BLOCK)}
+      <Lazy lines={end - start} of={hunk.lines[start]} name={blockKey(diff, h, start)} force={focus === blockKey(diff, h, start)} marks={lineMarks(hunk, start, end)}>
+        {#each hunk.lines.slice(start, end) as line, j (j)}
+          {@const i = start + j}
+          {@const on = picked.includes(i)}
+          <div
+            class="line {line.kind}"
+            class:picking
+            class:faded={picked.length > 0 && line.kind !== "context" && !on}
+            style:border-radius={radius(hunk.lines, i)}
+            style:margin-top="{gap(hunk.lines, i)}px"
+          >
+            {#if picking}
+              {#if line.kind !== "context"}{@render pickBox(hunk, line, i, on)}{:else}<span></span>{/if}
+            {/if}
+            <span class="no">{line.oldLine ?? ""}</span>
+            <span class="no">{line.newLine ?? ""}</span>
+            {@render code(diff, line, language, true)}
+          </div>
+        {/each}
+      </Lazy>
+    {/each}
+  {/if}
+{/snippet}
+
+<!-- Unchanged lines still folded: a few more open next to the code above or below, or all of them. -->
+{#snippet foldBar(diff: FileDiff, piece: Extract<Piece, { kind: "folded" }>)}
+  {@const count = piece.to - piece.from + 1}
+  {@const label = `⋯ ${count.toLocaleString()} unchanged ${count === 1 ? "line" : "lines"}`}
+  {#if !diff.old}
+    <button class="fold" onclick={onToggleWhole} title="Show whole file">{label}</button>
+  {:else}
+    <div class="fold">
+      <span class="grow">{label}</span>
+      {#if count > STEP && piece.above}
+        <button class="open" onclick={() => reveal(diff, piece.from, piece.from + STEP - 1)} title="Show {STEP} more lines under the code above">
+          <svg class="icon" viewBox="0 0 16 16"><path d="M8 3v9M4.5 8.5 8 12l3.5-3.5" /></svg>{STEP} More Lines
+        </button>
+      {/if}
+      {#if count > STEP && piece.below}
+        <button class="open" onclick={() => reveal(diff, piece.to - STEP + 1, piece.to)} title="Show {STEP} more lines over the code below">
+          <svg class="icon" viewBox="0 0 16 16"><path d="M8 13V4M4.5 7.5 8 4l3.5 3.5" /></svg>{STEP} More Lines
+        </button>
+      {/if}
+      <button class="open" onclick={() => reveal(diff, piece.from, piece.to)} title="Show every unchanged line here">Show All</button>
+    </div>
+  {/if}
+{/snippet}
+
 {#each shown.files as diff (diff.file.path)}
   {@const path = splitPath(diff.file.path)}
   {@const isShut = isFolded(diff)}
@@ -431,7 +577,8 @@
   {@const kind = isShut ? null : special(diff)}
   <section class="file" class:shut={isShut} data-path={diff.file.path}>
     <header>
-      <div class="bar" style:background={tint(color, "head")} style:--name={plate(color)}>
+      <!-- Outlined in the branch color, as the Summary tab is. -->
+      <div class="bar" style:background={tint(color, "head")} style:border-color={`color-mix(in srgb, ${lane(color)} 40%, transparent)`} style:--name={plate(color)}>
         {#if foldable}
           <button
             class="head"
@@ -593,58 +740,18 @@
       {@const cut = shown.cut?.diff === diff ? shown.cut : null}
       {#key wrap}
       <div class="code mono selectable" class:nowrap={!wrap} style:--digits={digits(diff)} style:--cols={wrap ? null : columns(diff)} use:sideways={!wrap}>
-        {#each cut ? diff.hunks.filter((_, h) => cut.lines[h] > 0) : diff.hunks as hunk, h (h)}
-          {@const before = h === 0 ? hunk.oldStart - 1 : hunk.oldStart - (diff.hunks[h - 1].oldStart + diff.hunks[h - 1].oldLines)}
-          {#if before > 0 && !whole}
-            <button class="fold" onclick={onToggleWhole} title="Show whole file">⋯ {before} unchanged {before === 1 ? "line" : "lines"}</button>
-          {/if}
-          {#if hunkBar}{@render hunkBar(diff, hunk)}{/if}
-          {@const picking = !!picker?.enabled(hunk)}
-          {@const picked = picking ? picker!.picked(hunk) : []}
-          {@const count = cut ? cut.lines[h] : hunk.lines.length}
-          {#if split}
-            {@const rows = rowsOf(hunk, count)}
-            {#each blocks(rows.length) as start (start)}
-              {@const end = Math.min(rows.length, start + BLOCK)}
-              <Lazy
-                lines={end - start}
-                of={hunk.lines[rows[start].left ?? rows[start].right ?? 0]}
-                name={blockKey(diff, h, start)}
-                force={focus === blockKey(diff, h, start)}
-                marks={rowMarks(rows, start, end)}
-              >
-                {#each rows.slice(start, end) as _, j (j)}
-                  <div class="row">
-                    {@render half(diff, hunk, rows, start + j, "left", language, picking, picked)}
-                    {@render half(diff, hunk, rows, start + j, "right", language, picking, picked)}
-                  </div>
-                {/each}
-              </Lazy>
-            {/each}
+        {#each piecesOf(diff, drawnHunks(diff, cut), !!cut) as piece (piece.kind === "hunk" ? `h${piece.h}` : `${piece.kind}${piece.from}`)}
+          {#if piece.kind === "folded"}
+            {@render foldBar(diff, piece)}
+          {:else if piece.kind === "shown"}
+            <!-- Never picked, but in line with the hunks' lines where those can be. -->
+            {@render hunkLines(diff, piece.hunk, partOf(piece), piece.hunk.lines.length, language, !!picker && diff.hunks.some((h) => picker.enabled(h)), [])}
           {:else}
-            {#each blocks(count) as start (start)}
-              {@const end = Math.min(count, start + BLOCK)}
-              <Lazy lines={end - start} of={hunk.lines[start]} name={blockKey(diff, h, start)} force={focus === blockKey(diff, h, start)} marks={lineMarks(hunk, start, end)}>
-                {#each hunk.lines.slice(start, end) as line, j (j)}
-                  {@const i = start + j}
-                  {@const on = picked.includes(i)}
-                  <div
-                    class="line {line.kind}"
-                    class:picking
-                    class:faded={picked.length > 0 && line.kind !== "context" && !on}
-                    style:border-radius={radius(hunk.lines, i)}
-                    style:margin-top="{gap(hunk.lines, i)}px"
-                  >
-                    {#if picking}
-                      {#if line.kind !== "context"}{@render pickBox(hunk, line, i, on)}{:else}<span></span>{/if}
-                    {/if}
-                    <span class="no">{line.oldLine ?? ""}</span>
-                    <span class="no">{line.newLine ?? ""}</span>
-                    {@render code(diff, line, language, true)}
-                  </div>
-                {/each}
-              </Lazy>
-            {/each}
+            {@const hunk = diff.hunks[piece.h]}
+            {#if hunkBar}{@render hunkBar(diff, hunk)}{/if}
+            {@const picking = !!picker?.enabled(hunk)}
+            {@const picked = picking ? picker!.picked(hunk) : []}
+            {@render hunkLines(diff, hunk, piece.h, cut ? cut.lines[piece.h] : hunk.lines.length, language, picking, picked)}
           {/if}
         {/each}
         {#if !wrap}<div class="hbar" aria-hidden="true"><div></div></div>{/if}
@@ -709,6 +816,7 @@
     gap: 8px;
     height: 34px;
     padding: 0 var(--space-1) 0 var(--space-3);
+    border: 1px solid transparent;
     border-radius: var(--radius-m);
     font-size: var(--text-small);
   }
@@ -977,17 +1085,46 @@
     box-shadow: 0 0 0 2px var(--text);
   }
   .fold {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 4px;
     width: 100%;
     margin: 4px 0;
-    padding: 0 12px;
-    height: 22px;
-    line-height: 22px;
+    padding: 0 3px 0 12px;
+    height: 24px;
     border-radius: var(--radius-m);
     background: var(--fold-bg, var(--field));
     color: var(--code-dim, var(--text2));
     font-family: var(--font);
     font-size: var(--text-caption);
+    text-align: left;
+  }
+  .fold .grow {
+    flex-grow: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* Opens unchanged lines: a quiet capsule on the fold, lit on hover. */
+  .open {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    height: 18px;
+    padding: 0 8px;
+    border-radius: var(--radius-pill);
+    color: var(--code-dim, var(--text2));
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .open:hover {
+    background: var(--win);
+    color: var(--text);
+  }
+  .open .icon {
+    width: 11px;
+    height: 11px;
   }
   .more.lines {
     margin: 10px 8px 0;

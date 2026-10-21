@@ -297,6 +297,19 @@ export interface EolChange {
 /** Where one side of a file diff can be read. */
 export type Source = { kind: "blob"; id: string } | { kind: "worktree"; path: string };
 
+/** Lines of one side of a file diff, for the unchanged lines between hunks. */
+export interface SourceLines {
+  lines: SourceLine[];
+  /** How many lines the side has in all. */
+  total: number;
+}
+
+export interface SourceLine {
+  text: string;
+  /** The line ends with CRLF; `text` leaves the CR out. */
+  cr?: boolean;
+}
+
 export interface FileCommit {
   id: string;
   parents: string[];

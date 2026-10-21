@@ -8,6 +8,7 @@ import type {
   FolderState,
   Blame,
   Source,
+  SourceLines,
   FileHistory,
   CompareMode,
   Comparison,
@@ -147,6 +148,8 @@ export const api = {
           ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
           : Uint8Array.from(data),
     ),
+  /** Lines `start` to `start + count - 1` (from 1) of one side of a file diff, and how many it has. */
+  sourceLines: (source: Source, start: number, count: number) => invoke<SourceLines>("source_lines", { source, start, count }),
   /** `label` names the copy: `logo (old a3f9c21).png`. */
   openSource: (source: Source, path: string, label: string) => invoke<void>("open_source", { source, path, label }),
   deletionCheck: (branch: string) => invoke<DeletionCheck>("deletion_check", { branch }),

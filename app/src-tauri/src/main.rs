@@ -1247,6 +1247,22 @@ async fn source_bytes(
     .map(tauri::ipc::Response::new)
 }
 
+/// Lines of one side of a file diff and how many it has, for the unchanged lines between hunks.
+#[tauri::command]
+async fn source_lines(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    source: Source,
+    start: u32,
+    count: u32,
+) -> CommandResult<oxbow_core::SourceLines> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "Read unchanged lines", move || {
+        repo.read_lines(&source, start, count)
+    })
+    .await
+}
+
 /// Open one side of a file diff in the app the system picks for it: the working-tree file as it
 /// is, any other version from a copy in a temporary folder named after it.
 #[tauri::command]
@@ -2372,6 +2388,7 @@ fn main() {
             working_diff,
             working_diff_page,
             source_bytes,
+            source_lines,
             open_source,
             deletion_check,
             remote_deletion_check,

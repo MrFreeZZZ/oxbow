@@ -218,6 +218,25 @@ pub struct DiffLine {
     pub secret: Option<String>,
 }
 
+/// Lines of one side of a file diff, read by [`Repo::read_lines`].
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceLines {
+    pub lines: Vec<SourceLine>,
+    /// How many lines the side has in all.
+    pub total: u32,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceLine {
+    /// The line without its line ending.
+    pub text: String,
+    /// The line ends with a carriage return (CRLF), which `text` leaves out.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cr: bool,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct WordPart {
@@ -618,6 +637,31 @@ impl Repo {
     /// The bytes of one side of a file diff.
     pub fn read_source(&self, source: &Source) -> Result<Vec<u8>> {
         self.read_source_upto(source, u64::MAX)
+    }
+
+    /// Lines `start` to `start + count - 1` (from 1) of one side of a file diff, and how many it
+    /// has: the unchanged lines between hunks, shown as they are asked for. Past its end it has
+    /// none, so a count of 0 only says how long it is.
+    pub fn read_lines(&self, source: &Source, start: u32, count: u32) -> Result<SourceLines> {
+        let data = self.read_source(source)?;
+        let all = data.split_inclusive(|&b| b == b'\n');
+        let total = data.split_inclusive(|&b| b == b'\n').count() as u32;
+        let lines = all
+            .skip(start.saturating_sub(1) as usize)
+            .take(count as usize)
+            .map(|line| {
+                let line = line.strip_suffix(b"\n").unwrap_or(line);
+                let (line, cr) = match line.strip_suffix(b"\r") {
+                    Some(line) => (line, true),
+                    None => (line, false),
+                };
+                SourceLine {
+                    text: String::from_utf8_lossy(line).into_owned(),
+                    cr,
+                }
+            })
+            .collect();
+        Ok(SourceLines { lines, total })
     }
 
     /// [`Repo::read_source`], reading at most `limit` bytes of a file in the working tree. An
