@@ -31,7 +31,7 @@
   import { nav } from "./nav.svelte";
   import type { LfsPattern, ReadPart, RecentRepo, Submodule, Tracking, Worktree } from "./types";
   import { PART_NAMES, age, errorLine, type ReadStates } from "./reads";
-  import { checking } from "./folders";
+  import { checking, stale } from "./folders";
   import { addSubmoduleRequest, latestRequest, removeSubmoduleRequest, submoduleNote, submoduleWhere, syncRequest, updateRequest, followsWord } from "./submodules";
   import { actionIcons } from "./icons";
   import { locateRequest, lockRequest, newWorktreeRequest, pruneWorktreesRequest, removeWorktreeRequest, tilde, unlockRequest, worktreeOf } from "./worktrees";
@@ -491,6 +491,7 @@
     if (wt.missing) return { text: "missing", tone: "warn" };
     if (checking(wt)) return { text: "checking…" };
     if (wt.changed === null) return { text: "status unknown", tone: "warn" };
+    if (stale(wt)) return { text: "may be stale", tone: "warn" };
     if (wt.changed) return { text: `${wt.changed} changed` };
     return null;
   }
@@ -510,6 +511,8 @@
     const lines = [wt.missing ? `Folder not found at ${tilde(wt.path)}` : wt.current ? tilde(wt.path) : `${tilde(wt.path)} · double-click to open its window`];
     if (checking(wt)) lines.push("Counting its uncommitted changes…");
     else if (wt.changed === null) lines.push(`Couldn’t count its uncommitted changes: ${errorLine(wt.statusError)}`);
+    else if (stale(wt))
+      lines.push(`The last count found ${wt.changed ? `${wt.changed} ${wt.changed === 1 ? "file" : "files"} with uncommitted changes` : "no uncommitted changes"}; counting again failed: ${errorLine(wt.statusError)}`);
     else if (wt.changed) lines.push(`${wt.changed} ${wt.changed === 1 ? "file" : "files"} with uncommitted changes there`);
     const tracking = worktreeTracking(wt);
     if (tracking && (tracking.ahead || tracking.behind))

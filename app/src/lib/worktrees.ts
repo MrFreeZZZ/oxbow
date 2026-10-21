@@ -7,7 +7,7 @@ import { homeDir } from "@tauri-apps/api/path";
 import { api } from "./api";
 import type { Part, Recovery, Request } from "./confirm.svelte";
 import { nameProblem, type BranchContext } from "./branches";
-import { checking } from "./folders";
+import { checking, stale } from "./folders";
 import { shortId } from "./format";
 import { tilde as tildeIn } from "./term";
 import type { Failure, History, Worktree } from "./types";
@@ -227,9 +227,10 @@ function newWorktreeSheet(ctx: BranchContext, repoPath: string, shown: string[],
 
 /** Remove a worktree; with `stash`, its uncommitted changes go to the stash first. */
 export function removeWorktreeRequest(ctx: BranchContext, wt: Worktree, stash = false): Request {
-  const dirty = (wt.changed ?? 0) > 0;
-  /** `git status` failed there, or is still to come: changes or not isn't known, so it isn't forced. */
-  const unknown = wt.changed === null;
+  /** `git status` failed there, or is still to come: changes or not isn't known, so it isn't
+   *  forced. A count from an earlier read that failed again isn't known either. */
+  const unknown = wt.changed === null || stale(wt);
+  const dirty = !unknown && (wt.changed ?? 0) > 0;
   const changed = wt.changed ?? 0;
   const body: Part[] = ["Deletes the folder ", { code: tilde(wt.path) }, ". "];
   if (wt.branch) body.push(branchPart(ctx, wt), " and all its commits stay in this repository.");

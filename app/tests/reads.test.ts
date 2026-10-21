@@ -1,4 +1,4 @@
-import { errorLine, loadingStates, retried, settle, stillFailing, troubled } from "../src/lib/reads.ts";
+import { errorLine, loadingStates, reloadNews, retried, settle, stillFailing, troubled } from "../src/lib/reads.ts";
 import type { History, ReadProblem, RefInfo, Tracking, Worktree } from "../src/lib/types.ts";
 import assert from "node:assert/strict";
 
@@ -89,4 +89,30 @@ const failed = (part: ReadProblem["part"]): ReadProblem => ({ part, error: "`git
   assert.equal(errorLine("`git status --porcelain` failed: fatal: index file corrupt\n"), "fatal: index file corrupt");
   assert.equal(errorLine("warning: x\nerror: bad object"), "error: bad object");
   assert.equal(errorLine(null), "");
+}
+
+// Reload: a status that couldn't be read is never "No uncommitted changes".
+{
+  const at = (files: number, unknown = false, problems: ReadProblem[] = [], over: Partial<History> = {}) =>
+    history(problems, {
+      rows: [{ id: "worktree", worktree: { files, staged: 0, unstaged: files, untracked: 0, conflicted: 0, unknown } }, { id: "a1", worktree: null }],
+      stashes: [],
+      changes: null,
+      changesStamp: 1,
+      ...over,
+    } as Partial<History>);
+  const unread = [failed("changes")];
+  // Two changed files, then git status failed.
+  assert.deepEqual(reloadNews(at(2), at(0, true, unread)), { text: "Couldn’t read the uncommitted changes", partial: true });
+  // Clean, then failed.
+  assert.deepEqual(reloadNews(at(0), at(0, true, unread)), { text: "Couldn’t read the uncommitted changes", partial: true });
+  // Not known, then read clean: that is news.
+  assert.deepEqual(reloadNews(at(0, true, unread), at(0)), { text: "No uncommitted changes", partial: false });
+  assert.deepEqual(reloadNews(at(0, true, unread), at(3)), { text: "3 uncommitted files", partial: false });
+  // The branch moved while the status failed: both are said.
+  const moved = at(0, true, [...unread, failed("worktrees")], { refs: [{ ...branch("main", null), target: "b2" }] });
+  assert.deepEqual(reloadNews(at(2), moved), { text: "main moved · Couldn’t read the uncommitted changes and worktrees", partial: true });
+  // All read, nothing changed.
+  assert.deepEqual(reloadNews(at(2), at(2)), { text: "Nothing new", partial: false });
+  assert.deepEqual(reloadNews(at(2), at(0)), { text: "No uncommitted changes", partial: false });
 }

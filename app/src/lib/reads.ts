@@ -4,7 +4,7 @@
 // one: "0 changed", "no changes" or "not published" are things git said, not what is shown when
 // it said nothing. A part that failed after a good reading keeps that reading, marked stale.
 
-import type { History, ReadPart, RefInfo } from "./types";
+import type { FileChange, History, ReadPart, RefInfo } from "./types";
 
 /** loading: being read again (Retry); ready: from the last read; stale: the last read failed,
  *  so this is an earlier one; failed: never read well, so not known at all. */
@@ -123,4 +123,46 @@ export function errorLine(error: string | null): string {
   const lines = error.split("\n").map((l) => l.trim()).filter(Boolean);
   const said = lines.find((l) => /^(fatal|error):/.test(l)) ?? lines[0] ?? "";
   return said.replace(/^`[^`]*` failed: /, "");
+}
+
+/** What a reload found: "Nothing new", or "3 new commits · origin/main moved · 2 uncommitted
+ *  files". A part it couldn't read is said so, never taken for an empty one; `partial` then. */
+export function reloadNews(before: History, after: History): { text: string; partial: boolean } {
+  const parts: string[] = [];
+  const known = new Set(before.rows.map((r) => r.id));
+  const fresh = after.rows.filter((r) => !r.worktree && !known.has(r.id)).length;
+  if (fresh) parts.push(`${fresh} new ${fresh === 1 ? "commit" : "commits"}`);
+  const key = (r: RefInfo) => `${r.kind} ${r.name}`;
+  const was = new Map(before.refs.map((r) => [key(r), r.target]));
+  const now = new Set(after.refs.map(key));
+  const refs = [
+    ...after.refs.filter((r) => was.get(key(r)) !== r.target).map((r) => `${r.name} ${was.has(key(r)) ? "moved" : "is new"}`),
+    ...before.refs.filter((r) => !now.has(key(r))).map((r) => `${r.name} is gone`),
+  ];
+  if (refs.length === 1) parts.push(refs[0]);
+  else if (refs.length) parts.push(`${refs.length} branches and tags changed`);
+  const failed = (h: History) => READ_PARTS.filter((part) => h.problems.some((p) => p.part === part));
+  const files = (h: History) => h.rows[0]?.worktree?.files ?? 0;
+  const count = (n: number) => (n ? `${n} uncommitted ${n === 1 ? "file" : "files"}` : "No uncommitted changes");
+  // Not read now: the 0 files of `after` are not known (said below). Not read before: whatever
+  // is read now is news.
+  if (!failed(after).includes("changes")) {
+    if (failed(before).includes("changes") || files(after) !== files(before)) parts.push(count(files(after)));
+    // The same number of files can still be other files, or other edits in them.
+    else if (changesKey(after) !== changesKey(before) || after.changesStamp !== before.changesStamp) parts.push("Uncommitted changes updated");
+  }
+  if (after.stashes.length !== before.stashes.length) parts.push(`${after.stashes.length} ${after.stashes.length === 1 ? "stash" : "stashes"}`);
+  else if (after.stashes.map((s) => s.id).join() !== before.stashes.map((s) => s.id).join()) parts.push("Stashes changed");
+  const unread = failed(after).map((part) => PART_NAMES[part]);
+  if (unread.length) parts.push(`Couldn’t read the ${unread.length > 1 ? `${unread.slice(0, -1).join(", ")} and ${unread.at(-1)}` : unread[0]}`);
+  return { text: parts.length ? parts.join(" · ") : "Nothing new", partial: unread.length > 0 };
+}
+
+/** Which files are changed, staged or not, and by how many lines: staging part of a file
+ *  changes it, which the files on disk don't show. */
+function changesKey(h: History): string {
+  const c = h.changes;
+  if (!c) return "";
+  const side = (name: string, files: FileChange[]) => files.map((f) => `${name} ${f.status} ${f.path} ${f.additions} ${f.deletions}`);
+  return [...side("s", c.staged), ...side("u", c.unstaged), ...side("c", c.conflicted)].join("\n");
 }

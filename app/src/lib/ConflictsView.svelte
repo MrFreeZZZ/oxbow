@@ -13,6 +13,7 @@
   import { kept } from "./kept";
   import { prefs } from "./prefs.svelte";
   import { hasWork, makeDraft, readDraft, takeDraft, type Draft, type DraftState, type DraftText, type OldDraft } from "./drafts";
+  import { draftSaves } from "./draftSaves";
   import {
     conflictSteps,
     joinLines,
@@ -37,6 +38,7 @@
   import { NO_BRANCH_COLOR, plate, relativeTime, shortId, splitPath, tint } from "./format";
 
   let {
+    folder,
     history,
     op,
     colorOf,
@@ -44,6 +46,8 @@
     run,
     refresh,
   }: {
+    /** The working folder the screen is for: its draft is saved there whatever the window opens next. */
+    folder: string;
     history: History;
     op: Operation;
     colorOf: (name: string) => number;
@@ -177,7 +181,9 @@
 
   async function loadDraft(): Promise<Draft | null> {
     try {
-      return readDraft(await api.conflictDraft());
+      // A save still on its way, e.g. from the screen as it was a moment ago, lands first.
+      await draftSaves.flush();
+      return readDraft(await api.conflictDraft(folder));
     } catch (err) {
       draftNote = { kind: "failed", why: String(err) };
       return null;
@@ -242,12 +248,6 @@
     untrack(() => reload());
   });
 
-  /** The save waiting for typing to pause. */
-  let pending: (() => void) | null = null;
-  let saveTimer: ReturnType<typeof setTimeout> | undefined;
-  /** Saves one after another, so an older one never lands over a newer. */
-  let saving = Promise.resolve();
-
   $effect(() => {
     if (!step || !tree) return;
     // The open file's result, when its decisions were made for the versions on screen.
@@ -255,26 +255,17 @@
     const state: Saved = { step, choices, texts, stages, results, old, seen };
     kept.set(KEPT_CONFLICTS, state);
     const paths = conflicted;
-    pending = () => {
-      saving = saving.then(() => saveDraft(state, paths));
-    };
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(flush, 300);
+    draftSaves.later(() => saveDraft(state, paths), 300);
   });
 
-  function flush() {
-    clearTimeout(saveTimer);
-    const save = pending;
-    pending = null;
-    save?.();
-  }
+  const flush = () => void draftSaves.flush();
 
   async function saveDraft(state: Saved, paths: string[]) {
     const at = Date.now();
     const draft = makeDraft(state.step, state, paths, at);
     try {
-      if (draft) await api.saveConflictDraft(draft);
-      else await api.dropConflictDraft();
+      if (draft) await api.saveConflictDraft(folder, draft);
+      else await api.dropConflictDraft(folder);
       draftAt = at;
       draftNote = draft ? { kind: "saved", at } : null;
     } catch (err) {
