@@ -43,7 +43,7 @@ pub use bisect::{Bisect, BisectMark};
 pub use cli::{CommandOutput, GitCommand, OutputLine};
 pub use commit::{
     CommitDetail, DiffContext, DiffLine, DiffPage, EolChange, FileChange, FileDiff, FileStatus, Hunk, LineKind,
-    ModeChange, Person, Source, SubmoduleChange, WordPart,
+    ModeChange, Person, Source, SourceLine, SourceLines, SubmoduleChange, WordPart,
 };
 pub use compare::{CompareCommit, CompareFile, CompareMode, Comparison};
 pub use config::{ConfigScope, GitInfo, RemoteInfo, SshKey, SshSource, Storage};

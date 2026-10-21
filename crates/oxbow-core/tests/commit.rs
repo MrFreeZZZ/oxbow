@@ -313,3 +313,37 @@ fn a_big_commit_lists_its_files_at_once_and_diffs_them_a_page_at_a_time() {
         10
     );
 }
+
+#[test]
+fn unchanged_lines_between_hunks_are_read_from_the_old_side() {
+    let mut fx = Fixture::new();
+    let before: String = (1..=60).map(|n| format!("line {n}\n")).collect::<String>() + "last\r\n";
+    fx.commit("notes.txt", &before, "Root");
+    let after = before
+        .replace("line 10\n", "line ten\n")
+        .replace("line 50\n", "line fifty\n");
+    let id = fx.commit("notes.txt", &after, "Edit");
+
+    let repo = Repo::open(fx.path()).unwrap();
+    let diff = &repo.commit_diff(&id, Some("notes.txt"), DiffContext::Compact).unwrap()[0];
+    assert_eq!(diff.hunks.len(), 2);
+    let old = diff.old.clone().unwrap();
+    // The gap after the first hunk starts at line 14.
+    let read = repo.read_lines(&old, 14, 3).unwrap();
+    let texts: Vec<_> = read.lines.iter().map(|l| l.text.as_str()).collect();
+    assert_eq!(texts, ["line 14", "line 15", "line 16"]);
+    assert_eq!(read.total, 61);
+    let last = repo.read_lines(&old, 60, 5).unwrap();
+    assert_eq!(last.lines.len(), 2);
+    assert_eq!((last.lines[1].text.as_str(), last.lines[1].cr), ("last", true));
+    assert!(repo.read_lines(&old, 62, 5).unwrap().lines.is_empty());
+    assert_eq!(repo.read_lines(&old, 1, 0).unwrap().total, 61);
+
+    // Uncommitted changes read theirs from the index, which the working copy doesn't move.
+    fx.write("notes.txt", &after.replace("line 30\n", "line thirty\n"));
+    let working = repo
+        .working_diff("notes.txt", oxbow_core::Side::Unstaged, false)
+        .unwrap();
+    let read = repo.read_lines(&working.old.clone().unwrap(), 50, 1).unwrap();
+    assert_eq!(read.lines[0].text, "line fifty");
+}
