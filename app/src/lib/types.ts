@@ -507,7 +507,7 @@ export type Action =
   | { kind: "continue"; message: string | null }
   | { kind: "abort" }
   | { kind: "skip" }
-  | { kind: "resolve"; path: string; picks: Resolution[]; text?: string }
+  | { kind: "resolve"; path: string; picks: Resolution[]; text?: string; stages?: string }
   | { kind: "takeFile"; path: string; side: ConflictSide }
   | { kind: "cherryPick"; commit: string }
   | { kind: "revert"; commit: string }
@@ -760,6 +760,10 @@ export interface ConflictFile {
   /** One side renamed the file to this path. */
   renamed: { from: string; side: ConflictSide } | null;
   chunks: Chunk[];
+  /** No line break at the end of the file. */
+  openEnd: boolean;
+  /** Which versions the index holds, by blob id: decisions made for others are stale. */
+  stages: string;
 }
 
 /** The merge tool git opens, from merge.guitool or merge.tool. */

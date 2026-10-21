@@ -289,6 +289,10 @@ pub enum Action {
         picks: Vec<Resolution>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         text: Option<String>,
+        /// The versions the choices were made for (`ConflictFile::stages`): refused when the
+        /// index holds others by now.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stages: Option<String>,
     },
     /// Resolve `path` with one side's whole file; a side that deleted it deletes it.
     TakeFile {
@@ -1792,7 +1796,19 @@ impl Repo {
                 lines,
             } => (Side::Staged, path, header, check, lines),
             _ => {
-                if let Action::Resolve { path, picks, text } = action {
+                if let Action::Resolve {
+                    path,
+                    picks,
+                    text,
+                    stages,
+                } = action
+                {
+                    if stages
+                        .as_ref()
+                        .is_some_and(|s| *s != self.stage_ids(path).unwrap_or_default())
+                    {
+                        return Err(Error::Git(format!("{path} changed since it was shown; open it again")));
+                    }
                     self.write_resolution(path, picks, text.as_deref())?;
                 }
                 if let Action::Ignore { pattern } = action {

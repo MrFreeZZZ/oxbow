@@ -38,6 +38,10 @@
   let blameError = $state<string | null>(null);
   /** A line picked for its history, and the commits that changed it. */
   let line = $state<{ no: number; ids: string[] } | null>(null);
+  /** Counts the asks for a line's history, so only the latest one lands. */
+  let lineAsk = 0;
+  /** The request of `nav.file` the file has been brought back to. */
+  let brought = $state(-1);
   let diffs = $state<FileDiff[]>([]);
   let whole = $state(wholeByDefault());
   let list = $state<HTMLDivElement>();
@@ -82,6 +86,7 @@
     path;
     at = null;
     line = null;
+    lineAsk++;
   });
 
   const blameAt = $derived(at ?? { rev: "HEAD", path });
@@ -94,14 +99,23 @@
     untrack(() => {
       if (goal.commit && file && byId.has(goal.commit)) selected = goal.commit;
       at = goal.at ?? null;
-      if (goal.line) void followLine(goal.line, goal.commit);
-      else line = null;
+      if (!goal.line) {
+        line = null;
+        lineAsk++;
+        brought = goal.seq;
+        return;
+      }
+      // The line's history loads first: until then the file isn't where Back brought it, and
+      // saying so would make that in-between state a new place, dropping the ones ahead.
+      void followLine(goal.line, goal.commit).finally(() => {
+        if (nav.file?.seq === goal.seq) brought = goal.seq;
+      });
     });
   });
 
   // How the file is now, for Back to come back to.
   $effect(() => {
-    nav.fileHere = { path, commit: selected, at: at ? { ...at } : null, line: line?.no ?? null };
+    nav.fileHere = { path, commit: selected, at: at ? { ...at } : null, line: line?.no ?? null, seq: brought };
   });
 
   $effect(() => {
@@ -235,6 +249,7 @@
   async function lineHistory(no: number) {
     if (line?.no === no) {
       line = null;
+      lineAsk++;
       return;
     }
     await followLine(no);
@@ -243,8 +258,11 @@
   /** The commits that changed line `no`, with `prefer` selected if it is one of them, else the newest. */
   async function followLine(no: number, prefer: string | null = null) {
     if (line?.no === no) return;
+    const ask = ++lineAsk;
     try {
       const ids = await api.lineHistory(blameAt.path, no, blameAt.rev, LINE);
+      // Another line was asked for meanwhile.
+      if (ask !== lineAsk) return;
       line = { no, ids };
       const first = prefer && ids.includes(prefer) ? prefer : ids[0];
       if (first) selected = first;

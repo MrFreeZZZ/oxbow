@@ -114,6 +114,44 @@ function closes(lines: string[], at: number): boolean {
   return false;
 }
 
+/** The whole file to edit as text: `markedText` with the file's last line break, so what is
+ *  typed is written as it is. */
+export function fileText(chunks: Chunk[], decisions: Decision[], sides: Sides, withBase: boolean, openEnd: boolean): string {
+  const text = markedText(chunks, decisions, sides, withBase);
+  const lines = chunks.reduce((n, c) => n + (c.kind === "same" ? c.lines.length : 1), 0);
+  return openEnd || !lines ? text : `${text}\n`;
+}
+
+const MARKS = [OPEN, BASE, MIDDLE, CLOSE] as const;
+/** Which of git's markers a line looks like, if any. */
+export const markOf = (line: string) => MARKS.find((m) => (m === MIDDLE ? line === m : marker(line, m))) ?? null;
+
+/** Lines that look like git's markers but are not part of a whole conflict, such as what is
+ *  left of a block when one of its markers was deleted: more of them than the file's own
+ *  versions hold, so a `=======` that is just part of the file never counts. */
+export function strayMarkers(text: string, chunks: Chunk[]): number {
+  const roles = markerRoles(text);
+  const count = (lines: Iterable<string>, into: Map<string, number>) => {
+    for (const line of lines) {
+      const m = markOf(line);
+      if (m) into.set(m, (into.get(m) ?? 0) + 1);
+    }
+  };
+  const own = new Map<string, number>();
+  for (const chunk of chunks) {
+    if (chunk.kind === "same") count(chunk.lines, own);
+    else for (const lines of [chunk.ours, chunk.base, chunk.theirs]) count(lines, own);
+  }
+  const stray = new Map<string, number>();
+  count(
+    text.split("\n").filter((_, i) => roles[i] !== "marker"),
+    stray,
+  );
+  let n = 0;
+  for (const [m, found] of stray) n += Math.max(0, found - (own.get(m) ?? 0));
+  return n;
+}
+
 /** The first line of each conflict still marked in the text. */
 export const markerStarts = (text: string): number[] => scan(text).starts;
 
@@ -140,6 +178,10 @@ export function kindOf(file: ConflictFile, labelOf: (side: ConflictSide) => stri
   if (!file.base) return { short: "Added on both sides", long: "Both sides added this file, with different text." };
   return { short: "Text", long: "Both sides changed the same lines." };
 }
+
+/** Where the Conflicts screen keeps its decisions while another screen is open; let go once no
+ *  operation is in progress, so a later one never starts from them. */
+export const KEPT_CONFLICTS = "conflicts";
 
 /** The Conflicts screen, while it is open, takes ⌥F5 and ⇧⌥F5 to step through its conflicts. */
 export const conflictSteps: { step: ((by: 1 | -1) => boolean) | null } = { step: null };

@@ -14,14 +14,17 @@
   import {
     conflictSteps,
     joinLines,
+    KEPT_CONFLICTS,
     kindOf,
     linesOf,
-    markedText,
+    markOf,
+    fileText,
     markerRoles,
     markerStarts,
     openMarkers,
     splitLines,
     stepIndex,
+    strayMarkers,
     toResolution,
     type Choice,
     type Decision,
@@ -49,11 +52,12 @@
   } = $props();
 
   type Conflict = Extract<Chunk, { kind: "conflict" }>;
-  /** A file written as text: what it is now, and what it started as, to tell an edit. */
-  type Text = { text: string; start: string };
-  /** What the screen had going, kept while the user is on another screen. */
-  type Saved = { step: string; choices: Map<string, Decision[]>; texts: Map<string, Text>; seen: string[] };
-  const KEPT = "conflicts";
+  /** A file written as text: what it is now, what it started as, to tell an edit, and how many
+   *  of its lines are what is left of a conflict whose markers were partly deleted. */
+  type Text = { text: string; start: string; stray: number };
+  /** What the screen had going, kept while the user is on another screen; `stages` says which
+   *  versions of each file its decisions were made for. */
+  type Saved = { step: string; choices: Map<string, Decision[]>; texts: Map<string, Text>; stages: Map<string, string>; seen: string[] };
 
   let tree = $state<WorkingTree | null>(null);
   let current = $state<string | null>(null);
@@ -64,9 +68,11 @@
   let choices = $state.raw(new Map<string, Decision[]>());
   /** Files being written as text. */
   let texts = $state.raw(new Map<string, Text>());
+  /** The versions of each file in the index that its decisions and text were made for. */
+  let stages = new Map<string, string>();
   /** Every file that was conflicted in this step, so resolved ones still show as done. */
   let seen = $state<string[]>([]);
-  /** The operation and commit the decisions belong to. */
+  /** The operation, its commit, and the commit checked out, that the decisions belong to. */
   let step = $state("");
   /** The conflict last stepped to in the open file; -1 before the first step. */
   let at = $state(-1);
@@ -123,19 +129,21 @@
       const next = await api.workingTree();
       tree = next;
       error = null;
-      const key = `${op.kind}:${op.commit?.id ?? ""}`;
+      const key = `${op.kind}:${op.commit?.id ?? ""}:${history.head.commit ?? ""}`;
       const paths = next.conflicted.map((f) => f.path);
       if (key !== step) {
         step = key;
         // Back on the screen in the same step: the decisions are still there.
-        const saved = kept.get<Saved>(KEPT);
+        const saved = kept.get<Saved>(KEPT_CONFLICTS);
         if (saved?.step === key) {
           choices = saved.choices;
           texts = saved.texts;
+          stages = saved.stages;
           seen = [...saved.seen, ...paths.filter((p) => !saved.seen.includes(p))];
         } else {
           choices = new Map();
           texts = new Map();
+          stages = new Map();
           seen = paths;
         }
       } else {
@@ -162,6 +170,18 @@
     try {
       const next = await api.conflictFile(path);
       if (current !== path) return;
+      // Decisions made for other versions of the file, as after an abort and a new merge, start
+      // over: the same number of conflicts is no sign they still fit.
+      const was = stages.get(path);
+      stages.set(path, next.stages);
+      if (was !== undefined && was !== next.stages) {
+        choices = new Map(choices);
+        choices.delete(path);
+        if (texts.has(path)) {
+          texts = new Map(texts);
+          texts.delete(path);
+        }
+      }
       file = next;
       const count = next.chunks.filter((c) => c.kind === "conflict").length;
       if (choices.get(path)?.length !== count) choices = new Map(choices).set(path, Array(count).fill(null));
@@ -177,7 +197,7 @@
   });
 
   $effect(() => {
-    if (step) kept.set(KEPT, { step, choices, texts, seen } satisfies Saved);
+    if (step) kept.set(KEPT_CONFLICTS, { step, choices, texts, stages, seen } satisfies Saved);
   });
 
   onMount(() => {
@@ -195,6 +215,7 @@
   const asText = $derived(current ? (texts.get(current) ?? null) : null);
   const conflicts = $derived((file?.chunks ?? []).filter((c): c is Conflict => c.kind === "conflict"));
   const open_ = $derived(asText ? openMarkers(asText.text) : picked.filter((c) => c === null).length);
+  const stray = $derived(asText?.stray ?? 0);
   const lineByLine = $derived(!!file && file.chunks.length > 0);
   const kind = $derived(file ? kindOf(file, labelOf) : null);
   const showBase = $derived(prefs.get("oxbow.conflicts.showBase") && !!file?.base && lineByLine);
@@ -217,8 +238,8 @@
 
   function startText() {
     if (!current || !file?.text) return;
-    const text = markedText(file.chunks, picked, sides, showBase);
-    texts = new Map(texts).set(current, { text, start: text });
+    const text = fileText(file.chunks, picked, sides, showBase, file.openEnd);
+    texts = new Map(texts).set(current, { text, start: text, stray: strayMarkers(text, file.chunks) });
     at = -1;
   }
 
@@ -241,8 +262,8 @@
   }
 
   function typedText(value: string) {
-    if (!current || !asText) return;
-    texts = new Map(texts).set(current, { ...asText, text: value });
+    if (!current || !asText || !file) return;
+    texts = new Map(texts).set(current, { ...asText, text: value, stray: strayMarkers(value, file.chunks) });
   }
 
   /** Go to the next or previous conflict (⌥F5, ⇧⌥F5), in every pane at once. */
@@ -352,9 +373,10 @@
 
   /** Tints of the text: git's markers orange, each side's lines in its branch color. */
   const roles = $derived(asText ? markerRoles(asText.text) : []);
-  const textTint = (i: number) => {
+  const textTint = (i: number, line: string) => {
     const role = roles[i];
-    return role === "marker"
+    // What is left of a block shows orange too, while the text has some.
+    return role === "marker" || (role === null && stray > 0 && markOf(line))
       ? "var(--orange-soft)"
       : role === "left"
         ? tint(leftColor, "soft")
@@ -386,7 +408,27 @@
       run({
         ...request,
         body: ["Oxbow writes the text you edited into ", { code: current }, ". Then git stages the file, which marks the conflict resolved."],
-        action: { kind: "resolve", path: current, picks: [], text: asText.text },
+        ...(stray
+          ? {
+              title: `Mark ${name} as resolved with markers left in it?`,
+              button: "Mark Resolved Anyway",
+              danger: true,
+              always: true,
+              warning: {
+                title: `${stray} ${stray === 1 ? "line looks" : "lines look"} like what is left of a conflict`,
+                body: [
+                  "A conflict marker (",
+                  { code: "<<<<<<<" },
+                  ", ",
+                  { code: "=======" },
+                  " or ",
+                  { code: ">>>>>>>" },
+                  ") is still in the text without the rest of its block. Those lines would be committed as they are.",
+                ],
+              },
+            }
+          : {}),
+        action: { kind: "resolve", path: current, picks: [], text: asText.text, stages: file.stages },
       });
       return;
     }
@@ -401,7 +443,7 @@
         same && words.length > 1 ? `: ${words[0]} in all ${words.length} conflicts. ` : ". ",
         "Then git stages the file, which marks the conflict resolved.",
       ],
-      action: { kind: "resolve", path: current, picks: list.map((d) => toResolution(d, sides)) },
+      action: { kind: "resolve", path: current, picks: list.map((d) => toResolution(d, sides)), stages: file.stages },
     });
   }
 
@@ -521,13 +563,14 @@
       {#each conflicted as path (path)}
         {@const p = splitPath(path)}
         {@const left = conflictsIn(path)}
+        {@const strays = texts.get(path)?.stray ?? 0}
         {@const what = current === path && kind && kind.short !== "Text" ? kind.short : null}
         <button class="file" class:on={current === path} onclick={() => open(path)}>
           <span class="mark warn">!</span>
           <span class="fwords">
             <span class="ellipsis"><span class="dir">{p.dir}</span>{p.name}</span>
-            <span class="sub ellipsis" class:orange={left !== 0} class:green={left === 0}>
-              {left === null ? (what ?? "Conflicted") : `${what ? `${what} · ` : ""}${left === 0 ? "Ready to mark resolved" : `${left} ${left === 1 ? "conflict" : "conflicts"} left`}${texts.has(path) ? " · as text" : ""}`}
+            <span class="sub ellipsis" class:orange={left !== 0 || strays > 0} class:green={left === 0 && !strays}>
+              {left === null ? (what ?? "Conflicted") : `${what ? `${what} · ` : ""}${left === 0 && strays ? `${strays} stray ${strays === 1 ? "marker" : "markers"}` : left === 0 ? "Ready to mark resolved" : `${left} ${left === 1 ? "conflict" : "conflicts"} left`}${texts.has(path) ? " · as text" : ""}`}
             </span>
           </span>
         </button>
@@ -627,6 +670,8 @@
               </span>
               {#if open_}
                 <span class="orange small">· {open_} left</span>
+              {:else if stray}
+                <span class="orange small" title="Lines that look like conflict markers, without the rest of their block">· {stray} stray {stray === 1 ? "marker" : "markers"}</span>
               {:else}
                 <span class="green small">· All decided</span>
               {/if}

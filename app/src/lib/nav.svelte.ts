@@ -14,10 +14,16 @@ function loadRecent(): Record<string, string[]> {
 
 class Nav {
   /** File History's file and the commit to start on; null when it isn't open. Back and Forward
-   *  also bring back Blame's revision and the line that was followed. */
-  file = $state<{ path: string; commit: string | null; at?: { rev: string; path: string } | null; line?: number | null } | null>(null);
-  /** How File History is now: its file, selected commit, Blame's revision and followed line. */
-  fileHere = $state<{ path: string; commit: string | null; at: { rev: string; path: string } | null; line: number | null } | null>(null);
+   *  also bring back Blame's revision and the line that was followed. `seq` tells each request
+   *  from the one before, even for the same file. */
+  file = $state<{ path: string; commit: string | null; at?: { rev: string; path: string } | null; line?: number | null; seq: number } | null>(null);
+  /** How File History is now: its file, selected commit, Blame's revision and followed line;
+   *  `seq` is the request of `file` it has finished bringing back, so until it matches, File
+   *  History is still on its way there and this is how it was before. */
+  fileHere = $state<{ path: string; commit: string | null; at: { rev: string; path: string } | null; line: number | null; seq: number } | null>(null);
+  private fileSeq = 0;
+  /** A number for the next request of `file`. */
+  nextFile = () => ++this.fileSeq;
   fileMode = $state<FileMode>("blame");
   /** Find in file: the text, whether case matters, how many matches File History shows and which one is current. */
   find = $state({ text: "", matchCase: false });
@@ -41,7 +47,7 @@ class Nav {
   repo = "";
 
   openFile(path: string, commit: string | null = null) {
-    this.file = { path, commit };
+    this.file = { path, commit, seq: this.nextFile() };
     if (!this.repo) return;
     const list = [path, ...(this.recentFiles[this.repo] ?? []).filter((p) => p !== path)].slice(0, 8);
     this.recentFiles = { ...this.recentFiles, [this.repo]: list };
