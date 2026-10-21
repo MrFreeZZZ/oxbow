@@ -1,4 +1,4 @@
-import { joinLines, kindOf, markedText, markerRoles, markerStarts, openMarkers, splitLines, stepIndex, toResolution, type Sides } from "../src/lib/conflicts.ts";
+import { fileText, joinLines, kindOf, markedText, markerRoles, markerStarts, openMarkers, splitLines, stepIndex, strayMarkers, toResolution, type Sides } from "../src/lib/conflicts.ts";
 import type { Chunk, ConflictFile } from "../src/lib/types.ts";
 import assert from "node:assert/strict";
 
@@ -38,6 +38,30 @@ const chunks: Chunk[] = [
   assert.equal(openMarkers("a\n=======\nb"), 0);
   assert.equal(openMarkers("<<<<<<< x\na\n=======\nb"), 0);
   assert.equal(openMarkers("<<<<<<< x\na\n=======\nb\n>>>>>>> y\n<<<<<<< x\n=======\n>>>>>>> y"), 2);
+}
+
+// A block missing any one of its markers is no conflict, but what is left of it is stray, so
+// the file isn't ready; a `=======` the file itself has is not.
+{
+  const whole = markedText(chunks, [null, "right"], sides, false).split("\n");
+  assert.equal(strayMarkers(whole.join("\n"), chunks), 0);
+  for (const gone of ["<<<<<<< feature", "=======", ">>>>>>> main"]) {
+    const text = whole.filter((l) => l !== gone).join("\n");
+    assert.equal(openMarkers(text), 0, gone);
+    assert.equal(strayMarkers(text, chunks), 2, gone);
+  }
+  const own: Chunk[] = [{ kind: "same", lines: ["Title", "======="] }, ...chunks];
+  assert.equal(strayMarkers("Title\n=======\none\n2 on main\nthree\n4", own), 0);
+  assert.equal(strayMarkers("Title\n=======\none\n=======\nthree\n4", own), 1);
+}
+
+// Text to edit ends with the file's own last line break, so it is written as it is.
+{
+  const decided = markedText(chunks, ["left", "right"], sides, false);
+  assert.equal(fileText(chunks, ["left", "right"], sides, false, false), `${decided}\n`);
+  assert.equal(fileText(chunks, ["left", "right"], sides, false, true), decided);
+  assert.equal(fileText([{ kind: "same", lines: [""] }], [], sides, false, false), "\n");
+  assert.equal(fileText([], [], sides, false, false), "");
 }
 
 // Both, as it reads on screen: the left side first.

@@ -126,6 +126,11 @@ pub struct ConflictFile {
     pub renamed: Option<Renamed>,
     /// Empty when the file can't be merged line by line.
     pub chunks: Vec<Chunk>,
+    /// The file has no line break at its end, so the text to edit has none either.
+    pub open_end: bool,
+    /// Which versions of the file the index holds, by blob id: what the user decided belongs
+    /// to these, and goes stale when another operation brings other versions.
+    pub stages: String,
 }
 
 /// Where a conflicted file came from when one side renamed it.
@@ -509,21 +514,25 @@ impl Repo {
         let text = [&base, &ours, &theirs]
             .iter()
             .all(|blob| blob.as_ref().is_none_or(|b| std::str::from_utf8(b).is_ok()));
-        let chunks = match (&ours, &theirs) {
-            (Some(o), Some(t)) if !binary && !link => self
-                .merge_blobs(o, base.as_deref().unwrap_or_default(), t)?
-                .into_iter()
-                .map(|chunk| match chunk {
-                    RawChunk::Same(lines) => Chunk::Same { lines: bare(lines) },
-                    RawChunk::Conflict { ours, base, theirs } => Chunk::Conflict {
-                        ours: bare(ours),
-                        base: bare(base),
-                        theirs: bare(theirs),
-                    },
-                })
-                .collect(),
+        let raw = match (&ours, &theirs) {
+            (Some(o), Some(t)) if !binary && !link => self.merge_blobs(o, base.as_deref().unwrap_or_default(), t)?,
             _ => Vec::new(),
         };
+        let open_end = match (&ours, &theirs) {
+            (Some(o), Some(t)) => ends_open(&raw, o, t),
+            _ => false,
+        };
+        let chunks = raw
+            .into_iter()
+            .map(|chunk| match chunk {
+                RawChunk::Same(lines) => Chunk::Same { lines: bare(lines) },
+                RawChunk::Conflict { ours, base, theirs } => Chunk::Conflict {
+                    ours: bare(ours),
+                    base: bare(base),
+                    theirs: bare(theirs),
+                },
+            })
+            .collect();
         Ok(ConflictFile {
             path: path.to_owned(),
             base: base.is_some(),
@@ -534,6 +543,8 @@ impl Repo {
             text: text && !binary && !link,
             renamed: self.renamed_into(path),
             chunks,
+            open_end,
+            stages: self.stage_ids(path)?,
         })
     }
 
@@ -669,7 +680,7 @@ impl Repo {
     }
 
     /// The file with `picks` in place of its conflicts, in order; or, with `text`, the whole
-    /// file as the user wrote it, one line per line break.
+    /// file exactly as the user wrote it, in the file's own line endings.
     pub(crate) fn resolved_text(&self, path: &str, picks: &[Resolution], text: Option<&str>) -> Result<Vec<u8>> {
         let ([base, ours, theirs], link) = self.stages(path)?;
         let (Some(ours), Some(theirs), false) = (ours, theirs, link) else {
@@ -688,15 +699,8 @@ impl Repo {
         }
         let chunks = self.merge_blobs(&ours, base.as_deref().unwrap_or_default(), &theirs)?;
         let eol: &[u8] = if crlf(&chunks) { b"\r\n" } else { b"\n" };
-        // Whether the file ends without a line break, which typed lines keep. Inside a conflict
-        // merge-file adds the break before its marker, so the versions themselves tell.
-        let open_end = match chunks.last() {
-            Some(RawChunk::Same(lines)) => lines.last().is_some_and(|l| !l.ends_with(b"\n")),
-            Some(RawChunk::Conflict { .. }) => [&ours, &theirs]
-                .iter()
-                .any(|blob| !blob.is_empty() && !blob.ends_with(b"\n")),
-            None => false,
-        };
+        // Whether the file ends without a line break, which typed lines keep.
+        let open_end = ends_open(&chunks, &ours, &theirs);
         let typed_lines = |lines: &mut dyn Iterator<Item = &str>, out: &mut Vec<u8>| {
             for line in lines {
                 out.extend(line.as_bytes());
@@ -708,11 +712,15 @@ impl Repo {
             if !picks.is_empty() {
                 return Err(Error::Git("a file is resolved by picks or by text, not both".into()));
             }
-            if !text.is_empty() {
-                typed_lines(&mut text.split('\n'), &mut out);
-            }
-            if open_end && out.ends_with(eol) {
-                out.truncate(out.len() - eol.len());
+            // The text is the whole file, its last line break too: written as it is, only with
+            // the file's own line endings.
+            let text = text.replace("\r\n", "\n");
+            let mut lines = text.split('\n').peekable();
+            while let Some(line) = lines.next() {
+                out.extend(line.as_bytes());
+                if lines.peek().is_some() {
+                    out.extend(eol);
+                }
             }
             return Ok(out);
         }
@@ -965,6 +973,20 @@ impl Repo {
         Ok((out, link))
     }
 
+    /// The versions of `path` in the index, as `stage:mode:id` each, to tell them apart from
+    /// the versions another operation would bring.
+    pub(crate) fn stage_ids(&self, path: &str) -> Result<String> {
+        let repo = self.local();
+        let index = repo.open_index().map_err(Error::git)?;
+        let ids: Vec<String> = index
+            .entries()
+            .iter()
+            .filter(|entry| entry.stage_raw() != 0 && entry.path(&index) == path.as_bytes())
+            .map(|entry| format!("{}:{:o}:{}", entry.stage_raw(), entry.mode.bits(), entry.id))
+            .collect();
+        Ok(ids.join(" "))
+    }
+
     /// Merge three versions with `git merge-file`, the way git marks conflicts in the file.
     fn merge_blobs(&self, ours: &[u8], base: &[u8], theirs: &[u8]) -> Result<Vec<RawChunk>> {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -1005,6 +1027,18 @@ impl Repo {
 }
 
 /// Whether most lines of the file end in CRLF, so typed lines do too.
+/// Whether the merged file ends without a line break. Inside a conflict merge-file adds the
+/// break before its marker, so the versions themselves tell.
+fn ends_open(chunks: &[RawChunk], ours: &[u8], theirs: &[u8]) -> bool {
+    match chunks.last() {
+        Some(RawChunk::Same(lines)) => lines.last().is_some_and(|l| !l.ends_with(b"\n")),
+        Some(RawChunk::Conflict { .. }) => [ours, theirs]
+            .iter()
+            .any(|blob| !blob.is_empty() && !blob.ends_with(b"\n")),
+        None => false,
+    }
+}
+
 fn crlf(chunks: &[RawChunk]) -> bool {
     let (mut crlf, mut lf) = (0usize, 0usize);
     let mut count = |lines: &[Vec<u8>]| {

@@ -130,6 +130,7 @@ fn a_merge_that_conflicts_is_resolved_pick_by_pick_and_committed() {
         path: "a.txt".into(),
         picks: vec![],
         text: None,
+        stages: None,
     };
     assert!(repo.perform(&wrong).is_err());
 
@@ -137,6 +138,7 @@ fn a_merge_that_conflicts_is_resolved_pick_by_pick_and_committed() {
         path: "a.txt".into(),
         picks: vec![Pick::TheirsThenOurs.into()],
         text: None,
+        stages: None,
     };
     assert_eq!(repo.plan(&resolve).unwrap().commands[0].display(), "git add -- a.txt");
     repo.perform(&resolve).unwrap();
@@ -178,6 +180,7 @@ fn resolving_keeps_bytes_that_are_not_utf8() {
         path: "a.txt".into(),
         picks: vec![Pick::OursThenTheirs.into()],
         text: None,
+        stages: None,
     })
     .unwrap();
     let bytes = std::fs::read(fx.path().join("a.txt")).unwrap();
@@ -340,6 +343,7 @@ fn a_conflicted_symlink_is_taken_whole_and_its_target_left_alone() {
             path: "link".into(),
             picks: vec![Pick::Theirs.into()],
             text: None,
+            stages: None,
         })
         .unwrap_err();
     assert!(err.to_string().contains("whole"), "{err}");
@@ -369,6 +373,7 @@ fn a_conflict_takes_lines_written_by_hand() {
             lines: vec!["2, as both meant".into(), "".into()],
         }],
         text: None,
+        stages: None,
     })
     .unwrap();
     assert_eq!(read(&fx, "a.txt"), "one\n2, as both meant\n\nthree\n");
@@ -397,6 +402,7 @@ fn typed_lines_keep_the_line_endings_of_the_file() {
             lines: vec!["Three".into(), "and four".into()],
         }],
         text: None,
+        stages: None,
     })
     .unwrap();
     assert_eq!(read(&fx, "a.txt"), "one\r\ntwo\r\nThree\r\nand four");
@@ -410,6 +416,7 @@ fn typed_lines_keep_the_line_endings_of_the_file() {
             path: "a.txt".into(),
             picks: vec![Pick::Ours.into()],
             text: Some("x".into()),
+            stages: None,
         })
         .is_err()
     );
@@ -417,6 +424,7 @@ fn typed_lines_keep_the_line_endings_of_the_file() {
         path: "a.txt".into(),
         picks: vec![],
         text: Some("one\nTwo\nThree".into()),
+        stages: None,
     })
     .unwrap();
     assert_eq!(read(&fx, "a.txt"), "one\r\nTwo\r\nThree");
@@ -447,6 +455,7 @@ fn typed_text_is_refused_for_a_file_that_is_not_utf8() {
                 lines: vec!["x".into()],
             }],
             text: None,
+            stages: None,
         })
         .unwrap_err();
     assert!(err.to_string().contains("UTF-8"), "{err}");
@@ -526,4 +535,78 @@ fn the_merge_tool_comes_from_the_git_config() {
     assert_eq!(read(&fx, "a.txt"), "one\nTWO on feature\nthree\n");
     assert_eq!(repo.operation().unwrap().unwrap().conflicted, 0);
     assert!(!fx.path().join("a.txt.orig").exists());
+}
+
+#[test]
+fn typed_text_is_written_exactly_with_its_last_line_breaks() {
+    for (typed, written) in [
+        ("one\nMERGED\nthree\n", "one\nMERGED\nthree\n"),
+        ("one\nMERGED\nthree", "one\nMERGED\nthree"),
+        ("one\nMERGED\nthree\n\n", "one\nMERGED\nthree\n\n"),
+        ("one\r\nMERGED\r\nthree\r\n", "one\nMERGED\nthree\n"),
+        ("", ""),
+    ] {
+        let fx = diverged();
+        let repo = Repo::open(fx.path()).unwrap();
+        repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+        let file = repo.conflict_file("a.txt").unwrap();
+        assert!(!file.open_end);
+        repo.perform(&Action::Resolve {
+            path: "a.txt".into(),
+            picks: vec![],
+            text: Some(typed.into()),
+            stages: Some(file.stages),
+        })
+        .unwrap();
+        assert_eq!(read(&fx, "a.txt"), written, "typed {typed:?}");
+    }
+
+    // A file without a line break at its end says so, and CRLF text keeps CRLF.
+    let fx = crlf_conflict();
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+    assert!(repo.conflict_file("a.txt").unwrap().open_end);
+    repo.perform(&Action::Resolve {
+        path: "a.txt".into(),
+        picks: vec![],
+        text: Some("one\ntwo\nTHREE\n".into()),
+        stages: None,
+    })
+    .unwrap();
+    assert_eq!(read(&fx, "a.txt"), "one\r\ntwo\r\nTHREE\r\n");
+}
+
+#[test]
+fn choices_made_for_other_versions_are_refused() {
+    let mut fx = diverged();
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+    let before = repo.conflict_file("a.txt").unwrap().stages;
+    assert_eq!(before.split(' ').count(), 3);
+
+    // Abort, change main's side, and merge the same branch again: other versions.
+    repo.perform(&Action::Abort).unwrap();
+    fx.commit("a.txt", "one\nNEW main value\nthree\n", "New value");
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+    let after = repo.conflict_file("a.txt").unwrap().stages;
+    assert_ne!(before, after);
+
+    let stale = Action::Resolve {
+        path: "a.txt".into(),
+        picks: vec![],
+        text: Some("old result\n".into()),
+        stages: Some(before),
+    };
+    let err = repo.perform(&stale).unwrap_err();
+    assert!(err.to_string().contains("changed since it was shown"), "{err}");
+    assert_eq!(repo.operation().unwrap().unwrap().conflicted, 1);
+
+    repo.perform(&Action::Resolve {
+        path: "a.txt".into(),
+        picks: vec![Pick::Ours.into()],
+        text: None,
+        stages: Some(after),
+    })
+    .unwrap();
+    assert_eq!(read(&fx, "a.txt"), "one\nNEW main value\nthree\n");
 }

@@ -40,7 +40,7 @@
   import type { PaletteItem } from "./lib/palette";
   import { Keymap, combo, type ShortcutId } from "./lib/shortcuts";
   import { stepChange } from "./lib/diffRows";
-  import { conflictSteps } from "./lib/conflicts";
+  import { conflictSteps, KEPT_CONFLICTS } from "./lib/conflicts";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import PairPanel from "./lib/PairPanel.svelte";
   import SnapshotPanel from "./lib/SnapshotPanel.svelte";
@@ -130,6 +130,10 @@
   let resolving = $state(false);
   const operation = $derived(history?.operation ?? null);
   const showConflicts = $derived(resolving && !!operation);
+  $effect(() => {
+    // Finished or aborted: the decisions made in it go too.
+    if (history && !operation) kept.drop(KEPT_CONFLICTS);
+  });
   /** Below this width the sidebar steps aside, so the graph keeps its room: a toolbar button
    *  slides it in over the content, and Settings and New Branch go into the «…» menu. */
   const NARROW = 1180;
@@ -293,6 +297,9 @@
   /** The list of places behind or ahead, from a right-click on Back or Forward. */
   let placesMenu = $state<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
 
+  /** How File History is now, once it has brought back what `nav.file` asked for. */
+  const fileLive = $derived(nav.file && nav.fileHere?.path === nav.file.path && nav.fileHere.seq === nav.file.seq ? nav.fileHere : null);
+
   /** Where you are now, as Back would bring you back to it. */
   const here = $derived.by((): Place | null => {
     if (!repo || !history) return null;
@@ -301,8 +308,9 @@
         return { view, commit: selected, scroll: null };
       case "file": {
         if (!nav.file) return null;
-        const live = nav.fileHere?.path === nav.file.path ? nav.fileHere : null;
-        const { path, commit, at, line } = live ?? { ...nav.file, at: nav.file.at ?? null, line: nav.file.line ?? null };
+        // While File History is still bringing a place back (a followed line loads its history
+        // first), the place is the one asked for, not how the file was before.
+        const { path, commit, at, line } = fileLive ?? { ...nav.file, at: nav.file.at ?? null, line: nav.file.line ?? null };
         return { view, path, commit, mode: nav.fileMode, at, line };
       }
       case "stashes":
@@ -428,7 +436,7 @@
       }
       case "file":
         nav.fileMode = p.mode;
-        nav.file = { path: p.path, commit: p.commit, at: p.at, line: p.line };
+        nav.file = { path: p.path, commit: p.commit, at: p.at, line: p.line, seq: nav.nextFile() };
         break;
       case "stashes":
         stashSel = p.stash;
@@ -1973,7 +1981,7 @@
               <span class="sub">{describe(operation).noun} in progress · {operation.conflicted} {operation.conflicted === 1 ? "file" : "files"} left</span>
             {:else if view === "file" && nav.file}
               <span class="name">{nav.file.path.slice(nav.file.path.lastIndexOf("/") + 1)}</span>
-              {@const line = nav.fileHere?.path === nav.file.path ? nav.fileHere.line : null}
+              {@const line = fileLive ? fileLive.line : (nav.file.line ?? null)}
               <span class="sub">{@render steps()}{#if trailPath.length && line}Line {line}{:else}{trailPath.length ? "" : `${repo.name} · `}{nav.file.path}{line ? ` · line ${line}` : ""}{/if}</span>
             {:else if view === "pull" && pullBranch}
               <span class="name">{pullBranch}</span>

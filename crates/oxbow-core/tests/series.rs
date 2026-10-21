@@ -199,3 +199,22 @@ fn the_latest_rewrite_comes_from_the_remote_branch() {
     assert_eq!(repo.last_rewrite("feature").unwrap().unwrap().new, second);
     assert_eq!(repo.last_rewrite("main").unwrap(), None);
 }
+
+#[test]
+fn a_tag_inside_the_old_series_does_not_cut_it_short() {
+    for annotated in [false, true] {
+        let (mut fx, old, new, _) = rebased();
+        let one = fx.git(&["rev-parse", &format!("{old}~2")]);
+        let repo = Repo::open(fx.path()).unwrap();
+        let without = repo.series(&old, &new, &["refs/heads/feature".to_owned()]).unwrap();
+        if annotated {
+            fx.git(&["tag", "-a", "-m", "Checkpoint", "checkpoint", &one]);
+        } else {
+            fx.git(&["tag", "checkpoint", &one]);
+        }
+        let with = repo.series(&old, &new, &["refs/heads/feature".to_owned()]).unwrap();
+        assert_eq!((with.old_count, with.new_count), (3, 4), "annotated: {annotated}");
+        let kinds = |s: &oxbow_core::Series| s.pairs.iter().map(|p| p.kind).collect::<Vec<_>>();
+        assert_eq!(kinds(&with), kinds(&without));
+    }
+}

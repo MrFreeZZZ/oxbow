@@ -349,18 +349,19 @@ impl Repo {
     /// newest first, each with its parents.
     fn own_commits(&self, tip: &str, other: &str, rewritten: &[String]) -> Result<Vec<(String, Vec<String>)>> {
         // Refs that hold the whole of `tip` came after it, e.g. main once the branch was merged
-        // or a branch stacked on it: they say nothing about where it starts.
+        // or a branch stacked on it: they say nothing about where it starts. Only branches mark
+        // where a series starts: a tag on one of its commits stays behind on the old one when it
+        // is rebased, and would cut the old series short.
         let refs = self.run(&GitCommand::new([
             "for-each-ref".to_owned(),
             format!("--no-contains={tip}"),
             "--format=%(refname)".to_owned(),
+            "refs/heads/".to_owned(),
+            "refs/remotes/".to_owned(),
         ]))?;
         let mut input = format!("{tip}\n^{other}\n");
         for name in refs.stdout.lines() {
-            let skip = name == "refs/stash"
-                || name.starts_with("refs/oxbow/")
-                || name.starts_with("refs/bisect/")
-                || rewritten.iter().any(|r| r == name);
+            let skip = rewritten.iter().any(|r| r == name);
             if !skip {
                 input.push_str(&format!("^{name}\n"));
             }
