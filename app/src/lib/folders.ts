@@ -46,9 +46,14 @@ export function withState(history: History, state: FolderState): History {
   return { ...history, worktrees };
 }
 
-/** `history` with the folders still being checked given up on: `error` says why none of them
- *  could be read. One that shows an earlier reading keeps it. */
+/** Shows an earlier reading, as reading it again failed: the count may be out of date. */
+export function stale(folder: Worktree | Submodule): boolean {
+  return !folder.pending && folder.changed !== null && folder.statusError !== null;
+}
+
+/** `history` with the folders still being read given up on: `error` says why none of them could
+ *  be. One that shows an earlier reading keeps it, stale: the error says it wasn't read again. */
 export function failChecking(history: History, error: string): History {
-  const fail = <T extends Worktree | Submodule>(f: T): T => (checking(f) ? { ...f, statusError: error, pending: false } : f);
+  const fail = <T extends Worktree | Submodule>(f: T): T => (f.pending ? { ...f, statusError: error, pending: false } : f);
   return { ...history, worktrees: history.worktrees.map(fail), submodules: history.submodules.map(fail) };
 }

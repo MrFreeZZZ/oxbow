@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Permissions of the repository windows (main, and repo-N from Open in New Window) Settings and the Console",
   "windows": ["main", "repo-*", "settings", "console"],
-  "permissions": ["core:default", "core:window:allow-start-dragging", "core:window:allow-set-size", "core:window:allow-set-min-size", "core:window:allow-center", "core:webview:allow-set-webview-zoom", "dialog:allow-open"]
+  "permissions": ["core:default", "core:window:allow-start-dragging", "core:window:allow-set-size", "core:window:allow-set-min-size", "core:window:allow-center", "core:window:allow-destroy", "core:webview:allow-set-webview-zoom", "dialog:allow-open"]
 }

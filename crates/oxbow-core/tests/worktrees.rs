@@ -281,7 +281,9 @@ fn the_history_lists_the_worktrees_and_their_changes_come_after() {
 
     let read = states(&repo, &history.worktrees, &FolderCache::default(), None);
     assert_eq!(read.len(), 1);
-    assert_eq!((read[0].path.as_str(), read[0].changed), (path.as_str(), Some(1)));
+    // git names the folder by its real path: on macOS /private/var/… for the /var/… made here.
+    let real = |p: &str| std::fs::canonicalize(p).unwrap();
+    assert_eq!((real(&read[0].path), read[0].changed), (real(&path), Some(1)));
     let mut trees = history.worktrees.clone();
     trees[1].take_state(&read[0]);
     assert_eq!(trees, repo.worktrees().unwrap());

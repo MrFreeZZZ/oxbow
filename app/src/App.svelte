@@ -2,8 +2,8 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { listen } from "@tauri-apps/api/event";
   import { api, settings, stopped } from "./lib/api";
-  import { WORKTREE_ID, type History, type HistoryRow, type ReadPart, type RecentRepo, type RefInfo, type ReflogEntry, type RepoSummary } from "./lib/types";
-  import { retried, settle, stillFailing, type ReadStates } from "./lib/reads";
+  import { WORKTREE_ID, type History, type HistoryRow, type ReadPart, type RecentRepo, type ReflogEntry, type RepoSummary } from "./lib/types";
+  import { reloadNews, retried, settle, stillFailing, type ReadStates } from "./lib/reads";
   import { carryStates, failChecking, withState } from "./lib/folders";
   import Sidebar from "./lib/Sidebar.svelte";
   import HistoryList from "./lib/HistoryList.svelte";
@@ -23,7 +23,7 @@
   import { newWorktreeRequest } from "./lib/worktrees";
   import StashesView from "./lib/StashesView.svelte";
   import { ancestors, cherryPickRequest, editMessageRequest, resetModes, resetRequest, revertRequest, undoCommitRequest } from "./lib/commits";
-  import type { FileChange, Operation } from "./lib/types";
+  import type { Operation } from "./lib/types";
   import Menu, { menuIcons, type MenuEntry } from "./lib/Menu.svelte";
   import { fetchRequest, pullRequest, pushRequest, syncBlock, unshallowRequest, type RemoteContext, type SyncFix } from "./lib/remote";
   import WhyPopover from "./lib/WhyPopover.svelte";
@@ -44,6 +44,8 @@
   import { stepChange } from "./lib/diffRows";
   import { conflictSteps, KEPT_CONFLICTS } from "./lib/conflicts";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { draftSaves } from "./lib/draftSaves";
   import PairPanel from "./lib/PairPanel.svelte";
   import SnapshotPanel from "./lib/SnapshotPanel.svelte";
   import LostCommitPanel from "./lib/LostCommitPanel.svelte";
@@ -148,7 +150,7 @@
     const folder = repo?.path ?? "";
     if (draftGone === folder) return;
     draftGone = folder;
-    api.dropConflictDraft().catch(() => (draftGone = null));
+    api.dropConflictDraft(folder).catch(() => (draftGone = null));
   });
   /** Below this width the sidebar steps aside, so the graph keeps its room: a toolbar button
    *  slides it in over the content, and Settings and New Branch go into the «…» menu. */
@@ -656,6 +658,9 @@
     activity.reset();
     stopPaging();
     if (view === "compare" || view === "file" || view === "stack" || view === "pull" || view === "series") view = "history";
+    // The Conflicts screen goes too, before the other repository opens: it saves its draft for
+    // its own folder, and reads nothing of the new one.
+    resolving = false;
     try {
       limit = PAGE;
       unreachable = new Set();
@@ -1512,42 +1517,9 @@
     await refresh();
     const after = history;
     if (!before || !after || after === before) return;
-    const sub = reloadNews(before, after);
-    activity.reloaded(sub, after.reads);
-    if (!activity.open) confirm.say(`Reloaded. ${sub}.`, "done");
-  }
-
-  /** What a reload found: "Nothing new", or "3 new commits · origin/main moved · 2 uncommitted files". */
-  function reloadNews(before: History, after: History): string {
-    const parts: string[] = [];
-    const known = new Set(before.rows.map((r) => r.id));
-    const fresh = after.rows.filter((r) => !r.worktree && !known.has(r.id)).length;
-    if (fresh) parts.push(`${fresh} new ${fresh === 1 ? "commit" : "commits"}`);
-    const key = (r: RefInfo) => `${r.kind} ${r.name}`;
-    const was = new Map(before.refs.map((r) => [key(r), r.target]));
-    const now = new Set(after.refs.map(key));
-    const refs = [
-      ...after.refs.filter((r) => was.get(key(r)) !== r.target).map((r) => `${r.name} ${was.has(key(r)) ? "moved" : "is new"}`),
-      ...before.refs.filter((r) => !now.has(key(r))).map((r) => `${r.name} is gone`),
-    ];
-    if (refs.length === 1) parts.push(refs[0]);
-    else if (refs.length) parts.push(`${refs.length} branches and tags changed`);
-    const files = (h: History) => h.rows[0]?.worktree?.files ?? 0;
-    if (files(after) !== files(before)) parts.push(files(after) ? `${files(after)} uncommitted ${files(after) === 1 ? "file" : "files"}` : "No uncommitted changes");
-    // The same number of files can still be other files, or other edits in them.
-    else if (changesKey(after) !== changesKey(before) || after.changesStamp !== before.changesStamp) parts.push("Uncommitted changes updated");
-    if (after.stashes.length !== before.stashes.length) parts.push(`${after.stashes.length} ${after.stashes.length === 1 ? "stash" : "stashes"}`);
-    else if (after.stashes.map((s) => s.id).join() !== before.stashes.map((s) => s.id).join()) parts.push("Stashes changed");
-    return parts.length ? parts.join(" · ") : "Nothing new";
-  }
-
-  /** Which files are changed, staged or not, and by how many lines: staging part of a file
-   *  changes it, which the files on disk don't show. */
-  function changesKey(h: History): string {
-    const c = h.changes;
-    if (!c) return "";
-    const side = (name: string, files: FileChange[]) => files.map((f) => `${name} ${f.status} ${f.path} ${f.additions} ${f.deletions}`);
-    return [...side("s", c.staged), ...side("u", c.unstaged), ...side("c", c.conflicted)].join("\n");
+    const news = reloadNews(before, after);
+    activity.reloaded(news.text, after.reads);
+    if (!activity.open) confirm.say(`Reloaded. ${news.text}.`, news.partial ? "warn" : "done");
   }
 
   let refreshing: Promise<void> | null = null;
@@ -1973,9 +1945,13 @@
     const unlisten = listen("repo-touched", () => refresh());
     // Signing in or out changes what GitHub tells about the pull requests.
     const account = listen("account-changed", () => repo && github.accountChanged());
+    // Closing the window, or quitting, waits for the Conflicts screen's last draft to be written:
+    // 3 seconds at most, so a save that hangs doesn't keep the window open.
+    const closing = getCurrentWindow().onCloseRequested(() => Promise.race([draftSaves.flush(), new Promise<void>((done) => setTimeout(done, 3000))]));
     return () => {
       unlisten.then((stop) => stop());
       account.then((stop) => stop());
+      closing.then((stop) => stop());
     };
   });
 </script>
@@ -2322,7 +2298,7 @@
       {/if}
       {#if showConflicts && operation}
         {#key repo.path}
-          <ConflictsView {history} op={operation} {colorOf} {version} {run} {refresh} />
+          <ConflictsView folder={repo.path} {history} op={operation} {colorOf} {version} {run} {refresh} />
         {/key}
       {:else if view === "file" && nav.file}
         {#key repo.path + nav.file.path}

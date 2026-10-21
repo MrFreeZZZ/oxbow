@@ -159,10 +159,12 @@ export const api = {
   mergeTool: () => invoke<MergeTool | null>("merge_tool"),
   /** Waits until the tool quits; true when git staged the file. */
   openMergeTool: (path: string) => invoke<boolean>("open_merge_tool", { path }),
-  /** The Conflicts screen's draft saved for this working folder, as lib/drafts.ts writes it. */
-  conflictDraft: () => invoke<unknown>("conflict_draft"),
-  saveConflictDraft: (draft: unknown) => invoke<void>("save_conflict_draft", { draft }),
-  dropConflictDraft: () => invoke<void>("drop_conflict_draft"),
+  /** The Conflicts screen's draft saved for the working folder `workdir`, as lib/drafts.ts
+   *  writes it. The folder is named, not taken from the window: a save can come after the
+   *  window opened another repository. */
+  conflictDraft: (workdir: string) => invoke<unknown>("conflict_draft", { workdir }),
+  saveConflictDraft: (workdir: string, draft: unknown) => invoke<void>("save_conflict_draft", { workdir, draft }),
+  dropConflictDraft: (workdir: string) => invoke<void>("drop_conflict_draft", { workdir }),
   stashCheck: (index: number, id: string) => invoke<StashCheck>("stash_check", { index, id }),
   stack: (branch: string | null) => invoke<Stack>("stack", { branch }),
   landedOn: (merged: string, candidates: string[]) => invoke<Landing | null>("landed_on", { merged, candidates }),

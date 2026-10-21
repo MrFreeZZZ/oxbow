@@ -3,7 +3,7 @@
 
 import { api } from "./api";
 import { confirm, type Part, type Request } from "./confirm.svelte";
-import { checking } from "./folders";
+import { checking, stale } from "./folders";
 import { shortId } from "./format";
 import type { Submodule, SubmoduleMove, UnpushedSubmodule } from "./types";
 
@@ -16,6 +16,7 @@ export function submoduleNote(sub: Submodule): { text: string; warn?: boolean; m
   if (sub.missing) return { text: "needs fetch", warn: true };
   if (sub.current !== sub.recorded) return { text: "out of sync", warn: true };
   if (sub.changed === null) return { text: "status unknown", warn: true };
+  if (stale(sub)) return { text: sub.changed ? `${sub.changed} changed · may be stale` : "may be stale", warn: true };
   if (sub.changed) return { text: `${sub.changed} changed` };
   return null;
 }
@@ -63,7 +64,7 @@ export function updateRequest(subs: Submodule[], sub: Submodule | null, repoPath
     ? ["Checks out ", { code: to }, ` in ${sub.title}, the commit ${repo} records. Commits made there stay in its history.`]
     : ["Clones ", { code: sub.url ?? sub.path }, " into ", { code: sub.path }, " and checks out ", { code: to }, `, the commit ${repo} records.`];
   if (checking(sub)) body.push(" Oxbow is still checking it for changed files: any the checkout would overwrite stop the update.");
-  else if (sub.changed === null) body.push(" Oxbow couldn’t check it for changed files (git status failed there): any the checkout would overwrite stop the update.");
+  else if (sub.changed === null || stale(sub)) body.push(" Oxbow couldn’t check it for changed files (git status failed there): any the checkout would overwrite stop the update.");
   else if (sub.changed) body.push(` Its ${plural(sub.changed, "changed file")} stop the update if the checkout would overwrite them.`);
   return {
     title: sub.cloned ? `Update ${sub.title} to ${to}?` : `Clone ${sub.title}?`,
@@ -134,7 +135,7 @@ export function syncRequest(sub: Submodule | null): Request {
 export function removeSubmoduleRequest(sub: Submodule): Request {
   const body: Part[] = ["Deletes the folder ", { code: sub.path }, " and its entry in ", { code: ".gitmodules" }, ". Commit the result to remove it for everyone."];
   if (checking(sub)) body.push(` Oxbow is still checking ${sub.title} for changed files: any it has are lost with the folder.`);
-  else if (sub.changed === null) body.push(` Oxbow couldn’t check ${sub.title} for changed files (git status failed there): any it has are lost with the folder.`);
+  else if (sub.changed === null || stale(sub)) body.push(` Oxbow couldn’t check ${sub.title} for changed files (git status failed there): any it has are lost with the folder.`);
   else if (sub.changed) body.push(` ${plural(sub.changed, "file")} changed inside ${sub.title} ${sub.changed === 1 ? "is" : "are"} lost with the folder.`);
   return {
     title: `Remove the submodule ${sub.title}?`,

@@ -213,10 +213,11 @@
   {/if}
 
   {#if sub.cloned && !pending}
-    {#if sub.changed === null}
-      <p class="note warn" title={sub.statusError ?? ""}>
+    {#if sub.statusError !== null}
+      <p class="note warn" title={sub.statusError}>
         <svg class="icon small" viewBox="0 0 16 16"><path d="M8 2.5 14 13H2zM8 6.5v3M8 11.2v.1" /></svg>
-        Couldn’t check for changes inside: {errorLine(sub.statusError)}
+        {#if sub.changed === null}Couldn’t check for changes inside:{:else}Couldn’t check for changes inside again, so “{sub.changed ? plural(sub.changed, "file") + " changed" : "no changes"}” from the last check may be stale:{/if}
+        {errorLine(sub.statusError)}
         <button class="link" onclick={onRetry}>Retry</button>
       </p>
     {:else if sub.changed}

@@ -1,4 +1,4 @@
-import { carryStates, checking, failChecking, withState } from "../src/lib/folders.ts";
+import { carryStates, checking, failChecking, stale, withState } from "../src/lib/folders.ts";
 import type { History, Submodule, Worktree } from "../src/lib/types.ts";
 import assert from "node:assert/strict";
 
@@ -84,15 +84,23 @@ const history = (worktrees: Worktree[], submodules: Submodule[]): History => ({ 
   assert.equal(withState(two, { path: "/src/gone", submodule: false, changed: 1, statusError: null, checkout: null }), two);
 }
 
-// When the folders can't be read at all, the ones being checked say why; earlier readings stay.
+// When the folders can't be read at all, every one being read says why; an earlier reading
+// stays, marked stale, so its old count doesn't pass for a new one.
 {
-  const shown = history([tree("hotfix", 3, true), tree("spike", null, true)], []);
+  const shown = history([tree("hotfix", 3, true), tree("spike", null, true), tree("clean", 0, true), tree("done", 1)], []);
   const failed = failChecking(shown, "No repository is open");
   assert.deepEqual(
-    failed.worktrees.map((t) => [t.changed, t.statusError, t.pending]),
+    failed.worktrees.map((t) => [t.changed, t.statusError, t.pending, stale(t), checking(t)]),
     [
-      [3, null, true],
-      [null, "No repository is open", false],
+      [3, "No repository is open", false, true, false],
+      [null, "No repository is open", false, false, false],
+      [0, "No repository is open", false, true, false],
+      [1, null, false, false, false],
     ],
   );
+  // The next read carries the stale one over, and a good reading clears it.
+  const again = carryStates(history([tree("hotfix", null, true)], []), failed);
+  assert.equal(again.worktrees[0].changed, 3);
+  const read = withState(again, { path: "/src/hotfix", submodule: false, changed: 2, statusError: null, checkout: null });
+  assert.deepEqual([read.worktrees[0].changed, read.worktrees[0].statusError, stale(read.worktrees[0])], [2, null, false]);
 }

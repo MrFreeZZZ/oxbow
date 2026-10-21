@@ -1470,30 +1470,47 @@ fn draft_file(app: &AppHandle, repo: &Repo) -> CommandResult<PathBuf> {
     Ok(drafts::file(&dir.join("conflict-drafts"), repo.workdir()))
 }
 
-/// The Conflicts screen's draft saved for the window's working folder, if there is one.
+/// The repository at `workdir`, the working folder the Conflicts screen was opened for. A save
+/// can arrive after the window opened another repository, and must still go to its own.
+fn draft_repo(session: &Session, window: &tauri::WebviewWindow, workdir: &str) -> CommandResult<Repo> {
+    if let Ok(repo) = current(session, window)
+        && repo.workdir() == Path::new(workdir)
+    {
+        return Ok(repo);
+    }
+    let repo = Repo::open(workdir).map_err(|err| err.to_string())?;
+    if repo.workdir() != Path::new(workdir) {
+        return Err(format!("{workdir} isn’t a working folder any more."));
+    }
+    Ok(repo)
+}
+
+/// The Conflicts screen's draft saved for the working folder `workdir`, if there is one.
 #[tauri::command]
 async fn conflict_draft(
     app: AppHandle,
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
+    workdir: String,
 ) -> CommandResult<Option<Value>> {
-    let repo = current(&session, &window)?;
+    let repo = draft_repo(&session, &window, &workdir)?;
     let file = draft_file(&app, &repo)?;
     tauri::async_runtime::spawn_blocking(move || drafts::read(&file, repo.workdir()))
         .await
         .map_err(|err| err.to_string())?
 }
 
-/// Save the Conflicts screen's draft for the window's working folder, while its operation is
+/// Save the Conflicts screen's draft for the working folder `workdir`, while its operation is
 /// under way.
 #[tauri::command]
 async fn save_conflict_draft(
     app: AppHandle,
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
+    workdir: String,
     draft: Value,
 ) -> CommandResult<()> {
-    let repo = current(&session, &window)?;
+    let repo = draft_repo(&session, &window, &workdir)?;
     let file = draft_file(&app, &repo)?;
     tauri::async_runtime::spawn_blocking(move || {
         // A save arriving after the operation was finished or aborted would bring its draft back.
@@ -1506,14 +1523,15 @@ async fn save_conflict_draft(
     .map_err(|err| err.to_string())?
 }
 
-/// Remove the draft of the window's working folder, once its operation is over.
+/// Remove the draft of the working folder `workdir`, once its operation is over.
 #[tauri::command]
 async fn drop_conflict_draft(
     app: AppHandle,
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
+    workdir: String,
 ) -> CommandResult<()> {
-    let repo = current(&session, &window)?;
+    let repo = draft_repo(&session, &window, &workdir)?;
     drafts::remove(&draft_file(&app, &repo)?)
 }
 
@@ -2298,8 +2316,39 @@ fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         let settings = tauri::menu::MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
         app_menu.insert(&settings, 2)?;
         app_menu.insert(&tauri::menu::PredefinedMenuItem::separator(app)?, 3)?;
+        // macOS's own Quit ends the app at once; this one lets the windows save first (quit()).
+        let last = app_menu.items()?.len() - 1;
+        app_menu.remove_at(last)?;
+        let name = &app.package_info().name;
+        app_menu.append(&tauri::menu::MenuItem::with_id(
+            app,
+            "quit",
+            format!("Quit {name}"),
+            true,
+            Some("CmdOrCtrl+Q"),
+        )?)?;
     }
     Ok(menu)
+}
+
+/// Quit: each repository window closes as its close button closes it, so the Conflicts screen
+/// saves its draft first, and the app ends once they are gone, or after 3 seconds.
+#[cfg(target_os = "macos")]
+fn quit(app: &AppHandle) {
+    let repo_window = |label: &str| label != "settings" && label != "console";
+    for (label, window) in app.webview_windows() {
+        if repo_window(&label) {
+            let _ = window.close();
+        }
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while std::time::Instant::now() < until && app.webview_windows().keys().any(|label| repo_window(label)) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        app.exit(0);
+    });
 }
 
 fn main() {
@@ -2342,6 +2391,10 @@ fn main() {
         .on_menu_event(|app, event| {
             if event.id() == "settings" {
                 let _ = show_settings(app);
+            }
+            #[cfg(target_os = "macos")]
+            if event.id() == "quit" {
+                quit(app);
             }
         })
         .setup(|app| {
