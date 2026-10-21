@@ -609,6 +609,14 @@ impl Repo {
         let real = self.git_path("index")?;
         if real.exists() {
             std::fs::copy(&real, &scratch).map_err(io)?;
+            // The copy keeps the index's time, or git takes a file changed in the same second
+            // as the index for unchanged (same size and time) and the snapshot misses the edit.
+            let modified = std::fs::metadata(&real).and_then(|m| m.modified()).map_err(io)?;
+            std::fs::File::options()
+                .write(true)
+                .open(&scratch)
+                .and_then(|f| f.set_modified(modified))
+                .map_err(io)?;
         } else {
             let _ = std::fs::remove_file(&scratch);
         }
