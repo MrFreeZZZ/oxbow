@@ -1,10 +1,12 @@
 // The user's settings, shared by every window: loaded from settings.json once, then kept in
 // step through the backend's "settings-changed" event. The file holds only values that differ
-// from the defaults below.
+// from the defaults below. A setting shows its new value at once; if settings.json doesn't take
+// it, it goes back and `failure` says why, so nothing looks saved that isn't.
 
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import { BRANCH_PALETTES, branchPaletteById, branchVariables, type BranchPaletteId } from "./branchPalettes";
+import { isNewer, loadedOver, SaveQueue } from "./settingSaves";
 import { paletteOf, THEMES, themeById, themeVariables } from "./themes";
 
 export const defaults = {
@@ -141,35 +143,74 @@ function fontStack(family: string): string {
   return `${name ? `"${name}", ` : ""}ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace`;
 }
 
+/** A save settings.json didn't take: the setting stays as it was. */
+export interface SaveFailure {
+  key: PrefKey;
+  /** What was asked for, for Try Again. */
+  value: unknown;
+  error: string;
+}
+
 class Prefs {
+  /** settings.json as the backend last told of it. */
   #values = $state<Record<string, unknown>>({});
+  /** Values saved here and not written yet, the newest of each key (null: its default). They are
+   *  shown meanwhile and go back if the save fails. */
+  #unsaved = $state<Record<string, unknown>>({});
+  /** The number of the change behind each key's value, so an older word can't undo a newer one. */
+  #revisions: Record<string, number> = {};
+  /** The number of the change settings.json was loaded at. */
+  #loadedAt = -1;
+  #saves = new SaveQueue();
   /** True once settings.json has been read. */
   loaded = $state(false);
+  /** Why settings.json can't be read, so the defaults are in use; null when it can. */
+  unreadable = $state<string | null>(null);
+  /** The last save that failed, until the setting is saved or the note is closed. */
+  failure = $state<SaveFailure | null>(null);
 
   constructor() {
-    api.allSettings().then(
-      (all) => {
-        this.#values = { ...all, ...this.#values };
-        this.loaded = true;
-      },
-      () => (this.loaded = true),
-    );
-    listen<{ key: string; value: unknown }>("settings-changed", (event) => {
-      const { key, value } = event.payload;
-      if (value === null) delete this.#values[key];
-      else this.#values[key] = value;
+    this.reload();
+    listen<{ key: string; value: unknown; revision: number }>("settings-changed", (event) => {
+      const { key, value, revision } = event.payload;
+      this.#take(key, value, revision);
     }).catch(() => {});
   }
 
+  /** Read settings.json again, e.g. after it was fixed by hand. */
+  async reload() {
+    try {
+      const all = await api.allSettings();
+      this.#values = loadedOver(this.#values, this.#revisions, all.revision, all.values);
+      this.#loadedAt = Math.max(this.#loadedAt, all.revision);
+      this.unreadable = all.problem;
+    } catch (err) {
+      this.unreadable = String(err);
+    }
+    this.loaded = true;
+  }
+
+  /** A change the backend wrote, `null` for a key put back to its default. */
+  #take(key: string, value: unknown, revision: number) {
+    if (!isNewer(this.#revisions, this.#loadedAt, key, revision)) return;
+    this.#revisions[key] = revision;
+    const values = { ...this.#values };
+    if (value === null) delete values[key];
+    else values[key] = value;
+    this.#values = values;
+    // Written, so settings.json can be read again.
+    this.unreadable = null;
+  }
+
   get<K extends PrefKey>(key: K): PrefValue<K> {
-    const value = this.#values[key];
+    const value = key in this.#unsaved ? this.#unsaved[key] : this.#values[key];
     // A value settings.json can't hold, e.g. typed in by hand, counts as the default.
-    return (value !== undefined && !problemOf(key, value) ? value : defaults[key]) as PrefValue<K>;
+    return (value !== undefined && value !== null && !problemOf(key, value) ? value : defaults[key]) as PrefValue<K>;
   }
 
   /** Whether settings.json holds anything, so Restore Defaults has something to do. */
   get customized(): boolean {
-    return Object.keys(this.#values).length > 0;
+    return Object.values({ ...this.#values, ...this.#unsaved }).some((value) => value !== null);
   }
 
   /** Whether the setting differs from its default. */
@@ -177,18 +218,57 @@ class Prefs {
     return this.get(key) !== defaults[key];
   }
 
-  /** Save a setting; its default value is saved as no value at all. Resolves once the backend
-   *  follows it too. */
-  set<K extends PrefKey>(key: K, value: PrefValue<K>): Promise<void> {
-    const fallback = defaults[key];
-    const stored = value === fallback || (Array.isArray(value) && Array.isArray(fallback) && !value.length && !fallback.length) ? null : value;
-    if (stored === null) delete this.#values[key];
-    else this.#values[key] = stored;
-    return api.setSetting(key, stored).catch(() => {});
+  /** Save a setting; its default value is saved as no value at all. It shows at once, and
+   *  resolves once settings.json has it: true, or false when it couldn't be written, and the
+   *  setting went back to what it was, with the reason in `failure`. */
+  async set<K extends PrefKey>(key: K, value: PrefValue<K>): Promise<boolean> {
+    const error = await this.#save(key, value);
+    if (error === null) {
+      if (this.failure?.key === key) this.failure = null;
+    } else if (error) this.failure = { key, value, error };
+    return error === null;
   }
 
-  reset(key: PrefKey): Promise<void> {
+  /** Save a setting for a step that reports its own result: rejects with why it wasn't saved,
+   *  without a note in `failure`. */
+  async save<K extends PrefKey>(key: K, value: PrefValue<K>): Promise<void> {
+    const error = await this.#save(key, value);
+    if (error) throw error;
+  }
+
+  reset(key: PrefKey): Promise<boolean> {
     return this.set(key, defaults[key]);
+  }
+
+  /** Save the failed setting again. */
+  retry() {
+    const failure = this.failure;
+    if (failure) void this.set(failure.key, failure.value as never);
+  }
+
+  /** null once saved; why not, when it failed and no newer save of the key replaced it; "" when one did. */
+  #save(key: PrefKey, value: unknown): Promise<string | null> {
+    const fallback = defaults[key];
+    const stored = value === fallback || (Array.isArray(value) && Array.isArray(fallback) && !value.length && !fallback.length) ? null : value;
+    this.#unsaved = { ...this.#unsaved, [key]: stored };
+    return this.#saves.run(
+      key,
+      async (newest) => {
+        try {
+          this.#take(key, stored, await api.setSetting(key, stored));
+          return null;
+        } catch (err) {
+          return newest() ? String(err) : "";
+        } finally {
+          if (newest()) {
+            const unsaved = { ...this.#unsaved };
+            delete unsaved[key];
+            this.#unsaved = unsaved;
+          }
+        }
+      },
+      null,
+    );
   }
 }
 

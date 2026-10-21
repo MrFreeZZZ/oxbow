@@ -580,9 +580,8 @@ class ConfirmState {
   /** Undo of the step the Operation Log just recorded for `action`, when there is one. */
   async #undoFromLog(action: Action, started: number): Promise<(() => Request) | null> {
     if (action.kind === "clearOperationLog") return null;
-    await oplog.load();
-    const entry = oplog.entries[0];
-    return entry && entry.time >= started && !entry.failed ? () => undoRequest(entry) : null;
+    const entry = await oplog.newest();
+    return entry && !(entry instanceof Error) && entry.time >= started && !entry.failed ? () => undoRequest(entry) : null;
   }
 
   /** A short message in the top right corner, e.g. after copying a name. */

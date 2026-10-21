@@ -325,8 +325,8 @@
   }
 
   async function undo() {
-    await oplog.load();
-    const latest = oplog.entries[0];
+    const latest = await oplog.newest();
+    if (latest instanceof Error) return confirm.say(`${latest.message} Nothing was undone.`, "error");
     if (!latest) return;
     if (await run(undoRequest(latest))) {
       done = null;

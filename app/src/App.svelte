@@ -716,21 +716,43 @@
   confirm.runner = (request) => void run(request);
   confirm.onRan = (ran) => activity.ran(ran);
 
+  // A setting changed here that settings.json didn't take is back to how it was, and settings.json
+  // that can't be read leaves every setting at its default (said once). The Welcome window has no
+  // toasts: it shows the note itself, and the toast follows once a repository is open.
+  let settingsNote = $state<{ text: string; tone: "warn" | "error" } | null>(null);
+  let toldUnreadable = false;
+  $effect(() => {
+    const failure = prefs.failure;
+    if (!failure) return;
+    settingsNote = { text: `Couldn’t save the setting, so it is back to how it was. ${failure.error}`, tone: "error" };
+    prefs.failure = null;
+  });
+  $effect(() => {
+    if (!prefs.unreadable || toldUnreadable) return;
+    toldUnreadable = true;
+    settingsNote = { text: `Oxbow is using the default settings. ${prefs.unreadable} Fix it in Settings › Edit in settings.json.`, tone: "warn" };
+  });
+  $effect(() => {
+    if (!settingsNote || !repo || !history) return;
+    confirm.say(settingsNote.text, settingsNote.tone);
+    settingsNote = null;
+  });
+
   /** ⌘Z: back to before the newest step of the Operation Log. */
   async function undoLatest() {
     oplog.open = false;
-    await oplog.load();
-    const latest = oplog.entries[0];
-    if (latest) run(undoRequest(latest));
+    const latest = await oplog.newest();
+    if (latest instanceof Error) confirm.say(`${latest.message} Nothing was undone.`, "error");
+    else if (latest) run(undoRequest(latest));
     else confirm.say("Nothing to undo yet.");
   }
 
   /** ⇧⌘Z: redo, when the newest step of the Operation Log is an undo. */
   async function redoLatest() {
     oplog.open = false;
-    await oplog.load();
-    const latest = oplog.entries[0];
-    if (latest && isRedo(latest)) run(undoRequest(latest));
+    const latest = await oplog.newest();
+    if (latest instanceof Error) confirm.say(`${latest.message} Nothing was redone.`, "error");
+    else if (latest && isRedo(latest)) run(undoRequest(latest));
     else confirm.say("Nothing to redo: the newest step isn’t an undo.");
   }
 
@@ -1963,7 +1985,7 @@
 />
 
 {#if !repo || !history}
-  <Welcome {loading} {error} onOpen={chooseRepo} onOpenPath={load} />
+  <Welcome {loading} error={error ?? settingsNote?.text ?? null} onOpen={chooseRepo} onOpenPath={load} />
 {:else}
   <div class="window" class:narrow class:mac class:side-shown={sideShown} class:side-hidden={sideHidden && !narrow} class:sliding>
     <button class="capsule side-toggle" onclick={toggleSidebar} aria-label={sideOut ? "Hide sidebar" : "Show sidebar"} aria-expanded={sideOut} title={withKeys(sideOut ? "Hide Sidebar" : "Show Sidebar", SIDEBAR_KEYS)}>

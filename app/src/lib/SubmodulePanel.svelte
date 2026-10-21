@@ -35,14 +35,31 @@
   const repoName = $derived(repoPath.split(/[\\/]/).filter(Boolean).pop() ?? "This repository");
 
   let move = $state<SubmoduleMove | null>(null);
+  /** Why git couldn't compare the two commits, for this submodule; null when it could. */
+  let moveError = $state<{ path: string; error: string } | null>(null);
+  /** Goes up with Retry, to compare again. */
+  let asked = $state(0);
+  let comparing = $state(false);
 
   $effect(() => {
     const { path, recorded, current, changed } = sub;
     void version;
+    void asked;
     let live = true;
+    comparing = true;
     api.submoduleMove(path, recorded, current, changed).then(
-      (m) => live && (move = m),
-      () => live && (move = null),
+      (m) => {
+        if (!live) return;
+        move = m;
+        moveError = null;
+        comparing = false;
+      },
+      (err) => {
+        if (!live) return;
+        move = null;
+        moveError = { path, error: String(err) };
+        comparing = false;
+      },
     );
     return () => {
       live = false;
@@ -50,6 +67,8 @@
   });
 
   const synced = $derived(sub.cloned && sub.current === sub.recorded);
+  /** The comparison failed: the commits and how far apart they are aren't known. */
+  const unknown = $derived(moveError?.path === sub.path ? moveError.error : null);
 
   /** Why the folder isn't at the recorded commit, in words. */
   const why = $derived.by((): { text: string; warn?: boolean } | null => {
@@ -98,6 +117,8 @@
       {#if commit}
         <span class="summary ellipsis" title={commit.summary}>{commit.summary}</span>
         <span class="who">{commit.authorName} · {shortTime(commit.time)}</span>
+      {:else if unknown !== null}
+        <span class="who">Not read</span>
       {:else}
         <span class="who">Not in its clone yet</span>
       {/if}
@@ -133,6 +154,13 @@
         <svg class="icon small" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" /><path d="M8 7.2v3.6M8 5.1v.1" /></svg>
       {/if}
       {why.text}
+    </p>
+  {/if}
+  {#if unknown !== null && sub.cloned}
+    <p class="note warn" title={unknown}>
+      <svg class="icon small" viewBox="0 0 16 16"><path d="M8 2.5 14 13H2zM8 6.5v3M8 11.2v.1" /></svg>
+      Couldn’t compare the two commits in the folder’s clone: {errorLine(unknown)}
+      <button class="link" disabled={comparing} onclick={() => asked++}>{comparing ? "Reading…" : "Retry"}</button>
     </p>
   {/if}
   {#if staged}

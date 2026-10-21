@@ -172,7 +172,7 @@ impl Repo {
     pub fn operation_log(&self) -> Result<Vec<OpEntry>> {
         let file = self.oplog_file()?;
         let oldest = now() - i64::from(keep_days()) * 86_400;
-        let Some(all) = read_log(&file) else {
+        let Some(all) = read_log(&file)? else {
             return Ok(Vec::new());
         };
         let mut entries: Vec<OpEntry> = all.iter().filter(|entry| entry.time >= oldest).cloned().collect();
@@ -1088,20 +1088,26 @@ pub(crate) fn short_ref(name: &str) -> String {
 }
 
 /// Every step in the log file, read again only when the file changed: every reload of the
-/// History asks for the log, and it grows with each action for weeks. `None` when there is none.
-fn read_log(file: &std::path::Path) -> Option<Arc<Vec<OpEntry>>> {
+/// History asks for the log, and it grows with each action for weeks. `None` when there is none;
+/// an error when the file is there but can't be read, which must not look like an empty log.
+fn read_log(file: &std::path::Path) -> Result<Option<Arc<Vec<OpEntry>>>> {
     type Read = (std::path::PathBuf, std::time::SystemTime, u64, Arc<Vec<OpEntry>>);
     static LAST: Mutex<Vec<Read>> = Mutex::new(Vec::new());
-    let meta = std::fs::metadata(file).ok()?;
-    let stamp = (meta.modified().ok()?, meta.len());
+    let unreadable = |err: std::io::Error| Error::Git(format!("oplog.jsonl: {err}"));
+    let meta = match std::fs::metadata(file) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(unreadable(err)),
+    };
+    let stamp = (meta.modified().map_err(unreadable)?, meta.len());
     if let Ok(last) = LAST.lock()
         && let Some((_, _, _, entries)) = last
             .iter()
             .find(|(path, modified, len, _)| path == file && (*modified, *len) == stamp)
     {
-        return Some(entries.clone());
+        return Ok(Some(entries.clone()));
     }
-    let text = std::fs::read_to_string(file).ok()?;
+    let text = std::fs::read_to_string(file).map_err(unreadable)?;
     let entries: Arc<Vec<OpEntry>> = Arc::new(
         text.lines()
             .filter_map(|line| serde_json::from_str::<OpEntry>(line).ok())
@@ -1115,7 +1121,7 @@ fn read_log(file: &std::path::Path) -> Option<Arc<Vec<OpEntry>>> {
         }
         last.push((file.to_path_buf(), stamp.0, stamp.1, entries.clone()));
     }
-    Some(entries)
+    Ok(Some(entries))
 }
 
 fn now() -> i64 {

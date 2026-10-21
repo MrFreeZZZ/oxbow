@@ -7,6 +7,7 @@
   import type { Request } from "./confirm.svelte";
   import { cannotRestore, clearRequest, entryIcon, isRedo, keptUntil, lostUntil, moveIcon, moveText, oplog, reflogRows, restoreRequest, undoRequest } from "./oplog.svelte";
   import { relativeTime } from "./format";
+  import { errorLine } from "./reads";
   import { prefs } from "./prefs.svelte";
   import { keys, withKeys } from "./keys";
   import WhyNote from "./WhyNote.svelte";
@@ -37,6 +38,8 @@
   } = $props();
 
   const latest = $derived(oplog.entries[0] ?? null);
+  /** Nothing is undone or restored from a list that couldn't be read again: it may be out of date. */
+  const unread = $derived(oplog.entriesError ? "The Operation Log can’t be read now" : null);
   /** Steps that throw work away get the warning tint, as the design has for a reset. */
   const warn = new Set(["reset", "discard", "drop"]);
 
@@ -91,6 +94,17 @@
 
 <svelte:window onkeydown={onKey} />
 
+{#snippet failed(what: string, error: string, kept: boolean, loading: boolean, retry: () => void)}
+  <div class="read-note" role="alert" title={errorLine(error)}>
+    <svg class="icon" viewBox="0 0 16 16"><path d="M8 2.5 14 13H2zM8 6.5v3M8 11.2v.1" /></svg>
+    <span class="grow">
+      <span class="what">{kept ? `Can’t read ${what} again, so this list may be out of date` : `${what[0].toUpperCase()}${what.slice(1)} can’t be read`}</span>
+      <span class="why">{errorLine(error)}</span>
+    </span>
+    <button class="retry" disabled={loading} onclick={retry}>{loading ? "Reading…" : "Retry"}</button>
+  </div>
+{/snippet}
+
 {#snippet body()}
   <div class="head">
     <!-- On the screen the toolbar already names it. -->
@@ -109,6 +123,7 @@
       Where HEAD and your branches have been, from git's own log, including what a terminal or another app did.
       {#if !oplog.allMoves}Commits no branch has any more are listed here, so you can keep them on a branch.{/if}
     </p>
+    {#if oplog.reflogError}{@render failed("git's reflog", oplog.reflogError, oplog.reflog.length > 0, oplog.loadingReflog, () => oplog.loadReflog())}{/if}
     <div class="list">
       {#each moves as entry (entry.id)}
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
@@ -137,9 +152,11 @@
           </span>
         </div>
       {:else}
-        <div class="empty">
-          {#if oplog.allMoves || !oplog.reflog.length}Git's reflog is empty here.{:else}Nothing is lost: every commit in git's reflog is on a branch.{/if}
-        </div>
+        {#if !oplog.reflogError}
+          <div class="empty">
+            {#if oplog.allMoves || !oplog.reflog.length}Git's reflog is empty here.{:else}Nothing is lost: every commit in git's reflog is on a branch.{/if}
+          </div>
+        {/if}
       {/each}
     </div>
     <div class="foot">
@@ -148,9 +165,10 @@
     </div>
   {:else}
   <p class="intro">Every change to the repository is recorded. Restore any point, including after reset or rebase.</p>
+  {#if oplog.entriesError}{@render failed("the Operation Log", oplog.entriesError, oplog.entries.length > 0, oplog.loading, () => oplog.load())}{/if}
   <div class="list">
     {#each oplog.entries as entry, i (entry.id)}
-      {@const blocked = cannotRestore(entry, i > 0)}
+      {@const blocked = unread ?? cannotRestore(entry, i > 0)}
       <div class="row" class:top={i === 0}>
         <span class="tile" class:warn={warn.has(entry.kind)}>
           <svg class="icon" viewBox="0 0 16 16"><path d={entryIcon(entry)} /></svg>
@@ -158,7 +176,7 @@
         <span class="words">
           <span class="title">{entry.title}</span>
           <span class="detail">{entry.failed ? "Stopped half way · " : ""}{entry.detail}</span>
-          {#if blocked}<WhyNote text={blocked} />{/if}
+          {#if blocked && !unread}<WhyNote text={blocked} />{/if}
         </span>
         <span class="when" title="Oxbow can go back to this step until then">
           <span>{relativeTime(entry.time)}</span>
@@ -185,12 +203,14 @@
         {/if}
       </div>
     {:else}
-      <div class="empty">Nothing to undo yet. Every change Oxbow makes to this repository shows up here. What a terminal or another app did is in Git Reflog.</div>
+      {#if !oplog.entriesError}
+        <div class="empty">Nothing to undo yet. Every change Oxbow makes to this repository shows up here. What a terminal or another app did is in Git Reflog.</div>
+      {/if}
     {/each}
   </div>
   <div class="foot">
     <span>Snapshots are kept for {prefs.get("oxbow.undo.keepDays")} days. Untracked files over 50 MB and files git ignores are not in them.</span>
-    {#if oplog.entries.length}
+    {#if oplog.entries.length && !unread}
       <button class="link" onclick={() => go(clearRequest(oplog.entries.length))}>Clear Log…</button>
     {/if}
   </div>
@@ -503,6 +523,49 @@
   }
   button:disabled {
     opacity: 0.45;
+  }
+  .read-note {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 4px 6px;
+    padding: 6px 8px 6px 10px;
+    border-radius: var(--radius-m);
+    background: color-mix(in srgb, var(--orange) 9%, transparent);
+    color: var(--orange);
+    font-size: var(--text-small);
+  }
+  .read-note .icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+  .read-note .grow {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .read-note .what {
+    font-weight: 600;
+  }
+  .read-note .why {
+    color: var(--text2);
+    font-size: var(--text-caption);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .retry {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    border-radius: var(--radius-s);
+    color: var(--accent-text);
+    font-size: var(--text-small);
+    font-weight: 600;
+  }
+  .retry:disabled {
+    color: var(--text2);
   }
   .empty {
     padding: 14px 10px;

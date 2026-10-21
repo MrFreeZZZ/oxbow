@@ -984,6 +984,16 @@ export interface DeviceCode {
   interval: number;
 }
 
+/** Oxbow's own settings, from settings.json. */
+export interface AllSettings {
+  /** The number of the last change in them, as `settings-changed` sends it. */
+  revision: number;
+  /** Every setting that differs from its default. */
+  values: Record<string, unknown>;
+  /** Why settings.json can't be read; the defaults are used meanwhile. */
+  problem: string | null;
+}
+
 /** Settings read from Git's own config and the computer. */
 export interface GitSettings {
   git: { path: string; version: string | null; custom: boolean };

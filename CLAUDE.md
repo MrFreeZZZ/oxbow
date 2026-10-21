@@ -33,6 +33,7 @@ crates/oxbow-core/          UI-free core library (all Git logic lives here)
 app/src-tauri/              Tauri shell (crate oxbow-app)
   src/main.rs               all #[tauri::command]s and the generate_handler! list
   src/accounts.rs pulls.rs open_in.rs console_window.rs
+  src/settings.rs           settings.json: read (never written over when broken), atomic write
   tauri.conf.json           window, CSP; build.rs sets version 0.1.<commit count>
 app/src/                    Svelte front end
   App.svelte                main window: layout, wiring, most state (large: grep, don't read whole)

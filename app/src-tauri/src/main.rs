@@ -5,6 +5,7 @@ mod accounts;
 mod console_window;
 mod open_in;
 mod pulls;
+mod settings;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -39,6 +40,10 @@ struct Session {
     snapshots: AtomicU64,
     /// Commit details and diffs already worked out: a commit never changes.
     commits: Mutex<CommitCache>,
+    /// Number of the last change to settings.json. Held while settings.json is read and written,
+    /// so two saves at once can't lose each other's key, and sent with every change, so each
+    /// window takes the changes in the order they were saved.
+    settings: Mutex<u64>,
 }
 
 #[derive(Default)]
@@ -267,11 +272,10 @@ fn settings_file(app: &AppHandle) -> CommandResult<PathBuf> {
         .map_err(|err| err.to_string())
 }
 
+/// The settings, or none when settings.json can't be read.
 fn read_settings(app: &AppHandle) -> serde_json::Map<String, serde_json::Value> {
     settings_file(app)
-        .ok()
-        .and_then(|file| std::fs::read_to_string(file).ok())
-        .and_then(|text| serde_json::from_str(&text).ok())
+        .and_then(|file| settings::read(&file))
         .unwrap_or_default()
 }
 
@@ -280,10 +284,29 @@ fn get_setting(app: AppHandle, key: String) -> Option<Value> {
     read_settings(&app).remove(&key)
 }
 
-/// Every setting that differs from its default.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AllSettings {
+    /// The number of the last change in them, as `settings-changed` sends it.
+    revision: u64,
+    /// Every setting that differs from its default.
+    values: serde_json::Map<String, Value>,
+    /// Why settings.json can't be read; the defaults are used meanwhile.
+    problem: Option<String>,
+}
+
 #[tauri::command]
-fn all_settings(app: AppHandle) -> serde_json::Map<String, Value> {
-    read_settings(&app)
+fn all_settings(app: AppHandle, session: State<'_, Session>) -> AllSettings {
+    let revision = session.settings.lock().expect("session lock");
+    let (values, problem) = match settings_file(&app).and_then(|file| settings::read(&file)) {
+        Ok(values) => (values, None),
+        Err(problem) => (serde_json::Map::new(), Some(problem)),
+    };
+    AllSettings {
+        revision: *revision,
+        values,
+        problem,
+    }
 }
 
 /// The system's Accessibility › Display switches the page can't read itself: WebKit has no media
@@ -316,25 +339,37 @@ fn display_options() -> DisplayOptions {
 struct SettingChanged {
     key: String,
     value: Value,
+    revision: u64,
 }
 
-/// Save a setting (`null` puts it back to its default) and tell every window.
+/// Save a setting (`null` puts it back to its default) and tell every window. Returns the
+/// number of the change. Nothing is written when settings.json can't be read, so the other
+/// settings in it stay.
 #[tauri::command]
-fn set_setting(app: AppHandle, session: State<'_, Session>, key: String, value: Value) -> CommandResult<()> {
-    let mut settings = read_settings(&app);
+fn set_setting(app: AppHandle, session: State<'_, Session>, key: String, value: Value) -> CommandResult<u64> {
+    let mut revision = session.settings.lock().expect("session lock");
+    let file = settings_file(&app)?;
+    let mut settings = settings::read(&file).map_err(|problem| {
+        format!("{problem} Oxbow doesn’t write over it until it is fixed in Edit in settings.json.")
+    })?;
     if value.is_null() {
         settings.remove(&key);
     } else {
         settings.insert(key.clone(), value.clone());
     }
-    let file = settings_file(&app)?;
-    std::fs::create_dir_all(file.parent().expect("settings file has a parent")).map_err(|err| err.to_string())?;
-    let text = serde_json::to_string_pretty(&settings).map_err(|err| err.to_string())?;
-    std::fs::write(file, text + "\n").map_err(|err| err.to_string())?;
+    settings::write(&file, &settings)?;
+    *revision += 1;
     apply_settings(&app, &session, &settings);
     // A window that misses this keeps showing the old value until it reloads; not an error.
-    let _ = app.emit("settings-changed", SettingChanged { key, value });
-    Ok(())
+    let _ = app.emit(
+        "settings-changed",
+        SettingChanged {
+            key,
+            value,
+            revision: *revision,
+        },
+    );
+    Ok(*revision)
 }
 
 /// The settings the backend itself follows: how diffs are made and the windows' appearance.
@@ -1998,21 +2033,24 @@ fn settings_text(app: AppHandle) -> CommandResult<String> {
 #[tauri::command]
 fn save_settings_text(app: AppHandle, session: State<'_, Session>, text: String) -> CommandResult<()> {
     let settings: serde_json::Map<String, Value> = serde_json::from_str(&text).map_err(|err| err.to_string())?;
+    let mut revision = session.settings.lock().expect("session lock");
     let before = read_settings(&app);
     let file = settings_file(&app)?;
-    std::fs::create_dir_all(file.parent().expect("settings file has a parent")).map_err(|err| err.to_string())?;
-    std::fs::write(&file, if text.ends_with('\n') { text } else { text + "\n" }).map_err(|err| err.to_string())?;
-    settings_replaced(&app, &session, &before, &settings);
+    settings::write_text(&file, &if text.ends_with('\n') { text } else { text + "\n" })?;
+    settings_replaced(&app, &session, &mut revision, &before, &settings);
     Ok(())
 }
 
 /// Follow settings that replaced `before` all at once, and tell every window which keys changed.
+/// `revision` is the held number of the last change.
 fn settings_replaced(
     app: &AppHandle,
     session: &Session,
+    revision: &mut u64,
     before: &serde_json::Map<String, Value>,
     after: &serde_json::Map<String, Value>,
 ) {
+    *revision += 1;
     apply_settings(app, session, after);
     let removed = before
         .keys()
@@ -2020,7 +2058,14 @@ fn settings_replaced(
         .map(|key| (key.clone(), Value::Null));
     for (key, value) in after.clone().into_iter().chain(removed) {
         if before.get(&key) != Some(&value) {
-            let _ = app.emit("settings-changed", SettingChanged { key, value });
+            let _ = app.emit(
+                "settings-changed",
+                SettingChanged {
+                    key,
+                    value,
+                    revision: *revision,
+                },
+            );
         }
     }
 }
@@ -2062,12 +2107,13 @@ fn settings_location(app: AppHandle) -> CommandResult<SettingsLocation> {
 /// settings.backup.json, so the old values can come back; Git's own settings are not touched.
 #[tauri::command]
 fn restore_default_settings(app: AppHandle, session: State<'_, Session>) -> CommandResult<()> {
+    let mut revision = session.settings.lock().expect("session lock");
     let before = read_settings(&app);
     let file = settings_file(&app)?;
     if file.exists() {
         move_file(&file, &settings_backup(&file))?;
     }
-    settings_replaced(&app, &session, &before, &serde_json::Map::new());
+    settings_replaced(&app, &session, &mut revision, &before, &serde_json::Map::new());
     Ok(())
 }
 
@@ -2078,9 +2124,10 @@ fn restore_settings_backup(app: AppHandle, session: State<'_, Session>) -> Comma
     let backup = settings_backup(&file);
     let text = std::fs::read_to_string(&backup).map_err(|_| "There is no copy of the old settings.".to_owned())?;
     let after: serde_json::Map<String, Value> = serde_json::from_str(&text).map_err(|err| err.to_string())?;
+    let mut revision = session.settings.lock().expect("session lock");
     let before = read_settings(&app);
     move_file(&backup, &file)?;
-    settings_replaced(&app, &session, &before, &after);
+    settings_replaced(&app, &session, &mut revision, &before, &after);
     Ok(())
 }
 
