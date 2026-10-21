@@ -31,7 +31,7 @@ crates/oxbow-core/          UI-free core library (all Git logic lives here)
   src/github.rs pulls.rs    GitHub REST: sign-in, publish, pull requests
   src/config.rs setup.rs    git settings; clone/init;  console.rs = Console process log
   tests/<area>.rs           integration tests, one file per area; tests/support/mod.rs = Fixture
-  examples/history.rs       history load benchmark
+  examples/history.rs       history load benchmark;  reads.rs = opening with worktrees/submodules
 app/src-tauri/              Tauri shell (crate oxbow-app)
   src/main.rs               all #[tauri::command]s and the generate_handler! list
   src/accounts.rs pulls.rs open_in.rs console_window.rs
@@ -49,6 +49,7 @@ app/src/                    Svelte front end
   app.css themes.ts branchPalettes.ts   design tokens, code theme Estuary, branch colors
 app/tests/*.test.ts         node:test unit tests for the pure lib/*.ts modules
 scripts/check.sh            quiet checks (below);  make-demo-repo.sh = demo repository
+scripts/make-perf-fixtures.sh   big fixtures for examples/;  docs/measuring-reads.md = how to run them
 ```
 
 A new backend action usually touches, in order: `crates/oxbow-core/src/<area>.rs` (+ test in
