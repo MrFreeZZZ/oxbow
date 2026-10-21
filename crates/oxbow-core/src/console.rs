@@ -12,7 +12,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{LazyLock, Mutex, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use regex::Regex;
@@ -125,6 +125,46 @@ thread_local! {
     static OPEN: RefCell<Option<Open>> = const { RefCell::new(None) };
     static ROLE: Cell<Option<Role>> = const { Cell::new(None) };
     static UNKEPT: Cell<bool> = const { Cell::new(false) };
+    /// The entry this thread runs commands for, open on another thread: see [`Helpers`].
+    static HELPING: RefCell<Option<Helpers>> = const { RefCell::new(None) };
+}
+
+/// The commands threads run for the entry open on another one, e.g. `git status` in several
+/// folders at once: [`Helpers::help`] runs work on such a thread, and [`Helpers::join`], back
+/// on the entry's thread, puts what they ran in the entry, in the order they started.
+#[derive(Clone, Default)]
+pub(crate) struct Helpers(Arc<Mutex<Vec<(PathBuf, Ran)>>>);
+
+impl Helpers {
+    /// Run `f` on this thread for the entry.
+    pub(crate) fn help<T>(&self, f: impl FnOnce() -> T) -> T {
+        struct Back(Option<Helpers>);
+        impl Drop for Back {
+            fn drop(&mut self) {
+                let outer = self.0.take();
+                HELPING.with(|helping| *helping.borrow_mut() = outer);
+            }
+        }
+        let _back = Back(HELPING.with(|helping| helping.borrow_mut().replace(self.clone())));
+        f()
+    }
+
+    /// Put what the helping threads ran in the entry open on this thread; without one, each is
+    /// an entry of its own, as for any command run outside an entry.
+    pub(crate) fn join(self) {
+        let mut all = std::mem::take(&mut *self.0.lock().expect("console helpers lock"));
+        all.sort_by_key(|(_, ran)| ran.time);
+        let left = OPEN.with(|open| match open.borrow_mut().as_mut() {
+            Some(open) => {
+                open.entry.commands.extend(all.drain(..).map(|(_, ran)| ran));
+                Vec::new()
+            }
+            None => all,
+        });
+        for (dir, ran) in left {
+            finish(Some(&dir), &read_by_oxbow(ran));
+        }
+    }
 }
 
 type Listener = Box<dyn Fn(Option<&Path>, &Entry) + Send + Sync>;
@@ -361,24 +401,15 @@ impl Started {
     }
 
     fn log(self, code: Option<i32>, stopped: bool, output: Output) {
-        let unscoped = OPEN.with(|open| open.borrow().is_none());
         let mut ran = self.ran(code, stopped, output);
+        if let Some(helpers) = HELPING.with(|helping| helping.borrow().clone()) {
+            helpers.0.lock().expect("console helpers lock").push((self.dir, ran));
+            return;
+        }
+        let unscoped = OPEN.with(|open| open.borrow().is_none());
         if unscoped {
             ran.role = None;
-            let entry = Entry {
-                id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
-                time: self.time,
-                kind: EntryKind::Read,
-                title: "Read by Oxbow".into(),
-                millis: ran.millis,
-                failed: false,
-                stopped,
-                gitoxide: false,
-                note: None,
-                commands: vec![ran],
-                running: false,
-            };
-            finish(Some(&self.dir), &entry);
+            finish(Some(&self.dir), &read_by_oxbow(ran));
             return;
         }
         let live = OPEN.with(|open| {
@@ -397,6 +428,23 @@ impl Started {
         if let Some((repo, log, entry)) = live {
             tell_running(repo.as_deref(), log, &entry);
         }
+    }
+}
+
+/// An entry of its own for `ran`, a command run outside any entry.
+fn read_by_oxbow(ran: Ran) -> Entry {
+    Entry {
+        id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+        time: ran.time,
+        kind: EntryKind::Read,
+        title: "Read by Oxbow".into(),
+        millis: ran.millis,
+        failed: false,
+        stopped: ran.stopped,
+        gitoxide: false,
+        note: None,
+        commands: vec![ran],
+        running: false,
     }
 }
 

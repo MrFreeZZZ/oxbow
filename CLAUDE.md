@@ -23,6 +23,8 @@ crates/oxbow-core/          UI-free core library (all Git logic lives here)
   src/oplog.rs              Operation Log and Undo; notkept.rs = what Undo can't bring back
   src/stack.rs              Edit Stack (rewrite stacked branches); series.rs = before/after a rewrite
   src/remote.rs             push/pull/fetch, upstreams, remote errors; ssh.rs, fetched.rs
+  src/folders.rs            other worktrees' and submodules' folders: read after the history,
+                            4 at a time, cancellable, kept while HEAD and index stay the same
   src/stash.rs tags.rs bisect.rs lfs.rs submodules.rs worktrees.rs search.rs compare.rs
   src/filehistory.rs        file history and blame;  reflog.rs = lost work
   src/fix.rs                Fix a Mistake plans;  secrets.rs = pre-commit secrets check

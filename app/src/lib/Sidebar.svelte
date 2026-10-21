@@ -31,6 +31,7 @@
   import { nav } from "./nav.svelte";
   import type { LfsPattern, ReadPart, RecentRepo, Submodule, Tracking, Worktree } from "./types";
   import { PART_NAMES, age, errorLine, type ReadStates } from "./reads";
+  import { checking } from "./folders";
   import { addSubmoduleRequest, latestRequest, removeSubmoduleRequest, submoduleNote, submoduleWhere, syncRequest, updateRequest, followsWord } from "./submodules";
   import { actionIcons } from "./icons";
   import { locateRequest, lockRequest, newWorktreeRequest, pruneWorktreesRequest, removeWorktreeRequest, tilde, unlockRequest, worktreeOf } from "./worktrees";
@@ -488,6 +489,7 @@
   function worktreeNote(wt: Worktree): { text: string; tone?: "accent" | "warn" } | null {
     if (wt.current) return { text: "this window", tone: "accent" };
     if (wt.missing) return { text: "missing", tone: "warn" };
+    if (checking(wt)) return { text: "checking…" };
     if (wt.changed === null) return { text: "status unknown", tone: "warn" };
     if (wt.changed) return { text: `${wt.changed} changed` };
     return null;
@@ -506,7 +508,8 @@
   /** The tooltip of a worktree's row. */
   function worktreeTitle(wt: Worktree): string {
     const lines = [wt.missing ? `Folder not found at ${tilde(wt.path)}` : wt.current ? tilde(wt.path) : `${tilde(wt.path)} · double-click to open its window`];
-    if (wt.changed === null) lines.push(`Couldn’t count its uncommitted changes: ${errorLine(wt.statusError)}`);
+    if (checking(wt)) lines.push("Counting its uncommitted changes…");
+    else if (wt.changed === null) lines.push(`Couldn’t count its uncommitted changes: ${errorLine(wt.statusError)}`);
     else if (wt.changed) lines.push(`${wt.changed} ${wt.changed === 1 ? "file" : "files"} with uncommitted changes there`);
     const tracking = worktreeTracking(wt);
     if (tracking && (tracking.ahead || tracking.behind))
@@ -564,11 +567,11 @@
 
   /** The menu of a submodule. */
   function submoduleMenu(event: MouseEvent, sub: Submodule) {
-    const at = sub.current ? sub.current.slice(0, 7) : sub.cloned ? "no commit" : "not cloned";
+    const at = checking(sub) ? "checking…" : sub.current ? sub.current.slice(0, 7) : sub.cloned ? "no commit" : "not cloned";
     const entries: MenuEntry[] = [{ kind: "header", label: `${sub.path} · ${at}` }];
     if (sub.cloned) entries.push({ kind: "item", label: "Open in New Window", icon: menuIcons.open, run: () => openSubmodule(sub) });
     if (!sub.cloned) entries.push({ kind: "item", label: "Clone…", icon: menuIcons.fetch, run: () => run(updateRequest(submodules, sub, repo.path)) });
-    else if (sub.recorded && sub.current !== sub.recorded)
+    else if (!checking(sub) && sub.recorded && sub.current !== sub.recorded)
       entries.push({ kind: "item", label: `Update to ${sub.recorded.slice(0, 7)}`, icon: actionIcons.box, run: () => run(updateRequest(submodules, sub, repo.path)) });
     if (sub.cloned) entries.push({ kind: "item", label: `Pull Latest from ${followsWord(sub)}`, icon: menuIcons.fetch, run: () => run(latestRequest(sub, repo.path)) });
     entries.push({ kind: "item", label: "Sync URL", icon: menuIcons.compare, run: () => run(syncRequest(sub)) });

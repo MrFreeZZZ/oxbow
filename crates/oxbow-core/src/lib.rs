@@ -15,6 +15,7 @@ pub mod error;
 pub mod fetched;
 pub mod filehistory;
 pub mod fix;
+pub mod folders;
 pub mod github;
 pub mod graph;
 pub mod history;
@@ -51,6 +52,7 @@ pub use error::{Error, Result};
 pub use fetched::RemoteFetch;
 pub use filehistory::{Blame, BlameCommit, BlameLine, FileCommit, FileHistory};
 pub use fix::{Fix, FixExpect, FixFile, FixState, FixStep, StepKind};
+pub use folders::{FolderCache, FolderState};
 pub use history::{
     Focus, History, HistoryCache, HistoryOptions, HistoryRow, Label, PAGE, Piece, ReadPart, ReadProblem, WORKTREE_ID,
     WorktreeSummary,
@@ -78,6 +80,6 @@ pub use stack::{
     StepAction,
 };
 pub use stash::StashCheck;
-pub use submodules::{Moved, Submodule, SubmoduleMove};
+pub use submodules::{Checkout, Moved, Submodule, SubmoduleMove};
 pub use worktree::{Action, ActionEvent, BranchPush, Plan, PullMode, RemoteBranch, Side, WorkingTree};
 pub use worktrees::Worktree;

@@ -8,6 +8,7 @@
   import { shortId, shortTime } from "./format";
   import { followsWord, latestRequest, updateRequest } from "./submodules";
   import { errorLine } from "./reads";
+  import { checking } from "./folders";
   import type { CommitBrief, Submodule, SubmoduleMove } from "./types";
 
   let {
@@ -41,10 +42,18 @@
   let asked = $state(0);
   let comparing = $state(false);
 
+  /** What its folder has is still being read, after the history. */
+  const pending = $derived(checking(sub));
+
   $effect(() => {
     const { path, recorded, current, changed } = sub;
     void version;
     void asked;
+    // The folder's commit isn't known yet: comparing it now would compare with none.
+    if (pending) {
+      move = null;
+      return;
+    }
     let live = true;
     comparing = true;
     api.submoduleMove(path, recorded, current, changed).then(
@@ -66,13 +75,14 @@
     };
   });
 
-  const synced = $derived(sub.cloned && sub.current === sub.recorded);
+  const synced = $derived(sub.cloned && !pending && sub.current === sub.recorded);
   /** The comparison failed: the commits and how far apart they are aren't known. */
   const unknown = $derived(moveError?.path === sub.path ? moveError.error : null);
 
   /** Why the folder isn't at the recorded commit, in words. */
   const why = $derived.by((): { text: string; warn?: boolean } | null => {
     if (!sub.cloned) return { text: `The folder is empty: ${sub.title} isn’t cloned here yet. Clone checks out the commit ${repoName} records.` };
+    if (pending) return { text: "Checking what the folder has…" };
     if (sub.missing) return { text: `The clone doesn’t have ${shortId(sub.recorded ?? "")} yet. Update fetches it first.`, warn: true };
     if (synced || !move || move.path !== sub.path) return null;
     switch (move.moved) {
@@ -117,6 +127,8 @@
       {#if commit}
         <span class="summary ellipsis" title={commit.summary}>{commit.summary}</span>
         <span class="who">{commit.authorName} · {shortTime(commit.time)}</span>
+      {:else if pending}
+        <span class="who">Reading…</span>
       {:else if unknown !== null}
         <span class="who">Not read</span>
       {:else}
@@ -143,7 +155,7 @@
 
   <div class="tiles">
     {@render tile(staged ? `${repoName} records (staged)` : `${repoName} records`, sub.recorded, recordedCommit, null)}
-    {@render tile("The folder has", sub.cloned ? sub.current : null, currentCommit, sub.cloned ? (sub.current ? (sub.branch ?? "detached") : "no commit") : "not cloned")}
+    {@render tile("The folder has", sub.cloned ? sub.current : null, currentCommit, !sub.cloned ? "not cloned" : pending ? "checking…" : sub.current ? (sub.branch ?? "detached") : "no commit")}
   </div>
 
   {#if why}
@@ -173,7 +185,7 @@
   <div class="actions">
     {#if !sub.cloned}
       <button class="button small primary" onclick={() => run(updateRequest(subs, sub, repoPath))}>Clone</button>
-    {:else if !synced && sub.recorded}
+    {:else if !synced && !pending && sub.recorded}
       <button class="button small primary" onclick={() => run(updateRequest(subs, sub, repoPath))}>Update to {shortId(sub.recorded)}</button>
     {/if}
     {#if sub.cloned}
@@ -200,7 +212,7 @@
     </div>
   {/if}
 
-  {#if sub.cloned}
+  {#if sub.cloned && !pending}
     {#if sub.changed === null}
       <p class="note warn" title={sub.statusError ?? ""}>
         <svg class="icon small" viewBox="0 0 16 16"><path d="M8 2.5 14 13H2zM8 6.5v3M8 11.2v.1" /></svg>

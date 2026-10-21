@@ -3,7 +3,8 @@
 //! or another one, have its own uncommitted changes, or not be cloned at all.
 //!
 //! The list comes from `.gitmodules` and the index (read with gitoxide); what is checked out in
-//! each folder is asked of git there, like for worktrees.
+//! each folder is asked of git there, like for worktrees, after the history: see
+//! [`crate::folders`].
 
 use std::path::{Path, PathBuf};
 
@@ -53,6 +54,21 @@ pub struct Submodule {
     /// Commits of `recorded` the folder doesn't have checked out.
     pub behind: usize,
     /// The recorded commit isn't in its clone yet: it needs a fetch before the folder can have it.
+    pub missing: bool,
+    /// What its folder has checked out and whether it has changes (`current`, `branch`,
+    /// `changed`, `ahead`, `behind`, `missing`) isn't read yet: [`Repo::folder_states`] reads it
+    /// after the history.
+    pub pending: bool,
+}
+
+/// What a submodule's folder has checked out, as [`crate::folders::FolderState`] tells it.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Checkout {
+    pub current: Option<String>,
+    pub branch: Option<String>,
+    pub ahead: usize,
+    pub behind: usize,
     pub missing: bool,
 }
 
@@ -119,10 +135,18 @@ impl Repo {
         self.read_submodules().unwrap_or_default()
     }
 
-    /// The repository's submodules in the order of `.gitmodules`; empty when it has none, an
-    /// error when `.gitmodules` or the index can't be read. A folder git can't read there has its
-    /// own [`Submodule::status_error`].
+    /// The repository's submodules in the order of `.gitmodules`, with what each folder has
+    /// checked out; empty when it has none, an error when `.gitmodules` or the index can't be
+    /// read. A folder git can't read there has its own [`Submodule::status_error`].
     pub fn read_submodules(&self) -> crate::error::Result<Vec<Submodule>> {
+        let mut list = self.submodule_list()?;
+        self.fill_folders(&mut [], &mut list)?;
+        Ok(list)
+    }
+
+    /// The repository's submodules as `.gitmodules` and the index have them, without looking
+    /// into their folders: each cloned one is [`Submodule::pending`]. Takes no git process.
+    pub fn submodule_list(&self) -> crate::error::Result<Vec<Submodule>> {
         let repo = self.local();
         let Some(list) = repo.submodules().map_err(crate::error::Error::git)? else {
             return Ok(Vec::new());
@@ -139,7 +163,7 @@ impl Repo {
             }
             let state = module.state().ok();
             let cloned = state.as_ref().is_some_and(|s| s.worktree_checkout) && self.workdir().join(&path).is_dir();
-            let mut sub = Submodule {
+            out.push(Submodule {
                 name: module.name().to_str_lossy().into_owned(),
                 title: title(&path),
                 url: module.url().ok().map(|u| u.to_bstring().to_str_lossy().into_owned()),
@@ -153,38 +177,13 @@ impl Repo {
                 current: None,
                 branch: None,
                 cloned,
-                changed: Some(0),
+                changed: if cloned { None } else { Some(0) },
                 status_error: None,
                 ahead: 0,
                 behind: 0,
                 missing: false,
-            };
-            if cloned {
-                let dir = self.workdir().join(&sub.path);
-                sub.current = git(&dir, ["rev-parse", "--verify", "-q", "HEAD"]).map(|s| s.trim().to_owned());
-                sub.branch = git(&dir, ["symbolic-ref", "-q", "--short", "HEAD"])
-                    .map(|s| s.trim().to_owned())
-                    .filter(|s| !s.is_empty());
-                match crate::worktrees::changed_files(&dir) {
-                    Ok(count) => sub.changed = Some(count),
-                    Err(err) => {
-                        sub.changed = None;
-                        sub.status_error = Some(err.to_string());
-                    }
-                }
-                if let (Some(current), Some(recorded)) = (&sub.current, &sub.recorded)
-                    && current != recorded
-                {
-                    sub.missing = !has_commit(&dir, recorded);
-                    if !sub.missing
-                        && let Some((ahead, behind)) = counts(&dir, recorded, current)
-                    {
-                        sub.ahead = ahead;
-                        sub.behind = behind;
-                    }
-                }
-            }
-            out.push(sub);
+                pending: cloned,
+            });
         }
         Ok(out)
     }
@@ -219,7 +218,11 @@ impl Repo {
         new: Option<&str>,
         changed: Option<usize>,
     ) -> SubmoduleMove {
-        let info = self.submodules().into_iter().find(|s| s.path == path);
+        // Its name and URL only: its folder is read for the working copy's card, by the caller.
+        let info = self
+            .submodule_list()
+            .ok()
+            .and_then(|list| list.into_iter().find(|s| s.path == path));
         let dir = self.submodule_dir(path);
         let mut out = SubmoduleMove {
             path: path.to_owned(),
@@ -274,6 +277,30 @@ fn title(path: &str) -> String {
     Path::new(path)
         .file_name()
         .map_or_else(|| path.to_owned(), |n| n.to_string_lossy().into_owned())
+}
+
+/// What the submodule folder at `dir` has checked out, against `recorded`, the commit this
+/// repository records for it.
+pub(crate) fn read_checkout(dir: &Path, recorded: Option<&str>) -> Checkout {
+    let mut out = Checkout {
+        current: git(dir, ["rev-parse", "--verify", "-q", "HEAD"]).map(|s| s.trim().to_owned()),
+        branch: git(dir, ["symbolic-ref", "-q", "--short", "HEAD"])
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty()),
+        ..Checkout::default()
+    };
+    if let (Some(current), Some(recorded)) = (&out.current, recorded)
+        && current != recorded
+    {
+        out.missing = !has_commit(dir, recorded);
+        if !out.missing
+            && let Some((ahead, behind)) = counts(dir, recorded, current)
+        {
+            out.ahead = ahead;
+            out.behind = behind;
+        }
+    }
+    out
 }
 
 /// What git prints in `dir`, or `None` when it fails.
@@ -338,7 +365,8 @@ impl Repo {
     /// branches: pushing this repository would record a commit nobody else can fetch. One that
     /// isn't cloned, or lacks the commit, is left out: it came from elsewhere.
     pub fn unpushed_submodules(&self) -> Vec<UnpushedSubmodule> {
-        self.submodules()
+        self.submodule_list()
+            .unwrap_or_default()
             .into_iter()
             .filter(|s| s.cloned)
             .filter_map(|s| {
@@ -421,7 +449,9 @@ impl Repo {
     /// are submodules, or the remote branch has them as of the last fetch, e.g. its first one.
     pub(crate) fn submodules_after_pull(&self, remote: &str, branch: &str) -> Option<GitCommand> {
         let incoming = format!("refs/remotes/{remote}/{branch}:.gitmodules");
-        if self.submodules().is_empty() && self.run(&GitCommand::new(["cat-file", "-e", &incoming])).is_err() {
+        if self.submodule_list().unwrap_or_default().is_empty()
+            && self.run(&GitCommand::new(["cat-file", "-e", &incoming])).is_err()
+        {
             return None;
         }
         Some(submodule_update())

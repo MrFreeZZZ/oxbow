@@ -1,10 +1,11 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AllSettings,
   SubmoduleMove,
   UnpushedSubmodule,
   Submodule,
   Worktree,
+  FolderState,
   Blame,
   Source,
   FileHistory,
@@ -89,7 +90,15 @@ export const api = {
   /** With `known`, the key of the history on screen, rows that came out the same are left out. */
   /** With `focus`, also the history of Current Branch Only: `History.focus`. */
   history: (limit: number, until: string | null = null, known: string | null = null, focus = false) =>
-    invoke<History>("history", { limit, until, known, focus }),
+    invoke<History>("history", { limit, until, known, focus, lane: "history" }),
+  /** What the folders of the worktrees and submodules the last history listed have, each passed
+   *  to `onState` as soon as it is read. One read before `since` (ms) is read again even when
+   *  it shows no change. A newer call stops this one. */
+  folderStates: (since: number | null, onState: (state: FolderState) => void) => {
+    const onStateChannel = new Channel<FolderState>();
+    onStateChannel.onmessage = onState;
+    return invoke<void>("folder_states", { since, lane: "folders", onState: onStateChannel });
+  },
   /** Which of `ids`, loaded commits the history could not tell, are unpushed: the next load
    *  marks them. Whether it found out anything. */
   settleUnpushed: (ids: string[], lane: string | null = null) => invoke<boolean>("settle_unpushed", { ids, lane }),

@@ -1,6 +1,10 @@
 mod support;
 
-use oxbow_core::{Action, HistoryOptions, Repo};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::time::SystemTime;
+
+use oxbow_core::{Action, Error, FolderCache, FolderState, HistoryOptions, Repo, Worktree};
 use support::Fixture;
 
 /// `main` with two commits and a branch `fix/login` off the first.
@@ -239,4 +243,93 @@ fn locked_missing_and_moved_worktrees() {
     assert_eq!(shown(&repo, &Action::WorktreePrune), ["git worktree prune --verbose"]);
     repo.perform(&Action::WorktreePrune).unwrap();
     assert_eq!(repo.worktrees().unwrap().len(), 1);
+}
+
+/// The states `folder_states` reads of `trees`, in the order they came.
+fn states(repo: &Repo, trees: &[Worktree], cache: &FolderCache, since: Option<SystemTime>) -> Vec<FolderState> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let mut out = Vec::new();
+    repo.folder_states(trees, &[], cache, since, 4, &cancel, &mut |s| out.push(s))
+        .unwrap();
+    out
+}
+
+/// A repository with a second worktree on `fix/login` at `../repo-fix-login`.
+fn with_worktree() -> (Fixture, Repo, String) {
+    let fx = repo_with_branch();
+    let repo = Repo::open(fx.path()).unwrap();
+    let path = sibling(&fx, "repo-fix-login");
+    repo.perform(&Action::WorktreeAdd {
+        path: path.clone(),
+        branch: "fix/login".into(),
+        create: false,
+        start: None,
+    })
+    .unwrap();
+    (fx, repo, path)
+}
+
+#[test]
+fn the_history_lists_the_worktrees_and_their_changes_come_after() {
+    let (_fx, repo, path) = with_worktree();
+    std::fs::write(std::path::Path::new(&path).join("notes.txt"), "draft\n").unwrap();
+    let history = repo.history(&HistoryOptions::default()).unwrap();
+    let other = &history.worktrees[1];
+    // Not counted yet, which is not the same as no changes.
+    assert!(other.pending && other.changed.is_none() && other.status_error.is_none());
+    assert!(!history.worktrees[0].pending);
+
+    let read = states(&repo, &history.worktrees, &FolderCache::default(), None);
+    assert_eq!(read.len(), 1);
+    assert_eq!((read[0].path.as_str(), read[0].changed), (path.as_str(), Some(1)));
+    let mut trees = history.worktrees.clone();
+    trees[1].take_state(&read[0]);
+    assert_eq!(trees, repo.worktrees().unwrap());
+}
+
+#[test]
+fn a_folder_that_shows_no_change_is_not_read_again_unless_asked_afresh() {
+    let (mut fx, repo, path) = with_worktree();
+    let folder = std::path::Path::new(&path);
+    std::fs::write(folder.join("one.txt"), "1\n").unwrap();
+    let trees = repo.worktree_list().unwrap();
+    let cache = FolderCache::default();
+    assert_eq!(states(&repo, &trees, &cache, None)[0].changed, Some(1));
+
+    // A new file moves neither HEAD nor the index: the kept state answers.
+    std::fs::write(folder.join("two.txt"), "2\n").unwrap();
+    assert_eq!(states(&repo, &trees, &cache, None)[0].changed, Some(1));
+    // Asked afresh, as when the window comes back to the front: read again.
+    assert_eq!(
+        states(&repo, &trees, &cache, Some(SystemTime::now()))[0].changed,
+        Some(2)
+    );
+
+    // Staging there changes its index, which is read again by itself.
+    std::fs::write(folder.join("three.txt"), "3\n").unwrap();
+    fx.git(&["-C", &path, "add", "three.txt"]);
+    assert_eq!(states(&repo, &trees, &cache, None)[0].changed, Some(3));
+}
+
+#[test]
+fn a_stopped_read_of_the_folders_answers_nothing() {
+    let (_fx, repo, _path) = with_worktree();
+    let trees = repo.worktree_list().unwrap();
+    let cancel = Arc::new(AtomicBool::new(true));
+    let mut got = Vec::new();
+    let result = repo.folder_states(&trees, &[], &FolderCache::default(), None, 4, &cancel, &mut |s| {
+        got.push(s)
+    });
+    assert!(matches!(result, Err(Error::Cancelled)));
+    assert!(got.is_empty());
+}
+
+#[test]
+fn a_stopped_read_runs_no_more_git() {
+    let (_fx, repo, _path) = with_worktree();
+    let stop = Arc::new(AtomicBool::new(true));
+    let result = oxbow_core::cli::stoppable(&stop, || repo.run(&oxbow_core::GitCommand::new(["status"])));
+    assert!(matches!(result, Err(Error::Cancelled)));
+    let history = oxbow_core::cli::stoppable(&stop, || repo.history(&HistoryOptions::default()));
+    assert!(matches!(history, Err(Error::Cancelled)));
 }

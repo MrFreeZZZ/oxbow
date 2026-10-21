@@ -4,9 +4,11 @@
 //! config behave exactly as in a terminal. A [`GitCommand`] is also what the confirmation sheet
 //! shows, so the user sees the very command that will run.
 
+use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -195,59 +197,7 @@ impl Repo {
     /// and fails with [`Error::Cancelled`]. For reads whose answer is no longer wanted once a
     /// newer one is asked for, such as a search.
     pub fn run_cancellable(&self, command: &GitCommand, cancel: &AtomicBool) -> Result<CommandOutput> {
-        let log = console::started(self.workdir(), &command.display());
-        let mut child = match command_in(self.workdir(), command)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(err) => {
-                log.not_started(&err.to_string());
-                return Err(Error::GitNotFound(err.to_string()));
-            }
-        };
-        let read = |mut pipe: Box<dyn Read + Send>| {
-            std::thread::spawn(move || {
-                let mut all = Vec::new();
-                let _ = pipe.read_to_end(&mut all);
-                all
-            })
-        };
-        let stdout = read(Box::new(child.stdout.take().expect("stdout is piped")));
-        let stderr = read(Box::new(child.stderr.take().expect("stderr is piped")));
-        let status = loop {
-            if cancel.load(Ordering::Relaxed) {
-                let _ = child.kill();
-                let _ = child.wait();
-                let output = log.output();
-                log.stopped(output);
-                return Err(Error::Cancelled);
-            }
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) => std::thread::sleep(Duration::from_millis(5)),
-                Err(err) => {
-                    log.not_started(&err.to_string());
-                    return Err(Error::GitNotFound(err.to_string()));
-                }
-            }
-        };
-        let stdout = stdout.join().unwrap_or_default();
-        let stderr = stderr.join().unwrap_or_default();
-        log.done(status.code(), &stdout, &stderr);
-        let stdout = String::from_utf8_lossy(&stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&stderr).into_owned();
-        if status.success() {
-            Ok(CommandOutput { stdout, stderr })
-        } else {
-            Err(Error::Command {
-                command: command.display(),
-                code: status.code(),
-                output: if stderr.trim().is_empty() { stdout } else { stderr },
-            })
-        }
+        run_cancellable_in(self.workdir(), command, cancel)
     }
 
     /// Run `command` and read at most `max` bytes of what it prints: past that it is stopped, and
@@ -369,7 +319,41 @@ pub(crate) struct Limited {
 
 thread_local! {
     /// The commands run on this thread while [`recording`] listens, as typed in a shell.
-    static RAN: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+    static RAN: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+    /// The Stop of the read running on this thread: see [`stoppable`].
+    static STOP: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
+}
+
+/// Run `f` so that setting `cancel` stops the git commands it runs on this thread, also those
+/// deep inside it that take no Stop of their own: each then fails with [`Error::Cancelled`],
+/// and none starts any more. For a read whose answer is no longer wanted, such as the history
+/// of a repository the window has left.
+pub fn stoppable<T>(cancel: &Arc<AtomicBool>, f: impl FnOnce() -> T) -> T {
+    let outer = STOP.with(|stop| stop.borrow_mut().replace(cancel.clone()));
+    // A panic in `f` must not leave the Stop in place for whatever runs on this thread next.
+    struct Reset(Option<Arc<AtomicBool>>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            let outer = self.0.take();
+            STOP.with(|stop| *stop.borrow_mut() = outer);
+        }
+    }
+    let _reset = Reset(outer);
+    f()
+}
+
+/// The Stop [`stoppable`] set on this thread, if any.
+pub(crate) fn current_stop() -> Option<Arc<AtomicBool>> {
+    STOP.with(|stop| stop.borrow().clone())
+}
+
+/// [`Error::Cancelled`] once the read running on this thread was stopped: for work between
+/// git commands, such as walking the commits.
+pub(crate) fn check_stop() -> Result<()> {
+    match STOP.with(|stop| stop.borrow().as_ref().is_some_and(|s| s.load(Ordering::Relaxed))) {
+        true => Err(Error::Cancelled),
+        false => Ok(()),
+    }
 }
 
 /// Run `f` and list the commands it ran on this thread, as typed in a shell: what a read such
@@ -446,6 +430,10 @@ pub fn run_in(dir: &Path, command: &GitCommand, input: Option<&[u8]>) -> Result<
 }
 
 fn spawn_in(dir: &Path, command: &GitCommand, input: Option<&[u8]>) -> Result<std::process::Output> {
+    let stop = current_stop();
+    if stop.as_ref().is_some_and(|s| s.load(Ordering::Relaxed)) {
+        return Err(Error::Cancelled);
+    }
     let log = console::started(dir, &command.display());
     let mut child = match command_in(dir, command)
         .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
@@ -459,6 +447,9 @@ fn spawn_in(dir: &Path, command: &GitCommand, input: Option<&[u8]>) -> Result<st
             return Err(Error::GitNotFound(err.to_string()));
         }
     };
+    if let Some(stop) = stop {
+        return collect(&mut child, log, input, &stop);
+    }
     if let Some(input) = input {
         let mut stdin = child.stdin.take().expect("stdin is piped");
         // A command that exits early closes its end; its exit status tells what went wrong.
@@ -474,6 +465,85 @@ fn spawn_in(dir: &Path, command: &GitCommand, input: Option<&[u8]>) -> Result<st
             Err(Error::GitNotFound(err.to_string()))
         }
     }
+}
+
+/// Run `command` in `dir` and wait for it, unless `cancel` is set first: the command is then
+/// stopped and fails with [`Error::Cancelled`].
+pub fn run_cancellable_in(dir: &Path, command: &GitCommand, cancel: &AtomicBool) -> Result<CommandOutput> {
+    let log = console::started(dir, &command.display());
+    let mut child = match command_in(dir, command)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(err) => {
+            log.not_started(&err.to_string());
+            return Err(Error::GitNotFound(err.to_string()));
+        }
+    };
+    let output = collect(&mut child, log, None, cancel)?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    if output.status.success() {
+        Ok(CommandOutput { stdout, stderr })
+    } else {
+        Err(Error::Command {
+            command: command.display(),
+            code: output.status.code(),
+            output: if stderr.trim().is_empty() { stdout } else { stderr },
+        })
+    }
+}
+
+/// Feed `input` to `child`, read what it prints and wait for it, checking `cancel` meanwhile:
+/// once it is set the command is killed. `log` is told how it ended.
+fn collect(
+    child: &mut Child,
+    log: console::Started,
+    input: Option<&[u8]>,
+    cancel: &AtomicBool,
+) -> Result<std::process::Output> {
+    let read = |mut pipe: Box<dyn Read + Send>| {
+        std::thread::spawn(move || {
+            let mut all = Vec::new();
+            let _ = pipe.read_to_end(&mut all);
+            all
+        })
+    };
+    let stdout = read(Box::new(child.stdout.take().expect("stdout is piped")));
+    let stderr = read(Box::new(child.stderr.take().expect("stderr is piped")));
+    if let Some(input) = input
+        && let Some(mut stdin) = child.stdin.take()
+    {
+        // A command that exits early closes its end; its exit status tells what went wrong.
+        let _ = stdin.write_all(input);
+    }
+    let status = loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let output = log.output();
+            log.stopped(output);
+            return Err(Error::Cancelled);
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => std::thread::sleep(Duration::from_millis(5)),
+            Err(err) => {
+                log.not_started(&err.to_string());
+                return Err(Error::GitNotFound(err.to_string()));
+            }
+        }
+    };
+    let output = std::process::Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    };
+    log.done(output.status.code(), &output.stdout, &output.stderr);
+    Ok(output)
 }
 
 /// Run `command` in `dir`, passing each line it prints to `on_line` as it comes. Setting

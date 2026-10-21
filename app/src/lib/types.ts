@@ -647,6 +647,8 @@ export interface Worktree {
    *  `git status` failed there, which is not the same as none: `statusError` says why. */
   changed: number | null;
   statusError: string | null;
+  /** `changed` isn't read yet: it comes after the history, as a `FolderState`. */
+  pending: boolean;
 }
 
 /** A submodule: another repository checked out in a folder here, at the commit this one records. */
@@ -676,6 +678,29 @@ export interface Submodule {
   behind: number;
   /** The recorded commit isn't in its clone yet. */
   missing: boolean;
+  /** What its folder has (`current`, `branch`, `changed`, `ahead`, `behind`, `missing`) isn't
+   *  read yet: it comes after the history, as a `FolderState`. */
+  pending: boolean;
+}
+
+/** What a submodule's folder has checked out. */
+export interface Checkout {
+  current: string | null;
+  branch: string | null;
+  ahead: number;
+  behind: number;
+  missing: boolean;
+}
+
+/** What one worktree's or submodule's folder has, read after the history. */
+export interface FolderState {
+  /** The worktree's path, or the submodule's path in the repository. */
+  path: string;
+  submodule: boolean;
+  changed: number | null;
+  statusError: string | null;
+  /** For a submodule. */
+  checkout: Checkout | null;
 }
 
 /** A submodule whose recorded commit is on none of its remotes. */

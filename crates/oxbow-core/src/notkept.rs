@@ -115,13 +115,13 @@ impl Repo {
                         (then.as_ref() != Some(now)).then_some((name, now))
                     })
                     .collect();
-                for worktree in self.worktrees()?.into_iter().filter(|w| !w.current && !w.missing) {
+                for worktree in self.worktree_list()?.into_iter().filter(|w| !w.current && !w.missing) {
                     let Some(branch) = &worktree.branch else { continue };
                     if moving.iter().any(|(name, _)| **name == format!("refs/heads/{branch}")) {
                         out.push(NotKept::Worktree {
                             folder: self.shown_path(&worktree.path),
                             branch: Some(branch.clone()),
-                            changed: worktree.changed,
+                            changed: crate::worktrees::changed_files(Path::new(&worktree.path)).ok(),
                             removed: false,
                         });
                     }
@@ -141,12 +141,18 @@ impl Repo {
             }
             Action::WorktreeRemove { path, force, stash } => {
                 let folder = self.shown_path(path);
-                let worktree = self.worktrees()?.into_iter().find(|w| same_path(&w.path, path));
+                let worktree = self.worktree_list()?.into_iter().find(|w| same_path(&w.path, path));
                 if *force && !*stash {
+                    // Only its own folder is counted, not every worktree's.
+                    let changed = match &worktree {
+                        Some(w) if w.pending => crate::worktrees::changed_files(Path::new(&w.path)).ok(),
+                        Some(w) => w.changed,
+                        None => Some(0),
+                    };
                     out.push(NotKept::Worktree {
                         folder: folder.clone(),
                         branch: worktree.as_ref().and_then(|w| w.branch.clone()),
-                        changed: worktree.as_ref().map_or(Some(0), |w| w.changed),
+                        changed,
                         removed: true,
                     });
                 }
