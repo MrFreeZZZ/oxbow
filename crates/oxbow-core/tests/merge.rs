@@ -545,6 +545,7 @@ fn typed_text_is_written_exactly_with_its_last_line_breaks() {
         ("one\nMERGED\nthree\n\n", "one\nMERGED\nthree\n\n"),
         ("one\r\nMERGED\r\nthree\r\n", "one\nMERGED\nthree\n"),
         ("", ""),
+        ("\n", "\n"),
     ] {
         let fx = diverged();
         let repo = Repo::open(fx.path()).unwrap();
@@ -574,6 +575,19 @@ fn typed_text_is_written_exactly_with_its_last_line_breaks() {
     })
     .unwrap();
     assert_eq!(read(&fx, "a.txt"), "one\r\ntwo\r\nTHREE\r\n");
+
+    // Every line deleted: an empty file, with no line break added.
+    let fx = crlf_conflict();
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+    repo.perform(&Action::Resolve {
+        path: "a.txt".into(),
+        picks: vec![],
+        text: Some(String::new()),
+        stages: None,
+    })
+    .unwrap();
+    assert_eq!(read(&fx, "a.txt"), "");
 }
 
 #[test]
