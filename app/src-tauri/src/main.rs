@@ -17,8 +17,8 @@ use oxbow_core::config::{self, ConfigScope};
 use oxbow_core::console;
 use oxbow_core::{
     Action, CommitBrief, CommitDetail, ConflictFile, DeletionCheck, DiffContext, DiffOptions, DiffPage, Failure,
-    FileDiff, History, HistoryCache, HistoryOptions, MergePreview, MergeTool, Plan, Repo, Side, Source, StashCheck,
-    WorkingTree,
+    FileDiff, FolderCache, FolderState, History, HistoryCache, HistoryOptions, MergePreview, MergeTool, Plan, Repo,
+    Side, Source, StashCheck, Submodule, WorkingTree, Worktree,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -58,9 +58,22 @@ struct Slot {
     history: HistoryCache,
     /// The working tree read with the last history, by number, for the Changes panel's diffs.
     changes: Option<(u64, Arc<WorkingTree>)>,
+    /// The worktrees and submodules the last history listed, whose folders `folder_states` reads.
+    folders: Arc<(Vec<Worktree>, Vec<Submodule>)>,
+    /// What those folders had when last read.
+    folder_cache: FolderCache,
     /// Stop of the read running in each lane (a search, the commit panel's diff): a newer read
     /// in the lane stops the older, whose answer would be dropped anyway.
     lanes: HashMap<String, Arc<AtomicBool>>,
+}
+
+impl Slot {
+    /// Stop every read running for this window: its repository changed, or it closed.
+    fn stop_reads(&mut self) {
+        for (_, cancel) in self.lanes.drain() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
 }
 
 /// What [`Session::commits`] holds.
@@ -495,9 +508,13 @@ async fn open_repo(
     }
     remember_repo(&app, &summary.path);
     session.slot(&window, |slot| {
+        // What runs for the repository open before is no longer wanted.
+        slot.stop_reads();
         slot.repo = Some(repo);
         slot.history = HistoryCache::default();
         slot.changes = None;
+        slot.folders = Arc::default();
+        slot.folder_cache = FolderCache::default();
     });
     // Settings shows this repository under This Repository.
     let _ = app.emit("repo-changed", ());
@@ -790,6 +807,7 @@ async fn create_repo(options: oxbow_core::NewRepoOptions) -> CommandResult<Strin
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn history(
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
@@ -797,8 +815,10 @@ async fn history(
     until: Option<String>,
     known: Option<String>,
     focus: Option<bool>,
+    lane: Option<String>,
 ) -> CommandResult<History> {
     let repo = current(&session, &window)?;
+    let cancel = session.lane(&window, lane);
     // Open the repository afresh: the built-in engine reads .git/config once, so a remote that
     // Publish or Settings just added would stay unseen.
     let old = repo.clone();
@@ -824,18 +844,55 @@ async fn history(
         "Read the repository again"
     };
     let (mut history, cache) = read(at(&repo), title, move || {
-        let history = repo.history_with(&options, &mut cache, known.as_deref())?;
+        // Stopped by a newer read of the history or another repository: the git it runs is too.
+        let history =
+            oxbow_core::cli::stoppable(&cancel, || repo.history_with(&options, &mut cache, known.as_deref()))?;
         Ok((history, cache))
     })
     .await?;
     // The diffs the Changes panel asks for next are of these files.
     history.snapshot = session.snapshots.fetch_add(1, Ordering::Relaxed) + 1;
     let changes = history.changes.clone().map(|tree| (history.snapshot, Arc::new(tree)));
+    let folders = Arc::new((history.worktrees.clone(), history.submodules.clone()));
     session.slot(&window, |slot| {
         slot.history = cache;
         slot.changes = changes;
+        slot.folders = folders;
     });
     Ok(history)
+}
+
+/// What the other worktrees and the submodules' folders the last history listed have, each sent
+/// on `on_state` as soon as it is read. A folder that shows no change since it was last read is
+/// answered from then, unless that was before `since` (ms since 1970): the window came back to
+/// the front, and its files may have changed.
+#[tauri::command]
+async fn folder_states(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    since: Option<u64>,
+    lane: Option<String>,
+    on_state: tauri::ipc::Channel<FolderState>,
+) -> CommandResult<()> {
+    let repo = current(&session, &window)?;
+    let cancel = session.lane(&window, lane);
+    let (folders, cache) = session.slot(&window, |slot| (slot.folders.clone(), slot.folder_cache.clone()));
+    let since = since.map(|ms| std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms));
+    read(at(&repo), "Read the worktrees and submodules", move || {
+        repo.folder_states(
+            &folders.0,
+            &folders.1,
+            &cache,
+            since,
+            oxbow_core::folders::AT_ONCE,
+            &cancel,
+            &mut |state| {
+                // The window may be closing; what it no longer shows needn't arrive.
+                let _ = on_state.send(state);
+            },
+        )
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1993,7 +2050,7 @@ fn open_in_terminal(
 /// `path` when it is one of the repository's worktrees or cloned submodules; commands that open
 /// things take no other.
 fn worktree_folder(repo: &Repo, path: &str) -> CommandResult<PathBuf> {
-    let known = repo.worktrees().map_err(|err| err.to_string())?;
+    let known = repo.worktree_list().map_err(|err| err.to_string())?;
     // A submodule's path is relative to the repository's folder.
     let full = repo.workdir().join(path);
     let wanted = full.canonicalize().ok();
@@ -2002,7 +2059,8 @@ fn worktree_folder(repo: &Repo, path: &str) -> CommandResult<PathBuf> {
         return Ok(PathBuf::from(&tree.path));
     }
     // A submodule's folder is a repository of its own, opened and shown like a worktree.
-    repo.submodules()
+    repo.submodule_list()
+        .unwrap_or_default()
         .iter()
         .filter(|s| s.cloned)
         .map(|s| repo.workdir().join(&s.path))
@@ -2252,7 +2310,10 @@ fn main() {
                     }
                 }
                 tauri::WindowEvent::Destroyed => {
-                    session.windows.lock().expect("session lock").remove(&label);
+                    // Its reads stop with it.
+                    if let Some(mut slot) = session.windows.lock().expect("session lock").remove(&label) {
+                        slot.stop_reads();
+                    }
                     session.pending.lock().expect("session lock").remove(&label);
                     let mut focused = session.focused.lock().expect("session lock");
                     if focused.as_deref() == Some(label.as_str()) {
@@ -2296,6 +2357,7 @@ fn main() {
             commit_diff,
             commit_diff_page,
             stop_reads,
+            folder_states,
             settle_unpushed,
             compare,
             compare_diff,

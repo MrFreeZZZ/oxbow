@@ -40,12 +40,23 @@ pub struct Worktree {
     pub changed: Option<usize>,
     /// Why `changed` isn't known.
     pub status_error: Option<String>,
+    /// `changed` isn't read yet: [`Repo::folder_states`] reads it after the history.
+    pub pending: bool,
 }
 
 impl Repo {
     /// Every working folder of the repository, the main one first, as `git worktree list` has
-    /// them. A bare main repository is left out: it has no folder to work in.
+    /// them, with their counts of changed files. A bare main repository is left out: it has no
+    /// folder to work in.
     pub fn worktrees(&self) -> Result<Vec<Worktree>> {
+        let mut list = self.worktree_list()?;
+        self.fill_folders(&mut list, &mut [])?;
+        Ok(list)
+    }
+
+    /// [`Repo::worktrees`] without counting their changed files, which takes a `git status` in
+    /// each: the other folders that are there are [`Worktree::pending`].
+    pub fn worktree_list(&self) -> Result<Vec<Worktree>> {
         let out = self.run(&GitCommand::new(["worktree", "list", "--porcelain", "-z"]))?;
         let here = canonical(self.workdir());
         let mut list = parse_list(&out.stdout);
@@ -54,13 +65,8 @@ impl Repo {
             tree.missing = tree.missing || !path.is_dir();
             tree.current = !tree.missing && canonical(path) == here;
             if !tree.current && !tree.missing {
-                match changed_files(path) {
-                    Ok(count) => tree.changed = Some(count),
-                    Err(err) => {
-                        tree.changed = None;
-                        tree.status_error = Some(err.to_string());
-                    }
-                }
+                tree.changed = None;
+                tree.pending = true;
             }
         }
         Ok(list)
@@ -122,7 +128,7 @@ impl Repo {
         let shown = self.shown_path(path);
         let name = folder_name(path);
         let locked = self
-            .worktrees()?
+            .worktree_list()?
             .iter()
             .any(|t| same_path(&t.path, path) && t.locked.is_some());
         let mut commands = Vec::new();
@@ -218,6 +224,7 @@ fn parse_list(text: &str) -> Vec<Worktree> {
                     missing: false,
                     changed: Some(0),
                     status_error: None,
+                    pending: false,
                 })
             }
             _ => {
@@ -244,9 +251,17 @@ fn parse_list(text: &str) -> Vec<Worktree> {
 /// Files with uncommitted changes in the folder at `path`. An error when git can't tell, which
 /// callers must not show as 0.
 pub(crate) fn changed_files(path: &Path) -> Result<usize> {
+    // --no-optional-locks: git doesn't write that folder's index while it looks, so a commit
+    // made there meanwhile doesn't find it locked, and the index stays as its owner left it.
     let out = crate::cli::run_in(
         path,
-        &GitCommand::new(["status", "--porcelain", "-z", "--untracked-files=all"]),
+        &GitCommand::new([
+            "--no-optional-locks",
+            "status",
+            "--porcelain",
+            "-z",
+            "--untracked-files=all",
+        ]),
         None,
     )?;
     let mut count = 0;

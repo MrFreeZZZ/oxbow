@@ -1,9 +1,10 @@
 <script lang="ts">
   import { open } from "@tauri-apps/plugin-dialog";
   import { listen } from "@tauri-apps/api/event";
-  import { api, settings } from "./lib/api";
+  import { api, settings, stopped } from "./lib/api";
   import { WORKTREE_ID, type History, type HistoryRow, type ReadPart, type RecentRepo, type RefInfo, type ReflogEntry, type RepoSummary } from "./lib/types";
   import { retried, settle, stillFailing, type ReadStates } from "./lib/reads";
+  import { carryStates, failChecking, withState } from "./lib/folders";
   import Sidebar from "./lib/Sidebar.svelte";
   import HistoryList from "./lib/HistoryList.svelte";
   import GraphLegend from "./lib/GraphLegend.svelte";
@@ -1506,6 +1507,7 @@
   /** Reload, asked for: Activity gets what changed and the git commands it ran, and unless
    *  Activity is open to show it, so does a toast. */
   async function reload() {
+    foldersSince = Date.now();
     const before = history;
     await refresh();
     const after = history;
@@ -1585,11 +1587,37 @@
   }
 
   /** Show `next`, read after `shown`: a part it couldn't read keeps `shown`'s reading, marked
-   *  stale, or is not known (see reads.ts). */
+   *  stale, or is not known (see reads.ts). What the other folders have comes after it. */
   function take(next: History, shown: History | null) {
-    const settled = settle(next, shown, shown ? reads : null, Date.now());
+    const settled = settle(carryStates(next, shown), shown, shown ? reads : null, Date.now());
     history = settled.history;
     reads = settled.states;
+    loadFolders();
+  }
+
+  /** Since when an earlier reading of a folder no longer counts (ms): the window came back to
+   *  the front or Reload was asked for, and files there may have changed with nothing in git
+   *  showing it. */
+  let foldersSince: number | null = null;
+
+  /** Read what the other worktrees and the submodules' folders have, after the history: each
+   *  row fills in as its folder is read. A newer call stops this one. */
+  async function loadFolders() {
+    if (!history || (!history.worktrees.some((t) => t.pending) && !history.submodules.some((s) => s.pending))) return;
+    const mine = generation;
+    try {
+      await api.folderStates(foldersSince, (state) => {
+        if (mine === generation && history) history = withState(history, state);
+      });
+    } catch (err) {
+      if (mine === generation && history && !stopped(err)) history = failChecking(history, String(err));
+    }
+  }
+
+  /** The window came back to the front: what changed meanwhile, also in the other folders. */
+  function cameBack() {
+    foldersSince = Date.now();
+    refresh();
   }
 
   /** Read one part again after it failed. The worktrees and submodules are read alone; the
@@ -1954,7 +1982,7 @@
 
 <svelte:window
   bind:innerWidth={windowWidth}
-  onfocus={refresh}
+  onfocus={cameBack}
   onmouseup={(event) => {
     // A mouse's own Back and Forward buttons.
     if ((event.button !== 3 && event.button !== 4) || !history || confirm.request || start.sheet) return;

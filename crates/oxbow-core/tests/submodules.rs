@@ -1,6 +1,6 @@
 mod support;
 
-use oxbow_core::{Action, DiffContext, HistoryOptions, Moved, NotKept, Repo, Side};
+use oxbow_core::{Action, DiffContext, FolderCache, HistoryOptions, Moved, NotKept, Repo, Side};
 use support::Fixture;
 
 /// Let git clone from local paths, as `submodule update` refuses by default; the tests' clones
@@ -65,8 +65,18 @@ fn the_list_has_what_is_recorded_and_what_is_checked_out() {
     assert!(lint.cloned && !lint.out_of_sync());
     assert_eq!((lint.changed, lint.ahead, lint.behind), (Some(0), 0, 0));
 
+    // The history lists it without looking into its folder, which is read after it.
     let history = repo.history(&HistoryOptions::default()).unwrap();
-    assert_eq!(history.submodules, list);
+    assert!(history.submodules[0].pending && history.submodules[0].current.is_none());
+    let mut read = history.submodules.clone();
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cache = FolderCache::default();
+    let mut states = Vec::new();
+    repo.folder_states(&[], &read, &cache, None, 4, &cancel, &mut |s| states.push(s))
+        .unwrap();
+    assert_eq!(states.len(), 1);
+    read[0].take_state(&states[0]);
+    assert_eq!(read, list);
 }
 
 #[test]

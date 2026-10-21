@@ -1966,7 +1966,7 @@ impl Repo {
                 // The pull brought the first submodules, which the last fetch didn't know of.
                 if let Action::Pull { submodules: true, .. } = action
                     && !updated_submodules
-                    && !self.submodules().is_empty()
+                    && !self.submodule_list().unwrap_or_default().is_empty()
                 {
                     let command = crate::ssh::interactive(crate::submodules::submodule_update());
                     on_event(ActionEvent::Command {

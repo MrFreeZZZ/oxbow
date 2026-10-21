@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 
 const tracking = (ahead: number, behind: number): Tracking => ({ remote: "origin", branch: "main", ahead, behind, gone: false, rewritten: null, replay: null });
 const branch = (name: string, t: Tracking | null): RefInfo => ({ name, kind: "local", target: "a1", tracking: t }) as RefInfo;
-const tree = (name: string, changed: number | null): Worktree => ({ path: `/src/${name}`, name, branch: name, head: "a1", main: false, current: false, locked: null, missing: false, changed, statusError: changed === null ? "fatal: index file corrupt" : null });
+const tree = (name: string, changed: number | null): Worktree => ({ path: `/src/${name}`, name, branch: name, head: "a1", main: false, current: false, locked: null, missing: false, changed, statusError: changed === null ? "fatal: index file corrupt" : null, pending: false });
 
 function history(problems: ReadProblem[], over: Partial<History> = {}): History {
   return {

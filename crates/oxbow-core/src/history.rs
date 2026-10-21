@@ -80,10 +80,10 @@ pub struct History {
     /// A bisect in progress, or one that found its commit and waits to be finished.
     pub bisect: Option<Bisect>,
     /// Every working folder of the repository, the main one first. Empty when git can't list
-    /// them: `problems` says so.
+    /// them: `problems` says so. The changes in the others are pending: [`Repo::folder_states`].
     pub worktrees: Vec<Worktree>,
     /// The repository's submodules, in the order of `.gitmodules`. Empty when they can't be
-    /// read: `problems` says so.
+    /// read: `problems` says so. What their folders have is pending: [`Repo::folder_states`].
     pub submodules: Vec<Submodule>,
     /// The parts of this read that failed. What they show is not known, which is not the same
     /// as none: no operation, no upstream, no changes.
@@ -482,11 +482,12 @@ impl Repo {
             note(ReadPart::Bisect, err);
             None
         });
-        let worktrees = self.worktrees().unwrap_or_else(|err| {
+        // Only the lists: what is in each folder comes after the history, see `folders.rs`.
+        let worktrees = self.worktree_list().unwrap_or_else(|err| {
             note(ReadPart::Worktrees, err);
             Vec::new()
         });
-        let submodules = self.read_submodules().unwrap_or_else(|err| {
+        let submodules = self.submodule_list().unwrap_or_else(|err| {
             note(ReadPart::Submodules, err);
             Vec::new()
         });
@@ -655,6 +656,9 @@ impl Repo {
             let mut limit = options.limit.max(1);
             for info in walk {
                 let info = info.map_err(Error::git)?;
+                if nodes.len() % 1024 == 0 {
+                    crate::cli::check_stop()?;
+                }
                 if nodes.len() == limit {
                     if until.is_none() {
                         truncated = true;

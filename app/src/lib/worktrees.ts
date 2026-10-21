@@ -7,6 +7,7 @@ import { homeDir } from "@tauri-apps/api/path";
 import { api } from "./api";
 import type { Part, Recovery, Request } from "./confirm.svelte";
 import { nameProblem, type BranchContext } from "./branches";
+import { checking } from "./folders";
 import { shortId } from "./format";
 import { tilde as tildeIn } from "./term";
 import type { Failure, History, Worktree } from "./types";
@@ -227,13 +228,14 @@ function newWorktreeSheet(ctx: BranchContext, repoPath: string, shown: string[],
 /** Remove a worktree; with `stash`, its uncommitted changes go to the stash first. */
 export function removeWorktreeRequest(ctx: BranchContext, wt: Worktree, stash = false): Request {
   const dirty = (wt.changed ?? 0) > 0;
-  /** `git status` failed there: changes or not isn't known, so it isn't forced. */
+  /** `git status` failed there, or is still to come: changes or not isn't known, so it isn't forced. */
   const unknown = wt.changed === null;
   const changed = wt.changed ?? 0;
   const body: Part[] = ["Deletes the folder ", { code: tilde(wt.path) }, ". "];
   if (wt.branch) body.push(branchPart(ctx, wt), " and all its commits stay in this repository.");
   else body.push("HEAD there is detached at ", branchPart(ctx, wt), ": commits only it has are left on no branch.");
   if (unknown && stash) body.push(" Any uncommitted changes there go to the stash first, under Stashes, so they aren’t lost.");
+  else if (unknown && checking(wt)) body.push(" Oxbow is still checking it for uncommitted changes, so it isn’t forced: git stops if there are any.");
   else if (unknown) body.push(" Oxbow couldn’t check it for uncommitted changes (git status failed there), so it isn’t forced: git stops if there are any.");
   else if (dirty && stash) body.push(` Its ${plural(changed, "uncommitted file")} go${changed === 1 ? "es" : ""} to the stash first, under Stashes, so ${changed === 1 ? "it isn’t" : "they aren’t"} lost.`);
   else if (dirty) body.push(` The folder has ${plural(changed, "changed file")} that ${changed === 1 ? "was" : "were"} never committed; removing deletes ${changed === 1 ? "it" : "them"} too.`);
