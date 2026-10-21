@@ -491,7 +491,7 @@
     if (wt.missing) return { text: "missing", tone: "warn" };
     if (checking(wt)) return { text: "checking…" };
     if (wt.changed === null) return { text: "status unknown", tone: "warn" };
-    if (stale(wt)) return { text: wt.changed ? `${wt.changed} changed · may be stale` : "may be stale", tone: "warn" };
+    if (stale(wt)) return { text: "may be stale", tone: "warn" };
     if (wt.changed) return { text: `${wt.changed} changed` };
     return null;
   }
@@ -512,7 +512,7 @@
     if (checking(wt)) lines.push("Counting its uncommitted changes…");
     else if (wt.changed === null) lines.push(`Couldn’t count its uncommitted changes: ${errorLine(wt.statusError)}`);
     else if (stale(wt))
-      lines.push(`Couldn’t count its uncommitted changes again: ${errorLine(wt.statusError)}. The last count found ${wt.changed ? `${wt.changed} ${wt.changed === 1 ? "file" : "files"}` : "none"}.`);
+      lines.push(`The last count found ${wt.changed ? `${wt.changed} ${wt.changed === 1 ? "file" : "files"} with uncommitted changes` : "no uncommitted changes"}; counting again failed: ${errorLine(wt.statusError)}`);
     else if (wt.changed) lines.push(`${wt.changed} ${wt.changed === 1 ? "file" : "files"} with uncommitted changes there`);
     const tracking = worktreeTracking(wt);
     if (tracking && (tracking.ahead || tracking.behind))

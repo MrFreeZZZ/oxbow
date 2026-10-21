@@ -16,7 +16,7 @@ export function submoduleNote(sub: Submodule): { text: string; warn?: boolean; m
   if (sub.missing) return { text: "needs fetch", warn: true };
   if (sub.current !== sub.recorded) return { text: "out of sync", warn: true };
   if (sub.changed === null) return { text: "status unknown", warn: true };
-  if (stale(sub)) return { text: sub.changed ? `${sub.changed} changed · may be stale` : "may be stale", warn: true };
+  if (stale(sub)) return { text: "may be stale", warn: true };
   if (sub.changed) return { text: `${sub.changed} changed` };
   return null;
 }

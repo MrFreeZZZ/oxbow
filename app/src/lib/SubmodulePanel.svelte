@@ -216,7 +216,7 @@
     {#if sub.statusError !== null}
       <p class="note warn" title={sub.statusError}>
         <svg class="icon small" viewBox="0 0 16 16"><path d="M8 2.5 14 13H2zM8 6.5v3M8 11.2v.1" /></svg>
-        {#if sub.changed === null}Couldn’t check for changes inside:{:else}Couldn’t check for changes inside again, so “{sub.changed ? plural(sub.changed, "file") + " changed" : "no changes"}” from the last check may be stale:{/if}
+        {#if sub.changed === null}Couldn’t check for changes inside:{:else}The last check found {sub.changed ? plural(sub.changed, "changed file") : "no changes"} inside; checking again failed:{/if}
         {errorLine(sub.statusError)}
         <button class="link" onclick={onRetry}>Retry</button>
       </p>
