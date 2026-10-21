@@ -71,6 +71,8 @@ pub enum FailureKind {
     Changed,
     /// A fix ran, but the files it put aside stay in the stash: their staged changes no longer fit.
     StashKept,
+    /// The snapshot for Undo couldn't be taken, so nothing ran.
+    NoUndo,
     Other,
 }
 
@@ -147,6 +149,8 @@ impl Repo {
             Error::Command { output, .. } => output.trim().to_owned(),
             // Nothing ran: the sheet lists the lines instead.
             Error::Secrets(_) => String::new(),
+            // Nothing ran: the sheet says so in its own words, under git's.
+            Error::NoUndo(reason) => reason.clone(),
             other => other.to_string(),
         };
         let mut failure = Failure {
@@ -678,6 +682,7 @@ pub fn classify_failure(error: &Error, pushing_with_hook: bool) -> FailureKind {
         Error::Secrets(_) => return FailureKind::Secrets,
         Error::Changed(_) => return FailureKind::Changed,
         Error::StashKept => return FailureKind::StashKept,
+        Error::NoUndo(_) => return FailureKind::NoUndo,
         _ => return FailureKind::Other,
     };
     let has = |needle: &str| output.contains(needle);

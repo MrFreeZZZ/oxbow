@@ -37,6 +37,10 @@ pub enum Error {
         "the steps ran, but your uncommitted files are still in the stash: their staged changes no longer fit on top of the new commits. Apply the stash in Stashes to bring them back, unstaged"
     )]
     StashKept,
+    /// The state before the action couldn't be saved for Undo, so it did not run: it can run
+    /// again without Undo once that is chosen.
+    #[error("Oxbow couldn't save the state for Undo, so nothing ran: {0}")]
+    NoUndo(String),
 }
 
 impl Error {

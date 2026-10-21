@@ -809,7 +809,9 @@ export interface DeletionCheck {
 
 export type ActionEvent =
   | { kind: "command"; display: string }
-  | { kind: "line"; text: string; stderr: boolean; progress: boolean };
+  | { kind: "line"; text: string; stderr: boolean; progress: boolean }
+  /** The action ran, but its step couldn't be written to the Operation Log: Undo can't take it back. */
+  | { kind: "notLogged"; reason: string };
 
 export type FailureKind =
   | "secrets"
@@ -824,6 +826,8 @@ export type FailureKind =
   | "cancelled"
   | "changed"
   | "stashKept"
+  /** The state before couldn't be saved for Undo, so nothing ran. */
+  | "noUndo"
   | "other";
 
 export interface CommitBrief {

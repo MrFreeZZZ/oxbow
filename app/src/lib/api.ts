@@ -152,7 +152,8 @@ export const api = {
   stackPreview: (plan: StackPlan) => invoke<StackPreview>("stack_preview", { plan }),
   planAction: (action: Action) => invoke<Plan>("plan_action", { action }),
   /** Rejects with a `Failure`. */
-  performAction: (action: Action) => invoke<string>("perform_action", { action }),
+  /** `withoutUndo`: run even when the state before can't be saved for Undo, once that was chosen. */
+  performAction: (action: Action, withoutUndo = false) => invoke<string>("perform_action", { action, withoutUndo }),
   stopAction: () => invoke<void>("stop_action"),
   getSetting: <T>(key: string) => invoke<T | null>("get_setting", { key }),
   allSettings: () => invoke<Record<string, unknown>>("all_settings"),

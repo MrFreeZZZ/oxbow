@@ -6,6 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import { oplog, revertInsteadRequest, undoRequest } from "./oplog.svelte";
 import { prefs } from "./prefs.svelte";
+import { errorLine } from "./reads";
 import type { Action, ActionEvent, Failure, FixStep, GitCommand, NotKept, SecretFinding } from "./types";
 
 /** What a toast reports: an action done, a note, something to look at, or a failure. */
@@ -166,7 +167,8 @@ export interface Recovery {
   tone: "warn" | "err";
   /** Runs right away: the sheet already shows its commands. With `next`, that runs after it
    *  in the same sheet, e.g. the fetch again once the SSH key is loaded. */
-  button?: { label: string; action: Action; status: string; done?: string; danger?: boolean; next?: Step; recover?: (failure: Failure) => Recovery | null };
+  /** `withoutUndo`: runs even when the state before can't be saved for Undo. */
+  button?: { label: string; action: Action; status: string; done?: string; danger?: boolean; next?: Step; recover?: (failure: Failure) => Recovery | null; withoutUndo?: boolean };
   /** A button that does something besides git, e.g. Copy Public Key, then closes the sheet
    *  with its message. */
   act?: { label: string; run: () => Promise<string> };
@@ -289,6 +291,10 @@ class ConfirmState {
   onRan: ((ran: Ran) => void) | null = null;
   /** The commands git ran for the action, and the steps after it, so far. */
   #ranCommands: string[] = [];
+  /** The action running, for its way on when it couldn't start without Undo. */
+  #running: { action: Action; status: string; done?: string } | null = null;
+  /** Why the step that ran isn't in the Operation Log; null when it is. */
+  #notLogged: string | null = null;
   #resolve: ((done: boolean) => void) | null = null;
   /** Goes up with every plan asked for, so a slow answer can't replace a newer one. */
   #planned = 0;
@@ -388,7 +394,7 @@ class ConfirmState {
     // A way out that runs another kind of action (Copy and Push after a force push) says how
     // its own failures go on; the rest go on with the request's.
     if (button.recover) this.#recover = button.recover;
-    this.#execute(button.action, button.status, button.done, button.next);
+    this.#execute(button.action, button.status, button.done, button.next, false, button.withoutUndo);
   }
 
   /** The recovery's other kind of button, e.g. Copy Public Key. */
@@ -470,9 +476,13 @@ class ConfirmState {
     }
   }
 
-  async #execute(action: Action, status: string, done?: string, next?: Step, chained = false): Promise<void> {
+  async #execute(action: Action, status: string, done?: string, next?: Step, chained = false, withoutUndo = false): Promise<void> {
     this.#stopPlanning();
-    if (!chained) this.#ranCommands = [];
+    if (!chained) {
+      this.#ranCommands = [];
+      this.#notLogged = null;
+    }
+    this.#running = { action, status, done };
     this.phase = "running";
     this.ran = null;
     this.status = status;
@@ -485,17 +495,21 @@ class ConfirmState {
     const after = this.request && action === this.request.action ? this.request.after : undefined;
     const started = Math.floor(Date.now() / 1000);
     try {
-      await api.performAction(action);
+      await api.performAction(action, withoutUndo);
       this.ran = action;
       if (next) return this.#execute(next.action, next.status, next.done, undefined, true);
       const request = this.request;
       // A way out offered after a failure has its own words; the request's are for its action.
       const own = request && action === request.action;
       const title = done ?? (own ? (request.past ?? request.title.replace(/\?$/, "")) : status);
+      const notLogged = this.#notLogged;
       this.#finish(true);
       this.onRan?.({ title: firstSentence(title), icon: request?.icon ?? "box", action, commands: this.#ranCommands });
       after?.();
-      if (done) this.#showToast(done, undo ?? (await this.#undoFromLog(action, started)), "done");
+      // Two facts, said apart: the action is done; Undo can't take it back. Not a failure, so
+      // nothing offers to run it again.
+      if (notLogged !== null) this.#showToast(`${done ?? `${firstSentence(title)}.`} ${notLoggedWords(notLogged, withoutUndo)}`, null, "warn");
+      else if (done) this.#showToast(done, undo ?? (await this.#undoFromLog(action, started)), "done");
     } catch (err) {
       const failure = toFailure(err);
       if (failure.kind === "conflict" && this.request?.resolveConflicts) {
@@ -532,7 +546,10 @@ class ConfirmState {
   async #fail(failure: Failure) {
     this.failure = failure;
     if (!this.lines.length && failure.output) this.lines = failure.output.split("\n").map((text) => ({ kind: lineKind(text, true), text }));
-    this.recovery = (this.#recover ?? this.request?.recover)?.(failure) ?? null;
+    // It ran part way and stopped: what it changed isn't in the Operation Log either.
+    if (this.#notLogged !== null) this.lines.push({ kind: "hint", text: `Oxbow couldn’t write this step to the Operation Log, so Undo can’t take back what it changed: ${errorLine(this.#notLogged)}` });
+    const running = this.#running;
+    this.recovery = failure.kind === "noUndo" && running ? noUndoRecovery(running, failure) : ((this.#recover ?? this.request?.recover)?.(failure) ?? null);
     this.recoveryCommands = [];
     this.quiet = false;
     this.phase = "failed";
@@ -542,6 +559,10 @@ class ConfirmState {
 
   #onEvent(event: ActionEvent) {
     if (this.phase !== "running") return;
+    if (event.kind === "notLogged") {
+      this.#notLogged = event.reason;
+      return;
+    }
     if (event.kind === "command") {
       this.lines.push({ kind: "cmd", text: event.display });
       this.#ranCommands.push(event.display);
@@ -639,6 +660,29 @@ class ConfirmState {
     this.#resolve?.(done);
     this.#resolve = null;
   }
+}
+
+/** The way on when the state before couldn't be saved for Undo: nothing ran yet, so it can be
+ *  left as it is, or run without Undo. */
+function noUndoRecovery(running: { action: Action; status: string; done?: string }, failure: Failure): Recovery {
+  return {
+    title: "Undo isn’t ready for this step",
+    body: [
+      "Oxbow saves the repository’s state before each step, so Undo can take it back. This time it couldn’t, so nothing ran yet: ",
+      { code: errorLine(failure.output) || "the snapshot failed" },
+    ],
+    icon: "undo",
+    tone: "warn",
+    button: { label: "Continue Without Undo", action: running.action, status: running.status, done: running.done, danger: isRisky(running.action), withoutUndo: true },
+    note: "Nothing has changed. Cancel leaves it as it is.",
+    close: "Cancel",
+  };
+}
+
+/** The second fact of a toast after an action whose step isn't in the Operation Log. */
+function notLoggedWords(reason: string, chosen: boolean): string {
+  if (chosen) return "It ran without Undo, as chosen: the Operation Log has no step for it.";
+  return `It isn’t in the Operation Log, so Undo can’t take it back: ${errorLine(reason)}`;
 }
 
 function toFailure(err: unknown): Failure {

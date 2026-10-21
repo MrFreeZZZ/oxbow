@@ -209,3 +209,86 @@ fn the_log_adds_nothing_to_the_history_and_skips_steps_that_changed_nothing() {
     repo.perform(&Action::ClearOperationLog).unwrap();
     assert!(repo.operation_log().unwrap().is_empty());
 }
+
+#[test]
+fn nothing_runs_when_the_state_before_cant_be_saved_unless_chosen() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    fx.write("a.txt", "edited\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    // Where the snapshot's scratch index goes is a file: no snapshot can be taken.
+    std::fs::write(fx.path().join(".git/oxbow"), "in the way").unwrap();
+    let discard = Action::Discard {
+        paths: vec!["a.txt".into()],
+    };
+    let never = std::sync::atomic::AtomicBool::new(false);
+    let err = repo.perform_with(&discard, &mut |_| {}, &never).unwrap_err();
+    assert!(matches!(err, oxbow_core::Error::NoUndo(_)));
+    assert_eq!(
+        oxbow_core::classify_failure(&err, false),
+        oxbow_core::FailureKind::NoUndo
+    );
+    assert_eq!(read(&fx, "a.txt").unwrap(), "edited\n");
+
+    // Chosen: it runs, and says it isn't in the log.
+    let mut events = Vec::new();
+    repo.perform_without_undo(&discard, &mut |e| events.push(e), &never)
+        .unwrap();
+    assert_eq!(read(&fx, "a.txt").unwrap(), "a\n");
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, oxbow_core::ActionEvent::NotLogged { .. }))
+    );
+}
+
+#[test]
+fn a_step_that_cant_be_written_is_reported_apart_from_the_action() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    fx.write("a.txt", "edited\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    // The log's file is a folder: the step can't be written down.
+    std::fs::create_dir_all(fx.path().join(".git/oxbow/oplog.jsonl")).unwrap();
+    let mut events = Vec::new();
+    repo.perform_with(
+        &Action::Discard {
+            paths: vec!["a.txt".into()],
+        },
+        &mut |e| events.push(e),
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(read(&fx, "a.txt").unwrap(), "a\n");
+    let reasons: Vec<&String> = events
+        .iter()
+        .filter_map(|e| match e {
+            oxbow_core::ActionEvent::NotLogged { reason } => Some(reason),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reasons.len(), 1);
+}
+
+#[test]
+fn a_step_written_down_reports_nothing() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    fx.write("a.txt", "edited\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    let mut events = Vec::new();
+    repo.perform_with(
+        &Action::Discard {
+            paths: vec!["a.txt".into()],
+        },
+        &mut |e| events.push(e),
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, oxbow_core::ActionEvent::NotLogged { .. }))
+    );
+    assert_eq!(repo.operation_log().unwrap().len(), 1);
+}

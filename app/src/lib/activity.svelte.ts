@@ -230,6 +230,8 @@ class Activity {
       this.lines.push({ kind: "cmd", text: event.display });
       return;
     }
+    // A fetch moves branches on remotes, which Undo leaves alone: its log step isn't missed.
+    if (event.kind === "notLogged") return;
     const phase = phaseOf(event.text);
     if (phase) {
       this.percent = phase.percent;
