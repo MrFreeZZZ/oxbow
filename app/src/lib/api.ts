@@ -147,6 +147,10 @@ export const api = {
   mergeTool: () => invoke<MergeTool | null>("merge_tool"),
   /** Waits until the tool quits; true when git staged the file. */
   openMergeTool: (path: string) => invoke<boolean>("open_merge_tool", { path }),
+  /** The Conflicts screen's draft saved for this working folder, as lib/drafts.ts writes it. */
+  conflictDraft: () => invoke<unknown>("conflict_draft"),
+  saveConflictDraft: (draft: unknown) => invoke<void>("save_conflict_draft", { draft }),
+  dropConflictDraft: () => invoke<void>("drop_conflict_draft"),
   stashCheck: (index: number, id: string) => invoke<StashCheck>("stash_check", { index, id }),
   stack: (branch: string | null) => invoke<Stack>("stack", { branch }),
   landedOn: (merged: string, candidates: string[]) => invoke<Landing | null>("landed_on", { merged, candidates }),

@@ -3,6 +3,7 @@
 
 mod accounts;
 mod console_window;
+mod drafts;
 mod open_in;
 mod pulls;
 mod settings;
@@ -1390,6 +1391,59 @@ async fn merge_tool(window: tauri::WebviewWindow, session: State<'_, Session>) -
     read(at(&repo), "Read the merge tool", move || Ok(repo.merge_tool())).await
 }
 
+/// The draft file of the window's working folder, in the app's data folder.
+fn draft_file(app: &AppHandle, repo: &Repo) -> CommandResult<PathBuf> {
+    let dir = app.path().app_data_dir().map_err(|err| err.to_string())?;
+    Ok(drafts::file(&dir.join("conflict-drafts"), repo.workdir()))
+}
+
+/// The Conflicts screen's draft saved for the window's working folder, if there is one.
+#[tauri::command]
+async fn conflict_draft(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+) -> CommandResult<Option<Value>> {
+    let repo = current(&session, &window)?;
+    let file = draft_file(&app, &repo)?;
+    tauri::async_runtime::spawn_blocking(move || drafts::read(&file, repo.workdir()))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+/// Save the Conflicts screen's draft for the window's working folder, while its operation is
+/// under way.
+#[tauri::command]
+async fn save_conflict_draft(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    draft: Value,
+) -> CommandResult<()> {
+    let repo = current(&session, &window)?;
+    let file = draft_file(&app, &repo)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        // A save arriving after the operation was finished or aborted would bring its draft back.
+        if repo.operation().is_ok_and(|op| op.is_none()) {
+            return drafts::remove(&file);
+        }
+        drafts::write(&file, repo.workdir(), draft)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+/// Remove the draft of the window's working folder, once its operation is over.
+#[tauri::command]
+async fn drop_conflict_draft(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+) -> CommandResult<()> {
+    let repo = current(&session, &window)?;
+    drafts::remove(&draft_file(&app, &repo)?)
+}
+
 /// Open a conflicted file in the merge tool and wait until it quits: true when git staged it.
 #[tauri::command]
 async fn open_merge_tool(
@@ -2263,6 +2317,9 @@ fn main() {
             conflict_file,
             merge_tool,
             open_merge_tool,
+            conflict_draft,
+            save_conflict_draft,
+            drop_conflict_draft,
             stash_check,
             stack,
             landed_on,

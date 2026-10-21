@@ -129,6 +129,11 @@ export function fileText(chunks: Chunk[], decisions: Decision[], sides: Sides, w
   return openEnd || !lines.length ? text : `${text}\n`;
 }
 
+/** The file as the decisions or the text typed would write it, for its draft. */
+export function resultOf(file: ConflictFile, decisions: Decision[], text: { text: string } | null, sides: Sides): string {
+  return text ? text.text : fileText(file.chunks, decisions, sides, false, file.openEnd);
+}
+
 const MARKS = [OPEN, BASE, MIDDLE, CLOSE] as const;
 /** Which of git's markers a line looks like, if any. */
 export const markOf = (line: string) => MARKS.find((m) => (m === MIDDLE ? line === m : marker(line, m))) ?? null;

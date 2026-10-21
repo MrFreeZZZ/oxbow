@@ -29,17 +29,22 @@ pub fn write(file: &Path, settings: &Settings) -> Result<(), String> {
 
 /// Save `text` as `file`: written next to it first, then moved over it.
 pub fn write_text(file: &Path, text: &str) -> Result<(), String> {
-    let failed = |err: std::io::Error| format!("Can’t write settings.json: {err}.");
-    std::fs::create_dir_all(file.parent().expect("settings file has a parent")).map_err(failed)?;
-    let next = file.with_extension("json.new");
+    replace(file, text).map_err(|err| format!("Can’t write settings.json: {err}."))
+}
+
+/// Write `text` next to `file`, then move it over `file`, so `file` is never left half written.
+pub fn replace(file: &Path, text: &str) -> std::io::Result<()> {
+    std::fs::create_dir_all(file.parent().expect("file has a parent"))?;
+    let mut next = file.as_os_str().to_owned();
+    next.push(".new");
+    let next = std::path::PathBuf::from(next);
     if let Err(err) = std::fs::write(&next, text) {
         let _ = std::fs::remove_file(&next);
-        return Err(failed(err));
+        return Err(err);
     }
     // Replaces `file` on Windows too.
-    std::fs::rename(&next, file).map_err(|err| {
+    std::fs::rename(&next, file).inspect_err(|_| {
         let _ = std::fs::remove_file(&next);
-        failed(err)
     })
 }
 
