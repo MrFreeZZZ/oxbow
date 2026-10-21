@@ -1433,13 +1433,15 @@ async fn plan_action(window: tauri::WebviewWindow, session: State<'_, Session>, 
 }
 
 /// Run an action, sending each command and output line to the window as an `action-event`. A
-/// failure comes back explained, so the sheet can offer the way out.
+/// failure comes back explained, so the sheet can offer the way out. With `without_undo` it
+/// runs even when the state before it can't be saved for Undo, once that was chosen.
 #[tauri::command]
 async fn perform_action(
     app: AppHandle,
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
     action: Action,
+    without_undo: Option<bool>,
 ) -> Result<String, Failure> {
     // Only the window that asked shows the output: Settings runs actions of its own.
     let label = window.label().to_owned();
@@ -1461,13 +1463,14 @@ async fn perform_action(
     let joined = tauri::async_runtime::spawn_blocking(move || {
         let title = repo.action_title(&action);
         console::scope(Some(repo.workdir()), console::EntryKind::Action, title, || {
-            let result = repo.perform_with(
-                &action,
-                &mut |event| {
-                    let _ = events.emit_to(label.as_str(), "action-event", event);
-                },
-                &cancel,
-            );
+            let mut emit = |event| {
+                let _ = events.emit_to(label.as_str(), "action-event", event);
+            };
+            let result = if without_undo.unwrap_or(false) {
+                repo.perform_without_undo(&action, &mut emit, &cancel)
+            } else {
+                repo.perform_with(&action, &mut emit, &cancel)
+            };
             result.map_err(|err| repo.explain_failure(&action, &err))
         })
     })

@@ -325,17 +325,19 @@ impl Repo {
         if let Some(dir) = file.parent() {
             std::fs::create_dir_all(dir).map_err(io)?;
         }
+        // Said with the file, for the message that the step isn't in the log.
+        let cant_write = |err: std::io::Error| Error::Git(format!("can't write .git/oxbow/oplog.jsonl: {err}"));
         let mut out = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&file)
-            .map_err(io)?;
+            .map_err(cant_write)?;
         writeln!(
             out,
             "{}",
             serde_json::to_string(&entry).map_err(|err| Error::Git(err.to_string()))?
         )
-        .map_err(io)?;
+        .map_err(cant_write)?;
         Ok(Some(OpEntry {
             expires: entry.time + i64::from(self.snapshot_days()) * 86_400,
             ..entry

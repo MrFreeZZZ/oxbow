@@ -562,6 +562,9 @@ pub enum ActionEvent {
     Command { display: String },
     /// The running command printed a line.
     Line(OutputLine),
+    /// The action ran, but its step couldn't be written to the Operation Log, so Undo can't
+    /// take it back; `reason` says why. The action's own result is reported as usual.
+    NotLogged { reason: String },
 }
 
 /// The commands an action runs, for the confirmation sheet.
@@ -1654,12 +1657,35 @@ impl Repo {
 
     /// Run `action`, reporting each command and each line it prints to `on_event`. Setting
     /// `cancel` stops the running command. The step goes into the Operation Log with the state
-    /// before and after it, so it can be undone; a log that can't be written never stops it.
+    /// before and after it, so it can be undone. When the state before can't be saved nothing
+    /// runs ([`Error::NoUndo`]): see [`Repo::perform_without_undo`]. A step that ran but can't
+    /// be written to the log is reported as [`ActionEvent::NotLogged`].
     pub fn perform_with(
         &self,
         action: &Action,
         on_event: &mut dyn FnMut(ActionEvent),
         cancel: &AtomicBool,
+    ) -> Result<String> {
+        self.perform_logged(action, on_event, cancel, false)
+    }
+
+    /// [`Repo::perform_with`] once it was chosen to go on without Undo: the state before is
+    /// saved when it can be, and nothing stops the action when it can't.
+    pub fn perform_without_undo(
+        &self,
+        action: &Action,
+        on_event: &mut dyn FnMut(ActionEvent),
+        cancel: &AtomicBool,
+    ) -> Result<String> {
+        self.perform_logged(action, on_event, cancel, true)
+    }
+
+    fn perform_logged(
+        &self,
+        action: &Action,
+        on_event: &mut dyn FnMut(ActionEvent),
+        cancel: &AtomicBool,
+        without_undo: bool,
     ) -> Result<String> {
         // A fix planned for another state never starts: the sheet shows the new plan.
         if let Action::Fix { expect, .. } = action {
@@ -1706,6 +1732,15 @@ impl Repo {
             self.clear_operation_log()?;
             return Ok(out);
         }
+        // The state before, for Undo, saved before anything is written: without it the step
+        // can't be undone, which is asked about first rather than found out after. A fetch
+        // mostly moves branches on remotes, which Undo leaves alone anyway: it never waits.
+        let required = !without_undo && !matches!(action, Action::Fetch { .. });
+        let before = match crate::console::role(UNDO_SNAPSHOT, || self.snapshot()) {
+            Ok(before) => Some(before),
+            Err(err) if required => return Err(Error::NoUndo(err.to_string())),
+            Err(_) => None,
+        };
         if let Action::Restore { id, .. } = action {
             self.prepare_restore(id)?;
         }
@@ -1727,7 +1762,6 @@ impl Repo {
         };
         // Steps of a fix noted for a pick or revert that is over by now, finished elsewhere.
         self.forget_fix_rest();
-        let before = crate::console::role(UNDO_SNAPSHOT, || self.snapshot().ok());
         if let Action::EditStack { plan } = action {
             self.remember_return(plan);
         }
@@ -1755,13 +1789,21 @@ impl Repo {
             // read-tree forgets what git knew about the files on disk.
             let _ = self.run(&GitCommand::new(["update-index", "-q", "--refresh"]));
         }
-        crate::console::role(UNDO_SNAPSHOT, || {
-            if let Some(before) = before
-                && let Ok(after) = self.snapshot()
-            {
-                let _ = self.record(action, &before, &after, result.is_err());
-            }
-        });
+        // The action ran (or failed part way): a step that can't be written is said apart from
+        // the action's own result, which stands either way.
+        let recorded = match before {
+            Some(before) => crate::console::role(UNDO_SNAPSHOT, || {
+                let after = self.snapshot()?;
+                self.record(action, &before, &after, result.is_err())
+            })
+            .map(|_| ()),
+            None => Err(Error::Git("there was no snapshot from before it".into())),
+        };
+        if let Err(err) = recorded {
+            on_event(ActionEvent::NotLogged {
+                reason: err.to_string(),
+            });
+        }
         result
     }
 
