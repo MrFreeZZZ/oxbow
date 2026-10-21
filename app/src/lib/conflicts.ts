@@ -49,6 +49,11 @@ const CLOSE = ">>>>>>>";
 /** The whole result as text: decided conflicts as their lines, open ones between git's markers,
  *  with the common version too when `withBase`. */
 export function markedText(chunks: Chunk[], decisions: Decision[], sides: Sides, withBase: boolean): string {
+  return joinLines(markedLines(chunks, decisions, sides, withBase));
+}
+
+/** `markedText` as lines: no lines at all tells apart from one empty line. */
+function markedLines(chunks: Chunk[], decisions: Decision[], sides: Sides, withBase: boolean): string[] {
   const out: string[] = [];
   let k = 0;
   for (const chunk of chunks) {
@@ -65,7 +70,7 @@ export function markedText(chunks: Chunk[], decisions: Decision[], sides: Sides,
     if (withBase) out.push(`${BASE} common ancestor`, ...chunk.base);
     out.push(MIDDLE, ...chunk[sides.right], `${CLOSE} ${sides.rightLabel}`);
   }
-  return joinLines(out);
+  return out;
 }
 
 const marker = (line: string, m: string) => line === m || line.startsWith(`${m} `);
@@ -117,9 +122,11 @@ function closes(lines: string[], at: number): boolean {
 /** The whole file to edit as text: `markedText` with the file's last line break, so what is
  *  typed is written as it is. */
 export function fileText(chunks: Chunk[], decisions: Decision[], sides: Sides, withBase: boolean, openEnd: boolean): string {
-  const text = markedText(chunks, decisions, sides, withBase);
-  const lines = chunks.reduce((n, c) => n + (c.kind === "same" ? c.lines.length : 1), 0);
-  return openEnd || !lines ? text : `${text}\n`;
+  // Counted after the decisions: conflicts whose lines were all deleted leave none, and an
+  // empty result stays an empty file.
+  const lines = markedLines(chunks, decisions, sides, withBase);
+  const text = joinLines(lines);
+  return openEnd || !lines.length ? text : `${text}\n`;
 }
 
 const MARKS = [OPEN, BASE, MIDDLE, CLOSE] as const;

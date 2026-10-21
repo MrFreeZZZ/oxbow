@@ -62,6 +62,16 @@ const chunks: Chunk[] = [
   assert.equal(fileText(chunks, ["left", "right"], sides, false, true), decided);
   assert.equal(fileText([{ kind: "same", lines: [""] }], [], sides, false, false), "\n");
   assert.equal(fileText([], [], sides, false, false), "");
+
+  // Lines are counted after the decisions: all deleted is an empty file, not one empty line.
+  const only: Chunk[] = [{ kind: "conflict", ours: ["main"], base: ["base"], theirs: ["incoming"] }];
+  assert.equal(fileText(only, [{ lines: [] }], sides, false, false), "");
+  assert.equal(fileText([...only, ...only], [{ lines: [] }, { lines: [] }], sides, false, false), "");
+  assert.equal(fileText(only, [{ lines: [""] }], sides, false, false), "\n");
+  assert.equal(fileText([{ kind: "same", lines: ["header"] }, ...only], [{ lines: [] }], sides, false, false), "header\n");
+  assert.equal(fileText(only, [{ lines: ["merged"] }], sides, false, false), "merged\n");
+  assert.equal(fileText(only, [{ lines: ["merged"] }], sides, false, true), "merged");
+  assert.equal(fileText(only, [null], sides, false, false), "<<<<<<< feature\nincoming\n=======\nmain\n>>>>>>> main\n");
 }
 
 // Both, as it reads on screen: the left side first.
