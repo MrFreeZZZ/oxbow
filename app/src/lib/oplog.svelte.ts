@@ -5,6 +5,7 @@ import { api } from "./api";
 import type { Icon, Request } from "./confirm.svelte";
 import { relativeTime } from "./format";
 import { actionIcons } from "./icons";
+import { errorLine } from "./reads";
 import type { HistoryRow, OpEntry, ReflogEntry } from "./types";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -24,28 +25,52 @@ class OplogState {
   allMoves = $state(false);
   /** A commit from the reflog that History doesn't have, shown in its details panel. */
   lost = $state<ReflogEntry | null>(null);
+  /** Why the steps couldn't be read the last time, null when they could. `entries` is then the
+   *  last list read, if any, and nothing is undone from it. */
+  entriesError = $state<string | null>(null);
+  /** Why git's reflog couldn't be read the last time; `reflog` is then the last one read. */
+  reflogError = $state<string | null>(null);
+  /** Being read, for Retry. */
+  loading = $state(false);
+  loadingReflog = $state(false);
   #asked = 0;
   #askedReflog = 0;
 
   async load() {
     const mine = ++this.#asked;
+    this.loading = true;
     try {
       const entries = await api.operationLog();
-      if (mine === this.#asked) this.entries = entries;
-    } catch {
-      if (mine === this.#asked) this.entries = [];
+      if (mine === this.#asked) {
+        this.entries = entries;
+        this.entriesError = null;
+      }
+    } catch (err) {
+      if (mine === this.#asked) this.entriesError = String(err);
     }
+    if (mine === this.#asked) this.loading = false;
     if (this.open && this.tab === "reflog") this.loadReflog();
   }
 
   async loadReflog() {
     const mine = ++this.#askedReflog;
+    this.loadingReflog = true;
     try {
       const entries = await api.reflogEntries();
-      if (mine === this.#askedReflog) this.reflog = entries;
-    } catch {
-      if (mine === this.#askedReflog) this.reflog = [];
+      if (mine === this.#askedReflog) {
+        this.reflog = entries;
+        this.reflogError = null;
+      }
+    } catch (err) {
+      if (mine === this.#askedReflog) this.reflogError = String(err);
     }
+    if (mine === this.#askedReflog) this.loadingReflog = false;
+  }
+
+  /** The newest step, read again: null when there is none, an error when the log can't be read. */
+  async newest(): Promise<OpEntry | null | Error> {
+    await this.load();
+    return this.entriesError === null ? (this.entries[0] ?? null) : new Error(unreadable(this.entriesError));
   }
 
   forget() {
@@ -53,6 +78,10 @@ class OplogState {
     this.#askedReflog++;
     this.entries = [];
     this.reflog = [];
+    this.entriesError = null;
+    this.reflogError = null;
+    this.loading = false;
+    this.loadingReflog = false;
     this.open = false;
     this.compare = null;
     this.lost = null;
@@ -60,6 +89,12 @@ class OplogState {
 }
 
 export const oplog = new OplogState();
+
+/** "Can’t read the Operation Log: …" with git's or the file's words in one line. */
+export function unreadable(error: string): string {
+  const line = errorLine(error);
+  return `Can’t read the Operation Log${line ? `: ${line.replace(/\.$/, "")}` : ""}.`;
+}
 
 /** The icon of a step; an unknown kind gets the undo arrow. */
 export function entryIcon(entry: OpEntry): string {

@@ -292,3 +292,14 @@ fn a_step_written_down_reports_nothing() {
     );
     assert_eq!(repo.operation_log().unwrap().len(), 1);
 }
+
+#[test]
+fn a_log_that_cant_be_read_is_an_error_not_an_empty_log() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    let repo = Repo::open(fx.path()).unwrap();
+    assert!(repo.operation_log().unwrap().is_empty());
+    std::fs::create_dir_all(fx.path().join(".git/oxbow/oplog.jsonl")).unwrap();
+    let err = repo.operation_log().unwrap_err().to_string();
+    assert!(err.starts_with("oplog.jsonl: "), "{err}");
+}

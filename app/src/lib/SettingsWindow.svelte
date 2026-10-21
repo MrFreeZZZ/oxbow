@@ -1004,10 +1004,20 @@
       jsonSaved = jsonText;
       jsonError = null;
       load();
+      prefs.reload();
     } catch (err) {
       jsonError = String(err);
     }
   }
+
+  /** What the Settings window calls an Oxbow setting, for the note when it couldn't be saved. */
+  function prefLabel(key: PrefKey): string | null {
+    for (const section of sections)
+      for (const group of section.groups())
+        for (const row of group.rows) if (row.setting?.kind === "pref" && row.setting.key === key) return text(row.label);
+    return null;
+  }
+  const failedLabel = $derived(prefs.failure ? prefLabel(prefs.failure.key) : null);
 
   const revealLabel = mac ? "Reveal in Finder" : navigator.platform.startsWith("Win") ? "Show in Explorer" : "Open Containing Folder";
 
@@ -1019,7 +1029,8 @@
   const shellPath = (path: string) => path.replace(/[^\w@%+=:,./~-]/g, "\\$&");
 
   /** Whether there is anything to restore; a file Oxbow can't read counts too. */
-  const customized = $derived(prefs.customized || (json && jsonSaved.trim() !== "{}"));
+  // settings.json that can't be read can still be moved aside.
+  const customized = $derived(prefs.customized || !!prefs.unreadable || (json && jsonSaved.trim() !== "{}"));
 
   /** The sheet that adds a secret pattern of your own. */
   function patternRequest(pattern: string, kind: SecretPattern["kind"]): Request {
@@ -1060,7 +1071,7 @@
       local: {
         commands: [],
         run: async () => {
-          await prefs.set("oxbow.secrets.patterns", [...list, { kind, pattern: text }]);
+          await prefs.save("oxbow.secrets.patterns", [...list, { kind, pattern: text }]);
           return `Added ${text}.`;
         },
       },
@@ -1087,7 +1098,7 @@
       local: {
         commands: [],
         run: async () => {
-          await prefs.set("oxbow.commit.checkSecrets", false);
+          await prefs.save("oxbow.commit.checkSecrets", false);
           return "The secrets check is off.";
         },
       },
@@ -1098,6 +1109,7 @@
     const where = await api.settingsLocation().catch(() => ({ file: "settings.json", backup: "settings.backup.json" }));
     const reopen = async () => {
       if (json) jsonText = jsonSaved = await api.settingsText().catch(() => "{}\n");
+      await prefs.reload();
     };
     await confirm.run({
       title: "Restore the default settings?",
@@ -1366,6 +1378,20 @@
     {:else}
       <div class="scroll">
         {#if problem}<p class="problem" role="alert">{problem}</p>{/if}
+        {#if prefs.failure}
+          <p class="problem with-actions" role="alert">
+            <span class="grow">Couldn’t save {failedLabel ? `“${failedLabel}”` : prefs.failure.key}, so it is back to how it was. {prefs.failure.error}</span>
+            <button class="button small" onclick={() => prefs.retry()}>Try Again</button>
+            <button class="close" onclick={() => (prefs.failure = null)} aria-label="Close" title="Close">
+              <svg class="icon small" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+            </button>
+          </p>
+        {:else if prefs.unreadable}
+          <p class="problem with-actions" role="alert">
+            <span class="grow">Oxbow is using the default settings. {prefs.unreadable}</span>
+            <button class="button small" onclick={openJson}>Edit in settings.json</button>
+          </p>
+        {/if}
 
         {#each shown as group (group.key)}
           <section>
@@ -2030,6 +2056,23 @@
     background: var(--danger-soft);
     color: var(--danger);
     font-size: var(--text-small);
+  }
+  .problem.with-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .problem .grow {
+    flex-grow: 1;
+    min-width: 0;
+  }
+  .problem .close {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    border-radius: var(--radius-s);
+    color: inherit;
   }
 
   /* Themes */

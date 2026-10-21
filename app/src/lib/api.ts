@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AllSettings,
   SubmoduleMove,
   UnpushedSubmodule,
   Submodule,
@@ -156,14 +157,15 @@ export const api = {
   performAction: (action: Action, withoutUndo = false) => invoke<string>("perform_action", { action, withoutUndo }),
   stopAction: () => invoke<void>("stop_action"),
   getSetting: <T>(key: string) => invoke<T | null>("get_setting", { key }),
-  allSettings: () => invoke<Record<string, unknown>>("all_settings"),
+  allSettings: () => invoke<AllSettings>("all_settings"),
   openSettings: () => invoke<void>("open_settings"),
   openConsole: () => invoke<void>("open_console"),
   consoleRepos: () => invoke<ConsoleRepos>("console_repos"),
   /** The log of a repository (null: what ran outside any), oldest first. */
   consoleEntries: (path: string | null) => invoke<ConsoleEntry[]>("console_entries", { path }),
   consoleClear: (paths: (string | null)[]) => invoke<void>("console_clear", { paths }),
-  setSetting: (key: string, value: unknown) => invoke<void>("set_setting", { key, value }),
+  /** Resolves to the number of the change, as `settings-changed` sends it. */
+  setSetting: (key: string, value: unknown) => invoke<number>("set_setting", { key, value }),
   gitSettings: () => invoke<GitSettings>("git_settings"),
   repoSettings: () => invoke<RepoSettings | null>("repo_settings"),
   /** `null` removes the value. */
