@@ -71,7 +71,6 @@ Read a log with `grep`/`tail`, never `cat` it whole.
 - Run the script before every push. CI has no PR checks; it only builds the macOS app on merge.
 - Never paste long build or test output into the chat or the thread; summarize it.
 - One run of a single Rust test: `cargo test -p oxbow-core --test <file> <name> -q 2>&1 | tail -n 20`.
-- `crates/oxbow-core/tests/notkept.rs` (`a_step_shows_until_when_it_is_kept…`) is flaky; rerun once.
 - UI changes are verified in a production build with the CSP on (`cd app && npm run build`).
 
 Cloud sessions: `.claude/hooks/session-start.sh` installs the Tauri Linux packages
