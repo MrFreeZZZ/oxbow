@@ -2,7 +2,8 @@
   // The Conflicts screen: conflicted files on the left; for the open file, both sides on top
   // (named by branch, never "ours" and "theirs"), with the version they started from when asked,
   // and the result underneath, where each conflict gets a side, both, or lines typed by hand,
-  // or the whole file is written as text, before the file is marked resolved.
+  // or the whole file is written as text, before the file is marked resolved. All of it is saved
+  // as a draft as the user goes (lib/drafts.ts), so quitting Oxbow keeps it.
 
   import TipCard from "./TipCard.svelte";
   import EditBox from "./EditBox.svelte";
@@ -11,6 +12,7 @@
   import { confirm, type Request } from "./confirm.svelte";
   import { kept } from "./kept";
   import { prefs } from "./prefs.svelte";
+  import { hasWork, makeDraft, readDraft, takeDraft, type Draft, type DraftState, type DraftText, type OldDraft } from "./drafts";
   import {
     conflictSteps,
     joinLines,
@@ -22,6 +24,7 @@
     markerRoles,
     markerStarts,
     openMarkers,
+    resultOf,
     splitLines,
     stepIndex,
     strayMarkers,
@@ -31,7 +34,7 @@
     type Sides,
   } from "./conflicts";
   import type { Chunk, ConflictFile, ConflictSide, History, MergeTool, Operation, WorkingTree } from "./types";
-  import { NO_BRANCH_COLOR, plate, shortId, splitPath, tint } from "./format";
+  import { NO_BRANCH_COLOR, plate, relativeTime, shortId, splitPath, tint } from "./format";
 
   let {
     history,
@@ -54,10 +57,10 @@
   type Conflict = Extract<Chunk, { kind: "conflict" }>;
   /** A file written as text: what it is now, what it started as, to tell an edit, and how many
    *  of its lines are what is left of a conflict whose markers were partly deleted. */
-  type Text = { text: string; start: string; stray: number };
+  type Text = DraftText;
   /** What the screen had going, kept while the user is on another screen; `stages` says which
    *  versions of each file its decisions were made for. */
-  type Saved = { step: string; choices: Map<string, Decision[]>; texts: Map<string, Text>; stages: Map<string, string>; seen: string[] };
+  type Saved = DraftState & { step: string };
 
   let tree = $state<WorkingTree | null>(null);
   let current = $state<string | null>(null);
@@ -72,8 +75,20 @@
   let stages = new Map<string, string>();
   /** Every file that was conflicted in this step, so resolved ones still show as done. */
   let seen = $state<string[]>([]);
+  /** Each file as its decisions or text would write it, for a draft that stops fitting it. */
+  let results = new Map<string, string>();
+  /** Drafts made for other versions of a file, kept to compare with it. */
+  let old = $state.raw(new Map<string, OldDraft>());
+  /** The open file's old draft is shown in place of the result. */
+  let comparing = $state(false);
+  /** When the decisions on screen were last saved, or came back from a draft. */
+  let draftAt = 0;
+  /** What saving the draft last came to, shown apart from Mark Resolved. */
+  let draftNote = $state<{ kind: "saved"; at: number } | { kind: "failed"; why: string } | null>(null);
   /** The operation, its commit, and the commit checked out, that the decisions belong to. */
   let step = $state("");
+  /** The step whose draft is being read from disk. */
+  let reading = "";
   /** The conflict last stepped to in the open file; -1 before the first step. */
   let at = $state(-1);
   /** A conflict just turned into lines to type: its box takes the focus. */
@@ -132,20 +147,24 @@
       const key = `${op.kind}:${op.commit?.id ?? ""}:${history.head.commit ?? ""}`;
       const paths = next.conflicted.map((f) => f.path);
       if (key !== step) {
-        step = key;
-        // Back on the screen in the same step: the decisions are still there.
+        if (key === reading) return;
+        reading = key;
+        // Back on the screen in the same step: the decisions are still there. Otherwise they
+        // come from the draft on disk, as after Oxbow was quit.
         const saved = kept.get<Saved>(KEPT_CONFLICTS);
-        if (saved?.step === key) {
-          choices = saved.choices;
-          texts = saved.texts;
-          stages = saved.stages;
-          seen = [...saved.seen, ...paths.filter((p) => !saved.seen.includes(p))];
-        } else {
-          choices = new Map();
-          texts = new Map();
-          stages = new Map();
-          seen = paths;
-        }
+        const draft = saved?.step === key ? null : await loadDraft();
+        if (reading !== key) return;
+        reading = "";
+        const state = saved?.step === key ? { ...saved, seen: [...saved.seen, ...paths.filter((p) => !saved.seen.includes(p))] } : takeDraft(draft, key, paths);
+        choices = state.choices;
+        texts = state.texts;
+        stages = state.stages;
+        results = state.results;
+        old = state.old;
+        seen = state.seen;
+        step = key;
+        if (draft?.step === key) draftAt = draft.savedAt;
+        if (draft) tellRestored(draft, state);
       } else {
         seen = [...seen, ...paths.filter((p) => !seen.includes(p))];
       }
@@ -156,11 +175,33 @@
     }
   }
 
+  async function loadDraft(): Promise<Draft | null> {
+    try {
+      return readDraft(await api.conflictDraft());
+    } catch (err) {
+      draftNote = { kind: "failed", why: String(err) };
+      return null;
+    }
+  }
+
+  /** Say what came back from the draft, as the decisions on screen don't say they are old. */
+  function tellRestored(draft: Draft, state: DraftState) {
+    const back = conflictedNow().filter((p) => hasWork(state.choices.get(p), state.texts.get(p))).length;
+    const when = since(draft.savedAt);
+    if (back) confirm.say(`Your draft from ${when} is back: ${back} ${back === 1 ? "file" : "files"} as you left ${back === 1 ? "it" : "them"}.`, "info");
+  }
+
+  /** "2 min ago", "yesterday 17:05": when a draft was saved, inside a sentence. */
+  const since = (ms: number) => relativeTime(ms / 1000).replace(/^(Just|Yesterday)/, (word) => word.toLowerCase());
+
+  const conflictedNow = () => tree?.conflicted.map((f) => f.path) ?? [];
+
   async function open(path: string | null, again = false) {
     if (!again || path !== current) {
       at = -1;
       leaving = false;
       fresh = null;
+      comparing = false;
     }
     current = path;
     if (!path) {
@@ -171,10 +212,15 @@
       const next = await api.conflictFile(path);
       if (current !== path) return;
       // Decisions made for other versions of the file, as after an abort and a new merge, start
-      // over: the same number of conflicts is no sign they still fit.
+      // over: the same number of conflicts is no sign they still fit. What they made is kept,
+      // to compare.
       const was = stages.get(path);
       stages.set(path, next.stages);
       if (was !== undefined && was !== next.stages) {
+        if (hasWork(choices.get(path), texts.get(path))) {
+          old = new Map(old).set(path, { path, result: results.get(path) ?? texts.get(path)?.text ?? "", savedAt: draftAt || Date.now() });
+        }
+        results.delete(path);
         choices = new Map(choices);
         choices.delete(path);
         if (texts.has(path)) {
@@ -196,9 +242,45 @@
     untrack(() => reload());
   });
 
+  /** The save waiting for typing to pause. */
+  let pending: (() => void) | null = null;
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Saves one after another, so an older one never lands over a newer. */
+  let saving = Promise.resolve();
+
   $effect(() => {
-    if (step) kept.set(KEPT_CONFLICTS, { step, choices, texts, stages, seen } satisfies Saved);
+    if (!step || !tree) return;
+    // The open file's result, when its decisions were made for the versions on screen.
+    if (file && current === file.path && stages.get(current) === file.stages) results.set(current, resultOf(file, picked, asText, sides));
+    const state: Saved = { step, choices, texts, stages, results, old, seen };
+    kept.set(KEPT_CONFLICTS, state);
+    const paths = conflicted;
+    pending = () => {
+      saving = saving.then(() => saveDraft(state, paths));
+    };
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(flush, 300);
   });
+
+  function flush() {
+    clearTimeout(saveTimer);
+    const save = pending;
+    pending = null;
+    save?.();
+  }
+
+  async function saveDraft(state: Saved, paths: string[]) {
+    const at = Date.now();
+    const draft = makeDraft(state.step, state, paths, at);
+    try {
+      if (draft) await api.saveConflictDraft(draft);
+      else await api.dropConflictDraft();
+      draftAt = at;
+      draftNote = draft ? { kind: "saved", at } : null;
+    } catch (err) {
+      draftNote = { kind: "failed", why: String(err) };
+    }
+  }
 
   onMount(() => {
     api
@@ -206,8 +288,11 @@
       .then((found) => (tool = found))
       .catch(() => (tool = null));
     conflictSteps.step = stepConflict;
+    window.addEventListener("beforeunload", flush);
     return () => {
       if (conflictSteps.step === stepConflict) conflictSteps.step = null;
+      window.removeEventListener("beforeunload", flush);
+      flush();
     };
   });
 
@@ -511,6 +596,30 @@
 
   const textWhy = $derived(file && !file.text ? "This file isn’t UTF-8 text, so it can’t be typed in here. Pick sides, or use the merge tool." : null);
 
+  const oldDraft = $derived(current ? (old.get(current) ?? null) : null);
+  /** The old draft's lines; its last line break ends the last line, it doesn't add one. */
+  const oldLines = $derived(oldDraft && oldDraft.result !== "" ? oldDraft.result.replace(/\n$/, "").split("\n") : []);
+  const oldWhen = $derived(oldDraft ? since(oldDraft.savedAt) : "");
+  /** Why the old draft can't become the text to edit, or null when it can. */
+  const useWhy = $derived(textWhy ?? (asText && asText.text !== asText.start ? "Leave Edit as Text first: the text you typed would be replaced" : null));
+
+  /** Edit the old draft's text as the file's result, from where it was left. */
+  function useOld() {
+    if (!current || !file || !oldDraft || useWhy) return;
+    // Started from the file as it is, so leaving the text asks first.
+    const start = fileText(file.chunks, picked, sides, showBase, file.openEnd);
+    texts = new Map(texts).set(current, { text: oldDraft.result, start, stray: strayMarkers(oldDraft.result, file.chunks) });
+    dropOld();
+  }
+
+  function dropOld() {
+    if (!current) return;
+    const next = new Map(old);
+    next.delete(current);
+    old = next;
+    comparing = false;
+  }
+
   const radius = (edge: string | null) => (edge === "both" ? "9px" : edge === "top" ? "9px 9px 0 0" : edge === "bottom" ? "0 0 9px 9px" : "0");
 </script>
 
@@ -556,7 +665,7 @@
   <aside class="files" aria-label="Conflicted files">
     <div class="ghead">
       <span>Conflicts</span>
-      <span class="count">{resolved.length} of {seen.length} {seen.length === 1 ? "file" : "files"} resolved</span>
+      {#if step}<span class="count">{resolved.length} of {seen.length} {seen.length === 1 ? "file" : "files"} resolved</span>{/if}
     </div>
     <div class="track"><span class="fill" style:width="{seen.length ? (resolved.length / seen.length) * 100 : 0}%"></span></div>
     <div class="list">
@@ -570,7 +679,7 @@
           <span class="fwords">
             <span class="ellipsis"><span class="dir">{p.dir}</span>{p.name}</span>
             <span class="sub ellipsis" class:orange={left !== 0 || strays > 0} class:green={left === 0 && !strays}>
-              {left === null ? (what ?? "Conflicted") : `${what ? `${what} · ` : ""}${left === 0 && strays ? `${strays} stray ${strays === 1 ? "marker" : "markers"}` : left === 0 ? "Ready to mark resolved" : `${left} ${left === 1 ? "conflict" : "conflicts"} left`}${texts.has(path) ? " · as text" : ""}`}
+              {left === null ? (what ?? "Conflicted") : `${what ? `${what} · ` : ""}${left === 0 && strays ? `${strays} stray ${strays === 1 ? "marker" : "markers"}` : left === 0 ? "Ready to mark resolved" : `${left} ${left === 1 ? "conflict" : "conflicts"} left`}${texts.has(path) ? " · as text" : ""}`}{old.has(path) ? " · old draft" : ""}
             </span>
           </span>
         </button>
@@ -600,12 +709,15 @@
       {:else}
         Nothing here is final until you {op.kind === "merge" || op.kind === "squash" ? "commit" : "continue"}. Abort puts everything back as it was before the {op.kind === "cherryPick" ? "cherry-pick" : op.kind}.
       {/if}
+      Your choices are kept as a draft until then, even if Oxbow quits.
     </p>
   </aside>
 
   <div class="work" bind:this={work}>
     {#if error}
       <p class="empty error">{error}</p>
+    {:else if !step}
+      <!-- Reading the files and the draft. -->
     {:else if !current}
       <div class="empty">
         <span class="big">✓</span>
@@ -675,6 +787,11 @@
               {:else}
                 <span class="green small">· All decided</span>
               {/if}
+              {#if draftNote?.kind === "failed"}
+                <span class="orange small" title={draftNote.why}>· Draft not saved</span>
+              {:else if draftNote && hasWork(picked, asText)}
+                <span class="saved small" title="Your choices and text are saved in Oxbow’s own data, not in the repository, so quitting Oxbow keeps them. Mark Resolved writes them into the file.">· Draft saved</span>
+              {/if}
               <span class="spacer"></span>
               <button
                 class="chip"
@@ -699,6 +816,22 @@
                 Mark Resolved
               </button>
             </header>
+            {#if oldDraft && comparing}
+              <div class="olddraft">
+                <span class="ellipsis">Your draft from {oldWhen}, for other versions of {p.name}. It isn’t put back by itself.</span>
+                <span class="spacer"></span>
+                <button class="button small" disabled={!!useWhy} title={useWhy ?? "Edit this text as the result of the file"} onclick={useOld}>Use as Text</button>
+                <button class="button small" onclick={dropOld}>Discard Draft</button>
+                <button class="button small" onclick={() => (comparing = false)}>Back to Result</button>
+              </div>
+            {:else if oldDraft}
+              <div class="olddraft">
+                <span class="ellipsis">A draft from {oldWhen} was made for other versions of {p.name}, so it isn’t put back.</span>
+                <span class="spacer"></span>
+                <button class="button small" onclick={() => (comparing = true)}>Compare</button>
+                <button class="button small" onclick={dropOld}>Discard Draft</button>
+              </div>
+            {/if}
             {#if leaving}
               <div class="leaving">
                 <span>Go back to picking sides? The text you typed in {p.name} is dropped.</span>
@@ -708,7 +841,13 @@
               </div>
             {/if}
             <div class="code mono selectable">
-              {#if asText}
+              {#if oldDraft && comparing}
+                {#each oldLines as line, i (i)}
+                  <div class="line"><span class="no">{i + 1}</span><span class="text">{line}</span></div>
+                {:else}
+                  <p class="placeholder">An empty file: every line was taken out.</p>
+                {/each}
+              {:else if asText}
                 <EditBox value={asText.text} tintOf={textTint} label="The whole result of {p.name}" onedit={typedText} bind:rows={textRows} />
               {:else}
                 {#each resultItems as item, i (itemKey(item, i))}
@@ -1155,6 +1294,20 @@
   }
   .typed {
     margin: 0 0 4px;
+  }
+  /* A draft that no longer fits the file: a quiet note, not a warning. */
+  .olddraft {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    padding: 6px 10px 6px 14px;
+    border-bottom: 1px solid var(--sep);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    font-size: var(--text-small);
+  }
+  .saved {
+    color: var(--text2);
   }
   .muted {
     color: var(--text2);

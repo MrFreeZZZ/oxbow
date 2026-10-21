@@ -133,9 +133,21 @@
   let resolving = $state(false);
   const operation = $derived(history?.operation ?? null);
   const showConflicts = $derived(resolving && !!operation);
+  /** The working folder whose saved conflict draft is known to be gone. */
+  let draftGone: string | null = null;
   $effect(() => {
-    // Finished or aborted: the decisions made in it go too.
-    if (history && !operation) kept.drop(KEPT_CONFLICTS);
+    // Finished or aborted: the decisions made in it go too, the draft on disk with them. Not
+    // while git's state couldn't be read: the operation may still be there.
+    if (!history || history.problems.some((p) => p.part === "operation")) return;
+    if (operation) {
+      draftGone = null;
+      return;
+    }
+    kept.drop(KEPT_CONFLICTS);
+    const folder = repo?.path ?? "";
+    if (draftGone === folder) return;
+    draftGone = folder;
+    api.dropConflictDraft().catch(() => (draftGone = null));
   });
   /** Below this width the sidebar steps aside, so the graph keeps its room: a toolbar button
    *  slides it in over the content, and Settings and New Branch go into the «…» menu. */
