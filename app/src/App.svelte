@@ -40,6 +40,7 @@
   import type { PaletteItem } from "./lib/palette";
   import { Keymap, combo, type ShortcutId } from "./lib/shortcuts";
   import { stepChange } from "./lib/diffRows";
+  import { conflictSteps } from "./lib/conflicts";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import PairPanel from "./lib/PairPanel.svelte";
   import SnapshotPanel from "./lib/SnapshotPanel.svelte";
@@ -854,8 +855,8 @@
     add("whitespace", "View", prefs.get("oxbow.diff.ignoreWhitespace") ? "Show Whitespace Changes" : "Ignore Whitespace Changes", () => void prefs.set("oxbow.diff.ignoreWhitespace", !prefs.get("oxbow.diff.ignoreWhitespace")));
     if (canBack(trail)) add("back", "Go", `Go Back to ${placeName(trail.places[trail.at - 1])}`, goBack, "back");
     if (canForward(trail)) add("forward", "Go", `Go Forward to ${placeName(trail.places[trail.at + 1])}`, goForward, "forward");
-    add("nextChange", "Go", "Go to Next Change", () => void stepChange(1), "nextChange");
-    add("previousChange", "Go", "Go to Previous Change", () => void stepChange(-1), "previousChange");
+    add("nextChange", "Go", "Go to Next Change", () => void stepAnyChange(1), "nextChange");
+    add("previousChange", "Go", "Go to Previous Change", () => void stepAnyChange(-1), "previousChange");
     add("history", "View", "Show History", () => ((view = "history"), (resolving = false)));
     add("stashes", "View", "Show Stashes", () => ((view = "stashes"), (resolving = false)));
     add("oplog", "View", "Show Operation Log", () => ((view = "oplog"), (resolving = false)));
@@ -980,7 +981,7 @@
       }
       case "nextChange":
       case "previousChange":
-        return stepChange(id === "nextChange" ? 1 : -1);
+        return stepAnyChange(id === "nextChange" ? 1 : -1);
       case "reload":
         reload();
         return true;
@@ -1034,6 +1035,12 @@
         return stepTab(id === "nextTab" ? 1 : -1);
     }
     return false;
+  }
+
+  /** The next change of a diff, or on the Conflicts screen its next conflict. */
+  function stepAnyChange(by: 1 | -1): boolean {
+    if (showConflicts && conflictSteps.step) return conflictSteps.step(by);
+    return stepChange(by);
   }
 
   /** The key went to a text field, where ⌘Z undoes typing. */
@@ -2205,7 +2212,7 @@
       {/if}
       {#if showConflicts && operation}
         {#key repo.path}
-          <ConflictsView {history} op={operation} {colorOf} {version} {run} />
+          <ConflictsView {history} op={operation} {colorOf} {version} {run} {refresh} />
         {/key}
       {:else if view === "file" && nav.file}
         {#key repo.path + nav.file.path}

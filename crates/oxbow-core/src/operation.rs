@@ -119,8 +119,22 @@ pub struct ConflictFile {
     pub binary: bool,
     /// A symbolic link or a submodule on some side: also taken whole from one side.
     pub link: bool,
+    /// Every version is UTF-8, so the result can be written by hand: Oxbow would not know how to
+    /// write typed text in any other encoding.
+    pub text: bool,
+    /// One side renamed the file to this path while the other changed or kept the old name.
+    pub renamed: Option<Renamed>,
     /// Empty when the file can't be merged line by line.
     pub chunks: Vec<Chunk>,
+}
+
+/// Where a conflicted file came from when one side renamed it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Renamed {
+    pub from: String,
+    /// The side that renamed it.
+    pub side: ConflictSide,
 }
 
 /// A run of lines of a conflicted file, without line endings.
@@ -145,6 +159,38 @@ pub enum Pick {
     Theirs,
     OursThenTheirs,
     TheirsThenOurs,
+}
+
+/// What goes into the result in place of one conflict: a side, or lines the user wrote. A pick
+/// is written as its bare name, so older records still read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Resolution {
+    Pick(Pick),
+    /// Lines without line endings; the file's own endings are added. None: the conflict goes.
+    Lines {
+        lines: Vec<String>,
+    },
+}
+
+impl From<Pick> for Resolution {
+    fn from(pick: Pick) -> Self {
+        Resolution::Pick(pick)
+    }
+}
+
+/// The merge tool `git mergetool` would open, from the git config.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeTool {
+    /// Git's name for it: `opendiff`, `vscode`, `meld`, or the name of a custom one.
+    pub name: String,
+    /// The name to show: FileMerge for `opendiff`.
+    pub label: String,
+    /// It runs in a terminal (vimdiff), where Oxbow has none to give it.
+    pub terminal: bool,
+    /// Taken from `merge.guitool`, so it opens with `--gui`.
+    pub gui: bool,
 }
 
 /// A chunk with its lines as they are in the file, as bytes with line endings included: the
@@ -460,6 +506,9 @@ impl Repo {
         let binary = [&base, &ours, &theirs]
             .iter()
             .any(|blob| blob.as_ref().is_some_and(|b| b.iter().take(8000).any(|&c| c == 0)));
+        let text = [&base, &ours, &theirs]
+            .iter()
+            .all(|blob| blob.as_ref().is_none_or(|b| std::str::from_utf8(b).is_ok()));
         let chunks = match (&ours, &theirs) {
             (Some(o), Some(t)) if !binary && !link => self
                 .merge_blobs(o, base.as_deref().unwrap_or_default(), t)?
@@ -482,32 +531,212 @@ impl Repo {
             theirs: theirs.is_some(),
             binary,
             link,
+            text: text && !binary && !link,
+            renamed: self.renamed_into(path),
             chunks,
         })
     }
 
-    /// The file with `picks` in place of its conflicts, in order.
-    pub(crate) fn resolved_text(&self, path: &str, picks: &[Pick]) -> Result<Vec<u8>> {
+    /// Whether one side renamed a file to `path`: only one side's commit has the path, and git
+    /// pairs it with another name on the other side. Git keeps no note of it in the index.
+    fn renamed_into(&self, path: &str) -> Option<Renamed> {
+        let theirs = self.theirs_rev()?;
+        let has = |rev: &str| {
+            self.spawn(&GitCommand::new(["cat-file", "-e", &format!("{rev}:{path}")]), None)
+                .is_ok_and(|out| out.status.success())
+        };
+        let (in_ours, in_theirs) = (has("HEAD"), has(&theirs));
+        if in_ours == in_theirs {
+            return None;
+        }
+        let out = self
+            .run(&GitCommand::new([
+                "diff",
+                "--name-status",
+                "-z",
+                "-M",
+                "--diff-filter=R",
+                "HEAD",
+                &theirs,
+            ]))
+            .ok()?;
+        // R<score> NUL old NUL new NUL, for each rename.
+        let fields: Vec<&str> = out.stdout.split('\0').collect();
+        fields.chunks(3).find_map(|entry| match entry {
+            [status, old, new] if status.starts_with('R') => {
+                if in_theirs && *new == path {
+                    Some(Renamed {
+                        from: (*old).to_owned(),
+                        side: ConflictSide::Theirs,
+                    })
+                } else if in_ours && *old == path {
+                    Some(Renamed {
+                        from: (*new).to_owned(),
+                        side: ConflictSide::Ours,
+                    })
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
+    }
+
+    /// The commit whose version is `theirs` in the index during the operation in progress.
+    fn theirs_rev(&self) -> Option<String> {
+        let dir = self.git_dir();
+        let read = |name: &str| {
+            std::fs::read_to_string(dir.join(name))
+                .ok()
+                .and_then(|text| text.lines().next().map(|l| l.trim().to_owned()))
+                .filter(|l| !l.is_empty())
+        };
+        read("REBASE_HEAD")
+            .or_else(|| read("MERGE_HEAD"))
+            .or_else(|| read("CHERRY_PICK_HEAD"))
+            // A revert brings in the commit's parent, with the commit itself as the base.
+            .or_else(|| read("REVERT_HEAD").map(|sha| format!("{sha}^")))
+            .or_else(|| read(SQUASH_SOURCE))
+            .or_else(|| self.pending_apply().map(|apply| apply.id))
+    }
+
+    /// The tool `git mergetool` opens: `merge.guitool`, else `merge.tool`, else FileMerge on a
+    /// Mac with the developer tools. None when nothing is set, where git would guess, and might
+    /// guess a terminal one.
+    pub fn merge_tool(&self) -> Option<MergeTool> {
+        let set = |key: &str| self.config_value(key).filter(|v| !v.is_empty());
+        let (name, gui) = match (set("merge.guitool"), set("merge.tool")) {
+            (Some(name), _) => (name, true),
+            (None, Some(name)) => (name, false),
+            (None, None) if cfg!(target_os = "macos") && has_filemerge() => ("opendiff".to_owned(), false),
+            (None, None) => return None,
+        };
+        Some(MergeTool {
+            label: tool_label(&name),
+            terminal: matches!(
+                name.trim_end_matches(char::is_numeric),
+                "vimdiff" | "nvimdiff" | "emerge"
+            ),
+            gui,
+            name,
+        })
+    }
+
+    /// The command that opens `path` in the merge tool. Git writes the file with conflict
+    /// markers, waits for the tool to quit, and stages the file if the merge worked.
+    pub fn merge_tool_command(&self, path: &str) -> Result<GitCommand> {
+        let tool = self
+            .merge_tool()
+            .ok_or_else(|| Error::Git("no merge tool is set: git config --global merge.tool <name>".into()))?;
+        let mut args = Vec::new();
+        // The tool's .orig copy would show up as a new file in Changes.
+        if self.config_value("mergetool.keepBackup").is_none() {
+            args.extend(["-c".to_owned(), "mergetool.keepBackup=false".to_owned()]);
+        }
+        args.extend(["mergetool".to_owned(), "--no-prompt".to_owned()]);
+        if tool.gui {
+            args.push("--gui".to_owned());
+        } else {
+            args.push(format!("--tool={}", tool.name));
+        }
+        args.extend(["--".to_owned(), literal(path)]);
+        Ok(GitCommand::new(args).comment(format!(
+            "opens {}; git stages the file when the merge is saved",
+            tool.label
+        )))
+    }
+
+    /// Open `path` in the merge tool and wait until it quits. True when git staged the file.
+    pub fn open_merge_tool(&self, path: &str) -> Result<bool> {
+        if self.merge_tool().is_some_and(|tool| tool.terminal) {
+            return Err(Error::Git(
+                "this merge tool runs in a terminal; set merge.guitool to a window app".into(),
+            ));
+        }
+        let command = self.merge_tool_command(path)?;
+        let out = self.spawn(&command, None)?;
+        let conflicted = self.conflicted_paths()?.iter().any(|p| p == path);
+        if !conflicted {
+            return Ok(true);
+        }
+        let said = String::from_utf8_lossy(&out.stderr);
+        // Exit 1 with nothing else to say is git's "merge of <path> failed": the tool quit
+        // without a merge. Anything else is worth telling.
+        if !out.status.success() && said.contains("Unknown merge tool") {
+            return Err(Error::Git(said.trim().to_owned()));
+        }
+        Ok(false)
+    }
+
+    /// The file with `picks` in place of its conflicts, in order; or, with `text`, the whole
+    /// file as the user wrote it, one line per line break.
+    pub(crate) fn resolved_text(&self, path: &str, picks: &[Resolution], text: Option<&str>) -> Result<Vec<u8>> {
         let ([base, ours, theirs], link) = self.stages(path)?;
         let (Some(ours), Some(theirs), false) = (ours, theirs, link) else {
             return Err(Error::Git(format!("{path} can only be taken whole from one side")));
         };
+        let typed = text.is_some() || picks.iter().any(|p| matches!(p, Resolution::Lines { .. }));
+        if typed
+            && [base.as_deref(), Some(&ours[..]), Some(&theirs[..])]
+                .into_iter()
+                .flatten()
+                .any(|b| std::str::from_utf8(b).is_err())
+        {
+            return Err(Error::Git(format!(
+                "{path} is not UTF-8 text, so it can't be edited by hand"
+            )));
+        }
         let chunks = self.merge_blobs(&ours, base.as_deref().unwrap_or_default(), &theirs)?;
+        let eol: &[u8] = if crlf(&chunks) { b"\r\n" } else { b"\n" };
+        // Whether the file ends without a line break, which typed lines keep. Inside a conflict
+        // merge-file adds the break before its marker, so the versions themselves tell.
+        let open_end = match chunks.last() {
+            Some(RawChunk::Same(lines)) => lines.last().is_some_and(|l| !l.ends_with(b"\n")),
+            Some(RawChunk::Conflict { .. }) => [&ours, &theirs]
+                .iter()
+                .any(|blob| !blob.is_empty() && !blob.ends_with(b"\n")),
+            None => false,
+        };
+        let typed_lines = |lines: &mut dyn Iterator<Item = &str>, out: &mut Vec<u8>| {
+            for line in lines {
+                out.extend(line.as_bytes());
+                out.extend(eol);
+            }
+        };
+        let mut out = Vec::new();
+        if let Some(text) = text {
+            if !picks.is_empty() {
+                return Err(Error::Git("a file is resolved by picks or by text, not both".into()));
+            }
+            if !text.is_empty() {
+                typed_lines(&mut text.split('\n'), &mut out);
+            }
+            if open_end && out.ends_with(eol) {
+                out.truncate(out.len() - eol.len());
+            }
+            return Ok(out);
+        }
         let conflicts = chunks.iter().filter(|c| matches!(c, RawChunk::Conflict { .. })).count();
         if conflicts != picks.len() {
             return Err(Error::Git(format!("{path} changed since it was shown; open it again")));
         }
         let mut picks = picks.iter();
-        let mut out = Vec::new();
+        let mut typed_last = false;
         for chunk in chunks {
+            typed_last = false;
             match chunk {
                 RawChunk::Same(lines) => out.extend(lines.concat()),
                 RawChunk::Conflict { ours, theirs, .. } => {
                     let parts: [&[Vec<u8>]; 2] = match picks.next().expect("one pick per conflict") {
-                        Pick::Ours => [&ours, &[]],
-                        Pick::Theirs => [&theirs, &[]],
-                        Pick::OursThenTheirs => [&ours, &theirs],
-                        Pick::TheirsThenOurs => [&theirs, &ours],
+                        Resolution::Pick(Pick::Ours) => [&ours, &[]],
+                        Resolution::Pick(Pick::Theirs) => [&theirs, &[]],
+                        Resolution::Pick(Pick::OursThenTheirs) => [&ours, &theirs],
+                        Resolution::Pick(Pick::TheirsThenOurs) => [&theirs, &ours],
+                        Resolution::Lines { lines } => {
+                            typed_lines(&mut lines.iter().map(String::as_str), &mut out);
+                            typed_last = true;
+                            continue;
+                        }
                     };
                     for part in parts {
                         out.extend(part.concat());
@@ -515,12 +744,15 @@ impl Repo {
                 }
             }
         }
+        if typed_last && open_end && out.ends_with(eol) {
+            out.truncate(out.len() - eol.len());
+        }
         Ok(out)
     }
 
     /// Write the file with the picks, before `git add` marks it resolved.
-    pub(crate) fn write_resolution(&self, path: &str, picks: &[Pick]) -> Result<()> {
-        let text = self.resolved_text(path, picks)?;
+    pub(crate) fn write_resolution(&self, path: &str, picks: &[Resolution], text: Option<&str>) -> Result<()> {
+        let text = self.resolved_text(path, picks, text)?;
         let file = self.workdir().join(path);
         if let Some(parent) = file.parent() {
             std::fs::create_dir_all(parent).map_err(|err| Error::Git(err.to_string()))?;
@@ -770,6 +1002,69 @@ impl Repo {
         let _ = std::fs::remove_dir_all(&dir);
         result
     }
+}
+
+/// Whether most lines of the file end in CRLF, so typed lines do too.
+fn crlf(chunks: &[RawChunk]) -> bool {
+    let (mut crlf, mut lf) = (0usize, 0usize);
+    let mut count = |lines: &[Vec<u8>]| {
+        for line in lines {
+            if line.ends_with(b"\r\n") {
+                crlf += 1;
+            } else if line.ends_with(b"\n") {
+                lf += 1;
+            }
+        }
+    };
+    for chunk in chunks {
+        match chunk {
+            RawChunk::Same(lines) => count(lines),
+            RawChunk::Conflict { ours, theirs, .. } => {
+                count(ours);
+                count(theirs);
+            }
+        }
+    }
+    crlf > lf
+}
+
+/// FileMerge comes with Xcode and its command line tools; `/usr/bin/opendiff` is there either
+/// way, as a stub that offers to install them.
+fn has_filemerge() -> bool {
+    std::process::Command::new("xcrun")
+        .args(["--find", "opendiff"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// How a merge tool calls itself, for the button.
+fn tool_label(name: &str) -> String {
+    match name {
+        "opendiff" => "FileMerge",
+        "vscode" => "VS Code",
+        "smerge" => "Sublime Merge",
+        "bc" | "bc3" | "bc4" => "Beyond Compare",
+        "kdiff3" => "KDiff3",
+        "meld" => "Meld",
+        "p4merge" => "P4Merge",
+        "araxis" => "Araxis Merge",
+        "tortoisemerge" => "TortoiseMerge",
+        "winmerge" => "WinMerge",
+        "codecompare" => "Code Compare",
+        "deltawalker" => "DeltaWalker",
+        "diffmerge" => "DiffMerge",
+        "ecmerge" => "ECMerge",
+        "examdiff" => "ExamDiff",
+        "guiffy" => "Guiffy",
+        "gvimdiff" => "gVim",
+        "tkdiff" => "TkDiff",
+        "xxdiff" => "xxdiff",
+        other => other,
+    }
+    .to_owned()
 }
 
 /// Split `git merge-file --diff3` output into agreed lines and conflicts.

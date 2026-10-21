@@ -20,7 +20,7 @@ use crate::config;
 use crate::edit::{ResetMode, plan_reset};
 use crate::error::{Error, Result};
 use crate::lfs::{self, LfsChange};
-use crate::operation::{ConflictSide, MergeMethod, OperationKind, Pick};
+use crate::operation::{ConflictSide, MergeMethod, OperationKind, Resolution};
 use crate::repo::Repo;
 use crate::tags;
 use std::io::Read;
@@ -282,10 +282,13 @@ pub enum Action {
     Abort,
     /// Leave out the commit a rebase or cherry-pick stopped on.
     Skip,
-    /// Write the chosen side of each conflict of `path` into the file and mark it resolved.
+    /// Write the chosen side of each conflict of `path` into the file and mark it resolved; with
+    /// `text`, the whole file as the user wrote it instead.
     Resolve {
         path: String,
-        picks: Vec<Pick>,
+        picks: Vec<Resolution>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
     },
     /// Resolve `path` with one side's whole file; a side that deleted it deletes it.
     TakeFile {
@@ -1789,8 +1792,8 @@ impl Repo {
                 lines,
             } => (Side::Staged, path, header, check, lines),
             _ => {
-                if let Action::Resolve { path, picks } = action {
-                    self.write_resolution(path, picks)?;
+                if let Action::Resolve { path, picks, text } = action {
+                    self.write_resolution(path, picks, text.as_deref())?;
                 }
                 if let Action::Ignore { pattern } = action {
                     self.add_ignore_rule(pattern)?;

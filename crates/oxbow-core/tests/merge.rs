@@ -1,6 +1,8 @@
 mod support;
 
-use oxbow_core::{Action, Chunk, ConflictSide, FailureKind, MergeMethod, OperationKind, Pick, Repo};
+use oxbow_core::{
+    Action, Chunk, ConflictSide, FailureKind, MergeMethod, OperationKind, Pick, Renamed, Repo, Resolution,
+};
 use support::Fixture;
 
 /// `main` and `feature` both change the second line of `a.txt`; `feature` also adds `b.txt`.
@@ -127,12 +129,14 @@ fn a_merge_that_conflicts_is_resolved_pick_by_pick_and_committed() {
     let wrong = Action::Resolve {
         path: "a.txt".into(),
         picks: vec![],
+        text: None,
     };
     assert!(repo.perform(&wrong).is_err());
 
     let resolve = Action::Resolve {
         path: "a.txt".into(),
-        picks: vec![Pick::TheirsThenOurs],
+        picks: vec![Pick::TheirsThenOurs.into()],
+        text: None,
     };
     assert_eq!(repo.plan(&resolve).unwrap().commands[0].display(), "git add -- a.txt");
     repo.perform(&resolve).unwrap();
@@ -172,7 +176,8 @@ fn resolving_keeps_bytes_that_are_not_utf8() {
     assert_eq!(file.chunks.len(), 2);
     repo.perform(&Action::Resolve {
         path: "a.txt".into(),
-        picks: vec![Pick::OursThenTheirs],
+        picks: vec![Pick::OursThenTheirs.into()],
+        text: None,
     })
     .unwrap();
     let bytes = std::fs::read(fx.path().join("a.txt")).unwrap();
@@ -333,7 +338,8 @@ fn a_conflicted_symlink_is_taken_whole_and_its_target_left_alone() {
     let err = repo
         .perform(&Action::Resolve {
             path: "link".into(),
-            picks: vec![Pick::Theirs],
+            picks: vec![Pick::Theirs.into()],
+            text: None,
         })
         .unwrap_err();
     assert!(err.to_string().contains("whole"), "{err}");
@@ -347,4 +353,177 @@ fn a_conflicted_symlink_is_taken_whole_and_its_target_left_alone() {
     let target = std::fs::read_link(fx.path().join("link")).unwrap();
     assert_eq!(target.to_str(), Some("theirs.txt"));
     assert_eq!(read(&fx, "ours.txt"), "ours.txt content\n");
+}
+
+#[test]
+fn a_conflict_takes_lines_written_by_hand() {
+    let fx = diverged();
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+    let file = repo.conflict_file("a.txt").unwrap();
+    assert!(file.text && file.renamed.is_none());
+
+    repo.perform(&Action::Resolve {
+        path: "a.txt".into(),
+        picks: vec![Resolution::Lines {
+            lines: vec!["2, as both meant".into(), "".into()],
+        }],
+        text: None,
+    })
+    .unwrap();
+    assert_eq!(read(&fx, "a.txt"), "one\n2, as both meant\n\nthree\n");
+    assert_eq!(repo.operation().unwrap().unwrap().conflicted, 0);
+}
+
+/// Both sides change the last line of a CRLF file that ends without a line break.
+fn crlf_conflict() -> Fixture {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "one\r\ntwo\r\nthree", "Root");
+    fx.git(&["switch", "-q", "-c", "feature"]);
+    fx.commit("a.txt", "one\r\ntwo\r\nTHREE", "Shout three");
+    fx.git(&["switch", "-q", "main"]);
+    fx.commit("a.txt", "one\r\ntwo\r\n3", "Number three");
+    fx
+}
+
+#[test]
+fn typed_lines_keep_the_line_endings_of_the_file() {
+    let fx = crlf_conflict();
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+    repo.perform(&Action::Resolve {
+        path: "a.txt".into(),
+        picks: vec![Resolution::Lines {
+            lines: vec!["Three".into(), "and four".into()],
+        }],
+        text: None,
+    })
+    .unwrap();
+    assert_eq!(read(&fx, "a.txt"), "one\r\ntwo\r\nThree\r\nand four");
+
+    let fx = crlf_conflict();
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+    // Picks and text at once are refused.
+    assert!(
+        repo.perform(&Action::Resolve {
+            path: "a.txt".into(),
+            picks: vec![Pick::Ours.into()],
+            text: Some("x".into()),
+        })
+        .is_err()
+    );
+    repo.perform(&Action::Resolve {
+        path: "a.txt".into(),
+        picks: vec![],
+        text: Some("one\nTwo\nThree".into()),
+    })
+    .unwrap();
+    assert_eq!(read(&fx, "a.txt"), "one\r\nTwo\r\nThree");
+    assert_eq!(repo.operation().unwrap().unwrap().conflicted, 0);
+}
+
+#[test]
+fn typed_text_is_refused_for_a_file_that_is_not_utf8() {
+    let mut fx = Fixture::new();
+    let write = |fx: &Fixture, bytes: &[u8]| std::fs::write(fx.path().join("a.txt"), bytes).unwrap();
+    write(&fx, b"caf\xe9\nbase\n");
+    fx.git(&["add", "a.txt"]);
+    fx.git(&["commit", "-q", "-m", "Root"]);
+    fx.git(&["switch", "-q", "-c", "feature"]);
+    write(&fx, b"caf\xe9\ntheirs\n");
+    fx.git(&["commit", "-q", "-am", "Theirs"]);
+    fx.git(&["switch", "-q", "main"]);
+    write(&fx, b"caf\xe9\nours\n");
+    fx.git(&["commit", "-q", "-am", "Ours"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+
+    assert!(!repo.conflict_file("a.txt").unwrap().text);
+    let err = repo
+        .perform(&Action::Resolve {
+            path: "a.txt".into(),
+            picks: vec![Resolution::Lines {
+                lines: vec!["x".into()],
+            }],
+            text: None,
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("UTF-8"), "{err}");
+    // Nothing was written: the file still has git's markers.
+    assert!(
+        std::fs::read(fx.path().join("a.txt"))
+            .unwrap()
+            .starts_with(b"caf\xe9\n<<<<<<<")
+    );
+}
+
+#[test]
+fn a_file_renamed_on_one_side_says_where_it_came_from() {
+    let mut fx = Fixture::new();
+    fx.commit("old.txt", "one\ntwo\nthree\nfour\nfive\nsix\n", "Root");
+    fx.git(&["switch", "-q", "-c", "feature"]);
+    fx.git(&["mv", "old.txt", "new.txt"]);
+    fx.commit("new.txt", "one\nTWO\nthree\nfour\nfive\nsix\n", "Rename and shout");
+    fx.git(&["switch", "-q", "main"]);
+    fx.commit("old.txt", "one\n2\nthree\nfour\nfive\nsix\n", "Number two");
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+
+    let file = repo.conflict_file("new.txt").unwrap();
+    assert_eq!(
+        file.renamed,
+        Some(Renamed {
+            from: "old.txt".into(),
+            side: ConflictSide::Theirs
+        })
+    );
+    assert_eq!(file.chunks.len(), 3);
+
+    // The other way round: main renamed it, feature changed the old name.
+    let mut fx = Fixture::new();
+    fx.commit("old.txt", "one\ntwo\nthree\nfour\nfive\nsix\n", "Root");
+    fx.git(&["switch", "-q", "-c", "feature"]);
+    fx.commit("old.txt", "one\nTWO\nthree\nfour\nfive\nsix\n", "Shout");
+    fx.git(&["switch", "-q", "main"]);
+    fx.git(&["mv", "old.txt", "new.txt"]);
+    fx.commit("new.txt", "one\n2\nthree\nfour\nfive\nsix\n", "Rename and number");
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+    let renamed = repo.conflict_file("new.txt").unwrap().renamed.unwrap();
+    assert_eq!((renamed.from.as_str(), renamed.side), ("old.txt", ConflictSide::Ours));
+}
+
+#[test]
+fn the_merge_tool_comes_from_the_git_config() {
+    let mut fx = diverged();
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+
+    fx.git(&["config", "merge.tool", "vimdiff"]);
+    let tool = repo.merge_tool().unwrap();
+    assert!(tool.terminal && !tool.gui);
+    assert!(
+        repo.open_merge_tool("a.txt")
+            .unwrap_err()
+            .to_string()
+            .contains("terminal")
+    );
+
+    fx.git(&["config", "merge.guitool", "vscode"]);
+    let tool = repo.merge_tool().unwrap();
+    assert_eq!((tool.label.as_str(), tool.terminal, tool.gui), ("VS Code", false, true));
+    assert_eq!(
+        repo.merge_tool_command("a.txt").unwrap().display(),
+        "git -c mergetool.keepBackup=false mergetool --no-prompt --gui -- a.txt"
+    );
+
+    // A custom tool that "merges" by taking feature's side: git stages the file once it quits.
+    fx.git(&["config", "merge.guitool", "take"]);
+    fx.git(&["config", "mergetool.take.cmd", "cp \"$REMOTE\" \"$MERGED\""]);
+    fx.git(&["config", "mergetool.take.trustExitCode", "true"]);
+    assert!(repo.open_merge_tool("a.txt").unwrap());
+    assert_eq!(read(&fx, "a.txt"), "one\nTWO on feature\nthree\n");
+    assert_eq!(repo.operation().unwrap().unwrap().conflicted, 0);
+    assert!(!fx.path().join("a.txt.orig").exists());
 }
