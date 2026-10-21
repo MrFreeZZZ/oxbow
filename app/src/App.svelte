@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { open } from "@tauri-apps/plugin-dialog";
+  import { message, open } from "@tauri-apps/plugin-dialog";
   import { listen } from "@tauri-apps/api/event";
   import { api, settings, stopped } from "./lib/api";
   import { WORKTREE_ID, type History, type HistoryRow, type ReadPart, type RecentRepo, type ReflogEntry, type RepoSummary } from "./lib/types";
@@ -17,7 +17,7 @@
   import { detachRequest, keepRequest, newBranchRequest, switchRequest, type BranchContext } from "./lib/branches";
   import DetachedBanner from "./lib/DetachedBanner.svelte";
   import OperationBanner from "./lib/OperationBanner.svelte";
-  import ConflictsView from "./lib/ConflictsView.svelte";
+  import ConflictsView, { draftSaves } from "./lib/ConflictsView.svelte";
   import { abortRequest, continueRequest, describe, mergeRequest, skipRequest } from "./lib/merge";
   import { stashMenu, stashRequest } from "./lib/stash";
   import { newWorktreeRequest } from "./lib/worktrees";
@@ -44,8 +44,7 @@
   import { stepChange } from "./lib/diffRows";
   import { conflictSteps, KEPT_CONFLICTS } from "./lib/conflicts";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { draftSaves } from "./lib/draftSaves";
+  import { getCurrentWindow, type CloseRequestedEvent } from "@tauri-apps/api/window";
   import PairPanel from "./lib/PairPanel.svelte";
   import SnapshotPanel from "./lib/SnapshotPanel.svelte";
   import LostCommitPanel from "./lib/LostCommitPanel.svelte";
@@ -1592,6 +1591,30 @@
     refresh();
   }
 
+  /** The window asks whether to close without the conflict draft: a close meanwhile waits. */
+  let askingToClose = false;
+  /** Closing the window, or quitting, waits for the Conflicts screen's last draft to be written.
+   *  When it can't be, or isn't after 3 seconds, the window stays and asks: Try Again, Close
+   *  Without Saving, or Cancel, which also calls off a quit. */
+  async function closeRequested(event: CloseRequestedEvent) {
+    if (askingToClose) return event.preventDefault();
+    // A save that failed earlier gets another go first: what stopped it may be over.
+    draftSaves.retry();
+    const why = await draftSaves.settle(3000);
+    if (why === null) return;
+    event.preventDefault();
+    askingToClose = true;
+    const answer = await message(`Oxbow couldn’t save your draft of the conflicts: ${why.replace(/\.$/, "")}. Do you really want to close without it?`, {
+      title: "Your conflict draft isn’t saved",
+      kind: "warning",
+      buttons: { yes: "Try Again", no: "Close Without Saving", cancel: "Cancel" },
+    }).catch(() => "Cancel");
+    askingToClose = false;
+    if (answer === "Close Without Saving") return void getCurrentWindow().destroy();
+    if (answer === "Try Again") return void getCurrentWindow().close();
+    api.cancelQuit().catch(() => {});
+  }
+
   /** Read one part again after it failed. The worktrees and submodules are read alone; the
    *  rest come with the history. */
   async function retryRead(part: ReadPart) {
@@ -1945,9 +1968,7 @@
     const unlisten = listen("repo-touched", () => refresh());
     // Signing in or out changes what GitHub tells about the pull requests.
     const account = listen("account-changed", () => repo && github.accountChanged());
-    // Closing the window, or quitting, waits for the Conflicts screen's last draft to be written:
-    // 3 seconds at most, so a save that hangs doesn't keep the window open.
-    const closing = getCurrentWindow().onCloseRequested(() => Promise.race([draftSaves.flush(), new Promise<void>((done) => setTimeout(done, 3000))]));
+    const closing = getCurrentWindow().onCloseRequested(closeRequested);
     return () => {
       unlisten.then((stop) => stop());
       account.then((stop) => stop());

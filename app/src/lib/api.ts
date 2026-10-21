@@ -165,6 +165,8 @@ export const api = {
   conflictDraft: (workdir: string) => invoke<unknown>("conflict_draft", { workdir }),
   saveConflictDraft: (workdir: string, draft: unknown) => invoke<void>("save_conflict_draft", { workdir, draft }),
   dropConflictDraft: (workdir: string) => invoke<void>("drop_conflict_draft", { workdir }),
+  /** A window stayed open when Quit closed it: Oxbow doesn't quit after all. */
+  cancelQuit: () => invoke<void>("cancel_quit"),
   stashCheck: (index: number, id: string) => invoke<StashCheck>("stash_check", { index, id }),
   stack: (branch: string | null) => invoke<Stack>("stack", { branch }),
   landedOn: (merged: string, candidates: string[]) => invoke<Landing | null>("landed_on", { merged, candidates }),
