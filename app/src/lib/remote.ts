@@ -7,6 +7,7 @@ import { describe, stoppedOnConflicts } from "./merge";
 import type { Action, Bisect, CommitBrief, Failure, HistoryRow, Operation, SshCheck, Tracking, UnpushedSubmodule } from "./types";
 import { unpushedWarning } from "./submodules";
 import { shortId } from "./format";
+import { errorLine } from "./reads";
 
 export interface RemoteContext {
   /** Checked-out branch; null when HEAD is detached. */
@@ -22,10 +23,12 @@ export interface RemoteContext {
   /** A merge, rebase, cherry-pick, revert or stash apply waiting to be finished. */
   operation?: Operation | null;
   bisect?: Bisect | null;
+  /** git's error when the upstreams couldn't be read: `tracking` null then says nothing. */
+  unread?: string | null;
 }
 
 /** The way out offered next to a reason, done by the caller. */
-export type SyncFix = "publish" | "resolve" | "continue" | "abort" | "newBranch" | "finishBisect";
+export type SyncFix = "publish" | "resolve" | "continue" | "abort" | "newBranch" | "finishBisect" | "retry";
 
 /** Why Pull or Push can't run now, shown when the grey button is clicked, with what fixes it. */
 export interface SyncBlock {
@@ -97,6 +100,13 @@ export function syncBlock(ctx: RemoteContext, kind: "pull" | "push"): SyncBlock 
     };
   }
   const t = ctx.tracking;
+  if (!t && ctx.unread) {
+    return {
+      title: "Couldn’t read the upstream",
+      body: ["Oxbow doesn’t know where ", chip(ctx, ctx.branch), " pushes and pulls, so it doesn’t guess: ", { code: errorLine(ctx.unread) }],
+      fixes: [{ label: "Retry", fix: "retry" }],
+    };
+  }
   if (kind === "pull" && t?.gone) {
     return {
       title: `${t.remote}/${t.branch} was deleted`,

@@ -7,6 +7,7 @@
   import { confirm, type Request } from "./confirm.svelte";
   import { shortId, shortTime } from "./format";
   import { followsWord, latestRequest, updateRequest } from "./submodules";
+  import { errorLine } from "./reads";
   import type { CommitBrief, Submodule, SubmoduleMove } from "./types";
 
   let {
@@ -16,6 +17,7 @@
     version,
     run,
     onClose,
+    onRetry,
   }: {
     sub: Submodule;
     /** All of the repository's submodules, for the requests. */
@@ -25,6 +27,8 @@
     version: number;
     run: (request: Request) => void;
     onClose: () => void;
+    /** Read the submodules again, after git couldn't read this one's folder. */
+    onRetry: () => void;
   } = $props();
 
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -169,7 +173,13 @@
   {/if}
 
   {#if sub.cloned}
-    {#if sub.changed}
+    {#if sub.changed === null}
+      <p class="note warn" title={sub.statusError ?? ""}>
+        <svg class="icon small" viewBox="0 0 16 16"><path d="M8 2.5 14 13H2zM8 6.5v3M8 11.2v.1" /></svg>
+        Couldn’t check for changes inside: {errorLine(sub.statusError)}
+        <button class="link" onclick={onRetry}>Retry</button>
+      </p>
+    {:else if sub.changed}
       <p class="note">
         <svg class="icon small" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" /><path d="M8 7.2v3.6M8 5.1v.1" /></svg>
         {plural(sub.changed, "file")} changed inside. They are committed in {sub.title}, not here:

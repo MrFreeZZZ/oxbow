@@ -5,12 +5,15 @@
   // the server, with when each remote was last fetched. The ahead and behind counts are only
   // as fresh as that fetch, so the line always says how old they are.
 
-  import type { History } from "./types";
+  import type { History, ReadPart } from "./types";
   import { activity, failureShort } from "./activity.svelte";
+  import { PART_NAMES, errorLine, readAgo, troubled, type ReadStates } from "./reads";
   import { lane, plate, relativeTime, tint } from "./format";
 
   let {
     history,
+    reads,
+    onRetry,
     color,
     onChanges,
     onPush,
@@ -20,6 +23,10 @@
     onPublish,
   }: {
     history: History;
+    /** How well each part besides the commits was read; null before the first read. */
+    reads: ReadStates | null;
+    /** Read a part again after it failed. */
+    onRetry: (part: ReadPart) => void;
     /** Lane color of the checked-out branch. */
     color: number;
     /** Show the uncommitted changes. */
@@ -58,6 +65,13 @@
   const ahead = $derived(t && !t.gone ? t.ahead : 0);
   const behind = $derived(t && !t.gone && !t.rewritten ? t.behind : 0);
   const diverged = $derived(ahead > 0 && behind > 0);
+  /** `git status` failed: the counts are not known, which is not the same as none. */
+  const unknown = $derived(!!changes?.unknown);
+  /** The parts not read this time, shown from an earlier read or not at all. */
+  const problems = $derived(troubled(reads));
+  const trackingPhase = $derived(reads?.tracking.phase ?? "ready");
+  /** No upstream known because none could be read, not because there is none. */
+  const noTracking = $derived(!t && trackingPhase === "failed");
 
   /** "4 min ago", "just now", "yesterday 14:05": inside a sentence. */
   function ago(time: number): string {
@@ -71,7 +85,8 @@
 
   /** The parts of the line after the branch name. */
   const parts = $derived.by(() => {
-    const out: { text: string; warn?: boolean }[] = [];
+    const out: { text: string; warn?: boolean; title?: string }[] = [];
+    if (unknown) out.push({ text: "Changes unknown", warn: true, title: errorLine(reads?.changes.error ?? null) });
     if (changes?.conflicted) out.push({ text: `${changes.conflicted} conflicted`, warn: true });
     const changed = (changes?.unstaged ?? 0) - (changes?.conflicted ?? 0);
     if (changed > 0) out.push({ text: `${changed} changed` });
@@ -79,6 +94,7 @@
     if (!changes) out.push({ text: "No changes" });
     if (!history.head.commit) out.push({ text: "No commits yet" });
     else if (!history.remotes.length) out.push({ text: "Local only" });
+    else if (noTracking) out.push({ text: "Upstream unknown", warn: true, title: errorLine(reads?.tracking.error ?? null) });
     else if (!t) out.push({ text: "Not published" });
     else if (t.gone) out.push({ text: `${t.remote}/${t.branch} is gone`, warn: true });
     else if (t.rewritten) out.push({ text: t.ahead ? `${t.ahead} to force push` : "Force push needed" });
@@ -86,6 +102,11 @@
       if (ahead) out.push({ text: `${ahead} to push` });
       if (behind) out.push({ text: `${behind} to pull` });
       if (!ahead && !behind) out.push({ text: `Up to date with ${upstream}` });
+    }
+    // Shown from an earlier read: the upstream, or that there was none, may have changed.
+    if (trackingPhase === "stale") out.push({ text: t ? "Counts may be stale" : "May be stale", warn: true, title: `Couldn’t read the upstreams again: ${errorLine(reads?.tracking.error ?? null)}` });
+    for (const part of ["operation", "bisect"] as const) {
+      if (problems.includes(part)) out.push({ text: part === "operation" ? "Merge state unknown" : "Bisect state unknown", warn: true, title: errorLine(reads?.[part].error ?? null) });
     }
     return out;
   });
@@ -109,7 +130,7 @@
   <button class="line" class:open onclick={() => (open = !open)} aria-expanded={open} aria-haspopup="dialog">
     <span class="branch" style:color={plate(color)}><span class="dot" style:background={lane(color)}></span>{branch}</span>
     {#each parts as part, i (i)}
-      <span class="sep">·</span><span class:warn={part.warn}>{part.text}</span>
+      <span class="sep">·</span><span class:warn={part.warn} title={part.title}>{part.text}</span>
     {/each}
     <span class="grow"></span>
     {#if remote}
@@ -133,28 +154,45 @@
     <div class="card" role="dialog" aria-label="Where your work is">
       <div class="head">
         <span class="h">Where your work is</span>
-        <span class="hint">{upstream ? `${branch} tracks ${upstream}` : remote && history.head.commit ? `${branch} is not on ${remote} yet` : `${branch} is only on this computer`}</span>
+        <span class="hint">{noTracking ? `Oxbow couldn’t read where ${branch} pushes and pulls` : upstream ? `${branch} tracks ${upstream}` : remote && history.head.commit ? `${branch} is not on ${remote} yet` : `${branch} is only on this computer`}</span>
       </div>
       <div class="flow">
         <div class="place">
           <span class="label">Working Folder</span>
-          <span class="n" class:zero={!(changes?.unstaged ?? 0)}>{changes?.unstaged ?? 0}</span>
-          <span class="what">{changes?.conflicted ? `${plural(changes.unstaged, "file")}, ${changes.conflicted} conflicted` : `${(changes?.unstaged ?? 0) === 1 ? "file" : "files"} changed`}</span>
-          <span class="detail">Edited, not staged yet</span>
-          <button class="button small act" disabled={!changes} onclick={then(onChanges)}>Review</button>
+          {#if unknown}
+            <span class="n warn">?</span>
+            <span class="what">changes not known</span>
+            <span class="detail warn" title={errorLine(reads?.changes.error ?? null)}>git status failed</span>
+            <button class="button small act" disabled={reads?.changes.phase === "loading"} onclick={() => onRetry("changes")}>{reads?.changes.phase === "loading" ? "Reading…" : "Retry"}</button>
+          {:else}
+            <span class="n" class:zero={!(changes?.unstaged ?? 0)}>{changes?.unstaged ?? 0}</span>
+            <span class="what">{changes?.conflicted ? `${plural(changes.unstaged, "file")}, ${changes.conflicted} conflicted` : `${(changes?.unstaged ?? 0) === 1 ? "file" : "files"} changed`}</span>
+            <span class="detail">Edited, not staged yet</span>
+            <button class="button small act" disabled={!changes} onclick={then(onChanges)}>Review</button>
+          {/if}
         </div>
         <svg class="arrow" viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
         <div class="place">
           <span class="label">Staged</span>
-          <span class="n" class:zero={!changes?.staged}>{changes?.staged ?? 0}</span>
-          <span class="what">{(changes?.staged ?? 0) === 1 ? "file" : "files"} staged</span>
+          {#if unknown}
+            <span class="n warn">?</span>
+            <span class="what">not known</span>
+          {:else}
+            <span class="n" class:zero={!changes?.staged}>{changes?.staged ?? 0}</span>
+            <span class="what">{(changes?.staged ?? 0) === 1 ? "file" : "files"} staged</span>
+          {/if}
           <span class="detail">Go into the next commit</span>
           <button class="button small act" disabled={!changes?.staged} onclick={then(onChanges)}>Commit…</button>
         </div>
         <svg class="arrow" viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
         <div class="place mine" style:background={tint(color, "soft")} style:border-color="color-mix(in srgb, {lane(color)} 28%, transparent)">
           <span class="label" style:color={plate(color)}>{branch}</span>
-          {#if t && !t.gone}
+          {#if noTracking}
+            <span class="n warn">?</span>
+            <span class="what">upstream not known</span>
+            <span class="detail warn" title={errorLine(reads?.tracking.error ?? null)}>Couldn’t read the upstreams</span>
+            <button class="button small act" disabled={trackingPhase === "loading"} onclick={() => onRetry("tracking")}>{trackingPhase === "loading" ? "Reading…" : "Retry"}</button>
+          {:else if t && !t.gone}
             <span class="n" class:zero={!ahead}>{ahead}</span>
             <span class="what">{ahead === 1 ? "commit" : "commits"} to push</span>
             <span class="detail">{t.rewritten ? `Replace old versions on ${t.remote}` : ahead ? `Not on ${t.remote} yet` : `All on ${t.remote}`}</span>
@@ -173,7 +211,12 @@
         <svg class="arrow" viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
         <div class="place">
           <span class="label">{upstream ?? remote ?? "Server"}</span>
-          {#if upstream && t}
+          {#if noTracking}
+            <span class="n warn">?</span>
+            <span class="what">not known</span>
+            <span class="detail">Read the upstream first</span>
+            <button class="button small act" disabled={!remote || !!activity.running} onclick={then(onFetch)}>Fetch</button>
+          {:else if upstream && t}
             <span class="n" class:zero={!behind}>{behind}</span>
             <span class="what">{t.rewritten ? "old versions there" : `new ${behind === 1 ? "commit" : "commits"} there`}</span>
             <span class="detail" class:warn={stale}>{checked === null ? "Not fetched yet" : `As of the fetch ${ago(checked)}`}</span>
@@ -200,6 +243,22 @@
           <button class="button small act" onclick={then(() => onTheirs(upstream!))}>See Their Commits</button>
           <button class="button small act" disabled={!!activity.running} onclick={then(() => onPull("merge"))} title="Pull and join both sides with a merge commit">Merge…</button>
           <button class="button small act" disabled={!!activity.running} onclick={then(() => onPull("rebase"))} title="Pull and replay your commits on top of theirs">Rebase…</button>
+        </div>
+      {/if}
+
+      {#if problems.length && reads}
+        <div class="problems">
+          {#each problems as part (part)}
+            {@const state = reads[part]}
+            <div class="problem">
+              <svg class="mark" viewBox="0 0 16 16"><path d="M8 2.2 14.2 13H1.8z" /><path d="M8 6.4v3M8 11.2v.1" /></svg>
+              <span class="words">
+                <span class="title">Couldn’t read the {PART_NAMES[part]}</span>
+                <span class="detail" title={state.error ?? ""}>{state.phase === "stale" ? `Showing what was there before (${readAgo(state, Date.now()).toLowerCase()}). ` : "Not known, so not shown as none. "}{errorLine(state.error)}</span>
+              </span>
+              <button class="button small act" disabled={state.phase === "loading"} onclick={() => onRetry(part)}>{state.phase === "loading" ? "Reading…" : "Retry"}</button>
+            </div>
+          {/each}
         </div>
       {/if}
 
@@ -435,6 +494,36 @@
   .title {
     font-size: var(--text-body);
     font-weight: 600;
+  }
+  .problems {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .problem {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: var(--radius-l);
+    background: color-mix(in srgb, var(--orange) 9%, transparent);
+  }
+  .problem .act {
+    margin-top: 0;
+    align-self: center;
+  }
+  .mark {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    fill: none;
+    stroke: var(--orange);
+    stroke-width: 1.4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .n.warn {
+    color: var(--orange);
   }
   .remotes {
     display: flex;

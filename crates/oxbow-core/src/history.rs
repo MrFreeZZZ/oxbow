@@ -79,11 +79,15 @@ pub struct History {
     pub operation: Option<Operation>,
     /// A bisect in progress, or one that found its commit and waits to be finished.
     pub bisect: Option<Bisect>,
-    /// Every working folder of the repository, the main one first. Just this one when there are
-    /// no others, or when git can't list them.
+    /// Every working folder of the repository, the main one first. Empty when git can't list
+    /// them: `problems` says so.
     pub worktrees: Vec<Worktree>,
-    /// The repository's submodules, in the order of `.gitmodules`.
+    /// The repository's submodules, in the order of `.gitmodules`. Empty when they can't be
+    /// read: `problems` says so.
     pub submodules: Vec<Submodule>,
+    /// The parts of this read that failed. What they show is not known, which is not the same
+    /// as none: no operation, no upstream, no changes.
+    pub problems: Vec<ReadProblem>,
     pub refs: Vec<RefInfo>,
     /// Tags the default remote does not have yet, as far as Oxbow knows.
     pub local_tags: Vec<String>,
@@ -109,7 +113,8 @@ pub struct History {
     /// fetched.
     pub shallow: bool,
     /// The uncommitted changes the row of uncommitted changes counts; `None` when git could not
-    /// list them. The Changes panel shows these, so a reload asks git for them once.
+    /// list them, and `problems` says why: the row is still there, with no counts. The Changes
+    /// panel shows these, so a reload asks git for them once.
     pub changes: Option<WorkingTree>,
     /// Stands for the files on disk of `changes`, by size and modification time: an edit that
     /// keeps the line counts still changes it. For Reload to tell whether anything changed.
@@ -209,6 +214,47 @@ pub struct WorktreeSummary {
     /// Of the unstaged files, the new ones git does not track yet.
     pub untracked: usize,
     pub conflicted: usize,
+    /// `git status` failed: the counts are 0 because they are not known.
+    pub unknown: bool,
+}
+
+/// A part of the History read that failed, and git's words for why.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadProblem {
+    pub part: ReadPart,
+    pub error: String,
+}
+
+/// The parts of the History read that can fail on their own, leaving the commits shown.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum ReadPart {
+    /// The uncommitted changes of this folder (`git status`).
+    Changes,
+    /// The upstreams of the branches and their ahead/behind counts (`git for-each-ref`).
+    Tracking,
+    /// A merge, rebase, cherry-pick or revert under way.
+    Operation,
+    Bisect,
+    /// The list of worktrees (`git worktree list`).
+    Worktrees,
+    /// The list of submodules (`.gitmodules` and the index).
+    Submodules,
+}
+
+impl ReadPart {
+    /// How the Console names it.
+    pub fn name(self) -> &'static str {
+        match self {
+            ReadPart::Changes => "status",
+            ReadPart::Tracking => "upstreams",
+            ReadPart::Operation => "operation",
+            ReadPart::Bisect => "bisect",
+            ReadPart::Worktrees => "worktrees",
+            ReadPart::Submodules => "submodules",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -297,7 +343,12 @@ fn rows_key(
 }
 
 /// What the row of uncommitted changes says: the operation under way and the file counts.
-fn fill_worktree_row(row: &mut HistoryRow, tree: &WorkingTree, operation: Option<&Operation>, branch: Option<&str>) {
+fn fill_worktree_row(
+    row: &mut HistoryRow,
+    tree: Option<&WorkingTree>,
+    operation: Option<&Operation>,
+    branch: Option<&str>,
+) {
     row.summary = operation
         .map_or("Uncommitted changes", |op| match op.kind {
             OperationKind::Merge => "Merge in progress",
@@ -312,16 +363,27 @@ fn fill_worktree_row(row: &mut HistoryRow, tree: &WorkingTree, operation: Option
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
     row.graph.branch = branch.map(str::to_owned);
-    row.worktree = Some(WorktreeSummary {
-        files: tree.file_count(),
-        staged: tree.staged.len(),
-        unstaged: tree.unstaged.len(),
-        untracked: tree
-            .unstaged
-            .iter()
-            .filter(|f| matches!(f.status, crate::commit::FileStatus::Untracked))
-            .count(),
-        conflicted: tree.conflicted.len(),
+    row.worktree = Some(match tree {
+        Some(tree) => WorktreeSummary {
+            files: tree.file_count(),
+            staged: tree.staged.len(),
+            unstaged: tree.unstaged.len(),
+            untracked: tree
+                .unstaged
+                .iter()
+                .filter(|f| matches!(f.status, crate::commit::FileStatus::Untracked))
+                .count(),
+            conflicted: tree.conflicted.len(),
+            unknown: false,
+        },
+        None => WorktreeSummary {
+            files: 0,
+            staged: 0,
+            unstaged: 0,
+            untracked: 0,
+            conflicted: 0,
+            unknown: true,
+        },
     });
 }
 
@@ -365,14 +427,26 @@ impl Repo {
     ) -> Result<History> {
         let (history, reads) = crate::cli::recording(|| self.read_history(options, cache, known));
         if let Ok(history) = &history {
-            let changes = history.changes.as_ref().map_or(0, WorkingTree::file_count);
-            crate::console::read_note(format!(
-                "refs {} · commits {} · status {} {}",
+            let status = match &history.changes {
+                Some(tree) => {
+                    let changes = tree.file_count();
+                    format!(
+                        "status {} {}",
+                        crate::console::grouped(changes),
+                        if changes == 1 { "change" } else { "changes" }
+                    )
+                }
+                None => "status failed".to_owned(),
+            };
+            let mut note = format!(
+                "refs {} · commits {} · {status}",
                 crate::console::grouped(history.refs.len()),
                 crate::console::grouped(history.loaded),
-                crate::console::grouped(changes),
-                if changes == 1 { "change" } else { "changes" }
-            ));
+            );
+            for problem in history.problems.iter().filter(|p| p.part != ReadPart::Changes) {
+                note.push_str(&format!(" · {} failed", problem.part.name()));
+            }
+            crate::console::read_note(note);
         }
         history.map(|history| History { reads, ..history })
     }
@@ -381,22 +455,45 @@ impl Repo {
         let repo = self.local();
         let head = self.head()?;
         let mut refs = self.refs()?;
-        // A failing `git for-each-ref` only hides the upstreams and their counts.
-        let mut upstreams = self.branch_tracking().unwrap_or_default();
+        // Each of these can fail on its own: the history still shows, and `problems` says what
+        // isn't known, so that it doesn't look like none.
+        let mut problems = Vec::new();
+        let mut note = |part: ReadPart, err: Error| {
+            problems.push(ReadProblem {
+                part,
+                error: err.to_string(),
+            })
+        };
+        let mut upstreams = self.branch_tracking().unwrap_or_else(|err| {
+            note(ReadPart::Tracking, err);
+            HashMap::new()
+        });
         for r in refs.iter_mut().filter(|r| r.kind == RefKind::Local) {
             r.tracking = upstreams.remove(&r.name);
         }
         let remotes = self.remotes();
         let stashes = self.stashes()?;
-        // A failure to read the operation's state only hides its banner.
-        let operation = self.operation().ok().flatten();
+        let operation = self.operation().unwrap_or_else(|err| {
+            note(ReadPart::Operation, err);
+            None
+        });
         let rebasing = operation.as_ref().is_some_and(|op| op.kind == OperationKind::Rebase);
-        let bisect = self.bisect().ok().flatten();
-        let worktrees = self.worktrees().unwrap_or_default();
-        let submodules = self.submodules();
-        // Uncommitted changes get a row of their own on top. A failing `git status` only hides the row.
-        let changes = self.working_tree().ok();
-        let dirty = changes.as_ref().is_some_and(|tree| !tree.is_empty());
+        let bisect = self.bisect().unwrap_or_else(|err| {
+            note(ReadPart::Bisect, err);
+            None
+        });
+        let worktrees = self.worktrees().unwrap_or_else(|err| {
+            note(ReadPart::Worktrees, err);
+            Vec::new()
+        });
+        let submodules = self.read_submodules().unwrap_or_else(|err| {
+            note(ReadPart::Submodules, err);
+            Vec::new()
+        });
+        // Uncommitted changes get a row of their own on top. When `git status` fails the row
+        // stays, saying the changes aren't known, rather than looking clean.
+        let changes = self.working_tree().map_err(|err| note(ReadPart::Changes, err)).ok();
+        let dirty = changes.as_ref().is_none_or(|tree| !tree.is_empty());
         let production = self.production_setting();
         let shallow = repo.is_shallow();
         // A deeper fetch moves where the history stops without moving any ref.
@@ -459,13 +556,13 @@ impl Repo {
         } else {
             built.rows.clone()
         };
-        if let (Some(row), Some(tree)) = (rows.first_mut().filter(|r| r.worktree.is_some()), &changes) {
-            fill_worktree_row(row, tree, operation.as_ref(), head.branch.as_deref());
+        if let Some(row) = rows.first_mut().filter(|r| r.worktree.is_some()) {
+            fill_worktree_row(row, changes.as_ref(), operation.as_ref(), head.branch.as_deref());
         }
 
         let previous_branch = head.branch.is_none().then(|| self.previous_branch(&refs)).flatten();
         // The checked-out branch's upstream was read with the others. A failing `git for-each-ref`
-        // only hides the ahead/behind counts.
+        // leaves it out, and `problems` says so.
         let tracking = match &head.branch {
             Some(branch) => refs
                 .iter()
@@ -489,6 +586,7 @@ impl Repo {
             bisect,
             worktrees,
             submodules,
+            problems,
             local_tags: self.local_tags(&refs),
             fetched: self.fetch_times_of(&remotes, &refs),
             refs,
@@ -821,6 +919,7 @@ impl Repo {
                     unstaged: 0,
                     untracked: 0,
                     conflicted: 0,
+                    unknown: false,
                 }),
             });
         }

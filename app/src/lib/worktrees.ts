@@ -226,12 +226,17 @@ function newWorktreeSheet(ctx: BranchContext, repoPath: string, shown: string[],
 
 /** Remove a worktree; with `stash`, its uncommitted changes go to the stash first. */
 export function removeWorktreeRequest(ctx: BranchContext, wt: Worktree, stash = false): Request {
-  const dirty = wt.changed > 0;
+  const dirty = (wt.changed ?? 0) > 0;
+  /** `git status` failed there: changes or not isn't known, so it isn't forced. */
+  const unknown = wt.changed === null;
+  const changed = wt.changed ?? 0;
   const body: Part[] = ["Deletes the folder ", { code: tilde(wt.path) }, ". "];
   if (wt.branch) body.push(branchPart(ctx, wt), " and all its commits stay in this repository.");
   else body.push("HEAD there is detached at ", branchPart(ctx, wt), ": commits only it has are left on no branch.");
-  if (dirty && stash) body.push(` Its ${plural(wt.changed, "uncommitted file")} go${wt.changed === 1 ? "es" : ""} to the stash first, under Stashes, so ${wt.changed === 1 ? "it isn’t" : "they aren’t"} lost.`);
-  else if (dirty) body.push(` The folder has ${plural(wt.changed, "changed file")} that ${wt.changed === 1 ? "was" : "were"} never committed; removing deletes ${wt.changed === 1 ? "it" : "them"} too.`);
+  if (unknown && stash) body.push(" Any uncommitted changes there go to the stash first, under Stashes, so they aren’t lost.");
+  else if (unknown) body.push(" Oxbow couldn’t check it for uncommitted changes (git status failed there), so it isn’t forced: git stops if there are any.");
+  else if (dirty && stash) body.push(` Its ${plural(changed, "uncommitted file")} go${changed === 1 ? "es" : ""} to the stash first, under Stashes, so ${changed === 1 ? "it isn’t" : "they aren’t"} lost.`);
+  else if (dirty) body.push(` The folder has ${plural(changed, "changed file")} that ${changed === 1 ? "was" : "were"} never committed; removing deletes ${changed === 1 ? "it" : "them"} too.`);
   else body.push(" Files git ignores there, like build output, go too.");
   if (wt.locked !== null) body.push(" It is locked, so it is unlocked first.");
   return {
@@ -240,12 +245,12 @@ export function removeWorktreeRequest(ctx: BranchContext, wt: Worktree, stash = 
     icon: stash ? "stash" : "drop",
     button: stash ? "Stash and Remove" : "Remove",
     danger: !stash,
-    alt: dirty && !stash ? { label: "Stash Them First", request: () => removeWorktreeRequest(ctx, wt, true) } : undefined,
-    note: dirty && !stash ? "Stash Them First keeps them, under Stashes." : "The branch stays: make a worktree for it again any time.",
+    alt: (dirty || unknown) && !stash ? { label: "Stash Them First", request: () => removeWorktreeRequest(ctx, wt, true) } : undefined,
+    note: (dirty || unknown) && !stash ? "Stash Them First keeps them, under Stashes." : "The branch stays: make a worktree for it again any time.",
     status: `Removing ${wt.name}…`,
     done: `Removed ${wt.name}.${dirty && stash ? " Its changes are in the stash." : ""}`,
     after: () => void api.closeWindowOf(wt.path).catch(() => {}),
-    action: { kind: "worktreeRemove", path: wt.path, force: dirty, stash: dirty && stash },
+    action: { kind: "worktreeRemove", path: wt.path, force: dirty, stash: (dirty || unknown) && stash },
   };
 }
 

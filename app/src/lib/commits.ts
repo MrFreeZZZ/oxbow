@@ -3,7 +3,7 @@
 
 import { api } from "./api";
 import type { Part, Recovery, Request } from "./confirm.svelte";
-import type { BranchContext } from "./branches";
+import { changesUnknown, type BranchContext } from "./branches";
 import { nothingToPick, stoppedOnConflicts } from "./merge";
 import type { Failure, History, HistoryRow, ResetMode } from "./types";
 import { shortId } from "./format";
@@ -140,7 +140,9 @@ export function resetRequest(ctx: BranchContext, row: HistoryRow, mode: ResetMod
   } else {
     body.push("No commits leave the branch.");
   }
-  if (mode === "hard") body.push(ctx.uncommitted ? ` together with your ${plural(ctx.uncommitted, "uncommitted file")}.` : ".");
+  const unknown = changesUnknown(ctx);
+  if (mode === "hard" && unknown) body.push(", together with any uncommitted changes: Oxbow couldn’t read them (git status failed).");
+  else if (mode === "hard") body.push(ctx.uncommitted ? ` together with your ${plural(ctx.uncommitted, "uncommitted file")}.` : ".");
   else if (ctx.uncommitted) body.push(` Your ${plural(ctx.uncommitted, "uncommitted file")} stay as they are.`);
   const warning = pushedWarning(ctx, gone);
   if (warning) body.push(warning);
@@ -150,7 +152,7 @@ export function resetRequest(ctx: BranchContext, row: HistoryRow, mode: ResetMod
     const them = orphans === gone.length ? (orphans === 1 ? "It is" : "They are") : `${orphans} of them are`;
     body.push(` ${them} on no other branch, so History stops showing ${orphans === 1 ? "it" : "them"}; git keeps such commits for about two weeks.`);
   }
-  const discards = mode === "hard" && (gone.length > 0 || ctx.uncommitted > 0);
+  const discards = mode === "hard" && (gone.length > 0 || ctx.uncommitted > 0 || unknown);
   return {
     title: `Reset ${name} to ${sha}?`,
     body,

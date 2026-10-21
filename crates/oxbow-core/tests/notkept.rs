@@ -177,7 +177,7 @@ fn removing_a_worktree_names_its_ignored_files_and_changes() {
             n,
             NotKept::Worktree {
                 removed: true,
-                changed: 1,
+                changed: Some(1),
                 ..
             }
         )),

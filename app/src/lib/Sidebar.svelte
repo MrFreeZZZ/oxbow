@@ -29,7 +29,8 @@
   import { github } from "./github.svelte";
   import { downloadRequest, installRequest, lfs, patternNote, pruneRequest, lfsTrackRequest, untrackRequest } from "./lfs.svelte";
   import { nav } from "./nav.svelte";
-  import type { LfsPattern, RecentRepo, Submodule, Tracking, Worktree } from "./types";
+  import type { LfsPattern, ReadPart, RecentRepo, Submodule, Tracking, Worktree } from "./types";
+  import { PART_NAMES, age, errorLine, type ReadStates } from "./reads";
   import { addSubmoduleRequest, latestRequest, removeSubmoduleRequest, submoduleNote, submoduleWhere, syncRequest, updateRequest, followsWord } from "./submodules";
   import { actionIcons } from "./icons";
   import { locateRequest, lockRequest, newWorktreeRequest, pruneWorktreesRequest, removeWorktreeRequest, tilde, unlockRequest, worktreeOf } from "./worktrees";
@@ -47,6 +48,8 @@
   let {
     repo,
     history,
+    reads,
+    onRetry,
     selectedRow,
     ctx,
     onOpen,
@@ -68,6 +71,10 @@
   }: {
     repo: RepoSummary;
     history: History;
+    /** How well the worktrees and submodules were read; null before the first read. */
+    reads: ReadStates | null;
+    /** Read a part again after it failed. */
+    onRetry: (part: ReadPart) => void;
     selectedRow: HistoryRow | null;
     ctx: BranchContext;
     onOpen: () => void;
@@ -481,6 +488,7 @@
   function worktreeNote(wt: Worktree): { text: string; tone?: "accent" | "warn" } | null {
     if (wt.current) return { text: "this window", tone: "accent" };
     if (wt.missing) return { text: "missing", tone: "warn" };
+    if (wt.changed === null) return { text: "status unknown", tone: "warn" };
     if (wt.changed) return { text: `${wt.changed} changed` };
     return null;
   }
@@ -498,7 +506,8 @@
   /** The tooltip of a worktree's row. */
   function worktreeTitle(wt: Worktree): string {
     const lines = [wt.missing ? `Folder not found at ${tilde(wt.path)}` : wt.current ? tilde(wt.path) : `${tilde(wt.path)} · double-click to open its window`];
-    if (wt.changed) lines.push(`${wt.changed} ${wt.changed === 1 ? "file" : "files"} with uncommitted changes there`);
+    if (wt.changed === null) lines.push(`Couldn’t count its uncommitted changes: ${errorLine(wt.statusError)}`);
+    else if (wt.changed) lines.push(`${wt.changed} ${wt.changed === 1 ? "file" : "files"} with uncommitted changes there`);
     const tracking = worktreeTracking(wt);
     if (tracking && (tracking.ahead || tracking.behind))
       lines.push(`${wt.branch}: ${[tracking.ahead && `${tracking.ahead} to push`, tracking.behind && `${tracking.behind} to pull`].filter(Boolean).join(", ")} (${tracking.remote}/${tracking.branch})`);
@@ -651,11 +660,11 @@
       class:current={showingChanges}
       disabled={!changes}
       onclick={onChanges}
-      title={!changes ? "No uncommitted changes" : changes.conflicted ? `${changes.conflicted} conflicted` : `${changes.staged} staged · ${changes.unstaged} not staged`}
+      title={!changes ? "No uncommitted changes" : changes.unknown ? `Couldn’t read the uncommitted changes: ${errorLine(reads?.changes.error ?? null)}` : changes.conflicted ? `${changes.conflicted} conflicted` : `${changes.staged} staged · ${changes.unstaged} not staged`}
     >
       <svg class="icon" viewBox="0 0 16 16"><path d="M4 1.5h5.5l3 3v10h-8.5zM6.5 7h3M8 5.5v3M6.5 11h3" /></svg>
       <span class="grow">Changes</span>
-      {#if changes}<span class="meta" class:warn={changes.conflicted > 0}>{changes.files}</span>{/if}
+      {#if changes?.unknown}<span class="meta warn">?</span>{:else if changes}<span class="meta" class:warn={changes.conflicted > 0}>{changes.files}</span>{/if}
     </button>
     <button class="item" class:current={view === "stashes"} onclick={() => onView("stashes")}>
       <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.stash} /></svg>
@@ -773,13 +782,25 @@
       {/each}
     {/if}
 
-    {#if history.head.commit && worktrees.length}
+    {#snippet readNote(part: ReadPart)}
+      {@const state = reads?.[part]}
+      {#if state && (state.phase === "failed" || state.phase === "stale" || (state.phase === "loading" && state.error))}
+        <div class="read-note" title={state.at === null ? errorLine(state.error) : `Couldn’t read the ${PART_NAMES[part]} again, so this is the list from ${age(state, Date.now())}: ${errorLine(state.error)}`}>
+          <svg class="icon" viewBox="0 0 16 16"><path d="M8 2.5 14 13H2zM8 6.5v3M8 11.2v.1" /></svg>
+          <span class="grow ellipsis">{state.at === null ? "Couldn’t read the list" : `Stale · from ${age(state, Date.now())}`}</span>
+          <button class="retry" disabled={state.phase === "loading"} onclick={() => onRetry(part)}>{state.phase === "loading" ? "Reading…" : "Retry"}</button>
+        </div>
+      {/if}
+    {/snippet}
+
+    {#if history.head.commit && (worktrees.length || reads?.worktrees.error)}
       <div class="heading with-button">
         <span>Worktrees</span>
         <button class="add" onclick={() => run(newWorktreeRequest(ctx, repo.path))} aria-label="New worktree" title="New Worktree…">
           <svg class="icon" viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9" /></svg>
         </button>
       </div>
+      {@render readNote("worktrees")}
       {#each worktrees as wt (wt.path)}
         {@const color = wt.branch ? ctx.colorOf(wt.branch) : NO_BRANCH_COLOR}
         {@const note = worktreeNote(wt)}
@@ -816,7 +837,7 @@
       {/each}
     {/if}
 
-    {#if history.head.commit && submodules.length}
+    {#if history.head.commit && (submodules.length || reads?.submodules.error)}
       <div class="heading with-button" oncontextmenu={submodulesMenu} role="group" aria-label="Submodules">
         <span>Submodules</span>
         <button class="add" onclick={submodulesMenu} aria-label="Submodule actions">
@@ -826,6 +847,7 @@
           <svg class="icon" viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9" /></svg>
         </button>
       </div>
+      {@render readNote("submodules")}
       {#each submodules as sub (sub.path)}
         {@const note = submoduleNote(sub)}
         <button
@@ -1172,6 +1194,37 @@
   .meta.warn {
     color: var(--orange);
     white-space: nowrap;
+  }
+  /* A list git couldn't read this time: shown from an earlier read, or not at all. */
+  .read-note {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 8px 2px;
+    padding: 4px 6px 4px 10px;
+    border-radius: var(--radius-m);
+    background: color-mix(in srgb, var(--orange) 9%, transparent);
+    color: var(--orange);
+    font-size: var(--text-caption);
+  }
+  .read-note .icon {
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+  }
+  .retry {
+    flex-shrink: 0;
+    padding: 1px 6px;
+    border-radius: var(--radius-s);
+    color: var(--accent-text);
+    font-size: var(--text-caption);
+    font-weight: 600;
+  }
+  .retry:hover:not(:disabled) {
+    background: var(--field);
+  }
+  .retry:disabled {
+    color: var(--text2);
   }
   .item.nested {
     padding-left: 30px;

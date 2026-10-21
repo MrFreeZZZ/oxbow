@@ -832,3 +832,37 @@ fn current_branch_only_follows_a_new_upstream_without_a_ref_moving() {
     assert!(now.contains(&"New upstream work".to_owned()), "{now:?}");
     assert!(!now.contains(&"Old upstream work".to_owned()), "{now:?}");
 }
+
+#[test]
+fn a_failing_status_keeps_the_row_of_changes_as_unknown() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "one\n", "First");
+    // A damaged index: `git status` can't read it, the commits still can be.
+    std::fs::write(fx.path().join(".git/index"), "not an index").unwrap();
+    let history = Repo::open(fx.path())
+        .unwrap()
+        .history(&HistoryOptions::default())
+        .unwrap();
+    assert!(history.changes.is_none());
+    assert!(
+        history
+            .problems
+            .iter()
+            .any(|p| p.part == oxbow_core::ReadPart::Changes && !p.error.is_empty())
+    );
+    let row = &history.rows[0];
+    assert!(row.worktree.as_ref().is_some_and(|w| w.unknown));
+    assert_eq!(history.rows[1].summary, "First");
+}
+
+#[test]
+fn a_clean_read_has_no_problems() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "one\n", "First");
+    let history = Repo::open(fx.path())
+        .unwrap()
+        .history(&HistoryOptions::default())
+        .unwrap();
+    assert!(history.problems.is_empty());
+    assert!(history.rows.iter().all(|r| r.worktree.is_none()));
+}

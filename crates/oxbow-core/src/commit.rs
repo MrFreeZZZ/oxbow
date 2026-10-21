@@ -549,7 +549,12 @@ impl Repo {
         let mut file = change.file;
         if file.submodule.is_some() {
             let id = |id: Option<ObjectId>| id.map(|id| id.to_string());
-            let moved = self.submodule_move(&file.path, id(change.old).as_deref(), id(change.new).as_deref(), 0);
+            let moved = self.submodule_move(
+                &file.path,
+                id(change.old).as_deref(),
+                id(change.new).as_deref(),
+                Some(0),
+            );
             return Ok(FileDiff {
                 file,
                 hunks: Vec::new(),

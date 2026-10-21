@@ -35,8 +35,11 @@ pub struct Worktree {
     /// The folder is gone: moved, deleted, or on a drive that isn't connected.
     pub missing: bool,
     /// Files with uncommitted changes there, untracked ones included. Not counted for the folder
-    /// open here (History has its own row for those) or a missing one.
-    pub changed: usize,
+    /// open here (History has its own row for those) or a missing one: 0. `None` when `git
+    /// status` failed there, which is not the same as no changes: `status_error` says why.
+    pub changed: Option<usize>,
+    /// Why `changed` isn't known.
+    pub status_error: Option<String>,
 }
 
 impl Repo {
@@ -51,7 +54,13 @@ impl Repo {
             tree.missing = tree.missing || !path.is_dir();
             tree.current = !tree.missing && canonical(path) == here;
             if !tree.current && !tree.missing {
-                tree.changed = changed_files(path);
+                match changed_files(path) {
+                    Ok(count) => tree.changed = Some(count),
+                    Err(err) => {
+                        tree.changed = None;
+                        tree.status_error = Some(err.to_string());
+                    }
+                }
             }
         }
         Ok(list)
@@ -207,7 +216,8 @@ fn parse_list(text: &str) -> Vec<Worktree> {
                     current: false,
                     locked: None,
                     missing: false,
-                    changed: 0,
+                    changed: Some(0),
+                    status_error: None,
                 })
             }
             _ => {
@@ -231,14 +241,14 @@ fn parse_list(text: &str) -> Vec<Worktree> {
     list
 }
 
-/// Files with uncommitted changes in the folder at `path`; 0 when git can't tell.
-pub(crate) fn changed_files(path: &Path) -> usize {
+/// Files with uncommitted changes in the folder at `path`. An error when git can't tell, which
+/// callers must not show as 0.
+pub(crate) fn changed_files(path: &Path) -> Result<usize> {
     let out = crate::cli::run_in(
         path,
         &GitCommand::new(["status", "--porcelain", "-z", "--untracked-files=all"]),
         None,
-    );
-    let Ok(out) = out else { return 0 };
+    )?;
     let mut count = 0;
     let mut entries = out.stdout.split('\0').filter(|e| !e.is_empty());
     while let Some(entry) = entries.next() {
@@ -248,7 +258,7 @@ pub(crate) fn changed_files(path: &Path) -> usize {
             entries.next();
         }
     }
-    count
+    Ok(count)
 }
 
 /// The last part of a path, as the worktree's name.

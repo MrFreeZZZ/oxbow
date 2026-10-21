@@ -43,8 +43,11 @@ pub struct Submodule {
     pub branch: Option<String>,
     /// Cloned and checked out in its folder.
     pub cloned: bool,
-    /// Files with uncommitted changes in its folder, untracked ones included.
-    pub changed: usize,
+    /// Files with uncommitted changes in its folder, untracked ones included; 0 when it isn't
+    /// cloned. `None` when `git status` failed there: `status_error` says why.
+    pub changed: Option<usize>,
+    /// Why `changed` isn't known.
+    pub status_error: Option<String>,
     /// Commits checked out in the folder that `recorded` doesn't have.
     pub ahead: usize,
     /// Commits of `recorded` the folder doesn't have checked out.
@@ -102,19 +105,27 @@ pub struct SubmoduleMove {
     pub dropped: usize,
     /// A clone exists to read its commits from.
     pub cloned: bool,
-    /// For the working copy: files with uncommitted changes in its folder.
-    pub changed: usize,
+    /// For the working copy: files with uncommitted changes in its folder; `None` when git
+    /// couldn't tell.
+    pub changed: Option<usize>,
     /// `new` is in its clone but on none of its remote branches: nobody else can fetch it yet.
     pub unpushed: bool,
 }
 
 impl Repo {
     /// The repository's submodules in the order of `.gitmodules`; empty when it has none or they
-    /// can't be read.
+    /// can't be read. Where the difference matters, [`Repo::read_submodules`] tells.
     pub fn submodules(&self) -> Vec<Submodule> {
+        self.read_submodules().unwrap_or_default()
+    }
+
+    /// The repository's submodules in the order of `.gitmodules`; empty when it has none, an
+    /// error when `.gitmodules` or the index can't be read. A folder git can't read there has its
+    /// own [`Submodule::status_error`].
+    pub fn read_submodules(&self) -> crate::error::Result<Vec<Submodule>> {
         let repo = self.local();
-        let Ok(Some(list)) = repo.submodules() else {
-            return Vec::new();
+        let Some(list) = repo.submodules().map_err(crate::error::Error::git)? else {
+            return Ok(Vec::new());
         };
         let mut out = Vec::new();
         for module in list {
@@ -142,7 +153,8 @@ impl Repo {
                 current: None,
                 branch: None,
                 cloned,
-                changed: 0,
+                changed: Some(0),
+                status_error: None,
                 ahead: 0,
                 behind: 0,
                 missing: false,
@@ -153,7 +165,13 @@ impl Repo {
                 sub.branch = git(&dir, ["symbolic-ref", "-q", "--short", "HEAD"])
                     .map(|s| s.trim().to_owned())
                     .filter(|s| !s.is_empty());
-                sub.changed = crate::worktrees::changed_files(&dir);
+                match crate::worktrees::changed_files(&dir) {
+                    Ok(count) => sub.changed = Some(count),
+                    Err(err) => {
+                        sub.changed = None;
+                        sub.status_error = Some(err.to_string());
+                    }
+                }
                 if let (Some(current), Some(recorded)) = (&sub.current, &sub.recorded)
                     && current != recorded
                 {
@@ -168,7 +186,7 @@ impl Repo {
             }
             out.push(sub);
         }
-        out
+        Ok(out)
     }
 
     /// Where git can read the submodule at `path`: its folder when checked out, else its clone in
@@ -194,7 +212,13 @@ impl Repo {
 
     /// How the submodule at `path` moved from `old` to `new`, with the commits in between as far
     /// as its clone has them. `changed` counts its folder's uncommitted files, for the working copy.
-    pub fn submodule_move(&self, path: &str, old: Option<&str>, new: Option<&str>, changed: usize) -> SubmoduleMove {
+    pub fn submodule_move(
+        &self,
+        path: &str,
+        old: Option<&str>,
+        new: Option<&str>,
+        changed: Option<usize>,
+    ) -> SubmoduleMove {
         let info = self.submodules().into_iter().find(|s| s.path == path);
         let dir = self.submodule_dir(path);
         let mut out = SubmoduleMove {

@@ -247,6 +247,7 @@
 
   /** "5 files · 3 staged · 1 unstaged · 1 untracked" for the row of uncommitted changes. */
   function worktreeLine(w: WorktreeSummary): string {
+    if (w.unknown) return "Couldn’t read them · git status failed";
     const parts = [`${w.files} ${w.files === 1 ? "file" : "files"}`];
     if (w.conflicted) parts.push(`${w.conflicted} conflicted`);
     if (w.staged) parts.push(`${w.staged} staged`);
@@ -479,7 +480,7 @@
               <span class="pill more" title={fit.folded.map((l) => l.name).join("\n")}>+{fit.folded.length}</span>
             {/if}
             {#if row.worktree}
-              <span class="byline">{worktreeLine(row.worktree)}</span>
+              <span class="byline" class:warn={row.worktree.unknown}>{worktreeLine(row.worktree)}</span>
             {:else}
               <span class="byline">
                 {#if kin.marks.has(row.id)}<span class="kin" style:color={plate(kin.color)} title="The selected commit was made on this one">↑ {kin.marks.get(row.id)}</span> ·{/if}
@@ -875,6 +876,9 @@
     color: var(--text2);
     white-space: nowrap;
     flex-shrink: 0;
+  }
+  .byline.warn {
+    color: var(--orange);
   }
   /* A search fades the commits that don't match, and the lines between them. */
   .row.faded {

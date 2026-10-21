@@ -10,8 +10,14 @@ export interface BranchContext {
   history: History;
   /** Lane color of a branch's latest commit, by local or remote name (`main`, `origin/main`). */
   colorOf: (name: string) => number;
-  /** Files with uncommitted changes. */
+  /** Files with uncommitted changes; 0 also when they couldn't be read: see `changesUnknown`. */
   uncommitted: number;
+}
+
+/** `git status` failed: whether there are uncommitted changes isn't known, so a sheet must not
+ *  say there are none. */
+export function changesUnknown(ctx: BranchContext): boolean {
+  return !!ctx.history.rows[0]?.worktree?.unknown;
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;

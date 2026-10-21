@@ -13,6 +13,7 @@ export function submoduleNote(sub: Submodule): { text: string; warn?: boolean; m
   if (!sub.cloned) return { text: "not cloned", muted: true };
   if (sub.missing) return { text: "needs fetch", warn: true };
   if (sub.current !== sub.recorded) return { text: "out of sync", warn: true };
+  if (sub.changed === null) return { text: "status unknown", warn: true };
   if (sub.changed) return { text: `${sub.changed} changed` };
   return null;
 }
@@ -58,7 +59,8 @@ export function updateRequest(subs: Submodule[], sub: Submodule | null, repoPath
   const body: Part[] = sub.cloned
     ? ["Checks out ", { code: to }, ` in ${sub.title}, the commit ${repo} records. Commits made there stay in its history.`]
     : ["Clones ", { code: sub.url ?? sub.path }, " into ", { code: sub.path }, " and checks out ", { code: to }, `, the commit ${repo} records.`];
-  if (sub.changed) body.push(` Its ${plural(sub.changed, "changed file")} stop the update if the checkout would overwrite them.`);
+  if (sub.changed === null) body.push(" Oxbow couldn’t check it for changed files (git status failed there): any the checkout would overwrite stop the update.");
+  else if (sub.changed) body.push(` Its ${plural(sub.changed, "changed file")} stop the update if the checkout would overwrite them.`);
   return {
     title: sub.cloned ? `Update ${sub.title} to ${to}?` : `Clone ${sub.title}?`,
     body,
@@ -127,7 +129,8 @@ export function syncRequest(sub: Submodule | null): Request {
 /** Remove a submodule: its folder, its settings and its `.gitmodules` entry, staged. */
 export function removeSubmoduleRequest(sub: Submodule): Request {
   const body: Part[] = ["Deletes the folder ", { code: sub.path }, " and its entry in ", { code: ".gitmodules" }, ". Commit the result to remove it for everyone."];
-  if (sub.changed) body.push(` ${plural(sub.changed, "file")} changed inside ${sub.title} ${sub.changed === 1 ? "is" : "are"} lost with the folder.`);
+  if (sub.changed === null) body.push(` Oxbow couldn’t check ${sub.title} for changed files (git status failed there): any it has are lost with the folder.`);
+  else if (sub.changed) body.push(` ${plural(sub.changed, "file")} changed inside ${sub.title} ${sub.changed === 1 ? "is" : "are"} lost with the folder.`);
   return {
     title: `Remove the submodule ${sub.title}?`,
     body,

@@ -63,7 +63,7 @@ fn the_list_has_what_is_recorded_and_what_is_checked_out() {
     assert_eq!(lint.current.as_deref(), Some(ids[2].as_str()));
     assert_eq!(lint.branch.as_deref(), Some("main"));
     assert!(lint.cloned && !lint.out_of_sync());
-    assert_eq!((lint.changed, lint.ahead, lint.behind), (0, 0, 0));
+    assert_eq!((lint.changed, lint.ahead, lint.behind), (Some(0), 0, 0));
 
     let history = repo.history(&HistoryOptions::default()).unwrap();
     assert_eq!(history.submodules, list);
@@ -141,7 +141,7 @@ fn files_changed_inside_are_counted() {
     fx.write("libs/lint/rules.txt", "edited\n");
     fx.write("libs/lint/new.txt", "new\n");
     let repo = Repo::open(fx.path()).unwrap();
-    assert_eq!(repo.submodules()[0].changed, 2);
+    assert_eq!(repo.submodules()[0].changed, Some(2));
 
     let tree = repo.working_tree().unwrap();
     let file = tree.unstaged.iter().find(|f| f.path == "libs/lint").unwrap();
@@ -153,7 +153,19 @@ fn files_changed_inside_are_counted() {
         .submodule
         .unwrap();
     assert_eq!(moved.moved, Moved::Same);
-    assert_eq!(moved.changed, 2);
+    assert_eq!(moved.changed, Some(2));
+}
+
+#[test]
+fn a_folder_git_cant_read_is_not_counted_as_clean() {
+    let (fx, _lib, _ids) = app_with_submodule();
+    // The submodule's own index, damaged: its `git status` fails.
+    std::fs::write(fx.path().join(".git/modules/libs/lint/index"), "not an index").unwrap();
+    let repo = Repo::open(fx.path()).unwrap();
+    let sub = &repo.read_submodules().unwrap()[0];
+    assert!(sub.cloned);
+    assert_eq!(sub.changed, None);
+    assert!(sub.status_error.is_some());
 }
 
 #[test]
@@ -457,7 +469,7 @@ fn removing_one_names_the_ignored_files_lost_with_its_folder() {
     // git status in the folder says nothing about it.
     assert_eq!(sub(&mut fx, &["status", "--porcelain"]), "");
     let repo = Repo::open(fx.path()).unwrap();
-    assert_eq!(repo.submodules()[0].changed, 0);
+    assert_eq!(repo.submodules()[0].changed, Some(0));
 
     let gaps = repo
         .not_kept(&Action::SubmoduleRemove {
