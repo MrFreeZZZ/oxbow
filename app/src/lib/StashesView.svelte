@@ -5,7 +5,7 @@
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { CommitDetail, FileChange, FileDiff, History, StashCheck, StashInfo } from "./types";
   import type { Request } from "./confirm.svelte";
-  import type { BranchContext } from "./branches";
+  import { changesUnknown, type BranchContext } from "./branches";
   import { applyRequest, dropRequest, stashBranchRequest, stashMenu, stashName, stashRequest } from "./stash";
   import { filesBrief, filterWords, stashMatches } from "./stashFilter";
   import { plate, relativeTime, shortId, splitPath, tint } from "./format";
@@ -224,6 +224,8 @@
       <button class="button primary" onclick={() => run(stashRequest(ctx))} disabled={busy} title={busy ? "Finish or abort what is under way first" : "Stash your uncommitted changes"}>
         Stash {plural(ctx.uncommitted, "Change")}
       </button>
+    {:else if changesUnknown(ctx)}
+      <span class="nothing">Oxbow couldn’t read the uncommitted changes: git status failed.</span>
     {:else}
       <span class="nothing">Nothing to stash now: there are no uncommitted changes.</span>
     {/if}
@@ -232,7 +234,7 @@
   <section class="list" aria-label="Stashes">
     <div class="list-head">
       <span class="grow">{stashes.length} {stashes.length === 1 ? "stash" : "stashes"}{stashes.length > 1 ? " · newest first" : ""}</span>
-      <button class="stash-now" onclick={() => run(stashRequest(ctx))} disabled={!ctx.uncommitted || busy} title={ctx.uncommitted ? "Stash your uncommitted changes" : "No uncommitted changes to stash"}>
+      <button class="stash-now" onclick={() => run(stashRequest(ctx))} disabled={!ctx.uncommitted || busy} title={ctx.uncommitted ? "Stash your uncommitted changes" : changesUnknown(ctx) ? "Oxbow couldn’t read the uncommitted changes: git status failed" : "No uncommitted changes to stash"}>
         <svg class="icon small" viewBox="0 0 16 16"><path d="M2.5 3.5h11v3h-11zM3.5 6.5v6h9v-6M6.5 9h3" /></svg>
         {ctx.uncommitted ? `Stash ${plural(ctx.uncommitted, "Change")}` : "Stash Changes"}
       </button>

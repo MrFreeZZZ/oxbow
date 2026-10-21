@@ -69,6 +69,17 @@ export interface WorktreeSummary {
   /** Of the unstaged files, the new ones git does not track yet. */
   untracked: number;
   conflicted: number;
+  /** `git status` failed: the counts are 0 because they aren't known. */
+  unknown: boolean;
+}
+
+/** The parts of the History read that can fail on their own, leaving the commits shown. */
+export type ReadPart = "changes" | "tracking" | "operation" | "bisect" | "worktrees" | "submodules";
+
+/** A part of the History read that failed, and git's words for why. */
+export interface ReadProblem {
+  part: ReadPart;
+  error: string;
 }
 
 export interface StashInfo {
@@ -132,6 +143,9 @@ export interface History {
   worktrees: Worktree[];
   /** In the order of `.gitmodules`. */
   submodules: Submodule[];
+  /** The parts of this read that failed: what they show isn't known, which is not the same as
+   *  none. See `settle` in reads.ts, which keeps the last good reading of each, marked stale. */
+  problems: ReadProblem[];
   refs: RefInfo[];
   /** Tags the default remote doesn’t have yet, as far as Oxbow knows. */
   localTags: string[];
@@ -449,8 +463,8 @@ export interface SubmoduleMove {
   dropped: number;
   /** A clone exists to read the commits from. */
   cloned: boolean;
-  /** Working copy: files changed in its folder. */
-  changed: number;
+  /** Working copy: files changed in its folder; null when git couldn't tell. */
+  changed: number | null;
   /** `new` is on none of its remote branches yet. */
   unpushed: boolean;
 }
@@ -629,8 +643,10 @@ export interface Worktree {
   locked: string | null;
   /** Its folder is gone. */
   missing: boolean;
-  /** Files with uncommitted changes there; 0 for this window's and a missing one. */
-  changed: number;
+  /** Files with uncommitted changes there; 0 for this window's and a missing one. null when
+   *  `git status` failed there, which is not the same as none: `statusError` says why. */
+  changed: number | null;
+  statusError: string | null;
 }
 
 /** A submodule: another repository checked out in a folder here, at the commit this one records. */
@@ -651,8 +667,10 @@ export interface Submodule {
   /** null while detached, as `git submodule update` leaves it. */
   branch: string | null;
   cloned: boolean;
-  /** Files with uncommitted changes in its folder. */
-  changed: number;
+  /** Files with uncommitted changes in its folder; 0 when not cloned. null when `git status`
+   *  failed there: `statusError` says why. */
+  changed: number | null;
+  statusError: string | null;
   /** Commits checked out that `recorded` doesn't have, and the other way round. */
   ahead: number;
   behind: number;
@@ -890,7 +908,7 @@ export interface SizedFile {
 export type NotKept =
   | { kind: "bigFiles"; files: SizedFile[]; more: number; limit: number }
   | { kind: "ignored"; folder: string; files: SizedFile[]; more: number; bytes: number }
-  | { kind: "worktree"; folder: string; branch: string | null; changed: number; removed: boolean }
+  | { kind: "worktree"; folder: string; branch: string | null; changed: number | null; removed: boolean }
   | { kind: "notLogged"; what: string }
   | { kind: "submoduleFolder"; folder: string }
   | { kind: "pushed"; branch: string; remote: string; commits: { id: string; summary: string }[]; more: number; revert: string | null };

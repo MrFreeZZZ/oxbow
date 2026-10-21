@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   SubmoduleMove,
   UnpushedSubmodule,
+  Submodule,
+  Worktree,
   Blame,
   Source,
   FileHistory,
@@ -186,8 +188,12 @@ export const api = {
   revealWorktree: (path: string) => invoke<void>("reveal_worktree", { path }),
   /** A window of its own for the worktree at `path`, or the one it is already open in. */
   openWindow: (path: string) => invoke<void>("open_window", { path }),
-  submoduleMove: (path: string, old: string | null, newId: string | null, changed = 0) => invoke<SubmoduleMove>("submodule_move", { path, old, new: newId, changed }),
+  submoduleMove: (path: string, old: string | null, newId: string | null, changed: number | null = 0) => invoke<SubmoduleMove>("submodule_move", { path, old, new: newId, changed }),
   unpushedSubmodules: () => invoke<UnpushedSubmodule[]>("unpushed_submodules"),
+  /** The submodules alone, for Retry after History couldn't read them. */
+  submodules: () => invoke<Submodule[]>("submodules"),
+  /** The worktrees alone, with their counts of changed files, for Retry. */
+  worktrees: () => invoke<Worktree[]>("worktrees"),
   /** After removing the worktree at `path`, close the window that showed it. */
   closeWindowOf: (path: string) => invoke<void>("close_window_of", { path }),
   monospaceFonts: () => invoke<string[]>("monospace_fonts"),

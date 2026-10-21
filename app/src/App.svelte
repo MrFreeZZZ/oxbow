@@ -2,7 +2,8 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { listen } from "@tauri-apps/api/event";
   import { api, settings } from "./lib/api";
-  import { WORKTREE_ID, type History, type HistoryRow, type RecentRepo, type RefInfo, type ReflogEntry, type RepoSummary } from "./lib/types";
+  import { WORKTREE_ID, type History, type HistoryRow, type ReadPart, type RecentRepo, type RefInfo, type ReflogEntry, type RepoSummary } from "./lib/types";
+  import { retried, settle, stillFailing, type ReadStates } from "./lib/reads";
   import Sidebar from "./lib/Sidebar.svelte";
   import HistoryList from "./lib/HistoryList.svelte";
   import GraphLegend from "./lib/GraphLegend.svelte";
@@ -83,6 +84,8 @@
 
   let repo = $state<RepoSummary | null>(null);
   let history = $state<History | null>(null);
+  /** How well each part of `history` besides the commits was read: see reads.ts. */
+  let reads = $state<ReadStates | null>(null);
 
   /** Past the unpushed commits a load walks, the rest are told in the background, and a reload
    *  marks them. */
@@ -650,7 +653,7 @@
       repo = summary;
       nav.repo = summary.path;
       github.load(summary.path);
-      history = next;
+      take(next, null);
       version++;
       oplog.load();
       lfs.load();
@@ -1312,6 +1315,7 @@
       unpushed: history.rows.filter((r) => r.unpushed && !r.worktree && r.graph.branch === history!.head.branch),
       operation: history.operation,
       bisect: history.bisect,
+      unread: reads?.tracking.phase === "failed" || (reads?.tracking.phase === "loading" && reads.tracking.at === null) ? reads.tracking.error : null,
     },
   );
   const pullBlock = $derived(remoteCtx && syncBlock(remoteCtx, "pull"));
@@ -1334,6 +1338,7 @@
     else if (fix === "resolve" && op) resolving = true;
     else if (fix === "continue" && op && branchCtx) run(continueRequest(branchCtx, op));
     else if (fix === "abort" && op && branchCtx) run(abortRequest(branchCtx, op));
+    else if (fix === "retry") void retryRead("tracking");
   }
 
   /** A repository with no remote: make one on GitHub and push there. */
@@ -1533,7 +1538,7 @@
       const next = withRows(await api.history(limit, null, shown?.key ?? null, focusOnly), shown);
       // Another repository was opened meanwhile: this answer may come from the old one.
       if (mine !== generation || loading) return;
-      history = next;
+      take(next, shown);
       version++;
       oplog.load();
       lfs.load();
@@ -1542,6 +1547,38 @@
       else if (next.focus && !next.focus.rows.some((i) => next.rows[i].id === selected)) selected = next.head.commit ?? selected;
     } catch (err) {
       if (mine === generation) error = String(err);
+    }
+  }
+
+  /** Show `next`, read after `shown`: a part it couldn't read keeps `shown`'s reading, marked
+   *  stale, or is not known (see reads.ts). */
+  function take(next: History, shown: History | null) {
+    const settled = settle(next, shown, shown ? reads : null, Date.now());
+    history = settled.history;
+    reads = settled.states;
+  }
+
+  /** Read one part again after it failed. The worktrees and submodules are read alone; the
+   *  rest come with the history. */
+  async function retryRead(part: ReadPart) {
+    if (!reads || !history) return;
+    const mine = generation;
+    reads = { ...reads, [part]: { ...reads[part], phase: "loading" } };
+    if (part !== "worktrees" && part !== "submodules") {
+      const error = reads[part].error ?? "";
+      await refresh();
+      // No new reading came (the reload failed, or waits for older commits): as it was.
+      if (mine === generation && reads?.[part].phase === "loading") reads = stillFailing(reads, part, error);
+      return;
+    }
+    try {
+      const patch = part === "worktrees" ? { worktrees: await api.worktrees() } : { submodules: await api.submodules() };
+      if (mine !== generation || !history || !reads) return;
+      const done = retried(history, reads, part, patch, Date.now());
+      history = done.history;
+      reads = done.states;
+    } catch (err) {
+      if (mine === generation && reads) reads = stillFailing(reads, part, String(err));
     }
   }
 
@@ -1577,7 +1614,7 @@
       const next = withRows(await api.history(until ? limit : limit + Math.min(limit, MAX_STEP), until, shown?.key ?? null, focusOnly), shown);
       if (mine !== generation || loading) return false;
       limit = Math.max(limit, next.loaded);
-      history = next;
+      take(next, shown);
       const found = !!until && next.rows.some((r) => r.id === until);
       if (until && !found) unreachable.add(until);
       return found;
@@ -1639,6 +1676,7 @@
     activity.reset();
     repo = null;
     history = null;
+    reads = null;
     selected = null;
     second = null;
     search.clear();
@@ -1936,7 +1974,7 @@
       <div class="side-catcher" onclick={() => (sideShown = false)}></div>
     {/if}
     <!-- Over a narrow window the sidebar steps aside again once something in it is picked. -->
-    <Sidebar {repo} {history} {selectedRow} ctx={branchCtx!} onOpen={chooseRepo} onOpenPath={load} onWelcome={closeRepo}
+    <Sidebar {repo} {history} {reads} onRetry={retryRead} {selectedRow} ctx={branchCtx!} onOpen={chooseRepo} onOpenPath={load} onWelcome={closeRepo}
       onPick={aside((id: string) => ((expanded = false), pick(id), requestAnimationFrame(() => list?.focus())))}
       {run}
       view={view === "series" ? seriesBack : view}
@@ -2101,7 +2139,7 @@
                 title={why === "push" ? undefined : pushBlock ? `${pushBlock.title} · click for more` : t?.rewritten ? `Force push to ${t.remote}/${t.branch}: it has the old versions of commits you rewrote` : t && !t.gone ? `Push to ${t.remote}/${t.branch}` : `Publish ${history.head.branch} to ${remoteCtx.remote}`}
               >
                 <svg class="icon" viewBox="0 0 16 16"><path d="M8 12V3M4.5 6.5 8 3l3.5 3.5M3 14h10" /></svg>
-                {#if t?.ahead}<span class="count">{t.ahead}</span>{:else if !t && history.head.branch}<span class="count">Publish</span>{/if}
+                {#if t?.ahead}<span class="count">{t.ahead}</span>{:else if !t && history.head.branch && !remoteCtx.unread}<span class="count">Publish</span>{/if}
               </button>
             </div>
             <ActivityPopover fix={fixFetch} retry={() => backgroundFetch(false)} settings={() => ((activity.open = false), api.openSettings())} reload={reload} />
@@ -2174,6 +2212,8 @@
       {#if view === "history" && !showConflicts && !searching && !operation && !history.bisect && history.head.branch}
         <StatusLine
           {history}
+          {reads}
+          onRetry={retryRead}
           color={headColor}
           onChanges={showChanges}
           onPush={() => sync("push")}
@@ -2368,6 +2408,7 @@
                 {version}
                 run={(request) => void run(request)}
                 onClose={() => (submoduleSel = null)}
+                onRetry={() => retryRead("submodules")}
               />
             {:else if oplog.compare}
               <SnapshotPanel

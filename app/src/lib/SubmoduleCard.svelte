@@ -33,7 +33,7 @@
       case "removed":
         return `${m.title} was removed`;
       case "same":
-        return m.changed ? `${m.title} has changes inside` : `${m.title} is at the commit recorded`;
+        return m.changed === null ? `${m.title} couldn’t be checked for changes` : m.changed ? `${m.title} has changes inside` : `${m.title} is at the commit recorded`;
       default:
         return `${m.title} moved to ${short(m.new)}`;
     }
@@ -105,7 +105,11 @@
       <svg class="icon small" viewBox="0 0 16 16"><path d="M8 2.5 14 13H2zM8 6.5v3M8 11.2v.1" /></svg>{short(move.new)} isn’t on {move.title}’s remote yet. Push it there before pushing this repository.
     </p>
   {/if}
-  {#if move.changed}
+  {#if move.changed === null}
+    <p class="note warn">
+      <svg class="icon small" viewBox="0 0 16 16"><path d="M8 2.5 14 13H2zM8 6.5v3M8 11.2v.1" /></svg>Oxbow couldn’t check {move.title} for changed files: git status failed there.
+    </p>
+  {:else if move.changed}
     <p class="note">
       <svg class="icon small" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" /><path d="M8 7.2v3.6M8 5.1v.1" /></svg>{plural(move.changed, "file")} changed inside {move.title}. They are committed there, not here: open it as a repository.
     </p>

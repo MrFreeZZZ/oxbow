@@ -64,7 +64,8 @@ pub enum NotKept {
     Worktree {
         folder: String,
         branch: Option<String>,
-        changed: usize,
+        /// `None` when `git status` failed there: the files may or may not have changes.
+        changed: Option<usize>,
         removed: bool,
     },
     /// The step itself stays out of the log, e.g. removing a worktree.
@@ -145,7 +146,7 @@ impl Repo {
                     out.push(NotKept::Worktree {
                         folder: folder.clone(),
                         branch: worktree.as_ref().and_then(|w| w.branch.clone()),
-                        changed: worktree.as_ref().map_or(0, |w| w.changed),
+                        changed: worktree.as_ref().map_or(Some(0), |w| w.changed),
                         removed: true,
                     });
                 }

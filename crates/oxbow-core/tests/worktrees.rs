@@ -100,6 +100,30 @@ fn the_other_folder_opens_as_a_repository_of_its_own() {
 }
 
 #[test]
+fn a_status_that_fails_is_not_counted_as_no_changes() {
+    let fx = repo_with_branch();
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&Action::WorktreeAdd {
+        path: sibling(&fx, "repo-broken"),
+        branch: "broken".into(),
+        create: true,
+        start: None,
+    })
+    .unwrap();
+    // A damaged index: the folder is there, but `git status` can't read it.
+    let index = fx.path().join(".git/worktrees/repo-broken/index");
+    std::fs::write(&index, "not an index").unwrap();
+    let list = repo.worktrees().unwrap();
+    let broken = list.iter().find(|w| w.name == "repo-broken").unwrap();
+    assert!(!broken.missing);
+    assert_eq!(broken.changed, None);
+    assert!(broken.status_error.as_deref().is_some_and(|e| e.contains("index")));
+    let main = list.iter().find(|w| w.current).unwrap();
+    assert_eq!(main.changed, Some(0));
+    assert_eq!(main.status_error, None);
+}
+
+#[test]
 fn removing_a_worktree_with_changes_forces_or_stashes_them() {
     let mut fx = repo_with_branch();
     let repo = Repo::open(fx.path()).unwrap();
@@ -116,8 +140,8 @@ fn removing_a_worktree_with_changes_forces_or_stashes_them() {
         std::fs::write(folder.join("notes.txt"), "new\n").unwrap();
     }
     let list = repo.worktrees().unwrap();
-    assert_eq!(list[1].changed, 2);
-    assert_eq!(list[2].changed, 2);
+    assert_eq!(list[1].changed, Some(2));
+    assert_eq!(list[2].changed, Some(2));
 
     // git refuses a plain remove while there are changes.
     let a = sibling(&fx, "repo-a");

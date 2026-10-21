@@ -68,7 +68,8 @@
       case "ignored":
         return `Files git ignores in ${gap.folder} are deleted for good`;
       case "worktree":
-        return gap.removed ? `${plural(gap.changed, "uncommitted file")} in ${gap.folder} ${gap.changed === 1 ? "is" : "are"} lost` : `${gap.branch} is checked out in ${gap.folder}`;
+        if (gap.removed && gap.changed === null) return `Uncommitted files in ${gap.folder}, if any, are lost: git status failed there`;
+        return gap.removed ? `${plural(gap.changed ?? 0, "uncommitted file")} in ${gap.folder} ${gap.changed === 1 ? "is" : "are"} lost` : `${gap.branch} is checked out in ${gap.folder}`;
       case "notLogged":
         return "Undo can’t put the folder back";
       case "submoduleFolder":

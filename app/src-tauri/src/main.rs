@@ -1222,13 +1222,34 @@ async fn submodule_move(
     path: String,
     old: Option<String>,
     new: Option<String>,
-    changed: usize,
+    changed: Option<usize>,
 ) -> CommandResult<oxbow_core::SubmoduleMove> {
     let repo = current(&session, &window)?;
     read(at(&repo), "Read a submodule", move || {
         Ok(repo.submodule_move(&path, old.as_deref(), new.as_deref(), changed))
     })
     .await
+}
+
+/// The submodules alone, for Retry after History couldn't read them.
+#[tauri::command]
+async fn submodules(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+) -> CommandResult<Vec<oxbow_core::Submodule>> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "Read the submodules", move || repo.read_submodules()).await
+}
+
+/// The worktrees alone, with their counts of changed files, for Retry after History couldn't
+/// read them.
+#[tauri::command]
+async fn worktrees(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+) -> CommandResult<Vec<oxbow_core::Worktree>> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "Read the worktrees", move || repo.worktrees()).await
 }
 
 /// Submodules whose recorded commit is on none of their remotes, for the warning before a push.
@@ -2215,6 +2236,8 @@ fn main() {
             reveal_worktree,
             open_window,
             submodule_move,
+            submodules,
+            worktrees,
             unpushed_submodules,
             close_window_of,
             reveal_file,

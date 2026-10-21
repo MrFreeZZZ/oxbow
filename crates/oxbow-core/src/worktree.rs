@@ -1060,7 +1060,7 @@ impl Repo {
         };
         let path = &file.path;
         let (old, new, changed) = match side {
-            Side::Staged => (id(format!("HEAD:{path}")), id(format!(":{path}")), 0),
+            Side::Staged => (id(format!("HEAD:{path}")), id(format!(":{path}")), Some(0)),
             Side::Unstaged => {
                 let folder = self.workdir().join(path);
                 let current =
@@ -1069,9 +1069,9 @@ impl Repo {
                         .map(|out| out.stdout.trim().to_owned())
                         .filter(|id| !id.is_empty());
                 let changed = if sub.changed {
-                    crate::worktrees::changed_files(&folder)
+                    crate::worktrees::changed_files(&folder).ok()
                 } else {
-                    0
+                    Some(0)
                 };
                 (id(format!(":{path}")), current, changed)
             }

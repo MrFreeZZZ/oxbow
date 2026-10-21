@@ -52,7 +52,8 @@ pub use fetched::RemoteFetch;
 pub use filehistory::{Blame, BlameCommit, BlameLine, FileCommit, FileHistory};
 pub use fix::{Fix, FixExpect, FixFile, FixState, FixStep, StepKind};
 pub use history::{
-    Focus, History, HistoryCache, HistoryOptions, HistoryRow, Label, PAGE, Piece, WORKTREE_ID, WorktreeSummary,
+    Focus, History, HistoryCache, HistoryOptions, HistoryRow, Label, PAGE, Piece, ReadPart, ReadProblem, WORKTREE_ID,
+    WorktreeSummary,
 };
 pub use lfs::{LfsChange, LfsPattern, LfsPointer, LfsStatus};
 pub use notkept::{NotKept, PushedCommit, SizedFile};
