@@ -102,8 +102,9 @@
       if (ahead) out.push({ text: `${ahead} to push` });
       if (behind) out.push({ text: `${behind} to pull` });
       if (!ahead && !behind) out.push({ text: `Up to date with ${upstream}` });
-      if (trackingPhase === "stale") out.push({ text: "Counts may be stale", warn: true, title: errorLine(reads?.tracking.error ?? null) });
     }
+    // Shown from an earlier read: the upstream, or that there was none, may have changed.
+    if (trackingPhase === "stale") out.push({ text: t ? "Counts may be stale" : "May be stale", warn: true, title: `Couldn’t read the upstreams again: ${errorLine(reads?.tracking.error ?? null)}` });
     for (const part of ["operation", "bisect"] as const) {
       if (problems.includes(part)) out.push({ text: part === "operation" ? "Merge state unknown" : "Bisect state unknown", warn: true, title: errorLine(reads?.[part].error ?? null) });
     }
