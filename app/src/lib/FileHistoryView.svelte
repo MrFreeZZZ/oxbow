@@ -6,7 +6,7 @@
   import { tick, untrack } from "svelte";
   import { api, stopped } from "./api";
   import { nav } from "./nav.svelte";
-  import { diffSettings, wholeByDefault } from "./prefs.svelte";
+  import { diffSettings, prefs, wholeByDefault } from "./prefs.svelte";
   import type { Blame, FileCommit, FileDiff, FileHistory, History, HistoryRow } from "./types";
   import { initials, lane, person, relativeTime, shortId, splitPath, tint } from "./format";
   import { languageOf, occurrences, paint } from "./syntax";
@@ -327,6 +327,18 @@
     if (at === shownAt) return;
     shownAt = at;
     show(at, true);
+  });
+
+  // Wrap and No Wrap draw the diff anew, without the ring: the same match is ringed again and
+  // brought into view, wherever the new layout put it.
+  let wrapShown = prefs.get("oxbow.diff.wrap");
+  $effect(() => {
+    const wrap = prefs.get("oxbow.diff.wrap");
+    if (wrap === wrapShown) return;
+    wrapShown = wrap;
+    untrack(() => {
+      if (find && mode === "changes") show(shownAt, true);
+    });
   });
 
   /** Ring the current match, and scroll to it: its block is drawn first if it is far away. */

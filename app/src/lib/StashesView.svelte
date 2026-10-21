@@ -1,7 +1,7 @@
 <script lang="ts">
   // The Stashes screen: every stash on the left, the picked one on the right with whether it
   // applies to the checked-out branch, its actions, its files and their diffs.
-  import { api } from "./api";
+  import { api, stopped } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { CommitDetail, FileChange, FileDiff, History, StashCheck, StashInfo } from "./types";
   import type { Request } from "./confirm.svelte";
@@ -38,6 +38,8 @@
 
   /** Grey, the color of stashes in the graph; also for a branch that is gone. */
   const STASH_COLOR = 10;
+  /** Lane of the diff read: a newer read, for another file or setting, stops the older one. */
+  const DIFF = "stash-diff";
 
   /** A stash's files: the tracked ones against the commit it was made on, then the untracked ones. */
   interface Files {
@@ -158,12 +160,22 @@
     // An untracked file's diff is in the stash's third commit.
     const source = f.tracked.some((x) => x.path === file) ? current.id : current.untracked;
     if (!source) return;
-    api.commitDiff(source, file, wholeFile).then(
+    // Only the latest read counts: an older answer, or its error, arriving late is dropped.
+    let live = true;
+    api.commitDiff(source, file, wholeFile, false, DIFF).then(
       (d) => {
-        if (stash?.id === current.id && path === file && whole === wholeFile) diffs = d;
+        if (live) diffs = d;
       },
-      (err) => (error = String(err)),
+      (err) => {
+        if (live && !stopped(err)) error = String(err);
+      },
     );
+    return () => (live = false);
+  });
+
+  // The diff read stops when the view closes: its answer would go nowhere.
+  $effect(() => () => {
+    api.stopReads([DIFF]).catch(() => {});
   });
 
   function pick(s: StashInfo) {
