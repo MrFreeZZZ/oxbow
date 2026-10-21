@@ -12,7 +12,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import type { DiffLine, FileDiff, Hunk, Side } from "./types";
-  import { plate, splitPath, tint } from "./format";
+  import { lane, plate, splitPath, tint } from "./format";
   import { prefs } from "./prefs.svelte";
   import { api, stopped } from "./api";
   import { confirm } from "./confirm.svelte";
@@ -577,7 +577,8 @@
   {@const kind = isShut ? null : special(diff)}
   <section class="file" class:shut={isShut} data-path={diff.file.path}>
     <header>
-      <div class="bar" style:background={tint(color, "head")} style:--name={plate(color)}>
+      <!-- Outlined in the branch color, as the Summary tab is. -->
+      <div class="bar" style:background={tint(color, "head")} style:border-color={`color-mix(in srgb, ${lane(color)} 40%, transparent)`} style:--name={plate(color)}>
         {#if foldable}
           <button
             class="head"
@@ -815,6 +816,7 @@
     gap: 8px;
     height: 34px;
     padding: 0 var(--space-1) 0 var(--space-3);
+    border: 1px solid transparent;
     border-radius: var(--radius-m);
     font-size: var(--text-small);
   }
