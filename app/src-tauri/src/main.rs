@@ -15,7 +15,8 @@ use oxbow_core::config::{self, ConfigScope};
 use oxbow_core::console;
 use oxbow_core::{
     Action, CommitBrief, CommitDetail, ConflictFile, DeletionCheck, DiffContext, DiffOptions, DiffPage, Failure,
-    FileDiff, History, HistoryCache, HistoryOptions, MergePreview, Plan, Repo, Side, Source, StashCheck, WorkingTree,
+    FileDiff, History, HistoryCache, HistoryOptions, MergePreview, MergeTool, Plan, Repo, Side, Source, StashCheck,
+    WorkingTree,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -1326,6 +1327,28 @@ async fn conflict_file(
     read(at(&repo), "Read a conflict", move || repo.conflict_file(&path)).await
 }
 
+/// The merge tool git is set to open, for the Conflicts screen's button.
+#[tauri::command]
+async fn merge_tool(window: tauri::WebviewWindow, session: State<'_, Session>) -> CommandResult<Option<MergeTool>> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "Read the merge tool", move || Ok(repo.merge_tool())).await
+}
+
+/// Open a conflicted file in the merge tool and wait until it quits: true when git staged it.
+#[tauri::command]
+async fn open_merge_tool(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    path: String,
+) -> CommandResult<bool> {
+    let repo = current(&session, &window)?;
+    let title = format!("Open {path} in the merge tool");
+    logged(Some(at(&repo)), console::EntryKind::Action, title, move || {
+        repo.open_merge_tool(&path)
+    })
+    .await
+}
+
 /// Whether `stash@{index}` applies cleanly to the checked-out commit.
 #[tauri::command]
 async fn stash_check(
@@ -2167,6 +2190,8 @@ fn main() {
             remote_deletion_check,
             merge_preview,
             conflict_file,
+            merge_tool,
+            open_merge_tool,
             stash_check,
             stack,
             landed_on,

@@ -27,6 +27,8 @@ export const defaults = {
   /** Old and new lines one under the other, or next to each other. */
   "oxbow.diff.layout": "unified" as "unified" | "split",
   "oxbow.diff.contextLines": 3,
+  /** The Conflicts screen shows the version both sides started from beside them. */
+  "oxbow.conflicts.showBase": false,
   "oxbow.diff.wordHighlight": true,
   "oxbow.diff.ignoreWhitespace": false,
   /** Long lines wrap at the edge; off, they run on and the lines of a file scroll sideways. */

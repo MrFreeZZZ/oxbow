@@ -16,6 +16,7 @@ import type {
   GitSettings,
   RepoSettings,
   ConflictFile,
+  MergeTool,
   DeletionCheck,
   FileDiff,
   History,
@@ -140,6 +141,9 @@ export const api = {
   remoteDeletionCheck: (branch: string) => invoke<CommitBrief[]>("remote_deletion_check", { branch }),
   mergePreview: (branch: string) => invoke<MergePreview>("merge_preview", { branch }),
   conflictFile: (path: string) => invoke<ConflictFile>("conflict_file", { path }),
+  mergeTool: () => invoke<MergeTool | null>("merge_tool"),
+  /** Waits until the tool quits; true when git staged the file. */
+  openMergeTool: (path: string) => invoke<boolean>("open_merge_tool", { path }),
   stashCheck: (index: number, id: string) => invoke<StashCheck>("stash_check", { index, id }),
   stack: (branch: string | null) => invoke<Stack>("stack", { branch }),
   landedOn: (merged: string, candidates: string[]) => invoke<Landing | null>("landed_on", { merged, candidates }),

@@ -1,14 +1,34 @@
 <script lang="ts">
   // The Conflicts screen: conflicted files on the left; for the open file, both sides on top
-  // (named by branch, never "ours" and "theirs") and the result underneath, where each conflict
-  // gets a side, or both, before the file is marked resolved.
+  // (named by branch, never "ours" and "theirs"), with the version they started from when asked,
+  // and the result underneath, where each conflict gets a side, both, or lines typed by hand,
+  // or the whole file is written as text, before the file is marked resolved.
 
   import TipCard from "./TipCard.svelte";
-  import { untrack } from "svelte";
+  import EditBox from "./EditBox.svelte";
+  import { onMount, untrack } from "svelte";
   import { api } from "./api";
-  import type { Request } from "./confirm.svelte";
-  import type { Chunk, ConflictFile, ConflictSide, History, Operation, Pick, WorkingTree } from "./types";
-  import { lane, NO_BRANCH_COLOR, plate, shortId, splitPath, tint } from "./format";
+  import { confirm, type Request } from "./confirm.svelte";
+  import { kept } from "./kept";
+  import { prefs } from "./prefs.svelte";
+  import {
+    conflictSteps,
+    joinLines,
+    kindOf,
+    linesOf,
+    markedText,
+    markerRoles,
+    markerStarts,
+    openMarkers,
+    splitLines,
+    stepIndex,
+    toResolution,
+    type Choice,
+    type Decision,
+    type Sides,
+  } from "./conflicts";
+  import type { Chunk, ConflictFile, ConflictSide, History, MergeTool, Operation, WorkingTree } from "./types";
+  import { NO_BRANCH_COLOR, plate, shortId, splitPath, tint } from "./format";
 
   let {
     history,
@@ -16,6 +36,7 @@
     colorOf,
     version,
     run,
+    refresh,
   }: {
     history: History;
     op: Operation;
@@ -23,20 +44,42 @@
     /** Goes up on every reload, so the lists reload too. */
     version: number;
     run: (request: Request) => void;
+    /** Reload the window, after the merge tool changed the repository. */
+    refresh: () => void;
   } = $props();
 
-  type Choice = "left" | "right" | "both";
+  type Conflict = Extract<Chunk, { kind: "conflict" }>;
+  /** A file written as text: what it is now, and what it started as, to tell an edit. */
+  type Text = { text: string; start: string };
+  /** What the screen had going, kept while the user is on another screen. */
+  type Saved = { step: string; choices: Map<string, Decision[]>; texts: Map<string, Text>; seen: string[] };
+  const KEPT = "conflicts";
 
   let tree = $state<WorkingTree | null>(null);
   let current = $state<string | null>(null);
   let file = $state<ConflictFile | null>(null);
   let error = $state<string | null>(null);
-  /** Choices per file, one per conflict, kept while the user moves between files. */
+  /** Decisions per file, one per conflict, kept while the user moves between files. */
   // A Map, as a conflicted file may be called `constructor` or `__proto__`.
-  let choices = $state.raw(new Map<string, (Choice | null)[]>());
+  let choices = $state.raw(new Map<string, Decision[]>());
+  /** Files being written as text. */
+  let texts = $state.raw(new Map<string, Text>());
   /** Every file that was conflicted in this step, so resolved ones still show as done. */
   let seen = $state<string[]>([]);
-  let seenFor = "";
+  /** The operation and commit the decisions belong to. */
+  let step = $state("");
+  /** The conflict last stepped to in the open file; -1 before the first step. */
+  let at = $state(-1);
+  /** A conflict just turned into lines to type: its box takes the focus. */
+  let fresh = $state<number | null>(null);
+  /** Leaving the text asks first, as typed text would be dropped. */
+  let leaving = $state(false);
+  /** The merge tool git opens; undefined until known. */
+  let tool = $state<MergeTool | null | undefined>(undefined);
+  /** The file open in the merge tool. */
+  let waiting = $state<string | null>(null);
+  let work = $state<HTMLElement>();
+  let textRows = $state<HTMLElement>();
 
   // On top the side being brought in, on the right of it the user's own work.
   const leftSide = $derived<ConflictSide>(op.yours === "ours" ? "theirs" : "ours");
@@ -44,6 +87,7 @@
   const labelOf = (side: ConflictSide) => (side === "ours" ? op.oursLabel : op.theirsLabel);
   const leftLabel = $derived(labelOf(leftSide));
   const rightLabel = $derived(labelOf(rightSide));
+  const sides = $derived<Sides>({ left: leftSide, right: rightSide, leftLabel, rightLabel });
   const isRef = (name: string) => history.refs.some((r) => r.name === name);
   const leftColor = $derived(isRef(leftLabel) ? colorOf(leftLabel) : NO_BRANCH_COLOR);
   const rightColor = $derived(op.branch ? colorOf(op.branch) : NO_BRANCH_COLOR);
@@ -81,21 +125,35 @@
       error = null;
       const key = `${op.kind}:${op.commit?.id ?? ""}`;
       const paths = next.conflicted.map((f) => f.path);
-      if (key !== seenFor) {
-        seenFor = key;
-        seen = paths;
-        choices = new Map();
+      if (key !== step) {
+        step = key;
+        // Back on the screen in the same step: the decisions are still there.
+        const saved = kept.get<Saved>(KEPT);
+        if (saved?.step === key) {
+          choices = saved.choices;
+          texts = saved.texts;
+          seen = [...saved.seen, ...paths.filter((p) => !saved.seen.includes(p))];
+        } else {
+          choices = new Map();
+          texts = new Map();
+          seen = paths;
+        }
       } else {
         seen = [...seen, ...paths.filter((p) => !seen.includes(p))];
       }
       if (!current || !paths.includes(current)) current = paths[0] ?? null;
-      await open(current);
+      await open(current, true);
     } catch (err) {
       error = String(err);
     }
   }
 
-  async function open(path: string | null) {
+  async function open(path: string | null, again = false) {
+    if (!again || path !== current) {
+      at = -1;
+      leaving = false;
+      fresh = null;
+    }
     current = path;
     if (!path) {
       file = null;
@@ -118,21 +176,98 @@
     untrack(() => reload());
   });
 
-  const picked = $derived(current ? (choices.get(current) ?? []) : []);
-  const open_ = $derived(picked.filter((c) => c === null).length);
-  const lineByLine = $derived(!!file && file.chunks.length > 0);
+  $effect(() => {
+    if (step) kept.set(KEPT, { step, choices, texts, seen } satisfies Saved);
+  });
 
-  function choose(k: number, choice: Choice | null) {
+  onMount(() => {
+    api
+      .mergeTool()
+      .then((found) => (tool = found))
+      .catch(() => (tool = null));
+    conflictSteps.step = stepConflict;
+    return () => {
+      if (conflictSteps.step === stepConflict) conflictSteps.step = null;
+    };
+  });
+
+  const picked = $derived(current ? (choices.get(current) ?? []) : []);
+  const asText = $derived(current ? (texts.get(current) ?? null) : null);
+  const conflicts = $derived((file?.chunks ?? []).filter((c): c is Conflict => c.kind === "conflict"));
+  const open_ = $derived(asText ? openMarkers(asText.text) : picked.filter((c) => c === null).length);
+  const lineByLine = $derived(!!file && file.chunks.length > 0);
+  const kind = $derived(file ? kindOf(file, labelOf) : null);
+  const showBase = $derived(prefs.get("oxbow.conflicts.showBase") && !!file?.base && lineByLine);
+
+  function decide(k: number, decision: Decision) {
     if (!current) return;
     const list = [...(choices.get(current) ?? [])];
-    list[k] = choice;
+    list[k] = decision;
     choices = new Map(choices).set(current, list);
   }
+
+  /** Turn a conflict into lines to type, starting from what it holds: both sides while open. */
+  function edit(k: number) {
+    const chunk = conflicts[k];
+    if (!chunk) return;
+    const lines = linesOf(chunk, picked[k] ?? null, sides) ?? [...chunk[leftSide], ...chunk[rightSide]];
+    fresh = k;
+    decide(k, { lines: [...lines] });
+  }
+
+  function startText() {
+    if (!current || !file?.text) return;
+    const text = markedText(file.chunks, picked, sides, showBase);
+    texts = new Map(texts).set(current, { text, start: text });
+    at = -1;
+  }
+
+  function stopText() {
+    if (!asText) return;
+    if (asText.text !== asText.start && !leaving) {
+      leaving = true;
+      return;
+    }
+    dropText();
+  }
+
+  function dropText() {
+    if (!current) return;
+    const next = new Map(texts);
+    next.delete(current);
+    texts = next;
+    leaving = false;
+    at = -1;
+  }
+
+  function typedText(value: string) {
+    if (!current || !asText) return;
+    texts = new Map(texts).set(current, { ...asText, text: value });
+  }
+
+  /** Go to the next or previous conflict (⌥F5, ⇧⌥F5), in every pane at once. */
+  function stepConflict(by: 1 | -1): boolean {
+    const starts = asText ? markerStarts(asText.text) : null;
+    const count = starts ? starts.length : conflicts.length;
+    if (!count || !work) return false;
+    at = at < 0 || at >= count ? (by > 0 ? 0 : count - 1) : stepIndex(at, by, count);
+    const targets = starts
+      ? [textRows?.children[starts[at]] as HTMLElement | undefined]
+      : [...work.querySelectorAll<HTMLElement>(`[data-conflict="${at}"]`)];
+    for (const target of targets) {
+      const scroller = target?.closest<HTMLElement>(".code");
+      if (!target || !scroller) continue;
+      scroller.scrollTop += target.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 8;
+    }
+    return true;
+  }
+
+  const stepCount = $derived(asText ? markerStarts(asText.text).length : conflicts.length);
 
   /** What each side looks like around the conflicts: one line of context, the rest folded. */
   type SideItem = { kind: "line"; no: number; text: string; k: number | null } | { kind: "fold"; count: number } | { kind: "head"; k: number } | { kind: "empty"; k: number };
 
-  function sideItems(chunks: Chunk[], side: ConflictSide): SideItem[] {
+  function sideItems(chunks: Chunk[], side: ConflictSide | "base"): SideItem[] {
     const items: SideItem[] = [];
     let no = 1;
     let k = 0;
@@ -170,11 +305,13 @@
     return cut ? items.map((i) => (i.kind === "line" ? { ...i, text: i.text.slice(cut) } : i)) : items;
   }
 
-  /** The whole result: agreed lines, picked lines tinted by where they came from, open conflicts. */
+  /** The whole result: agreed lines, picked lines tinted by where they came from, lines typed by
+   *  hand, open conflicts. */
   type ResultItem =
     | { kind: "line"; no: number; text: string; from: Choice | null; k: number | null; edge: "top" | "bottom" | "both" | null }
     | { kind: "open"; k: number }
-    | { kind: "bar"; k: number; choice: Choice };
+    | { kind: "bar"; k: number; choice: Choice }
+    | { kind: "typed"; k: number; no: number; value: string };
 
   const resultItems = $derived.by((): ResultItem[] => {
     if (!file) return [];
@@ -188,7 +325,10 @@
       }
       const choice = picked[k] ?? null;
       if (!choice) items.push({ kind: "open", k });
-      else {
+      else if (typeof choice === "object") {
+        items.push({ kind: "typed", k, no, value: joinLines(choice.lines) });
+        no += choice.lines.length;
+      } else {
         items.push({ kind: "bar", k, choice });
         const left = chunk[leftSide].map((text) => ({ text, from: "left" as Choice }));
         const right = chunk[rightSide].map((text) => ({ text, from: "right" as Choice }));
@@ -203,40 +343,65 @@
     }
     return items;
   });
+  /** Typed boxes keep their place by conflict, so typing in one never lands in another. */
+  const itemKey = (item: ResultItem, i: number) => (item.kind === "typed" ? `typed${item.k}` : `${item.kind}${i}`);
 
   const leftItems = $derived(file ? sideItems(file.chunks, leftSide) : []);
   const rightItems = $derived(file ? sideItems(file.chunks, rightSide) : []);
+  const baseItems = $derived(file && showBase ? sideItems(file.chunks, "base") : []);
 
-  function toPick(choice: Choice): Pick {
-    if (choice === "left") return leftSide;
-    if (choice === "right") return rightSide;
-    return leftSide === "theirs" ? "theirsThenOurs" : "oursThenTheirs";
-  }
+  /** Tints of the text: git's markers orange, each side's lines in its branch color. */
+  const roles = $derived(asText ? markerRoles(asText.text) : []);
+  const textTint = (i: number) => {
+    const role = roles[i];
+    return role === "marker"
+      ? "var(--orange-soft)"
+      : role === "left"
+        ? tint(leftColor, "soft")
+        : role === "right"
+          ? tint(rightColor, "soft")
+          : role === "base"
+            ? "var(--field)"
+            : undefined;
+  };
 
   const conflictsIn = (path: string) => {
+    if (texts.has(path)) return openMarkers(texts.get(path)!.text);
     const list = choices.get(path);
-    return list ? list.filter((c) => c === null).length : null;
+    // No conflicts line by line: the file is taken whole from one side.
+    return list?.length ? list.filter((c) => c === null).length : null;
   };
 
   function markResolved() {
     if (!current || !file || open_) return;
     const name = splitPath(current).name;
-    const list = picked as Choice[];
-    const words = list.map((c) => (c === "both" ? "both" : c === "left" ? leftLabel : rightLabel));
-    const same = words.every((w) => w === words[0]);
-    run({
+    const request = {
       title: `Mark ${name} as resolved?`,
-      body: [
-        "Oxbow writes your choices into ",
-        { code: current },
-        same && words.length > 1 ? `: ${words[0] === "both" ? "both sides" : words[0]} in all ${words.length} conflicts. ` : ". ",
-        "Then git stages the file, which marks the conflict resolved.",
-      ],
       icon: "stage",
       button: "Mark Resolved",
       status: `Resolving ${name}…`,
       done: `${name} is resolved.`,
-      action: { kind: "resolve", path: current, picks: list.map(toPick) },
+    } as const;
+    if (asText) {
+      run({
+        ...request,
+        body: ["Oxbow writes the text you edited into ", { code: current }, ". Then git stages the file, which marks the conflict resolved."],
+        action: { kind: "resolve", path: current, picks: [], text: asText.text },
+      });
+      return;
+    }
+    const list = picked as Exclude<Decision, null>[];
+    const words = list.map((c) => (typeof c === "object" ? "lines you typed" : c === "both" ? "both sides" : c === "left" ? leftLabel : rightLabel));
+    const same = words.every((w) => w === words[0]);
+    run({
+      ...request,
+      body: [
+        "Oxbow writes your choices into ",
+        { code: current },
+        same && words.length > 1 ? `: ${words[0]} in all ${words.length} conflicts. ` : ". ",
+        "Then git stages the file, which marks the conflict resolved.",
+      ],
+      action: { kind: "resolve", path: current, picks: list.map((d) => toResolution(d, sides)) },
     });
   }
 
@@ -273,10 +438,41 @@
     return "Both sides changed this file in a way git can’t show line by line. Pick one side’s version.";
   });
 
+  /** Why the merge tool can't open the file, or null when it can. */
+  const toolWhy = $derived.by(() => {
+    if (tool === undefined) return "Looking for the merge tool…";
+    if (!tool) return "No merge tool is set. Set one with: git config --global merge.tool <name>";
+    if (tool.terminal) return `${tool.name} runs in a terminal. Set merge.guitool to an app with a window.`;
+    if (!file || !lineByLine) return "A merge tool needs both sides’ text of the file.";
+    if (waiting && waiting !== current) return `${splitPath(waiting).name} is still open in ${tool.label}.`;
+    return null;
+  });
+  const toolLabel = $derived(tool && !tool.terminal ? tool.label : "Merge Tool");
+
+  /** Open the file in the merge tool; git waits for it to quit, then the screen reloads. */
+  async function openTool() {
+    if (!current || !tool || toolWhy || waiting) return;
+    const path = current;
+    const name = splitPath(path).name;
+    waiting = path;
+    try {
+      const done = await api.openMergeTool(path);
+      confirm.say(done ? `${name} is resolved in ${tool.label}.` : `${tool.label} closed. ${name} still has conflicts.`, done ? "done" : "info");
+    } catch (err) {
+      confirm.fail(err);
+    } finally {
+      waiting = null;
+      refresh();
+      await reload();
+    }
+  }
+
+  const textWhy = $derived(file && !file.text ? "This file isn’t UTF-8 text, so it can’t be typed in here. Pick sides, or use the merge tool." : null);
+
   const radius = (edge: string | null) => (edge === "both" ? "9px" : edge === "top" ? "9px 9px 0 0" : edge === "bottom" ? "0 0 9px 9px" : "0");
 </script>
 
-{#snippet sidePane(items: SideItem[], side: ConflictSide, label: string, note: string, color: number, choice: Choice)}
+{#snippet sidePane(items: SideItem[], label: string, note: string, color: number, choice: Choice | null)}
   <section class="pane" aria-label="{label}’s version">
     <header class="pane-head">
       <span class="cap" style:background={tint(color, "label")} style:color={plate(color)}>{label}</span>
@@ -285,18 +481,23 @@
     <div class="code side mono selectable">
       {#each items as item, i (i)}
         {#if item.kind === "head"}
-          {@const chosen = picked[item.k] === choice || picked[item.k] === "both"}
-          <div class="chead" style:background={tint(color, "bar")}>
+          {@const decision = picked[item.k] ?? null}
+          {@const chosen = choice !== null && (decision === choice || decision === "both")}
+          <div class="chead" class:current={at === item.k && !asText} data-conflict={item.k} style:background={tint(color, "bar")}>
             <span style:color={plate(color)}>Conflict {item.k + 1}</span>
             <span class="spacer"></span>
-            {#if chosen}
+            {#if choice === null || asText}
+              <!-- The base and the text: nothing to take from here. -->
+            {:else if chosen}
               <span class="in" style:color={plate(color)}>✓ In result</span>
+            {:else if decision !== null && typeof decision === "object"}
+              <span class="in muted">Typed in the result</span>
             {:else}
-              <button class="take" onclick={() => choose(item.k, choice)}>Take {label}</button>
+              <button class="take" onclick={() => decide(item.k, choice)}>Take {label}</button>
             {/if}
           </div>
         {:else if item.kind === "empty"}
-          <div class="line inblock" style:background={tint(color, "soft")}><span class="no"></span><span class="text gone">Nothing here: {label} removed these lines</span></div>
+          <div class="line inblock" style:background={tint(color, "soft")}><span class="no"></span><span class="text gone">Nothing here: {choice === null ? "these lines weren’t there" : `${label} removed these lines`}</span></div>
         {:else if item.kind === "fold"}
           <div class="fold">⋯ {item.count} unchanged {item.count === 1 ? "line" : "lines"}</div>
         {:else}
@@ -320,11 +521,14 @@
       {#each conflicted as path (path)}
         {@const p = splitPath(path)}
         {@const left = conflictsIn(path)}
+        {@const what = current === path && kind && kind.short !== "Text" ? kind.short : null}
         <button class="file" class:on={current === path} onclick={() => open(path)}>
           <span class="mark warn">!</span>
           <span class="fwords">
             <span class="ellipsis"><span class="dir">{p.dir}</span>{p.name}</span>
-            <span class="sub" class:orange={left !== 0} class:green={left === 0}>{left === null ? "Conflicted" : left === 0 ? "Ready to mark resolved" : `${left} ${left === 1 ? "conflict" : "conflicts"} left`}</span>
+            <span class="sub ellipsis" class:orange={left !== 0} class:green={left === 0}>
+              {left === null ? (what ?? "Conflicted") : `${what ? `${what} · ` : ""}${left === 0 ? "Ready to mark resolved" : `${left} ${left === 1 ? "conflict" : "conflicts"} left`}${texts.has(path) ? " · as text" : ""}`}
+            </span>
           </span>
         </button>
       {/each}
@@ -356,7 +560,7 @@
     </p>
   </aside>
 
-  <div class="work">
+  <div class="work" bind:this={work}>
     {#if error}
       <p class="empty error">{error}</p>
     {:else if !current}
@@ -365,67 +569,155 @@
         <span class="title">Every conflict is resolved</span>
         <span>{op.kind === "merge" || op.kind === "squash" ? "Commit the merge" : op.kind === "stashApply" ? "Finish" : "Continue"} with the button in the banner above.</span>
       </div>
-    {:else if file && wholeOnly}
-      <div class="empty">
-        <span class="title">{splitPath(file.path).name}</span>
-        <span class="explain">{wholeOnly}</span>
-        <div class="buttons">
-          <button class="button" onclick={() => takeFile(leftSide)}>{(leftSide === "ours" ? file.ours : file.theirs) ? `Use ${leftLabel}’s Version` : `Delete, as on ${leftLabel}`}</button>
-          <button class="button" onclick={() => takeFile(rightSide)}>{(rightSide === "ours" ? file.ours : file.theirs) ? `Use ${rightLabel}’s Version` : `Delete, as on ${rightLabel}`}</button>
-        </div>
-      </div>
     {:else if file}
-      <div class="sides">
-        {@render sidePane(leftItems, leftSide, leftLabel, leftNote, leftColor, "left")}
-        {@render sidePane(rightItems, rightSide, rightLabel, rightNote, rightColor, "right")}
+      {@const p = splitPath(file.path)}
+      <div class="filebar">
+        <span class="fname ellipsis"><span class="dir">{p.dir}</span>{p.name}</span>
+        {#if kind}<span class="kind ellipsis" title={kind.long}>{kind.long}</span>{/if}
+        <span class="spacer"></span>
+        {#if waiting === current}
+          <span class="waitnote">Save and quit {toolLabel} to come back here.</span>
+        {/if}
+        {#if lineByLine}
+          <button
+            class="chip"
+            class:on={showBase}
+            aria-pressed={showBase}
+            disabled={!file.base}
+            title={file.base ? "Show the version both sides started from" : "Both sides added this file, so there is no version they started from"}
+            onclick={() => prefs.set("oxbow.conflicts.showBase", !prefs.get("oxbow.conflicts.showBase"))}
+          >
+            Common Ancestor
+          </button>
+        {/if}
+        <button class="button small" disabled={!!toolWhy || !!waiting} title={toolWhy ?? `Git writes the file with conflict markers, opens it in ${toolLabel}, and stages it once you save and quit`} onclick={openTool}>
+          {waiting === current ? `Waiting for ${toolLabel}…` : `Open in ${toolLabel}`}
+        </button>
       </div>
-      <section class="pane result" aria-label="Result">
-        <header class="pane-head">
-          <b>Result</b>
-          <span class="ellipsis note">{file.path}</span>
-          <span class="spacer"></span>
-          {#if open_}
-            <span class="orange small">{open_} {open_ === 1 ? "conflict" : "conflicts"} left</span>
-          {:else}
-            <span class="green small">All decided</span>
-          {/if}
-          <button class="button small" onclick={() => takeFile(leftSide)} title="Use {leftLabel}’s whole file">All {leftLabel}</button>
-          <button class="button small" onclick={() => takeFile(rightSide)} title="Use {rightLabel}’s whole file">All {rightLabel}</button>
-          <button class="button primary small" disabled={open_ > 0} title={open_ ? "Pick a side in every conflict first" : undefined} onclick={markResolved}>Mark Resolved</button>
-        </header>
-        <div class="code mono selectable">
-          {#each resultItems as item, i (i)}
-            {#if item.kind === "open"}
-              <div class="open">
-                <div class="open-head">
-                  <span>Conflict {item.k + 1} · both sides changed these lines</span>
-                  <span class="spacer"></span>
-                  <button class="pick" style:color={plate(leftColor)} onclick={() => choose(item.k, "left")}>{leftLabel}</button>
-                  <button class="pick" style:color={plate(rightColor)} onclick={() => choose(item.k, "right")}>{rightLabel}</button>
-                  <button class="pick" onclick={() => choose(item.k, "both")}>Both</button>
-                </div>
-                <div class="placeholder">Pick a side, or keep both</div>
-              </div>
-            {:else if item.kind === "bar"}
-              <div class="bar">
-                <span>
-                  Conflict {item.k + 1}: {item.choice === "both" ? `both, ${leftLabel} first` : `took ${item.choice === "left" ? leftLabel : rightLabel}`}
+      {#if wholeOnly}
+        <div class="empty">
+          <span class="explain">{wholeOnly}</span>
+          <div class="buttons">
+            <button class="button" onclick={() => takeFile(leftSide)}>{(leftSide === "ours" ? file.ours : file.theirs) ? `Use ${leftLabel}’s Version` : `Delete, as on ${leftLabel}`}</button>
+            <button class="button" onclick={() => takeFile(rightSide)}>{(rightSide === "ours" ? file.ours : file.theirs) ? `Use ${rightLabel}’s Version` : `Delete, as on ${rightLabel}`}</button>
+          </div>
+        </div>
+      {:else}
+        {#key current}
+          <div class="sides">
+            {#if showBase}
+              {@render sidePane(baseItems, "Common ancestor", "Before both changes", NO_BRANCH_COLOR, null)}
+            {/if}
+            {@render sidePane(leftItems, leftLabel, leftNote, leftColor, "left")}
+            {@render sidePane(rightItems, rightLabel, rightNote, rightColor, "right")}
+          </div>
+          <section class="pane result" aria-label="Result">
+            <header class="pane-head">
+              <b>Result</b>
+              <span class="stepper">
+                <button class="step" aria-label="Previous conflict" title="Previous conflict (⇧⌥F5)" disabled={!stepCount} onclick={() => stepConflict(-1)}>
+                  <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>
+                </button>
+                <button class="step" aria-label="Next conflict" title="Next conflict (⌥F5)" disabled={!stepCount} onclick={() => stepConflict(1)}>
+                  <svg class="icon" viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
+                </button>
+                <span class="small note">
+                  {#if at >= 0 && at < stepCount}Conflict {at + 1} of {stepCount}{:else}{stepCount} {stepCount === 1 ? "conflict" : "conflicts"}{/if}
                 </span>
-                <button class="undo" onclick={() => choose(item.k, null)}>Undo</button>
-              </div>
-            {:else}
-              <div
-                class="line"
-                class:picked={item.from !== null}
-                style:background={item.from ? tint(colorFor(item.from), "bar") : undefined}
-                style:border-radius={radius(item.edge)}
+              </span>
+              {#if open_}
+                <span class="orange small">· {open_} left</span>
+              {:else}
+                <span class="green small">· All decided</span>
+              {/if}
+              <span class="spacer"></span>
+              <button
+                class="chip"
+                class:on={!!asText}
+                aria-pressed={!!asText}
+                disabled={!!textWhy}
+                title={textWhy ?? (asText ? "Back to picking sides; text you typed is dropped" : "Type the whole file, with git’s markers around the conflicts still open")}
+                onclick={() => (asText ? stopText() : startText())}
               >
-                <span class="no">{item.no}</span><span class="text">{item.text}</span>
+                Edit as Text
+              </button>
+              {#if !asText}
+                <button class="button small" onclick={() => takeFile(leftSide)} title="Use {leftLabel}’s whole file">All {leftLabel}</button>
+                <button class="button small" onclick={() => takeFile(rightSide)} title="Use {rightLabel}’s whole file">All {rightLabel}</button>
+              {/if}
+              <button
+                class="button primary small"
+                disabled={open_ > 0}
+                title={open_ ? (asText ? "Remove every conflict marker first" : "Decide every conflict first") : undefined}
+                onclick={markResolved}
+              >
+                Mark Resolved
+              </button>
+            </header>
+            {#if leaving}
+              <div class="leaving">
+                <span>Go back to picking sides? The text you typed in {p.name} is dropped.</span>
+                <span class="spacer"></span>
+                <button class="button small" onclick={() => (leaving = false)}>Keep Editing</button>
+                <button class="button small" onclick={dropText}>Drop Text</button>
               </div>
             {/if}
-          {/each}
-        </div>
-      </section>
+            <div class="code mono selectable">
+              {#if asText}
+                <EditBox value={asText.text} tintOf={textTint} label="The whole result of {p.name}" onedit={typedText} bind:rows={textRows} />
+              {:else}
+                {#each resultItems as item, i (itemKey(item, i))}
+                  {#if item.kind === "open"}
+                    <div class="open" class:current={at === item.k} data-conflict={item.k}>
+                      <div class="open-head">
+                        <span class="ellipsis">Conflict {item.k + 1} · both sides changed these lines</span>
+                        <span class="spacer"></span>
+                        <button class="pick" style:color={plate(leftColor)} onclick={() => decide(item.k, "left")}>{leftLabel}</button>
+                        <button class="pick" style:color={plate(rightColor)} onclick={() => decide(item.k, "right")}>{rightLabel}</button>
+                        <button class="pick" onclick={() => decide(item.k, "both")}>Both</button>
+                        {#if !textWhy}<button class="pick" title="Type the lines yourself, starting from both sides" onclick={() => edit(item.k)}>Edit</button>{/if}
+                      </div>
+                      <div class="placeholder">Pick a side, keep both, or edit</div>
+                    </div>
+                  {:else if item.kind === "bar"}
+                    <div class="bar" class:current={at === item.k} data-conflict={item.k}>
+                      <span>
+                        Conflict {item.k + 1}: {item.choice === "both" ? `both, ${leftLabel} first` : `took ${item.choice === "left" ? leftLabel : rightLabel}`}
+                      </span>
+                      {#if !textWhy}<button class="undo" onclick={() => edit(item.k)}>Edit</button>{/if}
+                      <button class="undo" onclick={() => decide(item.k, null)}>Undo</button>
+                    </div>
+                  {:else if item.kind === "typed"}
+                    <div class="bar" class:current={at === item.k} data-conflict={item.k}>
+                      <span>Conflict {item.k + 1}: typed by you{item.value === "" ? " · no lines, the conflict goes" : ""}</span>
+                      <button class="undo" onclick={() => decide(item.k, null)}>Undo</button>
+                    </div>
+                    <div class="typed">
+                      <EditBox
+                        value={item.value}
+                        first={item.no}
+                        tintOf={() => "color-mix(in srgb, var(--accent) 9%, transparent)"}
+                        label="Conflict {item.k + 1} of {p.name}"
+                        focus={fresh === item.k}
+                        onedit={(value) => decide(item.k, { lines: splitLines(value) })}
+                      />
+                    </div>
+                  {:else}
+                    <div
+                      class="line"
+                      class:picked={item.from !== null}
+                      style:background={item.from ? tint(colorFor(item.from), "bar") : undefined}
+                      style:border-radius={radius(item.edge)}
+                    >
+                      <span class="no">{item.no}</span><span class="text">{item.text}</span>
+                    </div>
+                  {/if}
+                {/each}
+              {/if}
+            </div>
+          </section>
+        {/key}
+      {/if}
     {/if}
   </div>
 </div>
@@ -732,6 +1024,104 @@
   .undo {
     font-size: var(--text-caption);
     color: var(--accent-text);
+  }
+  .filebar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 40px;
+    flex-shrink: 0;
+    padding: 0 10px 0 14px;
+    border-bottom: 1px solid var(--sep);
+    background: var(--win);
+    font-size: var(--text-small);
+  }
+  .fname {
+    font-weight: 600;
+    flex-shrink: 0;
+    max-width: 45%;
+  }
+  .fname .dir {
+    font-weight: 400;
+  }
+  .kind {
+    color: var(--text2);
+    min-width: 0;
+    flex-shrink: 2;
+  }
+  .waitnote {
+    color: var(--text2);
+    white-space: nowrap;
+  }
+  /* A toggle that reads as one: lit while on. */
+  .chip {
+    height: 24px;
+    padding: 0 10px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-small);
+    white-space: nowrap;
+    color: var(--text2);
+    border: 0.5px solid var(--sep);
+  }
+  .chip.on {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    border-color: transparent;
+    color: var(--accent-text);
+    font-weight: 500;
+  }
+  .chip:disabled {
+    opacity: 0.45;
+  }
+  .stepper {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-left: 4px;
+  }
+  .stepper .note {
+    margin-left: 4px;
+    white-space: nowrap;
+  }
+  .step {
+    width: 22px;
+    height: 22px;
+    border-radius: var(--radius-pill);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--icon);
+  }
+  .step .icon {
+    width: 13px;
+    height: 13px;
+  }
+  .step:disabled {
+    opacity: 0.4;
+  }
+  .leaving {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    padding: 6px 10px 6px 14px;
+    border-bottom: 1px solid var(--sep);
+    background: var(--orange-soft);
+    font-size: var(--text-small);
+  }
+  .typed {
+    margin: 0 0 4px;
+  }
+  .muted {
+    color: var(--text2);
+  }
+  /* The conflict stepped to: a quiet ring in the accent. */
+  .open.current,
+  .chead.current {
+    box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  .bar.current span:first-child {
+    color: var(--text);
+    font-weight: 600;
   }
   .empty {
     flex-grow: 1;

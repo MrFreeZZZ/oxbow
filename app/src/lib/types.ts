@@ -507,7 +507,7 @@ export type Action =
   | { kind: "continue"; message: string | null }
   | { kind: "abort" }
   | { kind: "skip" }
-  | { kind: "resolve"; path: string; picks: Pick[] }
+  | { kind: "resolve"; path: string; picks: Resolution[]; text?: string }
   | { kind: "takeFile"; path: string; side: ConflictSide }
   | { kind: "cherryPick"; commit: string }
   | { kind: "revert"; commit: string }
@@ -710,6 +710,8 @@ export type OperationKind = "merge" | "squash" | "rebase" | "cherryPick" | "reve
 /** A side of a conflict as git names the index stages: ours is stage 2, theirs stage 3. */
 export type ConflictSide = "ours" | "theirs";
 export type Pick = "ours" | "theirs" | "oursThenTheirs" | "theirsThenOurs";
+/** What replaces one conflict: a side, or lines written by hand (none: the conflict goes). */
+export type Resolution = Pick | { lines: string[] };
 
 export interface Operation {
   kind: OperationKind;
@@ -753,7 +755,21 @@ export interface ConflictFile {
   binary: boolean;
   /** A symbolic link or submodule: taken whole from one side. */
   link: boolean;
+  /** Every version is UTF-8, so the result can be written by hand. */
+  text: boolean;
+  /** One side renamed the file to this path. */
+  renamed: { from: string; side: ConflictSide } | null;
   chunks: Chunk[];
+}
+
+/** The merge tool git opens, from merge.guitool or merge.tool. */
+export interface MergeTool {
+  name: string;
+  /** FileMerge for opendiff. */
+  label: string;
+  /** Runs in a terminal (vimdiff), which Oxbow can't give it. */
+  terminal: boolean;
+  gui: boolean;
 }
 
 export interface RemoteBranch {

@@ -56,7 +56,10 @@ pub use history::{
 };
 pub use lfs::{LfsChange, LfsPattern, LfsPointer, LfsStatus};
 pub use notkept::{NotKept, PushedCommit, SizedFile};
-pub use operation::{Chunk, ConflictFile, ConflictSide, MergeMethod, MergePreview, Operation, OperationKind, Pick};
+pub use operation::{
+    Chunk, ConflictFile, ConflictSide, MergeMethod, MergePreview, MergeTool, Operation, OperationKind, Pick, Renamed,
+    Resolution,
+};
 pub use oplog::{HeadState, OpEntry, RefMove, SnapshotComparison, StashMove, StashRecord, Trees};
 pub use reflog::ReflogEntry;
 pub use remote::{CommitBrief, DeletionCheck, Failure, FailureKind, Replay, Tracking, classify_failure};
