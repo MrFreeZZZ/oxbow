@@ -849,7 +849,9 @@ export type ActionEvent =
   | { kind: "command"; display: string }
   | { kind: "line"; text: string; stderr: boolean; progress: boolean }
   /** The action ran, but its step couldn't be written to the Operation Log: Undo can't take it back. */
-  | { kind: "notLogged"; reason: string };
+  | { kind: "notLogged"; reason: string }
+  /** Another window of the repository is changing it: this starts once `title` there is done. */
+  | { kind: "waiting"; title: string; window: string };
 
 /** What changed in the repository outside the window: in a terminal, an editor, another window. */
 export interface OutsideChange {
@@ -859,6 +861,8 @@ export interface OutsideChange {
   files: boolean;
   /** When the last of it happened, in milliseconds since the epoch. */
   at: number;
+  /** The folder name of the repository's other window that changed it; null for a terminal or an editor. */
+  window: string | null;
 }
 
 export type FailureKind =

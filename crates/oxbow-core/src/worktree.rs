@@ -565,6 +565,9 @@ pub enum ActionEvent {
     /// The action ran, but its step couldn't be written to the Operation Log, so Undo can't
     /// take it back; `reason` says why. The action's own result is reported as usual.
     NotLogged { reason: String },
+    /// Another window of the repository is changing it: this waits until `title` there is done.
+    /// `window` is that window's folder name.
+    Waiting { title: String, window: String },
 }
 
 /// The commands an action runs, for the confirmation sheet.

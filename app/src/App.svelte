@@ -1607,7 +1607,7 @@
     // A reload that began after it sees it already, e.g. the one after an action here.
     if (readSince > change.at) return;
     if (document.visibilityState === "hidden") {
-      unseen = unseen ? { git: unseen.git || change.git, files: unseen.files || change.files, at: Math.max(unseen.at, change.at) } : change;
+      unseen = unseen ? { git: unseen.git || change.git, files: unseen.files || change.files, at: Math.max(unseen.at, change.at), window: change.window ?? unseen.window } : change;
       return;
     }
     const before = history;
@@ -1616,7 +1616,7 @@
     const after = history;
     if (!change.git || !after || after === before || mine !== generation) return;
     const news = reloadNews(before, after);
-    if (news.text !== "Nothing new") activity.outside(news.text, after.reads);
+    if (news.text !== "Nothing new") activity.outside(news.text, after.reads, change.window);
   }
 
   /** The window shows again: minimized, hidden or covered by other windows before, which needn't

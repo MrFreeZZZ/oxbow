@@ -7,6 +7,7 @@ mod drafts;
 mod open_in;
 mod pulls;
 mod settings;
+mod turns;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -45,6 +46,8 @@ struct Session {
     /// so two saves at once can't lose each other's key, and sent with every change, so each
     /// window takes the changes in the order they were saved.
     settings: Mutex<u64>,
+    /// Changes running in each repository, which its other windows wait for.
+    turns: Arc<turns::Turns>,
 }
 
 #[derive(Default)]
@@ -542,8 +545,18 @@ fn watch_repo(app: AppHandle, label: String) {
         };
         let events = app.clone();
         let to = label.clone();
+        let turns = session.turns.clone();
+        let common = turns::canonical(&repo.common_dir());
         let Ok(watch) = repo.watch(move |changed| {
-            let _ = events.emit_to(to.as_str(), "outside-change", changed);
+            // Mostly another window's action, still running: it is told by that window's name.
+            let window = turns.other(&common, &to).map(|other| other.folder);
+            let change = OutsideChange {
+                git: changed.git,
+                files: changed.files,
+                at: changed.at,
+                window,
+            };
+            let _ = events.emit_to(to.as_str(), "outside-change", change);
         }) else {
             return;
         };
@@ -555,6 +568,49 @@ fn watch_repo(app: AppHandle, label: String) {
             slot.watch = Some(watch);
         }
     });
+}
+
+/// What changed in a window's repository outside it, as `outside-change` tells it.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OutsideChange {
+    git: bool,
+    files: bool,
+    /// When the last of it happened, in milliseconds since 1970.
+    at: u64,
+    /// The folder name of the repository's other window that changed it; none for a terminal
+    /// or an editor.
+    window: Option<String>,
+}
+
+/// Tell the other windows of `repo` that window `label` changed it, right as it is done.
+fn tell_others(app: &AppHandle, session: &Session, repo: &Repo, label: &str) {
+    let common = turns::canonical(&repo.common_dir());
+    let others: Vec<String> = session
+        .windows
+        .lock()
+        .expect("session lock")
+        .iter()
+        .filter(|(other, slot)| {
+            other.as_str() != label
+                && slot
+                    .repo
+                    .as_ref()
+                    .is_some_and(|open| turns::canonical(&open.common_dir()) == common)
+        })
+        .map(|(other, _)| other.clone())
+        .collect();
+    let change = OutsideChange {
+        git: true,
+        files: true,
+        at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64),
+        window: Some(repo.name()),
+    };
+    for other in others {
+        let _ = app.emit_to(other.as_str(), "outside-change", change.clone());
+    }
 }
 
 /// Repository to open at start: the first command-line argument, else the last one used,
@@ -1676,9 +1732,32 @@ async fn perform_action(
     let cancel = session.cancel(&window);
     cancel.store(false, Ordering::Relaxed);
     let events = app.clone();
+    let turns = session.turns.clone();
+    let turn_window = repo_window.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
         let title = repo.action_title(&action);
-        console::scope(Some(repo.workdir()), console::EntryKind::Action, title, || {
+        // Another window of the repository changing it goes first.
+        let common = repo.common_dir();
+        let turn = turns.take(&common, &turn_window, repo.name(), title.clone(), &cancel, |other| {
+            let event = oxbow_core::ActionEvent::Waiting {
+                title: other.title.clone(),
+                window: other.folder.clone(),
+            };
+            let _ = events.emit_to(label.as_str(), "action-event", event);
+        });
+        let Some(_turn) = turn else {
+            return Err(Failure {
+                kind: oxbow_core::FailureKind::Cancelled,
+                output: String::new(),
+                incoming: Vec::new(),
+                remote_tip: None,
+                hook: None,
+                ssh: None,
+                secrets: None,
+                tracking: None,
+            });
+        };
+        let done = console::scope(Some(repo.workdir()), console::EntryKind::Action, title, || {
             let mut emit = |event| {
                 let _ = events.emit_to(label.as_str(), "action-event", event);
             };
@@ -1688,7 +1767,10 @@ async fn perform_action(
                 repo.perform_with(&action, &mut emit, &cancel)
             };
             result.map_err(|err| repo.explain_failure(&action, &err))
-        })
+        });
+        // Done or not, it may have changed what the other windows show.
+        tell_others(&events, &events.state::<Session>(), &repo, &turn_window);
+        done
     })
     .await;
     // The repository window shows the remotes and branches Settings just changed.
@@ -1896,6 +1978,8 @@ async fn fetch_in_background(
         Arc::new(AtomicBool::new(false))
     };
     let label = window.label().to_owned();
+    let turn_window = session.label(&window);
+    let turns = session.turns.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let action = Action::Fetch { remote: remote.clone() };
         let (kind, title) = if auto == Some(true) {
@@ -1906,11 +1990,31 @@ async fn fetch_in_background(
                 format!("Fetch {}", remote.as_deref().unwrap_or("all remotes")),
             )
         };
-        console::scope(Some(repo.workdir()), kind, title, || {
+        let emit = |event| {
+            let _ = app.emit_to(label.as_str(), "fetch-event", FetchEvent { fetch, event });
+        };
+        // Another window of the repository changing it goes first.
+        let turn = turns.take(
+            &repo.common_dir(),
+            &turn_window,
+            repo.name(),
+            title.clone(),
+            &cancel,
+            |other| {
+                emit(oxbow_core::ActionEvent::Waiting {
+                    title: other.title.clone(),
+                    window: other.folder.clone(),
+                })
+            },
+        );
+        let Some(_turn) = turn else {
+            return Err(Failure {
+                kind: oxbow_core::FailureKind::Cancelled,
+                ..failed(String::new())
+            });
+        };
+        let done = console::scope(Some(repo.workdir()), kind, title, || {
             let command = repo.fetch_command(remote.as_deref()).with_progress();
-            let emit = |event| {
-                let _ = app.emit_to(label.as_str(), "fetch-event", FetchEvent { fetch, event });
-            };
             emit(oxbow_core::ActionEvent::Command {
                 display: command.display(),
             });
@@ -1931,7 +2035,11 @@ async fn fetch_in_background(
                 Ok(_) => Ok(Fetched { updated }),
                 Err(err) => Err(repo.explain_failure(&action, &err)),
             }
-        })
+        });
+        if done.as_ref().is_ok_and(|fetched| fetched.updated > 0) {
+            tell_others(&app, &app.state::<Session>(), &repo, &turn_window);
+        }
+        done
     })
     .await
     .unwrap_or_else(|err| Err(failed(err.to_string())))

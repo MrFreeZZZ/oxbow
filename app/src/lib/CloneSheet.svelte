@@ -3,7 +3,7 @@
   // switches, the exact command, then git's three phases as it runs.
 
   import { modal } from "./modal";
-  import { listen } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { open as chooseFolder } from "@tauri-apps/plugin-dialog";
   import { api } from "./api";
   import { plate, tint } from "./format";
@@ -172,7 +172,7 @@
     failure = "";
     cloningInto = "";
     resetPhases();
-    const unlisten = await listen<OutputLine>("clone-line", (event) => onLine(event.payload));
+    const unlisten = await getCurrentWindow().listen<OutputLine>("clone-line", (event) => onLine(event.payload));
     try {
       const path = await api.cloneRepo(options);
       unlisten();

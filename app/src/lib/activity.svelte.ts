@@ -3,9 +3,9 @@
 // with its git commands, also the actions that ran without asking. A fetch that fails here never
 // opens a sheet: the Fetch button gets an amber dot, and Fix… in Activity opens the way out.
 
-import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./api";
-import { lineKind, type Icon, type Ran, type TermLine } from "./confirm.svelte";
+import { lineKind, waitingWords, type Icon, type Ran, type TermLine } from "./confirm.svelte";
 import { hostName } from "./remote";
 import type { ActionEvent, Failure } from "./types";
 
@@ -95,7 +95,8 @@ class Activity {
 
   constructor() {
     // Only what the running fetch prints: one of the repository open before may still be printing.
-    listen<{ fetch: number | null; event: ActionEvent }>("fetch-event", ({ payload }) => {
+    // This window's own: each window numbers its fetches.
+    getCurrentWindow().listen<{ fetch: number | null; event: ActionEvent }>("fetch-event", ({ payload }) => {
       if (payload.fetch !== null && payload.fetch === this.running?.id) this.#onEvent(payload.event);
     }).catch(() => {});
   }
@@ -193,10 +194,10 @@ class Activity {
     this.#finished({ kind: "reload", title: "Reloaded", sub, state: "done", commands });
   }
 
-  /** A change outside Oxbow (a terminal, an editor, another window) moved branches, HEAD or
+  /** A change outside Oxbow (a terminal, an editor) or in another window moved branches, HEAD or
    *  the stashes, or staged files: what the reload after it found. */
-  outside(sub: string, commands: string[]) {
-    this.#finished({ kind: "reload", title: "Changed outside Oxbow", sub, state: "done", commands });
+  outside(sub: string, commands: string[], window: string | null) {
+    this.#finished({ kind: "reload", title: window ? `Changed in the ${window} window` : "Changed outside Oxbow", sub, state: "done", commands });
   }
 
   /** The commands the running fetch ran. */
@@ -238,6 +239,10 @@ class Activity {
     }
     // A fetch moves branches on remotes, which Undo leaves alone: its log step isn't missed.
     if (event.kind === "notLogged") return;
+    if (event.kind === "waiting") {
+      this.running = { ...running, sub: waitingWords(event) };
+      return;
+    }
     const phase = phaseOf(event.text);
     if (phase) {
       this.percent = phase.percent;

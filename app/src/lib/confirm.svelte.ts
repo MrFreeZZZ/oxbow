@@ -2,7 +2,7 @@
 // git commands first (the design's rule, so people learn the commands), then runs the action in
 // the same sheet with git's live output. A failure turns the sheet into the way out of it.
 
-import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./api";
 import { oplog, revertInsteadRequest, undoRequest } from "./oplog.svelte";
 import { prefs } from "./prefs.svelte";
@@ -293,6 +293,8 @@ class ConfirmState {
   #ranCommands: string[] = [];
   /** The action running, for its way on when it couldn't start without Undo. */
   #running: { action: Action; status: string; done?: string } | null = null;
+  /** What the sheet said before the action waited for another window, said again once it starts. */
+  #beforeWaiting: string | null = null;
   /** Why the step that ran isn't in the Operation Log; null when it is. */
   #notLogged: string | null = null;
   #resolve: ((done: boolean) => void) | null = null;
@@ -308,7 +310,10 @@ class ConfirmState {
   #toastCount = 0;
 
   constructor() {
-    listen<ActionEvent>("action-event", (event) => this.#onEvent(event.payload)).catch(() => {});
+    // This window's own: another window's action may run right after this one.
+    getCurrentWindow()
+      .listen<ActionEvent>("action-event", (event) => this.#onEvent(event.payload))
+      .catch(() => {});
   }
 
   /** Whether an action of this window runs now: the sheet keeps its last phase once it closes. */
@@ -491,6 +496,7 @@ class ConfirmState {
     this.phase = "running";
     this.ran = null;
     this.status = status;
+    this.#beforeWaiting = null;
     this.lines = [];
     this.progress = null;
     this.failure = null;
@@ -567,6 +573,16 @@ class ConfirmState {
     if (event.kind === "notLogged") {
       this.#notLogged = event.reason;
       return;
+    }
+    if (event.kind === "waiting") {
+      this.#beforeWaiting ??= this.status;
+      this.status = waitingWords(event);
+      this.lines.push({ kind: "hint", text: "Two changes to one repository at once could get in each other’s way, so this starts once that one is done. Stop gives up waiting." });
+      return;
+    }
+    if (this.#beforeWaiting !== null) {
+      this.status = this.#beforeWaiting;
+      this.#beforeWaiting = null;
     }
     if (event.kind === "command") {
       this.lines.push({ kind: "cmd", text: event.display });
@@ -664,6 +680,11 @@ class ConfirmState {
     this.#resolve?.(done);
     this.#resolve = null;
   }
+}
+
+/** What an action or fetch waits for, e.g. "Waiting for “Pull” in the billing-feature window…". */
+export function waitingWords(event: { title: string; window: string }): string {
+  return `Waiting for “${firstSentence(event.title)}” in the ${event.window} window…`;
 }
 
 /** The way on when the state before couldn't be saved for Undo: nothing ran yet, so it can be
