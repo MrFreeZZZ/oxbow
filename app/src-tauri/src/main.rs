@@ -2683,6 +2683,9 @@ fn main() {
             apply_settings(handle, &handle.state::<Session>(), &read_settings(handle));
             accounts::lend_to_git(handle);
             console_window::follow(handle);
+            // The menu bar has all its menus before the window loads; menu.json can't be broken,
+            // a UI test writes it.
+            let _ = menu::put_at_start(handle);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

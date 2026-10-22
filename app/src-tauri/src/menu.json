@@ -1,0 +1,429 @@
+[
+ {
+  "title": "File",
+  "items": [
+   {
+    "id": "newRepo",
+    "title": "New Repository…",
+    "enabled": false,
+    "accelerator": "CmdOrCtrl+N"
+   },
+   {
+    "id": "clone",
+    "title": "Clone…",
+    "enabled": false,
+    "accelerator": "CmdOrCtrl+Shift+C"
+   },
+   {
+    "id": "open",
+    "title": "Open…",
+    "enabled": false,
+    "accelerator": "CmdOrCtrl+O"
+   },
+   {
+    "id": "recent",
+    "title": "",
+    "enabled": true,
+    "accelerator": null
+   },
+   {
+    "id": "-",
+    "title": "",
+    "enabled": true,
+    "accelerator": null
+   },
+   {
+    "id": "openWorktree",
+    "title": "Open Worktree…",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "openSubmodule",
+    "title": "Open Submodule…",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "-",
+    "title": "",
+    "enabled": true,
+    "accelerator": null
+   },
+   {
+    "id": "reload",
+    "title": "Reload Repository",
+    "enabled": false,
+    "accelerator": "CmdOrCtrl+R"
+   },
+   {
+    "id": "closeRepo",
+    "title": "Close Repository",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "-",
+    "title": "",
+    "enabled": true,
+    "accelerator": null
+   }
+  ]
+ },
+ {
+  "title": "Edit",
+  "items": [
+   {
+    "id": "find",
+    "title": "Find in History",
+    "enabled": false,
+    "accelerator": "CmdOrCtrl+F"
+   },
+   {
+    "id": "findCode",
+    "title": "Find in Changed Code",
+    "enabled": false,
+    "accelerator": "CmdOrCtrl+Shift+F"
+   },
+   {
+    "id": "findNext",
+    "title": "Find Next",
+    "enabled": false,
+    "accelerator": "CmdOrCtrl+G"
+   },
+   {
+    "id": "findPrevious",
+    "title": "Find Previous",
+    "enabled": false,
+    "accelerator": "CmdOrCtrl+Shift+G"
+   }
+  ]
+ },
+ {
+  "title": "View",
+  "items": [
+   {
+    "id": "palette",
+    "title": "Command Palette…",
+    "enabled": false,
+    "accelerator": "CmdOrCtrl+Shift+P"
+   },
+   {
+    "id": "-",
+    "title": "",
+    "enabled": true,
+    "accelerator": null
+   },
+   {
+    "id": "sidebar",
+    "title": "Toggle Sidebar",
+    "enabled": false,
+    "accelerator": "CmdOrCtrl+B"
+   },
+   {
+    "id": "details",
+    "title": "Toggle Details",
+    "enabled": false,
+    "accelerator": "Alt+CmdOrCtrl+B"
+   },
+   {
+    "id": "expand",
+    "title": "Toggle Expanded Details",
+    "enabled": false,
+    "accelerator": "Ctrl+CmdOrCtrl+E"
+   },
+   {
+    "id": "focusOnly",
+    "title": "Toggle Current Branch Only",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "-",
+    "title": "",
+    "enabled": true,
+    "accelerator": null
+   },
+   {
+    "id": "history",
+    "title": "Show History",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "changes",
+    "title": "Show Changes",
+    "enabled": false,
+    "accelerator": "Ctrl+Shift+G"
+   },
+   {
+    "id": "stashes",
+    "title": "Show Stashes",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "oplog",
+    "title": "Show Operation Log",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "activity",
+    "title": "Show Activity",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "console",
+    "title": "Console",
+    "enabled": false,
+    "accelerator": "CmdOrCtrl+Shift+U"
+   },
+   {
+    "id": "-",
+    "title": "",
+    "enabled": true,
+    "accelerator": null
+   },
+   {
+    "id": "diffLayout",
+    "title": "Toggle Side by Side Diffs",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "wrap",
+    "title": "Toggle Word Wrap",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "whitespace",
+    "title": "Toggle Ignore Whitespace",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "-",
+    "title": "",
+    "enabled": true,
+    "accelerator": null
+   },
+   {
+    "id": "zoomIn",
+    "title": "Zoom In",
+    "enabled": false,
+    "accelerator": "CmdOrCtrl+="
+   },
+   {
+    "id": "zoomOut",
+    "title": "Zoom Out",
+    "enabled": false,
+    "accelerator": "CmdOrCtrl+-"
+   },
+   {
+    "id": "zoomReset",
+    "title": "Actual Size",
+    "enabled": false,
+    "accelerator": "CmdOrCtrl+0"
+   }
+  ]
+ },
+ {
+  "title": "Go",
+  "items": [
+   {
+    "id": "back",
+    "title": "Back",
+    "enabled": false,
+    "accelerator": "Ctrl+-"
+   },
+   {
+    "id": "forward",
+    "title": "Forward",
+    "enabled": false,
+    "accelerator": "Ctrl+Shift+-"
+   },
+   {
+    "id": "-",
+    "title": "",
+    "enabled": true,
+    "accelerator": null
+   },
+   {
+    "id": "quickOpen",
+    "title": "Go to File History…",
+    "enabled": false,
+    "accelerator": "CmdOrCtrl+P"
+   },
+   {
+    "id": "goToBranch",
+    "title": "Go to Branch…",
+    "enabled": false,
+    "accelerator": "CmdOrCtrl+T"
+   },
+   {
+    "id": "goToTag",
+    "title": "Go to Tag…",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "goToStash",
+    "title": "Go to Stash…",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "-",
+    "title": "",
+    "enabled": true,
+    "accelerator": null
+   },
+   {
+    "id": "nextChange",
+    "title": "Next Change",
+    "enabled": false,
+    "accelerator": "Alt+F5"
+   },
+   {
+    "id": "previousChange",
+    "title": "Previous Change",
+    "enabled": false,
+    "accelerator": "Alt+Shift+F5"
+   },
+   {
+    "id": "-",
+    "title": "",
+    "enabled": true,
+    "accelerator": null
+   },
+   {
+    "id": "nextTab",
+    "title": "Next Tab",
+    "enabled": false,
+    "accelerator": "Alt+CmdOrCtrl+Right"
+   },
+   {
+    "id": "previousTab",
+    "title": "Previous Tab",
+    "enabled": false,
+    "accelerator": "Alt+CmdOrCtrl+Left"
+   }
+  ]
+ },
+ {
+  "title": "Repository",
+  "items": [
+   {
+    "id": "fetch",
+    "title": "Fetch",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "pull",
+    "title": "Pull",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "pullRebase",
+    "title": "Pull (Rebase)",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "pullMerge",
+    "title": "Pull (Merge)",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "push",
+    "title": "Push",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "publish",
+    "title": "Publish Branch…",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "publishGitHub",
+    "title": "Publish to GitHub…",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "-",
+    "title": "",
+    "enabled": true,
+    "accelerator": null
+   },
+   {
+    "id": "commit",
+    "title": "Commit…",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "stash",
+    "title": "Stash",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "-",
+    "title": "",
+    "enabled": true,
+    "accelerator": null
+   },
+   {
+    "id": "branch",
+    "title": "Create Branch…",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "checkout",
+    "title": "Checkout to…",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "newWorktree",
+    "title": "New Worktree…",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "editStack",
+    "title": "Edit Stack…",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "resolve",
+    "title": "Resolve Conflicts",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "-",
+    "title": "",
+    "enabled": true,
+    "accelerator": null
+   },
+   {
+    "id": "fixMistake",
+    "title": "Fix a Mistake…",
+    "enabled": false,
+    "accelerator": "Alt+CmdOrCtrl+Z"
+   }
+  ]
+ }
+]

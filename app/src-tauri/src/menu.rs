@@ -1,7 +1,9 @@
 //! Oxbow's commands in the macOS menu bar: File, Edit, View, Go and Repository. The window used
 //! last says which commands it has, their titles and keys (set_menu); a command picked in the
 //! menu goes back to that window as a "menu-command" event, as if its key were pressed there.
-//! Only the Mac has a menu bar; elsewhere set_menu finds no menu and does nothing.
+//! At start the menu bar has them all, greyed out (menu.json, the front end's menus with no
+//! window yet), so it doesn't wait for the window to load. Only the Mac has a menu bar;
+//! elsewhere set_menu finds no menu and does nothing.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -47,9 +49,24 @@ const COMMAND: &str = "cmd:";
 const RECENT: &str = "recent:";
 const CLEAR_RECENT: &str = "recent-clear";
 
-/// Put the commands in the menu bar the first time, and show what they are now after that.
+/// The menus as appMenu.ts makes them before any window says what it can run; a UI test keeps
+/// this file the same as appMenu.ts.
+const AT_START: &str = include_str!("menu.json");
+
+/// All the commands in the menu bar, greyed out, until the first window shows its own.
+pub fn put_at_start(app: &AppHandle) -> Result<(), String> {
+    let menus: Vec<MenuPart> = serde_json::from_str(AT_START).map_err(|err| err.to_string())?;
+    show(app, &app.state::<MenuState>(), menus)
+}
+
+/// The window in front shows its commands in the menu bar.
 #[tauri::command]
 pub fn set_menu(app: AppHandle, state: tauri::State<'_, MenuState>, menus: Vec<MenuPart>) -> Result<(), String> {
+    show(&app, &state, menus)
+}
+
+/// Put the commands in the menu bar the first time, and show what they are now after that.
+fn show(app: &AppHandle, state: &MenuState, menus: Vec<MenuPart>) -> Result<(), String> {
     let Some(menu) = app.menu() else { return Ok(()) };
     let mut built = state.built.lock().expect("menu lock");
     if let Some(built) = built.as_mut() {
@@ -89,18 +106,17 @@ pub fn set_menu(app: AppHandle, state: tauri::State<'_, MenuState>, menus: Vec<M
         for command in &part.items {
             match command.id.as_str() {
                 "-" => items.push(MenuItemKind::Predefined(
-                    PredefinedMenuItem::separator(&app).map_err(|err| err.to_string())?,
+                    PredefinedMenuItem::separator(app).map_err(|err| err.to_string())?,
                 )),
                 "recent" => {
-                    let recent =
-                        Submenu::with_id(&app, "recent", "Open Recent", true).map_err(|err| err.to_string())?;
+                    let recent = Submenu::with_id(app, "recent", "Open Recent", true).map_err(|err| err.to_string())?;
                     made.recent = Some(recent.clone());
                     items.push(MenuItemKind::Submenu(recent));
                 }
                 id => {
                     let item = |accelerator: Option<&str>| {
                         MenuItem::with_id(
-                            &app,
+                            app,
                             format!("{COMMAND}{id}"),
                             &command.title,
                             command.enabled,
@@ -122,18 +138,18 @@ pub fn set_menu(app: AppHandle, state: tauri::State<'_, MenuState>, menus: Vec<M
             (Some(file), "File") => file.insert_items(&refs, 0),
             // Before Enter Full Screen.
             (Some(view), "View") => {
-                let separator = PredefinedMenuItem::separator(&app).map_err(|err| err.to_string())?;
+                let separator = PredefinedMenuItem::separator(app).map_err(|err| err.to_string())?;
                 view.insert_items(&refs, 0)
                     .and_then(|()| view.insert(&separator, refs.len()))
             }
             (Some(existing), _) => {
-                let separator = PredefinedMenuItem::separator(&app).map_err(|err| err.to_string())?;
+                let separator = PredefinedMenuItem::separator(app).map_err(|err| err.to_string())?;
                 existing.append(&separator).and_then(|()| existing.append_items(&refs))
             }
             // A menu of its own, before Window.
             (None, title) => {
                 let at = menu.items().map_or(0, |bar| bar.len().saturating_sub(2));
-                Submenu::with_items(&app, title, true, &refs).and_then(|new| menu.insert(&new, at))
+                Submenu::with_items(app, title, true, &refs).and_then(|new| menu.insert(&new, at))
             }
         };
         result.map_err(|err| err.to_string())?;
@@ -142,7 +158,7 @@ pub fn set_menu(app: AppHandle, state: tauri::State<'_, MenuState>, menus: Vec<M
     *built = Some(made);
     drop(built);
     if let Some(recent) = recent {
-        fill_recent(&app, &recent);
+        fill_recent(app, &recent);
     }
     Ok(())
 }

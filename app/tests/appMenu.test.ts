@@ -1,5 +1,6 @@
 import { MENUS, menuBar, menuKey } from "../src/lib/appMenu.ts";
-import { bindingsOf, commandOf, type ShortcutId } from "../src/lib/shortcuts.ts";
+import { bindingsOf, commandOf, defaultsOf, type ShortcutId } from "../src/lib/shortcuts.ts";
+import { readFileSync, writeFileSync } from "node:fs";
 import assert from "node:assert/strict";
 
 const title = (id: ShortcutId) => commandOf(id).title;
@@ -31,4 +32,13 @@ for (const menu of MENUS) for (const entry of menu.items) if (entry !== "-" && e
 {
   const bar = menuBar(new Map(), title, (id) => bindingsOf(id, { fetch: ["Mod+Shift+L"] }, true));
   assert.equal(bar.flatMap((m) => m.items).find((i) => i.id === "fetch")!.accelerator, "CmdOrCtrl+Shift+L");
+}
+// The menu bar has these until the first window loads (app/src-tauri/src/menu.json): every
+// command greyed out, with the Mac's own keys. `OXBOW_WRITE_MENU=1 npm test` writes it again.
+{
+  const file = new URL("../src-tauri/src/menu.json", import.meta.url);
+  const atStart = menuBar(new Map(), title, (id) => defaultsOf(id, true));
+  const text = JSON.stringify(atStart, null, 1) + "\n";
+  if (process.env.OXBOW_WRITE_MENU) writeFileSync(file, text);
+  assert.equal(readFileSync(file, "utf8"), text, "menu.json differs from appMenu.ts: run OXBOW_WRITE_MENU=1 npm test");
 }
