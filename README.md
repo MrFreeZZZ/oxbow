@@ -1,74 +1,98 @@
-# Oxbow
+<p align="center">
+  <img src="docs/images/icon.png" width="112" alt="">
+</p>
 
-A calm desktop Git client for macOS, Windows and Linux.
+<h1 align="center">Oxbow</h1>
 
-Oxbow reads history, graphs and diffs with gitoxide and changes repositories through the git command line: staging and commits, branches, merge and rebase with conflict resolution, stashes, tags, push, pull and fetch, Edit Stack, and an Operation Log with Undo. Every change shows the exact git commands first. Before each commit Oxbow checks the staged lines for passwords, tokens and private keys (with your own patterns from Settings › Git › Security) and stops the commit until they are unstaged or allowed. Sign in to GitHub in Settings › Accounts, with the browser or a personal access token; the token is kept in the Keychain (Credential Manager on Windows, the Secret Service on Linux). A repository without a remote, or a new one, can then be published to GitHub in one step. The Pull Request screen opens, reviews and merges pull requests, keeps the stack list in each one up to date, and restacks the rest of a stack after its base merged.
+<p align="center">
+  A calm, fast Git client that shows every git command before it runs<br>
+  and can take back any step, even a hard reset.
+</p>
 
-## Layout
+<p align="center">
+  <sub>For macOS. Windows and Linux are coming.</sub>
+</p>
 
-```
-crates/oxbow-core   Git core library, no UI: history, graph lanes, refs, diffs
-app/                Desktop app: Svelte + TypeScript front end
-app/src-tauri       Tauri shell that exposes oxbow-core to the front end
-scripts/            Developer helpers
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/history-dark.png">
+    <img src="docs/images/history-light.png" alt="Oxbow: the commit graph of a repository with several stacked branches, and the diff of the selected commit">
+  </picture>
+</p>
 
-### How Git is accessed
+## Why Oxbow
 
-- **Reads** (history, graph, refs, diffs) use [gitoxide](https://github.com/GitoxideLabs/gitoxide). It is fast and has no C dependencies.
-- **Writes** (commit, rebase, push, hooks, SSH) will run the system `git` command line. Hooks, credentials and SSH then behave exactly as they do in a terminal.
+**Undo any step.** Every change Oxbow makes goes into the Operation Log with the state of the
+repository before and after it. ⌘Z (Ctrl+Z) takes back a commit, a rebase, a merge, a deleted branch, a
+dropped stash, even a hard reset or discarded files. When a step holds something Undo can't bring
+back, the confirmation says so before it runs.
 
-`oxbow-core` doesn't depend on any UI, so it can be tested on its own and reused.
+**No surprises.** Before a change Oxbow shows the exact git commands it is going to run. Risky
+ones ask first; simple ones run at once and show up in Activity, and the Console keeps the full
+log.
 
-### The commit graph
+**Real git underneath.** History, the graph and diffs are read with
+[gitoxide](https://github.com/GitoxideLabs/gitoxide), so even big repositories open quickly.
+Every change runs your own `git`, so hooks, credentials and SSH behave exactly as in a terminal.
 
-The design rules are in `crates/oxbow-core/src/graph.rs`:
+**Nothing is lost.** Dropped stashes and aborted operations keep a copy for 30 days. Lost Work
+finds commits from the reflog, and Fix a Mistake plans the way out of a commit on the wrong
+branch, a forgotten file or a push you want to take back.
 
-- The trunk (the first-parent chain of `main` or `master`) always sits in the leftmost column. It is drawn with a thicker line in Steel.
-- Every other branch gets its own column to the right. It keeps that column for its whole life, and a column is reused only after its branch line has ended.
-- A branch line runs down to the commit it forked from and curves into it. That commit gets a ring in the branch's color.
-- A branch's color is stable, derived from its name. Yellow is reserved for tags.
-- Commits that are not on any remote-tracking branch get hollow dots and dashed lines.
+**Stacked branches.** Edit Stack rewrites a chain of branches in one go. Pull requests keep their
+stack list up to date and the rest of a stack is restacked when its base is merged.
 
-## Development
+**Secrets stay out.** Before each commit the staged lines are checked for passwords, tokens and
+private keys, with your own patterns on top.
 
-Prerequisites:
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/confirm-dark.png">
+    <img src="docs/images/confirm-light.png" width="49%" alt="A hard reset shows the exact git command before it runs">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/undo-dark.png">
+    <img src="docs/images/undo-light.png" width="49%" alt="Undo puts the repository back as it was before the reset">
+  </picture>
+</p>
 
-- Rust (stable) and Node.js 22 or newer.
-- Platform dependencies for Tauri 2 (see the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)):
-  - macOS: Xcode Command Line Tools.
-  - Linux: `libwebkit2gtk-4.1-dev`, `libxdo-dev`, `libssl-dev`, `libayatana-appindicator3-dev` and `librsvg2-dev`.
-  - Windows: Microsoft C++ Build Tools and WebView2 (preinstalled on Windows 11).
+## Everything you use every day
 
-Run the app:
+- Staging by file, hunk or line; amend, reword, fixup
+- Branches, tags, stashes, worktrees, submodules, Git LFS
+- Merge, rebase, cherry-pick and revert with a three-way conflict editor
+- Push, pull and fetch with clear messages when a remote refuses
+- Compare branches and commits, search history and code, file history and blame
+- Bisect, with a test command if you have one
+- GitHub: sign in, publish a repository, open, review and merge pull requests
+- Command Palette and VS Code's keyboard shortcuts, light and dark themes
+
+## How it compares
+
+|                   | Oxbow  | Fork     | Tower        | Sublime Merge | GitKraken             | GitHub Desktop |
+| ----------------- | ------ | -------- | ------------ | ------------- | --------------------- | -------------- |
+| macOS             | ✓      | ✓        | ✓            | ✓             | ✓                     | ✓              |
+| Windows           | soon   | ✓        | ✓            | ✓             | ✓                     | ✓              |
+| Linux             | soon   | –        | –            | ✓             | ✓                     | –              |
+| Price             | Free   | Pay once | Subscription | Pay once      | Free for public repos | Free           |
+| Undo for any step | ✓      | –        | ✓            | –             | Some steps            | Last commit    |
+
+Based on each app's own site in October 2026.
+
+## Building from source
+
+You need Rust (stable), Node.js 22 or newer and the
+[Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your system.
 
 ```sh
 cd app
-npm install
-npm run tauri dev                    # opens the last repository, or asks for one
-npm run tauri dev -- -- /path/to/repo  # opens a specific repository
+npm ci
+npm run tauri dev -- -- /path/to/repo   # or without a path: the last repository
 ```
 
-To try it on a small repository with branches, merges, tags and unpushed work:
+`scripts/make-demo-repo.sh /tmp/acme-api` makes a small repository with branches, merges, tags and
+unpushed work to try it on. `scripts/check.sh` runs formatting, lints and tests, and
+`npm run tauri build` makes an installable app. How Oxbow is put together is in
+[docs/architecture.md](docs/architecture.md).
 
-```sh
-scripts/make-demo-repo.sh /tmp/acme-api
-cd app && npm run tauri dev -- -- /tmp/acme-api
-```
-
-Checks, the same ones CI runs:
-
-```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test -p oxbow-core
-cd app && npm run check
-```
-
-To measure how fast a repository's history loads:
-
-```sh
-cargo run --release -p oxbow-core --example history -- /path/to/repo
-```
-
-Build an installable app with `cd app && npm run tauri build`. CI also builds an unsigned `.app` for macOS and a `.deb` for Linux on every pull request; you can download them from the workflow run's artifacts. Because the macOS build is unsigned, run `xattr -cr Oxbow.app` once before opening it.
+Third-party credits are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

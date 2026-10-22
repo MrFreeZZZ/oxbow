@@ -51,6 +51,7 @@ app/src/                    Svelte front end
 app/tests/*.test.ts         node:test unit tests for the pure lib/*.ts modules
 scripts/check.sh            quiet checks (below);  make-demo-repo.sh = demo repository
 scripts/make-perf-fixtures.sh   big fixtures for examples/;  docs/measuring-reads.md = how to run them
+docs/architecture.md        layout, git access, graph rules, development;  docs/images/ = README pictures
 ```
 
 A new backend action usually touches, in order: `crates/oxbow-core/src/<area>.rs` (+ test in
