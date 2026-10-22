@@ -9,6 +9,7 @@ export const mac = typeof navigator !== "undefined" && navigator.platform.starts
 export type ShortcutId =
   | "palette"
   | "quickOpen"
+  | "goToBranch"
   | "settings"
   | "sidebar"
   | "details"
@@ -47,6 +48,8 @@ export const BINDINGS: Record<ShortcutId, Binding> = {
   palette: { mac: ["Mod+Shift+P", "F1"], other: ["Mod+Shift+P", "F1"] },
   // Go to File.
   quickOpen: { mac: ["Mod+P"], other: ["Mod+P"] },
+  // Go to Symbol in Workspace: here the branches, tags, stashes, worktrees and submodules.
+  goToBranch: { mac: ["Mod+T"], other: ["Mod+T"] },
   // Open Settings.
   settings: { mac: ["Mod+,"], other: ["Mod+,"] },
   // Toggle Primary Side Bar Visibility. ⌃⌘S, as in Mail, still works on the Mac.

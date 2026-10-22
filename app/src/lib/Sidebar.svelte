@@ -34,6 +34,7 @@
   import { checking, stale } from "./folders";
   import { addSubmoduleRequest, latestRequest, removeSubmoduleRequest, submoduleNote, submoduleWhere, syncRequest, updateRequest, followsWord } from "./submodules";
   import { actionIcons } from "./icons";
+  import { notInHistory } from "./objects";
   import { locateRequest, lockRequest, newWorktreeRequest, pruneWorktreesRequest, removeWorktreeRequest, tilde, unlockRequest, worktreeOf } from "./worktrees";
 
   const PULL_ICON = "M3 3.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M3 12.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M10 12.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M4.5 5v6M11.5 11V6.5a2 2 0 0 0-2-2H7M8.5 3 7 4.5 8.5 6";
@@ -82,7 +83,9 @@
     onOpenPath: (path: string) => void;
     /** Close the repository and show the Welcome window. */
     onWelcome: () => void;
-    onPick: (commit: string) => void;
+    /** Select a commit in History, loading older commits down to it; `missing` says why it
+     *  can't be shown when no branch or tag reaches it. */
+    onPick: (commit: string, missing?: string) => void;
     /** Confirm and run a change to the repository. */
     run: (request: Request | Promise<Request>) => void;
     /** The screen shown next to the sidebar. */
@@ -477,12 +480,11 @@
     api.openWindow(wt.path).catch((err) => confirm.fail(err));
   }
 
-  /** The commit a worktree has checked out, selected in History. */
+  /** The commit a worktree has checked out, selected in History, older commits loaded down to it. */
   function showWorktree(wt: Worktree) {
-    if (wt.head && rowOf.has(wt.head)) {
-      clicked = wt.branch ? (history.refs.find((r) => r.kind === "local" && r.name === wt.branch) ?? null) : null;
-      onPick(wt.head);
-    } else confirm.say(`${wt.head ? wt.head.slice(0, 7) : "Its commit"} isn’t in the loaded history.`, "warn");
+    if (!wt.head) return;
+    clicked = wt.branch ? (history.refs.find((r) => r.kind === "local" && r.name === wt.branch) ?? null) : null;
+    onPick(wt.head, notInHistory(wt.head, wt));
   }
 
   /** What the note on a worktree's row says. */
