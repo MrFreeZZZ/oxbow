@@ -4,6 +4,7 @@
 mod accounts;
 mod console_window;
 mod drafts;
+mod menu;
 mod open_in;
 mod pulls;
 mod settings;
@@ -711,6 +712,7 @@ fn write_recent(app: &AppHandle, list: &[RecentRepo]) {
     if let Ok(text) = serde_json::to_string_pretty(list) {
         let _ = std::fs::write(file, text + "\n");
     }
+    menu::recent_changed(app);
 }
 
 fn now() -> i64 {
@@ -2635,6 +2637,7 @@ fn main() {
         // Restores the window's size and position from the last session.
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(Session::default())
+        .manage(menu::MenuState::default())
         .manage(accounts::Accounts::default())
         .on_window_event(|window, event| {
             let session = window.state::<Session>();
@@ -2666,6 +2669,8 @@ fn main() {
             if event.id() == "settings" {
                 let _ = show_settings(app);
             }
+            let focused = app.state::<Session>().focused.lock().expect("session lock").clone();
+            menu::picked(app, event.id().as_ref(), focused);
             #[cfg(target_os = "macos")]
             if event.id() == "quit" {
                 quit(app);
@@ -2741,6 +2746,7 @@ fn main() {
             set_setting,
             open_settings,
             set_settings_key,
+            menu::set_menu,
             git_settings,
             repo_settings,
             set_git_config,

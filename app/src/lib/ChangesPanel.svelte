@@ -1316,15 +1316,34 @@
     flex-direction: column;
     padding: var(--space-1) var(--space-2);
   }
+  .group + .group {
+    margin-top: var(--space-2);
+  }
+  /* Each list's heading reads as a section title, as in Finder's sidebar, not as one more row:
+     small capitals over a hairline, with the files under it set in a step. */
   .ghead {
     display: flex;
     align-items: center;
     gap: 6px;
     height: 28px;
     padding: 0 var(--space-3);
+    margin-bottom: var(--space-1);
+    border-bottom: 0.5px solid var(--sep);
     font-size: var(--text-caption);
     font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
     color: var(--text2);
+  }
+  .ghead .n,
+  .ghead .button {
+    letter-spacing: normal;
+    text-transform: none;
+  }
+  .group > .file,
+  .group > .folder,
+  .group > .empty {
+    margin-left: var(--space-3);
   }
   .n {
     font-weight: 400;
@@ -1466,6 +1485,8 @@
   .untracked-fold {
     gap: 6px;
     font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
     color: inherit;
     text-align: left;
   }

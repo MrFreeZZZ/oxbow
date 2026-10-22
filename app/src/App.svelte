@@ -45,7 +45,8 @@
   import ObjectPicker from "./lib/ObjectPicker.svelte";
   import { namedLike, notInHistory, objectsOf, type ObjectAction, type ObjectItem, type ObjectKind } from "./lib/objects";
   import type { PaletteItem } from "./lib/palette";
-  import { Keymap, accelerator, combo, commandOf, pressed, type ShortcutId } from "./lib/shortcuts";
+  import { Keymap, accelerator, bindingsOf, combo, commandOf, pressed, type ShortcutId } from "./lib/shortcuts";
+  import { menuBar, type Available } from "./lib/appMenu";
   import { stepChange } from "./lib/diffRows";
   import { conflictSteps, KEPT_CONFLICTS } from "./lib/conflicts";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -862,6 +863,32 @@
   $effect(() => {
     api.setSettingsKey(accelerator(combo("settings"))).catch(() => {});
   });
+
+  /** What the menu bar shows of this window last, so only changes go to it. */
+  let menuShown = "";
+  /** The menu bar shows the commands of the window in front (appMenu.ts). */
+  function showMenu() {
+    if (!mac) return;
+    const available: Available = new Map(paletteCommands().map((c) => [c.id, c.title]));
+    available.set("palette", undefined);
+    if (history) for (const id of ["findNext", "findPrevious", "nextTab", "previousTab"]) available.set(id, undefined);
+    const menus = menuBar(available, (id) => commandOf(id).title, (id) => bindingsOf(id));
+    const text = JSON.stringify(menus);
+    if (text === menuShown || !document.hasFocus()) return;
+    menuShown = text;
+    api.setMenu(menus).catch(() => {});
+  }
+  $effect(showMenu);
+
+  /** A command picked in the menu bar runs as its key would in the field that has the focus. */
+  function fromMenu(id: ShortcutId) {
+    const event = { target: document.activeElement, altKey: false } as unknown as KeyboardEvent;
+    shortcutKey(id, event);
+  }
+
+  /** A repository's name to head the History: "oxbow" as "Oxbow". A name with capitals of its
+   *  own, such as "iOS-app", keeps them. */
+  const titled = (name: string) => (name === name.toLowerCase() ? name.charAt(0).toUpperCase() + name.slice(1) : name);
 
   function openPalette() {
     nav.quickOpen = false;
@@ -2188,7 +2215,18 @@
     // Signing in or out changes what GitHub tells about the pull requests.
     const account = listen("account-changed", () => repo && github.accountChanged());
     const closing = getCurrentWindow().onCloseRequested(closeRequested);
+    const picked = getCurrentWindow().listen<ShortcutId>("menu-command", (event) => fromMenu(event.payload));
+    const recent = getCurrentWindow().listen<string>("menu-open", (event) => void load(event.payload));
+    // Back in front: the menu bar shows this window's commands again.
+    const front = getCurrentWindow().onFocusChanged(({ payload }) => {
+      if (!payload) return;
+      menuShown = "";
+      untrack(showMenu);
+    });
     return () => {
+      picked.then((stop) => stop());
+      recent.then((stop) => stop());
+      front.then((stop) => stop());
       unlisten.then((stop) => stop());
       outside.then((stop) => stop());
       account.then((stop) => stop());
@@ -2265,6 +2303,18 @@
     <button class="capsule side-toggle" onclick={toggleSidebar} aria-label={sideOut ? "Hide sidebar" : "Show sidebar"} aria-expanded={sideOut} title={withKeys(sideOut ? "Hide Sidebar" : "Show Sidebar", combo("sidebar"))}>
       <svg class="icon" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2" /><path d="M6 3v10" /></svg>
     </button>
+    {#if !showConflicts}
+      <!-- Back and Forward, as in Safari and Finder: a right-click lists the places that way. They
+         stay beside the sidebar button, out or not. -->
+      <div class="joined steps" role="group" aria-label="Back and Forward">
+        <button onclick={goBack} oncontextmenu={(event) => showPlaces(event, false)} disabled={!stepBack} aria-label={stepBack ? `Back to ${stepBack}` : "Back"} title={withKeys(stepBack ? `Back to ${stepBack}` : "Back", combo("back"))}>
+          <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>
+        </button>
+        <button onclick={goForward} oncontextmenu={(event) => showPlaces(event, true)} disabled={!stepForward} aria-label={stepForward ? `Forward to ${stepForward}` : "Forward"} title={withKeys(stepForward ? `Forward to ${stepForward}` : "Forward", combo("forward"))}>
+          <svg class="icon" viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
+        </button>
+      </div>
+    {/if}
     {#if narrow && sideShown}
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
       <div class="side-catcher" onclick={() => (sideShown = false)}></div>
@@ -2293,17 +2343,6 @@
     <div class="main">
       <header data-tauri-drag-region>
         <div class="lead" data-tauri-drag-region>
-          {#if !showConflicts}
-            <!-- Back and Forward, as in Safari and Finder: a right-click lists the places that way. -->
-            <div class="joined steps" role="group" aria-label="Back and Forward">
-              <button onclick={goBack} oncontextmenu={(event) => showPlaces(event, false)} disabled={!stepBack} aria-label={stepBack ? `Back to ${stepBack}` : "Back"} title={withKeys(stepBack ? `Back to ${stepBack}` : "Back", combo("back"))}>
-                <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>
-              </button>
-              <button onclick={goForward} oncontextmenu={(event) => showPlaces(event, true)} disabled={!stepForward} aria-label={stepForward ? `Forward to ${stepForward}` : "Forward"} title={withKeys(stepForward ? `Forward to ${stepForward}` : "Forward", combo("forward"))}>
-                <svg class="icon" viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
-              </button>
-            </div>
-          {/if}
           {#snippet steps()}
             {#each trailPath as crumb (crumb.at)}
               <button class="crumb" onclick={() => goTo(crumb.at)} title="Back to {crumb.label}">{crumb.label}</button><span class="crumb-sep" aria-hidden="true">›</span>
@@ -2336,7 +2375,7 @@
               <span class="name">Operation Log</span>
               <span class="sub">{@render steps()}{trailPath.length ? "" : `${repo.name} · `}every step, to undo or restore</span>
             {:else}
-              <span class="name">History</span>
+              <span class="name">{titled(repo.name)} history</span>
               {#if activity.running}
                 <span class="sub">{activity.running.title}{activity.percent !== null ? ` · ${activity.percent}%` : "…"}</span>
               {:else if activity.problem?.failure}
@@ -2857,6 +2896,15 @@
   .window.mac .side-toggle {
     left: 96px;
   }
+  .window .steps {
+    position: absolute;
+    z-index: 21;
+    top: 11px;
+    left: 56px;
+  }
+  .window.mac .steps {
+    left: 138px;
+  }
   .window > :global(nav),
   .main,
   header {
@@ -2922,14 +2970,15 @@
   .window.narrow .trail {
     flex: 0 0 auto;
   }
-  /* The traffic lights and the sidebar button sit on the sidebar; without it, the toolbar makes room for them. */
+  /* The traffic lights, the sidebar button and Back and Forward sit on the sidebar; without it,
+     the toolbar makes room for them. */
   .window.narrow header,
   .window.side-hidden header {
-    padding-left: 60px;
+    padding-left: 136px;
   }
   .window.narrow.mac header,
   .window.side-hidden.mac header {
-    padding-left: 142px;
+    padding-left: 218px;
   }
   /* Three zones: the two sides share the room equally, so the search sits in the middle of the
      toolbar. In a narrow window the buttons on the right keep their size, and the title and then

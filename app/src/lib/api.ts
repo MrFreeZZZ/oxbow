@@ -1,4 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import type { MenuPart } from "./appMenu";
 import type {
   AllSettings,
   SubmoduleMove,
@@ -184,6 +185,7 @@ export const api = {
   openSettings: () => invoke<void>("open_settings"),
   /** The key of the app menu's Settings…, "CmdOrCtrl+,", or null for none (macOS). */
   setSettingsKey: (accelerator: string | null) => invoke<void>("set_settings_key", { accelerator }),
+  setMenu: (menus: MenuPart[]) => invoke<void>("set_menu", { menus }),
   openConsole: () => invoke<void>("open_console"),
   consoleRepos: () => invoke<ConsoleRepos>("console_repos"),
   /** The log of a repository (null: what ran outside any), oldest first. */
