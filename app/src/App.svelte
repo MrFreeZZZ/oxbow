@@ -10,7 +10,10 @@
   import GraphLegend from "./lib/GraphLegend.svelte";
   import { focusedView } from "./lib/graph";
   import CommitPanel from "./lib/CommitPanel.svelte";
-  import ChangesPanel from "./lib/ChangesPanel.svelte";
+  import ChangesPanel, { moveMessage, savedMessage } from "./lib/ChangesPanel.svelte";
+  import FolderGone from "./lib/FolderGone.svelte";
+  import { goneScreen, messageOf } from "./lib/gone";
+  import { tilde } from "./lib/term";
   import ConfirmSheet from "./lib/ConfirmSheet.svelte";
   import { confirm, type Request } from "./lib/confirm.svelte";
   import BranchPicker from "./lib/BranchPicker.svelte";
@@ -23,7 +26,7 @@
   import { newWorktreeRequest } from "./lib/worktrees";
   import StashesView from "./lib/StashesView.svelte";
   import { ancestors, cherryPickRequest, editMessageRequest, resetModes, resetRequest, revertRequest, undoCommitRequest } from "./lib/commits";
-  import type { Operation } from "./lib/types";
+  import type { Gone, Operation } from "./lib/types";
   import Menu, { menuIcons, type MenuEntry } from "./lib/Menu.svelte";
   import { fetchRequest, pullRequest, pushRequest, syncBlock, unshallowRequest, type RemoteContext, type SyncFix } from "./lib/remote";
   import WhyPopover from "./lib/WhyPopover.svelte";
@@ -635,6 +638,15 @@
   let generation = 0;
   let opening: Promise<void> = Promise.resolve();
 
+  /** The folder of the repository asked for, or of the one open, isn't there any more: its
+   *  screen shows in place of Recent Repositories. */
+  let gone = $state<Gone | null>(null);
+  /** What the last Retry or Find Folder… found, when it didn't work. */
+  let goneNote = $state<string | null>(null);
+  let reconnecting = $state(false);
+  const shownPath = (path: string) => tilde(path, start.info?.home ?? "");
+  const goneShown = $derived(gone && goneScreen(gone, { message: messageOf(savedMessage(gone.path)), conflicts: gone.conflictDraft }, shownPath, mac));
+
   function load(path: string): Promise<void> {
     const mine = ++generation;
     // One open at a time: the backend keeps whichever repository was opened last.
@@ -667,6 +679,8 @@
       const summary = await api.openRepo(path);
       const next = await api.history(limit);
       if (mine !== generation) return;
+      gone = null;
+      goneNote = null;
       repo = summary;
       nav.repo = summary.path;
       github.load(summary.path);
@@ -679,11 +693,73 @@
       selected = next.head.commit ?? next.rows[0]?.id ?? null;
       requestAnimationFrame(() => selected && list?.reveal(selected));
     } catch (err) {
-      if (mine === generation) error = String(err);
+      if (mine === generation) await failed(path, err, mine);
     } finally {
       if (mine === generation) loading = false;
     }
   }
+
+  /** Opening or reading the repository at `path` failed: when its folder isn't there, the
+   *  screen of a gone folder says why and what is safe, otherwise the error shows. */
+  async function failed(path: string, err: unknown, mine: number) {
+    const found = await api.goneFolder(path).catch(() => null);
+    if (mine !== generation) return;
+    if (!found) {
+      error = String(err);
+      return;
+    }
+    const again = gone?.path === found.path;
+    if (repo) closeRepo();
+    gone = found;
+    goneNote = again ? `Still not there at ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.` : null;
+  }
+
+  /** Open Main Folder: the gone worktree's commit message and Conflicts draft stay with it. */
+  function goneMain() {
+    if (gone?.worktree?.main) load(gone.worktree.main);
+  }
+
+  /** Close: the main window shows Recent Repositories again, another window closes. */
+  function goneClose() {
+    const win = getCurrentWindow();
+    if (win.label !== "main") {
+      win.close();
+      return;
+    }
+    gone = null;
+    goneNote = null;
+    error = null;
+  }
+
+  /** Find Folder… and Locate…: choose where the folder that was at `old` is now, point git at it
+   *  there and open it. It is the same folder, so its commit message and Conflicts draft go
+   *  along, and the toast says they did. */
+  async function findFolder(old: string) {
+    const name = old.split(/[/\\]/).filter(Boolean).pop() ?? old;
+    const near = gone?.path === old ? gone.found : null;
+    const picked = await open({ directory: true, multiple: false, title: `Find ${name}`, defaultPath: near ?? old.replace(/[/\\][^/\\]*[/\\]?$/, "") });
+    if (typeof picked !== "string") return;
+    reconnecting = true;
+    goneNote = null;
+    error = null;
+    let moved: { path: string; conflictDraft: boolean };
+    try {
+      moved = await api.reconnectFolder(old, picked);
+    } catch (err) {
+      if (gone?.path === old) goneNote = String(err);
+      else error = String(err);
+      return;
+    } finally {
+      reconnecting = false;
+    }
+    const message = moveMessage(old, moved.path);
+    await load(moved.path);
+    if (repo?.path !== moved.path) return;
+    const along = [message && "commit message", moved.conflictDraft && "Conflicts draft"].filter(Boolean);
+    const newName = moved.path.split(/[/\\]/).filter(Boolean).pop() ?? moved.path;
+    confirm.say(`Reconnected ${newName}.${along.length ? ` Its ${along.join(" and ")} came along.` : ""}`, "done");
+  }
+
 
   const targetOf = $derived(new Map(history?.refs.map((r) => [r.kind === "tag" ? `tag:${r.name}` : r.name, r.target]) ?? []));
   /** Lane color of a branch's latest commit; a name that doesn't exist yet gets HEAD's. */
@@ -1554,7 +1630,8 @@
       // Current Branch Only follows a checkout: a commit it no longer shows gives way to HEAD.
       else if (next.focus && !next.focus.rows.some((i) => next.rows[i].id === selected)) selected = next.head.commit ?? selected;
     } catch (err) {
-      if (mine === generation) error = String(err);
+      if (mine === generation && repo) await failed(repo.path, err, mine);
+      else if (mine === generation) error = String(err);
     }
   }
 
@@ -2065,7 +2142,22 @@
 />
 
 {#if !repo || !history}
-  <Welcome {loading} error={error ?? settingsNote?.text ?? null} onOpen={chooseRepo} onOpenPath={load} />
+  <Welcome {loading} error={gone ? null : (error ?? settingsNote?.text ?? null)} onOpen={chooseRepo} onOpenPath={load} onLocate={findFolder} gone={gone ? goneAside : undefined} />
+  {#snippet goneAside()}
+    {#if gone && goneShown}
+      <FolderGone
+        {gone}
+        screen={goneShown}
+        shown={shownPath}
+        busy={loading || reconnecting}
+        note={goneNote}
+        onMain={goneMain}
+        onFind={() => gone && findFolder(gone.path)}
+        onRetry={() => gone && load(gone.path)}
+        onClose={goneClose}
+      />
+    {/if}
+  {/snippet}
 {:else}
   <div class="window" class:narrow class:mac class:side-shown={sideShown} class:side-hidden={sideHidden && !narrow} class:sliding>
     <button class="capsule side-toggle" onclick={toggleSidebar} aria-label={sideOut ? "Hide sidebar" : "Show sidebar"} aria-expanded={sideOut} title={withKeys(sideOut ? "Hide Sidebar" : "Show Sidebar", SIDEBAR_KEYS)}>

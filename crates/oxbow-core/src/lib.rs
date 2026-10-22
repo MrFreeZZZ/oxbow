@@ -84,4 +84,4 @@ pub use stash::StashCheck;
 pub use submodules::{Checkout, Moved, Submodule, SubmoduleMove};
 pub use watch::{Changed, Watch};
 pub use worktree::{Action, ActionEvent, BranchPush, Plan, PullMode, RemoteBranch, Side, WorkingTree};
-pub use worktrees::Worktree;
+pub use worktrees::{GoneFolder, GoneWhy, GoneWorktree, Worktree, gone_folder, reconnect_folder};

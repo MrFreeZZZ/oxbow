@@ -193,6 +193,255 @@ impl Repo {
     }
 }
 
+/// Why a repository's folder can't be opened when it isn't where it was.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GoneWhy {
+    /// It is on a disk or network drive that isn't connected: [`GoneFolder::disk`] names it.
+    Disk,
+    /// It is in the Trash, at [`GoneFolder::found`].
+    Trash,
+    /// It was moved: Oxbow found it at [`GoneFolder::found`].
+    Moved,
+    /// Deleted, or moved somewhere Oxbow didn't look.
+    Missing,
+    /// It is there, but the system doesn't let Oxbow read it.
+    NoAccess,
+}
+
+/// A repository folder that isn't there any more, and what is still known about it.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GoneFolder {
+    pub path: String,
+    pub name: String,
+    pub why: GoneWhy,
+    /// The disk it is on, when that isn't connected.
+    pub disk: Option<String>,
+    /// Where it is now, when Oxbow found it: moved next to where it was, or in the Trash.
+    pub found: Option<String>,
+    /// When it is a worktree of another folder: what the repository still has about it.
+    pub worktree: Option<GoneWorktree>,
+}
+
+/// What a repository keeps about one of its worktrees, which stays when the folder goes.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GoneWorktree {
+    /// The repository's main folder; `None` when it isn't there either.
+    pub main: Option<String>,
+    /// The branch checked out in the main folder, which Open Main Folder shows instead.
+    pub main_branch: Option<String>,
+    /// The branch checked out there; `None` when `HEAD` was detached.
+    pub branch: Option<String>,
+    /// The commit checked out there when `HEAD` was detached.
+    pub head: Option<String>,
+    /// Locked, so Prune keeps it: the reason given, empty when none was.
+    pub locked: Option<String>,
+}
+
+/// Why the folder at `path` can't be opened, or `None` when it is there. `known` are folders of
+/// repositories it may be a worktree of (the one open before, the recent ones): git keeps a
+/// worktree's records in the main repository, which tell its branch and recognize the folder
+/// where it was moved.
+pub fn gone_folder(path: &Path, known: &[PathBuf]) -> Option<GoneFolder> {
+    let mut why = match std::fs::metadata(path) {
+        // macOS lets the folder be seen but not read when Oxbow isn't allowed into it.
+        Ok(_) => match std::fs::read_dir(path) {
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => GoneWhy::NoAccess,
+            _ => return None,
+        },
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => GoneWhy::NoAccess,
+        Err(_) => GoneWhy::Missing,
+    };
+    let disk = (why == GoneWhy::Missing).then(|| unplugged_disk(path)).flatten();
+    if disk.is_some() {
+        why = GoneWhy::Disk;
+    }
+    let record = known.iter().find_map(|dir| WorktreeRecord::of(dir, path));
+    let mut found = None;
+    if why == GoneWhy::Missing
+        && let Some((at, trash)) = record.as_ref().and_then(|r| r.find(path))
+    {
+        why = if trash { GoneWhy::Trash } else { GoneWhy::Moved };
+        found = Some(at.display().to_string());
+    }
+    Some(GoneFolder {
+        path: path.display().to_string(),
+        name: folder_name(&path.display().to_string()),
+        why,
+        disk,
+        found,
+        worktree: record.map(|r| r.about()),
+    })
+}
+
+/// The folder that was at `old` is at `new` now: check that it is the same folder and point git
+/// at its new place with `git worktree repair`. For a worktree that is the one whose records
+/// it holds; a main folder only needs to be a repository, and its worktrees are pointed back at
+/// it. Answers the folder to open.
+pub fn reconnect_folder(old: &Path, new: &Path, known: &[PathBuf]) -> Result<PathBuf> {
+    let name = folder_name(&old.display().to_string());
+    let new = canonical(new);
+    if let Some(record) = known.iter().find_map(|dir| WorktreeRecord::of(dir, old)) {
+        if crate::folders::git_dir(&new).map(|dir| canonical(&dir)) != Some(canonical(&record.dir)) {
+            return Err(crate::error::Error::Git(format!(
+                "{} isn't the worktree {name}: choose the folder {name} was moved to",
+                new.display()
+            )));
+        }
+        crate::cli::run_in(&new, &GitCommand::new(["worktree", "repair"]), None)?;
+        return Ok(new);
+    }
+    let repo = Repo::open(&new)?;
+    let common = repo.common_dir();
+    let linked = std::fs::read_dir(common.join("worktrees")).is_ok_and(|mut entries| entries.next().is_some());
+    if linked {
+        // Worktrees whose folders are gone too can't be pointed back: git says so, and the
+        // others are fixed all the same.
+        let _ = crate::cli::run_in(repo.workdir(), &GitCommand::new(["worktree", "repair"]), None);
+    }
+    Ok(repo.workdir().to_path_buf())
+}
+
+/// The disk `path` is on, when the folder disks are connected at (`/Volumes`, `/media`) doesn't
+/// have it, or the drive letter is not there.
+fn unplugged_disk(path: &Path) -> Option<String> {
+    let missing: Vec<&Path> = path
+        .ancestors()
+        .take_while(|dir| !dir.as_os_str().is_empty() && std::fs::metadata(dir).is_err())
+        .collect();
+    let outermost = missing.last()?;
+    if outermost.parent().is_none() {
+        return Some(outermost.display().to_string());
+    }
+    let under = |dir: &Path, depth: usize, mounts: &[&str]| {
+        dir.ancestors()
+            .nth(depth)
+            .is_some_and(|up| mounts.iter().any(|m| up == Path::new(m)))
+    };
+    // Linux mounts a disk at /media/<user>/<disk>, macOS at /Volumes/<disk>.
+    let disk = missing
+        .iter()
+        .find(|dir| under(dir, 2, &["/media", "/run/media"]))
+        .or_else(|| {
+            missing
+                .iter()
+                .find(|dir| under(dir, 1, &["/Volumes", "/media", "/mnt"]))
+        })?;
+    disk.file_name().map(|n| n.to_string_lossy().into_owned())
+}
+
+/// A worktree's folder in its main repository (`.git/worktrees/<id>`), which keeps its `HEAD`
+/// and where its folder was.
+struct WorktreeRecord {
+    dir: PathBuf,
+    /// The repository's own git folder, which keeps the main folder's `HEAD`.
+    common: PathBuf,
+    /// The repository's main folder, when it has one.
+    main: Option<PathBuf>,
+}
+
+impl WorktreeRecord {
+    /// The record of the worktree that was at `path`, in the repository of the folder `known`.
+    fn of(known: &Path, path: &Path) -> Option<Self> {
+        let git = crate::folders::git_dir(known)?;
+        let common = match std::fs::read_to_string(git.join("commondir")) {
+            Ok(text) => git.join(text.trim()),
+            Err(_) => git,
+        };
+        let common = canonical(&common);
+        let dir = std::fs::read_dir(common.join("worktrees"))
+            .ok()?
+            .flatten()
+            .find_map(|entry| {
+                let text = std::fs::read_to_string(entry.path().join("gitdir")).ok()?;
+                // It names the folder's `.git` file.
+                let was = Path::new(text.trim()).parent()?;
+                same_place(was, path).then(|| entry.path())
+            })?;
+        let main = (common.file_name().is_some_and(|n| n == ".git"))
+            .then(|| common.parent().map(Path::to_path_buf))
+            .flatten();
+        Some(WorktreeRecord { dir, common, main })
+    }
+
+    fn about(&self) -> GoneWorktree {
+        let head = std::fs::read_to_string(self.dir.join("HEAD")).unwrap_or_default();
+        let head = head.trim();
+        let branch = branch_of(head);
+        GoneWorktree {
+            main_branch: branch_of(
+                std::fs::read_to_string(self.common.join("HEAD"))
+                    .unwrap_or_default()
+                    .trim(),
+            ),
+            main: self
+                .main
+                .as_ref()
+                .filter(|main| main.is_dir())
+                .map(|main| main.display().to_string()),
+            head: (branch.is_none() && !head.is_empty()).then(|| head.to_owned()),
+            branch,
+            locked: std::fs::read_to_string(self.dir.join("locked"))
+                .ok()
+                .map(|why| why.trim().to_owned()),
+        }
+    }
+
+    /// Where the folder went: one of the folders next to where it was or next to the main
+    /// folder whose `.git` points at this record, else one in the Trash. True when in the Trash.
+    fn find(&self, was: &Path) -> Option<(PathBuf, bool)> {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let places = [
+            was.parent().map(Path::to_path_buf),
+            self.main.as_ref().and_then(|m| m.parent().map(Path::to_path_buf)),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|dir| (dir, false))
+        .chain(
+            home.iter()
+                .flat_map(|home| [home.join(".Trash"), home.join(".local/share/Trash/files")])
+                .map(|dir| (dir, true)),
+        );
+        let record = canonical(&self.dir);
+        for (place, trash) in places {
+            let Ok(entries) = std::fs::read_dir(&place) else {
+                continue;
+            };
+            // A folder of thousands is not looked through to the end.
+            for entry in entries.flatten().take(2000) {
+                let candidate = entry.path();
+                if std::fs::symlink_metadata(candidate.join(".git")).is_ok_and(|m| m.is_file())
+                    && crate::folders::git_dir(&candidate).is_some_and(|dir| canonical(&dir) == record)
+                {
+                    return Some((candidate, trash));
+                }
+            }
+        }
+        None
+    }
+}
+
+/// The branch a `HEAD` file names; `None` when it holds a commit.
+fn branch_of(head: &str) -> Option<String> {
+    head.strip_prefix("ref: ")
+        .map(|r| r.strip_prefix("refs/heads/").unwrap_or(r).to_owned())
+}
+
+/// `a` and `b` are one place, also when neither is there any more: their parents are compared
+/// as the system resolves them (`/tmp` and `/private/tmp` on macOS), their names as they are.
+fn same_place(a: &Path, b: &Path) -> bool {
+    a == b
+        || (a.file_name() == b.file_name()
+            && a.file_name().is_some()
+            && match (a.parent(), b.parent()) {
+                (Some(x), Some(y)) => same(x, y),
+                _ => false,
+            })
+}
+
 /// The records of `git worktree list --porcelain -z`: attribute lines ending in NUL, an empty
 /// one after each worktree. The first is always the main one.
 fn parse_list(text: &str) -> Vec<Worktree> {

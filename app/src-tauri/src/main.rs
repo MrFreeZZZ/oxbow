@@ -648,6 +648,9 @@ struct RecentRepo {
     name: String,
     #[serde(default)]
     missing: bool,
+    /// Why a missing one is gone, when listed.
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
+    gone: Option<oxbow_core::GoneFolder>,
 }
 
 /// How many repositories Recent Repositories keeps.
@@ -677,6 +680,7 @@ fn read_recent(app: &AppHandle) -> Vec<RecentRepo> {
                     opened: now(),
                     name: String::new(),
                     missing: false,
+                    gone: None,
                 }]
             })
             .unwrap_or_default(),
@@ -708,6 +712,7 @@ fn remember_repo(app: &AppHandle, path: &str) {
             opened: now(),
             name: String::new(),
             missing: false,
+            gone: None,
         },
     );
     list.truncate(RECENT_LIMIT);
@@ -716,17 +721,109 @@ fn remember_repo(app: &AppHandle, path: &str) {
 
 #[tauri::command]
 fn recent_repos(app: AppHandle) -> Vec<RecentRepo> {
-    read_recent(&app)
-        .into_iter()
+    let list = read_recent(&app);
+    let known: Vec<PathBuf> = list.iter().map(|r| PathBuf::from(&r.path)).collect();
+    list.into_iter()
         .map(|mut r| {
             let path = Path::new(&r.path);
             r.name = path
                 .file_name()
                 .map_or_else(|| r.path.clone(), |n| n.to_string_lossy().into_owned());
             r.missing = !path.is_dir();
+            if r.missing {
+                r.gone = oxbow_core::gone_folder(path, &known);
+            }
             r
         })
         .collect()
+}
+
+/// Folders of the repositories a gone folder may be a worktree of: the window's own, whose
+/// records outlive the folder, and the recent ones.
+fn known_repos(app: &AppHandle, session: &Session, window: &tauri::WebviewWindow) -> Vec<PathBuf> {
+    let open = session.slot(window, |slot| slot.repo.as_ref().map(Repo::common_dir));
+    open.and_then(|common| {
+        (common.file_name().is_some_and(|name| name == ".git"))
+            .then(|| common.parent().map(Path::to_path_buf))
+            .flatten()
+    })
+    .into_iter()
+    .chain(read_recent(app).into_iter().map(|r| PathBuf::from(r.path)))
+    .collect()
+}
+
+/// Where the window's Conflicts drafts are kept.
+fn drafts_dir(app: &AppHandle) -> CommandResult<PathBuf> {
+    let dir = app.path().app_data_dir().map_err(|err| err.to_string())?;
+    Ok(dir.join("conflict-drafts"))
+}
+
+/// A folder that isn't there any more, for the screen that says so.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Gone {
+    #[serde(flatten)]
+    folder: oxbow_core::GoneFolder,
+    /// The Conflicts screen has a draft saved for it.
+    conflict_draft: bool,
+}
+
+/// Why the repository folder at `path` can't be opened, when it isn't there; none when it is.
+#[tauri::command]
+async fn gone_folder(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    path: String,
+) -> CommandResult<Option<Gone>> {
+    let known = known_repos(&app, &session, &window);
+    let dir = drafts_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = PathBuf::from(path);
+        oxbow_core::gone_folder(&path, &known).map(|folder| Gone {
+            folder,
+            conflict_draft: drafts::read(&drafts::file(&dir, &path), &path).is_ok_and(|draft| draft.is_some()),
+        })
+    })
+    .await
+    .map_err(|err| err.to_string())
+}
+
+/// What [`reconnect_folder`] did.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Reconnected {
+    /// The folder to open.
+    path: String,
+    /// The Conflicts draft of the old place came along.
+    conflict_draft: bool,
+}
+
+/// The folder that was at `old` is at `new`: point git at it (see [`oxbow_core::reconnect_folder`]),
+/// and move its Conflicts draft and its row in Recent Repositories along. Only the same folder
+/// is taken, so a draft never lands on another branch.
+#[tauri::command]
+async fn reconnect_folder(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    old: String,
+    new: String,
+) -> CommandResult<Reconnected> {
+    let known = known_repos(&app, &session, &window);
+    let (from, to) = (PathBuf::from(&old), PathBuf::from(&new));
+    let path = logged(
+        Some(to.clone()),
+        console::EntryKind::Action,
+        "Reconnect a moved folder",
+        move || oxbow_core::reconnect_folder(&from, &to, &known),
+    )
+    .await?;
+    // A draft that couldn't move stays where it was, for the old place.
+    let conflict_draft = drafts::moved(&drafts_dir(&app)?, Path::new(&old), &path).unwrap_or(false);
+    let path = path.display().to_string();
+    forget_repo(app, old, Some(path.clone()));
+    Ok(Reconnected { path, conflict_draft })
 }
 
 /// Take a repository off Recent Repositories; with `to`, it moved there (Locate…).
@@ -1558,8 +1655,7 @@ async fn merge_tool(window: tauri::WebviewWindow, session: State<'_, Session>) -
 
 /// The draft file of the window's working folder, in the app's data folder.
 fn draft_file(app: &AppHandle, repo: &Repo) -> CommandResult<PathBuf> {
-    let dir = app.path().app_data_dir().map_err(|err| err.to_string())?;
-    Ok(drafts::file(&dir.join("conflict-drafts"), repo.workdir()))
+    Ok(drafts::file(&drafts_dir(app)?, repo.workdir()))
 }
 
 /// The repository at `workdir`, the working folder the Conflicts screen was opened for. A save
@@ -2572,6 +2668,8 @@ fn main() {
             initial_repo,
             recent_repos,
             forget_repo,
+            gone_folder,
+            reconnect_folder,
             clear_recent,
             repo_glance,
             welcome_info,

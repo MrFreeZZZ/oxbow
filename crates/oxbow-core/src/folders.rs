@@ -264,7 +264,7 @@ fn stamp(dir: &Path, what: impl Hash) -> u64 {
 
 /// The folder git keeps the folder at `dir`'s `HEAD` and index in: its `.git`, or where the
 /// `.git` file of a linked worktree or a submodule points.
-fn git_dir(dir: &Path) -> Option<PathBuf> {
+pub(crate) fn git_dir(dir: &Path) -> Option<PathBuf> {
     let dot = dir.join(".git");
     if dot.is_dir() {
         return Some(dot);
