@@ -2331,24 +2331,40 @@ fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     Ok(menu)
 }
 
+/// A Quit under way: the repository windows are closing. One that stays open, its conflict
+/// draft not saved, calls it off (cancel_quit).
+static QUITTING: AtomicBool = AtomicBool::new(false);
+
 /// Quit: each repository window closes as its close button closes it, so the Conflicts screen
-/// saves its draft first, and the app ends once they are gone, or after 3 seconds.
+/// saves its draft first, and the app ends once they are gone. A window that couldn't save asks
+/// first, and stays open on Cancel.
 #[cfg(target_os = "macos")]
 fn quit(app: &AppHandle) {
     let repo_window = |label: &str| label != "settings" && label != "console";
+    let already = QUITTING.swap(true, Ordering::SeqCst);
     for (label, window) in app.webview_windows() {
         if repo_window(&label) {
             let _ = window.close();
         }
     }
+    if already {
+        return;
+    }
     let app = app.clone();
     std::thread::spawn(move || {
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
-        while std::time::Instant::now() < until && app.webview_windows().keys().any(|label| repo_window(label)) {
+        while QUITTING.load(Ordering::SeqCst) && app.webview_windows().keys().any(|label| repo_window(label)) {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        app.exit(0);
+        if QUITTING.swap(false, Ordering::SeqCst) {
+            app.exit(0);
+        }
     });
+}
+
+/// A window stayed open when Quit closed it: Oxbow doesn't quit after all.
+#[tauri::command]
+fn cancel_quit() {
+    QUITTING.store(false, Ordering::SeqCst);
 }
 
 fn main() {
@@ -2452,6 +2468,7 @@ fn main() {
             conflict_draft,
             save_conflict_draft,
             drop_conflict_draft,
+            cancel_quit,
             stash_check,
             stack,
             landed_on,

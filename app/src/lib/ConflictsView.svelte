@@ -1,3 +1,11 @@
+<script module lang="ts">
+  import { api } from "./api";
+  import { DraftSaves } from "./draftSaves";
+
+  /** The draft saves of this window's Conflicts screens, outliving each screen (draftSaves.ts). */
+  export const draftSaves = new DraftSaves(api);
+</script>
+
 <script lang="ts">
   // The Conflicts screen: conflicted files on the left; for the open file, both sides on top
   // (named by branch, never "ours" and "theirs"), with the version they started from when asked,
@@ -8,12 +16,10 @@
   import TipCard from "./TipCard.svelte";
   import EditBox from "./EditBox.svelte";
   import { onMount, untrack } from "svelte";
-  import { api } from "./api";
   import { confirm, type Request } from "./confirm.svelte";
   import { kept } from "./kept";
   import { prefs } from "./prefs.svelte";
   import { hasWork, makeDraft, readDraft, takeDraft, type Draft, type DraftState, type DraftText, type OldDraft } from "./drafts";
-  import { draftSaves } from "./draftSaves";
   import {
     conflictSteps,
     joinLines,
@@ -89,6 +95,9 @@
   let draftAt = 0;
   /** What saving the draft last came to, shown apart from Mark Resolved. */
   let draftNote = $state<{ kind: "saved"; at: number } | { kind: "failed"; why: string } | null>(null);
+  /** The working folder the screen was opened for, read once: `folder` follows the window's
+   *  repository, and a save that runs after it opened another must still go to this one. */
+  const home = untrack(() => folder);
   /** The operation, its commit, and the commit checked out, that the decisions belong to. */
   let step = $state("");
   /** The step whose draft is being read from disk. */
@@ -183,7 +192,7 @@
     try {
       // A save still on its way, e.g. from the screen as it was a moment ago, lands first.
       await draftSaves.flush();
-      return readDraft(await api.conflictDraft(folder));
+      return readDraft(await api.conflictDraft(home));
     } catch (err) {
       draftNote = { kind: "failed", why: String(err) };
       return null;
@@ -255,23 +264,13 @@
     const state: Saved = { step, choices, texts, stages, results, old, seen };
     kept.set(KEPT_CONFLICTS, state);
     const paths = conflicted;
-    draftSaves.later(() => saveDraft(state, paths), 300);
+    draftSaves.later(home, () => makeDraft(state.step, state, paths, Date.now()), 300, (note) => {
+      if (note.kind !== "failed") draftAt = note.at;
+      draftNote = note.kind === "dropped" ? null : note;
+    });
   });
 
   const flush = () => void draftSaves.flush();
-
-  async function saveDraft(state: Saved, paths: string[]) {
-    const at = Date.now();
-    const draft = makeDraft(state.step, state, paths, at);
-    try {
-      if (draft) await api.saveConflictDraft(folder, draft);
-      else await api.dropConflictDraft(folder);
-      draftAt = at;
-      draftNote = draft ? { kind: "saved", at } : null;
-    } catch (err) {
-      draftNote = { kind: "failed", why: String(err) };
-    }
-  }
 
   onMount(() => {
     api
