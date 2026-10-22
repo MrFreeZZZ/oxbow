@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tips, TIP_COUNT } from "./tips.svelte";
-  import { keys } from "./keys";
+  import { keys, shortcut } from "./keys";
   // The Settings window (⌘,): sections on the left, grouped rows of controls on the right, in
   // the layout of the Settings design. Oxbow's own settings save at once to settings.json and
   // reach the main window through prefs; Git's own (identity, pull, default branch…) are written
@@ -20,6 +20,9 @@
   import { defaults, effectiveLook, knownSetting, prefs, problemOf, type PrefKey, type SecretPattern } from "./prefs.svelte";
   import { addRemoteRequest, optimizeRequest, removeRemoteRequest, setUrlRequest } from "./repoSettings";
   import { paletteOf, THEMES, themeById, type Palette } from "./themes";
+  import ShortcutKeys from "./ShortcutKeys.svelte";
+  import { anyChanged, fits, nameOf, resetAllRequest, shortcutEdit } from "./shortcutEdit.svelte";
+  import { bindingsOf, changedKeys, commandIds, commandOf, defaultsOf, startsWith, strokeOf, type ShortcutId } from "./shortcuts";
   import type { ConfigScope, FileDiff, GitHubAccount, GitSettings, OpenApp, RemoteInfo, RepoSettings } from "./types";
 
   const GEAR =
@@ -39,12 +42,16 @@
     | { type: "switch"; get: () => boolean; set: (on: boolean) => void }
     /** A value with Edit, which turns it into a text box. */
     | { type: "edit"; get: () => string; shown?: () => string; placeholder?: string; save: (value: string) => void }
-    | { type: "button"; label: Text; run: () => void; danger?: boolean };
+    | { type: "button"; label: Text; run: () => void; danger?: boolean }
+    /** A command's keyboard shortcuts, with the recorder for new ones. */
+    | { type: "keys"; id: ShortcutId };
 
   type Row = {
     id: string;
     label: Text;
     sub?: Text;
+    /** The sub line as a warning or an error, e.g. a key another command has. */
+    subTone?: () => "warn" | "error" | undefined;
     mono?: boolean;
     badge?: () => string | null;
     /** A round picture before the label, e.g. an account's avatar. */
@@ -263,6 +270,68 @@
 
   const confirmOff = () => !prefs.get("oxbow.confirm.enabled");
   const look = $derived(effectiveLook());
+
+  // Keyboard Shortcuts: the commands by category, the screens' own keys last.
+  const KEYBOARD = "M1.8 4.5h12.4v7H1.8zM4 6.6h.1M6 6.6h.1M8 6.6h.1M10 6.6h.1M12 6.6h.1M4.5 9.3h7";
+  const KEY_GROUPS: { title: string; categories: string[]; foot?: string }[] = [
+    { title: "File", categories: ["Preferences", "File"] },
+    { title: "Go", categories: ["Go"] },
+    { title: "Search", categories: ["Search"] },
+    { title: "View", categories: ["View"] },
+    { title: "Git", categories: ["Git"] },
+    { title: "Changes", categories: ["Changes"], foot: "In the commit message of the Changes panel." },
+    { title: "Edit Stack", categories: ["Edit Stack"], foot: "On the Edit Stack screen. A key alone works while no text field has the cursor." },
+    { title: "Bisect", categories: ["Bisect"], foot: "While bisecting, in History. A key alone works while no text field has the cursor." },
+  ];
+  /** The section's own search: words, or keys pressed with Record Keys on. */
+  let keyQuery = $state("");
+  let keyStroke = $state<string | null>(null);
+  let recordSearch = $state(false);
+  let changedOnly = $state(false);
+  let keyField = $state<HTMLInputElement>();
+
+  function keyRow(id: ShortcutId): Row {
+    return {
+      id: `keys:${id}`,
+      label: () => (needle ? nameOf(id) : commandOf(id).title),
+      sub: () => shortcutEdit.note(id)?.text ?? "",
+      subTone: () => shortcutEdit.note(id)?.tone,
+      control: { type: "keys", id },
+      more: () => {
+        const combos = bindingsOf(id);
+        const fallback = defaultsOf(id);
+        return [
+          ...combos.map((c): MenuEntry => ({ kind: "item", label: `Change ${keys(c)}…`, icon: menuIcons.edit, run: () => shortcutEdit.start(id, c) })),
+          { kind: "item", label: combos.length ? "Add Another Key…" : "Add Key…", icon: "M8 3.5v9M3.5 8h9", run: () => shortcutEdit.start(id) },
+          ...combos.map((c): MenuEntry => ({ kind: "item", label: `Remove ${keys(c)}`, icon: menuIcons.drop, run: () => shortcutEdit.remove(id, c) })),
+          { kind: "sep" },
+          { kind: "item", label: "Copy Command ID", icon: menuIcons.copy, run: () => copy(id, id) },
+          ...(changedKeys(id) ? [{ kind: "sep" } as MenuEntry, { kind: "item", label: `Reset to Default (${fallback.length ? fallback.map((c) => keys(c)).join(", ") : "no key"})`, icon: menuIcons.reset, run: () => shortcutEdit.reset(id) } as MenuEntry] : []),
+        ];
+      },
+    };
+  }
+
+  /** Record Keys: what is pressed in the search field is searched for, not typed. */
+  function searchKey(event: KeyboardEvent) {
+    if (!recordSearch) return;
+    const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+    if (plain && event.key === "Tab") return;
+    event.preventDefault();
+    if (plain && event.key === "Escape") {
+      recordSearch = false;
+      return;
+    }
+    if (plain && event.key === "Backspace") {
+      keyStroke = null;
+      keyQuery = "";
+      return;
+    }
+    const stroke = strokeOf(event);
+    if (!stroke) return;
+    keyStroke = stroke;
+    keyQuery = "";
+  }
 
   const sections: Section[] = [
     {
@@ -627,7 +696,7 @@
             }),
             prefRow("oxbow.diff.contextLines", "Context lines", "popup", { sub: "Unchanged lines kept around each change", options: () => opts(1, 3, 5, 10) }),
             prefRow("oxbow.diff.wordHighlight", "Highlight changed words", "switch"),
-            prefRow("oxbow.diff.wrap", "Wrap long lines", "switch", { sub: `Off, long lines run on and scroll sideways · ${keys("Alt+Z")}` }),
+            prefRow("oxbow.diff.wrap", "Wrap long lines", "switch", { sub: () => `Off, long lines run on and scroll sideways${shortcut("wrap") ? ` · ${shortcut("wrap")}` : ""}` }),
             prefRow("oxbow.diff.ignoreWhitespace", "Ignore whitespace changes", "switch", {
               sub: "In commits and stashes. Changes stays exact, so staging matches what you see",
             }),
@@ -682,6 +751,19 @@
           ],
         },
       ],
+    },
+    {
+      id: "keys",
+      label: "Keyboard Shortcuts",
+      color: "var(--section-blue)",
+      icon: KEYBOARD,
+      groups: () => {
+        const shown = commandIds.filter((id) => needle || (fits(id, keyQuery, mac) && (!keyStroke || bindingsOf(id).some((c) => startsWith(c, keyStroke!))) && (!changedOnly || changedKeys(id))));
+        return KEY_GROUPS.flatMap(({ title, categories, foot }) => {
+          const ids = shown.filter((id) => categories.includes(commandOf(id).category));
+          return ids.length ? [{ title, foot, rows: ids.map(keyRow) }] : [];
+        });
+      },
     },
     {
       id: "integrations",
@@ -860,6 +942,7 @@
   function go(id: string) {
     query = "";
     json = false;
+    shortcutEdit.cancel();
     if (id === visited[at]) return;
     visited = [...visited.slice(0, at + 1), id];
     at = visited.length - 1;
@@ -1393,6 +1476,38 @@
           </p>
         {/if}
 
+        {#if !needle && current.id === "keys"}
+          <div class="key-tools">
+            <label class="key-search" class:recording={recordSearch}>
+              <svg class="icon small" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5 14 14" /></svg>
+              {#if recordSearch}
+                <input bind:this={keyField} aria-label="Press keys to find their command" placeholder="Press keys to find their command" value={keyStroke ? keys(keyStroke) : ""} onkeydown={searchKey} readonly />
+              {:else}
+                <input bind:this={keyField} type="search" aria-label="Search commands" placeholder="Search commands or keys" bind:value={keyQuery} spellcheck="false" />
+              {/if}
+            </label>
+            <button
+              class="button pill"
+              class:on={recordSearch}
+              aria-pressed={recordSearch}
+              title="Find a command by pressing its keys"
+              onclick={() => {
+                recordSearch = !recordSearch;
+                keyStroke = null;
+                keyQuery = "";
+                requestAnimationFrame(() => keyField?.focus());
+              }}
+            >
+              <svg class="icon small" viewBox="0 0 16 16"><path d={KEYBOARD} /></svg>Record Keys
+            </button>
+            <button class="button pill" class:on={changedOnly} aria-pressed={changedOnly} onclick={() => (changedOnly = !changedOnly)} title="Only the commands you gave your own keys">Changed</button>
+            <span class="spacer"></span>
+            <button class="button pill" disabled={!anyChanged()} onclick={() => void confirm.run(resetAllRequest())} title={anyChanged() ? "Every command back to the keys it came with, as in VS Code" : "Every command has the keys it came with"}>
+              <svg class="icon small" viewBox="0 0 16 16"><path d={menuIcons.reset} /></svg>Reset All
+            </button>
+          </div>
+          {#if !shown.length}<p class="empty">{changedOnly && !keyQuery && !keyStroke ? "Every command has the keys it came with, as in VS Code." : `No commands ${keyStroke ? `with ${keys(keyStroke)}` : `match “${keyQuery.trim()}”`}.`}</p>{/if}
+        {/if}
         {#each shown as group (group.key)}
           <section>
             {#if group.title}<h2>{group.title}</h2>{/if}
@@ -1433,7 +1548,7 @@
                   {#if row.image?.()}<img class="avatar" src={row.image()} alt="" />{/if}
                   <span class="text" class:off>
                     <span class="name" class:mono={row.mono}>{text(row.label)}</span>
-                    {#if text(row.sub)}<span class="sub">{text(row.sub)}</span>{/if}
+                    {#if text(row.sub)}<span class="sub {row.subTone?.() ?? ''}">{text(row.sub)}</span>{/if}
                   </span>
                   {#if badge}<span class="chip">{badge}</span>{/if}
                   {#if control?.type === "seg"}
@@ -1486,6 +1601,8 @@
                     {/if}
                   {:else if control?.type === "button"}
                     <button class="button small" class:danger={control.danger} disabled={off} onclick={control.run}>{text(control.label)}</button>
+                  {:else if control?.type === "keys"}
+                    <ShortcutKeys id={control.id} />
                   {/if}
                 </div>
               {/each}
@@ -1600,6 +1717,7 @@
     --section-orange: #d99a62;
     --section-purple: #a77bc9;
     --section-teal: #5baeb6;
+    --section-blue: #6f8fae;
     position: relative;
     height: 100%;
     display: flex;
@@ -2047,6 +2165,73 @@
   .empty {
     padding-top: 8px;
     font-size: var(--text-body);
+  }
+
+  /* Stays on top while the list scrolls under it. */
+  .key-tools {
+    position: sticky;
+    top: -6px;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: -6px -30px 0 -28px;
+    padding: 6px 30px 8px 28px;
+    background: var(--win);
+  }
+
+  .key-search {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 280px;
+    height: 30px;
+    padding: 0 10px;
+    border-radius: var(--radius-pill);
+    background: var(--field);
+    color: var(--text2);
+  }
+
+  .key-search:focus-within {
+    box-shadow: var(--focus-ring);
+  }
+
+  .key-search input {
+    flex-grow: 1;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    font: inherit;
+    color: var(--text);
+    caret-color: transparent;
+    box-shadow: none;
+  }
+
+  .key-search input[type="search"] {
+    caret-color: auto;
+  }
+
+  .key-search.recording input::placeholder {
+    color: var(--accent-ink);
+  }
+
+  .pill.on {
+    background: var(--accent-quiet);
+    color: var(--accent-ink);
+  }
+
+  .sub.warn {
+    color: var(--orange);
+  }
+
+  .sub.error {
+    color: var(--danger);
+  }
+
+  .sub.warn,
+  .sub.error {
+    white-space: normal;
   }
 
   .problem {

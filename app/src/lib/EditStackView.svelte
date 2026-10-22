@@ -9,7 +9,8 @@
   import { confirm } from "./confirm.svelte";
   import type { BranchContext } from "./branches";
   import { lane, plate, shortId, tint } from "./format";
-  import { keys, withKeys } from "./keys";
+  import { shortcut, withKeys } from "./keys";
+  import { combo, pressed } from "./shortcuts";
   import { kept as keptPlans } from "./kept";
   import Menu, { type MenuEntry } from "./Menu.svelte";
   import WhyNote from "./WhyNote.svelte";
@@ -216,7 +217,7 @@
     menu = {
       x: box.left,
       y: box.bottom + 4,
-      entries: ACTIONS.map((a) => ({ kind: "item", label: `${a.label}  ·  ${a.hint}`, icon: ICONS[a.id], keys: a.key, danger: a.id === "drop", run: () => setAct(id, a.id) })),
+      entries: ACTIONS.map((a) => ({ kind: "item", label: `${a.label}  ·  ${a.hint}`, icon: ICONS[a.id], keys: shortcut(a.command) || undefined, danger: a.id === "drop", run: () => setAct(id, a.id) })),
     };
   }
 
@@ -272,11 +273,19 @@
   }
 
   // --- Keys --------------------------------------------------------------------------------------
+  /** Move's keys for the legend, "⌥↑↓" when they differ by the arrow alone. */
+  function moveKeys(): string {
+    const up = shortcut("stackUp");
+    const down = shortcut("stackDown");
+    if (up && down && up.slice(0, -1) === down.slice(0, -1)) return up + down.slice(-1);
+    return [up, down].filter(Boolean).join(" ");
+  }
+
   function onKey(event: KeyboardEvent) {
     if (!stack || confirm.request || menu || event.defaultPrevented) return;
     const target = event.target as HTMLElement | null;
     const typing = !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA");
-    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+    if (pressed("stackRebase", event)) {
       event.preventDefault();
       start();
       return;
@@ -286,9 +295,9 @@
       return;
     }
     const index = draft.items.findIndex((i) => i.kind === "commit" && i.id === selected);
-    if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+    if (pressed("stackUp", event) || pressed("stackDown", event)) {
       event.preventDefault();
-      if (index >= 0) move(index, event.key === "ArrowUp" ? -1 : 1);
+      if (index >= 0) move(index, pressed("stackUp", event) ? -1 : 1);
       return;
     }
     if (event.key === "ArrowUp" || event.key === "ArrowDown") {
@@ -299,8 +308,8 @@
       if (next) selected = next;
       return;
     }
-    if (event.metaKey || event.ctrlKey || event.altKey || !selected) return;
-    const action = ACTIONS.find((a) => a.key.toLowerCase() === event.key.toLowerCase());
+    if (!selected) return;
+    const action = ACTIONS.find((a) => pressed(a.command, event));
     if (action) {
       event.preventDefault();
       setAct(selected, action.id);
@@ -579,7 +588,7 @@
                     style:background={a === "drop" || folded ? "var(--win)" : lane(color)}
                   ></span>
                   <span class="cells" class:indent={folded}>
-                    <button class="pill act-{a}" aria-haspopup="menu" title="Action ({ACTIONS.find((x) => x.id === a)?.key})" onclick={(e) => { e.stopPropagation(); openActions(e, item.id); }}>
+                    <button class="pill act-{a}" aria-haspopup="menu" title={withKeys("Action", combo(ACTIONS.find((x) => x.id === a)!.command))} onclick={(e) => { e.stopPropagation(); openActions(e, item.id); }}>
                       {ACTIONS.find((x) => x.id === a)?.label}
                       <svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>
                     </button>
@@ -596,10 +605,10 @@
                     <span class="stat">{c.additions ? `+${c.additions}` : ""}{c.deletions ? ` −${c.deletions}` : ""}</span>
                     {#if on}
                       <span class="moves">
-                        <button aria-label="Move up" title={withKeys("Move Up", "Alt+Up")} disabled={index <= 1} onclick={(e) => { e.stopPropagation(); move(index, -1); }}>
+                        <button aria-label="Move up" title={withKeys("Move Up", combo("stackUp"))} disabled={index <= 1} onclick={(e) => { e.stopPropagation(); move(index, -1); }}>
                           <svg class="icon" viewBox="0 0 16 16"><path d="M8 12.5v-9M4.5 7 8 3.5 11.5 7" /></svg>
                         </button>
-                        <button aria-label="Move down" title={withKeys("Move Down", "Alt+Down")} disabled={index >= draft.items.length - 1} onclick={(e) => { e.stopPropagation(); move(index, 1); }}>
+                        <button aria-label="Move down" title={withKeys("Move Down", combo("stackDown"))} disabled={index >= draft.items.length - 1} onclick={(e) => { e.stopPropagation(); move(index, 1); }}>
                           <svg class="icon" viewBox="0 0 16 16"><path d="M8 3.5v9M4.5 9 8 12.5 11.5 9" /></svg>
                         </button>
                       </span>
@@ -627,8 +636,8 @@
         </div>
         <span class="grow"></span>
         <div class="legend">
-          {#each ACTIONS as a (a.id)}<span><span class="key mono">{a.key}</span>{a.label}</span>{/each}
-          <span><span class="key mono">{keys("Alt+Up")}{keys("Down").slice(-1)}</span>Move</span>
+          {#each ACTIONS as a (a.id)}<span>{#if shortcut(a.command)}<span class="key mono">{shortcut(a.command)}</span>{/if}{a.label}</span>{/each}
+          <span>{#if moveKeys()}<span class="key mono">{moveKeys()}</span>{/if}Move</span>
         </div>
       </section>
 
@@ -696,7 +705,7 @@
             {#if !changed}<WhyNote text="Change the plan first" />{/if}
             <button class="button" onclick={cancel}>Cancel</button>
             <button class="button primary" onclick={start} disabled={!changed || checking} title={changed ? undefined : "Change the plan first"}>
-              Rebase Stack <span class="key-hint">{keys("Mod+Enter")}</span>
+              Rebase Stack {#if shortcut("stackRebase")}<span class="key-hint">{shortcut("stackRebase")}</span>{/if}
             </button>
           </div>
         {/if}

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { keys, withKeys } from "./keys";
+  import { withKeys } from "./keys";
+  import { combo } from "./shortcuts";
   // Find in file, in File History's toolbar: the text, a letter-case switch, which match is
   // current among how many, and arrows to the previous and next one.
 
@@ -40,7 +41,7 @@
     spellcheck="false"
     autocomplete="off"
     aria-label="Find in file"
-    title={withKeys("Find in File", "Mod+F")}
+    title={withKeys("Find in File", combo("find"))}
   />
   <button
     class="case"

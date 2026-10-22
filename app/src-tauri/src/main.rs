@@ -487,6 +487,24 @@ fn show_settings(app: &AppHandle) -> CommandResult<()> {
     builder.build().map(|_| ()).map_err(|err| err.to_string())
 }
 
+/// The key the app menu's Settings… shows and answers to: the one Settings › Keyboard Shortcuts
+/// gives Open Settings, or none. Only the Mac has the menu.
+#[tauri::command]
+async fn set_settings_key(app: AppHandle, accelerator: Option<String>) -> CommandResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let item = app
+            .menu()
+            .and_then(|menu| menu.items().ok()?.first()?.as_submenu()?.get("settings"));
+        if let Some(item) = item.as_ref().and_then(|item| item.as_menuitem()) {
+            item.set_accelerator(accelerator).map_err(|err| err.to_string())?;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, accelerator);
+    Ok(())
+}
+
 fn last_repo_file(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_config_dir().ok().map(|dir| dir.join("last-repository"))
 }
@@ -2722,6 +2740,7 @@ fn main() {
             all_settings,
             set_setting,
             open_settings,
+            set_settings_key,
             git_settings,
             repo_settings,
             set_git_config,

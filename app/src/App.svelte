@@ -45,7 +45,7 @@
   import ObjectPicker from "./lib/ObjectPicker.svelte";
   import { namedLike, notInHistory, objectsOf, type ObjectAction, type ObjectItem, type ObjectKind } from "./lib/objects";
   import type { PaletteItem } from "./lib/palette";
-  import { Keymap, combo, type ShortcutId } from "./lib/shortcuts";
+  import { Keymap, accelerator, combo, commandOf, pressed, type ShortcutId } from "./lib/shortcuts";
   import { stepChange } from "./lib/diffRows";
   import { conflictSteps, KEPT_CONFLICTS } from "./lib/conflicts";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -61,7 +61,7 @@
   import { startPublish } from "./lib/publish";
   import { start } from "./lib/start.svelte";
   import OperationLog from "./lib/OperationLog.svelte";
-  import { withKeys } from "./lib/keys";
+  import { shortcut, withKeys } from "./lib/keys";
   import { isRedo, lostRow, oplog, undoRequest } from "./lib/oplog.svelte";
   import EditStackView from "./lib/EditStackView.svelte";
   import { amend, canBack, canForward, crumbs, emptyTrail, go, visit, type Place, type Trail } from "./lib/backStack";
@@ -170,7 +170,6 @@
   let sideHidden = $state(false);
   /** Whether the sidebar is out now: docked in a wide window, slid in over a narrow one. */
   const sideOut = $derived(narrow ? sideShown : !sideHidden);
-  const SIDEBAR_KEYS = combo("sidebar");
   /** The sidebar is sliding in or out of a wide window. */
   let sliding = $state(false);
   let slideTimer: ReturnType<typeof setTimeout> | undefined;
@@ -209,16 +208,14 @@
   function moreEntries(): MenuEntry[] {
     const entries: MenuEntry[] = [];
     if (view !== "file" || showConflicts) entries.push({ kind: "item", label: history?.head.branch ? "New Branch…" : "Create a Branch at HEAD…", icon: NEW_BRANCH_ICON, run: newBranch });
-    entries.push({ kind: "item", label: "Console", icon: CONSOLE_ICON, keys: keys(combo("console")), run: () => api.openConsole() });
-    entries.push({ kind: "item", label: "Settings…", icon: SETTINGS_ICON, keys: keys("Mod+,"), run: () => api.openSettings() });
+    entries.push({ kind: "item", label: "Console", icon: CONSOLE_ICON, keys: shortcut("console") || undefined, run: () => api.openConsole() });
+    entries.push({ kind: "item", label: "Settings…", icon: SETTINGS_ICON, keys: shortcut("settings") || undefined, run: () => api.openSettings() });
     return entries;
   }
   /** The details panel put away, so the graph takes the whole width; kept in settings.json. */
   let detailsHidden = $state(false);
   /** The details panel over the whole content, for a long diff; the graph comes back with the same button or Esc. */
   let expanded = $state(false);
-  const DETAILS_KEYS = combo("details");
-  const EXPAND_KEYS = combo("expand");
   function toggleDetails() {
     expanded = false;
     detailsHidden = !detailsHidden;
@@ -857,9 +854,14 @@
   /** What Quick Open starts with when the palette's ">" was taken away. */
   let quickInitial = $state("");
   let branchPicker = $state<BranchPicker>();
+  /** Your own keys come with Settings › Keyboard Shortcuts, through prefs. */
   const keymap = new Keymap();
   /** The toast saying a chord waits for its second key. */
   let chordNote: string | null = null;
+  // The app menu's Settings… answers to the key Open Settings has now.
+  $effect(() => {
+    api.setSettingsKey(accelerator(combo("settings"))).catch(() => {});
+  });
 
   function openPalette() {
     nav.quickOpen = false;
@@ -1007,85 +1009,87 @@
   /** Every command there is here and now, for the Command Palette. */
   function paletteCommands(): PaletteItem[] {
     const out: PaletteItem[] = [];
-    const add = (id: string, category: string, title: string, run: () => void, keys?: ShortcutId) => out.push({ id, category, title, run, keys });
-    add("settings", "Preferences", "Open Settings", () => api.openSettings(), "settings");
-    add("console", "View", "Show Console", () => api.openConsole(), "console");
-    add("open", "File", "Open Repository…", chooseRepo, "open");
-    add("openRecent", "File", "Open Recent…", () => void openRecent(), "openRecent");
-    add("clone", "Git", "Clone…", () => start.clone(), "clone");
-    add("newRepo", "Git", "Initialize Repository…", () => start.newRepo(), "newRepo");
-    add("zoomIn", "View", "Zoom In", () => zoom(zoomLevel + 1), "zoomIn");
-    add("zoomOut", "View", "Zoom Out", () => zoom(zoomLevel - 1), "zoomOut");
-    add("zoomReset", "View", "Reset Zoom", () => zoom(0), "zoomReset");
+    // Each command as the registry names it, unless its title says what it does now ("Hide
+    // Sidebar"), with its own key, or another's.
+    const add = (id: ShortcutId, run: () => void, title?: string, keys: ShortcutId = id) => out.push({ id, category: commandOf(id).category, title: title ?? commandOf(id).title, run, keys });
+    add("settings", () => api.openSettings());
+    add("console", () => api.openConsole());
+    add("open", chooseRepo);
+    add("openRecent", () => void openRecent());
+    add("clone", () => start.clone());
+    add("newRepo", () => start.newRepo());
+    add("zoomIn", () => zoom(zoomLevel + 1));
+    add("zoomOut", () => zoom(zoomLevel - 1));
+    add("zoomReset", () => zoom(0));
     if (!repo || !history || !branchCtx) return out;
     const h = history;
     const t = h.tracking;
     const busy = !!h.operation || !!h.bisect;
-    add("closeRepo", "File", "Close Repository", closeRepo, "closeRepo");
-    add("reload", "File", "Reload Repository", () => void reload(), "reload");
-    add("quickOpen", "Go", "Go to File History…", () => (nav.quickOpen = true), "quickOpen");
-    add("goToBranch", "Go", "Go to Branch…", () => openObjects("branches"), "goToBranch");
-    if (h.refs.some((r) => r.kind === "tag")) add("goToTag", "Go", "Go to Tag…", () => openObjects("tags"));
-    if (h.stashes.length) add("goToStash", "Go", "Go to Stash…", () => openObjects("stashes"));
-    if (h.worktrees.length > 1) add("openWorktree", "File", "Open Worktree…", () => openObjects("worktrees"));
-    if (h.submodules.length) add("openSubmodule", "File", "Open Submodule…", () => openObjects("submodules"));
-    add("find", "Search", "Find in History", () => findInHistory(), "find");
-    add("findCode", "Search", "Find in Changed Code", () => findInHistory("code"), "findCode");
-    if (h.stashes.length) add("findStashes", "Search", "Find in Stashes", findInStashes, view === "stashes" ? "find" : undefined);
-    add("sidebar", "View", sideOut ? "Hide Sidebar" : "Show Sidebar", toggleSidebar, "sidebar");
-    add("diffLayout", "View", prefs.get("oxbow.diff.layout") === "split" ? "Show Diffs Unified" : "Show Diffs Side by Side", () => void prefs.set("oxbow.diff.layout", prefs.get("oxbow.diff.layout") === "split" ? "unified" : "split"));
-    add("wrap", "View", "Toggle Word Wrap", () => void prefs.set("oxbow.diff.wrap", !prefs.get("oxbow.diff.wrap")), "wrap");
-    add("whitespace", "View", prefs.get("oxbow.diff.ignoreWhitespace") ? "Show Whitespace Changes" : "Ignore Whitespace Changes", () => void prefs.set("oxbow.diff.ignoreWhitespace", !prefs.get("oxbow.diff.ignoreWhitespace")));
-    if (canBack(trail)) add("back", "Go", `Go Back to ${placeName(trail.places[trail.at - 1])}`, goBack, "back");
-    if (canForward(trail)) add("forward", "Go", `Go Forward to ${placeName(trail.places[trail.at + 1])}`, goForward, "forward");
-    add("nextChange", "Go", "Go to Next Change", () => void stepAnyChange(1), "nextChange");
-    add("previousChange", "Go", "Go to Previous Change", () => void stepAnyChange(-1), "previousChange");
-    add("history", "View", "Show History", () => ((view = "history"), (resolving = false)));
-    add("stashes", "View", "Show Stashes", () => ((view = "stashes"), (resolving = false)));
-    add("oplog", "View", "Show Operation Log", () => ((view = "oplog"), (resolving = false)));
+    add("closeRepo", closeRepo);
+    add("reload", () => void reload());
+    add("quickOpen", () => (nav.quickOpen = true));
+    add("goToBranch", () => openObjects("branches"));
+    if (h.refs.some((r) => r.kind === "tag")) add("goToTag", () => openObjects("tags"));
+    if (h.stashes.length) add("goToStash", () => openObjects("stashes"));
+    if (h.worktrees.length > 1) add("openWorktree", () => openObjects("worktrees"));
+    if (h.submodules.length) add("openSubmodule", () => openObjects("submodules"));
+    add("find", () => findInHistory());
+    add("findCode", () => findInHistory("code"));
+    if (h.stashes.length) add("findStashes", findInStashes, undefined, view === "stashes" ? "find" : undefined);
+    add("sidebar", toggleSidebar, sideOut ? "Hide Sidebar" : "Show Sidebar");
+    add("diffLayout", () => void prefs.set("oxbow.diff.layout", prefs.get("oxbow.diff.layout") === "split" ? "unified" : "split"), prefs.get("oxbow.diff.layout") === "split" ? "Show Diffs Unified" : "Show Diffs Side by Side");
+    add("wrap", () => void prefs.set("oxbow.diff.wrap", !prefs.get("oxbow.diff.wrap")));
+    add("whitespace", () => void prefs.set("oxbow.diff.ignoreWhitespace", !prefs.get("oxbow.diff.ignoreWhitespace")), prefs.get("oxbow.diff.ignoreWhitespace") ? "Show Whitespace Changes" : "Ignore Whitespace Changes");
+    if (canBack(trail)) add("back", goBack, `Go Back to ${placeName(trail.places[trail.at - 1])}`);
+    if (canForward(trail)) add("forward", goForward, `Go Forward to ${placeName(trail.places[trail.at + 1])}`);
+    add("nextChange", () => void stepAnyChange(1));
+    add("previousChange", () => void stepAnyChange(-1));
+    add("history", () => ((view = "history"), (resolving = false)));
+    add("stashes", () => ((view = "stashes"), (resolving = false)));
+    add("oplog", () => ((view = "oplog"), (resolving = false)));
     if (view === "history" && !showConflicts) {
-      add("details", "View", detailsHidden ? "Show Details" : "Hide Details", toggleDetails, "details");
-      add("expand", "View", expanded ? "Show Graph" : "Expand Details", toggleExpanded, "expand");
-      add("focusOnly", "View", focusOnly ? "Show All Branches" : "Show Current Branch Only", () => void setFocusOnly(!focusOnly));
+      add("details", toggleDetails, detailsHidden ? "Show Details" : "Hide Details");
+      add("expand", toggleExpanded, expanded ? "Show Graph" : "Expand Details");
+      add("focusOnly", () => void setFocusOnly(!focusOnly), focusOnly ? "Show All Branches" : "Show Current Branch Only");
     }
     if (h.rows.some((r) => r.worktree)) {
-      add("changes", "View", "Show Changes", () => ((view = "history"), (resolving = false), showChanges()), "changes");
-      add("commit", "Git", "Commit…", commitChanges);
-      if (!busy) add("stash", "Git", "Stash", () => void run(stashRequest(branchCtx!)));
+      add("changes", () => ((view = "history"), (resolving = false), showChanges()));
+      add("commit", commitChanges);
+      if (!busy) add("stash", () => void run(stashRequest(branchCtx!)));
     }
     if (h.head.commit && repo) {
       const path = repo.path;
-      add("newWorktree", "Git", "New Worktree…", () => void run(newWorktreeRequest(branchCtx!, path)));
+      add("newWorktree", () => void run(newWorktreeRequest(branchCtx!, path)));
     }
     if (h.remotes.length && remoteCtx) {
-      add("fetch", "Git", "Fetch", () => void sync("fetch"));
-      add("activity", "View", "Show Activity", showActivity);
+      add("fetch", () => void sync("fetch"));
+      add("activity", showActivity);
       if (t) {
-        add("pull", "Git", "Pull", () => void sync("pull"));
+        add("pull", () => void sync("pull"));
         if (!pullBlock) {
-          add("pullRebase", "Git", "Pull (Rebase)", () => void sync("pull", "rebase"));
-          add("pullMerge", "Git", "Pull (Merge)", () => void sync("pull", "merge"));
+          add("pullRebase", () => void sync("pull", "rebase"));
+          add("pullMerge", () => void sync("pull", "merge"));
         }
-        add("push", "Git", "Push", () => void sync("push"));
+        add("push", () => void sync("push"));
       } else if (h.head.branch) {
-        add("publish", "Git", "Publish Branch…", () => void sync("push"));
+        add("publish", () => void sync("push"));
       }
     } else if (h.head.branch && h.head.commit) {
-      add("publishGitHub", "Git", "Publish to GitHub…", () => void publishToGitHub());
+      add("publishGitHub", () => void publishToGitHub());
     }
     if (!busy) {
-      add("checkout", "Git", "Checkout to…", () => {
+      add("checkout", () => {
         view = view === "file" ? "history" : view;
         resolving = false;
         requestAnimationFrame(() => branchPicker?.show());
       });
     }
-    add("branch", "Git", h.head.branch ? "Create Branch…" : "Create Branch at HEAD…", newBranch);
-    if (h.head.branch && !busy) add("editStack", "Git", "Edit Stack…", () => openStack(null));
-    if (operation?.conflicted) add("resolve", "Git", "Resolve Conflicts", () => (resolving = true));
-    add("undo", "Git", "Undo Last Step", () => void undoLatest(), "undo");
-    add("redo", "Git", "Redo", () => void redoLatest(), "redo");
-    add("fixMistake", "Git", "Fix a Mistake…", () => void openFixes(), "fixMistake");
+    add("branch", newBranch, h.head.branch ? "Create Branch…" : "Create Branch at HEAD…");
+    if (h.head.branch && !busy) add("editStack", () => openStack(null));
+    if (operation?.conflicted) add("resolve", () => (resolving = true));
+    add("undo", () => void undoLatest());
+    add("redo", () => void redoLatest());
+    add("fixMistake", () => void openFixes());
     return out;
   }
 
@@ -1222,13 +1226,23 @@
       case "previousTab":
         return stepTab(id === "nextTab" ? 1 : -1);
     }
-    return false;
+    // The rest have no key of their own until you give them one: they run when the palette
+    // would list them, as VS Code's when-clauses have it.
+    const command = paletteCommands().find((c) => c.id === id);
+    if (!command) return false;
+    command.run();
+    return true;
   }
 
   /** The next change of a diff, or on the Conflicts screen its next conflict. */
   function stepAnyChange(by: 1 | -1): boolean {
     if (showConflicts && conflictSteps.step) return conflictSteps.step(by);
     return stepChange(by);
+  }
+
+  /** The answer a key gives for the commit under test while bisecting, G, B or S by default. */
+  function bisectPressed(event: KeyboardEvent): "good" | "bad" | "skip" | null {
+    return pressed("bisectGood", event) ? "good" : pressed("bisectBad", event) ? "bad" : pressed("bisectSkip", event) ? "skip" : null;
   }
 
   /** The key went to a text field, where ⌘Z undoes typing. */
@@ -2210,10 +2224,10 @@
       confirm.say(`The key combination (${keys(hit.missed).replace(" ", ", ")}) is not a command.`);
     } else if (hit && "id" in hit && shortcutKey(hit.id, event)) {
       event.preventDefault();
-    } else if (history?.bisect && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && ["g", "b", "s"].includes(event.key.toLowerCase()) && view === "history" && !showConflicts && !confirm.request && !start.sheet && !nav.quickOpen && !picker && !typing(event)) {
+    } else if (history?.bisect && bisectPressed(event) && view === "history" && !showConflicts && !confirm.request && !start.sheet && !nav.quickOpen && !picker && !typing(event)) {
       // Bisecting: G, B and S answer for the commit under test, as the banner's tooltips say.
       event.preventDefault();
-      bisectKey(({ g: "good", b: "bad", s: "skip" } as const)[event.key.toLowerCase() as "g" | "b" | "s"]);
+      bisectKey(bisectPressed(event)!);
     } else if (event.key === "Escape" && sideShown && !confirm.request && !event.defaultPrevented) {
       sideShown = false;
     } else if (event.key === "Escape" && submoduleSel && view === "history" && !confirm.request && !event.defaultPrevented) {
@@ -2248,7 +2262,7 @@
   {/snippet}
 {:else}
   <div class="window" class:narrow class:mac class:side-shown={sideShown} class:side-hidden={sideHidden && !narrow} class:sliding>
-    <button class="capsule side-toggle" onclick={toggleSidebar} aria-label={sideOut ? "Hide sidebar" : "Show sidebar"} aria-expanded={sideOut} title={withKeys(sideOut ? "Hide Sidebar" : "Show Sidebar", SIDEBAR_KEYS)}>
+    <button class="capsule side-toggle" onclick={toggleSidebar} aria-label={sideOut ? "Hide sidebar" : "Show sidebar"} aria-expanded={sideOut} title={withKeys(sideOut ? "Hide Sidebar" : "Show Sidebar", combo("sidebar"))}>
       <svg class="icon" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2" /><path d="M6 3v10" /></svg>
     </button>
     {#if narrow && sideShown}
@@ -2475,7 +2489,7 @@
             <button class="capsule" onclick={() => api.openConsole()} aria-label="Console" title={withKeys("Console", combo("console"))}>
               <svg class="icon" viewBox="0 0 16 16"><path d={CONSOLE_ICON} /></svg>
             </button>
-            <button class="capsule" onclick={() => api.openSettings()} aria-label="Settings" title={withKeys("Settings", "Mod+,")}>
+            <button class="capsule" onclick={() => api.openSettings()} aria-label="Settings" title={withKeys("Settings", combo("settings"))}>
               <svg class="icon" viewBox="0 0 16 16"><path d={SETTINGS_ICON} /></svg>
             </button>
           {/if}
@@ -2634,7 +2648,7 @@
               <GraphLegend {history} shown={graphHistory!} onShow={jump} />
             {/if}
             {#if detailsHidden}
-              <button class="bar-button" onclick={toggleDetails} aria-label="Show details" title={withKeys("Show Details", DETAILS_KEYS)}>
+              <button class="bar-button" onclick={toggleDetails} aria-label="Show details" title={withKeys("Show Details", combo("details"))}>
                 <svg class="icon" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2" /><path d="M10 3v10" /></svg>
               </button>
             {/if}
@@ -2666,11 +2680,11 @@
           <!-- In line with the graph's column bar: what the panel shows, and the room it takes. -->
           <div class="columns panel-bar">
             <span class="what">{panelLabel}</span>
-            <button class="bar-button" class:on={expanded} onclick={toggleExpanded} aria-pressed={expanded} aria-label={expanded ? "Show the graph again" : "Expand details"} title={withKeys(expanded ? "Show Graph" : "Expand Details", EXPAND_KEYS)}>
+            <button class="bar-button" class:on={expanded} onclick={toggleExpanded} aria-pressed={expanded} aria-label={expanded ? "Show the graph again" : "Expand details"} title={withKeys(expanded ? "Show Graph" : "Expand Details", combo("expand"))}>
               <svg class="icon" viewBox="0 0 16 16"><path d={expanded ? "M13.5 2.5 9.5 6.5M9.5 3.2v3.3h3.3M2.5 13.5l4-4M6.5 12.8V9.5H3.2" : "M9.5 2.5h4v4M13.5 2.5 9.5 6.5M6.5 13.5h-4v-4M2.5 13.5l4-4"} /></svg>
             </button>
             {#if !expanded}
-              <button class="bar-button" onclick={toggleDetails} aria-label="Hide details" title={withKeys("Hide Details", DETAILS_KEYS)}>
+              <button class="bar-button" onclick={toggleDetails} aria-label="Hide details" title={withKeys("Hide Details", combo("details"))}>
                 <svg class="icon" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2" /><path d="M10 3v10" /></svg>
               </button>
             {/if}

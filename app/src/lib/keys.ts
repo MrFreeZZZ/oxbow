@@ -27,12 +27,13 @@ function stroke(combo: string): string {
   return [...new Set(mods), otherNames[key] ?? key].join("+");
 }
 
-/** A tooltip with its shortcut: "Settings (⌘,)". */
-export function withKeys(label: string, combo: string): string {
-  return `${label} (${keys(combo)})`;
+/** A tooltip with its shortcut: "Settings (⌘,)"; just the label for a command without a key. */
+export function withKeys(label: string, combo: string | null): string {
+  return combo ? `${label} (${keys(combo)})` : label;
 }
 
-/** A window-wide shortcut as people read it: "⇧⌘P", "Ctrl+Shift+P". */
+/** A command's shortcut as people read it: "⇧⌘P", "Ctrl+Shift+P"; "" when it has none. */
 export function shortcut(id: ShortcutId): string {
-  return keys(combo(id));
+  const first = combo(id);
+  return first ? keys(first) : "";
 }

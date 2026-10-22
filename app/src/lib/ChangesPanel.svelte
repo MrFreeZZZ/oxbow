@@ -109,7 +109,8 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import TipCard from "./TipCard.svelte";
-  import { keys } from "./keys";
+  import { shortcut } from "./keys";
+  import { pressed } from "./shortcuts";
   import { api, stopped } from "./api";
   import { diffSettings, prefs, wholeByDefault } from "./prefs.svelte";
   import { confirm, type Part, type Request } from "./confirm.svelte";
@@ -724,7 +725,7 @@
   });
 
   function onCommitKey(event: KeyboardEvent) {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+    if (pressed("commitNow", event)) {
       event.preventDefault();
       commit();
     }
@@ -1174,7 +1175,7 @@
       {/if}
       <span class="grow"></span>
       <button class="button primary go" onclick={commit} disabled={!canCommit} title={commitHint?.text}>
-        {draft.amend ? "Amend" : "Commit"} <span class="keys">{keys("Mod+Enter")}</span>
+        {draft.amend ? "Amend" : "Commit"} {#if shortcut("commitNow")}<span class="keys">{shortcut("commitNow")}</span>{/if}
       </button>
     </div>
   </div>
