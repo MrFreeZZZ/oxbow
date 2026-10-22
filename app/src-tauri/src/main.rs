@@ -65,6 +65,8 @@ struct Slot {
     /// Stop of the read running in each lane (a search, the commit panel's diff): a newer read
     /// in the lane stops the older, whose answer would be dropped anyway.
     lanes: HashMap<String, Arc<AtomicBool>>,
+    /// Tells the window what changes in its repository outside it; stops when dropped.
+    watch: Option<oxbow_core::Watch>,
 }
 
 impl Slot {
@@ -515,10 +517,44 @@ async fn open_repo(
         slot.changes = None;
         slot.folders = Arc::default();
         slot.folder_cache = FolderCache::default();
+        slot.watch = None;
     });
+    watch_repo(app.clone(), window.label().to_owned());
     // Settings shows this repository under This Repository.
     let _ = app.emit("repo-changed", ());
     Ok(summary)
+}
+
+/// Watch the repository open in window `label`, which hears each change outside it as an
+/// `outside-change`. Started after the repository opened: a big folder takes a while to watch.
+/// Without a watch the window still reads afresh when it comes back to the front.
+fn watch_repo(app: AppHandle, label: String) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let session = app.state::<Session>();
+        let Some(repo) = session
+            .windows
+            .lock()
+            .expect("session lock")
+            .get(&label)
+            .and_then(|slot| slot.repo.clone())
+        else {
+            return;
+        };
+        let events = app.clone();
+        let to = label.clone();
+        let Ok(watch) = repo.watch(move |changed| {
+            let _ = events.emit_to(to.as_str(), "outside-change", changed);
+        }) else {
+            return;
+        };
+        // Another repository was opened meanwhile, or the window closed: the watch stops here.
+        if let Some(slot) = session.windows.lock().expect("session lock").get_mut(&label)
+            && slot.repo.as_ref().is_some_and(|open| open.workdir() == repo.workdir())
+            && slot.watch.is_none()
+        {
+            slot.watch = Some(watch);
+        }
+    });
 }
 
 /// Repository to open at start: the first command-line argument, else the last one used,

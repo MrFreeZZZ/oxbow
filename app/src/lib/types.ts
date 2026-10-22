@@ -851,6 +851,16 @@ export type ActionEvent =
   /** The action ran, but its step couldn't be written to the Operation Log: Undo can't take it back. */
   | { kind: "notLogged"; reason: string };
 
+/** What changed in the repository outside the window: in a terminal, an editor, another window. */
+export interface OutsideChange {
+  /** Branches, tags, HEAD, the stashes, what is staged, an operation under way, settings. */
+  git: boolean;
+  /** Files in the working copy, or what is ignored. */
+  files: boolean;
+  /** When the last of it happened, in milliseconds since the epoch. */
+  at: number;
+}
+
 export type FailureKind =
   | "secrets"
   | "rejected"

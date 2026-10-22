@@ -1,6 +1,6 @@
 <script lang="ts">
   import { withKeys } from "./keys";
-  import { untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import type { History, HistoryRow, Label, RowLayout, Segment, WorktreeSummary } from "./types";
   import { lane, plate, relativeTime, tint } from "./format";
   import Menu, { type MenuEntry } from "./Menu.svelte";
@@ -162,6 +162,30 @@
     row.parents.forEach((id, i) => marks.set(id, row.parents.length > 1 ? `parent ${i + 1}` : "parent"));
     return { marks, color: row.graph.color };
   });
+  // Rows that come or go above the ones in view (a commit made in a terminal, the row of
+  // uncommitted changes) don't move what is in view. At the top, the list stays at the top.
+  let anchored: HistoryRow[] | null = null;
+  /** Where to scroll once the new rows are drawn; a reveal or scroll asked for meanwhile wins. */
+  let anchor: number | null = null;
+  $effect.pre(() => {
+    const next = rows;
+    untrack(() => {
+      const old = anchored;
+      anchored = next;
+      if (!old || old === next || !viewport || viewport.scrollTop < ROW) return;
+      const at = Math.max(0, Math.floor((viewport.scrollTop - PAD_TOP) / ROW));
+      const id = old[at]?.id;
+      const now = id === undefined ? -1 : next.findIndex((r) => r.id === id);
+      if (now < 0 || now === at) return;
+      const top = viewport.scrollTop + (now - at) * ROW;
+      anchor = top;
+      tick().then(() => {
+        if (anchor === top && viewport) viewport.scrollTop = top;
+        anchor = null;
+      });
+    });
+  });
+
   const first = $derived(Math.max(0, Math.floor((scrollTop - PAD_TOP) / ROW) - OVERSCAN));
   const last = $derived(Math.min(rows.length, Math.ceil((scrollTop + height) / ROW) + OVERSCAN));
   const visible = $derived(rows.slice(first, last).map((row, k) => ({ row, index: first + k })));
@@ -278,6 +302,7 @@
   export function reveal(id: string) {
     const index = indexOf.get(id);
     if (index === undefined || !viewport) return;
+    anchor = null;
     const top = PAD_TOP + index * ROW;
     if (top < viewport.scrollTop || top + ROW > viewport.scrollTop + viewport.clientHeight) {
       viewport.scrollTop = top - viewport.clientHeight / 2 + ROW / 2;
@@ -290,6 +315,7 @@
 
   /** Scroll to where the list was, after Back or Forward. */
   export function scrollTo(top: number) {
+    anchor = null;
     if (viewport) viewport.scrollTop = top;
   }
 
@@ -300,6 +326,7 @@
 
   /** Back to the newest commit: scroll to the top and select it. */
   export function toTop() {
+    anchor = null;
     if (viewport) viewport.scrollTo({ top: 0, behavior: "smooth" });
     if (rows[0]) onSelect(rows[0].id);
   }

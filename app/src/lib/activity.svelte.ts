@@ -193,6 +193,12 @@ class Activity {
     this.#finished({ kind: "reload", title: "Reloaded", sub, state: "done", commands });
   }
 
+  /** A change outside Oxbow (a terminal, an editor, another window) moved branches, HEAD or
+   *  the stashes, or staged files: what the reload after it found. */
+  outside(sub: string, commands: string[]) {
+    this.#finished({ kind: "reload", title: "Changed outside Oxbow", sub, state: "done", commands });
+  }
+
   /** The commands the running fetch ran. */
   #commands(): string[] {
     return this.lines.filter((line) => line.kind === "cmd").map((line) => line.text);

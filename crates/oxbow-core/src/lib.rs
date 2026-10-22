@@ -36,6 +36,7 @@ pub mod stack;
 pub mod stash;
 pub mod submodules;
 pub mod tags;
+pub mod watch;
 pub mod worktree;
 pub mod worktrees;
 
@@ -81,5 +82,6 @@ pub use stack::{
 };
 pub use stash::StashCheck;
 pub use submodules::{Checkout, Moved, Submodule, SubmoduleMove};
+pub use watch::{Changed, Watch};
 pub use worktree::{Action, ActionEvent, BranchPush, Plan, PullMode, RemoteBranch, Side, WorkingTree};
 pub use worktrees::Worktree;

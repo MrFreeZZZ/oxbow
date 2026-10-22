@@ -2,7 +2,7 @@
   import { message, open } from "@tauri-apps/plugin-dialog";
   import { listen } from "@tauri-apps/api/event";
   import { api, settings, stopped } from "./lib/api";
-  import { WORKTREE_ID, type History, type HistoryRow, type ReadPart, type RecentRepo, type ReflogEntry, type RepoSummary } from "./lib/types";
+  import { WORKTREE_ID, type History, type HistoryRow, type OutsideChange, type ReadPart, type RecentRepo, type ReflogEntry, type RepoSummary } from "./lib/types";
   import { reloadNews, retried, settle, stillFailing, type ReadStates } from "./lib/reads";
   import { carryStates, failChecking, withState } from "./lib/folders";
   import Sidebar from "./lib/Sidebar.svelte";
@@ -1541,6 +1541,7 @@
   async function refreshNow() {
     const mine = generation;
     const shown = history;
+    readSince = Date.now();
     try {
       const next = withRows(await api.history(limit, null, shown?.key ?? null, focusOnly), shown);
       // Another repository was opened meanwhile: this answer may come from the old one.
@@ -1588,7 +1589,43 @@
   /** The window came back to the front: what changed meanwhile, also in the other folders. */
   function cameBack() {
     foldersSince = Date.now();
-    refresh();
+    showsAgain();
+  }
+
+  /** When the reload under way, or the last one, began reading (ms). */
+  let readSince = 0;
+  /** Changes outside that came while the window was out of sight: read once it shows again. */
+  let unseen: OutsideChange | null = null;
+
+  /** Something changed in the repository outside this window: a terminal, an editor, another
+   *  window. Read it now, also while the window is behind others; branches, HEAD, the stashes
+   *  or what is staged moving goes to Activity. The selection and the scrolled-to commit stay. */
+  async function outsideChanged(change: OutsideChange) {
+    if (!repo || !history) return;
+    // This window's own action and the reload after it go first: what they changed is no news.
+    while (confirm.running || refreshing) await (refreshing ?? new Promise((done) => setTimeout(done, 200)));
+    // A reload that began after it sees it already, e.g. the one after an action here.
+    if (readSince > change.at) return;
+    if (document.visibilityState === "hidden") {
+      unseen = unseen ? { git: unseen.git || change.git, files: unseen.files || change.files, at: Math.max(unseen.at, change.at) } : change;
+      return;
+    }
+    const before = history;
+    const mine = generation;
+    await refresh();
+    const after = history;
+    if (!change.git || !after || after === before || mine !== generation) return;
+    const news = reloadNews(before, after);
+    if (news.text !== "Nothing new") activity.outside(news.text, after.reads);
+  }
+
+  /** The window shows again: minimized, hidden or covered by other windows before, which needn't
+   *  bring it to the front. What changed meanwhile is read as it would have been. */
+  function showsAgain() {
+    const change = unseen;
+    unseen = null;
+    if (change) outsideChanged(change);
+    else refresh();
   }
 
   /** The window asks whether to close without the conflict draft: a close meanwhile waits. */
@@ -1964,18 +2001,24 @@
       if (path) load(path);
       launched = true;
     });
-    // Settings changed remotes or packed the repository.
-    const unlisten = listen("repo-touched", () => refresh());
+    // Settings changed remotes or packed the repository. Only this window's: each window has
+    // its own repository.
+    const unlisten = getCurrentWindow().listen("repo-touched", () => refresh());
+    // A terminal, an editor or another window changed the repository.
+    const outside = getCurrentWindow().listen<OutsideChange>("outside-change", (event) => outsideChanged(event.payload));
     // Signing in or out changes what GitHub tells about the pull requests.
     const account = listen("account-changed", () => repo && github.accountChanged());
     const closing = getCurrentWindow().onCloseRequested(closeRequested);
     return () => {
       unlisten.then((stop) => stop());
+      outside.then((stop) => stop());
       account.then((stop) => stop());
       closing.then((stop) => stop());
     };
   });
 </script>
+
+<svelte:document onvisibilitychange={() => document.visibilityState === "visible" && unseen && showsAgain()} />
 
 <svelte:window
   bind:innerWidth={windowWidth}
