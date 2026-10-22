@@ -3,7 +3,10 @@
   // branch and date, the same search as a `git log` command, and In Graph / Only Matches.
 
   import type { History } from "./types";
-  import Menu, { type MenuEntry } from "./Menu.svelte";
+  import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
+  import { actionIcons } from "./icons";
+  import { shortcut } from "./keys";
+  import type { ObjectItem, ObjectKind } from "./objects";
   import { SINCE, search } from "./search.svelte";
 
   let {
@@ -13,6 +16,9 @@
     loading = false,
     onLoadOlder,
     copy,
+    named = null,
+    onObject,
+    onObjects,
   }: {
     history: History;
     /** Matching commits, loaded or not. */
@@ -24,7 +30,16 @@
     /** Load the history down to the oldest match. */
     onLoadOlder?: () => void;
     copy: (text: string) => void;
+    /** Branches, tags and the like named like the search, to go to instead of searching commits. */
+    named?: { items: ObjectItem[]; total: number } | null;
+    /** Show one of them in History. */
+    onObject?: (item: ObjectItem) => void;
+    /** All of them, in Go to Branch… (⌘T). */
+    onObjects?: () => void;
   } = $props();
+
+  const ICONS: Record<ObjectKind, string> = { branches: menuIcons.branch, tags: menuIcons.tag, stashes: menuIcons.stash, worktrees: menuIcons.folder, submodules: actionIcons.box };
+  const ONE: Record<ObjectKind, string> = { branches: "branch", tags: "tag", stashes: "stash", worktrees: "worktree", submodules: "submodule" };
 
   const CHECK = "M3.5 8.5l3 3 6-7";
   let menu = $state<{ x: number; y: number; label: string; entries: MenuEntry[] } | null>(null);
@@ -95,6 +110,24 @@
   }
 </script>
 
+{#if named?.items.length}
+  <!-- Branches, tags and folders named like the search come first: going to one is likelier
+       what was meant than commits that mention it. -->
+  <div class="goto" role="group" aria-label="Go to">
+    <span class="lead">Go to</span>
+    {#each named.items as item (item.key)}
+      <button class="pill object" onclick={() => onObject?.(item)} title="Show {ONE[item.kind]} {item.name} in History">
+        <svg class="icon" class:tag={item.kind === "tags"} viewBox="0 0 16 16"><path d={ICONS[item.kind]} /></svg>
+        <span class="kind">{ONE[item.kind]}</span>
+        <span class="name">{item.name}</span>
+      </button>
+    {/each}
+    <button class="more" onclick={() => onObjects?.()} title="All of them in Go to Branch… ({shortcut('goToBranch')})">
+      {named.total > named.items.length ? `${named.total - named.items.length} more…` : "Go to Branch…"}
+      <kbd>{shortcut("goToBranch")}</kbd>
+    </button>
+  </div>
+{/if}
 <div class="bar" role="region" aria-label="Search results">
   <span class="count">
     {#if search.error}
@@ -186,6 +219,63 @@
   .sub {
     font-size: var(--text-caption);
     color: var(--text2);
+  }
+  .goto {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 36px;
+    flex-shrink: 0;
+    padding: 0 12px 0 16px;
+    min-width: 0;
+    overflow: hidden;
+    border-bottom: 1px solid var(--sep);
+  }
+  .lead {
+    font-weight: 700;
+    white-space: nowrap;
+    margin-right: 4px;
+  }
+  .pill.object .kind {
+    color: var(--text2);
+  }
+  .pill.object {
+    min-width: 0;
+    flex-shrink: 1;
+    gap: 5px;
+    height: 26px;
+    padding: 0 10px;
+    color: var(--text);
+  }
+  .pill.object .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .pill.object .icon {
+    flex-shrink: 0;
+    color: var(--text2);
+  }
+  .pill.object .icon.tag {
+    color: var(--tag-border);
+  }
+  .more {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+    font-size: var(--text-caption);
+    color: var(--accent-text);
+  }
+  .more:hover {
+    text-decoration: underline;
+  }
+  .more kbd {
+    font: inherit;
+    font-size: var(--text-caption);
+    color: var(--text2);
+    background: var(--field);
+    border-radius: var(--radius-s);
+    padding: 0 5px;
   }
   .hint {
     font-size: var(--text-caption);

@@ -15,6 +15,7 @@
     history,
     tilde,
     first,
+    initial = "",
     colorOf,
     onAct,
     onClose,
@@ -24,6 +25,8 @@
     tilde: (path: string) => string;
     /** The type shown first. */
     first: ObjectKind;
+    /** What the search starts with, from History's search. */
+    initial?: string;
     colorOf: (branch: string) => number;
     /** Do `action` with `item`; the picker has closed. */
     onAct: (item: ObjectItem, action: ObjectAction) => void;
@@ -32,7 +35,8 @@
 
   // svelte-ignore state_referenced_locally
   let kind = $state<ObjectKind>(first);
-  let query = $state("");
+  // svelte-ignore state_referenced_locally
+  let query = $state(initial);
   let active = $state(0);
   let input = $state<HTMLInputElement>();
   let listEl = $state<HTMLDivElement>();

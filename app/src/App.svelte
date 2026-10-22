@@ -43,7 +43,7 @@
   import QuickOpen from "./lib/QuickOpen.svelte";
   import CommandPalette from "./lib/CommandPalette.svelte";
   import ObjectPicker from "./lib/ObjectPicker.svelte";
-  import { notInHistory, type ObjectAction, type ObjectItem, type ObjectKind } from "./lib/objects";
+  import { namedLike, notInHistory, objectsOf, type ObjectAction, type ObjectItem, type ObjectKind } from "./lib/objects";
   import type { PaletteItem } from "./lib/palette";
   import { Keymap, combo, type ShortcutId } from "./lib/shortcuts";
   import { stepChange } from "./lib/diffRows";
@@ -853,7 +853,7 @@
 
   /** The Command Palette, the list of recent repositories (⌃R), or Go to Branch… (⌘T) with
    *  the type it shows first, over the window. */
-  let picker = $state<{ kind: "commands"; initial: string } | { kind: "recent"; repos: RecentRepo[] } | { kind: "objects"; first: ObjectKind } | null>(null);
+  let picker = $state<{ kind: "commands"; initial: string } | { kind: "recent"; repos: RecentRepo[] } | { kind: "objects"; first: ObjectKind; query: string } | null>(null);
   /** What Quick Open starts with when the palette's ">" was taken away. */
   let quickInitial = $state("");
   let branchPicker = $state<BranchPicker>();
@@ -873,10 +873,13 @@
 
   /** Go to Branch… and the like: the picker of branches, tags, stashes, worktrees and
    *  submodules, at `first`; its key again closes it. */
-  function openObjects(first: ObjectKind) {
+  function openObjects(first: ObjectKind, query = "") {
     nav.quickOpen = false;
-    picker = picker?.kind === "objects" ? null : { kind: "objects", first };
+    picker = picker?.kind === "objects" ? null : { kind: "objects", first, query };
   }
+
+  /** Branches, tags and the like named like History's search, offered beside its matches. */
+  const named = $derived(searching && history && search.parsed.mode !== "code" && search.parsed.mode !== "sha" ? namedLike(objectsOf(history), search.parsed.text) : null);
 
   /** What was picked in Go to Branch…: shown in History, its window opened, or checked out. */
   async function actOn(item: ObjectItem, action: ObjectAction) {
@@ -1142,7 +1145,9 @@
         nav.quickOpen = !nav.quickOpen;
         return true;
       case "goToBranch":
-        openObjects("branches");
+        // From History's search, with what is typed there.
+        if (named && typing(event)) openObjects(named.kind, search.parsed.text);
+        else openObjects("branches");
         return true;
       case "find":
         // In File History, ⌘F finds in the file.
@@ -2484,6 +2489,9 @@
           loading={!!paging}
           onLoadOlder={() => olderMatches.length && loadOlder(olderMatches[olderMatches.length - 1])}
           copy={(text) => copyText(text, "Copied the command.")}
+          {named}
+          onObject={(item) => void actOn(item, { id: "show", label: "Show in History" })}
+          onObjects={() => named && openObjects(named.kind, search.parsed.text)}
         />
       {/if}
       {#if view === "history" && !showConflicts && !searching && !operation && !history.bisect && history.head.branch}
@@ -2790,7 +2798,7 @@
       : undefined}
   />
 {:else if picker?.kind === "objects" && history}
-  <ObjectPicker {history} tilde={shownPath} first={picker.first} {colorOf} onAct={(item, action) => void actOn(item, action)} onClose={() => (picker = null)} />
+  <ObjectPicker {history} tilde={shownPath} first={picker.first} initial={picker.query} {colorOf} onAct={(item, action) => void actOn(item, action)} onClose={() => (picker = null)} />
 {:else if picker?.kind === "recent"}
   <CommandPalette
     commands={false}
