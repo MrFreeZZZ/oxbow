@@ -79,8 +79,11 @@ Read a log with `grep`/`tail`, never `cat` it whole.
 
 Cloud sessions: `.claude/hooks/session-start.sh` installs the Tauri Linux packages
 (libwebkit2gtk-4.1-dev, libgtk-3-dev, librsvg2-dev), runs `npm ci` and `cargo fetch`, and
-fetches origin/main. Its log: `/tmp/oxbow-session-start.log`. Use `npm ci`, not `npm install`
-(install rewrites package-lock.json).
+fetches origin/main. Its log: `/tmp/oxbow-session-start.log`. Project threads don't read
+`.claude/settings.json`, so the hook doesn't run there: if `app/node_modules` is missing, run
+`CLAUDE_CODE_REMOTE=true .claude/hooks/session-start.sh` once (about a minute, prints one line)
+before the first check or build. Use `npm ci`, not `npm install` (install rewrites
+package-lock.json).
 
 ## Code rules
 
