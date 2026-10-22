@@ -130,7 +130,9 @@ export function errorLine(error: string | null): string {
 export function reloadNews(before: History, after: History): { text: string; partial: boolean } {
   const parts: string[] = [];
   const known = new Set(before.rows.map((r) => r.id));
-  const fresh = after.rows.filter((r) => !r.worktree && !known.has(r.id)).length;
+  // A stash shows in the graph as a row of its own, but it is said as a stash.
+  const stashes = new Set(after.stashes.map((s) => s.id));
+  const fresh = after.rows.filter((r) => !r.worktree && !known.has(r.id) && !stashes.has(r.id)).length;
   if (fresh) parts.push(`${fresh} new ${fresh === 1 ? "commit" : "commits"}`);
   const key = (r: RefInfo) => `${r.kind} ${r.name}`;
   const was = new Map(before.refs.map((r) => [key(r), r.target]));

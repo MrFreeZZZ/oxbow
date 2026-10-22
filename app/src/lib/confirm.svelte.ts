@@ -311,6 +311,11 @@ class ConfirmState {
     listen<ActionEvent>("action-event", (event) => this.#onEvent(event.payload)).catch(() => {});
   }
 
+  /** Whether an action of this window runs now: the sheet keeps its last phase once it closes. */
+  get running(): boolean {
+    return this.phase === "running" && this.request !== null;
+  }
+
   /** Ask, then run. Resolves to true once the action ran, false if it was cancelled or failed. */
   async run(request: Request): Promise<boolean> {
     const done = new Promise<boolean>((resolve) => (this.#resolve = resolve));

@@ -115,4 +115,10 @@ const failed = (part: ReadProblem["part"]): ReadProblem => ({ part, error: "`git
   // All read, nothing changed.
   assert.deepEqual(reloadNews(at(2), at(2)), { text: "Nothing new", partial: false });
   assert.deepEqual(reloadNews(at(2), at(0)), { text: "No uncommitted changes", partial: false });
+  // A new stash is a stash, not a new commit, though the graph shows it as a row.
+  const stashed = at(2, false, [], {
+    rows: [{ id: "worktree", worktree: { files: 2, staged: 0, unstaged: 2, untracked: 0, conflicted: 0, unknown: false } }, { id: "s1", worktree: null }, { id: "a1", worktree: null }],
+    stashes: [{ index: 0, id: "s1" }],
+  } as Partial<History>);
+  assert.deepEqual(reloadNews(at(2), stashed), { text: "1 stash", partial: false });
 }
