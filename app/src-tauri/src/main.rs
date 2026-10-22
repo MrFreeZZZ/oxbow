@@ -2685,6 +2685,7 @@ fn main() {
             apply_settings(handle, &handle.state::<Session>(), &read_settings(handle));
             accounts::lend_to_git(handle);
             console_window::follow(handle);
+            menu::recent_changed(handle);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
