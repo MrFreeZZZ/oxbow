@@ -56,6 +56,7 @@ const CLEAR_RECENT: &str = "recent-clear";
 const AT_START: &str = include_str!("menu.json");
 
 /// All the commands in the menu bar being made, greyed out, until the first window shows its own.
+/// Open Recent stays empty: Tauri can't find the list's file yet, setup fills it (recent_changed).
 #[cfg(target_os = "macos")]
 pub fn put_at_start(app: &AppHandle, menu: &Menu<Wry>) -> Result<(), String> {
     let menus: Vec<MenuPart> = serde_json::from_str(AT_START).map_err(|err| err.to_string())?;
@@ -66,7 +67,12 @@ pub fn put_at_start(app: &AppHandle, menu: &Menu<Wry>) -> Result<(), String> {
 #[tauri::command]
 pub fn set_menu(app: AppHandle, state: tauri::State<'_, MenuState>, menus: Vec<MenuPart>) -> Result<(), String> {
     let Some(menu) = app.menu() else { return Ok(()) };
-    show(&app, &menu, &state, menus)
+    let first = state.built.lock().expect("menu lock").is_none();
+    show(&app, &menu, &state, menus)?;
+    if first {
+        recent_changed(&app);
+    }
+    Ok(())
 }
 
 /// Put the commands in the menu bar the first time, and show what they are now after that.
@@ -157,12 +163,7 @@ fn show(app: &AppHandle, menu: &Menu<Wry>, state: &MenuState, menus: Vec<MenuPar
         };
         result.map_err(|err| err.to_string())?;
     }
-    let recent = made.recent.clone();
     *built = Some(made);
-    drop(built);
-    if let Some(recent) = recent {
-        fill_recent(app, &recent);
-    }
     Ok(())
 }
 
