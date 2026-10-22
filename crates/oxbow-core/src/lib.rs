@@ -49,7 +49,7 @@ pub use commit::{
 pub use compare::{CompareCommit, CompareFile, CompareMode, Comparison};
 pub use config::{ConfigScope, GitInfo, RemoteInfo, SshKey, SshSource, Storage};
 pub use edit::ResetMode;
-pub use error::{Error, Result};
+pub use error::{Error, FailedPart, Result};
 pub use fetched::RemoteFetch;
 pub use filehistory::{Blame, BlameCommit, BlameLine, FileCommit, FileHistory};
 pub use fix::{Fix, FixExpect, FixFile, FixState, FixStep, StepKind};
@@ -83,5 +83,5 @@ pub use stack::{
 pub use stash::StashCheck;
 pub use submodules::{Checkout, Moved, Submodule, SubmoduleMove};
 pub use watch::{Changed, Watch};
-pub use worktree::{Action, ActionEvent, BranchPush, Plan, PullMode, RemoteBranch, Side, WorkingTree};
+pub use worktree::{Action, ActionEvent, BranchPush, PartState, Plan, PullMode, RemoteBranch, Side, WorkingTree};
 pub use worktrees::{GoneFolder, GoneWhy, GoneWorktree, Worktree, gone_folder, reconnect_folder};

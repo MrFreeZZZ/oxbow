@@ -11,6 +11,7 @@
   import TipCard from "./TipCard.svelte";
   import { tips, type TipId } from "./tips.svelte";
   import { bytes } from "./unusual";
+  import { errorLine } from "./reads";
   import type { NotKept } from "./types";
 
   let { repo, branch, color }: { repo: string; branch: string | null; color: number } = $props();
@@ -29,11 +30,20 @@
   // What the sheet says: the request, or after a failure the way out of it.
   const shown = $derived.by(() => {
     if (!request) return null;
-    if (running) return { title: confirm.status, body: [] as Part[], icon: request.icon, tone: request.danger ? "err" : "" };
+    if (running) return { title: confirm.status + partsAt, body: [] as Part[], icon: request.icon, tone: request.danger ? "err" : "" };
     if (recovery) return { title: recovery.title, body: recovery.body, icon: recovery.icon, tone: recovery.tone };
     if (failed) return { title: "Git stopped with an error", body: [] as Part[], icon: request.icon, tone: "err" };
     return { title: request.title, body: request.body, icon: request.icon, tone: request.danger ? "err" : (request.tone ?? "") };
   });
+
+  /** Which of the parts runs now, e.g. " 2 of 5", for an action that goes over several one at a time. */
+  const partsAt = $derived.by(() => {
+    const n = confirm.parts.length;
+    if (n < 2) return "";
+    const at = confirm.parts.findIndex((p) => p.state === "started");
+    return at < 0 ? "" : ` ${at + 1} of ${n}`;
+  });
+  const PART_WORDS = { waiting: "Waiting", started: "Running…", done: "Done", failed: "Failed" };
 
   /** The hunk part of a patch fed on stdin, without the file header, and at most `max` lines. */
   function patchLines(input: string, max = 16): { kind: string; text: string }[] {
@@ -339,6 +349,31 @@
               {/each}
             </p>
           </div>
+        </div>
+      {/if}
+
+      {#if confirm.parts.length > 1 && confirm.phase !== "ask"}
+        <div class="parts" aria-label="Each one">
+          {#each confirm.parts as part (part.name)}
+            <div class="part {part.state}">
+              <span class="part-mark">
+                {#if part.state === "done"}
+                  <svg class="icon" viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" /></svg>
+                {:else if part.state === "failed"}
+                  <svg class="icon" viewBox="0 0 16 16"><path d="M8 2.5l6 11H2zM8 6.5v3.5M8 12v.01" /></svg>
+                {:else}
+                  <span class="dot"></span>
+                {/if}
+              </span>
+              <span class="part-words">
+                <span class="mono part-name">{part.name}</span>
+                {#if part.state === "failed"}
+                  <span class="part-why" title={part.error ?? ""}>{#if part.inner}In <span class="mono">{part.inner.slice(part.name.length + 1)}</span>, its own submodule: {/if}{errorLine(part.error)}</span>
+                {/if}
+              </span>
+              <span class="part-state">{PART_WORDS[part.state]}</span>
+            </div>
+          {/each}
         </div>
       {/if}
 
@@ -813,6 +848,82 @@
   }
   .field-note.error {
     color: var(--red);
+  }
+  .parts {
+    margin-left: 58px;
+    border: 1px solid var(--sep);
+    border-radius: var(--radius-l);
+    max-height: 180px;
+    overflow-y: auto;
+  }
+  .part {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    padding: 6px 12px;
+    font-size: var(--text-small);
+  }
+  .part + .part {
+    border-top: 0.5px solid var(--sep);
+  }
+  .part-mark {
+    width: 14px;
+    height: 16px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text2);
+  }
+  .part-mark .icon {
+    width: 14px;
+    height: 14px;
+  }
+  .part.done .part-mark {
+    color: var(--accent-text);
+  }
+  .part.failed .part-mark,
+  .part.failed .part-state {
+    color: var(--orange);
+  }
+  .part-mark .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    border: 1.5px solid currentColor;
+  }
+  .part.started .dot {
+    border-color: var(--accent);
+    background: var(--accent);
+    animation: pulse 1s ease-in-out infinite alternate;
+  }
+  @keyframes pulse {
+    to {
+      opacity: 0.35;
+    }
+  }
+  .part-words {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .part-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .part-why {
+    color: var(--text2);
+    line-height: 1.4;
+  }
+  .part-state {
+    flex-shrink: 0;
+    color: var(--text2);
+  }
+  .part.waiting .part-name {
+    color: var(--text2);
   }
   .gaps {
     margin-left: 58px;

@@ -258,6 +258,18 @@ export interface Ran {
   icon: Icon;
   action: Action;
   commands: string[];
+  /** It went over several parts and these failed, in words, e.g. "icons failed". */
+  failed?: string;
+}
+
+/** One of the things an action goes over one at a time, e.g. a submodule of Update All. */
+export interface RunPart {
+  name: string;
+  state: "waiting" | "started" | "done" | "failed";
+  /** What git printed when it failed. */
+  error: string | null;
+  /** The nested submodule that failed, when it wasn't this one. */
+  inner: string | null;
 }
 
 class ConfirmState {
@@ -275,6 +287,8 @@ class ConfirmState {
   status = $state("");
   /** Percent from git's progress lines, or null before any. */
   progress = $state<number | null>(null);
+  /** What an action that goes over several things one at a time has done of each, e.g. Update All. */
+  parts = $state<RunPart[]>([]);
   failure = $state<Failure | null>(null);
   recovery = $state<Recovery | null>(null);
   /** Commands the recovery button will run. */
@@ -492,6 +506,7 @@ class ConfirmState {
       this.#ranCommands = [];
       this.#notLogged = null;
     }
+    this.parts = [];
     this.#running = { action, status, done };
     this.phase = "running";
     this.ran = null;
@@ -529,8 +544,9 @@ class ConfirmState {
         return;
       }
       if (failure.kind === "cancelled") {
+        const done = this.parts.filter((p) => p.state === "done").length;
         this.#finish(false);
-        this.#showToast("Stopped. Nothing else was run.");
+        this.#showToast(done ? `Stopped after ${done} of ${this.parts.length}. Nothing else was run.` : "Stopped. Nothing else was run.");
         return;
       }
       this.#fail(failure);
@@ -564,6 +580,11 @@ class ConfirmState {
     this.recoveryCommands = [];
     this.quiet = false;
     this.phase = "failed";
+    // Some parts ran: Activity keeps what was done, with what failed.
+    if (failure.kind === "partlyDone" && running && this.recovery) {
+      const failed = this.parts.filter((p) => p.state === "failed").map((p) => (p.inner ?? p.name).split("/").pop());
+      this.onRan?.({ title: this.recovery.title, icon: this.request?.icon ?? "box", action: running.action, commands: this.#ranCommands, failed: `${failed.join(", ")} failed` });
+    }
     const button = this.recovery?.button;
     if (button) this.recoveryCommands = (await api.planAction(button.action).catch(() => ({ commands: [], notKept: [] }))).commands;
   }
@@ -588,6 +609,14 @@ class ConfirmState {
       this.lines.push({ kind: "cmd", text: event.display });
       this.#ranCommands.push(event.display);
       this.progress = null;
+      return;
+    }
+    if (event.kind === "parts") {
+      this.parts = event.names.map((name) => ({ name, state: "waiting", error: null, inner: null }));
+      return;
+    }
+    if (event.kind === "part") {
+      this.parts = this.parts.map((p) => (p.name === event.name ? { ...p, state: event.state, error: event.error, inner: event.inner } : p));
       return;
     }
     const percent = /(\d{1,3})%/.exec(event.text);

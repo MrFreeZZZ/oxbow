@@ -691,7 +691,10 @@ export interface Submodule {
   behind: number;
   /** The recorded commit isn't in its clone yet. */
   missing: boolean;
-  /** What its folder has (`current`, `branch`, `changed`, `ahead`, `behind`, `missing`) isn't
+  /** Commits checked out with no branch there that no branch, remote branch or tag of its clone
+   *  has: checking out another commit leaves them only in its reflog. */
+  onNoBranch: number;
+  /** What its folder has (`current`, `branch`, `changed`, `ahead`, `behind`, `missing`, `onNoBranch`) isn't
    *  read yet: it comes after the history, as a `FolderState`. */
   pending: boolean;
 }
@@ -703,6 +706,7 @@ export interface Checkout {
   ahead: number;
   behind: number;
   missing: boolean;
+  onNoBranch: number;
 }
 
 /** What one worktree's or submodule's folder has, read after the history. */
@@ -851,7 +855,12 @@ export type ActionEvent =
   /** The action ran, but its step couldn't be written to the Operation Log: Undo can't take it back. */
   | { kind: "notLogged"; reason: string }
   /** Another window of the repository is changing it: this starts once `title` there is done. */
-  | { kind: "waiting"; title: string; window: string };
+  | { kind: "waiting"; title: string; window: string }
+  /** The action goes over these one at a time, e.g. Update All over the submodules: one that fails doesn't stop the others. */
+  | { kind: "parts"; names: string[] }
+  /** One of the parts started or ended; a failed one has git's `error`, and `inner` names the
+   *  nested submodule that failed when it wasn't this one. */
+  | { kind: "part"; name: string; state: "started" | "done" | "failed"; error: string | null; inner: string | null };
 
 /** What changed in the repository outside the window: in a terminal, an editor, another window. */
 export interface OutsideChange {
@@ -880,6 +889,8 @@ export type FailureKind =
   | "stashKept"
   /** The state before couldn't be saved for Undo, so nothing ran. */
   | "noUndo"
+  /** Some parts of an action that goes over several, e.g. Update All, failed; the rest ran. */
+  | "partlyDone"
   | "other";
 
 export interface CommitBrief {

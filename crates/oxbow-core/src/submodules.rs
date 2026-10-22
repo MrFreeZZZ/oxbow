@@ -7,13 +7,16 @@
 //! [`crate::folders`].
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 
 use gix::bstr::ByteSlice;
 use serde::Serialize;
 
 use crate::cli::GitCommand;
+use crate::error::{Error, FailedPart, Result};
 use crate::remote::{CommitBrief, parse_briefs};
 use crate::repo::Repo;
+use crate::worktree::{ActionEvent, PartState};
 
 /// Commits listed between two commits of a submodule; the count says how many there are.
 const LISTED: usize = 50;
@@ -55,8 +58,12 @@ pub struct Submodule {
     pub behind: usize,
     /// The recorded commit isn't in its clone yet: it needs a fetch before the folder can have it.
     pub missing: bool,
+    /// Commits checked out in the folder, with no branch there, that no branch, remote branch or
+    /// tag of its clone has: checking out another commit leaves them only in its reflog. 0 when
+    /// a branch is checked out or the folder is at the recorded commit.
+    pub on_no_branch: usize,
     /// What its folder has checked out and whether it has changes (`current`, `branch`,
-    /// `changed`, `ahead`, `behind`, `missing`) isn't read yet: [`Repo::folder_states`] reads it
+    /// `changed`, `ahead`, `behind`, `missing`, `on_no_branch`) isn't read yet: [`Repo::folder_states`] reads it
     /// after the history.
     pub pending: bool,
 }
@@ -70,6 +77,7 @@ pub struct Checkout {
     pub ahead: usize,
     pub behind: usize,
     pub missing: bool,
+    pub on_no_branch: usize,
 }
 
 impl Submodule {
@@ -182,6 +190,7 @@ impl Repo {
                 ahead: 0,
                 behind: 0,
                 missing: false,
+                on_no_branch: 0,
                 pending: cloned,
             });
         }
@@ -299,6 +308,23 @@ pub(crate) fn read_checkout(dir: &Path, recorded: Option<&str>) -> Checkout {
             out.ahead = ahead;
             out.behind = behind;
         }
+        // Only then: a branch keeps its commits, and the recorded commit is this repository's.
+        if out.branch.is_none() {
+            out.on_no_branch = git(
+                dir,
+                [
+                    "rev-list",
+                    "--count",
+                    "HEAD",
+                    "--not",
+                    "--branches",
+                    "--remotes",
+                    "--tags",
+                ],
+            )
+            .and_then(|n| n.trim().parse().ok())
+            .unwrap_or(0);
+        }
     }
     out
 }
@@ -388,26 +414,94 @@ impl Repo {
 
     /// `git submodule update` for `paths` (all when empty): the folders get the commits this
     /// repository records, cloned first where they aren't yet. With `latest`, they get the
-    /// newest commit of the branch each follows instead.
+    /// newest commit of the branch each follows instead. More than one goes one at a time, each
+    /// with its own command, so one that fails doesn't stop the others: see
+    /// [`Repo::update_submodules`].
     pub(crate) fn plan_submodule_update(&self, paths: &[String], latest: bool) -> Vec<GitCommand> {
-        let mut args = vec!["submodule".to_owned(), "update".to_owned()];
-        let note = if latest {
-            args.push("--remote".to_owned());
-            "--remote: fetch each one and check out the newest commit of the branch it follows; commit the result to record it"
-        } else {
-            args.push("--init".to_owned());
-            "--init: clone the ones that aren't yet; then check out the commits this repository records"
-        };
-        args.push("--recursive".to_owned());
-        if !paths.is_empty() {
-            args.push("--".to_owned());
-            args.extend(paths.iter().cloned());
+        if let [path] = paths {
+            return vec![update_command(Some(path), latest)];
         }
-        vec![
-            GitCommand::new(args)
-                .comment(format!("{note}; --recursive: their submodules too"))
-                .with_progress(),
-        ]
+        let each = self.submodules_among(paths);
+        if each.is_empty() {
+            return vec![update_command(None, latest)];
+        }
+        each.iter().map(|path| update_command(Some(path), latest)).collect()
+    }
+
+    /// The paths of the submodules among `paths` (all when empty), in the order of `.gitmodules`.
+    pub(crate) fn submodules_among(&self, paths: &[String]) -> Vec<String> {
+        self.submodule_list()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| s.path)
+            .filter(|p| paths.is_empty() || paths.contains(p))
+            .collect()
+    }
+
+    /// Run the update of [`Repo::plan_submodule_update`] for the submodules among `paths`, one
+    /// at a time, telling which starts and how each ended. One that fails doesn't stop the
+    /// others; when any failed, the answer is [`Error::PartlyDone`].
+    pub(crate) fn update_submodules(
+        &self,
+        paths: &[String],
+        latest: bool,
+        on_event: &mut dyn FnMut(ActionEvent),
+        cancel: &AtomicBool,
+    ) -> Result<String> {
+        let names = self.submodules_among(paths);
+        let commands = names.iter().map(|path| update_command(Some(path), latest));
+        on_event(ActionEvent::Parts { names: names.clone() });
+        let mut failed = Vec::new();
+        for (name, command) in names.iter().zip(commands) {
+            on_event(ActionEvent::Part {
+                name: name.clone(),
+                state: PartState::Started,
+                error: None,
+                inner: None,
+            });
+            let command = crate::ssh::interactive(command);
+            on_event(ActionEvent::Command {
+                display: command.display(),
+            });
+            let ran = crate::console::main(|| {
+                self.run_streaming(&command, &mut |line| on_event(ActionEvent::Line(line)), cancel)
+            });
+            match ran {
+                Ok(_) => on_event(ActionEvent::Part {
+                    name: name.clone(),
+                    state: PartState::Done,
+                    error: None,
+                    inner: None,
+                }),
+                Err(Error::Cancelled) => return Err(Error::Cancelled),
+                Err(err) => {
+                    let output = match err {
+                        Error::Command { output, .. } => output.trim().to_owned(),
+                        other => other.to_string(),
+                    };
+                    let inner = inner_submodule(&output, name);
+                    on_event(ActionEvent::Part {
+                        name: name.clone(),
+                        state: PartState::Failed,
+                        error: Some(output.clone()),
+                        inner: inner.clone(),
+                    });
+                    failed.push(FailedPart {
+                        name: name.clone(),
+                        error: output,
+                        inner,
+                    });
+                }
+            }
+        }
+        if failed.is_empty() {
+            Ok(String::new())
+        } else {
+            Err(Error::PartlyDone {
+                of: names.len(),
+                failed,
+            })
+        }
     }
 
     /// `git submodule sync`: copy the URLs in `.gitmodules` to the settings of `paths` (all when
@@ -456,6 +550,39 @@ impl Repo {
         }
         Some(submodule_update())
     }
+}
+
+/// `git submodule update` of `path` (all without one), as [`Repo::plan_submodule_update`] says.
+fn update_command(path: Option<&String>, latest: bool) -> GitCommand {
+    let mut args = vec!["submodule".to_owned(), "update".to_owned()];
+    let note = if latest {
+        args.push("--remote".to_owned());
+        "--remote: fetch it and check out the newest commit of the branch it follows; commit the result to record it"
+    } else {
+        args.push("--init".to_owned());
+        "--init: clone it if it isn't yet; then check out the commit this repository records"
+    };
+    args.push("--recursive".to_owned());
+    if let Some(path) = path {
+        args.push("--".to_owned());
+        args.push(path.clone());
+    }
+    GitCommand::new(args)
+        .comment(format!("{note}; --recursive: its submodules too"))
+        .with_progress()
+}
+
+/// The submodule inside `top` that git's `output` says failed, as a path from this repository,
+/// e.g. `libs/app/vendor/icons` for `fatal: Unable to checkout '…' in submodule path
+/// 'libs/app/vendor/icons'`; `None` when it was `top` itself.
+pub(crate) fn inner_submodule(output: &str, top: &str) -> Option<String> {
+    output
+        .split("submodule path '")
+        .skip(1)
+        .filter_map(|rest| rest.split('\'').next())
+        .filter(|path| path.len() > top.len() && path.starts_with(top) && path[top.len()..].starts_with('/'))
+        .max_by_key(|path| path.len())
+        .map(str::to_owned)
 }
 
 /// `git submodule update` after a pull: the submodules check out the commits recorded now.

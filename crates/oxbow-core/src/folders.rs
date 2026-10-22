@@ -85,6 +85,7 @@ impl Submodule {
         self.ahead = checkout.ahead;
         self.behind = checkout.behind;
         self.missing = checkout.missing;
+        self.on_no_branch = checkout.on_no_branch;
         self.pending = false;
     }
 }

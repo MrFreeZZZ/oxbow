@@ -183,10 +183,11 @@ class Activity {
     this.queued = this.queued.filter((item) => item.id !== id);
   }
 
-  /** Note an action that ran, in the sheet or without asking, under Done with its commands. */
+  /** Note an action that ran, in the sheet or without asking, under Done with its commands; one
+   *  that went over several things and failed on some, with those. */
   ran(ran: Ran) {
     const kind = PUSHES.has(ran.action.kind) ? "push" : ran.action.kind === "pull" ? "pull" : FETCHES.has(ran.action.kind) ? "fetch" : "action";
-    this.#finished({ kind, title: ran.title, sub: "", state: "done", icon: ran.icon, commands: ran.commands });
+    this.#finished({ kind, title: ran.title, sub: ran.failed ?? "", state: ran.failed ? "failed" : "done", icon: ran.icon, commands: ran.commands });
   }
 
   /** Reload read the repository again: what changed, and the git commands it ran. */
@@ -238,7 +239,8 @@ class Activity {
       return;
     }
     // A fetch moves branches on remotes, which Undo leaves alone: its log step isn't missed.
-    if (event.kind === "notLogged") return;
+    // It goes over no parts either.
+    if (event.kind === "notLogged" || event.kind === "parts" || event.kind === "part") return;
     if (event.kind === "waiting") {
       this.running = { ...running, sub: waitingWords(event) };
       return;

@@ -31,6 +31,7 @@ const sub = (path: string, current: string | null, pending = false, cloned = tru
   ahead: 0,
   behind: 0,
   missing: false,
+  onNoBranch: 0,
   pending,
 });
 const history = (worktrees: Worktree[], submodules: Submodule[]): History => ({ worktrees, submodules }) as History;
@@ -76,7 +77,7 @@ const history = (worktrees: Worktree[], submodules: Submodule[]): History => ({ 
     submodule: true,
     changed: 0,
     statusError: null,
-    checkout: { current: "c0", branch: null, ahead: 0, behind: 2, missing: false },
+    checkout: { current: "c0", branch: null, ahead: 0, behind: 2, missing: false, onNoBranch: 0 },
   });
   assert.deepEqual([two.submodules[0].current, two.submodules[0].behind, two.submodules[0].pending], ["c0", 2, false]);
   // A worktree and a submodule may share a path string: the kind tells them apart.

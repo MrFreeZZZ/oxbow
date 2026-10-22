@@ -45,6 +45,27 @@ pub enum Error {
     /// again without Undo once that is chosen.
     #[error("Oxbow couldn't save the state for Undo, so nothing ran: {0}")]
     NoUndo(String),
+    /// An action that goes over several things one at a time, e.g. Update All over the
+    /// submodules, ran each of the `of`, but these failed; the others are done.
+    #[error("{} of {of} failed: {}", failed.len(), failed.iter().map(|f| f.to_string()).collect::<Vec<_>>().join("; "))]
+    PartlyDone { of: usize, failed: Vec<FailedPart> },
+}
+
+/// One part of an action that failed while the others went on, e.g. one submodule of Update All.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailedPart {
+    pub name: String,
+    /// What git printed.
+    pub error: String,
+    /// The nested submodule that failed, as a path from the repository, when it wasn't `name`
+    /// itself.
+    pub inner: Option<String>,
+}
+
+impl Display for FailedPart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.inner.as_ref().unwrap_or(&self.name), self.error)
+    }
 }
 
 impl Error {

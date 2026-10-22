@@ -73,6 +73,8 @@ pub enum FailureKind {
     StashKept,
     /// The snapshot for Undo couldn't be taken, so nothing ran.
     NoUndo,
+    /// Some parts of an action that goes over several, e.g. Update All, failed; the rest ran.
+    PartlyDone,
     Other,
 }
 
@@ -683,6 +685,7 @@ pub fn classify_failure(error: &Error, pushing_with_hook: bool) -> FailureKind {
         Error::Changed(_) => return FailureKind::Changed,
         Error::StashKept => return FailureKind::StashKept,
         Error::NoUndo(_) => return FailureKind::NoUndo,
+        Error::PartlyDone { .. } => return FailureKind::PartlyDone,
         _ => return FailureKind::Other,
     };
     let has = |needle: &str| output.contains(needle);
