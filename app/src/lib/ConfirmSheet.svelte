@@ -368,7 +368,7 @@
               <span class="part-words">
                 <span class="mono part-name">{part.name}</span>
                 {#if part.state === "failed"}
-                  <span class="part-why" title={part.error ?? ""}>{#if part.inner}In <span class="mono">{part.inner.slice(part.name.length + 1)}</span>, its own submodule: {/if}{errorLine(part.error)}</span>
+                  <span class="part-why" title={part.error ?? ""}>{#if part.inner}In <span class="mono">{part.inner.slice(part.name.length + 1)}</span>, its own submodule: {/if}{(request.partWhy ?? errorLine)(part.error ?? "")}</span>
                 {/if}
               </span>
               <span class="part-state">{PART_WORDS[part.state]}</span>

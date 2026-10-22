@@ -26,7 +26,7 @@ const shown = (s: Submodule, checking = false) => submoduleActions(s, checking).
 
 // At the recorded commit: Pull Latest is there, as on the card and in the menu alike.
 assert.deepEqual(shown(sub()), [["latest", "Pull Latest", null, null]]);
-assert.match(submoduleActions(sub({ follows: "release" }), false)[0].about, /newest commit of release/);
+assert.match(submoduleActions(sub({ follows: "release" }), false)[0].about, /^Newest commit of release/);
 
 // Not cloned: Clone; Pull Latest is listed, with why it can't run yet.
 assert.deepEqual(shown(sub({ cloned: false, current: null, branch: null })), [
@@ -51,7 +51,7 @@ assert.deepEqual(shown(sub({ cloned: false, current: null, branch: null })), [
     ["latest", false, null],
   ]);
   assert.equal(both[0].about, "Back to the commit this repository records");
-  assert.equal(submoduleActions(sub({ current: "f0f0f0f0", missing: true }), false)[0].about, "Fetch and check out the commit this repository records");
+  assert.equal(submoduleActions(sub({ current: "f0f0f0f0", missing: true }), false)[0].about, "Fetch the commit this repository records");
 }
 
 // Commits made on no branch: both would leave them, and both say so, the same way.

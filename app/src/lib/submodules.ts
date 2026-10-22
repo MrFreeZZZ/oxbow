@@ -58,7 +58,9 @@ export function updateRequest(subs: Submodule[], sub: Submodule | null, repoPath
       done: subs.length === 1 ? `${subs[0].title} is at the commit this repository records.` : `All ${plural(subs.length, "submodule")} are at the commits this repository records.`,
       past: "Updated submodules",
       action: { kind: "submoduleUpdate", paths: [], latest: false },
+      partWhy: submoduleFailure,
       recover: (failure) => partlyRecovery(failure),
+      ...leavingWarning(subs),
     };
   }
   const to = sub.recorded ? shortId(sub.recorded) : "the recorded commit";
@@ -75,6 +77,8 @@ export function updateRequest(subs: Submodule[], sub: Submodule | null, repoPath
     icon: "box",
     tone: caution ? "warn" : undefined,
     warning: caution ? { title: caution.title, body: [caution.text] } : undefined,
+    // Commits it would leave behind are worth a question even when simple steps don't ask.
+    always: !!caution,
     button: sub.cloned ? "Update" : "Clone",
     status: sub.cloned ? `Updating ${sub.title}…` : `Cloning ${sub.title}…`,
     done: `${sub.title} is at ${to}.`,
@@ -87,6 +91,33 @@ export function updateRequest(subs: Submodule[], sub: Submodule | null, repoPath
  *  menu and the card say it too. */
 function cautionOf(sub: Submodule): SubmoduleAction["caution"] {
   return submoduleActions(sub, checking(sub)).find((a) => a.caution)?.caution;
+}
+
+/** Update All asks first, with a warning, when it would leave commits made on no branch in some. */
+function leavingWarning(subs: Submodule[]): Partial<Request> {
+  const leaving = subs.flatMap((s) => {
+    const caution = cautionOf(s);
+    return caution ? [{ sub: s, caution }] : [];
+  });
+  if (!leaving.length) return {};
+  const [first] = leaving;
+  const warning =
+    leaving.length === 1
+      ? { title: `${first.caution.title} in ${first.sub.title}`, body: [first.caution.text] }
+      : {
+          title: `Commits on no branch in ${plural(leaving.length, "submodule")}`,
+          body: [`${leaving.map((l) => `${l.sub.title} has ${plural(l.sub.onNoBranch, "commit")}`).join(", ")} made with no branch checked out. After this only their reflogs have them: open them in new windows and make branches first.`],
+        };
+  return { warning, tone: "warn", always: true };
+}
+
+/** Why one submodule of Update All failed, in words, from what git printed. */
+export function submoduleFailure(error: string): string {
+  const missing = /did not contain ([0-9a-f]{7})/.exec(error);
+  if (missing) return `Its remote doesn’t have ${missing[1]}: whoever made it hasn’t pushed it yet.`;
+  if (/would be overwritten by checkout/.test(error)) return "Changed files inside would be overwritten: commit or stash them in its window first.";
+  if (/Unable to checkout/.test(error)) return errorLine(error.split("\n").reverse().find((l) => /^(fatal|error):/.test(l)) ?? error);
+  return errorLine(error);
 }
 
 /** The sheet of one of `submoduleActions`. */
@@ -125,7 +156,7 @@ function partlyRecovery(failure: Failure): Recovery | null {
       done: one ? `${one} is at the commit this repository records.` : "The submodules are at the commits this repository records.",
       recover: partlyRecovery,
     },
-    note: failed.length === 1 ? errorLine(failed[0].error) : "Each one’s reason is in its row.",
+    note: failed.length === 1 ? "Open it in a new window to look into it." : "Open them in new windows to look into them.",
     close: "Done",
   };
 }
@@ -210,6 +241,8 @@ export function latestRequest(sub: Submodule, repoPath: string): Request {
     icon: "pull",
     tone: caution ? "warn" : undefined,
     warning: caution ? { title: caution.title, body: [caution.text] } : undefined,
+    // Commits it would leave behind are worth a question even when simple steps don't ask.
+    always: !!caution,
     button: "Pull Latest",
     status: `Pulling the latest ${sub.title}…`,
     done: `${sub.title} is at the newest commit of ${branch}. Stage it to record it.`,

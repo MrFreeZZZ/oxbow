@@ -425,7 +425,19 @@ impl Repo {
         if each.is_empty() {
             return vec![update_command(None, latest)];
         }
-        each.iter().map(|path| update_command(Some(path), latest)).collect()
+        // The comment once: the commands differ only in the path.
+        each.iter()
+            .enumerate()
+            .map(|(at, path)| {
+                let mut command = update_command(Some(path), latest);
+                if at > 0 {
+                    command.comment = None;
+                } else if let Some(comment) = &mut command.comment {
+                    comment.push_str("; one at a time, so one that fails doesn't stop the others");
+                }
+                command
+            })
+            .collect()
     }
 
     /// The paths of the submodules among `paths` (all when empty), in the order of `.gitmodules`.

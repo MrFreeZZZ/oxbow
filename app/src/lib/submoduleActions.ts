@@ -43,12 +43,12 @@ export function submoduleActions(sub: Submodule, checking: boolean): SubmoduleAc
       : undefined;
   const out: SubmoduleAction[] = [];
   if (!sub.cloned) {
-    out.push({ id: "clone", label: "Clone", about: "Clone it and check out the commit this repository records", primary: true });
+    out.push({ id: "clone", label: "Clone", about: "At the commit this repository records", primary: true });
   } else if (sub.recorded && (checking || sub.current !== sub.recorded)) {
     out.push({
       id: "update",
       label: `Update to ${sub.recorded.slice(0, 7)}`,
-      about: sub.missing ? "Fetch and check out the commit this repository records" : "Back to the commit this repository records",
+      about: sub.missing ? "Fetch the commit this repository records" : "Back to the commit this repository records",
       primary: true,
       off: checking ? wait : undefined,
       caution,
@@ -57,7 +57,7 @@ export function submoduleActions(sub: Submodule, checking: boolean): SubmoduleAc
   out.push({
     id: "latest",
     label: "Pull Latest",
-    about: `The newest commit of ${followsWord(sub)}; commit here to record it`,
+    about: `Newest commit of ${followsWord(sub)}, to record here`,
     off: !sub.cloned ? `Clone ${sub.title} first: Pull Latest works in its folder.` : checking ? wait : undefined,
     caution,
   });

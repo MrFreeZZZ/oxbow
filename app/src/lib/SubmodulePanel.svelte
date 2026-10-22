@@ -211,7 +211,8 @@
       <svg class="icon" viewBox="0 0 16 16"><path d="M3.2 8a.8.8 0 1 0 1.6 0a.8.8 0 1 0-1.6 0M7.2 8a.8.8 0 1 0 1.6 0a.8.8 0 1 0-1.6 0M11.2 8a.8.8 0 1 0 1.6 0a.8.8 0 1 0-1.6 0" /></svg>
     </button>
   </div>
-  {#if update && latest}
+  <!-- What each one does, unless the notes around say it already. -->
+  {#if update && latest && !caution && move?.moved !== "forward"}
     <p class="note">
       <svg class="icon small" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" /><path d="M8 7.2v3.6M8 5.1v.1" /></svg>
       {update.label} goes back to the commit {repoName} records. Pull Latest takes the newest commit of {followsWord(sub)} instead, for you to record.
@@ -409,12 +410,15 @@
   .actions .button {
     flex-shrink: 0;
   }
-  .more {
-    padding: 0 8px;
+  .actions .more {
+    width: 30px;
+    min-width: 0;
+    padding: 0;
   }
   .more .icon {
     width: 14px;
     height: 14px;
+    flex-shrink: 0;
   }
 
   .list-label {

@@ -99,6 +99,9 @@ export interface Request {
   /** Runs in the background instead of in the sheet, e.g. a fetch: the sheet closes on the
    *  button and this starts it. */
   background?: () => void;
+  /** For an action that goes over several things one at a time: why one failed, in words,
+   *  from what git printed. */
+  partWhy?: (error: string) => string;
   /** The git action; a request without one is `local`. */
   action?: Action;
   /** Something Oxbow does itself instead of git, e.g. putting its settings back to the
