@@ -12,6 +12,7 @@ const id = (hit: ReturnType<Keymap["match"]>) => (hit && "id" in hit ? hit.id : 
   assert.equal(id(map.match(press({ key: "P", code: "KeyP", metaKey: true, shiftKey: true }))), "palette");
   assert.equal(id(map.match(press({ key: "F1", code: "F1" }))), "palette");
   assert.equal(id(map.match(press({ key: "p", code: "KeyP", metaKey: true }))), "quickOpen");
+  assert.equal(id(map.match(press({ key: "t", code: "KeyT", metaKey: true }))), "goToBranch");
   assert.equal(id(map.match(press({ key: "b", code: "KeyB", metaKey: true }))), "sidebar");
   // ⌥ turns B into ∫ on the Mac: the key's place still says B.
   assert.equal(id(map.match(press({ key: "∫", code: "KeyB", metaKey: true, altKey: true }))), "details");

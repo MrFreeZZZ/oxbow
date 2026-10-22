@@ -17,7 +17,7 @@
   import ConfirmSheet from "./lib/ConfirmSheet.svelte";
   import { confirm, type Request } from "./lib/confirm.svelte";
   import BranchPicker from "./lib/BranchPicker.svelte";
-  import { detachRequest, keepRequest, newBranchRequest, switchRequest, type BranchContext } from "./lib/branches";
+  import { detachRequest, keepRequest, newBranchRequest, switchRequest, trackRequest, type BranchContext } from "./lib/branches";
   import DetachedBanner from "./lib/DetachedBanner.svelte";
   import OperationBanner from "./lib/OperationBanner.svelte";
   import ConflictsView, { draftSaves } from "./lib/ConflictsView.svelte";
@@ -42,6 +42,8 @@
   import FindField from "./lib/FindField.svelte";
   import QuickOpen from "./lib/QuickOpen.svelte";
   import CommandPalette from "./lib/CommandPalette.svelte";
+  import ObjectPicker from "./lib/ObjectPicker.svelte";
+  import { notInHistory, type ObjectAction, type ObjectItem, type ObjectKind } from "./lib/objects";
   import type { PaletteItem } from "./lib/palette";
   import { Keymap, combo, type ShortcutId } from "./lib/shortcuts";
   import { stepChange } from "./lib/diffRows";
@@ -849,8 +851,9 @@
     else confirm.say("Nothing to redo: the newest step isn’t an undo.");
   }
 
-  /** The Command Palette, or the list of recent repositories (⌃R), over the window. */
-  let picker = $state<{ kind: "commands"; initial: string } | { kind: "recent"; repos: RecentRepo[] } | null>(null);
+  /** The Command Palette, the list of recent repositories (⌃R), or Go to Branch… (⌘T) with
+   *  the type it shows first, over the window. */
+  let picker = $state<{ kind: "commands"; initial: string } | { kind: "recent"; repos: RecentRepo[] } | { kind: "objects"; first: ObjectKind } | null>(null);
   /** What Quick Open starts with when the palette's ">" was taken away. */
   let quickInitial = $state("");
   let branchPicker = $state<BranchPicker>();
@@ -866,6 +869,52 @@
   function closePickers() {
     picker = null;
     nav.quickOpen = false;
+  }
+
+  /** Go to Branch… and the like: the picker of branches, tags, stashes, worktrees and
+   *  submodules, at `first`; its key again closes it. */
+  function openObjects(first: ObjectKind) {
+    nav.quickOpen = false;
+    picker = picker?.kind === "objects" ? null : { kind: "objects", first };
+  }
+
+  /** What was picked in Go to Branch…: shown in History, its window opened, or checked out. */
+  async function actOn(item: ObjectItem, action: ObjectAction) {
+    if (!history || !branchCtx) return;
+    const ctx = branchCtx;
+    const fail = (err: unknown) => confirm.fail(err);
+    switch (action.id) {
+      case "show":
+        if (item.kind === "stashes" && view === "stashes") stashSel = item.commit;
+        else if (item.commit) {
+          expanded = false;
+          pick(item.commit, notInHistory(item.commit, item.worktree));
+        }
+        return;
+      case "stashes":
+        view = "stashes";
+        resolving = false;
+        stashSel = item.commit;
+        return;
+      case "details":
+        showSubmodule(item.submodule!.path);
+        return;
+      case "open": {
+        const path = item.worktree?.path ?? item.submodule?.path ?? history.worktrees.find((t) => !t.current && t.branch === item.name)?.path;
+        if (path) api.openWindow(path).catch(fail);
+        return;
+      }
+      case "checkout": {
+        const ref = item.ref!;
+        if (ref.kind === "local") return run(switchRequest(ctx, ref.name));
+        if (ref.kind === "remote") return run(trackRequest(ctx, ref, rowsById.get(ref.target)?.authorName ?? ""));
+        // A tag: its commit may be further down than History has loaded.
+        if (!(await ensureLoaded(ref.target))) return confirm.say(notInHistory(ref.target), "warn");
+        const row = rowsById.get(ref.target);
+        if (row) run(detachRequest(ctx, row, ref.name));
+        return;
+      }
+    }
   }
 
   async function openRecent() {
@@ -972,6 +1021,11 @@
     add("closeRepo", "File", "Close Repository", closeRepo, "closeRepo");
     add("reload", "File", "Reload Repository", () => void reload(), "reload");
     add("quickOpen", "Go", "Go to File History…", () => (nav.quickOpen = true), "quickOpen");
+    add("goToBranch", "Go", "Go to Branch…", () => openObjects("branches"), "goToBranch");
+    if (h.refs.some((r) => r.kind === "tag")) add("goToTag", "Go", "Go to Tag…", () => openObjects("tags"));
+    if (h.stashes.length) add("goToStash", "Go", "Go to Stash…", () => openObjects("stashes"));
+    if (h.worktrees.length > 1) add("openWorktree", "File", "Open Worktree…", () => openObjects("worktrees"));
+    if (h.submodules.length) add("openSubmodule", "File", "Open Submodule…", () => openObjects("submodules"));
     add("find", "Search", "Find in History", () => findInHistory(), "find");
     add("findCode", "Search", "Find in Changed Code", () => findInHistory("code"), "findCode");
     if (h.stashes.length) add("findStashes", "Search", "Find in Stashes", findInStashes, view === "stashes" ? "find" : undefined);
@@ -1081,11 +1135,14 @@
     if (!history || !free) return false;
     // The palette and Quick Open keep the keyboard too: what's typed stays in them. Only Quick
     // Open's own key passes, to switch over from the palette or close it.
-    if ((picker || nav.quickOpen) && id !== "quickOpen") return false;
+    if ((picker || nav.quickOpen) && id !== "quickOpen" && id !== "goToBranch") return false;
     switch (id) {
       case "quickOpen":
         picker = null;
         nav.quickOpen = !nav.quickOpen;
+        return true;
+      case "goToBranch":
+        openObjects("branches");
         return true;
       case "find":
         // In File History, ⌘F finds in the file.
@@ -1771,9 +1828,21 @@
     return { ...next, rows, pieces: [] };
   }
 
+  /** The page of older commits on its way, if one is. */
+  let pageRun: Promise<boolean> | null = null;
+
   /** Load the next page of older commits, or with `until` the history down to that commit.
    *  Whether `until` is in History now. */
-  async function loadOlder(until: string | null = null): Promise<boolean> {
+  function loadOlder(until: string | null = null): Promise<boolean> {
+    const run = loadPage(until);
+    if (paging) {
+      pageRun = run;
+      run.finally(() => pageRun === run && (pageRun = null));
+    }
+    return run;
+  }
+
+  async function loadPage(until: string | null): Promise<boolean> {
     if (!repo || loading || paging || !history?.truncated) return false;
     const mine = generation;
     const token = ++pagingToken;
@@ -1806,6 +1875,9 @@
   /** Make sure History has the commit, loading older commits down to it when it is further down
    *  than what is loaded. Whether History has it. */
   async function ensureLoaded(id: string): Promise<boolean> {
+    if (rowsById.has(id)) return true;
+    // A page on its way may bring it, and the next one can start only after it.
+    if (pageRun) await pageRun;
     if (rowsById.has(id)) return true;
     if (!history?.truncated || unreachable.has(id)) return false;
     return loadOlder(id);
@@ -1943,8 +2015,10 @@
     }
   });
 
-  /** Picking a commit from the sidebar goes back to History, which mounts the graph again. */
-  function pick(id: string) {
+  /** Picking a commit from the sidebar goes back to History, which mounts the graph again.
+   *  `missing` says why History can't show it, when no branch or tag reaches it. */
+  function pick(id: string, missing?: string) {
+    const before = selected;
     if (id !== selected && view === "history" && !showConflicts) jumping = true;
     unhide(id);
     selected = id;
@@ -1952,7 +2026,16 @@
     submoduleSel = null;
     oplog.compare = null;
     oplog.lost = null;
-    if (!rowsById.has(id)) ensureLoaded(id).then((ok) => ok && selected === id && requestAnimationFrame(() => list?.reveal(id)));
+    if (!rowsById.has(id))
+      ensureLoaded(id).then((ok) => {
+        if (selected !== id) return;
+        if (ok) requestAnimationFrame(() => list?.reveal(id));
+        else if (missing) {
+          // The selection stays where it was: an empty details panel would say nothing.
+          selected = before;
+          confirm.say(missing, "warn");
+        }
+      });
     if (view === "history" && !showConflicts) return list?.reveal(id);
     view = "history";
     resolving = false;
@@ -2169,7 +2252,7 @@
     {/if}
     <!-- Over a narrow window the sidebar steps aside again once something in it is picked. -->
     <Sidebar {repo} {history} {reads} onRetry={retryRead} {selectedRow} ctx={branchCtx!} onOpen={chooseRepo} onOpenPath={load} onWelcome={closeRepo}
-      onPick={aside((id: string) => ((expanded = false), pick(id), requestAnimationFrame(() => list?.focus())))}
+      onPick={aside((id: string, missing?: string) => ((expanded = false), pick(id, missing), requestAnimationFrame(() => list?.focus())))}
       {run}
       view={view === "series" ? seriesBack : view}
       onView={(v) => {
@@ -2706,6 +2789,8 @@
         }
       : undefined}
   />
+{:else if picker?.kind === "objects" && history}
+  <ObjectPicker {history} tilde={shownPath} first={picker.first} {colorOf} onAct={(item, action) => void actOn(item, action)} onClose={() => (picker = null)} />
 {:else if picker?.kind === "recent"}
   <CommandPalette
     commands={false}
