@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="docs/images/icon.png" width="112" alt="">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/code-dark.png">
+    <img src="docs/images/code-light.png" alt="Your code is half the story. Oxbow tells the other half: commits, branches, history.">
+  </picture>
 </p>
 
 <h1 align="center">Oxbow</h1>
@@ -53,13 +56,6 @@ private keys, with your own patterns on top.
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/undo-dark.png">
     <img src="docs/images/undo-light.png" width="49%" alt="Undo puts the repository back as it was before the reset">
-  </picture>
-</p>
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/code-dark.png">
-    <img src="docs/images/code-light.png" alt="Your code is half the story. Oxbow tells the other half: commits, branches, history.">
   </picture>
 </p>
 
