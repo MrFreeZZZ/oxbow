@@ -5,6 +5,10 @@ use std::fmt::Display;
 pub enum Error {
     #[error("{path} is not a Git repository")]
     NotARepository { path: String },
+    /// The folder of the open repository isn't there any more: deleted, moved, or on a disk
+    /// that isn't connected. [`crate::worktrees::gone_folder`] tells which.
+    #[error("the folder {path} isn't there any more")]
+    FolderGone { path: String },
     #[error("bare repositories are not supported yet")]
     Bare,
     #[error("no commit {0}")]

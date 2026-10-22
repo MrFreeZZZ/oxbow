@@ -1,9 +1,9 @@
 <script lang="ts">
   import { shortcut } from "./keys";
+  import type { Snippet } from "svelte";
   // The Welcome window: clone, open or start a repository on the left with this computer's Git
   // setup under them; repositories opened before on the right, each with where it stands.
 
-  import { open as chooseFolder } from "@tauri-apps/plugin-dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { api } from "./api";
   import { plate, relativeTime, tint } from "./format";
@@ -18,12 +18,18 @@
     error,
     onOpen,
     onOpenPath,
+    onLocate,
+    gone,
   }: {
     loading: boolean;
     error: string | null;
     /** Choose a folder and open it. */
     onOpen: () => void;
     onOpenPath: (path: string) => void;
+    /** Choose where the repository that was at the path is now, and open it there. */
+    onLocate: (path: string) => void;
+    /** The screen of a folder that isn't there any more, in place of Recent Repositories. */
+    gone?: Snippet;
   } = $props();
 
 
@@ -91,7 +97,14 @@
 
   /** The second line on the right of a row: where the repository stands. */
   function status(repo: RecentRepo, glance: RepoGlance | null | undefined): { text: string; warn?: boolean } {
-    if (repo.missing) return { text: "Folder not found" };
+    if (repo.missing) {
+      const why = repo.gone?.why;
+      if (why === "disk") return { text: `Disk “${repo.gone?.disk}” not connected` };
+      if (why === "trash") return { text: "In the Trash" };
+      if (why === "moved") return { text: "Moved" };
+      if (why === "noAccess") return { text: "Can’t read it" };
+      return { text: "Folder not found" };
+    }
     if (glance === undefined) return { text: "" };
     if (glance === null) return { text: "Can't read it" };
     if (glance.operation) {
@@ -107,16 +120,13 @@
     return { text: glance.upstream ? "Up to date" : glance.branch ? "Not published" : "Detached HEAD" };
   }
 
-  async function locate(repo: RecentRepo) {
-    const path = await chooseFolder({ directory: true, multiple: false, title: `Locate ${repo.name}`, defaultPath: home || undefined });
-    if (typeof path !== "string") return;
-    await api.forgetRepo(repo.path, path).catch(() => {});
-    onOpenPath(path);
+  function locate(repo: RecentRepo) {
+    onLocate(repo.path);
   }
 
+  /** A missing one opens the screen that says why it is gone and the ways out. */
   function activate(repo: RecentRepo) {
-    if (repo.missing) locate(repo);
-    else onOpenPath(repo.path);
+    onOpenPath(repo.path);
   }
 
   async function forget(repo: RecentRepo) {
@@ -255,7 +265,9 @@
 
   <section class="repos" aria-label="Repositories">
     <div class="drag top-drag" data-tauri-drag-region></div>
-    {#if start.recent && start.recent.length}
+    {#if gone}
+      {@render gone()}
+    {:else if start.recent && start.recent.length}
       <div class="head">
         <span class="title">Recent Repositories</span>
         <label class="filter">

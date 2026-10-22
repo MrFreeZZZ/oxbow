@@ -56,6 +56,22 @@ pub fn write(file: &Path, worktree: &Path, draft: Value) -> Result<(), String> {
     Ok(())
 }
 
+/// The folder `old` was moved to `new`: its draft goes along, unless `new` has one of its own.
+/// True when it went.
+pub fn moved(dir: &Path, old: &Path, new: &Path) -> Result<bool, String> {
+    let from = file(dir, old);
+    let Some(draft) = read(&from, old)? else {
+        return Ok(false);
+    };
+    let to = file(dir, new);
+    if read(&to, new)?.is_some() {
+        return Ok(false);
+    }
+    write(&to, new, draft)?;
+    remove(&from)?;
+    Ok(true)
+}
+
 /// Remove the draft in `file`, if there is one.
 pub fn remove(file: &Path) -> Result<(), String> {
     match std::fs::remove_file(file) {
@@ -136,6 +152,21 @@ mod tests {
         std::fs::write(&at, "{ \"step\": ").unwrap();
         assert!(read(&at, Path::new("/work/repo")).is_err());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_draft_follows_its_folder_but_never_replaces_another() {
+        let dir = folder("moved");
+        let (old, new, other) = (Path::new("/work/old"), Path::new("/work/new"), Path::new("/work/other"));
+        write(&file(&dir, old), old, json!({ "step": "a" })).unwrap();
+        assert_eq!(moved(&dir, old, new), Ok(true));
+        assert_eq!(read(&file(&dir, old), old), Ok(None));
+        assert_eq!(read(&file(&dir, new), new), Ok(Some(json!({ "step": "a" }))));
+
+        write(&file(&dir, other), other, json!({ "step": "b" })).unwrap();
+        assert_eq!(moved(&dir, new, other), Ok(false));
+        assert_eq!(read(&file(&dir, new), new), Ok(Some(json!({ "step": "a" }))));
+        assert_eq!(read(&file(&dir, other), other), Ok(Some(json!({ "step": "b" }))));
     }
 
     #[test]

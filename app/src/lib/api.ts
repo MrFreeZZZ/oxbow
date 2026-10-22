@@ -34,6 +34,7 @@ import type {
   StashCheck,
   WorkingTree,
   RecentRepo,
+  Gone,
   RepoGlance,
   WelcomeInfo,
   RemoteProbe,
@@ -76,6 +77,8 @@ export const api = {
   recentRepos: () => invoke<RecentRepo[]>("recent_repos"),
   /** With `to`, the repository moved there. */
   forgetRepo: (path: string, to: string | null = null) => invoke<void>("forget_repo", { path, to }),
+  goneFolder: (path: string) => invoke<Gone | null>("gone_folder", { path }),
+  reconnectFolder: (old: string, path: string) => invoke<{ path: string; conflictDraft: boolean }>("reconnect_folder", { old, new: path }),
   /** Empty Recent Repositories but for `keep`. */
   clearRecent: (keep: string[]) => invoke<void>("clear_recent", { keep }),
   repoGlance: (path: string) => invoke<RepoGlance>("repo_glance", { path }),

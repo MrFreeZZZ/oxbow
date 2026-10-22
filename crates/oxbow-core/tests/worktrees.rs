@@ -4,7 +4,11 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::SystemTime;
 
-use oxbow_core::{Action, Error, FolderCache, FolderState, HistoryOptions, Repo, Worktree};
+use std::path::{Path, PathBuf};
+
+use oxbow_core::{
+    Action, Error, FolderCache, FolderState, GoneWhy, HistoryOptions, Repo, Worktree, gone_folder, reconnect_folder,
+};
 use support::Fixture;
 
 /// `main` with two commits and a branch `fix/login` off the first.
@@ -334,4 +338,117 @@ fn a_stopped_read_runs_no_more_git() {
     assert!(matches!(result, Err(Error::Cancelled)));
     let history = oxbow_core::cli::stoppable(&stop, || repo.history(&HistoryOptions::default()));
     assert!(matches!(history, Err(Error::Cancelled)));
+}
+
+/// The repository with `fix/login` checked out in a worktree next to it, open there.
+fn linked() -> (Fixture, PathBuf, Repo) {
+    let fx = repo_with_branch();
+    let path = PathBuf::from(sibling(&fx, "repo-login"));
+    fx_git(&fx, &["worktree", "add", "-q", path.to_str().unwrap(), "fix/login"]);
+    let repo = Repo::open(&path).unwrap();
+    (fx, path, repo)
+}
+
+fn fx_git(fx: &Fixture, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(fx.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+}
+
+#[test]
+fn a_worktree_whose_folder_is_gone_says_so_instead_of_reading_half_a_history() {
+    let (fx, path, repo) = linked();
+    assert_eq!(gone_folder(&path, &[fx.path().to_path_buf()]), None);
+    std::fs::remove_dir_all(&path).unwrap();
+    assert!(matches!(
+        repo.history(&HistoryOptions::default()),
+        Err(Error::FolderGone { .. })
+    ));
+
+    // Without the repository it belonged to, nothing more is known.
+    let gone = gone_folder(&path, &[]).unwrap();
+    assert_eq!(gone.why, GoneWhy::Missing);
+    assert_eq!(gone.name, "repo-login");
+    assert_eq!(gone.worktree, None);
+
+    // The main folder still has its records: the branch, and the folder to open instead.
+    let gone = gone_folder(&path, &[fx.path().to_path_buf()]).unwrap();
+    assert_eq!(gone.why, GoneWhy::Missing);
+    let worktree = gone.worktree.unwrap();
+    assert_eq!(worktree.branch.as_deref(), Some("fix/login"));
+    assert_eq!(worktree.main_branch.as_deref(), Some("main"));
+    assert_eq!(worktree.locked, None);
+    let main = worktree.main.unwrap();
+    assert!(Path::new(&main).canonicalize().unwrap() == fx.path().canonicalize().unwrap());
+}
+
+#[test]
+fn a_moved_worktree_is_found_next_to_where_it_was_and_reconnected() {
+    let (fx, path, _repo) = linked();
+    let moved = PathBuf::from(sibling(&fx, "login-old"));
+    std::fs::rename(&path, &moved).unwrap();
+    let known = [fx.path().to_path_buf()];
+    let gone = gone_folder(&path, &known).unwrap();
+    assert_eq!(gone.why, GoneWhy::Moved);
+    assert_eq!(gone.found.as_deref().map(Path::new), Some(moved.as_path()));
+
+    // Another folder is not taken for it.
+    let other = PathBuf::from(sibling(&fx, "something-else"));
+    std::fs::create_dir(&other).unwrap();
+    let err = reconnect_folder(&path, &other, &known).unwrap_err();
+    assert!(err.to_string().contains("isn't the worktree repo-login"), "{err}");
+
+    let open = reconnect_folder(&path, &moved, &known).unwrap();
+    assert_eq!(open, moved.canonicalize().unwrap());
+    let repo = Repo::open(&open).unwrap();
+    assert_eq!(repo.head().unwrap().branch.as_deref(), Some("fix/login"));
+    let main = Repo::open(fx.path()).unwrap();
+    let list = main.worktrees().unwrap();
+    assert!(!list[1].missing);
+    assert_eq!(list[1].name, "login-old");
+}
+
+#[test]
+fn a_moved_main_folder_is_reconnected_with_its_worktrees() {
+    let (fx, path, _repo) = linked();
+    let moved = fx.path().with_file_name("repo-moved");
+    std::fs::rename(fx.path(), &moved).unwrap();
+    let known = [path.clone()];
+    assert_eq!(gone_folder(fx.path(), &known).unwrap().why, GoneWhy::Missing);
+    let open = reconnect_folder(fx.path(), &moved, &known).unwrap();
+    assert_eq!(open, moved.canonicalize().unwrap());
+    // The worktree finds its repository again.
+    let repo = Repo::open(&path).unwrap();
+    assert_eq!(repo.head().unwrap().branch.as_deref(), Some("fix/login"));
+    std::fs::rename(&moved, fx.path()).unwrap();
+}
+
+#[test]
+fn a_folder_on_a_disk_that_isnt_connected_names_the_disk() {
+    let gone = gone_folder(Path::new("/Volumes/Oxbow Test Disk 7/src/acme"), &[]).unwrap();
+    assert_eq!(gone.why, GoneWhy::Disk);
+    assert_eq!(gone.disk.as_deref(), Some("Oxbow Test Disk 7"));
+    let gone = gone_folder(Path::new("/media/someone/USB 7/acme"), &[]).unwrap();
+    assert_eq!(gone.disk.as_deref(), Some("USB 7"));
+}
+
+#[test]
+fn a_locked_worktree_says_why_it_is_kept() {
+    let (fx, path, _repo) = linked();
+    fx_git(
+        &fx,
+        &[
+            "worktree",
+            "lock",
+            "--reason",
+            "on the USB drive",
+            path.to_str().unwrap(),
+        ],
+    );
+    std::fs::remove_dir_all(&path).unwrap();
+    let gone = gone_folder(&path, &[fx.path().to_path_buf()]).unwrap();
+    assert_eq!(gone.worktree.unwrap().locked.as_deref(), Some("on the USB drive"));
 }

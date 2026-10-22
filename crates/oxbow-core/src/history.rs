@@ -425,6 +425,13 @@ impl Repo {
         cache: &mut HistoryCache,
         known: Option<&str>,
     ) -> Result<History> {
+        // The records of a worktree are in the main repository, so its history still reads when
+        // its own folder is gone: only git's commands in that folder would fail, one by one.
+        if std::fs::metadata(self.workdir()).is_err() {
+            return Err(Error::FolderGone {
+                path: self.workdir().display().to_string(),
+            });
+        }
         let (history, reads) = crate::cli::recording(|| self.read_history(options, cache, known));
         if let Ok(history) = &history {
             let status = match &history.changes {

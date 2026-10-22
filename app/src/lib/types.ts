@@ -1104,6 +1104,44 @@ export interface RecentRepo {
   opened: number;
   /** The folder is gone: moved, renamed or deleted. */
   missing: boolean;
+  /** Why it is gone, when it is. */
+  gone?: GoneFolder;
+}
+
+/** Why a repository's folder can't be opened: on a disk that isn't connected, in the Trash,
+ *  moved (found next to where it was), deleted or moved where Oxbow didn't look, or there but
+ *  not readable for Oxbow. */
+export type GoneWhy = "disk" | "trash" | "moved" | "missing" | "noAccess";
+
+/** A repository folder that isn't there any more, and what is still known about it. */
+export interface GoneFolder {
+  path: string;
+  name: string;
+  why: GoneWhy;
+  /** The disk it is on, when that isn't connected. */
+  disk: string | null;
+  /** Where it is now, when Oxbow found it. */
+  found: string | null;
+  /** When it is a worktree of another folder: what the repository still has about it. */
+  worktree: GoneWorktree | null;
+}
+
+export interface GoneWorktree {
+  /** The main folder; null when it isn't there either. */
+  main: string | null;
+  /** The branch checked out in the main folder. */
+  mainBranch: string | null;
+  branch: string | null;
+  /** The commit checked out there when HEAD was detached. */
+  head: string | null;
+  /** Locked, so Prune keeps it: the reason, empty when none was given. */
+  locked: string | null;
+}
+
+/** The gone folder of the window, as its screen shows it. */
+export interface Gone extends GoneFolder {
+  /** The Conflicts screen has a draft saved for it. */
+  conflictDraft: boolean;
 }
 
 /** Where a recent repository stands. */
