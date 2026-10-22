@@ -1,11 +1,11 @@
+<h1 align="center">Oxbow</h1>
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/code-dark.png">
     <img src="docs/images/code-light.png" alt="Your code is half the story. Oxbow tells the other half: commits, branches, history.">
   </picture>
 </p>
-
-<h1 align="center">Oxbow</h1>
 
 <p align="center">
   A calm, fast Git client that shows every git command before it runs<br>
