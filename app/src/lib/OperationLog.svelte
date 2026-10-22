@@ -9,7 +9,8 @@
   import { relativeTime } from "./format";
   import { errorLine } from "./reads";
   import { prefs } from "./prefs.svelte";
-  import { keys, withKeys } from "./keys";
+  import { shortcut, withKeys } from "./keys";
+  import { combo } from "./shortcuts";
   import WhyNote from "./WhyNote.svelte";
   import type { OpEntry, ReflogEntry } from "./types";
 
@@ -198,7 +199,7 @@
         </span>
         {#if i === 0}
           <button class="button small primary" disabled={!!blocked} title={blocked ?? undefined} onclick={() => go(undoRequest(entry))}>
-            {isRedo(entry) ? "Redo" : "Undo"}<span class="key">{keys("Mod+Z")}</span>
+            {isRedo(entry) ? "Redo" : "Undo"}{#if shortcut("undo")}<span class="key">{shortcut("undo")}</span>{/if}
           </button>
         {/if}
       </div>
@@ -230,7 +231,7 @@
       aria-haspopup="dialog"
       aria-expanded={oplog.open}
       aria-label={latest ? `Undo ${latest.title}, open operation log` : "Open operation log"}
-      title={latest ? withKeys(isRedo(latest) ? "Redo, from the Operation Log" : `Undo “${latest.title}”`, "Mod+Z") : "Operation Log"}
+      title={latest ? withKeys(isRedo(latest) ? "Redo, from the Operation Log" : `Undo “${latest.title}”`, combo("undo")) : "Operation Log"}
     >
       <svg class="icon" viewBox="0 0 16 16"><path d="M5.5 4 2.5 7l3 3M3 7h6.5a3.5 3.5 0 0 1 0 7H7" /></svg>
       <svg class="icon chevron" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>

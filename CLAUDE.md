@@ -41,7 +41,8 @@ app/src/                    Svelte front end
   App.svelte                main window: layout, wiring, most state (large: grep, don't read whole)
   lib/api.ts                typed invoke() wrappers, one per Tauri command
   lib/types.ts              TS mirrors of oxbow-core serde types
-  lib/shortcuts.ts          every keyboard shortcut (VS Code keys); keys.ts shows them
+  lib/shortcuts.ts          every command and its keys (VS Code's, yours over them); keys.ts shows them;
+                            shortcutEdit.svelte.ts = Settings › Keyboard Shortcuts
   lib/prefs.svelte.ts       settings;  SettingsWindow.svelte = Settings UI
   lib/confirm.svelte.ts     confirmations (ConfirmSheet.svelte);  activity.svelte.ts = Activity
   lib/*.svelte              one component per view/sheet (HistoryList, DiffView, ChangesPanel…)

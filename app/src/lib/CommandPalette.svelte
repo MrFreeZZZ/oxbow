@@ -125,14 +125,15 @@
       <p class="note">{empty(query)}</p>
     {:else}
       {#each shown as row, i (row.item.id)}
+        {@const first = row.item.keys ? combo(row.item.keys) : null}
         {#if commands && !query.trim() && recent.length && (i === 0 || row.recent !== shown[i - 1].recent)}
           <div class="heading">{row.recent ? "Recently used" : "Other commands"}</div>
         {/if}
         <button class="item" class:on={i === active} data-index={i} role="option" aria-selected={i === active} onmousemove={() => (active = i)} onclick={() => go(row.item)}>
           <span class="label">{#each pieces(row.item, row.hits) as piece, k (k)}<span class:dim={piece.dim} class:hit={piece.hit}>{piece.text}</span>{/each}{#if row.item.detail}<span class="detail">{row.item.detail}</span>{/if}</span>
-          {#if row.item.keys}
-            <span class="combo" title={keys(combo(row.item.keys))}>
-              {#each keys(combo(row.item.keys)).split(" ") as part, k (k)}<kbd>{part}</kbd>{/each}
+          {#if first}
+            <span class="combo" title={keys(first)}>
+              {#each keys(first).split(" ") as part, k (k)}<kbd>{part}</kbd>{/each}
             </span>
           {/if}
         </button>

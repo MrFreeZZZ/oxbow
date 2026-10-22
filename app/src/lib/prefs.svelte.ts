@@ -7,6 +7,7 @@ import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import { BRANCH_PALETTES, branchPaletteById, branchVariables, type BranchPaletteId } from "./branchPalettes";
 import { isNewer, loadedOver, SaveQueue } from "./settingSaves";
+import { isCommand, useCustom, validCombo, type Custom } from "./shortcuts";
 import { paletteOf, THEMES, themeById, themeVariables } from "./themes";
 
 export const defaults = {
@@ -77,6 +78,9 @@ export const defaults = {
   "oxbow.theme.variant": "auto" as "auto" | "light" | "dark",
   /** Colors of branches everywhere: graph, sidebar, capsules, stacks. */
   "oxbow.branchPalette": "mineral" as BranchPaletteId,
+  /** Your own keyboard shortcuts by command, over VS Code's: { "push": ["Mod+Shift+K"] }; an
+   *  empty list takes a command's keys away. Settings › Keyboard Shortcuts writes it. */
+  "oxbow.keyboard.shortcuts": {} as Custom,
 };
 
 export type PrefKey = keyof typeof defaults;
@@ -126,6 +130,7 @@ export function problemOf(key: string, value: unknown): string | null {
   const actual = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
   if (actual !== expected) return `Expected ${named(expected)}, not ${named(actual)}`;
   if (key === "oxbow.secrets.patterns") return patternsProblem(value as unknown[]);
+  if (key === "oxbow.keyboard.shortcuts") return shortcutsProblem(value as Record<string, unknown>);
   if (key === "oxbow.tips.seen" && (value as unknown[]).some((id) => typeof id !== "string")) return "Expected a list of tip names";
   const rule = rules[key as PrefKey];
   if (!rule) return null;
@@ -215,7 +220,7 @@ class Prefs {
 
   /** Whether the setting differs from its default. */
   changed(key: PrefKey): boolean {
-    return this.get(key) !== defaults[key];
+    return !isDefault(key, this.get(key));
   }
 
   /** Save a setting; its default value is saved as no value at all. It shows at once, and
@@ -248,8 +253,7 @@ class Prefs {
 
   /** null once saved; why not, when it failed and no newer save of the key replaced it; "" when one did. */
   #save(key: PrefKey, value: unknown): Promise<string | null> {
-    const fallback = defaults[key];
-    const stored = value === fallback || (Array.isArray(value) && Array.isArray(fallback) && !value.length && !fallback.length) ? null : value;
+    const stored = isDefault(key, value) ? null : value;
     this.#unsaved = { ...this.#unsaved, [key]: stored };
     return this.#saves.run(
       key,
@@ -273,6 +277,18 @@ class Prefs {
 }
 
 export const prefs = new Prefs();
+
+// Every window's shortcuts follow settings.json.
+useCustom(() => prefs.get("oxbow.keyboard.shortcuts"));
+
+/** Whether a value is the setting's default, so settings.json needn't hold it: the same value,
+ *  or an empty list or object for an empty default. */
+function isDefault(key: PrefKey, value: unknown): boolean {
+  const fallback = defaults[key];
+  if (value === fallback) return true;
+  const empty = (v: unknown) => (Array.isArray(v) ? !v.length : !!v && typeof v === "object" && !Object.keys(v).length);
+  return empty(value) && empty(fallback);
+}
 
 /** Read inside an effect that loads diffs, so it loads them again when Diff & Text changes how
  *  the backend makes them. */
@@ -359,6 +375,15 @@ function patternsProblem(list: unknown[]): string | null {
         return `“${p.pattern}” is not a regular expression`;
       }
     }
+  }
+  return null;
+}
+
+/** Commands Oxbow doesn't know are let be, so keys set in a later version don't undo the rest. */
+function shortcutsProblem(map: Record<string, unknown>): string | null {
+  for (const [id, list] of Object.entries(map)) {
+    if (!Array.isArray(list) || list.some((c) => !validCombo(c)))
+      return `Expected lists of keys like { "push": ["Mod+Shift+K"] }${isCommand(id) ? `; “${id}” has ${JSON.stringify(list)}` : ""}`;
   }
   return null;
 }

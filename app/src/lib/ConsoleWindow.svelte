@@ -32,6 +32,7 @@
     type ConsoleRepos,
   } from "./console";
   import { mac } from "./keys";
+  import { pressed } from "./shortcuts";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
 
   /** An entry with the repository it is of, for All Repositories, and the log it is in. */
@@ -281,7 +282,7 @@
 
 <svelte:window
   onkeydown={(event) => {
-    if (keyed(event) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "f") {
+    if (pressed("find", event)) {
       event.preventDefault();
       search?.focus();
       search?.select();

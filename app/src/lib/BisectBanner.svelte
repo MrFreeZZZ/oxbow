@@ -7,6 +7,7 @@
   import { lane, NO_BRANCH_COLOR, plate, shortId, tint } from "./format";
   import { actionIcons } from "./icons";
   import { withKeys } from "./keys";
+  import { combo } from "./shortcuts";
   import { estimateSteps } from "./bisect";
 
   let {
@@ -95,9 +96,9 @@
       <button class="button primary" onclick={onFinish} title="Back to {bisect.startIsBranch ? bisect.start : shortId(bisect.start)}">Finish</button>
     {:else}
       <button class="button" onclick={onStop} title="Stop bisecting and go back to {bisect.startIsBranch ? bisect.start : shortId(bisect.start)}">Stop</button>
-      {#if ready}<button class="button" onclick={onSkip} title={withKeys("Can’t test this commit: skip it", "S")}>Skip</button>{/if}
-      <button class="button good" onclick={onGood} title={withKeys(`It works here: mark as ${bisect.termGood}`, "G")}>{bisect.termGood === "good" ? "Good" : bisect.termGood}</button>
-      <button class="button bad" onclick={onBad} title={withKeys(`It is broken here: mark as ${bisect.termBad}`, "B")}>{bisect.termBad === "bad" ? "Bad" : bisect.termBad}</button>
+      {#if ready}<button class="button" onclick={onSkip} title={withKeys("Can’t test this commit: skip it", combo("bisectSkip"))}>Skip</button>{/if}
+      <button class="button good" onclick={onGood} title={withKeys(`It works here: mark as ${bisect.termGood}`, combo("bisectGood"))}>{bisect.termGood === "good" ? "Good" : bisect.termGood}</button>
+      <button class="button bad" onclick={onBad} title={withKeys(`It is broken here: mark as ${bisect.termBad}`, combo("bisectBad"))}>{bisect.termBad === "bad" ? "Bad" : bisect.termBad}</button>
     {/if}
   </div>
   {#if bisect.output.length}

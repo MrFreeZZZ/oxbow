@@ -7,6 +7,7 @@ import type { Part, Request } from "./confirm.svelte";
 import type { BranchContext } from "./branches";
 import { stoppedOnConflicts } from "./merge";
 import { shortId } from "./format";
+import type { ShortcutId } from "./shortcuts";
 import type { HistoryRow, Stack, StackPlan, StackPreview, StackStep, StepAction } from "./types";
 
 const plural = (n: number, word: string) => `${n} ${n === 1 ? word : word === "branch" ? "branches" : `${word}s`}`;
@@ -24,13 +25,14 @@ export interface Draft {
   onto: boolean;
 }
 
-export const ACTIONS: { id: StepAction; label: string; key: string; hint: string }[] = [
-  { id: "pick", label: "Pick", key: "P", hint: "keep as is" },
-  { id: "reword", label: "Reword", key: "R", hint: "new message" },
-  { id: "edit", label: "Edit", key: "E", hint: "stop to amend" },
-  { id: "squash", label: "Squash", key: "S", hint: "into the one below" },
-  { id: "fixup", label: "Fixup", key: "F", hint: "squash, drop message" },
-  { id: "drop", label: "Drop", key: "D", hint: "remove commit" },
+/** The actions of a commit, each with the command its key runs (shortcuts.ts). */
+export const ACTIONS: { id: StepAction; label: string; command: ShortcutId; hint: string }[] = [
+  { id: "pick", label: "Pick", command: "stackPick", hint: "keep as is" },
+  { id: "reword", label: "Reword", command: "stackReword", hint: "new message" },
+  { id: "edit", label: "Edit", command: "stackEdit", hint: "stop to amend" },
+  { id: "squash", label: "Squash", command: "stackSquash", hint: "into the one below" },
+  { id: "fixup", label: "Fixup", command: "stackFixup", hint: "squash, drop message" },
+  { id: "drop", label: "Drop", command: "stackDrop", hint: "remove commit" },
 ];
 
 export const itemKey = (item: Item) => (item.kind === "branch" ? `b:${item.name}` : `c:${item.id}`);

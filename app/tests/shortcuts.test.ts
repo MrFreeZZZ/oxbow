@@ -1,4 +1,4 @@
-import { BINDINGS, Keymap, strokeOf, type ShortcutId } from "../src/lib/shortcuts.ts";
+import { accelerator, assign, bindingsOf, commandIds, conflicts, defaultsOf, Keymap, pressed, refusal, resetKeys, scopeOf, strokeOf, unassign, validCombo, type Custom, type ShortcutId } from "../src/lib/shortcuts.ts";
 import { fit, rank, type PaletteItem } from "../src/lib/palette.ts";
 import assert from "node:assert/strict";
 
@@ -70,15 +70,96 @@ const id = (hit: ReturnType<Keymap["match"]>) => (hit && "id" in hit ? hit.id : 
   assert.equal(strokeOf(press({ key: "Unidentified", code: "Tab", ctrlKey: true, shiftKey: true }), false), "Shift+Mod+Tab");
 }
 
-// No two shortcuts share a combo.
-for (const platform of ["mac", "other"] as const) {
-  const seen = new Map<string, ShortcutId>();
-  for (const [name, binding] of Object.entries(BINDINGS)) {
-    for (const c of binding[platform]) {
-      assert.ok(!seen.has(c), `${platform}: ${c} is both ${seen.get(c)} and ${name}`);
-      seen.set(c, name as ShortcutId);
+// No two commands that can meet share a combo: the window's with any, a screen's with its own.
+for (const onMac of [true, false]) {
+  for (const a of commandIds) {
+    for (const c of defaultsOf(a, onMac)) {
+      assert.ok(validCombo(c), `${a}: ${c}`);
+      const others = conflicts(a, c, {}, onMac);
+      assert.deepEqual(others, [], `${onMac ? "mac" : "other"}: ${c} is both ${a} and ${others.map((o) => o.id).join(", ")}`);
     }
   }
+}
+
+// Your own keys go over the defaults, at once: a new one works, the old one no longer does.
+{
+  let mine: Custom = {};
+  const map = new Keymap(true, () => mine);
+  assert.equal(id(map.match(press({ key: "b", code: "KeyB", metaKey: true }))), "sidebar");
+  mine = { sidebar: ["Ctrl+Mod+B"], push: ["Mod+Shift+K"] };
+  assert.equal(map.match(press({ key: "b", code: "KeyB", metaKey: true })), null);
+  assert.equal(id(map.match(press({ key: "b", code: "KeyB", metaKey: true, ctrlKey: true }))), "sidebar");
+  // A command with no key of its own, and on a Russian layout too.
+  assert.equal(id(map.match(press({ key: "Л", code: "KeyK", metaKey: true, shiftKey: true }))), "push");
+  // An empty list takes the keys away.
+  mine = { palette: [] };
+  assert.equal(map.match(press({ key: "F1", code: "F1" })), null);
+  // A chord of your own.
+  mine = { fetch: ["Mod+K Mod+P"] };
+  assert.deepEqual(map.match(press({ key: "k", code: "KeyK", metaKey: true }), 0), { chord: "Mod+K" });
+  assert.equal(id(map.match(press({ key: "p", code: "KeyP", metaKey: true }), 100)), "fetch");
+  // A screen's keys are no window shortcut.
+  assert.equal(map.match(press({ key: "g", code: "KeyG" })), null);
+  assert.equal(map.match(press({ key: "Enter", code: "Enter", metaKey: true })), null);
+}
+
+// A screen's command checks its own key: ⌘↩ commits, G marks good, yours if you changed them.
+{
+  const enter = press({ key: "Enter", code: "Enter", metaKey: true });
+  assert.ok(pressed("commitNow", enter, {}, true));
+  assert.ok(!pressed("commitNow", press({ key: "Enter", code: "Enter" }), {}, true));
+  assert.ok(pressed("commitNow", press({ key: "Enter", code: "Enter", ctrlKey: true }), {}, false));
+  assert.ok(!pressed("commitNow", enter, { commitNow: ["Ctrl+Enter"] }, true));
+  assert.ok(pressed("bisectGood", press({ key: "п", code: "KeyG" }), {}, true));
+  assert.ok(!pressed("bisectGood", press({ key: "g", code: "KeyG", metaKey: true }), {}, true));
+  assert.ok(pressed("stackUp", press({ key: "ArrowUp", code: "ArrowUp", altKey: true }), {}, true));
+}
+
+// Giving a key takes it from the command that had it; one equal to the defaults is not kept.
+{
+  let mine = assign("push", "Mod+B", {}, true);
+  assert.deepEqual(mine, { push: ["Mod+B"], sidebar: ["Ctrl+Mod+S"] });
+  assert.deepEqual(conflicts("fetch", "Mod+B", mine, true), [{ id: "push", combo: "Mod+B" }]);
+  mine = assign("sidebar", "Mod+B", mine, true, undefined);
+  // Push had no key before, so nothing is kept for it.
+  assert.deepEqual(mine, { sidebar: ["Ctrl+Mod+S", "Mod+B"] });
+  // In place of a key, and back to the defaults' order: nothing kept for it.
+  mine = assign("sidebar", "Mod+B", { sidebar: ["Ctrl+Mod+S"] }, true, "Ctrl+Mod+S");
+  assert.deepEqual(mine, { sidebar: ["Mod+B"] });
+  assert.deepEqual(unassign("sidebar", "Mod+B", mine, true), { sidebar: [] });
+  assert.deepEqual(resetKeys("sidebar", mine), {});
+  assert.deepEqual(bindingsOf("sidebar", {}, true), ["Mod+B", "Ctrl+Mod+S"]);
+  // ⌘K alone would cut off the chords that start with it.
+  assert.deepEqual(conflicts("fetch", "Mod+K", {}, true).map((c) => c.id).sort(), ["closeRepo", "expand"]);
+  // Two screens never meet: Edit Stack's S and bisect's S are both fine.
+  assert.deepEqual(conflicts("stackSquash", "S", {}, true), []);
+  assert.deepEqual(conflicts("bisectGood", "S", {}, true).map((c) => c.id), ["bisectSkip"]);
+  assert.equal(scopeOf("fetch"), "window");
+}
+
+// Keys a command can't have.
+{
+  assert.match(refusal("push", "K", true)!, /Add ⌘, ⌃ or ⌥/);
+  assert.match(refusal("push", "Shift+K", false)!, /Add Ctrl or Alt/);
+  assert.equal(refusal("push", "F6", true), null);
+  assert.equal(refusal("push", "Mod+K F", true), null);
+  assert.match(refusal("push", "Mod+Q", true)!, /quits Oxbow/);
+  assert.match(refusal("push", "Ctrl+C", false)!, /copies/);
+  assert.equal(refusal("bisectGood", "N", true), null);
+  assert.match(refusal("commitNow", "Enter", true)!, /types in text fields/);
+  assert.match(refusal("stackPick", "Mod+K P", true)!, /one press/);
+  assert.ok(!validCombo("Mod+Hyper+K"));
+  assert.ok(!validCombo("Mod+K Mod+M Mod+X"));
+  assert.ok(!validCombo(""));
+  assert.ok(validCombo("Alt+Shift+F5"));
+}
+
+// The app menu's Settings… shows the same key; a chord it can't show.
+{
+  assert.equal(accelerator("Mod+,"), "CmdOrCtrl+,");
+  assert.equal(accelerator("Ctrl+Alt+S"), "Ctrl+Alt+S");
+  assert.equal(accelerator("Mod+K Mod+S"), null);
+  assert.equal(accelerator(null), null);
 }
 
 // The palette finds commands by words, word starts and initials.

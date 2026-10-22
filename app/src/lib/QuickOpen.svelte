@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { keys } from "./keys";
+  import { shortcut } from "./keys";
   // Quick Open (⌘P): pick any file in HEAD to open its File History, by typing a few letters of
   // its path. Files opened lately and the ones the selected commit changed come first. A ">"
   // typed first turns it into the Command Palette, as in VS Code.
@@ -197,7 +197,7 @@
   <div class="field">
     <svg class="icon" viewBox="0 0 16 16"><path d="M4 1.5h5.5L13 5v9.5H4z" /><path d="M9.5 1.5V5H13" /></svg>
     <input bind:this={input} bind:value={query} onkeydown={onKey} placeholder="Find a file to see its history" spellcheck="false" autocomplete="off" aria-label="File name" />
-    <span class="keys">{keys("Mod+P")}</span>
+    {#if shortcut("quickOpen")}<span class="keys">{shortcut("quickOpen")}</span>{/if}
   </div>
   <div class="list" bind:this={listEl} role="listbox" aria-label="Files">
     {#if error}

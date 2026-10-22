@@ -182,6 +182,8 @@ export const api = {
   getSetting: <T>(key: string) => invoke<T | null>("get_setting", { key }),
   allSettings: () => invoke<AllSettings>("all_settings"),
   openSettings: () => invoke<void>("open_settings"),
+  /** The key of the app menu's Settings…, "CmdOrCtrl+,", or null for none (macOS). */
+  setSettingsKey: (accelerator: string | null) => invoke<void>("set_settings_key", { accelerator }),
   openConsole: () => invoke<void>("open_console"),
   consoleRepos: () => invoke<ConsoleRepos>("console_repos"),
   /** The log of a repository (null: what ran outside any), oldest first. */

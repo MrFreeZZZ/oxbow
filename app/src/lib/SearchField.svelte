@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { keys, withKeys } from "./keys";
+  import { shortcut, withKeys } from "./keys";
+  import { combo } from "./shortcuts";
   // The toolbar search field: a mode token (Message, Code, Author, File, SHA), the text, and the
   // place of the selected commit among the matches with arrows to the previous and next one.
 
@@ -112,7 +113,7 @@
     spellcheck="false"
     autocomplete="off"
     aria-label="Search history"
-    title={withKeys("Search History", "Mod+F")}
+    title={withKeys("Search History", combo("find"))}
   />
   {#if search.active}
     <span class="place" aria-live="polite">
@@ -165,7 +166,7 @@
           <span class="name">Find in a file…</span>
           <span class="sub">pick a file, then search its text and history</span>
         </span>
-        <span class="flag">{keys("Mod+P")}</span>
+        {#if shortcut("quickOpen")}<span class="flag">{shortcut("quickOpen")}</span>{/if}
       </button>
       {#if search.recent.length}
         <div class="sep"></div>
