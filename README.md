@@ -56,6 +56,13 @@ private keys, with your own patterns on top.
   </picture>
 </p>
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/code-dark.png">
+    <img src="docs/images/code-light.png" alt="Your code is half the story. Oxbow tells the other half: commits, branches, history.">
+  </picture>
+</p>
+
 ## Everything you use every day
 
 - Staging by file, hunk or line; amend, reword, fixup
