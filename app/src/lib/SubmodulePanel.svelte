@@ -6,7 +6,9 @@
   import { api } from "./api";
   import { confirm, type Request } from "./confirm.svelte";
   import { shortId, shortTime } from "./format";
-  import { followsWord, latestRequest, updateRequest } from "./submodules";
+  import Menu, { type MenuEntry } from "./Menu.svelte";
+  import { followsWord, openSubmoduleWindow, submoduleMenu, submoduleRequest } from "./submodules";
+  import { submoduleActions } from "./submoduleActions";
   import { errorLine } from "./reads";
   import { checking } from "./folders";
   import type { CommitBrief, Submodule, SubmoduleMove } from "./types";
@@ -111,8 +113,21 @@
 
   const staged = $derived(sub.committed !== sub.recorded && sub.recorded !== null);
 
+  /** Clone, Update and Pull Latest as the sidebar's menu offers them, with the same reasons. */
+  const actions = $derived(submoduleActions(sub, pending));
+  const caution = $derived(actions.find((a) => a.caution)?.caution ?? null);
+  const update = $derived(actions.find((a) => a.id === "update" && !a.off));
+  const latest = $derived(actions.find((a) => a.id === "latest" && !a.off));
+
+  /** The sidebar's menu of the submodule, from the … button. */
+  let menu = $state<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
+  function more(event: MouseEvent) {
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    menu = { x: box.left, y: box.bottom + 4, entries: submoduleMenu(sub, subs, repoPath, run) };
+  }
+
   function openWindow() {
-    api.openWindow(sub.path).catch((err) => confirm.fail(err));
+    openSubmoduleWindow(sub);
   }
   function reveal() {
     api.revealWorktree(sub.path).catch((err) => confirm.fail(err));
@@ -183,17 +198,32 @@
   {/if}
 
   <div class="actions">
-    {#if !sub.cloned}
-      <button class="button small primary" onclick={() => run(updateRequest(subs, sub, repoPath))}>Clone</button>
-    {:else if !synced && !pending && sub.recorded}
-      <button class="button small primary" onclick={() => run(updateRequest(subs, sub, repoPath))}>Update to {shortId(sub.recorded)}</button>
-    {/if}
+    {#each actions as action (action.id)}
+      <button class="button small" class:primary={action.primary} disabled={!!action.off} title={action.off ?? action.about} onclick={() => run(submoduleRequest(action, sub, subs, repoPath))}
+        >{action.label}</button
+      >
+    {/each}
     {#if sub.cloned}
-      {#if synced}<button class="button small" onclick={() => run(latestRequest(sub, repoPath))}>Pull Latest</button>{/if}
       <button class="button small" onclick={openWindow}>Open in New Window</button>
       <button class="button small" onclick={reveal}>Show in Finder</button>
     {/if}
+    <button class="button small more" onclick={more} aria-label="More actions for {sub.title}" title="More actions">
+      <svg class="icon" viewBox="0 0 16 16"><path d="M3.2 8a.8.8 0 1 0 1.6 0a.8.8 0 1 0-1.6 0M7.2 8a.8.8 0 1 0 1.6 0a.8.8 0 1 0-1.6 0M11.2 8a.8.8 0 1 0 1.6 0a.8.8 0 1 0-1.6 0" /></svg>
+    </button>
   </div>
+  <!-- What each one does, unless the notes around say it already. -->
+  {#if update && latest && !caution && move?.moved !== "forward"}
+    <p class="note">
+      <svg class="icon small" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" /><path d="M8 7.2v3.6M8 5.1v.1" /></svg>
+      {update.label} goes back to the commit {repoName} records. Pull Latest takes the newest commit of {followsWord(sub)} instead, for you to record.
+    </p>
+  {/if}
+  {#if caution}
+    <p class="note warn">
+      <svg class="icon small" viewBox="0 0 16 16"><path d="M8 2.5 14 13H2zM8 6.5v3M8 11.2v.1" /></svg>
+      {caution.text}
+    </p>
+  {/if}
 
   {#if listLabel && move?.commits.length}
     <p class="list-label">{listLabel}</p>
@@ -240,6 +270,10 @@
     {/if}
   {/if}
 </div>
+
+{#if menu}
+  <Menu x={menu.x} y={menu.y} label="Submodule menu" entries={menu.entries} onClose={() => (menu = null)} />
+{/if}
 
 <style>
   .panel {
@@ -372,6 +406,19 @@
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+  }
+  .actions .button {
+    flex-shrink: 0;
+  }
+  .actions .more {
+    width: 30px;
+    min-width: 0;
+    padding: 0;
+  }
+  .more .icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
   }
 
   .list-label {

@@ -2,10 +2,17 @@
 // What the sidebar says about each, and the requests that update, sync, add and remove them.
 
 import { api } from "./api";
-import { confirm, type Part, type Request } from "./confirm.svelte";
+import { confirm, type Part, type Recovery, type Request } from "./confirm.svelte";
 import { checking, stale } from "./folders";
 import { shortId } from "./format";
-import type { Submodule, SubmoduleMove, UnpushedSubmodule } from "./types";
+import { menuIcons, type MenuEntry } from "./Menu.svelte";
+import { errorLine } from "./reads";
+import { followsWord, submoduleActions, type SubmoduleAction } from "./submoduleActions";
+import { actionIcons } from "./icons";
+import type { Failure, Submodule, SubmoduleMove, UnpushedSubmodule } from "./types";
+
+
+export { followsWord };
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -30,12 +37,6 @@ export function submoduleWhere(sub: Submodule): string {
   return `${at} · ${sub.branch ?? "detached"}`;
 }
 
-/** The branch Pull Latest takes, in words. */
-export function followsWord(sub: { follows: string | null }): string {
-  if (sub.follows === ".") return "the branch checked out here";
-  return sub.follows ?? "its default branch";
-}
-
 /** The repository's own name, from its folder. */
 const nameOf = (repoPath: string) => repoPath.split(/[\\/]/).filter(Boolean).pop() ?? "this repository";
 
@@ -49,14 +50,17 @@ export function updateRequest(subs: Submodule[], sub: Submodule | null, repoPath
       body: [
         `Checks out the commit ${repo} records in each of its ${plural(subs.length, "submodule")}`,
         ...(fresh ? [`, cloning the ${plural(fresh, "one")} not cloned yet first`] : []),
-        ". Their own submodules too.",
+        ". Their own submodules too. One at a time: one that fails doesn’t stop the others.",
       ],
       icon: "box",
       button: "Update All",
       status: "Updating submodules…",
-      done: "The submodules are at the commits this repository records.",
+      done: subs.length === 1 ? `${subs[0].title} is at the commit this repository records.` : `All ${plural(subs.length, "submodule")} are at the commits this repository records.`,
       past: "Updated submodules",
       action: { kind: "submoduleUpdate", paths: [], latest: false },
+      partWhy: submoduleFailure,
+      recover: (failure) => partlyRecovery(failure),
+      ...leavingWarning(subs),
     };
   }
   const to = sub.recorded ? shortId(sub.recorded) : "the recorded commit";
@@ -66,16 +70,142 @@ export function updateRequest(subs: Submodule[], sub: Submodule | null, repoPath
   if (checking(sub)) body.push(" Oxbow is still checking it for changed files: any the checkout would overwrite stop the update.");
   else if (sub.changed === null || stale(sub)) body.push(" Oxbow couldn’t check it for changed files (git status failed there): any the checkout would overwrite stop the update.");
   else if (sub.changed) body.push(` Its ${plural(sub.changed, "changed file")} stop the update if the checkout would overwrite them.`);
+  const caution = cautionOf(sub);
   return {
     title: sub.cloned ? `Update ${sub.title} to ${to}?` : `Clone ${sub.title}?`,
     body,
     icon: "box",
+    tone: caution ? "warn" : undefined,
+    warning: caution ? { title: caution.title, body: [caution.text] } : undefined,
+    // Commits it would leave behind are worth a question even when simple steps don't ask.
+    always: !!caution,
     button: sub.cloned ? "Update" : "Clone",
     status: sub.cloned ? `Updating ${sub.title}…` : `Cloning ${sub.title}…`,
     done: `${sub.title} is at ${to}.`,
     past: sub.cloned ? `Updated ${sub.title} to ${to}` : `Cloned ${sub.title}`,
     action: { kind: "submoduleUpdate", paths: [sub.path], latest: false },
   };
+}
+
+/** What to know before Update or Pull Latest checks out another commit in `sub`'s folder, as the
+ *  menu and the card say it too. */
+function cautionOf(sub: Submodule): SubmoduleAction["caution"] {
+  return submoduleActions(sub, checking(sub)).find((a) => a.caution)?.caution;
+}
+
+/** Update All asks first, with a warning, when it would leave commits made on no branch in some. */
+function leavingWarning(subs: Submodule[]): Partial<Request> {
+  const leaving = subs.flatMap((s) => {
+    const caution = cautionOf(s);
+    return caution ? [{ sub: s, caution }] : [];
+  });
+  if (!leaving.length) return {};
+  const [first] = leaving;
+  const warning =
+    leaving.length === 1
+      ? { title: `${first.caution.title} in ${first.sub.title}`, body: [first.caution.text] }
+      : {
+          title: `Commits on no branch in ${plural(leaving.length, "submodule")}`,
+          body: [`${leaving.map((l) => `${l.sub.title} has ${plural(l.sub.onNoBranch, "commit")}`).join(", ")} made with no branch checked out. After this only their reflogs have them: open them in new windows and make branches first.`],
+        };
+  return { warning, tone: "warn", always: true };
+}
+
+/** Why one submodule of Update All failed, in words, from what git printed. */
+export function submoduleFailure(error: string): string {
+  const missing = /did not contain ([0-9a-f]{7})/.exec(error);
+  if (missing) return `Its remote doesn’t have ${missing[1]}: whoever made it hasn’t pushed it yet.`;
+  if (/would be overwritten by checkout/.test(error)) return "Changed files inside would be overwritten: commit or stash them in its window first.";
+  if (/Unable to checkout/.test(error)) return errorLine(error.split("\n").reverse().find((l) => /^(fatal|error):/.test(l)) ?? error);
+  return errorLine(error);
+}
+
+/** The sheet of one of `submoduleActions`. */
+export function submoduleRequest(action: SubmoduleAction, sub: Submodule, subs: Submodule[], repoPath: string): Request {
+  return action.id === "latest" ? latestRequest(sub, repoPath) : updateRequest(subs, sub, repoPath);
+}
+
+/** After Update All failed on some: which, why, and a way to try those again. The others stay
+ *  updated. */
+function partlyRecovery(failure: Failure): Recovery | null {
+  if (failure.kind !== "partlyDone") return null;
+  const parts = confirm.parts;
+  const failed = parts.filter((p) => p.state === "failed");
+  if (!failed.length) return null;
+  const done = parts.filter((p) => p.state === "done").length;
+  const title = (path: string) => path.split("/").pop() ?? path;
+  const body: Part[] = [];
+  failed.forEach((p, i) => {
+    if (i) body.push(i === failed.length - 1 ? " and " : ", ");
+    body.push(title(p.name));
+  });
+  body.push(" couldn’t be updated");
+  const nested = failed.filter((p) => p.inner);
+  if (nested.length === 1) body.push(`: in it, its own submodule `, { code: nested[0].inner!.slice(nested[0].name.length + 1) }, " failed");
+  body.push(done ? `. The other ${plural(done, "submodule")} ${done === 1 ? "is" : "are"} at the ${done === 1 ? "commit" : "commits"} this repository records.` : ".");
+  const one = failed.length === 1 ? title(failed[0].name) : null;
+  return {
+    title: done ? `Updated ${done} of ${plural(parts.length, "submodule")}` : `None of the ${plural(parts.length, "submodule")} could be updated`,
+    body,
+    icon: "box",
+    tone: "warn",
+    button: {
+      label: one ? `Try ${one} Again` : `Try ${failed.length} Again`,
+      action: { kind: "submoduleUpdate", paths: failed.map((p) => p.name), latest: false },
+      status: one ? `Updating ${one}…` : "Updating submodules…",
+      done: one ? `${one} is at the commit this repository records.` : "The submodules are at the commits this repository records.",
+      recover: partlyRecovery,
+    },
+    note: failed.length === 1 ? "Open it in a new window to look into it." : "Open them in new windows to look into them.",
+    close: "Done",
+  };
+}
+
+/** The menu of a submodule, the same in the sidebar and on its card. */
+export function submoduleMenu(sub: Submodule, subs: Submodule[], repoPath: string, run: (request: Request) => void): MenuEntry[] {
+  const pending = checking(sub);
+  const at = pending ? "checking…" : sub.current ? sub.current.slice(0, 7) : sub.cloned ? "no commit" : "not cloned";
+  const entries: MenuEntry[] = [{ kind: "header", label: `${sub.path} · ${at}` }];
+  if (sub.cloned) entries.push({ kind: "item", label: "Open in New Window", icon: menuIcons.open, run: () => openSubmoduleWindow(sub) });
+  for (const action of submoduleActions(sub, pending)) {
+    entries.push({
+      kind: "item",
+      label: action.label,
+      icon: action.id === "update" ? actionIcons.box : menuIcons.fetch,
+      detail: action.off ?? action.caution?.title ?? action.about,
+      warn: !action.off && !!action.caution,
+      off: !!action.off,
+      run: () => run(submoduleRequest(action, sub, subs, repoPath)),
+    });
+  }
+  entries.push({ kind: "item", label: "Sync URL", icon: menuIcons.compare, run: () => run(syncRequest(sub)) });
+  entries.push({ kind: "sep" });
+  if (sub.cloned) {
+    entries.push(
+      { kind: "item", label: "Show in Finder", icon: menuIcons.reveal, run: () => api.revealWorktree(sub.path).catch((err) => confirm.fail(err)) },
+      { kind: "item", label: "Open in Terminal", icon: menuIcons.terminal, run: () => api.openInTerminal(sub.path).catch((err) => confirm.fail(err)) },
+    );
+  }
+  if (sub.url) {
+    const url = sub.url;
+    entries.push({
+      kind: "item",
+      label: "Copy URL",
+      icon: menuIcons.copy,
+      run: () =>
+        navigator.clipboard.writeText(url).then(
+          () => confirm.say(`Copied ${url}.`, "done"),
+          () => confirm.say("Couldn’t copy to the clipboard.", "error"),
+        ),
+    });
+  }
+  entries.push({ kind: "sep" }, { kind: "item", label: "Remove Submodule…", icon: menuIcons.drop, danger: true, run: () => run(removeSubmoduleRequest(sub)) });
+  return entries;
+}
+
+/** A submodule's folder in its own window. */
+export function openSubmoduleWindow(sub: Submodule) {
+  api.openWindow(sub.path).catch((err) => confirm.fail(err));
 }
 
 /** From Changes: put a submodule's folder back at the commit the index records. */
@@ -96,14 +226,23 @@ export function updateFolderRequest(move: SubmoduleMove): Request {
 /** Fetch `sub` and check out the newest commit of the branch it follows; committing records it. */
 export function latestRequest(sub: Submodule, repoPath: string): Request {
   const branch = followsWord(sub);
+  const body: Part[] = [
+    "Fetches ",
+    { code: sub.url ?? sub.path },
+    ` and checks out the newest commit of ${branch} in ${sub.title}, whatever ${nameOf(repoPath)} records. Then commit it in ${nameOf(repoPath)} to record the new commit.`,
+  ];
+  if (sub.branch) body.push(` ${sub.branch} in its folder stays where it is: the folder gets the commit with no branch checked out.`);
+  if (sub.changed === null || stale(sub)) body.push(` Oxbow couldn’t check it for changed files (git status failed there): any the checkout would overwrite stop it.`);
+  else if (sub.changed) body.push(` Its ${plural(sub.changed, "changed file")} stop it if the checkout would overwrite them.`);
+  const caution = cautionOf(sub);
   return {
     title: `Pull the latest ${sub.title}?`,
-    body: [
-      "Fetches ",
-      { code: sub.url ?? sub.path },
-      ` and checks out the newest commit of ${branch} in ${sub.title}. Then commit it in ${nameOf(repoPath)} to record the new commit.`,
-    ],
+    body,
     icon: "pull",
+    tone: caution ? "warn" : undefined,
+    warning: caution ? { title: caution.title, body: [caution.text] } : undefined,
+    // Commits it would leave behind are worth a question even when simple steps don't ask.
+    always: !!caution,
     button: "Pull Latest",
     status: `Pulling the latest ${sub.title}…`,
     done: `${sub.title} is at the newest commit of ${branch}. Stage it to record it.`,

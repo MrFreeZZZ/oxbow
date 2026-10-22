@@ -1,6 +1,11 @@
 mod support;
 
-use oxbow_core::{Action, DiffContext, FolderCache, HistoryOptions, Moved, NotKept, Repo, Side};
+use std::sync::atomic::AtomicBool;
+
+use oxbow_core::{
+    Action, ActionEvent, DiffContext, Error, FailureKind, FolderCache, HistoryOptions, Moved, NotKept, PartState, Repo,
+    Side, classify_failure,
+};
 use support::Fixture;
 
 /// Let git clone from local paths, as `submodule update` refuses by default; the tests' clones
@@ -497,4 +502,143 @@ fn removing_one_names_the_ignored_files_lost_with_its_folder() {
             folder: "libs/lint".into()
         }
     );
+}
+
+/// A library at `path` of `app`, with one commit, and one more commit made in its folder there
+/// and recorded by `app`, which the library itself never got: a clone of `app` can't check it out.
+fn add_unfetchable(app: &mut Fixture, path: &str) -> Fixture {
+    let mut lib = Fixture::new();
+    lib.commit("icons.svg", "<svg/>\n", "First icon");
+    let url = lib.path().display().to_string();
+    app.git(&["-c", "protocol.file.allow=always", "submodule", "add", &url, path]);
+    app.write(&format!("{path}/icons.svg"), "<svg></svg>\n");
+    app.git(&["-C", path, "commit", "-q", "-am", "Only here"]);
+    app.git(&["add", path]);
+    app.git(&["commit", "-q", "-m", &format!("Add {path}")]);
+    lib
+}
+
+/// A fresh clone of `fx` beside it, without its submodules.
+fn clone_of(fx: &Fixture, name: &str) -> std::path::PathBuf {
+    let target = fx.path().parent().unwrap().join(name);
+    let out = std::process::Command::new("git")
+        .args([
+            "clone",
+            "-q",
+            &fx.path().display().to_string(),
+            &target.display().to_string(),
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    target
+}
+
+#[test]
+fn update_all_goes_one_at_a_time_and_says_how_each_ended() {
+    let (mut fx, _lib, ids) = app_with_submodule();
+    let _icons = add_unfetchable(&mut fx, "libs/icons");
+    let target = clone_of(&fx, "copy");
+    let repo = Repo::open(&target).unwrap();
+    let all = Action::SubmoduleUpdate {
+        paths: Vec::new(),
+        latest: false,
+    };
+    assert_eq!(
+        shown(&repo, &all),
+        [
+            "git submodule update --init --recursive -- libs/lint",
+            "git submodule update --init --recursive -- libs/icons",
+        ]
+    );
+
+    let mut events = Vec::new();
+    let err = repo
+        .perform_with(&all, &mut |e| events.push(e), &AtomicBool::new(false))
+        .unwrap_err();
+    // The one that failed doesn't stop the other, and the answer says which one it was.
+    let Error::PartlyDone { of, failed } = &err else {
+        panic!("{err}")
+    };
+    assert_eq!(*of, 2);
+    assert_eq!(failed.len(), 1);
+    assert_eq!(
+        (failed[0].name.as_str(), failed[0].inner.as_deref()),
+        ("libs/icons", None)
+    );
+    assert_eq!(classify_failure(&err, false), FailureKind::PartlyDone);
+    let parts: Vec<(String, PartState)> = events
+        .iter()
+        .filter_map(|e| match e {
+            ActionEvent::Part { name, state, .. } => Some((name.clone(), *state)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        parts,
+        [
+            ("libs/lint".to_owned(), PartState::Started),
+            ("libs/lint".to_owned(), PartState::Done),
+            ("libs/icons".to_owned(), PartState::Started),
+            ("libs/icons".to_owned(), PartState::Failed),
+        ]
+    );
+    assert_eq!(
+        events.first(),
+        Some(&ActionEvent::Parts {
+            names: vec!["libs/lint".into(), "libs/icons".into()]
+        })
+    );
+    let list = repo.submodules();
+    assert_eq!(list[0].current.as_deref(), Some(ids[2].as_str()));
+}
+
+#[test]
+fn a_nested_submodule_that_fails_is_named_by_its_whole_path() {
+    allow_file_urls();
+    let mut lint = Fixture::new();
+    lint.commit("rules.txt", "one\n", "First rule");
+    let _deep = add_unfetchable(&mut lint, "vendor/deep");
+    let mut app = Fixture::new();
+    app.commit("app.rs", "fn main() {}\n", "Start");
+    let url = lint.path().display().to_string();
+    app.git(&[
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        &url,
+        "libs/lint",
+    ]);
+    app.git(&["commit", "-q", "-m", "Add lint"]);
+    let target = clone_of(&app, "nested");
+    let repo = Repo::open(&target).unwrap();
+    let err = repo
+        .perform(&Action::SubmoduleUpdate {
+            paths: Vec::new(),
+            latest: false,
+        })
+        .unwrap_err();
+    let Error::PartlyDone { failed, .. } = &err else {
+        panic!("{err}")
+    };
+    assert_eq!(failed[0].name, "libs/lint");
+    assert_eq!(failed[0].inner.as_deref(), Some("libs/lint/vendor/deep"));
+}
+
+#[test]
+fn commits_made_on_no_branch_in_the_folder_are_counted() {
+    let (mut fx, _lib, ids) = app_with_submodule();
+    sub(&mut fx, &["checkout", "-q", "--detach"]);
+    fx.write("libs/lint/rules.txt", "four\n");
+    sub(&mut fx, &["commit", "-q", "-am", "Fourth rule"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let lint = &repo.submodules()[0];
+    assert_eq!(lint.branch, None);
+    assert_eq!((lint.ahead, lint.on_no_branch), (1, 1));
+    assert_eq!(lint.recorded.as_deref(), Some(ids[2].as_str()));
+
+    // On a branch, the branch keeps it.
+    sub(&mut fx, &["branch", "keep"]);
+    assert_eq!(repo.submodules()[0].on_no_branch, 0);
 }

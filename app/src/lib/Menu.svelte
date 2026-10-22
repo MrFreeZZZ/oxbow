@@ -1,8 +1,20 @@
 <script lang="ts" module>
   export type MenuEntry =
-    /** `keys`: its shortcut, grey on the right, e.g. "⌘O". `detail`: a grey second line, e.g. a folder's path.
+    /** `keys`: its shortcut, grey on the right, e.g. "⌘O". `detail`: a grey second line, e.g. a folder's path;
+     *  orange with `warn`. `off`: listed greyed and does nothing, its detail saying why.
      *  `remove`: a × on hover (or Delete on the focused item) that takes the item off a list and keeps the menu open. */
-    | { kind: "item"; label: string; icon: string; danger?: boolean; keys?: string; detail?: string; run: () => void; remove?: { label: string; run: () => void } }
+    | {
+        kind: "item";
+        label: string;
+        icon: string;
+        danger?: boolean;
+        keys?: string;
+        detail?: string;
+        warn?: boolean;
+        off?: boolean;
+        run: () => void;
+        remove?: { label: string; run: () => void };
+      }
     /** Opens a submenu to the side, e.g. Reset ▸ Soft / Mixed / Hard. */
     | { kind: "sub"; label: string; icon: string; entries: SubEntry[] }
     | { kind: "header"; label: string }
@@ -37,6 +49,7 @@
     ignore: "M3 3l10 10M5.2 5.2C3.8 6 2.8 7 2 8c1.5 2.5 3.7 4 6 4 1 0 2-.3 2.8-.8M7 4.1c.3 0 .7-.1 1-.1 2.3 0 4.5 1.5 6 4-.4.7-.9 1.3-1.4 1.8",
     open: "M9 2.5h4.5V7M13.5 2.5 8 8M11.5 9.5v4h-9v-9h4",
     reveal: "M2 4h4.5l1.5 1.5H14V13H2z",
+    terminal: "M2.5 3.5h11v9h-11zM5 7l2 1.5L5 10M8.5 10.5h2.5",
     history: "M8 2.5a5.5 5.5 0 1 1-5.5 5.5M8 5v3l2 1.5M2.5 3v2.5H5",
     lfs: "M3 4a5 1.8 0 1 0 10 0a5 1.8 0 1 0-10 0M3 4v8c0 1 2.2 1.8 5 1.8s5-.8 5-1.8V4M3 8c0 1 2.2 1.8 5 1.8s5-.8 5-1.8",
     bisect: "M7 2.5a4.5 4.5 0 1 0 0 9a4.5 4.5 0 1 0 0-9M10.3 10.3 14 14M7 4.5v4.5M5 7h4",
@@ -169,12 +182,21 @@
       {@const run = entry.run}
       {@const drop = entry.remove}
       <div class="row" class:removable={drop}>
-        <button role="menuitem" data-index={i} class:danger={entry.danger} class:two={entry.detail} onmouseenter={() => (sub = null)} onclick={() => choose(run)}>
+        <button
+          role="menuitem"
+          data-index={i}
+          class:danger={entry.danger}
+          class:two={entry.detail}
+          class:off={entry.off}
+          aria-disabled={entry.off}
+          onmouseenter={() => (sub = null)}
+          onclick={() => !entry.off && choose(run)}
+        >
           <svg class="icon" viewBox="0 0 16 16"><path d={entry.icon} /></svg>
           {#if entry.detail}
             <span class="lines">
               <span>{entry.label}</span>
-              <span class="detail" title={entry.detail}>{entry.detail}</span>
+              <span class="detail" class:warn={entry.warn} title={entry.detail}>{entry.detail}</span>
             </span>
           {:else}
             <span>{entry.label}</span>
@@ -288,6 +310,14 @@
   .lines .detail {
     font-size: var(--text-caption);
     color: var(--text2);
+  }
+  .lines .detail.warn {
+    color: var(--orange);
+  }
+  button.off > .icon,
+  button.off .lines > span:first-child,
+  button.off > span {
+    opacity: 0.45;
   }
   button .chevron {
     width: 12px;

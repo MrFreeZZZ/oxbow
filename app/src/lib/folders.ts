@@ -22,8 +22,8 @@ export function carryStates(next: History, prev: History | null): History {
   const submodules = next.submodules.map((s): Submodule => {
     const was = s.pending ? subs.get(s.path) : undefined;
     if (!was) return s;
-    const { changed, statusError, current, branch, ahead, behind, missing } = was;
-    return { ...s, changed, statusError, current, branch, ahead, behind, missing };
+    const { changed, statusError, current, branch, ahead, behind, missing, onNoBranch } = was;
+    return { ...s, changed, statusError, current, branch, ahead, behind, missing, onNoBranch };
   });
   return { ...next, worktrees, submodules };
 }
@@ -35,7 +35,7 @@ export function withState(history: History, state: FolderState): History {
     const at = history.submodules.findIndex((s) => s.path === state.path);
     if (at < 0) return history;
     const submodules = history.submodules.slice();
-    const checkout = state.checkout ?? { current: null, branch: null, ahead: 0, behind: 0, missing: false };
+    const checkout = state.checkout ?? { current: null, branch: null, ahead: 0, behind: 0, missing: false, onNoBranch: 0 };
     submodules[at] = { ...submodules[at], ...checkout, changed: state.changed, statusError: state.statusError, pending: false };
     return { ...history, submodules };
   }

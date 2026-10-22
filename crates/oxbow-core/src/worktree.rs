@@ -568,6 +568,26 @@ pub enum ActionEvent {
     /// Another window of the repository is changing it: this waits until `title` there is done.
     /// `window` is that window's folder name.
     Waiting { title: String, window: String },
+    /// The action goes over these one at a time, e.g. Update All over the submodules; said
+    /// before the first starts. One that fails doesn't stop the others.
+    Parts { names: Vec<String> },
+    /// One of the [`ActionEvent::Parts`] started or ended. A failed one has git's `error`, and
+    /// `inner` names the nested submodule that failed when it wasn't this one itself.
+    Part {
+        name: String,
+        state: PartState,
+        error: Option<String>,
+        inner: Option<String>,
+    },
+}
+
+/// Where one of an action's [`ActionEvent::Parts`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PartState {
+    Started,
+    Done,
+    Failed,
 }
 
 /// The commands an action runs, for the confirmation sheet.
@@ -1721,6 +1741,13 @@ impl Repo {
         | Action::SubmoduleAdd { .. }
         | Action::SubmoduleRemove { .. } = action
         {
+            // Several submodules go one at a time: one that fails doesn't stop the others.
+            if let Action::SubmoduleUpdate { paths, latest } = action
+                && paths.len() != 1
+                && !self.submodules_among(paths).is_empty()
+            {
+                return self.update_submodules(paths, *latest, on_event, cancel);
+            }
             return self.perform_unlogged(action, on_event, cancel);
         }
         // A bisect step only checks out a commit to test, and undoing one would not take back

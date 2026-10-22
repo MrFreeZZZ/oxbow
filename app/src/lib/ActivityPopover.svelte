@@ -59,7 +59,7 @@
   };
 
   function iconOf(item: ActivityItem): string {
-    if (item.state === "failed" || item.fixed) return item.failure?.ssh || item.failure?.kind === "auth" ? ICONS.key : ICONS.fetch;
+    if ((item.state === "failed" || item.fixed) && item.kind !== "action") return item.failure?.ssh || item.failure?.kind === "auth" ? ICONS.key : ICONS.fetch;
     if (item.state === "stopped") return ICONS.stopped;
     if (item.state === "done" && item.kind === "fetch") return ICONS.done;
     if (item.kind === "action") return item.icon ? actionIcons[item.icon] : ICONS.done;
@@ -133,7 +133,8 @@
           <span class="tile" class:warn={open}><svg class="icon" viewBox="0 0 16 16"><path d={iconOf(item)} /></svg></span>
           <span class="words">
             <span class="line"><span class="title">{item.title}</span><span class="time">{relativeTime(Math.floor(item.time / 1000))}</span></span>
-            {#if item.sub}<span class="detail" class:bad={open}>{item.sub}</span>{/if}
+            <!-- An action that went over several things says the ones that failed. -->
+            {#if item.sub}<span class="detail" class:bad={open || (item.state === "failed" && item.kind === "action")}>{item.sub}</span>{/if}
             {#if commands.length && !open}
               <div class="cmds mono selectable" aria-label="Git commands">
                 <button class="copy" title="Copy the commands" onclick={() => copy(item)}>{copiedId === item.id ? "Copied" : "Copy"}</button>
