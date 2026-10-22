@@ -156,6 +156,17 @@ export function search(items: ObjectItem[], query: string): Found[] {
     .map((r) => r.found);
 }
 
+/** Branches, tags and the rest whose name has the query, for the bar under History's search:
+ *  the best `limit` of them, how many there are in all, and the type most of them are. */
+export function namedLike(all: Record<ObjectKind, ObjectItem[]>, query: string, limit = 3): { items: ObjectItem[]; total: number; kind: ObjectKind } | null {
+  if (query.trim().length < 2) return null;
+  const found = KINDS.map((k) => ({ kind: k.kind, items: search(all[k.kind], query).filter((f) => f.name.length).map((f) => f.item) }));
+  const total = found.reduce((n, f) => n + f.items.length, 0);
+  if (!total) return null;
+  const kind = found.reduce((best, f) => (f.items.length > best.items.length ? f : best)).kind;
+  return { items: found.flatMap((f) => f.items).slice(0, limit), total, kind };
+}
+
 /** What can be done with an object, the first being what Return does. */
 export function actionsOf(item: ObjectItem, history: History): ObjectAction[] {
   const out: ObjectAction[] = [];
