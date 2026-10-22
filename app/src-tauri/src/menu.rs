@@ -1,15 +1,16 @@
 //! Oxbow's commands in the macOS menu bar: File, Edit, View, Go and Repository. The window used
 //! last says which commands it has, their titles and keys (set_menu); a command picked in the
 //! menu goes back to that window as a "menu-command" event, as if its key were pressed there.
-//! At start the menu bar has them all, greyed out (menu.json, the front end's menus with no
-//! window yet), so it doesn't wait for the window to load. Only the Mac has a menu bar;
-//! elsewhere set_menu finds no menu and does nothing.
+//! The menu bar has them all from the start, greyed out (menu.json, the front end's menus with
+//! no window yet): put in before macOS shows the menu, as menus added later show only once the
+//! pointer passes over them. Only the Mac has a menu bar; elsewhere set_menu finds no menu and
+//! does nothing.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 use serde::Deserialize;
-use tauri::menu::{IsMenuItem, MenuItem, MenuItemKind, PredefinedMenuItem, Submenu};
+use tauri::menu::{IsMenuItem, Menu, MenuItem, MenuItemKind, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Manager, Wry};
 
 /// A command in the menu, or a separator when `id` is "-", or Open Recent when it's "recent".
@@ -51,23 +52,25 @@ const CLEAR_RECENT: &str = "recent-clear";
 
 /// The menus as appMenu.ts makes them before any window says what it can run; a UI test keeps
 /// this file the same as appMenu.ts.
+#[cfg(target_os = "macos")]
 const AT_START: &str = include_str!("menu.json");
 
-/// All the commands in the menu bar, greyed out, until the first window shows its own.
-pub fn put_at_start(app: &AppHandle) -> Result<(), String> {
+/// All the commands in the menu bar being made, greyed out, until the first window shows its own.
+#[cfg(target_os = "macos")]
+pub fn put_at_start(app: &AppHandle, menu: &Menu<Wry>) -> Result<(), String> {
     let menus: Vec<MenuPart> = serde_json::from_str(AT_START).map_err(|err| err.to_string())?;
-    show(app, &app.state::<MenuState>(), menus)
+    show(app, menu, &app.state::<MenuState>(), menus)
 }
 
 /// The window in front shows its commands in the menu bar.
 #[tauri::command]
 pub fn set_menu(app: AppHandle, state: tauri::State<'_, MenuState>, menus: Vec<MenuPart>) -> Result<(), String> {
-    show(&app, &state, menus)
+    let Some(menu) = app.menu() else { return Ok(()) };
+    show(&app, &menu, &state, menus)
 }
 
 /// Put the commands in the menu bar the first time, and show what they are now after that.
-fn show(app: &AppHandle, state: &MenuState, menus: Vec<MenuPart>) -> Result<(), String> {
-    let Some(menu) = app.menu() else { return Ok(()) };
+fn show(app: &AppHandle, menu: &Menu<Wry>, state: &MenuState, menus: Vec<MenuPart>) -> Result<(), String> {
     let mut built = state.built.lock().expect("menu lock");
     if let Some(built) = built.as_mut() {
         for part in &menus {
