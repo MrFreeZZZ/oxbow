@@ -886,6 +886,10 @@
     shortcutKey(id, event);
   }
 
+  /** A repository's name to head the History: "oxbow" as "Oxbow". A name with capitals of its
+   *  own, such as "iOS-app", keeps them. */
+  const titled = (name: string) => (name === name.toLowerCase() ? name.charAt(0).toUpperCase() + name.slice(1) : name);
+
   function openPalette() {
     nav.quickOpen = false;
     picker = picker?.kind === "commands" ? null : { kind: "commands", initial: "" };
@@ -2371,7 +2375,7 @@
               <span class="name">Operation Log</span>
               <span class="sub">{@render steps()}{trailPath.length ? "" : `${repo.name} · `}every step, to undo or restore</span>
             {:else}
-              <span class="name">{repo.name} history</span>
+              <span class="name">{titled(repo.name)} history</span>
               {#if activity.running}
                 <span class="sub">{activity.running.title}{activity.percent !== null ? ` · ${activity.percent}%` : "…"}</span>
               {:else if activity.problem?.failure}
