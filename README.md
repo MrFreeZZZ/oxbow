@@ -1,4 +1,9 @@
-<h1 align="center">Oxbow</h1>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/name-dark.png">
+    <img src="docs/images/name-light.png" width="220" alt="Oxbow">
+  </picture>
+</p>
 
 <p align="center">
   <picture>
