@@ -1336,6 +1336,15 @@ export interface Stack {
   /** Branches that fork off the stack, so the rebase leaves them as they are. */
   leftBehind: string[];
   dirty: boolean;
+  /** Merges of the trunk into the stack, oldest first: the rebase leaves them out. */
+  merges: StackMerge[];
+}
+
+export interface StackMerge {
+  id: string;
+  summary: string;
+  /** The branch of the stack it is on. */
+  branch: string;
 }
 
 export interface StackCommit {
@@ -1353,6 +1362,8 @@ export interface StackCommit {
 export interface StackBranch {
   name: string;
   tip: string;
+  /** The stack commit its line sits above: the tip, or the commit a merge at the tip was made on. */
+  at: string;
   upstream: RemoteBranch | null;
   ahead: number;
 }
@@ -1382,7 +1393,20 @@ export interface StackPreview {
   emptied: string[];
   conflict: { id: string; summary: string; files: string[] } | null;
   /** Top first. */
-  branches: { name: string; commits: number; moves: boolean; forcePush: RemoteBranch | null }[];
+  branches: BranchAfter[];
+}
+
+export interface BranchAfter {
+  name: string;
+  /** Its own commits afterwards. */
+  commits: number;
+  moves: boolean;
+  /** The commit it points at afterwards, as it is now: a stack commit (with a new SHA when it
+   *  moves) or the commit the stack starts from when it ends up empty. */
+  tipFrom: string;
+  /** That commit keeps its SHA. */
+  sameSha: boolean;
+  forcePush: RemoteBranch | null;
 }
 
 // --- Pull requests ---------------------------------------------------------------------------

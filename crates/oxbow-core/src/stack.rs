@@ -52,6 +52,19 @@ pub struct Stack {
     pub left_behind: Vec<String>,
     /// There are uncommitted changes; the rebase puts them aside and back.
     pub dirty: bool,
+    /// Merges of the trunk into the stack, oldest first. They only bring in trunk commits the
+    /// stack is replayed on anyway, so the rebase leaves them out and the line comes out straight.
+    pub merges: Vec<StackMerge>,
+}
+
+/// A merge commit of the trunk into the stack, left out by the rebase.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StackMerge {
+    pub id: String,
+    pub summary: String,
+    /// The branch of the stack it is on.
+    pub branch: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -77,6 +90,9 @@ pub struct StackBranch {
     pub name: String,
     /// The commit it points at.
     pub tip: String,
+    /// The stack commit its line sits above: the tip, or for a tip at a merge of the trunk, the
+    /// commit the merge was made on.
+    pub at: String,
     /// Its upstream, when it has one that still exists.
     pub upstream: Option<RemoteBranch>,
     /// Commits the upstream does not have yet.
@@ -183,6 +199,11 @@ pub struct BranchAfter {
     pub commits: usize,
     /// It will point at another commit.
     pub moves: bool,
+    /// The commit it points at afterwards, as it is now: one of the stack's, which the rebase
+    /// gives a new sha when `moves`, or the commit the stack starts from when it ends up empty.
+    pub tip_from: String,
+    /// That commit keeps its sha: the branch ends on it as it is.
+    pub same_sha: bool,
     /// Its remote branch has commits the rebase replaces, so pushing it needs a force push.
     pub force_push: Option<RemoteBranch>,
 }
@@ -212,13 +233,17 @@ enum Emit {
 struct Listed {
     id: String,
     parent: String,
+    /// A merge's other parents.
+    others: Vec<String>,
     tree: String,
     message: String,
 }
 
 /// What `git log` says about a range, oldest first.
 struct Range {
+    /// Its commits without the merges.
     commits: Vec<Listed>,
+    merges: Vec<Listed>,
     base_tree: String,
 }
 
@@ -286,19 +311,21 @@ impl Repo {
                 .collect();
             let Some(next) = higher.first() else { break };
             let one_way = higher.iter().all(|name| self.is_ancestor(next, name));
-            if !one_way || self.has_merges(&format!("{top}..{next}"))? {
+            if !one_way {
+                break;
+            }
+            // A merge Edit Stack can't leave out ends it too: the branches below stay editable.
+            let merges = self.list_range(&top, next)?.merges;
+            if self.blocking_merge(&merges, &base, &trunk.name, next).is_some() {
                 break;
             }
             top = (*next).clone();
         }
         let range = format!("{base}..{top}");
-        if self.has_merges(&range)? {
-            return Err(Error::Git(format!(
-                "{top} has merge commits since it left {}: Edit Stack works on a straight line of commits",
-                trunk.name
-            )));
-        }
         let listed = self.list_range(&base, &top)?;
+        if let Some((why, merge)) = self.blocking_merge(&listed.merges, &base, &trunk.name, &top) {
+            return Err(Error::Git(why + &self.below_merge(merge, &base)));
+        }
         if listed.commits.len() > MAX_COMMITS {
             return Err(Error::Git(format!(
                 "{} commits are more than Edit Stack shows; rebase them in a terminal",
@@ -319,15 +346,28 @@ impl Repo {
 
         // The branches of the stack: the top, and every local branch whose tip is in it.
         let ids: HashSet<&str> = listed.commits.iter().map(|c| c.id.as_str()).collect();
+        let first_parent: HashMap<&str, &str> = listed
+            .merges
+            .iter()
+            .map(|m| (m.id.as_str(), m.parent.as_str()))
+            .collect();
+        let line_of = |tip: &str| {
+            let mut at = tip;
+            while let Some(parent) = first_parent.get(at) {
+                at = parent;
+            }
+            at.to_owned()
+        };
         let tracking = self.branch_tracking().unwrap_or_default();
         let mut branches: Vec<StackBranch> = local
             .iter()
-            .filter(|r| r.name != trunk.name && (r.name == top || ids.contains(r.target.as_str())))
+            .filter(|r| r.name != trunk.name && (r.name == top || ids.contains(line_of(&r.target).as_str())))
             .map(|r| {
                 let up = tracking.get(&r.name).filter(|t| !t.gone);
                 StackBranch {
                     name: r.name.clone(),
                     tip: r.target.clone(),
+                    at: line_of(&r.target),
                     upstream: up.map(|t| RemoteBranch {
                         remote: t.remote.clone(),
                         branch: t.branch.clone(),
@@ -344,8 +384,8 @@ impl Repo {
             .collect();
         // Top first; the top branch above any other at its commit.
         branches.sort_by(|a, b| {
-            let pa = position.get(a.tip.as_str()).copied().unwrap_or(usize::MAX);
-            let pb = position.get(b.tip.as_str()).copied().unwrap_or(usize::MAX);
+            let pa = position.get(a.at.as_str()).copied().unwrap_or(usize::MAX);
+            let pb = position.get(b.at.as_str()).copied().unwrap_or(usize::MAX);
             pb.cmp(&pa)
                 .then_with(|| (b.name == top).cmp(&(a.name == top)))
                 .then_with(|| b.name.cmp(&a.name))
@@ -357,7 +397,7 @@ impl Repo {
             let owner = branches
                 .iter()
                 .rev()
-                .find(|b| position.get(b.tip.as_str()).is_some_and(|&p| p >= i))
+                .find(|b| position.get(b.at.as_str()).is_some_and(|&p| p >= i))
                 .map_or(top.clone(), |b| b.name.clone());
             let (additions, deletions) = stats.get(&c.id).copied().unwrap_or((0, 0));
             let brief = self.brief_of(&c.id)?;
@@ -395,6 +435,28 @@ impl Repo {
             left_behind.sort();
         }
 
+        // A merge belongs to the branch at it, else to the branch of the first commit above it.
+        let merges = listed
+            .merges
+            .iter()
+            .map(|m| {
+                let at = branches.iter().rev().find(|b| b.tip == m.id).map(|b| b.name.clone());
+                let branch = at.unwrap_or_else(|| {
+                    listed
+                        .commits
+                        .iter()
+                        .find(|c| c.parent == m.id)
+                        .and_then(|c| commits.iter().find(|s| s.id == c.id))
+                        .map_or(top.clone(), |c| c.branch.clone())
+                });
+                StackMerge {
+                    id: m.id.clone(),
+                    summary: m.message.lines().next().unwrap_or_default().to_owned(),
+                    branch,
+                }
+            })
+            .collect();
+
         let newer = self.count(&format!("{base}..{}", trunk.target))?;
         let dirty = self.tracked_changes()?;
         Ok(Stack {
@@ -408,7 +470,77 @@ impl Repo {
             branches,
             left_behind,
             dirty,
+            merges,
         })
+    }
+
+    /// Why Edit Stack can't leave out one of `merges`, the merge commits on `top` since it left
+    /// the trunk at `base`, if it can't, in paragraphs, with the merge. It can when a merge only
+    /// brought in trunk commits the stack starts from anyway, and changed nothing of its own then.
+    fn blocking_merge<'a>(
+        &self,
+        merges: &'a [Listed],
+        base: &str,
+        trunk: &str,
+        top: &str,
+    ) -> Option<(String, &'a Listed)> {
+        merges.iter().find_map(|m| {
+            let summary = m.message.lines().next().unwrap_or_default();
+            let named = format!("The merge {} “{summary}” on {top}", short(&m.id));
+            if !m.others.iter().all(|p| self.is_ancestor(p, base)) {
+                let why = format!(
+                    "{named} brings in commits {trunk} doesn't have.\n\n\
+                     Edit Stack replays commits one by one on a straight line, so it would flatten this merge \
+                     and take those commits into the stack as if they were its own.\n\n\
+                     Merge that branch into {trunk} first, or rebase in a terminal if flattening it is what \
+                     you want."
+                );
+                return Some((why, m));
+            }
+            let own_changes = match self.spawn(
+                &GitCommand::new(["merge-tree", "--write-tree", "--no-messages", &m.parent, &m.others[0]]),
+                None,
+            ) {
+                Ok(out) if out.status.success() && m.others.len() == 1 => {
+                    String::from_utf8_lossy(&out.stdout).trim() != m.tree
+                }
+                _ => true,
+            };
+            own_changes.then(|| {
+                let why = format!(
+                    "{named} brings in {trunk} and also changes files of its own, usually to settle \
+                     conflicts.\n\n\
+                     Edit Stack replays commits on a straight line without such merges, so those changes would \
+                     be lost.\n\n\
+                     Rebase {top} onto {trunk} in a terminal and settle the conflicts there."
+                );
+                (why, m)
+            })
+        })
+    }
+
+    /// Where Edit Stack still opens below `merge`: the branches with commits of their own under it.
+    fn below_merge(&self, merge: &Listed, base: &str) -> String {
+        let names: Vec<String> = self
+            .run(&GitCommand::new([
+                "for-each-ref",
+                "--format=%(refname:short)",
+                "--merged",
+                &merge.parent,
+                "--no-merged",
+                base,
+                "refs/heads",
+            ]))
+            .map(|out| out.stdout.lines().map(str::to_owned).collect())
+            .unwrap_or_default();
+        match names.as_slice() {
+            [] => String::new(),
+            [one] => format!("\n\nEdit Stack still opens on {one}, below the merge."),
+            [rest @ .., last] => format!(
+                "\n\nEdit Stack still opens on {} and {last}, below the merge.",
+                rest.join(", ")
+            ),
+        }
     }
 
     /// Replay `plan` in memory: what it changes, where it would stop, what to push afterwards.
@@ -538,6 +670,19 @@ impl Repo {
             }
         }
         owned.insert(plan.top.clone(), since);
+        // What each branch points at afterwards, by the commits as they are now.
+        let mut tip_from: HashMap<String, String> = HashMap::new();
+        let mut last = plan.onto.clone();
+        for emit in &emits {
+            match emit {
+                Emit::Pick { id, .. } if !empty.contains(id.as_str()) => last = id.clone(),
+                Emit::Ref { name } => {
+                    tip_from.insert(name.clone(), last.clone());
+                }
+                _ => {}
+            }
+        }
+        tip_from.insert(plan.top.clone(), last);
         for branch in &stack.branches {
             let Some(new_tip) = tips.get(&branch.name) else {
                 continue;
@@ -554,6 +699,11 @@ impl Repo {
                 name: branch.name.clone(),
                 commits: owned.get(&branch.name).copied().unwrap_or(0),
                 moves: moves || (stopped && preview.changed),
+                same_sha: !stopped && tip_from.get(&branch.name) == Some(new_tip),
+                tip_from: tip_from
+                    .get(&branch.name)
+                    .cloned()
+                    .unwrap_or_else(|| branch.tip.clone()),
                 force_push,
             });
         }
@@ -752,19 +902,24 @@ impl Repo {
                 let record = record.trim_start_matches('\n');
                 let mut parts = record.splitn(4, '\u{1f}');
                 let id = parts.next()?.trim().to_owned();
-                let parent = parts.next()?.split_whitespace().next().unwrap_or_default().to_owned();
+                let mut parents = parts.next()?.split_whitespace().map(str::to_owned);
+                let parent = parents.next().unwrap_or_default();
+                let others = parents.collect();
                 let tree = parts.next()?.to_owned();
                 let message = parts.next().unwrap_or_default().trim_end().to_owned();
                 (!id.is_empty()).then_some(Listed {
                     id,
                     parent,
+                    others,
                     tree,
                     message,
                 })
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let (merges, commits) = commits.into_iter().partition(|c| !c.others.is_empty());
         Ok(Range {
             commits,
+            merges,
             base_tree: self.tree_of(base)?,
         })
     }
@@ -1157,6 +1312,7 @@ fn range_tree(range: &Range, id: &str) -> String {
     range
         .commits
         .iter()
+        .chain(&range.merges)
         .find(|c| c.id == id)
         .map_or_else(|| range.base_tree.clone(), |c| c.tree.clone())
 }

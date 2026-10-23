@@ -30,7 +30,7 @@ fn as_is(stack: &Stack) -> StackPlan {
             action: StepAction::Pick,
             message: None,
         });
-        while let Some(b) = branches.next_if(|b| b.tip == commit.id) {
+        while let Some(b) = branches.next_if(|b| b.at == commit.id) {
             steps.push(StackStep::Branch { name: b.name.clone() });
         }
     }
@@ -375,6 +375,8 @@ fn a_commit_main_already_has_is_left_out() {
     assert!(preview.conflict.is_none());
     let auth1 = preview.branches.iter().find(|b| b.name == "auth/1").unwrap();
     assert_eq!(auth1.commits, 0);
+    // Empty, it ends up on the commit the stack is replayed on.
+    assert_eq!(auth1.tip_from, stack.trunk_tip.id);
 
     repo.perform(&Action::EditStack { plan }).unwrap();
     assert_eq!(fx.git(&["rev-parse", "auth/1"]), fx.git(&["rev-parse", "main"]));
@@ -497,4 +499,98 @@ fn a_branch_forking_off_the_middle_of_the_stack_is_left_behind() {
     let stack = repo.stack(None).unwrap();
     assert_eq!(stack.top, "auth/3");
     assert_eq!(stack.left_behind, ["spike"]);
+}
+
+#[test]
+fn each_branch_knows_the_commit_it_ends_up_on() {
+    let fx = stacked();
+    let repo = Repo::open(fx.path()).unwrap();
+    let stack = repo.stack(None).unwrap();
+    let mut plan = as_is(&stack);
+    // The newest commit of auth/3 goes; auth/2's commits stay as they are.
+    let wire = id_of(&stack, "Wire token refresh");
+    set(&mut plan, &wire, StepAction::Drop, None);
+    let preview = repo.stack_preview(&plan).unwrap();
+    let after = |name: &str| preview.branches.iter().find(|b| b.name == name).unwrap().clone();
+    assert!(after("auth/3").moves);
+    assert_eq!(after("auth/3").tip_from, id_of(&stack, "Add expiry banner"));
+    assert!(after("auth/3").same_sha);
+    assert!(!after("auth/2").moves);
+    assert_eq!(after("auth/2").tip_from, id_of(&stack, "Validate refresh rotation"));
+}
+
+#[test]
+fn a_merge_of_main_into_the_stack_is_left_out() {
+    let mut fx = stacked();
+    fx.git(&["switch", "-q", "main"]);
+    fx.commit("docs.md", "rate limits\n", "Mention rate limits");
+    fx.git(&["switch", "-q", "auth/2"]);
+    fx.git(&["merge", "-q", "--no-edit", "main"]);
+    fx.git(&["switch", "-q", "auth/3"]);
+    fx.git(&["reset", "-q", "--hard", "auth/2"]);
+    fx.commit("ui.rs", "banner\n", "Add expiry banner");
+    fx.git(&["switch", "-q", "auth/2"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let stack = repo.stack(None).unwrap();
+    assert_eq!(stack.top, "auth/3");
+    assert_eq!(stack.base.summary, "Mention rate limits");
+    assert_eq!(stack.merges.len(), 1);
+    assert_eq!(stack.merges[0].branch, "auth/2");
+    let names: Vec<_> = stack.branches.iter().map(|b| b.name.as_str()).collect();
+    assert_eq!(names, ["auth/3", "auth/2", "auth/1"]);
+    // auth/2's line sits on its own newest commit, under the merge.
+    let auth2 = stack.branches.iter().find(|b| b.name == "auth/2").unwrap();
+    assert_eq!(auth2.at, id_of(&stack, "Validate refresh rotation"));
+    assert_eq!(stack.commits.len(), 4);
+
+    // As it is, the plan replays the stack straight onto main, without the merge.
+    let plan = as_is(&stack);
+    let preview = repo.stack_preview(&plan).unwrap();
+    assert!(preview.changed);
+    assert!(preview.conflict.is_none());
+    repo.perform(&Action::EditStack { plan }).unwrap();
+    assert_eq!(fx.git(&["rev-list", "--min-parents=2", "--count", "main..auth/3"]), "0");
+    assert_eq!(
+        subjects(&mut fx, "main..auth/3"),
+        [
+            "Add expiry banner",
+            "Validate refresh rotation",
+            "Expose sessions endpoint",
+            "Add Session model"
+        ]
+    );
+    assert_eq!(fx.git(&["show", "auth/2:docs.md"]), "rate limits");
+}
+
+#[test]
+fn a_merge_of_another_branch_is_explained() {
+    let mut fx = stacked();
+    fx.git(&["switch", "-q", "-c", "spike", "main"]);
+    fx.commit("spike.rs", "x\n", "Try a spike");
+    fx.git(&["switch", "-q", "auth/3"]);
+    fx.git(&["merge", "-q", "--no-edit", "spike"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let err = repo.stack(Some("auth/3")).unwrap_err().to_string();
+    assert!(err.contains("brings in commits main doesn't have"), "{err}");
+    // Below the merge the stack still opens, ending where the merge starts.
+    let stack = repo.stack(Some("auth/1")).unwrap();
+    assert_eq!(stack.top, "auth/2");
+}
+
+#[test]
+fn a_merge_of_main_with_changes_of_its_own_is_explained() {
+    let mut fx = stacked();
+    fx.git(&["switch", "-q", "main"]);
+    fx.commit("docs.md", "rate limits\n", "Mention rate limits");
+    fx.git(&["switch", "-q", "auth/3"]);
+    fx.git(&["merge", "-q", "--no-ff", "--no-commit", "main"]);
+    fx.write("api.rs", "fn sessions_v2() {}\n");
+    fx.git(&["commit", "-q", "-a", "--no-edit"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let err = repo.stack(Some("auth/3")).unwrap_err().to_string();
+    assert!(err.contains("changes files of its own"), "{err}");
+    assert!(
+        err.contains("still opens on auth/1 and auth/2, below the merge"),
+        "{err}"
+    );
 }
