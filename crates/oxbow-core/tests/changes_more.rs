@@ -478,14 +478,17 @@ fn a_page_stops_while_it_is_read() {
     let later = std::thread::spawn(move || {
         std::thread::sleep(wait);
         stop.store(true, Ordering::Relaxed);
+        Instant::now()
     });
-    let started = Instant::now();
     let out = repo.working_diff_page(&tree, &paths, Side::Unstaged, true, 0, usize::MAX, &cancel);
-    later.join().unwrap();
+    let ended = Instant::now();
+    // Timed from when Stop was set, not from the start: on a busy machine the sleep before it
+    // can last much longer than asked.
+    let stopped = later.join().unwrap();
     assert!(matches!(out, Err(oxbow_core::Error::Cancelled)));
+    let took = ended.saturating_duration_since(stopped);
     assert!(
-        started.elapsed() < wait + whole / 2 + Duration::from_millis(50),
-        "stopped after {:?} of {whole:?}",
-        started.elapsed()
+        took < whole / 2 + Duration::from_millis(50),
+        "stopped {took:?} after Stop, the whole read took {whole:?}"
     );
 }
