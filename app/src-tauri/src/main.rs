@@ -1781,6 +1781,27 @@ async fn stack(
     read(at(&repo), "Read the stack", move || repo.stack(branch.as_deref())).await
 }
 
+/// The restack under way after a pull request of a stack merged, and how far it got.
+#[tauri::command]
+async fn restack(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+) -> CommandResult<Option<oxbow_core::RestackState>> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "Read the restack", move || Ok(repo.restack())).await
+}
+
+/// Keep a restack for its next step, or forget it once it is done.
+#[tauri::command]
+async fn save_restack(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    restack: Option<oxbow_core::Restack>,
+) -> CommandResult<()> {
+    let repo = current(&session, &window)?;
+    blocking(move || repo.save_restack(restack.as_ref())).await
+}
+
 /// Which of `candidates` has the merged pull request's commit `merged`, for a restack to move
 /// onto; none until a fetch brought it.
 #[tauri::command]
@@ -2739,6 +2760,8 @@ fn main() {
             cancel_quit,
             stash_check,
             stack,
+            restack,
+            save_restack,
             landed_on,
             stack_preview,
             plan_action,

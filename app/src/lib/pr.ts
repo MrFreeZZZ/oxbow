@@ -280,11 +280,15 @@ export async function createRequest(ctx: BranchContext, pull: NewPull): Promise<
 
 // --- After the base of a stack merged ---------------------------------------------------------
 
-/** Force push the rewritten branches and point their pull requests at the trunk. */
+/** Force push the rewritten branches and point their pull requests at the trunk: the restack's
+ *  last two steps, or the ones still to go. `failed` keeps the step that failed and why, for
+ *  going on from it later; `done` runs once both went through. */
 export async function restackPushRequest(
   ctx: BranchContext,
   push: (Action & { kind: "pushBranches" }) | null,
   retarget: { number: number; base: string }[],
+  failed: (step: "push" | "base", message: string) => Promise<void>,
+  done: () => Promise<void>,
 ): Promise<Request | null> {
   const calls: PullCall[] = retarget.map((r) => ({ kind: "update", number: r.number, base: r.base }));
   if (!push && !calls.length) return null;
@@ -302,15 +306,81 @@ export async function restackPushRequest(
     body,
     icon: "push",
     tone: push ? "warn" : undefined,
+    forcePush: !!push,
     button: push ? "Force Push" : "Change Base",
     status: "Pushing…",
+    note: "If a step fails, the restack goes on from it later.",
     local: {
       commands: [...pushed.map((c) => c.display), ...curls],
       comments: [...pushed.map((c) => c.comment), ...retarget.map((r) => `gh pr edit ${r.number} --base ${r.base} does the same`)],
       run: async () => {
-        if (push) await perform(push);
-        if (calls.length) await api.githubRun(calls);
+        if (push)
+          try {
+            await perform(push);
+          } catch (err) {
+            await failed("push", firstLine(err)).catch(() => {});
+            throw err;
+          }
+        if (calls.length)
+          try {
+            await api.githubRun(calls);
+          } catch (err) {
+            await failed("base", firstLine(err)).catch(() => {});
+            throw err;
+          }
+        await done().catch(() => {});
         return "Restacked.";
+      },
+    },
+  };
+}
+
+// --- Getting it ready ---------------------------------------------------------------------------
+
+/** Merge the base into the branch on GitHub, like its Update branch button. */
+export async function updateBranchRequest(ctx: BranchContext, pr: PullRequest): Promise<Request> {
+  const calls: PullCall[] = [{ kind: "updateBranch", number: pr.number, sha: pr.headSha }];
+  const [curl] = await api.githubCallsPreview(calls);
+  const local = ctx.history.refs.find((r) => r.kind === "local" && r.name === pr.head);
+  const ahead = local?.tracking && !local.tracking.gone ? local.tracking.ahead : 0;
+  const body: Part[] = ["GitHub merges the newest ", chip(ctx, pr.base), " into ", chip(ctx, pr.head), " with a merge commit, and the checks run again."];
+  if (local) body.push(" Pull it here afterwards to have the merge locally.");
+  return {
+    title: `Update ${pr.head} with ${pr.base}?`,
+    body,
+    icon: "merge",
+    button: "Update Branch",
+    status: "Updating the branch…",
+    warning: ahead
+      ? { title: `${plural(ahead, "commit")} here aren’t on GitHub yet`, body: ["Push them first, or pull after the update: ", chip(ctx, pr.head), " then has a merge to bring in."] }
+      : undefined,
+    local: {
+      commands: [curl],
+      comment: `gh pr update-branch ${pr.number} does the same`,
+      run: async () => {
+        await api.githubRun(calls);
+        return `GitHub is updating ${pr.head}.`;
+      },
+    },
+  };
+}
+
+/** Ask `logins` to review it. */
+export async function reviewersRequest(pr: PullRequest, logins: string[]): Promise<Request> {
+  const calls: PullCall[] = [{ kind: "requestReviewers", number: pr.number, reviewers: logins }];
+  const [curl] = await api.githubCallsPreview(calls);
+  return {
+    title: `Ask ${logins.join(", ")} to review #${pr.number}?`,
+    body: [`GitHub tells ${logins.length === 1 ? "them" : "each of them"} about it.`],
+    icon: "push",
+    button: "Ask for Review",
+    status: "Asking for a review…",
+    local: {
+      commands: [curl],
+      comment: `gh pr edit ${pr.number} ${logins.map((l) => `--add-reviewer ${l}`).join(" ")} does the same`,
+      run: async () => {
+        await api.githubRun(calls);
+        return `Asked ${logins.join(", ")} to review #${pr.number}.`;
       },
     },
   };

@@ -17,7 +17,7 @@ use crate::cli::{GitCommand, shell_quote};
 use crate::error::{Error, Result};
 use crate::remote::CommitBrief;
 use crate::repo::{RefKind, Repo};
-use crate::worktree::{RemoteBranch, paragraphs};
+use crate::worktree::{BranchPush, RemoteBranch, paragraphs};
 
 /// More commits than this are not edited on screen.
 const MAX_COMMITS: usize = 300;
@@ -27,6 +27,9 @@ const TODO_FILE: &str = "oxbow/rebase-todo";
 
 /// The branch to go back to once a stack rebase that stopped is over: the top, then that branch.
 const RETURN_FILE: &str = "oxbow/edit-stack-return";
+
+/// The restack under way, as JSON: shared by every worktree, like the branches it moves.
+const RESTACK_FILE: &str = "oxbow/restack.json";
 
 /// A stack of branches on top of the trunk, as the Edit Stack screen shows it.
 #[derive(Debug, Clone, Serialize)]
@@ -147,6 +150,55 @@ pub struct StackPlan {
     #[serde(default)]
     pub head: Option<String>,
     pub steps: Vec<StackStep>,
+}
+
+/// What a restack after a merged pull request does, kept in the git directory from its rebase
+/// until its last step: when the push or the new base on GitHub fails, e.g. without network, it
+/// goes on from that step, also after a restart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Restack {
+    /// The merged pull request whose commits leave the stack.
+    pub merged: u64,
+    /// The branch it merged into, the new base of the pull requests that were built on it.
+    pub base: String,
+    /// The branches the rebase moves.
+    pub branches: Vec<String>,
+    /// The merged commits the rebase leaves out.
+    pub drop: Vec<String>,
+    /// Where the moved branches are pushed, each to its branch there.
+    pub remote: Option<String>,
+    pub push: Vec<BranchPush>,
+    /// Pull requests that went into the merged branch and go into `base` next.
+    pub retarget: Vec<u64>,
+    /// The step that failed last, until it runs again.
+    pub failed: Option<RestackFailure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestackFailure {
+    pub step: RestackStep,
+    /// What went wrong, in git's or GitHub's words.
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RestackStep {
+    Push,
+    Base,
+}
+
+/// A kept restack and how far it got here. The base on GitHub is the screen's to check.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestackState {
+    pub restack: Restack,
+    /// The rebase stopped, e.g. on a conflict, and waits to be continued.
+    pub rebasing: bool,
+    /// Pushes still to make: branches whose remote branch isn't at their tip.
+    pub unpushed: Vec<String>,
 }
 
 /// A branch that has a merged pull request, for a restack to move onto.
@@ -1019,6 +1071,82 @@ impl Repo {
                     tip: self.brief_of(name).ok()?,
                 })
             })
+    }
+
+    /// The restack under way and how far it got. One whose rebase never ran or was aborted (the
+    /// branches still have the merged commits) is forgotten, as is one that can't be read.
+    pub fn restack(&self) -> Option<RestackState> {
+        let file = self.git_file(RESTACK_FILE).ok()?;
+        let text = std::fs::read_to_string(&file).ok()?;
+        let Ok(restack) = serde_json::from_str::<Restack>(&text) else {
+            let _ = std::fs::remove_file(&file);
+            return None;
+        };
+        let rebasing = self.operation().ok().flatten().is_some_and(|op| {
+            op.kind == crate::operation::OperationKind::Rebase
+                && op.branch.as_ref().is_some_and(|b| restack.branches.contains(b))
+        });
+        let tip = |name: &str| self.rev_parse(name);
+        let rebased = restack
+            .branches
+            .iter()
+            .filter(|b| tip(&format!("refs/heads/{b}")).is_some())
+            .all(|b| {
+                restack
+                    .drop
+                    .iter()
+                    .all(|id| !self.is_ancestor(id, &format!("refs/heads/{b}")))
+            });
+        if !rebasing && !rebased {
+            let _ = std::fs::remove_file(&file);
+            return None;
+        }
+        let unpushed = match &restack.remote {
+            Some(remote) => restack
+                .push
+                .iter()
+                .filter(|p| {
+                    let here = tip(&format!("refs/heads/{}", p.branch));
+                    here.is_some() && here != tip(&format!("refs/remotes/{remote}/{}", p.upstream))
+                })
+                .map(|p| p.branch.clone())
+                .collect(),
+            None => Vec::new(),
+        };
+        Some(RestackState {
+            restack,
+            rebasing,
+            unpushed,
+        })
+    }
+
+    /// Keep `restack` for its next step, or forget it with `None` once it is done.
+    pub fn save_restack(&self, restack: Option<&Restack>) -> Result<()> {
+        let file = self.git_file(RESTACK_FILE)?;
+        let failed = |err: std::io::Error| Error::Git(format!("could not keep the restack: {err}"));
+        let Some(restack) = restack else {
+            return match std::fs::remove_file(&file) {
+                Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(failed(err)),
+                _ => Ok(()),
+            };
+        };
+        if let Some(dir) = file.parent() {
+            std::fs::create_dir_all(dir).map_err(failed)?;
+        }
+        // Written whole, then moved in, so a crash never leaves half a file.
+        let next = file.with_extension("json.new");
+        let text = serde_json::to_vec_pretty(restack).map_err(|err| failed(err.into()))?;
+        std::fs::write(&next, text).map_err(failed)?;
+        std::fs::rename(&next, &file).map_err(failed)
+    }
+
+    fn rev_parse(&self, rev: &str) -> Option<String> {
+        let out = self
+            .spawn(&GitCommand::new(["rev-parse", "--verify", "--quiet", rev]), None)
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
     }
 
     fn brief_of(&self, rev: &str) -> Result<CommitBrief> {

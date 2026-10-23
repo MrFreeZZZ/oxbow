@@ -1,19 +1,23 @@
 <script lang="ts">
   // The Pull Request screen of one branch: its stack as a strip of soft arrows, then the pull
   // request (conversation or commits) on the left and whether it can merge, and how, on the
-  // right. A branch without one gets the form that opens it. After the base of a stack merged,
-  // the rest of the stack can be restacked onto the trunk from here.
+  // right, with the one step it waits for next on top. A branch without one gets the form that
+  // opens it. After the base of a stack merged, the rest of the stack can be restacked onto the
+  // trunk from here, in three steps kept between runs: a push that fails goes on later.
   import { untrack } from "svelte";
   import { api } from "./api";
   import { github } from "./github.svelte";
   import type { Request } from "./confirm.svelte";
   import type { BranchContext } from "./branches";
-  import type { Action, History, MergeMethodName, Landing, PullCheck, PullEntry, PullRequest, PullSummary, ReviewState, Rewrite, Stack, StackPreview } from "./types";
+  import type { Action, History, MergeMethodName, Landing, PullCheck, PullEntry, PullRequest, PullSummary, Restack, RestackState, ReviewState, Rewrite, Stack, StackPreview } from "./types";
   import type { SeriesQuery } from "./series";
   import { lane, person, plate, relativeTime, shortId, splitPath, tint } from "./format";
   import { kept } from "./kept";
   import { softArrows } from "./shapes";
   import { editStackRequest, freshDraft, planOf } from "./stack";
+  import { switchRequest } from "./branches";
+  import { mergeRequest as mergeIntoRequest } from "./merge";
+  import { blockers, nextStep, restackFinished, restackLines, restackTouches, stillToRetarget, type RestackLine } from "./nextStep";
   import {
     autoMergeRequest,
     createRequest,
@@ -24,6 +28,8 @@
     readBody,
     readyRequest,
     restackPushRequest,
+    reviewersRequest,
+    updateBranchRequest,
     type NewPull,
     type StackLine,
   } from "./pr";
@@ -182,6 +188,28 @@
     return toPush ? `No pull request · ${toPush} to push` : "No pull request";
   }
 
+  // --- A restack under way ---
+
+  /** The restack kept between its steps, started here or in another window of the repository. */
+  let saved = $state<RestackState | null>(null);
+  $effect(() => {
+    void version;
+    untrack(() => readSaved());
+  });
+
+  async function readSaved() {
+    saved = await api.restack().catch(() => null);
+  }
+
+  const savedLines = $derived(saved ? restackLines(saved, github.pulls) : null);
+  // Once its last step is done, there is nothing to go on with.
+  $effect(() => {
+    if (savedLines && github.pulls.length && restackFinished(savedLines)) {
+      saved = null;
+      api.saveRestack(null).catch(() => {});
+    }
+  });
+
   // --- The pull request ---
 
   const approvals = $derived(pr ? pr.reviews.filter((r) => r.state === "approved").length : 0);
@@ -206,26 +234,17 @@
 
   const failing = $derived(pr ? pr.checks.filter((c) => c.state === "fail") : []);
   const running = $derived(pr ? pr.checks.filter((c) => c.state === "run") : []);
-  const blocks = $derived.by(() => {
-    if (!pr || pr.state !== "open") return [];
-    const list: string[] = [];
-    if (pr.draft) list.push("Draft, mark it ready for review first");
-    if (basePull) list.push(`Merge #${basePull.number} first, it is the base of this pull request`);
-    if (mergedBelow) list.push(`Restack onto ${trunk}, #${mergedBelow.number} is merged`);
-    const strict = pr.mergeableState === "blocked";
-    if (strict && failing.length) list.push(`${plural(failing.length, "check")} failing: ${failing.map((c) => c.name).join(", ")}`);
-    if (strict && running.length) list.push("Checks are running");
-    const asked = pr.reviews.filter((r) => r.state === "changesRequested").map((r) => r.author.login);
-    if (asked.length) list.push(`Changes requested by ${asked.join(", ")}`);
-    if (pr.requiredApprovals && approvals < pr.requiredApprovals) list.push(`Needs ${plural(pr.requiredApprovals - approvals, "approval")}`);
-    if (pr.mergeable === false || pr.mergeableState === "dirty") list.push(`Conflicts with ${pr.base}: resolve them first`);
-    if (pr.mergeableState === "behind") list.push(`${pr.base} has newer commits: update the branch first`);
-    if (!pr.settings.canPush) list.push("Your account can’t push to this repository, so it can’t merge");
-    if (strict && !list.length) list.push(`GitHub’s rules for ${pr.base} block merging for now`);
-    return list;
-  });
+  const facts = $derived(
+    pr
+      ? { pr, mergedBelow, basePull, restack: saved && restackTouches(saved, pr) ? savedLines : null, trunk, checkedOut: history.head.branch === pr.head }
+      : null,
+  );
+  /** What keeps it from merging, the first one first. */
+  const blocked = $derived(facts ? blockers(facts) : []);
+  const next = $derived(facts ? nextStep(facts, blocked) : null);
+  const also = $derived(blocked.slice(1).flatMap((b) => (b.short ? [b.short] : [])));
   const checking = $derived(!!pr && pr.state === "open" && pr.mergeableState === "unknown");
-  const canMerge = $derived(!!pr && pr.state === "open" && !blocks.length && !checking && pr.mergeable !== false);
+  const canMerge = $derived(!!pr && pr.state === "open" && !blocked.length && !checking && pr.mergeable !== false);
 
   const methods = $derived(pr ? METHODS.filter((m) => (m.id === "merge" ? pr!.settings.mergeCommit : m.id === "squash" ? pr!.settings.squash : pr!.settings.rebase)) : []);
   const chosen = $derived(method && methods.some((m) => m.id === method) ? method : (methods.find((m) => m.id === "squash") ?? methods[0])?.id ?? "merge");
@@ -273,6 +292,8 @@
     review: "M3 8h10M8 3v10",
     draft: "M4 12l1-3 6-6 2 2-6 6z",
     dot: "M8 8h.01",
+    next: "M6.5 4.5 10 8l-3.5 3.5",
+    warn: "M8 4.5v4M8 11.2v.1",
   };
 
   const reviewers = $derived.by(() => {
@@ -306,7 +327,7 @@
 
   // --- Restacking after the base merged ---
 
-  interface Restack {
+  interface Plan {
     /** The merged pull request whose commits leave the stack. */
     merged: PullSummary;
     stack: Stack;
@@ -317,7 +338,7 @@
     /** Why it can't be restacked from here, e.g. the merge isn't here yet. */
     problem: string | null;
   }
-  let restack = $state<Restack | null>(null);
+  let restack = $state<Plan | null>(null);
   let restackSkipped = $state(false);
 
   /** Where the stack goes: a branch that has the merge, fetched first when none has it yet, so
@@ -333,7 +354,7 @@
 
   /** The stack built on `merged`, here, with its commits left out and moved onto a branch that
    *  has the merge. */
-  async function planRestack(merged: PullRequest): Promise<Restack | null> {
+  async function planRestack(merged: PullRequest): Promise<Plan | null> {
     const shas = new Set(merged.commits.map((c) => c.sha));
     const candidates = github.pulls.filter((p) => p.state === "open" && p.head !== merged.head && ctx.history.refs.some((r) => r.kind === "local" && r.name === p.head));
     for (const candidate of candidates) {
@@ -343,7 +364,7 @@
       if (!drop.length) continue;
       const names = new Set(s.branches.map((b) => b.name));
       const retarget = github.pulls.filter((p) => p.state === "open" && names.has(p.head) && p.base === merged.head);
-      const stuck = (problem: string): Restack => ({ merged, stack: s!, drop, preview: { changed: false } as StackPreview, retarget, problem });
+      const stuck = (problem: string): Plan => ({ merged, stack: s!, drop, preview: { changed: false } as StackPreview, retarget, problem });
       if (!merged.commitsComplete)
         return stuck(`#${merged.number} has more commits than GitHub lists (250), so Oxbow can’t tell which ones to leave out. Use Edit Stack to drop them by hand.`);
       const onto = await landing(s, merged);
@@ -373,15 +394,52 @@
     const draft = freshDraft(plan.stack, true);
     for (const id of plan.drop) draft.acts[id] = "drop";
     draft.items = draft.items.filter((item) => !(item.kind === "branch" && item.name === merged.head));
-    if (!(await run(editStackRequest(ctx, plan.stack, draft, plan.preview)))) return;
     const forced = plan.preview.branches.filter((b) => b.forcePush);
     const ups = plan.stack.branches.filter((b) => b.upstream && forced.some((f) => f.name === b.name));
-    const push: (Action & { kind: "pushBranches" }) | null = ups.length
-      ? { kind: "pushBranches", remote: ups[0].upstream!.remote, branches: ups.filter((b) => b.upstream!.remote === ups[0].upstream!.remote).map((b) => ({ branch: b.name, upstream: b.upstream!.branch })) }
-      : null;
-    const next = await restackPushRequest(ctx, push, plan.retarget.map((p) => ({ number: p.number, base: merged.base })));
+    const remote = ups[0]?.upstream?.remote ?? null;
+    const kept: Restack = {
+      merged: merged.number,
+      base: merged.base,
+      branches: plan.stack.branches.filter((b) => b.name !== merged.head).map((b) => b.name),
+      drop: plan.drop,
+      remote,
+      push: ups.filter((b) => b.upstream!.remote === remote).map((b) => ({ branch: b.name, upstream: b.upstream!.branch })),
+      retarget: plan.retarget.map((p) => p.number),
+      failed: null,
+    };
+    const rebased = await run(editStackRequest(ctx, plan.stack, draft, plan.preview));
+    // Kept also when the rebase stopped on a conflict; one that never ran is forgotten when read.
+    await api.saveRestack(kept).catch(() => {});
+    if (rebased) await pushAndRetarget(kept, null);
+    await readSaved();
+  }
+
+  /** The restack's push and new base, or the ones of them still to go. */
+  async function pushAndRetarget(kept: Restack, state: RestackState | null) {
+    const left = state ? kept.push.filter((p) => state.unpushed.includes(p.branch)) : kept.push;
+    const push: (Action & { kind: "pushBranches" }) | null = kept.remote && left.length ? { kind: "pushBranches", remote: kept.remote, branches: left } : null;
+    const retarget = (state ? stillToRetarget(state, github.pulls) : kept.retarget).map((number) => ({ number, base: kept.base }));
+    const next = await restackPushRequest(
+      ctx,
+      push,
+      retarget,
+      (step, message) => api.saveRestack({ ...kept, failed: { step, message } }),
+      () => api.saveRestack(null),
+    );
     if (next) await run(next);
+    else await api.saveRestack(null).catch(() => {});
     await reload();
+  }
+
+  async function continueRestack() {
+    if (!saved || saved.rebasing) return;
+    await pushAndRetarget(saved.restack, saved);
+    await readSaved();
+  }
+
+  async function forgetRestack() {
+    saved = null;
+    await api.saveRestack(null).catch(() => {});
   }
 
   const restackSteps = $derived.by(() => {
@@ -390,11 +448,55 @@
     const kept = s.commits.length - drop.length;
     const names = s.branches.filter((b) => b.name !== merged.head).map((b) => b.name);
     const steps = [`Rebase ${plural(kept, "commit")} of ${names.join(" and ")} onto ${s.trunk}, leaving out ${plural(drop.length, "commit")} ${merged.base} has now`];
-    for (const r of retarget) steps.push(`Change the base of #${r.number} to ${merged.base}`);
     const forced = p.branches.filter((b) => b.forcePush).length;
     if (forced) steps.push(`Force push ${plural(forced, "branch")} with --force-with-lease`);
+    for (const r of retarget) steps.push(`Change the base of #${r.number} to ${merged.base}`);
     steps.push(p.conflict ? `Stops on a conflict in “${p.conflict.summary}” for you to resolve` : "No conflicts expected (dry run)");
     return steps;
+  });
+
+  // --- The next step ---
+
+  let adding = $state("");
+  let reviewerBox = $state<HTMLInputElement | null>(null);
+
+  function askReviewer() {
+    const login = adding.trim().replace(/^@/, "");
+    adding = "";
+    if (pr && login) act(reviewersRequest(pr, [login]));
+  }
+
+  /** The button of the next step, when it has one. */
+  const nextAction = $derived.by((): { label: string; go: () => void } | null => {
+    if (!pr || !next || !gh) return null;
+    const p = pr;
+    const remote = gh.remote;
+    const local = history.refs.some((r) => r.kind === "local" && r.name === p.head);
+    switch (next.kind) {
+      case "continueRestack":
+        return saved && !saved.rebasing ? { label: "Continue…", go: continueRestack } : null;
+      case "restack":
+        return mergedBelow ? { label: "Restack…", go: () => mergedBelow && startRestack(mergedBelow) } : null;
+      case "waitBase":
+        return basePull ? { label: `Show #${basePull.number}`, go: () => basePull && onBranch(basePull.head) } : null;
+      case "ready":
+        return p.settings.canPush ? { label: "Ready for Review…", go: () => act(readyRequest(p)) } : null;
+      case "conflicts":
+        if (history.head.branch === p.head) return { label: `Merge ${p.base}…`, go: () => act(mergeIntoRequest(ctx, `${remote}/${p.base}`)) };
+        return local ? { label: `Switch to ${p.head}…`, go: () => act(switchRequest(ctx, p.head)) } : null;
+      case "update":
+        return p.settings.canPush ? { label: "Update Branch…", go: () => act(updateBranchRequest(ctx, p)) } : null;
+      case "fixChecks": {
+        const check = failing.find((c) => c.url?.startsWith("https://github.com/"));
+        return check ? { label: "Show on GitHub", go: () => openCheck(check) } : null;
+      }
+      case "changes":
+        return tab !== "conversation" ? { label: "Show Conversation", go: () => (tab = "conversation") } : null;
+      case "review":
+        return p.settings.canPush && !p.requested.length ? { label: "Ask for Review…", go: () => reviewerBox?.focus() } : null;
+      default:
+        return null;
+    }
   });
 
   // --- A new pull request ---
@@ -514,6 +616,19 @@
   <span class="dot" style:background={bg} style:color={fg}>
     <svg viewBox="0 0 16 16"><path d={ICONS[icon] ?? ICONS.dot} /></svg>
   </span>
+{/snippet}
+
+{#snippet restackList(lines: RestackLine[])}
+  {#each lines as line, i (line.step)}
+    {@const look = line.state === "done" ? ["ok", ...toneOf("ok")] : line.state === "now" ? ["next", tint(0, "label"), plate(0)] : line.state === "next" ? ["dot", ...toneOf("grey")] : ["warn", ...toneOf("warn")]}
+    <span class="step" class:waiting={line.state === "next"}>
+      {@render dot(look[0], look[1], look[2])}
+      <span class="step-text">
+        <span>{i + 1}. {line.text}</span>
+        {#if line.why}<span class="why">{line.why}</span>{/if}
+      </span>
+    </span>
+  {/each}
 {/snippet}
 
 {#snippet capsule(name: string)}
@@ -745,14 +860,25 @@
 
   <aside class="box" aria-label="Merge">
     {#if pr && pr.state === "open"}
-      {#if blocks.length}
-        <div class="blocks">
-          <span class="blocks-title">Can’t merge yet</span>
-          {#each blocks as b (b)}
-            <span class="block"><span class="bullet">•</span><span>{b}</span></span>
-          {/each}
-          {#if pr.draft && pr.settings.canPush}
-            <button class="button small" onclick={() => pr && act(readyRequest(pr))}>Ready for Review…</button>
+      {#if next}
+        {@const ready = next.kind === "merge"}
+        <div class="next" class:ready>
+          <span class="next-label">{ready ? "Ready to merge" : "Next step"}</span>
+          <span class="next-title">{next.title}</span>
+          <span class="next-text">{next.text}{pr.autoMerge && !ready ? " GitHub merges it on its own once it is ready." : ""}</span>
+          {#if next.kind === "continueRestack" && savedLines}
+            <div class="steps">{@render restackList(savedLines)}</div>
+          {/if}
+          {#if also.length}
+            <div class="also">
+              <span class="also-title">Also before merging</span>
+              {#each also as b (b)}
+                <span class="block"><span class="bullet">•</span><span>{b}</span></span>
+              {/each}
+            </div>
+          {/if}
+          {#if nextAction}
+            <div class="buttons"><button class="button primary" onclick={nextAction.go}>{nextAction.label}</button></div>
           {/if}
         </div>
       {/if}
@@ -781,6 +907,21 @@
         {:else}
           <span class="muted small-text">Nobody is asked to review it yet.</span>
         {/each}
+        {#if pr.settings.canPush}
+          <input
+            class="add-reviewer ask"
+            placeholder="+ Ask someone"
+            aria-label="Ask someone to review it"
+            bind:this={reviewerBox}
+            bind:value={adding}
+            onkeydown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                askReviewer();
+              }
+            }}
+          />
+        {/if}
       </div>
       {#if baseLine}
         {@const [bg, fg] = baseLine.tone === "stack" ? [tint(colorOf(pr.head)), plate(colorOf(pr.head))] : toneOf(baseLine.tone)}
@@ -789,7 +930,6 @@
             ><path d={baseLine.tone === "ok" ? ICONS.ok : baseLine.tone === "stack" ? "M3 6.5h10v7H3zM4.5 4.5h7M6 2.5h4" : "M8 3.5v5.5M8 12.2v.1"} /></svg
           >
           <span class="grow">{baseLine.text}</span>
-          {#if mergedBelow}<button class="button small" onclick={() => mergedBelow && startRestack(mergedBelow)}>Restack…</button>{/if}
         </div>
       {/if}
       <div class="sep"></div>
@@ -818,7 +958,7 @@
         {pr.autoMerge && !canMerge ? "Will Merge When Ready" : METHODS.find((m) => m.id === chosen)?.button}
       </button>
       <span class="note center">
-        {#if canMerge}Merges on GitHub, then updates your local {pr.base}.{:else if pr.autoMerge}GitHub merges it once it is ready.{:else if checking}GitHub is still checking it.{:else}Merging is blocked until the items above are done.{/if}
+        {#if canMerge}Merges on GitHub, then updates your local {pr.base}.{:else if pr.autoMerge}GitHub merges it once it is ready.{:else if checking}GitHub is still checking it.{:else}Merging waits for the steps above.{/if}
       </span>
     {:else if pr && pr.state === "merged"}
       {@const kept = history.refs.some((r) => r.kind === "local" && r.name === pr!.head)}
@@ -829,7 +969,20 @@
           <span class="muted">{pr.mergeCommit ? shortId(pr.mergeCommit) : ""}{pr.mergedBy ? ` · by ${pr.mergedBy}` : ""} · {kept ? `${pr.head} kept here` : `${pr.head} deleted here`}</span>
         </span>
       </div>
-      {#if restack && !restackSkipped}
+      {#if saved && saved.restack.merged === pr.number && savedLines}
+        {@const top = saved.restack.branches[0] ?? pr.head}
+        <div class="restack" style:border-color="color-mix(in srgb, {lane(colorOf(top))} 40%, transparent)" style:background={tint(colorOf(top))}>
+          <span class="restack-title">Finish the restack</span>
+          <span class="muted small-text">
+            {saved.rebasing ? "The rebase stopped. Once it is done, the restack goes on from here." : "It goes on from the step that didn’t go through."}
+          </span>
+          <div class="steps">{@render restackList(savedLines)}</div>
+          <div class="buttons">
+            <button class="capsule" onclick={forgetRestack} title="Stop showing it; the branches stay as they are">Forget</button>
+            <button class="button primary" disabled={saved.rebasing} onclick={continueRestack}>Continue…</button>
+          </div>
+        </div>
+      {:else if restack && !restackSkipped}
         {@const built = restack.stack.branches.filter((b) => b.name !== pr!.head).map((b) => b.name)}
         <div class="restack" style:border-color="color-mix(in srgb, {lane(colorOf(restack.stack.top))} 40%, transparent)" style:background={tint(colorOf(restack.stack.top))}>
           <span class="restack-title">Restack the rest of the stack?</span>
@@ -1434,18 +1587,55 @@
   }
 
   /* The box on the right */
-  .blocks {
+  .next {
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    padding: 10px 12px;
+    gap: 4px;
+    padding: 12px;
     border-radius: var(--radius-l);
-    background: var(--orange-soft);
+    background: var(--accent-quiet);
+    border: 1.5px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+  .next.ready {
+    background: var(--green-soft);
+    border-color: color-mix(in srgb, var(--green) 30%, transparent);
+  }
+  .next-label {
+    font-size: var(--text-caption);
+    font-weight: 600;
+    color: var(--accent-ink);
+  }
+  .next.ready .next-label {
+    color: var(--green);
+  }
+  .next-title {
+    font-weight: 600;
+    font-size: var(--text-body);
+  }
+  .next-text {
+    font-size: var(--text-small);
+    color: var(--text2);
+    line-height: 1.4;
+  }
+  .next .steps {
+    margin-top: 6px;
+  }
+  .next .buttons {
+    margin-top: 8px;
+  }
+  .also {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--sep);
     font-size: var(--text-small);
   }
-  .blocks-title {
+  .also-title {
+    font-size: var(--text-caption);
     font-weight: 600;
-    color: var(--orange);
+    color: var(--text2);
   }
   .block {
     display: flex;
@@ -1453,11 +1643,31 @@
     line-height: 1.4;
   }
   .bullet {
-    color: var(--orange);
+    color: var(--text2);
   }
-  .blocks .button {
+  .steps {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .step-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+  .step.waiting {
+    color: var(--text2);
+  }
+  .why {
+    font-size: var(--text-caption);
+    color: var(--orange);
+    overflow-wrap: anywhere;
+  }
+  .add-reviewer.ask {
+    width: auto;
     align-self: flex-start;
-    margin-top: 4px;
+    padding: 0;
   }
 
   .group {

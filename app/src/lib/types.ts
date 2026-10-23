@@ -1319,6 +1319,34 @@ export interface Landing {
   tip: CommitBrief;
 }
 
+/** What a restack after a merged pull request does, kept from its rebase until its last step, so
+ *  a push or base change that failed goes on from there. */
+export interface Restack {
+  /** The merged pull request whose commits leave the stack. */
+  merged: number;
+  /** The branch it merged into, the new base of the pull requests that were built on it. */
+  base: string;
+  /** The branches the rebase moves. */
+  branches: string[];
+  /** The merged commits the rebase leaves out. */
+  drop: string[];
+  remote: string | null;
+  push: { branch: string; upstream: string }[];
+  /** Pull requests that went into the merged branch and go into `base` next. */
+  retarget: number[];
+  /** The step that failed last, until it runs again. */
+  failed: { step: "push" | "base"; message: string } | null;
+}
+
+/** A kept restack and how far it got here. */
+export interface RestackState {
+  restack: Restack;
+  /** The rebase stopped, e.g. on a conflict, and waits to be continued. */
+  rebasing: boolean;
+  /** Branches whose remote branch isn't at their tip yet. */
+  unpushed: string[];
+}
+
 export interface Stack {
   /** The branch at the top, the one the rebase rewrites. */
   top: string;
@@ -1530,6 +1558,7 @@ export type PullCall =
   | { kind: "requestReviewers"; number: number; reviewers: string[] }
   | { kind: "update"; number: number; base?: string | null; body?: string | null }
   | { kind: "readyForReview"; number: number; id: string }
+  | { kind: "updateBranch"; number: number; sha: string }
   | { kind: "autoMerge"; number: number; id: string; method?: MergeMethodName | null };
 
 /** A commit of a series before or after a rewrite. */
