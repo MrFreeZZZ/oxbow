@@ -464,21 +464,64 @@ fn spawn_in(dir: &Path, command: &GitCommand, input: Option<&[u8]>) -> Result<st
     if let Some(stop) = stop {
         return collect(&mut child, log, input, &stop);
     }
+    let stderr = read_stderr(&mut child);
     if let Some(input) = input {
         let mut stdin = child.stdin.take().expect("stdin is piped");
         // A command that exits early closes its end; its exit status tells what went wrong.
         let _ = stdin.write_all(input);
     }
-    match child.wait_with_output() {
-        Ok(output) => {
-            log.done(output.status.code(), &output.stdout, &output.stderr);
-            Ok(output)
+    let mut stdout = Vec::new();
+    let _ = child.stdout.take().expect("stdout is piped").read_to_end(&mut stdout);
+    let stderr = stderr.join().unwrap_or_default();
+    match child.wait() {
+        Ok(status) => {
+            log.done(status.code(), &stdout, &stderr);
+            Ok(std::process::Output { status, stdout, stderr })
         }
         Err(err) => {
             log.not_started(&err.to_string());
             Err(Error::GitNotFound(err.to_string()))
         }
     }
+}
+
+/// Read the child's stderr on a thread of its own, keeping its last [`MAX_KEPT_BYTES`]: what
+/// a remote prints there has no end of its own.
+fn read_stderr(child: &mut Child) -> std::thread::JoinHandle<Vec<u8>> {
+    let pipe = child.stderr.take().expect("stderr is piped");
+    std::thread::spawn(move || read_tail(pipe, MAX_KEPT_BYTES))
+}
+
+/// All of `pipe`, or its last `max` bytes from a line start when it prints more, saying so.
+fn read_tail(mut pipe: impl Read, max: usize) -> Vec<u8> {
+    let mut all = Vec::new();
+    let mut cut = false;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let n = match pipe.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        };
+        all.extend_from_slice(&buffer[..n]);
+        // Dropped in large steps, so a long output isn't moved for every read.
+        if all.len() > 2 * max {
+            all.drain(..all.len() - max);
+            cut = true;
+        }
+    }
+    if !cut && all.len() <= max {
+        return all;
+    }
+    let from = all.len().saturating_sub(max);
+    let start = all[from..]
+        .iter()
+        .position(|&c| c == b'\n')
+        .map_or(all.len(), |i| from + i + 1);
+    let mut kept = b"\xe2\x80\xa6 (earlier output cut)\n".to_vec();
+    kept.extend_from_slice(&all[start..]);
+    kept
 }
 
 /// Run `command` in `dir` and wait for it, unless `cancel` is set first: the command is then
@@ -519,15 +562,13 @@ fn collect(
     input: Option<&[u8]>,
     cancel: &AtomicBool,
 ) -> Result<std::process::Output> {
-    let read = |mut pipe: Box<dyn Read + Send>| {
-        std::thread::spawn(move || {
-            let mut all = Vec::new();
-            let _ = pipe.read_to_end(&mut all);
-            all
-        })
-    };
-    let stdout = read(Box::new(child.stdout.take().expect("stdout is piped")));
-    let stderr = read(Box::new(child.stderr.take().expect("stderr is piped")));
+    let mut pipe = child.stdout.take().expect("stdout is piped");
+    let stdout = std::thread::spawn(move || {
+        let mut all = Vec::new();
+        let _ = pipe.read_to_end(&mut all);
+        all
+    });
+    let stderr = read_stderr(child);
     if let Some(input) = input
         && let Some(mut stdin) = child.stdin.take()
     {
@@ -741,6 +782,18 @@ mod tests {
         keep_tail(&mut text, 60);
         assert_eq!(text, "… (earlier output cut)\nlast line\n");
         assert!(text.len() <= 60);
+    }
+
+    #[test]
+    fn endless_stderr_keeps_its_end() {
+        let small = b"one\ntwo\n".to_vec();
+        assert_eq!(read_tail(std::io::Cursor::new(small.clone()), 100), small);
+        let lines: String = (0..10_000).map(|i| format!("remote: line {i}\n")).collect();
+        let kept = read_tail(std::io::Cursor::new(lines.into_bytes()), 1000);
+        let kept = String::from_utf8(kept).unwrap();
+        assert!(kept.starts_with("… (earlier output cut)\nremote: line "));
+        assert!(kept.ends_with("remote: line 9999\n"));
+        assert!(kept.len() <= 1000 + "… (earlier output cut)\n".len());
     }
 
     #[test]

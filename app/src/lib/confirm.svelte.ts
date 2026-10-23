@@ -6,6 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./api";
 import { oplog, revertInsteadRequest, undoRequest } from "./oplog.svelte";
 import { prefs } from "./prefs.svelte";
+import { addLine, cutLine } from "./liveLines";
 import { errorLine } from "./reads";
 import type { Action, ActionEvent, Failure, FixStep, GitCommand, NotKept, SecretFinding } from "./types";
 
@@ -203,6 +204,8 @@ export interface TermLine {
   text: string;
   /** A progress line the next one replaces, like `\r` in a terminal. */
   progress?: boolean;
+  /** The line that stands for this many lines of output left out. */
+  cut?: number;
 }
 
 type Phase = "ask" | "running" | "failed";
@@ -583,7 +586,11 @@ class ConfirmState {
 
   async #fail(failure: Failure) {
     this.failure = failure;
-    if (!this.lines.length && failure.output) this.lines = failure.output.split("\n").map((text) => ({ kind: lineKind(text, true), text }));
+    if (!this.lines.length && failure.output) {
+      const lines: TermLine[] = [];
+      for (const text of failure.output.split("\n")) addLine(lines, { kind: lineKind(text, true), text }, cutLine);
+      this.lines = lines;
+    }
     // It ran part way and stopped: what it changed isn't in the Operation Log either.
     if (this.#notLogged !== null) this.lines.push({ kind: "hint", text: `Oxbow couldn’t write this step to the Operation Log, so Undo can’t take back what it changed: ${errorLine(this.#notLogged)}` });
     const running = this.#running;
@@ -636,10 +643,7 @@ class ConfirmState {
     }
     const percent = /(\d{1,3})%/.exec(event.text);
     if (percent) this.progress = Math.min(100, Number(percent[1]));
-    const line: TermLine = { kind: lineKind(event.text, event.stderr), text: event.text, progress: event.progress };
-    const last = this.lines[this.lines.length - 1];
-    if (last?.progress) this.lines[this.lines.length - 1] = line;
-    else this.lines.push(line);
+    addLine(this.lines, { kind: lineKind(event.text, event.stderr), text: event.text, progress: event.progress }, cutLine);
   }
 
   /** Undo of the step the Operation Log just recorded for `action`, when there is one. */
