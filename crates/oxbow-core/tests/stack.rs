@@ -1,7 +1,7 @@
 mod support;
 
 use oxbow_core::{
-    Action, BranchPush, OperationKind, Repo, Restack, RestackFailure, RestackStep, Stack, StackPlan, StackStep,
+    Action, BranchPush, Error, OperationKind, Repo, Restack, RestackFailure, RestackStep, Stack, StackPlan, StackStep,
     StepAction,
 };
 use support::Fixture;
@@ -429,11 +429,41 @@ fn staged_changes_go_into_an_older_commit() {
     fx.git(&["add", "api.rs"]);
     fx.write("notes.txt", "keep me\n");
 
-    repo.perform(&Action::AddToCommit { commit: expose }).unwrap();
+    repo.perform(&Action::AddToCommit {
+        commit: expose,
+        allow_secrets: false,
+    })
+    .unwrap();
     assert_eq!(subjects(&mut fx, "main..auth/3").len(), 5);
     assert_eq!(fx.git(&["show", "auth/2~1:api.rs"]), "fn sessions() { todo!() }");
     assert_eq!(subjects(&mut fx, "auth/1..auth/2").len(), 2, "auth/2 moved along");
     assert!(fx.path().join("notes.txt").exists());
+}
+
+#[test]
+fn a_secret_in_the_staged_changes_stops_adding_them_to_an_older_commit() {
+    let mut fx = stacked();
+    fx.git(&["switch", "-q", "auth/3"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let stack = repo.stack(None).unwrap();
+    let expose = id_of(&stack, "Expose sessions endpoint");
+    // A fake token, split so that secret scanners don't take this file for a leak.
+    fx.write(
+        "deploy.env",
+        concat!("TOKEN=ghp_", "R8mZ2kQx7Lp4Wn9Vb3Tc6Yd1Hf5Gt0Js8Ka2\n"),
+    );
+    fx.git(&["add", "deploy.env"]);
+    let top = fx.git(&["rev-parse", "HEAD"]);
+
+    let add = |allow_secrets| Action::AddToCommit {
+        commit: expose.clone(),
+        allow_secrets,
+    };
+    let err = repo.perform(&add(false)).unwrap_err();
+    assert!(matches!(err, Error::Secrets(ref found) if found.len() == 1), "{err}");
+    assert_eq!(fx.git(&["rev-parse", "HEAD"]), top, "nothing was committed");
+    repo.perform(&add(true)).unwrap();
+    assert_ne!(fx.git(&["rev-parse", "HEAD"]), top);
 }
 
 #[test]

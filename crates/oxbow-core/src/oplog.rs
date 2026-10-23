@@ -601,8 +601,11 @@ impl Repo {
 
     /// The working copy as a tree: tracked files as they are on disk, and untracked ones that
     /// are not ignored or too big, written through a scratch index so the real one is untouched.
+    /// Each call has its own: a compare running next to a step must not delete the step's.
     fn worktree_tree(&self) -> Result<String> {
-        let scratch = self.git_path("oxbow/snapshot.index")?;
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let scratch = self.git_path(&format!("oxbow/snapshot-{}-{n}.index", std::process::id()))?;
         if let Some(dir) = scratch.parent() {
             std::fs::create_dir_all(dir).map_err(io)?;
         }
@@ -946,7 +949,7 @@ impl Repo {
             Action::PushBranches { remote, branches } => {
                 ("push", format!("Push {} branches to {remote}", branches.len()))
             }
-            Action::AddToCommit { commit } => (
+            Action::AddToCommit { commit, .. } => (
                 "commit",
                 format!("Add staged changes to {}", &commit[..commit.len().min(7)]),
             ),

@@ -74,7 +74,8 @@ It prints one line when green, otherwise only the errors; full logs are in `targ
 Read a log with `grep`/`tail`, never `cat` it whole.
 
 - Check only what the change touches: a UI change needs `ui`, a core change `core`.
-- Run the script before every push. CI has no PR checks; it only builds the macOS app on merge.
+- Run the script before every push. CI runs `scripts/check.sh all` on Linux for every PR and
+  builds the macOS app only on merge.
 - Never paste long build or test output into the chat or the thread; summarize it.
 - One run of a single Rust test: `cargo test -p oxbow-core --test <file> <name> -q 2>&1 | tail -n 20`.
 - UI changes are verified in a production build with the CSP on (`cd app && npm run build`).

@@ -301,6 +301,9 @@ export async function rewordRequest(ctx: BranchContext, row: HistoryRow): Promis
 export function addToCommitRequest(ctx: BranchContext, row: HistoryRow): Request {
   const staged = ctx.history.rows[0]?.worktree?.staged ?? 0;
   const head = ctx.history.head.branch ?? "HEAD";
+  const action = { kind: "addToCommit", commit: row.id } as const;
+  const status = `Adding to ${shortId(row.id)}…`;
+  const done = `Added the staged changes to ${shortId(row.id)}.`;
   return {
     title: "Add the staged changes to this commit?",
     body: [
@@ -314,10 +317,22 @@ export function addToCommitRequest(ctx: BranchContext, row: HistoryRow): Request
     button: "Add to Commit",
     invalid: staged ? null : "Stage the changes to add first.",
     note: "Nothing is pushed. Undo is in the Operation Log.",
-    status: `Adding to ${shortId(row.id)}…`,
-    done: `Added the staged changes to ${shortId(row.id)}.`,
+    status,
+    done,
     resolveConflicts: true,
-    recover: (failure) => stoppedOnConflicts(failure, "rebase"),
-    action: { kind: "addToCommit", commit: row.id },
+    recover: (failure) =>
+      failure.kind === "secrets"
+        ? {
+            title: "Possible secrets in the staged changes",
+            body: ["Oxbow checked the staged lines before making the fixup commit and stopped: these look like a password or key. Once pushed, a secret has to be revoked."],
+            icon: "key",
+            tone: "warn",
+            secrets: failure.secrets ?? [],
+            button: { label: "Add Anyway", danger: true, action: { ...action, allowSecrets: true }, status, done, recover: (again) => stoppedOnConflicts(again, "rebase") },
+            note: "The changes stay staged. A line with oxbow:allow is never flagged.",
+            close: "Close",
+          }
+        : stoppedOnConflicts(failure, "rebase"),
+    action,
   };
 }

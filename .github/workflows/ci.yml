@@ -1,9 +1,10 @@
 name: CI
 
-# The app is built for macOS only, once per merge to main (or when run by hand from the Actions
-# tab).
-# Format, lint and tests run locally before every push.
+# Every pull request runs the checks on Linux: format, lint, tests and the type check, the same
+# scripts/check.sh as before a push. The app is built for macOS only, once per merge to main (or
+# when run by hand from the Actions tab).
 on:
+  pull_request:
   push:
     branches: [main]
   workflow_dispatch:
@@ -16,8 +17,35 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  checks:
+    name: Checks
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install what Tauri needs on Linux
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+        working-directory: app
+      # The production build, with the CSP on; the shell crate also needs it to compile.
+      - run: npm run build
+        working-directory: app
+      - run: scripts/check.sh all
+
   app:
     name: App (macOS)
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5

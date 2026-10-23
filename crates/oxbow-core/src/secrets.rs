@@ -328,14 +328,20 @@ pub(crate) fn scan_patch(patch: &str) -> Vec<SecretFinding> {
     let mut found = Vec::new();
     let mut path: Option<String> = None;
     let mut line = 0u32;
+    // Between `diff --git` and the first `@@`: an added line `++ x` reads `+++ x` too.
+    let mut header = false;
     for text in patch.lines() {
-        if let Some(rest) = text.strip_prefix("+++ ") {
-            path = rest.strip_prefix("b/").map(str::to_owned);
-        } else if text.starts_with("diff --git ") {
+        if text.starts_with("diff --git ") {
             path = None;
-        } else if let Some(header) = text.strip_prefix("@@ ") {
+            header = true;
+        } else if header && let Some(rest) = text.strip_prefix("+++ ") {
+            path = crate::worktree::header_path(rest).and_then(|p| p.strip_prefix("b/").map(str::to_owned));
+        } else if header && !text.starts_with("@@ ") {
+            continue;
+        } else if let Some(hunk) = text.strip_prefix("@@ ") {
+            header = false;
             // @@ -a,b +c,d @@
-            line = header
+            line = hunk
                 .split_whitespace()
                 .find_map(|part| part.strip_prefix('+'))
                 .and_then(|range| range.split(',').next())
@@ -379,6 +385,9 @@ impl Repo {
             "--no-renames",
             "--text",
             "-U0",
+            // Whatever diff.noprefix or diff.mnemonicPrefix say, the paths read `b/…`.
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
         ]
         .map(str::to_owned)
         .into();

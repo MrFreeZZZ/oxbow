@@ -21,6 +21,11 @@ use serde::Serialize;
 /// Index of a commit in the display order.
 pub type RowIndex = usize;
 
+/// Lines a row has at most before a merge's further lines stop just below it, as lines to
+/// parents a filter left out do. A merge of thousands of branches would otherwise keep a line
+/// open for each, in every row down to the bottom of the history.
+const MAX_LANES: usize = 256;
+
 /// Most branch colors a palette has, not counting the trunk color: the Oxbow palette's nine.
 /// Mineral, Paper and Signal have seven. None of them has red or pink (removed lines), green
 /// (added lines) or yellow (tags).
@@ -128,8 +133,9 @@ pub struct RowLayout {
     /// merge brought it in from. `None` for trunk commits (the caller knows the trunk's name) and
     /// for lines whose branch is unknown.
     pub branch: Option<String>,
-    /// Lines to parents a filtered history left out: each stops half a row below the commit,
-    /// on its way from `from` to `to`, instead of running on to some other commit.
+    /// Lines to parents a filtered history left out, or to more parents of a merge than a row
+    /// can hold lines for: each stops half a row below the commit, on its way from `from` to
+    /// `to`, instead of running on to some other commit.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub cuts: Vec<Segment>,
 }
@@ -479,8 +485,12 @@ fn place(commits: &[GraphCommit], plan: &Plan) -> Vec<RowLayout> {
         let mut row_joins = Vec::new();
         let mut cuts = Vec::new();
         for (index, &parent) in commit.parents.iter().enumerate() {
-            // A parent the filter left out: its line stops just below, heading where it would go.
-            if commit.is_cut(index) {
+            // A parent the filter left out, or a merge line past what a row can hold: its line
+            // stops just below, heading where it would go.
+            let crowded = index > 0
+                && lanes.iter().flatten().count() >= MAX_LANES
+                && !lanes.iter().flatten().any(|l| parent.is_some() && l.target == parent);
+            if commit.is_cut(index) || crowded {
                 let (to, cut_color) = if index == 0 {
                     (column, color)
                 } else {
@@ -876,6 +886,28 @@ mod tests {
         assert!(rows[1].segments.is_empty() && rows[1].fork_colors.is_empty());
         // The commit text below starts after where the cut line stops.
         assert_eq!(rows[1].width, 1);
+    }
+
+    #[test]
+    fn a_merge_of_thousands_of_branches_keeps_rows_bounded() {
+        // 0 a merge of 5000 parents outside the loaded history, then 1000 commits below it.
+        let mut merge = commit(&[], true);
+        merge.parents = std::iter::once(Some(1))
+            .chain(std::iter::repeat_n(None, 5000))
+            .collect();
+        let mut commits = vec![merge];
+        commits.extend((1..=1000).map(|i| {
+            let parents: &[usize] = if i < 1000 { &[i + 1] } else { &[] };
+            commit(parents, true)
+        }));
+        let rows = layout(&commits, None).rows;
+        assert!(
+            rows.iter().all(|r| r.segments.len() <= MAX_LANES),
+            "{}",
+            rows[1].segments.len()
+        );
+        assert_eq!(rows[0].cuts.len(), 5000 - (MAX_LANES - 1));
+        assert_eq!(rows[500].segments.len(), MAX_LANES);
     }
 
     #[test]
