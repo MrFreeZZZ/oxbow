@@ -114,13 +114,38 @@ fn bisecting_finds_the_first_bad_commit_and_brings_the_stash_back() {
 
     let finish = repo.plan(&Action::BisectReset).unwrap();
     let shown: Vec<String> = finish.commands.iter().map(|c| c.display()).collect();
-    assert_eq!(shown, ["git bisect reset", "git stash pop stash@{0}"]);
+    assert_eq!(shown, ["git bisect reset", "git stash pop --index stash@{0}"]);
     repo.perform(&Action::BisectReset).unwrap();
     assert!(repo.bisect().unwrap().is_none());
     assert_eq!(fx.git(&["branch", "--show-current"]), "main");
     assert_eq!(
         std::fs::read_to_string(fx.path().join("notes.txt")).unwrap(),
         "uncommitted\n"
+    );
+    assert_eq!(fx.git(&["stash", "list"]), "");
+}
+
+#[test]
+fn finishing_brings_staged_and_unstaged_changes_back_as_they_were() {
+    let (mut fx, _) = ten_commits();
+    fx.commit("readme.md", "one\ntwo\n", "Add readme");
+    // Half of the change staged, half not.
+    fx.write("readme.md", "ONE\ntwo\n");
+    fx.git(&["add", "readme.md"]);
+    fx.write("readme.md", "ONE\nTWO\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&Action::BisectStart {
+        good: "v1".into(),
+        bad: "main".into(),
+        stash: true,
+        command: None,
+    })
+    .unwrap();
+    repo.perform(&Action::BisectReset).unwrap();
+    assert_eq!(fx.git(&["show", ":readme.md"]), "ONE\ntwo");
+    assert_eq!(
+        std::fs::read_to_string(fx.path().join("readme.md")).unwrap(),
+        "ONE\nTWO\n"
     );
     assert_eq!(fx.git(&["stash", "list"]), "");
 }

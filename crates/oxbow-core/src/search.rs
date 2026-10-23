@@ -125,7 +125,9 @@ impl Repo {
         let mut args = vec!["log".to_owned()];
         args.extend(query.filters());
         args.push(format!("--max-count={}", LIMIT + 1));
-        // \x01 starts each commit, so the file names after it can be told apart.
+        // \x01 starts each commit, so the file names after it can be told apart; -z: the names
+        // end in NUL, exactly as they are, not quoted.
+        args.push("-z".to_owned());
         args.push("--format=%x01%H".to_owned());
         if files {
             args.push("--name-only".to_owned());
@@ -163,14 +165,20 @@ impl Repo {
     }
 }
 
+/// `git log -z --format=%x01%H --name-only`: each commit is `\x01<id>\0`, then a line break
+/// and its file names, each ending in NUL. Names are kept whole: spaces and tabs are theirs.
 fn parse_log(out: &str) -> Vec<SearchHit> {
     out.split('\u{1}')
         .filter_map(|chunk| {
-            let mut lines = chunk.lines().map(str::trim).filter(|l| !l.is_empty());
-            let id = lines.next()?.to_owned();
+            let (id, files) = chunk.split_once('\0').unwrap_or((chunk, ""));
+            let id = id.trim();
+            if id.is_empty() {
+                return None;
+            }
+            let files = files.strip_prefix('\n').unwrap_or(files);
             Some(SearchHit {
-                id,
-                files: lines.map(str::to_owned).collect(),
+                id: id.to_owned(),
+                files: files.split('\0').filter(|f| !f.is_empty()).map(str::to_owned).collect(),
             })
         })
         .collect()
@@ -211,13 +219,13 @@ mod tests {
 
     #[test]
     fn log_with_files_is_split_by_commit() {
-        let out = "\u{1}aaa\n\nsrc/a.rs\nsrc/b.rs\n\u{1}bbb\n";
+        let out = "\u{1}aaa\0\nsrc/a.rs\0 lead\tand tab.rs\0\u{1}bbb\0";
         assert_eq!(
             parse_log(out),
             vec![
                 SearchHit {
                     id: "aaa".into(),
-                    files: vec!["src/a.rs".into(), "src/b.rs".into()]
+                    files: vec!["src/a.rs".into(), " lead\tand tab.rs".into()]
                 },
                 SearchHit {
                     id: "bbb".into(),

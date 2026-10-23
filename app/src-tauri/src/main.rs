@@ -1500,7 +1500,9 @@ async fn open_source(
                 Some((stem, ext)) if !stem.is_empty() => format!("{stem} ({label} {short}).{ext}"),
                 _ => format!("{name} ({label} {short})"),
             };
-            let dir = std::env::temp_dir().join("oxbow-versions");
+            let dir = oxbow_core::cli::private_temp_dir()
+                .map_err(|err| err.to_string())?
+                .join("versions");
             std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
             let file = dir.join(named);
             std::fs::write(&file, data).map_err(|err| err.to_string())?;

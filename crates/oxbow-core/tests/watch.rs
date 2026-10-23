@@ -69,7 +69,8 @@ fn ignored_files_and_status_rewriting_the_index_are_not_changes() {
     fixture.write("a.txt", "two\n");
     let _ = rx.recv_timeout(TOLD);
     fixture.write("a.txt", "one\n");
-    let _ = rx.recv_timeout(TOLD);
+    // Whatever the edits are told as, all of it, also when a busy machine tells it late.
+    while rx.recv_timeout(QUIET).is_ok() {}
     fixture.git(&["status", "--porcelain"]);
     assert!(
         rx.recv_timeout(QUIET).is_err(),

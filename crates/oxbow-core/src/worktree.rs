@@ -673,7 +673,7 @@ impl Repo {
                 }
                 budget -= len;
                 let data = crate::lfs::read_regular(&path, MAX_COUNTED_BYTES).unwrap_or_default();
-                file.additions = data.split(|&b| b == b'\n').filter(|l| !l.is_empty()).count() as u32;
+                file.additions = line_count(&data);
             }
             // A file changed within the last moments may change again with the same size and
             // time: it is counted again next time.
@@ -1974,11 +1974,14 @@ impl Repo {
                     let ran = crate::console::main(|| {
                         self.run_streaming(&command, &mut |line| on_event(ActionEvent::Line(line)), cancel)
                     });
-                    // The files a fix put aside whose staged changes no longer fit: git changed
-                    // nothing and kept the stash. Say so rather than bring them back unstaged.
+                    // The files a fix or a bisect put aside whose staged changes no longer fit:
+                    // git changed nothing and kept the stash. Say so rather than bring them back
+                    // unstaged.
                     if ran.is_err()
-                        && command.args == ["stash", "pop", "--index"]
-                        && (fix_start.is_some() || matches!(action, Action::Abort))
+                        && command
+                            .args
+                            .starts_with(&["stash".to_owned(), "pop".to_owned(), "--index".to_owned()])
+                        && (fix_start.is_some() || matches!(action, Action::Abort | Action::BisectReset))
                         && self.conflicted_paths().is_ok_and(|p| p.is_empty())
                     {
                         return Err(Error::StashKept);
@@ -2586,6 +2589,13 @@ fn unquote(text: &str) -> Option<(String, &str)> {
     }
 }
 
+/// Lines in a file as git counts them: empty ones too, and a last one without a line break.
+fn line_count(data: &[u8]) -> u32 {
+    let breaks = data.iter().filter(|&&b| b == b'\n').count();
+    let open = data.last().is_some_and(|&b| b != b'\n');
+    (breaks + usize::from(open)) as u32
+}
+
 /// Whether a file has its executable bit, which git records as mode 100755.
 #[cfg(unix)]
 fn executable(meta: &std::fs::Metadata) -> bool {
@@ -2870,6 +2880,15 @@ fn mark_words(lines: &mut [DiffLine]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_files_count_lines_as_git_does() {
+        assert_eq!(line_count(b""), 0);
+        assert_eq!(line_count(b"\n"), 1);
+        assert_eq!(line_count(b"one\n\n\nend\n"), 4);
+        assert_eq!(line_count(b"one\r\ntwo\r\n"), 2);
+        assert_eq!(line_count(b"one\ntwo"), 2);
+    }
 
     #[test]
     fn a_patch_past_the_budget_is_cut() {
