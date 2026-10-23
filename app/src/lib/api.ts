@@ -50,6 +50,8 @@ import type {
   FixState,
   SnapshotComparison,
   Landing,
+  Restack,
+  RestackState,
   Stack,
   StackPlan,
   StackPreview,
@@ -174,6 +176,8 @@ export const api = {
   stashCheck: (index: number, id: string) => invoke<StashCheck>("stash_check", { index, id }),
   stack: (branch: string | null) => invoke<Stack>("stack", { branch }),
   landedOn: (merged: string, candidates: string[]) => invoke<Landing | null>("landed_on", { merged, candidates }),
+  restack: () => invoke<RestackState | null>("restack"),
+  saveRestack: (restack: Restack | null) => invoke<void>("save_restack", { restack }),
   stackPreview: (plan: StackPlan) => invoke<StackPreview>("stack_preview", { plan }),
   planAction: (action: Action) => invoke<Plan>("plan_action", { action }),
   /** Rejects with a `Failure`. */

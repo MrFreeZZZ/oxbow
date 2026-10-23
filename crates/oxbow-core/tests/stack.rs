@@ -1,6 +1,9 @@
 mod support;
 
-use oxbow_core::{Action, OperationKind, Repo, Stack, StackPlan, StackStep, StepAction};
+use oxbow_core::{
+    Action, BranchPush, OperationKind, Repo, Restack, RestackFailure, RestackStep, Stack, StackPlan, StackStep,
+    StepAction,
+};
 use support::Fixture;
 
 /// `main`, and three branches stacked on it: `auth/1` with one commit, `auth/2` with two on top
@@ -593,4 +596,101 @@ fn a_merge_of_main_with_changes_of_its_own_is_explained() {
         err.contains("still opens on auth/1 and auth/2, below the merge"),
         "{err}"
     );
+}
+
+#[test]
+fn a_restack_is_kept_between_its_steps() {
+    let mut fx = stacked();
+    let remote = tempfile::tempdir().unwrap();
+    let url = remote.path().join("acme.git");
+    fx.git(&["init", "-q", "--bare", url.to_str().unwrap()]);
+    fx.git(&["remote", "add", "origin", url.to_str().unwrap()]);
+    fx.git(&["push", "-q", "-u", "origin", "main", "auth/1", "auth/2", "auth/3"]);
+    // auth/1 merged on GitHub as a new commit on main.
+    fx.git(&["switch", "-q", "main"]);
+    fx.commit("models.rs", "struct Session;\n", "Add Session model (#418)");
+    fx.git(&["switch", "-q", "auth/2"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let stack = repo.stack(Some("auth/3")).unwrap();
+    let merged = id_of(&stack, "Add Session model");
+    let restack = Restack {
+        merged: 418,
+        base: "main".into(),
+        branches: vec!["auth/3".into(), "auth/2".into()],
+        drop: vec![merged.clone()],
+        remote: Some("origin".into()),
+        push: ["auth/3", "auth/2"]
+            .map(|b| BranchPush {
+                branch: b.into(),
+                upstream: b.into(),
+            })
+            .to_vec(),
+        retarget: vec![419],
+        failed: None,
+    };
+
+    // Kept before its rebase ran, it is forgotten: nothing moved.
+    repo.save_restack(Some(&restack)).unwrap();
+    assert!(repo.restack().is_none());
+    assert!(!fx.path().join(".git/oxbow/restack.json").exists());
+
+    let mut plan = as_is(&stack);
+    set(&mut plan, &merged, StepAction::Drop, None);
+    plan.steps
+        .retain(|s| !matches!(s, StackStep::Branch { name } if name == "auth/1"));
+    plan.onto = fx.git(&["rev-parse", "main"]);
+    repo.perform(&Action::EditStack { plan }).unwrap();
+    let failed = Restack {
+        failed: Some(RestackFailure {
+            step: RestackStep::Push,
+            message: "Could not resolve host: github.com".into(),
+        }),
+        ..restack.clone()
+    };
+    repo.save_restack(Some(&failed)).unwrap();
+    let state = repo.restack().unwrap();
+    assert_eq!(state.restack, failed);
+    assert!(!state.rebasing);
+    assert_eq!(state.unpushed, ["auth/3", "auth/2"]);
+
+    fx.git(&["push", "-q", "--force-with-lease", "origin", "auth/3", "auth/2"]);
+    assert!(repo.restack().unwrap().unpushed.is_empty());
+    repo.save_restack(None).unwrap();
+    assert!(repo.restack().is_none());
+    repo.save_restack(None).unwrap();
+}
+
+#[test]
+fn a_restack_stopped_on_a_conflict_is_kept() {
+    let mut fx = stacked();
+    fx.git(&["switch", "-q", "main"]);
+    fx.commit("models.rs", "struct Session;\n", "Add Session model (#418)");
+    fx.commit("api.rs", "fn sessions_v2() {}\n", "Sessions on main");
+    fx.git(&["switch", "-q", "auth/2"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let stack = repo.stack(Some("auth/3")).unwrap();
+    let merged = id_of(&stack, "Add Session model");
+    let mut plan = as_is(&stack);
+    set(&mut plan, &merged, StepAction::Drop, None);
+    plan.steps
+        .retain(|s| !matches!(s, StackStep::Branch { name } if name == "auth/1"));
+    plan.onto = fx.git(&["rev-parse", "main"]);
+    plan.onto_name = Some("main".into());
+    repo.perform(&Action::EditStack { plan }).unwrap_err();
+    let restack = Restack {
+        merged: 418,
+        base: "main".into(),
+        branches: vec!["auth/3".into(), "auth/2".into()],
+        drop: vec![merged],
+        remote: None,
+        push: Vec::new(),
+        retarget: Vec::new(),
+        failed: None,
+    };
+    repo.save_restack(Some(&restack)).unwrap();
+    assert!(repo.restack().unwrap().rebasing);
+
+    // Aborted, the branches are where they were: nothing to go on with.
+    repo.perform(&Action::Abort).unwrap();
+    assert!(repo.restack().is_none());
 }

@@ -644,6 +644,12 @@ pub enum Call {
         number: u64,
         id: String,
     },
+    /// Merge the base into the head on GitHub, like its Update branch button, if the head is
+    /// still this commit.
+    UpdateBranch {
+        number: u64,
+        sha: String,
+    },
     /// Turn auto-merge on with `method`, or off without one.
     AutoMerge {
         number: u64,
@@ -743,6 +749,11 @@ impl Client {
                 }
                 self.api_request("PATCH", &repo.path(&format!("/pulls/{}", number(*n))), Some(json))
             }
+            Call::UpdateBranch { number: n, sha } => self.api_request(
+                "PUT",
+                &repo.path(&format!("/pulls/{}/update-branch", number(*n))),
+                Some(json!({ "expected_head_sha": sha })),
+            ),
             Call::ReadyForReview { id, .. } => self.graphql_request(READY, json!({ "id": id })),
             Call::AutoMerge { id, method, .. } => match method {
                 Some(method) => self.graphql_request(AUTO_ON, json!({ "id": id, "method": method.graphql() })),
@@ -1482,6 +1493,14 @@ mod tests {
         assert_eq!(
             client.call_request(&repo, &reviewers, None).display(),
             r#"curl -X POST -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/acme/api/pulls/$NUMBER/requested_reviewers -d '{"reviewers":["maria"],"team_reviewers":["core"]}'"#
+        );
+        let update = Call::UpdateBranch {
+            number: 419,
+            sha: "9c1f2e7".into(),
+        };
+        assert_eq!(
+            client.call_request(&repo, &update, None).display(),
+            r#"curl -X PUT -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/acme/api/pulls/419/update-branch -d '{"expected_head_sha":"9c1f2e7"}'"#
         );
         assert!(
             client

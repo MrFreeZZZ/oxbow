@@ -88,6 +88,8 @@ export interface Request {
   preview?: Preview;
   /** Asks even with confirmations off, e.g. turning the secrets check off. */
   always?: boolean;
+  /** A `local` request that force pushes, e.g. the push of a restack: it asks as a force push does. */
+  forcePush?: boolean;
   /** Stopping on conflicts is expected: the sheet closes so they can be resolved. */
   resolveConflicts?: boolean;
   /** The way out when the action fails. */
@@ -244,10 +246,11 @@ function isForcePush(action: Action): boolean {
 function shouldAsk(request: Request): boolean {
   if (request.always || request.fields?.length || request.invalid) return true;
   const action = request.action;
-  if (action && isForcePush(action) && prefs.get("oxbow.push.confirmForce")) return true;
+  const force = action ? isForcePush(action) : !!request.forcePush;
+  if (force && prefs.get("oxbow.push.confirmForce")) return true;
   if (!prefs.get("oxbow.confirm.enabled")) return false;
   if (prefs.get("oxbow.confirm.scope") === "all") return true;
-  if (!action) return !!request.danger;
+  if (!action) return !!request.danger || force;
   return !!request.danger || isRisky(action);
 }
 
