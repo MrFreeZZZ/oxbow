@@ -1,8 +1,9 @@
 mod support;
 
 use std::process::Command;
+use std::sync::atomic::AtomicBool;
 
-use oxbow_core::{Action, Repo, Side};
+use oxbow_core::{Action, ActionEvent, Error, PartState, Repo, Side};
 use support::Fixture;
 
 /// Whether git-lfs is installed here; the tests that need it skip without it.
@@ -127,4 +128,119 @@ fn symlinks_to_endless_files_are_not_read() {
             .iter()
             .any(|f| f.path == "new.txt")
     );
+}
+
+/// Run git in `dir` the way the fixture does, for a second repository.
+fn git_in(dir: &std::path::Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_LFS_SKIP_SMUDGE", "1")
+        .output()
+        .expect("git runs");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+#[test]
+fn a_download_brings_each_file_and_names_the_one_that_failed() {
+    if !has_lfs() {
+        return;
+    }
+    let mut fx = Fixture::new();
+    fx.git(&["lfs", "install", "--local"]);
+    fx.git(&["lfs", "track", "*.bin"]);
+    for (i, name) in ["a.bin", "b.bin", "dir/c d.bin"].iter().enumerate() {
+        let path = fx.path().join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, binary(2000 + i)).unwrap();
+    }
+    fx.git(&["add", "-A"]);
+    fx.git(&["commit", "-q", "-m", "Assets"]);
+    let top = fx.path().parent().unwrap().to_owned();
+    git_in(&top, &["init", "-q", "--bare", "remote.git"]);
+    let remote = format!("file://{}", top.join("remote.git").display());
+    fx.git(&["remote", "add", "origin", &remote]);
+    fx.git(&["push", "-q", "origin", "main"]);
+    // A clone that got only the pointers, and a server that lost b.bin.
+    git_in(&top, &["clone", "-q", "-b", "main", "remote.git", "clone"]);
+    let clone = top.join("clone");
+    git_in(&clone, &["lfs", "install", "--local"]);
+    let lost = git_in(&clone, &["lfs", "ls-files", "-l", "-I", "b.bin"]);
+    let lost = lost.split_whitespace().next().unwrap().to_owned();
+    let store = top
+        .join("remote.git/lfs/objects")
+        .join(&lost[..2])
+        .join(&lost[2..4])
+        .join(&lost);
+    let kept = top.join("b.object");
+    std::fs::rename(&store, &kept).unwrap();
+
+    let repo = Repo::open(&clone).unwrap();
+    let missing: Vec<(String, u64)> = repo
+        .lfs_status()
+        .unwrap()
+        .missing_files
+        .into_iter()
+        .map(|f| (f.path, f.size))
+        .collect();
+    assert_eq!(
+        missing,
+        [
+            ("a.bin".to_owned(), 2000),
+            ("b.bin".to_owned(), 2001),
+            ("dir/c d.bin".to_owned(), 2002)
+        ]
+    );
+
+    let mut events = Vec::new();
+    let pull = Action::LfsPull {
+        include: None,
+        paths: Vec::new(),
+    };
+    let result = repo.perform_with(&pull, &mut |e| events.push(e), &AtomicBool::new(false));
+    match result {
+        Err(Error::PartlyDone { of: 3, failed }) => {
+            assert_eq!(failed.len(), 1);
+            assert_eq!(failed[0].name, "b.bin");
+        }
+        other => panic!("one file should fail: {other:?}"),
+    }
+    assert!(events.contains(&ActionEvent::Parts {
+        names: vec!["a.bin".into(), "b.bin".into(), "dir/c d.bin".into()]
+    }));
+    let ended: Vec<(String, PartState)> = events
+        .iter()
+        .filter_map(|e| match e {
+            ActionEvent::Part { name, state, .. } if *state != PartState::Started => Some((name.clone(), *state)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        ended,
+        [
+            ("a.bin".to_owned(), PartState::Done),
+            ("b.bin".to_owned(), PartState::Failed),
+            ("dir/c d.bin".to_owned(), PartState::Done),
+        ]
+    );
+    assert_eq!(std::fs::read(clone.join("dir/c d.bin")).unwrap(), binary(2002));
+
+    // Once the server has it again, trying that one file again brings it.
+    std::fs::rename(&kept, &store).unwrap();
+    let again = Action::LfsPull {
+        include: None,
+        paths: vec!["b.bin".into()],
+    };
+    let shown = repo.plan(&again).unwrap().commands[0].display();
+    assert_eq!(shown, "git lfs pull --include=/b.bin");
+    repo.perform(&again).unwrap();
+    assert_eq!(std::fs::read(clone.join("b.bin")).unwrap(), binary(2001));
+    assert!(repo.lfs_status().unwrap().missing_files.is_empty());
 }

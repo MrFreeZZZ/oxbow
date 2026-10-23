@@ -280,6 +280,16 @@ export interface LfsStatus {
   patterns: LfsPattern[];
   /** Homebrew, to install git-lfs with. */
   brew: string | null;
+  /** The files that are still pointers here, by path; at most 5000. */
+  missingFiles: LfsFile[];
+}
+
+/** A file kept in LFS that is only a pointer here: not downloaded. */
+export interface LfsFile {
+  path: string;
+  /** The real file's size, as the pointer says. */
+  size: number;
+  oid: string;
 }
 
 /** Old and new mode in git's octal form: 100644, 100755, 120000. */
@@ -568,7 +578,7 @@ export type Action =
   /** `stage`: stage .gitattributes and `paths` too. */
   | { kind: "lfsTrack"; pattern: string; paths: string[]; stage: boolean }
   | { kind: "lfsUntrack"; pattern: string }
-  | { kind: "lfsPull"; include: string | null }
+  | { kind: "lfsPull"; include: string | null; paths?: string[] }
   | { kind: "lfsPrune" }
   | { kind: "lfsInstall"; brew: string | null; pull: boolean }
   /** `command`: git runs it at every step and answers by its exit code. */
@@ -729,6 +739,16 @@ export interface UnpushedSubmodule {
 
 export type BisectMark = "good" | "bad" | "skip";
 
+/** One answer of a bisect's journal. */
+export interface BisectStep {
+  commit: string;
+  /** The subject, as git noted it with the answer. */
+  summary: string;
+  mark: BisectMark;
+  /** Given before both a good and a bad commit were known: it set the range, it wasn't a step. */
+  range: boolean;
+}
+
 /** git bisect, from git's own state, so one started in a terminal shows too. */
 export interface Bisect {
   /** Where finishing goes back to: a branch, or a sha when HEAD was detached. */
@@ -757,6 +777,11 @@ export interface Bisect {
   output: string[];
   /** git bisect log. */
   log: string;
+  /** Every answer so far, in the order given, the two that set the range first. */
+  journal: BisectStep[];
+  /** What it found, as text to paste into an issue: the commit, the range, the steps. Set once
+   *  the first bad commit is found, or only skipped ones are left. */
+  report: string | null;
   /** Oxbow stashed changes before starting; Finish brings them back. */
   stashed: boolean;
   termBad: string;
@@ -860,7 +885,9 @@ export type ActionEvent =
   | { kind: "parts"; names: string[] }
   /** One of the parts started or ended; a failed one has git's `error`, and `inner` names the
    *  nested submodule that failed when it wasn't this one. */
-  | { kind: "part"; name: string; state: "started" | "done" | "failed"; error: string | null; inner: string | null };
+  | { kind: "part"; name: string; state: "started" | "done" | "failed"; error: string | null; inner: string | null }
+  /** How much of one of the parts is done, in bytes, e.g. a file a download brings. */
+  | { kind: "partProgress"; name: string; done: number; total: number };
 
 /** What changed in the repository outside the window: in a terminal, an editor, another window. */
 export interface OutsideChange {

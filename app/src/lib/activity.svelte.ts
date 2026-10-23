@@ -240,7 +240,7 @@ class Activity {
     }
     // A fetch moves branches on remotes, which Undo leaves alone: its log step isn't missed.
     // It goes over no parts either.
-    if (event.kind === "notLogged" || event.kind === "parts" || event.kind === "part") return;
+    if (event.kind === "notLogged" || event.kind === "parts" || event.kind === "part" || event.kind === "partProgress") return;
     if (event.kind === "waiting") {
       this.running = { ...running, sub: waitingWords(event) };
       return;

@@ -2590,7 +2590,7 @@
           onGood={() => bisectKey("good")}
           onBad={() => bisectKey("bad")}
           onShow={pick}
-          copy={(text) => copyText(text, "Copied the bisect log.")}
+          copy={(text, said) => copyText(text, said)}
         />
       {/if}
       {#if lfs.missing && !lfs.dismissed}

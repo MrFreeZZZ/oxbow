@@ -5,14 +5,17 @@
 //! the `git-lfs` tool is not installed and every such file is still a pointer. Changes go through
 //! `git lfs` like any other command.
 
-use std::io::Read;
+use std::collections::{HashMap, HashSet};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 
 use serde::Serialize;
 
 use crate::cli::GitCommand;
-use crate::error::Result;
+use crate::error::{Error, FailedPart, Result};
 use crate::repo::Repo;
+use crate::worktree::{ActionEvent, PartState};
 
 /// What every pointer file starts with.
 const POINTER_START: &str = "version https://git-lfs.github.com/spec/v1";
@@ -35,6 +38,26 @@ pub struct LfsStatus {
     pub patterns: Vec<LfsPattern>,
     /// Where Homebrew is, to install git-lfs with it.
     pub brew: Option<String>,
+    /// The files that are still pointers here, by path; at most [`MAX_LISTED`].
+    pub missing_files: Vec<LfsFile>,
+}
+
+/// Files listed as not downloaded; the counts of the patterns go on past it.
+pub const MAX_LISTED: usize = 5000;
+
+/// Files a download names one by one; for more it downloads them all, which skips the ones that
+/// are there already, rather than make the command too long.
+const MAX_NAMED: usize = 200;
+
+/// A file kept in LFS that is only a pointer here: not downloaded.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LfsFile {
+    pub path: String,
+    /// The size of the real file, as the pointer says.
+    pub size: u64,
+    /// `sha256:4d7a…`, how git-lfs names it when it can't download it.
+    pub oid: String,
 }
 
 /// One `filter=lfs` rule and the files it covers.
@@ -144,15 +167,62 @@ pub(crate) fn plan_untrack(pattern: &str) -> Vec<GitCommand> {
     ]
 }
 
-pub(crate) fn plan_pull(include: Option<&str>) -> Vec<GitCommand> {
+/// `git lfs pull` for the files at `paths`, else those `include` matches, else all.
+pub(crate) fn plan_pull(include: Option<&str>, paths: &[String]) -> Vec<GitCommand> {
     let mut args = vec!["lfs".to_owned(), "pull".to_owned()];
-    if let Some(pattern) = include {
+    let named = !paths.is_empty() && paths.len() <= MAX_NAMED;
+    if named {
+        let list: Vec<String> = paths.iter().map(|p| include_path(p)).collect();
+        args.push(format!("--include={}", list.join(",")));
+    } else if let Some(pattern) = include {
         args.push(format!("--include={pattern}"));
     }
-    vec![GitCommand::new(args).comment(match include {
-        Some(_) => "downloads only the files the pattern matches and puts them in place of their pointers",
-        None => "downloads the files of the checked-out commit and puts them in place of their pointers",
+    vec![GitCommand::new(args).comment(if named {
+        "downloads these files and puts them in place of their pointers"
+    } else if include.is_some() {
+        "downloads only the files the pattern matches and puts them in place of their pointers"
+    } else {
+        "downloads the files of the checked-out commit and puts them in place of their pointers"
     })]
+}
+
+/// A path as a `--include` pattern that matches only that file: `/` ties it to the top, a
+/// backslash makes `*`, `?` and `[` plain. git-lfs splits the list at commas with no way to
+/// escape one, so a comma becomes `?`, which matches it too.
+fn include_path(path: &str) -> String {
+    let mut out = String::from("/");
+    for c in path.chars() {
+        match c {
+            '\\' | '*' | '?' | '[' | ']' => {
+                out.push('\\');
+                out.push(c);
+            }
+            ',' => out.push('?'),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// A line of the file `GIT_LFS_PROGRESS` names: `download 2/7 32768/9000000 assets/intro.mov`.
+fn progress_line(line: &str) -> Option<(&str, u64, u64)> {
+    let mut words = line.splitn(4, ' ');
+    if words.next()? != "download" {
+        return None;
+    }
+    let _count = words.next()?;
+    let (done, total) = words.next()?.split_once('/')?;
+    Some((words.next()?, done.parse().ok()?, total.parse().ok()?))
+}
+
+/// What git-lfs said about one file it couldn't download: its line names the object,
+/// `[4d7a…] Object does not exist on the server: [404] Object does not exist`.
+fn error_for(output: &str, oid: &str) -> Option<String> {
+    let hex = oid.strip_prefix("sha256:").unwrap_or(oid);
+    output
+        .lines()
+        .find(|line| line.contains(hex))
+        .map(|line| line.replace(&format!("[{hex}] "), "").trim().to_owned())
 }
 
 pub(crate) fn plan_prune() -> Vec<GitCommand> {
@@ -178,7 +248,7 @@ pub(crate) fn plan_install(brew: Option<&str>, pull: bool) -> Vec<GitCommand> {
     );
     if pull {
         commands.extend(
-            plan_pull(None)
+            plan_pull(None, &[])
                 .into_iter()
                 .map(|c| c.comment("replaces the pointers with the real files")),
         );
@@ -235,6 +305,8 @@ impl Repo {
                 .unwrap_or_default()
         };
         let mut patterns = Vec::new();
+        let mut missing_files = Vec::new();
+        let mut listed = HashSet::new();
         for pattern in wanted {
             let out = self.run(&GitCommand::new(["ls-files", "-z", "--", &pathspec(&pattern)]))?;
             let mut entry = LfsPattern {
@@ -245,17 +317,25 @@ impl Repo {
                 missing: 0,
             };
             for path in out.stdout.split('\0').filter(|p| !p.is_empty()) {
-                let Some((size, pointer)) = self.lfs_file_size(path) else {
+                let Some((size, pointer)) = self.lfs_file(path) else {
                     continue;
                 };
                 entry.files += 1;
                 entry.size += size;
-                if pointer {
+                if let Some(pointer) = pointer {
                     entry.missing += 1;
+                    if missing_files.len() < MAX_LISTED && listed.insert(path.to_owned()) {
+                        missing_files.push(LfsFile {
+                            path: path.to_owned(),
+                            size,
+                            oid: pointer.oid,
+                        });
+                    }
                 }
             }
             patterns.push(entry);
         }
+        missing_files.sort_by(|a, b| a.path.cmp(&b.path));
         let filters = self
             .run(&GitCommand::new(["config", "--get", "filter.lfs.process"]))
             .is_ok_and(|out| !out.stdout.trim().is_empty());
@@ -264,6 +344,7 @@ impl Repo {
             filters,
             patterns,
             brew: brew().map(|p| p.display().to_string()),
+            missing_files,
         })
     }
 
@@ -288,6 +369,11 @@ impl Repo {
     /// The size of a file in the working copy, and whether it is only a pointer; `None` when it
     /// is not there.
     pub(crate) fn lfs_file_size(&self, path: &str) -> Option<(u64, bool)> {
+        self.lfs_file(path).map(|(size, pointer)| (size, pointer.is_some()))
+    }
+
+    /// The size of a file in the working copy, and its pointer while it is only that.
+    fn lfs_file(&self, path: &str) -> Option<(u64, Option<LfsPointer>)> {
         let file = self.workdir().join(path);
         // A symlink is a link here, as for git, not the file it points at.
         let meta = std::fs::symlink_metadata(&file).ok()?;
@@ -296,13 +382,176 @@ impl Repo {
         }
         let len = meta.len();
         if len > MAX_POINTER {
-            return Some((len, false));
+            return Some((len, None));
         }
         let data = read_regular(&file, MAX_POINTER)?;
         Some(match parse_pointer(&data) {
-            Some(pointer) => (pointer.size, true),
-            None => (len, false),
+            Some(pointer) => (pointer.size, Some(pointer)),
+            None => (len, None),
         })
+    }
+
+    /// The files `include` matches, or all LFS files, that are still pointers here.
+    fn lfs_missing(&self, include: Option<&str>) -> Result<Vec<LfsFile>> {
+        let patterns = match include {
+            Some(pattern) => vec![pattern.to_owned()],
+            None => lfs_patterns(&read_attributes(self.workdir()).unwrap_or_default()),
+        };
+        let mut files: Vec<LfsFile> = Vec::new();
+        let mut seen = HashSet::new();
+        for pattern in patterns {
+            let out = self.run(&GitCommand::new(["ls-files", "-z", "--", &pathspec(&pattern)]))?;
+            for path in out.stdout.split('\0').filter(|p| !p.is_empty()) {
+                if let Some((size, Some(pointer))) = self.lfs_file(path)
+                    && seen.insert(path.to_owned())
+                {
+                    files.push(LfsFile {
+                        path: path.to_owned(),
+                        size,
+                        oid: pointer.oid,
+                    });
+                }
+            }
+        }
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(files)
+    }
+
+    /// Download LFS files in place of their pointers: those at `paths`, else those `include`
+    /// matches, else all. Each file is a part of the action, with how much of it came; one
+    /// that fails doesn't stop the others, and when any is still a pointer after, the answer
+    /// is [`Error::PartlyDone`] with what git-lfs said about it.
+    pub(crate) fn lfs_download(
+        &self,
+        include: Option<&str>,
+        paths: &[String],
+        on_event: &mut dyn FnMut(ActionEvent),
+        cancel: &AtomicBool,
+    ) -> Result<String> {
+        let files: Vec<LfsFile> = if paths.is_empty() {
+            self.lfs_missing(include)?
+        } else {
+            paths
+                .iter()
+                .filter_map(|path| match self.lfs_file(path) {
+                    Some((size, Some(pointer))) => Some(LfsFile {
+                        path: path.clone(),
+                        size,
+                        oid: pointer.oid,
+                    }),
+                    _ => None,
+                })
+                .collect()
+        };
+        let named: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
+        let progress = self.git_dir().join("oxbow").join("lfs-progress");
+        // Without it the files still come, only without their progress.
+        if let Some(dir) = progress.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&progress, "");
+        let command = plan_pull(include, if paths.is_empty() { &[] } else { &named })
+            .remove(0)
+            .env("GIT_LFS_PROGRESS", progress.display().to_string())
+            .env("GIT_LFS_FORCE_PROGRESS", "1");
+        let command = crate::ssh::interactive(command);
+        if !files.is_empty() {
+            on_event(ActionEvent::Parts { names: named.clone() });
+        }
+        on_event(ActionEvent::Command {
+            display: command.display(),
+        });
+
+        // What git-lfs wrote to the progress file since the last look, a file at a time.
+        let wanted: HashSet<&str> = named.iter().map(String::as_str).collect();
+        let mut read = ProgressReader::default();
+        let mut started = HashSet::new();
+        let mut finished = HashSet::new();
+        let mut look = |on_event: &mut dyn FnMut(ActionEvent)| {
+            for (path, done, total) in read.next(&progress) {
+                if !wanted.contains(path.as_str()) {
+                    continue;
+                }
+                if started.insert(path.clone()) {
+                    on_event(ActionEvent::Part {
+                        name: path.clone(),
+                        state: PartState::Started,
+                        error: None,
+                        inner: None,
+                    });
+                }
+                // All of it came: git-lfs puts it in place once the others are there too.
+                if done == total && finished.insert(path.clone()) {
+                    on_event(ActionEvent::Part {
+                        name: path,
+                        state: PartState::Done,
+                        error: None,
+                        inner: None,
+                    });
+                } else if !finished.contains(&path) {
+                    on_event(ActionEvent::PartProgress {
+                        name: path,
+                        done,
+                        total,
+                    });
+                }
+            }
+        };
+        let ran = crate::console::main(|| {
+            self.run_streaming(
+                &command,
+                &mut |line| {
+                    on_event(ActionEvent::Line(line));
+                    look(&mut *on_event);
+                },
+                cancel,
+            )
+        });
+        let _ = std::fs::remove_file(&progress);
+        let output = match &ran {
+            Ok(out) => format!("{}\n{}", out.stdout, out.stderr),
+            Err(Error::Cancelled) => return Err(Error::Cancelled),
+            Err(Error::Command { output, .. }) => output.clone(),
+            Err(other) => other.to_string(),
+        };
+        let mut failed = Vec::new();
+        for file in &files {
+            let still = matches!(self.lfs_file(&file.path), Some((_, Some(_))));
+            let error = still.then(|| {
+                error_for(&output, &file.oid).unwrap_or_else(|| match &ran {
+                    Ok(_) => "git-lfs left it a pointer".to_owned(),
+                    Err(_) => output.trim().to_owned(),
+                })
+            });
+            if !still && finished.contains(&file.path) {
+                continue;
+            }
+            on_event(ActionEvent::Part {
+                name: file.path.clone(),
+                state: if still { PartState::Failed } else { PartState::Done },
+                error: error.clone(),
+                inner: None,
+            });
+            if let Some(error) = error {
+                failed.push(FailedPart {
+                    name: file.path.clone(),
+                    error,
+                    inner: None,
+                });
+            }
+        }
+        match ran {
+            _ if !failed.is_empty() => Err(Error::PartlyDone {
+                of: files.len(),
+                failed,
+            }),
+            Ok(out) => Ok(if out.stdout.trim().is_empty() {
+                out.stderr
+            } else {
+                out.stdout
+            }),
+            Err(err) => Err(err),
+        }
     }
 
     /// Paths among `paths` that `.gitattributes` sends to LFS.
@@ -338,6 +587,45 @@ impl Repo {
             .lines()
             .find(|line| line.contains("would be pruned"))
             .map(|line| line.trim().trim_start_matches("prune:").trim().to_owned()))
+    }
+}
+
+/// Reads the lines git-lfs adds to its progress file, from where the last read stopped; a
+/// line it is still writing waits for the next read.
+#[derive(Default)]
+struct ProgressReader {
+    offset: u64,
+    partial: String,
+}
+
+impl ProgressReader {
+    /// The newest numbers for each file that moved since the last read, in the order they came.
+    fn next(&mut self, file: &Path) -> Vec<(String, u64, u64)> {
+        let Ok(mut f) = std::fs::File::open(file) else {
+            return Vec::new();
+        };
+        let mut text = String::new();
+        if f.seek(SeekFrom::Start(self.offset)).is_err() || f.read_to_string(&mut text).is_err() {
+            return Vec::new();
+        }
+        self.offset += text.len() as u64;
+        self.partial.push_str(&text);
+        let Some(end) = self.partial.rfind('\n') else {
+            return Vec::new();
+        };
+        let complete: String = self.partial.drain(..=end).collect();
+        let mut newest: Vec<(String, u64, u64)> = Vec::new();
+        let mut at: HashMap<String, usize> = HashMap::new();
+        for (path, done, total) in complete.lines().filter_map(progress_line) {
+            match at.get(path) {
+                Some(&i) => newest[i] = (path.to_owned(), done, total),
+                None => {
+                    at.insert(path.to_owned(), newest.len());
+                    newest.push((path.to_owned(), done, total));
+                }
+            }
+        }
+        newest
     }
 }
 
@@ -410,6 +698,50 @@ mod tests {
         let commands = plan_track("*.mov", &["assets/demo/intro.mov".into()], true);
         assert_eq!(commands[0].display(), "git lfs track '*.mov'");
         assert_eq!(commands[1].display(), "git add -- .gitattributes assets/demo/intro.mov");
+    }
+
+    #[test]
+    fn a_download_names_each_file_so_it_matches_only_that_one() {
+        let commands = plan_pull(None, &["f1.bin".into(), "st*r [1].bin".into(), "a,b/c.bin".into()]);
+        assert_eq!(commands[0].args[2], r"--include=/f1.bin,/st\*r \[1\].bin,/a?b/c.bin");
+        // Too many to name: all of them, which skips what is there already.
+        let many: Vec<String> = (0..=MAX_NAMED).map(|i| format!("{i}.bin")).collect();
+        assert_eq!(
+            plan_pull(Some("*.bin"), &many)[0].display(),
+            "git lfs pull '--include=*.bin'"
+        );
+    }
+
+    #[test]
+    fn reads_the_progress_file_a_line_at_a_time() {
+        assert_eq!(
+            progress_line("download 2/7 32768/9000000 d,x/a b.bin"),
+            Some(("d,x/a b.bin", 32768, 9000000))
+        );
+        assert_eq!(progress_line("clean 1/1 1024/3000000 f1.bin"), None);
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("progress");
+        let mut read = ProgressReader::default();
+        std::fs::write(
+            &file,
+            "download 1/2 10/100 a.bin\ndownload 1/2 50/100 a.bin\ndownload 2/2 5/",
+        )
+        .unwrap();
+        assert_eq!(read.next(&file), [("a.bin".to_owned(), 50, 100)]);
+        let mut f = std::fs::OpenOptions::new().append(true).open(&file).unwrap();
+        std::io::Write::write_all(&mut f, b"9 b.bin\n").unwrap();
+        assert_eq!(read.next(&file), [("b.bin".to_owned(), 5, 9)]);
+        assert_eq!(read.next(&file), []);
+    }
+
+    #[test]
+    fn finds_what_git_lfs_said_about_a_file() {
+        let output = "Downloading LFS objects: 100% (7/7)\n[0f1cee] Object does not exist: [404] Object does not exist\nFailed to fetch some objects from 'http://x/'";
+        assert_eq!(
+            error_for(output, "sha256:0f1cee").as_deref(),
+            Some("Object does not exist: [404] Object does not exist")
+        );
+        assert_eq!(error_for(output, "sha256:abcdef"), None);
     }
 
     #[test]

@@ -444,9 +444,12 @@ pub enum Action {
     LfsUntrack {
         pattern: String,
     },
-    /// Download LFS files in place of their pointers: those `include` matches, or all.
+    /// Download LFS files in place of their pointers: those at `paths`, else those `include`
+    /// matches, else all.
     LfsPull {
         include: Option<String>,
+        #[serde(default)]
+        paths: Vec<String>,
     },
     /// Delete local copies of LFS files that are no longer checked out and are on the server.
     LfsPrune,
@@ -579,6 +582,9 @@ pub enum ActionEvent {
         error: Option<String>,
         inner: Option<String>,
     },
+    /// How much of one of the [`ActionEvent::Parts`] is done, in bytes, e.g. a file a download
+    /// brings.
+    PartProgress { name: String, done: u64, total: u64 },
 }
 
 /// Where one of an action's [`ActionEvent::Parts`] is.
@@ -1614,7 +1620,7 @@ impl Repo {
             Action::DeleteMergedBranch { base, branch, sha } => self.plan_delete_merged_branch(base, branch, sha)?,
             Action::LfsTrack { pattern, paths, stage } => lfs::plan_track(pattern, paths, *stage),
             Action::LfsUntrack { pattern } => lfs::plan_untrack(pattern),
-            Action::LfsPull { include } => lfs::plan_pull(include.as_deref()),
+            Action::LfsPull { include, paths } => lfs::plan_pull(include.as_deref(), paths),
             Action::LfsPrune => lfs::plan_prune(),
             Action::LfsInstall { brew, pull } => lfs::plan_install(brew.as_deref(), *pull),
             Action::BisectStart {
@@ -1847,6 +1853,10 @@ impl Repo {
             && message.trim().is_empty()
         {
             return Err(Error::Git("the commit message is empty".into()));
+        }
+        // Each file is a part, with its progress, and one that fails doesn't stop the others.
+        if let Action::LfsPull { include, paths } = action {
+            return self.lfs_download(include.as_deref(), paths, on_event, cancel);
         }
         let (side, path, header, check, lines) = match action {
             Action::StageHunk {

@@ -101,6 +101,9 @@ export interface Request {
   /** Runs in the background instead of in the sheet, e.g. a fetch: the sheet closes on the
    *  button and this starts it. */
   background?: () => void;
+  /** What the action goes over, listed before it runs, e.g. the files a download brings with
+   *  their sizes; while it runs the same box shows how far each one is. */
+  list?: { name: string; meta: string }[];
   /** For an action that goes over several things one at a time: why one failed, in words,
    *  from what git printed. */
   partWhy?: (error: string) => string;
@@ -276,6 +279,8 @@ export interface RunPart {
   error: string | null;
   /** The nested submodule that failed, when it wasn't this one. */
   inner: string | null;
+  /** How much of it is done, in bytes, while that is known, e.g. a file a download brings. */
+  bytes?: { done: number; total: number };
 }
 
 class ConfirmState {
@@ -623,6 +628,10 @@ class ConfirmState {
     }
     if (event.kind === "part") {
       this.parts = this.parts.map((p) => (p.name === event.name ? { ...p, state: event.state, error: event.error, inner: event.inner } : p));
+      return;
+    }
+    if (event.kind === "partProgress") {
+      this.parts = this.parts.map((p) => (p.name === event.name ? { ...p, bytes: { done: event.done, total: event.total } } : p));
       return;
     }
     const percent = /(\d{1,3})%/.exec(event.text);
