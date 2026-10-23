@@ -115,3 +115,33 @@ fn the_console_keeps_no_secret() {
     }
     oxbow_core::set_secrets_check(true, &[]);
 }
+
+#[test]
+fn every_staged_file_is_checked_whatever_its_name() {
+    // Git quotes names with a tab, a line break, a quote or letters outside ASCII, and puts a
+    // tab after one with a space.
+    let names = [
+        "tab\there.env",
+        "line\nbreak.env",
+        "quote\"d.env",
+        "back\\slash.env",
+        "ключи.env",
+        "my keys.env",
+    ];
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "First");
+    // An added line `++ x` must not end the file early, and diff.noprefix must not hide paths.
+    fx.git(&["config", "diff.noprefix", "true"]);
+    for name in names {
+        fx.write(name, concat!("++ notes\nAWS_ACCESS_KEY_ID=AKIA", "Q7XKZ3M4P2LJ6WVB\n"));
+    }
+    fx.git(&["add", "."]);
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let found = repo.staged_secrets().unwrap();
+    let mut paths: Vec<_> = found.iter().map(|f| (f.path.as_str(), f.line)).collect();
+    paths.sort();
+    let mut expected: Vec<_> = names.iter().map(|n| (*n, 2)).collect();
+    expected.sort();
+    assert_eq!(paths, expected);
+}

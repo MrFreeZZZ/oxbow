@@ -171,6 +171,33 @@ fn ignoring_keeps_a_gitignore_that_is_not_utf8() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn ignoring_never_writes_through_a_gitignore_symlink() {
+    // A repository commits `.gitignore` as a link to a file outside it.
+    let mut fx = Fixture::new();
+    let outside = fx
+        .path()
+        .parent()
+        .unwrap()
+        .join(format!("outside-{}", std::process::id()));
+    std::fs::write(&outside, "mine\n").unwrap();
+    std::os::unix::fs::symlink(&outside, fx.path().join(".gitignore")).unwrap();
+    fx.commit("a.txt", "a\n", "Root");
+    fx.write("debug.log", "noise\n");
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let err = repo
+        .perform(&Action::Ignore {
+            pattern: "*.log".into(),
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("not a plain file"), "{err}");
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "mine\n");
+    assert!(fx.path().join(".gitignore").symlink_metadata().unwrap().is_symlink());
+    std::fs::remove_file(outside).unwrap();
+}
+
 #[test]
 fn chosen_files_are_stashed_and_the_rest_stays() {
     let mut fx = Fixture::new();

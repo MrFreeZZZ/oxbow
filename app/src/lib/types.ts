@@ -570,7 +570,7 @@ export type Action =
   | { kind: "restore"; id: string; after: boolean }
   | { kind: "clearOperationLog" }
   | { kind: "editStack"; plan: StackPlan }
-  | { kind: "addToCommit"; commit: string }
+  | { kind: "addToCommit"; commit: string; allowSecrets?: boolean }
   | { kind: "pushBranches"; remote: string; branches: { branch: string; upstream: string }[] }
   | { kind: "pullRequestMerged"; remote: string; base: string; branch: string }
   /** Only while `branch` is still at `sha`, the commit GitHub merged. */
@@ -1001,6 +1001,7 @@ export interface SizedFile {
 /** Something an action changes that Undo can't bring back. */
 export type NotKept =
   | { kind: "bigFiles"; files: SizedFile[]; more: number; limit: number }
+  | { kind: "ignoredInTheWay"; files: SizedFile[]; more: number; bytes: number }
   | { kind: "ignored"; folder: string; files: SizedFile[]; more: number; bytes: number }
   | { kind: "worktree"; folder: string; branch: string | null; changed: number | null; removed: boolean }
   | { kind: "notLogged"; what: string }

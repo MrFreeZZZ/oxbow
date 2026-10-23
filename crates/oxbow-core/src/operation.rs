@@ -20,7 +20,7 @@ const SQUASH_SOURCE: &str = "OXBOW_SQUASH_SOURCE";
 const PREVIEW_COMMITS: usize = 8;
 
 /// Conflict markers longer than git's usual seven, so a line of `=======` in a file is not
-/// mistaken for one.
+/// mistaken for one; longer still when a version has a line that starts like the marker.
 const MARKER: usize = 13;
 
 /// How a branch is brought into the checked-out one.
@@ -996,6 +996,7 @@ impl Repo {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).map_err(|err| Error::Git(err.to_string()))?;
+        let size = marker_size(&[ours, base, theirs]);
         let result = (|| {
             let mut files = Vec::new();
             for (name, data) in [("ours", ours), ("base", base), ("theirs", theirs)] {
@@ -1008,7 +1009,7 @@ impl Repo {
                     "merge-file".to_owned(),
                     "-p".to_owned(),
                     "--diff3".to_owned(),
-                    format!("--marker-size={MARKER}"),
+                    format!("--marker-size={size}"),
                     files[0].clone(),
                     files[1].clone(),
                     files[2].clone(),
@@ -1019,7 +1020,8 @@ impl Repo {
             if out.status.code().is_none_or(|code| !(0..=127).contains(&code)) {
                 return Err(Error::Git(String::from_utf8_lossy(&out.stderr).trim().to_owned()));
             }
-            Ok(parse_merged(&out.stdout))
+            parse_merged(&out.stdout, size)
+                .ok_or_else(|| Error::Git("could not tell the conflicts in the merged file apart".into()))
         })();
         let _ = std::fs::remove_dir_all(&dir);
         result
@@ -1101,15 +1103,31 @@ fn tool_label(name: &str) -> String {
     .to_owned()
 }
 
-/// Split `git merge-file --diff3` output into agreed lines and conflicts.
-fn parse_merged(text: &[u8]) -> Vec<RawChunk> {
+/// A marker longer than any run of `<`, `|`, `=` or `>` a line of the versions starts with, so
+/// no line of the file reads as a marker.
+fn marker_size(versions: &[&[u8]]) -> usize {
+    let longest = versions
+        .iter()
+        .flat_map(|blob| blob.split(|&c| c == b'\n'))
+        .filter_map(|line| {
+            let first = *line.first()?;
+            matches!(first, b'<' | b'|' | b'=' | b'>').then(|| line.iter().take_while(|&&c| c == first).count())
+        })
+        .max()
+        .unwrap_or(0);
+    MARKER.max(longest + 1)
+}
+
+/// Split `git merge-file --diff3` output, marked with `size`-long markers, into agreed lines
+/// and conflicts; `None` when a conflict doesn't end, rather than lose the lines after it.
+fn parse_merged(text: &[u8], size: usize) -> Option<Vec<RawChunk>> {
     enum In {
         Same,
         Ours,
         Base,
         Theirs,
     }
-    let marker = |c: u8| vec![c; MARKER];
+    let marker = |c: u8| vec![c; size];
     let (start, mid_base, mid, end) = (marker(b'<'), marker(b'|'), marker(b'='), marker(b'>'));
     let mut chunks = Vec::new();
     let mut same = Vec::new();
@@ -1141,10 +1159,13 @@ fn parse_merged(text: &[u8]) -> Vec<RawChunk> {
             In::Theirs => theirs.push(line.to_vec()),
         }
     }
+    if !matches!(state, In::Same) {
+        return None;
+    }
     if !same.is_empty() {
         chunks.push(RawChunk::Same(same));
     }
-    chunks
+    Some(chunks)
 }
 
 /// Lines for showing, without line endings. Bytes that aren't UTF-8 show as `�`; the file
@@ -1220,7 +1241,7 @@ mod tests {
             m('='),
             m('>')
         );
-        let chunks = parse_merged(text.as_bytes());
+        let chunks = parse_merged(text.as_bytes(), MARKER).unwrap();
         let l = |s: &str| s.as_bytes().to_vec();
         assert_eq!(
             chunks,
@@ -1235,6 +1256,19 @@ mod tests {
                 RawChunk::Same(vec![l("z\n"), l("=======\n")]),
             ]
         );
+        // A conflict that never ends is not cut off silently.
+        assert_eq!(
+            parse_merged(format!("a\n{} ours\nb\n", m('<')).as_bytes(), MARKER),
+            None
+        );
+    }
+
+    #[test]
+    fn markers_are_longer_than_any_line_that_looks_like_one() {
+        assert_eq!(marker_size(&[b"a\n", b"=======\n"]), MARKER);
+        let long = format!("x\n{} example\n", "<".repeat(MARKER));
+        assert_eq!(marker_size(&[b"a\n", long.as_bytes(), b""]), MARKER + 1);
+        assert_eq!(marker_size(&[">".repeat(20).as_bytes()]), 21);
     }
 
     #[test]

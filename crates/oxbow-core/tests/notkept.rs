@@ -80,6 +80,81 @@ fn a_hard_reset_names_big_untracked_files_it_writes_over() {
 }
 
 #[test]
+fn a_hard_reset_names_ignored_files_it_writes_over() {
+    // The older commit tracks .env; the newer one stops tracking and ignores it.
+    let mut fx = Fixture::new();
+    fx.commit(".env", "TOKEN=example\n", "Root");
+    let root = fx.git(&["rev-parse", "HEAD"]);
+    fx.git(&["rm", "-q", "--cached", ".env"]);
+    fx.commit(".gitignore", ".env\n", "Ignore .env");
+    fx.write(".env", "TOKEN=my own\n");
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let reset = Action::Reset {
+        commit: root,
+        mode: ResetMode::Hard,
+    };
+    match repo.not_kept(&reset).unwrap().as_slice() {
+        [NotKept::IgnoredInTheWay { files, more: 0, bytes }] => {
+            assert_eq!(files[0].path, ".env");
+            assert_eq!(*bytes, 13);
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_hard_reset_names_files_in_a_folder_where_the_commit_has_a_file() {
+    // The older commit has a file `dir`; now `dir` is a folder of untracked files.
+    let mut fx = Fixture::new();
+    fx.commit("dir", "a file\n", "Root");
+    let root = fx.git(&["rev-parse", "HEAD"]);
+    fx.git(&["rm", "-q", "dir"]);
+    fx.commit(".gitignore", "*.log\n", "Remove dir");
+    big(&fx, "dir/large.bin");
+    fx.write("dir/notes.txt", "small, in the snapshot\n");
+    fx.write("dir/run.log", "ignored\n");
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let reset = Action::Reset {
+        commit: root,
+        mode: ResetMode::Hard,
+    };
+    match repo.not_kept(&reset).unwrap().as_slice() {
+        [
+            NotKept::BigFiles { files: big, .. },
+            NotKept::IgnoredInTheWay { files: ignored, .. },
+        ] => {
+            assert_eq!(big.len(), 1);
+            assert_eq!(big[0].path, "dir/large.bin");
+            assert_eq!(ignored.len(), 1);
+            assert_eq!(ignored[0].path, "dir/run.log");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_hard_reset_names_an_ignored_file_where_the_commit_has_a_folder() {
+    let mut fx = Fixture::new();
+    fx.commit("build/out.txt", "out\n", "Root");
+    let root = fx.git(&["rev-parse", "HEAD"]);
+    fx.git(&["rm", "-q", "-r", "build"]);
+    fx.commit(".gitignore", "build\n", "Remove build");
+    fx.write("build", "a file now\n");
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let reset = Action::Reset {
+        commit: root,
+        mode: ResetMode::Hard,
+    };
+    match repo.not_kept(&reset).unwrap().as_slice() {
+        [NotKept::IgnoredInTheWay { files, .. }] => assert_eq!(files[0].path, "build"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
 fn undoing_a_pushed_commit_says_only_this_copy_changes_and_offers_revert() {
     let remote = tempfile::tempdir().unwrap();
     let url = remote.path().join("acme.git");

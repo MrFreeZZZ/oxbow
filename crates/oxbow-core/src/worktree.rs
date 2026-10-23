@@ -37,6 +37,9 @@ const MAX_COUNTED_BYTES: u64 = 8 * 1024 * 1024;
 /// files past them are counted by the readings after.
 const MAX_FRESH_BYTES: u64 = 32 * 1024 * 1024;
 
+/// A `.gitignore` bigger than this isn't added to: it is read whole and written back.
+const MAX_GITIGNORE_BYTES: u64 = 16 * 1024 * 1024;
+
 /// What counting a new file's lines found, with the size and time of change it had then.
 #[derive(Clone, Copy)]
 struct Counted {
@@ -412,6 +415,9 @@ pub enum Action {
     /// Fold the staged changes into `commit`, an older commit of the checked-out branch.
     AddToCommit {
         commit: String,
+        /// Add them even though the secrets check finds something, this one time.
+        #[serde(default)]
+        allow_secrets: bool,
     },
     /// Push several local branches to `remote` at once, each to its upstream, overwriting what
     /// the rebase replaced there while nobody else pushed (`--force-with-lease`).
@@ -1603,7 +1609,7 @@ impl Repo {
                     .comment("the snapshots go with git's next clean-up"),
             ],
             Action::EditStack { plan } => self.plan_edit_stack(plan)?,
-            Action::AddToCommit { commit } => self.plan_add_to_commit(commit)?,
+            Action::AddToCommit { commit, .. } => self.plan_add_to_commit(commit)?,
             Action::PushBranches { remote, branches } => {
                 let mut args = vec!["push".to_owned(), "--force-with-lease".to_owned()];
                 if !config::run_hooks() {
@@ -1722,6 +1728,9 @@ impl Repo {
         }
         // A commit the secrets check stops never starts: nothing runs, nothing to undo.
         if let Action::Commit {
+            allow_secrets: false, ..
+        }
+        | Action::AddToCommit {
             allow_secrets: false, ..
         } = action
             && crate::secrets::check_secrets()
@@ -2082,11 +2091,22 @@ impl Repo {
         }
         let file = self.workdir().join(".gitignore");
         // Bytes, not text: git reads a `.gitignore` that isn't UTF-8 just fine, and its rules
-        // must stay. Only a missing file starts empty; any other read error stops here.
-        let mut text = match std::fs::read(&file) {
-            Ok(bytes) => bytes,
+        // must stay. Only a missing file starts empty; any other read error stops here. Like
+        // git, never through a symlink: a repository could commit one that points at a file of
+        // yours outside it, and the rule would be written there.
+        let mut text = match std::fs::symlink_metadata(&file) {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(err) => return Err(Error::Git(format!("could not read .gitignore: {err}"))),
+            Ok(meta) if !meta.is_file() => {
+                return Err(Error::Git(
+                    ".gitignore is a link or a folder, not a plain file; Oxbow leaves it alone".into(),
+                ));
+            }
+            Ok(_) => match crate::lfs::read_regular(&file, MAX_GITIGNORE_BYTES + 1) {
+                Some(bytes) if bytes.len() as u64 <= MAX_GITIGNORE_BYTES => bytes,
+                Some(_) => return Err(Error::Git(".gitignore is too big to add a rule to here".into())),
+                None => return Err(Error::Git("could not read .gitignore as a plain file".into())),
+            },
         };
         let line = |l: &[u8]| l.strip_suffix(b"\r").unwrap_or(l) == pattern.as_bytes();
         if text.split(|&c| c == b'\n').any(line) {
@@ -2097,7 +2117,26 @@ impl Repo {
         }
         text.extend_from_slice(pattern.as_bytes());
         text.push(b'\n');
-        std::fs::write(&file, text).map_err(|err| Error::Git(format!("could not write .gitignore: {err}")))
+        // A new file renamed over the old one: a rename replaces a symlink put there in the
+        // meantime instead of writing through it.
+        let fresh = self.workdir().join(format!(".gitignore.oxbow-{}", std::process::id()));
+        let written = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&fresh)
+            .and_then(|mut f| {
+                std::io::Write::write_all(&mut f, &text)?;
+                // The file keeps its permissions.
+                match std::fs::symlink_metadata(&file) {
+                    Ok(meta) if meta.is_file() => f.set_permissions(meta.permissions()),
+                    _ => Ok(()),
+                }
+            })
+            .and_then(|()| std::fs::rename(&fresh, &file));
+        if written.is_err() {
+            let _ = std::fs::remove_file(&fresh);
+        }
+        written.map_err(|err| Error::Git(format!("could not write .gitignore: {err}")))
     }
 
     /// `git diff` output for one file.
@@ -2500,6 +2539,15 @@ pub(crate) fn path_field(field: &str) -> String {
         Some((path, "")) if field.starts_with('"') => path,
         _ => field.to_owned(),
     }
+}
+
+/// The path of a `---`/`+++` line of a patch: quoted C-style when it has a tab, a line break,
+/// a quote or a byte outside ASCII, and followed by a tab when it has a space.
+pub(crate) fn header_path(field: &str) -> Option<String> {
+    if field.starts_with('"') {
+        return unquote(field).map(|(path, _)| path);
+    }
+    Some(field.strip_suffix('\t').unwrap_or(field).to_owned())
 }
 
 /// A path git quoted C-style (`"dir/\303\244.txt"`), and what follows it.

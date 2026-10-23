@@ -52,6 +52,13 @@ pub enum NotKept {
         more: usize,
         limit: u64,
     },
+    /// Files git ignores, e.g. a local `.env`, that a reset or an undo writes over or deletes:
+    /// the commit has a file where they are, or a folder where one of them is a file.
+    IgnoredInTheWay {
+        files: Vec<SizedFile>,
+        more: usize,
+        bytes: u64,
+    },
     /// Files git ignores, e.g. build output or `.env`, in a folder the action deletes.
     Ignored {
         folder: String,
@@ -98,14 +105,11 @@ impl Repo {
                 commit,
                 mode: ResetMode::Hard,
             } => {
-                // An untracked file at a path the commit has is written over.
-                let paths = self.tree_paths(commit)?;
-                out.extend(self.big_files(self.untracked()?.iter().filter(|p| paths.contains(*p))));
+                out.extend(self.in_the_way(commit)?);
             }
             Action::Restore { id, after } => {
                 let point = self.restore_point(id, *after)?;
-                let paths = self.tree_paths(&point.trees.worktree)?;
-                out.extend(self.big_files(self.untracked()?.iter().filter(|p| paths.contains(*p))));
+                out.extend(self.in_the_way(&point.trees.worktree)?);
                 let now = self.all_refs()?;
                 let moving: Vec<(&String, &String)> = point
                     .refs
@@ -212,6 +216,59 @@ impl Repo {
             .stdout
             .split('\0')
             .filter(|p| !p.is_empty() && !p.ends_with('/'))
+            .map(str::to_owned)
+            .collect())
+    }
+
+    /// What a reset or an undo to `tree` writes over or deletes that no snapshot has: untracked
+    /// files git lists that are too big, and files it ignores. A file is in the way when the tree
+    /// has a file at its path or in a folder of that name, or a folder where the file is.
+    fn in_the_way(&self, tree: &str) -> Result<Vec<NotKept>> {
+        let paths = self.tree_paths(tree)?;
+        let tracked = self.index_paths()?;
+        let untracked = self.untracked()?;
+        let workdir = self.workdir();
+        let mut found = BTreeSet::new();
+        let mut budget = MEASURED;
+        // Paths the index has are tracked files, whose content every snapshot has.
+        for path in paths.iter().filter(|p| !tracked.contains(*p)) {
+            files_at(workdir, path, &tracked, &mut found, &mut budget);
+            let mut end = 0;
+            while let Some(slash) = path[end..].find('/') {
+                end += slash;
+                let folder = &path[..end];
+                if !tracked.contains(folder) && workdir.join(folder).symlink_metadata().is_ok_and(|m| !m.is_dir()) {
+                    found.insert(folder.to_owned());
+                }
+                end += 1;
+            }
+        }
+        let (listed, ignored): (Vec<&String>, Vec<&String>) = found.iter().partition(|p| untracked.contains(*p));
+        let mut out: Vec<NotKept> = self.big_files(listed).into_iter().collect();
+        if !ignored.is_empty() {
+            let mut files: Vec<SizedFile> = ignored
+                .into_iter()
+                .map(|p| SizedFile {
+                    path: p.clone(),
+                    size: workdir.join(p).symlink_metadata().map_or(0, |m| m.len()),
+                })
+                .collect();
+            let bytes = files.iter().map(|f| f.size).sum();
+            files.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));
+            let more = files.len().saturating_sub(NAMED);
+            files.truncate(NAMED);
+            out.push(NotKept::IgnoredInTheWay { files, more, bytes });
+        }
+        Ok(out)
+    }
+
+    /// Every path in the index.
+    fn index_paths(&self) -> Result<BTreeSet<String>> {
+        Ok(self
+            .run(&GitCommand::new(["ls-files", "-z"]))?
+            .stdout
+            .split('\0')
+            .filter(|p| !p.is_empty())
             .map(str::to_owned)
             .collect())
     }
@@ -361,6 +418,32 @@ impl Repo {
         self.run(&GitCommand::new(["rev-list", "--parents", "-n", "1", id]))
             .map(|o| o.stdout.split_whitespace().count().saturating_sub(1))
             .unwrap_or(0)
+    }
+}
+
+/// The untracked file at `path`, or every untracked file in the folder there, without following
+/// symlinks; stops once `budget` entries were looked at.
+fn files_at(workdir: &Path, path: &str, tracked: &BTreeSet<String>, found: &mut BTreeSet<String>, budget: &mut usize) {
+    let Ok(meta) = workdir.join(path).symlink_metadata() else {
+        return;
+    };
+    if !meta.is_dir() {
+        if !tracked.contains(path) {
+            found.insert(path.to_owned());
+        }
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(workdir.join(path)) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if *budget == 0 {
+            return;
+        }
+        *budget -= 1;
+        if let Some(name) = entry.file_name().to_str() {
+            files_at(workdir, &format!("{path}/{name}"), tracked, found, budget);
+        }
     }
 }
 

@@ -190,6 +190,36 @@ fn resolving_keeps_bytes_that_are_not_utf8() {
 }
 
 #[test]
+fn a_line_that_looks_like_a_conflict_marker_keeps_the_rest_of_the_file() {
+    // Lines both sides keep, after the conflict: one starts like Oxbow's own marker.
+    let tail = format!(
+        "{} example\n{}\n{} end\nIMPORTANT TAIL\n",
+        "<".repeat(13),
+        "=".repeat(13),
+        ">".repeat(13)
+    );
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", &format!("one\nbase\n{tail}"), "Root");
+    fx.git(&["switch", "-q", "-c", "feature"]);
+    fx.commit("a.txt", &format!("one\ntheirs\n{tail}"), "Theirs");
+    fx.git(&["switch", "-q", "main"]);
+    fx.commit("a.txt", &format!("one\nours\n{tail}"), "Ours");
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+
+    let file = repo.conflict_file("a.txt").unwrap();
+    assert_eq!(file.chunks.len(), 3);
+    repo.perform(&Action::Resolve {
+        path: "a.txt".into(),
+        picks: vec![Pick::Ours.into()],
+        text: None,
+        stages: None,
+    })
+    .unwrap();
+    assert_eq!(read(&fx, "a.txt"), format!("one\nours\n{tail}"));
+}
+
+#[test]
 fn abort_puts_everything_back() {
     let mut fx = diverged();
     let before = fx.git(&["rev-parse", "HEAD"]);

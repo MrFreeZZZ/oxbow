@@ -77,6 +77,8 @@
     switch (gap.kind) {
       case "bigFiles":
         return `Undo can’t bring back ${gap.files.length + gap.more === 1 ? "this file" : "these files"}`;
+      case "ignoredInTheWay":
+        return `Files git ignores are written over for good`;
       case "ignored":
         return `Files git ignores in ${gap.folder} are deleted for good`;
       case "worktree":
@@ -96,6 +98,8 @@
     switch (gap.kind) {
       case "bigFiles":
         return `Untracked files over ${Math.round(gap.limit / 1048576)} MB stay out of snapshots, so the Operation Log has no copy.`;
+      case "ignoredInTheWay":
+        return `The commit has files where these are. They are not in git or in the Operation Log, ${bytes(gap.bytes)} in all. Copy anything you need, like a .env file, first.`;
       case "ignored":
         return `They are not in git or in the Operation Log, ${bytes(gap.bytes)} in all. Copy anything you need, like a .env file, first.`;
       case "worktree":
@@ -436,7 +440,7 @@
                 <span class="gap-title">{gapTitle(gap)}</span>
               </div>
               <p class="gap-why">{gapWhy(gap)}</p>
-              {#if gap.kind === "bigFiles" || gap.kind === "ignored"}
+              {#if gap.kind === "bigFiles" || gap.kind === "ignored" || gap.kind === "ignoredInTheWay"}
                 <div class="gap-files">
                   {#each gap.files as file (file.path)}
                     <div class="gap-file"><span class="mono gap-path">{file.path}</span><span class="gap-size">{bytes(file.size)}</span></div>
