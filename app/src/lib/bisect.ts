@@ -182,7 +182,7 @@ export function bisectResetRequest(ctx: BranchContext, bisect: Bisect): Request 
   const stash = bisect.stashed ? " and brings back the uncommitted changes stashed before it" : "";
   const found = bisect.found ? history.rows.find((r) => r.id === bisect.found) : undefined;
   const body: Part[] = found
-    ? ["Goes back to ", back, `${stash}. The first bad commit was `, { code: shortId(found.id) }, " ", { quote: found.summary }, ". It stays in History, and Copy Log in the banner keeps the whole bisect."]
+    ? ["Goes back to ", back, `${stash}. The first bad commit was `, { code: shortId(found.id) }, " ", { quote: found.summary }, ". It stays in History. To keep the steps, use Copy Report in the banner before finishing."]
     : ["Goes back to ", back, `${stash}. The answers so far are dropped; Copy Log in the banner keeps them for git bisect replay.`];
   return {
     title: bisect.found ? "Finish the bisect?" : "Stop bisecting?",

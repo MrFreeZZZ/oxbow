@@ -91,6 +91,24 @@ fn bisecting_finds_the_first_bad_commit_and_brings_the_stash_back() {
         "{:?}",
         state.output
     );
+    // The journal has the two answers that set the range, then one row for each step.
+    assert_eq!(state.journal.len(), rounds + 2);
+    assert!(state.journal[0].range && state.journal[1].range);
+    assert_eq!(state.journal[0].summary, "Commit 10");
+    assert!(
+        state.journal[2..]
+            .iter()
+            .all(|s| !s.range && s.summary.starts_with("Commit "))
+    );
+    let report = state.report.as_deref().expect("a report once found");
+    assert!(
+        report.starts_with(&format!("First bad commit: {}\n    Commit 6\n", ids[5])),
+        "{report}"
+    );
+    assert!(
+        report.contains(&format!("Between v1 (good) and main (bad), 8 commits: {rounds} step")),
+        "{report}"
+    );
     // Git 2.56 and newer put the term in quotes.
     assert!(state.log.contains("# first bad commit:") || state.log.contains("# first 'bad' commit:"));
 
@@ -126,6 +144,8 @@ fn a_test_command_answers_every_step() {
     let state = repo.bisect().unwrap().unwrap();
     assert_eq!(state.found.as_deref(), Some(ids[5].as_str()));
     assert!(!state.stashed);
+    assert!(state.report.is_some_and(|r| r.contains("Commit 6")));
+    assert!(state.journal.len() > 2);
 
     // Nothing was stashed, so finishing only goes back.
     let shown: Vec<String> = repo

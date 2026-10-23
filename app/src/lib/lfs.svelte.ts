@@ -3,10 +3,11 @@
 // while git-lfs isn't installed gets a banner, since its files are only pointers then.
 
 import { api } from "./api";
-import type { Part, Request } from "./confirm.svelte";
-import type { LfsPattern, LfsStatus } from "./types";
+import { confirm, type Part, type Recovery, type Request } from "./confirm.svelte";
+import type { Failure, LfsFile, LfsPattern, LfsStatus } from "./types";
 import { bytes } from "./unusual";
 import { splitPath } from "./format";
+import { errorLine } from "./reads";
 
 export { BIG_FILE } from "./unusual";
 
@@ -198,21 +199,96 @@ export function untrackRequest(pattern: string): Request {
   };
 }
 
-/** Download the files of one pattern, or all, in place of their pointers. */
-export function downloadRequest(pattern: LfsPattern | null): Request {
-  const count = pattern ? pattern.missing : lfs.patterns.reduce((n, p) => n + p.missing, 0);
-  const what = pattern ? `${plural(count, "file")} of ${pattern.pattern}` : count ? `${plural(count, "LFS file")}` : "LFS files";
+/** Files listed in the sheet; the rest are counted in one more row. */
+const LISTED = 300;
+
+/** The files not downloaded here that `pattern` matches, those at `paths`, or all. */
+export function missingFiles(pattern: LfsPattern | null, paths?: string[]): LfsFile[] {
+  const all = lfs.status?.missingFiles ?? [];
+  if (paths) return all.filter((f) => paths.includes(f.path));
+  return pattern ? all.filter((f) => matches(pattern.pattern, f.path)) : all;
+}
+
+/** Download the files of one pattern, the ones at `paths`, or all, in place of their pointers.
+ *  The sheet lists them with their sizes, then shows how far each one is; with `always` it
+ *  shows even when downloads don't ask, for the list of what isn't downloaded. */
+export function downloadRequest(pattern: LfsPattern | null, paths?: string[], always = false): Request {
+  const files = missingFiles(pattern, paths);
+  // The status lists at most 5000; the patterns count them all.
+  const count = paths ? files.length : pattern ? Math.max(pattern.missing, files.length) : Math.max(lfs.patterns.reduce((n, p) => n + p.missing, 0), files.length);
+  const size = files.reduce((n, f) => n + f.size, 0);
+  const one = count === 1 && files.length === 1 ? splitPath(files[0].path).name : null;
+  const what = one ?? (pattern ? `${plural(count, "file")} of ${pattern.pattern}` : count ? plural(count, "LFS file") : "LFS files");
+  const list = files.slice(0, LISTED).map((f) => ({ name: f.path, meta: bytes(f.size) }));
+  if (files.length > LISTED) {
+    const rest = files.slice(LISTED);
+    list.push({ name: `and ${plural(rest.length, "more file")}`, meta: bytes(rest.reduce((n, f) => n + f.size, 0)) });
+  }
+  const body: Part[] = one
+    ? ["Downloads ", { code: files[0].path }, " from the LFS server and puts it in place of its pointer"]
+    : pattern
+      ? ["Downloads the files ", { code: pattern.pattern }, " matches from the LFS server and puts them in place of their pointers"]
+      : count
+        ? ["Downloads these files from the LFS server in place of the pointers git checked out"]
+        : ["Downloads the LFS files of the checked-out commit and puts them in place of their pointers"];
+  body.push(size ? `: ${bytes(size)} in all. Nothing is committed.` : ". Nothing is committed.");
   return {
     title: `Download ${what}?`,
-    body: [
-      pattern ? ["Downloads the files ", { code: pattern.pattern }, " matches"] : ["Downloads the LFS files of the checked-out commit"],
-      " from the LFS server and puts them in place of their pointers. Nothing is committed.",
-    ].flat() as Part[],
+    body,
     icon: "fetch",
     button: "Download",
+    always,
+    list,
     status: `Downloading ${what}…`,
-    done: pattern ? `Downloaded the files of ${pattern.pattern}.` : "Downloaded the LFS files.",
-    action: { kind: "lfsPull", include: pattern?.pattern ?? null },
+    done: one ? `Downloaded ${one}.` : pattern ? `Downloaded the files of ${pattern.pattern}.` : "Downloaded the LFS files.",
+    past: `Downloaded ${what}`,
+    partWhy: lfsWhy,
+    recover: downloadRecovery,
+    action: { kind: "lfsPull", include: pattern?.pattern ?? null, paths: paths ?? [] },
+  };
+}
+
+/** Why git-lfs couldn't download a file, in words, from what it printed. */
+export function lfsWhy(error: string): string {
+  if (/\[404\]|does not exist/i.test(error)) return "The LFS server doesn’t have it; whoever committed it may not have pushed it.";
+  if (/\[40[13]\]|permission|credentials|authenticat/i.test(error)) return "The LFS server didn’t allow it with this account.";
+  if (/dial tcp|connection (refused|reset)|timed? ?out|no such host|could not resolve|network|EOF/i.test(error)) return "Couldn’t reach the LFS server.";
+  if (/no space left/i.test(error)) return "There is no space left on the disk.";
+  return errorLine(error);
+}
+
+/** After a download where some files failed: which, why, and Try Again for just those. */
+function downloadRecovery(failure: Failure): Recovery | null {
+  if (failure.kind !== "partlyDone") return null;
+  const parts = confirm.parts;
+  const failed = parts.filter((p) => p.state === "failed");
+  if (!failed.length) return null;
+  const done = parts.filter((p) => p.state === "done").length;
+  const name = (path: string) => splitPath(path).name;
+  const one = failed.length === 1 ? name(failed[0].name) : null;
+  const reasons = new Set(failed.map((p) => lfsWhy(p.error ?? "")));
+  const body: Part[] = [];
+  failed.slice(0, 3).forEach((p, i) => {
+    if (i) body.push(i === failed.length - 1 ? " and " : ", ");
+    body.push({ code: name(p.name) });
+  });
+  if (failed.length > 3) body.push(` and ${plural(failed.length - 3, "more file")}`);
+  body.push(failed.length === 1 ? " is still a pointer" : " are still pointers");
+  body.push(reasons.size === 1 ? `: ${[...reasons][0].replace(/\.$/, "").replace(/^./, (c) => c.toLowerCase())}.` : ". Each one says why below.");
+  if (done) body.push(` The other ${plural(done, "file")} ${done === 1 ? "is" : "are"} in place.`);
+  const paths = failed.map((p) => p.name);
+  return {
+    title: done ? `Downloaded ${done} of ${plural(parts.length, "file")}` : parts.length === 1 ? `Couldn’t download ${name(parts[0].name)}` : `None of the ${plural(parts.length, "file")} could be downloaded`,
+    body,
+    icon: "fetch",
+    tone: "warn",
+    button: {
+      label: one ? "Try Again" : `Try ${failed.length} Again`,
+      action: { kind: "lfsPull", include: null, paths },
+      status: one ? `Downloading ${one}…` : `Downloading ${plural(failed.length, "file")}…`,
+      done: one ? `Downloaded ${one}.` : "Downloaded the LFS files.",
+      recover: downloadRecovery,
+    },
   };
 }
 

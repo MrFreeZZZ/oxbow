@@ -6,7 +6,7 @@
 //! in a terminal shows here too. Oxbow only remembers the stash it made before starting, to put
 //! the uncommitted changes back when the bisect is done.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -71,11 +71,37 @@ pub struct Bisect {
     pub output: Vec<String>,
     /// `git bisect log`, to copy and replay.
     pub log: String,
+    /// Every answer so far, in the order given, the ones that set the range first.
+    pub journal: Vec<BisectStep>,
+    /// What the bisect found, in plain text to paste into an issue or a chat: the commit, the
+    /// range and the steps. Once the first bad commit is found, or only skipped ones are left.
+    pub report: Option<String>,
     /// Oxbow stashed uncommitted changes before starting; finishing puts them back.
     pub stashed: bool,
     /// git's words for bad and good: `bad`/`good` unless the bisect was started with other terms.
     pub term_bad: String,
     pub term_good: String,
+}
+
+/// One answer of the journal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BisectStep {
+    pub commit: String,
+    /// The commit's subject, as git noted it with the answer.
+    pub summary: String,
+    pub mark: BisectMark,
+    /// Given before both a good and a bad commit were known: it set the range, it wasn't a step.
+    pub range: bool,
+}
+
+/// The commit a bisect found, for the report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FoundCommit {
+    id: String,
+    summary: String,
+    author: String,
+    date: String,
 }
 
 impl Repo {
@@ -156,6 +182,9 @@ impl Repo {
         }
 
         let output = self.bisect_output(&parsed, &name_of, testing.as_deref(), left, steps_left);
+        let mut journal = parsed.journal.clone();
+        self.fill_summaries(&mut journal);
+        let report = self.bisect_report(&parsed, &name_of, &journal);
         Ok(Some(Bisect {
             start,
             start_is_branch,
@@ -175,6 +204,8 @@ impl Repo {
             possible: parsed.possible,
             output,
             log,
+            journal,
+            report,
             stashed: self.bisect_stash().is_some(),
             term_bad,
             term_good,
@@ -256,6 +287,93 @@ impl Repo {
             ));
         }
         lines
+    }
+
+    /// Subjects for answers git noted without one, e.g. from a script that wrote the log itself.
+    fn fill_summaries(&self, journal: &mut [BisectStep]) {
+        let missing: Vec<String> = journal
+            .iter()
+            .filter(|s| s.summary.is_empty())
+            .map(|s| s.commit.clone())
+            .collect();
+        if missing.is_empty() {
+            return;
+        }
+        let args = ["log", "--no-walk", "--format=%H %s"]
+            .into_iter()
+            .map(str::to_owned)
+            .chain(missing);
+        let Ok(out) = self.run(&GitCommand::new(args.chain(["--".to_owned()]))) else {
+            return;
+        };
+        for (id, subject) in out.stdout.lines().filter_map(|l| l.split_once(' ')) {
+            for step in journal.iter_mut().filter(|s| s.summary.is_empty() && s.commit == id) {
+                step.summary = subject.to_owned();
+            }
+        }
+    }
+
+    /// The report once there is a result: the first bad commit, or the skipped ones it may be.
+    fn bisect_report(
+        &self,
+        parsed: &ParsedLog,
+        name_of: &dyn Fn(&str) -> String,
+        journal: &[BisectStep],
+    ) -> Option<String> {
+        if parsed.found.is_none() && parsed.possible.is_empty() {
+            return None;
+        }
+        let found = parsed.found.as_deref().and_then(|id| {
+            let out = self
+                .run(&GitCommand::new([
+                    "log",
+                    "-1",
+                    "--date=format:%Y-%m-%d %H:%M %z",
+                    "--format=%H%x1f%an <%ae>%x1f%ad%x1f%s",
+                    id,
+                    "--",
+                ]))
+                .ok()?;
+            let fields: Vec<&str> = out.stdout.trim_end().splitn(4, '\x1f').collect();
+            let [id, author, date, summary] = fields[..] else {
+                return None;
+            };
+            Some(FoundCommit {
+                id: id.to_owned(),
+                summary: summary.to_owned(),
+                author: author.to_owned(),
+                date: date.to_owned(),
+            })
+        });
+        let possible: Vec<(String, String)> = parsed
+            .possible
+            .iter()
+            .map(|id| {
+                let summary = self
+                    .run(&GitCommand::new(["log", "-1", "--format=%s", id, "--"]))
+                    .map(|out| out.stdout.trim().to_owned())
+                    .unwrap_or_default();
+                (short(id), summary)
+            })
+            .collect();
+        let range = match (&parsed.first_good, &parsed.first_bad) {
+            (Some(good), Some(bad)) => {
+                let count = self
+                    .run(&GitCommand::new(["rev-list", "--count", bad, &format!("^{good}")]))
+                    .ok()
+                    .and_then(|out| out.stdout.trim().parse().ok());
+                Some((name_of(good), name_of(bad), count))
+            }
+            _ => None,
+        };
+        Some(report_text(
+            found.as_ref(),
+            &possible,
+            range.as_ref().map(|(g, b, n)| (g.as_str(), b.as_str(), *n)),
+            journal,
+            &parsed.term_bad,
+            &parsed.term_good,
+        ))
     }
 
     /// The stash Oxbow made before the bisect, while it is still in the stash list.
@@ -376,6 +494,8 @@ struct ParsedLog {
     last: Option<(String, String)>,
     found: Option<String>,
     possible: Vec<String>,
+    /// Every answer in order, with the subject git noted for it.
+    journal: Vec<BisectStep>,
     term_bad: String,
     term_good: String,
 }
@@ -402,6 +522,16 @@ fn parse_log(log: &str, term_bad: &str, term_good: &str) -> ParsedLog {
         .find_map(|prefix| line.strip_prefix(prefix.as_str()))
         .map(str::to_owned)
     };
+    // git notes each answer's commit with its subject: "# bad: [88ee5a5…] Fix the parser".
+    let mut subjects = HashMap::new();
+    for line in log.lines() {
+        if let Some((_, rest)) = line.strip_prefix("# ").and_then(|l| l.split_once(": ["))
+            && let Some((sha, subject)) = rest.split_once("] ")
+        {
+            subjects.insert(sha.to_owned(), subject.to_owned());
+        }
+    }
+    let mut noted: Vec<(String, Vec<String>)> = Vec::new();
     for line in log.lines() {
         if let Some(rest) = result(line, "# first") {
             parsed.found = bracketed(&rest);
@@ -411,34 +541,32 @@ fn parse_log(log: &str, term_bad: &str, term_good: &str) -> ParsedLog {
             parsed.possible.extend(bracketed(&rest));
             continue;
         }
+        // An answer git noted: before `git bisect start <bad> <good>` these are all there is
+        // of the answers the start gave.
+        if let Some((word, rest)) = line.strip_prefix("# ").and_then(|l| l.split_once(": "))
+            && (word == term_bad || word == term_good || word == "skip")
+            && let Some(sha) = bracketed(rest)
+        {
+            noted.push((word.to_owned(), vec![sha]));
+            continue;
+        }
         let Some(rest) = line.strip_prefix("git bisect ") else {
             continue;
         };
         let mut words = rest.split_whitespace();
-        let (Some(word), Some(sha)) = (words.next(), words.next()) else {
-            continue;
+        let answers = match (words.next(), words.next()) {
+            (Some("start"), _) => std::mem::take(&mut noted),
+            // `skip` can name several commits at once.
+            (Some(word), Some(sha)) => {
+                let named = std::iter::once(sha).chain(words.filter(|_| word == "skip"));
+                vec![(word.to_owned(), named.map(str::to_owned).collect())]
+            }
+            _ => Vec::new(),
         };
-        let list = if word == term_good {
-            parsed.first_good.get_or_insert_with(|| sha.to_owned());
-            &mut parsed.good
-        } else if word == term_bad {
-            parsed.first_bad.get_or_insert_with(|| sha.to_owned());
-            &mut parsed.bad
-        } else if word == "skip" {
-            &mut parsed.skipped
-        } else {
-            continue;
-        };
-        // `skip` can name several commits at once.
-        list.push(sha.to_owned());
-        if word == "skip" {
-            list.extend(words.map(str::to_owned));
+        noted.clear();
+        for (word, named) in answers {
+            answer(&mut parsed, &word, named, &subjects);
         }
-        if parsed.ready {
-            parsed.steps += 1;
-        }
-        parsed.ready = parsed.first_good.is_some() && parsed.first_bad.is_some();
-        parsed.last = Some((word.to_owned(), sha.to_owned()));
     }
     // A later answer about the same commit replaces the earlier one.
     for list in [&mut parsed.good, &mut parsed.bad, &mut parsed.skipped] {
@@ -446,6 +574,122 @@ fn parse_log(log: &str, term_bad: &str, term_good: &str) -> ParsedLog {
         list.retain(|sha| seen.insert(sha.clone()));
     }
     parsed
+}
+
+/// Note one answer of the log about the commits `named` (several only for `skip`).
+fn answer(parsed: &mut ParsedLog, word: &str, named: Vec<String>, subjects: &HashMap<String, String>) {
+    let Some(first) = named.first().cloned() else {
+        return;
+    };
+    let (mark, list) = if word == parsed.term_good {
+        parsed.first_good.get_or_insert_with(|| first.clone());
+        (BisectMark::Good, &mut parsed.good)
+    } else if word == parsed.term_bad {
+        parsed.first_bad.get_or_insert_with(|| first.clone());
+        (BisectMark::Bad, &mut parsed.bad)
+    } else if word == "skip" {
+        (BisectMark::Skip, &mut parsed.skipped)
+    } else {
+        return;
+    };
+    list.extend(named.iter().cloned());
+    let range = !parsed.ready;
+    parsed.journal.extend(named.into_iter().map(|commit| BisectStep {
+        summary: subjects.get(&commit).cloned().unwrap_or_default(),
+        commit,
+        mark,
+        range,
+    }));
+    if parsed.ready {
+        parsed.steps += 1;
+    }
+    parsed.ready = parsed.first_good.is_some() && parsed.first_bad.is_some();
+    parsed.last = Some((word.to_owned(), first));
+}
+
+/// The report in plain text, as it is copied:
+///
+/// ```text
+/// First bad commit: 33de29d6fe752c594ed6b48b6946722497351a4b
+///     Cache the parsed config
+/// Author: Ana Lima <ana@example.com>, 2026-10-20 14:02
+///
+/// Between v1.2 (good) and main (bad), 30 commits: 2 steps, 1 commit skipped.
+///
+///     bad   88ee5a5  Release 1.3       sets the range
+///     good  12edd5c  Release 1.2       sets the range
+///  1  skip  f0eb5a8  Split the parser
+///  2  bad   97ba9e2  Read the config once
+/// ```
+fn report_text(
+    found: Option<&FoundCommit>,
+    possible: &[(String, String)],
+    range: Option<(&str, &str, Option<usize>)>,
+    journal: &[BisectStep],
+    term_bad: &str,
+    term_good: &str,
+) -> String {
+    let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+    let mut out = String::new();
+    if let Some(found) = found {
+        out.push_str(&format!(
+            "First {term_bad} commit: {}\n    {}\n",
+            found.id, found.summary
+        ));
+        out.push_str(&format!("Author: {}, {}\n", found.author, found.date));
+    } else {
+        out.push_str(&format!(
+            "The first {term_bad} commit is one of these; only skipped commits were left to test:\n"
+        ));
+        for (id, summary) in possible {
+            out.push_str(&format!("    {id}  {summary}\n"));
+        }
+    }
+    let steps = journal.iter().filter(|s| !s.range).count();
+    let skipped = journal.iter().filter(|s| s.mark == BisectMark::Skip).count();
+    let mut summary = match range {
+        Some((good, bad, count)) => {
+            let count = count.map_or(String::new(), |n| format!(", {}", plural(n, "commit")));
+            format!(
+                "Between {good} ({term_good}) and {bad} ({term_bad}){count}: {}",
+                plural(steps, "step")
+            )
+        }
+        None => plural(steps, "step"),
+    };
+    if skipped > 0 {
+        summary.push_str(&format!(", {} skipped", plural(skipped, "commit")));
+    }
+    out.push_str(&format!("\n{summary}.\n\n"));
+    let word = |mark: BisectMark| match mark {
+        BisectMark::Good => term_good,
+        BisectMark::Bad => term_bad,
+        BisectMark::Skip => "skip",
+    };
+    let width = journal.iter().map(|s| word(s.mark).len()).max().unwrap_or(4);
+    let subject = journal.iter().map(|s| s.summary.chars().count()).max().unwrap_or(0);
+    let mut number = 0;
+    for step in journal {
+        let at = if step.range {
+            "  ".to_owned()
+        } else {
+            number += 1;
+            format!("{number:>2}")
+        };
+        let mut line = format!(
+            "{at}  {:<width$}  {}  {}",
+            word(step.mark),
+            short(&step.commit),
+            step.summary
+        );
+        if step.range {
+            let pad = subject - step.summary.chars().count();
+            line.push_str(&format!("{}  sets the range", " ".repeat(pad)));
+        }
+        out.push_str(line.trim_end());
+        out.push('\n');
+    }
+    out
 }
 
 fn short(sha: &str) -> String {
@@ -498,6 +742,92 @@ git bisect good b0783d7651a9e81c1accd7681338c8fdfd5827e0
         assert_eq!(
             parsed.found.as_deref(),
             Some("33de29d6fe752c594ed6b48b6946722497351a4b")
+        );
+    }
+
+    #[test]
+    fn the_journal_lists_every_answer_with_its_subject() {
+        let journal = parse_log(LOG, "bad", "good").journal;
+        let rows: Vec<(&str, BisectMark, bool, &str)> = journal
+            .iter()
+            .map(|s| (&s.commit[..7], s.mark, s.range, s.summary.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("88ee5a5", BisectMark::Bad, true, "c12"),
+                ("12edd5c", BisectMark::Good, true, "c2"),
+                ("97ba9e2", BisectMark::Bad, false, "c7"),
+                ("f0eb5a8", BisectMark::Skip, false, "c4"),
+                ("b0783d7", BisectMark::Good, false, "c5"),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_report_names_the_commit_the_range_and_the_steps() {
+        let journal = parse_log(LOG, "bad", "good").journal;
+        let found = FoundCommit {
+            id: "33de29d6fe752c594ed6b48b6946722497351a4b".into(),
+            summary: "c6".into(),
+            author: "Ana Lima <ana@example.com>".into(),
+            date: "2026-10-20 14:02".into(),
+        };
+        let report = report_text(
+            Some(&found),
+            &[],
+            Some(("v1", "main", Some(10))),
+            &journal,
+            "bad",
+            "good",
+        );
+        assert_eq!(
+            report,
+            "First bad commit: 33de29d6fe752c594ed6b48b6946722497351a4b
+    c6
+Author: Ana Lima <ana@example.com>, 2026-10-20 14:02
+
+Between v1 (good) and main (bad), 10 commits: 3 steps, 1 commit skipped.
+
+    bad   88ee5a5  c12  sets the range
+    good  12edd5c  c2   sets the range
+ 1  bad   97ba9e2  c7
+ 2  skip  f0eb5a8  c4
+ 3  good  b0783d7  c5
+"
+        );
+        let stuck = report_text(
+            None,
+            &[("aaaa".into(), "x".into()), ("cccc".into(), "y".into())],
+            None,
+            &[],
+            "bad",
+            "good",
+        );
+        assert!(stuck.starts_with("The first bad commit is one of these"));
+        assert!(stuck.contains("    cccc  y\n"));
+    }
+
+    #[test]
+    fn a_start_that_names_the_range_sets_it() {
+        let log = "# bad: [aaaa] Ten\n# good: [bbbb] Two\ngit bisect start 'main' 'v1'\n# skip: [cccc] Six\ngit bisect skip cccc\n# good: [dddd] Four\ngit bisect good dddd\n";
+        let parsed = parse_log(log, "bad", "good");
+        assert_eq!(parsed.first_bad.as_deref(), Some("aaaa"));
+        assert_eq!(parsed.first_good.as_deref(), Some("bbbb"));
+        assert_eq!(parsed.steps, 2);
+        let rows: Vec<(&str, bool, &str)> = parsed
+            .journal
+            .iter()
+            .map(|s| (s.commit.as_str(), s.range, s.summary.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("aaaa", true, "Ten"),
+                ("bbbb", true, "Two"),
+                ("cccc", false, "Six"),
+                ("dddd", false, "Four")
+            ]
         );
     }
 

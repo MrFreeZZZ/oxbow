@@ -28,6 +28,7 @@
   import { start } from "./start.svelte";
   import { github } from "./github.svelte";
   import { downloadRequest, installRequest, lfs, patternNote, pruneRequest, lfsTrackRequest, untrackRequest } from "./lfs.svelte";
+  import { bytes } from "./unusual";
   import { nav } from "./nav.svelte";
   import type { LfsPattern, ReadPart, RecentRepo, Submodule, Tracking, Worktree } from "./types";
   import { PART_NAMES, age, errorLine, type ReadStates } from "./reads";
@@ -435,6 +436,10 @@
     ];
   }
 
+  /** LFS files that are only pointers here, and how big they are once downloaded. */
+  const lfsMissing = $derived(lfs.patterns.reduce((n, p) => n + p.missing, 0));
+  const lfsMissingSize = $derived((lfs.status?.missingFiles ?? []).reduce((n, f) => n + f.size, 0));
+
   /** The menu of the Git LFS heading: LFS as a whole. */
   function lfsMenu(event: MouseEvent) {
     const missing = lfs.patterns.reduce((n, p) => n + p.missing, 0);
@@ -749,6 +754,16 @@
           </button>
         {/if}
       </div>
+      {#if lfs.ready && lfsMissing}
+        <button class="item lfs" style:--ring="var(--sep)" onclick={() => run(downloadRequest(null, undefined, true))} title="List the files that are only pointers here, and download them">
+          <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.fetch} /></svg>
+          <span class="grow lfs-text">
+            <span class="ellipsis pattern">Not downloaded</span>
+            <span class="ellipsis sub">{lfsMissing} {lfsMissing === 1 ? "file" : "files"} · {bytes(lfsMissingSize)}</span>
+          </span>
+          <span class="meta warn">Download…</span>
+        </button>
+      {/if}
       {#each lfs.patterns as p (p.pattern)}
         <button
           class="item lfs"

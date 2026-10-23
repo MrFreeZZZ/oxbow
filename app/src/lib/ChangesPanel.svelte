@@ -983,7 +983,7 @@
         <div class="group">
           <div class="ghead">
             {@render groupBox("unstaged", shownTracked)}
-            <span>Unstaged</span><span class="n">{needle ? `${shownTracked.length} of ${tracked.length}` : tracked.length}</span><span class="grow"></span>
+            <span class="gtitle" style:color={plate(color)}>Unstaged</span><span class="n">{needle ? `${shownTracked.length} of ${tracked.length}` : tracked.length}</span><span class="grow"></span>
             {#if tickedUnstaged.length}
               <button class="button mini" onclick={() => actOnTicked("unstaged", "discard")} title="Throw away the edits in the selected files">Discard Selected ({tickedUnstaged.length})</button>
               <button class="button mini primary" onclick={() => actOnTicked("unstaged")}>Stage Selected ({tickedUnstaged.length})</button>
@@ -1009,7 +1009,7 @@
                 title={needle ? "Shown while the filter is on" : untrackedOpen ? "Hide the untracked files" : "Show the new files git does not track yet"}
               >
                 <svg class="chevron" class:open={untrackedOpen} viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" /></svg>
-                <span>Untracked</span><span class="n">{needle ? `${shownUntracked.length} of ${untracked.length}` : untracked.length}</span>
+                <span class="gtitle" style:color={plate(color)}>Untracked</span><span class="n">{needle ? `${shownUntracked.length} of ${untracked.length}` : untracked.length}</span>
               </button>
               <span class="grow"></span>
               {#if tickedUntracked.length}
@@ -1028,7 +1028,7 @@
         <div class="group">
           <div class="ghead">
             {@render groupBox("staged", shownStaged)}
-            <span>Staged</span><span class="n">{needle ? `${shownStaged.length} of ${staged.length}` : staged.length}</span><span class="grow"></span>
+            <span class="gtitle" style:color={plate(color)}>Staged</span><span class="n">{needle ? `${shownStaged.length} of ${staged.length}` : staged.length}</span><span class="grow"></span>
             {#if tickedStaged.length}
               <button class="button mini primary" onclick={() => actOnTicked("staged")}>Unstage Selected ({tickedStaged.length})</button>
             {:else if shownStaged.length}
@@ -1334,6 +1334,10 @@
     letter-spacing: 0.05em;
     text-transform: uppercase;
     color: var(--text2);
+  }
+  /* The three lists' names in the branch color, as the Summary tab. */
+  .gtitle {
+    font-weight: 700;
   }
   .ghead .n,
   .ghead .button {

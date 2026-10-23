@@ -40,6 +40,8 @@
   const partsAt = $derived.by(() => {
     const n = confirm.parts.length;
     if (n < 2) return "";
+    // Parts that run side by side, like the files of a download, count what is done.
+    if (confirm.parts.some((p) => p.bytes)) return ` ${confirm.parts.filter((p) => p.state === "done").length} of ${n} done`;
     const at = confirm.parts.findIndex((p) => p.state === "started");
     return at < 0 ? "" : ` ${at + 1} of ${n}`;
   });
@@ -352,6 +354,17 @@
         </div>
       {/if}
 
+      {#if request.list?.length && confirm.phase === "ask"}
+        <div class="parts" aria-label={request.list.length === 1 ? "The one" : "Each one"}>
+          {#each request.list as item (item.name)}
+            <div class="part">
+              <span class="part-words"><span class="mono part-name" title={item.name}>{item.name}</span></span>
+              <span class="part-state">{item.meta}</span>
+            </div>
+          {/each}
+        </div>
+      {/if}
+
       {#if confirm.parts.length > 1 && confirm.phase !== "ask"}
         <div class="parts" aria-label="Each one">
           {#each confirm.parts as part (part.name)}
@@ -371,7 +384,14 @@
                   <span class="part-why" title={part.error ?? ""}>{#if part.inner}In <span class="mono">{part.inner.slice(part.name.length + 1)}</span>, its own submodule: {/if}{(request.partWhy ?? errorLine)(part.error ?? "")}</span>
                 {/if}
               </span>
-              <span class="part-state">{PART_WORDS[part.state]}</span>
+              {#if part.state === "started" && part.bytes}
+                <span class="part-state part-bytes" title="{bytes(part.bytes.done)} of {bytes(part.bytes.total)}">
+                  <span class="part-bar"><span style:width="{part.bytes.total ? Math.min(100, (100 * part.bytes.done) / part.bytes.total) : 0}%"></span></span>
+                  {bytes(part.bytes.done)} of {bytes(part.bytes.total)}
+                </span>
+              {:else}
+                <span class="part-state">{PART_WORDS[part.state]}</span>
+              {/if}
             </div>
           {/each}
         </div>
@@ -924,6 +944,24 @@
   }
   .part.waiting .part-name {
     color: var(--text2);
+  }
+  .part-bytes {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-variant-numeric: tabular-nums;
+  }
+  .part-bar {
+    width: 64px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--sep);
+    overflow: hidden;
+  }
+  .part-bar span {
+    display: block;
+    height: 100%;
+    background: var(--accent);
   }
   .gaps {
     margin-left: 58px;
