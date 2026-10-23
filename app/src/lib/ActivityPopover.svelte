@@ -186,6 +186,8 @@
     backdrop-filter: blur(30px) saturate(1.8);
     border: 0.5px solid var(--glass-border);
     box-shadow: var(--shadow-pop);
+    /* A short window keeps the whole popover on screen: the list scrolls instead. */
+    max-height: calc(100vh - 60px);
     display: flex;
     flex-direction: column;
     text-align: left;
@@ -232,12 +234,16 @@
   }
   .list {
     max-height: 460px;
+    min-height: 0;
+    overflow-x: hidden;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 2px;
   }
   .row {
+    /* WebKit would otherwise squeeze a tall row inside the scrolling list and cut its buttons. */
+    flex-shrink: 0;
     display: flex;
     align-items: flex-start;
     gap: 10px;
@@ -302,6 +308,8 @@
   .detail {
     font-size: var(--text-small);
     color: var(--text2);
+    /* A long remote URL in an error breaks anywhere rather than widening the popover. */
+    overflow-wrap: anywhere;
   }
   .detail.bad {
     color: var(--orange);
@@ -399,6 +407,7 @@
   }
   .buttons {
     display: flex;
+    flex-shrink: 0;
     gap: 8px;
     margin-top: 8px;
   }
