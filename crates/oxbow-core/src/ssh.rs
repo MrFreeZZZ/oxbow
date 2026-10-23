@@ -334,25 +334,16 @@ if command -v kdialog >/dev/null 2>&1; then
 fi
 exit 1
 "#;
-    let dir = std::env::temp_dir().join(format!("oxbow-{}", whoami()));
-    std::fs::create_dir_all(&dir).ok()?;
-    let path = dir.join("askpass.sh");
+    let path = crate::cli::private_temp_dir().ok()?.join("askpass.sh");
     if std::fs::read_to_string(&path).ok().as_deref() != Some(script) {
         std::fs::write(&path, script).ok()?;
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).ok()?;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).ok()?;
     }
     Some(path)
-}
-
-fn whoami() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("USERNAME"))
-        .unwrap_or_else(|_| "user".into())
 }
 
 #[cfg(test)]

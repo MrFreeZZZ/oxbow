@@ -3,7 +3,6 @@
 //! runs, and each conflicted file with both sides, so the user picks what goes into the result.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use gix::bstr::ByteSlice;
 use serde::{Deserialize, Serialize};
@@ -989,42 +988,36 @@ impl Repo {
 
     /// Merge three versions with `git merge-file`, the way git marks conflicts in the file.
     fn merge_blobs(&self, ours: &[u8], base: &[u8], theirs: &[u8]) -> Result<Vec<RawChunk>> {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "oxbow-merge-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&dir).map_err(|err| Error::Git(err.to_string()))?;
+        // A new folder of its own with a random name, deleted after: never one made beforehand.
+        let dir = tempfile::Builder::new()
+            .prefix("oxbow-merge-")
+            .tempdir()
+            .map_err(|err| Error::Git(err.to_string()))?;
         let size = marker_size(&[ours, base, theirs]);
-        let result = (|| {
-            let mut files = Vec::new();
-            for (name, data) in [("ours", ours), ("base", base), ("theirs", theirs)] {
-                let file = dir.join(name);
-                std::fs::write(&file, data).map_err(|err| Error::Git(err.to_string()))?;
-                files.push(file.display().to_string());
-            }
-            let out = self.spawn(
-                &GitCommand::new([
-                    "merge-file".to_owned(),
-                    "-p".to_owned(),
-                    "--diff3".to_owned(),
-                    format!("--marker-size={size}"),
-                    files[0].clone(),
-                    files[1].clone(),
-                    files[2].clone(),
-                ]),
-                None,
-            )?;
-            // The exit code is the number of conflicts; only a negative one is an error.
-            if out.status.code().is_none_or(|code| !(0..=127).contains(&code)) {
-                return Err(Error::Git(String::from_utf8_lossy(&out.stderr).trim().to_owned()));
-            }
-            parse_merged(&out.stdout, size)
-                .ok_or_else(|| Error::Git("could not tell the conflicts in the merged file apart".into()))
-        })();
-        let _ = std::fs::remove_dir_all(&dir);
-        result
+        let mut files = Vec::new();
+        for (name, data) in [("ours", ours), ("base", base), ("theirs", theirs)] {
+            let file = dir.path().join(name);
+            std::fs::write(&file, data).map_err(|err| Error::Git(err.to_string()))?;
+            files.push(file.display().to_string());
+        }
+        let out = self.spawn(
+            &GitCommand::new([
+                "merge-file".to_owned(),
+                "-p".to_owned(),
+                "--diff3".to_owned(),
+                format!("--marker-size={size}"),
+                files[0].clone(),
+                files[1].clone(),
+                files[2].clone(),
+            ]),
+            None,
+        )?;
+        // The exit code is the number of conflicts; only a negative one is an error.
+        if out.status.code().is_none_or(|code| !(0..=127).contains(&code)) {
+            return Err(Error::Git(String::from_utf8_lossy(&out.stderr).trim().to_owned()));
+        }
+        parse_merged(&out.stdout, size)
+            .ok_or_else(|| Error::Git("could not tell the conflicts in the merged file apart".into()))
     }
 }
 

@@ -342,22 +342,38 @@ fn owner_pattern_matches(pattern: &str, path: &str) -> bool {
         (0..segments.len()).collect()
     };
     starts.iter().any(|&start| {
+        let ends = glob_prefixes(&pat, &segments[start..]);
         (start + 1..=segments.len()).any(|end| {
             let covers_inside = end < segments.len();
             if (directory && !covers_inside) || (files_only && covers_inside) {
                 return false;
             }
-            glob_segments(&pat, &segments[start..end])
+            ends[end - start]
         })
     })
 }
 
-fn glob_segments(pat: &[&str], path: &[&str]) -> bool {
-    match pat.first() {
-        None => path.is_empty(),
-        Some(&"**") => (0..=path.len()).any(|skip| glob_segments(&pat[1..], &path[skip..])),
-        Some(p) => !path.is_empty() && glob(p, path[0]) && glob_segments(&pat[1..], &path[1..]),
+/// For each `n`, whether `pat` matches the first `n` segments of `path`. A table of pattern by
+/// path position rather than trying every split for every `**`, which a CODEOWNERS line of
+/// many `**` would make take forever.
+fn glob_prefixes(pat: &[&str], path: &[&str]) -> Vec<bool> {
+    let mut reached = vec![true];
+    reached.resize(path.len() + 1, false);
+    for p in pat {
+        let mut next = vec![false; path.len() + 1];
+        if *p == "**" {
+            // Any number of segments, from the first position reached on.
+            if let Some(first) = reached.iter().position(|&r| r) {
+                next[first..].fill(true);
+            }
+        } else {
+            for i in 0..path.len() {
+                next[i + 1] = reached[i] && glob(p, path[i]);
+            }
+        }
+        reached = next;
     }
+    reached
 }
 
 /// `*` and `?` within one path segment.
@@ -1448,6 +1464,14 @@ mod tests {
         assert!(!owner_pattern_matches("docs/*", "docs/deep/a.md"));
         assert!(owner_pattern_matches("docs/**/a.md", "docs/x/y/a.md"));
         assert!(owner_pattern_matches("README.md", "sub/README.md"));
+        assert!(owner_pattern_matches("docs/**", "docs/x/y/a.md"));
+        assert!(owner_pattern_matches("**/a.md", "a.md"));
+        assert!(!owner_pattern_matches("docs/**/b.md", "docs/x/y/a.md"));
+        // Many `**` before a name that isn't there: answered at once, not by trying every split.
+        let deep = vec!["d"; 40].join("/") + "/file.rs";
+        let started = std::time::Instant::now();
+        assert!(!owner_pattern_matches(&("**/".repeat(30) + "nothere"), &deep));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
         let rules = parse_code_owners("# owners\n*  @acme/core\n/src/api/ @kirill maria@acme.io # api\n");
         assert_eq!(rules[1], ("/src/api/".to_owned(), vec!["kirill".to_owned()]));
     }

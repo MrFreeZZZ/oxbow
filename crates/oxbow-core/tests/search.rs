@@ -94,3 +94,18 @@ fn a_sha_prefix_resolves_anywhere_in_the_repository() {
     assert_eq!(repo.resolve_commit("abc"), None);
     assert_eq!(repo.resolve_commit("0000000"), None);
 }
+
+#[test]
+fn file_search_finds_names_with_tabs_and_spaces() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    let id = fx.commit("hello\tworld.txt", "x\n", "Add a tab");
+    fx.commit(" spaced .txt", "y\n", "Add spaces");
+    let repo = Repo::open(fx.path()).unwrap();
+    assert_eq!(
+        find(&repo, SearchMode::File, "hello\tworld"),
+        [(id, vec!["hello\tworld.txt".to_owned()])]
+    );
+    let spaced = find(&repo, SearchMode::File, "spaced");
+    assert_eq!(spaced[0].1, [" spaced .txt"]);
+}

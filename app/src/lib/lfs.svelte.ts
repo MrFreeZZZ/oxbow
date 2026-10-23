@@ -8,8 +8,10 @@ import type { Failure, LfsFile, LfsPattern, LfsStatus } from "./types";
 import { bytes } from "./unusual";
 import { splitPath } from "./format";
 import { errorLine } from "./reads";
+import { matches } from "./lfsGlob";
 
 export { BIG_FILE } from "./unusual";
+export { matches } from "./lfsGlob";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -61,41 +63,6 @@ class LfsState {
 }
 
 export const lfs = new LfsState();
-
-/** Whether a .gitattributes pattern matches `path`: without a slash it matches a name in any
- *  folder, with one a path from the top. */
-export function matches(pattern: string, path: string): boolean {
-  const anchored = pattern.replace(/\/$/, "").includes("/");
-  const target = anchored ? path : path.slice(path.lastIndexOf("/") + 1);
-  return globRegex(pattern.replace(/^\//, "")).test(target);
-}
-
-function globRegex(glob: string): RegExp {
-  let out = "";
-  for (let i = 0; i < glob.length; i++) {
-    const c = glob[i];
-    if (c === "*" && glob[i + 1] === "*") {
-      // `**/` is any folders, a trailing `/**` everything inside.
-      if (glob[i + 2] === "/") {
-        out += "(?:.*/)?";
-        i += 2;
-      } else {
-        out += ".*";
-        i += 1;
-      }
-    } else if (c === "*") out += "[^/]*";
-    else if (c === "?") out += "[^/]";
-    else if (c === "[") {
-      const end = glob.indexOf("]", i + 1);
-      if (end < 0) out += "\\[";
-      else {
-        out += `[${glob.slice(i + 1, end).replace(/^!/, "^").replace(/\\/g, "\\\\")}]`;
-        i = end;
-      }
-    } else out += c.replace(/[.+^${}()|\\]/g, "\\$&");
-  }
-  return new RegExp(`^${out}$`);
-}
 
 /** Patterns to offer for a file: its kind, its folder, the file itself. */
 export function patternChoices(path: string): string[] {

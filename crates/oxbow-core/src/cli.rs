@@ -19,6 +19,20 @@ use crate::console;
 use crate::error::{Error, Result};
 use crate::repo::Repo;
 
+/// A folder only this user can open, made once per run with a random name, for files that git
+/// or another app reads. In a temp folder shared with other users, as Linux's `/tmp` is, a
+/// fixed name could be made first by someone else, or be a link to a file of yours.
+pub fn private_temp_dir() -> std::io::Result<std::path::PathBuf> {
+    static DIR: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+    let mut dir = DIR.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(made) = dir.as_ref().filter(|d| d.is_dir()) {
+        return Ok(made.clone());
+    }
+    let made = tempfile::Builder::new().prefix("oxbow-").tempdir()?.keep();
+    *dir = Some(made.clone());
+    Ok(made)
+}
+
 /// One `git` invocation, with an optional explanation for the confirmation sheet.
 /// It serializes with its `display` form too.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -546,6 +560,16 @@ fn collect(
     Ok(output)
 }
 
+/// A line of a command's output longer than this is cut; the rest of it is dropped.
+const MAX_LINE_BYTES: usize = 16 * 1024;
+
+/// Lines read but not yet handled, per command: a command that prints faster than its lines
+/// are handled waits for them instead of filling memory.
+const QUEUED_LINES: usize = 1024;
+
+/// The output kept of a streamed command, per stream: past it, the oldest lines go.
+const MAX_KEPT_BYTES: usize = 4 * 1024 * 1024;
+
 /// Run `command` in `dir`, passing each line it prints to `on_line` as it comes. Setting
 /// `cancel` stops the command; it then fails with [`Error::Cancelled`].
 pub fn run_streaming_in(
@@ -567,7 +591,7 @@ pub fn run_streaming_in(
             return Err(Error::GitNotFound(err.to_string()));
         }
     };
-    let (send, receive) = mpsc::channel();
+    let (send, receive) = mpsc::sync_channel(QUEUED_LINES);
     // What the Console shows: the lines in the order they came, without progress.
     let mut logged = log.output();
     let readers = [
@@ -593,6 +617,7 @@ pub fn run_streaming_in(
                     };
                     all.push_str(&line.text);
                     all.push('\n');
+                    keep_tail(all, MAX_KEPT_BYTES);
                     logged.push(&line.text, line.stderr);
                 }
                 on_line(line);
@@ -627,17 +652,36 @@ pub fn run_streaming_in(
     }
 }
 
-/// Read `pipe` on a thread of its own, sending each line split at `\n` or `\r`.
+/// Drop whole lines from the start of `text` until it is at most `max` bytes, saying so once.
+fn keep_tail(text: &mut String, max: usize) {
+    const CUT: &str = "… (earlier output cut)\n";
+    if text.len() <= max {
+        return;
+    }
+    let mut from = (text.len() + CUT.len()).saturating_sub(max).min(text.len());
+    while !text.is_char_boundary(from) {
+        from += 1;
+    }
+    let start = text[from..].find('\n').map_or(text.len(), |i| from + i + 1);
+    text.replace_range(..start, CUT);
+}
+
+/// Read `pipe` on a thread of its own, sending each line split at `\n` or `\r`, at most
+/// [`MAX_LINE_BYTES`] of it.
 fn read_lines(
     mut pipe: impl Read + Send + 'static,
     stderr: bool,
-    send: mpsc::Sender<OutputLine>,
+    send: mpsc::SyncSender<OutputLine>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let mut pending: Vec<u8> = Vec::new();
+        let mut cut = false;
         let mut buffer = [0u8; 4096];
-        let emit = |bytes: &[u8], progress: bool| {
-            let text = String::from_utf8_lossy(bytes).trim_end().to_owned();
+        let emit = |bytes: &[u8], cut: bool, progress: bool| {
+            let mut text = String::from_utf8_lossy(bytes).trim_end().to_owned();
+            if cut {
+                text.push_str(" …");
+            }
             if !text.is_empty() {
                 let _ = send.send(OutputLine { text, stderr, progress });
             }
@@ -649,14 +693,17 @@ fn read_lines(
             };
             for &byte in &buffer[..n] {
                 if byte == b'\n' || byte == b'\r' {
-                    emit(&pending, byte == b'\r');
+                    emit(&pending, cut, byte == b'\r');
                     pending.clear();
-                } else {
+                    cut = false;
+                } else if pending.len() < MAX_LINE_BYTES {
                     pending.push(byte);
+                } else {
+                    cut = true;
                 }
             }
         }
-        emit(&pending, false);
+        emit(&pending, cut, false);
     })
 }
 
@@ -684,6 +731,30 @@ pub(crate) fn shell_quote(arg: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kept_output_loses_its_oldest_lines() {
+        let mut text = "one\ntwo\nthree\nfour\n".to_owned();
+        keep_tail(&mut text, 100);
+        assert_eq!(text, "one\ntwo\nthree\nfour\n");
+        let mut text = format!("{}\nlast line\n", "x".repeat(200));
+        keep_tail(&mut text, 60);
+        assert_eq!(text, "… (earlier output cut)\nlast line\n");
+        assert!(text.len() <= 60);
+    }
+
+    #[test]
+    fn a_very_long_line_is_cut() {
+        let (send, receive) = mpsc::sync_channel(4);
+        let data = format!("{}\nnext\n", "y".repeat(MAX_LINE_BYTES * 3));
+        read_lines(std::io::Cursor::new(data.into_bytes()), false, send)
+            .join()
+            .unwrap();
+        let lines: Vec<OutputLine> = receive.iter().collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text.len(), MAX_LINE_BYTES + " …".len());
+        assert_eq!(lines[1].text, "next");
+    }
 
     #[cfg(unix)]
     #[test]

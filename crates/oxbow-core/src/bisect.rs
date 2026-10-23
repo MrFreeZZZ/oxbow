@@ -464,7 +464,8 @@ impl Repo {
             && let Some(name) = self.stash_name(&id)
         {
             commands.push(
-                GitCommand::new(["stash", "pop", &name]).comment("your uncommitted changes from before the bisect"),
+                GitCommand::new(["stash", "pop", "--index", &name])
+                    .comment("your uncommitted changes from before the bisect; --index: staged ones staged again"),
             );
         }
         Ok(commands)
