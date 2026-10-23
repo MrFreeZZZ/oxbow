@@ -160,10 +160,7 @@ impl Repo {
             stash: self.stash_records()?,
             trees: Trees {
                 worktree: self.worktree_tree()?,
-                index: self
-                    .run(&GitCommand::new(["write-tree"]))
-                    .ok()
-                    .map(|o| o.stdout.trim().to_owned()),
+                index: self.index_tree()?,
             },
         })
     }
@@ -599,10 +596,9 @@ impl Repo {
             .is_ok_and(|m| (m.is_file() || m.is_symlink()) && m.len() <= MAX_UNTRACKED)
     }
 
-    /// The working copy as a tree: tracked files as they are on disk, and untracked ones that
-    /// are not ignored or too big, written through a scratch index so the real one is untouched.
-    /// Each call has its own: a compare running next to a step must not delete the step's.
-    fn worktree_tree(&self) -> Result<String> {
+    /// A copy of the index of its own to work on, so the real one is untouched. Each call has
+    /// its own: a compare running next to a step must not delete the step's.
+    fn scratch_index(&self) -> Result<std::path::PathBuf> {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let scratch = self.git_path(&format!("oxbow/snapshot-{}-{n}.index", std::process::id()))?;
@@ -623,6 +619,34 @@ impl Repo {
         } else {
             let _ = std::fs::remove_file(&scratch);
         }
+        Ok(scratch)
+    }
+
+    /// What the index stages, as a tree; `None` while it has conflicts, as in a merge or rebase
+    /// that stopped. Written from a copy: `write-tree` on the real index may take `index.lock`
+    /// and fail while anything else holds it, which is no reason for a snapshot without it.
+    fn index_tree(&self) -> Result<Option<String>> {
+        let scratch = self.scratch_index()?;
+        let with_scratch = |cmd: GitCommand| cmd.env("GIT_INDEX_FILE", scratch.to_string_lossy().into_owned());
+        let result = (|| {
+            if !self
+                .run(&with_scratch(GitCommand::new(["ls-files", "-u", "-z"])))?
+                .stdout
+                .is_empty()
+            {
+                return Ok(None);
+            }
+            let tree = self.run(&with_scratch(GitCommand::new(["write-tree"])))?.stdout;
+            Ok(Some(tree.trim().to_owned()))
+        })();
+        let _ = std::fs::remove_file(&scratch);
+        result
+    }
+
+    /// The working copy as a tree: tracked files as they are on disk, and untracked ones that
+    /// are not ignored or too big, written through a scratch index so the real one is untouched.
+    fn worktree_tree(&self) -> Result<String> {
+        let scratch = self.scratch_index()?;
         let file = scratch.to_string_lossy().into_owned();
         let with_scratch = |cmd: GitCommand| cmd.env("GIT_INDEX_FILE", file.clone());
         let result = (|| {

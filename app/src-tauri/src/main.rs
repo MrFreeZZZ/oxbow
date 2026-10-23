@@ -1503,9 +1503,9 @@ async fn open_source(
             let dir = oxbow_core::cli::private_temp_dir()
                 .map_err(|err| err.to_string())?
                 .join("versions");
-            std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+            oxbow_core::cli::create_private_dir(&dir).map_err(|err| err.to_string())?;
             let file = dir.join(named);
-            std::fs::write(&file, data).map_err(|err| err.to_string())?;
+            oxbow_core::cli::write_private(&file, &data).map_err(|err| err.to_string())?;
             file
         }
     };

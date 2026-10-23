@@ -303,3 +303,56 @@ fn a_log_that_cant_be_read_is_an_error_not_an_empty_log() {
     let err = repo.operation_log().unwrap_err().to_string();
     assert!(err.starts_with("oplog.jsonl: "), "{err}");
 }
+
+#[test]
+fn a_snapshot_is_whole_while_something_else_holds_the_index() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    fx.write("a.txt", "edited\n");
+    fx.write("new.txt", "new\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    let before = repo.snapshot().unwrap();
+
+    // A `git status` or a commit in a terminal holds index.lock for a moment.
+    let lock = fx.path().join(".git/index.lock");
+    std::fs::write(&lock, "").unwrap();
+    assert_eq!(repo.snapshot().unwrap(), before);
+    std::fs::remove_file(&lock).unwrap();
+
+    // Snapshots taken side by side, as a compare next to a step takes them.
+    std::thread::scope(|scope| {
+        for _ in 0..8 {
+            scope.spawn(|| {
+                for _ in 0..4 {
+                    assert_eq!(repo.snapshot().unwrap(), before);
+                }
+            });
+        }
+    });
+}
+
+#[test]
+fn a_step_taken_during_a_merge_with_conflicts_cant_be_gone_back_to() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    fx.git(&["checkout", "-q", "-b", "topic"]);
+    fx.commit("a.txt", "topic\n", "Topic");
+    fx.git(&["checkout", "-q", "main"]);
+    fx.commit("a.txt", "main\n", "Main");
+    let _ = std::process::Command::new("git")
+        .args(["merge", "-q", "topic"])
+        .current_dir(fx.path())
+        .output()
+        .unwrap();
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&Action::CreateBranch {
+        name: "fix".into(),
+        start: None,
+        switch: false,
+        publish: None,
+    })
+    .unwrap();
+    let id = repo.operation_log().unwrap()[0].id.clone();
+    let err = repo.plan_restore(&id, false).unwrap_err();
+    assert!(err.to_string().contains("middle of a merge"), "{err}");
+}

@@ -1002,6 +1002,7 @@ export interface SizedFile {
 export type NotKept =
   | { kind: "bigFiles"; files: SizedFile[]; more: number; limit: number }
   | { kind: "ignoredInTheWay"; files: SizedFile[]; more: number; bytes: number }
+  | { kind: "unchecked"; folders: string[]; more: number; limit: number }
   | { kind: "ignored"; folder: string; files: SizedFile[]; more: number; bytes: number }
   | { kind: "worktree"; folder: string; branch: string | null; changed: number | null; removed: boolean }
   | { kind: "notLogged"; what: string }

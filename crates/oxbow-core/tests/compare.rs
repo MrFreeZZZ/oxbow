@@ -108,3 +108,14 @@ fn pages_and_counts_add_up_to_the_whole_diff() {
         Err(oxbow_core::Error::Cancelled)
     ));
 }
+
+#[test]
+fn a_file_with_a_tab_or_a_quote_in_its_name_knows_its_last_commit() {
+    let (mut fx, _, _, _) = diverged();
+    fx.git(&["switch", "-q", "feature"]);
+    let tab = fx.commit("tab\there \"q\".txt", "x\n", "Add an odd name");
+    let repo = Repo::open(fx.path()).unwrap();
+    let c = repo.compare("main", "feature", CompareMode::Split).unwrap();
+    let file = c.files.iter().find(|f| f.file.path.starts_with("tab")).unwrap();
+    assert_eq!(file.last.as_deref(), Some(tab.as_str()));
+}

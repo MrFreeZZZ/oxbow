@@ -989,15 +989,12 @@ impl Repo {
     /// Merge three versions with `git merge-file`, the way git marks conflicts in the file.
     fn merge_blobs(&self, ours: &[u8], base: &[u8], theirs: &[u8]) -> Result<Vec<RawChunk>> {
         // A new folder of its own with a random name, deleted after: never one made beforehand.
-        let dir = tempfile::Builder::new()
-            .prefix("oxbow-merge-")
-            .tempdir()
-            .map_err(|err| Error::Git(err.to_string()))?;
+        let dir = crate::cli::private_temp_folder("oxbow-merge-").map_err(|err| Error::Git(err.to_string()))?;
         let size = marker_size(&[ours, base, theirs]);
         let mut files = Vec::new();
         for (name, data) in [("ours", ours), ("base", base), ("theirs", theirs)] {
             let file = dir.path().join(name);
-            std::fs::write(&file, data).map_err(|err| Error::Git(err.to_string()))?;
+            crate::cli::write_private(&file, data).map_err(|err| Error::Git(err.to_string()))?;
             files.push(file.display().to_string());
         }
         let out = self.spawn(
