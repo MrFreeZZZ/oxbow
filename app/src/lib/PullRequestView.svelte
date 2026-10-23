@@ -412,7 +412,7 @@
   /** Commits `branch` brings into `base`, from the stack (newest first). */
   function commitsOver(base: string): number {
     if (!stack) return 0;
-    const tipOf = (name: string) => stack!.commits.findIndex((c) => c.id === stack!.branches.find((b) => b.name === name)?.tip);
+    const tipOf = (name: string) => stack!.commits.findIndex((c) => c.id === stack!.branches.find((b) => b.name === name)?.at);
     const from = tipOf(branch);
     if (from < 0) return 0;
     const to = base === below ? tipOf(base) : stack.commits.length;

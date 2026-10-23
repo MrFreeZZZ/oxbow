@@ -2,7 +2,9 @@
   // Edit Stack: the stack's commits on its line, newest at the top, with a branch line above
   // each branch's commits. Each commit gets an action (pick, reword, edit, squash, fixup, drop)
   // and can be dragged, or moved with ⌥↑↓, also across a branch line into that branch. On the
-  // right, what the stack looks like afterwards, from a dry run of the plan.
+  // right, what the stack looks like afterwards, from a dry run of the plan: each branch's old
+  // and new tip, whether it needs a force push and its pull request. Templates make a plan in one
+  // go: Squash WIP, Fix Messages, Move to Branch.
   import { untrack } from "svelte";
   import { api } from "./api";
   import type { Request } from "./confirm.svelte";
@@ -12,6 +14,8 @@
   import { shortcut, withKeys } from "./keys";
   import { combo, pressed } from "./shortcuts";
   import { kept as keptPlans } from "./kept";
+  import { github } from "./github.svelte";
+  import { messageNote, moveToBranch, neighborBranch, squashWip, wipOf } from "./stackTemplates";
   import Menu, { type MenuEntry } from "./Menu.svelte";
   import WhyNote from "./WhyNote.svelte";
   import { oplog, undoRequest } from "./oplog.svelte";
@@ -33,7 +37,7 @@
     type Draft,
     type Item,
   } from "./stack";
-  import type { Stack, StackPreview, StepAction } from "./types";
+  import type { BranchAfter, Stack, StackPreview, StepAction } from "./types";
 
   let {
     branch,
@@ -63,7 +67,9 @@
   let preview = $state<StackPreview | null>(null);
   let previewError = $state<string | null>(null);
   let checking = $state(false);
-  let menu = $state<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
+  let menu = $state<{ x: number; y: number; label: string; entries: MenuEntry[] } | null>(null);
+  /** Fix Messages: every subject is a text box in the list. */
+  let fixing = $state(false);
   /** After a rebase: what it did, until the plan changes again. */
   let done = $state<{ line: string; push: string[]; moved: string[] } | null>(null);
 
@@ -193,6 +199,7 @@
   function resetPlan() {
     if (!stack) return;
     done = null;
+    fixing = false;
     draft = freshDraft(stack);
   }
 
@@ -217,8 +224,125 @@
     menu = {
       x: box.left,
       y: box.bottom + 4,
-      entries: ACTIONS.map((a) => ({ kind: "item", label: `${a.label}  ·  ${a.hint}`, icon: ICONS[a.id], keys: shortcut(a.command) || undefined, danger: a.id === "drop", run: () => setAct(id, a.id) })),
+      label: "Commit action",
+      entries: [
+        ...ACTIONS.map((a): MenuEntry => ({ kind: "item", label: `${a.label}  ·  ${a.hint}`, icon: ICONS[a.id], keys: shortcut(a.command) || undefined, danger: a.id === "drop", run: () => setAct(id, a.id) })),
+        { kind: "sep" },
+        ...moveEntries(id),
+      ],
     };
+  }
+
+  // --- Templates -------------------------------------------------------------------------------
+  const DOWN = "M8 3.5v9M4.5 9 8 12.5 11.5 9";
+  const UP = "M8 12.5v-9M4.5 7 8 3.5 11.5 7";
+
+  /** Move to Branch, both ways, for the commit `id`. */
+  function moveEntries(id: string | null): MenuEntry[] {
+    const summary = id ? (byId.get(id)?.summary ?? "") : "";
+    return ([1, -1] as const).map((dir): MenuEntry => {
+      const to = id ? neighborBranch(draft.items, id, dir) : null;
+      const where = dir === 1 ? "below" : "above";
+      return {
+        kind: "item",
+        label: to ? `Move to ${to}` : `Move to the Branch ${dir === 1 ? "Below" : "Above"}`,
+        icon: dir === 1 ? DOWN : UP,
+        detail: !id ? "Select a commit first" : to ? `“${summary}” becomes its ${dir === 1 ? "newest" : "oldest"} commit` : `No branch ${where} this commit’s branch`,
+        off: !to,
+        run: () => {
+          const next = id && moveToBranch(draft.items, id, dir);
+          if (next) {
+            done = null;
+            draft = { ...draft, items: next };
+          }
+        },
+      };
+    });
+  }
+
+  function openTemplates(event: MouseEvent) {
+    if (!stack) return;
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const wip = stack.commits.filter((c) => wipOf(c.summary)).length;
+    const unclear = stack.commits.filter((c) => messageNote(c.summary)).length;
+    menu = {
+      x: box.left,
+      y: box.bottom + 4,
+      label: "Templates",
+      entries: [
+        {
+          kind: "item",
+          label: "Squash WIP Commits",
+          icon: ICONS.squash,
+          detail: wip ? `Folds ${plural(wip, "WIP commit")} into the commits they continue` : "No WIP, fixup! or squash! commits in this stack",
+          off: !wip,
+          run: applySquashWip,
+        },
+        {
+          kind: "item",
+          label: "Fix Messages",
+          icon: ICONS.reword,
+          detail: unclear ? `Every subject becomes editable; ${unclear} could say more` : "Every subject becomes editable in the list",
+          run: startFixing,
+        },
+        { kind: "sep" },
+        ...moveEntries(selected),
+      ],
+    };
+  }
+
+  function applySquashWip() {
+    if (!stack) return;
+    const result = squashWip(draft, stack.commits);
+    done = null;
+    draft = result.draft;
+    if (result.left.length) {
+      const names = result.left.map((id) => `“${byId.get(id)?.summary ?? shortId(id)}”`);
+      confirm.say(`${list(names)} ${result.left.length === 1 ? "is the oldest commit of its branch, so it stays" : "are the oldest commits of their branches, so they stay"}: reword ${result.left.length === 1 ? "it" : "them"} with Fix Messages.`);
+    }
+  }
+
+  function startFixing() {
+    if (!stack) return;
+    fixing = true;
+    // The first subject worth a look gets the cursor.
+    const first = stack.commits.find((c) => messageNote(c.summary) && fixable(c.id)) ?? stack.commits.find((c) => fixable(c.id));
+    if (first) selected = first.id;
+    requestAnimationFrame(() => document.querySelector<HTMLInputElement>(`.list input.fix[data-id="${first?.id}"]`)?.focus());
+  }
+
+  /** In Fix Messages, a commit that keeps a message of its own gets a text box. */
+  const fixable = (id: string) => (actOf(id) === "pick" || actOf(id) === "reword") && !isFold(id);
+
+  /** A subject typed in Fix Messages: a new one rewords the commit, the old one picks it again. */
+  function fixSubject(id: string, subject: string) {
+    const c = byId.get(id);
+    if (!c) return;
+    const message = draft.messages[id] ?? c.message;
+    const rest = message.includes("\n") ? message.slice(message.indexOf("\n")) : "";
+    const acts = { ...draft.acts };
+    const messages = { ...draft.messages };
+    if (subject + rest === c.message) {
+      delete acts[id];
+      delete messages[id];
+    } else {
+      acts[id] = "reword";
+      messages[id] = subject + rest;
+    }
+    done = null;
+    draft = { ...draft, acts, messages };
+  }
+
+  /** Enter in Fix Messages goes on to the next subject. */
+  function fixKey(event: KeyboardEvent) {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    const boxes = [...document.querySelectorAll<HTMLInputElement>(".list input.fix")];
+    const next = boxes[boxes.indexOf(event.currentTarget as HTMLInputElement) + 1];
+    if (next) {
+      next.focus();
+      selected = next.dataset.id ?? selected;
+    } else (event.currentTarget as HTMLInputElement).blur();
   }
 
   const ICONS: Record<StepAction, string> = {
@@ -323,6 +447,7 @@
     const before = preview;
     const ok = await run(request);
     if (!ok) return;
+    fixing = false;
     const moved = before.branches.filter((b) => b.moves).length;
     const rewritten = before.rewritten + before.squashed;
     done = {
@@ -372,6 +497,8 @@
     ok: "M3.5 8.5 6.5 11.5 12.5 4.5",
     warn: "M8 2.5 14 13H2zM8 6.5v3M8 11.5v.1",
     stop: "M5 3v10M11 3v10",
+    merge: "M4.5 2v12M4.5 4.5c0 3.5 7 2.5 7 6v3.5M11.5 2v2",
+    pull: "M4.5 2.5v11M4.5 2.5a1.5 1.5 0 1 0 0 .1M11.5 13.5V6.5c0-1.5-1-2.5-2.5-2.5H7M8.5 2.5 7 4l1.5 1.5",
   };
   type Fact = { icon: string; title: string; detail: string; tone?: "ok" | "warn" };
 
@@ -415,20 +542,12 @@
         tone: "warn",
       });
     }
-    const moving = preview.branches.filter((b) => b.moves).length;
-    if (moving) {
+    if (stack.merges.length) {
+      const one = stack.merges.length === 1;
       out.push({
-        icon: icons.branch,
-        title: moving === 1 ? "1 branch moves with its commits" : `${moving} branches move with their commits`,
-        detail: "Each branch line stays on its own last commit, so the stack keeps its shape. Moving a commit across a line moves it to that branch.",
-      });
-    }
-    const force = preview.branches.filter((b) => b.forcePush).map((b) => b.name);
-    if (force.length) {
-      out.push({
-        icon: icons.push,
-        title: `Force push needed for ${list(force)}`,
-        detail: "Push them from here when the rebase is done: with --force-with-lease, so nobody else’s new commits get overwritten.",
+        icon: icons.merge,
+        title: one ? `The merge “${stack.merges[0].summary}” is left out` : `${stack.merges.length} merges of ${stack.trunk} are left out`,
+        detail: `${one ? "It" : "They"} only brought ${stack.trunk} into ${list([...new Set(stack.merges.map((m) => m.branch))])}. A rebase replays commits one by one on a straight line, so the stack’s own commits go on top of ${stack.trunk} ${shortId((draft.onto ? stack.trunkTip : stack.base).id)} instead, and nothing of ${stack.trunk} is lost.`,
       });
     }
     if (preview.emptied.length) {
@@ -475,6 +594,70 @@
     return out;
   });
 
+  // --- Each branch afterwards ----------------------------------------------------------------
+  type BranchRow = {
+    name: string;
+    old: string;
+    next: string;
+    summary: string;
+    push: { label: string; tone: "force" | "plain" | "none"; title: string };
+    pull: { number: number; title: string; note: string; warn: boolean } | null;
+  };
+
+  function pushOf(after: BranchAfter): BranchRow["push"] {
+    const up = stack?.branches.find((b) => b.name === after.name)?.upstream;
+    if (!after.moves) return { label: "Unchanged", tone: "none", title: "It stays on the same commit" };
+    if (after.forcePush) {
+      return {
+        label: "Force push",
+        tone: "force",
+        title: `git push --force-with-lease ${after.forcePush.remote} ${after.name}: its commits on ${after.forcePush.remote} are replaced, and the push is refused if someone else pushed there since your last fetch`,
+      };
+    }
+    if (up) return { label: "Push", tone: "plain", title: `${up.remote} only gets new commits: a plain push` };
+    return { label: "Not pushed", tone: "none", title: "It has no remote branch yet" };
+  }
+
+  const branchRows = $derived.by((): BranchRow[] => {
+    if (!stack || !preview || !preview.changed) return [];
+    const onto = draft.onto ? stack.trunkTip : stack.base;
+    return preview.branches.map((after) => {
+      const b = stack!.branches.find((x) => x.name === after.name);
+      const from = byId.get(after.tipFrom);
+      const empty = after.tipFrom === onto.id;
+      const pull = github.openPullOf(b?.upstream?.branch ?? after.name);
+      const push = pushOf(after);
+      return {
+        name: after.name,
+        old: shortId(b?.tip ?? ""),
+        next: !after.moves ? "unchanged" : after.sameSha ? shortId(after.tipFrom) : "new SHA",
+        summary: empty
+          ? `Ends on ${stack!.trunk}, with no commits of its own`
+          : `${after.moves ? "Ends on" : "Stays on"} “${from ? subjectOf(from.id) : shortId(after.tipFrom)}”`,
+        push,
+        pull: pull && {
+          number: pull.number,
+          title: pull.title,
+          warn: empty,
+          note: empty
+            ? "would show no changes"
+            : !after.moves
+              ? "stays as it is"
+              : push.tone === "force"
+                ? "shows the rewritten commits after the force push"
+                : "shows the new commits after the push",
+        },
+      };
+    });
+  });
+
+  const branchSummary = $derived.by(() => {
+    const moving = branchRows.filter((r) => r.next !== "unchanged").length;
+    const force = branchRows.filter((r) => r.push.tone === "force").length;
+    const pulls = branchRows.filter((r) => r.pull && r.pull.note !== "stays as it is").length;
+    return [`${moving} ${moving === 1 ? "moves" : "move"}`, force && `${force} force ${force === 1 ? "push" : "pushes"}`, pulls && `${plural(pulls, "pull request")} affected`].filter(Boolean).join(" · ");
+  });
+
   /** The commit whose combined message is being written: the selected squash's target, or the selected target. */
   const squashTarget = $derived.by(() => {
     if (!selected) return null;
@@ -518,7 +701,8 @@
 
 {#if error}
   <div class="empty-state">
-    <p>{error}</p>
+    <p class="empty-title">Edit Stack can’t open this stack</p>
+    <p class="empty-why">{error.replace(/^Error: /, "")}</p>
     <button class="button" onclick={onClose}>Back to History</button>
   </div>
 {:else if stack}
@@ -530,6 +714,10 @@
       <span class="dim">onto</span>
       <span class="cap" style:background={tint(trunkColor, "label")} style:color={plate(trunkColor)}>{stack.trunk}</span>
       <span class="grow"></span>
+      <button class="button templates" aria-haspopup="menu" title="Plans made in one go: Squash WIP, Fix Messages, Move to Branch" onclick={openTemplates}>
+        Templates
+        <svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>
+      </button>
       <button class="switch-row" onclick={toggleOnto} disabled={!stack.newer} role="switch" aria-checked={draft.onto}>
         <span class="switch-words">
           <span class="switch-title">Move onto latest {stack.trunk}</span>
@@ -541,9 +729,14 @@
 
     <div class="columns">
       <section class="plan" aria-label="Commits">
-        <div class="plan-head">
-          <span class="grow">Newest at the top · drag commits, or a branch line, to move them</span>
-          <span class="count">{kept} of {commitCount} commits kept</span>
+        <div class="plan-head" class:fixing>
+          {#if fixing}
+            <span class="grow">Fix Messages · type over any subject, Return goes to the next</span>
+            <button class="button small" onclick={() => (fixing = false)}>Done</button>
+          {:else}
+            <span class="grow">Newest at the top · drag commits, or a branch line, to move them</span>
+            <span class="count">{kept} of {commitCount} commits kept</span>
+          {/if}
         </div>
         <div class="list" role="list" aria-label="Rebase plan" onpointermove={moveDrag} onpointerup={endDrag} onpointercancel={endDrag}>
           {#each draft.items as item, index (itemKey(item))}
@@ -576,8 +769,10 @@
                 {@const folded = isFold(item.id)}
                 {@const on = selected === item.id}
                 {@const note = noteOf(item.id)}
+                {@const fix = fixing && fixable(item.id)}
+                {@const hint = fix ? messageNote(subjectOf(item.id)) : null}
                 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-                <div class="row" class:on style:background={on ? tint(color) : undefined} class:tall={!!note} onclick={() => (selected = item.id)}>
+                <div class="row" class:on style:background={on ? tint(color) : undefined} class:tall={!!note || !!hint} onclick={() => (selected = item.id)}>
                   <button class="grip" aria-label="Drag {c.summary}" title="Drag to move, or ⌥↑ ⌥↓" onpointerdown={(e) => startDrag(e, index)}>
                     <svg class="icon small" viewBox="0 0 16 16"><circle cx="6" cy="4" r=".6" /><circle cx="10" cy="4" r=".6" /><circle cx="6" cy="8" r=".6" /><circle cx="10" cy="8" r=".6" /><circle cx="6" cy="12" r=".6" /><circle cx="10" cy="12" r=".6" /></svg>
                   </button>
@@ -592,7 +787,21 @@
                       {ACTIONS.find((x) => x.id === a)?.label}
                       <svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>
                     </button>
-                    {#if a === "reword" && on}
+                    {#if fix}
+                      <span class="words">
+                        <input
+                          class="reword fix"
+                          data-id={item.id}
+                          aria-label="Subject of {c.summary}"
+                          value={subjectOf(item.id)}
+                          oninput={(e) => fixSubject(item.id, e.currentTarget.value)}
+                          onfocus={() => (selected = item.id)}
+                          onkeydown={fixKey}
+                          onclick={(e) => e.stopPropagation()}
+                        />
+                        {#if hint}<span class="note hint">{hint}</span>{/if}
+                      </span>
+                    {:else if a === "reword" && on}
                       <!-- svelte-ignore a11y_autofocus -->
                       <input class="reword" aria-label="New commit message" value={subjectOf(item.id)} oninput={(e) => reword(item.id, e.currentTarget.value)} onclick={(e) => e.stopPropagation()} autofocus />
                     {:else}
@@ -667,6 +876,31 @@
             {/each}
           {/if}
         </div>
+        {#if !done && branchRows.length}
+          <div class="branches" role="list" aria-label="Branches afterwards">
+            <div class="section-title"><span>Branches</span><span class="dim">{branchSummary}</span></div>
+            {#each branchRows as r (r.name)}
+              {@const color = colorOf(r.name)}
+              <div class="branch-row" role="listitem">
+                <span class="branch-line">
+                  <span class="cap" style:background={tint(color, "label")} style:color={plate(color)}>{r.name}</span>
+                  <span class="tips mono" title="Tip before → tip after">{r.old}<svg class="icon small" viewBox="0 0 16 16"><path d="M3 8h9.5M9 4.5 12.5 8 9 11.5" /></svg>{r.next}</span>
+                  <span class="grow"></span>
+                  <span class="push-badge {r.push.tone}" title={r.push.title}>{r.push.label}</span>
+                </span>
+                <span class="tip-msg">{r.summary}</span>
+                {#if r.pull}
+                  <span class="pull-line" class:warn={r.pull.warn}>
+                    <svg class="icon small" viewBox="0 0 16 16"><path d={icons.pull} /></svg>
+                    <span class="pull-number">#{r.pull.number}</span>
+                    <span class="pull-title">{r.pull.title}</span>
+                    <span class="pull-note">{r.pull.note}</span>
+                  </span>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
         {#if !done}
           <div class="facts">
             {#each facts as f (f.title)}
@@ -715,7 +949,7 @@
 {/if}
 
 {#if menu}
-  <Menu x={menu.x} y={menu.y} label="Commit action" entries={menu.entries} onClose={() => (menu = null)} />
+  <Menu x={menu.x} y={menu.y} label={menu.label} entries={menu.entries} onClose={() => (menu = null)} />
 {/if}
 
 <style>
@@ -740,8 +974,33 @@
     padding: 40px;
     text-align: center;
   }
+  .empty-title {
+    margin: 0;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .empty-why {
+    margin: 0;
+    max-width: 520px;
+    line-height: 1.45;
+    white-space: pre-line;
+  }
   .grow {
     flex-grow: 1;
+  }
+  .templates {
+    gap: 6px;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .templates svg {
+    width: 9px;
+    height: 9px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
   .dim {
     color: var(--text2);
@@ -847,6 +1106,14 @@
   .count {
     font-weight: 400;
   }
+  .plan-head.fixing {
+    color: var(--accent-text);
+  }
+  .plan-head .button.small {
+    height: 22px;
+    padding: 0 12px;
+    font-size: var(--text-caption);
+  }
   .list {
     display: flex;
     flex-direction: column;
@@ -943,6 +1210,7 @@
   .row {
     position: relative;
     flex-grow: 1;
+    min-width: 0;
     display: flex;
     align-items: center;
     min-height: 36px;
@@ -1040,6 +1308,17 @@
   }
   .note.warn {
     color: var(--orange);
+  }
+  .note.hint {
+    color: var(--orange);
+    padding-left: 9px;
+  }
+  .words .fix {
+    flex-grow: 0;
+    border-color: var(--glass-border);
+  }
+  .words .fix:focus {
+    border-color: var(--accent);
   }
   .reword {
     flex-grow: 1;
@@ -1241,6 +1520,100 @@
     font-size: var(--text-small);
     font-weight: 600;
   }
+  .branches {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .section-title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 0 2px 4px;
+    font-size: var(--text-caption);
+    font-weight: 600;
+    color: var(--text2);
+  }
+  .section-title .dim {
+    font-weight: 400;
+  }
+  .branch-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 7px 10px;
+    border-radius: var(--radius-l);
+    background: var(--field);
+  }
+  .branch-line,
+  .pull-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .branch-line .cap {
+    flex-shrink: 0;
+  }
+  .tips {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: var(--text-caption);
+    color: var(--text2);
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .tip-msg,
+  .pull-title {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: var(--text-small);
+  }
+  .tip-msg {
+    color: var(--text2);
+    padding-left: 2px;
+  }
+  .push-badge {
+    flex-shrink: 0;
+    white-space: nowrap;
+    padding: 1px 8px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-caption);
+    font-weight: 600;
+    color: var(--text2);
+  }
+  .push-badge.plain {
+    color: var(--accent-text);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+  .push-badge.force {
+    color: var(--orange);
+    background: var(--orange-soft);
+  }
+  .pull-line {
+    font-size: var(--text-small);
+    color: var(--text2);
+    padding-left: 2px;
+  }
+  .pull-line.warn .pull-note {
+    color: var(--orange);
+  }
+  .pull-number {
+    font-weight: 600;
+    color: var(--text);
+    flex-shrink: 0;
+  }
+  .pull-title {
+    color: var(--text);
+    flex: 0 1 auto;
+  }
+  .pull-note {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
   .facts {
     display: flex;
     flex-direction: column;
@@ -1320,6 +1693,8 @@
   }
   .buttons {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     align-items: center;
     gap: 8px;
     padding-bottom: 2px;

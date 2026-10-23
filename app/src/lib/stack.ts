@@ -41,7 +41,7 @@ export const itemKey = (item: Item) => (item.kind === "branch" ? `b:${item.name}
 export function initialItems(stack: Stack): Item[] {
   const items: Item[] = [];
   for (const commit of stack.commits) {
-    for (const b of stack.branches.filter((b) => b.tip === commit.id)) items.push({ kind: "branch", name: b.name });
+    for (const b of stack.branches.filter((b) => b.at === commit.id)) items.push({ kind: "branch", name: b.name });
     items.push({ kind: "commit", id: commit.id });
   }
   return items;
@@ -158,6 +158,8 @@ function consequences(ctx: BranchContext, stack: Stack, preview: StackPreview): 
   const force = preview.branches.filter((b) => b.forcePush).map((b) => b.name);
   if (force.length) parts.push(" ", ...chips(ctx, force), ` ${force.length === 1 ? "is" : "are"} already pushed, so the next push has to be a force push.`);
   if (preview.emptied.length) parts.push(` ${plural(preview.emptied.length, "commit")} ${stack.trunk} already has ${preview.emptied.length === 1 ? "is" : "are"} left out.`);
+  if (stack.merges.length === 1) parts.push(" The merge ", { quote: stack.merges[0].summary }, ` is left out: it only brought in ${stack.trunk}, which the stack is replayed on.`);
+  else if (stack.merges.length) parts.push(` ${stack.merges.length} merges of ${stack.trunk} are left out: they only brought in ${stack.trunk}, which the stack is replayed on.`);
   if (stack.leftBehind.length) parts.push(" ", ...chips(ctx, stack.leftBehind), ` fork${stack.leftBehind.length === 1 ? "s" : ""} off the stack and stay${stack.leftBehind.length === 1 ? "s" : ""} where ${stack.leftBehind.length === 1 ? "it is" : "they are"}.`);
   if (preview.conflict) {
     parts.push(" The dry run stops on a conflict in ", { quote: preview.conflict.summary }, ": the rebase will stop there so you can resolve it.");

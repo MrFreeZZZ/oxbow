@@ -77,8 +77,8 @@ pub use series::{
 pub use setup::{CloneOptions, NewRepoOptions, NewRepoPlan, RemoteProbe, RepoGlance};
 pub use ssh::{SshCheck, SshProblem, SshStep};
 pub use stack::{
-    BranchAfter, Landing, Stack, StackBranch, StackCommit, StackConflict, StackPlan, StackPreview, StackStep,
-    StepAction,
+    BranchAfter, Landing, Stack, StackBranch, StackCommit, StackConflict, StackMerge, StackPlan, StackPreview,
+    StackStep, StepAction,
 };
 pub use stash::StashCheck;
 pub use submodules::{Checkout, Moved, Submodule, SubmoduleMove};
