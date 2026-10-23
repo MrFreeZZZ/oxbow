@@ -171,16 +171,16 @@ impl Repo {
         let out = self.run(&GitCommand::new([
             "log".to_owned(),
             format!("--max-count={LIMIT}"),
-            "--format=%x01%H".to_owned(),
+            // The names as they are, not quoted, as the diff has them.
+            "-z".to_owned(),
+            "--format=%x00%H".to_owned(),
             "--name-only".to_owned(),
             format!("{from}..{to}"),
         ]))?;
         let mut files = HashMap::new();
-        for chunk in out.stdout.split('\u{1}') {
-            let mut lines = chunk.lines().map(str::trim).filter(|l| !l.is_empty());
-            let Some(id) = lines.next() else { continue };
-            for path in lines {
-                files.entry(path.to_owned()).or_insert_with(|| id.to_owned());
+        for hit in crate::search::parse_log(&out.stdout) {
+            for path in hit.files {
+                files.entry(path).or_insert_with(|| hit.id.clone());
             }
         }
         Ok(files)

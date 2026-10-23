@@ -485,11 +485,11 @@ fn place(commits: &[GraphCommit], plan: &Plan) -> Vec<RowLayout> {
         let mut row_joins = Vec::new();
         let mut cuts = Vec::new();
         for (index, &parent) in commit.parents.iter().enumerate() {
-            // A parent the filter left out, or a merge line past what a row can hold: its line
-            // stops just below, heading where it would go.
-            let crowded = index > 0
-                && lanes.iter().flatten().count() >= MAX_LANES
-                && !lanes.iter().flatten().any(|l| parent.is_some() && l.target == parent);
+            // A parent the filter left out, or a line past what a row can hold: its line stops
+            // just below, heading where it would go. A line going on through this commit gave up
+            // its lane above, so only a new one, a merge's or a new branch's, can be too many.
+            let crowded = lanes.iter().flatten().count() >= MAX_LANES
+                && (index == 0 || !lanes.iter().flatten().any(|l| parent.is_some() && l.target == parent));
             if commit.is_cut(index) || crowded {
                 let (to, cut_color) = if index == 0 {
                     (column, color)
@@ -908,6 +908,25 @@ mod tests {
         );
         assert_eq!(rows[0].cuts.len(), 5000 - (MAX_LANES - 1));
         assert_eq!(rows[500].segments.len(), MAX_LANES);
+    }
+
+    #[test]
+    fn many_branches_from_outside_the_page_keep_rows_bounded() {
+        // 0 a merge of 5000 parents outside the loaded history, then 300 branches whose parents
+        // are all outside it too.
+        let mut merge = commit(&[], true);
+        merge.parents = vec![None; 5000];
+        let mut commits = vec![merge];
+        commits.extend((1..=300).map(|_| {
+            let mut tip = commit(&[], false);
+            tip.parents = vec![None];
+            tip
+        }));
+        let rows = layout(&commits, None).rows;
+        let widest = rows.iter().map(|r| r.segments.len()).max().unwrap();
+        assert!(widest <= MAX_LANES, "{widest}");
+        // A branch that finds no room still shows where its line goes.
+        assert_eq!(rows[300].cuts.len(), 1);
     }
 
     #[test]

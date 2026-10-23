@@ -28,9 +28,38 @@ pub fn private_temp_dir() -> std::io::Result<std::path::PathBuf> {
     if let Some(made) = dir.as_ref().filter(|d| d.is_dir()) {
         return Ok(made.clone());
     }
-    let made = tempfile::Builder::new().prefix("oxbow-").tempdir()?.keep();
+    let made = private_temp_folder("oxbow-")?.keep();
     *dir = Some(made.clone());
     Ok(made)
+}
+
+/// A new folder with a random name in the temp folder, deleted when dropped. It is made closed
+/// to other users, not closed after: a random name alone keeps no one out.
+pub fn private_temp_folder(prefix: &str) -> std::io::Result<tempfile::TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(prefix);
+    #[cfg(unix)]
+    builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
+    builder.tempdir()
+}
+
+/// The folder at `path`, and the ones it is in, made if missing so that only this user can open
+/// them.
+pub fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(path)
+}
+
+/// Write `data` to the file at `path`, which only this user can read when it is new.
+pub fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(path)?.write_all(data)
 }
 
 /// One `git` invocation, with an optional explanation for the confirmation sheet.

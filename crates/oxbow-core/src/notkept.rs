@@ -3,6 +3,7 @@
 //! than the log keeps.
 
 use std::collections::BTreeSet;
+use std::io::ErrorKind;
 use std::path::Path;
 
 use serde::Serialize;
@@ -18,7 +19,8 @@ use crate::worktrees::same_path;
 /// At most this many files are named; the rest are counted.
 const NAMED: usize = 5;
 /// A folder of ignored files is measured up to this many entries, so a huge `node_modules`
-/// doesn't hold the sheet up; past it the size is at least what was counted.
+/// doesn't hold the sheet up; past it the size is at least what was counted. A folder in the way
+/// of a reset is looked through up to as many, and the sheet names what was left unchecked.
 const MEASURED: usize = 20_000;
 /// At most this many submodule folders, nested ones included, are looked into before a removal.
 const NESTED: usize = 50;
@@ -58,6 +60,15 @@ pub enum NotKept {
         files: Vec<SizedFile>,
         more: usize,
         bytes: u64,
+    },
+    /// Folders a reset or an undo deletes or writes over that weren't looked through to the end:
+    /// too many files, or one that can't be read. Files there too big for a snapshot, or ignored,
+    /// would be lost, so the sheet says so instead of naming none.
+    Unchecked {
+        /// Each ends with `/`.
+        folders: Vec<String>,
+        more: usize,
+        limit: u64,
     },
     /// Files git ignores, e.g. build output or `.env`, in a folder the action deletes.
     Ignored {
@@ -229,10 +240,22 @@ impl Repo {
         let untracked = self.untracked()?;
         let workdir = self.workdir();
         let mut found = BTreeSet::new();
+        let mut unchecked = BTreeSet::new();
         let mut budget = MEASURED;
         // Paths the index has are tracked files, whose content every snapshot has.
         for path in paths.iter().filter(|p| !tracked.contains(*p)) {
-            files_at(workdir, path, &tracked, &mut found, &mut budget);
+            // What git lists is all there, however far the look through the folder gets.
+            let inside = format!("{path}/");
+            if untracked.contains(path) {
+                found.insert(path.clone());
+            }
+            found.extend(
+                untracked
+                    .range(inside.clone()..)
+                    .take_while(|u| u.starts_with(&inside))
+                    .cloned(),
+            );
+            files_at(workdir, path, &tracked, &mut found, &mut unchecked, &mut budget);
             let mut end = 0;
             while let Some(slash) = path[end..].find('/') {
                 end += slash;
@@ -258,6 +281,22 @@ impl Repo {
             let more = files.len().saturating_sub(NAMED);
             files.truncate(NAMED);
             out.push(NotKept::IgnoredInTheWay { files, more, bytes });
+        }
+        // A folder inside one already named adds nothing.
+        let mut folders: Vec<String> = Vec::new();
+        for folder in unchecked {
+            if !folders.last().is_some_and(|f| folder.starts_with(f.as_str())) {
+                folders.push(folder);
+            }
+        }
+        if !folders.is_empty() {
+            let more = folders.len().saturating_sub(NAMED);
+            folders.truncate(NAMED);
+            out.push(NotKept::Unchecked {
+                folders,
+                more,
+                limit: MAX_UNTRACKED,
+            });
         }
         Ok(out)
     }
@@ -422,10 +461,25 @@ impl Repo {
 }
 
 /// The untracked file at `path`, or every untracked file in the folder there, without following
-/// symlinks; stops once `budget` entries were looked at.
-fn files_at(workdir: &Path, path: &str, tracked: &BTreeSet<String>, found: &mut BTreeSet<String>, budget: &mut usize) {
-    let Ok(meta) = workdir.join(path).symlink_metadata() else {
-        return;
+/// symlinks; stops once `budget` entries were looked at. A folder not looked through to the end,
+/// one it can't read, has a name that isn't UTF-8 in it or is past the budget, goes in
+/// `unchecked`, ending with `/`.
+fn files_at(
+    workdir: &Path,
+    path: &str,
+    tracked: &BTreeSet<String>,
+    found: &mut BTreeSet<String>,
+    unchecked: &mut BTreeSet<String>,
+    budget: &mut usize,
+) {
+    let meta = match workdir.join(path).symlink_metadata() {
+        Ok(meta) => meta,
+        // Nothing there, or a file where a folder of the path would be.
+        Err(err) if matches!(err.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => return,
+        Err(_) => {
+            unchecked.insert(format!("{path}/"));
+            return;
+        }
     };
     if !meta.is_dir() {
         if !tracked.contains(path) {
@@ -434,15 +488,20 @@ fn files_at(workdir: &Path, path: &str, tracked: &BTreeSet<String>, found: &mut 
         return;
     }
     let Ok(entries) = std::fs::read_dir(workdir.join(path)) else {
+        unchecked.insert(format!("{path}/"));
         return;
     };
-    for entry in entries.flatten() {
+    for entry in entries {
         if *budget == 0 {
+            unchecked.insert(format!("{path}/"));
             return;
         }
         *budget -= 1;
-        if let Some(name) = entry.file_name().to_str() {
-            files_at(workdir, &format!("{path}/{name}"), tracked, found, budget);
+        match entry.as_ref().map(|e| e.file_name().into_string()) {
+            Ok(Ok(name)) => files_at(workdir, &format!("{path}/{name}"), tracked, found, unchecked, budget),
+            _ => {
+                unchecked.insert(format!("{path}/"));
+            }
         }
     }
 }

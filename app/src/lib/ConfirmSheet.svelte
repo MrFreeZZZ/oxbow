@@ -79,6 +79,8 @@
         return `Undo can’t bring back ${gap.files.length + gap.more === 1 ? "this file" : "these files"}`;
       case "ignoredInTheWay":
         return `Files git ignores are written over for good`;
+      case "unchecked":
+        return `Files in ${gap.folders.length + gap.more === 1 ? gap.folders[0] : "these folders"} may be lost for good`;
       case "ignored":
         return `Files git ignores in ${gap.folder} are deleted for good`;
       case "worktree":
@@ -100,6 +102,8 @@
         return `Untracked files over ${Math.round(gap.limit / 1048576)} MB stay out of snapshots, so the Operation Log has no copy.`;
       case "ignoredInTheWay":
         return `The commit has files where these are. They are not in git or in the Operation Log, ${bytes(gap.bytes)} in all. Copy anything you need, like a .env file, first.`;
+      case "unchecked":
+        return `Oxbow couldn’t look through all of ${gap.folders.length + gap.more === 1 ? "it" : "them"}: too many files, or some it can’t read. Files over ${Math.round(gap.limit / 1048576)} MB and files git ignores there have no copy in the Operation Log. Copy anything you need first.`;
       case "ignored":
         return `They are not in git or in the Operation Log, ${bytes(gap.bytes)} in all. Copy anything you need, like a .env file, first.`;
       case "worktree":
@@ -444,6 +448,13 @@
                 <div class="gap-files">
                   {#each gap.files as file (file.path)}
                     <div class="gap-file"><span class="mono gap-path">{file.path}</span><span class="gap-size">{bytes(file.size)}</span></div>
+                  {/each}
+                  {#if gap.more}<div class="gap-file more">and {plural(gap.more, "more")}</div>{/if}
+                </div>
+              {:else if gap.kind === "unchecked" && gap.folders.length + gap.more > 1}
+                <div class="gap-files">
+                  {#each gap.folders as folder (folder)}
+                    <div class="gap-file"><span class="mono gap-path">{folder}</span></div>
                   {/each}
                   {#if gap.more}<div class="gap-file more">and {plural(gap.more, "more")}</div>{/if}
                 </div>

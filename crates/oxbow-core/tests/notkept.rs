@@ -134,6 +134,65 @@ fn a_hard_reset_names_files_in_a_folder_where_the_commit_has_a_file() {
     }
 }
 
+/// `dir` full of more untracked files than the sheet looks through, and one too big for a
+/// snapshot among them.
+fn crowded(fx: &Fixture) {
+    std::fs::create_dir_all(fx.path().join("dir")).unwrap();
+    for n in 0..20_001 {
+        std::fs::write(fx.path().join(format!("dir/{n}.txt")), "").unwrap();
+    }
+    big(fx, "dir/zz-large.bin");
+}
+
+fn names_the_big_file_and_the_unchecked_folder(notes: &[NotKept]) {
+    match notes {
+        [
+            NotKept::BigFiles { files, .. },
+            NotKept::Unchecked { folders, more: 0, .. },
+        ] => {
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].path, "dir/zz-large.bin");
+            assert_eq!(folders, &["dir/".to_owned()]);
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_hard_reset_over_a_folder_too_full_to_look_through_still_warns() {
+    let mut fx = Fixture::new();
+    fx.commit("dir", "a file\n", "Root");
+    let root = fx.git(&["rev-parse", "HEAD"]);
+    fx.git(&["rm", "-q", "dir"]);
+    fx.commit("a.txt", "a\n", "Remove dir");
+    crowded(&fx);
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let reset = Action::Reset {
+        commit: root,
+        mode: ResetMode::Hard,
+    };
+    names_the_big_file_and_the_unchecked_folder(&repo.not_kept(&reset).unwrap());
+}
+
+#[test]
+fn an_undo_over_a_folder_too_full_to_look_through_still_warns() {
+    let mut fx = Fixture::new();
+    fx.commit("dir", "a file\n", "Root");
+    fx.git(&["rm", "-q", "dir"]);
+    let removed = fx.commit("a.txt", "a\n", "Remove dir");
+    fx.git(&["reset", "-q", "--hard", "HEAD~1"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&Action::Reset {
+        commit: removed,
+        mode: ResetMode::Hard,
+    })
+    .unwrap();
+    crowded(&fx);
+
+    names_the_big_file_and_the_unchecked_folder(&repo.not_kept(&undo_last(&repo)).unwrap());
+}
+
 #[test]
 fn a_hard_reset_names_an_ignored_file_where_the_commit_has_a_folder() {
     let mut fx = Fixture::new();

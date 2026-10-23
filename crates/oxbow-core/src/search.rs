@@ -125,10 +125,10 @@ impl Repo {
         let mut args = vec!["log".to_owned()];
         args.extend(query.filters());
         args.push(format!("--max-count={}", LIMIT + 1));
-        // \x01 starts each commit, so the file names after it can be told apart; -z: the names
-        // end in NUL, exactly as they are, not quoted.
+        // -z: the names end in NUL, exactly as they are, not quoted; an extra NUL before each
+        // commit tells them apart from its id, since no name is empty.
         args.push("-z".to_owned());
-        args.push("--format=%x01%H".to_owned());
+        args.push("--format=%x00%H".to_owned());
         if files {
             args.push("--name-only".to_owned());
         }
@@ -165,23 +165,30 @@ impl Repo {
     }
 }
 
-/// `git log -z --format=%x01%H --name-only`: each commit is `\x01<id>\0`, then a line break
-/// and its file names, each ending in NUL. Names are kept whole: spaces and tabs are theirs.
-fn parse_log(out: &str) -> Vec<SearchHit> {
-    out.split('\u{1}')
-        .filter_map(|chunk| {
-            let (id, files) = chunk.split_once('\0').unwrap_or((chunk, ""));
-            let id = id.trim();
-            if id.is_empty() {
-                return None;
+/// `git log -z --format=%x00%H --name-only`: each commit is `\0<id>\0`, then a line break and
+/// its file names, each ending in NUL. Read field by field, an empty one before each id: a name
+/// can hold any byte but NUL, also one that looks like the start of a commit. Names are kept
+/// whole: spaces and tabs are theirs.
+pub(crate) fn parse_log(out: &str) -> Vec<SearchHit> {
+    let mut hits: Vec<SearchHit> = Vec::new();
+    let mut fields = out.split('\0');
+    while let Some(field) = fields.next() {
+        if field.is_empty() {
+            if let Some(id) = fields.next().map(str::trim).filter(|id| !id.is_empty()) {
+                hits.push(SearchHit {
+                    id: id.to_owned(),
+                    files: Vec::new(),
+                });
             }
-            let files = files.strip_prefix('\n').unwrap_or(files);
-            Some(SearchHit {
-                id: id.to_owned(),
-                files: files.split('\0').filter(|f| !f.is_empty()).map(str::to_owned).collect(),
-            })
-        })
-        .collect()
+        } else if let Some(hit) = hits.last_mut() {
+            let name = match hit.files.is_empty() {
+                true => field.strip_prefix('\n').unwrap_or(field),
+                false => field,
+            };
+            hit.files.push(name.to_owned());
+        }
+    }
+    hits
 }
 
 #[cfg(test)]
@@ -219,7 +226,7 @@ mod tests {
 
     #[test]
     fn log_with_files_is_split_by_commit() {
-        let out = "\u{1}aaa\0\nsrc/a.rs\0 lead\tand tab.rs\0\u{1}bbb\0";
+        let out = "\0aaa\0\nsrc/a.rs\0 lead\tand tab.rs\0\0bbb\0\0ccc\0\npre\u{1}post.txt\0\u{1}ddd\0";
         assert_eq!(
             parse_log(out),
             vec![
@@ -230,6 +237,10 @@ mod tests {
                 SearchHit {
                     id: "bbb".into(),
                     files: vec![]
+                },
+                SearchHit {
+                    id: "ccc".into(),
+                    files: vec!["pre\u{1}post.txt".into(), "\u{1}ddd".into()]
                 },
             ]
         );

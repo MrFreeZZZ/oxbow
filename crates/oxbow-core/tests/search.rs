@@ -109,3 +109,19 @@ fn file_search_finds_names_with_tabs_and_spaces() {
     let spaced = find(&repo, SearchMode::File, "spaced");
     assert_eq!(spaced[0].1, [" spaced .txt"]);
 }
+
+#[test]
+fn file_search_finds_names_with_control_bytes() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    let id = fx.commit("pre\u{1}post.txt", "x\n", "Add a control byte");
+    // A name that looks like the start of the next commit.
+    let header = format!("\u{1}{id}");
+    let other = fx.commit(&header, "y\n", "Add a name like an id");
+    let repo = Repo::open(fx.path()).unwrap();
+    assert_eq!(
+        find(&repo, SearchMode::File, "pre\u{1}post"),
+        [(id.clone(), vec!["pre\u{1}post.txt".to_owned()])]
+    );
+    assert_eq!(find(&repo, SearchMode::File, &header), [(other, vec![header.clone()])]);
+}

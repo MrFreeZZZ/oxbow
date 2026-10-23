@@ -82,16 +82,7 @@ impl Repo {
                     .map_err(|err| Error::Git(err.to_string()))?;
             }
         }
-        let mut seen = Seen {
-            repo: self.clone(),
-            roots: Roots::new(&workdir, &git_dirs),
-            indexes: HashMap::new(),
-        };
-        // What the index stages now, so that the first reload's rewrite of it counts for nothing.
-        let own = local.index_path();
-        if let Some(print) = seen.fingerprint(&own) {
-            seen.indexes.insert(own, print);
-        }
+        let seen = Seen::new(self, &workdir, &git_dirs);
         std::thread::Builder::new()
             .name("oxbow-watch".into())
             .spawn(move || seen.run(rx, &mut on_change))
@@ -125,6 +116,20 @@ struct Batch {
 }
 
 impl Seen {
+    fn new(repo: &Repo, workdir: &Path, git_dirs: &[PathBuf]) -> Self {
+        let mut seen = Seen {
+            repo: repo.clone(),
+            roots: Roots::new(workdir, git_dirs),
+            indexes: HashMap::new(),
+        };
+        // What the index stages now, so that the first reload's rewrite of it counts for nothing.
+        let own = repo.local().index_path();
+        if let Some(print) = seen.fingerprint(&own) {
+            seen.indexes.insert(index_key(&own), print);
+        }
+        seen
+    }
+
     fn run(mut self, rx: mpsc::Receiver<notify::Result<notify::Event>>, on_change: &mut impl FnMut(Changed)) {
         let local = self.repo.local();
         let mut batch = Batch::default();
@@ -178,9 +183,10 @@ impl Seen {
     /// Whether the index at `path` stages something else than when last looked at.
     fn restaged(&mut self, path: &Path) -> bool {
         let print = self.fingerprint(path);
+        let key = index_key(path);
         let before = match print {
-            Some(print) => self.indexes.insert(path.to_path_buf(), print),
-            None => self.indexes.remove(path),
+            Some(print) => self.indexes.insert(key, print),
+            None => self.indexes.remove(&key),
         };
         before != print || print.is_none()
     }
@@ -364,6 +370,15 @@ fn git_kind(relative: &Path) -> Kind {
     }
 }
 
+/// The same index however its path is spelled: the system may tell a path through a link by
+/// where the link leads, as macOS tells its temp folder's `/var` as `/private/var`.
+fn index_key(path: &Path) -> PathBuf {
+    match (path.parent().and_then(|dir| dir.canonicalize().ok()), path.file_name()) {
+        (Some(dir), Some(name)) => dir.join(name),
+        _ => path.to_path_buf(),
+    }
+}
+
 fn dedup(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut seen = Vec::new();
     paths.retain(|p| {
@@ -400,5 +415,25 @@ mod tests {
         assert_eq!(kind("modules/lib/HEAD"), Kind::Git);
         assert_eq!(kind("modules/lib/objects/pack/x"), Kind::Nothing);
         assert_eq!(kind("info/exclude"), Kind::Files);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_index_told_by_where_a_link_leads_is_the_one_looked_at_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, dir.path().join("link")).unwrap();
+        std::fs::write(real.join("a.txt"), "a\n").unwrap();
+        for args in [&["init", "-q"][..], &["add", "a.txt"]] {
+            let status = std::process::Command::new("git").args(args).current_dir(&real).status();
+            assert!(status.unwrap().success());
+        }
+        let opened = dir.path().join("link");
+        let repo = Repo::open(&opened).unwrap();
+        let mut seen = Seen::new(&repo, &opened, &[opened.join(".git")]);
+        // A `git status` rewrote the index; the system tells it by its real path, or as opened.
+        assert!(!seen.restaged(&real.join(".git/index")));
+        assert!(!seen.restaged(&opened.join(".git/index")));
     }
 }
