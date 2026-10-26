@@ -20,7 +20,7 @@
   import { detachRequest, keepRequest, newBranchRequest, switchRequest, trackRequest, type BranchContext } from "./lib/branches";
   import DetachedBanner from "./lib/DetachedBanner.svelte";
   import OperationBanner from "./lib/OperationBanner.svelte";
-  import ConflictsView, { draftSaves } from "./lib/ConflictsView.svelte";
+  import { draftSaves } from "./lib/conflictDrafts";
   import { abortRequest, continueRequest, describe, mergeRequest, skipRequest } from "./lib/merge";
   import { stashMenu, stashRequest } from "./lib/stash";
   import { newWorktreeRequest } from "./lib/worktrees";
@@ -37,8 +37,6 @@
   import SearchBar from "./lib/SearchBar.svelte";
   import { search, type Found } from "./lib/search.svelte";
   import { tick, untrack } from "svelte";
-  import CompareView from "./lib/CompareView.svelte";
-  import FileHistoryView from "./lib/FileHistoryView.svelte";
   import FindField from "./lib/FindField.svelte";
   import QuickOpen from "./lib/QuickOpen.svelte";
   import CommandPalette from "./lib/CommandPalette.svelte";
@@ -51,44 +49,50 @@
   import { conflictSteps, KEPT_CONFLICTS } from "./lib/conflicts";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { getCurrentWindow, type CloseRequestedEvent } from "@tauri-apps/api/window";
-  import PairPanel from "./lib/PairPanel.svelte";
-  import SnapshotPanel from "./lib/SnapshotPanel.svelte";
-  import LostCommitPanel from "./lib/LostCommitPanel.svelte";
-  import SubmodulePanel from "./lib/SubmodulePanel.svelte";
   import { nav } from "./lib/nav.svelte";
   import type { CompareMode } from "./lib/types";
-  import CloneSheet from "./lib/CloneSheet.svelte";
-  import NewRepoSheet from "./lib/NewRepoSheet.svelte";
   import { startPublish } from "./lib/publish";
   import { start } from "./lib/start.svelte";
   import OperationLog from "./lib/OperationLog.svelte";
   import { shortcut, withKeys } from "./lib/keys";
   import { isRedo, lostRow, oplog, undoRequest } from "./lib/oplog.svelte";
-  import EditStackView from "./lib/EditStackView.svelte";
   import { amend, canBack, canForward, crumbs, emptyTrail, go, visit, type Place, type Trail } from "./lib/backStack";
   import { kept } from "./lib/kept";
-  import SeriesView from "./lib/SeriesView.svelte";
   import { stepQuery, type SeriesQuery } from "./lib/series";
   import { relativeTime } from "./lib/format";
   import ActivityPopover from "./lib/ActivityPopover.svelte";
   import { activity, failureShort, type ActivityItem } from "./lib/activity.svelte";
   import { addToCommitRequest, dropCommitRequest, rewordRequest, squashRequest } from "./lib/stack";
-  import PullRequestView from "./lib/PullRequestView.svelte";
   import { github } from "./lib/github.svelte";
   import { lfs } from "./lib/lfs.svelte";
   import LfsBanner from "./lib/LfsBanner.svelte";
-  import BisectBanner from "./lib/BisectBanner.svelte";
   import StatusLine from "./lib/StatusLine.svelte";
   import { lens } from "./lib/lens.svelte";
   import TipCard from "./lib/TipCard.svelte";
   import { tips } from "./lib/tips.svelte";
-  import FixSheet from "./lib/FixSheet.svelte";
   import { fixChoices, fixRequest, fixStateLine, loadFixState, type FixContext, type FixId } from "./lib/fixes";
   import { bisectMarkRequest, bisectResetRequest, bisectStartRequest } from "./lib/bisect";
   import { keys, mac } from "./lib/keys";
   import type { BisectMark, OpEntry } from "./lib/types";
   import { fitWindow } from "./lib/windowSize";
   import { stepperOf } from "./lib/tabs";
+  import { Lazy } from "./lib/lazy.svelte";
+
+  // Screens and sheets a window seldom shows load the first time they are (lazy.svelte.ts).
+  const ConflictsView = new Lazy(() => import("./lib/ConflictsView.svelte"));
+  const FileHistoryView = new Lazy(() => import("./lib/FileHistoryView.svelte"));
+  const CompareView = new Lazy(() => import("./lib/CompareView.svelte"));
+  const SeriesView = new Lazy(() => import("./lib/SeriesView.svelte"));
+  const PullRequestView = new Lazy(() => import("./lib/PullRequestView.svelte"));
+  const EditStackView = new Lazy(() => import("./lib/EditStackView.svelte"));
+  const BisectBanner = new Lazy(() => import("./lib/BisectBanner.svelte"));
+  const CloneSheet = new Lazy(() => import("./lib/CloneSheet.svelte"));
+  const NewRepoSheet = new Lazy(() => import("./lib/NewRepoSheet.svelte"));
+  const FixSheet = new Lazy(() => import("./lib/FixSheet.svelte"));
+  const SubmodulePanel = new Lazy(() => import("./lib/SubmodulePanel.svelte"));
+  const SnapshotPanel = new Lazy(() => import("./lib/SnapshotPanel.svelte"));
+  const LostCommitPanel = new Lazy(() => import("./lib/LostCommitPanel.svelte"));
+  const PairPanel = new Lazy(() => import("./lib/PairPanel.svelte"));
 
   let repo = $state<RepoSummary | null>(null);
   let history = $state<History | null>(null);
@@ -2600,7 +2604,7 @@
       {/if}
       {#if history.bisect && branchCtx}
         {@const bisect = history.bisect}
-        <BisectBanner
+        <BisectBanner.component
           {bisect}
           lookup={(id) => rowsById.get(id)}
           onStop={() => run(bisectResetRequest(branchCtx!, bisect))}
@@ -2617,15 +2621,15 @@
       {/if}
       {#if showConflicts && operation}
         {#key repo.path}
-          <ConflictsView folder={repo.path} {history} op={operation} {colorOf} {version} {run} {refresh} />
+          <ConflictsView.component folder={repo.path} {history} op={operation} {colorOf} {version} {run} {refresh} />
         {/key}
       {:else if view === "file" && nav.file}
         {#key repo.path + nav.file.path}
-          <FileHistoryView {history} path={nav.file.path} start={nav.file.commit} lookup={(id) => rowsById.get(id)} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "the command" : text}.`)} />
+          <FileHistoryView.component {history} path={nav.file.path} start={nav.file.commit} lookup={(id) => rowsById.get(id)} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "the command" : text}.`)} />
         {/key}
       {:else if view === "compare"}
         {#key repo.path}
-          <CompareView
+          <CompareView.component
             {history}
             base={comparing.base}
             target={comparing.target}
@@ -2642,7 +2646,7 @@
         {/key}
       {:else if view === "series" && seriesQuery}
         {#key repo.path}
-          <SeriesView
+          <SeriesView.component
             query={seriesQuery}
             {version}
             {colorOf}
@@ -2656,7 +2660,7 @@
         {/key}
       {:else if view === "pull" && pullBranch && branchCtx}
         {#key repo.path}
-          <PullRequestView
+          <PullRequestView.component
             branch={pullBranch}
             {history}
             ctx={branchCtx}
@@ -2670,7 +2674,7 @@
         {/key}
       {:else if view === "stack" && branchCtx}
         {#key repo.path}
-          <EditStackView branch={stackBranch} ctx={branchCtx} {colorOf} {version} {run} onClose={() => (view = "history")} onSeries={seriesOfLastStep} />
+          <EditStackView.component branch={stackBranch} ctx={branchCtx} {colorOf} {version} {run} onClose={() => (view = "history")} onSeries={seriesOfLastStep} />
         {/key}
       {:else if view === "oplog"}
         {#key repo.path}
@@ -2758,7 +2762,7 @@
           <!-- A new repository starts the panels from scratch. -->
           {#key repo.path}
             {#if pickedSubmodule}
-              <SubmodulePanel
+              <SubmodulePanel.component
                 sub={pickedSubmodule}
                 subs={history.submodules}
                 repoPath={repo.path}
@@ -2768,7 +2772,7 @@
                 onRetry={() => retryRead("submodules")}
               />
             {:else if oplog.compare}
-              <SnapshotPanel
+              <SnapshotPanel.component
                 entry={oplog.compare.entry}
                 after={oplog.compare.after}
                 color={headColor}
@@ -2779,7 +2783,7 @@
               />
             {:else if oplog.lost}
               {@const lost = oplog.lost}
-              <LostCommitPanel
+              <LostCommitPanel.component
                 entry={lost}
                 color={moveColor(lost)}
                 lookup={(id) => rowsById.get(id)}
@@ -2788,7 +2792,7 @@
                 onClose={() => (oplog.lost = null)}
               />
             {:else if pair}
-              <PairPanel
+              <PairPanel.component
                 older={pair.older}
                 newer={pair.newer}
                 {version}
@@ -2845,7 +2849,7 @@
   {/if}
   {#if fixing}
     {@const fc = fixing}
-    <FixSheet
+    <FixSheet.component
       choices={fixChoices(fc, fixBusy)}
       summary={fixStateLine(fc)}
       onPick={(id) => pickFix(fc, id)}
@@ -2881,9 +2885,9 @@
   />
 {/if}
 {#if start.sheet?.kind === "clone"}
-  <CloneSheet url={start.sheet.url} onDone={started} onClose={() => (start.sheet = null)} />
+  <CloneSheet.component url={start.sheet.url} onDone={started} onClose={() => (start.sheet = null)} />
 {:else if start.sheet?.kind === "new"}
-  <NewRepoSheet folder={start.sheet.folder} onDone={started} onClose={() => (start.sheet = null)} />
+  <NewRepoSheet.component folder={start.sheet.folder} onDone={started} onClose={() => (start.sheet = null)} />
 {/if}
 
 <style>
