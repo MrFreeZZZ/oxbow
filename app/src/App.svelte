@@ -76,9 +76,9 @@
   import type { BisectMark, OpEntry } from "./lib/types";
   import { fitWindow } from "./lib/windowSize";
   import { stepperOf } from "./lib/tabs";
-  import { Lazy } from "./lib/lazy.svelte";
+  import { Lazy } from "./lib/lazyScreen.svelte";
 
-  // Screens and sheets a window seldom shows load the first time they are (lazy.svelte.ts).
+  // Screens and sheets a window seldom shows load the first time they are (lazyScreen.svelte.ts).
   const ConflictsView = new Lazy(() => import("./lib/ConflictsView.svelte"));
   const FileHistoryView = new Lazy(() => import("./lib/FileHistoryView.svelte"));
   const CompareView = new Lazy(() => import("./lib/CompareView.svelte"));
