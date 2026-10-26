@@ -60,6 +60,11 @@ struct Slot {
     fetch_cancel: Arc<AtomicBool>,
     /// The commit rows of the last history, for the next reload to reuse.
     history: HistoryCache,
+    /// Number of the last history read started here, or of the last repository opened here:
+    /// a read started before that is of the repository open before.
+    history_reads: u64,
+    /// Number of the read whose answer `history`, `changes` and `folders` hold.
+    history_kept: u64,
     /// The working tree read with the last history, by number, for the Changes panel's diffs.
     changes: Option<(u64, Arc<WorkingTree>)>,
     /// The worktrees and submodules the last history listed, whose folders `folder_states` reads.
@@ -74,6 +79,47 @@ struct Slot {
 }
 
 impl Slot {
+    /// Open `repo` in this window: what was read of the repository open before goes.
+    fn open(&mut self, repo: Repo) {
+        // What runs for the repository open before is no longer wanted.
+        self.stop_reads();
+        self.repo = Some(repo);
+        self.history = HistoryCache::default();
+        self.changes = None;
+        self.folders = Arc::default();
+        self.folder_cache = FolderCache::default();
+        self.watch = None;
+        // A read of the repository before may still finish: what it found is not kept.
+        self.history_reads += 1;
+        self.history_kept = self.history_reads;
+    }
+
+    /// The repository open here and the number of a history read of it starting now, for
+    /// [`Slot::keep_history`].
+    fn start_history(&mut self) -> (Option<Repo>, u64) {
+        self.history_reads += 1;
+        (self.repo.clone(), self.history_reads)
+    }
+
+    /// Keep what history read `number` found, for the next reload and the Changes panel, unless
+    /// another repository was opened since it started or a newer read was kept: a late answer of
+    /// the repository open before would hand its rows, files and folders to this one.
+    fn keep_history(
+        &mut self,
+        number: u64,
+        cache: HistoryCache,
+        changes: Option<(u64, Arc<WorkingTree>)>,
+        folders: Arc<(Vec<Worktree>, Vec<Submodule>)>,
+    ) {
+        if number <= self.history_kept {
+            return;
+        }
+        self.history_kept = number;
+        self.history = cache;
+        self.changes = changes;
+        self.folders = folders;
+    }
+
     /// Stop every read running for this window: its repository changed, or it closed.
     fn stop_reads(&mut self) {
         for (_, cancel) in self.lanes.drain() {
@@ -531,16 +577,7 @@ async fn open_repo(
         let _ = std::fs::write(&file, &summary.path);
     }
     remember_repo(&app, &summary.path);
-    session.slot(&window, |slot| {
-        // What runs for the repository open before is no longer wanted.
-        slot.stop_reads();
-        slot.repo = Some(repo);
-        slot.history = HistoryCache::default();
-        slot.changes = None;
-        slot.folders = Arc::default();
-        slot.folder_cache = FolderCache::default();
-        slot.watch = None;
-    });
+    session.slot(&window, |slot| slot.open(repo));
     watch_repo(app.clone(), window.label().to_owned());
     // Settings shows this repository under This Repository.
     let _ = app.emit("repo-changed", ());
@@ -1026,7 +1063,9 @@ async fn history(
     focus: Option<bool>,
     lane: Option<String>,
 ) -> CommandResult<History> {
-    let repo = current(&session, &window)?;
+    // Taken together: a repository opened in between must not get this one's answer.
+    let (repo, number) = session.slot(&window, |slot| slot.start_history());
+    let repo = repo.ok_or_else(|| "No repository is open".to_owned())?;
     let cancel = session.lane(&window, lane);
     // Open the repository afresh: the built-in engine reads .git/config once, so a remote that
     // Publish or Settings just added would stay unseen.
@@ -1063,11 +1102,7 @@ async fn history(
     history.snapshot = session.snapshots.fetch_add(1, Ordering::Relaxed) + 1;
     let changes = history.changes.clone().map(|tree| (history.snapshot, Arc::new(tree)));
     let folders = Arc::new((history.worktrees.clone(), history.submodules.clone()));
-    session.slot(&window, |slot| {
-        slot.history = cache;
-        slot.changes = changes;
-        slot.folders = folders;
-    });
+    session.slot(&window, |slot| slot.keep_history(number, cache, changes, folders));
     Ok(history)
 }
 
@@ -2835,4 +2870,90 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Oxbow");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A repository with one commit in a folder of its own.
+    fn repo(name: &str) -> Repo {
+        let dir = std::env::temp_dir().join(format!("oxbow-slot-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&["init", "-q", "-b", "main"]);
+        std::fs::write(dir.join("a.txt"), name).unwrap();
+        git(&["add", "a.txt"]);
+        git(&["commit", "-q", "-m", name]);
+        Repo::open(&dir).unwrap()
+    }
+
+    /// What the `history` command does in a window: take the repository and the cache, read
+    /// (`meanwhile` runs while the read is under way), then keep what it found. Its files are
+    /// kept under the read's number.
+    fn read_history(slot: &mut Slot, meanwhile: impl FnOnce(&mut Slot)) {
+        let (repo, number) = slot.start_history();
+        let mut cache = slot.history.clone();
+        let history = repo
+            .unwrap()
+            .history_with(&HistoryOptions::default(), &mut cache, None)
+            .unwrap();
+        meanwhile(slot);
+        let changes = history.changes.clone().map(|tree| (number, Arc::new(tree)));
+        let folders = Arc::new((history.worktrees.clone(), history.submodules.clone()));
+        slot.keep_history(number, cache, changes, folders);
+    }
+
+    #[test]
+    fn a_late_history_of_the_repository_open_before_keeps_nothing() {
+        let (a, b) = (repo("late-a"), repo("late-b"));
+        let mut slot = Slot::default();
+        slot.open(a.clone());
+        // The window opens B while the history of A is still being read.
+        read_history(&mut slot, |slot| slot.open(b.clone()));
+        assert!(slot.history.is_empty(), "the rows of A are kept for B's next reload");
+        assert!(slot.changes.is_none(), "the files of A are kept for B's Changes panel");
+        assert!(
+            slot.folders.0.is_empty(),
+            "B lists the folders of A: {:?}",
+            slot.folders.0
+        );
+        // B's own reading is kept as usual.
+        read_history(&mut slot, |_| {});
+        assert!(!slot.history.is_empty());
+        assert_eq!(
+            Path::new(&slot.folders.0[0].path).canonicalize().unwrap(),
+            b.workdir().canonicalize().unwrap()
+        );
+        for repo in [a, b] {
+            std::fs::remove_dir_all(repo.workdir()).unwrap();
+        }
+    }
+
+    #[test]
+    fn an_older_history_finishing_last_leaves_the_newer() {
+        let a = repo("older");
+        let mut slot = Slot::default();
+        slot.open(a.clone());
+        let mut newer = 0;
+        // A reload starts while the one before it is still reading, and ends first.
+        read_history(&mut slot, |slot| {
+            read_history(slot, |_| {});
+            newer = slot.changes.as_ref().unwrap().0;
+        });
+        assert_eq!(slot.changes.as_ref().unwrap().0, newer);
+        // The window opens the same repository again: a read started before keeps nothing.
+        read_history(&mut slot, |slot| slot.open(a.clone()));
+        assert!(slot.history.is_empty() && slot.changes.is_none());
+        std::fs::remove_dir_all(a.workdir()).unwrap();
+    }
 }
