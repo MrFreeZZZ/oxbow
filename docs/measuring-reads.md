@@ -60,8 +60,8 @@ About three minutes; it needs about 1 GB. It makes:
 |---|---|
 | History shown | from asking until the graph, branches and HEAD can show |
 | All statuses in | until the last worktree or submodule folder is read |
-| Refresh, nothing changed | a refresh Oxbow makes itself (after an action or a fetch): folders that show no change in their HEAD and index are not read again |
-| Refresh, back to front | the window came back to the front: every folder is read again, as files may have changed |
+| Refresh, nothing changed | a refresh for nothing done in the window (a fetch, a change outside) with the repository watched: what the watch saw no change in isn't asked of git again, nor folders that show no change in their HEAD and index |
+| Refresh, back to front | the window came back to the front: the same, but every other folder is read again, as files there may have changed unwatched |
 | History answer (JSON) | what the history sends to the window |
 | Open / Refresh: git processes | how many git processes ran, and the most at once |
 | History shown, 2 s status | with `git status` made 2 s slower in every other folder: the history doesn't wait for them |

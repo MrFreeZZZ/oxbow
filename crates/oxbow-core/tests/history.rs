@@ -866,3 +866,80 @@ fn a_clean_read_has_no_problems() {
     assert!(history.problems.is_empty());
     assert!(history.rows.iter().all(|r| r.worktree.is_none()));
 }
+
+#[test]
+fn a_quiet_refresh_with_nothing_changed_runs_no_git() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "1\n", "Root");
+    fx.git(&["checkout", "-q", "-b", "feature"]);
+    fx.commit("b.txt", "1\n", "On feature");
+    fx.write("a.txt", "edited\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    let mut cache = oxbow_core::HistoryCache::default();
+    // `seen`: what the window's watch had noticed when each read began.
+    let read = |cache: &mut oxbow_core::HistoryCache, seen: u64, quiet: bool, known: Option<&str>| {
+        let options = HistoryOptions {
+            seen: Some(seen),
+            quiet,
+            ..Default::default()
+        };
+        repo.history_with(&options, cache, known).unwrap()
+    };
+    let asked = |h: &History, what: &str| h.reads.iter().any(|r| r.contains(what));
+
+    let first = read(&mut cache, 1, false, None);
+    assert!(asked(&first, "status") && asked(&first, "for-each-ref") && asked(&first, "worktree list"));
+    assert!(!first.unchanged);
+
+    // The window came back to the front; the watch noticed nothing.
+    let quiet = read(&mut cache, 1, true, Some(&first.key));
+    assert_eq!(quiet.reads, Vec::<String>::new());
+    assert!(quiet.unchanged && quiet.same);
+    assert_eq!(format!("{:?}", quiet.changes), format!("{:?}", first.changes));
+    assert_eq!(quiet.worktrees, first.worktrees);
+
+    // A reload after something done here asks for the changes again, not for what the refs
+    // and settings still give.
+    let after = read(&mut cache, 1, false, Some(&first.key));
+    assert!(asked(&after, "status") && !asked(&after, "for-each-ref") && !asked(&after, "worktree list"));
+    assert!(!after.unchanged);
+
+    // The watch noticed an edit.
+    fx.write("b.txt", "edited\n");
+    let edited = read(&mut cache, 2, true, Some(&after.key));
+    assert!(asked(&edited, "status") && !asked(&edited, "for-each-ref"));
+    assert_eq!(edited.changes.as_ref().unwrap().unstaged.len(), 2);
+    assert!(!edited.unchanged);
+
+    // Staged outside, before the watch counted it: what is staged says so.
+    fx.git(&["add", "b.txt"]);
+    let staged = read(&mut cache, 2, true, Some(&edited.key));
+    assert!(asked(&staged, "status"));
+    assert_eq!(staged.changes.as_ref().unwrap().staged.len(), 1);
+
+    // A new branch moves no file: the changes are taken again, the upstreams asked for.
+    fx.git(&["branch", "other"]);
+    let branched = read(&mut cache, 2, true, Some(&staged.key));
+    assert!(!asked(&branched, "status") && asked(&branched, "for-each-ref") && asked(&branched, "worktree list"));
+    assert!(!branched.unchanged);
+    assert!(read(&mut cache, 2, true, Some(&branched.key)).unchanged);
+
+    // Another worktree, and later its folder gone.
+    let other = fx.path().parent().unwrap().join("other-folder");
+    fx.git(&["worktree", "add", "-q", other.to_str().unwrap(), "other"]);
+    let added = read(&mut cache, 2, true, Some(&branched.key));
+    assert!(asked(&added, "worktree list"));
+    assert_eq!(added.worktrees.len(), 2);
+    std::fs::remove_dir_all(&other).unwrap();
+    let gone = read(&mut cache, 2, true, Some(&added.key));
+    assert!(asked(&gone, "worktree list"));
+    assert!(gone.worktrees[1].missing);
+
+    // Without a watch of the files, the changes are always asked for.
+    let unwatched = HistoryOptions {
+        quiet: true,
+        ..Default::default()
+    };
+    let blind = repo.history_with(&unwatched, &mut cache, Some(&gone.key)).unwrap();
+    assert!(asked(&blind, "status") && !blind.unchanged);
+}

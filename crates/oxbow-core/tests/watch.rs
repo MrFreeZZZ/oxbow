@@ -111,3 +111,23 @@ fn the_watch_stops_when_dropped() {
     fixture.commit("a.txt", "two\n", "Second");
     assert!(rx.recv_timeout(QUIET).is_err());
 }
+
+#[test]
+fn seen_counts_changes_as_they_come() {
+    let mut fixture = base();
+    let (watch, rx) = watched(&fixture);
+    let start = watch.seen().unwrap();
+    // `git status` rewrites the index and an ignored file changes: nothing to count.
+    fixture.git(&["status", "--porcelain"]);
+    fixture.write("debug.log", "noise\n");
+    std::thread::sleep(QUIET);
+    assert_eq!(watch.seen(), Some(start));
+    fixture.write("a.txt", "edited\n");
+    // Counted by the time it is told.
+    rx.recv_timeout(TOLD).expect("the edit is told");
+    let edited = watch.seen().unwrap();
+    assert!(edited > start);
+    fixture.git(&["branch", "other"]);
+    rx.recv_timeout(TOLD).expect("the branch is told");
+    assert!(watch.seen().unwrap() > edited);
+}

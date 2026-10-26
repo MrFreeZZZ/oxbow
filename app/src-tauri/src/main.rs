@@ -1061,10 +1061,15 @@ async fn history(
     until: Option<String>,
     known: Option<String>,
     focus: Option<bool>,
+    quiet: Option<bool>,
     lane: Option<String>,
 ) -> CommandResult<History> {
-    // Taken together: a repository opened in between must not get this one's answer.
-    let (repo, number) = session.slot(&window, |slot| slot.start_history());
+    // Taken together: a repository opened in between must not get this one's answer. What the
+    // watch noticed is counted before the read begins: a change after it is told again.
+    let (repo, number, seen) = session.slot(&window, |slot| {
+        let (repo, number) = slot.start_history();
+        (repo, number, slot.watch.as_ref().and_then(oxbow_core::Watch::seen))
+    });
     let repo = repo.ok_or_else(|| "No repository is open".to_owned())?;
     let cancel = session.lane(&window, lane);
     // Open the repository afresh: the built-in engine reads .git/config once, so a remote that
@@ -1084,6 +1089,8 @@ async fn history(
         limit: limit.unwrap_or(oxbow_core::PAGE),
         until,
         focus: focus.unwrap_or(false),
+        seen,
+        quiet: quiet.unwrap_or(false),
     };
     let mut cache = session.slot(&window, |slot| slot.history.clone());
     let title = if cache.is_empty() {
@@ -1098,9 +1105,21 @@ async fn history(
         Ok((history, cache))
     })
     .await?;
-    // The diffs the Changes panel asks for next are of these files.
-    history.snapshot = session.snapshots.fetch_add(1, Ordering::Relaxed) + 1;
-    let changes = history.changes.clone().map(|tree| (history.snapshot, Arc::new(tree)));
+    // The diffs the Changes panel asks for next are of these files; when nothing changed, the
+    // panel keeps the reading it has.
+    let kept = session
+        .slot(&window, |slot| slot.changes.clone())
+        .filter(|_| history.unchanged);
+    let changes = match kept {
+        Some(kept) => {
+            history.snapshot = kept.0;
+            Some(kept)
+        }
+        None => {
+            history.snapshot = session.snapshots.fetch_add(1, Ordering::Relaxed) + 1;
+            history.changes.clone().map(|tree| (history.snapshot, Arc::new(tree)))
+        }
+    };
     let folders = Arc::new((history.worktrees.clone(), history.submodules.clone()));
     session.slot(&window, |slot| slot.keep_history(number, cache, changes, folders));
     Ok(history)

@@ -9,10 +9,15 @@
 //! Reading the status rewrites the index when only the files' times changed. Such a rewrite is
 //! no change: the index counts only when what it stages changed, or the app's own reload would
 //! wake the next one, and two windows of one repository would wake each other.
+//!
+//! What the watch notices is also counted as it comes, before the quiet spell: while the count
+//! stays the same, a reload needn't ask git what changed in the files (see `history.rs`).
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -48,6 +53,17 @@ pub struct Watch {
     /// Whether the working copy's files are watched, not only Git's folders: a folder too big
     /// for the system's watches leaves its files to the window coming back to the front.
     pub files: bool,
+    /// Changes noticed so far, see [`Watch::seen`].
+    seen: Arc<AtomicU64>,
+}
+
+impl Watch {
+    /// How many changes in the working copy's files and Git's folders the watch has noticed,
+    /// counted as they come, before they are told; `None` when it doesn't watch the files. A
+    /// rewritten index isn't counted: whether it stages anything else is for the reader to tell.
+    pub fn seen(&self) -> Option<u64> {
+        self.files.then(|| self.seen.load(Ordering::SeqCst))
+    }
 }
 
 /// What a changed path is to the repository.
@@ -82,7 +98,9 @@ impl Repo {
                     .map_err(|err| Error::Git(err.to_string()))?;
             }
         }
-        let seen = Seen::new(self, &workdir, &git_dirs);
+        let counted = Arc::new(AtomicU64::new(0));
+        let mut seen = Seen::new(self, &workdir, &git_dirs);
+        seen.counted = counted.clone();
         std::thread::Builder::new()
             .name("oxbow-watch".into())
             .spawn(move || seen.run(rx, &mut on_change))
@@ -90,6 +108,7 @@ impl Repo {
         Ok(Watch {
             _watcher: watcher,
             files,
+            seen: counted,
         })
     }
 }
@@ -100,6 +119,8 @@ struct Seen {
     roots: Roots,
     /// What each index staged when last looked at.
     indexes: HashMap<PathBuf, u64>,
+    /// Changes noticed, for [`Watch::seen`].
+    counted: Arc<AtomicU64>,
 }
 
 /// Changes gathered since the last one told.
@@ -121,6 +142,7 @@ impl Seen {
             repo: repo.clone(),
             roots: Roots::new(workdir, git_dirs),
             indexes: HashMap::new(),
+            counted: Arc::default(),
         };
         // What the index stages now, so that the first reload's rewrite of it counts for nothing.
         let own = repo.local().index_path();
@@ -145,13 +167,18 @@ impl Seen {
                     if matches!(event.kind, EventKind::Access(_)) {
                         continue;
                     }
-                    let mut noted = false;
+                    let (mut noted, mut counts) = (false, false);
                     for path in &event.paths {
                         let kind = match self.roots.kind(path) {
                             Kind::Files if batch.ignored(&local, &mut excludes, &self.roots, path) => Kind::Nothing,
                             kind => kind,
                         };
+                        counts |= matches!(kind, Kind::Git | Kind::Files);
                         noted |= batch.note(kind, path);
+                    }
+                    // Counted before it is told: a reload beginning after this sees it.
+                    if counts {
+                        self.counted.fetch_add(1, Ordering::SeqCst);
                     }
                     if noted {
                         batch.touch();
@@ -159,6 +186,7 @@ impl Seen {
                 }
                 // The system lost track, e.g. too many changes at once: anything may have changed.
                 Ok(Err(_)) => {
+                    self.counted.fetch_add(1, Ordering::SeqCst);
                     batch.git = true;
                     batch.files = true;
                     batch.touch();
@@ -191,19 +219,23 @@ impl Seen {
         before != print || print.is_none()
     }
 
-    /// What an index stages, without the files' times it also keeps: their paths, ids, modes
-    /// and stages. `None` when it can't be read.
     fn fingerprint(&self, path: &Path) -> Option<u64> {
-        let index = gix::index::File::at(path, self.repo.local().object_hash(), true, Default::default()).ok()?;
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        for entry in index.entries() {
-            entry.path(&index).hash(&mut hasher);
-            entry.id.hash(&mut hasher);
-            entry.mode.bits().hash(&mut hasher);
-            entry.flags.bits().hash(&mut hasher);
-        }
-        Some(hasher.finish())
+        staged(path, self.repo.local().object_hash())
     }
+}
+
+/// What the index at `path` stages, without the files' times it also keeps: their paths, ids,
+/// modes and stages. `None` when it can't be read.
+pub(crate) fn staged(path: &Path, hash: gix::hash::Kind) -> Option<u64> {
+    let index = gix::index::File::at(path, hash, true, Default::default()).ok()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for entry in index.entries() {
+        entry.path(&index).hash(&mut hasher);
+        entry.id.hash(&mut hasher);
+        entry.mode.bits().hash(&mut hasher);
+        entry.flags.bits().hash(&mut hasher);
+    }
+    Some(hasher.finish())
 }
 
 impl Batch {
@@ -356,6 +388,8 @@ fn git_kind(relative: &Path) -> Kind {
         ["worktrees", _, rest @ ..] if !rest.is_empty() => git_kind(&rest.iter().collect::<PathBuf>()),
         ["modules", .., "HEAD"] => Kind::Git,
         ["modules", .., "index"] => Kind::Index,
+        // A commit in a submodule moves its branch, not its HEAD: the folder shows other commits.
+        ["modules", rest @ ..] if rest.contains(&"refs") || rest.last() == Some(&"packed-refs") => Kind::Git,
         ["modules", ..] => Kind::Nothing,
         ["index"] => Kind::Index,
         ["refs", ..] | ["logs", "refs", "stash"] => Kind::Git,
@@ -414,6 +448,9 @@ mod tests {
         assert_eq!(kind("worktrees/feature/logs/HEAD"), Kind::Nothing);
         assert_eq!(kind("modules/lib/HEAD"), Kind::Git);
         assert_eq!(kind("modules/lib/objects/pack/x"), Kind::Nothing);
+        assert_eq!(kind("modules/lib/refs/heads/main"), Kind::Git);
+        assert_eq!(kind("modules/lib/packed-refs"), Kind::Git);
+        assert_eq!(kind("modules/lib/refs/heads/main.lock"), Kind::Nothing);
         assert_eq!(kind("info/exclude"), Kind::Files);
     }
 

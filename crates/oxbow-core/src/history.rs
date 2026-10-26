@@ -50,6 +50,13 @@ pub struct HistoryOptions {
     pub until: Option<String>,
     /// Also lay out the graph of the checked-out branch and its base alone: [`History::focus`].
     pub focus: bool,
+    /// How many changes the window's watch had noticed when this read began
+    /// ([`crate::Watch::seen`]); `None` without a watch of the files.
+    pub seen: Option<u64>,
+    /// Nothing was done here since the last read, so only changes the watch notices can have
+    /// happened: e.g. the window came back to the front. What git said of the uncommitted
+    /// changes is then taken again while `seen`, `HEAD` and what is staged stay the same.
+    pub quiet: bool,
 }
 
 impl Default for HistoryOptions {
@@ -58,6 +65,8 @@ impl Default for HistoryOptions {
             limit: PAGE,
             until: None,
             focus: false,
+            seen: None,
+            quiet: false,
         }
     }
 }
@@ -134,6 +143,9 @@ pub struct History {
     /// The git commands this read ran, as typed in a shell; commits and refs are read from
     /// `.git` directly. What Reload shows in Activity.
     pub reads: Vec<String>,
+    /// Read on a quiet refresh ([`HistoryOptions::quiet`]) with nothing changed since the read
+    /// before: no git command ran, and everything is as that read found it.
+    pub unchanged: bool,
     /// Some loaded commits not marked unpushed may be: more were unpushed than the history
     /// walks while it loads. [`Repo::settle_unpushed`] tells, and the next load marks them.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -280,6 +292,23 @@ struct Node {
 #[derive(Debug, Default, Clone)]
 pub struct HistoryCache {
     last: Option<(u64, Arc<Rows>)>,
+    asked: Asked,
+}
+
+/// What the last read asked git, each with a key for what the answer depends on: the next read
+/// takes it again while the key stays the same. A refresh with nothing changed runs no git.
+#[derive(Debug, Default, Clone)]
+struct Asked {
+    /// The upstreams of the local branches, by the refs and the settings.
+    tracking: Option<(u64, HashMap<String, Tracking>)>,
+    /// git's list of the worktrees, by the refs and their records in `.git/worktrees`.
+    worktrees: Option<(u64, Vec<Worktree>)>,
+    /// The uncommitted changes, by what the watch noticed, `HEAD` and what is staged.
+    changes: Option<(u64, WorkingTree)>,
+    /// The upstream of the checked-out branch once old versions of commits it rewrote were
+    /// looked for, by its upstream and what the watch noticed: the reflogs it reads move with
+    /// the refs.
+    rewrite: Option<(u64, Option<Tracking>)>,
 }
 
 impl HistoryCache {
@@ -303,6 +332,13 @@ struct Rows {
     loaded: usize,
     unpushed_pending: bool,
     focus: Option<Focus>,
+}
+
+fn keyed(value: &impl std::hash::Hash) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// What the commit rows are built from. The commits themselves never change under their ids,
@@ -411,6 +447,19 @@ impl Repo {
         hasher.finish().max(1)
     }
 
+    /// Stands for what the upstreams and their ahead/behind counts are worked out from: `HEAD`,
+    /// the refs, where the history stops, and the repository's settings as written.
+    fn state_print(&self, head: &HeadInfo, refs: &[RefInfo], boundary: u64) -> u64 {
+        let local = self.local();
+        let refs: Vec<_> = refs.iter().map(|r| (&r.name, r.kind as u8, &r.target)).collect();
+        let settings = [
+            local.common_dir().join("config"),
+            local.git_dir().join("config.worktree"),
+        ]
+        .map(|file| std::fs::read(file).ok());
+        keyed(&(&head.branch, &head.commit, refs, boundary, settings))
+    }
+
     /// Load the commit history of all branches and tags with its graph layout.
     pub fn history(&self, options: &HistoryOptions) -> Result<History> {
         self.history_with(options, &mut HistoryCache::default(), None)
@@ -462,6 +511,14 @@ impl Repo {
         let repo = self.local();
         let head = self.head()?;
         let mut refs = self.refs()?;
+        // A deeper fetch moves where the history stops without moving any ref.
+        let boundary = self.shallow_stamp();
+        let state = self.state_print(&head, &refs, boundary);
+        // Only what the watch notices can have changed, and it counts what it noticed.
+        let quiet = options.quiet && options.seen.is_some();
+        let mut asked = Asked::default();
+        // Answers taken again, of the four in `Asked`.
+        let mut taken = 0;
         // Each of these can fail on its own: the history still shows, and `problems` says what
         // isn't known, so that it doesn't look like none.
         let mut problems = Vec::new();
@@ -471,7 +528,18 @@ impl Repo {
                 error: err.to_string(),
             })
         };
-        let mut upstreams = self.branch_tracking().unwrap_or_else(|err| {
+        let tracking_key = state;
+        let tracked = match &cache.asked.tracking {
+            Some((key, upstreams)) if *key == tracking_key => {
+                taken += 1;
+                Ok(upstreams.clone())
+            }
+            _ => self.branch_tracking(),
+        };
+        if let Ok(upstreams) = &tracked {
+            asked.tracking = Some((tracking_key, upstreams.clone()));
+        }
+        let mut upstreams = tracked.unwrap_or_else(|err| {
             note(ReadPart::Tracking, err);
             HashMap::new()
         });
@@ -490,7 +558,18 @@ impl Repo {
             None
         });
         // Only the lists: what is in each folder comes after the history, see `folders.rs`.
-        let worktrees = self.worktree_list().unwrap_or_else(|err| {
+        let worktrees_key = keyed(&(state, self.worktrees_print()));
+        let listed = match &cache.asked.worktrees {
+            Some((key, list)) if *key == worktrees_key => {
+                taken += 1;
+                Ok(list.clone())
+            }
+            _ => self.listed_worktrees(),
+        };
+        if let Ok(list) = &listed {
+            asked.worktrees = Some((worktrees_key, list.clone()));
+        }
+        let worktrees = listed.map(|list| self.place_worktrees(list)).unwrap_or_else(|err| {
             note(ReadPart::Worktrees, err);
             Vec::new()
         });
@@ -500,12 +579,22 @@ impl Repo {
         });
         // Uncommitted changes get a row of their own on top. When `git status` fails the row
         // stays, saying the changes aren't known, rather than looking clean.
-        let changes = self.working_tree().map_err(|err| note(ReadPart::Changes, err)).ok();
+        let staged = crate::watch::staged(&repo.index_path(), repo.object_hash());
+        let changes_key = options.seen.map(|seen| keyed(&(seen, &head.commit, staged)));
+        let changes = match &cache.asked.changes {
+            Some((key, tree)) if quiet && Some(*key) == changes_key => {
+                taken += 1;
+                Ok(tree.clone())
+            }
+            _ => self.working_tree(),
+        };
+        if let (Ok(tree), Some(key)) = (&changes, changes_key) {
+            asked.changes = Some((key, tree.clone()));
+        }
+        let changes = changes.map_err(|err| note(ReadPart::Changes, err)).ok();
         let dirty = changes.as_ref().is_none_or(|tree| !tree.is_empty());
         let production = self.production_setting();
         let shallow = repo.is_shallow();
-        // A deeper fetch moves where the history stops without moving any ref.
-        let boundary = self.shallow_stamp();
 
         let key = rows_key(
             self.workdir(),
@@ -520,6 +609,7 @@ impl Repo {
             boundary,
             self.unpushed.0.lock().expect("unpushed lock").added,
         );
+        let rows_before = cache.last.as_ref().map(|(last, _)| *last);
         // The rows the caller has, when they are the ones built last.
         let mut before = None;
         let built = match &cache.last {
@@ -571,19 +661,32 @@ impl Repo {
         let previous_branch = head.branch.is_none().then(|| self.previous_branch(&refs)).flatten();
         // The checked-out branch's upstream was read with the others. A failing `git for-each-ref`
         // leaves it out, and `problems` says so.
-        let tracking = match &head.branch {
-            Some(branch) => refs
-                .iter()
+        let upstream = head.branch.as_ref().and_then(|branch| {
+            refs.iter()
                 .find(|r| r.kind == RefKind::Local && &r.name == branch)
                 .and_then(|r| r.tracking.clone())
-                .map(|mut t| {
-                    if t.behind > 0 {
-                        self.find_rewrite(branch, &mut t);
-                    }
-                    t
-                }),
-            None => None,
+        });
+        let rewrite_key = options.seen.map(|seen| keyed(&(seen, tracking_key, &head.branch)));
+        let tracking = match (&cache.asked.rewrite, &head.branch, upstream) {
+            (Some((key, tracking)), _, _) if quiet && Some(*key) == rewrite_key => {
+                taken += 1;
+                tracking.clone()
+            }
+            (_, Some(branch), Some(mut t)) => {
+                if t.behind > 0 {
+                    self.find_rewrite(branch, &mut t);
+                }
+                Some(t)
+            }
+            _ => None,
         };
+        if let Some(key) = rewrite_key
+            && problems.iter().all(|p| p.part != ReadPart::Tracking)
+        {
+            asked.rewrite = Some((key, tracking.clone()));
+        }
+        let unchanged = quiet && taken == 4 && rows_before == Some(key);
+        cache.asked = asked;
         Ok(History {
             head,
             trunk: built.trunk.clone(),
@@ -614,6 +717,7 @@ impl Repo {
             same,
             pieces,
             reads: Vec::new(),
+            unchanged,
             unpushed_pending: built.unpushed_pending,
             focus: built.focus.clone(),
         })

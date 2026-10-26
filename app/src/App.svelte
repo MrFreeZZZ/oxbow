@@ -109,7 +109,7 @@
       api.settleUnpushed(ids, "history-unpushed").then(
         (found) => {
           settling = false;
-          if (found && mine === generation) refresh();
+          if (found && mine === generation) refreshQuietly();
         },
         () => (settling = false),
       );
@@ -1634,7 +1634,7 @@
     const ok = await activity.fetch(target.remote, target.label, auto);
     if (!ok) return;
     await api.refreshRemoteTags().catch(() => false);
-    await refresh();
+    await refreshQuietly();
     if (!auto) confirm.say(activity.recent[0]?.sub === "Nothing new" ? `Fetched ${target.label}. Nothing new.` : `Fetched ${target.label}.`, "done");
   }
 
@@ -1659,13 +1659,23 @@
   /** Ask the remote which tags it has, so the ones it lacks show as local; quiet when offline. */
   async function checkRemoteTags() {
     if (!history?.remotes.length) return;
-    if (await api.refreshRemoteTags().catch(() => false)) await refresh();
+    if (await api.refreshRemoteTags().catch(() => false)) await refreshQuietly();
   }
 
   /** Reload after the repository changed, here or outside the app, keeping the selection when it still exists.
    *  One reload runs at a time: asked for meanwhile (focus, a fetch, an action finishing), one more
    *  follows it, for everyone who asked, so that it sees what changed. */
   function refresh(): Promise<void> {
+    refreshAll = true;
+    return refreshOnce();
+  }
+  /** Reload for nothing done here that the watch wouldn't see: the window came back to the
+   *  front, something changed outside, a fetch, which leaves the files alone. What the watch
+   *  noticed no change in isn't asked of git again; when nothing changed, nothing is read again. */
+  function refreshQuietly(): Promise<void> {
+    return refreshOnce();
+  }
+  function refreshOnce(): Promise<void> {
     if (!repo || loading) return Promise.resolve();
     // Older commits are on their way: reload once they are in, with the new limit.
     if (paging) {
@@ -1676,7 +1686,7 @@
     if (refreshing) {
       const queued = refreshing.then(() => {
         if (refreshQueued === queued) refreshQueued = null;
-        return refresh();
+        return refreshOnce();
       });
       refreshQueued = queued;
       return queued;
@@ -1701,6 +1711,8 @@
   }
 
   let refreshing: Promise<void> | null = null;
+  /** The next reload asks git for everything: something was done here since the last one began. */
+  let refreshAll = true;
   /** The reload that follows the one under way. */
   let refreshQueued: Promise<void> | null = null;
   let refreshAfterPaging = false;
@@ -1720,19 +1732,26 @@
   async function refreshNow() {
     const mine = generation;
     const shown = history;
+    const quiet = !refreshAll && !!shown;
+    refreshAll = false;
     readSince = Date.now();
     try {
-      const next = withRows(await api.history(limit, null, shown?.key ?? null, focusOnly), shown);
+      const next = withRows(await api.history(limit, null, shown?.key ?? null, focusOnly, quiet), shown);
       // Another repository was opened meanwhile: this answer may come from the old one.
       if (mine !== generation || loading) return;
       take(next, shown);
-      version++;
-      oplog.load();
-      lfs.load();
+      // Nothing changed: the views, Undo and LFS have it all already.
+      if (!next.unchanged) {
+        version++;
+        oplog.load();
+        lfs.load();
+      }
       if (!selected || !next.rows.some((r) => r.id === selected)) selected = next.head.commit ?? next.rows[0]?.id ?? null;
       // Current Branch Only follows a checkout: a commit it no longer shows gives way to HEAD.
       else if (next.focus && !next.focus.rows.some((i) => next.rows[i].id === selected)) selected = next.head.commit ?? selected;
     } catch (err) {
+      // What was done here is still to be read.
+      if (!quiet) refreshAll = true;
       if (mine === generation && repo) await failed(repo.path, err, mine);
       else if (mine === generation) error = String(err);
     }
@@ -1792,7 +1811,7 @@
     }
     const before = history;
     const mine = generation;
-    await refresh();
+    await refreshQuietly();
     const after = history;
     if (!change.git || !after || after === before || mine !== generation) return;
     const news = reloadNews(before, after);
@@ -1805,7 +1824,7 @@
     const change = unseen;
     unseen = null;
     if (change) outsideChanged(change);
-    else refresh();
+    else refreshQuietly();
   }
 
   /** The window asks whether to close without the conflict draft: a close meanwhile waits. */
@@ -1912,7 +1931,7 @@
         paging = null;
         if (refreshAfterPaging) {
           refreshAfterPaging = false;
-          refresh();
+          refreshOnce();
         }
       }
     }

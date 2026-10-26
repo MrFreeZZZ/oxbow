@@ -182,6 +182,8 @@ export interface History {
   /** The git commands this read ran, as typed in a shell; commits and refs are read from .git
    *  directly. What Reload shows in Activity. */
   reads: string[];
+  /** Read on a quiet refresh with nothing changed since the read before: no git command ran. */
+  unchanged: boolean;
   /** Some loaded commits not marked unpushed may be: more were unpushed than the history walks
    *  while it loads. `settleUnpushed` tells, and the next load marks them. */
   unpushedPending?: boolean;

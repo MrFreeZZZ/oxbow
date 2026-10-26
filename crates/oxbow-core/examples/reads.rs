@@ -5,6 +5,9 @@
 //! `RUNS=30` repeats each step (default 15); `SLOW=2` makes `git status` in every other folder
 //! take 2 seconds longer, to see whether History waits for it; `AT_ONCE=1,2,4,8` compares how
 //! many folders are read side by side (default: Oxbow's own).
+//!
+//! A refresh is made the way the window makes one when it comes back to the front: with the
+//! repository watched, so that what nobody changed isn't asked of git again.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use oxbow_core::folders::AT_ONCE;
-use oxbow_core::{FolderCache, History, HistoryCache, HistoryOptions, Repo};
+use oxbow_core::{FolderCache, History, HistoryCache, HistoryOptions, Repo, Watch};
 
 /// What one load cost.
 struct Load {
@@ -24,9 +27,12 @@ struct Load {
 }
 
 /// Load the history with `cache`, then read the folders it left pending with `folders`, the way
-/// the app does after a reload or a refresh.
+/// the app does after a reload or a refresh. With `known`, a refresh the window makes on its own,
+/// with `watch` counting the changes.
+#[allow(clippy::too_many_arguments)]
 fn load(
     repo: &Repo,
+    watch: &Watch,
     cache: &mut HistoryCache,
     folders: &FolderCache,
     known: Option<&str>,
@@ -34,7 +40,12 @@ fn load(
     at_once: usize,
 ) -> Result<Load, Box<dyn std::error::Error>> {
     let start = Instant::now();
-    let history = repo.history_with(&HistoryOptions::default(), cache, known)?;
+    let options = HistoryOptions {
+        seen: watch.seen(),
+        quiet: known.is_some(),
+        ..Default::default()
+    };
+    let history = repo.history_with(&options, cache, known)?;
     let shown = start.elapsed();
     let cancel = Arc::new(AtomicBool::new(false));
     repo.folder_states(
@@ -72,6 +83,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for path in &paths {
         let repo = Repo::open(path)?;
         println!("\n{} ({path})", repo.name());
+        let watch = repo.watch(|_| {})?;
+        if !watch.files {
+            println!("  (the files are too many to watch: a refresh reads them again)");
+        }
 
         // Times, with git as it is.
         oxbow_core::config::set_git_program(None);
@@ -82,14 +97,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let repo = Repo::open(path)?;
                 let mut cache = HistoryCache::default();
                 let folders = FolderCache::default();
-                let first = load(&repo, &mut cache, &folders, None, None, n)?;
+                let first = load(&repo, &watch, &mut cache, &folders, None, None, n)?;
                 shown.push(first.shown);
                 all.push(first.all);
                 size = serde_json::to_vec(&first.history)?.len();
                 let key = first.history.key.clone();
-                again.push(load(&repo, &mut cache, &folders, Some(&key), None, n)?.all);
+                again.push(load(&repo, &watch, &mut cache, &folders, Some(&key), None, n)?.all);
                 // The window came back to the front: every folder is read again.
-                afresh.push(load(&repo, &mut cache, &folders, Some(&key), Some(SystemTime::now()), n)?.all);
+                afresh.push(
+                    load(
+                        &repo,
+                        &watch,
+                        &mut cache,
+                        &folders,
+                        Some(&key),
+                        Some(SystemTime::now()),
+                        n,
+                    )?
+                    .all,
+                );
             }
             let at = if at_once.len() > 1 {
                 format!(" ({n} at once)")
@@ -112,11 +138,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut cache = HistoryCache::default();
         let folders = FolderCache::default();
         let _ = std::fs::remove_file(&log);
-        let first = load(&repo, &mut cache, &folders, None, None, at_once[0])?;
+        let first = load(&repo, &watch, &mut cache, &folders, None, None, at_once[0])?;
         let (count, most) = processes(&log)?;
         println!("  {:<34} {count} git processes, at most {most} at once", "Open");
         let _ = std::fs::remove_file(&log);
-        load(&repo, &mut cache, &folders, Some(&first.history.key), None, at_once[0])?;
+        load(
+            &repo,
+            &watch,
+            &mut cache,
+            &folders,
+            Some(&first.history.key),
+            None,
+            at_once[0],
+        )?;
         let (count, most) = processes(&log)?;
         println!(
             "  {:<34} {count} git processes, at most {most} at once",
@@ -128,6 +162,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             oxbow_core::config::set_git_program(Some(wrapped));
             let first = load(
                 &repo,
+                &watch,
                 &mut HistoryCache::default(),
                 &FolderCache::default(),
                 None,
