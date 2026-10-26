@@ -1,11 +1,3 @@
-<script module lang="ts">
-  import { api } from "./api";
-  import { DraftSaves } from "./draftSaves";
-
-  /** The draft saves of this window's Conflicts screens, outliving each screen (draftSaves.ts). */
-  export const draftSaves = new DraftSaves(api);
-</script>
-
 <script lang="ts">
   // The Conflicts screen: conflicted files on the left; for the open file, both sides on top
   // (named by branch, never "ours" and "theirs"), with the version they started from when asked,
@@ -13,6 +5,8 @@
   // or the whole file is written as text, before the file is marked resolved. All of it is saved
   // as a draft as the user goes (lib/drafts.ts), so quitting Oxbow keeps it.
 
+  import { api } from "./api";
+  import { draftSaves } from "./conflictDrafts";
   import TipCard from "./TipCard.svelte";
   import EditBox from "./EditBox.svelte";
   import { onMount, untrack } from "svelte";
