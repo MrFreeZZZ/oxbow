@@ -95,9 +95,11 @@ export const api = {
   createRepo: (options: NewRepoOptions) => invoke<string>("create_repo", { options }),
   /** The latest `limit` commits, or more to reach `until`. */
   /** With `known`, the key of the history on screen, rows that came out the same are left out. */
-  /** With `focus`, also the history of Current Branch Only: `History.focus`. */
-  history: (limit: number, until: string | null = null, known: string | null = null, focus = false) =>
-    invoke<History>("history", { limit, until, known, focus, lane: "history" }),
+  /** With `focus`, also the history of Current Branch Only: `History.focus`. With `quiet`, a
+   *  refresh for no action of the window's own: what the watch saw no change in isn't asked of
+   *  git again, and `History.unchanged` says when nothing changed. */
+  history: (limit: number, until: string | null = null, known: string | null = null, focus = false, quiet = false) =>
+    invoke<History>("history", { limit, until, known, focus, quiet, lane: "history" }),
   /** What the folders of the worktrees and submodules the last history listed have, each passed
    *  to `onState` as soon as it is read. One read before `since` (ms) is read again even when
    *  it shows no change. A newer call stops this one. */

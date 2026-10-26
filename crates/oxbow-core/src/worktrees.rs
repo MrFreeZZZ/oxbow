@@ -57,9 +57,18 @@ impl Repo {
     /// [`Repo::worktrees`] without counting their changed files, which takes a `git status` in
     /// each: the other folders that are there are [`Worktree::pending`].
     pub fn worktree_list(&self) -> Result<Vec<Worktree>> {
+        Ok(self.place_worktrees(self.listed_worktrees()?))
+    }
+
+    /// git's own list of the worktrees, before their folders are looked at.
+    pub(crate) fn listed_worktrees(&self) -> Result<Vec<Worktree>> {
         let out = self.run(&GitCommand::new(["worktree", "list", "--porcelain", "-z"]))?;
+        Ok(parse_list(&out.stdout))
+    }
+
+    /// Look at the folders of git's list: gone, the one open here, or to be read.
+    pub(crate) fn place_worktrees(&self, mut list: Vec<Worktree>) -> Vec<Worktree> {
         let here = canonical(self.workdir());
-        let mut list = parse_list(&out.stdout);
         for tree in list.iter_mut() {
             let path = Path::new(&tree.path);
             tree.missing = tree.missing || !path.is_dir();
@@ -69,7 +78,31 @@ impl Repo {
                 tree.pending = true;
             }
         }
-        Ok(list)
+        list
+    }
+
+    /// Stands for what git's list of worktrees is made of besides the refs: the main folder's
+    /// `HEAD`, each other one's record in `.git/worktrees` (where it is, its `HEAD`, a lock) and
+    /// whether its folder is there.
+    pub(crate) fn worktrees_print(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let common = self.common_dir();
+        std::fs::read(common.join("HEAD")).ok().hash(&mut hasher);
+        let mut records: Vec<_> = std::fs::read_dir(common.join("worktrees"))
+            .map(|dir| dir.flatten().map(|entry| entry.path()).collect())
+            .unwrap_or_default();
+        records.sort();
+        for record in records {
+            record.hash(&mut hasher);
+            for name in ["gitdir", "HEAD", "locked"] {
+                std::fs::read(record.join(name)).ok().hash(&mut hasher);
+            }
+            // Relative to the record when git keeps worktrees by relative paths.
+            let gitdir = std::fs::read_to_string(record.join("gitdir")).unwrap_or_default();
+            record.join(gitdir.trim()).exists().hash(&mut hasher);
+        }
+        hasher.finish()
     }
 
     /// `path` as a command line here would take it: `../name` next to this folder, relative
