@@ -390,8 +390,12 @@
     const fresh = group === "untracked" ? { untracked: true } : {};
     show(paths.length > 1 ? { kind: "files", paths, side, ...fresh } : paths.length ? { kind: "file", path: paths[0], side } : { kind: "all", side, ...fresh });
   }
+  /** A clicked row or heading takes the keyboard, so ↑ ↓ and Space go on from it: WebKit on
+   *  macOS doesn't focus a button on a click. */
+  const keyFocus = (event: MouseEvent) => (event.currentTarget as HTMLElement).focus({ preventScroll: true });
   /** A list's name folds or unfolds the list, as its chevron does, and shows every file of it. */
-  function openGroup(group: List) {
+  function openGroup(event: MouseEvent, group: List) {
+    keyFocus(event);
     if (group === "untracked") {
       if (!needle) view.untracked = !view.untracked;
       show({ kind: "all", side: "unstaged", untracked: true });
@@ -426,6 +430,7 @@
   /** A file's name selects it and opens its diff; ⌘-click (Ctrl) adds it to the selection or
    *  takes it out, Shift-click adds every file from the one clicked last. */
   function rowClick(event: MouseEvent, file: FileChange, group: List | "conflicted") {
+    keyFocus(event);
     if (dragged) return;
     if (group !== "conflicted" && (event.metaKey || event.ctrlKey || event.shiftKey)) {
       event.preventDefault();
@@ -1265,7 +1270,7 @@
         <div class="group">
           <div class="ghead" class:on={isAll("unstaged")} style:background={isAll("unstaged") ? tint(color) : undefined}>
             {@render chevron(!shut.unstaged, shut.unstaged ? "Show the unstaged files" : "Hide the unstaged files", () => (shut.unstaged = !shut.unstaged))}
-            <button class="gname" onclick={() => openGroup("unstaged")} aria-current={isAll("unstaged") ? "true" : undefined} aria-expanded={!shut.unstaged} title={shut.unstaged ? "Show every unstaged change and the files" : "Show every unstaged change and hide the files"}>
+            <button class="gname" onclick={(e) => openGroup(e, "unstaged")} aria-current={isAll("unstaged") ? "true" : undefined} aria-expanded={!shut.unstaged} title={shut.unstaged ? "Show every unstaged change and the files" : "Show every unstaged change and hide the files"}>
               <span class="gtitle" style:color={plate(color)}>Unstaged</span><span class="n">{needle ? `${shownTracked.length} of ${tracked.length}` : tracked.length}</span>
             </button>
             {#if pickedUnstaged.length}
@@ -1286,7 +1291,7 @@
           <div class="group">
             <div class="ghead" class:on={isAll("unstaged", true)} style:background={isAll("unstaged", true) ? tint(color) : undefined}>
               {@render chevron(untrackedOpen, untrackedOpen ? "Hide the untracked files" : "Show the new files git does not track yet", () => (view.untracked = !view.untracked), !!needle)}
-              <button class="gname" onclick={() => openGroup("untracked")} aria-current={isAll("unstaged", true) ? "true" : undefined} aria-expanded={untrackedOpen} title={untrackedOpen ? "Show every new file git does not track yet and hide the files" : "Show every new file git does not track yet and the files"}>
+              <button class="gname" onclick={(e) => openGroup(e, "untracked")} aria-current={isAll("unstaged", true) ? "true" : undefined} aria-expanded={untrackedOpen} title={untrackedOpen ? "Show every new file git does not track yet and hide the files" : "Show every new file git does not track yet and the files"}>
                 <span class="gtitle" style:color={plate(color)}>Untracked</span><span class="n">{needle ? `${shownUntracked.length} of ${untracked.length}` : untracked.length}</span>
               </button>
               {#if pickedUntracked.length}
@@ -1308,7 +1313,7 @@
       <div class="group staged" class:drop={!!dragging && dragging.group !== "staged"} class:over={!!dragging && dragging.group !== "staged" && dropping} bind:this={stagedBox}>
         <div class="ghead" class:on={isAll("staged")} style:background={isAll("staged") ? tint(color) : undefined}>
           {@render chevron(!shut.staged, shut.staged ? "Show the staged files" : "Hide the staged files", () => (shut.staged = !shut.staged))}
-          <button class="gname" onclick={() => openGroup("staged")} aria-current={isAll("staged") ? "true" : undefined} aria-expanded={!shut.staged} title={shut.staged ? "Show the next commit: every staged change, and the files" : "Show the next commit: every staged change, and hide the files"}>
+          <button class="gname" onclick={(e) => openGroup(e, "staged")} aria-current={isAll("staged") ? "true" : undefined} aria-expanded={!shut.staged} title={shut.staged ? "Show the next commit: every staged change, and the files" : "Show the next commit: every staged change, and hide the files"}>
             <span class="gtitle" style:color={plate(color)}>Staged</span><span class="n">{needle ? `${shownStaged.length} of ${staged.length}` : staged.length}</span>
           </button>
           {#if pickedStaged.length}
