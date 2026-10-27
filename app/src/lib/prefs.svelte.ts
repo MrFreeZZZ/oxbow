@@ -114,7 +114,7 @@ export const rules: Partial<Record<PrefKey, Rule>> = {
 };
 
 /** Keys Oxbow keeps in settings.json by itself, e.g. the width of a panel, with their type. */
-export const internal: Record<string, "number" | "boolean"> = { "oxbow.history.detailsWidth": "number", "oxbow.sidebar.hidden": "boolean", "oxbow.history.detailsHidden": "boolean", "oxbow.window.zoomLevel": "number" };
+export const internal: Record<string, "number" | "boolean"> = { "oxbow.history.detailsWidth": "number", "oxbow.sidebar.hidden": "boolean", "oxbow.history.detailsHidden": "boolean", "oxbow.changes.width": "number", "oxbow.changes.expanded": "boolean", "oxbow.window.zoomLevel": "number" };
 
 const named = (type: string) => (type === "null" ? "null" : type === "boolean" ? "true or false" : `${/^[aeiou]/.test(type) ? "an" : "a"} ${type}`);
 const quoted = (words: readonly string[]) => words.map((word) => `"${word}"`).join(", ");

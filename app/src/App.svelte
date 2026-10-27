@@ -139,6 +139,9 @@
   let findField = $state<FindField>();
   let stashesView = $state<StashesView>();
   let panelWidth = $state(640);
+  /** The width of the panel with Changes, kept apart from a commit's; until it is dragged, as wide
+   *  as the graph lets it be. */
+  let changesWidth = $state<number | null>(null);
   /** Goes up on every reload of the history, so the changes panel reloads too. */
   let version = $state(0);
   /** The Conflicts screen is open in place of History. */
@@ -219,10 +222,20 @@
   }
   /** The details panel put away, so the graph takes the whole width; kept in settings.json. */
   let detailsHidden = $state(false);
-  /** The details panel over the whole content, for a long diff; the graph comes back with the same button or Esc. */
-  let expanded = $state(false);
+  /** The details panel over the whole content, for a long diff; the graph comes back with the same
+   *  button or Esc. A commit's goes back once another is picked; Changes stays so, kept in
+   *  settings.json, until the graph is asked back. */
+  let commitExpanded = $state(false);
+  let changesExpanded = $state(false);
+  const expanded = $derived.by(() => (onChanges ? changesExpanded : commitExpanded));
+  function setChangesExpanded(on: boolean) {
+    if (changesExpanded === on) return;
+    changesExpanded = on;
+    api.setSetting(settings.changesExpanded, on).catch(() => {});
+  }
   function toggleDetails() {
-    expanded = false;
+    commitExpanded = false;
+    if (onChanges) setChangesExpanded(false);
     detailsHidden = !detailsHidden;
     api.setSetting(settings.detailsHidden, detailsHidden).catch(() => {});
     // Back from the whole width, the list keeps the selected commit in view.
@@ -235,7 +248,8 @@
   }
   function toggleExpanded() {
     if (!expanded) showDetails();
-    expanded = !expanded;
+    if (onChanges) setChangesExpanded(!changesExpanded);
+    else commitExpanded = !commitExpanded;
     if (!expanded && selected) requestAnimationFrame(() => list?.reveal(selected!));
   }
   /** Changes from the sidebar or the status line: the panel of the row above HEAD, shown even if put away. */
@@ -247,7 +261,9 @@
   const panelMax = $derived(Math.max(PANEL_MIN, contentWidth - GRAPH_MIN));
   /** A hidden sidebar's room goes to the details panel, as in Mail: the graph keeps its width and only moves to the edge. */
   const panelBonus = $derived(!narrow && sideHidden ? SIDEBAR : 0);
-  const shownPanelWidth = $derived(Math.min(Math.max(panelWidth + panelBonus, PANEL_MIN), panelMax));
+  const shownPanelWidth = $derived.by(() =>
+    onChanges && changesWidth === null ? panelMax : Math.min(Math.max((onChanges ? (changesWidth ?? panelWidth) : panelWidth) + panelBonus, PANEL_MIN), panelMax),
+  );
   /** The screen next to the sidebar. */
   let view = $state<"history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull" | "series">("history");
   /** The branch whose stack Edit Stack shows; the checked-out one when null. */
@@ -531,7 +547,7 @@
   const selectedRow = $derived(selected ? (rowsById.get(selected) ?? null) : null);
   // Another screen gives the graph back.
   $effect(() => {
-    if (view !== "history" || showConflicts) expanded = false;
+    if (view !== "history" || showConflicts) commitExpanded = false;
   });
   /** A second commit, ⌘-clicked, compared with the selected one in the details panel. */
   let second = $state<string | null>(null);
@@ -545,6 +561,8 @@
     const rows = history.rows;
     return rows.indexOf(other) > rows.indexOf(selectedRow) ? { older: other, newer: selectedRow } : { older: selectedRow, newer: other };
   });
+  /** The details panel shows Changes, which keeps its own width and Expand. */
+  const onChanges = $derived(view === "history" && !showConflicts && !!selectedRow?.worktree && !pickedSubmodule && !oplog.compare && !oplog.lost && !pair);
   /** What the details panel shows, named in its bar. */
   const panelLabel = $derived(
     pickedSubmodule
@@ -923,7 +941,7 @@
       case "show":
         if (item.kind === "stashes" && view === "stashes") stashSel = item.commit;
         else if (item.commit) {
-          expanded = false;
+          commitExpanded = false;
           pick(item.commit, notInHistory(item.commit, item.worktree));
         }
         return;
@@ -980,6 +998,10 @@
 
   /** The next or the previous tab of the details panel, as ⌥⌘→ steps through VS Code's editors. */
   function stepTab(by: 1 | -1): boolean {
+    // Changes steps through its files, which are a list, not tabs.
+    const files = content?.querySelector("aside.panel [data-steps]");
+    const steps = stepperOf(files);
+    if (steps) return steps(by, true);
     const tabs = [...(content?.querySelectorAll<HTMLElement>('aside.panel [role="tablist"] [role="tab"]') ?? [])];
     if (!tabs.length) return false;
     const focused = document.activeElement && tabs.includes(document.activeElement as HTMLElement);
@@ -2192,14 +2214,19 @@
     const startWidth = shownPanelWidth;
     const target = event.currentTarget as HTMLElement;
     target.setPointerCapture(event.pointerId);
+    // Changes keeps a width of its own.
+    const own = onChanges;
     const move = (e: PointerEvent) => {
       // Saved without the hidden sidebar's room, so the graph keeps its width when the sidebar comes back.
-      panelWidth = Math.max(Math.min(Math.max(startWidth - (e.clientX - startX), PANEL_MIN), panelMax) - panelBonus, PANEL_MIN);
+      const width = Math.max(Math.min(Math.max(startWidth - (e.clientX - startX), PANEL_MIN), panelMax) - panelBonus, PANEL_MIN);
+      if (own) changesWidth = width;
+      else panelWidth = width;
     };
     const up = () => {
       target.removeEventListener("pointermove", move);
       target.removeEventListener("pointerup", up);
-      api.setSetting(settings.detailsWidth, Math.round(panelWidth)).catch(() => {});
+      if (own && changesWidth !== null) api.setSetting(settings.changesWidth, Math.round(changesWidth)).catch(() => {});
+      else if (!own) api.setSetting(settings.detailsWidth, Math.round(panelWidth)).catch(() => {});
     };
     target.addEventListener("pointermove", move);
     target.addEventListener("pointerup", up);
@@ -2216,6 +2243,12 @@
   $effect(() => {
     api.getSetting<number>(settings.detailsWidth).then((width) => {
       if (typeof width === "number") panelWidth = Math.max(width, PANEL_MIN);
+    });
+    api.getSetting<number>(settings.changesWidth).then((width) => {
+      if (typeof width === "number") changesWidth = Math.max(width, PANEL_MIN);
+    });
+    api.getSetting<boolean>(settings.changesExpanded).then((on) => {
+      if (typeof on === "boolean") changesExpanded = on;
     });
     api.getSetting<boolean>(settings.sidebarHidden).then((hidden) => {
       if (typeof hidden === "boolean") sideHidden = hidden;
@@ -2344,7 +2377,7 @@
     {/if}
     <!-- Over a narrow window the sidebar steps aside again once something in it is picked. -->
     <Sidebar {repo} {history} {reads} onRetry={retryRead} {selectedRow} ctx={branchCtx!} onOpen={chooseRepo} onOpenPath={load} onWelcome={closeRepo}
-      onPick={aside((id: string, missing?: string) => ((expanded = false), pick(id, missing), requestAnimationFrame(() => list?.focus())))}
+      onPick={aside((id: string, missing?: string) => ((commitExpanded = false), pick(id, missing), requestAnimationFrame(() => list?.focus())))}
       {run}
       view={view === "series" ? seriesBack : view}
       onView={(v) => {

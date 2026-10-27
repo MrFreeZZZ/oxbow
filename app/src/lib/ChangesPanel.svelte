@@ -115,15 +115,17 @@
   import { diffSettings, prefs, wholeByDefault } from "./prefs.svelte";
   import { confirm, type Part, type Request } from "./confirm.svelte";
   import type { FileChange, FileDiff, Hunk, HistoryRow, Side, WorkingTree } from "./types";
-  import { lane, plate, splitPath, tabLabels, tabWindow, tint } from "./format";
-  import { fileTabs, tabStepper } from "./tabs";
+  import { lane, plate, splitPath, tint } from "./format";
+  import { tabStepper } from "./tabs";
   import DiffView, { type LinePicker } from "./DiffView.svelte";
+  import DiffTools from "./DiffTools.svelte";
   import FoldAll from "./FoldAll.svelte";
   import WhyNote from "./WhyNote.svelte";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import { nav } from "./nav.svelte";
   import { BIG_FILE, bytes } from "./unusual";
   import { commitRecovery, ignoreChoices, ignoreRequest, linesRequest, stashFilesRequest, stashMessageFor, type LinesKind } from "./changes";
+  import { keepShown, pickRange, sameShown, stepShown, type Shown } from "./changesView";
   import { updateFolderRequest } from "./submodules";
 
   let {
@@ -160,16 +162,18 @@
   const SUMMARY_LIMIT = $derived(prefs.get("oxbow.commit.subjectGuide"));
 
   let tree = $state<WorkingTree | null>(null);
-  /** The tab shown: null is Summary, otherwise a file's path. */
-  let tab = $state<string | null>(null);
-  /** The diffs shown, on each side: every file in Summary, one file on its tab. */
-  let shown = $state<{ unstaged: FileDiff[]; staged: FileDiff[] }>({ unstaged: [], staged: [] });
-  /** The lists of Summary: untracked files are unstaged ones listed apart. */
+  /** What the diff column shows: a file on one side, or every file of a side. */
+  let shown = $state<Shown | null>(null);
+  /** The diffs in the diff column, and what they were read for: until a new read is in, the
+   *  column keeps the old diffs, with their own side's actions. */
+  let diffs = $state<FileDiff[]>([]);
+  let diffsOf = $state<Shown | null>(null);
+  /** The lists of files: untracked files are unstaged ones listed apart. */
   type List = Side | "untracked";
-  /** Files ticked in each list, for Stage Selected and Unstage Selected. */
-  let ticked = $state<Record<List, string[]>>({ unstaged: [], staged: [], untracked: [] });
-  /** The same ticks as sets, so a list of thousands of files checks each one at once. */
-  const tickedSet = $derived({ unstaged: new Set(ticked.unstaged), staged: new Set(ticked.staged), untracked: new Set(ticked.untracked) });
+  /** Files picked with ⌘-click or Shift-click in each list, for Stage, Unstage or Discard of several. */
+  let picks = $state<Record<List, string[]>>({ unstaged: [], staged: [], untracked: [] });
+  /** The same picks as sets, so a list of thousands of files checks each one at once. */
+  const pickSet = $derived({ unstaged: new Set(picks.unstaged), staged: new Set(picks.staged), untracked: new Set(picks.untracked) });
   let whole = $state(wholeByDefault());
   // Diff & Text's default view applies again when it changes.
   $effect(() => {
@@ -180,11 +184,8 @@
   /** Lines picked in one hunk, with the one clicked last for Shift-click. */
   let sel = $state<{ hunk: Hunk; lines: number[]; anchor: number } | null>(null);
   let menu = $state<{ x: number; y: number; entries: MenuEntry[]; label: string } | null>(null);
-  let scroller = $state<HTMLDivElement>();
-  let tabBar = $state<HTMLDivElement>();
-  let unstagedView = $state<DiffView>();
-  let untrackedView = $state<DiffView>();
-  let stagedView = $state<DiffView>();
+  let diffScroller = $state<HTMLDivElement>();
+  let diffView = $state<DiffView>();
 
   const staged = $derived(tree?.staged ?? []);
   const unstaged = $derived(tree?.unstaged ?? []);
@@ -192,39 +193,30 @@
   /** Unstaged files split as Sublime Merge does: edits to tracked files, and new files git does not track yet. */
   const tracked = $derived(unstaged.filter((f) => f.status !== "untracked"));
   const untracked = $derived(unstaged.filter((f) => f.status === "untracked"));
-  /** Only files whose path has this text are listed, and their diffs shown in Summary. */
+  /** Only files whose path has this text are listed, and their diffs shown with every file of a side. */
   let filter = $state("");
   const needle = $derived(filter.trim().toLowerCase());
   const matches = (file: FileChange) => !needle || file.path.toLowerCase().includes(needle) || !!file.oldPath?.toLowerCase().includes(needle);
   /** Untracked files show while a filter is typed, so it finds them too. */
   const untrackedOpen = $derived(view.untracked || !!needle);
-  const stagedPaths = $derived(new Set(staged.map((f) => f.path)));
+  /** Unstaged and Staged fold to their heading, until the app quits. */
+  let shut = $state({ unstaged: false, staged: false });
   /** Each list's files by path, for the other side of a file staged in part. */
   const stagedByPath = $derived(new Map(staged.map((f) => [f.path, f])));
   const unstagedByPath = $derived(new Map(unstaged.map((f) => [f.path, f])));
-  /** Every changed file once, for the tabs: staged first, then the rest, each in list order. A file
-   *  staged in part sits with the staged ones. */
-  const stagedTabs = $derived(staged.map((f) => f.path));
-  const otherTabs = $derived([...new Set([...conflicted, ...tracked].map((f) => f.path))].filter((path) => !stagedPaths.has(path)));
-  /** Untracked files get tabs, last, only while their list is open. */
-  const untrackedTabs = $derived(untracked.map((f) => f.path).filter((path) => !stagedPaths.has(path)));
-  const paths = $derived([...stagedTabs, ...otherTabs, ...(untrackedOpen || (tab !== null && untrackedTabs.includes(tab)) ? untrackedTabs : [])]);
-  const labels = $derived(tabLabels(paths));
-  const shownTabs = $derived(tabWindow(paths.length, tab === null ? -1 : paths.indexOf(tab)));
-  const fileCount = $derived(stagedTabs.length + otherTabs.length + untrackedTabs.length);
+  const fileCount = $derived(new Set([...conflicted, ...unstaged, ...staged].map((f) => f.path)).size);
   const branchPart = $derived<Part>(branch ? { branch, color } : { code: "HEAD" });
 
-  /** Lines of diff a page of the Summary brings on each side, about what the diff shows at first. */
+  /** Lines of diff a page of every file of a side brings, about what the diff shows at first. */
   const PAGE_LINES = 4000;
   /** Lanes of the diff reads of each side: a newer read in a lane stops the older one. */
   const LANES: Record<Side, string> = { unstaged: "changes-unstaged", staged: "changes-staged" };
-  /** On each side, where the next page of Summary's diffs starts (null once all are loaded), and
-   *  how many files are still to come. */
-  let more = $state<Record<Side, number | null>>({ unstaged: null, staged: null });
-  let pending = $state<Record<Side, number>>({ unstaged: 0, staged: 0 });
-  let loadingMore: Record<Side, boolean> = { unstaged: false, staged: false };
+  /** Where the next page of diffs starts (null once all are loaded), and how many files are still to come. */
+  let more = $state<number | null>(null);
+  let pending = $state(0);
+  let loadingMore = false;
   /** What the diffs shown were asked for: later pages must be of the same. */
-  let asked: { lists: Record<Side, string[]>; whole: boolean; reading: number | null } | null = null;
+  let asked: { side: Side; paths: string[]; whole: boolean; reading: number | null } | null = null;
 
   const draft = $derived(draftFor(repo));
 
@@ -237,7 +229,7 @@
   const shownTracked = $derived(tracked.filter(matches));
   const shownUntracked = $derived(untracked.filter(matches));
   const shownStaged = $derived(staged.filter(matches));
-  /** The filter the Summary diffs follow, a moment after typing stops. */
+  /** The filter the diffs of a whole side follow, a moment after typing stops. */
   let diffNeedle = $state("");
   $effect(() => {
     const next = needle;
@@ -279,7 +271,7 @@
   const message = $derived([draft.summary.trim(), draft.description.trim()].filter(Boolean).join("\n\n"));
   const canCommit = $derived(!!draft.summary.trim() && conflicted.length === 0 && (staged.length > 0 || (draft.amend && !!head)) && (!draft.amend || head?.id === draft.amendOn));
   let summaryBox = $state<HTMLInputElement>();
-  /** Why Commit is grey, beside it, with the way out when there is one. */
+  /** Why Commit is grey, over it, with the way out when there is one. */
   const commitHint = $derived.by((): { text: string; warn?: boolean; fix?: { label: string; run: () => void } } | null => {
     if (conflicted.length) {
       return {
@@ -308,14 +300,14 @@
       reading = given ? snapshot : null;
       tree = next;
       error = null;
-      const unstagedNow = new Set([...next.unstaged, ...next.conflicted].map((f) => f.path));
+      const unstagedNow = new Set(next.unstaged.map((f) => f.path));
       const stagedNow = new Set(next.staged.map((f) => f.path));
-      // A file's tab closes once it has no changes left; ticks go with the files that moved.
-      if (tab !== null && !unstagedNow.has(tab) && !stagedNow.has(tab)) tab = null;
-      ticked = {
-        unstaged: ticked.unstaged.filter((p) => unstagedNow.has(p)),
-        staged: ticked.staged.filter((p) => stagedNow.has(p)),
-        untracked: ticked.untracked.filter((p) => unstagedNow.has(p)),
+      // A file staged or unstaged whole is shown where it went; picks go with the files that moved.
+      shown = keepShown(shown, next);
+      picks = {
+        unstaged: picks.unstaged.filter((p) => unstagedNow.has(p)),
+        staged: picks.staged.filter((p) => stagedNow.has(p)),
+        untracked: picks.untracked.filter((p) => unstagedNow.has(p)),
       };
       loads++;
     } catch (err) {
@@ -330,38 +322,33 @@
     untrack(load);
   });
 
-  // The selected tab may be scrolled out of the tab bar.
   $effect(() => {
-    tab;
-    requestAnimationFrame(() => tabBar?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ inline: "nearest", block: "nearest" }));
-  });
-
-  $effect(() => {
-    const current = tab;
+    const target = shown;
     const wholeFile = whole;
     diffSettings();
     loads;
     const t = tree;
-    if (!t) return;
-    const n = diffNeedle;
-    // Summary reads the untracked files' diffs only while their list is open, after the edits.
-    const withUntracked = current !== null || view.untracked || !!n;
-    const side = (list: FileChange[]) =>
-      list
-        .filter((f) => (current === null ? !n || f.path.toLowerCase().includes(n) || !!f.oldPath?.toLowerCase().includes(n) : f.path === current))
-        .map((f) => f.path);
-    const fresh = t.unstaged.filter((f) => f.status === "untracked");
-    const edits = t.unstaged.filter((f) => f.status !== "untracked");
-    const ask = { lists: { unstaged: side([...t.conflicted, ...edits, ...(withUntracked ? fresh : [])]), staged: side(t.staged) }, whole: wholeFile, reading };
+    if (!t || !target) {
+      asked = null;
+      diffs = [];
+      diffsOf = target;
+      return;
+    }
+    const n = target.kind === "all" ? diffNeedle : "";
+    const pool = target.side === "staged" ? t.staged : [...t.conflicted, ...t.unstaged.filter((f) => target.kind === "file" || f.status !== "untracked")];
+    const paths = pool
+      .filter((f) => (target.kind === "file" ? f.path === target.path : !n || f.path.toLowerCase().includes(n) || !!f.oldPath?.toLowerCase().includes(n)))
+      .map((f) => f.path);
+    const ask = { side: target.side, paths, whole: wholeFile, reading };
     asked = ask;
-    const first = (s: Side) =>
-      ask.lists[s].length ? api.workingDiffPage(ask.lists[s], s, wholeFile, reading, 0, PAGE_LINES, LANES[s]) : Promise.resolve({ diffs: [], next: null, files: 0 });
-    Promise.all([first("unstaged"), first("staged")]).then(
-      ([u, st]) => {
+    const first = paths.length ? api.workingDiffPage(paths, target.side, wholeFile, reading, 0, PAGE_LINES, LANES[target.side]) : Promise.resolve({ diffs: [], next: null, files: 0 });
+    first.then(
+      (page) => {
         if (asked !== ask) return;
-        shown = { unstaged: u.diffs, staged: st.diffs };
-        more = { unstaged: u.next, staged: st.next };
-        pending = { unstaged: u.files - u.diffs.length, staged: st.files - st.diffs.length };
+        diffs = page.diffs;
+        diffsOf = target;
+        more = page.next;
+        pending = page.files - page.diffs.length;
         // Picked lines belong to the hunks they were picked in.
         sel = null;
       },
@@ -376,103 +363,104 @@
     api.stopReads(Object.values(LANES)).catch(() => {});
   });
 
-  /** The next page of Summary's diffs on one side. */
-  function loadMore(s: Side) {
+  /** The next page of the diffs of every file of a side. */
+  function loadMore() {
     const ask = asked;
-    const from = more[s];
-    if (!ask || from === null || loadingMore[s] || tab !== null) return;
-    loadingMore[s] = true;
-    api.workingDiffPage(ask.lists[s], s, ask.whole, ask.reading, from, PAGE_LINES, LANES[s]).then(
+    const from = more;
+    if (!ask || from === null || loadingMore) return;
+    loadingMore = true;
+    api.workingDiffPage(ask.paths, ask.side, ask.whole, ask.reading, from, PAGE_LINES, LANES[ask.side]).then(
       (page) => {
-        loadingMore[s] = false;
-        if (asked !== ask || more[s] !== from) return;
-        shown = { ...shown, [s]: [...shown[s], ...page.diffs] };
-        more = { ...more, [s]: page.next };
-        pending = { ...pending, [s]: Math.max(0, pending[s] - page.diffs.length) };
+        loadingMore = false;
+        if (asked !== ask || more !== from) return;
+        diffs = [...diffs, ...page.diffs];
+        more = page.next;
+        pending = Math.max(0, pending - page.diffs.length);
       },
       (err) => {
-        loadingMore[s] = false;
+        loadingMore = false;
         if (asked === ask && !stopped(err)) error = String(err);
       },
     );
   }
 
-  function openTab(path: string | null) {
-    tab = path;
-    if (scroller) scroller.scrollTop = 0;
+  let filesBox = $state<HTMLDivElement>();
+
+  function show(next: Shown) {
+    if (!sameShown(next, shown) && diffScroller) diffScroller.scrollTop = 0;
+    shown = next;
+    // Stepped to with the keys, the file may be scrolled out of its list.
+    requestAnimationFrame(() => filesBox?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: "nearest" }));
   }
 
-  /** The side and file each hunk shown belongs to. */
-  /** Summary's unstaged diffs in their two parts: edits, then the new files. */
-  const trackedDiffs = $derived(shown.unstaged.filter((d) => d.file.status !== "untracked"));
-  const untrackedDiffs = $derived(shown.unstaged.filter((d) => d.file.status === "untracked"));
+  const sideOf = (group: List | "conflicted"): Side => (group === "staged" ? "staged" : "unstaged");
+  const isOpen = (file: FileChange, group: List | "conflicted") => shown?.kind === "file" && shown.path === file.path && shown.side === sideOf(group);
+  const isAll = (side: Side) => shown?.kind === "all" && shown.side === side;
 
+  /** The side and file each hunk shown belongs to. */
   const hunkFile = $derived.by(() => {
-    const map = new Map<Hunk, { file: FileChange; side: Side }>();
-    for (const [side, list] of [["unstaged", shown.unstaged], ["staged", shown.staged]] as const)
-      for (const d of list) for (const h of d.hunks) map.set(h, { file: d.file, side });
+    const map = new Map<Hunk, FileChange>();
+    for (const d of diffs) for (const h of d.hunks) map.set(h, d.file);
     return map;
   });
 
-  /** The file ticked or unticked last, where Shift-click starts a range. */
+  /** The file picked or unpicked last, where Shift-click starts a range. */
   let anchor: { group: List; path: string } | null = null;
 
   /** The files a list shows, the filter applied. */
   const listOf = (group: List) => (group === "staged" ? shownStaged : group === "untracked" ? shownUntracked : shownTracked);
 
   /** The files of a list in the order they are shown, without those in closed folders. */
-  function order(group: List): string[] {
-    const list = listOf(group);
+  function order(group: List | "conflicted"): string[] {
+    const list = group === "conflicted" ? shownConflicted : listOf(group);
     if (!view.folders) return list.map((f) => f.path);
     return byFolder(list).flatMap((g) => (folded.has(`${group}:${g.dir}`) ? [] : g.files.map((f) => f.path)));
   }
 
-  /** Ticks or unticks a file; with `range`, ticks every file from the last one clicked to it. */
-  function tick(group: List, path: string, range = false) {
-    const list = ticked[group];
-    const on = tickedSet[group];
-    if (range && anchor?.group === group) {
-      const seq = order(group);
-      const from = seq.indexOf(anchor.path);
-      const to = seq.indexOf(path);
-      if (from >= 0 && to >= 0) {
-        const span = seq.slice(Math.min(from, to), Math.max(from, to) + 1);
-        ticked = { ...ticked, [group]: [...list, ...span.filter((p) => !on.has(p))] };
-        return;
-      }
-    }
-    ticked = { ...ticked, [group]: on.has(path) ? list.filter((p) => p !== path) : [...list, path] };
-    anchor = { group, path };
-  }
-
-  /** Ticks all of these files, or unticks them when they all are. */
-  function tickAll(group: List, paths: string[]) {
-    const list = ticked[group];
-    const on = tickedSet[group];
-    const all = paths.length > 0 && paths.every((p) => on.has(p));
-    const these = new Set(paths);
-    ticked = { ...ticked, [group]: all ? list.filter((p) => !these.has(p)) : [...list, ...[...these].filter((p) => !on.has(p))] };
-  }
-
-  /** A click on a checkbox: the browser has already flipped it, so it shows the tick as kept. */
-  function tickBox(event: MouseEvent, group: List, run: () => void, on: () => boolean) {
-    run();
-    (event.currentTarget as HTMLInputElement).checked = on();
-  }
-
-  /** A file's name opens its tab; with ⌘ (Ctrl) it ticks the file, with Shift a range. */
+  /** A file's name opens its diff; ⌘-click (Ctrl) picks it or lets it go, Shift-click picks every
+   *  file from the one clicked last. */
   function rowClick(event: MouseEvent, file: FileChange, group: List | "conflicted") {
     if (group !== "conflicted" && (event.metaKey || event.ctrlKey || event.shiftKey)) {
       event.preventDefault();
-      tick(group, file.path, event.shiftKey);
-    } else openTab(file.path);
+      const list = picks[group];
+      if (event.shiftKey) {
+        picks = { ...picks, [group]: pickRange(order(group), list, anchor?.group === group ? anchor.path : null, file.path) };
+        return;
+      }
+      picks = { ...picks, [group]: pickSet[group].has(file.path) ? list.filter((p) => p !== file.path) : [...list, file.path] };
+      anchor = { group, path: file.path };
+      return;
+    }
+    picks = { unstaged: [], staged: [], untracked: [] };
+    anchor = group === "conflicted" ? null : { group, path: file.path };
+    show({ kind: "file", path: file.path, side: sideOf(group) });
   }
 
-  /** Only ticked files that are listed: the filter can hide some. */
-  const pickedFiles = (group: List) => listOf(group).filter((f) => tickedSet[group].has(f.path));
-  const tickedUnstaged = $derived(pickedFiles("unstaged"));
-  const tickedUntracked = $derived(pickedFiles("untracked"));
-  const tickedStaged = $derived(pickedFiles("staged"));
+  /** Every file shown once, in the order of the lists, each side led by all of its files: the
+   *  steps of Next Tab and Previous Tab. */
+  const steps = $derived.by((): Shown[] => {
+    const out: Shown[] = [];
+    const add = (group: List | "conflicted") => out.push(...order(group).map((path): Shown => ({ kind: "file", path, side: sideOf(group) })));
+    if (conflicted.length || tracked.length) out.push({ kind: "all", side: "unstaged" });
+    add("conflicted");
+    if (!shut.unstaged) add("unstaged");
+    if (untrackedOpen) add("untracked");
+    if (staged.length) out.push({ kind: "all", side: "staged" });
+    if (!shut.staged) add("staged");
+    return out;
+  });
+  const stepper = $derived((by: 1 | -1, wrap: boolean) => {
+    const next = stepShown(steps, shown, by, wrap);
+    if (!next) return false;
+    show(next);
+    return true;
+  });
+
+  /** Only picked files that are listed: the filter can hide some. */
+  const pickedFiles = (group: List) => listOf(group).filter((f) => pickSet[group].has(f.path));
+  const pickedUnstaged = $derived(pickedFiles("unstaged"));
+  const pickedUntracked = $derived(pickedFiles("untracked"));
+  const pickedStaged = $derived(pickedFiles("staged"));
 
   /** Changed lines, "+12 −3", or what the change is when it has none. */
   function counts(file: FileChange): string {
@@ -488,13 +476,13 @@
     return done;
   }
 
-  /** Stage, Unstage or Discard Selected: the ticked files of one list, then their ticks go. */
-  async function actOnTicked(group: List, how: "move" | "discard" = "move") {
+  /** Stage, Unstage or Discard the picked files of one list, then let them go. */
+  async function actOnPicked(group: List, how: "move" | "discard" = "move") {
     const files = pickedFiles(group);
     if (!files.length) return;
     const done = await (how === "discard" ? discard(files) : group === "staged" ? unstage(files) : stage(files));
     const gone = new Set(files.map((f) => f.path));
-    if (done) ticked = { ...ticked, [group]: ticked[group].filter((p) => !gone.has(p)) };
+    if (done) picks = { ...picks, [group]: picks[group].filter((p) => !gone.has(p)) };
   }
 
   const name = (files: FileChange[]): Part[] =>
@@ -575,7 +563,7 @@
   /** Changed lines can be picked in the hunks of a tracked file, not in the whole-file view. */
   const picker: LinePicker = {
     enabled: (hunk) => {
-      const f = hunkFile.get(hunk)?.file;
+      const f = hunkFile.get(hunk);
       return !whole && !!f && f.status !== "untracked" && f.status !== "conflicted";
     },
     picked: (hunk) => (sel?.hunk === hunk ? sel.lines : []),
@@ -598,7 +586,7 @@
   /** Every file with changes once, for a stash of a few of them. */
   function stashCandidates() {
     const seen = new Map<string, { path: string; untracked: boolean; staged: boolean; unstaged: boolean }>();
-    for (const f of unstaged) seen.set(f.path, { path: f.path, untracked: f.status === "untracked", staged: stagedPaths.has(f.path), unstaged: true });
+    for (const f of unstaged) seen.set(f.path, { path: f.path, untracked: f.status === "untracked", staged: stagedByPath.has(f.path), unstaged: true });
     for (const f of staged) if (!seen.has(f.path)) seen.set(f.path, { path: f.path, untracked: false, staged: true, unstaged: false });
     return [...seen.values()];
   }
@@ -606,14 +594,33 @@
   const modClick = navigator.platform.startsWith("Mac") ? "⌘-click" : "Ctrl-click";
   const revealLabel = navigator.platform.startsWith("Mac") ? "Reveal in Finder" : navigator.platform.startsWith("Win") ? "Show in Explorer" : "Open Containing Folder";
 
-  function fileMenu(event: MouseEvent, file: FileChange, group: "staged" | "unstaged" | "conflicted") {
+  function fileMenu(event: MouseEvent, file: FileChange, group: List | "conflicted") {
     event.preventDefault();
+    // A right-click on one of several picked files acts on all of them.
+    const several = group !== "conflicted" && pickSet[group].has(file.path) ? pickedFiles(group) : [];
+    if (several.length > 1 && group !== "conflicted") {
+      const n = several.length;
+      const fresh = several.every((f) => f.status === "untracked");
+      const entries: MenuEntry[] = [{ kind: "header", label: `${n} selected files` }];
+      if (group === "staged") entries.push({ kind: "item", label: `Unstage ${n} Files`, icon: menuIcons.unstage, run: () => actOnPicked(group) });
+      else entries.push({ kind: "item", label: `Stage ${n} Files`, icon: menuIcons.stage, run: () => actOnPicked(group) });
+      entries.push({ kind: "item", label: "Stash These Files…", icon: menuIcons.stash, run: () => act(stashFilesRequest(stashCandidates(), several.map((f) => f.path), stashMessageFor(several[0].path))) });
+      entries.push({ kind: "sep" });
+      entries.push({ kind: "item", label: "Copy Paths", icon: menuIcons.copy, run: () => navigator.clipboard.writeText(several.map((f) => f.path).join("\n")).then(() => confirm.say(`Copied ${n} paths.`, "done"), () => {}) });
+      if (group !== "staged") {
+        entries.push({ kind: "sep" });
+        entries.push({ kind: "item", label: fresh ? `Delete ${n} Files…` : `Discard ${n} Files…`, icon: menuIcons.drop, danger: true, run: () => actOnPicked(group, "discard") });
+      }
+      menu = { x: event.clientX, y: event.clientY, entries, label: `${n} files menu` };
+      return;
+    }
+    const side = group === "untracked" ? "unstaged" : group;
     const name = splitPath(file.path).name;
     const what = { modified: "modified", added: "new file", untracked: "untracked", deleted: "deleted", renamed: "renamed", copied: "copied", conflicted: "conflicted" }[file.status];
-    const entries: MenuEntry[] = [{ kind: "header", label: `${name} · ${what}${group === "staged" ? ", staged" : ""}` }];
-    if (group === "staged") entries.push({ kind: "item", label: "Unstage File", icon: menuIcons.unstage, run: () => unstage([file]) });
-    else if (group === "unstaged") entries.push({ kind: "item", label: "Stage File", icon: menuIcons.stage, run: () => stage([file]) });
-    if (group !== "conflicted")
+    const entries: MenuEntry[] = [{ kind: "header", label: `${name} · ${what}${side === "staged" ? ", staged" : ""}` }];
+    if (side === "staged") entries.push({ kind: "item", label: "Unstage File", icon: menuIcons.unstage, run: () => unstage([file]) });
+    else if (side === "unstaged") entries.push({ kind: "item", label: "Stage File", icon: menuIcons.stage, run: () => stage([file]) });
+    if (side !== "conflicted")
       entries.push({ kind: "item", label: "Stash This File…", icon: menuIcons.stash, run: () => act(stashFilesRequest(stashCandidates(), [file.path], stashMessageFor(file.path))) });
     if (file.status === "untracked")
       entries.push({
@@ -634,7 +641,7 @@
       run: () => navigator.clipboard.writeText(file.path).then(() => confirm.say(`Copied ${file.path}.`, "done"), () => {}),
     });
     if (file.status !== "untracked" && file.status !== "added") entries.push({ kind: "item", label: "File History", icon: menuIcons.history, run: () => nav.openFile(file.path) });
-    if (group === "unstaged") {
+    if (side === "unstaged") {
       entries.push({ kind: "sep" });
       entries.push({ kind: "item", label: file.status === "untracked" ? "Delete File…" : "Discard Changes…", icon: menuIcons.drop, danger: true, run: () => discard([file]) });
     }
@@ -705,30 +712,122 @@
     draft.prefilled = "";
   }
 
-  /** The description grows with its text while it is being written, up to DESC_LINES, and
-   *  goes back to two lines after, so the diffs keep their room. */
+  /** The description grows with its text while it is being written, up to DESC_LINES, and goes
+   *  back to two lines after, so the lists keep their room. Empty, it is one line, as tall as the
+   *  summary, until it is clicked or tabbed into; Amend keeps it open. */
   const DESC_LINES = 10;
   let descBox = $state<HTMLTextAreaElement>();
   let descOpen = $state(false);
+  const descFolded = $derived(!draft.description && !descOpen && !draft.amend);
   $effect(() => {
     draft.description;
     const open = descOpen;
     const box = descBox;
+    const one = descFolded;
     if (!box) return;
     const style = getComputedStyle(box);
     const line = parseFloat(style.lineHeight);
     const frame = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+    if (one) {
+      box.style.height = `${SUMMARY_HEIGHT}px`;
+      return;
+    }
     const least = 2 * line + frame;
     box.style.height = `${least}px`;
     const wanted = Math.min(box.scrollHeight + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth), DESC_LINES * line + frame);
     box.style.height = `${open ? Math.max(least, wanted) : least}px`;
   });
+  /** The height of the summary box, which a folded description matches. */
+  const SUMMARY_HEIGHT = 34;
 
   function onCommitKey(event: KeyboardEvent) {
     if (pressed("commitNow", event)) {
       event.preventDefault();
       commit();
     }
+  }
+
+  /** Two columns, the files beside their diff, from this width of the panel; under it the files
+   *  sit over the diff, with a border to drag between them. */
+  const TWO_COLUMNS = 600;
+  let bodyWidth = $state(0);
+  let bodyHeight = $state(0);
+  const stacked = $derived(bodyWidth > 0 && bodyWidth < TWO_COLUMNS);
+  /** The most height the staged files take before they scroll: four rows at first, then as the
+   *  border over them is dragged. Kept for every window and repository. */
+  const STAGED_KEY = "oxbow.changes.stagedHeight";
+  const ROW = 28;
+  let stagedHeight = $state(readNumber(STAGED_KEY, 4 * ROW));
+  /** In one column, the share of the height the files take over the diff. */
+  const SHARE_KEY = "oxbow.changes.filesShare";
+  let filesShare = $state(readNumber(SHARE_KEY, 0.6));
+
+  function readNumber(key: string, fallback: number): number {
+    try {
+      const value = Number(localStorage.getItem(key));
+      return localStorage.getItem(key) !== null && Number.isFinite(value) && value > 0 ? value : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  function keepNumber(key: string, value: number) {
+    try {
+      localStorage.setItem(key, String(value));
+    } catch {
+      // Lasts until the app quits.
+    }
+  }
+
+  /** A border dragged up or down: `onMove` gets how far the pointer went, and the value is kept once it is let go. */
+  function drag(event: PointerEvent, onMove: (dy: number) => void, onDone: () => void) {
+    const startY = event.clientY;
+    const target = event.currentTarget as HTMLElement;
+    target.setPointerCapture(event.pointerId);
+    const move = (e: PointerEvent) => onMove(e.clientY - startY);
+    const up = () => {
+      target.removeEventListener("pointermove", move);
+      target.removeEventListener("pointerup", up);
+      onDone();
+    };
+    target.addEventListener("pointermove", move);
+    target.addEventListener("pointerup", up);
+  }
+
+  function dragStaged(event: PointerEvent) {
+    const from = stagedHeight;
+    drag(
+      event,
+      (dy) => (stagedHeight = Math.min(Math.max(from - dy, ROW), 20 * ROW)),
+      () => keepNumber(STAGED_KEY, Math.round(stagedHeight)),
+    );
+  }
+
+  function dragShare(event: PointerEvent) {
+    const from = filesShare;
+    const height = bodyHeight || 1;
+    drag(
+      event,
+      (dy) => (filesShare = Math.min(Math.max(from + dy / height, 0.2), 0.8)),
+      () => keepNumber(SHARE_KEY, Math.round(filesShare * 1000) / 1000),
+    );
+  }
+
+  /** The part of the open file staged in part that the other side holds. */
+  const openFile = $derived(shown?.kind === "file" ? shown : null);
+  const openUnstaged = $derived(openFile ? ([...conflicted, ...unstaged].find((f) => f.path === openFile.path) ?? null) : null);
+  const openStaged = $derived(openFile ? (stagedByPath.get(openFile.path) ?? null) : null);
+  /** Files of every file of a side shown, with their lines, for the heading over them. */
+  const sideFiles = $derived(shown?.kind !== "all" ? [] : shown.side === "staged" ? shownStaged : [...shownConflicted, ...shownTracked]);
+  const sideTotals = $derived(sideFiles.reduce((sum, f) => ({ add: sum.add + f.additions, del: sum.del + f.deletions }), { add: 0, del: 0 }));
+
+  /** What the open file's side holds, under the switch. */
+  function caption(file: Shown & { kind: "file" }): string {
+    if (file.side === "staged") return "Goes into the commit";
+    const f = openUnstaged;
+    if (f?.status === "conflicted") return "Has conflicts to resolve";
+    if (f?.status === "untracked") return "New file git does not track yet";
+    return "Stays out of the commit";
   }
 
   const badge: Record<string, { text: string; tone: string; title: string }> = {
@@ -745,27 +844,24 @@
 {#snippet fileRow(file: FileChange, group: List | "conflicted", nested: boolean)}
   {@const p = splitPath(file.path)}
   {@const b = badge[file.status]}
-  {@const on = group !== "conflicted" && tickedSet[group].has(file.path)}
+  {@const picked = group !== "conflicted" && pickSet[group].has(file.path)}
+  {@const open = isOpen(file, group)}
   <!-- The part of a file staged in part that the other list holds. -->
   {@const other = group === "staged" ? unstagedByPath.get(file.path) : group === "unstaged" ? stagedByPath.get(file.path) : undefined}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="file" class:ticked={on} class:nested oncontextmenu={(e) => fileMenu(e, file, group === "untracked" ? "unstaged" : group)}>
-    {#if group !== "conflicted"}
-      <input
-        type="checkbox"
-        checked={on}
-        aria-label="Select {file.path}"
-        title={group === "staged" ? "Select for Unstage Selected · Shift-click selects a range" : "Select for Stage or Discard Selected · Shift-click selects a range"}
-        onclick={(e) => tickBox(e, group, () => tick(group, file.path, e.shiftKey), () => tickedSet[group].has(file.path))}
-      />
-    {/if}
-    <button class="name" onclick={(e) => rowClick(e, file, group)} title="{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}{group === 'conflicted' ? '' : ` · ${modClick} to select`}">
+  <div class="file" class:picked class:open class:nested class:bin={group === "unstaged" || group === "untracked"} style:background={open ? tint(color) : undefined} oncontextmenu={(e) => fileMenu(e, file, group)}>
+    <button
+      class="name"
+      onclick={(e) => rowClick(e, file, group)}
+      aria-current={open ? "true" : undefined}
+      title="{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}{group === 'conflicted' ? '' : ` · ${modClick} or Shift-click to select`}"
+    >
       <span class="badge {b.tone}" title={b.title}>{b.text}</span>
       <span class="path">{#if !nested}<span class="dir">{p.dir}</span>{/if}{p.name}</span>
       {#if other}
-        <span class="note" title={group === "staged" ? `Staged in part: ${counts(file)} go into the commit, ${counts(other)} stay out` : `Staged in part: ${counts(other)} go into the commit, ${counts(file)} stay out`}
-          >{group === "staged" ? `${counts(other)} stay out` : `${counts(other)} in the commit`}</span
-        >
+        <span class="note partial" title={group === "staged" ? `Staged in part: ${counts(file)} go into the commit, ${counts(other)} stay out` : `Staged in part: ${counts(other)} go into the commit, ${counts(file)} stay out`}>
+          <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" /><path class="fill" d="M8 2.5a5.5 5.5 0 0 0 0 11z" /></svg>Partial
+        </span>
       {/if}
       {#if file.submodule}
         <span class="note" title="Another repository in a folder here">Submodule{file.submodule.changed && !file.submodule.moved ? " · changed inside" : ""}</span>
@@ -773,6 +869,8 @@
         <span class="note" title="Kept in Git LFS: git stores a small pointer">LFS{file.newSize !== undefined ? ` · ${bytes(file.newSize)}` : ""}</span>
       {:else if (file.newSize ?? 0) >= BIG_FILE}
         <span class="note warn" title="Too big for a git repository: GitHub refuses files over 100 MB">{bytes(file.newSize!)}</span>
+      {:else if !file.binary && !file.uncounted && file.status !== "conflicted"}
+        <span class="counts mono"><span class="add">+{file.additions}</span> <span class="del">−{file.deletions}</span></span>
       {/if}
     </button>
     {#if group === "unstaged" || group === "untracked"}
@@ -783,21 +881,6 @@
   </div>
 {/snippet}
 
-<!-- Ticks every listed file of a list, or none. -->
-{#snippet groupBox(group: List, files: FileChange[])}
-  {#if files.length}
-    {@const n = files.filter((f) => tickedSet[group].has(f.path)).length}
-    <input
-      type="checkbox"
-      checked={n === files.length}
-      indeterminate={n > 0 && n < files.length}
-      aria-label="Select every {group} file"
-      title={n === files.length ? "Select none" : "Select all"}
-      onclick={(e) => tickBox(e, group, () => tickAll(group, files.map((f) => f.path)), () => files.every((f) => tickedSet[group].has(f.path)))}
-    />
-  {/if}
-{/snippet}
-
 {#snippet fileList(files: FileChange[], group: List | "conflicted")}
   {@const limit = listed[group]}
   {#if view.folders}
@@ -806,18 +889,7 @@
       {@const key = `${group}:${folder.dir}`}
       {@const open = !folded.has(key)}
       {#if room > 0}
-      {@const n = group === "conflicted" ? 0 : folder.files.filter((f) => tickedSet[group].has(f.path)).length}
       <div class="folder">
-        {#if group !== "conflicted"}
-          <input
-            type="checkbox"
-            checked={n === folder.files.length}
-            indeterminate={n > 0 && n < folder.files.length}
-            aria-label="Select the files in {folder.dir || 'the top folder'}"
-            title="Select the files in this folder"
-            onclick={(e) => tickBox(e, group, () => tickAll(group, folder.files.map((f) => f.path)), () => folder.files.every((f) => tickedSet[group].has(f.path)))}
-          />
-        {/if}
         <button class="fold" aria-expanded={open} onclick={() => fold(key)} title={folder.dir || "The repository's top folder"}>
           <svg class="chevron" class:open viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" /></svg>
           <svg class="icon folder-icon" viewBox="0 0 16 16"><path d="M1.5 4.5a1 1 0 0 1 1-1H6l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" /></svg>
@@ -839,6 +911,13 @@
   <button class="more-rows" onclick={() => (listed = { ...listed, [group]: listed[group] + LIST_STEP })}
     >Show {Math.min(left, LIST_STEP).toLocaleString()} more {Math.min(left, LIST_STEP) === 1 ? "file" : "files"}</button
   >
+{/snippet}
+
+<!-- A list's heading: the chevron folds it, the name shows every file of the side. -->
+{#snippet chevron(open: boolean, label: string, toggle: () => void, disabled = false)}
+  <button class="chev" aria-expanded={open} aria-label={label} title={disabled ? "Shown while the filter is on" : label} {disabled} onclick={toggle}>
+    <svg class="chevron" class:open viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" /></svg>
+  </button>
 {/snippet}
 
 {#snippet hunkBar(d: FileDiff, hunk: Hunk, side: Side)}
@@ -884,8 +963,9 @@
   {:else if d.file.status === "conflicted"}
     {#if onResolve}<button class="button mini text" onclick={onResolve}>Resolve Conflicts…</button>{/if}
   {:else}
-    <button class="button mini text" onclick={() => discard([d.file])} title={d.file.status === "untracked" ? "Delete this new file" : "Throw away the edits in this file"}>Discard</button>
-    <button class="button mini quiet" onclick={() => stage([d.file])} title="Add the whole file to the next commit">Stage</button>
+    {@const rest = stagedByPath.has(d.file.path)}
+    <button class="button mini text" onclick={() => discard([d.file])} title={d.file.status === "untracked" ? "Delete this new file" : rest ? "Throw away the edits not staged; the staged part stays" : "Throw away the edits in this file"}>Discard</button>
+    <button class="button mini quiet" onclick={() => stage([d.file])} title={rest ? "Add the rest of the file to the next commit" : "Add the whole file to the next commit"}>{rest ? "Stage the Rest" : "Stage"}</button>
   {/if}
 {/snippet}
 {#snippet stagedFile(d: FileDiff)}
@@ -909,112 +989,72 @@
     </span>
   </div>
 
-  {#if fileCount}
-    <div class="tabs" role="tablist" aria-label="Uncommitted changes" use:tabStepper={fileTabs(paths, tab, openTab)}>
-      <!-- Summary stays pinned first; only the file tabs scroll. -->
-      <button
-        role="tab"
-        aria-selected={tab === null}
-        class="tab"
-        class:on={tab === null}
-        style:background={tab === null ? tint(color) : undefined}
-        style:border-color={tab === null ? `color-mix(in srgb, ${lane(color)} 40%, transparent)` : undefined}
-        style:color={tab === null ? plate(color) : undefined}
-        onclick={() => openTab(null)}>Summary</button
-      >
-      <span class="divider" aria-hidden="true"></span>
-      <div class="file-tabs" bind:this={tabBar}>
-        <!-- Thousands of files draw only the tabs around the open one. -->
-        {#if shownTabs.start}<button class="tab neutral more" onclick={() => openTab(paths[shownTabs.start - 1])} title="Open the file before these">+{shownTabs.start.toLocaleString()}</button>{/if}
-        {#each paths.slice(shownTabs.start, shownTabs.end) as path, i (path)}
-          {@const at = shownTabs.start + i}
-          {#if (at === stagedTabs.length || at === stagedTabs.length + otherTabs.length) && at > 0}<span class="divider" aria-hidden="true"></span>{/if}
-          {#if at < stagedTabs.length}
-            <button role="tab" aria-selected={tab === path} class="tab staged" class:on={tab === path} onclick={() => openTab(path)} title="Staged · {path}"
-              >{labels.get(path)}</button
-            >
-          {:else}
-            <button role="tab" aria-selected={tab === path} class="tab neutral" class:on={tab === path} onclick={() => openTab(path)} title={at < stagedTabs.length + otherTabs.length ? path : `Untracked · ${path}`}
-              >{labels.get(path)}</button
-            >
-          {/if}
-        {/each}
-        {#if shownTabs.end < paths.length}<button class="tab neutral more" onclick={() => openTab(paths[shownTabs.end])} title="Open the file after these">+{(paths.length - shownTabs.end).toLocaleString()}</button>{/if}
+  <div class="body" class:stacked bind:clientWidth={bodyWidth} bind:clientHeight={bodyHeight}>
+    <div class="files" bind:this={filesBox} aria-label="Working copy" data-steps use:tabStepper={stepper} style:height={stacked ? `${Math.round(filesShare * 100)}%` : null}>
+      <div class="tools">
+        <label class="filter">
+          <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
+          <input
+            bind:value={filter}
+            placeholder="Filter files"
+            aria-label="Filter files"
+            spellcheck="false"
+            autocomplete="off"
+            onkeydown={(e) => {
+              if (e.key === "Escape" && filter) {
+                e.stopPropagation();
+                filter = "";
+              }
+            }}
+          />
+          {#if filter}<button class="clear" onclick={() => (filter = "")} aria-label="Clear the filter" title="Clear the filter">×</button>{/if}
+        </label>
+        <div class="segmented icons" role="radiogroup" aria-label="Show files">
+          <button role="radio" aria-checked={!view.folders} class:on={!view.folders} onclick={() => setFolders(false)} aria-label="List" title="One list of paths">
+            <svg class="icon" viewBox="0 0 16 16"><path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01" /></svg>
+          </button>
+          <button role="radio" aria-checked={view.folders} class:on={view.folders} onclick={() => setFolders(true)} aria-label="Folders" title="Files under their folders">
+            <svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5a1 1 0 0 1 1-1H6l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" /></svg>
+          </button>
+        </div>
       </div>
-    </div>
-  {/if}
 
-  <div class="scroll" bind:this={scroller}>
-    {#if error}<p class="error" role="alert">{error}</p>{/if}
-    {#if tab === null}
-      <div class="lists" aria-label="Working copy">
-        {#if fileCount > 1}
-          <div class="tools">
-            <label class="filter">
-              <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
-              <input
-                bind:value={filter}
-                placeholder="Filter files"
-                aria-label="Filter files"
-                spellcheck="false"
-                autocomplete="off"
-                onkeydown={(e) => {
-                  if (e.key === "Escape" && filter) {
-                    e.stopPropagation();
-                    filter = "";
-                  }
-                }}
-              />
-              {#if filter}<button class="clear" onclick={() => (filter = "")} aria-label="Clear the filter" title="Clear the filter">×</button>{/if}
-            </label>
-            <span class="grow"></span>
-            <div class="segmented" role="radiogroup" aria-label="Show files">
-              <button role="radio" aria-checked={!view.folders} class:on={!view.folders} onclick={() => setFolders(false)} title="One list of paths">List</button>
-              <button role="radio" aria-checked={view.folders} class:on={view.folders} onclick={() => setFolders(true)} title="Files under their folders">Folders</button>
-            </div>
-          </div>
-        {/if}
+      <div class="lists">
         {#if shownConflicted.length}
           <div class="group">
-            <div class="ghead"><span>Conflicted</span><span class="n">{shownConflicted.length}</span></div>
+            <div class="ghead"><span class="gtitle conflicted">Conflicted</span><span class="n">{shownConflicted.length}</span></div>
             {@render fileList(shownConflicted, "conflicted")}
           </div>
         {/if}
         <div class="group">
-          <div class="ghead">
-            {@render groupBox("unstaged", shownTracked)}
-            <span class="gtitle" style:color={plate(color)}>Unstaged</span><span class="n">{needle ? `${shownTracked.length} of ${tracked.length}` : tracked.length}</span><span class="grow"></span>
-            {#if tickedUnstaged.length}
-              <button class="button mini" onclick={() => actOnTicked("unstaged", "discard")} title="Throw away the edits in the selected files">Discard Selected ({tickedUnstaged.length})</button>
-              <button class="button mini primary" onclick={() => actOnTicked("unstaged")}>Stage Selected ({tickedUnstaged.length})</button>
+          <div class="ghead" class:on={isAll("unstaged")} style:background={isAll("unstaged") ? tint(color) : undefined}>
+            {@render chevron(!shut.unstaged, shut.unstaged ? "Show the unstaged files" : "Hide the unstaged files", () => (shut.unstaged = !shut.unstaged))}
+            <button class="gname" onclick={() => show({ kind: "all", side: "unstaged" })} aria-current={isAll("unstaged") ? "true" : undefined} title="Show every unstaged change">
+              <span class="gtitle" style:color={plate(color)}>Unstaged</span><span class="n">{needle ? `${shownTracked.length} of ${tracked.length}` : tracked.length}</span>
+            </button>
+            {#if pickedUnstaged.length}
+              <button class="button mini primary" onclick={() => actOnPicked("unstaged")}>Stage {pickedUnstaged.length} Selected</button>
             {:else if shownTracked.length}
               <button class="button mini" onclick={() => stage(shownTracked)}>{needle && shownTracked.length < tracked.length ? "Stage Shown" : "Stage All"}</button>
             {/if}
           </div>
-          {@render fileList(shownTracked, "unstaged")}
-          {#if !shownTracked.length}
-            <p class="empty">{needle && tracked.length ? "No unstaged files match the filter." : untracked.length ? "No edits to tracked files." : "Nothing left to stage."}</p>
+          {#if !shut.unstaged}
+            {@render fileList(shownTracked, "unstaged")}
+            {#if !shownTracked.length}
+              <p class="empty">{needle && tracked.length ? "No unstaged files match the filter." : untracked.length ? "No edits to tracked files." : "Nothing left to stage."}</p>
+            {/if}
           {/if}
         </div>
         {#if untracked.length}
           <!-- New files git does not track yet, apart from the edits and folded at first, as in Sublime Merge. -->
           <div class="group">
             <div class="ghead">
-              {@render groupBox("untracked", shownUntracked)}
-              <button
-                class="fold untracked-fold"
-                aria-expanded={untrackedOpen}
-                disabled={!!needle}
-                onclick={() => (view.untracked = !view.untracked)}
-                title={needle ? "Shown while the filter is on" : untrackedOpen ? "Hide the untracked files" : "Show the new files git does not track yet"}
-              >
-                <svg class="chevron" class:open={untrackedOpen} viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" /></svg>
+              {@render chevron(untrackedOpen, untrackedOpen ? "Hide the untracked files" : "Show the new files git does not track yet", () => (view.untracked = !view.untracked), !!needle)}
+              <button class="gname" onclick={() => (view.untracked = !view.untracked)} disabled={!!needle} title={untrackedOpen ? "Hide the untracked files" : "Show the new files git does not track yet"}>
                 <span class="gtitle" style:color={plate(color)}>Untracked</span><span class="n">{needle ? `${shownUntracked.length} of ${untracked.length}` : untracked.length}</span>
               </button>
-              <span class="grow"></span>
-              {#if tickedUntracked.length}
-                <button class="button mini" onclick={() => actOnTicked("untracked", "discard")} title="Delete the selected new files">Delete Selected ({tickedUntracked.length})</button>
-                <button class="button mini primary" onclick={() => actOnTicked("untracked")}>Stage Selected ({tickedUntracked.length})</button>
+              {#if pickedUntracked.length}
+                <button class="button mini primary" onclick={() => actOnPicked("untracked")}>Stage {pickedUntracked.length} Selected</button>
               {:else if shownUntracked.length}
                 <button class="button mini" onclick={() => stage(shownUntracked)}>{needle && shownUntracked.length < untracked.length ? "Stage Shown" : "Stage All"}</button>
               {/if}
@@ -1025,158 +1065,138 @@
             {/if}
           </div>
         {/if}
-        <div class="group">
-          <div class="ghead">
-            {@render groupBox("staged", shownStaged)}
-            <span class="gtitle" style:color={plate(color)}>Staged</span><span class="n">{needle ? `${shownStaged.length} of ${staged.length}` : staged.length}</span><span class="grow"></span>
-            {#if tickedStaged.length}
-              <button class="button mini primary" onclick={() => actOnTicked("staged")}>Unstage Selected ({tickedStaged.length})</button>
-            {:else if shownStaged.length}
-              <button class="button mini" onclick={() => unstage(shownStaged)}>{needle && shownStaged.length < staged.length ? "Unstage Shown" : "Unstage All"}</button>
-            {/if}
-          </div>
-          {@render fileList(shownStaged, "staged")}
-          {#if !shownStaged.length}
-            <p class="empty">{needle && staged.length ? "No staged files match the filter." : "Tick files above and press Stage Selected to add them to the next commit."}</p>
+      </div>
+
+      <!-- The staged files and the commit, held at the bottom; the border over them sets how tall the list gets. -->
+      {#if !stacked}<button class="grip" tabindex="-1" onpointerdown={dragStaged} aria-label="Resize the staged files" title="Drag to resize"></button>{/if}
+      <div class="group staged">
+        <div class="ghead" class:on={isAll("staged")} style:background={isAll("staged") ? tint(color) : undefined}>
+          {@render chevron(!shut.staged, shut.staged ? "Show the staged files" : "Hide the staged files", () => (shut.staged = !shut.staged))}
+          <button class="gname" onclick={() => show({ kind: "all", side: "staged" })} aria-current={isAll("staged") ? "true" : undefined} title="Show the next commit: every staged change">
+            <span class="gtitle" style:color={plate(color)}>Staged</span><span class="n">{needle ? `${shownStaged.length} of ${staged.length}` : staged.length}</span>
+          </button>
+          {#if pickedStaged.length}
+            <button class="button mini primary" onclick={() => actOnPicked("staged")}>Unstage {pickedStaged.length} Selected</button>
+          {:else if shownStaged.length}
+            <button class="button mini" onclick={() => unstage(shownStaged)}>{needle && shownStaged.length < staged.length ? "Unstage Shown" : "Unstage All"}</button>
           {/if}
         </div>
+        {#if !shut.staged}
+          <div class="staged-files" style:max-height={stacked ? null : `${stagedHeight}px`}>
+            {@render fileList(shownStaged, "staged")}
+            {#if !shownStaged.length}
+              <p class="empty">{needle && staged.length ? "No staged files match the filter." : "Stage files or lines to add them to the next commit."}</p>
+            {/if}
+          </div>
+        {/if}
       </div>
-      {#if staged.some((f) => unstagedByPath.has(f.path))}<div class="tip"><TipCard id="partlyStaged" /></div>{/if}
-    {:else}
-      {@const inCommit = stagedByPath.get(tab)}
-      {@const out = [...conflicted, ...unstaged].find((f) => f.path === tab)}
-      <!-- What of this file the next commit takes, and what it leaves in the folder. -->
-      <div class="split" aria-label="This file and the next commit">
-        <div class="side" class:none={!out}>
-          <span class="label">Stays out of the commit</span>
-          <span class="what">{out ? (out.status === "conflicted" ? "conflicts" : counts(out)) : "Nothing"}</span>
-          {#if out && out.status !== "conflicted"}<button class="button mini text" onclick={() => stage([out])} title="Add the rest of the file to the next commit">{inCommit ? "Stage the Rest" : "Stage"}</button>{/if}
-        </div>
-        <div class="side in" class:none={!inCommit}>
-          <span class="label">In the commit</span>
-          <span class="what">{inCommit ? counts(inCommit) : "Nothing yet"}</span>
-          {#if inCommit}<button class="button mini text" onclick={() => unstage([inCommit])} title="Take the whole file out of the next commit">Unstage</button>{/if}
-        </div>
-      </div>
-    {/if}
-    {#if trackedDiffs.length}
-      {#if tab === null || shown.staged.length}
-        <div class="part">
-          <span class="grow">Unstaged · stays out of the commit</span>
-          {#if tab === null}<FoldAll onFold={(fold) => unstagedView?.setAll(fold)} />{/if}
-        </div>
-      {/if}
-      <DiffView
-        bind:this={unstagedView}
-        foldable
-        diffs={trackedDiffs}
-        {color}
-        {whole}
-        onToggleWhole={() => (whole = !whole)}
-        hunkBar={unstagedHunk}
-        fileActions={unstagedFile}
-        {picker}
-        pending={tab === null && !untrackedDiffs.length ? pending.unstaged : 0}
-        onMore={() => loadMore("unstaged")}
-        loadFull={(d) => api.workingDiff(d.file.path, "unstaged", whole, true)}
-        command={(d) => `git diff -- ${d.file.path}`}
-        working
-        side="unstaged"
-      />
-    {/if}
-    {#if tab === null && untracked.length}
-      <!-- The new files' diffs, folded with their list. -->
-      <div class="part">
-        <button
-          class="fold untracked-fold grow"
-          aria-expanded={untrackedOpen}
-          disabled={!!needle}
-          onclick={() => (view.untracked = !view.untracked)}
-          title={needle ? "Shown while the filter is on" : untrackedOpen ? "Hide the untracked files" : "Show the new files git does not track yet"}
-        >
-          <svg class="chevron" class:open={untrackedOpen} viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" /></svg>
-          Untracked · {untracked.length === 1 ? "1 new file" : `${untracked.length} new files`} git does not track yet
-        </button>
-        {#if untrackedOpen && untrackedDiffs.length}<FoldAll onFold={(fold) => untrackedView?.setAll(fold)} />{/if}
-      </div>
-    {/if}
-    {#if untrackedDiffs.length}
-      <DiffView
-        bind:this={untrackedView}
-        foldable
-        diffs={untrackedDiffs}
-        {color}
-        {whole}
-        onToggleWhole={() => (whole = !whole)}
-        hunkBar={unstagedHunk}
-        fileActions={unstagedFile}
-        {picker}
-        pending={tab === null ? pending.unstaged : 0}
-        onMore={() => loadMore("unstaged")}
-        loadFull={(d) => api.workingDiff(d.file.path, "unstaged", whole, true)}
-        command={(d) => `git diff -- ${d.file.path}`}
-        working
-        side="unstaged"
-      />
-    {/if}
-    {#if shown.staged.length}
-      {#if tab === null || shown.unstaged.length}
-        <div class="part">
-          <span class="grow">Staged · in the commit</span>
-          {#if tab === null}<FoldAll onFold={(fold) => stagedView?.setAll(fold)} />{/if}
-        </div>
-      {/if}
-      <DiffView
-        bind:this={stagedView}
-        foldable
-        diffs={shown.staged}
-        {color}
-        {whole}
-        onToggleWhole={() => (whole = !whole)}
-        hunkBar={stagedHunk}
-        fileActions={stagedFile}
-        {picker}
-        pending={tab === null ? pending.staged : 0}
-        onMore={() => loadMore("staged")}
-        loadFull={(d) => api.workingDiff(d.file.path, "staged", whole, true)}
-        command={(d) => `git diff --cached -- ${d.file.path}`}
-        working
-        side="staged"
-      />
-    {/if}
-  </div>
 
-  <div class="commit" role="group" aria-label="Commit">
-    <div class="row">
-      <span class="grow to">Commit to <b>{branch ?? "detached HEAD"}</b></span>
-      <button class="amend" role="switch" aria-checked={draft.amend} onclick={toggleAmend} disabled={!head} title="Replace the last commit instead of adding a new one">
-        Amend
-        <span class="switch" class:on={draft.amend}><span class="knob"></span></span>
-      </button>
+      <div class="commit" role="group" aria-label="Commit" style:background={tint(color)} style:border-color={`color-mix(in srgb, ${lane(color)} 40%, transparent)`}>
+        <div class="row">
+          <span class="grow to">Commit to <b style:color={plate(color)}>{branch ?? "detached HEAD"}</b></span>
+          <button class="amend" role="switch" aria-checked={draft.amend} onclick={toggleAmend} disabled={!head} title="Replace the last commit instead of adding a new one">
+            Amend
+            <span class="switch" class:on={draft.amend}><span class="knob"></span></span>
+          </button>
+        </div>
+        <div class="summary">
+          <input type="text" aria-label="Commit summary" placeholder="Summary" bind:this={summaryBox} bind:value={draft.summary} onkeydown={onCommitKey} spellcheck="true" />
+          {#if SUMMARY_LIMIT}<span class="counter" class:over={draft.summary.length > SUMMARY_LIMIT}>{draft.summary.length}/{SUMMARY_LIMIT}</span>{/if}
+        </div>
+        <textarea
+          aria-label="Commit description"
+          placeholder="Description"
+          rows="1"
+          class:folded={descFolded}
+          bind:this={descBox}
+          bind:value={draft.description}
+          onkeydown={onCommitKey}
+          onfocus={() => (descOpen = true)}
+          onblur={() => (descOpen = false)}
+        ></textarea>
+        {#if commitHint}<WhyNote text={commitHint.text} warn={commitHint.warn} />{/if}
+        <div class="row">
+          {#if commitHint?.fix}
+            <button class="button mini" onclick={commitHint.fix.run}>{commitHint.fix.label}</button>
+          {:else if !commitHint}
+            <span class="staged-count">{draft.amend && !staged.length ? "Message only" : `${staged.length} ${staged.length === 1 ? "file" : "files"} staged`}</span>
+          {/if}
+          <span class="grow"></span>
+          <button class="button primary go" onclick={commit} disabled={!canCommit} title={commitHint?.text}>
+            {draft.amend ? "Amend" : "Commit"} {#if shortcut("commitNow")}<span class="keys">{shortcut("commitNow")}</span>{/if}
+          </button>
+        </div>
+      </div>
     </div>
-    <div class="summary">
-      <input type="text" aria-label="Commit summary" placeholder="Summary" bind:this={summaryBox} bind:value={draft.summary} onkeydown={onCommitKey} spellcheck="true" />
-      {#if SUMMARY_LIMIT}<span class="counter" class:over={draft.summary.length > SUMMARY_LIMIT}>{draft.summary.length}/{SUMMARY_LIMIT}</span>{/if}
-    </div>
-    <textarea
-      aria-label="Commit description"
-      placeholder="Description"
-      rows="2"
-      bind:this={descBox}
-      bind:value={draft.description}
-      onkeydown={onCommitKey}
-      onfocus={() => (descOpen = true)}
-      onblur={() => (descOpen = false)}
-    ></textarea>
-    <div class="row">
-      {#if commitHint}
-        <WhyNote text={commitHint.text} warn={commitHint.warn} />
-        {#if commitHint.fix}<button class="button mini" onclick={commitHint.fix.run}>{commitHint.fix.label}</button>{/if}
+
+    {#if stacked}
+      <button class="grip across" tabindex="-1" onpointerdown={dragShare} aria-label="Resize the files and the diff" title="Drag to resize"></button>
+    {/if}
+
+    <div class="diff" aria-label="Diff">
+      {#if shown}
+        <div class="dhead">
+          {#if shown.kind === "file"}
+            {@const file = shown}
+            <div class="segmented" role="radiogroup" aria-label="Which part of the file">
+              <button role="radio" aria-checked={file.side === "unstaged"} class:on={file.side === "unstaged"} disabled={!openUnstaged} onclick={() => show({ ...file, side: "unstaged" })} title={openUnstaged ? "What stays out of the commit" : "Nothing of this file is left out of the commit"}>Unstaged</button>
+              <button role="radio" aria-checked={file.side === "staged"} class:on={file.side === "staged"} disabled={!openStaged} onclick={() => show({ ...file, side: "staged" })} title={openStaged ? "What goes into the commit" : "Nothing of this file is staged yet"}>Staged</button>
+            </div>
+            <span class="caption grow">{caption(file)}</span>
+          {:else}
+            <div class="grow">
+              <div class="dtitle">
+                <b>{shown.side === "staged" ? "Next commit" : "Unstaged changes"}</b>
+                <span class="n">{sideFiles.length} {sideFiles.length === 1 ? "file" : "files"}</span>
+                {#if sideFiles.length}<span class="mono add">+{sideTotals.add}</span><span class="mono del">−{sideTotals.del}</span>{/if}
+              </div>
+              <div class="caption">{shown.side === "staged" ? "Only staged changes go into the commit" : "They stay out of the commit until staged"}</div>
+            </div>
+            {#if diffs.length > 1}<FoldAll onFold={(fold) => diffView?.setAll(fold)} />{/if}
+          {/if}
+          <DiffTools {whole} onToggleWhole={() => (whole = !whole)} working />
+        </div>
       {/if}
-      <span class="grow"></span>
-      <button class="button primary go" onclick={commit} disabled={!canCommit} title={commitHint?.text}>
-        {draft.amend ? "Amend" : "Commit"} {#if shortcut("commitNow")}<span class="keys">{shortcut("commitNow")}</span>{/if}
-      </button>
+      <div class="scroll" bind:this={diffScroller}>
+        {#if error}<p class="error" role="alert">{error}</p>{/if}
+        {#if openFile && openUnstaged && openStaged}<div class="tip"><TipCard id="partlyStaged" /></div>{/if}
+        {#if !shown}
+          <p class="nothing">No uncommitted changes.</p>
+        {:else if shown.kind === "all" && !sideFiles.length && !needle}
+          <!-- Nothing left on this side: a short line with the way on, not a big empty screen. -->
+          <div class="done-strip">
+            <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" /><path d="M5.5 8.2 7.2 10l3.3-3.8" /></svg>
+            {#if shown.side === "unstaged"}
+              <span class="grow">{staged.length ? "All changes staged" : "No edits to tracked files"}</span>
+              {#if untracked.length}<button class="button mini" onclick={() => show({ kind: "file", path: untracked[0].path, side: "unstaged" })}>Next Unstaged File</button>{/if}
+              {#if staged.length}<button class="button mini quiet" onclick={() => show({ kind: "all", side: "staged" })}>Review Staged</button>{/if}
+            {:else}
+              <span class="grow">Nothing staged yet</span>
+              {#if tracked.length || conflicted.length}<button class="button mini quiet" onclick={() => show({ kind: "all", side: "unstaged" })}>Review Unstaged</button>{/if}
+            {/if}
+          </div>
+        {:else if diffsOf}
+          {@const side = diffsOf.side}
+          <DiffView
+            bind:this={diffView}
+            foldable={diffsOf.kind === "all"}
+            {diffs}
+            {color}
+            {whole}
+            onToggleWhole={() => (whole = !whole)}
+            hunkBar={side === "staged" ? stagedHunk : unstagedHunk}
+            fileActions={side === "staged" ? stagedFile : unstagedFile}
+            {picker}
+            pending={diffsOf.kind === "all" ? pending : 0}
+            onMore={loadMore}
+            loadFull={(d) => api.workingDiff(d.file.path, side, whole, true)}
+            command={(d) => (side === "staged" ? `git diff --cached -- ${d.file.path}` : `git diff -- ${d.file.path}`)}
+            working
+            {side}
+            tools={false}
+          />
+        {/if}
+      </div>
     </div>
   </div>
 </div>
@@ -1195,10 +1215,11 @@
   }
   /* No frame: the head sits on the panel itself, like the commit details. */
   .head {
-    padding: var(--space-4) var(--space-5) var(--space-2);
+    padding: var(--space-4) var(--space-5) var(--space-3);
     display: flex;
     flex-direction: column;
     gap: 4px;
+    border-bottom: 1px solid var(--sep);
   }
   h1 {
     margin: 0;
@@ -1228,53 +1249,168 @@
     font-size: var(--text-caption);
     color: var(--text2);
   }
-  /* Tabs, as in a commit's details: Summary in the branch color, then a tab per file. */
-  .tabs {
+
+  /* The files beside their diff; in a narrow panel, over it. */
+  .body {
+    flex-grow: 1;
+    min-height: 0;
     display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: var(--space-2) 0 var(--space-2) var(--space-5);
-    border-bottom: 1px solid var(--sep);
-    flex-shrink: 0;
   }
-  .divider {
-    width: 1px;
-    height: 16px;
-    background: var(--sep);
-    flex-shrink: 0;
+  .body.stacked {
+    flex-direction: column;
   }
-  .file-tabs {
+  .files {
+    width: 268px;
+    flex-shrink: 0;
+    min-height: 0;
     display: flex;
-    align-items: center;
-    gap: 6px;
+    flex-direction: column;
+    border-right: 1px solid var(--sep);
+  }
+  /* Over the diff there is no room for lists that scroll apart: the files and the commit form
+     scroll as one. */
+  .stacked .files {
+    width: auto;
+    border-right: 0;
+    overflow-y: auto;
+  }
+  .stacked .lists,
+  .stacked .group.staged {
+    flex: none;
+    min-height: 0;
+    overflow: visible;
+  }
+  .diff {
+    flex-grow: 1;
     min-width: 0;
-    padding-right: 12px;
-    overflow-x: auto;
-    scrollbar-width: none;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
   }
-  .file-tabs::-webkit-scrollbar {
-    display: none;
+  .stacked .diff {
+    border-top: 1px solid var(--sep);
   }
-  .tab {
+  .lists {
+    flex-grow: 1;
+    min-height: 84px;
+    overflow-y: auto;
+    padding: 0 var(--space-2) var(--space-1);
+  }
+  .group {
+    display: flex;
+    flex-direction: column;
+  }
+  .group + .group {
+    margin-top: var(--space-2);
+  }
+  /* In a short window the staged files give way first; the commit form always shows whole. */
+  .group.staged {
+    flex-shrink: 1;
+    min-height: 30px;
+    padding: 0 var(--space-2);
+  }
+  .staged-files {
+    min-height: 26px;
+    overflow-y: auto;
+  }
+  /* A border to drag: over the staged files, and between the files and the diff in one column. */
+  .grip {
+    flex-shrink: 0;
+    height: 9px;
+    margin: 0 var(--space-3);
     display: flex;
     align-items: center;
-    height: 26px;
-    padding: 0 var(--space-3);
+    justify-content: center;
+    cursor: row-resize;
+  }
+  .grip::after {
+    content: "";
+    width: 28px;
+    height: 3px;
     border-radius: var(--radius-pill);
-    border: 1px solid var(--sep);
-    font-size: var(--text-small);
-    font-weight: 500;
+    background: var(--sep);
+  }
+  .grip:hover::after {
+    background: var(--text2);
+  }
+  .grip.across {
+    margin: 0;
+  }
+  /* Each list's heading reads as a section title, as in Finder's sidebar, not as one more row:
+     small capitals in the branch color, with the files under it. */
+  .ghead {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    height: 30px;
+    padding: 0 var(--space-1) 0 2px;
+    border-radius: var(--radius-s);
+    font-size: var(--text-caption);
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
     color: var(--text2);
-    white-space: nowrap;
     flex-shrink: 0;
   }
-  .tab.on {
-    font-weight: 600;
+  .gname {
+    flex-grow: 1;
+    min-width: 0;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 4px;
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    color: inherit;
+    text-align: left;
   }
-  /* Staged files: Steel, the color of Commit, which takes them. */
-  .tab.more {
+  .gname:disabled {
+    opacity: 1;
+    cursor: default;
+  }
+  .chev {
+    width: 18px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     color: var(--text2);
+    flex-shrink: 0;
+  }
+  .chev:disabled {
+    opacity: 1;
+    cursor: default;
+  }
+  .gtitle {
+    font-weight: 700;
+  }
+  .gtitle.conflicted {
+    color: var(--red);
+    padding-left: 22px;
+  }
+  .ghead .n,
+  .ghead .button {
+    letter-spacing: normal;
+    text-transform: none;
+  }
+  .ghead .button {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .n {
     font-weight: 400;
+  }
+  .grow {
+    flex-grow: 1;
+    min-width: 0;
+  }
+  .empty {
+    margin: 0;
+    padding: var(--space-1) var(--space-3) var(--space-1) 26px;
+    font-size: var(--text-small);
+    color: var(--text2);
   }
   .more-rows {
     display: block;
@@ -1288,120 +1424,38 @@
   .more-rows:hover {
     background: var(--field);
   }
-  .tab.staged {
-    background: color-mix(in srgb, var(--accent) 9%, transparent);
-    border-color: color-mix(in srgb, var(--accent) 26%, transparent);
-    color: color-mix(in srgb, var(--accent) 75%, var(--text));
-  }
-  .tab.staged.on {
-    background: color-mix(in srgb, var(--accent) 20%, transparent);
-    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  }
-  .tab.neutral.on {
-    background: var(--side-sel);
-    border-color: transparent;
-    color: var(--text);
-  }
-  .tip {
-    margin: 0 var(--space-3) var(--space-2);
-    display: flex;
-    flex-direction: column;
-  }
-  .lists {
-    margin: 8px 8px 4px;
-    padding: 4px 0;
-  }
-  .group {
-    display: flex;
-    flex-direction: column;
-    padding: var(--space-1) var(--space-2);
-  }
-  .group + .group {
-    margin-top: var(--space-2);
-  }
-  /* Each list's heading reads as a section title, as in Finder's sidebar, not as one more row:
-     small capitals over a hairline, with the files under it set in a step. */
-  .ghead {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    height: 28px;
-    padding: 0 var(--space-3);
-    margin-bottom: var(--space-1);
-    border-bottom: 0.5px solid var(--sep);
-    font-size: var(--text-caption);
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    color: var(--text2);
-  }
-  /* The three lists' names in the branch color, as the Summary tab. */
-  .gtitle {
-    font-weight: 700;
-  }
-  .ghead .n,
-  .ghead .button {
-    letter-spacing: normal;
-    text-transform: none;
-  }
-  .group > .file,
-  .group > .folder,
-  .group > .empty {
-    margin-left: var(--space-3);
-  }
-  .n {
-    font-weight: 400;
-  }
-  .grow {
-    flex-grow: 1;
-    min-width: 0;
-  }
-
-  /* A heading over each side's diffs in Summary. */
-  .part {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin: var(--space-3) var(--space-3) 0;
-    padding: 0 var(--space-3);
-    font-size: var(--text-caption);
-    font-weight: 600;
-    color: var(--text2);
-  }
-  .empty {
-    margin: 0;
-    padding: var(--space-1) var(--space-3);
-    font-size: var(--text-small);
-    color: var(--text2);
-  }
   .file {
+    position: relative;
     display: flex;
     align-items: center;
-    gap: 8px;
     height: 28px;
-    padding: 0 var(--space-1) 0 var(--space-3);
+    padding: 0 var(--space-2) 0 22px;
     border-radius: var(--radius-s);
   }
   .file:hover {
     background: var(--field);
   }
+  /* Picked with ⌘ or Shift: grey, as a selection in a Finder list that is not the open one. */
+  .file.picked {
+    background: var(--side-sel);
+  }
   .file.nested {
-    padding-left: calc(var(--space-3) + 22px);
+    padding-left: 44px;
   }
   /* Filter and List / Folders over the lists. */
   .tools {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 0 var(--space-2) var(--space-1);
+    padding: var(--space-3) var(--space-3) var(--space-1);
+    flex-shrink: 0;
   }
   .filter {
     display: flex;
     align-items: center;
     gap: 6px;
-    width: 220px;
+    flex-grow: 1;
     min-width: 0;
-    flex-shrink: 1;
     height: 26px;
     padding: 0 6px 0 10px;
     border-radius: var(--radius-pill);
@@ -1463,13 +1517,28 @@
     color: var(--text);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
   }
-  /* A folder over its files: tick them all, or fold them away. */
+  .segmented button:disabled:not(.on) {
+    opacity: 0.45;
+    cursor: default;
+  }
+  .segmented.icons button {
+    min-width: 0;
+    width: 28px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .segmented.icons .icon {
+    width: 14px;
+    height: 14px;
+  }
+  /* A folder over its files: fold them away. */
   .folder {
     display: flex;
     align-items: center;
-    gap: 8px;
     height: 26px;
-    padding: 0 var(--space-1) 0 var(--space-3);
+    padding: 0 var(--space-1) 0 22px;
     border-radius: var(--radius-s);
   }
   .folder:hover {
@@ -1484,22 +1553,6 @@
     gap: 5px;
     font-size: var(--text-small);
     color: var(--text2);
-  }
-  /* The untracked files' heading folds them, in the lists and over their diffs. */
-  .untracked-fold {
-    gap: 6px;
-    font: inherit;
-    letter-spacing: inherit;
-    text-transform: inherit;
-    color: inherit;
-    text-align: left;
-  }
-  .untracked-fold:disabled {
-    opacity: 1;
-    cursor: default;
-  }
-  .part .untracked-fold {
-    height: 24px;
   }
   .chevron {
     width: 10px;
@@ -1527,74 +1580,6 @@
     white-space: nowrap;
     font-weight: 500;
     color: var(--text);
-  }
-  /* A file tab: what the next commit takes of the file, and what it leaves. */
-  .split {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-    margin: var(--space-3) var(--space-3) 0;
-  }
-  .side {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-    height: 34px;
-    padding: 0 var(--space-1) 0 var(--space-3);
-    border-radius: var(--radius-m);
-    background: var(--field);
-    font-size: var(--text-small);
-  }
-  .side.in {
-    background: color-mix(in srgb, var(--accent) 10%, transparent);
-  }
-  .side .label {
-    font-weight: 600;
-    white-space: nowrap;
-  }
-  .side.in .label {
-    color: color-mix(in srgb, var(--accent) 75%, var(--text));
-  }
-  .side .what {
-    flex-grow: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text2);
-  }
-  .side.none .what {
-    font-style: italic;
-  }
-  .file.ticked {
-    background: var(--side-sel);
-  }
-  /* Drawn like the line checkboxes of a diff, so they match the theme on every system:
-     an outline on the panel, Steel with a white tick when on. */
-  input[type="checkbox"] {
-    -webkit-appearance: none;
-    appearance: none;
-    margin: 0;
-    width: 14px;
-    height: 14px;
-    border: 1.2px solid var(--text2);
-    border-radius: var(--radius-xs);
-    background: transparent center / 11px 11px no-repeat;
-    flex-shrink: 0;
-  }
-  input[type="checkbox"]:checked {
-    border-color: var(--accent);
-    background-color: var(--accent);
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  }
-  input[type="checkbox"]:indeterminate {
-    border-color: var(--accent);
-    background-color: var(--accent);
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8h8' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
-  }
-  input[type="checkbox"]:focus-visible {
-    box-shadow: var(--focus-ring);
   }
   .name {
     flex-grow: 1;
@@ -1633,6 +1618,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    text-align: left;
   }
   .dir {
     color: var(--text2);
@@ -1645,7 +1631,35 @@
   .note.warn {
     color: var(--orange);
   }
+  .partial {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+  }
+  .partial .icon {
+    width: 11px;
+    height: 11px;
+  }
+  .partial .fill {
+    fill: currentColor;
+    stroke: none;
+  }
+  .counts {
+    font-size: var(--text-caption);
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .add {
+    color: var(--green);
+  }
+  .del {
+    color: var(--red);
+  }
+  /* The bin shows over the counts while the row is hovered. */
   .discard {
+    position: absolute;
+    right: 2px;
+    top: 2px;
     width: 24px;
     height: 24px;
     border-radius: var(--radius-pill);
@@ -1654,7 +1668,6 @@
     justify-content: center;
     color: var(--text2);
     opacity: 0;
-    flex-shrink: 0;
   }
   .discard .icon {
     width: 14px;
@@ -1663,10 +1676,52 @@
   .file:hover .discard,
   .discard:focus-visible {
     opacity: 1;
+    background: var(--win);
+  }
+  .file.bin:hover .counts {
+    visibility: hidden;
   }
   .discard:hover {
     color: var(--red);
-    background: var(--red-soft);
+  }
+
+  /* Over the diff: which side of the file it is, or which side's files, and how it is drawn. */
+  .dhead {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 46px;
+    padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
+    flex-shrink: 0;
+  }
+  .caption {
+    font-size: var(--text-small);
+    color: var(--text2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dtitle {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    white-space: nowrap;
+  }
+  .dtitle b {
+    font-size: var(--text-body);
+    font-weight: 600;
+  }
+  .dtitle .n {
+    font-size: var(--text-small);
+    color: var(--text2);
+  }
+  .dtitle .mono {
+    font-size: var(--text-small);
+  }
+  .tip {
+    margin: 0 var(--space-3) var(--space-2);
+    display: flex;
+    flex-direction: column;
   }
   .scroll {
     flex-grow: 1;
@@ -1676,9 +1731,34 @@
   .error {
     margin: 12px 20px 0;
     font-size: var(--text-small);
-  }
-  .error {
     color: var(--red);
+  }
+  .nothing {
+    margin: var(--space-5);
+    color: var(--text2);
+    font-size: var(--text-small);
+  }
+  /* A side with nothing left: one line with the way on. */
+  .done-strip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 40px;
+    margin: 0 var(--space-3);
+    padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+    border-radius: var(--radius-m);
+    background: var(--field);
+    font-size: var(--text-small);
+    color: var(--text2);
+  }
+  .done-strip .icon {
+    width: 15px;
+    height: 15px;
+    flex-shrink: 0;
+  }
+  .done-strip .button {
+    flex-shrink: 0;
+    white-space: nowrap;
   }
   /* Hunk bar, as in the design: the @@ line, its state and the actions over it. */
   .hunk {
@@ -1704,8 +1784,6 @@
   }
   .state {
     font-family: var(--font);
-  }
-  .state {
     font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
@@ -1718,12 +1796,13 @@
     padding: 0 4px;
   }
 
+  /* The commit, as a card in the branch color, as «this commit» is in a commit's chain. */
   .commit {
     flex-shrink: 0;
-    margin: var(--space-3);
+    margin: var(--space-2) var(--space-3) var(--space-3);
     padding: 12px;
+    border: 1px solid transparent;
     border-radius: var(--radius-xl);
-    background: var(--field);
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -1742,13 +1821,18 @@
   }
   .to b {
     font-weight: 600;
-    color: var(--text);
+  }
+  .staged-count {
+    font-size: var(--text-small);
+    color: var(--text2);
+    white-space: nowrap;
   }
   .amend {
     display: flex;
     align-items: center;
     gap: 6px;
     font-size: var(--text-small);
+    flex-shrink: 0;
   }
   .amend:disabled {
     opacity: 0.5;
@@ -1821,6 +1905,12 @@
     color: var(--text);
     transition: height 0.15s ease;
   }
+  /* Empty and not written in: one line, as tall as the summary. */
+  textarea.folded {
+    padding-top: 7px;
+    padding-bottom: 7px;
+    overflow: hidden;
+  }
   input::placeholder,
   textarea::placeholder {
     color: var(--text2);
@@ -1832,6 +1922,7 @@
     gap: 8px;
     height: 32px;
     padding: 0 var(--space-4);
+    flex-shrink: 0;
   }
 
   .keys {
