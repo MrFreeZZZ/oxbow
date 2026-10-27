@@ -4,13 +4,14 @@
 #   worktrees-20    a repository with 20 more worktrees, every third with uncommitted changes
 #   worktrees-50    the same with 50
 #   submodules-20   20 submodules: clean, changed, behind, ahead, on a branch, not cloned
-# Usage: scripts/make-perf-fixtures.sh <folder> [history|worktrees|submodules ...]
+#   conflicts       a merge stopped on 4 files: 10k and 100k lines, with 100 and 1,000 conflicts
+# Usage: scripts/make-perf-fixtures.sh <folder> [history|worktrees|submodules|conflicts ...]
 set -euo pipefail
 
-dest=${1:?usage: make-perf-fixtures.sh <folder> [history|worktrees|submodules ...]}
+dest=${1:?usage: make-perf-fixtures.sh <folder> [history|worktrees|submodules|conflicts ...]}
 shift
 parts=("$@")
-[ ${#parts[@]} -gt 0 ] || parts=(history worktrees submodules)
+[ ${#parts[@]} -gt 0 ] || parts=(history worktrees submodules conflicts)
 mkdir -p "$dest"
 dest=$(cd "$dest" && pwd)
 
@@ -141,9 +142,52 @@ submodules() {
   echo "submodules-20: $(git -C "$repo" submodule status | wc -l) submodules"
 }
 
+# `code <lines> <conflicts> <side>`: a file of that many lines of code; every conflict's 3
+# lines are changed one way by `ours` and another by `theirs`, and left as they were by `base`.
+code() {
+  awk -v lines="$1" -v conflicts="$2" -v side="$3" 'BEGIN {
+    gap = int(lines / conflicts)
+    for (i = 1; i <= lines; i++) {
+      at = (i - 1) % gap
+      if (side != "base" && at >= gap / 2 && at < gap / 2 + 3) {
+        printf "    let value_%d = %s(%d, \"%s\");\n", i, side == "ours" ? "compute" : "evaluate", i * 7, side
+      } else {
+        printf "    let value_%d = combine(value_%d, %d); // step %d of the pipeline\n", i, i - 1, i % 97, i
+      }
+    }
+  }'
+}
+
+conflicts() {
+  local repo=$dest/conflicts
+  rm -rf "$repo"
+  git init -q -b main "$repo"
+  mkdir -p "$repo/src"
+  # `write <side>`: every file as that side has it.
+  write() {
+    local lines count
+    for lines in 10000 100000; do
+      for count in 100 1000; do
+        code "$lines" "$count" "$1" >"$repo/src/lines-$((lines / 1000))k-conflicts-$count.rs"
+      done
+    done
+  }
+  write base
+  git -C "$repo" add -A
+  git -C "$repo" commit -q -m "Start"
+  git -C "$repo" checkout -q -b feature/rewrite
+  write theirs
+  git -C "$repo" commit -q -am "Rewrite every step"
+  git -C "$repo" checkout -q main
+  write ours
+  git -C "$repo" commit -q -am "Change every step"
+  git -C "$repo" merge -q feature/rewrite >/dev/null 2>&1 || true
+  echo "conflicts: $(git -C "$repo" diff --name-only --diff-filter=U | wc -l) conflicted files"
+}
+
 for part in "${parts[@]}"; do
   case $part in
-    history | worktrees | submodules) "$part" ;;
-    *) echo "make-perf-fixtures: unknown part '$part' (history, worktrees, submodules)" >&2; exit 2 ;;
+    history | worktrees | submodules | conflicts) "$part" ;;
+    *) echo "make-perf-fixtures: unknown part '$part' (history, worktrees, submodules, conflicts)" >&2; exit 2 ;;
   esac
 done

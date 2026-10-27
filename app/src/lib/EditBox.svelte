@@ -1,8 +1,12 @@
 <script lang="ts">
-  // Lines of code to type in, with line numbers: a plain text field over a copy of its lines,
-  // which draws the numbers and each line's tint. Both wrap the same way, so they stay in step.
+  // Lines of code to type in, with line numbers and each line's tint: a CodeMirror editor, which
+  // draws only the lines on screen, so a file of 100,000 lines types as fast as a few. It grows
+  // with its text and scrolls with the page it is on.
 
   import { onMount, untrack } from "svelte";
+  import { Compartment, EditorState, RangeSetBuilder, StateEffect } from "@codemirror/state";
+  import { Decoration, EditorView, ViewPlugin, keymap, lineNumbers, type DecorationSet, type ViewUpdate } from "@codemirror/view";
+  import { defaultKeymap, history, historyKeymap, insertTab } from "@codemirror/commands";
 
   let {
     value,
@@ -11,7 +15,6 @@
     label,
     focus = false,
     onedit,
-    rows = $bindable(),
   }: {
     /** The starting text; what is typed then goes to `onedit`. */
     value: string;
@@ -23,109 +26,145 @@
     /** Takes the focus when it first shows, with the caret at the end. */
     focus?: boolean;
     onedit: (value: string) => void;
-    /** The drawn lines, one element each, for scrolling to a line. */
-    rows?: HTMLElement;
   } = $props();
 
-  let text = $state(untrack(() => value));
-  let field: HTMLTextAreaElement;
-  const lines = $derived(text.split("\n"));
+  /** What is typed is handed on once typing pauses, and a long text after a longer pause: the
+   *  screen it is on may be long too, and making the text whole again costs more than a key. */
+  const LONG = 100_000;
+  const pauseFor = (length: number) => (length < LONG ? 80 : 300);
 
-  onMount(() => {
-    if (!focus) return;
-    field.focus({ preventScroll: true });
-    field.setSelectionRange(text.length, text.length);
+  let host: HTMLDivElement;
+  let view: EditorView | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  /** Typed and not handed on yet. */
+  let unsent = false;
+  const numbers = new Compartment();
+  const retint = StateEffect.define<null>();
+
+  /** Hand what is typed to `onedit` now, if it is waiting. */
+  export function flush() {
+    clearTimeout(timer);
+    if (!unsent || !view) return;
+    unsent = false;
+    onedit(view.state.doc.toString());
+  }
+
+  /** Scroll line `i`, from 0, to the top of the page it is on. */
+  export function showLine(i: number) {
+    if (!view || i < 0 || i >= view.state.doc.lines) return;
+    view.dispatch({ effects: EditorView.scrollIntoView(view.state.doc.line(i + 1).from, { y: "start", yMargin: 8 }) });
+  }
+
+  const numbered = (from: number) => lineNumbers({ formatNumber: (n) => String(from + n - 1) });
+
+  /** The tints of the lines on screen, kept on their lines while typing moves them. */
+  const tints = ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet;
+      constructor(view: EditorView) {
+        this.decorations = this.paint(view);
+      }
+      update(update: ViewUpdate) {
+        if (update.viewportChanged || update.transactions.some((t) => t.effects.some((e) => e.is(retint)))) this.decorations = this.paint(update.view);
+        else if (update.docChanged) this.decorations = this.decorations.map(update.changes);
+      }
+      paint(view: EditorView): DecorationSet {
+        const out = new RangeSetBuilder<Decoration>();
+        for (const { from, to } of view.visibleRanges) {
+          for (let at = from; at <= to; ) {
+            const line = view.state.doc.lineAt(at);
+            const color = tintOf(line.number - 1, line.text);
+            if (color) out.add(line.from, line.from, Decoration.line({ attributes: { style: `background: ${color}` } }));
+            at = line.to + 1;
+          }
+        }
+        return out.finish();
+      }
+    },
+    { decorations: (plugin) => plugin.decorations },
+  );
+
+  const theme = EditorView.theme({
+    "&": { backgroundColor: "transparent", color: "var(--code)", fontSize: "inherit" },
+    "&.cm-focused": { outline: "none" },
+    ".cm-scroller": { fontFamily: "inherit", lineHeight: "inherit", overflow: "visible" },
+    ".cm-content": { padding: "0", caretColor: "var(--text)", fontFamily: "inherit" },
+    ".cm-line": { padding: "0 8px 0 0" },
+    ".cm-cursor": { borderLeftColor: "var(--text)" },
+    ".cm-gutters": { backgroundColor: "transparent", border: "none", color: "var(--text2)" },
+    ".cm-lineNumbers .cm-gutterElement": { minWidth: "var(--gutter, 36px)", padding: "0 10px 0 0", boxSizing: "border-box", textAlign: "right", opacity: "0.7" },
+    "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
+      backgroundColor: "color-mix(in srgb, var(--accent) 24%, transparent)",
+    },
   });
 
-  function keydown(event: KeyboardEvent) {
-    // Tab types a tab, as in an editor; Escape leaves the field, so the keyboard isn't stuck.
-    if (event.key === "Tab" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
-      event.preventDefault();
-      // Through the editing commands, so ⌘Z takes it back like any typing.
-      if (!document.execCommand("insertText", false, "\t")) field.setRangeText("\t", field.selectionStart, field.selectionEnd, "end");
-      text = field.value;
-      onedit(text);
-    } else if (event.key === "Escape") {
-      event.stopPropagation();
-      field.blur();
+  onMount(() => {
+    const tab = parseInt(getComputedStyle(host).tabSize) || 4;
+    view = new EditorView({
+      parent: host,
+      state: EditorState.create({
+        doc: value,
+        extensions: [
+          numbers.of(numbered(untrack(() => first))),
+          history(),
+          EditorState.tabSize.of(tab),
+          EditorView.lineWrapping,
+          EditorView.contentAttributes.of({ "aria-label": label, spellcheck: "false", autocorrect: "off", autocapitalize: "off" }),
+          // Tab types a tab, as in an editor; Escape leaves the text, so the keyboard isn't stuck.
+          keymap.of([{ key: "Tab", run: insertTab }, ...historyKeymap, ...defaultKeymap]),
+          EditorView.domEventHandlers({
+            keydown(event, view) {
+              if (event.key !== "Escape") return false;
+              event.stopPropagation();
+              view.contentDOM.blur();
+              return true;
+            },
+            blur: () => flush(),
+          }),
+          EditorView.updateListener.of((update) => {
+            if (!update.docChanged) return;
+            unsent = true;
+            clearTimeout(timer);
+            timer = setTimeout(flush, pauseFor(update.state.doc.length));
+          }),
+          tints,
+          theme,
+        ],
+      }),
+    });
+    if (focus) {
+      view.focus();
+      view.dispatch({ selection: { anchor: view.state.doc.length } });
     }
-  }
+    return () => {
+      flush();
+      view?.destroy();
+      view = null;
+    };
+  });
+
+  // Numbers follow the line the text starts at.
+  $effect(() => {
+    const from = first;
+    untrack(() => view?.dispatch({ effects: numbers.reconfigure(numbered(from)) }));
+  });
+
+  // Tints follow whatever `tintOf` reads, such as where the markers are now: asking it about a
+  // line watches that.
+  $effect(() => {
+    tintOf(0, "");
+    untrack(() => view?.dispatch({ effects: retint.of(null) }));
+  });
 </script>
 
-<div class="box">
-  <div class="rows" aria-hidden="true" bind:this={rows}>
-    {#each lines as line, i (i)}
-      <div class="row" style:background={tintOf(i, line)}><span class="no">{first + i}</span><span class="text">{line === "" ? "​" : line}</span></div>
-    {/each}
-  </div>
-  <textarea
-    bind:this={field}
-    bind:value={text}
-    oninput={() => onedit(text)}
-    onkeydown={keydown}
-    aria-label={label}
-    spellcheck="false"
-    autocomplete="off"
-    autocapitalize="off"
-    class="selectable"
-  ></textarea>
-</div>
+<div class="box selectable" bind:this={host}></div>
 
 <style>
   .box {
-    position: relative;
     border-radius: var(--radius-m);
+    overflow: hidden;
   }
   .box:focus-within {
     box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 55%, transparent);
-  }
-  .row {
-    display: grid;
-    grid-template-columns: 36px 1fr;
-  }
-  .row:first-child {
-    border-radius: var(--radius-m) var(--radius-m) 0 0;
-  }
-  .row:last-child {
-    border-radius: 0 0 var(--radius-m) var(--radius-m);
-  }
-  .row:only-child {
-    border-radius: var(--radius-m);
-  }
-  .no {
-    color: var(--text2);
-    opacity: 0.7;
-    text-align: right;
-    padding-right: 10px;
-    user-select: none;
-    -webkit-user-select: none;
-  }
-  /* The copy only takes up the room; the field on top shows the text. */
-  .text {
-    white-space: pre-wrap;
-    word-break: break-all;
-    padding-right: 8px;
-    color: transparent;
-  }
-  textarea {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    margin: 0;
-    padding: 0 8px 0 36px;
-    border: 0;
-    outline: none;
-    resize: none;
-    overflow: hidden;
-    background: transparent;
-    font: inherit;
-    line-height: inherit;
-    letter-spacing: inherit;
-    tab-size: inherit;
-    color: var(--code);
-    caret-color: var(--text);
-    white-space: pre-wrap;
-    word-break: break-all;
   }
 </style>

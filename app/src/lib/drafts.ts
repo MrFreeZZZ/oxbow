@@ -16,7 +16,8 @@ export interface DraftFile {
   stages: string;
   choices: Decision[];
   text: DraftText | null;
-  /** The file as the decisions or the text would write it, open conflicts between markers. */
+  /** The file as the decisions would write it, open conflicts between markers; empty when it is
+   *  written as text, which is then the result, so a long file isn't saved twice. */
   result: string;
 }
 
@@ -62,7 +63,7 @@ export function makeDraft(step: string, state: DraftState, conflicted: string[],
     const text = state.texts.get(path) ?? null;
     const stages = state.stages.get(path);
     if (stages !== undefined && hasWork(choices, text)) {
-      files.push({ path, stages, choices, text, result: state.results.get(path) ?? text?.text ?? "" });
+      files.push({ path, stages, choices, text, result: text ? "" : (state.results.get(path) ?? "") });
     }
     const was = state.old.get(path);
     if (was) old.push(was);
@@ -95,6 +96,9 @@ export function readDraft(value: unknown): Draft | null {
   return { version: 1, step: d.step, savedAt: d.savedAt, seen: d.seen.filter((p) => typeof p === "string"), files, old };
 }
 
+/** The file as a draft would write it: its text, or else what its decisions make. */
+const resultIn = (f: DraftFile) => (f.text ? f.text.text : f.result);
+
 /** What the screen starts the step `step` with from `draft`: its decisions when the draft is of
  *  this step (each still checked against the file's versions when it opens), otherwise only the
  *  results, to compare. */
@@ -107,11 +111,11 @@ export function takeDraft(draft: Draft | null, step: string, conflicted: string[
       state.choices.set(f.path, f.choices);
       if (f.text) state.texts.set(f.path, f.text);
       state.stages.set(f.path, f.stages);
-      state.results.set(f.path, f.result);
+      state.results.set(f.path, resultIn(f));
     }
     state.seen = [...draft.seen, ...conflicted.filter((p) => !draft.seen.includes(p))];
   } else {
-    for (const f of draft.files) state.old.set(f.path, { path: f.path, result: f.result, savedAt: draft.savedAt });
+    for (const f of draft.files) state.old.set(f.path, { path: f.path, result: resultIn(f), savedAt: draft.savedAt });
   }
   return state;
 }

@@ -61,6 +61,8 @@ const roundTrip = (value: unknown) => readDraft(JSON.parse(JSON.stringify(value)
     draft.files.map((f) => f.path),
     ["empty.txt", "crlf.txt", "open.txt", "__proto__"],
   );
+  // Text is saved once, not again as the result.
+  assert.deepEqual(draft.files.slice(0, 3).map((f) => f.result), ["", "", ""]);
   const back = takeDraft(draft, "merge:x:y", conflicted);
   for (const [path, text] of Object.entries(texts)) {
     assert.deepEqual(back.texts.get(path), text);
@@ -71,6 +73,9 @@ const roundTrip = (value: unknown) => readDraft(JSON.parse(JSON.stringify(value)
   assert.deepEqual(back.choices.get("__proto__"), [{ lines: [] }, { lines: [""] }, "both"]);
   assert.deepEqual(back.seen, [...state.seen, "untouched.txt"]);
   assert.equal(back.old.size, 0);
+  // In another step the text is what is kept to compare.
+  const other = takeDraft(draft, "merge:x:z", conflicted);
+  assert.equal(other.old.get("crlf.txt")!.result, "one\r\ntwo\r\n");
 }
 
 // A file resolved since isn't kept: what was written is in the file now.
