@@ -926,6 +926,10 @@
   /** The height of the summary box, which a folded description matches. */
   const SUMMARY_HEIGHT = 34;
 
+  /** The room for the buttons under the commit form, and what the fix and Commit side by side take. */
+  let actionsWidth = $state(0);
+  let buttonsWidth = $state(0);
+
   function onCommitKey(event: KeyboardEvent) {
     if (pressed("commitNow", event)) {
       event.preventDefault();
@@ -1354,22 +1358,29 @@
           onblur={() => (descOpen = false)}
         ></textarea>
         {#if commitHint}<WhyNote text={commitHint.text} warn={commitHint.warn} />{/if}
-        <div class="row actions">
+        {#snippet goLabel()}{draft.amend ? "Amend" : "Commit"} {#if shortcut("commitNow")}<span class="keys">{shortcut("commitNow")}</span>{/if}{/snippet}
+        <div class="row actions" bind:clientWidth={actionsWidth}>
           {#if commitHint?.fix}
-            <button class="button mini" onclick={commitHint.fix.run}>{commitHint.fix.label}</button>
-          {:else if !commitHint}
-            <span class="staged-count"
-              >{draft.amend
-                ? staged.length
-                  ? `${amendedCount} ${amendedCount === 1 ? "file" : "files"}`
-                  : "Message only"
-                : `${staged.length} ${staged.length === 1 ? "file" : "files"} staged`}</span
-            >
+            <!-- The fix and Commit side by side, unseen, to tell whether they fit on one line. -->
+            <div class="buttons measure" aria-hidden="true" inert bind:offsetWidth={buttonsWidth}>
+              <span class="button">{commitHint.fix.label}</span><span class="button primary go">{@render goLabel()}</span>
+            </div>
+            <div class="buttons" class:column={buttonsWidth > actionsWidth}>
+              <button class="button" onclick={commitHint.fix.run}>{commitHint.fix.label}</button>
+              <button class="button primary go" onclick={commit} disabled={!canCommit} title={commitHint.text}>{@render goLabel()}</button>
+            </div>
+          {:else}
+            {#if !commitHint}
+              <span class="staged-count"
+                >{draft.amend
+                  ? staged.length
+                    ? `${amendedCount} ${amendedCount === 1 ? "file" : "files"}`
+                    : "Message only"
+                  : `${staged.length} ${staged.length === 1 ? "file" : "files"} staged`}</span
+              >
+            {/if}
+            <button class="button primary go" onclick={commit} disabled={!canCommit} title={commitHint?.text}>{@render goLabel()}</button>
           {/if}
-          <span class="grow"></span>
-          <button class="button primary go" onclick={commit} disabled={!canCommit} title={commitHint?.text}>
-            {draft.amend ? "Amend" : "Commit"} {#if shortcut("commitNow")}<span class="keys">{shortcut("commitNow")}</span>{/if}
-          </button>
         </div>
       </div>
     </div>
@@ -2291,19 +2302,40 @@
     color: var(--text2);
     font-weight: 400;
   }
-  /* A long fix, such as Stage All 1,000 Files, leaves Commit room on a line of its own. */
   .actions {
-    flex-wrap: wrap;
-    row-gap: 8px;
+    position: relative;
+  }
+  /* A fix, such as Stage All 10 Files, is as big as Commit beside it. */
+  .actions .button {
+    height: 32px;
+    padding: 0 var(--space-4);
+    min-width: 96px;
   }
   .go {
     margin-left: auto;
-    display: flex;
-    align-items: center;
     gap: 8px;
-    height: 32px;
-    padding: 0 var(--space-4);
-    flex-shrink: 0;
+  }
+  .buttons {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+  }
+  .buttons .go {
+    margin-left: 0;
+  }
+  /* Too wide for one line, a long fix stands over Commit, both as wide as the wider one, on the right. */
+  .buttons.column {
+    display: grid;
+    grid-template-columns: max-content;
+    justify-items: stretch;
+  }
+  .buttons.measure {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: max-content;
+    visibility: hidden;
+    pointer-events: none;
   }
 
   .keys {
