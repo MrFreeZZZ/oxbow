@@ -57,6 +57,7 @@
     focus = null,
     hits = $bindable([]),
     tools = true,
+    shut,
   }: {
     diffs: FileDiff[];
     color: number;
@@ -100,6 +101,8 @@
     /** Wrap, Side by Side, Whole File and Ignore Whitespace on each file's bar; off where
      *  DiffTools shows them once over the diff. */
     tools?: boolean;
+    /** Files that start folded whatever the setting says, such as the ones a review ticked Viewed. */
+    shut?: (diff: FileDiff) => boolean;
   } = $props();
 
   /** Diffs loaded in full with Show Diff Anyway, by the very diff they stand in for: a diff
@@ -184,12 +187,17 @@
       // A file shown on its own tab is what was asked for, so it starts open.
       const many = diffs.length + pending > 1;
       folded = Object.fromEntries(
-        diffs.map((d) => [d.file.path, own(kept, d.file.path) ?? (many && startsFolded(d))]),
+        diffs.map((d) => [d.file.path, own(kept, d.file.path) ?? (!!shut?.(d) || (many && startsFolded(d)))]),
       );
     });
   });
 
   const isFolded = (diff: FileDiff) => foldable && !!own(folded, diff.file.path);
+
+  /** Fold or unfold one file, as when a review ticks it Viewed. */
+  export function fold(path: string, shut: boolean) {
+    folded = { ...folded, [path]: shut };
+  }
 
   /** Fold or unfold every file, from the file list's buttons or ⌥-click on a chevron. */
   export function setAll(fold: boolean) {

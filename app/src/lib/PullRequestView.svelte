@@ -1,7 +1,8 @@
 <script lang="ts">
   // The Pull Request screen of one branch: its stack as a strip of soft arrows, then the pull
-  // request (conversation or commits) on the left and whether it can merge, and how, on the
-  // right, with the one step it waits for next on top. A branch without one gets the form that
+  // request (conversation, commits or files to review) on the left and whether it can merge,
+  // and how, on the right, with the one step it waits for next on top. Another account's pull
+  // request, or a fork's, is picked by its number. A branch without one gets the form that
   // opens it. After the base of a stack merged, the rest of the stack can be restacked onto the
   // trunk from here, in three steps kept between runs: a push that fails goes on later.
   import { untrack } from "svelte";
@@ -13,6 +14,8 @@
   import type { SeriesQuery } from "./series";
   import { lane, person, plate, relativeTime, shortId, splitPath, tint } from "./format";
   import { kept } from "./kept";
+  import PullFiles from "./PullFiles.svelte";
+  import { pullWorktreeRequest, worktreeOf } from "./worktrees";
   import { softArrows } from "./shapes";
   import { editStackRequest, freshDraft, planOf } from "./stack";
   import { switchRequest } from "./branches";
@@ -36,6 +39,7 @@
 
   let {
     branch,
+    number = null,
     history,
     ctx,
     colorOf,
@@ -46,6 +50,8 @@
     onSeries,
   }: {
     branch: string;
+    /** The pull request by its number, when it is no branch's here. */
+    number?: number | null;
     history: History;
     ctx: BranchContext;
     colorOf: (name: string) => number;
@@ -62,12 +68,12 @@
   const HEIGHT = 42;
 
   const gh = $derived(github.repo);
-  const summary = $derived(github.pullOf(branch));
+  const summary = $derived(number ? github.byNumber(number) : github.pullOf(branch));
   let pr = $state<PullRequest | null>(null);
   let loading = $state(false);
   let error = $state<string | null>(null);
   let stack = $state<Stack | null>(null);
-  let tab = $state<"conversation" | "commits">("conversation");
+  let tab = $state<"conversation" | "commits" | "files">("conversation");
   let method = $state<MergeMethodName | null>(null);
   let deleteBranch = $state(true);
   let me = $state<string | null>(null);
@@ -311,6 +317,30 @@
 
   function openCheck(check: PullCheck) {
     if (check.url?.startsWith("https://github.com/")) api.openGitHub(check.url).catch(() => {});
+  }
+
+  // --- Checking it out ---
+
+  /** A pull request from another account's copy of the repository. */
+  const fork = $derived(!!pr?.headOwner && pr.headOwner !== gh?.owner);
+  /** The worktree button: none for a branch checked out here, or one of this repository's
+   *  branches that has no local copy yet but is the one this screen is about. */
+  const worktreeLabel = $derived.by(() => {
+    if (!pr || !gh) return null;
+    if (fork) return "Check Out in Worktree";
+    if (history.head.branch === pr.head) return null;
+    return worktreeOf(history, pr.head) ? "Open Its Worktree" : "Check Out in Worktree";
+  });
+
+  function checkOut() {
+    if (!pr || !gh) return;
+    const elsewhere = worktreeOf(history, pr.head);
+    if (elsewhere && !fork) {
+      api.openWindow(elsewhere.path).catch(() => {});
+      return;
+    }
+    const here = history.worktrees.find((t) => t.current)?.path ?? "";
+    act(pullWorktreeRequest(ctx, here, pr, gh.remote, fork));
   }
 
   // --- Merging ---
@@ -696,9 +726,17 @@
           style:--on-bg={tint(colorOf(pr.head))} style:--on-fg={plate(colorOf(pr.head))}>Conversation</button>
         <button role="tab" class="tab" class:on={tab === "commits"} aria-selected={tab === "commits"} onclick={() => (tab = "commits")}
           style:--on-bg={tint(colorOf(pr.head))} style:--on-fg={plate(colorOf(pr.head))}>Commits {pr.commits.length}</button>
+        <button role="tab" class="tab" class:on={tab === "files"} aria-selected={tab === "files"} onclick={() => (tab = "files")}
+          style:--on-bg={tint(colorOf(pr.head))} style:--on-fg={plate(colorOf(pr.head))}>Files {pr.changedFiles}</button>
         {#if error}<span class="load-error">{error}</span>{/if}
+        {#if rewrite || worktreeLabel}<span class="grow"></span>{/if}
+        {#if worktreeLabel && pr.state === "open"}
+          <button class="rewrite" onclick={checkOut} title={worktreeLabel === "Open Its Worktree" ? `${pr.head} is checked out in another worktree` : `A working folder of its own with #${pr.number} checked out`}>
+            <svg class="icon small" viewBox="0 0 16 16"><path d="M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1zM8 7.5v3.5M6.25 9.25h3.5" /></svg>
+            {worktreeLabel}
+          </button>
+        {/if}
         {#if rewrite}
-          <span class="grow"></span>
           <button class="rewrite" onclick={openSeries} title="{rewriteText}: each commit before and after, side by side (git range-diff)">
             <svg class="icon small" viewBox="0 0 16 16"><path d="M2.5 5h8M8 2.5 10.5 5 8 7.5M13.5 11h-8M8 8.5 5.5 11 8 13.5" /></svg>
             <span class="rewrite-why">{rewriteText} ·</span> Compare Series
@@ -706,6 +744,9 @@
         {/if}
       </div>
 
+      {#if tab === "files"}
+        <PullFiles {pr} color={colorOf(pr.head)} {version} />
+      {:else}
       <div class="scroll">
         {#if tab === "conversation"}
           <div class="timeline">
@@ -797,6 +838,7 @@
           </div>
         {/if}
       </div>
+      {/if}
     {:else if form && gh}
       <div class="title-block">
         <h1>New pull request</h1>
@@ -858,7 +900,7 @@
     {/if}
   </section>
 
-  <aside class="box" aria-label="Merge">
+  <aside class="box" aria-label="Merge" class:hidden={!!pr && tab === "files"}>
     {#if pr && pr.state === "open"}
       {#if next}
         {@const ready = next.kind === "merge"}
@@ -1056,6 +1098,10 @@
     gap: 14px;
     padding: 16px 18px;
     overflow-y: auto;
+  }
+  /* The Files tab takes the whole width. */
+  .box.hidden {
+    display: none;
   }
   .grow {
     flex-grow: 1;

@@ -1,7 +1,11 @@
 #![allow(dead_code)]
 
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 /// A throwaway repository driven through the `git` command line.
 pub struct Fixture {
@@ -71,4 +75,61 @@ impl Fixture {
     pub fn path(&self) -> &Path {
         &self.path
     }
+}
+
+/// A stand-in for GitHub's API answering each request by its path: the first route whose
+/// prefix matches, else 404. A route `"/graphql markFileAsViewed"` also needs its words in the body.
+pub fn server(routes: Vec<(&'static str, &'static str)>) -> String {
+    stand_in(routes).0
+}
+
+/// Each request a stand-in got: its path and body.
+pub type Seen = Arc<Mutex<Vec<(String, String)>>>;
+
+/// [`server`], also keeping each request's path and body as they came.
+pub fn stand_in(routes: Vec<(&'static str, &'static str)>) -> (String, Seen) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let kept = seen.clone();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { break };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_err() {
+                continue;
+            }
+            let mut length = 0;
+            loop {
+                let mut header = String::new();
+                reader.read_line(&mut header).unwrap();
+                if header.trim().is_empty() {
+                    break;
+                }
+                if let Some(value) = header.to_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap();
+                }
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            let body = String::from_utf8_lossy(&body).into_owned();
+            let path = line.split_whitespace().nth(1).unwrap_or("").to_owned();
+            kept.lock().unwrap().push((path.clone(), body.clone()));
+            let (status, answer) = routes
+                .iter()
+                .find(|(route, _)| {
+                    let (prefix, words) = route.split_once(' ').unwrap_or((route, ""));
+                    path.starts_with(prefix) && body.contains(words)
+                })
+                .map_or((404, r#"{"message":"Not Found"}"#), |(_, answer)| (200, answer));
+            let mut stream = stream;
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+                answer.len()
+            );
+        }
+    });
+    (address, seen)
 }

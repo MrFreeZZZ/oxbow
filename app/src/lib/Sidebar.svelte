@@ -39,6 +39,8 @@
   import { locateRequest, lockRequest, newWorktreeRequest, pruneWorktreesRequest, removeWorktreeRequest, tilde, unlockRequest, worktreeOf } from "./worktrees";
 
   const PULL_ICON = "M3 3.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M3 12.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M10 12.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M4.5 5v6M11.5 11V6.5a2 2 0 0 0-2-2H7M8.5 3 7 4.5 8.5 6";
+  /** A speech bubble with a tick: pull requests to review. */
+  const REVIEW_ICON = "M2.5 4.2c0-.7.5-1.2 1.2-1.2h8.6c.7 0 1.2.5 1.2 1.2v5.6c0 .7-.5 1.2-1.2 1.2H7l-3 2.5V11h-.3c-.7 0-1.2-.5-1.2-1.2zM5.5 7l1.6 1.5 3.4-3";
   const FOLDER = "M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z";
   const HOME = "M2.5 7.5 8 3l5.5 4.5M4 6.5v6.5h8V6.5";
   /** A list with a ×: Clear Recent. */
@@ -89,8 +91,8 @@
     /** Confirm and run a change to the repository. */
     run: (request: Request | Promise<Request>) => void;
     /** The screen shown next to the sidebar. */
-    view: "history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull";
-    onView: (view: "history" | "stashes" | "oplog") => void;
+    view: "history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull" | "reviews";
+    onView: (view: "history" | "stashes" | "oplog" | "reviews") => void;
     /** Open the uncommitted changes in the details panel, next to History. */
     onChanges: () => void;
     /** On the Stashes screen a stash in the list is picked there instead of in History. */
@@ -669,6 +671,14 @@
         {#if headPull}<span class="meta">#{headPull.number}</span>{/if}
       </button>
     {/if}
+    {#if github.repo}
+      {@const waiting = github.waiting.length}
+      <button class="item" class:current={view === "reviews"} onclick={() => onView("reviews")} title={waiting ? `${waiting} pull ${waiting === 1 ? "request asks" : "requests ask"} for your review` : "Open pull requests, yours and others’"}>
+        <svg class="icon" viewBox="0 0 16 16"><path d={REVIEW_ICON} /></svg>
+        <span class="grow">Reviews</span>
+        {#if waiting}<span class="meta count">{waiting}</span>{/if}
+      </button>
+    {/if}
     <button class="item" class:current={view === "oplog"} onclick={() => onView("oplog")} title="Every step Oxbow ran here, to undo or restore">
       <svg class="icon" viewBox="0 0 16 16"><path d="M5.5 4 2.5 7l3 3M3 7h6.5a3.5 3.5 0 0 1 0 7H7" /></svg>
       <span class="grow">Operation Log</span>
@@ -1190,6 +1200,17 @@
   .missing {
     font-weight: 500;
     margin-left: 6px;
+  }
+  /* Pull requests waiting for your review: a count to act on. */
+  .meta.count {
+    min-width: 18px;
+    padding: 0 6px;
+    border-radius: var(--radius-pill);
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+    line-height: 16px;
+    text-align: center;
   }
   .meta.warn {
     color: var(--orange);

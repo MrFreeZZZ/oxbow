@@ -10,7 +10,7 @@ import { nameProblem, type BranchContext } from "./branches";
 import { checking, stale } from "./folders";
 import { shortId } from "./format";
 import { tilde as tildeIn } from "./term";
-import type { Failure, History, Worktree } from "./types";
+import type { Failure, History, PullSummary, Worktree } from "./types";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -54,6 +54,8 @@ interface NewWorktree {
   create: boolean;
   /** Where a new branch starts; null for HEAD. */
   from: string | null;
+  /** What `from` is called, when it is no branch: "pull request #421". */
+  fromLabel?: string;
   /** The folder as typed, maybe with ~. */
   folder: string;
   /** The folder was typed or chosen, so it stops following the branch. */
@@ -107,6 +109,30 @@ export async function newWorktreeRequest(ctx: BranchContext, repoPath: string, b
   return newWorktreeSheet(ctx, repoPath, shown, free, state);
 }
 
+/** New Worktree for a pull request: its branch here when there is one, else a new branch at
+ *  its head, which follows the branch on `remote` when it is one of this repository. */
+export async function pullWorktreeRequest(ctx: BranchContext, repoPath: string, pull: PullSummary, remote: string, fork: boolean): Promise<Request> {
+  const { history } = ctx;
+  const local = history.refs.some((r) => r.kind === "local" && r.name === pull.head);
+  if (local && !fork) return newWorktreeRequest(ctx, repoPath, pull.head);
+  await api.pullFetch(pull.number, pull.base);
+  const tracked = `${remote}/${pull.head}`;
+  const follows = !fork && history.refs.some((r) => r.kind === "remote" && r.name === tracked);
+  const name = fork || local ? `pr/${pull.number}` : pull.head;
+  const free = freeBranches(history);
+  const state: NewWorktree = {
+    branch: name,
+    create: true,
+    from: follows ? tracked : `refs/oxbow/pull/${pull.number}/head`,
+    fromLabel: follows ? tracked : `pull request #${pull.number}`,
+    folder: tilde(await freeFolder(history, repoPath, name)),
+    edited: false,
+    open: true,
+    search: null,
+  };
+  return newWorktreeSheet(ctx, repoPath, free.slice(0, 3), free, state);
+}
+
 /** Branch chips shown while searching. */
 const FOUND = 8;
 
@@ -124,7 +150,7 @@ function newWorktreeSheet(ctx: BranchContext, repoPath: string, shown: string[],
   const folderName = path.split(/[/\\]/).pop() ?? "";
   const nextTo = parentOf(path) === parentOf(repoPath.replace(/[/\\]$/, ""));
   const here = history.head.branch;
-  const fromName = state.from ?? here ?? (history.head.commit ? shortId(history.head.commit) : "HEAD");
+  const fromName = (state.from && state.fromLabel) || state.from || here || (history.head.commit ? shortId(history.head.commit) : "HEAD");
 
   let invalid: string | null = null;
   let nameError: string | undefined;
@@ -190,8 +216,10 @@ function newWorktreeSheet(ctx: BranchContext, repoPath: string, shown: string[],
       chips: PREFIXES.map((p) => ({ label: p, on: state.branch.startsWith(p), pick: () => again(follow(withPrefix(p))) })),
       error: nameError,
     });
-    const froms = [...new Set([here, history.trunk].filter((b): b is string => !!b))];
-    if (froms.length > 1) fields.push({ label: "From", chips: froms.map((b) => ({ label: b, on: fromName === b, pick: () => again({ from: b === here ? null : b }) })) });
+    // A start of its own, such as a pull request's head, comes first.
+    const own = state.fromLabel && state.from ? [{ label: state.fromLabel, from: state.from }] : [];
+    const froms = [...own, ...[...new Set([here, history.trunk].filter((b): b is string => !!b))].map((b) => ({ label: b, from: b === here ? null : b }))];
+    if (froms.length > 1) fields.push({ label: "From", chips: froms.map((f) => ({ label: f.label, on: fromName === f.label, pick: () => again({ from: f.from }) })) });
   }
   fields.push({
     label: "Folder",

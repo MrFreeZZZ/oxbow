@@ -2885,7 +2885,14 @@ fn main() {
             pulls::github_pull,
             pulls::github_calls_preview,
             pulls::github_run,
-            pulls::code_owners
+            pulls::code_owners,
+            pulls::github_pull_statuses,
+            pulls::pull_fetch,
+            pulls::github_viewing,
+            pulls::github_send,
+            pulls::review_draft,
+            pulls::review_drafts,
+            pulls::save_review_draft
         ])
         .run(tauri::generate_context!())
         .expect("error while running Oxbow");

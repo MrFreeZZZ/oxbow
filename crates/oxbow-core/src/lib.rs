@@ -27,6 +27,7 @@ pub mod pulls;
 pub mod reflog;
 pub mod remote;
 pub mod repo;
+pub mod review;
 pub mod search;
 pub mod secrets;
 pub mod series;

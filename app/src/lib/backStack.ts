@@ -15,7 +15,9 @@ export type Place =
   | { view: "oplog" }
   | { view: "compare"; base: string; target: string; mode: CompareMode }
   | { view: "series"; query: SeriesQuery }
-  | { view: "pull"; branch: string }
+  /** A pull request: of a branch here, or by its number when it is another account's or a fork's. */
+  | { view: "pull"; branch: string; number?: number | null }
+  | { view: "reviews" }
   | { view: "stack"; branch: string | null };
 
 export type Trail = { places: Place[]; at: number };
@@ -36,7 +38,7 @@ export function placeKey(p: Place): string {
     case "series":
       return `series\0${p.query.branch}\0${p.query.old}\0${p.query.new}`;
     case "pull":
-      return `pull\0${p.branch}`;
+      return `pull\0${p.number ?? p.branch}`;
     case "stack":
       return `stack\0${p.branch ?? ""}`;
     default:
