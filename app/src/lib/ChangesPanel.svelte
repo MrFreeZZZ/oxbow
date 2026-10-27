@@ -390,6 +390,16 @@
     const fresh = group === "untracked" ? { untracked: true } : {};
     show(paths.length > 1 ? { kind: "files", paths, side, ...fresh } : paths.length ? { kind: "file", path: paths[0], side } : { kind: "all", side, ...fresh });
   }
+  /** A list's name folds or unfolds the list, as its chevron does, and shows every file of it. */
+  function openGroup(group: List) {
+    if (group === "untracked") {
+      if (!needle) view.untracked = !view.untracked;
+      show({ kind: "all", side: "unstaged", untracked: true });
+    } else {
+      shut[group] = !shut[group];
+      show({ kind: "all", side: group });
+    }
+  }
   const isOpen = (file: FileChange, group: List | "conflicted") => !lastOpen && shown?.kind === "file" && shown.path === file.path && shown.side === sideOf(group);
   const isAll = (side: Side, fresh = false) => !lastOpen && shown?.kind === "all" && shown.side === side && !!shown.untracked === fresh;
 
@@ -1124,7 +1134,7 @@
   >
 {/snippet}
 
-<!-- A list's heading: the chevron folds it, the name shows every file of the side. -->
+<!-- A list's heading: the chevron folds it; the name folds it too and shows every file of the side. -->
 {#snippet chevron(open: boolean, label: string, toggle: () => void, disabled = false)}
   <button class="chev" aria-expanded={open} aria-label={label} title={disabled ? "Shown while the filter is on" : label} {disabled} onclick={toggle}>
     <svg class="chevron" class:open viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" /></svg>
@@ -1255,7 +1265,7 @@
         <div class="group">
           <div class="ghead" class:on={isAll("unstaged")} style:background={isAll("unstaged") ? tint(color) : undefined}>
             {@render chevron(!shut.unstaged, shut.unstaged ? "Show the unstaged files" : "Hide the unstaged files", () => (shut.unstaged = !shut.unstaged))}
-            <button class="gname" onclick={() => show({ kind: "all", side: "unstaged" })} aria-current={isAll("unstaged") ? "true" : undefined} title="Show every unstaged change">
+            <button class="gname" onclick={() => openGroup("unstaged")} aria-current={isAll("unstaged") ? "true" : undefined} aria-expanded={!shut.unstaged} title={shut.unstaged ? "Show every unstaged change and the files" : "Show every unstaged change and hide the files"}>
               <span class="gtitle" style:color={plate(color)}>Unstaged</span><span class="n">{needle ? `${shownTracked.length} of ${tracked.length}` : tracked.length}</span>
             </button>
             {#if pickedUnstaged.length}
@@ -1276,7 +1286,7 @@
           <div class="group">
             <div class="ghead" class:on={isAll("unstaged", true)} style:background={isAll("unstaged", true) ? tint(color) : undefined}>
               {@render chevron(untrackedOpen, untrackedOpen ? "Hide the untracked files" : "Show the new files git does not track yet", () => (view.untracked = !view.untracked), !!needle)}
-              <button class="gname" onclick={() => show({ kind: "all", side: "unstaged", untracked: true })} aria-current={isAll("unstaged", true) ? "true" : undefined} title="Show every new file git does not track yet">
+              <button class="gname" onclick={() => openGroup("untracked")} aria-current={isAll("unstaged", true) ? "true" : undefined} aria-expanded={untrackedOpen} title={untrackedOpen ? "Show every new file git does not track yet and hide the files" : "Show every new file git does not track yet and the files"}>
                 <span class="gtitle" style:color={plate(color)}>Untracked</span><span class="n">{needle ? `${shownUntracked.length} of ${untracked.length}` : untracked.length}</span>
               </button>
               {#if pickedUntracked.length}
@@ -1298,7 +1308,7 @@
       <div class="group staged" class:drop={!!dragging && dragging.group !== "staged"} class:over={!!dragging && dragging.group !== "staged" && dropping} bind:this={stagedBox}>
         <div class="ghead" class:on={isAll("staged")} style:background={isAll("staged") ? tint(color) : undefined}>
           {@render chevron(!shut.staged, shut.staged ? "Show the staged files" : "Hide the staged files", () => (shut.staged = !shut.staged))}
-          <button class="gname" onclick={() => show({ kind: "all", side: "staged" })} aria-current={isAll("staged") ? "true" : undefined} title="Show the next commit: every staged change">
+          <button class="gname" onclick={() => openGroup("staged")} aria-current={isAll("staged") ? "true" : undefined} aria-expanded={!shut.staged} title={shut.staged ? "Show the next commit: every staged change, and the files" : "Show the next commit: every staged change, and hide the files"}>
             <span class="gtitle" style:color={plate(color)}>Staged</span><span class="n">{needle ? `${shownStaged.length} of ${staged.length}` : staged.length}</span>
           </button>
           {#if pickedStaged.length}
