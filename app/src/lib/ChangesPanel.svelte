@@ -87,6 +87,7 @@
   import DiffView, { type LinePicker } from "./DiffView.svelte";
   import DiffTools from "./DiffTools.svelte";
   import FoldAll from "./FoldAll.svelte";
+  import PathName from "./PathName.svelte";
   import WhyNote from "./WhyNote.svelte";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import { nav } from "./nav.svelte";
@@ -138,10 +139,6 @@
   let diffsOf = $state<Shown | null>(null);
   /** The lists of files: untracked files are unstaged ones listed apart. */
   type List = Side | "untracked";
-  /** Files picked with ⌘-click or Shift-click in each list, for Stage, Unstage or Discard of several. */
-  let picks = $state<Record<List, string[]>>({ unstaged: [], staged: [], untracked: [] });
-  /** The same picks as sets, so a list of thousands of files checks each one at once. */
-  const pickSet = $derived({ unstaged: new Set(picks.unstaged), staged: new Set(picks.staged), untracked: new Set(picks.untracked) });
   let whole = $state(wholeByDefault());
   // Diff & Text's default view applies again when it changes.
   $effect(() => {
@@ -268,15 +265,8 @@
       reading = given ? snapshot : null;
       tree = next;
       error = null;
-      const unstagedNow = new Set(next.unstaged.map((f) => f.path));
-      const stagedNow = new Set(next.staged.map((f) => f.path));
-      // A file staged or unstaged whole is shown where it went; picks go with the files that moved.
+      // A file staged or unstaged whole is shown where it went; a selection keeps the files still there.
       shown = keepShown(shown, next);
-      picks = {
-        unstaged: picks.unstaged.filter((p) => unstagedNow.has(p)),
-        staged: picks.staged.filter((p) => stagedNow.has(p)),
-        untracked: picks.untracked.filter((p) => unstagedNow.has(p)),
-      };
       loads++;
     } catch (err) {
       error = String(err);
@@ -306,11 +296,14 @@
     const pool =
       target.side === "staged"
         ? t.staged
-        : target.kind === "all" && target.untracked
-          ? t.unstaged.filter((f) => f.status === "untracked")
-          : [...t.conflicted, ...t.unstaged.filter((f) => target.kind === "file" || f.status !== "untracked")];
+        : target.kind !== "all"
+          ? [...t.conflicted, ...t.unstaged]
+          : target.untracked
+            ? t.unstaged.filter((f) => f.status === "untracked")
+            : [...t.conflicted, ...t.unstaged.filter((f) => f.status !== "untracked")];
+    const chosen = target.kind === "files" ? new Set(target.paths) : null;
     const paths = pool
-      .filter((f) => (target.kind === "file" ? f.path === target.path : !n || f.path.toLowerCase().includes(n) || !!f.oldPath?.toLowerCase().includes(n)))
+      .filter((f) => (target.kind === "file" ? f.path === target.path : chosen ? chosen.has(f.path) : !n || f.path.toLowerCase().includes(n) || !!f.oldPath?.toLowerCase().includes(n)))
       .map((f) => f.path);
     const ask = { side: target.side, paths, whole: wholeFile, reading };
     asked = ask;
@@ -363,11 +356,40 @@
     if ((lastOpen || !sameShown(next, shown)) && diffScroller) diffScroller.scrollTop = 0;
     lastOpen = null;
     shown = next;
+    if (next.kind === "file") {
+      const group = groupOf(next.path, next.side);
+      anchor = group ? { group, path: next.path } : null;
+    }
     // Stepped to with the keys, the file may be scrolled out of its list.
     requestAnimationFrame(() => filesBox?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: "nearest" }));
   }
 
   const sideOf = (group: List | "conflicted"): Side => (group === "staged" ? "staged" : "unstaged");
+  /** The list a file on a side is in; null for a conflicted file, which is never selected with others. */
+  function groupOf(path: string, side: Side): List | null {
+    if (side === "staged") return "staged";
+    const file = unstagedByPath.get(path);
+    return !file || file.status === "conflicted" ? null : file.status === "untracked" ? "untracked" : "unstaged";
+  }
+
+  /** The files selected in each list, as in a Finder list: the one open, or those picked with
+   *  ⌘-click or Shift-click, which the diff then shows together. */
+  const picks = $derived.by((): Record<List, string[]> => {
+    const none: Record<List, string[]> = { unstaged: [], staged: [], untracked: [] };
+    if (lastOpen || !shown || shown.kind === "all") return none;
+    if (shown.kind === "files") return { ...none, [shown.side === "staged" ? "staged" : shown.untracked ? "untracked" : "unstaged"]: shown.paths };
+    const group = groupOf(shown.path, shown.side);
+    return group ? { ...none, [group]: [shown.path] } : none;
+  });
+  /** The same picks as sets, so a list of thousands of files checks each one at once. */
+  const pickSet = $derived({ unstaged: new Set(picks.unstaged), staged: new Set(picks.staged), untracked: new Set(picks.untracked) });
+
+  /** Shows the files selected in a list: one file, several together, or the whole list once none is. */
+  function showPicked(group: List, paths: string[]) {
+    const side = sideOf(group);
+    const fresh = group === "untracked" ? { untracked: true } : {};
+    show(paths.length > 1 ? { kind: "files", paths, side, ...fresh } : paths.length ? { kind: "file", path: paths[0], side } : { kind: "all", side, ...fresh });
+  }
   const isOpen = (file: FileChange, group: List | "conflicted") => !lastOpen && shown?.kind === "file" && shown.path === file.path && shown.side === sideOf(group);
   const isAll = (side: Side, fresh = false) => !lastOpen && shown?.kind === "all" && shown.side === side && !!shown.untracked === fresh;
 
@@ -378,7 +400,7 @@
     return map;
   });
 
-  /** The file picked or unpicked last, where Shift-click starts a range. */
+  /** The file opened, picked or unpicked last, where Shift-click starts a range. */
   let anchor: { group: List; path: string } | null = null;
 
   /** The files a list shows, the filter applied. */
@@ -391,23 +413,18 @@
     return byFolder(list).flatMap((g) => (folded.has(`${group}:${g.dir}`) ? [] : g.files.map((f) => f.path)));
   }
 
-  /** A file's name opens its diff; ⌘-click (Ctrl) picks it or lets it go, Shift-click picks every
-   *  file from the one clicked last. */
+  /** A file's name selects it and opens its diff; ⌘-click (Ctrl) adds it to the selection or
+   *  takes it out, Shift-click adds every file from the one clicked last. */
   function rowClick(event: MouseEvent, file: FileChange, group: List | "conflicted") {
     if (dragged) return;
     if (group !== "conflicted" && (event.metaKey || event.ctrlKey || event.shiftKey)) {
       event.preventDefault();
       const list = picks[group];
-      if (event.shiftKey) {
-        picks = { ...picks, [group]: pickRange(order(group), list, anchor?.group === group ? anchor.path : null, file.path) };
-        return;
-      }
-      picks = { ...picks, [group]: pickSet[group].has(file.path) ? list.filter((p) => p !== file.path) : [...list, file.path] };
+      if (event.shiftKey) return showPicked(group, pickRange(order(group), list, anchor?.group === group ? anchor.path : null, file.path));
+      showPicked(group, pickSet[group].has(file.path) ? list.filter((p) => p !== file.path) : [...list, file.path]);
       anchor = { group, path: file.path };
       return;
     }
-    picks = { unstaged: [], staged: [], untracked: [] };
-    anchor = group === "conflicted" ? null : { group, path: file.path };
     show({ kind: "file", path: file.path, side: sideOf(group) });
   }
 
@@ -426,7 +443,9 @@
     return out;
   });
   const stepper = $derived((by: 1 | -1, wrap: boolean) => {
-    const next = stepShown(steps, shown, by, wrap);
+    // From several files, the keys go on from the one clicked last.
+    const from: Shown | null = shown?.kind === "files" && anchor ? { kind: "file", path: anchor.path, side: shown.side } : shown;
+    const next = stepShown(steps, from, by, wrap);
     if (!next) return false;
     show(next);
     return true;
@@ -471,6 +490,11 @@
     } else if (pressed("stageFile", event)) {
       event.preventDefault();
       stageOrUnstage();
+    } else if (event.key === "Escape" && shown && shown.kind !== "all" && !lastOpen) {
+      // As in a Finder list, the selection goes; its list is shown whole, with Stage All.
+      event.preventDefault();
+      const fresh = shown.kind === "files" ? !!shown.untracked : groupOf(shown.path, shown.side) === "untracked";
+      show(fresh ? { kind: "all", side: shown.side, untracked: true } : { kind: "all", side: shown.side });
     }
   }
 
@@ -519,11 +543,8 @@
       dragged = true;
       setTimeout(() => (dragged = false));
       if (!drop || !there) return;
-      const moved = done.group === "staged" ? unstage(done.files) : stage(done.files);
-      const gone = new Set(done.files.map((f) => f.path));
-      moved.then((ok) => {
-        if (ok) picks = { ...picks, [done.group]: picks[done.group].filter((p) => !gone.has(p)) };
-      });
+      if (done.group === "staged") unstage(done.files);
+      else stage(done.files);
     };
     const up = () => end(true);
     const cancel = () => end(false);
@@ -544,6 +565,8 @@
   const pickedUnstaged = $derived(pickedFiles("unstaged"));
   const pickedUntracked = $derived(pickedFiles("untracked"));
   const pickedStaged = $derived(pickedFiles("staged"));
+  /** The heading's button for the selected files of its list. */
+  const pickedLabel = (verb: string, n: number) => (n === 1 ? `${verb} File` : `${verb} ${n} Files`);
 
   /** Changed lines, "+12 −3", or what the change is when it has none. */
   function counts(file: FileChange): string {
@@ -559,13 +582,12 @@
     return done;
   }
 
-  /** Stage, Unstage or Discard the picked files of one list, then let them go. */
+  /** Stage, Unstage or Discard the selected files of one list: once they leave it, the
+   *  selection lets them go. */
   async function actOnPicked(group: List, how: "move" | "discard" = "move") {
     const files = pickedFiles(group);
     if (!files.length) return;
-    const done = await (how === "discard" ? discard(files) : group === "staged" ? unstage(files) : stage(files));
-    const gone = new Set(files.map((f) => f.path));
-    if (done) picks = { ...picks, [group]: picks[group].filter((p) => !gone.has(p)) };
+    await (how === "discard" ? discard(files) : group === "staged" ? unstage(files) : stage(files));
   }
 
   const name = (files: FileChange[]): Part[] =>
@@ -963,7 +985,14 @@
   const openUnstaged = $derived(openFile ? ([...conflicted, ...unstaged].find((f) => f.path === openFile.path) ?? null) : null);
   const openStaged = $derived(openFile ? (stagedByPath.get(openFile.path) ?? null) : null);
   /** Files of every file of a side shown, with their lines, for the heading over them. */
-  const sideFiles = $derived(shown?.kind !== "all" ? [] : shown.side === "staged" ? shownStaged : shown.untracked ? shownUntracked : [...shownConflicted, ...shownTracked]);
+  const sideFiles = $derived.by(() => {
+    if (shown?.kind !== "all" && shown?.kind !== "files") return [];
+    if (shown.kind === "files") {
+      const chosen = new Set(shown.paths);
+      return (shown.side === "staged" ? staged : shown.untracked ? untracked : tracked).filter((f) => chosen.has(f.path));
+    }
+    return shown.side === "staged" ? shownStaged : shown.untracked ? shownUntracked : [...shownConflicted, ...shownTracked];
+  });
   const sideTotals = $derived(sideFiles.reduce((sum, f) => ({ add: sum.add + f.additions, del: sum.del + f.deletions }), { add: 0, del: 0 }));
 
   /** What the open file's side holds, under the switch. */
@@ -987,7 +1016,6 @@
 </script>
 
 {#snippet fileRow(file: FileChange, group: List | "conflicted", nested: boolean)}
-  {@const p = splitPath(file.path)}
   {@const b = badge[file.status]}
   {@const picked = group !== "conflicted" && pickSet[group].has(file.path)}
   {@const open = isOpen(file, group)}
@@ -996,12 +1024,11 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="file"
-    class:picked
     class:open
     class:nested
     class:bin={group === "unstaged" || group === "untracked"}
     class:moving={dragging?.group === group && dragging.files.includes(file)}
-    style:background={open ? tint(color) : undefined}
+    style:background={open || picked ? tint(color) : undefined}
     oncontextmenu={(e) => fileMenu(e, file, group)}
   >
     <button
@@ -1009,10 +1036,10 @@
       onclick={(e) => rowClick(e, file, group)}
       onpointerdown={(e) => dragFile(e, file, group)}
       aria-current={open ? "true" : undefined}
-      title={dragging ? undefined : `${file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}${group === "conflicted" ? "" : ` · ${modClick} or Shift-click to select, drag to ${group === "staged" ? "unstage" : "stage"}`}`}
+      title={dragging ? undefined : `${file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}${group === "conflicted" ? "" : ` · ${modClick} or Shift-click to select more, drag to ${group === "staged" ? "unstage" : "stage"}`}`}
     >
       <span class="badge {b.tone}" title={b.title}>{b.text}</span>
-      <span class="path">{#if !nested}<span class="dir">{p.dir}</span>{/if}{p.name}</span>
+      <PathName path={file.path} folders={!nested} />
       {#if other}
         <span class="note partial" title={group === "staged" ? `Staged in part: ${counts(file)} go into the commit, ${counts(other)} stay out` : `Staged in part: ${counts(other)} go into the commit, ${counts(file)} stay out`}>
           <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" /><path class="fill" d="M8 2.5a5.5 5.5 0 0 0 0 11z" /></svg>Partial
@@ -1128,7 +1155,7 @@
     {@const label = rest ? "Stage the Rest" : "Stage"}
     {@const keys = shortcut("stageFile")}
     <!-- A file staged in part has Discard the Rest in the Stage menu: Discard beside Stage the Rest would read as the whole file. -->
-    {#if !rest || diffsOf?.kind === "all"}
+    {#if !rest || diffsOf?.kind !== "file"}
       <button class="button mini text" onclick={() => discard([d.file])} title={d.file.status === "untracked" ? "Delete this new file" : rest ? "Throw away the edits not staged; the staged part stays" : "Throw away the edits in this file"}>Discard</button>
     {/if}
     {#if diffsOf?.kind === "file"}
@@ -1209,7 +1236,7 @@
               <span class="gtitle" style:color={plate(color)}>Unstaged</span><span class="n">{needle ? `${shownTracked.length} of ${tracked.length}` : tracked.length}</span>
             </button>
             {#if pickedUnstaged.length}
-              <button class="button mini primary" onclick={() => actOnPicked("unstaged")}>Stage {pickedUnstaged.length} Selected</button>
+              <button class="button mini primary" onclick={() => actOnPicked("unstaged")}>{pickedLabel("Stage", pickedUnstaged.length)}</button>
             {:else if shownTracked.length}
               <button class="button mini" onclick={() => stage(shownTracked)}>{needle && shownTracked.length < tracked.length ? "Stage Shown" : "Stage All"}</button>
             {/if}
@@ -1230,7 +1257,7 @@
                 <span class="gtitle" style:color={plate(color)}>Untracked</span><span class="n">{needle ? `${shownUntracked.length} of ${untracked.length}` : untracked.length}</span>
               </button>
               {#if pickedUntracked.length}
-                <button class="button mini primary" onclick={() => actOnPicked("untracked")}>Stage {pickedUntracked.length} Selected</button>
+                <button class="button mini primary" onclick={() => actOnPicked("untracked")}>{pickedLabel("Stage", pickedUntracked.length)}</button>
               {:else if shownUntracked.length}
                 <button class="button mini" onclick={() => stage(shownUntracked)}>{needle && shownUntracked.length < untracked.length ? "Stage Shown" : "Stage All"}</button>
               {/if}
@@ -1252,7 +1279,7 @@
             <span class="gtitle" style:color={plate(color)}>Staged</span><span class="n">{needle ? `${shownStaged.length} of ${staged.length}` : staged.length}</span>
           </button>
           {#if pickedStaged.length}
-            <button class="button mini primary" onclick={() => actOnPicked("staged")}>Unstage {pickedStaged.length} Selected</button>
+            <button class="button mini primary" onclick={() => actOnPicked("staged")}>{pickedLabel("Unstage", pickedStaged.length)}</button>
           {:else if shownStaged.length}
             <button class="button mini" onclick={() => unstage(shownStaged)}>{needle && shownStaged.length < staged.length ? "Unstage Shown" : "Unstage All"}</button>
           {/if}
@@ -1270,13 +1297,12 @@
                 <span class="grow">From last commit</span><span class="n">{lastFiles.length}</span>
               </div>
               {#each lastFiles.filter(matches) as file (file.path)}
-                {@const p = splitPath(file.path)}
                 {@const b = badge[file.status]}
                 {@const open = lastOpen === file.path}
                 <div class="file" class:open style:background={open ? tint(color) : undefined}>
                   <button class="name" onclick={() => openLast(file.path)} aria-current={open ? "true" : undefined} title="{file.path} · its changes in the last commit">
                     <span class="badge {b.tone}" title={b.title}>{b.text}</span>
-                    <span class="path"><span class="dir">{p.dir}</span>{p.name}</span>
+                    <PathName path={file.path} />
                   </button>
                 </div>
               {/each}
@@ -1355,7 +1381,7 @@
           {:else}
             <div class="grow">
               <div class="dtitle">
-                <b>{shown.side === "staged" ? "Next commit" : shown.untracked ? "Untracked files" : "Unstaged changes"}</b>
+                <b>{shown.kind === "files" ? "Selected files" : shown.side === "staged" ? "Next commit" : shown.untracked ? "Untracked files" : "Unstaged changes"}</b>
                 <span class="n">{sideFiles.length} {sideFiles.length === 1 ? "file" : "files"}</span>
                 {#if sideFiles.length}<span class="mono add">+{sideTotals.add}</span><span class="mono del">−{sideTotals.del}</span>{/if}
               </div>
@@ -1394,7 +1420,7 @@
           {@const side = diffsOf.side}
           <DiffView
             bind:this={diffView}
-            foldable={diffsOf.kind === "all"}
+            foldable={diffsOf.kind !== "file"}
             {diffs}
             {color}
             {whole}
@@ -1402,7 +1428,7 @@
             hunkBar={side === "staged" ? stagedHunk : unstagedHunk}
             fileActions={side === "staged" ? stagedFile : unstagedFile}
             {picker}
-            pending={diffsOf.kind === "all" ? pending : 0}
+            pending={diffsOf.kind !== "file" ? pending : 0}
             onMore={loadMore}
             loadFull={(d) => api.workingDiff(d.file.path, side, whole, true)}
             command={(d) => (side === "staged" ? `git diff --cached -- ${d.file.path}` : `git diff -- ${d.file.path}`)}
@@ -1756,10 +1782,6 @@
   }
   .file:hover {
     background: var(--field);
-  }
-  /* Picked with ⌘ or Shift: grey, as a selection in a Finder list that is not the open one. */
-  .file.picked {
-    background: var(--side-sel);
   }
   .file.nested {
     padding-left: 44px;

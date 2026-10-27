@@ -3,12 +3,13 @@
   import { api, stopped } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { CommitDetail, FileChange, FileDiff, HistoryRow } from "./types";
-  import { fullDate, initials, shortTime, lane, person, plate, shortId, splitPath, tint } from "./format";
+  import { fullDate, initials, shortTime, lane, person, plate, shortId, tint } from "./format";
   import { fileTabs, tabStepper } from "./tabs";
   import { confirm } from "./confirm.svelte";
   import DiffView from "./DiffView.svelte";
   import DiffTools from "./DiffTools.svelte";
   import FoldAll from "./FoldAll.svelte";
+  import PathName from "./PathName.svelte";
   import CommitChain from "./CommitChain.svelte";
   import FileBadge from "./FileBadge.svelte";
   import { byFolder, filesWidth, listView, resizeFiles, setFolders } from "./listView.svelte";
@@ -366,11 +367,10 @@
             {/if}
           </button>
           {#snippet fileRow(file: FileChange, nested: boolean)}
-            {@const p = splitPath(file.path)}
             {@const open = tab === file.path}
             <button class="file" class:nested aria-current={open ? "true" : undefined} style:background={open ? tint(color) : undefined} onclick={() => openTab(file.path)} title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
               <span class="badge {tone[file.status]}">{statusIcon[file.status]}</span>
-              <span class="grow ellipsis">{#if !nested}<span class="dir">{p.dir}</span>{/if}{p.name}</span>
+              <PathName path={file.path} folders={!nested} />
               {#if foundFiles.includes(file.path)}
                 <span class="found" title={find ? `Adds or removes “${find}”` : "The path matches the search"}>
                   <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="M10.3 10.3 14 14" /></svg>{foundText ?? "match"}
