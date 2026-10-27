@@ -1486,16 +1486,22 @@
     min-height: 0;
   }
   /* No frame: the head sits on the panel itself, like the commit details. */
+  /* One line: what this is, the branch, and the counts, so the files and the diff get the height. */
   .head {
-    padding: var(--space-4) var(--space-5) var(--space-3);
+    min-height: 40px;
+    padding: var(--space-2) var(--space-4);
     display: flex;
-    flex-direction: column;
-    gap: 4px;
+    align-items: center;
+    gap: var(--space-3);
     border-bottom: 1px solid var(--sep);
   }
   h1 {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     margin: 0;
-    font-size: var(--text-title);
+    font-size: var(--text-heading);
     font-weight: 600;
     line-height: 1.3;
   }
@@ -1517,7 +1523,13 @@
     width: 12px;
     height: 12px;
   }
+  /* Cut before the title and the branch are. */
   .sub {
+    flex-shrink: 100;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: var(--text-caption);
     color: var(--text2);
   }
