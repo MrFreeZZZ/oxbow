@@ -74,7 +74,7 @@
 </script>
 
 <script lang="ts">
-  import { untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import TipCard from "./TipCard.svelte";
   import { shortcut } from "./keys";
   import { pressed } from "./shortcuts";
@@ -92,7 +92,7 @@
   import { nav } from "./nav.svelte";
   import { BIG_FILE, bytes } from "./unusual";
   import { commitRecovery, ignoreChoices, ignoreRequest, linesRequest, stashFilesRequest, stashMessageFor, type LinesKind } from "./changes";
-  import { keepShown, pickRange, sameShown, stepShown, type Shown } from "./changesView";
+  import { keepShown, nextAfter, pickRange, sameShown, stepShown, type Shown } from "./changesView";
   import { updateFolderRequest } from "./submodules";
   import { byFolder, listView, setFolders } from "./listView.svelte";
 
@@ -355,15 +355,16 @@
   let filesBox = $state<HTMLDivElement>();
 
   function show(next: Shown) {
-    if (!sameShown(next, shown) && diffScroller) diffScroller.scrollTop = 0;
+    if ((lastOpen || !sameShown(next, shown)) && diffScroller) diffScroller.scrollTop = 0;
+    lastOpen = null;
     shown = next;
     // Stepped to with the keys, the file may be scrolled out of its list.
     requestAnimationFrame(() => filesBox?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: "nearest" }));
   }
 
   const sideOf = (group: List | "conflicted"): Side => (group === "staged" ? "staged" : "unstaged");
-  const isOpen = (file: FileChange, group: List | "conflicted") => shown?.kind === "file" && shown.path === file.path && shown.side === sideOf(group);
-  const isAll = (side: Side) => shown?.kind === "all" && shown.side === side;
+  const isOpen = (file: FileChange, group: List | "conflicted") => !lastOpen && shown?.kind === "file" && shown.path === file.path && shown.side === sideOf(group);
+  const isAll = (side: Side) => !lastOpen && shown?.kind === "all" && shown.side === side;
 
   /** The side and file each hunk shown belongs to. */
   const hunkFile = $derived.by(() => {
@@ -388,6 +389,7 @@
   /** A file's name opens its diff; ⌘-click (Ctrl) picks it or lets it go, Shift-click picks every
    *  file from the one clicked last. */
   function rowClick(event: MouseEvent, file: FileChange, group: List | "conflicted") {
+    if (dragged) return;
     if (group !== "conflicted" && (event.metaKey || event.ctrlKey || event.shiftKey)) {
       event.preventDefault();
       const list = picks[group];
@@ -423,6 +425,110 @@
     show(next);
     return true;
   });
+
+  /** The files Stage & Next File goes through: the unstaged edits, then the new files. */
+  const unstagedOrder = () => [...order("unstaged"), ...(untrackedOpen ? order("untracked") : [])];
+
+  /** Stages the open unstaged file and opens the one after it; the next commit when none is left. */
+  async function stageAndNext(file: FileChange) {
+    const next = nextAfter(unstagedOrder(), file.path);
+    if (!(await stage([file]))) return;
+    show(next && next !== file.path ? { kind: "file", path: next, side: "unstaged" } : { kind: "all", side: "staged" });
+  }
+
+  /** Space: the picked files of a list, else the open file, else every file of the open side,
+   *  go to the other side. */
+  function stageOrUnstage() {
+    for (const group of ["unstaged", "untracked", "staged"] as const) if (pickedFiles(group).length) return actOnPicked(group);
+    if (shown?.kind === "all") return shown.side === "staged" ? shownStaged.length && unstage(shownStaged) : shownTracked.length && stage(shownTracked);
+    if (shown?.kind !== "file") return;
+    if (shown.side === "staged") return openStaged && unstage([openStaged]);
+    if (openUnstaged && openUnstaged.status !== "conflicted") return stage([openUnstaged]);
+  }
+
+  /** The list's own keys, while a file or a heading of it has the focus: the filter field and
+   *  the buttons keep theirs. */
+  function onFilesKey(event: KeyboardEvent) {
+    const target = event.target as HTMLElement;
+    if (!target.closest(".name, .gname")) return;
+    keysInList = true;
+    const by = pressed("nextFile", event) ? 1 : pressed("previousFile", event) ? -1 : 0;
+    if (by) {
+      event.preventDefault();
+      if (stepper(by, false)) requestAnimationFrame(() => filesBox?.querySelector<HTMLElement>('[aria-current="true"]')?.focus());
+    } else if (pressed("stageAndNext", event)) {
+      event.preventDefault();
+      if (shown?.kind === "file" && shown.side === "unstaged" && openUnstaged && openUnstaged.status !== "conflicted") stageAndNext(openUnstaged);
+    } else if (pressed("stageFile", event)) {
+      event.preventDefault();
+      stageOrUnstage();
+    }
+  }
+
+  /** Whether the list's keys were used: a file staged with them leaves its row, and the keys go
+   *  on from the row of the file open next. */
+  let keysInList = false;
+  $effect(() => {
+    shown;
+    tree;
+    tick().then(() => {
+      const lost = !document.activeElement || document.activeElement === document.body;
+      if (keysInList && lost) filesBox?.querySelector<HTMLElement>('[aria-current="true"]')?.focus({ preventScroll: true });
+    });
+  });
+
+  /** The files being dragged to the other side, and where the pointer is. Pointer events, not the
+   *  page's drag and drop, which the window's own file drop takes over on Windows. */
+  let dragging = $state<{ group: List; files: FileChange[]; x: number; y: number } | null>(null);
+  /** Whether the files would be dropped where the pointer is. */
+  let dropping = $state(false);
+  /** A drag ends with a click on the row it started from, which must not open the file. */
+  let dragged = false;
+  let listsBox = $state<HTMLDivElement>();
+  let stagedBox = $state<HTMLDivElement>();
+
+  function dragFile(event: PointerEvent, file: FileChange, group: List | "conflicted") {
+    if (group === "conflicted" || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
+    const from = { x: event.clientX, y: event.clientY };
+    const files = () => (pickSet[group].has(file.path) ? pickedFiles(group) : [file]);
+    const move = (e: PointerEvent) => {
+      if (!dragging && Math.hypot(e.clientX - from.x, e.clientY - from.y) < 5) return;
+      dragging = { group, files: dragging?.files ?? files(), x: e.clientX, y: e.clientY };
+      const box = (group === "staged" ? listsBox : stagedBox)?.getBoundingClientRect();
+      dropping = !!box && e.clientX >= box.left && e.clientX <= box.right && e.clientY >= box.top && e.clientY <= box.bottom;
+    };
+    const end = (drop: boolean) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("keydown", key, true);
+      const done = dragging;
+      dragging = null;
+      const there = dropping;
+      dropping = false;
+      if (!done) return;
+      dragged = true;
+      setTimeout(() => (dragged = false));
+      if (!drop || !there) return;
+      const moved = done.group === "staged" ? unstage(done.files) : stage(done.files);
+      const gone = new Set(done.files.map((f) => f.path));
+      moved.then((ok) => {
+        if (ok) picks = { ...picks, [done.group]: picks[done.group].filter((p) => !gone.has(p)) };
+      });
+    };
+    const up = () => end(true);
+    const cancel = () => end(false);
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || !dragging) return;
+      e.preventDefault();
+      e.stopPropagation();
+      end(false);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("keydown", key, true);
+  }
 
   /** Only picked files that are listed: the filter can hide some. */
   const pickedFiles = (group: List) => listOf(group).filter((f) => pickSet[group].has(f.path));
@@ -562,6 +668,21 @@
   const modClick = navigator.platform.startsWith("Mac") ? "⌘-click" : "Ctrl-click";
   const revealLabel = navigator.platform.startsWith("Mac") ? "Reveal in Finder" : navigator.platform.startsWith("Win") ? "Show in Explorer" : "Open Containing Folder";
 
+  /** Stage's menu on the bar of the open file: Stage & Next File first, as the way through a
+   *  review, then Stage itself, and Discard the Rest for a file staged in part. */
+  function stageMenu(event: MouseEvent, file: FileChange, label: string) {
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const entries: MenuEntry[] = [
+      { kind: "item", label: "Stage & Next File", icon: menuIcons.skip, keys: shortcut("stageAndNext"), run: () => stageAndNext(file) },
+      { kind: "item", label, icon: menuIcons.stage, keys: shortcut("stageFile"), run: () => stage([file]) },
+    ];
+    if (stagedByPath.has(file.path)) {
+      entries.push({ kind: "sep" });
+      entries.push({ kind: "item", label: "Discard the Rest…", icon: menuIcons.drop, danger: true, run: () => discard([file]) });
+    }
+    menu = { x: box.right - 240, y: box.bottom + 4, entries, label: "Stage menu" };
+  }
+
   function fileMenu(event: MouseEvent, file: FileChange, group: List | "conflicted") {
     event.preventDefault();
     // A right-click on one of several picked files acts on all of them.
@@ -668,6 +789,53 @@
       }
     }
   }
+
+  /** The files of the commit Amend replaces, under Staged: they stay in it with the staged ones. */
+  let lastFiles = $state<FileChange[]>([]);
+  /** One of them, its diff in that commit shown instead of the working copy's. */
+  let lastOpen = $state<string | null>(null);
+  let lastDiffs = $state<FileDiff[]>([]);
+  const amending = $derived(draft.amend && !!head && head.id === draft.amendOn ? head.id : null);
+  $effect(() => {
+    const id = amending;
+    lastFiles = [];
+    lastOpen = null;
+    if (!id) return;
+    let live = true;
+    api.commitDetail(id, true).then(
+      (detail) => {
+        if (live) lastFiles = detail.files;
+      },
+      () => {},
+    );
+    return () => (live = false);
+  });
+  $effect(() => {
+    const id = amending;
+    const path = lastOpen;
+    const wholeFile = whole;
+    diffSettings();
+    lastDiffs = [];
+    if (!id || !path) return;
+    let live = true;
+    api.commitDiff(id, path, wholeFile).then(
+      (d) => {
+        if (live) lastDiffs = d;
+      },
+      (err) => {
+        if (live && !stopped(err)) error = String(err);
+      },
+    );
+    return () => (live = false);
+  });
+  function openLast(path: string) {
+    if (lastOpen !== path && diffScroller) diffScroller.scrollTop = 0;
+    lastOpen = path;
+  }
+  /** Amend's files get room of their own under the staged ones, up to three files. */
+  const lastRoom = $derived.by(() => (lastFiles.length ? 24 + Math.min(lastFiles.length, 3) * ROW : 0));
+  /** Files the amended commit will have: its own and the staged ones. */
+  const amendedCount = $derived(new Set([...lastFiles, ...staged].map((f) => f.path)).size);
 
   function turnOffAmend() {
     const prefilled = draft.prefilled && message === draft.prefilled;
@@ -817,12 +985,22 @@
   <!-- The part of a file staged in part that the other list holds. -->
   {@const other = group === "staged" ? unstagedByPath.get(file.path) : group === "unstaged" ? stagedByPath.get(file.path) : undefined}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="file" class:picked class:open class:nested class:bin={group === "unstaged" || group === "untracked"} style:background={open ? tint(color) : undefined} oncontextmenu={(e) => fileMenu(e, file, group)}>
+  <div
+    class="file"
+    class:picked
+    class:open
+    class:nested
+    class:bin={group === "unstaged" || group === "untracked"}
+    class:moving={dragging?.group === group && dragging.files.includes(file)}
+    style:background={open ? tint(color) : undefined}
+    oncontextmenu={(e) => fileMenu(e, file, group)}
+  >
     <button
       class="name"
       onclick={(e) => rowClick(e, file, group)}
+      onpointerdown={(e) => dragFile(e, file, group)}
       aria-current={open ? "true" : undefined}
-      title="{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}{group === 'conflicted' ? '' : ` · ${modClick} or Shift-click to select`}"
+      title={dragging ? undefined : `${file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}${group === "conflicted" ? "" : ` · ${modClick} or Shift-click to select, drag to ${group === "staged" ? "unstage" : "stage"}`}`}
     >
       <span class="badge {b.tone}" title={b.title}>{b.text}</span>
       <span class="path">{#if !nested}<span class="dir">{p.dir}</span>{/if}{p.name}</span>
@@ -873,6 +1051,12 @@
     {#each files.slice(0, limit) as file (file.path)}{@render fileRow(file, group, false)}{/each}
     {#if files.length > limit}{@render moreRows(group, files.length - limit)}{/if}
   {/if}
+{/snippet}
+
+{#snippet dropRow(label: string)}
+  <div class="drop-row" aria-hidden="true">
+    <svg class="icon" viewBox="0 0 16 16"><path d="M8 3v9M4.5 8.5 8 12l3.5-3.5" /></svg>{label}
+  </div>
 {/snippet}
 
 {#snippet moreRows(group: List | "conflicted", left: number)}
@@ -932,8 +1116,22 @@
     {#if onResolve}<button class="button mini text" onclick={onResolve}>Resolve Conflicts…</button>{/if}
   {:else}
     {@const rest = stagedByPath.has(d.file.path)}
-    <button class="button mini text" onclick={() => discard([d.file])} title={d.file.status === "untracked" ? "Delete this new file" : rest ? "Throw away the edits not staged; the staged part stays" : "Throw away the edits in this file"}>Discard</button>
-    <button class="button mini quiet" onclick={() => stage([d.file])} title={rest ? "Add the rest of the file to the next commit" : "Add the whole file to the next commit"}>{rest ? "Stage the Rest" : "Stage"}</button>
+    {@const label = rest ? "Stage the Rest" : "Stage"}
+    {@const keys = shortcut("stageFile")}
+    <!-- A file staged in part has Discard the Rest in the Stage menu: Discard beside Stage the Rest would read as the whole file. -->
+    {#if !rest || diffsOf?.kind === "all"}
+      <button class="button mini text" onclick={() => discard([d.file])} title={d.file.status === "untracked" ? "Delete this new file" : rest ? "Throw away the edits not staged; the staged part stays" : "Throw away the edits in this file"}>Discard</button>
+    {/if}
+    {#if diffsOf?.kind === "file"}
+      <span class="split">
+        <button class="button mini quiet" onclick={() => stage([d.file])} title="{rest ? 'Add the rest of the file to the next commit' : 'Add the whole file to the next commit'}{keys ? ` (${keys})` : ''}">{label}</button>
+        <button class="button mini quiet more" onclick={(e) => stageMenu(e, d.file, label)} aria-label="More ways to stage" aria-haspopup="menu" title="More ways to stage">
+          <svg class="icon" viewBox="0 0 16 16"><path d="M4.5 6.5 8 10l3.5-3.5" /></svg>
+        </button>
+      </span>
+    {:else}
+      <button class="button mini quiet" onclick={() => stage([d.file])} title={rest ? "Add the rest of the file to the next commit" : "Add the whole file to the next commit"}>{label}</button>
+    {/if}
   {/if}
 {/snippet}
 {#snippet stagedFile(d: FileDiff)}
@@ -958,7 +1156,7 @@
   </div>
 
   <div class="body" class:stacked bind:clientWidth={bodyWidth} bind:clientHeight={bodyHeight}>
-    <div class="files" bind:this={filesBox} aria-label="Working copy" data-steps use:tabStepper={stepper} style:height={stacked ? `${Math.round(filesShare * 100)}%` : null}>
+    <div class="files" bind:this={filesBox} aria-label="Working copy" data-steps use:tabStepper={stepper} onkeydown={onFilesKey} class:dragging={!!dragging} style:height={stacked ? `${Math.round(filesShare * 100)}%` : null}>
       <div class="tools">
         <label class="filter">
           <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
@@ -987,7 +1185,8 @@
         </div>
       </div>
 
-      <div class="lists">
+      <div class="lists" class:drop={dragging?.group === "staged"} class:over={dragging?.group === "staged" && dropping} bind:this={listsBox}>
+        {#if dragging?.group === "staged"}{@render dropRow("Drop to Unstage")}{/if}
         {#if shownConflicted.length}
           <div class="group">
             <div class="ghead"><span class="gtitle conflicted">Conflicted</span><span class="n">{shownConflicted.length}</span></div>
@@ -1037,7 +1236,7 @@
 
       <!-- The staged files and the commit, held at the bottom; the border over them sets how tall the list gets. -->
       {#if !stacked}<button class="grip" tabindex="-1" onpointerdown={dragStaged} aria-label="Resize the staged files" title="Drag to resize"></button>{/if}
-      <div class="group staged">
+      <div class="group staged" class:drop={!!dragging && dragging.group !== "staged"} class:over={!!dragging && dragging.group !== "staged" && dropping} bind:this={stagedBox}>
         <div class="ghead" class:on={isAll("staged")} style:background={isAll("staged") ? tint(color) : undefined}>
           {@render chevron(!shut.staged, shut.staged ? "Show the staged files" : "Hide the staged files", () => (shut.staged = !shut.staged))}
           <button class="gname" onclick={() => show({ kind: "all", side: "staged" })} aria-current={isAll("staged") ? "true" : undefined} title="Show the next commit: every staged change">
@@ -1049,11 +1248,29 @@
             <button class="button mini" onclick={() => unstage(shownStaged)}>{needle && shownStaged.length < staged.length ? "Unstage Shown" : "Unstage All"}</button>
           {/if}
         </div>
+        {#if dragging && dragging.group !== "staged"}{@render dropRow("Drop to Stage")}{/if}
         {#if !shut.staged}
-          <div class="staged-files" style:max-height={stacked ? null : `${stagedHeight}px`}>
+          <div class="staged-files" style:max-height={stacked ? null : `${stagedHeight + lastRoom}px`}>
             {@render fileList(shownStaged, "staged")}
-            {#if !shownStaged.length}
+            {#if !shownStaged.length && !lastFiles.length}
               <p class="empty">{needle && staged.length ? "No staged files match the filter." : "Stage files or lines to add them to the next commit."}</p>
+            {/if}
+            {#if lastFiles.length}
+              <!-- Amend: the commit it replaces keeps its files, and the staged ones join them. -->
+              <div class="from-last" title="Files of the commit Amend replaces: they stay in it, with the staged changes added">
+                <span class="grow">From last commit</span><span class="n">{lastFiles.length}</span>
+              </div>
+              {#each lastFiles.filter(matches) as file (file.path)}
+                {@const p = splitPath(file.path)}
+                {@const b = badge[file.status]}
+                {@const open = lastOpen === file.path}
+                <div class="file" class:open style:background={open ? tint(color) : undefined}>
+                  <button class="name" onclick={() => openLast(file.path)} aria-current={open ? "true" : undefined} title="{file.path} · its changes in the last commit">
+                    <span class="badge {b.tone}" title={b.title}>{b.text}</span>
+                    <span class="path"><span class="dir">{p.dir}</span>{p.name}</span>
+                  </button>
+                </div>
+              {/each}
             {/if}
           </div>
         {/if}
@@ -1087,7 +1304,13 @@
           {#if commitHint?.fix}
             <button class="button mini" onclick={commitHint.fix.run}>{commitHint.fix.label}</button>
           {:else if !commitHint}
-            <span class="staged-count">{draft.amend && !staged.length ? "Message only" : `${staged.length} ${staged.length === 1 ? "file" : "files"} staged`}</span>
+            <span class="staged-count"
+              >{draft.amend
+                ? staged.length
+                  ? `${amendedCount} ${amendedCount === 1 ? "file" : "files"}`
+                  : "Message only"
+                : `${staged.length} ${staged.length === 1 ? "file" : "files"} staged`}</span
+            >
           {/if}
           <span class="grow"></span>
           <button class="button primary go" onclick={commit} disabled={!canCommit} title={commitHint?.text}>
@@ -1102,7 +1325,15 @@
     {/if}
 
     <div class="diff" aria-label="Diff">
-      {#if shown}
+      {#if lastOpen}
+        <div class="dhead">
+          <div class="grow">
+            <div class="dtitle"><b>From last commit</b></div>
+            <div class="caption">Amend keeps these changes in the commit</div>
+          </div>
+          <DiffTools {whole} onToggleWhole={() => (whole = !whole)} working />
+        </div>
+      {:else if shown}
         <div class="dhead">
           {#if shown.kind === "file"}
             {@const file = shown}
@@ -1127,8 +1358,10 @@
       {/if}
       <div class="scroll" bind:this={diffScroller}>
         {#if error}<p class="error" role="alert">{error}</p>{/if}
-        {#if openFile && openUnstaged && openStaged}<div class="tip"><TipCard id="partlyStaged" /></div>{/if}
-        {#if !shown}
+        {#if openFile && openUnstaged && openStaged && !lastOpen}<div class="tip"><TipCard id="partlyStaged" /></div>{/if}
+        {#if lastOpen}
+          <DiffView diffs={lastDiffs} {color} {whole} onToggleWhole={() => (whole = !whole)} tools={false} />
+        {:else if !shown}
           <p class="nothing">No uncommitted changes.</p>
         {:else if shown.kind === "all" && !sideFiles.length && !needle}
           <!-- Nothing left on this side: a short line with the way on, not a big empty screen. -->
@@ -1168,6 +1401,18 @@
     </div>
   </div>
 </div>
+
+{#if dragging}
+  {@const one = dragging.files.length === 1 ? splitPath(dragging.files[0].path) : null}
+  <div class="ghost" aria-hidden="true" style:left="{dragging.x + 12}px" style:top="{dragging.y - 14}px">
+    {#if one}
+      {@const b = badge[dragging.files[0].status]}
+      <span class="badge {b.tone}">{b.text}</span><span class="path"><span class="dir">{one.dir}</span>{one.name}</span>
+    {:else}
+      <span class="path">{dragging.files.length} files</span>
+    {/if}
+  </div>
+{/if}
 
 {#if menu}
   <Menu x={menu.x} y={menu.y} label={menu.label} entries={menu.entries} onClose={() => (menu = null)} />
@@ -1280,6 +1525,87 @@
   .staged-files {
     min-height: 26px;
     overflow-y: auto;
+  }
+  /* Where dragged files go: the other list, ringed in Steel, with a line saying what a drop does. */
+  .drop {
+    outline: 1.5px dashed var(--accent);
+    outline-offset: -1px;
+    border-radius: var(--radius-m);
+  }
+  .drop.over {
+    background: var(--accent-quiet);
+  }
+  .drop-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    height: 28px;
+    padding: 0 var(--space-3);
+    font-size: var(--text-small);
+    font-weight: 600;
+    color: var(--accent-ink);
+  }
+  .drop-row .icon {
+    width: 14px;
+    height: 14px;
+  }
+  .files.dragging {
+    cursor: grabbing;
+    user-select: none;
+  }
+  .files.dragging .name {
+    cursor: grabbing;
+  }
+  .file.moving {
+    opacity: 0.4;
+  }
+  .ghost {
+    position: fixed;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 280px;
+    height: 28px;
+    padding: 0 14px 0 10px;
+    border-radius: var(--radius-m);
+    background: var(--sheet);
+    box-shadow: var(--shadow-pop);
+    font-size: var(--text-body);
+    color: var(--text);
+    pointer-events: none;
+  }
+  /* Amend: the files the commit has already, under the staged ones. */
+  .from-last {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    margin-top: 2px;
+    padding: 0 var(--space-2) 0 22px;
+    font-size: var(--text-caption);
+    color: var(--text2);
+  }
+  /* Stage with its menu on the bar of the open file: one capsule cut in two. */
+  .split {
+    display: inline-flex;
+    gap: 1px;
+    flex-shrink: 0;
+  }
+  .split .button:first-child {
+    border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+    padding-right: 8px;
+  }
+  .split .more {
+    width: 22px;
+    padding: 0;
+    border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+  }
+  .split .more .icon {
+    width: 11px;
+    height: 11px;
+    stroke-width: 1.8;
   }
   /* A border to drag: over the staged files, and between the files and the diff in one column. */
   .grip {

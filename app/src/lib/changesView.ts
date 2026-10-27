@@ -57,3 +57,11 @@ export function pickRange(order: string[], picked: string[], anchor: string | nu
   const have = new Set(picked);
   return [...picked, ...span.filter((p) => !have.has(p))];
 }
+
+/** The file Stage & Next File opens after staging `path`: the one below it in `order`, else the
+ *  one above; null when `path` was the only one. */
+export function nextAfter(order: string[], path: string): string | null {
+  const at = order.indexOf(path);
+  if (at < 0) return order[0] ?? null;
+  return order[at + 1] ?? order[at - 1] ?? null;
+}

@@ -10,7 +10,7 @@ export const mac = typeof navigator !== "undefined" && navigator.platform.starts
 
 /** Where a command's key works: anywhere in the window, or only on one screen, where it may be a
  *  key alone, as G, B and S while bisecting. Keys of two screens never meet, so they may match. */
-export type Scope = "window" | "changes" | "editStack" | "bisect";
+export type Scope = "window" | "changes" | "files" | "editStack" | "bisect";
 
 type Command = {
   /** The Command Palette's "Category: Title", and the group in Settings. */
@@ -103,6 +103,12 @@ export const COMMANDS = {
   fixMistake: { category: "Git", title: "Fix a Mistake…", mac: ["Alt+Mod+Z"], other: ["Alt+Mod+Z"] },
   // The commit message's box: Git: Commit, as in VS Code's Source Control.
   commitNow: { category: "Changes", title: "Commit", mac: ["Mod+Enter"], other: ["Mod+Enter"], scope: "changes" },
+  // The list of changed files, while it has the focus: ↑ and ↓ go through the files as in
+  // Finder, Space stages the open file or takes it out, ⌥Space stages it and opens the next.
+  nextFile: { category: "Changes", title: "Next File", mac: ["Down"], other: ["Down"], scope: "files" },
+  previousFile: { category: "Changes", title: "Previous File", mac: ["Up"], other: ["Up"], scope: "files" },
+  stageFile: { category: "Changes", title: "Stage or Unstage File", mac: ["Space"], other: ["Space"], scope: "files" },
+  stageAndNext: { category: "Changes", title: "Stage & Next File", mac: ["Alt+Space"], other: ["Alt+Space"], scope: "files" },
   // Edit Stack: ⌘↩ runs it; ⌥↑ and ⌥↓ as VS Code's Move Line Up and Down; a letter per action,
   // as git's own todo list names them.
   stackRebase: { category: "Edit Stack", title: "Rebase Stack", mac: ["Mod+Enter"], other: ["Mod+Enter"], scope: "editStack" },
@@ -202,6 +208,8 @@ function keyOf(event: KeyboardEvent): string | null {
   if (["Meta", "Control", "Alt", "Shift", "CapsLock", "Fn"].includes(key)) return null;
   // Shift+Tab comes as ISO_Left_Tab on Linux, which names no key; its code is still Tab.
   if (code === "Tab") return "Tab";
+  // ⌥Space types a no-break space on the Mac.
+  if (code === "Space") return "Space";
   if (/^[a-z]$/i.test(key)) return key.toUpperCase();
   // Another alphabet, or ⌥ turning the letter into a sign on the Mac: the key's place tells.
   const letter = /^Key([A-Z])$/.exec(code);
