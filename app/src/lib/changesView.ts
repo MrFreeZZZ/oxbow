@@ -3,9 +3,9 @@
 
 import type { FileChange, Side } from "./types";
 
-/** One file on one side of the staging area, or every file of a side: the unstaged edits, or
- *  the next commit. */
-export type Shown = { kind: "file"; path: string; side: Side } | { kind: "all"; side: Side };
+/** One file on one side of the staging area, or every file of a side: the unstaged edits, the
+ *  new files git does not track yet (`untracked`), or the next commit. */
+export type Shown = { kind: "file"; path: string; side: Side } | { kind: "all"; side: Side; untracked?: boolean };
 
 export interface Lists {
   unstaged: FileChange[];
@@ -14,7 +14,7 @@ export interface Lists {
 }
 
 export const sameShown = (a: Shown | null, b: Shown | null): boolean =>
-  a === b || (!!a && !!b && a.kind === b.kind && a.side === b.side && (a.kind === "all" || a.path === (b as typeof a).path));
+  a === b || (!!a && !!b && a.kind === b.kind && a.side === b.side && (a.kind === "all" ? !!a.untracked === !!(b as typeof a).untracked : a.path === (b as typeof a).path));
 
 /** What Changes opens on: the edits not staged yet, else the next commit, else the first new file. */
 export function firstShown(lists: Lists): Shown | null {

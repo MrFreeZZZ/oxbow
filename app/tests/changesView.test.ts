@@ -29,6 +29,10 @@ assert.equal(stepShown(seq, seq[2], 1, false), undefined);
 assert.equal(stepShown(seq, seq[0], -1, false), undefined);
 assert.deepEqual(stepShown(seq, { kind: "file", path: "gone", side: "staged" }, -1, false), seq[2]);
 assert.equal(stepShown([], null, 1, true), undefined);
+// All the new files are a step of their own, apart from the unstaged edits.
+const fresh: Shown[] = [{ kind: "all", side: "unstaged" }, { kind: "all", side: "unstaged", untracked: true }, { kind: "all", side: "staged" }];
+assert.deepEqual(stepShown(fresh, { kind: "all", side: "unstaged", untracked: true }, 1, false), fresh[2]);
+assert.deepEqual(stepShown(fresh, { kind: "all", side: "unstaged" }, 1, false), fresh[1]);
 
 // Shift-click adds the files between, in either direction, and keeps those picked before.
 const order = ["a", "b", "c", "d"];

@@ -303,7 +303,12 @@
       return;
     }
     const n = target.kind === "all" ? diffNeedle : "";
-    const pool = target.side === "staged" ? t.staged : [...t.conflicted, ...t.unstaged.filter((f) => target.kind === "file" || f.status !== "untracked")];
+    const pool =
+      target.side === "staged"
+        ? t.staged
+        : target.kind === "all" && target.untracked
+          ? t.unstaged.filter((f) => f.status === "untracked")
+          : [...t.conflicted, ...t.unstaged.filter((f) => target.kind === "file" || f.status !== "untracked")];
     const paths = pool
       .filter((f) => (target.kind === "file" ? f.path === target.path : !n || f.path.toLowerCase().includes(n) || !!f.oldPath?.toLowerCase().includes(n)))
       .map((f) => f.path);
@@ -364,7 +369,7 @@
 
   const sideOf = (group: List | "conflicted"): Side => (group === "staged" ? "staged" : "unstaged");
   const isOpen = (file: FileChange, group: List | "conflicted") => !lastOpen && shown?.kind === "file" && shown.path === file.path && shown.side === sideOf(group);
-  const isAll = (side: Side) => !lastOpen && shown?.kind === "all" && shown.side === side;
+  const isAll = (side: Side, fresh = false) => !lastOpen && shown?.kind === "all" && shown.side === side && !!shown.untracked === fresh;
 
   /** The side and file each hunk shown belongs to. */
   const hunkFile = $derived.by(() => {
@@ -414,6 +419,7 @@
     if (conflicted.length || tracked.length) out.push({ kind: "all", side: "unstaged" });
     add("conflicted");
     if (!shut.unstaged) add("unstaged");
+    if (untracked.length) out.push({ kind: "all", side: "unstaged", untracked: true });
     if (untrackedOpen) add("untracked");
     if (staged.length) out.push({ kind: "all", side: "staged" });
     if (!shut.staged) add("staged");
@@ -440,7 +446,10 @@
    *  go to the other side. */
   function stageOrUnstage() {
     for (const group of ["unstaged", "untracked", "staged"] as const) if (pickedFiles(group).length) return actOnPicked(group);
-    if (shown?.kind === "all") return shown.side === "staged" ? shownStaged.length && unstage(shownStaged) : shownTracked.length && stage(shownTracked);
+    if (shown?.kind === "all") {
+      const files = shown.side === "staged" ? shownStaged : shown.untracked ? shownUntracked : shownTracked;
+      return files.length && (shown.side === "staged" ? unstage(files) : stage(files));
+    }
     if (shown?.kind !== "file") return;
     if (shown.side === "staged") return openStaged && unstage([openStaged]);
     if (openUnstaged && openUnstaged.status !== "conflicted") return stage([openUnstaged]);
@@ -954,7 +963,7 @@
   const openUnstaged = $derived(openFile ? ([...conflicted, ...unstaged].find((f) => f.path === openFile.path) ?? null) : null);
   const openStaged = $derived(openFile ? (stagedByPath.get(openFile.path) ?? null) : null);
   /** Files of every file of a side shown, with their lines, for the heading over them. */
-  const sideFiles = $derived(shown?.kind !== "all" ? [] : shown.side === "staged" ? shownStaged : [...shownConflicted, ...shownTracked]);
+  const sideFiles = $derived(shown?.kind !== "all" ? [] : shown.side === "staged" ? shownStaged : shown.untracked ? shownUntracked : [...shownConflicted, ...shownTracked]);
   const sideTotals = $derived(sideFiles.reduce((sum, f) => ({ add: sum.add + f.additions, del: sum.del + f.deletions }), { add: 0, del: 0 }));
 
   /** What the open file's side holds, under the switch. */
@@ -1215,9 +1224,9 @@
         {#if untracked.length}
           <!-- New files git does not track yet, apart from the edits and folded at first, as in Sublime Merge. -->
           <div class="group">
-            <div class="ghead">
+            <div class="ghead" class:on={isAll("unstaged", true)} style:background={isAll("unstaged", true) ? tint(color) : undefined}>
               {@render chevron(untrackedOpen, untrackedOpen ? "Hide the untracked files" : "Show the new files git does not track yet", () => (view.untracked = !view.untracked), !!needle)}
-              <button class="gname" onclick={() => (view.untracked = !view.untracked)} disabled={!!needle} title={untrackedOpen ? "Hide the untracked files" : "Show the new files git does not track yet"}>
+              <button class="gname" onclick={() => show({ kind: "all", side: "unstaged", untracked: true })} aria-current={isAll("unstaged", true) ? "true" : undefined} title="Show every new file git does not track yet">
                 <span class="gtitle" style:color={plate(color)}>Untracked</span><span class="n">{needle ? `${shownUntracked.length} of ${untracked.length}` : untracked.length}</span>
               </button>
               {#if pickedUntracked.length}
@@ -1346,11 +1355,11 @@
           {:else}
             <div class="grow">
               <div class="dtitle">
-                <b>{shown.side === "staged" ? "Next commit" : "Unstaged changes"}</b>
+                <b>{shown.side === "staged" ? "Next commit" : shown.untracked ? "Untracked files" : "Unstaged changes"}</b>
                 <span class="n">{sideFiles.length} {sideFiles.length === 1 ? "file" : "files"}</span>
                 {#if sideFiles.length}<span class="mono add">+{sideTotals.add}</span><span class="mono del">−{sideTotals.del}</span>{/if}
               </div>
-              <div class="caption">{shown.side === "staged" ? "Only staged changes go into the commit" : "They stay out of the commit until staged"}</div>
+              <div class="caption">{shown.side === "staged" ? "Only staged changes go into the commit" : shown.untracked ? "New files git does not track yet stay out of the commit until staged" : "They stay out of the commit until staged"}</div>
             </div>
             {#if diffs.length > 1}<FoldAll onFold={(fold) => diffView?.setAll(fold)} />{/if}
           {/if}
@@ -1368,7 +1377,11 @@
           <!-- Nothing left on this side: a short line with the way on, not a big empty screen. -->
           <div class="done-strip">
             <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" /><path d="M5.5 8.2 7.2 10l3.3-3.8" /></svg>
-            {#if shown.side === "unstaged"}
+            {#if shown.untracked}
+              <span class="grow">{staged.length ? "All new files staged" : "No untracked files"}</span>
+              {#if tracked.length || conflicted.length}<button class="button mini quiet" onclick={() => show({ kind: "all", side: "unstaged" })}>Review Unstaged</button>{/if}
+              {#if staged.length}<button class="button mini quiet" onclick={() => show({ kind: "all", side: "staged" })}>Review Staged</button>{/if}
+            {:else if shown.side === "unstaged"}
               <span class="grow">{staged.length ? "All changes staged" : "No edits to tracked files"}</span>
               {#if untracked.length}<button class="button mini" onclick={() => show({ kind: "file", path: untracked[0].path, side: "unstaged" })}>Next Unstaged File</button>{/if}
               {#if staged.length}<button class="button mini quiet" onclick={() => show({ kind: "all", side: "staged" })}>Review Staged</button>{/if}
