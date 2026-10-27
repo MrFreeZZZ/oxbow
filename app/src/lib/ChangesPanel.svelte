@@ -94,7 +94,7 @@
   import { commitRecovery, ignoreChoices, ignoreRequest, linesRequest, stashFilesRequest, stashMessageFor, type LinesKind } from "./changes";
   import { keepShown, nextAfter, pickRange, sameShown, stepShown, type Shown } from "./changesView";
   import { updateFolderRequest } from "./submodules";
-  import { byFolder, listView, setFolders } from "./listView.svelte";
+  import { byFolder, filesWidth, listView, resizeFiles, setFolders } from "./listView.svelte";
 
   let {
     repo,
@@ -1156,7 +1156,7 @@
   </div>
 
   <div class="body" class:stacked bind:clientWidth={bodyWidth} bind:clientHeight={bodyHeight}>
-    <div class="files" bind:this={filesBox} aria-label="Working copy" data-steps use:tabStepper={stepper} onkeydown={onFilesKey} class:dragging={!!dragging} style:height={stacked ? `${Math.round(filesShare * 100)}%` : null}>
+    <div class="files" bind:this={filesBox} aria-label="Working copy" data-steps use:tabStepper={stepper} onkeydown={onFilesKey} class:dragging={!!dragging} style:height={stacked ? `${Math.round(filesShare * 100)}%` : null} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
       <div class="tools">
         <label class="filter">
           <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
@@ -1300,7 +1300,7 @@
           onblur={() => (descOpen = false)}
         ></textarea>
         {#if commitHint}<WhyNote text={commitHint.text} warn={commitHint.warn} />{/if}
-        <div class="row">
+        <div class="row actions">
           {#if commitHint?.fix}
             <button class="button mini" onclick={commitHint.fix.run}>{commitHint.fix.label}</button>
           {:else if !commitHint}
@@ -1324,6 +1324,7 @@
       <button class="grip across" tabindex="-1" onpointerdown={dragShare} aria-label="Resize the files and the diff" title="Drag to resize"></button>
     {/if}
 
+    {#if !stacked}<button class="edge" tabindex="-1" style:left={`${filesWidth(bodyWidth) - 4}px`} onpointerdown={(e) => resizeFiles(e, bodyWidth)} aria-label="Resize the files" title="Drag to resize"></button>{/if}
     <div class="diff" aria-label="Diff">
       {#if lastOpen}
         <div class="dhead">
@@ -1465,6 +1466,7 @@
 
   /* The files beside their diff; in a narrow panel, over it. */
   .body {
+    position: relative;
     flex-grow: 1;
     min-height: 0;
     display: flex;
@@ -1473,7 +1475,6 @@
     flex-direction: column;
   }
   .files {
-    width: 268px;
     flex-shrink: 0;
     min-height: 0;
     display: flex;
@@ -1492,6 +1493,20 @@
     flex: none;
     min-height: 0;
     overflow: visible;
+  }
+  /* The border to drag between the files and the diff, like the graph's. */
+  .edge {
+    position: absolute;
+    top: 50%;
+    width: 7px;
+    height: 36px;
+    margin-top: -18px;
+    border-radius: var(--radius-xs);
+    background: var(--win);
+    border: 1px solid var(--glass-border);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+    z-index: 2;
+    cursor: col-resize;
   }
   .diff {
     flex-grow: 1;
@@ -2210,7 +2225,13 @@
     color: var(--text2);
     font-weight: 400;
   }
+  /* A long fix, such as Stage All 1,000 Files, leaves Commit room on a line of its own. */
+  .actions {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
   .go {
+    margin-left: auto;
     display: flex;
     align-items: center;
     gap: 8px;

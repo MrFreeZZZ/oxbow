@@ -11,7 +11,7 @@
   import FoldAll from "./FoldAll.svelte";
   import CommitChain from "./CommitChain.svelte";
   import FileBadge from "./FileBadge.svelte";
-  import { byFolder, listView, setFolders } from "./listView.svelte";
+  import { byFolder, filesWidth, listView, resizeFiles, setFolders } from "./listView.svelte";
 
   let {
     row,
@@ -316,7 +316,7 @@
   </div>
 
   <div class="body" class:stacked bind:clientWidth={bodyWidth}>
-    <div class="files" bind:this={filesBox} aria-label="Changed files" data-steps use:tabStepper={fileTabs(paths, tab, openTab)}>
+    <div class="files" bind:this={filesBox} aria-label="Changed files" data-steps use:tabStepper={fileTabs(paths, tab, openTab)} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
       <div class="tools">
         <label class="filter">
           <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
@@ -428,6 +428,7 @@
       </div>
     </div>
 
+    {#if !stacked}<button class="edge" tabindex="-1" style:left={`${filesWidth(bodyWidth) - 4}px`} onpointerdown={(e) => resizeFiles(e, bodyWidth)} aria-label="Resize the files" title="Drag to resize"></button>{/if}
     <div class="diff" aria-label="Diff">
       <div class="dhead">
         <span class="caption grow">
@@ -566,6 +567,7 @@
 
   /* The files beside their diff; in a narrow panel, over it, scrolling as one with the details. */
   .body {
+    position: relative;
     flex-grow: 1;
     min-height: 0;
     display: flex;
@@ -574,7 +576,6 @@
     flex-direction: column;
   }
   .files {
-    width: 268px;
     flex-shrink: 0;
     min-height: 0;
     display: flex;
@@ -591,6 +592,20 @@
   .stacked .list {
     flex: none;
     overflow: visible;
+  }
+  /* The border to drag between the files and the diff, like the graph's. */
+  .edge {
+    position: absolute;
+    top: 50%;
+    width: 7px;
+    height: 36px;
+    margin-top: -18px;
+    border-radius: var(--radius-xs);
+    background: var(--win);
+    border: 1px solid var(--glass-border);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+    z-index: 2;
+    cursor: col-resize;
   }
   .diff {
     flex-grow: 1;
