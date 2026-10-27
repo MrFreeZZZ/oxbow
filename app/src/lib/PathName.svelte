@@ -3,22 +3,24 @@
   // front («…/lib/») when the row is too narrow. The row's tooltip gives the whole path.
   import { splitPath } from "./format";
 
-  let { path, folders = true }: { path: string; folders?: boolean } = $props();
+  let { path, folders = true, grow = true }: { path: string; folders?: boolean; grow?: boolean } = $props();
   const p = $derived(splitPath(path));
 </script>
 
-<span class="path-name">
+<span class="path-name" class:grow>
   <!-- Right to left so the ellipsis cuts the start; the marks keep the slashes where they are. -->
   {#if folders && p.dir}<span class="dir">{`‎${p.dir}‎`}</span>{/if}<span class="file">{p.name}</span>
 </span>
 
 <style>
   .path-name {
-    flex-grow: 1;
     min-width: 0;
     display: flex;
     white-space: nowrap;
     text-align: left;
+  }
+  .grow {
+    flex-grow: 1;
   }
   .dir {
     flex: 0 1 auto;

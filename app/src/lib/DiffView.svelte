@@ -1,4 +1,5 @@
 <script lang="ts" module>
+  import PathName from "./PathName.svelte";
   import type { Hunk as HunkOf } from "./types";
 
   /** Which changed lines of a hunk are picked; the others dim once any is. */
@@ -462,7 +463,7 @@
   {#if old}
     <span class="path"><span class="dir">{path.dir}</span>{old} <span class="dir">→</span> {path.name}</span>
   {:else}
-    <span class="path"><span class="dir">{path.dir}</span>{path.name}</span>
+    <span class="path"><PathName path={diff.file.path} grow={false} /></span>
     {#if diff.file.oldPath}<span class="from">from {diff.file.oldPath}</span>{/if}
   {/if}
 {/snippet}
@@ -827,11 +828,17 @@
     font-size: var(--text-small);
   }
   .path {
+    min-width: 0;
+    display: flex;
     font-weight: 600;
     color: var(--name);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .counts {
+    flex-shrink: 0;
+    white-space: nowrap;
   }
   .dir {
     color: var(--text2);
