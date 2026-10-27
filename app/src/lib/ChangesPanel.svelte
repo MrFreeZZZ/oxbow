@@ -385,16 +385,16 @@
   /** A clicked row or heading takes the keyboard, so ↑ ↓ and Space go on from it: WebKit on
    *  macOS doesn't focus a button on a click. */
   const keyFocus = (event: MouseEvent) => (event.currentTarget as HTMLElement).focus({ preventScroll: true });
-  /** A list's name folds or unfolds the list, as its chevron does, and shows every file of it. */
+  /** A list's name shows every file of it; once shown, it folds or unfolds the list, as its
+   *  chevron does. */
   function openGroup(event: MouseEvent, group: List) {
     keyFocus(event);
+    const fresh = group === "untracked";
+    const side = fresh ? "unstaged" : group;
+    if (!isAll(side, fresh)) return show(fresh ? { kind: "all", side, untracked: true } : { kind: "all", side });
     if (group === "untracked") {
       if (!needle) view.untracked = !view.untracked;
-      show({ kind: "all", side: "unstaged", untracked: true });
-    } else {
-      shut[group] = !shut[group];
-      show({ kind: "all", side: group });
-    }
+    } else shut[group] = !shut[group];
   }
   const isOpen = (file: FileChange, group: List | "conflicted") => !lastOpen && shown?.kind === "file" && shown.path === file.path && shown.side === sideOf(group);
   const isAll = (side: Side, fresh = false) => !lastOpen && shown?.kind === "all" && shown.side === side && !!shown.untracked === fresh;
@@ -611,7 +611,6 @@
   const pickedUntracked = $derived(pickedFiles("untracked"));
   const pickedStaged = $derived(pickedFiles("staged"));
   /** The heading's button for the selected files of its list. */
-  const pickedLabel = (verb: string, n: number) => (n === 1 ? `${verb} File` : `${verb} ${n} Files`);
 
   /** Changed lines, "+12 −3", or what the change is when it has none. */
   function counts(file: FileChange): string {
@@ -1174,6 +1173,20 @@
   >{@render tickMark(all || n > 0, n > 0 && !all)}</button>
 {/snippet}
 
+<!-- Stage 4 Files; Stage 4 in a narrow list, where the bin beside it would push the list's name out. -->
+{#snippet pickedLabel(verb: string, n: number)}
+  {#if n === 1}{verb} File{:else}{verb} {n}<span class="word"> Files</span>{/if}
+{/snippet}
+
+<!-- Discard or Delete for the selected files, beside Stage: the bin of a row, held in view. -->
+{#snippet binPicked(files: FileChange[])}
+  {@const fresh = files.every((f) => f.status === "untracked")}
+  {@const what = files.length === 1 ? splitPath(files[0].path).name : `${files.length} files`}
+  <button class="discard held" onclick={() => discard(files)} aria-label={fresh ? `Delete ${what}` : `Discard changes in ${what}`} title={fresh ? `Delete ${what}…` : `Discard changes in ${what}…`}>
+    <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 4.5h11M6 4.5V3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5M4 4.5l.7 9a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.7-9" /></svg>
+  </button>
+{/snippet}
+
 {#snippet fileList(files: FileChange[], group: List | "conflicted")}
   {@const limit = listed[group]}
   {#if listView.folders}
@@ -1345,11 +1358,12 @@
           <div class="ghead" class:on={isAll("unstaged")} style:background={isAll("unstaged") ? tint(color) : undefined} data-group="unstaged">
             {@render tickAllBox("unstaged", shownTracked, "Select every unstaged file", ".gname")}
             {@render chevron(!shut.unstaged, shut.unstaged ? "Show the unstaged files" : "Hide the unstaged files", () => (shut.unstaged = !shut.unstaged))}
-            <button class="gname" onclick={(e) => openGroup(e, "unstaged")} aria-current={isAll("unstaged") ? "true" : undefined} aria-expanded={!shut.unstaged} title={shut.unstaged ? "Show every unstaged change and the files" : "Show every unstaged change and hide the files"}>
+            <button class="gname" onclick={(e) => openGroup(e, "unstaged")} aria-current={isAll("unstaged") ? "true" : undefined} aria-expanded={!shut.unstaged} title={!isAll("unstaged") ? "Show every unstaged change" : shut.unstaged ? "Show the unstaged files" : "Hide the unstaged files"}>
               <span class="gtitle" style:color={plate(color)}>Unstaged</span><span class="n">{needle ? `${shownTracked.length} of ${tracked.length}` : tracked.length}</span>
             </button>
             {#if pickedUnstaged.length}
-              <button class="button mini primary" onclick={() => actOnPicked("unstaged")}>{pickedLabel("Stage", pickedUnstaged.length)}</button>
+              {@render binPicked(pickedUnstaged)}
+              <button class="button mini primary" onclick={() => actOnPicked("unstaged")}>{@render pickedLabel("Stage", pickedUnstaged.length)}</button>
             {:else if shownTracked.length}
               <button class="button mini" onclick={() => stage(shownTracked)}>{needle && shownTracked.length < tracked.length ? "Stage Shown" : "Stage All"}</button>
             {/if}
@@ -1367,11 +1381,12 @@
             <div class="ghead" class:on={isAll("unstaged", true)} style:background={isAll("unstaged", true) ? tint(color) : undefined} data-group="untracked">
               {@render tickAllBox("untracked", shownUntracked, "Select every untracked file", ".gname")}
               {@render chevron(untrackedOpen, untrackedOpen ? "Hide the untracked files" : "Show the new files git does not track yet", () => (view.untracked = !view.untracked), !!needle)}
-              <button class="gname" onclick={(e) => openGroup(e, "untracked")} aria-current={isAll("unstaged", true) ? "true" : undefined} aria-expanded={untrackedOpen} title={untrackedOpen ? "Show every new file git does not track yet and hide the files" : "Show every new file git does not track yet and the files"}>
+              <button class="gname" onclick={(e) => openGroup(e, "untracked")} aria-current={isAll("unstaged", true) ? "true" : undefined} aria-expanded={untrackedOpen} title={!isAll("unstaged", true) ? "Show every new file git does not track yet" : untrackedOpen ? "Hide the untracked files" : "Show the untracked files"}>
                 <span class="gtitle" style:color={plate(color)}>Untracked</span><span class="n">{needle ? `${shownUntracked.length} of ${untracked.length}` : untracked.length}</span>
               </button>
               {#if pickedUntracked.length}
-                <button class="button mini primary" onclick={() => actOnPicked("untracked")}>{pickedLabel("Stage", pickedUntracked.length)}</button>
+                {@render binPicked(pickedUntracked)}
+                <button class="button mini primary" onclick={() => actOnPicked("untracked")}>{@render pickedLabel("Stage", pickedUntracked.length)}</button>
               {:else if shownUntracked.length}
                 <button class="button mini" onclick={() => stage(shownUntracked)}>{needle && shownUntracked.length < untracked.length ? "Stage Shown" : "Stage All"}</button>
               {/if}
@@ -1390,11 +1405,11 @@
         <div class="ghead" class:on={isAll("staged")} style:background={isAll("staged") ? tint(color) : undefined} data-group="staged">
           {@render tickAllBox("staged", shownStaged, "Select every staged file", ".gname")}
           {@render chevron(!shut.staged, shut.staged ? "Show the staged files" : "Hide the staged files", () => (shut.staged = !shut.staged))}
-          <button class="gname" onclick={(e) => openGroup(e, "staged")} aria-current={isAll("staged") ? "true" : undefined} aria-expanded={!shut.staged} title={shut.staged ? "Show the next commit: every staged change, and the files" : "Show the next commit: every staged change, and hide the files"}>
+          <button class="gname" onclick={(e) => openGroup(e, "staged")} aria-current={isAll("staged") ? "true" : undefined} aria-expanded={!shut.staged} title={!isAll("staged") ? "Show the next commit: every staged change" : shut.staged ? "Show the staged files" : "Hide the staged files"}>
             <span class="gtitle" style:color={plate(color)}>Staged</span><span class="n">{needle ? `${shownStaged.length} of ${staged.length}` : staged.length}</span>
           </button>
           {#if pickedStaged.length}
-            <button class="button mini primary" onclick={() => actOnPicked("staged")}>{pickedLabel("Unstage", pickedStaged.length)}</button>
+            <button class="button mini primary" onclick={() => actOnPicked("staged")}>{@render pickedLabel("Unstage", pickedStaged.length)}</button>
           {:else if shownStaged.length}
             <button class="button mini" onclick={() => unstage(shownStaged)}>{needle && shownStaged.length < staged.length ? "Unstage Shown" : "Unstage All"}</button>
           {/if}
@@ -1881,6 +1896,14 @@
     flex-shrink: 0;
     white-space: nowrap;
   }
+  .ghead {
+    container-type: inline-size;
+  }
+  @container (max-width: 300px) {
+    .ghead .word {
+      display: none;
+    }
+  }
   .n {
     font-weight: 400;
   }
@@ -2208,6 +2231,16 @@
   }
   .discard:hover {
     color: var(--red);
+  }
+  .discard.held {
+    position: static;
+    flex-shrink: 0;
+    margin: 0 2px 0 4px;
+    opacity: 1;
+  }
+  .discard.held:hover,
+  .discard.held:focus-visible {
+    background: var(--win);
   }
 
   /* Over the diff: which side of the file it is, or which side's files, and how it is drawn. */
