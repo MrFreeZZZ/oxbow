@@ -1,4 +1,4 @@
-import { fileText, joinLines, kindOf, markedText, markerRoles, markerStarts, openMarkers, splitLines, stepIndex, strayMarkers, toResolution, type Sides } from "../src/lib/conflicts.ts";
+import { fileText, joinLines, kindOf, markedText, markerRoles, markerStarts, openMarkers, resultBlocks, resultStarts, sideBlocks, sideItems, splitLines, stepIndex, strayMarkers, toResolution, type Sides } from "../src/lib/conflicts.ts";
 import type { Chunk, ConflictFile } from "../src/lib/types.ts";
 import assert from "node:assert/strict";
 
@@ -100,4 +100,53 @@ const chunks: Chunk[] = [
   assert.equal(kindOf(file({ renamed: { from: "old.rs", side: "theirs" } }), label).short, "Renamed on feature");
   assert.equal(kindOf(file({ ours: false, renamed: { from: "old.rs", side: "theirs" } }), label).short, "Renamed on feature, deleted on main");
   assert.equal(kindOf(file({ binary: true }), label).short, "Binary file");
+}
+
+// Each chunk's first line in the result: open conflicts take none, decided ones their lines.
+{
+  assert.deepEqual(resultStarts(chunks, [null, null], sides), [1, 2, 2, 3]);
+  assert.deepEqual(resultStarts(chunks, ["both", { lines: [] }], sides), [1, 2, 4, 5]);
+}
+
+// A side: a line of context around each conflict, the rest folded; a conflict's last line knows it.
+{
+  const long: Chunk[] = [
+    { kind: "same", lines: ["    a", "    b", "    c"] },
+    { kind: "conflict", ours: ["    x", "    y"], base: [], theirs: [] },
+    { kind: "same", lines: ["    d", "    e", "    f", "    g"] },
+    { kind: "conflict", ours: ["    z"], base: [], theirs: [] },
+  ];
+  const items = sideItems(long, "ours");
+  assert.deepEqual(
+    items.map((i) => (i.kind === "line" ? `${i.no}:${i.text}${i.end ? "." : ""}` : i.kind === "fold" ? `fold ${i.count}` : `${i.kind} ${i.k}`)),
+    ["fold 2", "3:c", "head 0", "4:x", "5:y.", "6:d", "fold 2", "9:g", "head 1", "10:z."],
+  );
+  assert.deepEqual(
+    sideItems(long, "theirs").filter((i) => i.kind === "empty").map((i) => i.kind === "empty" && i.k),
+    [0, 1],
+  );
+  // Blocks know the conflicts whose heads they hold.
+  const parts = sideBlocks(items, 4);
+  assert.deepEqual(parts.map((b) => [b.start, b.end, b.first, b.last]), [[0, 4, 0, 0], [4, 8, Infinity, -1], [8, 10, 1, 1]]);
+  assert.equal(parts[0].rows, 1.6 + 1 + 1.6 + 1);
+}
+
+// A side of a file added on both sides, 200,000 lines long, is read without running out of stack.
+{
+  const big = Array.from({ length: 200000 }, (_, i) => `  line ${i}`);
+  const items = sideItems([{ kind: "conflict", ours: big, base: [], theirs: ["x"] }], "ours");
+  assert.equal(items.length, 200001);
+  assert.equal(items[1].kind === "line" && items[1].text, "line 0");
+}
+
+// The result in blocks: agreed lines split where a block is full, a conflict's head always in one.
+{
+  const parts = resultBlocks(chunks, 2);
+  assert.deepEqual(
+    parts.map((b) => b.pieces.map((p) => `${p.ci}:${p.from}-${p.to}${p.head ? "h" : ""}`).join(" ")),
+    ["0:0-1 1:0-1h", "1:1-2 2:0-1", "3:0-1h"],
+  );
+  assert.deepEqual(parts.map((b) => [b.first, b.last]), [[0, 0], [Infinity, -1], [1, 1]]);
+  const long: Chunk[] = [{ kind: "same", lines: Array.from({ length: 150 }, (_, i) => `${i}`) }];
+  assert.deepEqual(resultBlocks(long, 64).map((b) => b.pieces.map((p) => [p.from, p.to])), [[[0, 64]], [[64, 128]], [[128, 150]]]);
 }

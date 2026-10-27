@@ -3,13 +3,16 @@
   // (named by branch, never "ours" and "theirs"), with the version they started from when asked,
   // and the result underneath, where each conflict gets a side, both, or lines typed by hand,
   // or the whole file is written as text, before the file is marked resolved. All of it is saved
-  // as a draft as the user goes (lib/drafts.ts), so quitting Oxbow keeps it.
+  // as a draft as the user goes (lib/drafts.ts), so quitting Oxbow keeps it. Long files are drawn
+  // in blocks near the screen, like a long diff, so a file of 100,000 lines opens and answers as
+  // fast as a short one.
 
   import { api } from "./api";
   import { draftSaves } from "./conflictDrafts";
   import TipCard from "./TipCard.svelte";
   import EditBox from "./EditBox.svelte";
-  import { onMount, untrack } from "svelte";
+  import Lazy, { BLOCK } from "./Lazy.svelte";
+  import { onMount, tick, untrack } from "svelte";
   import { confirm, type Request } from "./confirm.svelte";
   import { kept } from "./kept";
   import { prefs } from "./prefs.svelte";
@@ -25,13 +28,21 @@
     markerRoles,
     markerStarts,
     openMarkers,
+    resultBlocks,
     resultOf,
+    resultStarts,
+    sideBlocks,
+    sideItems,
     splitLines,
     stepIndex,
     strayMarkers,
     toResolution,
     type Choice,
     type Decision,
+    type SideItem,
+    type Block,
+    type Piece,
+    type ResultBlock,
     type Sides,
   } from "./conflicts";
   import type { Chunk, ConflictFile, ConflictSide, History, MergeTool, Operation, WorkingTree } from "./types";
@@ -68,7 +79,8 @@
 
   let tree = $state<WorkingTree | null>(null);
   let current = $state<string | null>(null);
-  let file = $state<ConflictFile | null>(null);
+  // Raw: a long file's lines are only read, and watching each of them would cost more than drawing.
+  let file = $state.raw<ConflictFile | null>(null);
   let error = $state<string | null>(null);
   /** Decisions per file, one per conflict, kept while the user moves between files. */
   // A Map, as a conflicted file may be called `constructor` or `__proto__`.
@@ -81,6 +93,13 @@
   let seen = $state<string[]>([]);
   /** Each file as its decisions or text would write it, for a draft that stops fitting it. */
   let results = new Map<string, string>();
+  /** Writes the open file's entry in `results`, put off until a draft is saved or the file left:
+   *  a long file's text costs more than a key typed. */
+  let unwritten: (() => void) | null = null;
+  const writeResult = () => {
+    unwritten?.();
+    unwritten = null;
+  };
   /** Drafts made for other versions of a file, kept to compare with it. */
   let old = $state.raw(new Map<string, OldDraft>());
   /** The open file's old draft is shown in place of the result. */
@@ -98,6 +117,8 @@
   let reading = "";
   /** The conflict last stepped to in the open file; -1 before the first step. */
   let at = $state(-1);
+  /** The conflict stepped to, drawn in every pane however far it is from the screen. */
+  let reach = $state<number | null>(null);
   /** A conflict just turned into lines to type: its box takes the focus. */
   let fresh = $state<number | null>(null);
   /** Leaving the text asks first, as typed text would be dropped. */
@@ -107,7 +128,7 @@
   /** The file open in the merge tool. */
   let waiting = $state<string | null>(null);
   let work = $state<HTMLElement>();
-  let textRows = $state<HTMLElement>();
+  let textBox = $state<ReturnType<typeof EditBox>>();
 
   // On top the side being brought in, on the right of it the user's own work.
   const leftSide = $derived<ConflictSide>(op.yours === "ours" ? "theirs" : "ours");
@@ -208,6 +229,7 @@
   async function open(path: string | null, again = false) {
     if (!again || path !== current) {
       at = -1;
+      reach = null;
       leaving = false;
       fresh = null;
       comparing = false;
@@ -223,6 +245,7 @@
       // Decisions made for other versions of the file, as after an abort and a new merge, start
       // over: the same number of conflicts is no sign they still fit. What they made is kept,
       // to compare.
+      writeResult();
       const was = stages.get(path);
       stages.set(path, next.stages);
       if (was !== undefined && was !== next.stages) {
@@ -254,11 +277,20 @@
   $effect(() => {
     if (!step || !tree) return;
     // The open file's result, when its decisions were made for the versions on screen.
-    if (file && current === file.path && stages.get(current) === file.stages) results.set(current, resultOf(file, picked, asText, sides));
+    if (file && current === file.path && stages.get(current) === file.stages) {
+      const [of, path, decisions, text, by] = [file, current, picked, asText, sides];
+      unwritten = () => results.set(path, resultOf(of, decisions, text, by));
+    }
     const state: Saved = { step, choices, texts, stages, results, old, seen };
     kept.set(KEPT_CONFLICTS, state);
     const paths = conflicted;
-    draftSaves.later(home, () => makeDraft(state.step, state, paths, Date.now()), 300, (note) => {
+    const make = () => {
+      writeResult();
+      return makeDraft(state.step, state, paths, Date.now());
+    };
+    // A long file's draft is large to write, so it waits for a longer pause in the typing.
+    const pause = (starts.at(-1) ?? 0) > 20_000 ? 1500 : 300;
+    draftSaves.later(home, make, pause, (note) => {
       if (note.kind !== "failed") draftAt = note.at;
       draftNote = note.kind === "dropped" ? null : note;
     });
@@ -276,6 +308,7 @@
     return () => {
       if (conflictSteps.step === stepConflict) conflictSteps.step = null;
       window.removeEventListener("beforeunload", flush);
+      writeResult();
       flush();
     };
   });
@@ -337,108 +370,98 @@
 
   /** Go to the next or previous conflict (⌥F5, ⇧⌥F5), in every pane at once. */
   function stepConflict(by: 1 | -1): boolean {
-    const starts = asText ? markerStarts(asText.text) : null;
-    const count = starts ? starts.length : conflicts.length;
+    // Text typed a moment ago counts too.
+    textBox?.flush();
+    const marks = asText ? markerStarts(asText.text) : null;
+    const count = marks ? marks.length : conflicts.length;
     if (!count || !work) return false;
-    at = at < 0 || at >= count ? (by > 0 ? 0 : count - 1) : stepIndex(at, by, count);
-    const targets = starts
-      ? [textRows?.children[starts[at]] as HTMLElement | undefined]
-      : [...work.querySelectorAll<HTMLElement>(`[data-conflict="${at}"]`)];
-    for (const target of targets) {
-      const scroller = target?.closest<HTMLElement>(".code");
-      if (!target || !scroller) continue;
-      scroller.scrollTop += target.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 8;
-    }
+    const k = at < 0 || at >= count ? (by > 0 ? 0 : count - 1) : stepIndex(at, by, count);
+    at = k;
+    reach = marks ? null : k;
+    // Once the blocks it is in are drawn.
+    void tick().then(() => {
+      if (at !== k || !work) return;
+      if (marks) return textBox?.showLine(marks[k]);
+      const targets = [...work.querySelectorAll<HTMLElement>(`[data-conflict="${k}"]`)];
+      // Every place read first, then every pane scrolled: one layout, not one for each pane.
+      const moves = targets.flatMap((target) => {
+        const scroller = target?.closest<HTMLElement>(".code");
+        return target && scroller ? [{ scroller, by: target.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 8 }] : [];
+      });
+      for (const { scroller, by } of moves) scroller.scrollTop += by;
+    });
     return true;
   }
 
   const stepCount = $derived(asText ? markerStarts(asText.text).length : conflicts.length);
 
-  /** What each side looks like around the conflicts: one line of context, the rest folded. */
-  type SideItem = { kind: "line"; no: number; text: string; k: number | null } | { kind: "fold"; count: number } | { kind: "head"; k: number } | { kind: "empty"; k: number };
-
-  function sideItems(chunks: Chunk[], side: ConflictSide | "base"): SideItem[] {
-    const items: SideItem[] = [];
-    let no = 1;
-    let k = 0;
-    chunks.forEach((chunk, ci) => {
-      if (chunk.kind === "same") {
-        const n = chunk.lines.length;
-        let folded = 0;
-        chunk.lines.forEach((text, i) => {
-          const keep = (ci > 0 && i === 0) || (ci < chunks.length - 1 && i === n - 1);
-          if (!keep) {
-            folded++;
-            return;
-          }
-          if (folded) items.push({ kind: "fold", count: folded });
-          folded = 0;
-          items.push({ kind: "line", no: no + i, text, k: null });
-        });
-        if (folded) items.push({ kind: "fold", count: folded });
-        no += n;
-      } else {
-        items.push({ kind: "head", k });
-        const lines = chunk[side];
-        if (!lines.length) items.push({ kind: "empty", k });
-        for (const text of lines) items.push({ kind: "line", no: no++, text, k });
-        k++;
-      }
-    });
-    return dedent(items);
-  }
-
-  /** Narrow panes drop the indentation every shown line shares, like the design. */
-  function dedent(items: SideItem[]): SideItem[] {
-    const indents = items.flatMap((i) => (i.kind === "line" && i.text.trim() ? [/^[ \t]*/.exec(i.text)![0].length] : []));
-    const cut = indents.length ? Math.min(...indents) : 0;
-    return cut ? items.map((i) => (i.kind === "line" ? { ...i, text: i.text.slice(cut) } : i)) : items;
-  }
-
-  /** The whole result: agreed lines, picked lines tinted by where they came from, lines typed by
-   *  hand, open conflicts. */
-  type ResultItem =
-    | { kind: "line"; no: number; text: string; from: Choice | null; k: number | null; edge: "top" | "bottom" | "both" | null }
-    | { kind: "open"; k: number }
-    | { kind: "bar"; k: number; choice: Choice }
-    | { kind: "typed"; k: number; no: number; value: string };
-
-  const resultItems = $derived.by((): ResultItem[] => {
-    if (!file) return [];
-    const items: ResultItem[] = [];
-    let no = 1;
-    let k = 0;
+  /** Digits of the longest line number, on either side or in the result. */
+  const digits = $derived.by(() => {
+    if (!file) return 3;
+    let lines = 0;
+    let room = 0;
     for (const chunk of file.chunks) {
+      if (chunk.kind === "same") lines += chunk.lines.length;
+      else room += Math.max(chunk.base.length, chunk.ours.length + chunk.theirs.length);
+    }
+    return String(lines + room).length;
+  });
+
+  /** Where each chunk starts in the result. */
+  const starts = $derived(file ? resultStarts(file.chunks, picked, sides) : []);
+
+  /** A decided conflict's lines, tinted by where they came from, rounded where that changes;
+   *  made once for each choice, as a long conflict is drawn in several blocks. */
+  type Picked = { text: string; from: Choice; edge: "top" | "bottom" | "both" | null };
+  const pickedMade = new WeakMap<Conflict, Map<Choice, Picked[]>>();
+  function pickedLines(chunk: Conflict, choice: Choice): Picked[] {
+    let made = pickedMade.get(chunk);
+    if (!made) pickedMade.set(chunk, (made = new Map()));
+    let lines = made.get(choice);
+    if (!lines) made.set(choice, (lines = makePicked(chunk, choice)));
+    return lines;
+  }
+  function makePicked(chunk: Conflict, choice: Choice): Picked[] {
+    const left = chunk[leftSide].map((text) => ({ text, from: "left" as Choice }));
+    const right = chunk[rightSide].map((text) => ({ text, from: "right" as Choice }));
+    const lines = choice === "left" ? left : choice === "right" ? right : [...left, ...right];
+    return lines.map((l, i) => {
+      const top = i === 0 || lines[i - 1].from !== l.from;
+      const bottom = i === lines.length - 1 || lines[i + 1].from !== l.from;
+      return { ...l, edge: top && bottom ? "both" : top ? "top" : bottom ? "bottom" : null };
+    });
+  }
+
+  const resultParts = $derived(file ? resultBlocks(file.chunks, BLOCK) : []);
+
+  /** About how many lines high a block of the result is, as it is decided now. */
+  function partRows(part: ResultBlock): number {
+    let rows = 0;
+    for (const piece of part.pieces) {
+      const chunk = file!.chunks[piece.ci];
       if (chunk.kind === "same") {
-        for (const text of chunk.lines) items.push({ kind: "line", no: no++, text, from: null, k: null, edge: null });
+        rows += piece.to - piece.from;
         continue;
       }
-      const choice = picked[k] ?? null;
-      if (!choice) items.push({ kind: "open", k });
-      else if (typeof choice === "object") {
-        items.push({ kind: "typed", k, no, value: joinLines(choice.lines) });
-        no += choice.lines.length;
-      } else {
-        items.push({ kind: "bar", k, choice });
-        const left = chunk[leftSide].map((text) => ({ text, from: "left" as Choice }));
-        const right = chunk[rightSide].map((text) => ({ text, from: "right" as Choice }));
-        const lines = choice === "left" ? left : choice === "right" ? right : [...left, ...right];
-        lines.forEach((l, i) => {
-          const top = i === 0 || lines[i - 1].from !== l.from;
-          const bottom = i === lines.length - 1 || lines[i + 1].from !== l.from;
-          items.push({ kind: "line", no: no++, text: l.text, from: l.from, k, edge: top && bottom ? "both" : top ? "top" : bottom ? "bottom" : null });
-        });
-      }
-      k++;
+      const choice = picked[piece.k] ?? null;
+      if (piece.head) rows += choice === null ? 2.8 : 1.3;
+      const lines = choice === null ? 0 : typeof choice === "object" ? (piece.head ? choice.lines.length : 0) : pickedLines(chunk, choice).length;
+      rows += Math.max(0, Math.min(lines, piece.to) - piece.from);
     }
-    return items;
-  });
-  /** Typed boxes keep their place by conflict, so typing in one never lands in another. */
-  const itemKey = (item: ResultItem, i: number) => (item.kind === "typed" ? `typed${item.k}` : `${item.kind}${i}`);
+    return rows;
+  }
+
+  /** A block stays drawn while it holds a conflict being typed, so its text box is never made
+   *  afresh, or the conflict stepped to. */
+  const keepDrawn = (part: ResultBlock) =>
+    (reach !== null && part.first <= reach && reach <= part.last) || part.pieces.some((p) => p.head && picked[p.k] !== null && typeof picked[p.k] === "object");
 
   const leftItems = $derived(file ? sideItems(file.chunks, leftSide) : []);
   const rightItems = $derived(file ? sideItems(file.chunks, rightSide) : []);
   const baseItems = $derived(file && showBase ? sideItems(file.chunks, "base") : []);
+  const leftBlocks = $derived(sideBlocks(leftItems, BLOCK));
+  const rightBlocks = $derived(sideBlocks(rightItems, BLOCK));
+  const baseBlocks = $derived(sideBlocks(baseItems, BLOCK));
 
   /** Tints of the text: git's markers orange, each side's lines in its branch color. */
   const roles = $derived(asText ? markerRoles(asText.text) : []);
@@ -607,14 +630,25 @@
   const radius = (edge: string | null) => (edge === "both" ? "9px" : edge === "top" ? "9px 9px 0 0" : edge === "bottom" ? "0 0 9px 9px" : "0");
 </script>
 
-{#snippet sidePane(items: SideItem[], label: string, note: string, color: number, choice: Choice | null)}
+{#snippet sidePane(items: SideItem[], parts: Block[], label: string, note: string, color: number, choice: Choice | null)}
   <section class="pane" aria-label="{label}’s version">
     <header class="pane-head">
       <span class="cap" style:background={tint(color, "label")} style:color={plate(color)}>{label}</span>
       <span class="ellipsis note">{note}</span>
     </header>
     <div class="code side mono selectable">
-      {#each items as item, i (i)}
+      {#each parts as part (part.start)}
+        <Lazy lines={part.rows} of={items} force={reach !== null && part.first <= reach && reach <= part.last}>
+          {#each items.slice(part.start, part.end) as item, j (j)}
+            {@render sideItem(item, label, color, choice)}
+          {/each}
+        </Lazy>
+      {/each}
+    </div>
+  </section>
+{/snippet}
+
+{#snippet sideItem(item: SideItem, label: string, color: number, choice: Choice | null)}
         {#if item.kind === "head"}
           {@const decision = picked[item.k] ?? null}
           {@const chosen = choice !== null && (decision === choice || decision === "both")}
@@ -632,17 +666,70 @@
             {/if}
           </div>
         {:else if item.kind === "empty"}
-          <div class="line inblock" style:background={tint(color, "soft")}><span class="no"></span><span class="text gone">Nothing here: {choice === null ? "these lines weren’t there" : `${label} removed these lines`}</span></div>
+          <div class="line inblock end" style:background={tint(color, "soft")}><span class="no"></span><span class="text gone">Nothing here: {choice === null ? "these lines weren’t there" : `${label} removed these lines`}</span></div>
         {:else if item.kind === "fold"}
           <div class="fold">⋯ {item.count} unchanged {item.count === 1 ? "line" : "lines"}</div>
         {:else}
-          <div class="line" class:inblock={item.k !== null} style:background={item.k !== null ? tint(color, "soft") : undefined}>
+          <div class="line" class:inblock={item.k !== null} class:end={item.end} style:background={item.k !== null ? tint(color, "soft") : undefined}>
             <span class="no">{item.no}</span><span class="text">{item.text}</span>
           </div>
         {/if}
+{/snippet}
+
+<!-- A piece of a block of the result: agreed lines, or a conflict's head and the lines picked. -->
+{#snippet resultPiece(piece: Piece, name: string)}
+  {@const chunk = file!.chunks[piece.ci]}
+  {@const first = starts[piece.ci] + piece.from}
+  {#if chunk.kind === "same"}
+    {#each chunk.lines.slice(piece.from, piece.to) as text, j (j)}
+      <div class="line"><span class="no">{first + j}</span><span class="text">{text}</span></div>
+    {/each}
+  {:else}
+    {@const k = piece.k}
+    {@const choice = picked[k] ?? null}
+    {#if piece.head && !choice}
+      <div class="open" class:current={at === k} data-conflict={k}>
+        <div class="open-head">
+          <span class="ellipsis">Conflict {k + 1} · both sides changed these lines</span>
+          <span class="spacer"></span>
+          <button class="pick" style:color={plate(leftColor)} onclick={() => decide(k, "left")}>{leftLabel}</button>
+          <button class="pick" style:color={plate(rightColor)} onclick={() => decide(k, "right")}>{rightLabel}</button>
+          <button class="pick" onclick={() => decide(k, "both")}>Both</button>
+          {#if !textWhy}<button class="pick" title="Type the lines yourself, starting from both sides" onclick={() => edit(k)}>Edit</button>{/if}
+        </div>
+        <div class="placeholder">Pick a side, keep both, or edit</div>
+      </div>
+    {:else if piece.head && choice && typeof choice === "object"}
+      {@const value = joinLines(choice.lines)}
+      <div class="bar" class:current={at === k} data-conflict={k}>
+        <span>Conflict {k + 1}: typed by you{value === "" ? " · no lines, the conflict goes" : ""}</span>
+        <button class="undo" onclick={() => decide(k, null)}>Undo</button>
+      </div>
+      <div class="typed">
+        <EditBox
+          {value}
+          first={starts[piece.ci]}
+          tintOf={() => "color-mix(in srgb, var(--accent) 9%, transparent)"}
+          label="Conflict {k + 1} of {name}"
+          focus={fresh === k}
+          onedit={(typed) => decide(k, { lines: splitLines(typed) })}
+        />
+      </div>
+    {:else if choice && typeof choice !== "object"}
+      {#if piece.head}
+        <div class="bar" class:current={at === k} data-conflict={k}>
+          <span>Conflict {k + 1}: {choice === "both" ? `both, ${leftLabel} first` : `took ${choice === "left" ? leftLabel : rightLabel}`}</span>
+          {#if !textWhy}<button class="undo" onclick={() => edit(k)}>Edit</button>{/if}
+          <button class="undo" onclick={() => decide(k, null)}>Undo</button>
+        </div>
+      {/if}
+      {#each pickedLines(chunk, choice).slice(piece.from, piece.to) as line, j (j)}
+        <div class="line picked" style:background={tint(colorFor(line.from), "bar")} style:border-radius={radius(line.edge)}>
+          <span class="no">{first + j}</span><span class="text">{line.text}</span>
+        </div>
       {/each}
-    </div>
-  </section>
+    {/if}
+  {/if}
 {/snippet}
 
 <div class="conflicts">
@@ -697,7 +784,7 @@
     </p>
   </aside>
 
-  <div class="work" bind:this={work}>
+  <div class="work" bind:this={work} style:--digits={digits}>
     {#if error}
       <p class="empty error">{error}</p>
     {:else if !step}
@@ -745,10 +832,10 @@
         {#key current}
           <div class="sides">
             {#if showBase}
-              {@render sidePane(baseItems, "Common ancestor", "Before both changes", NO_BRANCH_COLOR, null)}
+              {@render sidePane(baseItems, baseBlocks, "Common ancestor", "Before both changes", NO_BRANCH_COLOR, null)}
             {/if}
-            {@render sidePane(leftItems, leftLabel, leftNote, leftColor, "left")}
-            {@render sidePane(rightItems, rightLabel, rightNote, rightColor, "right")}
+            {@render sidePane(leftItems, leftBlocks, leftLabel, leftNote, leftColor, "left")}
+            {@render sidePane(rightItems, rightBlocks, rightLabel, rightNote, rightColor, "right")}
           </div>
           <section class="pane result" aria-label="Result">
             <header class="pane-head">
@@ -832,54 +919,14 @@
                   <p class="placeholder">An empty file: every line was taken out.</p>
                 {/each}
               {:else if asText}
-                <EditBox value={asText.text} tintOf={textTint} label="The whole result of {p.name}" onedit={typedText} bind:rows={textRows} />
+                <EditBox value={asText.text} tintOf={textTint} label="The whole result of {p.name}" onedit={typedText} bind:this={textBox} />
               {:else}
-                {#each resultItems as item, i (itemKey(item, i))}
-                  {#if item.kind === "open"}
-                    <div class="open" class:current={at === item.k} data-conflict={item.k}>
-                      <div class="open-head">
-                        <span class="ellipsis">Conflict {item.k + 1} · both sides changed these lines</span>
-                        <span class="spacer"></span>
-                        <button class="pick" style:color={plate(leftColor)} onclick={() => decide(item.k, "left")}>{leftLabel}</button>
-                        <button class="pick" style:color={plate(rightColor)} onclick={() => decide(item.k, "right")}>{rightLabel}</button>
-                        <button class="pick" onclick={() => decide(item.k, "both")}>Both</button>
-                        {#if !textWhy}<button class="pick" title="Type the lines yourself, starting from both sides" onclick={() => edit(item.k)}>Edit</button>{/if}
-                      </div>
-                      <div class="placeholder">Pick a side, keep both, or edit</div>
-                    </div>
-                  {:else if item.kind === "bar"}
-                    <div class="bar" class:current={at === item.k} data-conflict={item.k}>
-                      <span>
-                        Conflict {item.k + 1}: {item.choice === "both" ? `both, ${leftLabel} first` : `took ${item.choice === "left" ? leftLabel : rightLabel}`}
-                      </span>
-                      {#if !textWhy}<button class="undo" onclick={() => edit(item.k)}>Edit</button>{/if}
-                      <button class="undo" onclick={() => decide(item.k, null)}>Undo</button>
-                    </div>
-                  {:else if item.kind === "typed"}
-                    <div class="bar" class:current={at === item.k} data-conflict={item.k}>
-                      <span>Conflict {item.k + 1}: typed by you{item.value === "" ? " · no lines, the conflict goes" : ""}</span>
-                      <button class="undo" onclick={() => decide(item.k, null)}>Undo</button>
-                    </div>
-                    <div class="typed">
-                      <EditBox
-                        value={item.value}
-                        first={item.no}
-                        tintOf={() => "color-mix(in srgb, var(--accent) 9%, transparent)"}
-                        label="Conflict {item.k + 1} of {p.name}"
-                        focus={fresh === item.k}
-                        onedit={(value) => decide(item.k, { lines: splitLines(value) })}
-                      />
-                    </div>
-                  {:else}
-                    <div
-                      class="line"
-                      class:picked={item.from !== null}
-                      style:background={item.from ? tint(colorFor(item.from), "bar") : undefined}
-                      style:border-radius={radius(item.edge)}
-                    >
-                      <span class="no">{item.no}</span><span class="text">{item.text}</span>
-                    </div>
-                  {/if}
+                {#each resultParts as part, b (b)}
+                  <Lazy lines={partRows(part)} of={resultParts} force={keepDrawn(part)}>
+                    {#each part.pieces as piece (`${piece.ci}:${piece.from}`)}
+                      {@render resultPiece(piece, p.name)}
+                    {/each}
+                  </Lazy>
                 {/each}
               {/if}
             </div>
@@ -1025,6 +1072,8 @@
     color: var(--text2);
   }
   .work {
+    /* Room for the longest line number, as a file may have 100,000 lines. */
+    --gutter: max(36px, calc(var(--digits) * 1ch + 14px));
     flex-grow: 1;
     min-width: 0;
     display: flex;
@@ -1092,7 +1141,7 @@
   }
   .line {
     display: grid;
-    grid-template-columns: 36px 1fr;
+    grid-template-columns: var(--gutter) 1fr;
   }
   /* Side panes are narrow: lines scroll sideways instead of wrapping. */
 
@@ -1142,8 +1191,7 @@
     font-weight: 500;
     padding-right: 6px;
   }
-  .inblock:last-child,
-  .inblock:has(+ :not(.inblock)) {
+  .inblock.end {
     border-radius: 0 0 var(--radius-m) var(--radius-m);
     margin-bottom: 4px;
   }
@@ -1175,7 +1223,7 @@
     color: var(--orange);
   }
   .placeholder {
-    padding: 0 10px 6px 46px;
+    padding: 0 10px 6px calc(var(--gutter) + 10px);
     font-style: italic;
     color: var(--text2);
   }
@@ -1184,7 +1232,7 @@
     align-items: center;
     gap: 8px;
     margin-top: 4px;
-    padding: 0 6px 2px 46px;
+    padding: 0 6px 2px calc(var(--gutter) + 10px);
     font-family: var(--font);
     font-size: var(--text-caption);
     color: var(--text2);
