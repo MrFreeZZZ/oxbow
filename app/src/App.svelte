@@ -588,6 +588,11 @@
     if (second) showDetails();
   }
   const headRow = $derived(history?.head.commit ? (rowsById.get(history.head.commit) ?? null) : null);
+  /** The commit picked last, which History in the sidebar goes back to from Changes. */
+  let lastCommit: string | null = null;
+  $effect(() => {
+    if (selectedRow && !selectedRow.worktree) lastCommit = selectedRow.id;
+  });
   // The line the next commit goes on: the uncommitted row's, or HEAD's.
   const headColor = $derived(history?.rows.find((r) => r.worktree)?.graph.color ?? headRow?.graph.color ?? 0);
   // Children of every commit, newest first (rows are already newest first).
@@ -2384,6 +2389,12 @@
         sideShown = false;
         view = v;
         resolving = false;
+        // History is the graph, also from Changes: with the commit picked before, else HEAD.
+        const back = v === "history" && selectedRow?.worktree ? (lastCommit && rowsById.has(lastCommit) ? lastCommit : (headRow?.id ?? null)) : null;
+        if (back) {
+          commitExpanded = false;
+          pick(back);
+        }
         if (v === "history" && selected) requestAnimationFrame(() => list?.reveal(selected!));
       }}
       onChanges={aside(showChanges)}

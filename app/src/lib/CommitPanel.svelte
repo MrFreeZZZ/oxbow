@@ -3,15 +3,16 @@
   import { api, stopped } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { CommitDetail, FileChange, FileDiff, HistoryRow } from "./types";
-  import { fullDate, initials, shortTime, lane, person, plate, shortId, splitPath, tint } from "./format";
+  import { fullDate, initials, shortTime, lane, person, plate, shortId, tint } from "./format";
   import { fileTabs, tabStepper } from "./tabs";
   import { confirm } from "./confirm.svelte";
   import DiffView from "./DiffView.svelte";
   import DiffTools from "./DiffTools.svelte";
   import FoldAll from "./FoldAll.svelte";
+  import PathName from "./PathName.svelte";
   import CommitChain from "./CommitChain.svelte";
   import FileBadge from "./FileBadge.svelte";
-  import { byFolder, listView, setFolders } from "./listView.svelte";
+  import { byFolder, filesWidth, listView, resizeFiles, setFolders } from "./listView.svelte";
 
   let {
     row,
@@ -316,7 +317,7 @@
   </div>
 
   <div class="body" class:stacked bind:clientWidth={bodyWidth}>
-    <div class="files" bind:this={filesBox} aria-label="Changed files" data-steps use:tabStepper={fileTabs(paths, tab, openTab)}>
+    <div class="files" bind:this={filesBox} aria-label="Changed files" data-steps use:tabStepper={fileTabs(paths, tab, openTab)} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
       <div class="tools">
         <label class="filter">
           <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
@@ -366,11 +367,10 @@
             {/if}
           </button>
           {#snippet fileRow(file: FileChange, nested: boolean)}
-            {@const p = splitPath(file.path)}
             {@const open = tab === file.path}
             <button class="file" class:nested aria-current={open ? "true" : undefined} style:background={open ? tint(color) : undefined} onclick={() => openTab(file.path)} title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
               <span class="badge {tone[file.status]}">{statusIcon[file.status]}</span>
-              <span class="grow ellipsis">{#if !nested}<span class="dir">{p.dir}</span>{/if}{p.name}</span>
+              <PathName path={file.path} folders={!nested} />
               {#if foundFiles.includes(file.path)}
                 <span class="found" title={find ? `Adds or removes “${find}”` : "The path matches the search"}>
                   <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="M10.3 10.3 14 14" /></svg>{foundText ?? "match"}
@@ -409,7 +409,8 @@
           Commit Details
         </button>
         {#if !detailsShut}
-          {#if detail?.body}<p class="message selectable">{detail.body}</p>{/if}
+          <!-- The whole message: its summary first, as written, then the description. -->
+          <div class="message selectable"><b>{detail?.summary ?? row.summary}</b>{#if detail?.body}<p>{detail.body}</p>{/if}</div>
           <dl>
             <dt>Commit</dt>
             <dd>
@@ -428,6 +429,7 @@
       </div>
     </div>
 
+    {#if !stacked}<button class="edge" tabindex="-1" style:left={`${filesWidth(bodyWidth) - 4}px`} onpointerdown={(e) => resizeFiles(e, bodyWidth)} aria-label="Resize the files" title="Drag to resize"></button>{/if}
     <div class="diff" aria-label="Diff">
       <div class="dhead">
         <span class="caption grow">
@@ -566,6 +568,7 @@
 
   /* The files beside their diff; in a narrow panel, over it, scrolling as one with the details. */
   .body {
+    position: relative;
     flex-grow: 1;
     min-height: 0;
     display: flex;
@@ -574,7 +577,6 @@
     flex-direction: column;
   }
   .files {
-    width: 268px;
     flex-shrink: 0;
     min-height: 0;
     display: flex;
@@ -591,6 +593,20 @@
   .stacked .list {
     flex: none;
     overflow: visible;
+  }
+  /* The border to drag between the files and the diff, like the graph's. */
+  .edge {
+    position: absolute;
+    top: 50%;
+    width: 7px;
+    height: 36px;
+    margin-top: -18px;
+    border-radius: var(--radius-xs);
+    background: var(--win);
+    border: 1px solid var(--glass-border);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+    z-index: 2;
+    cursor: col-resize;
   }
   .diff {
     flex-grow: 1;
@@ -869,6 +885,12 @@
     overflow-wrap: anywhere;
     max-height: 160px;
     overflow-y: auto;
+  }
+  .message b {
+    font-weight: 600;
+  }
+  .message p {
+    margin: 6px 0 0;
   }
   dl {
     margin: 0;
