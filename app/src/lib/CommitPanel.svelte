@@ -3,12 +3,15 @@
   import { api, stopped } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { CommitDetail, FileChange, FileDiff, HistoryRow } from "./types";
-  import { fullDate, initials, lane, person, plate, splitPath, tabLabels, tabWindow, tint } from "./format";
+  import { fullDate, initials, shortTime, lane, person, plate, shortId, splitPath, tint } from "./format";
   import { fileTabs, tabStepper } from "./tabs";
+  import { confirm } from "./confirm.svelte";
   import DiffView from "./DiffView.svelte";
+  import DiffTools from "./DiffTools.svelte";
   import FoldAll from "./FoldAll.svelte";
   import CommitChain from "./CommitChain.svelte";
   import FileBadge from "./FileBadge.svelte";
+  import { byFolder, listView, setFolders } from "./listView.svelte";
 
   let {
     row,
@@ -63,7 +66,7 @@
   let loadingMore = $state(false);
   /** Rows of the Summary's file list drawn: a commit of thousands of files draws the rest on request. */
   let listed = $state(LIST_STEP);
-  let tab = $state<string | null>(null); // null = Summary, otherwise a file path
+  let tab = $state<string | null>(null); // null = All Changes, otherwise a file path
   let whole = $state(wholeByDefault());
   // Diff & Text's default view applies again when it changes.
   $effect(() => {
@@ -71,15 +74,13 @@
   });
   let error = $state<string | null>(null);
   let scroller = $state<HTMLDivElement>();
-  let tabBar = $state<HTMLDivElement>();
+  let filesBox = $state<HTMLDivElement>();
 
-  // The selected tab may be scrolled out of the tab bar, for example when a file is picked in Summary.
+  // Stepped to with the keys, the open file may be scrolled out of its list.
   $effect(() => {
     tab;
     detail;
-    requestAnimationFrame(() =>
-      tabBar?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ inline: "nearest", block: "nearest" }),
-    );
+    requestAnimationFrame(() => filesBox?.querySelector<HTMLElement>('[aria-current="true"]')?.scrollIntoView({ block: "nearest" }));
   });
 
   // Effects follow the id, not the row object, so reloading the history keeps the panel as it is.
@@ -88,9 +89,6 @@
   // A stash has no branch line of its own; its capsule names the stash entry.
   const branchName = $derived(row.graph.branch ?? row.labels.find((l) => l.kind === "stash")?.name ?? null);
   const tags = $derived(row.labels.filter((l) => l.kind === "tag").map((l) => l.name));
-  const paths = $derived(detail?.files.map((f) => f.path) ?? []);
-  const labels = $derived(tabLabels(paths));
-  const shownTabs = $derived(tabWindow(paths.length, tab === null ? -1 : paths.indexOf(tab)));
   /** The files as far as they are known: until the counted list comes, a loaded diff has counts. */
   const files = $derived.by(() => {
     if (!detail) return [];
@@ -240,30 +238,73 @@
     if (scroller) scroller.scrollTop = 0;
   }
 
+  /** Only files whose path has this text are listed. */
+  let filter = $state("");
+  const needle = $derived(filter.trim().toLowerCase());
+  const shownFiles = $derived(needle ? files.filter((f) => f.path.toLowerCase().includes(needle) || !!f.oldPath?.toLowerCase().includes(needle)) : files);
+  /** Folders closed in the list. */
+  let folded = $state(new Set<string>());
+  function fold(dir: string) {
+    const next = new Set(folded);
+    if (!next.delete(dir)) next.add(dir);
+    folded = next;
+  }
+  /** The files listed, in the order they are shown: the steps of Next Tab after All Changes. */
+  const paths = $derived(
+    listView.folders ? byFolder(shownFiles).flatMap((g) => (folded.has(g.dir) ? [] : g.files.map((f) => f.path))) : shownFiles.map((f) => f.path),
+  );
+
+  /** Two columns, the files beside their diff, from this width of the panel; under it the files
+   *  sit over the diff. */
+  const TWO_COLUMNS = 600;
+  let bodyWidth = $state(0);
+  const stacked = $derived(bodyWidth > 0 && bodyWidth < TWO_COLUMNS);
+
+  /** Commit details folded to their heading; kept for every window. */
+  const DETAILS_KEY = "oxbow.commit.detailsShut";
+  let detailsShut = $state(readShut());
+  function readShut(): boolean {
+    try {
+      return localStorage.getItem(DETAILS_KEY) === "true";
+    } catch {
+      return false;
+    }
+  }
+  function toggleDetails() {
+    detailsShut = !detailsShut;
+    try {
+      localStorage.setItem(DETAILS_KEY, String(detailsShut));
+    } catch {
+      // Lasts until the app quits.
+    }
+  }
+  function copy(text: string, what: string) {
+    navigator.clipboard.writeText(text).then(() => confirm.say(`Copied ${what}.`, "done"), () => {});
+  }
+  const message = $derived(detail ? [detail.summary, detail.body].filter(Boolean).join("\n\n") : row.summary);
+
   const statusIcon: Record<string, string> = { added: "A", deleted: "D", modified: "M", renamed: "R", copied: "C" };
+  const tone: Record<string, string> = { added: "green", deleted: "red", modified: "orange", renamed: "orange", copied: "orange" };
 </script>
 
 <div class="panel">
   {@render banner?.()}
   <div class="head">
-    <div class="message">
-      <h1 class="selectable">
-        {detail?.summary ?? row.summary}
-        {#if branchName}
-          <span class="branch" style:color={plate(color)} style:background={tint(color, "label")} title="Branch of this commit">
-            <svg class="icon tiny" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg>
-            {branchName}
-          </span>
-        {/if}
-        {#each tags as name (name)}
-          <span class="branch tag" class:local={localTags.includes(name)} title={localTags.includes(name) ? "Tag on this commit, not pushed yet" : "Tag on this commit"}>
-            <svg class="icon tiny" viewBox="0 0 16 16"><path d="M2.5 2.5h5l6 6-5 5-6-6z" /><circle cx="5.5" cy="5.5" r="0.8" /></svg>
-            {name}
-          </span>
-        {/each}
-      </h1>
-      {#if detail?.body}<p class="body selectable">{detail.body}</p>{/if}
-    </div>
+    <h1 class="selectable">
+      {detail?.summary ?? row.summary}
+      {#if branchName}
+        <span class="branch" style:color={plate(color)} style:background={tint(color, "label")} title="Branch of this commit">
+          <svg class="icon tiny" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg>
+          {branchName}
+        </span>
+      {/if}
+      {#each tags as name (name)}
+        <span class="branch tag" class:local={localTags.includes(name)} title={localTags.includes(name) ? "Tag on this commit, not pushed yet" : "Tag on this commit"}>
+          <svg class="icon tiny" viewBox="0 0 16 16"><path d="M2.5 2.5h5l6 6-5 5-6-6z" /><circle cx="5.5" cy="5.5" r="0.8" /></svg>
+          {name}
+        </span>
+      {/each}
+    </h1>
     <div class="people">
       <span class="avatar" style:background={person(row.authorEmail)}>{initials(row.authorName)}</span>
       <span class="who">
@@ -274,93 +315,164 @@
     <CommitChain {row} {childIds} {lookup} {onSelect} />
   </div>
 
-  <div class="tabs" role="tablist" aria-label="Changes in this commit" use:tabStepper={fileTabs(paths, tab, openTab)}>
-    <!-- Summary stays pinned first; only the file tabs scroll. -->
-    <button
-      role="tab"
-      aria-selected={tab === null}
-      class="tab"
-      style:background={tab === null ? tint(color) : undefined}
-      style:border-color={tab === null ? `color-mix(in srgb, ${lane(color)} 40%, transparent)` : undefined}
-      style:color={tab === null ? plate(color) : undefined}
-      class:on={tab === null}
-      onclick={() => openTab(null)}>Summary</button
-    >
-    {#if detail?.files.length}
-      <span class="divider" aria-hidden="true"></span>
-      <div class="file-tabs" bind:this={tabBar}>
-        <!-- Thousands of files draw only the tabs around the open one. -->
-        {#if shownTabs.start}<button class="tab neutral more" onclick={() => openTab(paths[shownTabs.start - 1])} title="Open the file before these">+{shownTabs.start.toLocaleString()}</button>{/if}
-        {#each paths.slice(shownTabs.start, shownTabs.end) as path (path)}
-          <button role="tab" aria-selected={tab === path} class="tab neutral" class:on={tab === path} onclick={() => openTab(path)} title={path}
-            >{labels.get(path)}</button
-          >
-        {/each}
-        {#if shownTabs.end < paths.length}<button class="tab neutral more" onclick={() => openTab(paths[shownTabs.end])} title="Open the file after these">+{(paths.length - shownTabs.end).toLocaleString()}</button>{/if}
-      </div>
-    {/if}
-  </div>
-
-  <div class="scroll" bind:this={scroller}>
-    {#if error}
-      <p class="error" role="alert">{error}</p>
-    {/if}
-    {#if tab === null && detail?.shallowEnd}
-      <div class="end">
-        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.3" /><path d="M8 7.2v4M8 4.9v.1" /></svg>
-        <span class="end-text">
-          History ends here
-          <span class="sub">This is a shallow clone, and the commit before this one isn’t downloaded, so its changes can’t be shown yet.</span>
-        </span>
-        {#if onUnshallow}<button class="button small" onclick={() => onUnshallow?.()}>Fetch Full History…</button>{/if}
-      </div>
-    {:else if tab === null && detail}
-      <div class="files">
-        <div class="count">
-          <span class="grow">{detail.files.length.toLocaleString()} {detail.files.length === 1 ? "file" : "files"} changed</span>
-          {#if totals}
-            <span class="add">+{totals.add}</span>
-            <span class="del">−{totals.del}</span>
-          {:else}
-            <span class="counting" title="Counting the changed lines">Counting…</span>
-          {/if}
-          <FoldAll onFold={(fold) => diffView?.setAll(fold)} />
+  <div class="body" class:stacked bind:clientWidth={bodyWidth}>
+    <div class="files" bind:this={filesBox} aria-label="Changed files" data-steps use:tabStepper={fileTabs(paths, tab, openTab)}>
+      <div class="tools">
+        <label class="filter">
+          <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
+          <input
+            bind:value={filter}
+            placeholder="Filter files"
+            aria-label="Filter files"
+            spellcheck="false"
+            autocomplete="off"
+            onkeydown={(e) => {
+              if (e.key === "Escape" && filter) {
+                e.stopPropagation();
+                filter = "";
+              }
+            }}
+          />
+          {#if filter}<button class="clear" onclick={() => (filter = "")} aria-label="Clear the filter" title="Clear the filter">×</button>{/if}
+        </label>
+        <div class="segmented" role="radiogroup" aria-label="Show files">
+          <button role="radio" aria-checked={!listView.folders} class:on={!listView.folders} onclick={() => setFolders(false)} aria-label="List" title="One list of paths">
+            <svg class="icon" viewBox="0 0 16 16"><path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01" /></svg>
+          </button>
+          <button role="radio" aria-checked={listView.folders} class:on={listView.folders} onclick={() => setFolders(true)} aria-label="Folders" title="Files under their folders">
+            <svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5a1 1 0 0 1 1-1H6l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" /></svg>
+          </button>
         </div>
-        {#each files.slice(0, listed) as file (file.path)}
-          {@const p = splitPath(file.path)}
-          <button class="file" onclick={() => openTab(file.path)}>
-            <span class="badge {file.status}">{statusIcon[file.status]}</span>
-            <span class="grow ellipsis"><span class="dir">{p.dir}</span>{p.name}</span>
-            {#if foundFiles.includes(file.path)}
-              <span class="found" title={find ? `Adds or removes “${find}”` : "The path matches the search"}>
-                <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="M10.3 10.3 14 14" /></svg>{foundText ?? "match"}
-              </span>
-            {/if}
-            {#if detail.counted || known.has(file.path)}
-              <FileBadge {file} />
+      </div>
+
+      <div class="list">
+        {#if detail && !detail.shallowEnd}
+          <!-- The heading shows every file's diff, as Summary did. -->
+          <button
+            class="all"
+            aria-current={tab === null ? "true" : undefined}
+            style:background={tab === null ? tint(color) : undefined}
+            onclick={() => openTab(null)}
+            title="Show the changes of every file"
+          >
+            <span class="gtitle" style:color={plate(color)}>All Changes</span>
+            <span class="n">{needle ? `${shownFiles.length} of ${detail.files.length}` : detail.files.length.toLocaleString()}</span>
+            <span class="grow"></span>
+            {#if totals}
+              <span class="mono add">+{totals.add}</span>
+              <span class="mono del">−{totals.del}</span>
+            {:else}
+              <span class="counting" title="Counting the changed lines">Counting…</span>
             {/if}
           </button>
-        {/each}
-        {#if files.length > listed}
-          <button class="file more" onclick={() => (listed += LIST_STEP)}>Show {Math.min(files.length - listed, LIST_STEP).toLocaleString()} more {files.length - listed === 1 ? "file" : "files"}</button>
+          {#snippet fileRow(file: FileChange, nested: boolean)}
+            {@const p = splitPath(file.path)}
+            {@const open = tab === file.path}
+            <button class="file" class:nested aria-current={open ? "true" : undefined} style:background={open ? tint(color) : undefined} onclick={() => openTab(file.path)} title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
+              <span class="badge {tone[file.status]}">{statusIcon[file.status]}</span>
+              <span class="grow ellipsis">{#if !nested}<span class="dir">{p.dir}</span>{/if}{p.name}</span>
+              {#if foundFiles.includes(file.path)}
+                <span class="found" title={find ? `Adds or removes “${find}”` : "The path matches the search"}>
+                  <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="M10.3 10.3 14 14" /></svg>{foundText ?? "match"}
+                </span>
+              {/if}
+              {#if detail?.counted || known.has(file.path)}
+                <FileBadge {file} />
+              {/if}
+            </button>
+          {/snippet}
+          {#if listView.folders}
+            {#each byFolder(shownFiles.slice(0, listed)) as group (group.dir)}
+              {@const open = !folded.has(group.dir)}
+              <button class="folder" aria-expanded={open} onclick={() => fold(group.dir)} title={group.dir || "The repository's top folder"}>
+                <svg class="chevron" class:open viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" /></svg>
+                <svg class="icon folder-icon" viewBox="0 0 16 16"><path d="M1.5 4.5a1 1 0 0 1 1-1H6l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" /></svg>
+                <span class="dirname">{group.dir ? group.dir.slice(0, -1) : "Top folder"}</span>
+                <span class="n">{group.files.length}</span>
+              </button>
+              {#if open}{#each group.files as file (file.path)}{@render fileRow(file, true)}{/each}{/if}
+            {/each}
+          {:else}
+            {#each shownFiles.slice(0, listed) as file (file.path)}{@render fileRow(file, false)}{/each}
+          {/if}
+          {#if shownFiles.length > listed}
+            <button class="file more" onclick={() => (listed += LIST_STEP)}>Show {Math.min(shownFiles.length - listed, LIST_STEP).toLocaleString()} more {shownFiles.length - listed === 1 ? "file" : "files"}</button>
+          {/if}
+          {#if needle && !shownFiles.length}<p class="empty">No files match the filter.</p>{/if}
         {/if}
       </div>
-    {/if}
-    <DiffView
-      bind:this={diffView}
-      foldable
-      {diffs}
-      {color}
-      {whole}
-      {find}
-      commit={row.id}
-      pending={tab === null && next !== null ? fileCount - diffs.length : 0}
-      onMore={loadMore}
-      onToggleWhole={() => (whole = !whole)}
-      loadFull={(d) => api.commitDiff(row.id, d.file.path, whole, true, FULL).then((all) => all[0])}
-      command={(d) =>
-        detail?.parents.length ? `git diff ${row.id.slice(0, 7)}~1 ${row.id.slice(0, 7)} -- ${d.file.path}` : `git show ${row.id.slice(0, 7)} -- ${d.file.path}`}
-    />
+
+      <!-- The whole message and who made the commit, as a card in the branch color like «this commit» in the chain. -->
+      <div class="details" style:background={tint(color)} style:border-color={`color-mix(in srgb, ${lane(color)} 40%, transparent)`}>
+        <button class="details-head" aria-expanded={!detailsShut} onclick={toggleDetails} style:color={plate(color)}>
+          <svg class="chevron" class:open={!detailsShut} viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" /></svg>
+          Commit Details
+        </button>
+        {#if !detailsShut}
+          {#if detail?.body}<p class="message selectable">{detail.body}</p>{/if}
+          <dl>
+            <dt>Commit</dt>
+            <dd>
+              <span class="mono sha selectable" title={row.id}>{row.id}</span>
+              <button class="copy" onclick={() => copy(row.id, shortId(row.id))} aria-label="Copy the commit's SHA" title="Copy SHA">
+                <svg class="icon" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" /><path d="M10.5 5.5V3.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2" /></svg>
+              </button>
+            </dd>
+            {#if detail}
+              <dt>Committed</dt>
+              <dd class="ellipsis" title="{detail.committer.email} · {fullDate(detail.committer.time, detail.committer.offset)}">{detail.committer.name}, {shortTime(detail.committer.time)}</dd>
+            {/if}
+          </dl>
+          <div><button class="button mini" onclick={() => copy(message, "the message")}>Copy Message</button></div>
+        {/if}
+      </div>
+    </div>
+
+    <div class="diff" aria-label="Diff">
+      <div class="dhead">
+        <span class="caption grow">
+          {#if tab === null}
+            {detail ? `${detail.files.length.toLocaleString()} ${detail.files.length === 1 ? "file" : "files"}` : ""}
+          {:else}
+            {@const at = detail?.files.findIndex((f) => f.path === tab) ?? -1}
+            {#if at >= 0 && detail}File {at + 1} of {detail.files.length.toLocaleString()}{/if}
+          {/if}
+        </span>
+        {#if tab === null && diffs.length > 1}<FoldAll onFold={(fold) => diffView?.setAll(fold)} />{/if}
+        <DiffTools {whole} onToggleWhole={() => (whole = !whole)} />
+      </div>
+      <div class="scroll" bind:this={scroller}>
+        {#if error}
+          <p class="error" role="alert">{error}</p>
+        {/if}
+        {#if detail?.shallowEnd}
+          <div class="end">
+            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.3" /><path d="M8 7.2v4M8 4.9v.1" /></svg>
+            <span class="end-text">
+              History ends here
+              <span class="sub">This is a shallow clone, and the commit before this one isn’t downloaded, so its changes can’t be shown yet.</span>
+            </span>
+            {#if onUnshallow}<button class="button small" onclick={() => onUnshallow?.()}>Fetch Full History…</button>{/if}
+          </div>
+        {/if}
+        <DiffView
+          bind:this={diffView}
+          foldable={tab === null}
+          {diffs}
+          {color}
+          {whole}
+          {find}
+          commit={row.id}
+          pending={tab === null && next !== null ? fileCount - diffs.length : 0}
+          onMore={loadMore}
+          onToggleWhole={() => (whole = !whole)}
+          loadFull={(d) => api.commitDiff(row.id, d.file.path, whole, true, FULL).then((all) => all[0])}
+          command={(d) =>
+            detail?.parents.length ? `git diff ${row.id.slice(0, 7)}~1 ${row.id.slice(0, 7)} -- ${d.file.path}` : `git show ${row.id.slice(0, 7)} -- ${d.file.path}`}
+          tools={false}
+        />
+      </div>
+    </div>
   </div>
 </div>
 
@@ -372,17 +484,13 @@
     flex-direction: column;
     min-height: 0;
   }
-  /* The commit's details sit on the panel itself, with no frame; a hairline parts them from the tabs. */
+  /* The commit's subject, author and chain sit on the panel itself, with no frame; a hairline parts them from the files. */
   .head {
-    padding: var(--space-4) var(--space-5) var(--space-2);
+    padding: var(--space-4) var(--space-5) var(--space-3);
     display: flex;
     flex-direction: column;
-    gap: 14px;
-  }
-  .message {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+    gap: 12px;
+    border-bottom: 1px solid var(--sep);
   }
   .branch {
     display: inline-flex;
@@ -423,14 +531,6 @@
     font-weight: 600;
     line-height: 1.3;
   }
-  .body {
-    margin: 0;
-    color: var(--text2);
-    line-height: 1.45;
-    white-space: pre-wrap;
-    max-height: 160px;
-    overflow-y: auto;
-  }
   .people {
     display: flex;
     align-items: center;
@@ -463,51 +563,374 @@
     font-size: var(--text-caption);
     color: var(--text2);
   }
-  .tabs {
+
+  /* The files beside their diff; in a narrow panel, over it, scrolling as one with the details. */
+  .body {
+    flex-grow: 1;
+    min-height: 0;
     display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: var(--space-2) 0 var(--space-2) var(--space-5);
+  }
+  .body.stacked {
+    flex-direction: column;
+  }
+  .files {
+    width: 268px;
+    flex-shrink: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--sep);
+  }
+  .stacked .files {
+    width: auto;
+    max-height: 50%;
+    border-right: 0;
     border-bottom: 1px solid var(--sep);
+    overflow-y: auto;
+  }
+  .stacked .list {
+    flex: none;
+    overflow: visible;
+  }
+  .diff {
+    flex-grow: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: var(--space-3) var(--space-3) var(--space-1);
     flex-shrink: 0;
   }
-  .divider {
-    width: 1px;
-    height: 16px;
-    background: var(--sep);
-    flex-shrink: 0;
-  }
-  .file-tabs {
+  .filter {
     display: flex;
     align-items: center;
     gap: 6px;
+    flex-grow: 1;
     min-width: 0;
-    padding-right: 12px;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-  .file-tabs::-webkit-scrollbar {
-    display: none;
-  }
-  .tab {
-    display: flex;
-    align-items: center;
     height: 26px;
-    padding: 0 var(--space-3);
+    padding: 0 6px 0 10px;
     border-radius: var(--radius-pill);
-    border: 1px solid var(--sep);
-    font-size: var(--text-small);
-    font-weight: 500;
+    background: var(--field);
     color: var(--text2);
+  }
+  .filter:focus-within {
+    box-shadow: var(--focus-ring);
+  }
+  .filter .icon {
+    width: 13px;
+    height: 13px;
     flex-shrink: 0;
   }
-  .tab.on {
-    font-weight: 600;
-  }
-  .tab.neutral.on {
-    background: var(--side-sel);
-    border-color: transparent;
+  .filter input {
+    flex-grow: 1;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    font: inherit;
+    font-size: var(--text-small);
     color: var(--text);
+    user-select: text;
+    -webkit-user-select: text;
+    box-shadow: none;
+  }
+  .clear {
+    width: 18px;
+    height: 18px;
+    border-radius: var(--radius-pill);
+    color: var(--text2);
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .clear:hover {
+    background: var(--side-sel);
+    color: var(--text);
+  }
+  .segmented {
+    flex-shrink: 0;
+    display: flex;
+    padding: 2px;
+    border-radius: var(--radius-m);
+    background: var(--field);
+  }
+  .segmented button {
+    width: 28px;
+    height: 22px;
+    border-radius: var(--radius-s);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text2);
+  }
+  .segmented button.on {
+    background: var(--sheet);
+    color: var(--text);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  }
+  .segmented .icon {
+    width: 14px;
+    height: 14px;
+  }
+  .list {
+    flex-grow: 1;
+    min-height: 60px;
+    overflow-y: auto;
+    padding: 0 var(--space-2) var(--space-2);
+  }
+  /* The heading of the list, in small capitals in the branch color, as in Changes. */
+  .all {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    height: 30px;
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-s);
+    font-size: var(--text-caption);
+    font-weight: 600;
+    color: var(--text2);
+  }
+  .gtitle {
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .n {
+    font-weight: 400;
+  }
+  .counting {
+    font-weight: 400;
+  }
+  .file {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    height: 28px;
+    padding: 0 var(--space-2) 0 22px;
+    border-radius: var(--radius-s);
+    text-align: left;
+  }
+  .file:hover,
+  .folder:hover {
+    background: var(--field);
+  }
+  .file.nested {
+    padding-left: 44px;
+  }
+  .file.more {
+    justify-content: center;
+    padding: 0;
+    color: var(--text2);
+    font-size: var(--text-small);
+  }
+  .folder {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    width: 100%;
+    height: 26px;
+    padding: 0 var(--space-2) 0 22px;
+    border-radius: var(--radius-s);
+    font-size: var(--text-small);
+    color: var(--text2);
+  }
+  .chevron {
+    width: 10px;
+    height: 10px;
+    flex-shrink: 0;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform 0.15s;
+  }
+  .chevron.open {
+    transform: rotate(90deg);
+  }
+  .folder-icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+  .dirname {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+    color: var(--text);
+  }
+  .empty {
+    margin: 0;
+    padding: var(--space-1) var(--space-3) var(--space-1) 22px;
+    font-size: var(--text-small);
+    color: var(--text2);
+  }
+  .found {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    max-width: 40%;
+    height: 18px;
+    padding: 0 7px 0 5px;
+    border-radius: var(--radius-pill);
+    background: var(--found-bg);
+    box-shadow: inset 0 0 0 1px var(--found-ring);
+    font-size: var(--text-caption);
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 1;
+  }
+  .found .icon {
+    width: 10px;
+    height: 10px;
+    flex-shrink: 0;
+  }
+  /* The same letters as in Changes. */
+  .badge {
+    width: 16px;
+    height: 16px;
+    border-radius: var(--radius-xs);
+    font-size: var(--text-caption);
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .badge.orange {
+    background: var(--orange-soft);
+    color: var(--orange);
+  }
+  .badge.green {
+    background: var(--green-soft);
+    color: var(--green);
+  }
+  .badge.red {
+    background: var(--red-soft);
+    color: var(--red);
+  }
+  .grow {
+    flex-grow: 1;
+    min-width: 0;
+  }
+  .ellipsis {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dir {
+    color: var(--text2);
+  }
+  .add {
+    color: var(--green);
+    font-size: var(--text-caption);
+  }
+  .del {
+    color: var(--red);
+    font-size: var(--text-caption);
+  }
+
+  /* Commit Details, at the bottom of the files. */
+  .details {
+    flex-shrink: 0;
+    margin: var(--space-2) var(--space-3) var(--space-3);
+    padding: 10px 12px 12px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-xl);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: var(--text-small);
+  }
+  .details-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--text-caption);
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    text-align: left;
+  }
+  .message {
+    margin: 0;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 160px;
+    overflow-y: auto;
+  }
+  dl {
+    margin: 0;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 10px;
+    row-gap: 4px;
+    align-items: center;
+  }
+  dt {
+    color: var(--text2);
+  }
+  dd {
+    margin: 0;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  dd.ellipsis {
+    display: block;
+  }
+  .sha {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--text-caption);
+  }
+  .copy {
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    border-radius: var(--radius-pill);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--icon);
+  }
+  .copy:hover {
+    background: var(--field);
+  }
+  .copy .icon {
+    width: 13px;
+    height: 13px;
+  }
+
+  /* Over the diff: how many files, and how the diff is drawn. */
+  .dhead {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 46px;
+    padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
+    flex-shrink: 0;
+  }
+  .caption {
+    font-size: var(--text-small);
+    color: var(--text2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .scroll {
     flex-grow: 1;
@@ -516,7 +939,7 @@
   }
   /* The same card as at the end of a shallow clone's history. */
   .end {
-    margin: var(--space-3) var(--space-3) var(--space-2);
+    margin: 0 var(--space-3) var(--space-2);
     display: flex;
     align-items: center;
     gap: 10px;
@@ -543,112 +966,6 @@
   .end-text .sub {
     font-weight: 400;
     font-size: var(--text-small);
-    color: var(--text2);
-  }
-
-  .files {
-    margin: 8px 12px 4px;
-    padding: 4px 0 6px;
-  }
-  .counting {
-    font-weight: 400;
-  }
-  .tab.more {
-    color: var(--text2);
-    font-weight: 400;
-  }
-  .file.more {
-    justify-content: center;
-    color: var(--text2);
-  }
-  .count {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 0 8px 6px;
-    font-size: var(--text-caption);
-    font-weight: 600;
-    color: var(--text2);
-  }
-  .found {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    max-width: 40%;
-    height: 18px;
-    padding: 0 7px 0 5px;
-    border-radius: var(--radius-pill);
-    background: var(--found-bg);
-    box-shadow: inset 0 0 0 1px var(--found-ring);
-    font-size: var(--text-caption);
-    font-weight: 500;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    flex-shrink: 1;
-  }
-  .found .icon {
-    width: 10px;
-    height: 10px;
-    flex-shrink: 0;
-  }
-  .file {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    height: 26px;
-    padding: 0 8px;
-    border-radius: var(--radius-s);
-  }
-  .file:hover {
-    background: var(--field);
-  }
-  .badge {
-    width: 16px;
-    height: 16px;
-    border-radius: var(--radius-s);
-    font-size: var(--text-caption);
-    font-weight: 700;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--field);
-    color: var(--text2);
-    flex-shrink: 0;
-  }
-  .badge.added {
-    color: var(--green);
-  }
-  .badge.deleted {
-    color: var(--red);
-  }
-  .grow {
-    flex-grow: 1;
-    min-width: 0;
-  }
-  .ellipsis {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .dir {
-    color: var(--text2);
-  }
-  .add {
-    color: var(--green);
-    font-size: var(--text-caption);
-  }
-  .del {
-    color: var(--red);
-    font-size: var(--text-caption);
-  }
-  .num {
-    min-width: 22px;
-    text-align: right;
-  }
-  .meta {
-    font-size: var(--text-caption);
     color: var(--text2);
   }
   .error {
