@@ -27,6 +27,7 @@ import type {
   FileDiff,
   History,
   MergePreview,
+  PatchPreview,
   Plan,
   RepoSummary,
   SearchQuery,
@@ -166,6 +167,11 @@ export const api = {
   deletionCheck: (branch: string) => invoke<DeletionCheck>("deletion_check", { branch }),
   remoteDeletionCheck: (branch: string) => invoke<CommitBrief[]>("remote_deletion_check", { branch }),
   mergePreview: (branch: string) => invoke<MergePreview>("merge_preview", { branch }),
+  /** Patch files at full paths, before Apply Patches runs. */
+  patchPreview: (paths: string[]) => invoke<PatchPreview>("patch_preview", { paths }),
+  /** The commits Save as Patches writes, oldest first: those of `to` that `since` doesn't
+   *  have, or the newest `count` up to `to`. */
+  patchRange: (to: string, since: string | null, count: number) => invoke<CommitBrief[]>("patch_range", { to, since, count }),
   conflictFile: (path: string) => invoke<ConflictFile>("conflict_file", { path }),
   mergeTool: () => invoke<MergeTool | null>("merge_tool"),
   /** Waits until the tool quits; true when git staged the file. */

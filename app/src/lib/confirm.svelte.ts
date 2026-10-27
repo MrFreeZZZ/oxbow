@@ -48,7 +48,8 @@ export type Icon =
   | "lfs"
   | "bisect"
   | "worktree"
-  | "fix";
+  | "fix"
+  | "patch";
 
 export interface Request {
   /** A question, e.g. "Discard changes in 2 files?" */
@@ -104,7 +105,7 @@ export interface Request {
   background?: () => void;
   /** What the action goes over, listed before it runs, e.g. the files a download brings with
    *  their sizes; while it runs the same box shows how far each one is. */
-  list?: { name: string; meta: string }[];
+  list?: ListItem[];
   /** For an action that goes over several things one at a time: why one failed, in words,
    *  from what git printed. */
   partWhy?: (error: string) => string;
@@ -114,6 +115,15 @@ export interface Request {
    *  defaults: the sheet shows the same step as shell commands, the button runs it, and the
    *  toast says what it returned. `comments` gives each command its own. */
   local?: { commands: string[]; comment?: string; comments?: (string | null)[]; run: () => Promise<string> };
+}
+
+/** A row of a request's list: a path in mono, or with `words` a line of text such as a commit's
+ *  summary. Rows with a `group` go under its name, e.g. "3 commits" and then "4 files". */
+export interface ListItem {
+  name: string;
+  meta: string;
+  words?: boolean;
+  group?: string;
 }
 
 /** A step of a fix as the sheet shows it: words with chips, a line under them, and the short

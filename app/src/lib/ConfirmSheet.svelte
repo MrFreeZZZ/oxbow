@@ -364,9 +364,12 @@
 
       {#if request.list?.length && confirm.phase === "ask"}
         <div class="parts" aria-label={request.list.length === 1 ? "The one" : "Each one"}>
-          {#each request.list as item (item.name)}
+          {#each request.list as item, i (i)}
+            {#if item.group && item.group !== request.list[i - 1]?.group}
+              <div class="part-group">{item.group}</div>
+            {/if}
             <div class="part">
-              <span class="part-words"><span class="mono part-name" title={item.name}>{item.name}</span></span>
+              <span class="part-words"><span class="part-name" class:mono={!item.words} title={item.name}>{item.name}</span></span>
               <span class="part-state">{item.meta}</span>
             </div>
           {/each}
@@ -898,8 +901,18 @@
     padding: 6px 12px;
     font-size: var(--text-small);
   }
-  .part + .part {
+  .part + .part,
+  .part + .part-group {
     border-top: 0.5px solid var(--sep);
+  }
+  /* "3 commits", then "4 files": a heading over each group of the list. */
+  .part-group {
+    padding: 6px 12px 3px;
+    font-size: var(--text-caption);
+    font-weight: 600;
+    color: var(--text2);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
   .part-mark {
     width: 14px;

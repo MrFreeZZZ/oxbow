@@ -70,16 +70,18 @@ export function syncBlock(ctx: RemoteContext, kind: "pull" | "push"): SyncBlock 
     const words = describe(op);
     const stash = op.kind === "stashApply";
     const commits = op.kind === "merge" || op.kind === "squash";
-    const finish = stash ? "Finish" : commits ? `Commit ${words.noun}` : `Continue ${words.noun}`;
+    const finish = stash ? "Finish" : commits ? `Commit ${words.noun}` : op.kind === "am" ? "Continue" : `Continue ${words.noun}`;
     const on: Part = op.branch ? chip(ctx, op.branch) : { code: "HEAD" };
     const doing: Part[] =
       op.kind === "rebase"
         ? ["Push and Pull wait while ", on, " is being rebased."]
         : stash
           ? ["Push and Pull wait until the stash is applied to ", on, "."]
+          : op.kind === "am"
+            ? ["Push and Pull wait until the patches are applied to ", on, "."]
           : ["Push and Pull wait until the ", words.verb, " on ", on, " is finished."];
     return {
-      title: stash ? "Finish applying the stash first" : `Finish the ${words.verb} first`,
+      title: stash ? "Finish applying the stash first" : op.kind === "am" ? "Finish applying the patches first" : `Finish the ${words.verb} first`,
       body: [
         ...doing,
         op.conflicted

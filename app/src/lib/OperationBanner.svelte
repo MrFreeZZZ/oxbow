@@ -30,9 +30,10 @@
   const words = $derived(describe(op));
   const commits = $derived(op.kind === "merge" || op.kind === "squash");
   const stash = $derived(op.kind === "stashApply");
-  const finish = $derived(stash ? "Finish" : commits ? `Commit ${words.noun}` : `Continue ${words.noun}`);
+  const am = $derived(op.kind === "am");
+  const finish = $derived(stash ? "Finish" : commits ? `Commit ${words.noun}` : am ? "Continue" : `Continue ${words.noun}`);
   const title = $derived(
-    resolving
+    resolving || am
       ? words.title
       : op.kind === "squash" && !op.incoming
         ? `Squash merge in progress on ${op.branch ?? "HEAD"}`
@@ -42,7 +43,9 @@
     if (!resolving) {
       return op.conflicted
         ? `Git stopped on ${op.conflicted === 1 ? "a conflict" : "conflicts"}. Finish or abort the ${words.verb} before you switch branches, pull or push.`
-        : `Every conflict is resolved. ${stash ? "Finish the apply" : commits ? `Commit the ${words.verb}` : `Continue the ${words.verb}`} to finish it.`;
+        : am
+          ? "No conflicts are left. Continue to apply the rest, or skip this patch."
+          : `Every conflict is resolved. ${stash ? "Finish the apply" : commits ? `Commit the ${words.verb}` : `Continue the ${words.verb}`} to finish it.`;
     }
     const c = op.commit;
     switch (op.kind) {
@@ -75,6 +78,8 @@
       <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.revert} /></svg>
     {:else if op.kind === "stashApply"}
       <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.stash} /></svg>
+    {:else if am}
+      <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.patch} /></svg>
     {:else}
       <svg class="icon" viewBox="0 0 16 16"><path d="M4.5 2v12M4.5 4.5c0 3.5 7 2.5 7 6v3.5M2.5 12 4.5 14l2-2" /></svg>
     {/if}
@@ -89,8 +94,9 @@
     <span class="done">All resolved</span>
   {/if}
   <button class="button" onclick={onAbort}>{stash ? "Undo Apply" : `Abort ${words.noun}`}</button>
-  {#if resolving && (op.kind === "rebase" || op.kind === "cherryPick")}
-    <button class="button" onclick={onSkip}>Skip Commit</button>
+  <!-- A patch git couldn't merge at all stops with no conflicts: Skip is the way past it. -->
+  {#if (resolving && (op.kind === "rebase" || op.kind === "cherryPick" || am)) || (am && !op.conflicted)}
+    <button class="button" onclick={onSkip}>{am ? "Skip Patch" : "Skip Commit"}</button>
   {/if}
   {#if !resolving && op.conflicted}
     <button class="button primary" onclick={onResolve}>Resolve Conflicts</button>

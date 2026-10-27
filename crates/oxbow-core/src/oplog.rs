@@ -358,6 +358,7 @@ impl Repo {
                 OperationKind::Rebase => "A rebase",
                 OperationKind::CherryPick => "A cherry-pick",
                 OperationKind::Revert => "A revert",
+                OperationKind::Am => "Applying patches",
                 OperationKind::StashApply => "Applying a stash",
             };
             return Err(Error::Git(format!("{what} is in progress: finish or abort it first")));
@@ -861,6 +862,19 @@ impl Repo {
             Action::Skip => ("rebase", "Skip a commit".to_owned()),
             Action::Resolve { path, .. } | Action::TakeFile { path, .. } => ("merge", format!("Resolve {path}")),
             Action::CherryPick { commit } => ("cherry", format!("Cherry-pick {} onto {here}", short_id(commit))),
+            Action::SavePatches { .. } => ("commit", "Save commits as patches".to_owned()),
+            Action::ApplyPatches { paths } => (
+                "commit",
+                match paths.as_slice() {
+                    [one] => format!(
+                        "Apply {} to {here}",
+                        std::path::Path::new(one)
+                            .file_name()
+                            .map_or_else(|| one.clone(), |n| n.to_string_lossy().into_owned())
+                    ),
+                    _ => format!("Apply {} patch files to {here}", paths.len()),
+                },
+            ),
             Action::Revert { commit } => ("revert", format!("Revert {}", short_id(commit))),
             Action::Reset { commit, mode } => (
                 "reset",

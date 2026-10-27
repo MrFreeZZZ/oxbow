@@ -1,5 +1,5 @@
 //! Merging and rebasing, and the operations git can stop in the middle of: a merge, rebase,
-//! cherry-pick or revert that hit conflicts. What is going on, what a merge would do before it
+//! cherry-pick, revert or `git am` that hit conflicts. What is going on, what a merge would do before it
 //! runs, and each conflicted file with both sides, so the user picks what goes into the result.
 
 use std::path::PathBuf;
@@ -48,6 +48,8 @@ pub enum OperationKind {
     Revert,
     /// `git stash apply` or `pop` stopped on conflicts; Oxbow remembers it (git does not).
     StashApply,
+    /// `git am` stopped on a patch that doesn't apply.
+    Am,
 }
 
 /// One side of a conflict, as git names the index stages: `ours` is stage 2, `theirs` stage 3.
@@ -71,7 +73,8 @@ pub struct Operation {
     pub commit: Option<CommitBrief>,
     /// For a merge: commits it brings in.
     pub incoming_count: usize,
-    /// For a rebase: the commit it stopped on and how many there are, from 1.
+    /// For a rebase or `git am`: the commit or patch it stopped on and how many there are,
+    /// from 1.
     pub step: Option<(usize, usize)>,
     /// Files with unresolved conflicts.
     pub conflicted: usize,
@@ -238,14 +241,50 @@ impl Repo {
         let here_label = here.clone().unwrap_or_else(|| "HEAD".to_owned());
 
         // `git am` keeps its state in rebase-apply too, marked by `applying`.
+        let applying = exists("rebase-apply/applying");
         let rebase_dir = if exists("rebase-merge") {
             Some("rebase-merge")
-        } else if exists("rebase-apply") && !exists("rebase-apply/applying") {
+        } else if exists("rebase-apply") && !applying {
             Some("rebase-apply")
         } else {
             None
         };
-        let mut op = if let Some(state) = rebase_dir {
+        let mut op = if applying {
+            let file = |name: &str| read(&format!("rebase-apply/{name}"));
+            let next: Option<usize> = file("next").and_then(|n| n.parse().ok());
+            let step = next.zip(file("last").and_then(|n| n.parse().ok()));
+            // The patch it stopped on: its sha from the mail, its author and subject from what
+            // git read out of it.
+            let info = file("info").unwrap_or_default();
+            let field = |name: &str| info.lines().find_map(|l| l.strip_prefix(name)).map(str::trim);
+            let id = next
+                .and_then(|n| std::fs::read(dir.join(format!("rebase-apply/{n:04}"))).ok())
+                .and_then(|mail| crate::patches::mail_id(&mail))
+                .unwrap_or_default();
+            // Its side of a conflict goes by the sha it was made from, as a picked commit's does.
+            let label = if id.is_empty() { "patch".to_owned() } else { short(&id) };
+            let commit = field("Subject:").map(|summary| CommitBrief {
+                id,
+                summary: summary.to_owned(),
+                author_name: field("Author:").unwrap_or_default().to_owned(),
+                time: field("Date:")
+                    .and_then(|d| gix::date::parse(d, None).ok())
+                    .map_or(0, |t| t.seconds),
+            });
+            Operation {
+                kind: OperationKind::Am,
+                branch: here.clone(),
+                incoming: None,
+                commit,
+                incoming_count: 0,
+                step,
+                conflicted: 0,
+                ours_label: here_label,
+                theirs_label: label,
+                yours: ConflictSide::Ours,
+                message: None,
+            }
+        } else if let Some(state) = rebase_dir {
             let file = |name: &str| read(&format!("{state}/{name}"));
             let branch = file("head-name").map(|n| n.strip_prefix("refs/heads/").unwrap_or(&n).to_owned());
             let onto = file("onto").map(|sha| name_of(&sha));
@@ -844,7 +883,7 @@ impl Repo {
 
     fn current_operation(&self) -> Result<Operation> {
         self.operation()?
-            .ok_or_else(|| Error::Git("no merge, rebase, cherry-pick or revert is in progress".into()))
+            .ok_or_else(|| Error::Git("no merge, rebase, cherry-pick, revert or git am is in progress".into()))
     }
 
     pub(crate) fn plan_continue(&self, message: Option<&str>) -> Result<Vec<GitCommand>> {
@@ -874,6 +913,8 @@ impl Repo {
                 GitCommand::new(["revert", "--continue"]).comment("commits the revert with the resolved files")
             }
             OperationKind::StashApply => return self.plan_finish_apply(&self.pending()?),
+            OperationKind::Am => GitCommand::new(["am", "--continue"])
+                .comment("commits the patch with the resolved files and applies the rest"),
         }];
         if op.kind == OperationKind::Rebase {
             commands.extend(self.return_after(false));
@@ -905,6 +946,9 @@ impl Repo {
                 GitCommand::new(["revert", "--abort"]).comment(format!("{branch} goes back to before the revert"))
             }
             OperationKind::StashApply => return self.plan_undo_apply(&self.pending()?),
+            OperationKind::Am => GitCommand::new(["am", "--abort"]).comment(format!(
+                "{branch} goes back to before the patches, without their commits"
+            )),
         }];
         if op.kind == OperationKind::Rebase {
             commands.extend(self.return_after(true));
@@ -922,7 +966,14 @@ impl Repo {
             OperationKind::CherryPick => {
                 GitCommand::new(["cherry-pick", "--skip"]).comment(format!("leaves {commit} out"))
             }
-            _ => return Err(Error::Git("only a rebase or cherry-pick can skip a commit".into())),
+            OperationKind::Am => {
+                GitCommand::new(["am", "--skip"]).comment("leaves this patch out and goes on with the next one")
+            }
+            _ => {
+                return Err(Error::Git(
+                    "only a rebase, cherry-pick or git am can skip a commit".into(),
+                ));
+            }
         }];
         if op.kind == OperationKind::Rebase {
             commands.extend(self.return_after(false));

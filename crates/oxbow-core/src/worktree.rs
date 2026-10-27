@@ -309,6 +309,23 @@ pub enum Action {
     CherryPick {
         commit: String,
     },
+    /// Write commits as patch files (`git format-patch`): those of `to` that `since` doesn't
+    /// have, or without `since` the newest `count` up to `to`. A numbered file each in the
+    /// folder `into`, or with `one_file` all of them in the file `into`.
+    SavePatches {
+        to: String,
+        #[serde(default)]
+        since: Option<String>,
+        count: usize,
+        into: String,
+        #[serde(default)]
+        one_file: bool,
+    },
+    /// Apply the patch files at `paths`, in order: mailed patches become commits (`git am`),
+    /// a plain diff goes into the files uncommitted (`git apply`).
+    ApplyPatches {
+        paths: Vec<String>,
+    },
     /// Add a commit that undoes `commit`.
     Revert {
         commit: String,
@@ -1524,6 +1541,14 @@ impl Repo {
             ))],
             Action::TakeFile { path, side } => self.plan_take_file(path, *side)?,
             Action::CherryPick { commit } => self.plan_cherry_pick(commit)?,
+            Action::SavePatches {
+                to,
+                since,
+                count,
+                into,
+                one_file,
+            } => self.plan_save_patches(to, since.as_deref(), *count, into, *one_file)?,
+            Action::ApplyPatches { paths } => self.plan_apply_patches(paths)?,
             Action::Revert { commit } => self.plan_revert(commit)?,
             Action::Reset { commit, mode } => plan_reset(commit, *mode),
             Action::StashPush {
@@ -1753,11 +1778,12 @@ impl Repo {
                 return Err(Error::Secrets(found));
             }
         }
-        // Loading a key changes nothing in the repository. A worktree is a folder: undoing the
+        // Loading a key or saving patches changes nothing in the repository. A worktree is a folder: undoing the
         // branch a new one made would pull it from under that folder, and a removed one's files
         // were never in a snapshot. A submodule's folder is another repository, also in no
         // snapshot.
         if let Action::AddSshKey { .. }
+        | Action::SavePatches { .. }
         | Action::WorktreeAdd { .. }
         | Action::WorktreeRemove { .. }
         | Action::WorktreeLock { .. }

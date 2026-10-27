@@ -22,6 +22,7 @@
   import OperationBanner from "./lib/OperationBanner.svelte";
   import { draftSaves } from "./lib/conflictDrafts";
   import { abortRequest, continueRequest, describe, mergeRequest, skipRequest } from "./lib/merge";
+  import { applyPatchesRequest, choosePatchFiles, savePatchesRequest, type PatchTarget } from "./lib/patches";
   import { stashMenu, stashRequest } from "./lib/stash";
   import { newWorktreeRequest } from "./lib/worktrees";
   import StashesView from "./lib/StashesView.svelte";
@@ -1162,6 +1163,9 @@
     }
     add("branch", newBranch, h.head.branch ? "Create Branch…" : "Create Branch at HEAD…");
     if (h.head.branch && !busy) add("editStack", () => openStack(null));
+    const saving = selectedRow && !selectedRow.worktree && !h.stashes.some((s) => s.id === selectedRow.id) ? patchTarget(selectedRow) : null;
+    if (saving) add("savePatches", () => void run(savePatchesRequest(saving)), saving.count === 1 && !saving.since ? "Save as Patch…" : undefined);
+    if (!busy) add("applyPatches", () => void applyPatches());
     if (operation?.conflicted) add("resolve", () => (resolving = true));
     add("undo", () => void undoLatest());
     add("redo", () => void redoLatest());
@@ -1397,6 +1401,35 @@
   /** Why no fix can run now: something git is in the middle of comes first. */
   const fixBusy = $derived(operation ? `Finish or abort the ${describe(operation).noun.toLowerCase()} in progress first.` : history?.bisect ? "Finish the bisect first." : null);
 
+  /** The commits Save as Patches writes for `row`: the pair picked with ⌘-click when `row` is
+   *  one of them and the older one is before the newer, else `row` alone. */
+  function patchTarget(row: HistoryRow): PatchTarget {
+    if (pair && history && (row.id === pair.older.id || row.id === pair.newer.id)) {
+      const { older, newer } = pair;
+      const since = older.parents[0];
+      if (since && ancestors(history, newer.id).has(older.id)) {
+        const before = ancestors(history, since);
+        const count = [...ancestors(history, newer.id)].filter((id) => !before.has(id) && (rowsById.get(id)?.parents.length ?? 1) < 2).length;
+        return {
+          to: newer.id,
+          since,
+          count,
+          name: newer.labels.find((l) => l.kind === "local")?.name ?? newer.summary,
+          what: ["The commits from ", { code: older.id.slice(0, 7) }, " ", { quote: older.summary }, " to ", { code: newer.id.slice(0, 7) }, " ", { quote: newer.summary }],
+        };
+      }
+    }
+    return { to: row.id, since: null, count: 1, name: row.summary, what: ["Commit ", { code: row.id.slice(0, 7) }, " ", { quote: row.summary }] };
+  }
+
+  /** Apply Patches: pick the files, then the sheet shows what they bring. */
+  async function applyPatches() {
+    const ctx = branchCtx;
+    if (!ctx) return;
+    const paths = await choosePatchFiles().catch((err) => (confirm.fail(err), null));
+    if (paths && branchCtx === ctx) await run(applyPatchesRequest(ctx, paths));
+  }
+
   /** The right-click menu of a commit in the graph. */
   function commitMenu(row: HistoryRow): MenuEntry[] {
     const ctx = branchCtx;
@@ -1499,6 +1532,8 @@
       });
     }
     group(tagging);
+    const saving = patchTarget(row);
+    group([item(saving.since ? `Save ${saving.count} Commits as Patches…` : "Save as Patch…", menuIcons.patch, () => run(savePatchesRequest(saving)))]);
     // Compare this commit, named by its branch when one ends here, with HEAD or the default branch.
     const name = row.labels.find((l) => l.kind === "local")?.name ?? row.id.slice(0, 7);
     const against = [...new Set([isHead ? null : here, history.trunk])].filter((b): b is string => !!b && b !== name);
@@ -2432,7 +2467,7 @@
           <div class="title" data-tauri-drag-region>
             {#if showConflicts && operation}
               <span class="name">Resolve Conflicts</span>
-              <span class="sub">{describe(operation).noun} in progress · {operation.conflicted} {operation.conflicted === 1 ? "file" : "files"} left</span>
+              <span class="sub">{operation.kind === "am" ? "Applying patches" : `${describe(operation).noun} in progress`} · {operation.conflicted} {operation.conflicted === 1 ? "file" : "files"} left</span>
             {:else if view === "file" && nav.file}
               <span class="name">{nav.file.path.slice(nav.file.path.lastIndexOf("/") + 1)}</span>
               {@const line = fileLive ? fileLive.line : (nav.file.line ?? null)}

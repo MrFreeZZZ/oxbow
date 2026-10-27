@@ -151,6 +151,8 @@
           ? `Picked commit${op.commit ? ` · ${op.commit.summary}` : ""}`
           : op.kind === "revert"
             ? "The revert"
+            : op.kind === "am"
+              ? `The patch${op.step && op.step[1] > 1 ? ` ${op.step[0]} of ${op.step[1]}` : ""}${op.commit ? ` · ${op.commit.summary}` : ""}`
             : op.kind === "stashApply"
               ? `The stash${op.message ? ` · ${op.message}` : ""}`
               : op.incoming
@@ -777,6 +779,8 @@
     <p class="hint">
       {#if op.kind === "stashApply"}
         Nothing here is final until you finish. Undo Apply takes back what the stash brought and keeps the stash.
+      {:else if op.kind === "am"}
+        Nothing here is final until you continue. Abort takes back every patch of this run: {op.branch ?? "HEAD"} goes back to before them.
       {:else}
         Nothing here is final until you {op.kind === "merge" || op.kind === "squash" ? "commit" : "continue"}. Abort puts everything back as it was before the {op.kind === "cherryPick" ? "cherry-pick" : op.kind}.
       {/if}

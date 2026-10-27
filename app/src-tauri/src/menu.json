@@ -419,6 +419,24 @@
     "accelerator": null
    },
    {
+    "id": "savePatches",
+    "title": "Save as Patches…",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "applyPatches",
+    "title": "Apply Patches…",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "-",
+    "title": "",
+    "enabled": true,
+    "accelerator": null
+   },
+   {
     "id": "fixMistake",
     "title": "Fix a Mistake…",
     "enabled": false,

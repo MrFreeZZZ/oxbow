@@ -23,6 +23,7 @@
   } from "./branches";
   import { pushRequest } from "./remote";
   import { mergeRequest } from "./merge";
+  import { savePatchesRequest } from "./patches";
   import { stashMenu } from "./stash";
   import { deleteTagRequest, fetchTagsRequest, isLocalTag, newTagRequest, pushTagsRequest } from "./tags";
   import { start } from "./start.svelte";
@@ -160,7 +161,7 @@
   const busy = $derived.by(() => {
     const op = history.operation;
     if (!op?.branch) return null;
-    const word = { merge: "MERGING", squash: "SQUASHING", rebase: "REBASING", cherryPick: "PICKING", revert: "REVERTING", stashApply: "APPLYING" }[op.kind];
+    const word = { merge: "MERGING", squash: "SQUASHING", rebase: "REBASING", cherryPick: "PICKING", revert: "REVERTING", stashApply: "APPLYING", am: "PATCHING" }[op.kind];
     return { branch: op.branch, word };
   });
 
@@ -347,6 +348,12 @@
     entries.push({ kind: "sep" });
     entries.push(item(`New Branch from ${ref.name}…`, menuIcons.branch, () => run(newBranchRequest(ctx, ref.name))));
     if (!isTrunk) entries.push(item("Rename…", menuIcons.edit, () => run(renameRequest(ctx, ref))));
+    // The branch's own commits, the ones the default branch doesn't have.
+    const trunk = history.trunk;
+    if (!isTrunk && trunk) {
+      const what = ["The commits of ", { branch: ref.name, color: ctx.colorOf(ref.name) }, " that ", { branch: trunk, color: ctx.colorOf(trunk) }, " doesn’t have"];
+      entries.push(item("Save as Patches…", menuIcons.patch, () => run(savePatchesRequest({ to: ref.name, since: trunk, count: 0, name: ref.name, what }))));
+    }
     entries.push(item("Copy Name", menuIcons.copy, () => copy(ref.name)));
     if (!isHead && !isTrunk && !t?.gone && !elsewhere) {
       entries.push({ kind: "sep" });
