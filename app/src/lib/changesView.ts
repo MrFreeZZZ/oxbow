@@ -41,12 +41,11 @@ export function keepShown(shown: Shown | null, lists: Lists): Shown | null {
   if (!shown) return firstShown(lists);
   if (shown.kind === "all") return shown;
   if (shown.kind === "files") {
-    // Files of a selection that left its side drop out of it; once none is left, the list they
-    // were in is shown.
+    // Files of a selection that left its side drop out of it, the rest stay ticked; once none is
+    // left, the list they were in is shown.
     const there = new Set((shown.side === "staged" ? lists.staged : lists.unstaged).map((f) => f.path));
     const paths = shown.paths.filter((p) => there.has(p));
-    if (paths.length > 1) return paths.length === shown.paths.length ? shown : { ...shown, paths };
-    if (paths.length) return { kind: "file", path: paths[0], side: shown.side };
+    if (paths.length) return paths.length === shown.paths.length ? shown : { ...shown, paths };
     return shown.untracked ? { kind: "all", side: shown.side, untracked: true } : { kind: "all", side: shown.side };
   }
   const has = (side: Side) => (side === "staged" ? lists.staged : [...lists.conflicted, ...lists.unstaged]).some((f) => f.path === shown.path);

@@ -443,6 +443,23 @@
     show({ kind: "file", path: file.path, side: sideOf(group) });
   }
 
+  /** The files ticked in each list: only a selection of files, not the one file open. */
+  const ticks = $derived(shown?.kind === "files" ? pickSet : { unstaged: new Set<string>(), staged: new Set<string>(), untracked: new Set<string>() });
+
+  /** A file's checkbox ticks or unticks it, Shift a range from the one ticked last; the diff
+   *  shows the ticked files, and the list whole once none is. */
+  function tickFile(event: MouseEvent, file: FileChange, group: List) {
+    // The row takes the keyboard, so ↑ ↓ and Space go on from it.
+    ((event.currentTarget as HTMLElement).nextElementSibling as HTMLElement | null)?.focus({ preventScroll: true });
+    if (dragged) return;
+    const list = [...ticks[group]];
+    const paths = event.shiftKey ? pickRange(order(group), list, anchor?.group === group ? anchor.path : null, file.path) : ticks[group].has(file.path) ? list.filter((p) => p !== file.path) : [...list, file.path];
+    anchor = { group, path: file.path };
+    const side = sideOf(group);
+    const fresh = group === "untracked" ? { untracked: true } : {};
+    show(paths.length ? { kind: "files", paths, side, ...fresh } : { kind: "all", side, ...fresh });
+  }
+
   /** Every file shown once, in the order of the lists, each side led by all of its files: the
    *  steps of Next Tab and Previous Tab. */
   const steps = $derived.by((): Shown[] => {
@@ -1069,6 +1086,19 @@
     style:background={open || picked ? tint(color) : undefined}
     oncontextmenu={(e) => fileMenu(e, file, group)}
   >
+    {#if group !== "conflicted"}
+      {@const on = ticks[group].has(file.path)}
+      <button
+        class="tick"
+        class:on
+        role="checkbox"
+        aria-checked={on}
+        tabindex="-1"
+        aria-label="{on ? 'Unselect' : 'Select'} {file.path}"
+        title="Select for {group === 'staged' ? 'Unstage' : 'Stage'} and the file menu · Shift-click selects a range"
+        onclick={(e) => tickFile(e, file, group)}
+      ><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" /></svg></button>
+    {/if}
     <button
       class="name"
       onclick={(e) => rowClick(e, file, group)}
@@ -1842,6 +1872,39 @@
   }
   .file.nested {
     padding-left: 44px;
+  }
+  /* Always shown, in the room left of the badge; drawn like the line checkboxes of a diff. */
+  .tick {
+    position: absolute;
+    left: 4px;
+    top: 7px;
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    border-radius: var(--radius-xs);
+    border: 1.2px solid var(--text2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .file.nested .tick {
+    left: 26px;
+  }
+  .tick svg {
+    width: 11px;
+    height: 11px;
+    fill: none;
+    stroke: transparent;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .tick.on {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .tick.on svg {
+    stroke: #fff;
   }
   /* Filter and List / Folders over the lists. */
   .tools {
