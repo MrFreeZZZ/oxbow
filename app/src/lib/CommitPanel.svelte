@@ -409,7 +409,8 @@
           Commit Details
         </button>
         {#if !detailsShut}
-          {#if detail?.body}<p class="message selectable">{detail.body}</p>{/if}
+          <!-- The whole message: its summary first, as written, then the description. -->
+          <div class="message selectable"><b>{detail?.summary ?? row.summary}</b>{#if detail?.body}<p>{detail.body}</p>{/if}</div>
           <dl>
             <dt>Commit</dt>
             <dd>
@@ -884,6 +885,12 @@
     overflow-wrap: anywhere;
     max-height: 160px;
     overflow-y: auto;
+  }
+  .message b {
+    font-weight: 600;
+  }
+  .message p {
+    margin: 6px 0 0;
   }
   dl {
     margin: 0;
