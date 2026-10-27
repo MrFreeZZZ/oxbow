@@ -104,6 +104,22 @@ fn a_hard_reset_names_ignored_files_it_writes_over() {
 }
 
 #[test]
+fn an_ignored_file_just_as_the_commit_has_it_is_not_named() {
+    let mut fx = Fixture::new();
+    fx.commit(".env", "TOKEN=example\n", "Root");
+    let root = fx.git(&["rev-parse", "HEAD"]);
+    fx.git(&["rm", "-q", "--cached", ".env"]);
+    fx.commit(".gitignore", ".env\n", "Ignore .env");
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let reset = Action::Reset {
+        commit: root,
+        mode: ResetMode::Hard,
+    };
+    assert!(repo.not_kept(&reset).unwrap().is_empty());
+}
+
+#[test]
 fn a_hard_reset_names_files_in_a_folder_where_the_commit_has_a_file() {
     // The older commit has a file `dir`; now `dir` is a folder of untracked files.
     let mut fx = Fixture::new();
