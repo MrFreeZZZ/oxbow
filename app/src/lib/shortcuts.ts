@@ -103,11 +103,14 @@ export const COMMANDS = {
   fixMistake: { category: "Git", title: "Fix a Mistake…", mac: ["Alt+Mod+Z"], other: ["Alt+Mod+Z"] },
   // The commit message's box: Git: Commit, as in VS Code's Source Control.
   commitNow: { category: "Changes", title: "Commit", mac: ["Mod+Enter"], other: ["Mod+Enter"], scope: "changes" },
-  // The list of changed files, while it has the focus: ↑ and ↓ go through the files as in
-  // Finder, Space stages the open file or takes it out, ⌥Space stages it and opens the next.
+  // The list of changed files, while it has the focus, as any list with checkboxes: ↑ and ↓ go
+  // through the files, Space ticks one, ⌘A ticks them all; Enter stages the open file (or the
+  // ticked ones) or takes it out, ⌥Space stages it and opens the next.
   nextFile: { category: "Changes", title: "Next File", mac: ["Down"], other: ["Down"], scope: "files" },
   previousFile: { category: "Changes", title: "Previous File", mac: ["Up"], other: ["Up"], scope: "files" },
-  stageFile: { category: "Changes", title: "Stage or Unstage File", mac: ["Space"], other: ["Space"], scope: "files" },
+  tickFile: { category: "Changes", title: "Select or Unselect File", mac: ["Space"], other: ["Space"], scope: "files" },
+  selectAllFiles: { category: "Changes", title: "Select All Files", mac: ["Mod+A"], other: ["Mod+A"], scope: "files" },
+  stageFile: { category: "Changes", title: "Stage or Unstage File", mac: ["Enter"], other: ["Enter"], scope: "files" },
   stageAndNext: { category: "Changes", title: "Stage & Next File", mac: ["Alt+Space"], other: ["Alt+Space"], scope: "files" },
   // Edit Stack: ⌘↩ runs it; ⌥↑ and ⌥↓ as VS Code's Move Line Up and Down; a letter per action,
   // as git's own todo list names them.

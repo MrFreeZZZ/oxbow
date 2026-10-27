@@ -1,6 +1,6 @@
 mod support;
 
-use oxbow_core::{Action, FailureKind, LineKind, Repo, Side};
+use oxbow_core::{Action, FailureKind, FileStatus, LineKind, Repo, Side};
 use support::Fixture;
 
 const BEFORE: &str = "one\ntwo\nthree\nfour\nfive\n";
@@ -133,6 +133,7 @@ fn a_file_is_ignored_with_a_staged_rule() {
 
     let ignore = Action::Ignore {
         pattern: "*.log".into(),
+        untrack: None,
     };
     let plan = repo.plan(&ignore).unwrap();
     assert_eq!(plan.commands[0].before.as_deref(), Some("echo '*.log' >> .gitignore"));
@@ -142,6 +143,7 @@ fn a_file_is_ignored_with_a_staged_rule() {
     repo.perform(&ignore).unwrap();
     repo.perform(&Action::Ignore {
         pattern: "/.env.local".into(),
+        untrack: None,
     })
     .unwrap();
     assert_eq!(
@@ -155,6 +157,41 @@ fn a_file_is_ignored_with_a_staged_rule() {
 }
 
 #[test]
+fn a_tracked_file_is_ignored_and_no_longer_tracked_but_kept_on_disk() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    fx.commit("config/local.json", "{}\n", "Add local config");
+    fx.write("config/local.json", "{\"mine\": 1}\n");
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let ignore = Action::Ignore {
+        pattern: "/config/local.json".into(),
+        untrack: Some("config/local.json".into()),
+    };
+    let plan = repo.plan(&ignore).unwrap();
+    assert_eq!(
+        plan.commands[0].display(),
+        "git rm -r --cached --quiet -- config/local.json"
+    );
+    assert_eq!(plan.commands[1].display(), "git add -- .gitignore");
+    repo.perform(&ignore).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(fx.path().join("config/local.json")).unwrap(),
+        "{\"mine\": 1}\n"
+    );
+    let tree = repo.working_tree().unwrap();
+    let staged: Vec<_> = tree.staged.iter().map(|f| (f.path.as_str(), f.status)).collect();
+    assert_eq!(
+        staged,
+        [
+            (".gitignore", FileStatus::Added),
+            ("config/local.json", FileStatus::Deleted)
+        ]
+    );
+    assert!(tree.unstaged.is_empty(), "{:?}", tree.unstaged);
+}
+
+#[test]
 fn ignoring_keeps_a_gitignore_that_is_not_utf8() {
     let mut fx = Fixture::new();
     fx.commit("a.txt", "a\n", "Root");
@@ -163,6 +200,7 @@ fn ignoring_keeps_a_gitignore_that_is_not_utf8() {
     let repo = Repo::open(fx.path()).unwrap();
     repo.perform(&Action::Ignore {
         pattern: "new-file.log".into(),
+        untrack: None,
     })
     .unwrap();
     assert_eq!(
@@ -190,6 +228,7 @@ fn ignoring_never_writes_through_a_gitignore_symlink() {
     let err = repo
         .perform(&Action::Ignore {
             pattern: "*.log".into(),
+            untrack: None,
         })
         .unwrap_err();
     assert!(err.to_string().contains("not a plain file"), "{err}");

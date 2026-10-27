@@ -827,7 +827,7 @@ impl Repo {
             Action::StageHunk { path, lines, .. } => ("stage", format!("Stage {}", hunk(lines, path))),
             Action::UnstageHunk { path, lines, .. } => ("unstage", format!("Unstage {}", hunk(lines, path))),
             Action::DiscardHunk { path, lines, .. } => ("discard", format!("Discard {}", hunk(lines, path))),
-            Action::Ignore { pattern } => ("ignore", format!("Ignore {pattern}")),
+            Action::Ignore { pattern, .. } => ("ignore", format!("Ignore {pattern}")),
             Action::Commit { amend: true, .. } => ("commit", format!("Amend the last commit on {here}")),
             Action::Commit { .. } => ("commit", format!("Commit to {here}")),
             Action::Fetch { remote } => ("fetch", format!("Fetch {}", remote.as_deref().unwrap_or("all remotes"))),

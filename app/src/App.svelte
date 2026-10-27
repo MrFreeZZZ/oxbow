@@ -138,10 +138,9 @@
   let searchField = $state<SearchField>();
   let findField = $state<FindField>();
   let stashesView = $state<StashesView>();
-  let panelWidth = $state(640);
-  /** The width of the panel with Changes, kept apart from a commit's; until it is dragged, as wide
-   *  as the graph lets it be. */
-  let changesWidth = $state<number | null>(null);
+  /** The width of the details panel, one for Changes and a commit so the graph keeps its width
+   *  between them; until it is dragged, as wide as the graph lets it be. */
+  let panelWidth = $state<number | null>(null);
   /** Goes up on every reload of the history, so the changes panel reloads too. */
   let version = $state(0);
   /** The Conflicts screen is open in place of History. */
@@ -262,7 +261,7 @@
   /** A hidden sidebar's room goes to the details panel, as in Mail: the graph keeps its width and only moves to the edge. */
   const panelBonus = $derived(!narrow && sideHidden ? SIDEBAR : 0);
   const shownPanelWidth = $derived.by(() =>
-    onChanges && changesWidth === null ? panelMax : Math.min(Math.max((onChanges ? (changesWidth ?? panelWidth) : panelWidth) + panelBonus, PANEL_MIN), panelMax),
+    panelWidth === null ? panelMax : Math.min(Math.max(panelWidth + panelBonus, PANEL_MIN), panelMax),
   );
   /** The screen next to the sidebar. */
   let view = $state<"history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull" | "series">("history");
@@ -2219,19 +2218,15 @@
     const startWidth = shownPanelWidth;
     const target = event.currentTarget as HTMLElement;
     target.setPointerCapture(event.pointerId);
-    // Changes keeps a width of its own.
-    const own = onChanges;
     const move = (e: PointerEvent) => {
       // Saved without the hidden sidebar's room, so the graph keeps its width when the sidebar comes back.
       const width = Math.max(Math.min(Math.max(startWidth - (e.clientX - startX), PANEL_MIN), panelMax) - panelBonus, PANEL_MIN);
-      if (own) changesWidth = width;
-      else panelWidth = width;
+      panelWidth = width;
     };
     const up = () => {
       target.removeEventListener("pointermove", move);
       target.removeEventListener("pointerup", up);
-      if (own && changesWidth !== null) api.setSetting(settings.changesWidth, Math.round(changesWidth)).catch(() => {});
-      else if (!own) api.setSetting(settings.detailsWidth, Math.round(panelWidth)).catch(() => {});
+      if (panelWidth !== null) api.setSetting(settings.detailsWidth, Math.round(panelWidth)).catch(() => {});
     };
     target.addEventListener("pointermove", move);
     target.addEventListener("pointerup", up);
@@ -2246,11 +2241,10 @@
   });
 
   $effect(() => {
-    api.getSetting<number>(settings.detailsWidth).then((width) => {
+    // Changes once kept a width of its own: it serves until the shared one is saved.
+    Promise.all([api.getSetting<number>(settings.detailsWidth), api.getSetting<number>(settings.changesWidth)]).then(([details, changes]) => {
+      const width = typeof details === "number" ? details : changes;
       if (typeof width === "number") panelWidth = Math.max(width, PANEL_MIN);
-    });
-    api.getSetting<number>(settings.changesWidth).then((width) => {
-      if (typeof width === "number") changesWidth = Math.max(width, PANEL_MIN);
     });
     api.getSetting<boolean>(settings.changesExpanded).then((on) => {
       if (typeof on === "boolean") changesExpanded = on;
@@ -2726,7 +2720,7 @@
         {/key}
       {:else if view === "stashes" && branchCtx}
         {#key repo.path}
-          <StashesView bind:this={stashesView} {history} ctx={branchCtx} {colorOf} bind:selected={stashSel} {version} {run} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "it" : text}.`)} />
+          <StashesView bind:this={stashesView} {history} ctx={branchCtx} {colorOf} bind:selected={stashSel} {version} {run} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "it" : text}.`)} panelWidth={shownPanelWidth} onGrip={startResize} />
         {/key}
       {:else}
       <!-- svelte-ignore a11y_no_static_element_interactions -->

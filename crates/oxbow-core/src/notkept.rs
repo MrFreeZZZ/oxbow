@@ -267,6 +267,10 @@ impl Repo {
             }
         }
         let (listed, ignored): (Vec<&String>, Vec<&String>) = found.iter().partition(|p| untracked.contains(*p));
+        // An ignored file just as the tree has it loses nothing, such as one Add to .gitignore
+        // stopped tracking and an undo tracks again.
+        let same = self.same_as_in(tree, &ignored);
+        let ignored: Vec<&String> = ignored.into_iter().filter(|p| !same.contains(*p)).collect();
         let mut out: Vec<NotKept> = self.big_files(listed).into_iter().collect();
         if !ignored.is_empty() {
             let mut files: Vec<SizedFile> = ignored
@@ -313,6 +317,42 @@ impl Repo {
     }
 
     /// Every file path in a commit's or a tree's tree.
+    /// Those of `paths` whose file on disk has the very content of the file at its path in `tree`.
+    fn same_as_in(&self, tree: &str, paths: &[&String]) -> BTreeSet<String> {
+        let files: Vec<&String> = paths
+            .iter()
+            .copied()
+            .filter(|p| self.workdir().join(p).symlink_metadata().is_ok_and(|m| m.is_file()))
+            .collect();
+        if files.is_empty() {
+            return BTreeSet::new();
+        }
+        let listed = |args: Vec<&str>| {
+            self.run(&GitCommand::new(args))
+                .map(|out| out.stdout)
+                .unwrap_or_default()
+        };
+        let mut ls = vec!["ls-tree", "-r", "-z", tree, "--"];
+        ls.extend(files.iter().map(|p| p.as_str()));
+        let in_tree: std::collections::HashMap<&str, String> = listed(ls)
+            .split('\0')
+            .filter_map(|entry| {
+                let (meta, path) = entry.split_once('\t')?;
+                let id = meta.split(' ').nth(2)?;
+                Some((files.iter().find(|p| p.as_str() == path)?.as_str(), id.to_owned()))
+            })
+            .collect();
+        let mut hash = vec!["hash-object", "--"];
+        hash.extend(files.iter().map(|p| p.as_str()));
+        let ids = listed(hash);
+        files
+            .iter()
+            .zip(ids.lines())
+            .filter(|(p, id)| in_tree.get(p.as_str()).is_some_and(|t| t == id))
+            .map(|(p, _)| (*p).clone())
+            .collect()
+    }
+
     fn tree_paths(&self, tree: &str) -> Result<BTreeSet<String>> {
         Ok(self
             .run(&GitCommand::new(["ls-tree", "-r", "-z", "--name-only", tree]))?
