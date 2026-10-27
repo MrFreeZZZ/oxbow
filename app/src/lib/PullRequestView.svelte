@@ -15,6 +15,10 @@
   import { lane, person, plate, relativeTime, shortId, splitPath, tint } from "./format";
   import { kept } from "./kept";
   import PullFiles from "./PullFiles.svelte";
+  import ReviewThread from "./ReviewThread.svelte";
+  import FinishReview from "./FinishReview.svelte";
+  import { ReviewSession } from "./review.svelte";
+  import { countWords, spotLabel } from "./reviewDraft";
   import { pullWorktreeRequest, worktreeOf } from "./worktrees";
   import { softArrows } from "./shapes";
   import { editStackRequest, freshDraft, planOf } from "./stack";
@@ -121,6 +125,21 @@
     // `load` reads `pr`; tracking it here would load again after every load.
     untrack(() => load(number));
   });
+
+  /** Reviewing it: the draft, the Viewed ticks, the comment being written. */
+  let review = $state<ReviewSession | null>(null);
+  $effect(() => {
+    const p = pr;
+    untrack(() => {
+      if (!p) review = null;
+      else if (review?.number === p.number) review.pr = p;
+      else review = new ReviewSession(p, run, () => load(p.number));
+    });
+  });
+  let finishAt = $state<HTMLButtonElement>();
+  const mine = $derived(!!pr && !!github.me && pr.author.login === github.me);
+  /** Finish Review shows on someone else's open pull request, and on one's own with comments to send. */
+  const reviewable = $derived(!!review && !!github.me && pr?.state === "open" && (!mine || review.count > 0));
 
   async function load(number: number) {
     loading = !pr || pr.number !== number;
@@ -642,6 +661,14 @@
   </span>
 {/snippet}
 
+{#snippet finishButton(r: ReviewSession)}
+  <button class="button primary small" bind:this={finishAt} onclick={() => (r.finishing = !r.finishing)} aria-expanded={r.finishing}>
+    <svg class="icon small" viewBox="0 0 16 16"><path d="M3 4a1.5 1.5 0 0 1 1.5-1.5h7A1.5 1.5 0 0 1 13 4v5a1.5 1.5 0 0 1-1.5 1.5H7L4.5 13v-2.5A1.5 1.5 0 0 1 3 9z" /></svg>
+    Finish Review
+    {#if r.count}<span class="finish-count">{r.count}</span>{/if}
+  </button>
+{/snippet}
+
 {#snippet dot(icon: string, bg: string, fg: string)}
   <span class="dot" style:background={bg} style:color={fg}>
     <svg viewBox="0 0 16 16"><path d={ICONS[icon] ?? ICONS.dot} /></svg>
@@ -729,9 +756,17 @@
         <button role="tab" class="tab" class:on={tab === "files"} aria-selected={tab === "files"} onclick={() => (tab = "files")}
           style:--on-bg={tint(colorOf(pr.head))} style:--on-fg={plate(colorOf(pr.head))}>Files {pr.changedFiles}</button>
         {#if error}<span class="load-error">{error}</span>{/if}
-        {#if rewrite || worktreeLabel}<span class="grow"></span>{/if}
-        {#if worktreeLabel && pr.state === "open"}
-          <button class="rewrite" onclick={checkOut} title={worktreeLabel === "Open Its Worktree" ? `${pr.head} is checked out in another worktree` : `A working folder of its own with #${pr.number} checked out`}>
+        {#if rewrite || worktreeLabel || (tab === "files" && review)}<span class="grow"></span>{/if}
+        {#if tab === "files" && review}
+          <span class="viewed-count">{review.viewed.size} of {review.files} viewed</span>
+          {#if reviewable}
+            <span class="finish">
+              {@render finishButton(review)}
+              {#if review.finishing}<FinishReview session={review} {mine} anchor={finishAt} />{/if}
+            </span>
+          {/if}
+        {:else if worktreeLabel && pr.state === "open"}
+          <button class="rewrite keep" onclick={checkOut} title={worktreeLabel === "Open Its Worktree" ? `${pr.head} is checked out in another worktree` : `A working folder of its own with #${pr.number} checked out`}>
             <svg class="icon small" viewBox="0 0 16 16"><path d="M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1zM8 7.5v3.5M6.25 9.25h3.5" /></svg>
             {worktreeLabel}
           </button>
@@ -745,7 +780,7 @@
       </div>
 
       {#if tab === "files"}
-        <PullFiles {pr} color={colorOf(pr.head)} {version} />
+        {#if review}<PullFiles session={review} me={github.me} color={colorOf(pr.head)} {version} />{/if}
       {:else}
       <div class="scroll">
         {#if tab === "conversation"}
@@ -797,8 +832,11 @@
                   {@render avatar(first.author.login, first.author.avatarUrl, 30)}
                   <div class="card">
                     <div class="card-head">
-                      <span class="who">{first.author.login}</span><span class="ellipsis">commented on {e.path}</span><span class="when">· {relativeTime(e.time)}</span>
+                      <span class="who">{first.author.login}</span><span class="ellipsis">commented on {e.path}{e.line ? ` ${spotLabel(e)}` : ""}</span><span class="when">· {relativeTime(e.time)}</span>
                       <span class="grow"></span>
+                      {#if review && e.node && pr.state === "open" && github.me}
+                        <button class="button mini text" onclick={() => review?.resolve(e)} title={e.resolved ? "Open the thread again" : "Fold the thread away on GitHub"}>{e.resolved ? "Unresolve" : "Resolve"}</button>
+                      {/if}
                       {#if e.resolved !== null || e.outdated}
                         {@const [bg, fg] = toneOf(e.resolved ? "grey" : e.outdated ? "grey" : "warn")}
                         <span class="badge" style:background={bg} style:color={fg}>{e.resolved ? "Resolved" : e.outdated ? "Outdated" : "Open"}</span>
@@ -812,14 +850,7 @@
                         {/each}
                       </div>
                     {/if}
-                    <p class="text selectable">{first.body}</p>
-                    {#each e.comments.slice(1) as reply, j (j)}
-                      <div class="reply">
-                        {@render avatar(reply.author.login, reply.author.avatarUrl, 20)}
-                        <span class="who">{reply.author.login}</span>
-                        <span class="reply-text selectable">{reply.body}</span>
-                      </div>
-                    {/each}
+                    <div class="thread"><ReviewThread thread={e} session={review} me={github.me} resolve={false} /></div>
                   </div>
                 </div>
               {/if}
@@ -901,6 +932,24 @@
   </section>
 
   <aside class="box" aria-label="Merge" class:hidden={!!pr && tab === "files"}>
+    {#if pr && pr.state === "open" && tab !== "files" && review && reviewable && !mine && (review.count > 0 || (!!github.me && pr.requested.includes(github.me)))}
+      {@const what = countWords(review.draft?.comments.length ?? 0, review.draft?.replies.length ?? 0)}
+      <div class="next yours">
+        <span class="next-label">Your review</span>
+        <span class="next-title">{what ? "Finish it" : "Review it"}</span>
+        <span class="next-text"
+          >{what ? `${what} ${review.count === 1 ? "isn’t" : "aren’t"} sent yet.` : `${pr.author.login} asked you to review it.`}
+          {review.viewed.size} of {review.files} files viewed.</span
+        >
+        <div class="buttons">
+          <span class="finish">
+            {@render finishButton(review)}
+            {#if review.finishing}<FinishReview session={review} {mine} anchor={finishAt} />{/if}
+          </span>
+          <button class="button" onclick={() => (tab = "files")}>Go to Files</button>
+        </div>
+      </div>
+    {/if}
     {#if pr && pr.state === "open"}
       {#if next}
         {@const ready = next.kind === "merge"}
@@ -1302,6 +1351,9 @@
     font-weight: 500;
     white-space: nowrap;
   }
+  .rewrite.keep {
+    flex-shrink: 0;
+  }
   .rewrite-why {
     color: var(--text2);
     font-weight: 400;
@@ -1483,20 +1535,10 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .reply {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding-top: 6px;
+  /* The thread's comments and the reply, edge to edge under the code. */
+  .thread {
+    margin: 0 -12px -10px;
     border-top: 0.5px solid var(--sep);
-    font-size: var(--text-small);
-    min-width: 0;
-  }
-  .reply-text {
-    min-width: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   /* Commits */
@@ -1668,6 +1710,28 @@
   }
   .next .buttons {
     margin-top: 8px;
+  }
+  .next.yours .buttons {
+    justify-content: flex-start;
+  }
+  .finish {
+    display: inline-flex;
+  }
+  .finish-count {
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: var(--radius-pill);
+    background: rgba(255, 255, 255, 0.25);
+    font-size: var(--text-caption);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .viewed-count {
+    font-size: var(--text-small);
+    color: var(--text2);
+    white-space: nowrap;
   }
   .also {
     display: flex;

@@ -10,6 +10,7 @@
   import { person, plate, relativeTime, tint } from "./format";
   import { pullWorktreeRequest, worktreeOf } from "./worktrees";
   import { listFor } from "./reviews";
+  import { countWords } from "./reviewDraft";
 
   let {
     ctx,
@@ -40,8 +41,8 @@
   function draftNote(number: number): string | null {
     const d = drafts[String(number)];
     if (!d) return null;
-    const n = d.comments.length + d.replies.length;
-    return n ? `Your draft · ${n} ${n === 1 ? "comment" : "comments"}` : "Your draft";
+    const what = countWords(d.comments.length, d.replies.length);
+    return what ? `Your draft · ${what}` : "Your draft";
   }
 
   /** What GitHub says of it, in one capsule. */

@@ -49,6 +49,7 @@ app/src/                    Svelte front end
   lib/confirm.svelte.ts     confirmations (ConfirmSheet.svelte);  activity.svelte.ts = Activity
   lib/*.svelte              one component per view/sheet (HistoryList, DiffView, ChangesPanel…)
   lib/ReviewsView.svelte    Reviews screen (lib/reviews.ts sorts it);  PullFiles.svelte = PR Files tab
+  lib/review.svelte.ts      one PR's review: draft, Viewed, sending;  reviewDraft.ts = its pure logic
   lib/*.ts                  pure logic next to its view (diffRows, conflicts, branches, graph…)
   app.css themes.ts branchPalettes.ts   design tokens, code theme Estuary, branch colors
 app/tests/*.test.ts         node:test unit tests for the pure lib/*.ts modules
