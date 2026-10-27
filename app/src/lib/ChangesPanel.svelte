@@ -89,7 +89,7 @@
   import FoldAll from "./FoldAll.svelte";
   import PathName from "./PathName.svelte";
   import WhyNote from "./WhyNote.svelte";
-  import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
+  import Menu, { menuIcons, type MenuEntry, type SubEntry } from "./Menu.svelte";
   import { nav } from "./nav.svelte";
   import { BIG_FILE, bytes } from "./unusual";
   import { commitRecovery, ignoreChoices, ignoreRequest, linesRequest, stashFilesRequest, stashMessageFor, type LinesKind } from "./changes";
@@ -714,6 +714,30 @@
     menu = { x: box.right - 240, y: box.bottom + 4, entries, label: "Stage menu" };
   }
 
+  /** Copy Path/Reference, as in JetBrains IDEs: the path from the disk's root, the name, or the
+   *  path in the repository, of one file or of several on lines of their own. */
+  function copyMenu(paths: string[]): MenuEntry {
+    // Windows paths come with backslashes.
+    const sep = repo.includes("\\") && !repo.includes("/") ? "\\" : "/";
+    const absolute = (path: string) => repo.replace(/[\\/]+$/, "") + sep + path.replaceAll("/", sep);
+    const one = paths.length === 1;
+    const item = (label: string, texts: string[]): SubEntry => ({
+      label,
+      hint: one ? texts[0] : undefined,
+      run: () => navigator.clipboard.writeText(texts.join("\n")).then(() => confirm.say(one ? `Copied ${texts[0]}.` : `Copied ${paths.length} paths.`, "done"), () => {}),
+    });
+    return {
+      kind: "sub",
+      label: "Copy Path/Reference",
+      icon: menuIcons.copy,
+      entries: [
+        item(one ? "Absolute Path" : "Absolute Paths", paths.map(absolute)),
+        item(one ? "File Name" : "File Names", paths.map((p) => splitPath(p).name)),
+        item(one ? "Path from Repository Root" : "Paths from Repository Root", paths),
+      ],
+    };
+  }
+
   function fileMenu(event: MouseEvent, file: FileChange, group: List | "conflicted") {
     event.preventDefault();
     // A right-click on one of several picked files acts on all of them.
@@ -726,7 +750,7 @@
       else entries.push({ kind: "item", label: `Stage ${n} Files`, icon: menuIcons.stage, run: () => actOnPicked(group) });
       entries.push({ kind: "item", label: "Stash These Files…", icon: menuIcons.stash, run: () => act(stashFilesRequest(stashCandidates(), several.map((f) => f.path), stashMessageFor(several[0].path))) });
       entries.push({ kind: "sep" });
-      entries.push({ kind: "item", label: "Copy Paths", icon: menuIcons.copy, run: () => navigator.clipboard.writeText(several.map((f) => f.path).join("\n")).then(() => confirm.say(`Copied ${n} paths.`, "done"), () => {}) });
+      entries.push(copyMenu(several.map((f) => f.path)));
       if (group !== "staged") {
         entries.push({ kind: "sep" });
         entries.push({ kind: "item", label: fresh ? `Delete ${n} Files…` : `Discard ${n} Files…`, icon: menuIcons.drop, danger: true, run: () => actOnPicked(group, "discard") });
@@ -754,12 +778,7 @@
       entries.push({ kind: "item", label: "Open in Editor", icon: menuIcons.open, run: () => api.openInEditor(file.path, null).catch((err) => confirm.fail(err)) });
     if (file.status !== "deleted")
       entries.push({ kind: "item", label: revealLabel, icon: menuIcons.reveal, run: () => api.revealFile(file.path).catch((err) => confirm.fail(err)) });
-    entries.push({
-      kind: "item",
-      label: "Copy Path",
-      icon: menuIcons.copy,
-      run: () => navigator.clipboard.writeText(file.path).then(() => confirm.say(`Copied ${file.path}.`, "done"), () => {}),
-    });
+    entries.push(copyMenu([file.path]));
     if (file.status !== "untracked" && file.status !== "added") entries.push({ kind: "item", label: "File History", icon: menuIcons.history, run: () => nav.openFile(file.path) });
     if (side === "unstaged") {
       entries.push({ kind: "sep" });

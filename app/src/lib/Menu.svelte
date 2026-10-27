@@ -339,8 +339,16 @@
   }
   .submenu .hint {
     flex-grow: 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: var(--text-small);
     color: var(--text2);
+  }
+  /* A long hint, such as a path, gives way; the label stays whole. */
+  .submenu button > span:first-child {
+    flex-shrink: 0;
   }
   .row {
     position: relative;
