@@ -3,7 +3,7 @@
   import { api, stopped } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { CommitDetail, FileChange, FileDiff, HistoryRow } from "./types";
-  import { fullDate, initials, shortTime, lane, person, plate, shortId, tint } from "./format";
+  import { fullDate, initials, relativeTime, lane, person, plate, shortId, tint } from "./format";
   import { fileTabs, tabStepper } from "./tabs";
   import { confirm } from "./confirm.svelte";
   import DiffView from "./DiffView.svelte";
@@ -283,6 +283,15 @@
     navigator.clipboard.writeText(text).then(() => confirm.say(`Copied ${what}.`, "done"), () => {});
   }
   const message = $derived(detail ? [detail.summary, detail.body].filter(Boolean).join("\n\n") : row.summary);
+  /** Who made the commit, when that isn't the author, such as GitHub for a merged pull request;
+   *  or when, if the author made it again later, as in a rebase. Null when it adds nothing. */
+  const committed = $derived.by(() => {
+    if (!detail) return null;
+    const { author, committer } = detail;
+    const when = relativeTime(committer.time);
+    if (committer.name !== author.name || committer.email !== author.email) return { by: committer.name, when };
+    return Math.abs(committer.time - author.time) > 60 ? { by: null, when: when.replace(/^(Just|Yesterday)/, (w) => w.toLowerCase()) } : null;
+  });
 
   const statusIcon: Record<string, string> = { added: "A", deleted: "D", modified: "M", renamed: "R", copied: "C" };
   const tone: Record<string, string> = { added: "green", deleted: "red", modified: "orange", renamed: "orange", copied: "orange" };
@@ -402,29 +411,46 @@
         {/if}
       </div>
 
-      <!-- The whole message and who made the commit, as a card in the branch color like «this commit» in the chain. -->
+      <!-- The description and who made the commit, as a card in the branch color like «this commit» in
+           the chain: the summary, author and date are over it already. -->
       <div class="details" style:background={tint(color)} style:border-color={`color-mix(in srgb, ${lane(color)} 40%, transparent)`}>
-        <button class="details-head" aria-expanded={!detailsShut} onclick={toggleDetails} style:color={plate(color)}>
-          <svg class="chevron" class:open={!detailsShut} viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" /></svg>
-          Commit Details
-        </button>
+        <div class="details-top">
+          <button class="details-head" aria-expanded={!detailsShut} onclick={toggleDetails} style:color={plate(color)}>
+            <svg class="chevron" class:open={!detailsShut} viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" /></svg>
+            Commit Details
+          </button>
+          <button class="sha mono" onclick={() => copy(row.id, shortId(row.id))} style:background={tint(color, "label")} aria-label="Copy the commit's SHA" title="Copy SHA {row.id}">
+            {shortId(row.id)}
+            <svg class="icon" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" /><path d="M10.5 5.5V3.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2" /></svg>
+          </button>
+        </div>
         {#if !detailsShut}
-          <!-- The whole message: its summary first, as written, then the description. -->
-          <div class="message selectable"><b>{detail?.summary ?? row.summary}</b>{#if detail?.body}<p>{detail.body}</p>{/if}</div>
-          <dl>
-            <dt>Commit</dt>
-            <dd>
-              <span class="mono sha selectable" title={row.id}>{row.id}</span>
-              <button class="copy" onclick={() => copy(row.id, shortId(row.id))} aria-label="Copy the commit's SHA" title="Copy SHA">
-                <svg class="icon" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" /><path d="M10.5 5.5V3.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2" /></svg>
-              </button>
-            </dd>
-            {#if detail}
-              <dt>Committed</dt>
-              <dd class="ellipsis" title="{detail.committer.email} · {fullDate(detail.committer.time, detail.committer.offset)}">{detail.committer.name}, {shortTime(detail.committer.time)}</dd>
-            {/if}
-          </dl>
-          <div><button class="button mini" onclick={() => copy(message, "the message")}>Copy Message</button></div>
+          {#if detail?.body}<p class="message selectable">{detail.body}</p>{/if}
+          {#if (detail && detail.parents.length > 1) || committed}
+            {#if detail?.body}<div class="rule" style:background={`color-mix(in srgb, ${lane(color)} 25%, transparent)`}></div>{/if}
+            <div class="facts">
+              {#if detail && detail.parents.length > 1}
+                <div>
+                  <svg class="icon" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="8" r="1.5" /><path d="M4.5 5v6M4.5 5c0 2 2 3 5.5 3" /></svg>
+                  <span class="ellipsis">
+                    Merge of
+                    {#each detail.parents as parent, i (parent)}
+                      {#if i > 0}{i === detail.parents.length - 1 ? " and " : ", "}{/if}
+                      {@const target = lookup(parent)}
+                      <button class="parent mono" disabled={!target} onclick={() => onSelect(parent)} title={target ? `${shortId(parent)} ${target.summary}` : `${parent} is not loaded`}>{shortId(parent)}</button>
+                    {/each}
+                  </span>
+                </div>
+              {/if}
+              {#if detail && committed}
+                <div title="{detail.committer.name} <{detail.committer.email}> · {fullDate(detail.committer.time, detail.committer.offset)}">
+                  <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.5" /><path d="M1.5 8h4M10.5 8h4" /></svg>
+                  <span class="ellipsis">{#if committed.by}Committed by <b>{committed.by}</b> · {committed.when}{:else}Committed {committed.when}{/if}</span>
+                </div>
+              {/if}
+            </div>
+          {/if}
+          <button class="copy-message" onclick={() => copy(message, "the message")}>Copy Message</button>
         {/if}
       </div>
     </div>
@@ -868,7 +894,13 @@
     gap: 8px;
     font-size: var(--text-small);
   }
+  .details-top {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
   .details-head {
+    flex-grow: 1;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -878,6 +910,26 @@
     text-transform: uppercase;
     text-align: left;
   }
+  /* The short SHA, copied whole on a click. */
+  .sha {
+    height: 22px;
+    padding: 0 8px;
+    border-radius: var(--radius-pill);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+    font-size: var(--text-caption);
+    color: var(--text);
+  }
+  .sha .icon {
+    width: 12px;
+    height: 12px;
+    color: var(--text2);
+  }
+  .sha:hover {
+    box-shadow: inset 0 0 0 100px var(--hover-wash);
+  }
   .message {
     margin: 0;
     line-height: 1.45;
@@ -886,56 +938,53 @@
     max-height: 160px;
     overflow-y: auto;
   }
-  .message b {
-    font-weight: 600;
-  }
-  .message p {
-    margin: 6px 0 0;
-  }
-  dl {
-    margin: 0;
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    column-gap: 10px;
-    row-gap: 4px;
-    align-items: center;
-  }
-  dt {
-    color: var(--text2);
-  }
-  dd {
-    margin: 0;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
-  dd.ellipsis {
-    display: block;
-  }
-  .sha {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: var(--text-caption);
-  }
-  .copy {
-    width: 22px;
-    height: 22px;
+  .rule {
+    height: 1px;
     flex-shrink: 0;
-    border-radius: var(--radius-pill);
+  }
+  .facts {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    color: var(--text2);
+    line-height: 1.4;
+  }
+  .facts > div {
     display: flex;
     align-items: center;
-    justify-content: center;
-    color: var(--icon);
+    gap: 6px;
+    min-width: 0;
   }
-  .copy:hover {
-    background: var(--field);
-  }
-  .copy .icon {
+  .facts .icon {
     width: 13px;
     height: 13px;
+    flex-shrink: 0;
+  }
+  .facts b {
+    font-weight: 500;
+    color: var(--text);
+  }
+  .facts .ellipsis {
+    min-width: 0;
+  }
+  .parent {
+    font-size: var(--text-caption);
+    color: var(--accent-ink);
+  }
+  .parent:hover:not(:disabled) {
+    text-decoration: underline;
+  }
+  .parent:disabled {
+    color: inherit;
+  }
+  .copy-message {
+    align-self: flex-end;
+    color: var(--accent-ink);
+    font-size: var(--text-small);
+    font-weight: 500;
+  }
+  .copy-message:hover {
+    text-decoration: underline;
   }
 
   /* Over the diff: how many files, and how the diff is drawn. */
