@@ -22,6 +22,8 @@
     version,
     run,
     copy,
+    panelWidth,
+    onGrip,
   }: {
     history: History;
     ctx: BranchContext;
@@ -32,6 +34,9 @@
     version: number;
     run: (request: Request | Promise<Request>) => void;
     copy: (text: string) => void;
+    /** The details panel's width, the same as beside History, so the list keeps the graph's width. */
+    panelWidth: number;
+    onGrip: (event: PointerEvent) => void;
   } = $props();
 
   let diffView = $state<DiffView>();
@@ -312,7 +317,8 @@
     {/if}
   </section>
 
-  <section class="detail" aria-label="Stash details">
+  <section class="detail" style:width="{panelWidth}px" aria-label="Stash details">
+    <button class="grip" tabindex="-1" onpointerdown={onGrip} aria-label="Resize the stash details" title="Drag to resize"></button>
     {#if stash}
       {@const f = files[stash.id]}
       {@const conflicts = check?.conflicts ?? []}
@@ -425,11 +431,10 @@
     overflow: hidden;
   }
   .list {
-    width: 400px;
-    flex-shrink: 0;
+    flex-grow: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
-    border-right: 1px solid var(--sep);
     background: var(--graph-bg);
     min-height: 0;
   }
@@ -647,11 +652,26 @@
     height: 14px;
   }
   .detail {
-    flex-grow: 1;
-    min-width: 0;
+    position: relative;
+    flex-shrink: 0;
+    border-left: 1px solid var(--sep);
     display: flex;
     flex-direction: column;
     min-height: 0;
+  }
+  .grip {
+    position: absolute;
+    left: -4px;
+    top: 50%;
+    width: 7px;
+    height: 36px;
+    margin-top: -18px;
+    border-radius: var(--radius-xs);
+    background: var(--win);
+    border: 1px solid var(--glass-border);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+    z-index: 2;
+    cursor: col-resize;
   }
   .head {
     padding: 16px 16px 12px;

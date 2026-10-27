@@ -2720,7 +2720,7 @@
         {/key}
       {:else if view === "stashes" && branchCtx}
         {#key repo.path}
-          <StashesView bind:this={stashesView} {history} ctx={branchCtx} {colorOf} bind:selected={stashSel} {version} {run} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "it" : text}.`)} />
+          <StashesView bind:this={stashesView} {history} ctx={branchCtx} {colorOf} bind:selected={stashSel} {version} {run} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "it" : text}.`)} panelWidth={shownPanelWidth} onGrip={startResize} />
         {/key}
       {:else}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
