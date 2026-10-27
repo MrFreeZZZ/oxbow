@@ -267,6 +267,10 @@
       error = null;
       // A file staged or unstaged whole is shown where it went; a selection keeps the files still there.
       shown = keepShown(shown, next);
+      // Ticks go with the files that left their list.
+      const left = (list: FileChange[]) => new Set(list.map((f) => f.path));
+      const now = { unstaged: left(next.unstaged.filter((f) => f.status !== "untracked")), untracked: left(next.unstaged.filter((f) => f.status === "untracked")), staged: left(next.staged) };
+      ticked = { unstaged: ticked.unstaged.filter((p) => now.unstaged.has(p)), staged: ticked.staged.filter((p) => now.staged.has(p)), untracked: ticked.untracked.filter((p) => now.untracked.has(p)) };
       loads++;
     } catch (err) {
       error = String(err);
@@ -372,24 +376,12 @@
     return !file || file.status === "conflicted" ? null : file.status === "untracked" ? "untracked" : "unstaged";
   }
 
-  /** The files selected in each list, as in a Finder list: the one open, or those picked with
-   *  ⌘-click or Shift-click, which the diff then shows together. */
-  const picks = $derived.by((): Record<List, string[]> => {
-    const none: Record<List, string[]> = { unstaged: [], staged: [], untracked: [] };
-    if (lastOpen || !shown || shown.kind === "all") return none;
-    if (shown.kind === "files") return { ...none, [shown.side === "staged" ? "staged" : shown.untracked ? "untracked" : "unstaged"]: shown.paths };
-    const group = groupOf(shown.path, shown.side);
-    return group ? { ...none, [group]: [shown.path] } : none;
-  });
-  /** The same picks as sets, so a list of thousands of files checks each one at once. */
-  const pickSet = $derived({ unstaged: new Set(picks.unstaged), staged: new Set(picks.staged), untracked: new Set(picks.untracked) });
+  /** The files ticked in each list, for Stage, Unstage and Discard of several at once: apart
+   *  from the file open, as in any list with checkboxes. */
+  let ticked = $state<Record<List, string[]>>({ unstaged: [], staged: [], untracked: [] });
+  /** The same ticks as sets, so a list of thousands of files checks each one at once. */
+  const tickedSet = $derived({ unstaged: new Set(ticked.unstaged), staged: new Set(ticked.staged), untracked: new Set(ticked.untracked) });
 
-  /** Shows the files selected in a list: one file, several together, or the whole list once none is. */
-  function showPicked(group: List, paths: string[]) {
-    const side = sideOf(group);
-    const fresh = group === "untracked" ? { untracked: true } : {};
-    show(paths.length > 1 ? { kind: "files", paths, side, ...fresh } : paths.length ? { kind: "file", path: paths[0], side } : { kind: "all", side, ...fresh });
-  }
   /** A clicked row or heading takes the keyboard, so ↑ ↓ and Space go on from it: WebKit on
    *  macOS doesn't focus a button on a click. */
   const keyFocus = (event: MouseEvent) => (event.currentTarget as HTMLElement).focus({ preventScroll: true });
@@ -414,7 +406,7 @@
     return map;
   });
 
-  /** The file opened, picked or unpicked last, where Shift-click starts a range. */
+  /** The file opened, ticked or unticked last, where Shift-click starts a range. */
   let anchor: { group: List; path: string } | null = null;
 
   /** The files a list shows, the filter applied. */
@@ -427,38 +419,42 @@
     return byFolder(list).flatMap((g) => (folded.has(`${group}:${g.dir}`) ? [] : g.files.map((f) => f.path)));
   }
 
-  /** A file's name selects it and opens its diff; ⌘-click (Ctrl) adds it to the selection or
-   *  takes it out, Shift-click adds every file from the one clicked last. */
+  /** A file's name opens its diff; ⌘-click (Ctrl) ticks or unticks it instead, Shift-click
+   *  ticks every file from the one clicked last. */
   function rowClick(event: MouseEvent, file: FileChange, group: List | "conflicted") {
     keyFocus(event);
     if (dragged) return;
     if (group !== "conflicted" && (event.metaKey || event.ctrlKey || event.shiftKey)) {
       event.preventDefault();
-      const list = picks[group];
-      if (event.shiftKey) return showPicked(group, pickRange(order(group), list, anchor?.group === group ? anchor.path : null, file.path));
-      showPicked(group, pickSet[group].has(file.path) ? list.filter((p) => p !== file.path) : [...list, file.path]);
-      anchor = { group, path: file.path };
+      tickFile(group, file.path, event.shiftKey);
       return;
     }
     show({ kind: "file", path: file.path, side: sideOf(group) });
   }
 
-  /** The files ticked in each list: only a selection of files, not the one file open. */
-  const ticks = $derived(shown?.kind === "files" ? pickSet : { unstaged: new Set<string>(), staged: new Set<string>(), untracked: new Set<string>() });
-
-  /** A file's checkbox ticks or unticks it, Shift a range from the one ticked last; the diff
-   *  shows the ticked files, and the list whole once none is. */
-  function tickFile(event: MouseEvent, file: FileChange, group: List) {
-    // The row takes the keyboard, so ↑ ↓ and Space go on from it.
-    ((event.currentTarget as HTMLElement).nextElementSibling as HTMLElement | null)?.focus({ preventScroll: true });
-    if (dragged) return;
-    const list = [...ticks[group]];
-    const paths = event.shiftKey ? pickRange(order(group), list, anchor?.group === group ? anchor.path : null, file.path) : ticks[group].has(file.path) ? list.filter((p) => p !== file.path) : [...list, file.path];
-    anchor = { group, path: file.path };
-    const side = sideOf(group);
-    const fresh = group === "untracked" ? { untracked: true } : {};
-    show(paths.length ? { kind: "files", paths, side, ...fresh } : { kind: "all", side, ...fresh });
+  /** A file's checkbox, ⌘-click or Space ticks or unticks it; with `range`, ticks every file
+   *  from the one clicked last to it. */
+  function tickFile(group: List, path: string, range = false) {
+    const list = ticked[group];
+    const on = tickedSet[group];
+    ticked = {
+      ...ticked,
+      [group]: range ? pickRange(order(group), list, anchor?.group === group ? anchor.path : null, path) : on.has(path) ? list.filter((p) => p !== path) : [...list, path],
+    };
+    anchor = { group, path };
   }
+
+  /** The checkbox of a list or a folder: ticks all of its files, or unticks them when they all are. */
+  function tickAll(group: List, paths: string[]) {
+    const list = ticked[group];
+    const on = tickedSet[group];
+    const these = new Set(paths);
+    const all = paths.length > 0 && paths.every((p) => on.has(p));
+    ticked = { ...ticked, [group]: all ? list.filter((p) => !these.has(p)) : [...list, ...paths.filter((p) => !on.has(p))] };
+  }
+
+  /** A checkbox gives the keyboard to its row or heading, so ↑ ↓ and Space go on from there. */
+  const keysTo = (event: MouseEvent, selector: string) => (event.currentTarget as HTMLElement).parentElement?.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
 
   /** Every file shown once, in the order of the lists, each side led by all of its files: the
    *  steps of Next Tab and Previous Tab. */
@@ -493,7 +489,7 @@
     show(next && next !== file.path ? { kind: "file", path: next, side: "unstaged" } : { kind: "all", side: "staged" });
   }
 
-  /** Space: the picked files of a list, else the open file, else every file of the open side,
+  /** Enter: the ticked files of a list, else the open file, else every file of the open side,
    *  go to the other side. */
   function stageOrUnstage() {
     for (const group of ["unstaged", "untracked", "staged"] as const) if (pickedFiles(group).length) return actOnPicked(group);
@@ -507,7 +503,7 @@
   }
 
   /** The list's own keys, while a file or a heading of it has the focus: the filter field and
-   *  the buttons keep theirs. */
+   *  the buttons keep theirs. Esc unticks every file, then shows the open file's list whole. */
   function onFilesKey(event: KeyboardEvent) {
     const target = event.target as HTMLElement;
     if (!target.closest(".name, .gname")) return;
@@ -522,12 +518,29 @@
     } else if (pressed("stageFile", event)) {
       event.preventDefault();
       stageOrUnstage();
+    } else if (pressed("tickFile", event) || pressed("selectAllFiles", event)) {
+      // On a file, Space ticks it; on a list's heading, all of the list, as its checkbox does.
+      event.preventDefault();
+      const group = target.closest<HTMLElement>("[data-group]")?.dataset.group as List | "conflicted" | undefined;
+      if (!group || group === "conflicted") return;
+      const path = target.closest<HTMLElement>("[data-path]")?.dataset.path;
+      if (pressed("selectAllFiles", event)) ticked = { ...ticked, [group]: listOf(group).map((f) => f.path) };
+      else if (path) tickFile(group, path);
+      else tickAll(group, listOf(group).map((f) => f.path));
+    } else if (event.key === "Escape" && (ticked.unstaged.length || ticked.untracked.length || ticked.staged.length)) {
+      event.preventDefault();
+      ticked = { unstaged: [], staged: [], untracked: [] };
     } else if (event.key === "Escape" && shown && shown.kind !== "all" && !lastOpen) {
       // As in a Finder list, the selection goes; its list is shown whole, with Stage All.
       event.preventDefault();
       const fresh = shown.kind === "files" ? !!shown.untracked : groupOf(shown.path, shown.side) === "untracked";
       show(fresh ? { kind: "all", side: shown.side, untracked: true } : { kind: "all", side: shown.side });
     }
+  }
+
+  /** Space ticks: the row or heading it is pressed on must not take it as a click too. */
+  function onFilesKeyUp(event: KeyboardEvent) {
+    if (event.key === " " && (event.target as HTMLElement).closest(".name, .gname")) event.preventDefault();
   }
 
   /** Whether the list's keys were used: a file staged with them leaves its row, and the keys go
@@ -555,7 +568,7 @@
   function dragFile(event: PointerEvent, file: FileChange, group: List | "conflicted") {
     if (group === "conflicted" || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
     const from = { x: event.clientX, y: event.clientY };
-    const files = () => (pickSet[group].has(file.path) ? pickedFiles(group) : [file]);
+    const files = () => (tickedSet[group].has(file.path) ? pickedFiles(group) : [file]);
     const move = (e: PointerEvent) => {
       if (!dragging && Math.hypot(e.clientX - from.x, e.clientY - from.y) < 5) return;
       dragging = { group, files: dragging?.files ?? files(), x: e.clientX, y: e.clientY };
@@ -593,7 +606,7 @@
   }
 
   /** Only picked files that are listed: the filter can hide some. */
-  const pickedFiles = (group: List) => listOf(group).filter((f) => pickSet[group].has(f.path));
+  const pickedFiles = (group: List) => listOf(group).filter((f) => tickedSet[group].has(f.path));
   const pickedUnstaged = $derived(pickedFiles("unstaged"));
   const pickedUntracked = $derived(pickedFiles("untracked"));
   const pickedStaged = $derived(pickedFiles("staged"));
@@ -773,7 +786,7 @@
   function fileMenu(event: MouseEvent, file: FileChange, group: List | "conflicted") {
     event.preventDefault();
     // A right-click on one of several picked files acts on all of them.
-    const several = group !== "conflicted" && pickSet[group].has(file.path) ? pickedFiles(group) : [];
+    const several = group !== "conflicted" && tickedSet[group].has(file.path) ? pickedFiles(group) : [];
     if (several.length > 1 && group !== "conflicted") {
       const n = several.length;
       const fresh = several.every((f) => f.status === "untracked");
@@ -798,12 +811,12 @@
     else if (side === "unstaged") entries.push({ kind: "item", label: "Stage File", icon: menuIcons.stage, run: () => stage([file]) });
     if (side !== "conflicted")
       entries.push({ kind: "item", label: "Stash This File…", icon: menuIcons.stash, run: () => act(stashFilesRequest(stashCandidates(), [file.path], stashMessageFor(file.path))) });
-    if (file.status === "untracked")
+    if (file.status !== "conflicted" && file.status !== "deleted")
       entries.push({
         kind: "sub",
-        label: "Ignore",
+        label: "Add to .gitignore",
         icon: menuIcons.ignore,
-        entries: ignoreChoices(file.path).map((choice) => ({ label: choice.label, hint: choice.pattern, run: () => act(ignoreRequest(file.path, choice)) })),
+        entries: ignoreChoices(file.path, file.status !== "untracked").map((choice) => ({ label: choice.label, hint: choice.pattern, run: () => act(ignoreRequest(file.path, choice)) })),
       });
     entries.push({ kind: "sep" });
     if (file.status !== "deleted")
@@ -1072,7 +1085,7 @@
 
 {#snippet fileRow(file: FileChange, group: List | "conflicted", nested: boolean)}
   {@const b = badge[file.status]}
-  {@const picked = group !== "conflicted" && pickSet[group].has(file.path)}
+  {@const on = group !== "conflicted" && tickedSet[group].has(file.path)}
   {@const open = isOpen(file, group)}
   <!-- The part of a file staged in part that the other list holds. -->
   {@const other = group === "staged" ? unstagedByPath.get(file.path) : group === "unstaged" ? stagedByPath.get(file.path) : undefined}
@@ -1083,11 +1096,13 @@
     class:nested
     class:bin={group === "unstaged" || group === "untracked"}
     class:moving={dragging?.group === group && dragging.files.includes(file)}
-    style:background={open || picked ? tint(color) : undefined}
+    class:ticked={on && !open}
+    style:background={open ? tint(color) : undefined}
+    data-group={group}
+    data-path={file.path}
     oncontextmenu={(e) => fileMenu(e, file, group)}
   >
     {#if group !== "conflicted"}
-      {@const on = ticks[group].has(file.path)}
       <button
         class="tick"
         class:on
@@ -1096,15 +1111,18 @@
         tabindex="-1"
         aria-label="{on ? 'Unselect' : 'Select'} {file.path}"
         title="Select for {group === 'staged' ? 'Unstage' : 'Stage'} and the file menu · Shift-click selects a range"
-        onclick={(e) => tickFile(e, file, group)}
-      ><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" /></svg></button>
+        onclick={(e) => {
+          keysTo(e, ".name");
+          if (!dragged) tickFile(group, file.path, e.shiftKey);
+        }}
+      >{@render tickMark(on, false)}</button>
     {/if}
     <button
       class="name"
       onclick={(e) => rowClick(e, file, group)}
       onpointerdown={(e) => dragFile(e, file, group)}
       aria-current={open ? "true" : undefined}
-      title={dragging ? undefined : `${file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}${group === "conflicted" ? "" : ` · ${modClick} or Shift-click to select more, drag to ${group === "staged" ? "unstage" : "stage"}`}`}
+      title={dragging ? undefined : `${file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}${group === "conflicted" ? "" : ` · ${modClick} to select, Shift-click to select a range, drag to ${group === "staged" ? "unstage" : "stage"}`}`}
     >
       <span class="badge {b.tone}" title={b.title}>{b.text}</span>
       <PathName path={file.path} folders={!nested} />
@@ -1131,6 +1149,31 @@
   </div>
 {/snippet}
 
+{#snippet tickMark(on: boolean, some: boolean)}
+  <svg viewBox="0 0 16 16"><path d={some ? "M4 8h8" : "M3.5 8.5l3 3 6-7"} /></svg>
+{/snippet}
+
+<!-- Ticks every listed file of a list or a folder, or none once they all are. -->
+{#snippet tickAllBox(group: List, files: FileChange[], label: string, focus: string)}
+  {@const n = files.filter((f) => tickedSet[group].has(f.path)).length}
+  {@const all = n > 0 && n === files.length}
+  <button
+    class="tick"
+    class:on={all}
+    class:some={n > 0 && !all}
+    role="checkbox"
+    aria-checked={all ? true : n ? "mixed" : false}
+    tabindex="-1"
+    aria-label={label}
+    title={all ? "Select none" : "Select all"}
+    disabled={!files.length}
+    onclick={(e) => {
+      keysTo(e, focus);
+      tickAll(group, files.map((f) => f.path));
+    }}
+  >{@render tickMark(all || n > 0, n > 0 && !all)}</button>
+{/snippet}
+
 {#snippet fileList(files: FileChange[], group: List | "conflicted")}
   {@const limit = listed[group]}
   {#if listView.folders}
@@ -1140,6 +1183,7 @@
       {@const open = !folded.has(key)}
       {#if room > 0}
       <div class="folder">
+        {#if group !== "conflicted"}{@render tickAllBox(group, folder.files, `Select the files in ${folder.dir || "the top folder"}`, ".fold")}{/if}
         <button class="fold" aria-expanded={open} onclick={() => fold(key)} title={folder.dir || "The repository's top folder"}>
           <svg class="chevron" class:open viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" /></svg>
           <svg class="icon folder-icon" viewBox="0 0 16 16"><path d="M1.5 4.5a1 1 0 0 1 1-1H6l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" /></svg>
@@ -1260,7 +1304,7 @@
   </div>
 
   <div class="body" class:stacked bind:clientWidth={bodyWidth} bind:clientHeight={bodyHeight}>
-    <div class="files" bind:this={filesBox} aria-label="Working copy" data-steps use:tabStepper={stepper} onkeydown={onFilesKey} class:dragging={!!dragging} style:height={stacked ? `${Math.round(filesShare * 100)}%` : null} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
+    <div class="files" bind:this={filesBox} aria-label="Working copy" data-steps use:tabStepper={stepper} onkeydown={onFilesKey} onkeyup={onFilesKeyUp} class:dragging={!!dragging} style:height={stacked ? `${Math.round(filesShare * 100)}%` : null} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
       <div class="tools">
         <label class="filter">
           <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
@@ -1298,7 +1342,8 @@
           </div>
         {/if}
         <div class="group">
-          <div class="ghead" class:on={isAll("unstaged")} style:background={isAll("unstaged") ? tint(color) : undefined}>
+          <div class="ghead" class:on={isAll("unstaged")} style:background={isAll("unstaged") ? tint(color) : undefined} data-group="unstaged">
+            {@render tickAllBox("unstaged", shownTracked, "Select every unstaged file", ".gname")}
             {@render chevron(!shut.unstaged, shut.unstaged ? "Show the unstaged files" : "Hide the unstaged files", () => (shut.unstaged = !shut.unstaged))}
             <button class="gname" onclick={(e) => openGroup(e, "unstaged")} aria-current={isAll("unstaged") ? "true" : undefined} aria-expanded={!shut.unstaged} title={shut.unstaged ? "Show every unstaged change and the files" : "Show every unstaged change and hide the files"}>
               <span class="gtitle" style:color={plate(color)}>Unstaged</span><span class="n">{needle ? `${shownTracked.length} of ${tracked.length}` : tracked.length}</span>
@@ -1319,7 +1364,8 @@
         {#if untracked.length}
           <!-- New files git does not track yet, apart from the edits and folded at first, as in Sublime Merge. -->
           <div class="group">
-            <div class="ghead" class:on={isAll("unstaged", true)} style:background={isAll("unstaged", true) ? tint(color) : undefined}>
+            <div class="ghead" class:on={isAll("unstaged", true)} style:background={isAll("unstaged", true) ? tint(color) : undefined} data-group="untracked">
+              {@render tickAllBox("untracked", shownUntracked, "Select every untracked file", ".gname")}
               {@render chevron(untrackedOpen, untrackedOpen ? "Hide the untracked files" : "Show the new files git does not track yet", () => (view.untracked = !view.untracked), !!needle)}
               <button class="gname" onclick={(e) => openGroup(e, "untracked")} aria-current={isAll("unstaged", true) ? "true" : undefined} aria-expanded={untrackedOpen} title={untrackedOpen ? "Show every new file git does not track yet and hide the files" : "Show every new file git does not track yet and the files"}>
                 <span class="gtitle" style:color={plate(color)}>Untracked</span><span class="n">{needle ? `${shownUntracked.length} of ${untracked.length}` : untracked.length}</span>
@@ -1341,7 +1387,8 @@
       <!-- The staged files and the commit, held at the bottom; the border over them sets how tall the list gets. -->
       {#if !stacked}<button class="grip" tabindex="-1" onpointerdown={dragStaged} aria-label="Resize the staged files" title="Drag to resize"></button>{/if}
       <div class="group staged" class:drop={!!dragging && dragging.group !== "staged"} class:over={!!dragging && dragging.group !== "staged" && dropping} bind:this={stagedBox}>
-        <div class="ghead" class:on={isAll("staged")} style:background={isAll("staged") ? tint(color) : undefined}>
+        <div class="ghead" class:on={isAll("staged")} style:background={isAll("staged") ? tint(color) : undefined} data-group="staged">
+          {@render tickAllBox("staged", shownStaged, "Select every staged file", ".gname")}
           {@render chevron(!shut.staged, shut.staged ? "Show the staged files" : "Hide the staged files", () => (shut.staged = !shut.staged))}
           <button class="gname" onclick={(e) => openGroup(e, "staged")} aria-current={isAll("staged") ? "true" : undefined} aria-expanded={!shut.staged} title={shut.staged ? "Show the next commit: every staged change, and the files" : "Show the next commit: every staged change, and hide the files"}>
             <span class="gtitle" style:color={plate(color)}>Staged</span><span class="n">{needle ? `${shownStaged.length} of ${staged.length}` : staged.length}</span>
@@ -1823,7 +1870,7 @@
   }
   .gtitle.conflicted {
     color: var(--red);
-    padding-left: 22px;
+    padding-left: 44px;
   }
   .ghead .n,
   .ghead .button {
@@ -1873,13 +1920,15 @@
   .file.nested {
     padding-left: 44px;
   }
-  /* Always shown, in the room left of the badge; drawn like the line checkboxes of a diff. */
+  .file.ticked {
+    background: var(--side-sel);
+  }
+  /* Always shown, one column of them left of the badges, the folders and the list names; drawn
+     like the line checkboxes of a diff. */
   .tick {
-    position: absolute;
-    left: 4px;
-    top: 7px;
     width: 14px;
     height: 14px;
+    flex-shrink: 0;
     padding: 0;
     border-radius: var(--radius-xs);
     border: 1.2px solid var(--text2);
@@ -1887,8 +1936,17 @@
     align-items: center;
     justify-content: center;
   }
-  .file.nested .tick {
-    left: 26px;
+  .tick:disabled {
+    opacity: 0.4;
+  }
+  .file > .tick,
+  .folder > .tick {
+    position: absolute;
+    left: 4px;
+    top: calc(50% - 7px);
+  }
+  .ghead > .tick {
+    margin: 0 2px;
   }
   .tick svg {
     width: 11px;
@@ -1899,11 +1957,13 @@
     stroke-linecap: round;
     stroke-linejoin: round;
   }
-  .tick.on {
+  .tick.on,
+  .tick.some {
     background: var(--accent);
     border-color: var(--accent);
   }
-  .tick.on svg {
+  .tick.on svg,
+  .tick.some svg {
     stroke: #fff;
   }
   /* Filter and List / Folders over the lists. */
@@ -1999,6 +2059,7 @@
   }
   /* A folder over its files: fold them away. */
   .folder {
+    position: relative;
     display: flex;
     align-items: center;
     height: 26px;
