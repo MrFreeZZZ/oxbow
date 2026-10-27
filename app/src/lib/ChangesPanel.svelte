@@ -68,42 +68,9 @@
     return draft;
   }
 
-  const FOLDERS_KEY = "oxbow.changes.folders";
-  /** The lists show files under their folders; every window and repository shares the choice.
-   *  Untracked files start folded away, apart from the edits, and stay open once opened until the
-   *  app quits. */
-  const view = $state({ folders: readFolders(), untracked: false });
-
-  function readFolders(): boolean {
-    try {
-      return localStorage.getItem(FOLDERS_KEY) === "true";
-    } catch {
-      return false;
-    }
-  }
-
-  function setFolders(on: boolean) {
-    view.folders = on;
-    try {
-      localStorage.setItem(FOLDERS_KEY, String(on));
-    } catch {
-      // Lasts until the app quits.
-    }
-  }
-
-  /** Files grouped by the folder they are in: the top folder first, then by name. */
-  function byFolder(files: FileChange[]): { dir: string; files: FileChange[] }[] {
-    const map = new Map<string, FileChange[]>();
-    for (const file of files) {
-      const dir = file.path.slice(0, file.path.lastIndexOf("/") + 1);
-      const list = map.get(dir);
-      if (list) list.push(file);
-      else map.set(dir, [file]);
-    }
-    return [...map]
-      .sort(([a], [b]) => (a === "" ? -1 : b === "" ? 1 : a.localeCompare(b)))
-      .map(([dir, files]) => ({ dir, files }));
-  }
+  /** Untracked files start folded away, apart from the edits, and stay open once opened until
+   *  the app quits; every window and repository shares that. */
+  const view = $state({ untracked: false });
 </script>
 
 <script lang="ts">
@@ -127,6 +94,7 @@
   import { commitRecovery, ignoreChoices, ignoreRequest, linesRequest, stashFilesRequest, stashMessageFor, type LinesKind } from "./changes";
   import { keepShown, pickRange, sameShown, stepShown, type Shown } from "./changesView";
   import { updateFolderRequest } from "./submodules";
+  import { byFolder, listView, setFolders } from "./listView.svelte";
 
   let {
     repo,
@@ -413,7 +381,7 @@
   /** The files of a list in the order they are shown, without those in closed folders. */
   function order(group: List | "conflicted"): string[] {
     const list = group === "conflicted" ? shownConflicted : listOf(group);
-    if (!view.folders) return list.map((f) => f.path);
+    if (!listView.folders) return list.map((f) => f.path);
     return byFolder(list).flatMap((g) => (folded.has(`${group}:${g.dir}`) ? [] : g.files.map((f) => f.path)));
   }
 
@@ -883,7 +851,7 @@
 
 {#snippet fileList(files: FileChange[], group: List | "conflicted")}
   {@const limit = listed[group]}
-  {#if view.folders}
+  {#if listView.folders}
     {@const cut = foldersWithin(byFolder(files), group, limit)}
     {#each cut.folders as { folder, room } (folder.dir)}
       {@const key = `${group}:${folder.dir}`}
@@ -1010,10 +978,10 @@
           {#if filter}<button class="clear" onclick={() => (filter = "")} aria-label="Clear the filter" title="Clear the filter">×</button>{/if}
         </label>
         <div class="segmented icons" role="radiogroup" aria-label="Show files">
-          <button role="radio" aria-checked={!view.folders} class:on={!view.folders} onclick={() => setFolders(false)} aria-label="List" title="One list of paths">
+          <button role="radio" aria-checked={!listView.folders} class:on={!listView.folders} onclick={() => setFolders(false)} aria-label="List" title="One list of paths">
             <svg class="icon" viewBox="0 0 16 16"><path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01" /></svg>
           </button>
-          <button role="radio" aria-checked={view.folders} class:on={view.folders} onclick={() => setFolders(true)} aria-label="Folders" title="Files under their folders">
+          <button role="radio" aria-checked={listView.folders} class:on={listView.folders} onclick={() => setFolders(true)} aria-label="Folders" title="Files under their folders">
             <svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5a1 1 0 0 1 1-1H6l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" /></svg>
           </button>
         </div>
