@@ -282,5 +282,7 @@ export const settings = {
   detailsWidth: "oxbow.history.detailsWidth",
   sidebarHidden: "oxbow.sidebar.hidden",
   detailsHidden: "oxbow.history.detailsHidden",
+  changesWidth: "oxbow.changes.width",
+  changesExpanded: "oxbow.changes.expanded",
   zoomLevel: "oxbow.window.zoomLevel",
 };

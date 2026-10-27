@@ -55,6 +55,7 @@
     onMore,
     focus = null,
     hits = $bindable([]),
+    tools = true,
   }: {
     diffs: FileDiff[];
     color: number;
@@ -95,6 +96,9 @@
     focus?: string | null;
     /** The blocks of lines drawn with matches of `find`, in order, and how many each has. */
     hits?: FindHits;
+    /** Wrap, Side by Side, Whole File and Ignore Whitespace on each file's bar; off where
+     *  DiffTools shows them once over the diff. */
+    tools?: boolean;
   } = $props();
 
   /** Diffs loaded in full with Show Diff Anyway, by the very diff they stand in for: a diff
@@ -624,6 +628,7 @@
             <svg class="icon" viewBox="0 0 16 16"><path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" /></svg>
           </button>
         {/if}
+        {#if tools}
         {#if !working}
           <button
             class="toggle"
@@ -673,6 +678,7 @@
             {#if whole}<path d="M3 5.5h10M3 10.5h10M8 1.5v2.5M8 12v2.5M6 3l2 1.5L10 3M6 13l2-1.5 2 1.5" />{:else}<path d="M3 3h10M3 13h10M3 8h10M8 4.5v-3M8 11.5v3" />{/if}
           </svg>
         </button>
+        {/if}
       </div>
     </header>
 
