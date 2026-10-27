@@ -19,8 +19,8 @@ use oxbow_core::config::{self, ConfigScope};
 use oxbow_core::console;
 use oxbow_core::{
     Action, CommitBrief, CommitDetail, ConflictFile, DeletionCheck, DiffContext, DiffOptions, DiffPage, Failure,
-    FileDiff, FolderCache, FolderState, History, HistoryCache, HistoryOptions, MergePreview, MergeTool, Plan, Repo,
-    Side, Source, StashCheck, Submodule, WorkingTree, Worktree,
+    FileDiff, FolderCache, FolderState, History, HistoryCache, HistoryOptions, MergePreview, MergeTool, PatchPreview,
+    Plan, Repo, Side, Source, StashCheck, Submodule, WorkingTree, Worktree,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -1711,6 +1711,33 @@ async fn merge_preview(
     read(at(&repo), "Preview a merge", move || repo.merge_preview(&branch)).await
 }
 
+/// What applying the patch files at `paths` would bring, for the Apply Patches sheet.
+#[tauri::command]
+async fn patch_preview(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    paths: Vec<String>,
+) -> CommandResult<PatchPreview> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "Preview patches", move || repo.patch_preview(&paths)).await
+}
+
+/// The commits Save as Patches writes, for its sheet.
+#[tauri::command]
+async fn patch_range(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    to: String,
+    since: Option<String>,
+    count: usize,
+) -> CommandResult<Vec<CommitBrief>> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "List commits for patches", move || {
+        repo.patch_range(&to, since.as_deref(), count)
+    })
+    .await
+}
+
 /// Both sides of a conflicted file, for the Conflicts screen.
 #[tauri::command]
 async fn conflict_file(
@@ -2807,6 +2834,8 @@ fn main() {
             deletion_check,
             remote_deletion_check,
             merge_preview,
+            patch_preview,
+            patch_range,
             conflict_file,
             merge_tool,
             open_merge_tool,

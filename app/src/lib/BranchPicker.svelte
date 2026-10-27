@@ -26,7 +26,7 @@
   /** While an operation is in progress, checking out another branch is refused by git. */
   const busy = $derived(
     history.operation
-      ? `Finish or abort the ${history.operation.kind === "cherryPick" ? "cherry-pick" : history.operation.kind} first`
+      ? `Finish or abort the ${history.operation.kind === "cherryPick" ? "cherry-pick" : history.operation.kind === "am" ? "patches" : history.operation.kind} first`
       : history.bisect
         ? `${history.bisect.found ? "Finish" : "Stop"} the bisect first`
         : null,

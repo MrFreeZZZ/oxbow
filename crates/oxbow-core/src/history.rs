@@ -392,6 +392,7 @@ fn fill_worktree_row(
             OperationKind::Rebase => "Rebase in progress",
             OperationKind::CherryPick => "Cherry-pick in progress",
             OperationKind::Revert => "Revert in progress",
+            OperationKind::Am => "Applying patches",
             OperationKind::StashApply => "Stash apply in progress",
         })
         .to_owned();

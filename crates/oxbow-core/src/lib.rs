@@ -23,6 +23,7 @@ pub mod lfs;
 pub mod notkept;
 pub mod operation;
 pub mod oplog;
+pub mod patches;
 pub mod pulls;
 pub mod reflog;
 pub mod remote;
@@ -66,6 +67,7 @@ pub use operation::{
     Resolution,
 };
 pub use oplog::{HeadState, OpEntry, RefMove, SnapshotComparison, StashMove, StashRecord, Trees};
+pub use patches::{PatchFile, PatchPreview};
 pub use reflog::ReflogEntry;
 pub use remote::{CommitBrief, DeletionCheck, Failure, FailureKind, Replay, Tracking, classify_failure};
 pub use repo::{DiffOptions, HeadInfo, RefInfo, RefKind, Repo, StashInfo};

@@ -289,12 +289,12 @@ function mergeSheet(ctx: BranchContext, p: MergePreview, method: MergeMethod, ty
   };
 }
 
-type Stopped = "merge" | "rebase" | "pull" | "cherry-pick" | "revert" | "stash";
-const NOUNS = { merge: "Merge", rebase: "Rebase", pull: "Pull", "cherry-pick": "Cherry-Pick", revert: "Revert", stash: "Apply" };
+type Stopped = "merge" | "rebase" | "pull" | "cherry-pick" | "revert" | "stash" | "patches";
+const NOUNS = { merge: "Merge", rebase: "Rebase", pull: "Pull", "cherry-pick": "Cherry-Pick", revert: "Revert", stash: "Apply", patches: "Patches" };
 
 /** What stopped, for the operation in progress. */
 function stoppedBy(op: Operation): Stopped {
-  return op.kind === "rebase" ? "rebase" : op.kind === "cherryPick" ? "cherry-pick" : op.kind === "revert" ? "revert" : op.kind === "stashApply" ? "stash" : "merge";
+  return op.kind === "rebase" ? "rebase" : op.kind === "cherryPick" ? "cherry-pick" : op.kind === "revert" ? "revert" : op.kind === "stashApply" ? "stash" : op.kind === "am" ? "patches" : "merge";
 }
 
 /** After an action stopped on conflicts: resolve them, or give it up. */
@@ -302,12 +302,14 @@ export function stoppedOnConflicts(failure: Failure, what: Stopped, then = "cont
   if (failure.kind !== "conflict") return null;
   const undo = what === "pull" ? "Undo Pull" : what === "stash" ? "Undo Apply" : `Abort ${NOUNS[what]}`;
   return {
-    title: what === "stash" ? "Applying the stash stopped on conflicts" : `The ${what} stopped on conflicts`,
+    title: what === "stash" ? "Applying the stash stopped on conflicts" : what === "patches" ? "Applying the patches stopped on conflicts" : `The ${what} stopped on conflicts`,
     body: [
       what === "stash"
         ? "The stash and your branch change the same lines, so git needs you to choose what goes into each file. Resolve the conflicts, then "
-        : "Both sides change the same lines, so git needs you to choose what goes into each file. Resolve the conflicts, then ",
-      what === "merge" ? "commit the merge." : what === "pull" ? then : what === "stash" ? "finish the apply. The stash stays until then." : `continue the ${what}.`,
+        : what === "patches"
+          ? "A patch and your branch change the same lines, so git needs you to choose what goes into each file. Resolve the conflicts, then "
+          : "Both sides change the same lines, so git needs you to choose what goes into each file. Resolve the conflicts, then ",
+      what === "merge" ? "commit the merge." : what === "pull" ? then : what === "stash" ? "finish the apply. The stash stays until then." : what === "patches" ? "continue with the rest." : `continue the ${what}.`,
     ],
     icon: "warn",
     tone: "warn",
@@ -380,6 +382,12 @@ export function describe(op: Operation): {
         noun: "Apply",
         verb: "stash apply",
       };
+    case "am":
+      return {
+        title: op.step && op.step[1] > 1 ? `Applying patch ${op.step[0]} of ${op.step[1]} to ${branch}` : `Applying a patch to ${branch}`,
+        noun: "Patches",
+        verb: "patches",
+      };
   }
 }
 
@@ -418,6 +426,26 @@ export function abortRequest(ctx: BranchContext, op: Operation): Request {
 
 export function skipRequest(ctx: BranchContext, op: Operation): Request {
   const commit = op.commit;
+  if (op.kind === "am") {
+    return {
+      title: "Skip this patch?",
+      body: [
+        "Leaves ",
+        ...(commit ? [...(commit.id ? [{ code: shortId(commit.id) } as Part, " "] : []), { quote: commit.summary } as Part] : ["the patch"]),
+        " out of ",
+        chip(ctx, op.branch ?? "HEAD"),
+        " and goes on with the next one. The patches applied before it stay.",
+      ],
+      icon: "warn",
+      tone: "warn",
+      button: "Skip Patch",
+      status: "Skipping the patch…",
+      done: "Skipped.",
+      recover: (failure) => stoppedOnConflicts(failure, "patches"),
+      resolveConflicts: true,
+      action: { kind: "skip" },
+    };
+  }
   return {
     title: "Skip this commit?",
     body: [
@@ -457,6 +485,20 @@ export function continueRequest(ctx: BranchContext, op: Operation, message?: str
       button: "Finish",
       status: "Finishing…",
       done: "Applied the stash. The changes are uncommitted.",
+      action: { kind: "continue", message: null },
+    };
+  }
+  if (op.kind === "am") {
+    const which = op.step && op.step[1] > 1 ? `patch ${op.step[0]} of ${op.step[1]}` : "the patch";
+    return {
+      title: "Continue applying the patches?",
+      body: ["Commits the resolved files as ", which, op.commit ? [", with its message ", { quote: op.commit.summary } as Part] : [], " and applies the rest to ", chip(ctx, branch), "."].flat(),
+      icon: "patch",
+      button: "Continue",
+      status: "Applying the rest…",
+      done: `Applied the patches to ${branch}.`,
+      resolveConflicts: true,
+      recover: (failure) => stoppedOnConflicts(failure, "patches"),
       action: { kind: "continue", message: null },
     };
   }

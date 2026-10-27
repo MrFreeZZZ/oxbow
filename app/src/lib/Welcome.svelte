@@ -93,6 +93,7 @@
     cherryPick: "Cherry-pick paused",
     revert: "Revert paused",
     stashApply: "Stash apply paused",
+    am: "Applying patches paused",
   };
 
   /** The second line on the right of a row: where the repository stands. */

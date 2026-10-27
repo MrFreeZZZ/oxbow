@@ -549,6 +549,11 @@ export type Action =
   | { kind: "resolve"; path: string; picks: Resolution[]; text?: string; stages?: string }
   | { kind: "takeFile"; path: string; side: ConflictSide }
   | { kind: "cherryPick"; commit: string }
+  /** Commits of `to` that `since` doesn't have, or the newest `count` up to `to`, as patch
+   *  files: a file each in the folder `into`, or with `oneFile` all in the file `into`. */
+  | { kind: "savePatches"; to: string; since: string | null; count: number; into: string; oneFile: boolean }
+  /** Mailed patches become commits (git am); a plain diff goes into the files (git apply). */
+  | { kind: "applyPatches"; paths: string[] }
   | { kind: "revert"; commit: string }
   | { kind: "reset"; commit: string; mode: ResetMode }
   | { kind: "reword"; message: string; noVerify?: boolean }
@@ -793,7 +798,7 @@ export interface Bisect {
 export type ResetMode = "soft" | "mixed" | "hard";
 
 export type MergeMethod = "merge" | "squash" | "rebase" | "fastForward";
-export type OperationKind = "merge" | "squash" | "rebase" | "cherryPick" | "revert" | "stashApply";
+export type OperationKind = "merge" | "squash" | "rebase" | "cherryPick" | "revert" | "stashApply" | "am";
 /** A side of a conflict as git names the index stages: ours is stage 2, theirs stage 3. */
 export type ConflictSide = "ours" | "theirs";
 export type Pick = "ours" | "theirs" | "oursThenTheirs" | "theirsThenOurs";
@@ -809,7 +814,7 @@ export interface Operation {
   /** The commit being merged, replayed, picked or reverted. */
   commit: CommitBrief | null;
   incomingCount: number;
-  /** For a rebase: [commit it stopped on, of how many], from 1. */
+  /** For a rebase or git am: [commit or patch it stopped on, of how many], from 1. */
   step: [number, number] | null;
   conflicted: number;
   oursLabel: string;
@@ -817,6 +822,30 @@ export interface Operation {
   /** The side with the user's own work: ours in a merge, theirs in a rebase. */
   yours: ConflictSide;
   message: string | null;
+}
+
+/** What applying patch files would do, before anything runs. */
+export interface PatchPreview {
+  /** The commits the patches make, in order; empty for a plain diff. */
+  commits: CommitBrief[];
+  /** More commits than are listed. */
+  more: number;
+  /** A diff without commits: its changes go into the files, uncommitted. */
+  plain: boolean;
+  files: PatchFile[];
+  /** Files whose changes don't fit as they are. */
+  notClean: string[];
+  /** They don't fit and git said of no file why. */
+  fails: boolean;
+  /** Uncommitted changes git am won't work over. */
+  inTheWay: string[];
+}
+
+/** A file a patch changes; null counts for a binary file. */
+export interface PatchFile {
+  path: string;
+  added: number | null;
+  removed: number | null;
 }
 
 export interface MergePreview {

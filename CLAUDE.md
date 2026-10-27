@@ -19,6 +19,7 @@ crates/oxbow-core/          UI-free core library (all Git logic lives here)
   src/worktree.rs           working copy and diffs; `enum Action` + plan() / perform(): every
                             change is an Action planned into git commands, then run
   src/edit.rs               History menu: cherry-pick, revert, reset, reword last
+  src/patches.rs            Save as Patches (format-patch); Apply Patches (git am, or git apply for a diff)
   src/operation.rs          merge/rebase and anything git can stop midway; conflicts
   src/oplog.rs              Operation Log and Undo; notkept.rs = what Undo can't bring back
   src/stack.rs              Edit Stack (rewrite stacked branches); series.rs = before/after a rewrite
