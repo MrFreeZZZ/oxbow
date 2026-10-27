@@ -1,12 +1,30 @@
 <script lang="ts" module>
   import PathName from "./PathName.svelte";
-  import type { Hunk as HunkOf } from "./types";
+  import type { Snippet as SnippetOf } from "svelte";
+  import type { DiffLine as LineOf, FileDiff as FileOf, Hunk as HunkOf } from "./types";
 
   /** Which changed lines of a hunk are picked; the others dim once any is. */
   export interface LinePicker {
     enabled: (hunk: HunkOf) => boolean;
     picked: (hunk: HunkOf) => number[];
     toggle: (hunk: HunkOf, index: number, range: boolean) => void;
+  }
+
+  /** Comments on lines, as in a review: a + on the lines that take one, and under a line what
+   *  is said of it. */
+  export interface LineNotes {
+    /** Whether line `index` of a hunk takes a comment. */
+    can: (diff: FileOf, hunk: HunkOf, index: number) => boolean;
+    /** Start a comment on the line; with `range`, on the lines from the one picked before. */
+    start: (diff: FileOf, hunk: HunkOf, index: number, range: boolean) => void;
+    /** Whether the line is one a comment is being written on. */
+    lit: (diff: FileOf, line: LineOf) => boolean;
+    /** Whether anything shows under the line. */
+    has: (diff: FileOf, line: LineOf) => boolean;
+    /** What shows under a line: its threads, the review's comments, the one being written. */
+    under: SnippetOf<[FileOf, LineOf]>;
+    /** What shows over a file's code, e.g. comments on lines it has no more. */
+    top?: SnippetOf<[FileOf]>;
   }
 </script>
 
@@ -58,6 +76,7 @@
     hits = $bindable([]),
     tools = true,
     shut,
+    notes = null,
   }: {
     diffs: FileDiff[];
     color: number;
@@ -103,6 +122,8 @@
     tools?: boolean;
     /** Files that start folded whatever the setting says, such as the ones a review ticked Viewed. */
     shut?: (diff: FileDiff) => boolean;
+    /** Comments on lines, for reviewing a pull request. */
+    notes?: LineNotes | null;
   } = $props();
 
   /** Diffs loaded in full with Show Diff Anyway, by the very diff they stand in for: a diff
@@ -492,6 +513,21 @@
   ><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" /></svg></button>
 {/snippet}
 
+{#snippet plus(diff: FileDiff, hunk: Hunk, line: DiffLine, i: number)}
+  {#if notes?.can(diff, hunk, i)}
+    <button
+      class="plus"
+      aria-label="Comment on line {line.kind === 'removed' ? line.oldLine : line.newLine}"
+      title="Comment on this line; Shift-click: on the lines from the one picked before"
+      onclick={(e) => notes!.start(diff, hunk, i, e.shiftKey)}
+    ><svg viewBox="0 0 16 16"><path d="M8 4v8M4 8h8" /></svg></button>
+  {/if}
+{/snippet}
+
+{#snippet under(diff: FileDiff, line: DiffLine)}
+  {#if notes?.has(diff, line)}<div class="notes">{@render notes.under(diff, line)}</div>{/if}
+{/snippet}
+
 <!-- One side of a Side by Side row: the old line on the left, the new one on the right. -->
 {#snippet half(diff: FileDiff, hunk: Hunk, rows: Row[], r: number, side: "left" | "right", language: ReturnType<typeof languageOf>, picking: boolean, picked: number[])}
   {@const at = side === "left" ? rows[r].left : rows[r].right}
@@ -501,8 +537,10 @@
     class="half {line ? line.kind : 'empty'}"
     class:picking
     class:faded={picked.length > 0 && !!line && line.kind !== "context" && !on}
+    class:lit={!!line && !!notes?.lit(diff, line)}
     style:border-radius={sideRadius(hunk.lines, rows, r, side)}
   >
+    {#if line && at !== null && (side === "right" || line.kind === "removed")}{@render plus(diff, hunk, line, at)}{/if}
     {#if picking}
       {#if line && at !== null && line.kind !== "context"}{@render pickBox(hunk, line, at, on)}{:else}<span></span>{/if}
     {/if}
@@ -529,6 +567,11 @@
             {@render half(diff, hunk, rows, start + j, "left", language, picking, picked)}
             {@render half(diff, hunk, rows, start + j, "right", language, picking, picked)}
           </div>
+          {#if notes}
+            {@const row = rows[start + j]}
+            {#if row.left !== null && hunk.lines[row.left].kind === "removed"}{@render under(diff, hunk.lines[row.left])}{/if}
+            {#if row.right !== null}{@render under(diff, hunk.lines[row.right])}{/if}
+          {/if}
         {/each}
       </Lazy>
     {/each}
@@ -543,9 +586,11 @@
             class="line {line.kind}"
             class:picking
             class:faded={picked.length > 0 && line.kind !== "context" && !on}
+            class:lit={!!notes?.lit(diff, line)}
             style:border-radius={radius(hunk.lines, i)}
             style:margin-top="{gap(hunk.lines, i)}px"
           >
+            {@render plus(diff, hunk, line, i)}
             {#if picking}
               {#if line.kind !== "context"}{@render pickBox(hunk, line, i, on)}{:else}<span></span>{/if}
             {/if}
@@ -553,6 +598,7 @@
             <span class="no">{line.newLine ?? ""}</span>
             {@render code(diff, line, language, true)}
           </div>
+          {@render under(diff, line)}
         {/each}
       </Lazy>
     {/each}
@@ -753,6 +799,7 @@
     {:else}
       {@const language = languageOf(diff.file.path)}
       {@const cut = shown.cut?.diff === diff ? shown.cut : null}
+      {#if notes?.top}{@render notes.top(diff)}{/if}
       {#key wrap}
       <div class="code mono selectable" class:nowrap={!wrap} style:--digits={digits(diff)} style:--cols={wrap ? null : columns(diff)} use:sideways={!wrap}>
         {#each piecesOf(diff, drawnHunks(diff, cut), !!cut) as piece (piece.kind === "hunk" ? `h${piece.h}` : `${piece.kind}${piece.from}`)}
@@ -1012,6 +1059,57 @@
   }
   .line.added {
     background: var(--add);
+  }
+  /* Comments: a + on the line under the pointer, the lines one is written on lit in Steel. */
+  .line,
+  .half {
+    position: relative;
+  }
+  .plus {
+    position: absolute;
+    left: 2px;
+    top: 50%;
+    z-index: 1;
+    width: 16px;
+    height: 16px;
+    margin-top: -8px;
+    padding: 0;
+    border-radius: 50%;
+    background: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+  }
+  .line:hover > .plus,
+  .half:hover > .plus,
+  .plus:focus-visible {
+    opacity: 1;
+  }
+  .plus svg {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: #fff;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+  }
+  .line.lit,
+  .half.lit {
+    background: var(--accent-quiet);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  .notes {
+    margin: 6px 0 8px calc(var(--digits, 3) * 2ch + 36px);
+    border: 1px solid var(--sep);
+    border-radius: var(--radius-l);
+    background: var(--win);
+    font-family: var(--font);
+    font-size: var(--text-body);
+    line-height: normal;
+    white-space: normal;
+    color: var(--text);
+    overflow: hidden;
   }
   .pick {
     align-self: center;
