@@ -1,4 +1,4 @@
-import { firstShown, keepShown, pickRange, stepShown, type Lists, type Shown } from "../src/lib/changesView.ts";
+import { firstShown, keepShown, nextAfter, pickRange, stepShown, type Lists, type Shown } from "../src/lib/changesView.ts";
 import type { FileChange } from "../src/lib/types.ts";
 import assert from "node:assert/strict";
 
@@ -36,3 +36,9 @@ assert.deepEqual(pickRange(order, [], "b", "d"), ["b", "c", "d"]);
 assert.deepEqual(pickRange(order, ["d"], "c", "a"), ["d", "a", "b", "c"]);
 assert.deepEqual(pickRange(order, ["a"], null, "c"), ["a", "c"]);
 assert.deepEqual(pickRange(order, [], "hidden", "c"), ["c"]);
+
+// Stage & Next File opens the file below, else the one above.
+assert.equal(nextAfter(order, "b"), "c");
+assert.equal(nextAfter(order, "d"), "c");
+assert.equal(nextAfter(["a"], "a"), null);
+assert.equal(nextAfter(order, "gone"), "a");
