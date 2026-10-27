@@ -84,6 +84,7 @@
   const CompareView = new Lazy(() => import("./lib/CompareView.svelte"));
   const SeriesView = new Lazy(() => import("./lib/SeriesView.svelte"));
   const PullRequestView = new Lazy(() => import("./lib/PullRequestView.svelte"));
+  const ReviewsView = new Lazy(() => import("./lib/ReviewsView.svelte"));
   const EditStackView = new Lazy(() => import("./lib/EditStackView.svelte"));
   const BisectBanner = new Lazy(() => import("./lib/BisectBanner.svelte"));
   const CloneSheet = new Lazy(() => import("./lib/CloneSheet.svelte"));
@@ -264,7 +265,7 @@
     panelWidth === null ? panelMax : Math.min(Math.max(panelWidth + panelBonus, PANEL_MIN), panelMax),
   );
   /** The screen next to the sidebar. */
-  let view = $state<"history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull" | "series">("history");
+  let view = $state<"history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull" | "series" | "reviews">("history");
   /** The branch whose stack Edit Stack shows; the checked-out one when null. */
   let stackBranch = $state<string | null>(null);
 
@@ -275,14 +276,24 @@
   }
   /** The branch the Pull Request screen shows. */
   let pullBranch = $state<string | null>(null);
+  /** The pull request shown, when it is picked by its number: one of another account or a fork. */
+  let pullNumber = $state<number | null>(null);
 
-  function openPull(branch: string) {
+  function openPull(branch: string, number: number | null = null) {
     pullBranch = branch;
+    pullNumber = number;
     view = "pull";
     resolving = false;
     if (repo) github.load(repo.path, true);
   }
-  const shownPull = $derived(view === "pull" && pullBranch ? github.pullOf(pullBranch) : null);
+  function openReviews() {
+    view = "reviews";
+    resolving = false;
+    if (repo) github.load(repo.path, true);
+  }
+  /** Someone else's pull request, opened from Reviews: the sidebar shows Reviews picked. */
+  const reviewing = $derived(view === "pull" && pullNumber !== null && (!history?.head.branch || github.pullOf(history.head.branch)?.number !== pullNumber));
+  const shownPull = $derived(view === "pull" && pullBranch ? (pullNumber ? github.byNumber(pullNumber) : github.pullOf(pullBranch)) : null);
 
   // A diff's File History button opens the screen.
   $effect(() => {
@@ -361,7 +372,9 @@
       case "series":
         return seriesQuery ? { view, query: seriesQuery } : null;
       case "pull":
-        return pullBranch ? { view, branch: pullBranch } : null;
+        return pullBranch ? { view, branch: pullBranch, number: pullNumber } : null;
+      case "reviews":
+        return { view };
       case "stack":
         return { view, branch: stackBranch };
     }
@@ -401,9 +414,11 @@
       case "series":
         return "Compare Series";
       case "pull": {
-        const pull = github.pullOf(p.branch);
+        const pull = p.number ? github.byNumber(p.number) : github.pullOf(p.branch);
         return pull ? `PR #${pull.number}` : `Pull Request ${p.branch}`;
       }
+      case "reviews":
+        return "Reviews";
       case "stack":
         return "Edit Stack";
     }
@@ -440,6 +455,7 @@
     series: menuIcons.compare,
     pull: menuIcons.merge,
     stack: menuIcons.rebase,
+    reviews: menuIcons.merge,
   };
 
   const stepBack = $derived(canBack(trail) ? placeName(trail.places[trail.at - 1]) : null);
@@ -493,7 +509,10 @@
         view = "series";
         break;
       case "pull":
-        openPull(p.branch);
+        openPull(p.branch, p.number ?? null);
+        break;
+      case "reviews":
+        openReviews();
         break;
       case "stack":
         openStack(p.branch);
@@ -694,7 +713,7 @@
     lfs.forget();
     activity.reset();
     stopPaging();
-    if (view === "compare" || view === "file" || view === "stack" || view === "pull" || view === "series") view = "history";
+    if (view === "compare" || view === "file" || view === "stack" || view === "pull" || view === "series" || view === "reviews") view = "history";
     // The Conflicts screen goes too, before the other repository opens: it saves its draft for
     // its own folder, and reads nothing of the new one.
     resolving = false;
@@ -2378,9 +2397,10 @@
     <Sidebar {repo} {history} {reads} onRetry={retryRead} {selectedRow} ctx={branchCtx!} onOpen={chooseRepo} onOpenPath={load} onWelcome={closeRepo}
       onPick={aside((id: string, missing?: string) => ((commitExpanded = false), pick(id, missing), requestAnimationFrame(() => list?.focus())))}
       {run}
-      view={view === "series" ? seriesBack : view}
+      view={view === "series" ? seriesBack : reviewing ? "reviews" : view}
       onView={(v) => {
         sideShown = false;
+        if (v === "reviews") return openReviews();
         view = v;
         resolving = false;
         // History is the graph, also from Changes: with the commit picked before, else HEAD.
@@ -2417,8 +2437,11 @@
               <span class="name">{nav.file.path.slice(nav.file.path.lastIndexOf("/") + 1)}</span>
               {@const line = fileLive ? fileLive.line : (nav.file.line ?? null)}
               <span class="sub">{@render steps()}{#if trailPath.length && line}Line {line}{:else}{trailPath.length ? "" : `${repo.name} · `}{nav.file.path}{line ? ` · line ${line}` : ""}{/if}</span>
+            {:else if view === "reviews"}
+              <span class="name">Reviews</span>
+              <span class="sub">{@render steps()}{github.repo ? `${github.repo.owner}/${github.repo.name}` : repo.name} · {github.pulls.filter((p) => p.state === "open").length} open</span>
             {:else if view === "pull" && pullBranch}
-              <span class="name">{pullBranch}</span>
+              <span class="name">{shownPull && pullNumber ? `PR #${shownPull.number}` : pullBranch}</span>
               <span class="sub">{@render steps()}{shownPull ? `Pull request #${shownPull.number}` : "No pull request yet"}{github.repo && !trailPath.length ? ` · ${github.repo.owner}/${github.repo.name}` : ""}</span>
             {:else if view === "stack"}
               <span class="name">Edit Stack</span>
@@ -2696,16 +2719,21 @@
             copy={(text) => copyText(text, "Copied the command.")}
           />
         {/key}
+      {:else if view === "reviews" && branchCtx}
+        {#key repo.path}
+          <ReviewsView.component ctx={branchCtx} {colorOf} {run} onOpen={(pull) => openPull(pull.head, pull.number)} />
+        {/key}
       {:else if view === "pull" && pullBranch && branchCtx}
         {#key repo.path}
           <PullRequestView.component
             branch={pullBranch}
+            number={pullNumber}
             {history}
             ctx={branchCtx}
             {colorOf}
             {version}
             {run}
-            onBranch={(name) => (pullBranch = name)}
+            onBranch={(name) => ((pullBranch = name), (pullNumber = null))}
             copy={(text) => copyText(text, `Copied ${text.length > 40 ? "it" : text}.`)}
             onSeries={openSeries}
           />

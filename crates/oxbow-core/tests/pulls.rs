@@ -2,55 +2,14 @@
 
 mod support;
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::thread;
 
 use oxbow_core::github::Client;
 use oxbow_core::pulls::{Call, Entry, GitHubRepo, Method, PullState};
 use oxbow_core::{Action, Repo};
-use support::Fixture;
-
-/// Answer every request by its path: the first route whose prefix matches, else 404.
-fn server(routes: Vec<(&'static str, &'static str)>) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = format!("http://{}", listener.local_addr().unwrap());
-    thread::spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(stream) = stream else { break };
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut line = String::new();
-            if reader.read_line(&mut line).is_err() {
-                continue;
-            }
-            let mut length = 0;
-            loop {
-                let mut header = String::new();
-                reader.read_line(&mut header).unwrap();
-                if header.trim().is_empty() {
-                    break;
-                }
-                if let Some(value) = header.to_lowercase().strip_prefix("content-length:") {
-                    length = value.trim().parse().unwrap();
-                }
-            }
-            let mut body = vec![0; length];
-            reader.read_exact(&mut body).unwrap();
-            let path = line.split_whitespace().nth(1).unwrap_or("").to_owned();
-            let (status, answer) = routes
-                .iter()
-                .find(|(prefix, _)| path.starts_with(prefix))
-                .map_or((404, r#"{"message":"Not Found"}"#), |(_, answer)| (200, answer));
-            let mut stream = stream;
-            let _ = write!(
-                stream,
-                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
-                answer.len()
-            );
-        }
-    });
-    address
-}
+use support::{Fixture, server};
 
 fn acme() -> GitHubRepo {
     GitHubRepo {
@@ -120,7 +79,7 @@ fn a_pull_request_is_read_in_full() {
     assert_eq!(pr.summary.base, "auth/1-models");
     assert_eq!((pr.additions, pr.deletions, pr.commit_count), (94, 12, 2));
     assert_eq!(pr.mergeable_state, "blocked");
-    assert_eq!(pr.requested, ["maria", "acme/core"]);
+    assert_eq!(pr.summary.requested, ["maria", "acme/core"]);
     assert_eq!(pr.commits[1].summary, "Expose /v2/sessions endpoint");
     assert_eq!(pr.required_approvals, Some(1));
     assert!(!pr.settings.merge_commit && pr.settings.squash && pr.settings.auto_merge && pr.settings.can_push);

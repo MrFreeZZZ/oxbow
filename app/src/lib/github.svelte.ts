@@ -1,8 +1,8 @@
-// The open repository's place on GitHub and its pull requests, for the sidebar and the Pull
-// Request screen. The list is asked for at most once a minute unless something changed it.
+// The open repository's place on GitHub and its pull requests, for the sidebar, Reviews and the
+// Pull Request screen. The list is asked for at most once a minute unless something changed it.
 
 import { api } from "./api";
-import type { GitHubRepo, PullSummary } from "./types";
+import type { GitHubRepo, PullStatus, PullSummary } from "./types";
 
 const FRESH_FOR = 60_000;
 
@@ -11,6 +11,10 @@ class GitHubState {
   repo = $state<GitHubRepo | null>(null);
   /** Open and recently closed pull requests, the latest updated first. */
   pulls = $state<PullSummary[]>([]);
+  /** GitHub's verdict and checks of the open ones, by number. */
+  statuses = $state<Record<number, PullStatus>>({});
+  /** The account signed in, by its login. */
+  me = $state<string | null>(null);
   /** Why the list couldn't be loaded, e.g. nobody is signed in. */
   problem = $state<string | null>(null);
   #path = "";
@@ -36,9 +40,16 @@ class GitHubState {
       return;
     }
     try {
-      const pulls = await api.githubPulls();
+      const [pulls, statuses, account] = await Promise.all([
+        api.githubPulls(),
+        // A verdict and checks are a nicety: the list stays without them.
+        api.githubPullStatuses().catch(() => []),
+        api.githubAccount().catch(() => null),
+      ]);
       if (load !== this.#load) return;
       this.pulls = pulls;
+      this.statuses = Object.fromEntries(statuses.map((s) => [s.number, s]));
+      this.me = account?.login ?? null;
       this.problem = null;
     } catch (err) {
       if (load === this.#load) this.problem = String(err);
@@ -55,6 +66,8 @@ class GitHubState {
     this.#load += 1;
     this.repo = null;
     this.pulls = [];
+    this.statuses = {};
+    this.me = null;
     this.problem = null;
     this.#loadedAt = 0;
   }
@@ -68,6 +81,17 @@ class GitHubState {
   pullOf(branch: string): PullSummary | null {
     const own = this.pulls.filter((p) => p.head === branch && (!p.headOwner || p.headOwner === this.repo?.owner));
     return own.find((p) => p.state === "open") ?? own[0] ?? null;
+  }
+
+  /** Pull request `number`, if the list has it. */
+  byNumber(number: number): PullSummary | null {
+    return this.pulls.find((p) => p.number === number) ?? null;
+  }
+
+  /** Open pull requests of others that ask this account for a review. */
+  get waiting(): PullSummary[] {
+    const me = this.me;
+    return me ? this.pulls.filter((p) => p.state === "open" && !p.draft && p.author.login !== me && p.requested.includes(me)) : [];
   }
 
   /** The open pull request whose head is `branch`. */

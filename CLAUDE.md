@@ -29,6 +29,8 @@ crates/oxbow-core/          UI-free core library (all Git logic lives here)
   src/filehistory.rs        file history and blame;  reflog.rs = lost work
   src/fix.rs                Fix a Mistake plans;  secrets.rs = pre-commit secrets check
   src/github.rs pulls.rs    GitHub REST: sign-in, publish, pull requests
+  src/review.rs             reviewing a pull request: statuses, Viewed, fetch into refs/oxbow/pull/N,
+                            the draft review kept in .git/oxbow/reviews
   src/config.rs setup.rs    git settings; clone/init;  console.rs = Console process log
   tests/<area>.rs           integration tests, one file per area; tests/support/mod.rs = Fixture
   examples/history.rs       history load benchmark;  reads.rs = opening with worktrees/submodules
@@ -46,6 +48,7 @@ app/src/                    Svelte front end
   lib/prefs.svelte.ts       settings;  SettingsWindow.svelte = Settings UI
   lib/confirm.svelte.ts     confirmations (ConfirmSheet.svelte);  activity.svelte.ts = Activity
   lib/*.svelte              one component per view/sheet (HistoryList, DiffView, ChangesPanel…)
+  lib/ReviewsView.svelte    Reviews screen (lib/reviews.ts sorts it);  PullFiles.svelte = PR Files tab
   lib/*.ts                  pure logic next to its view (diffRows, conflicts, branches, graph…)
   app.css themes.ts branchPalettes.ts   design tokens, code theme Estuary, branch colors
 app/tests/*.test.ts         node:test unit tests for the pure lib/*.ts modules

@@ -386,7 +386,7 @@ impl Repo {
 }
 
 /// Delete the folders of `.git/oxbow/removed` (named `<seconds>-…`) older than 30 days.
-fn prune_removed(root: &std::path::Path, now: u64) {
+pub(crate) fn prune_removed(root: &std::path::Path, now: u64) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };

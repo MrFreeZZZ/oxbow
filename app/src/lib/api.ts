@@ -63,6 +63,9 @@ import type {
   GitHubRepo,
   PullCall,
   PullRequest,
+  PullStatus,
+  ReviewDraft,
+  Viewing,
   PullSummary,
   LfsStatus,
 } from "./types";
@@ -275,6 +278,16 @@ export const api = {
   /** Sends `action-event`s while it runs; resolves to what the last call (or a create) answered. */
   githubRun: (calls: PullCall[]) => invoke<{ number?: number; html_url?: string; sha?: string } | null>("github_run", { calls }),
   codeOwners: (base: string, branch: string) => invoke<string[]>("code_owners", { base, branch }),
+  githubPullStatuses: () => invoke<PullStatus[]>("github_pull_statuses"),
+  /** Fetches the pull request's head and base into refs/oxbow/pull/<number>/, quietly. */
+  pullFetch: (number: number, base: string) => invoke<void>("pull_fetch", { number, base }),
+  githubViewing: (number: number) => invoke<Viewing>("github_viewing", { number }),
+  /** One small call, sent quietly: no sheet, no Activity. */
+  githubSend: (call: PullCall) => invoke<unknown>("github_send", { call }),
+  reviewDraft: (number: number) => invoke<ReviewDraft | null>("review_draft", { number }),
+  reviewDrafts: () => invoke<Record<string, ReviewDraft>>("review_drafts"),
+  /** Keeps the draft; null puts it away, a copy kept for 30 days. */
+  saveReviewDraft: (number: number, draft: ReviewDraft | null) => invoke<void>("save_review_draft", { number, draft }),
 };
 
 /** Keys of `settings.json`. */

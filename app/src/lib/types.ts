@@ -1501,6 +1501,8 @@ export interface PullSummary {
   created: number;
   updated: number;
   nodeId: string;
+  /** Reviews asked for and not given yet: logins, and teams as `org/team`. */
+  requested: string[];
 }
 
 export interface PullCommit {
@@ -1536,7 +1538,22 @@ export interface PullComment {
 export type PullEntry =
   | { kind: "comment"; author: GitHubPerson; body: string; time: number }
   | { kind: "review"; author: GitHubPerson; state: ReviewState; body: string; time: number }
-  | { kind: "thread"; path: string; line: number | null; hunk: HunkLine[]; comments: PullComment[]; resolved: boolean | null; outdated: boolean; time: number }
+  | {
+      kind: "thread";
+      /** The first comment's id, which replies go to. */
+      id: number;
+      /** GraphQL's id of the thread. */
+      node: string | null;
+      path: string;
+      line: number | null;
+      startLine: number | null;
+      side: DiffSide;
+      hunk: HunkLine[];
+      comments: PullComment[];
+      resolved: boolean | null;
+      outdated: boolean;
+      time: number;
+    }
   | { kind: "event"; actor: string; text: string; icon: "push" | "ok" | "fail" | "review" | "draft" | "dot"; tone: "ok" | "bad" | null; time: number };
 
 export interface PullCheck {
@@ -1573,7 +1590,6 @@ export interface PullRequest extends PullSummary {
   autoMerge: string | null;
   commits: PullCommit[];
   reviews: PullReview[];
-  requested: string[];
   timeline: PullEntry[];
   checks: PullCheck[];
   requiredApprovals: number | null;
@@ -1590,7 +1606,69 @@ export type PullCall =
   | { kind: "update"; number: number; base?: string | null; body?: string | null }
   | { kind: "readyForReview"; number: number; id: string }
   | { kind: "updateBranch"; number: number; sha: string }
-  | { kind: "autoMerge"; number: number; id: string; method?: MergeMethodName | null };
+  | { kind: "autoMerge"; number: number; id: string; method?: MergeMethodName | null }
+  | { kind: "viewed"; id: string; path: string; viewed: boolean }
+  | { kind: "comment"; number: number; commit: string; spot: Spot; body: string }
+  | { kind: "reply"; number: number; to: number; body: string }
+  | { kind: "resolve"; thread: string; resolved: boolean }
+  | { kind: "startReview"; id: string; commit: string }
+  | { kind: "reviewComment"; review?: string | null; spot: Spot; body: string }
+  | { kind: "reviewReply"; review?: string | null; thread: string; body: string }
+  | { kind: "submitReview"; review?: string | null; verdict: Verdict; body: string }
+  | { kind: "deleteReview"; review?: string | null };
+
+/** `RIGHT`: a line of the new file; `LEFT`: a deleted line, by its old number. */
+export type DiffSide = "RIGHT" | "LEFT";
+
+/** The lines a review comment is on. */
+export interface Spot {
+  path: string;
+  line: number;
+  side: DiffSide;
+  startLine?: number | null;
+}
+
+export type Verdict = "comment" | "approve" | "requestChanges";
+
+/** GitHub's say on an open pull request, for Reviews. */
+export interface PullStatus {
+  number: number;
+  decision: "approved" | "changesRequested" | "reviewRequired" | null;
+  checks: "success" | "failure" | "pending" | "error" | "expected" | null;
+}
+
+/** Files this account ticked Viewed on GitHub; `dismissed` ones changed since. */
+export interface Viewing {
+  viewed: string[];
+  dismissed: string[];
+  pending: { id: string; commit: string | null; comments: number } | null;
+}
+
+export interface DraftComment {
+  id: string;
+  spot: Spot;
+  body: string;
+  time: number;
+}
+
+export interface DraftReply {
+  id: string;
+  /** The thread's first comment. */
+  to: number;
+  /** The thread's GraphQL id. */
+  thread: string;
+  body: string;
+  time: number;
+}
+
+/** A review written here and not sent; its comments are on lines of `commit`. */
+export interface ReviewDraft {
+  commit: string;
+  body: string;
+  verdict: Verdict | null;
+  comments: DraftComment[];
+  replies: DraftReply[];
+}
 
 /** A commit of a series before or after a rewrite. */
 export interface SeriesCommit {

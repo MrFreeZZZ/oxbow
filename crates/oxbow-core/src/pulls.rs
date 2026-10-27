@@ -1,10 +1,11 @@
 //! Pull requests on GitHub: the list of a repository's pull requests, everything the Pull
 //! Request screen shows about one (conversation, commits, checks, reviews, whether it can merge)
-//! and the calls that change them: open, merge, retarget, mark ready, merge automatically.
+//! and the calls that change them: open, merge, retarget, mark ready, merge automatically, and
+//! review: comment on lines, reply, resolve, mark files viewed, send a review.
 //!
 //! Reading goes through the REST API, one request per kind of thing, sent side by side. Only
 //! what REST can't do goes through GraphQL: whether a review thread is resolved, marking a draft
-//! ready for review, and auto-merge.
+//! ready for review, auto-merge, files viewed and reviews with replies in them.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -439,6 +440,8 @@ pub struct PullSummary {
     pub updated: i64,
     /// GraphQL's id, for the calls only GraphQL has.
     pub node_id: String,
+    /// Reviews asked for and not given yet: logins, and teams as `org/team`.
+    pub requested: Vec<String>,
 }
 
 /// Everything the Pull Request screen shows about one pull request.
@@ -467,8 +470,6 @@ pub struct PullRequest {
     pub commits_complete: bool,
     /// Each reviewer's latest say, in the order they first spoke.
     pub reviews: Vec<Review>,
-    /// Reviews asked for and not given yet: logins, and teams as `org/team`.
-    pub requested: Vec<String>,
     /// The conversation, oldest first; the description is not part of it.
     pub timeline: Vec<Entry>,
     pub checks: Vec<Check>,
@@ -535,8 +536,16 @@ pub enum Entry {
     },
     /// Comments on a line of code, the first one and its replies.
     Thread {
+        /// The first comment's id, which replies go to.
+        id: u64,
+        /// GraphQL's id of the thread, for resolving it and replying in a review.
+        node: Option<String>,
         path: String,
         line: Option<u32>,
+        /// The first line of a comment on several lines.
+        start_line: Option<u32>,
+        /// `RIGHT` for a line of the new file, `LEFT` for a deleted one.
+        side: String,
         hunk: Vec<HunkLine>,
         comments: Vec<Comment>,
         /// `None` when GitHub didn't say.
@@ -623,8 +632,40 @@ impl Method {
     }
 }
 
+/// What a review says of the pull request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Verdict {
+    Comment,
+    Approve,
+    RequestChanges,
+}
+
+impl Verdict {
+    fn graphql(self) -> &'static str {
+        match self {
+            Verdict::Comment => "COMMENT",
+            Verdict::Approve => "APPROVE",
+            Verdict::RequestChanges => "REQUEST_CHANGES",
+        }
+    }
+}
+
+/// The lines a comment is on, as GitHub numbers them: `line` (and `start_line` for several) of
+/// the new file on the `RIGHT`, of the old one on the `LEFT` for deleted lines.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Spot {
+    pub path: String,
+    pub line: u32,
+    pub side: String,
+    #[serde(default)]
+    pub start_line: Option<u32>,
+}
+
 /// A change to a pull request, shown as its request before it is sent. `number` 0 means the
-/// pull request a `Create` earlier in the same run made.
+/// pull request a `Create` earlier in the same run made, a `review` of `None` the review a
+/// `StartReview` earlier in the run started.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Call {
@@ -673,6 +714,78 @@ pub enum Call {
         #[serde(default)]
         method: Option<Method>,
     },
+    /// Tick or untick a file's Viewed box, as on GitHub.
+    Viewed {
+        id: String,
+        path: String,
+        viewed: bool,
+    },
+    /// A comment on lines of `commit`, sent at once rather than in a review.
+    Comment {
+        number: u64,
+        commit: String,
+        spot: Spot,
+        body: String,
+    },
+    /// A reply, sent at once, to the thread comment `to` starts.
+    Reply {
+        number: u64,
+        to: u64,
+        body: String,
+    },
+    /// Resolve the thread with GraphQL id `thread`, or open it again.
+    Resolve {
+        thread: String,
+        resolved: bool,
+    },
+    /// Start a review of `commit`, pending until it is submitted.
+    StartReview {
+        id: String,
+        commit: String,
+    },
+    /// A comment in a pending review.
+    ReviewComment {
+        #[serde(default)]
+        review: Option<String>,
+        spot: Spot,
+        body: String,
+    },
+    /// A reply in a pending review to the thread with GraphQL id `thread`.
+    ReviewReply {
+        #[serde(default)]
+        review: Option<String>,
+        thread: String,
+        body: String,
+    },
+    /// Send a pending review with its verdict and summary.
+    SubmitReview {
+        #[serde(default)]
+        review: Option<String>,
+        verdict: Verdict,
+        body: String,
+    },
+    /// Throw away a pending review.
+    DeleteReview {
+        #[serde(default)]
+        review: Option<String>,
+    },
+}
+
+impl Call {
+    /// The review a `StartReview` made, for the calls of the run that go into it.
+    pub fn in_review(&mut self, id: &str) {
+        match self {
+            Call::ReviewComment { review, .. }
+            | Call::ReviewReply { review, .. }
+            | Call::SubmitReview { review, .. }
+            | Call::DeleteReview { review }
+                if review.is_none() =>
+            {
+                *review = Some(id.to_owned());
+            }
+            _ => {}
+        }
+    }
 }
 
 const READY: &str =
@@ -680,7 +793,18 @@ const READY: &str =
 const AUTO_ON: &str = "mutation($id: ID!, $method: PullRequestMergeMethod!) { enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method}) { clientMutationId } }";
 const AUTO_OFF: &str =
     "mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }";
-const THREADS: &str = "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes { isResolved comments(first: 1) { nodes { databaseId } } } } } } }";
+const VIEWED: &str = "mutation($id: ID!, $path: String!) { markFileAsViewed(input: {pullRequestId: $id, path: $path}) { clientMutationId } }";
+const UNVIEWED: &str = "mutation($id: ID!, $path: String!) { unmarkFileAsViewed(input: {pullRequestId: $id, path: $path}) { clientMutationId } }";
+const RESOLVE: &str = "mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }";
+const UNRESOLVE: &str =
+    "mutation($id: ID!) { unresolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }";
+const START_REVIEW: &str = "mutation($id: ID!, $commit: GitObjectID!) { addPullRequestReview(input: {pullRequestId: $id, commitOID: $commit}) { pullRequestReview { id } } }";
+const REVIEW_COMMENT: &str = "mutation($review: ID!, $path: String!, $line: Int!, $side: DiffSide!, $startLine: Int, $startSide: DiffSide, $body: String!) { addPullRequestReviewThread(input: {pullRequestReviewId: $review, path: $path, line: $line, side: $side, startLine: $startLine, startSide: $startSide, body: $body}) { thread { id } } }";
+const REVIEW_REPLY: &str = "mutation($review: ID!, $thread: ID!, $body: String!) { addPullRequestReviewThreadReply(input: {pullRequestReviewId: $review, pullRequestReviewThreadId: $thread, body: $body}) { comment { id } } }";
+const SUBMIT_REVIEW: &str = "mutation($review: ID!, $event: PullRequestReviewEvent!, $body: String) { submitPullRequestReview(input: {pullRequestReviewId: $review, event: $event, body: $body}) { pullRequestReview { url } } }";
+const DELETE_REVIEW: &str =
+    "mutation($review: ID!) { deletePullRequestReview(input: {pullRequestReviewId: $review}) { clientMutationId } }";
+const THREADS: &str = "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes { id isResolved comments(first: 1) { nodes { databaseId } } } } } } }";
 
 impl Client {
     // Requests, to show and then send.
@@ -697,7 +821,7 @@ impl Client {
         self.api_request("GET", &repo.path(&format!("/pulls/{number}")), None)
     }
 
-    fn graphql_request(&self, query: &str, variables: Value) -> Request {
+    pub(crate) fn graphql_request(&self, query: &str, variables: Value) -> Request {
         self.api_request(
             "POST",
             "/graphql",
@@ -775,6 +899,61 @@ impl Client {
                 Some(method) => self.graphql_request(AUTO_ON, json!({ "id": id, "method": method.graphql() })),
                 None => self.graphql_request(AUTO_OFF, json!({ "id": id })),
             },
+            Call::Viewed { id, path, viewed } => self.graphql_request(
+                if *viewed { VIEWED } else { UNVIEWED },
+                json!({ "id": id, "path": path }),
+            ),
+            Call::Comment {
+                number: n,
+                commit,
+                spot,
+                body,
+            } => {
+                let mut json = json!({ "body": body, "commit_id": commit, "path": spot.path, "line": spot.line, "side": spot.side });
+                if let Some(start) = spot.start_line {
+                    json["start_line"] = json!(start);
+                    json["start_side"] = json!(spot.side);
+                }
+                self.api_request(
+                    "POST",
+                    &repo.path(&format!("/pulls/{}/comments", number(*n))),
+                    Some(json),
+                )
+            }
+            Call::Reply { number: n, to, body } => self.api_request(
+                "POST",
+                &repo.path(&format!("/pulls/{}/comments/{to}/replies", number(*n))),
+                Some(json!({ "body": body })),
+            ),
+            Call::Resolve { thread, resolved } => {
+                self.graphql_request(if *resolved { RESOLVE } else { UNRESOLVE }, json!({ "id": thread }))
+            }
+            Call::StartReview { id, commit } => {
+                self.graphql_request(START_REVIEW, json!({ "id": id, "commit": commit }))
+            }
+            Call::ReviewComment { review, spot, body } => self.graphql_request(
+                REVIEW_COMMENT,
+                json!({
+                    "review": review_id(review),
+                    "path": spot.path,
+                    "line": spot.line,
+                    "side": spot.side,
+                    "startLine": spot.start_line,
+                    "startSide": spot.start_line.map(|_| &spot.side),
+                    "body": body,
+                }),
+            ),
+            Call::ReviewReply { review, thread, body } => self.graphql_request(
+                REVIEW_REPLY,
+                json!({ "review": review_id(review), "thread": thread, "body": body }),
+            ),
+            Call::SubmitReview { review, verdict, body } => self.graphql_request(
+                SUBMIT_REVIEW,
+                json!({ "review": review_id(review), "event": verdict.graphql(), "body": body }),
+            ),
+            Call::DeleteReview { review } => {
+                self.graphql_request(DELETE_REVIEW, json!({ "review": review_id(review) }))
+            }
         }
     }
 
@@ -877,7 +1056,6 @@ impl Client {
         let mut entries = conversation(&timeline, &comments, &resolved);
         entries.sort_by_key(Entry::time);
         let reviews = latest_reviews(&timeline);
-        let requested = requested(&pull);
         let checks = checks(&optional(runs), &optional(statuses));
         let required_approvals = required_approvals(&optional(rules));
 
@@ -909,7 +1087,6 @@ impl Client {
                 .map(str::to_owned),
             commits,
             reviews,
-            requested,
             timeline: entries,
             checks,
             required_approvals,
@@ -919,8 +1096,21 @@ impl Client {
     }
 }
 
+/// A review's id, or what stands for the one the run starts until it has one.
+fn review_id(review: &Option<String>) -> &str {
+    review.as_deref().unwrap_or("$REVIEW")
+}
+
+/// The id of the review a `StartReview` answered with.
+pub fn started_review(answer: &Value) -> Option<String> {
+    answer
+        .pointer("/data/addPullRequestReview/pullRequestReview/id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
 /// The message of a GraphQL answer that failed, which comes with status 200.
-fn graphql_error(body: &Value) -> Option<String> {
+pub(crate) fn graphql_error(body: &Value) -> Option<String> {
     let errors = body.get("errors")?.as_array()?;
     let messages: Vec<&str> = errors
         .iter()
@@ -999,6 +1189,7 @@ fn summary(pull: &Value) -> PullSummary {
         created: time(pull, "created_at"),
         updated: time(pull, "updated_at"),
         node_id: text(pull, "node_id"),
+        requested: requested(pull),
     }
 }
 
@@ -1118,7 +1309,7 @@ fn latest_reviews(timeline: &Value) -> Vec<Review> {
 
 /// The conversation from the timeline and the review comments: comments, reviews with something
 /// to say, threads on lines of code and one-line events. Commits in a row are one event.
-fn conversation(timeline: &Value, comments: &Value, resolved: &HashMap<u64, bool>) -> Vec<Entry> {
+fn conversation(timeline: &Value, comments: &Value, resolved: &HashMap<u64, (bool, String)>) -> Vec<Entry> {
     let mut out: Vec<Entry> = Vec::new();
     let mut pushed: Option<(String, usize, i64)> = None;
     let mut merged = false;
@@ -1232,7 +1423,7 @@ fn conversation(timeline: &Value, comments: &Value, resolved: &HashMap<u64, bool
 }
 
 /// Review comments grouped into threads: each first comment with the replies to it.
-fn threads(comments: &Value, resolved: &HashMap<u64, bool>) -> Vec<Entry> {
+fn threads(comments: &Value, resolved: &HashMap<u64, (bool, String)>) -> Vec<Entry> {
     let all: Vec<&Value> = comments.as_array().into_iter().flatten().collect();
     let mut out = Vec::new();
     for first in all
@@ -1251,13 +1442,23 @@ fn threads(comments: &Value, resolved: &HashMap<u64, bool>) -> Vec<Entry> {
                 .filter(|c| c.get("in_reply_to_id").and_then(Value::as_u64) == Some(id))
                 .map(|c| comment(c)),
         );
-        let line = first.get("line").and_then(Value::as_u64).map(|n| n as u32);
+        let number = |key: &str| first.get(key).and_then(Value::as_u64).map(|n| n as u32);
+        let line = number("line");
+        let thread = resolved.get(&id);
         out.push(Entry::Thread {
+            id,
+            node: thread.map(|(_, node)| node.clone()),
             path: text(first, "path"),
             hunk: hunk_tail(&text(first, "diff_hunk"), 4),
             outdated: line.is_none(),
-            line: line.or_else(|| first.get("original_line").and_then(Value::as_u64).map(|n| n as u32)),
-            resolved: resolved.get(&id).copied(),
+            start_line: if line.is_some() {
+                number("start_line")
+            } else {
+                number("original_start_line")
+            },
+            side: first.get("side").and_then(Value::as_str).unwrap_or("RIGHT").to_owned(),
+            line: line.or_else(|| number("original_line")),
+            resolved: thread.map(|(resolved, _)| *resolved),
             time: list[0].time,
             comments: list,
         });
@@ -1299,8 +1500,8 @@ pub fn hunk_tail(hunk: &str, count: usize) -> Vec<HunkLine> {
     tail
 }
 
-/// Which review threads are resolved, by the id of their first comment.
-fn resolved_threads(answer: &Value) -> HashMap<u64, bool> {
+/// Whether each review thread is resolved, and its GraphQL id, by the id of its first comment.
+fn resolved_threads(answer: &Value) -> HashMap<u64, (bool, String)> {
     answer
         .pointer("/data/repository/pullRequest/reviewThreads/nodes")
         .and_then(Value::as_array)
@@ -1308,7 +1509,13 @@ fn resolved_threads(answer: &Value) -> HashMap<u64, bool> {
         .flatten()
         .filter_map(|thread| {
             let id = thread.pointer("/comments/nodes/0/databaseId").and_then(Value::as_u64)?;
-            Some((id, thread.get("isResolved").and_then(Value::as_bool).unwrap_or(false)))
+            Some((
+                id,
+                (
+                    thread.get("isResolved").and_then(Value::as_bool).unwrap_or(false),
+                    text(thread, "id"),
+                ),
+            ))
         })
         .collect()
 }
