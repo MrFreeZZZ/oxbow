@@ -515,7 +515,7 @@ export type Action =
   | { kind: "stageHunk"; path: string; header: string; check: string; lines?: number[] | null }
   | { kind: "unstageHunk"; path: string; header: string; check: string; lines?: number[] | null }
   | { kind: "discardHunk"; path: string; header: string; check: string; lines?: number[] | null }
-  | { kind: "ignore"; pattern: string }
+  | { kind: "ignore"; pattern: string; untrack?: string }
   | { kind: "commit"; message: string; amend: boolean; noVerify?: boolean; allowSecrets?: boolean }
   | { kind: "fetch"; remote: string | null }
   | { kind: "pull"; remote: string; branch: string; fetchFirst?: boolean; submodules?: boolean; mode?: "rebase" | "merge" | "fastForward" }

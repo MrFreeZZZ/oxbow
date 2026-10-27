@@ -148,6 +148,9 @@ pub enum Action {
     /// Add `pattern` as a line of the top `.gitignore` and stage it.
     Ignore {
         pattern: String,
+        /// A tracked file or folder the rule covers: git stops tracking it, and it stays on disk.
+        #[serde(default)]
+        untrack: Option<String>,
     },
     Commit {
         message: String,
@@ -1225,11 +1228,21 @@ impl Repo {
                     }
                 }
             }
-            Action::Ignore { pattern } => vec![
-                GitCommand::new(["add", "--", ".gitignore"])
-                    .comment("stage .gitignore, so the rule reaches everyone with the next commit")
-                    .before(format!("echo {} >> .gitignore", crate::cli::shell_quote(pattern))),
-            ],
+            Action::Ignore { pattern, untrack } => {
+                let mut commands = Vec::new();
+                if let Some(path) = untrack {
+                    commands.push(
+                        GitCommand::new(["rm", "-r", "--cached", "--quiet", "--", &literal(path)])
+                            .comment("stop tracking it: it stays on disk, and leaves the repository with the next commit"),
+                    );
+                }
+                commands.push(
+                    GitCommand::new(["add", "--", ".gitignore"])
+                        .comment("stage .gitignore, so the rule reaches everyone with the next commit")
+                        .before(format!("echo {} >> .gitignore", crate::cli::shell_quote(pattern))),
+                );
+                commands
+            }
             Action::Commit {
                 message,
                 amend,
@@ -1902,7 +1915,7 @@ impl Repo {
                     }
                     self.write_resolution(path, picks, text.as_deref())?;
                 }
-                if let Action::Ignore { pattern } = action {
+                if let Action::Ignore { pattern, .. } = action {
                     self.add_ignore_rule(pattern)?;
                 }
                 // The note of a conflicted apply goes when the apply is finished or undone.
