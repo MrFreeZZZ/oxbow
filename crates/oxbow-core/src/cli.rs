@@ -827,9 +827,9 @@ pub fn run_streaming_in(
     let mut output = CommandOutput::default();
     let mut heard = Instant::now();
     let mut exited: Option<(std::process::ExitStatus, Instant)> = None;
-    // Both pipes are closed. That doesn't mean it is done: it may have sent its output
+    // When both pipes closed. That doesn't mean it is done: it may have sent its output
     // elsewhere and go on, and Stop still stops it.
-    let mut closed = false;
+    let mut closed: Option<Instant> = None;
     let status = loop {
         // Before each line: a command that prints without a pause still stops at once.
         if cancel.load(Ordering::Relaxed) {
@@ -840,8 +840,15 @@ pub fn run_streaming_in(
             log.stopped(logged);
             return Err(Error::Cancelled);
         }
-        let next = if closed {
-            std::thread::sleep(Duration::from_millis(20));
+        let next = if let Some(at) = closed {
+            // Most often it exits a moment after closing them: look often at first, so each
+            // git command doesn't take 20 ms more; one that went on working, less often.
+            let pause = if at.elapsed() < Duration::from_millis(50) {
+                1
+            } else {
+                20
+            };
+            std::thread::sleep(Duration::from_millis(pause));
             Err(mpsc::RecvTimeoutError::Timeout)
         } else {
             receive.recv_timeout(Duration::from_millis(50))
@@ -864,10 +871,10 @@ pub fn run_streaming_in(
             }
             Err(mpsc::RecvTimeoutError::Timeout) => match exited {
                 // Exited, but something it left running holds its output: what came is all.
-                Some((status, at)) if closed || at.elapsed() >= AFTER_EXIT => break status,
+                Some((status, at)) if closed.is_some() || at.elapsed() >= AFTER_EXIT => break status,
                 Some(_) => {}
                 None => match child.try_wait() {
-                    Ok(Some(status)) if closed => break status,
+                    Ok(Some(status)) if closed.is_some() => break status,
                     Ok(Some(status)) => exited = Some((status, Instant::now())),
                     Ok(None) if command.quiet_limit.is_some_and(|limit| heard.elapsed() >= limit) => {
                         kill_tree(&mut child);
@@ -896,7 +903,7 @@ pub fn run_streaming_in(
             },
             Err(mpsc::RecvTimeoutError::Disconnected) => match exited {
                 Some((status, _)) => break status,
-                None => closed = true,
+                None => closed = Some(Instant::now()),
             },
         }
     };

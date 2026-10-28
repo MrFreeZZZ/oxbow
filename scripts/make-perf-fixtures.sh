@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Creates the repositories Oxbow's reads are measured on (see docs/measuring-reads.md):
 #   history-100k    100,000 commits, 30 side branches (half merged back), 20 tags
+#   history-100k-clone  a clone of it, with origin's branches and a commit not pushed
 #   worktrees-20    a repository with 20 more worktrees, every third with uncommitted changes
 #   worktrees-50    the same with 50
 #   submodules-20   20 submodules: clean, changed, behind, ahead, on a branch, not cloned
@@ -69,6 +70,11 @@ history() {
   }' | git -C "$repo" fast-import --quiet
   git -C "$repo" checkout -q main
   echo "history-100k: $(git -C "$repo" rev-list --count --all) commits"
+  # The same as a clone has it, with origin's branches, and a commit not pushed yet.
+  rm -rf "$repo-clone"
+  git clone -q --local "$repo" "$repo-clone"
+  git -C "$repo-clone" commit -q --allow-empty -m "Not pushed yet"
+  echo "history-100k-clone: $(git -C "$repo-clone" branch -r | wc -l) remote branches"
 }
 
 worktrees() {
