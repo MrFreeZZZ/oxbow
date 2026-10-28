@@ -1,6 +1,7 @@
 //! The Pull Request screen's side: which GitHub repository the open one pushes to, its pull
 //! requests, one of them in full, and the calls that change them, streamed to the sheet as they
-//! run. Reviewing: the pull request fetched here, files viewed, the draft review.
+//! run. Reviewing: the pull request fetched here, files viewed, the draft review. GitLab: the
+//! projects the remotes point at, and their merge request pages in the browser.
 
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
@@ -9,7 +10,7 @@ use oxbow_core::console::EntryKind;
 use oxbow_core::github::Client;
 use oxbow_core::pulls::{Call, GitHubRepo, PullRequest, PullSummary, started_review};
 use oxbow_core::review::{PullStatus, ReviewDraft, Viewing};
-use oxbow_core::{ActionEvent, OutputLine};
+use oxbow_core::{ActionEvent, GitLabProject, OutputLine};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -36,6 +37,40 @@ pub async fn github_repo(
 ) -> CommandResult<Option<GitHubRepo>> {
     let repo = current(&session, &window)?;
     read(at(&repo), "Find the GitHub repository", move || Ok(repo.github_repo())).await
+}
+
+/// The GitLab projects the remotes point at, the default remote's first. Asks nothing of GitLab.
+#[tauri::command]
+pub async fn gitlab_projects(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+) -> CommandResult<Vec<GitLabProject>> {
+    let repo = current(&session, &window)?;
+    read(
+        at(&repo),
+        "Find the GitLab projects",
+        move || Ok(repo.gitlab_projects()),
+    )
+    .await
+}
+
+/// Open a merge request page of one of the repository's GitLab projects in the browser.
+#[tauri::command]
+pub async fn open_gitlab(window: tauri::WebviewWindow, session: State<'_, Session>, url: String) -> CommandResult<()> {
+    let repo = current(&session, &window)?;
+    let projects = read(
+        at(&repo),
+        "Find the GitLab projects",
+        move || Ok(repo.gitlab_projects()),
+    )
+    .await?;
+    if !projects
+        .iter()
+        .any(|p| url.starts_with(&format!("{}/-/merge_requests/", p.web_url)))
+    {
+        return Err("Only merge request pages of this repository's GitLab projects open from here".into());
+    }
+    crate::open_in::open_url(&url)
 }
 
 /// Its pull requests, open and recently closed, the latest updated first.

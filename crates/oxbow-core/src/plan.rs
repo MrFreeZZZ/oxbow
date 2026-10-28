@@ -238,6 +238,7 @@ impl Repo {
                 lease,
                 no_verify,
                 submodules,
+                merge_request,
             } => {
                 let mut args = vec!["push".to_owned()];
                 let mut notes = Vec::new();
@@ -269,6 +270,12 @@ impl Repo {
                         notes.push("--force: overwrite whatever the remote has".to_owned());
                     }
                     _ => {}
+                }
+                for (option, note) in merge_request.iter().flat_map(|m| m.push_options()) {
+                    args.extend(["-o".to_owned(), option]);
+                    if !note.is_empty() {
+                        notes.push(note);
+                    }
                 }
                 args.push(remote.clone());
                 args.push(refspec(branch, upstream));

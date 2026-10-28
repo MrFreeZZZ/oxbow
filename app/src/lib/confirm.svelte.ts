@@ -96,8 +96,11 @@ export interface Request {
   resolveConflicts?: boolean;
   /** The way out when the action fails. */
   recover?: (failure: Failure) => Recovery | null;
-  /** What Oxbow does once the action succeeded, e.g. open the new worktree's window. */
-  after?: () => void;
+  /** The message shown after it succeeded, from what git printed, e.g. the link GitLab gave. */
+  said?: (output: string) => string;
+  /** What Oxbow does once the action succeeded, e.g. open the new worktree's window; `output` is
+   *  what the last command printed. */
+  after?: (output: string) => void;
   /** Offered as Undo on the toast after it succeeded, e.g. putting a dropped stash back. */
   undo?: () => Request;
   /** Runs in the background instead of in the sheet, e.g. a fetch: the sheet closes on the
@@ -545,17 +548,18 @@ class ConfirmState {
     const after = this.request && action === this.request.action ? this.request.after : undefined;
     const started = Math.floor(Date.now() / 1000);
     try {
-      await api.performAction(action, withoutUndo);
+      const output = await api.performAction(action, withoutUndo);
       this.ran = action;
       if (next) return this.#execute(next.action, next.status, next.done, undefined, true);
       const request = this.request;
       // A way out offered after a failure has its own words; the request's are for its action.
       const own = request && action === request.action;
+      if (own && request.said) done = request.said(output);
       const title = done ?? (own ? (request.past ?? request.title.replace(/\?$/, "")) : status);
       const notLogged = this.#notLogged;
       this.#finish(true);
       this.onRan?.({ title: firstSentence(title), icon: request?.icon ?? "box", action, commands: this.#ranCommands });
-      after?.();
+      after?.(output);
       // Two facts, said apart: the action is done; Undo can't take it back. Not a failure, so
       // nothing offers to run it again.
       if (notLogged !== null) this.#showToast(`${done ?? `${firstSentence(title)}.`} ${notLoggedWords(notLogged, withoutUndo)}`, null, "warn");

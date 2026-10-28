@@ -51,6 +51,7 @@ fn push(set_upstream: bool) -> Action {
         lease: None,
         no_verify: false,
         submodules: false,
+        merge_request: None,
     }
 }
 
@@ -78,6 +79,74 @@ fn tracking_counts_commits_both_ways() {
     let history = repo.history(&Default::default()).unwrap();
     assert_eq!(history.tracking.unwrap().behind, 1);
     assert_eq!(history.default_remote.as_deref(), Some("origin"));
+}
+
+/// Create Merge Request on GitLab: the push carries the options GitLab reads, and the server
+/// gets them. The bare repository stands in for GitLab and prints what it got, as GitLab
+/// prints the merge request's link.
+#[test]
+fn a_push_asks_gitlab_for_a_merge_request() {
+    let mut team = Team::new();
+    let remote = team.me.git(&["remote", "get-url", "origin"]);
+    let status = std::process::Command::new("git")
+        .args(["-C", &remote, "config", "receive.advertisePushOptions", "true"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let hook = std::path::Path::new(&remote).join("hooks/post-receive");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\ni=0\nwhile [ $i -lt \"$GIT_PUSH_OPTION_COUNT\" ]; do eval echo \"got \\$GIT_PUSH_OPTION_$i\"; i=$((i+1)); done\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    team.me.git(&["checkout", "-q", "-b", "csv"]);
+    team.me.commit("b.txt", "csv\n", "Export CSV");
+    let repo = Repo::open(team.me.path()).unwrap();
+    let action = Action::Push {
+        remote: "origin".into(),
+        branch: "csv".into(),
+        upstream: "csv".into(),
+        set_upstream: true,
+        force: false,
+        lease: None,
+        no_verify: false,
+        submodules: false,
+        merge_request: Some(oxbow_core::MergeRequest {
+            target: "main".into(),
+            title: "Export CSV".into(),
+            draft: true,
+            remove_source: true,
+        }),
+    };
+    let plan = repo.plan(&action).unwrap();
+    assert_eq!(
+        plan.commands[0].display(),
+        "git push -u -o merge_request.create -o merge_request.target=main -o 'merge_request.title=Draft: Export CSV' \
+         -o merge_request.remove_source_branch origin csv"
+    );
+    assert!(
+        plan.commands[0]
+            .comment
+            .as_deref()
+            .unwrap()
+            .contains("GitLab opens a merge request into main")
+    );
+
+    let said = repo.perform(&action).unwrap();
+    for option in [
+        "merge_request.create",
+        "merge_request.target=main",
+        "merge_request.title=Draft: Export CSV",
+        "merge_request.remove_source_branch",
+    ] {
+        assert!(said.contains(&format!("remote: got {option}")), "{option} in {said}");
+    }
+    assert_eq!(repo.tracking().unwrap().unwrap().branch, "csv");
 }
 
 #[test]
@@ -595,6 +664,7 @@ fn force_push_with_lease_refuses_when_the_remote_moved_again() {
         lease: Some(tip.clone()),
         no_verify: false,
         submodules: false,
+        merge_request: None,
     };
     assert_eq!(
         repo.plan(&force).unwrap().commands[0].display(),
@@ -614,6 +684,7 @@ fn force_push_with_lease_refuses_when_the_remote_moved_again() {
         lease: Some(tip),
         no_verify: false,
         submodules: false,
+        merge_request: None,
     };
     repo.perform(&force).unwrap();
     assert_eq!(
@@ -638,6 +709,7 @@ fn publishing_a_branch_sets_its_upstream() {
         lease: None,
         no_verify: false,
         submodules: false,
+        merge_request: None,
     };
     assert_eq!(
         repo.plan(&publish).unwrap().commands[0].display(),
@@ -775,6 +847,7 @@ fn a_failing_pre_push_hook_is_recognized_and_can_be_skipped() {
         lease: None,
         no_verify: true,
         submodules: false,
+        merge_request: None,
     };
     repo.perform(&skip).unwrap();
     assert_eq!(repo.tracking().unwrap().unwrap().ahead, 0);

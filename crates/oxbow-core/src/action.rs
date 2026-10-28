@@ -112,6 +112,9 @@ pub enum Action {
         /// Push the submodule commits this branch records that their remotes don't have, first.
         #[serde(default)]
         submodules: bool,
+        /// Ask GitLab to open a merge request of the branch with the push.
+        #[serde(default)]
+        merge_request: Option<crate::gitlab::MergeRequest>,
     },
     /// Pull with rebase, then push: the way out of a push rejected for new remote commits.
     PullAndPush {

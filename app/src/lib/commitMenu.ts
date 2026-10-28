@@ -14,6 +14,8 @@ import { deleteTagRequest, isLocalTag, newTagRequest, pushTagsRequest } from "./
 import { addToCommitRequest, dropCommitRequest, rewordRequest, squashRequest } from "./stack";
 import { bisectMarkRequest, bisectResetRequest, bisectStartRequest } from "./bisect";
 import { keys } from "./keys";
+import { github } from "./github.svelte";
+import { branchMergeRequest, gitlabOf } from "./mergeRequest";
 
 /** What the menu needs from the window: the repository as shown, and what its items do. */
 export interface CommitMenuApp {
@@ -29,6 +31,8 @@ export interface CommitMenuApp {
   openCompare: (base: string, target: string) => void;
   /** The commits Save as Patches writes for a row. */
   patchTarget: (row: HistoryRow) => PatchTarget;
+  /** The Pull Request screen of a branch: its pull request, or the form for a new one. */
+  openPull: (branch: string) => void;
 }
 
 /** The right-click menu of a commit in the graph. */
@@ -106,6 +110,18 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
     else if (inHead) finding.push(item("Find First Bad Commit After This…", menuIcons.bisect, () => run(bisectStartRequest(ctx, { good: row }))));
     group(finding);
   }
+
+  // Pull and merge requests of the branches that end here, as from the branch list.
+  const reviewing: MenuEntry[] = [];
+  for (const ref of history.refs.filter((r) => r.kind === "local" && r.target === row.id && r.name !== history!.trunk).slice(0, 2)) {
+    if (github.repo) {
+      const pull = github.pullOf(ref.name);
+      reviewing.push(item(pull ? `Pull Request #${pull.number} of ${ref.name}` : `Create Pull Request for ${ref.name}…`, menuIcons.pull, () => app.openPull(ref.name)));
+    }
+    const project = gitlabOf(history, github.gitlab, ref);
+    if (project) reviewing.push(item(`Create Merge Request for ${ref.name}…`, menuIcons.pull, () => run(branchMergeRequest(ctx, ref, project))));
+  }
+  group(reviewing);
 
   group([isHead && !history.head.branch ? item("Create Branch…", menuIcons.branch, () => run(keepRequest(ctx))) : item("New Branch from Here…", menuIcons.branch, () => run(newBranchRequest(ctx, undefined, row)))]);
   // Tags: a new one here, and pushing or deleting the ones on this commit.

@@ -379,6 +379,7 @@ fn a_commit_only_this_clone_has_is_found_before_push_and_pushed_first() {
         lease: None,
         no_verify: false,
         submodules: true,
+        merge_request: None,
     };
     assert_eq!(
         shown(&repo, &push),

@@ -871,6 +871,12 @@ impl Repo {
             Action::Fetch { remote } => ("fetch", format!("Fetch {}", remote.as_deref().unwrap_or("all remotes"))),
             Action::Pull { remote, branch, .. } => ("pull", format!("Pull {remote}/{branch}")),
             Action::Push {
+                remote,
+                branch,
+                merge_request: Some(_),
+                ..
+            } => ("push", format!("Push {branch} to {remote} with a merge request")),
+            Action::Push {
                 remote, branch, force, ..
             } => (
                 "push",

@@ -567,6 +567,7 @@ impl Repo {
                 lease: None,
                 no_verify: false,
                 submodules: false,
+                merge_request: None,
             };
             plan.step(
                 StepKind::Push {

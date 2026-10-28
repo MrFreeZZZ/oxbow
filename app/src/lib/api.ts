@@ -63,6 +63,7 @@ import type {
   GitHubOwners,
   Publish,
   GitHubRepo,
+  GitLabProject,
   PullCall,
   PullRequest,
   PullStatus,
@@ -284,6 +285,10 @@ export const api = {
   /** `create: false`: the repository is on GitHub already, only origin and the push are left. */
   githubPublish: (path: string, publish: Publish, create = true) => invoke<string>("github_publish", { path, publish, create }),
   githubRepo: () => invoke<GitHubRepo | null>("github_repo"),
+  /** The GitLab projects the remotes point at, the default remote's first. */
+  gitlabProjects: () => invoke<GitLabProject[]>("gitlab_projects"),
+  /** Opens a merge request page of one of them in the browser. */
+  openGitLab: (url: string) => invoke<void>("open_gitlab", { url }),
   /** Open and recently closed, the latest updated first. */
   githubPulls: () => invoke<PullSummary[]>("github_pulls"),
   githubPull: (number: number) => invoke<PullRequest>("github_pull", { number }),
