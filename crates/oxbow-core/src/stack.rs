@@ -13,11 +13,12 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::action::{BranchPush, RemoteBranch};
 use crate::cli::{GitCommand, shell_quote};
 use crate::error::{Error, Result};
+use crate::plan::paragraphs;
 use crate::remote::CommitBrief;
 use crate::repo::{RefKind, Repo};
-use crate::worktree::{BranchPush, RemoteBranch, paragraphs};
 
 /// More commits than this are not edited on screen.
 const MAX_COMMITS: usize = 300;

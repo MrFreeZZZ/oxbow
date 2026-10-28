@@ -6,10 +6,10 @@
 
 use std::collections::BTreeSet;
 
+use crate::action::Action;
 use crate::cli::GitCommand;
 use crate::error::Result;
 use crate::repo::{RefInfo, RefKind, Repo};
-use crate::worktree::Action;
 
 const REMOTE_TAGS: &str = "OXBOW_REMOTE_TAGS";
 
@@ -19,7 +19,7 @@ pub(crate) fn plan_create(name: &str, commit: &str, message: Option<&str>, push:
     match message.map(str::trim).filter(|m| !m.is_empty()) {
         Some(message) => {
             let mut args = vec!["tag".to_owned(), "-a".to_owned(), name.to_owned()];
-            for paragraph in crate::worktree::paragraphs(message) {
+            for paragraph in crate::plan::paragraphs(message) {
                 args.push("-m".to_owned());
                 args.push(paragraph);
             }

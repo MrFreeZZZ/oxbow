@@ -17,8 +17,9 @@ crates/oxbow-core/          UI-free core library (all Git logic lives here)
   src/graph.rs              graph lane layout; design rules in its header comment
   src/cli.rs                running `git`: commands, plans shown in confirmations, literal(),
                             the quiet limit and output limits every command runs with
-  src/worktree.rs           working copy and diffs; `enum Action` + plan() / perform(): every
-                            change is an Action planned into git commands, then run
+  src/worktree.rs           working copy: status, diffs, patches of hunks and lines
+  src/action.rs             `enum Action`, Plan, ActionEvent: every change is an Action planned
+                            into git commands (plan.rs: Repo::plan), then run (perform.rs)
   src/edit.rs               History menu: cherry-pick, revert, reset, reword last
   src/patches.rs            Save as Patches (format-patch); Apply Patches (git am, or git apply for a diff)
   src/operation.rs          merge/rebase and anything git can stop midway; conflicts

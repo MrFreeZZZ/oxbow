@@ -4,6 +4,7 @@
 //! go through the system `git` (see [`cli`]) so hooks, credentials and SSH behave exactly like on
 //! the command line.
 
+pub mod action;
 pub mod bisect;
 pub mod cli;
 pub mod commit;
@@ -24,6 +25,8 @@ pub mod notkept;
 pub mod operation;
 pub mod oplog;
 pub mod patches;
+pub mod perform;
+pub mod plan;
 pub mod pulls;
 pub mod reflog;
 pub mod remote;
@@ -43,6 +46,7 @@ pub mod watch;
 pub mod worktree;
 pub mod worktrees;
 
+pub use action::{Action, ActionEvent, BranchPush, PartState, Plan, PullMode, RemoteBranch};
 pub use bisect::{Bisect, BisectMark};
 pub use cli::{CommandOutput, GitCommand, OutputLine};
 pub use commit::{
@@ -88,5 +92,5 @@ pub use stash::StashCheck;
 pub use submodules::{Checkout, Moved, Submodule, SubmoduleMove};
 pub use trust::{TrustFinding, TrustKind};
 pub use watch::{Changed, Watch};
-pub use worktree::{Action, ActionEvent, BranchPush, PartState, Plan, PullMode, RemoteBranch, Side, WorkingTree};
+pub use worktree::{Side, WorkingTree};
 pub use worktrees::{GoneFolder, GoneWhy, GoneWorktree, Worktree, gone_folder, reconnect_folder};

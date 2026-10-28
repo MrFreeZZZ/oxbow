@@ -352,12 +352,8 @@ impl Started {
     /// It exited with `code` (none: killed by a signal), printing `stdout` and `stderr`.
     pub(crate) fn done(self, code: Option<i32>, stdout: &[u8], stderr: &[u8]) {
         let mut output = self.output();
-        for line in pieces(&String::from_utf8_lossy(stdout)) {
-            output.push(line, false);
-        }
-        for line in pieces(&String::from_utf8_lossy(stderr)) {
-            output.push(line, true);
-        }
+        output.push_all(&String::from_utf8_lossy(stdout), false);
+        output.push_all(&String::from_utf8_lossy(stderr), true);
         self.log(code, false, output);
     }
 
@@ -704,6 +700,42 @@ impl Output {
         }
     }
 
+    /// Add all the lines of `text`, printed at once. Of a long one (a diff of thousands of lines)
+    /// only the lines that can be kept are looked at one by one; the ones between are counted.
+    pub(crate) fn push_all(&mut self, text: &str, stderr: bool) {
+        let mut rest = text;
+        while !rest.is_empty() && !self.unkept && self.head.len() < self.max {
+            let end = rest.find(['\n', '\0']).map_or(rest.len(), |at| at + 1);
+            for line in pieces(&rest[..end]) {
+                self.push(line, stderr);
+            }
+            rest = &rest[end..];
+        }
+        // The last lines, as many as the tail holds.
+        let mut start = rest.len();
+        let mut last = 0;
+        while start > 0 && last < self.max {
+            let before = &rest[..start];
+            let end = before.strip_suffix(['\n', '\0']).unwrap_or(before).len();
+            let from = rest[..end].rfind(['\n', '\0']).map_or(0, |at| at + 1);
+            if !rest[from..end].trim().is_empty() {
+                last += 1;
+            }
+            start = from;
+        }
+        let (between, tail) = rest.split_at(start);
+        let counted = lines_in(between);
+        if counted > 0 {
+            // They push out all the tail had, as they would have one by one.
+            self.skipped += self.tail.len() + counted;
+            self.tail.clear();
+            self.in_key = ends_in_key(between, self.in_key);
+        }
+        for line in pieces(tail) {
+            self.push(line, stderr);
+        }
+    }
+
     /// The lines kept, and how many were left out between them.
     fn lines(self) -> (Vec<Line>, usize) {
         if self.unkept {
@@ -725,6 +757,40 @@ impl Output {
         );
         (lines, self.skipped)
     }
+}
+
+/// Whether the lines of `text` end between the first and the last line of a private key, given
+/// that they start there if `in_key`; as [`Output::push`] would find, looking only at the lines
+/// with a `-----` in them.
+fn ends_in_key(text: &str, mut in_key: bool) -> bool {
+    let mut rest = text;
+    while let Some(at) = rest.find("-----") {
+        let from = rest[..at].rfind(['\n', '\0']).map_or(0, |i| i + 1);
+        let end = rest[at..].find(['\n', '\0']).map_or(rest.len(), |i| at + i);
+        let line = &rest[from..end];
+        if in_key {
+            in_key = !line.contains("-----END");
+        } else {
+            in_key = line.contains("-----BEGIN") && line.contains("PRIVATE KEY");
+        }
+        rest = &rest[end..];
+    }
+    in_key
+}
+
+/// How many lines [`pieces`] finds in `text`, quicker: split at one character, a search for it
+/// goes through the text at once.
+fn lines_in(text: &str) -> usize {
+    let non_blank = |line: &&str| !line.trim().is_empty();
+    text.split('\n')
+        .map(|line| {
+            if line.contains('\0') {
+                line.split('\0').filter(non_blank).count()
+            } else {
+                usize::from(non_blank(&line))
+            }
+        })
+        .sum()
 }
 
 /// `text` as lines, NULs of `-z` output as line breaks; of a progress line that `\r` rewrote,
@@ -952,6 +1018,52 @@ mod tests {
         assert_eq!(kept.len(), 40);
         assert_eq!(kept[34].text, "⋯ 9961 more lines ⋯");
         assert_eq!(kept[39].text, "line 9999");
+    }
+
+    #[test]
+    fn output_read_at_once_keeps_what_it_would_line_by_line() {
+        let key = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\nAAAAB3NzaC1yc2EAAAADAQAB\n-----END OPENSSH PRIVATE KEY-----";
+        let mut text = String::new();
+        for n in 0..5_000 {
+            text.push_str(&format!("+line {n}\n"));
+            if n % 7 == 0 {
+                text.push_str("\n \r\n");
+            }
+            if n == 4_990 || n == 30 {
+                text.push_str(&format!("+{}\n", key.replace('\n', "\n+")));
+            }
+        }
+        // A key that the lines between open, and the last lines close.
+        text.push_str("-----BEGIN RSA PRIVATE KEY-----\n");
+        text.push_str(&"+QUFBQUFBQUFBQUFBQUFB\n".repeat(60));
+        text.push_str("-----END RSA PRIVATE KEY-----\nlast é");
+        for (max, earlier) in [(40, 0), (400, 0), (40, 25), (400, 900)] {
+            let mut one_by_one = Output::new(max, false);
+            let mut at_once = Output::new(max, false);
+            for n in 0..earlier {
+                one_by_one.push(&format!("before {n}"), true);
+                at_once.push(&format!("before {n}"), true);
+            }
+            for line in pieces(&text) {
+                one_by_one.push(line, false);
+            }
+            at_once.push_all(&text, false);
+            assert_eq!(one_by_one.in_key, at_once.in_key);
+            let (a, a_skipped) = one_by_one.lines();
+            let (b, b_skipped) = at_once.lines();
+            assert_eq!(a_skipped, b_skipped, "max {max}, {earlier} before");
+            assert_eq!(a.len(), b.len(), "max {max}, {earlier} before");
+            assert!(
+                !b.iter().any(|line| line.text.contains("QUFB")),
+                "max {max}: a key's line is kept"
+            );
+            for (a, b) in a.iter().zip(&b) {
+                assert_eq!((&a.text, a.stderr), (&b.text, b.stderr));
+            }
+        }
+        let mut unkept = Output::new(40, true);
+        unkept.push_all(&text, false);
+        assert_eq!(unkept.skipped, pieces(&text).count());
     }
 
     fn entry(kind: EntryKind, n: u64) -> Entry {

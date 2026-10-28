@@ -8,12 +8,12 @@ use std::path::Path;
 
 use serde::Serialize;
 
+use crate::action::Action;
 use crate::cli::GitCommand;
 use crate::edit::ResetMode;
 use crate::error::Result;
 use crate::oplog::{MAX_UNTRACKED, short_ref};
 use crate::repo::Repo;
-use crate::worktree::Action;
 use crate::worktrees::same_path;
 
 /// At most this many files are named; the rest are counted.

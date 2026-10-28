@@ -18,13 +18,13 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
+use crate::action::Action;
 use crate::cli::{GitCommand, literal};
 use crate::edit::ResetMode;
 use crate::error::{Error, Result};
 use crate::fix::Fix;
 use crate::operation::{MergeMethod, OperationKind};
 use crate::repo::Repo;
-use crate::worktree::Action;
 
 /// The ref whose reflog keeps the entries' objects alive.
 pub const OPLOG_REF: &str = "refs/oxbow/oplog";

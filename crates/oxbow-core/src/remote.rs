@@ -3,10 +3,10 @@
 
 use serde::Serialize;
 
+use crate::action::Action;
 use crate::cli::GitCommand;
 use crate::error::{Error, Result};
 use crate::repo::Repo;
-use crate::worktree::Action;
 
 /// The upstream of the checked-out branch and how far apart the two are.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -18,6 +18,7 @@ use std::hash::{Hash, Hasher};
 
 use serde::{Deserialize, Serialize};
 
+use crate::action::Action;
 use crate::cli::{GitCommand, literal};
 use crate::config;
 use crate::edit::{ResetMode, plan_reset};
@@ -25,7 +26,6 @@ use crate::error::{Error, Result};
 use crate::operation::OperationKind;
 use crate::reflog::ReflogEntry;
 use crate::repo::Repo;
-use crate::worktree::Action;
 
 /// One way out of a typical mistake, with what the user picked in its sheet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
