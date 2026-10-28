@@ -6,8 +6,9 @@
 import { api } from "./api";
 import type { Part, Request } from "./confirm.svelte";
 import { hostName, pushRecovery, type RemoteContext } from "./remote";
-import { mergeRequestLink, newMergeRequestUrl } from "./gitlab";
-import type { Action, GitLabProject, MergeRequest } from "./types";
+import type { BranchContext } from "./branches";
+import { mergeRequestLink, mergeRequestTitle, newMergeRequestUrl } from "./gitlab";
+import type { Action, GitLabProject, History, MergeRequest, RefInfo } from "./types";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -22,6 +23,37 @@ export interface MergeRequestContext extends RemoteContext {
   /** Branches it can go into, the trunk first. */
   targets: string[];
   colorOf: (name: string) => number;
+}
+
+/** The GitLab project `ref` pushes to: its upstream's remote, else the default remote. */
+export function gitlabOf(history: History, projects: GitLabProject[], ref: RefInfo): GitLabProject | null {
+  const t = ref.tracking && !ref.tracking.gone ? ref.tracking : null;
+  const remote = t?.remote ?? history.defaultRemote;
+  return projects.find((p) => p.remote === remote) ?? null;
+}
+
+/** Create Merge Request for a local branch, from the branch list or the graph: into the trunk,
+ *  or a branch like develop that the remote has. */
+export function branchMergeRequest(ctx: BranchContext, ref: RefInfo, project: GitLabProject): Request {
+  const history = ctx.history;
+  const onRemote = (name: string) => history.refs.some((r) => r.kind === "remote" && r.name === `${project.remote}/${name}`);
+  const trunk = history.trunk ?? "main";
+  const targets = [trunk, ...["develop", "dev", "staging"].filter(onRemote)].filter((name, i, all) => name !== ref.name && all.indexOf(name) === i);
+  const summary = history.rows.find((r) => r.id === ref.target)?.summary;
+  return mergeRequestRequest(
+    {
+      branch: ref.name,
+      color: ctx.colorOf(ref.name),
+      tracking: ref.tracking,
+      remote: project.remote,
+      remotes: history.remotes,
+      unpushed: history.rows.filter((r) => r.unpushed && !r.worktree && r.graph.branch === ref.name),
+      project,
+      targets,
+      colorOf: ctx.colorOf,
+    },
+    { target: targets[0] ?? trunk, title: mergeRequestTitle(summary, ref.name), draft: true, removeSource: false, open: true },
+  );
 }
 
 export function mergeRequestRequest(ctx: MergeRequestContext, state: NewMergeRequest): Request {

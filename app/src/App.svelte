@@ -1451,7 +1451,7 @@
 
   /** The right-click menu of a commit in the graph (commitMenu.ts). */
   function commitMenu(row: HistoryRow): MenuEntry[] {
-    return commitMenuOf(row, { history, ctx: branchCtx, headStack, run, copyText, copyMessage, openStack, openFixes, openCompare, patchTarget });
+    return commitMenuOf(row, { history, ctx: branchCtx, headStack, run, copyText, copyMessage, openStack, openFixes, openCompare, patchTarget, openPull: (branch) => openPull(branch) });
   }
 
   /** G, B or S while bisecting: the answer for the commit under test. */

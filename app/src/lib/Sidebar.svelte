@@ -23,8 +23,7 @@
   } from "./branches";
   import { pushRequest } from "./remote";
   import { mergeRequest } from "./merge";
-  import { mergeRequestRequest } from "./mergeRequest";
-  import { mergeRequestTitle } from "./gitlab";
+  import { branchMergeRequest, gitlabOf } from "./mergeRequest";
   import { savePatchesRequest } from "./patches";
   import { stashMenu } from "./stash";
   import { deleteTagRequest, fetchTagsRequest, isLocalTag, newTagRequest, pushTagsRequest } from "./tags";
@@ -33,7 +32,7 @@
   import { downloadRequest, installRequest, lfs, patternNote, pruneRequest, lfsTrackRequest, untrackRequest } from "./lfs.svelte";
   import { bytes } from "./unusual";
   import { nav } from "./nav.svelte";
-  import type { GitLabProject, LfsPattern, ReadPart, RecentRepo, Submodule, Tracking, Worktree } from "./types";
+  import type { LfsPattern, ReadPart, RecentRepo, Submodule, Tracking, Worktree } from "./types";
   import { PART_NAMES, age, errorLine, type ReadStates } from "./reads";
   import { checking, stale } from "./folders";
   import { addSubmoduleRequest, openSubmoduleWindow, submoduleMenu as submoduleEntries, submoduleNote, submoduleWhere, syncRequest, updateRequest } from "./submodules";
@@ -41,7 +40,7 @@
   import { notInHistory } from "./objects";
   import { locateRequest, lockRequest, newWorktreeRequest, pruneWorktreesRequest, removeWorktreeRequest, tilde, unlockRequest, worktreeOf } from "./worktrees";
 
-  const PULL_ICON = "M3 3.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M3 12.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M10 12.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M4.5 5v6M11.5 11V6.5a2 2 0 0 0-2-2H7M8.5 3 7 4.5 8.5 6";
+  const PULL_ICON = menuIcons.pull;
   /** A speech bubble with a tick: pull requests to review. */
   const REVIEW_ICON = "M2.5 4.2c0-.7.5-1.2 1.2-1.2h8.6c.7 0 1.2.5 1.2 1.2v5.6c0 .7-.5 1.2-1.2 1.2H7l-3 2.5V11h-.3c-.7 0-1.2-.5-1.2-1.2zM5.5 7l1.6 1.5 3.4-3";
   const FOLDER = "M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z";
@@ -292,36 +291,6 @@
     }
   }
 
-  /** The GitLab project `ref` pushes to: its upstream's remote, else the default remote. */
-  function gitlabOf(ref: RefInfo): GitLabProject | null {
-    const t = ref.tracking && !ref.tracking.gone ? ref.tracking : null;
-    const remote = t?.remote ?? history.defaultRemote;
-    return github.gitlab.find((p) => p.remote === remote) ?? null;
-  }
-
-  /** Create Merge Request: the push asks GitLab for it. Into the trunk, or a branch like develop
-   *  that the remote has. */
-  function newMergeRequest(ref: RefInfo, project: GitLabProject): Request {
-    const onRemote = (name: string) => history.refs.some((r) => r.kind === "remote" && r.name === `${project.remote}/${name}`);
-    const trunk = history.trunk ?? "main";
-    const targets = [trunk, ...["develop", "dev", "staging"].filter(onRemote)].filter((name, i, all) => name !== ref.name && all.indexOf(name) === i);
-    const summary = history.rows.find((r) => r.id === ref.target)?.summary;
-    return mergeRequestRequest(
-      {
-        branch: ref.name,
-        color: ctx.colorOf(ref.name),
-        tracking: ref.tracking,
-        remote: project.remote,
-        remotes: history.remotes,
-        unpushed: history.rows.filter((r) => r.unpushed && !r.worktree && r.graph.branch === ref.name),
-        project,
-        targets,
-        colorOf: ctx.colorOf,
-      },
-      { target: targets[0] ?? trunk, title: mergeRequestTitle(summary, ref.name), draft: true, removeSource: false, open: true },
-    );
-  }
-
   /** The right-click menu of a local branch. */
   function branchMenu(event: MouseEvent, ref: RefInfo) {
     const isHead = ref.name === history.head.branch;
@@ -377,8 +346,8 @@
       if (history.operation) entries.push({ kind: "sep" });
       entries.push(item(pull ? `Pull Request #${pull.number}` : "Create Pull Request…", PULL_ICON, () => onPullRequest(ref.name)));
     }
-    const project = !isTrunk ? gitlabOf(ref) : null;
-    if (project) entries.push(item("Create Merge Request…", PULL_ICON, () => run(newMergeRequest(ref, project))));
+    const project = !isTrunk ? gitlabOf(history, github.gitlab, ref) : null;
+    if (project) entries.push(item("Create Merge Request…", PULL_ICON, () => run(branchMergeRequest(ctx, ref, project))));
     entries.push({ kind: "sep" });
     entries.push(item(`New Branch from ${ref.name}…`, menuIcons.branch, () => run(newBranchRequest(ctx, ref.name))));
     if (!isTrunk) entries.push(item("Rename…", menuIcons.edit, () => run(renameRequest(ctx, ref))));
