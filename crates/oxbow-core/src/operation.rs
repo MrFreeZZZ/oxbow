@@ -694,10 +694,12 @@ impl Repo {
             args.push(format!("--tool={}", tool.name));
         }
         args.extend(["--".to_owned(), literal(path)]);
-        Ok(GitCommand::new(args).comment(format!(
-            "opens {}; git stages the file when the merge is saved",
-            tool.label
-        )))
+        Ok(GitCommand::new(args)
+            .comment(format!(
+                "opens {}; git stages the file when the merge is saved",
+                tool.label
+            ))
+            .waits_for_user())
     }
 
     /// Open `path` in the merge tool and wait until it quits. True when git staged the file.

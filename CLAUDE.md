@@ -15,7 +15,8 @@ crates/oxbow-core/          UI-free core library (all Git logic lives here)
   src/history.rs            history list for the graph (gix)
   src/commit.rs             commit details, commit/tree diffs, word diff
   src/graph.rs              graph lane layout; design rules in its header comment
-  src/cli.rs                running `git`: commands, plans shown in confirmations, literal()
+  src/cli.rs                running `git`: commands, plans shown in confirmations, literal(),
+                            the quiet limit and output limits every command runs with
   src/worktree.rs           working copy and diffs; `enum Action` + plan() / perform(): every
                             change is an Action planned into git commands, then run
   src/edit.rs               History menu: cherry-pick, revert, reset, reword last
