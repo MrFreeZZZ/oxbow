@@ -100,3 +100,57 @@ export function crumbs(trail: Trail, label: (p: Place) => string, count = 3): { 
   if (out.length && out[out.length - 1].label === here) out.pop();
   return out.slice(-count);
 }
+
+/** What a place is called, in the header's path and the list of places. `pullOf` finds the pull
+ *  request of a branch, or the one with a number. */
+export function nameOfPlace(p: Place, pullOf: (branch: string, number: number | null) => { number: number } | null | undefined): string {
+  switch (p.view) {
+    case "history":
+      return "History";
+    case "file":
+      return p.line ? `Line ${p.line}` : p.path.slice(p.path.lastIndexOf("/") + 1);
+    case "stashes":
+      return "Stashes";
+    case "oplog":
+      return "Operation Log";
+    case "compare":
+      return "Compare";
+    case "series":
+      return "Compare Series";
+    case "pull": {
+      const pull = pullOf(p.branch, p.number ?? null);
+      return pull ? `PR #${pull.number}` : `Pull Request ${p.branch}`;
+    }
+    case "reviews":
+      return "Reviews";
+    case "stack":
+      return "Edit Stack";
+  }
+}
+
+/** The grey line under a place's name in the list of places. `rowOf` finds a commit of the
+ *  history; an Edit Stack of no branch in particular is the checked-out one's, `headBranch`. */
+export function detailOfPlace(
+  p: Place,
+  rowOf: (id: string) => { summary: string; worktree?: unknown } | undefined,
+  headBranch: string | null,
+): string | undefined {
+  switch (p.view) {
+    case "history": {
+      const row = p.commit ? rowOf(p.commit) : undefined;
+      return row ? (row.worktree ? "Uncommitted changes" : row.summary) : undefined;
+    }
+    case "file":
+      return p.line ? `${p.path} · Blame` : `${p.path} · ${p.mode === "blame" ? "Blame" : "Changes"}`;
+    case "compare":
+      return `${p.target} with ${p.base}`;
+    case "series":
+      return p.query.branch;
+    case "pull":
+      return p.branch;
+    case "stack":
+      return p.branch ?? headBranch ?? undefined;
+    default:
+      return undefined;
+  }
+}
