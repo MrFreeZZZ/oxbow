@@ -396,7 +396,7 @@ export function abortRequest(ctx: BranchContext, op: Operation): Request {
   const branch = op.branch ?? "HEAD";
   if (op.kind === "stashApply") {
     return {
-      title: "Undo applying the stash?",
+      title: "Do you really want to undo applying the stash?",
       body: [
         "Puts the files the stash changed back to how ",
         chip(ctx, branch),
@@ -413,7 +413,7 @@ export function abortRequest(ctx: BranchContext, op: Operation): Request {
     };
   }
   return {
-    title: `Abort the ${verb}?`,
+    title: `Do you really want to abort the ${verb}?`,
     body: [chip(ctx, branch), ` goes back to how it was before the ${verb}, and so do its files. Choices you made in conflicts are thrown away.`],
     icon: "discard",
     danger: true,

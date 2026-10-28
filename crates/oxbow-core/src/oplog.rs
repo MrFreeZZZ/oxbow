@@ -347,7 +347,7 @@ impl Repo {
         };
         let file = self.oplog_file()?;
         if let Some(dir) = file.parent() {
-            std::fs::create_dir_all(dir).map_err(io)?;
+            make_folder(dir)?;
         }
         // Said with the file, for the message that the step isn't in the log.
         let cant_write = |err: std::io::Error| Error::Git(format!("can't write .git/oxbow/oplog.jsonl: {err}"));
@@ -633,7 +633,7 @@ impl Repo {
             .git_path("oxbow")?
             .join(format!("snapshot-{}-{n}.index", std::process::id()));
         if let Some(dir) = scratch.parent() {
-            std::fs::create_dir_all(dir).map_err(io)?;
+            make_folder(dir)?;
         }
         let real = self.git_path("index")?;
         if real.exists() {
@@ -1222,6 +1222,25 @@ fn now() -> i64 {
 
 fn io(err: std::io::Error) -> Error {
     Error::Git(err.to_string())
+}
+
+/// Makes `.git/oxbow`, where the snapshots and the log go, saying in plain words why it can't:
+/// the words show when Undo isn't ready for a step.
+fn make_folder(dir: &std::path::Path) -> Result<()> {
+    use std::io::ErrorKind;
+    std::fs::create_dir_all(dir).map_err(|err| {
+        Error::Git(match err.kind() {
+            ErrorKind::AlreadyExists | ErrorKind::NotADirectory => {
+                "a file named .git/oxbow is where Oxbow keeps a folder of its own. Move the file away, and Undo works again".into()
+            }
+            ErrorKind::PermissionDenied => {
+                "Oxbow isn’t allowed to write in the repository’s .git folder. Check who owns it".into()
+            }
+            ErrorKind::ReadOnlyFilesystem => "the disk the repository is on can’t be written to".into(),
+            ErrorKind::StorageFull => "the disk is full".into(),
+            _ => format!("can’t make the folder .git/oxbow: {err}"),
+        })
+    })
 }
 
 #[cfg(test)]

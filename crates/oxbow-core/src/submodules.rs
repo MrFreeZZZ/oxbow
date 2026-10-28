@@ -156,7 +156,14 @@ impl Repo {
     /// into their folders: each cloned one is [`Submodule::pending`]. Takes no git process.
     pub fn submodule_list(&self) -> crate::error::Result<Vec<Submodule>> {
         let repo = self.local();
-        let Some(list) = repo.submodules().map_err(crate::error::Error::git)? else {
+        let list = match repo.submodules() {
+            Ok(list) => list,
+            // Without .gitmodules in the folder, gix looks for one in the index: a damaged index
+            // must not make a repository with no submodules at all look like one whose list failed.
+            Err(_) if !self.workdir().join(".gitmodules").exists() && !head_has_modules(&repo) => return Ok(Vec::new()),
+            Err(err) => return Err(crate::error::Error::git(err)),
+        };
+        let Some(list) = list else {
             return Ok(Vec::new());
         };
         let mut out = Vec::new();
@@ -602,4 +609,12 @@ pub(crate) fn submodule_update() -> GitCommand {
     GitCommand::new(["submodule", "update", "--init", "--recursive"])
         .comment("the submodules follow: check out the commits the pulled commits record")
         .with_progress()
+}
+
+/// Whether the last commit has a .gitmodules.
+fn head_has_modules(repo: &gix::Repository) -> bool {
+    repo.head_commit()
+        .ok()
+        .and_then(|commit| commit.tree().ok())
+        .is_some_and(|tree| tree.find_entry(".gitmodules").is_some())
 }

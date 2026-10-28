@@ -12,7 +12,7 @@
   import { confirm, type Part, type Request } from "./confirm.svelte";
   import type { FileChange, FileDiff, Hunk, HistoryRow, Side, WorkingTree } from "./types";
   import { plate, splitPath, tint } from "./format";
-  import { tabStepper } from "./tabs";
+  import { keyFocus as focusByKey, tabStepper } from "./tabs";
   import ChangesDiff from "./ChangesDiff.svelte";
   import type { LinePicker } from "./DiffView.svelte";
   import PathName from "./PathName.svelte";
@@ -407,7 +407,11 @@
     const by = pressed("nextFile", event) ? 1 : pressed("previousFile", event) ? -1 : 0;
     if (by) {
       event.preventDefault();
-      if (stepper(by, false)) requestAnimationFrame(() => filesBox?.querySelector<HTMLElement>('[aria-current="true"]')?.focus());
+      if (stepper(by, false))
+        requestAnimationFrame(() => {
+          const open = filesBox?.querySelector<HTMLElement>('[aria-current="true"]');
+          if (open) focusByKey(open);
+        });
     } else if (pressed("stageAndNext", event)) {
       event.preventDefault();
       if (shown?.kind === "file" && shown.side === "unstaged" && openUnstaged && openUnstaged.status !== "conflicted") stageAndNext(openUnstaged);
@@ -460,6 +464,9 @@
   let dragged = false;
   let listsBox = $state<HTMLDivElement>();
   let stagedBox = $state<HTMLDivElement>();
+  let stagedList = $state<HTMLDivElement>();
+  /** How tall the staged files are, all of them: they keep no more than that. */
+  let stagedRows = $state(0);
 
   function dragFile(event: PointerEvent, file: FileChange, group: List | "conflicted") {
     if (group === "conflicted" || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
@@ -625,8 +632,9 @@
   let bodyWidth = $state(0);
   let bodyHeight = $state(0);
   const stacked = $derived(bodyWidth > 0 && bodyWidth < TWO_COLUMNS);
-  /** The most height the staged files take before they scroll: four rows at first, then as the
-   *  border over them is dragged. Kept for every window and repository. */
+  /** The height the staged files keep when the lists over them want the room too: four rows at
+   *  first, then as the border over them is dragged. Kept for every window and repository. Room
+   *  the lists over them leave empty, the staged files take, up to all of them. */
   const STAGED_KEY = "oxbow.changes.stagedHeight";
   const ROW = 28;
   let stagedHeight = $state(readNumber(STAGED_KEY, 4 * ROW));
@@ -667,7 +675,8 @@
   }
 
   function dragStaged(event: PointerEvent) {
-    const from = stagedHeight;
+    // From the height they have now, which can be more than kept when there was room for them.
+    const from = stagedList ? Math.min(Math.max(stagedList.clientHeight - lastRoom, ROW), 20 * ROW) : stagedHeight;
     drag(
       event,
       (dy) => (stagedHeight = Math.min(Math.max(from - dy, ROW), 20 * ROW)),
@@ -963,7 +972,13 @@
 
       <!-- The staged files and the commit, held at the bottom; the border over them sets how tall the list gets. -->
       {#if !stacked}<button class="grip" tabindex="-1" onpointerdown={dragStaged} aria-label="Resize the staged files" title="Drag to resize"></button>{/if}
-      <div class="group staged" class:drop={!!dragging && dragging.group !== "staged"} class:over={!!dragging && dragging.group !== "staged" && dropping} bind:this={stagedBox}>
+      <div
+        class="group staged"
+        class:drop={!!dragging && dragging.group !== "staged"}
+        class:over={!!dragging && dragging.group !== "staged" && dropping}
+        bind:this={stagedBox}
+        style:min-height={stacked || shut.staged ? null : `min(${30 + Math.min(stagedHeight + lastRoom, stagedRows)}px, 45%)`}
+      >
         <div class="ghead" class:on={isAll("staged")} style:background={isAll("staged") ? tint(color) : undefined} data-group="staged">
           {@render tickAllBox("staged", shownStaged, "Select every staged file", ".gname")}
           {@render chevron(!shut.staged, shut.staged ? "Show the staged files" : "Hide the staged files", () => (shut.staged = !shut.staged))}
@@ -978,27 +993,29 @@
         </div>
         {#if dragging && dragging.group !== "staged"}{@render dropRow("Drop to Stage")}{/if}
         {#if !shut.staged}
-          <div class="staged-files" style:max-height={stacked ? null : `${stagedHeight + lastRoom}px`}>
-            {@render fileList(shownStaged, "staged")}
-            {#if !shownStaged.length && !lastFiles.length}
-              <p class="empty">{needle && staged.length ? "No staged files match the filter." : "Stage files or lines to add them to the next commit."}</p>
-            {/if}
-            {#if lastFiles.length}
-              <!-- Amend: the commit it replaces keeps its files, and the staged ones join them. -->
-              <div class="from-last" title="Files of the commit Amend replaces: they stay in it, with the staged changes added">
-                <span class="grow">From last commit</span><span class="n">{lastFiles.length}</span>
-              </div>
-              {#each lastFiles.filter(matches) as file (file.path)}
-                {@const b = badge[file.status]}
-                {@const open = lastOpen === file.path}
-                <div class="file" class:open style:background={open ? tint(color) : undefined}>
-                  <button class="name" onclick={() => openLast(file.path)} aria-current={open ? "true" : undefined} title="{file.path} · its changes in the last commit">
-                    <span class="badge {b.tone}" title={b.title}>{b.text}</span>
-                    <PathName path={file.path} />
-                  </button>
+          <div class="staged-files" bind:this={stagedList}>
+            <div bind:clientHeight={stagedRows}>
+              {@render fileList(shownStaged, "staged")}
+              {#if !shownStaged.length && !lastFiles.length}
+                <p class="empty">{needle && staged.length ? "No staged files match the filter." : "Stage files or lines to add them to the next commit."}</p>
+              {/if}
+              {#if lastFiles.length}
+                <!-- Amend: the commit it replaces keeps its files, and the staged ones join them. -->
+                <div class="from-last" title="Files of the commit Amend replaces: they stay in it, with the staged changes added">
+                  <span class="grow">From last commit</span><span class="n">{lastFiles.length}</span>
                 </div>
-              {/each}
-            {/if}
+                {#each lastFiles.filter(matches) as file (file.path)}
+                  {@const b = badge[file.status]}
+                  {@const open = lastOpen === file.path}
+                  <div class="file" class:open style:background={open ? tint(color) : undefined}>
+                    <button class="name" onclick={() => openLast(file.path)} aria-current={open ? "true" : undefined} title="{file.path} · its changes in the last commit">
+                      <span class="badge {b.tone}" title={b.title}>{b.text}</span>
+                      <PathName path={file.path} />
+                    </button>
+                  </div>
+                {/each}
+              {/if}
+            </div>
           </div>
         {/if}
       </div>
@@ -1187,9 +1204,10 @@
   .group + .group {
     margin-top: var(--space-2);
   }
-  /* In a short window the staged files give way first; the commit form always shows whole. */
+  /* The staged files take the room the lists over them leave, and when both want more, give
+     way first, down to the height kept for them; the commit form always shows whole. */
   .group.staged {
-    flex-shrink: 1;
+    flex-shrink: 1000;
     min-height: 30px;
     padding: 0 var(--space-2);
   }
@@ -1393,6 +1411,36 @@
   }
   .file.ticked {
     background: var(--side-sel);
+  }
+  /* A row's own button has the keys, but its ring goes round the whole row, on the row's rounded
+     plate, checkbox and bin included. */
+  .ghead {
+    position: relative;
+  }
+  .name:focus-visible,
+  .name:global(.key-focus),
+  .fold:focus-visible,
+  .fold:global(.key-focus),
+  .gname:focus-visible,
+  .gname:global(.key-focus) {
+    outline: none;
+  }
+  .name:focus-visible::after,
+  .name:global(.key-focus)::after,
+  .fold:focus-visible::after,
+  .fold:global(.key-focus)::after,
+  .gname:focus-visible::after,
+  .gname:global(.key-focus)::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: var(--radius-s);
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    pointer-events: none;
+  }
+  :global(:root[data-contrast="more"]) .files :is(.name, .fold, .gname):focus-visible::after {
+    outline-width: 3px;
   }
   /* Always shown, one column of them left of the badges, the folders and the list names; drawn
      like the line checkboxes of a diff. */
