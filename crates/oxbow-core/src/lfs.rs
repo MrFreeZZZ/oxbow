@@ -12,10 +12,10 @@ use std::sync::atomic::AtomicBool;
 
 use serde::Serialize;
 
+use crate::action::{ActionEvent, PartState};
 use crate::cli::GitCommand;
 use crate::error::{Error, FailedPart, Result};
 use crate::repo::Repo;
-use crate::worktree::{ActionEvent, PartState};
 
 /// What every pointer file starts with.
 const POINTER_START: &str = "version https://git-lfs.github.com/spec/v1";

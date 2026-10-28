@@ -12,11 +12,11 @@ use std::sync::atomic::AtomicBool;
 use gix::bstr::ByteSlice;
 use serde::Serialize;
 
+use crate::action::{ActionEvent, PartState};
 use crate::cli::GitCommand;
 use crate::error::{Error, FailedPart, Result};
 use crate::remote::{CommitBrief, parse_briefs};
 use crate::repo::Repo;
-use crate::worktree::{ActionEvent, PartState};
 
 /// Commits listed between two commits of a submodule; the count says how many there are.
 const LISTED: usize = 50;
