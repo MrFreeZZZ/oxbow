@@ -65,6 +65,11 @@ impl MergeRequest {
 /// `git@host:g/p.git`, `ssh://git@host:2222/g/p`. Only GitLab's own host and hosts named for it
 /// (`gitlab.example.com`, `gitlab-ce.corp`) count: a server of another name looks like any other.
 pub fn parse_gitlab_url(url: &str) -> Option<(String, String)> {
+    project_url(url).filter(|(host, _)| named_gitlab(host))
+}
+
+/// Host and project path of any server, the way [`parse_gitlab_url`] reads them.
+fn project_url(url: &str) -> Option<(String, String)> {
     let url = url.trim();
     let (host, path) = if let Some(rest) = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")) {
         let after_user = rest
@@ -78,10 +83,6 @@ pub fn parse_gitlab_url(url: &str) -> Option<(String, String)> {
         let target = crate::ssh::ssh_target(url)?;
         (target.host, target.path)
     };
-    let name = host.split(':').next().unwrap_or(&host).to_lowercase();
-    if !name.split('.').next().is_some_and(|label| label.starts_with("gitlab")) {
-        return None;
-    }
     let path = path.trim_matches('/');
     let path = path.strip_suffix(".git").unwrap_or(path).trim_end_matches('/');
     // A project lives in a group or a user: at least two parts.
@@ -91,26 +92,61 @@ pub fn parse_gitlab_url(url: &str) -> Option<(String, String)> {
     Some((host.to_lowercase(), path.to_owned()))
 }
 
+fn bare_host(host: &str) -> &str {
+    host.split(':').next().unwrap_or(host)
+}
+
+fn named_gitlab(host: &str) -> bool {
+    bare_host(host)
+        .split('.')
+        .next()
+        .is_some_and(|label| label.starts_with("gitlab"))
+}
+
+/// Hosts that are never GitLab, whatever the repository holds: a mirror there keeps its
+/// `.gitlab-ci.yml` too.
+const OTHER_HOSTS: &[&str] = &[
+    "github.com",
+    "bitbucket.org",
+    "codeberg.org",
+    "dev.azure.com",
+    "ssh.dev.azure.com",
+];
+
 impl Repo {
-    /// The GitLab projects the remotes point at, the default remote's first.
+    /// The GitLab projects the remotes point at, the default remote's first. A server of any
+    /// name counts when the repository has GitLab's pipeline file, `.gitlab-ci.yml`.
     pub fn gitlab_projects(&self) -> Vec<GitLabProject> {
         let Ok(remotes) = self.remotes_info() else {
             return Vec::new();
+        };
+        let pipeline = self.workdir().join(".gitlab-ci.yml").is_file();
+        let gitlab = |url: &str| {
+            project_url(url).filter(|(host, _)| {
+                named_gitlab(host) || (pipeline && !OTHER_HOSTS.contains(&bare_host(host).trim_start_matches("www.")))
+            })
         };
         let preferred = self.default_remote();
         let mut projects: Vec<GitLabProject> = remotes
             .iter()
             .filter_map(|r| {
-                let (host, path) = parse_gitlab_url(&r.push_url).or_else(|| parse_gitlab_url(&r.fetch_url))?;
-                // An address over ssh has the ssh port, never the page's.
-                let page = if r.push_url.starts_with("http") || r.fetch_url.starts_with("http") {
+                let (host, path) = gitlab(&r.push_url).or_else(|| gitlab(&r.fetch_url))?;
+                // An address over ssh has the ssh port, never the page's; one over plain http
+                // has its pages there too.
+                let web = [&r.push_url, &r.fetch_url].into_iter().find(|u| u.starts_with("http"));
+                let page = if web.is_some() {
                     host.clone()
                 } else {
-                    host.split(':').next().unwrap_or(&host).to_owned()
+                    bare_host(&host).to_owned()
+                };
+                let scheme = if web.is_some_and(|u| u.starts_with("http://")) {
+                    "http"
+                } else {
+                    "https"
                 };
                 Some(GitLabProject {
                     remote: r.name.clone(),
-                    web_url: format!("https://{page}/{path}"),
+                    web_url: format!("{scheme}://{page}/{path}"),
                     host: page,
                     path,
                 })

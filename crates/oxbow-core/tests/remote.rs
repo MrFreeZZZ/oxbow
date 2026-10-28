@@ -149,6 +149,33 @@ fn a_push_asks_gitlab_for_a_merge_request() {
     assert_eq!(repo.tracking().unwrap().unwrap().branch, "csv");
 }
 
+/// A GitLab server of any name counts once the repository has GitLab's pipeline file; GitHub
+/// never does, even for a mirror that keeps the file.
+#[test]
+fn a_gitlab_server_of_another_name_is_known_by_its_pipeline_file() {
+    let mut me = Fixture::new();
+    me.commit("a.txt", "one\n", "Root");
+    me.git(&["remote", "add", "origin", "git@git.fintaxi.ru:team/auth.git"]);
+    me.git(&["remote", "add", "mirror", "https://github.com/acme/auth.git"]);
+    me.git(&["remote", "add", "lab", "http://code.local:8080/team/auth.git"]);
+    let repo = Repo::open(me.path()).unwrap();
+    assert!(repo.gitlab_projects().is_empty());
+
+    me.commit(".gitlab-ci.yml", "test:\n  script: make\n", "Add the pipeline");
+    let projects = repo.gitlab_projects();
+    let pages: Vec<(&str, &str)> = projects
+        .iter()
+        .map(|p| (p.remote.as_str(), p.web_url.as_str()))
+        .collect();
+    assert_eq!(
+        pages,
+        [
+            ("origin", "https://git.fintaxi.ru/team/auth"),
+            ("lab", "http://code.local:8080/team/auth")
+        ]
+    );
+}
+
 #[test]
 fn an_edited_pushed_commit_is_pushed_with_a_lease() {
     let mut team = Team::new();
