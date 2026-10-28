@@ -78,6 +78,9 @@
   import { fitWindow } from "./lib/windowSize";
   import { stepperOf } from "./lib/tabs";
   import { Lazy } from "./lib/lazyScreen.svelte";
+  import TrustSheet from "./lib/TrustSheet.svelte";
+  import RestrictedBadge from "./lib/RestrictedBadge.svelte";
+  import type { TrustFinding } from "./lib/types";
 
   // Screens and sheets a window seldom shows load the first time they are (lazyScreen.svelte.ts).
   const ConflictsView = new Lazy(() => import("./lib/ConflictsView.svelte"));
@@ -722,7 +725,12 @@
       limit = PAGE;
       unreachable = new Set();
       focusOnly = false;
-      const summary = await api.openRepo(path);
+      let summary = await api.openRepo(path);
+      if (summary.untrusted) {
+        const answer = await askTrust(summary.name, summary.untrusted, true);
+        if (mine !== generation || !answer) return;
+        summary = await api.openRepo(path, answer);
+      }
       const next = await api.history(limit);
       if (mine !== generation) return;
       gone = null;
@@ -743,6 +751,39 @@
     } finally {
       if (mine === generation) loading = false;
     }
+  }
+
+  /** «Do you really want to let it run these programs?», while opening a repository or once it
+   *  is open Restricted. */
+  let trustAsk = $state<{ name: string; findings: TrustFinding[]; opening: boolean; answer: (a: "trust" | "restricted" | null) => void } | null>(null);
+
+  function askTrust(name: string, findings: TrustFinding[], opening: boolean): Promise<"trust" | "restricted" | null> {
+    return new Promise((answer) => {
+      trustAsk = {
+        name,
+        findings,
+        opening,
+        answer: (a) => {
+          trustAsk = null;
+          answer(a);
+        },
+      };
+    });
+  }
+
+  /** Trust This Repository…: git runs its settings from now on. */
+  async function trustOpen() {
+    if (!repo) return;
+    const shown = repo;
+    if ((await askTrust(shown.name, shown.restricted, false)) !== "trust") return;
+    try {
+      await api.trustRepo(shown.path);
+    } catch (err) {
+      confirm.say(String(err), "warn");
+      return;
+    }
+    if (repo?.path === shown.path) repo = { ...repo, restricted: [] };
+    await reload();
   }
 
   /** Opening or reading the repository at `path` failed: when its folder isn't there, the
@@ -2326,6 +2367,10 @@
     const closing = getCurrentWindow().onCloseRequested(closeRequested);
     const picked = getCurrentWindow().listen<ShortcutId>("menu-command", (event) => fromMenu(event.payload));
     const recent = getCurrentWindow().listen<string>("menu-open", (event) => void load(event.payload));
+    // Another window trusted a repository: git runs its settings here too.
+    const trusted = listen<string>("trust-changed", (event) => {
+      if (repo?.path === event.payload) repo = { ...repo, restricted: [] };
+    });
     // Back in front: the menu bar shows this window's commands again.
     const front = getCurrentWindow().onFocusChanged(({ payload }) => {
       if (!payload) return;
@@ -2335,6 +2380,7 @@
     return () => {
       picked.then((stop) => stop());
       recent.then((stop) => stop());
+      trusted.then((stop) => stop());
       front.then((stop) => stop());
       unlisten.then((stop) => stop());
       outside.then((stop) => stop());
@@ -2504,6 +2550,9 @@
               {/if}
             {/if}
           </div>
+          {#if repo.restricted.length}
+            <RestrictedBadge findings={repo.restricted} onTrust={trustOpen} />
+          {/if}
           <!-- File History is about one file: a plain back arrow and no branch picker, as in the design, leave room for Find in file. -->
           {#if view !== "file" || showConflicts}
             <!-- The branch and a new one beside it: one control, as Fetch, Pull and Push are. -->
@@ -2958,6 +3007,9 @@
     />
   {/if}
   <ConfirmSheet repo={repo.name} branch={history.head.branch ?? operation?.branch ?? null} color={headColor} />
+{/if}
+{#if trustAsk}
+  <TrustSheet name={trustAsk.name} findings={trustAsk.findings} opening={trustAsk.opening} home={start.info?.home ?? ""} onAnswer={trustAsk.answer} />
 {/if}
 {#if picker?.kind === "commands"}
   <CommandPalette

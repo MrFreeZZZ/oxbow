@@ -36,6 +36,7 @@ import type {
   StashCheck,
   WorkingTree,
   RecentRepo,
+  TrustedRepo,
   Gone,
   RepoGlance,
   WelcomeInfo,
@@ -81,7 +82,13 @@ export const api = {
   /** Reduce Transparency and Increase Contrast from the system (always off outside macOS). */
   displayOptions: () => invoke<{ reduceTransparency: boolean; increaseContrast: boolean }>("display_options"),
   initialRepo: () => invoke<string | null>("initial_repo"),
-  openRepo: (path: string) => invoke<RepoSummary>("open_repo", { path }),
+  /** A repository whose settings run programs comes back `untrusted`, unopened, unless it is
+   *  trusted or Settings says not to ask; `answer` is the user's reply to that. */
+  openRepo: (path: string, answer: "trust" | "restricted" | null = null) => invoke<RepoSummary>("open_repo", { path, answer }),
+  /** Trust This Repository…: git runs its settings from now on, in every window. */
+  trustRepo: (path: string) => invoke<void>("trust_repo", { path }),
+  trustedRepos: () => invoke<TrustedRepo[]>("trusted_repos"),
+  untrustRepo: (path: string) => invoke<void>("untrust_repo", { path }),
   recentRepos: () => invoke<RecentRepo[]>("recent_repos"),
   /** With `to`, the repository moved there. */
   forgetRepo: (path: string, to: string | null = null) => invoke<void>("forget_repo", { path, to }),

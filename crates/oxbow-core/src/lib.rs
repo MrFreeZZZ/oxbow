@@ -38,6 +38,7 @@ pub mod stack;
 pub mod stash;
 pub mod submodules;
 pub mod tags;
+pub mod trust;
 pub mod watch;
 pub mod worktree;
 pub mod worktrees;
@@ -85,6 +86,7 @@ pub use stack::{
 };
 pub use stash::StashCheck;
 pub use submodules::{Checkout, Moved, Submodule, SubmoduleMove};
+pub use trust::{TrustFinding, TrustKind};
 pub use watch::{Changed, Watch};
 pub use worktree::{Action, ActionEvent, BranchPush, PartState, Plan, PullMode, RemoteBranch, Side, WorkingTree};
 pub use worktrees::{GoneFolder, GoneWhy, GoneWorktree, Worktree, gone_folder, reconnect_folder};

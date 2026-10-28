@@ -33,12 +33,15 @@ crates/oxbow-core/          UI-free core library (all Git logic lives here)
   src/review.rs             reviewing a pull request: statuses, Viewed, fetch into refs/oxbow/pull/N,
                             the draft review kept in .git/oxbow/reviews
   src/config.rs setup.rs    git settings; clone/init;  console.rs = Console process log
+  src/trust.rs              settings of a repository that run programs (hooks, fsmonitor, filters…),
+                            found before opening it; Restricted runs git with them off
   tests/<area>.rs           integration tests, one file per area; tests/support/mod.rs = Fixture
   examples/history.rs       history load benchmark;  reads.rs = opening with worktrees/submodules;
                             steps.rs = Stage with Undo and pages of lines of a big file
 app/src-tauri/              Tauri shell (crate oxbow-app)
   src/main.rs               all #[tauri::command]s and the generate_handler! list
   src/accounts.rs pulls.rs open_in.rs console_window.rs
+  src/trusted.rs            trusted-repositories.json: which repositories may run their own programs
   src/settings.rs           settings.json: read (never written over when broken), atomic write
   tauri.conf.json           window, CSP; build.rs sets version 0.1.<commit count>
 app/src/                    Svelte front end

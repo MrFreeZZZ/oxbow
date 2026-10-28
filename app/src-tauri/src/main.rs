@@ -8,6 +8,7 @@ mod menu;
 mod open_in;
 mod pulls;
 mod settings;
+mod trusted;
 mod turns;
 
 use std::collections::HashMap;
@@ -266,6 +267,19 @@ impl Session {
 struct RepoSummary {
     name: String,
     path: String,
+    /// Open Restricted: the repository's settings that git runs with off.
+    restricted: Vec<oxbow_core::TrustFinding>,
+    /// Nothing was opened: the repository's settings run programs, and the user hasn't said
+    /// whether to trust it.
+    untrusted: Option<Vec<oxbow_core::TrustFinding>>,
+}
+
+/// The answer to «Do you really want to let it run these programs?».
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum TrustAnswer {
+    Trust,
+    Restricted,
 }
 
 type CommandResult<T> = Result<T, String>;
@@ -562,11 +576,47 @@ async fn open_repo(
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
     path: String,
+    answer: Option<TrustAnswer>,
 ) -> CommandResult<RepoSummary> {
     let repo = blocking(move || Repo::open(&path)).await?;
+    let workdir = repo.workdir().to_path_buf();
+    // Before anything else runs git there: its settings could run programs on the first read.
+    let (found, allowed) = {
+        let (app, repo) = (app.clone(), repo.clone());
+        tauri::async_runtime::spawn_blocking(move || trusted::check(&app, &repo))
+            .await
+            .map_err(|err| err.to_string())?
+    };
+    let restricted = match answer {
+        Some(TrustAnswer::Trust) => {
+            trusted::add(&app, &workdir, &found);
+            false
+        }
+        Some(TrustAnswer::Restricted) => !found.is_empty(),
+        None if allowed => false,
+        None => {
+            // Until the user answers, nothing of the repository's runs.
+            let (dir, kept) = (workdir.clone(), found.clone());
+            blocking(move || oxbow_core::trust::restrict(&dir, &kept)).await?;
+            return Ok(RepoSummary {
+                name: repo.name(),
+                path: workdir.display().to_string(),
+                restricted: Vec::new(),
+                untrusted: Some(found),
+            });
+        }
+    };
+    if restricted {
+        let (dir, found) = (workdir.clone(), found.clone());
+        blocking(move || oxbow_core::trust::restrict(&dir, &found)).await?;
+    } else {
+        oxbow_core::trust::lift(&workdir);
+    }
     let summary = RepoSummary {
         name: repo.name(),
-        path: repo.workdir().display().to_string(),
+        path: workdir.display().to_string(),
+        restricted: if restricted { found } else { Vec::new() },
+        untrusted: None,
     };
     // The next start opens what the first window had; another worktree's window doesn't count.
     if window.label() == "main"
@@ -582,6 +632,22 @@ async fn open_repo(
     // Settings shows this repository under This Repository.
     let _ = app.emit("repo-changed", ());
     Ok(summary)
+}
+
+/// Trust This Repository…: git runs its settings from now on, in every window that has it open.
+#[tauri::command]
+async fn trust_repo(app: AppHandle, path: String) -> CommandResult<()> {
+    let dir = PathBuf::from(&path);
+    let found = {
+        let dir = dir.clone();
+        blocking(move || oxbow_core::trust::scan(&dir))
+            .await
+            .unwrap_or_default()
+    };
+    trusted::add(&app, &dir, &found);
+    oxbow_core::trust::lift(&dir);
+    let _ = app.emit("trust-changed", path);
+    Ok(())
 }
 
 /// Watch the repository open in window `label`, which hears each change outside it as an
@@ -909,8 +975,13 @@ fn clear_recent(app: AppHandle, keep: Vec<String>) {
 
 /// Where a recent repository stands, for its row.
 #[tauri::command]
-async fn repo_glance(path: String) -> CommandResult<oxbow_core::RepoGlance> {
+async fn repo_glance(app: AppHandle, path: String) -> CommandResult<oxbow_core::RepoGlance> {
     read(PathBuf::from(&path), "Look at a repository", move || {
+        let repo = Repo::open(&path)?;
+        // Not trusted yet: `git status` runs restricted, as the window would until asked.
+        if let (found, false) = trusted::check(&app, &repo) {
+            oxbow_core::trust::restrict(repo.workdir(), &found)?;
+        }
         oxbow_core::setup::glance(Path::new(&path))
     })
     .await
@@ -1008,6 +1079,7 @@ fn clone_command(options: oxbow_core::CloneOptions) -> CommandResult<oxbow_core:
 /// ends it and removes what it made.
 #[tauri::command]
 async fn clone_repo(
+    app: AppHandle,
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
     options: oxbow_core::CloneOptions,
@@ -1031,6 +1103,8 @@ async fn clone_repo(
         },
     )
     .await?;
+    // A clone brings neither hooks nor settings along: what it has, the user's templates gave it.
+    trusted::add(&app, Path::new(&path), &[]);
     Ok(path)
 }
 
@@ -1048,7 +1122,7 @@ struct CreatedRepo {
 }
 
 #[tauri::command]
-async fn create_repo(options: oxbow_core::NewRepoOptions) -> CommandResult<CreatedRepo> {
+async fn create_repo(app: AppHandle, options: oxbow_core::NewRepoOptions) -> CommandResult<CreatedRepo> {
     let path = options.path.display().to_string();
     let secrets = logged(
         Some(options.path.clone()),
@@ -1057,6 +1131,7 @@ async fn create_repo(options: oxbow_core::NewRepoOptions) -> CommandResult<Creat
         move || oxbow_core::setup::create_repo(&options),
     )
     .await?;
+    trusted::add(&app, Path::new(&path), &[]);
     Ok(CreatedRepo { path, secrets })
 }
 
@@ -2803,6 +2878,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             display_options,
             open_repo,
+            trust_repo,
+            trusted::trusted_repos,
+            trusted::untrust_repo,
             initial_repo,
             recent_repos,
             forget_repo,
