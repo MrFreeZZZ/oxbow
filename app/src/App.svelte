@@ -2483,7 +2483,7 @@
         {/key}
       {:else if view === "file" && nav.file}
         {#key repo.path + nav.file.path}
-          <FileHistoryView.component {history} path={nav.file.path} start={nav.file.commit} lookup={(id) => rowsById.get(id)} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "the command" : text}.`)} />
+          <FileHistoryView.component {history} path={nav.file.path} start={nav.file.commit} lookup={(id) => rowsById.get(id)} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "the command" : text}.`)} {version} />
         {/key}
       {:else if view === "compare"}
         {#key repo.path}

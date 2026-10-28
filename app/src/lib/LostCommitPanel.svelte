@@ -61,7 +61,8 @@
   </div>
 {/snippet}
 
-<CommitPanel {row} childIds={[]} {lookup} {onSelect} {banner} />
+<!-- Lost work isn't in the checked-out history: its files can be cherry-picked, not reverted. -->
+<CommitPanel {row} childIds={[]} {lookup} {onSelect} {banner} inHead={() => false} />
 
 <style>
   .card {

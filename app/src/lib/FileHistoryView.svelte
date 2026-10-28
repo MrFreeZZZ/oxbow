@@ -23,6 +23,7 @@
     start,
     lookup,
     copy,
+    version = 0,
   }: {
     history: History;
     path: string;
@@ -30,6 +31,8 @@
     start: string | null;
     lookup: (id: string) => HistoryRow | undefined;
     copy: (text: string) => void;
+    /** Goes up on every reload, so Compare with Working Copy follows the file on disk. */
+    version?: number;
   } = $props();
 
   let file = $state<FileHistory | null>(null);
@@ -535,7 +538,7 @@
 
   <section class="main" bind:this={main} aria-label={comparing ? "Compare with Working Copy" : mode === "blame" ? "Blame" : "Changes"}>
     {#if comparing}
-      <WorkingCopyPanel commit={comparing.id} summary={comparing.summary} file={comparing} color={colorOfCommit(comparing.id)} onClose={() => (comparing = null)} />
+      <WorkingCopyPanel commit={comparing.id} summary={comparing.summary} file={comparing} color={colorOfCommit(comparing.id)} {version} onClose={() => (comparing = null)} />
     {:else if mode === "changes"}
       {#if pick}
         {@const color = colorOfCommit(pick.id)}
@@ -618,10 +621,10 @@
   </section>
 </div>
 
-
 {#if menu}
   <Menu x={menu.x} y={menu.y} label="Change menu" entries={menu.entries} onClose={() => (menu = null)} />
 {/if}
+
 <style>
   /* No frames: the list of changes on the graph's paper, a hairline to the file. */
   .screen {
