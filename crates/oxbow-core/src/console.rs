@@ -133,9 +133,14 @@ thread_local! {
 /// folders at once: [`Helpers::help`] runs work on such a thread, and [`Helpers::join`], back
 /// on the entry's thread, puts what they ran in the entry, in the order they started.
 #[derive(Clone, Default)]
-pub(crate) struct Helpers(Arc<Mutex<Vec<(PathBuf, Ran)>>>);
+pub(crate) struct Helpers(Arc<Mutex<Vec<(PathBuf, Ran)>>>, Option<Role>);
 
 impl Helpers {
+    /// Helpers whose commands are for what this thread's are for now, e.g. an Undo snapshot.
+    pub(crate) fn here() -> Self {
+        Helpers(Default::default(), ROLE.with(Cell::get))
+    }
+
     /// Run `f` on this thread for the entry.
     pub(crate) fn help<T>(&self, f: impl FnOnce() -> T) -> T {
         struct Back(Option<Helpers>);
@@ -146,7 +151,10 @@ impl Helpers {
             }
         }
         let _back = Back(HELPING.with(|helping| helping.borrow_mut().replace(self.clone())));
-        f()
+        match self.1 {
+            Some(role) => with(role, f),
+            None => f(),
+        }
     }
 
     /// Put what the helping threads ran in the entry open on this thread; without one, each is

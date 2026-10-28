@@ -34,7 +34,8 @@ crates/oxbow-core/          UI-free core library (all Git logic lives here)
                             the draft review kept in .git/oxbow/reviews
   src/config.rs setup.rs    git settings; clone/init;  console.rs = Console process log
   tests/<area>.rs           integration tests, one file per area; tests/support/mod.rs = Fixture
-  examples/history.rs       history load benchmark;  reads.rs = opening with worktrees/submodules
+  examples/history.rs       history load benchmark;  reads.rs = opening with worktrees/submodules;
+                            steps.rs = Stage with Undo and pages of lines of a big file
 app/src-tauri/              Tauri shell (crate oxbow-app)
   src/main.rs               all #[tauri::command]s and the generate_handler! list
   src/accounts.rs pulls.rs open_in.rs console_window.rs
@@ -80,7 +81,7 @@ Read a log with `grep`/`tail`, never `cat` it whole.
 
 - Check only what the change touches: a UI change needs `ui`, a core change `core`.
 - Run the script before every push. CI runs `scripts/check.sh all` on Linux for every PR and
-  builds the macOS app only on merge.
+  again on each merge to main, beside the macOS app, which it builds only on merge.
 - Never paste long build or test output into the chat or the thread; summarize it.
 - One run of a single Rust test: `cargo test -p oxbow-core --test <file> <name> -q 2>&1 | tail -n 20`.
 - UI changes are verified in a production build with the CSP on (`cd app && npm run build`).

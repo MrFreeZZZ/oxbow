@@ -1877,7 +1877,14 @@ impl Repo {
         // the action's own result, which stands either way.
         let recorded = match before {
             Some(before) => crate::console::role(UNDO_SNAPSHOT, || {
-                let after = self.snapshot()?;
+                // Staging changes the index only; it never writes a file.
+                let after = match action {
+                    Action::Stage { .. }
+                    | Action::Unstage { .. }
+                    | Action::StageHunk { .. }
+                    | Action::UnstageHunk { .. } => self.snapshot_of_index(&before)?,
+                    _ => self.snapshot()?,
+                };
                 self.record(action, &before, &after, result.is_err())
             })
             .map(|_| ()),
