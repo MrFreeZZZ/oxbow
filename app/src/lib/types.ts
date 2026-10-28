@@ -505,7 +505,7 @@ export interface RepoSummary {
 }
 
 /** What a setting of a repository makes git run, and so what Restricted turns off. */
-export type TrustKind = "fsmonitor" | "hook" | "ssh" | "credential" | "filter" | "textconv" | "mergeDriver" | "mergeTool" | "signing" | "remote" | "command";
+export type TrustKind = "fsmonitor" | "hook" | "ssh" | "credential" | "filter" | "textconv" | "mergeDriver" | "mergeTool" | "signing" | "remote" | "command" | "check";
 
 export interface TrustFinding {
   kind: TrustKind;
@@ -540,7 +540,7 @@ export type Action =
   | { kind: "unstageHunk"; path: string; header: string; check: string; lines?: number[] | null }
   | { kind: "discardHunk"; path: string; header: string; check: string; lines?: number[] | null }
   | { kind: "ignore"; pattern: string; untrack?: string }
-  | { kind: "commit"; message: string; amend: boolean; noVerify?: boolean; allowSecrets?: boolean; signOff?: boolean }
+  | { kind: "commit"; message: string; amend: boolean; noVerify?: boolean; allowSecrets?: boolean; skipChecks?: boolean; signOff?: boolean }
   | { kind: "fetch"; remote: string | null }
   | { kind: "pull"; remote: string; branch: string; fetchFirst?: boolean; submodules?: boolean; mode?: "rebase" | "merge" | "fastForward" }
   | {
@@ -589,7 +589,9 @@ export type Action =
   | { kind: "reset"; commit: string; mode: ResetMode }
   | { kind: "reword"; message: string; noVerify?: boolean }
   /** `paths`: only these files; every change when empty or missing. */
-  | { kind: "stashPush"; message: string | null; untracked: boolean; paths?: string[] }
+  | { kind: "stashPush"; message: string | null; untracked: boolean; paths?: string[]; staged?: boolean }
+  /** Put an unstaged hunk of `path`, or only its picked `lines`, aside in a new stash. */
+  | { kind: "stashHunk"; path: string; header: string; check: string; lines?: number[] | null; message: string | null }
   | { kind: "stashApply"; index: number; id: string; pop: boolean; keepIndex: boolean }
   | { kind: "stashDrop"; index: number; id: string }
   | { kind: "stashStore"; id: string; message: string }
@@ -608,7 +610,7 @@ export type Action =
   | { kind: "restore"; id: string; after: boolean }
   | { kind: "clearOperationLog" }
   | { kind: "editStack"; plan: StackPlan }
-  | { kind: "addToCommit"; commit: string; allowSecrets?: boolean }
+  | { kind: "addToCommit"; commit: string; allowSecrets?: boolean; skipChecks?: boolean }
   | { kind: "pushBranches"; remote: string; branches: { branch: string; upstream: string }[] }
   | { kind: "pullRequestMerged"; remote: string; base: string; branch: string }
   /** Only while `branch` is still at `sha`, the commit GitHub merged. */
@@ -642,7 +644,7 @@ export type Action =
 export type Fix =
   /** The last `count` commits go to `to`, a new branch with `create`; pushed ones are reverted and copied. */
   | { kind: "moveCommits"; count: number; to: string; create: boolean }
-  | { kind: "addToLast"; paths: string[]; allowSecrets?: boolean }
+  | { kind: "addToLast"; paths: string[]; allowSecrets?: boolean; skipChecks?: boolean }
   | { kind: "undoLast"; mode: ResetMode }
   | { kind: "revertPushed"; commit: string; push: boolean }
   /** `commit`: a commit only the reflog keeps; without it, where HEAD is. */
@@ -965,6 +967,8 @@ export interface OutsideChange {
 
 export type FailureKind =
   | "secrets"
+  /** A check before commit failed; nothing was committed. */
+  | "check"
   | "rejected"
   | "staleLease"
   | "auth"
@@ -998,6 +1002,8 @@ export interface Failure {
   hook: string | null;
   /** For a commit Oxbow stopped: what looks like a password or key in the staged lines. */
   secrets?: SecretFinding[];
+  /** For a commit a check before commit stopped: its command; `output` is the end of what it printed. */
+  check?: string;
   /** For a refused SSH connection: what Oxbow found out. */
   ssh?: SshCheck | null;
   /** For a rejected push of commits rewritten here: tracking after the fetch, with the lease
@@ -1206,6 +1212,16 @@ export interface RepoSettings {
   /** Production branch: the chosen full ref (`null` is Auto), whether it exists, what Auto
    *  picks, and the local and remote branches to choose from. */
   production: { chosen: string | null; found: boolean; auto: string | null; branches: string[] };
+  /** The checks before commit, in the order they run. */
+  checks: CommitCheck[];
+  /** Restricted: the repository's own programs don't run, these checks neither. */
+  restricted: boolean;
+}
+
+/** A command of the user's own that runs before each commit, kept as `oxbow.check` in .git/config. */
+export interface CommitCheck {
+  command: string;
+  on: boolean;
 }
 
 export type SearchMode = "message" | "code" | "author" | "file";

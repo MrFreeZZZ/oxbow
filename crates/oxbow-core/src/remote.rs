@@ -67,6 +67,8 @@ pub enum FailureKind {
     Cancelled,
     /// The secrets check found what looks like a password or key in the staged lines.
     Secrets,
+    /// A check before commit failed.
+    Check,
     /// The repository changed since the action was planned, so nothing ran.
     Changed,
     /// A fix ran, but the files it put aside stay in the stash: their staged changes no longer fit.
@@ -102,12 +104,15 @@ pub struct Failure {
     pub remote_tip: Option<String>,
     /// For a hook that stopped the command: its name, or both names when either of the
     /// `pre-commit` and `commit-msg` hooks could have.
-    pub hook: Option<Box<str>>,
+    pub hook: Option<Box<String>>,
     /// For a refused SSH connection: what Oxbow found out, and so which fix fits.
     pub ssh: Option<Box<crate::ssh::SshCheck>>,
     /// For a commit the secrets check stopped: the lines it found.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secrets: Option<Box<Vec<crate::secrets::SecretFinding>>>,
+    /// For a commit a check before commit stopped: its command, as typed in Settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub check: Option<Box<String>>,
     /// For a rejected push of commits rewritten here: the branch's tracking after the fetch,
     /// with the lease to use and what others pushed on top of the old versions.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -151,6 +156,8 @@ impl Repo {
             Error::Command { output, .. } => output.trim().to_owned(),
             // Nothing ran: the sheet lists the lines instead.
             Error::Secrets(_) => String::new(),
+            // The end of what the check printed; git did not run.
+            Error::Check(failed) => failed.output.clone(),
             // Nothing ran: the sheet says so in its own words, under git's.
             Error::NoUndo(reason) => reason.clone(),
             other => other.to_string(),
@@ -160,10 +167,14 @@ impl Repo {
             output,
             incoming: Vec::new(),
             remote_tip: None,
-            hook: hook.filter(|_| kind == FailureKind::Hook).map(Into::into),
+            hook: hook.filter(|_| kind == FailureKind::Hook).map(Box::new),
             ssh: None,
             secrets: match error {
                 Error::Secrets(found) => Some(Box::new(found.clone())),
+                _ => None,
+            },
+            check: match error {
+                Error::Check(failed) => Some(Box::new(failed.command.clone())),
                 _ => None,
             },
             tracking: None,
@@ -683,6 +694,7 @@ pub fn classify_failure(error: &Error, pushing_with_hook: bool) -> FailureKind {
         Error::Command { output, .. } => output,
         Error::Cancelled => return FailureKind::Cancelled,
         Error::Secrets(_) => return FailureKind::Secrets,
+        Error::Check(_) => return FailureKind::Check,
         Error::Changed(_) => return FailureKind::Changed,
         Error::StashKept => return FailureKind::StashKept,
         Error::NoUndo(_) => return FailureKind::NoUndo,

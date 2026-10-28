@@ -30,7 +30,8 @@ crates/oxbow-core/          UI-free core library (all Git logic lives here)
                             4 at a time, cancellable, kept while HEAD and index stay the same
   src/stash.rs tags.rs bisect.rs lfs.rs submodules.rs worktrees.rs search.rs compare.rs
   src/filehistory.rs        file history and blame;  reflog.rs = lost work
-  src/fix.rs                Fix a Mistake plans;  secrets.rs = pre-commit secrets check
+  src/fix.rs                Fix a Mistake plans;  secrets.rs = pre-commit secrets check;
+                            checks.rs = the checks before commit of This Repository (oxbow.check)
   src/github.rs pulls.rs    GitHub REST: sign-in, publish, pull requests
   src/gitlab.rs gitlab_api.rs   GitLab: Create Merge Request by push options; signed in, merge
                             requests as pull requests (one screen for both, words in app lib/forge.ts)

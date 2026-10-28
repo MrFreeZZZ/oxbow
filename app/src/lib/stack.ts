@@ -3,12 +3,13 @@
 // Message of an older commit and Add Staged Changes are one-line plans of the same kind.
 
 import { api } from "./api";
-import type { Part, Request } from "./confirm.svelte";
+import { checkFailed } from "./commitChecks";
+import type { Part, Recovery, Request } from "./confirm.svelte";
 import type { BranchContext } from "./branches";
 import { stoppedOnConflicts } from "./merge";
 import { shortId } from "./format";
 import type { ShortcutId } from "./shortcuts";
-import type { HistoryRow, Stack, StackPlan, StackPreview, StackStep, StepAction } from "./types";
+import type { Action, Failure, HistoryRow, Stack, StackPlan, StackPreview, StackStep, StepAction } from "./types";
 
 const plural = (n: number, word: string) => `${n} ${n === 1 ? word : word === "branch" ? "branches" : `${word}s`}`;
 
@@ -298,6 +299,26 @@ export async function rewordRequest(ctx: BranchContext, row: HistoryRow): Promis
   return sheet(commit.message);
 }
 
+/** The way out when the secrets check or a check before commit stopped Add to Commit, or the
+ *  rebase stopped on conflicts. Going on anyway keeps what was allowed before. */
+function addToCommitRecovery(failure: Failure, action: Action & { kind: "addToCommit" }, status: string, done: string): Recovery | null {
+  const anyway = (next: Action & { kind: "addToCommit" }) => ({ label: "Add Anyway", danger: true, action: next, status, done, recover: (again: Failure) => addToCommitRecovery(again, next, status, done) });
+  if (failure.kind === "secrets")
+    return {
+      title: "Possible secrets in the staged changes",
+      body: ["Oxbow checked the staged lines before making the fixup commit and stopped: these look like a password or key. Once pushed, a secret has to be revoked."],
+      icon: "key",
+      tone: "warn",
+      secrets: failure.secrets ?? [],
+      button: anyway({ ...action, allowSecrets: true }),
+      note: "The changes stay staged. A line with oxbow:allow is never flagged.",
+      close: "Close",
+    };
+  if (failure.kind === "check")
+    return { ...checkFailed(failure, "making the fixup commit"), button: anyway({ ...action, skipChecks: true }), note: "The changes stay staged.", close: "Close" };
+  return stoppedOnConflicts(failure, "rebase");
+}
+
 export function addToCommitRequest(ctx: BranchContext, row: HistoryRow): Request {
   const staged = ctx.history.rows[0]?.worktree?.staged ?? 0;
   const head = ctx.history.head.branch ?? "HEAD";
@@ -320,19 +341,7 @@ export function addToCommitRequest(ctx: BranchContext, row: HistoryRow): Request
     status,
     done,
     resolveConflicts: true,
-    recover: (failure) =>
-      failure.kind === "secrets"
-        ? {
-            title: "Possible secrets in the staged changes",
-            body: ["Oxbow checked the staged lines before making the fixup commit and stopped: these look like a password or key. Once pushed, a secret has to be revoked."],
-            icon: "key",
-            tone: "warn",
-            secrets: failure.secrets ?? [],
-            button: { label: "Add Anyway", danger: true, action: { ...action, allowSecrets: true }, status, done, recover: (again) => stoppedOnConflicts(again, "rebase") },
-            note: "The changes stay staged. A line with oxbow:allow is never flagged.",
-            close: "Close",
-          }
-        : stoppedOnConflicts(failure, "rebase"),
+    recover: (failure) => addToCommitRecovery(failure, action, status, done),
     action,
   };
 }

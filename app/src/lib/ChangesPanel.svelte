@@ -572,7 +572,7 @@
 
   function openFileMenu(event: MouseEvent, file: FileChange, group: List | "conflicted") {
     event.preventDefault();
-    const actions: FileMenuActions = { stage, unstage, discard, act, actOnPicked: (how) => group !== "conflicted" && actOnPicked(group, how), stashCandidates };
+    const actions: FileMenuActions = { stage, unstage, discard, act, actOnPicked: (how) => group !== "conflicted" && actOnPicked(group, how), stashCandidates, stagedCount: () => staged.length };
     // A right-click on one of several picked files acts on all of them.
     const several = group !== "conflicted" && tickedSet[group].has(file.path) ? pickedFiles(group) : [];
     const opened = several.length > 1 && group !== "conflicted" ? filesMenu(repo, several, group, actions) : fileMenu(repo, file, group, actions);

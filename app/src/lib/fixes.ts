@@ -3,6 +3,7 @@
 // anything runs, and the sheet shows the plan's steps, each with its commands.
 
 import { api } from "./api";
+import { checkFailed } from "./commitChecks";
 import type { Icon, Part, Recovery, Request, StepLine } from "./confirm.svelte";
 import { nameProblem, onNoBranch, type BranchContext } from "./branches";
 import type { Action, Failure, Fix, FixState, FixStep, HistoryRow, ResetMode } from "./types";
@@ -450,27 +451,38 @@ function forgotSheet(fc: FixContext, picked: Set<string>): Request {
     always: true,
     status: "Adding to the last commit…",
     done: `Added ${paths.length === 1 ? paths[0] : plural(paths.length, "file")} to “${head.summary}”.`,
-    recover: (failure) =>
-      failure.kind === "secrets"
-        ? {
-            title: "Possible secrets in the files",
-            body: ["Oxbow checked the staged lines before changing the commit and stopped: these look like a password or key. Once pushed, a secret has to be revoked."],
-            icon: "key",
-            tone: "warn",
-            secrets: failure.secrets ?? [],
-            button: {
-              label: "Add Anyway",
-              danger: true,
-              action: { ...action, fix: { kind: "addToLast", paths, allowSecrets: true } } as Action,
-              status: "Adding to the last commit…",
-              done: `Added to “${head.summary}”.`,
-            },
-            note: "The files stay staged. A line with oxbow:allow is never flagged.",
-            close: "Close",
-          }
-        : fixRecovery(fc, "forgot", failure),
+    recover: (failure) => forgotRecovery(fc, failure, paths, {}, head.summary),
     action,
   };
+}
+
+/** The way out when the secrets check or a check before commit stopped adding forgotten files;
+ *  going on anyway keeps what was allowed before (`allowed`). */
+function forgotRecovery(fc: FixContext, failure: Failure, paths: string[], allowed: { allowSecrets?: boolean; skipChecks?: boolean }, summary: string): Recovery | null {
+  const anyway = (more: typeof allowed) => {
+    const next = { ...allowed, ...more };
+    return {
+      label: "Add Anyway",
+      danger: true,
+      action: fixAction(fc, { kind: "addToLast", paths, ...next }),
+      status: "Adding to the last commit…",
+      done: `Added to “${summary}”.`,
+      recover: (again: Failure) => forgotRecovery(fc, again, paths, next, summary),
+    };
+  };
+  if (failure.kind === "secrets")
+    return {
+      title: "Possible secrets in the files",
+      body: ["Oxbow checked the staged lines before changing the commit and stopped: these look like a password or key. Once pushed, a secret has to be revoked."],
+      icon: "key",
+      tone: "warn",
+      secrets: failure.secrets ?? [],
+      button: anyway({ allowSecrets: true }),
+      note: "The files stay staged. A line with oxbow:allow is never flagged.",
+      close: "Close",
+    };
+  if (failure.kind === "check") return { ...checkFailed(failure, "changing the commit"), button: anyway({ skipChecks: true }), note: "The files stay staged.", close: "Close" };
+  return fixRecovery(fc, "forgot", failure);
 }
 
 function undoSheet(fc: FixContext, mode: ResetMode): Request {

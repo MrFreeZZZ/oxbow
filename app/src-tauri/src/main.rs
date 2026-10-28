@@ -165,6 +165,7 @@ fn main() {
             git_config::git_settings,
             git_config::repo_settings,
             git_config::set_git_config,
+            git_config::set_commit_checks,
             actions::fetch_in_background,
             actions::stop_fetch,
             actions::public_key,

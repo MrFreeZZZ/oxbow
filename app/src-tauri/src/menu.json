@@ -377,6 +377,12 @@
     "accelerator": null
    },
    {
+    "id": "stashStaged",
+    "title": "Stash Staged",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
     "id": "-",
     "title": "",
     "enabled": true,

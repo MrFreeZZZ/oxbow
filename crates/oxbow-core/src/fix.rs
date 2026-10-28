@@ -41,6 +41,9 @@ pub enum Fix {
         /// Go ahead even though the secrets check finds something, this one time.
         #[serde(default)]
         allow_secrets: bool,
+        /// Go ahead without running the checks before commit, this one time.
+        #[serde(default)]
+        skip_checks: bool,
     },
     /// Take the last commit off the branch; its changes stay staged (`Soft`) or in the files.
     UndoLast { mode: ResetMode },
@@ -289,7 +292,7 @@ impl Repo {
     pub(crate) fn plan_fix(&self, fix: &Fix) -> Result<FixPlan> {
         match fix {
             Fix::MoveCommits { count, to, create } => self.plan_move(*count, to, *create),
-            Fix::AddToLast { paths, .. } => self.plan_add_to_last(paths),
+            Fix::AddToLast { paths, skip_checks, .. } => self.plan_add_to_last(paths, *skip_checks),
             Fix::UndoLast { mode } => {
                 let head = self
                     .head()?
@@ -485,7 +488,7 @@ impl Repo {
         Ok(plan)
     }
 
-    fn plan_add_to_last(&self, paths: &[String]) -> Result<FixPlan> {
+    fn plan_add_to_last(&self, paths: &[String], skip_checks: bool) -> Result<FixPlan> {
         if self.head()?.commit.is_none() {
             return Err(Error::Git("there is no commit yet".into()));
         }
@@ -512,6 +515,9 @@ impl Repo {
         }
         let mut amend = GitCommand::new(args).comment(comment);
         amend.secrets_check = true;
+        if !skip_checks {
+            amend.before = self.checks_before();
+        }
         plan.step(StepKind::Amend, vec![amend]);
         Ok(plan)
     }

@@ -250,6 +250,7 @@ fn chosen_files_are_stashed_and_the_rest_stays() {
         message: Some("WIP: a".into()),
         untracked: true,
         paths: vec!["a.txt".into(), "new.txt".into()],
+        staged: false,
     };
     assert_eq!(
         repo.plan(&push).unwrap().commands[0].display(),
@@ -287,12 +288,13 @@ fn a_failing_pre_commit_hook_is_told_apart_and_can_be_skipped() {
         amend: false,
         no_verify: false,
         allow_secrets: false,
+        skip_checks: false,
         sign_off: false,
     };
     let err = repo.perform(&commit).unwrap_err();
     let failure = repo.explain_failure(&commit, &err);
     assert_eq!(failure.kind, FailureKind::Hook);
-    assert_eq!(failure.hook.as_deref(), Some("pre-commit"));
+    assert_eq!(failure.hook.as_deref().map(String::as_str), Some("pre-commit"));
     assert!(failure.output.contains("not formatted"), "{}", failure.output);
 
     let skip = Action::Commit {
@@ -300,6 +302,7 @@ fn a_failing_pre_commit_hook_is_told_apart_and_can_be_skipped() {
         amend: false,
         no_verify: true,
         allow_secrets: false,
+        skip_checks: false,
         sign_off: false,
     };
     assert_eq!(
@@ -334,7 +337,7 @@ fn a_failing_commit_msg_hook_stops_an_edited_message_and_can_be_skipped() {
     let err = repo.perform(&reword).unwrap_err();
     let failure = repo.explain_failure(&reword, &err);
     assert_eq!(failure.kind, FailureKind::Hook);
-    assert_eq!(failure.hook.as_deref(), Some("commit-msg"));
+    assert_eq!(failure.hook.as_deref().map(String::as_str), Some("commit-msg"));
     assert_eq!(fx.git(&["log", "-1", "--format=%s"]), "Root");
 
     let skip = Action::Reword {

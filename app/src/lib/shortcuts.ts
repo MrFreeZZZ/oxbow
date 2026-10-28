@@ -89,6 +89,7 @@ export const COMMANDS = {
   publishGitHub: { category: "Git", title: "Publish to GitHub…" },
   commit: { category: "Git", title: "Commit…" },
   stash: { category: "Git", title: "Stash" },
+  stashStaged: { category: "Git", title: "Stash Staged" },
   checkout: { category: "Git", title: "Checkout to…" },
   branch: { category: "Git", title: "Create Branch…" },
   newWorktree: { category: "Git", title: "New Worktree…" },

@@ -1,5 +1,6 @@
 //! Running an [`Action`] ([`Repo::perform`]): its git commands one after another, with the
-//! snapshot for Undo before them, the secrets check before a commit, progress and Stop.
+//! snapshot for Undo before them, the secrets check and the checks before a commit, progress
+//! and Stop.
 
 //! The working copy: what changed since the last commit, staging and committing.
 //!
@@ -83,6 +84,10 @@ impl Repo {
             if !found.is_empty() {
                 return Err(Error::Secrets(found));
             }
+        }
+        // Then the checks before commit; one that fails stops it the same way.
+        if let Action::Commit { skip_checks: false, .. } | Action::AddToCommit { skip_checks: false, .. } = action {
+            self.run_commit_checks(on_event, cancel)?;
         }
         // Loading a key or saving patches changes nothing in the repository. A worktree is a folder: undoing the
         // branch a new one made would pull it from under that folder, and a removed one's files
@@ -315,6 +320,13 @@ impl Repo {
                         })?;
                         if !found.is_empty() {
                             return Err(Error::Secrets(found));
+                        }
+                        if let Action::Fix {
+                            fix: crate::fix::Fix::AddToLast { skip_checks: false, .. },
+                            ..
+                        } = action
+                        {
+                            self.run_commit_checks(on_event, cancel)?;
                         }
                     }
                     self.write_todo(command)?;

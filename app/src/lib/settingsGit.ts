@@ -5,14 +5,15 @@
 import { open as openFile } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import { confirm, type Request } from "./confirm.svelte";
-import { menuIcons } from "./Menu.svelte";
+import { menuIcons, type MenuEntry } from "./Menu.svelte";
 import { prefs, type SecretPattern } from "./prefs.svelte";
 import { addRemoteRequest, optimizeRequest, removeRemoteRequest, setUrlRequest } from "./repoSettings";
 import { config, copy, gitEdit, gitSetting, gitSwitch, load, model, prefRow, truthy, writeGit } from "./settingsModel.svelte";
 import type { Row, Section, Value } from "./settingsRows";
 import { tokenExpiry } from "./gitlab";
 import { settingsTag } from "./trust";
-import type { GitLabAccount, RemoteInfo } from "./types";
+import { checkCommands, checkProblem, checkSub, movedCheck, withCheck } from "./commitChecks";
+import type { CommitCheck, GitLabAccount, RemoteInfo } from "./types";
 
 // GitHub: who is signed in, and the sign-in sheet.
 const storeName = navigator.platform.startsWith("Mac") ? "Keychain" : navigator.platform.startsWith("Win") ? "Credential Manager" : "keyring";
@@ -127,6 +128,81 @@ function size(bytes: number): string {
 async function runRepo(request: Parameters<typeof confirm.run>[0]) {
   await confirm.run(request);
   load();
+}
+
+/** Write the repository's checks before commit whole, then read Settings again. */
+async function saveChecks(list: CommitCheck[]) {
+  model.problem = null;
+  try {
+    await api.setCommitChecks(list);
+  } catch (err) {
+    model.problem = String(err);
+  }
+  await load();
+}
+
+/** The sheet that adds a check before commit (`index` null) or edits one. */
+function checkRequest(index: number | null, command: string): Request {
+  const list = model.repo?.checks ?? [];
+  const invalid = checkProblem(list, index, command);
+  const next = withCheck(list, index, command);
+  return {
+    title: index === null ? "Add a check before commit" : "Edit the check",
+    body: [
+      "Oxbow runs it in ",
+      { code: model.repo?.name ?? "this repository" },
+      " before each commit, after the secrets check. When it fails, nothing is committed: its output is in the sheet and the Console, with Commit Anyway.",
+    ],
+    icon: "hook",
+    button: index === null ? "Add Check" : "Save Check",
+    always: true,
+    invalid,
+    fields: [
+      {
+        label: "Command",
+        text: { value: command, placeholder: "ruff check .", focus: true, edit: (value) => checkRequest(index, value) },
+        note: "Runs in your login shell from the repository’s top folder, as in a terminal, e.g. npm test, cargo fmt --check or ./scripts/lint.sh. An exit code other than 0 is a failure.",
+        error: command.trim() && invalid ? invalid : undefined,
+      },
+    ],
+    status: "Saving the check…",
+    local: {
+      commands: checkCommands(next),
+      run: async () => {
+        await saveChecks(next);
+        if (model.problem) throw new Error(model.problem);
+        return index === null ? `Added ${command.trim()}.` : `Saved ${command.trim()}.`;
+      },
+    },
+  };
+}
+
+/** The rows of the checks before commit, and the one that adds a check. */
+function checkRows(checks: CommitCheck[], restricted: boolean): Row[] {
+  const rows = checks.map(
+    (check, i): Row => ({
+      id: `check:${i}`,
+      label: check.command,
+      mono: true,
+      sub: () => checkSub(check, restricted),
+      subTone: () => (restricted ? "warn" : undefined),
+      control: { type: "switch", get: () => check.on, set: (on) => saveChecks(checks.map((c, j) => (j === i ? { ...c, on } : { ...c }))) },
+      more: () => {
+        const entries: MenuEntry[] = [{ kind: "item", label: "Edit…", icon: menuIcons.edit, run: () => confirm.run(checkRequest(i, check.command)) }];
+        if (i > 0) entries.push({ kind: "item", label: "Run Earlier", icon: menuIcons.up, run: () => saveChecks(movedCheck(checks, i, -1)) });
+        if (i < checks.length - 1) entries.push({ kind: "item", label: "Run Later", icon: menuIcons.down, run: () => saveChecks(movedCheck(checks, i, 1)) });
+        entries.push({ kind: "sep" }, { kind: "item", label: "Remove Check", icon: menuIcons.drop, danger: true, run: () => saveChecks(checks.filter((_, j) => j !== i)) });
+        return entries;
+      },
+    }),
+  );
+  rows.push({
+    id: "check:add",
+    label: checks.length ? "Add a check" : "No checks before commit yet",
+    sub: checks.length ? undefined : "e.g. ruff check ., npm test or cargo fmt --check",
+    control: { type: "button", label: "Add…", run: () => confirm.run(checkRequest(null, "")) },
+  });
+  return rows;
 }
 
 /** The sheet that adds a secret pattern of your own. */
@@ -529,6 +605,11 @@ export const repoSection: Section = {
           { ...gitEdit("local", "user.name", "Name", { shown: () => config("local", "user.name") ?? "", placeholder: "Your Name" }), off: () => !ownIdentity() },
           { ...gitEdit("local", "user.email", "Email", { shown: () => config("local", "user.email") ?? "", placeholder: "you@work.example" }), off: () => !ownIdentity() },
         ],
+      },
+      {
+        title: "Checks Before Commit",
+        foot: "Kept as oxbow.check in .git/config, in the order they run. They run after the secrets check, also for Amend, Add to Commit and Fix a Mistake; their output goes to the Console. In a Restricted repository none runs.",
+        rows: checkRows(r.checks ?? [], r.restricted),
       },
       {
         title: "Remotes",

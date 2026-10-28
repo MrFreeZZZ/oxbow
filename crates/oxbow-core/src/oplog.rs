@@ -941,7 +941,12 @@ impl Repo {
                 ),
             ),
             Action::Reword { .. } => ("edit", format!("Edit the last message on {here}")),
+            Action::StashPush { staged: true, .. } => ("stash", "Stash staged changes".to_owned()),
             Action::StashPush { .. } => ("stash", "Stash changes".to_owned()),
+            Action::StashHunk {
+                lines: Some(_), path, ..
+            } => ("stash", format!("Stash lines of {path}")),
+            Action::StashHunk { path, .. } => ("stash", format!("Stash a hunk of {path}")),
             Action::StashApply { pop: true, .. } => ("pop", "Pop a stash".to_owned()),
             Action::StashApply { .. } => ("pop", "Apply a stash".to_owned()),
             Action::StashDrop { .. } => ("drop", "Drop a stash".to_owned()),

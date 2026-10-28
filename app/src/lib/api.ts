@@ -21,6 +21,7 @@ import type {
   ConfigScope,
   GitSettings,
   RepoSettings,
+  CommitCheck,
   ConflictFile,
   MergeTool,
   DeletionCheck,
@@ -228,6 +229,8 @@ export const api = {
   /** `null` removes the value. */
   setGitConfig: (scope: ConfigScope, key: string, value: string | null) =>
     invoke<void>("set_git_config", { scope, key, value }),
+  /** The open repository's checks before commit, written whole in this order. */
+  setCommitChecks: (checks: CommitCheck[]) => invoke<void>("set_commit_checks", { checks }),
   /** Sends `fetch-event`s marked with `fetch`, Activity's number for it, while it runs; rejects
    *  with a `Failure`. Without a number, Stop doesn't reach it. */
   fetchInBackground: (remote: string | null, fetch: number | null = null, auto = false) =>

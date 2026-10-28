@@ -870,7 +870,7 @@
     await refresh();
     if (ok && request.action?.kind === "fetchTags") checkRemoteTags();
     // A stash made or put back is the newest, and the Stashes screen shows it.
-    if (ok && (request.action?.kind === "stashPush" || request.action?.kind === "stashStore")) stashSel = history?.stashes[0]?.id ?? null;
+    if (ok && (request.action?.kind === "stashPush" || request.action?.kind === "stashHunk" || request.action?.kind === "stashStore")) stashSel = history?.stashes[0]?.id ?? null;
     const after = history?.head;
     if (after?.commit && (after.branch !== before?.branch || after.commit !== before?.commit)) (after.branch !== before?.branch ? jump : select)(after.commit);
     openConflicts(opBefore);
@@ -1156,6 +1156,7 @@
       add("changes", () => ((view = "history"), (resolving = false), showChanges()));
       add("commit", commitChanges);
       if (!busy) add("stash", () => void run(stashRequest(branchCtx!)));
+      if (!busy && h.rows[0]?.worktree?.staged) add("stashStaged", () => void run(stashRequest(branchCtx!, "", false, true)));
     }
     if (h.head.commit && repo) {
       const path = repo.path;

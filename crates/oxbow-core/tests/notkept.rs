@@ -253,6 +253,7 @@ fn undoing_a_pushed_commit_says_only_this_copy_changes_and_offers_revert() {
         amend: false,
         no_verify: false,
         allow_secrets: false,
+        skip_checks: false,
         sign_off: false,
     })
     .unwrap();

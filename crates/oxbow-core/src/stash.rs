@@ -385,6 +385,63 @@ impl Repo {
     }
 }
 
+impl Repo {
+    /// A stash commit of `patch` alone, made on the checked-out commit without touching the
+    /// files or the staging area: its index is the commit's own, its files the commit's with the
+    /// patch. Returns it, with the message for `git stash store`, git's own words: `On main:
+    /// message`, or `WIP on main: 1a2b3c4 subject` without one. Only objects are written; the
+    /// stash list changes when it is stored.
+    pub(crate) fn stash_commit_of(&self, patch: &str, message: Option<&str>) -> Result<(String, String)> {
+        let head = self.head()?;
+        let commit = head
+            .commit
+            .ok_or_else(|| Error::Git("there is no commit yet for a stash to start from: commit once first".into()))?;
+        let branch = head.branch.unwrap_or_else(|| "(no branch)".to_owned());
+        let short = &commit[..7.min(commit.len())];
+        let subject = self
+            .run(&GitCommand::new(["log", "-1", "--format=%s", &commit]))?
+            .stdout
+            .trim()
+            .to_owned();
+        let message = match message.map(str::trim).filter(|m| !m.is_empty()) {
+            Some(message) => format!("On {branch}: {message}"),
+            None => format!("WIP on {branch}: {short} {subject}"),
+        };
+        let folder = crate::cli::private_temp_folder("oxbow-stash-").map_err(|err| Error::Git(err.to_string()))?;
+        let index = folder.path().join("index").to_string_lossy().into_owned();
+        let scratch = |cmd: GitCommand| cmd.env("GIT_INDEX_FILE", index.clone());
+        self.run(&scratch(GitCommand::new(["read-tree", &commit])))?;
+        self.run_with_input(
+            &scratch(GitCommand::new(["apply", "--cached", "-"])),
+            Some(patch.as_bytes()),
+        )
+        .map_err(|_| {
+            Error::Git(
+                "these lines are next to staged changes of the file, so they don't fit on the last commit alone: stash the staged changes with them, or unstage them first".into(),
+            )
+        })?;
+        let tree = self
+            .run(&scratch(GitCommand::new(["write-tree"])))?
+            .stdout
+            .trim()
+            .to_owned();
+        let commit_tree = |tree: &str, parents: &[&str], message: &str| -> Result<String> {
+            let mut args = vec!["commit-tree", "--no-gpg-sign"];
+            for parent in parents {
+                args.extend(["-p", parent]);
+            }
+            args.extend(["-m", message, tree]);
+            Ok(self.run(&GitCommand::new(args))?.stdout.trim().to_owned())
+        };
+        let staged = commit_tree(
+            &format!("{commit}^{{tree}}"),
+            &[&commit],
+            &format!("index on {branch}: {short} {subject}"),
+        )?;
+        let stash = commit_tree(&tree, &[&commit, &staged], &message)?;
+        Ok((stash, message))
+    }
+}
 /// Delete the folders of `.git/oxbow/removed` (named `<seconds>-…`) older than 30 days.
 pub(crate) fn prune_removed(root: &std::path::Path, now: u64) {
     let Ok(entries) = std::fs::read_dir(root) else {

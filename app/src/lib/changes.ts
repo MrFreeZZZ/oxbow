@@ -2,6 +2,8 @@
 // file, stashing a few files, and the way out when a commit hook or the secrets check says no.
 
 import type { Part, Recovery, Request } from "./confirm.svelte";
+import { checkRecovery } from "./commitChecks";
+import { quoted } from "./stashLines";
 import { splitPath } from "./format";
 import type { Action, Failure, FileChange, Hunk, SecretFinding } from "./types";
 
@@ -109,19 +111,6 @@ export function stashFilesRequest(files: StashCandidate[], on: string[], message
     done: `Stashed ${one ?? plural(picked.length, "file")}${message.trim() ? ` as “${message.trim()}”` : ""}.`,
     action: { kind: "stashPush", message: message.trim() || null, untracked, paths: picked.map((f) => f.path) },
   };
-}
-
-/** "“a”, “b” and 3 more" for the picked lines. */
-function quoted(texts: string[]): Part[] {
-  const shown = texts.slice(0, 3);
-  const parts: Part[] = [];
-  shown.forEach((text, i) => {
-    if (i) parts.push(i === shown.length - 1 && texts.length === shown.length ? " and " : ", ");
-    const t = text.trim();
-    parts.push({ quote: t.length > 48 ? `${t.slice(0, 47)}…` : t || " " });
-  });
-  if (texts.length > shown.length) parts.push(` and ${texts.length - shown.length} more`);
-  return parts;
 }
 
 const name = (files: FileChange[]): Part[] =>
@@ -243,9 +232,11 @@ export function linesRequest(kind: LinesKind, path: string, hunk: Hunk, lines: n
   };
 }
 
-/** The way out when a pre-commit or commit-msg hook stopped a commit. */
+/** The way out when a pre-commit or commit-msg hook, the secrets check or a check before commit
+ *  stopped a commit. */
 export function commitRecovery(failure: Failure, action: Action & { kind: "commit" }, summary: string, branch: string): Recovery | null {
   if (failure.kind === "secrets") return secretsRecovery(failure.secrets ?? [], action, summary, branch);
+  if (failure.kind === "check") return checkRecovery(failure, action, summary, branch, (again, next) => commitRecovery(again, next, summary, branch));
   if (failure.kind !== "hook") return null;
   const hook = failure.hook ?? "pre-commit";
   const both = hook.includes(" or ");
@@ -289,6 +280,7 @@ function secretsRecovery(found: SecretFinding[], action: Action & { kind: "commi
 }
 
 function allowSecretsRequest(action: Action & { kind: "commit" }, summary: string, branch: string, n: number): Request {
+  const next = { ...action, allowSecrets: true };
   return {
     title: `Commit with ${n === 1 ? "a possible secret" : `${n} possible secrets`}?`,
     body: ["Commits ", { quote: summary }, ` to ${branch} as it is. If ${n === 1 ? "it is a real secret" : "they are real secrets"}, revoke ${n === 1 ? "it" : "them"} before pushing.`],
@@ -298,11 +290,13 @@ function allowSecretsRequest(action: Action & { kind: "commit" }, summary: strin
     note: "Oxbow checks again on your next commit.",
     status: `Committing to ${branch}…`,
     done: `Committed to ${branch}.`,
-    action: { ...action, allowSecrets: true },
+    recover: (failure) => commitRecovery(failure, next, summary, branch),
+    action: next,
   };
 }
 
 function noVerifyRequest(action: Action & { kind: "commit" }, summary: string, branch: string, hook: string): Request {
+  const next = { ...action, noVerify: true };
   return {
     title: `Commit without the ${hook.includes(" or ") ? "commit hooks" : `${hook} hook`}?`,
     body: ["Skips the hook this once, so ", { quote: summary }, " is committed without the checks it runs."],
@@ -312,6 +306,7 @@ function noVerifyRequest(action: Action & { kind: "commit" }, summary: string, b
     note: "The hook runs again on your next commit.",
     status: `Committing to ${branch}…`,
     done: `Committed to ${branch} without the hook.`,
-    action: { ...action, noVerify: true },
+    recover: (failure) => commitRecovery(failure, next, summary, branch),
+    action: next,
   };
 }

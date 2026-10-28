@@ -52,6 +52,7 @@ pub(crate) async fn perform_action(
         hook: None,
         ssh: None,
         secrets: None,
+        check: None,
         tracking: None,
     })?;
     let cancel = session.cancel(&window);
@@ -79,6 +80,7 @@ pub(crate) async fn perform_action(
                 hook: None,
                 ssh: None,
                 secrets: None,
+                check: None,
                 tracking: None,
             });
         };
@@ -111,6 +113,7 @@ pub(crate) async fn perform_action(
             hook: None,
             ssh: None,
             secrets: None,
+            check: None,
             tracking: None,
         })
     })
@@ -177,6 +180,7 @@ pub(crate) async fn fetch_in_background(
         hook: None,
         ssh: None,
         secrets: None,
+        check: None,
         tracking: None,
     };
     let repo = current(&session, &window).map_err(failed)?;

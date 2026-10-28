@@ -432,6 +432,7 @@ fn staged_changes_go_into_an_older_commit() {
     repo.perform(&Action::AddToCommit {
         commit: expose,
         allow_secrets: false,
+        skip_checks: false,
     })
     .unwrap();
     assert_eq!(subjects(&mut fx, "main..auth/3").len(), 5);
@@ -458,6 +459,7 @@ fn a_secret_in_the_staged_changes_stops_adding_them_to_an_older_commit() {
     let add = |allow_secrets| Action::AddToCommit {
         commit: expose.clone(),
         allow_secrets,
+        skip_checks: false,
     };
     let err = repo.perform(&add(false)).unwrap_err();
     assert!(matches!(err, Error::Secrets(ref found) if found.len() == 1), "{err}");
