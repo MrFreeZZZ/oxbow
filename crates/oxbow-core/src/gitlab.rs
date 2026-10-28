@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::cli::GitCommand;
 use crate::repo::Repo;
 
 /// A project on GitLab, the way a remote points at it.
@@ -115,17 +116,21 @@ const OTHER_HOSTS: &[&str] = &[
 
 impl Repo {
     /// The GitLab projects the remotes point at, the default remote's first. A server of any
-    /// name counts when the repository has GitLab's pipeline file, `.gitlab-ci.yml`.
+    /// name counts when the repository has GitLab's pipeline file, `.gitlab-ci.yml`, on any
+    /// branch: the one checked out may be older than it.
     pub fn gitlab_projects(&self) -> Vec<GitLabProject> {
         let Ok(remotes) = self.remotes_info() else {
             return Vec::new();
         };
-        let pipeline = self.workdir().join(".gitlab-ci.yml").is_file();
-        let gitlab = |url: &str| {
-            project_url(url).filter(|(host, _)| {
-                named_gitlab(host) || (pipeline && !OTHER_HOSTS.contains(&bare_host(host).trim_start_matches("www.")))
+        let unnamed = |url: &str| {
+            project_url(url).is_some_and(|(host, _)| {
+                !named_gitlab(&host) && !OTHER_HOSTS.contains(&bare_host(&host).trim_start_matches("www."))
             })
         };
+        // Only a server of another name needs the look at the branches.
+        let pipeline =
+            remotes.iter().any(|r| unnamed(&r.push_url) || unnamed(&r.fetch_url)) && self.has_pipeline_file();
+        let gitlab = |url: &str| project_url(url).filter(|(host, _)| named_gitlab(host) || (pipeline && unnamed(url)));
         let preferred = self.default_remote();
         let mut projects: Vec<GitLabProject> = remotes
             .iter()
@@ -154,6 +159,28 @@ impl Repo {
             .collect();
         projects.sort_by_key(|p| Some(&p.remote) != preferred.as_ref());
         projects
+    }
+}
+
+impl Repo {
+    /// Whether the working folder or a branch here, local or on a remote, has `.gitlab-ci.yml`.
+    fn has_pipeline_file(&self) -> bool {
+        if self.workdir().join(".gitlab-ci.yml").is_file() {
+            return true;
+        }
+        let Ok(refs) = self.run(&GitCommand::new([
+            "for-each-ref",
+            "--format=%(refname):.gitlab-ci.yml",
+            "refs/heads",
+            "refs/remotes",
+        ])) else {
+            return false;
+        };
+        self.run_with_input(
+            &GitCommand::new(["cat-file", "--batch-check"]),
+            Some(refs.stdout.as_bytes()),
+        )
+        .is_ok_and(|out| out.stdout.lines().any(|line| line.contains(" blob ")))
     }
 }
 
