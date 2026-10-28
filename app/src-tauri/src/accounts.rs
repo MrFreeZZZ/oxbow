@@ -114,7 +114,7 @@ pub(crate) fn write_entry(file: &Path, key: &str, value: Option<Value>) -> Comma
     })
 }
 
-fn entry(service: &str, item: &str) -> CommandResult<keyring::Entry> {
+pub(crate) fn entry(service: &str, item: &str) -> CommandResult<keyring::Entry> {
     keyring::Entry::new(service, item).map_err(|err| keychain_error(&err))
 }
 

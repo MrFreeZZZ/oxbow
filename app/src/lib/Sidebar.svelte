@@ -347,7 +347,9 @@
       entries.push(item(pull ? `Pull Request #${pull.number}` : "Create Pull Request…", PULL_ICON, () => onPullRequest(ref.name)));
     }
     const project = !isTrunk ? gitlabOf(history, github.gitlab, ref) : null;
-    if (project) entries.push(item("Create Merge Request…", PULL_ICON, () => run(branchMergeRequest(ctx, ref, project))));
+    const mr = project ? github.mergeRequestOf(ref.name) : null;
+    if (mr) entries.push(item(`Merge Request !${mr.number}`, PULL_ICON, () => void api.openGitLab(mr.htmlUrl)));
+    else if (project) entries.push(item("Create Merge Request…", PULL_ICON, () => run(branchMergeRequest(ctx, ref, project))));
     entries.push({ kind: "sep" });
     entries.push(item(`New Branch from ${ref.name}…`, menuIcons.branch, () => run(newBranchRequest(ctx, ref.name))));
     if (!isTrunk) entries.push(item("Rename…", menuIcons.edit, () => run(renameRequest(ctx, ref))));
@@ -738,6 +740,7 @@
           <svg class="icon tiny" class:off={wt.missing} viewBox="0 0 16 16" role="img" aria-label="Checked out in {wt.name}"><title>Checked out in {wt.name}</title><path d={menuIcons.folder} /></svg>
         {/if}
         {#if github.openPullOf(b.ref.name) && !head}<span class="meta" title="Pull request #{github.openPullOf(b.ref.name)?.number}">#{github.openPullOf(b.ref.name)?.number}</span>{/if}
+        {#if github.openMergeRequestOf(b.ref.name)}<span class="meta" title="Merge request !{github.openMergeRequestOf(b.ref.name)?.number}">!{github.openMergeRequestOf(b.ref.name)?.number}</span>{/if}
         {#if busy?.branch === b.ref.name}<span class="head busy">{busy.word}</span>{:else if head}<span class="head">HEAD</span>{/if}
       </button>
     {/each}

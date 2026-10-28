@@ -1,6 +1,7 @@
 // The right-click menu of a commit in the graph: what can be done with it, from where the
 // repository is now. While bisecting it answers about the commit instead.
 
+import { api } from "./api";
 import type { History, HistoryRow } from "./types";
 import type { BisectMark } from "./types";
 import type { Request } from "./confirm.svelte";
@@ -119,7 +120,9 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
       reviewing.push(item(pull ? `Pull Request #${pull.number} of ${ref.name}` : `Create Pull Request for ${ref.name}…`, menuIcons.pull, () => app.openPull(ref.name)));
     }
     const project = gitlabOf(history, github.gitlab, ref);
-    if (project) reviewing.push(item(`Create Merge Request for ${ref.name}…`, menuIcons.pull, () => run(branchMergeRequest(ctx, ref, project))));
+    const mr = project ? github.mergeRequestOf(ref.name) : null;
+    if (mr) reviewing.push(item(`Merge Request !${mr.number} of ${ref.name}`, menuIcons.pull, () => void api.openGitLab(mr.htmlUrl)));
+    else if (project) reviewing.push(item(`Create Merge Request for ${ref.name}…`, menuIcons.pull, () => run(branchMergeRequest(ctx, ref, project))));
   }
   // A branch only a GitLab remote has, e.g. a teammate's: its New merge request page.
   const locals = new Set(history.refs.filter((r) => r.kind === "local").map((r) => r.name));
@@ -127,7 +130,9 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
     const project = github.gitlab.find((p) => ref.name.startsWith(`${p.remote}/`));
     const name = project ? ref.name.slice(project.remote.length + 1) : "";
     if (!project || name === "HEAD" || name === history.trunk || locals.has(name)) continue;
-    reviewing.push(item(`Create Merge Request for ${ref.name}…`, menuIcons.pull, () => run(branchMergeRequest(ctx, ref, project))));
+    const mr = github.mergeRequestOf(name);
+    if (mr) reviewing.push(item(`Merge Request !${mr.number} of ${ref.name}`, menuIcons.pull, () => void api.openGitLab(mr.htmlUrl)));
+    else reviewing.push(item(`Create Merge Request for ${ref.name}…`, menuIcons.pull, () => run(branchMergeRequest(ctx, ref, project))));
   }
   group(reviewing);
 

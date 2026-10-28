@@ -5,7 +5,9 @@
 //! account `<host>/<username>#<when>`), and who is signed in where is kept in accounts.json
 //! under `gitlab`, so Settings can show it without reading the Keychain.
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use oxbow_core::gitlab_api::{self, Client, Server};
@@ -47,6 +49,44 @@ impl GitLabAccount {
             host: self.host.clone(),
             web: self.web.clone(),
         }
+    }
+}
+
+/// The tokens read from the credential store, by host, kept for the session.
+#[derive(Default)]
+pub struct GitLabTokens(Mutex<HashMap<String, String>>);
+
+impl GitLabTokens {
+    /// The token of the account on `host`, from memory or the credential store.
+    fn token(&self, account: &GitLabAccount) -> Option<String> {
+        let mut cached = self.0.lock().expect("token lock");
+        if !cached.contains_key(&account.host) {
+            let token = crate::accounts::entry(SERVICE, &account.item)
+                .ok()?
+                .get_password()
+                .ok()?;
+            cached.insert(account.host.clone(), token);
+        }
+        cached.get(&account.host).cloned()
+    }
+
+    /// A client signed in to `host`; fails with a message for people when nobody is.
+    pub fn client(&self, app: &AppHandle, host: &str) -> CommandResult<Client> {
+        let account = saved(app)
+            .into_iter()
+            .find(|a| a.host == host)
+            .ok_or_else(|| format!("Sign in to {host} in Settings › Accounts first"))?;
+        let token = self.token(&account).ok_or_else(|| {
+            format!(
+                "Oxbow can't read the token for {host} from the {}. Sign in again in Settings › Accounts.",
+                store_name()
+            )
+        })?;
+        Ok(Client::new(account.server()).with_token(token))
+    }
+
+    fn forget(&self, host: &str) {
+        self.0.lock().expect("token lock").remove(host);
     }
 }
 
@@ -169,6 +209,7 @@ pub fn gitlab_open_profile(app: AppHandle, host: String) -> CommandResult<()> {
 pub async fn gitlab_sign_in(
     app: AppHandle,
     accounts: State<'_, Accounts>,
+    tokens: State<'_, GitLabTokens>,
     server: String,
     token: String,
 ) -> CommandResult<GitLabAccount> {
@@ -210,6 +251,7 @@ pub async fn gitlab_sign_in(
     let account = switch_to(&Keyring(SERVICE), &file, account, &token, &|| {
         accounts.cancelled(attempt)
     })?;
+    tokens.forget(&account.host);
     let _ = app.emit("account-changed", ());
     Ok(account)
 }
@@ -223,7 +265,7 @@ pub fn gitlab_sign_in_stop(accounts: State<'_, Accounts>) {
 /// Forget the account on `host`: its token leaves the credential store. GitLab keeps the token
 /// until it expires or is revoked there.
 #[tauri::command]
-pub fn gitlab_sign_out(app: AppHandle, host: String) -> CommandResult<()> {
+pub fn gitlab_sign_out(app: AppHandle, tokens: State<'_, GitLabTokens>, host: String) -> CommandResult<()> {
     let file = accounts_file(&app)?;
     let mut all = saved_in(&file);
     if let Some(i) = all.iter().position(|a| a.host == host) {
@@ -231,6 +273,7 @@ pub fn gitlab_sign_out(app: AppHandle, host: String) -> CommandResult<()> {
         Keyring(SERVICE).delete(&account.item)?;
         save_in(&file, &all)?;
     }
+    tokens.forget(&host);
     let _ = app.emit("account-changed", ());
     Ok(())
 }

@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{Error, Result};
+use crate::gitlab::GitLabProject;
+use crate::pulls::{Person, PullState, PullSummary, parse_time};
 
 /// gitlab.com's address, the server when none is named.
 pub const WEB: &str = "https://gitlab.com";
@@ -202,6 +204,17 @@ impl Client {
         self.api_request("GET", "/version", None)
     }
 
+    pub fn merge_requests_request(&self, project: &GitLabProject) -> Request {
+        self.api_request(
+            "GET",
+            &format!(
+                "/projects/{}/merge_requests?state=all&order_by=updated_at&sort=desc&per_page=100",
+                project_id(project)
+            ),
+            None,
+        )
+    }
+
     pub(crate) fn api_request(&self, method: &'static str, path: &str, json: Option<Value>) -> Request {
         Request {
             method,
@@ -235,6 +248,16 @@ impl Client {
             expires_at,
             version,
         })
+    }
+
+    /// The project's merge requests, open and recently closed, the latest updated first, in
+    /// the shape of GitHub's pull requests: `number` is GitLab's `!12`.
+    pub fn merge_requests(&self, project: &GitLabProject) -> Result<Vec<PullSummary>> {
+        let body = self.call(&self.merge_requests_request(project))?;
+        Ok(body
+            .as_array()
+            .map(|list| list.iter().map(summary).collect())
+            .unwrap_or_default())
     }
 
     /// The picture at `url`, such as an account's avatar, as a `data:` address the window can
@@ -311,6 +334,62 @@ impl Client {
     }
 }
 
+/// The project as the API names it: its path, `group%2Fproject`.
+fn project_id(project: &GitLabProject) -> String {
+    crate::github::percent(&project.path)
+}
+
+/// A merge request in the list, as a pull request.
+fn summary(mr: &Value) -> PullSummary {
+    let text = |key: &str| mr.get(key).and_then(Value::as_str).unwrap_or_default().to_owned();
+    let time = |key: &str| mr.get(key).and_then(Value::as_str).map(parse_time).unwrap_or(0);
+    let state = match mr.get("state").and_then(Value::as_str) {
+        Some("merged") => PullState::Merged,
+        Some("closed") => PullState::Closed,
+        // `locked` is a moment while GitLab merges it.
+        _ => PullState::Open,
+    };
+    let source = mr.get("source_project_id").and_then(Value::as_u64);
+    let fork = source.is_some() && source != mr.get("target_project_id").and_then(Value::as_u64);
+    let draft = ["draft", "work_in_progress"]
+        .iter()
+        .any(|key| mr.get(*key).and_then(Value::as_bool) == Some(true));
+    PullSummary {
+        number: mr.get("iid").and_then(Value::as_u64).unwrap_or(0),
+        title: text("title"),
+        state,
+        draft,
+        head: text("source_branch"),
+        head_sha: text("sha"),
+        // A merge request from a fork: its project's id, as GitLab's list names no owner.
+        head_owner: fork.then(|| format!("project {}", source.unwrap_or_default())),
+        base: text("target_branch"),
+        html_url: text("web_url"),
+        body: text("description"),
+        author: Person {
+            login: mr
+                .pointer("/author/username")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            // The window loads no pictures from the server.
+            avatar_url: String::new(),
+        },
+        created: time("created_at"),
+        updated: time("updated_at"),
+        node_id: mr.get("id").and_then(Value::as_u64).unwrap_or(0).to_string(),
+        requested: mr
+            .get("reviewers")
+            .and_then(Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter_map(|r| r.get("username").and_then(Value::as_str).map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
 fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -360,6 +439,7 @@ fn api_error(status: u16, body: &Value) -> String {
     match status {
         401 => "GitLab didn't accept the token: it is wrong, expired or revoked".to_owned(),
         403 => "The token may not do this: it needs the api scope, or access to the project".to_owned(),
+        404 if message.contains("Project") => "GitLab doesn't know this project, or the token can't see it".to_owned(),
         _ if !message.is_empty() => message,
         _ => format!("GitLab answered with error {status}"),
     }

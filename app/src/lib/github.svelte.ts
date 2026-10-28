@@ -1,5 +1,7 @@
 // The open repository's place on GitHub and its pull requests, for the sidebar, Reviews and the
-// Pull Request screen; also its projects on GitLab, for Create Merge Request. The list is asked for at most once a minute unless something changed it.
+// Pull Request screen; also its projects on GitLab, for Create Merge Request, and their merge
+// requests once signed in there. The lists are asked for at most once a minute unless something
+// changed them.
 
 import { api } from "./api";
 import type { GitHubRepo, GitLabProject, PullStatus, PullSummary } from "./types";
@@ -11,6 +13,12 @@ class GitHubState {
   repo = $state<GitHubRepo | null>(null);
   /** The GitLab projects the remotes point at, the default remote's first. */
   gitlab = $state<GitLabProject[]>([]);
+  /** The GitLab project whose merge requests are listed: one on a server Oxbow is signed in to. */
+  mrProject = $state<GitLabProject | null>(null);
+  /** Its merge requests, open and recently closed, the latest updated first; `number` is `!N`. */
+  mergeRequests = $state<PullSummary[]>([]);
+  /** Why they couldn't be loaded, e.g. the token expired. */
+  mrProblem = $state<string | null>(null);
   /** Open and recently closed pull requests, the latest updated first. */
   pulls = $state<PullSummary[]>([]);
   /** GitHub's verdict and checks of the open ones, by number. */
@@ -38,6 +46,8 @@ class GitHubState {
     if (load !== this.#load) return;
     this.repo = repo;
     this.gitlab = gitlab;
+    if (gitlab.length) this.#loadMergeRequests(load);
+    else this.mrProject = null;
     if (!repo) {
       this.pulls = [];
       return;
@@ -59,6 +69,18 @@ class GitHubState {
     }
   }
 
+  async #loadMergeRequests(load: number) {
+    try {
+      const list = await api.gitlabMergeRequests();
+      if (load !== this.#load) return;
+      this.mrProject = list?.project ?? null;
+      this.mergeRequests = list?.mergeRequests ?? [];
+      this.mrProblem = null;
+    } catch (err) {
+      if (load === this.#load) this.mrProblem = String(err);
+    }
+  }
+
   /** Signed in as someone else, or out: what the old account could see goes at once. */
   accountChanged() {
     this.#forget();
@@ -69,6 +91,9 @@ class GitHubState {
     this.#load += 1;
     this.repo = null;
     this.gitlab = [];
+    this.mrProject = null;
+    this.mergeRequests = [];
+    this.mrProblem = null;
     this.pulls = [];
     this.statuses = {};
     this.me = null;
@@ -90,6 +115,18 @@ class GitHubState {
   /** Pull request `number`, if the list has it. */
   byNumber(number: number): PullSummary | null {
     return this.pulls.find((p) => p.number === number) ?? null;
+  }
+
+  /** The merge request of `branch` on GitLab: its open one, else the latest one. Forks don't count. */
+  mergeRequestOf(branch: string): PullSummary | null {
+    const own = this.mergeRequests.filter((p) => p.head === branch && !p.headOwner);
+    return own.find((p) => p.state === "open") ?? own[0] ?? null;
+  }
+
+  /** The open merge request whose source is `branch`. */
+  openMergeRequestOf(branch: string): PullSummary | null {
+    const mr = this.mergeRequestOf(branch);
+    return mr?.state === "open" ? mr : null;
   }
 
   /** Open pull requests of others that ask this account for a review. */
