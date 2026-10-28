@@ -254,7 +254,7 @@ pub fn lend_to_git(app: &AppHandle) {
 }
 
 fn client_id(app: &AppHandle) -> Option<String> {
-    let from_settings = crate::read_settings(app)
+    let from_settings = crate::preferences::read_settings(app)
         .get("oxbow.github.clientId")
         .and_then(Value::as_str)
         .map(str::trim)
@@ -452,7 +452,7 @@ pub async fn github_publish(
     }
     let client = accounts.client(&app)?;
     let label = window.label().to_owned();
-    let cancel = app.state::<crate::Session>().cancel(&window);
+    let cancel = app.state::<crate::session::Session>().cancel(&window);
     cancel.store(false, Ordering::Relaxed);
     tauri::async_runtime::spawn_blocking(move || {
         let emit = |event: ActionEvent| {

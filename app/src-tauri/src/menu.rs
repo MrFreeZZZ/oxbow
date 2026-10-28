@@ -183,7 +183,7 @@ pub fn recent_changed(app: &AppHandle) {
 
 fn fill_recent(app: &AppHandle, recent: &Submenu<Wry>) {
     while let Ok(Some(_)) = recent.remove_at(0) {}
-    let repos = crate::recent_repos(app.clone());
+    let repos = crate::recent::recent_repos(app.clone());
     for repo in repos.iter().filter(|repo| !repo.missing).take(15) {
         if let Ok(item) = MenuItem::with_id(app, format!("{RECENT}{}", repo.path), &repo.name, true, None::<&str>) {
             let _ = recent.append(&item);
@@ -207,13 +207,13 @@ pub fn picked(app: &AppHandle, id: &str, focused: Option<String>) {
     } else if id == CLEAR_RECENT {
         // The repositories open now stay, as Clear in the Welcome window keeps the open one.
         let keep = app
-            .state::<crate::Session>()
+            .state::<crate::session::Session>()
             .windows
             .lock()
             .expect("session lock")
             .values()
             .filter_map(|slot| slot.repo.as_ref().map(|repo| repo.workdir().display().to_string()))
             .collect();
-        crate::clear_recent(app.clone(), keep);
+        crate::recent::clear_recent(app.clone(), keep);
     }
 }
