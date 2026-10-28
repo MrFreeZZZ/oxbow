@@ -978,6 +978,10 @@ impl Repo {
                 )
             }
             Action::ClearOperationLog => ("drop", "Clear the Operation Log".to_owned()),
+            Action::EditStack { plan } if !plan.splits.is_empty() => {
+                let split: Vec<&str> = plan.splits.iter().map(|s| &s.id[..s.id.len().min(7)]).collect();
+                ("rebase", format!("Edit stack {}: split {}", plan.top, split.join(", ")))
+            }
             Action::EditStack { plan } => ("rebase", format!("Edit stack {}", plan.top)),
             Action::PullRequestMerged { branch, base, .. } => (
                 "merge",

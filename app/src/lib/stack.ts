@@ -1,6 +1,7 @@
 // Edit Stack: a stack's commits and branch lines as a plan the user rearranges, the plan as git
 // gets it, and the sheets that carry it out. The commit menu's Drop, Squash into Previous, Edit
-// Message of an older commit and Add Staged Changes are one-line plans of the same kind.
+// Message of an older commit, Split Commit and Add Staged Changes are one-line plans of the same
+// kind.
 
 import { api } from "./api";
 import { checkFailed } from "./commitChecks";
@@ -8,6 +9,7 @@ import type { Part, Recovery, Request } from "./confirm.svelte";
 import type { BranchContext } from "./branches";
 import { stoppedOnConflicts } from "./merge";
 import { shortId } from "./format";
+import { commitsWithSplits, plannedSplits, withSplit, type DraftSplit } from "./split";
 import type { ShortcutId } from "./shortcuts";
 import type { Action, Failure, HistoryRow, Stack, StackPlan, StackPreview, StackStep, StepAction } from "./types";
 
@@ -24,6 +26,8 @@ export interface Draft {
   messages: Record<string, string>;
   /** Replay the stack on the trunk's newest commit. */
   onto: boolean;
+  /** Commits split in two, by the commit split: its new commit is an item `split:<id>`. */
+  splits?: Record<string, DraftSplit>;
 }
 
 /** The actions of a commit, each with the command its key runs (shortcuts.ts). */
@@ -76,16 +80,16 @@ export function foldsInto(draft: Draft, id: string): string[] {
   return draft.items.flatMap((i) => (i.kind === "commit" && folds(actOf(draft, i.id)) && foldTarget(draft, i.id) === id ? [i.id] : []));
 }
 
-/** The commit's message as it is now. */
-const messageOf = (stack: Stack, id: string) => stack.commits.find((c) => c.id === id)?.message ?? "";
+/** The commit's message as it is now; a split's new commit has the one typed for it. */
+const messageOf = (stack: Stack, draft: Draft, id: string) => commitsWithSplits(stack, draft).find((c) => c.id === id)?.message ?? "";
 
 /** The message of the commit that squashes melt into, as git would combine it. */
 export function combinedMessage(stack: Stack, draft: Draft, target: string): string {
   const squashed = foldsInto(draft, target)
     .filter((id) => actOf(draft, id) === "squash")
     .reverse();
-  const own = draft.messages[target] && actOf(draft, target) === "reword" ? draft.messages[target] : messageOf(stack, target);
-  return [own, ...squashed.map((id) => messageOf(stack, id))].map((m) => m.trim()).join("\n\n");
+  const own = draft.messages[target] && actOf(draft, target) === "reword" ? draft.messages[target] : messageOf(stack, draft, target);
+  return [own, ...squashed.map((id) => messageOf(stack, draft, id))].map((m) => m.trim()).join("\n\n");
 }
 
 export function planOf(stack: Stack, draft: Draft): StackPlan {
@@ -108,6 +112,7 @@ export function planOf(stack: Stack, draft: Draft): StackPlan {
     ontoName: draft.onto ? stack.trunk : null,
     head: stack.head,
     steps,
+    splits: plannedSplits(draft),
   };
 }
 
@@ -243,6 +248,30 @@ function oneStepRequest(ctx: BranchContext, stack: Stack, draft: Draft, preview:
 }
 
 const commitParts = (row: { id: string; summary: string }): Part[] => [{ code: shortId(row.id) }, " ", { quote: row.summary }];
+
+/** Split Commit from the commit menu: the picked changes become a new commit right after it. */
+export async function splitRequest(ctx: BranchContext, row: HistoryRow, split: DraftSplit, files: number): Promise<Request> {
+  const stack = await api.stack(null);
+  const draft = withSplit(freshDraft(stack), split);
+  const preview = await api.stackPreview(planOf(stack, draft));
+  const branch = stack.commits.find((c) => c.id === row.id)?.branch ?? stack.top;
+  const picked = split.files.every((f) => !f.lines) ? plural(files, "file") : `${plural(split.additions + split.deletions, "changed line")} of ${plural(files, "file")}`;
+  return oneStepRequest(
+    ctx,
+    stack,
+    draft,
+    preview,
+    row.id,
+    [`Takes ${picked} out of `, ...commitParts(row), " on ", chip(ctx, branch), " into a new commit right after it, ", { quote: split.message.split("\n")[0] }, ". The rest keeps its message."],
+    {
+      title: "Split this commit?",
+      icon: "commit",
+      button: "Split Commit",
+      status: `Splitting ${shortId(row.id)}…`,
+      done: `Split ${shortId(row.id)} in two.`,
+    },
+  );
+}
 
 export async function dropCommitRequest(ctx: BranchContext, row: HistoryRow): Promise<Request> {
   const { stack, draft, preview } = await oneStep(row.id, "drop", null);

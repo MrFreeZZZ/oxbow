@@ -4,7 +4,8 @@
   // and can be dragged, or moved with ⌥↑↓, also across a branch line into that branch. On the
   // right, what the stack looks like afterwards, from a dry run of the plan: each branch's old
   // and new tip, whether it needs a force push and its pull request. Templates make a plan in one
-  // go: Squash WIP, Fix Messages, Move to Branch.
+  // go: Squash WIP, Fix Messages, Move to Branch. Split Commit takes picked files or lines out of
+  // a commit into a new one right above it, which can then be moved like any other.
   import { untrack } from "svelte";
   import { api } from "./api";
   import type { Request } from "./confirm.svelte";
@@ -16,7 +17,9 @@
   import { kept as keptPlans } from "./kept";
   import { github } from "./github.svelte";
   import { messageNote, moveToBranch, neighborBranch, squashWip, wipOf } from "./stackTemplates";
-  import Menu, { type MenuEntry } from "./Menu.svelte";
+  import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
+  import SplitSheet from "./SplitSheet.svelte";
+  import { commitsWithSplits, picksOf, splitOf, splitPart, withSplit, withoutSplit, type DraftSplit } from "./split";
   import WhyNote from "./WhyNote.svelte";
   import { oplog, undoRequest } from "./oplog.svelte";
   import { softArrows } from "./shapes";
@@ -70,6 +73,8 @@
   let menu = $state<{ x: number; y: number; label: string; entries: MenuEntry[] } | null>(null);
   /** Fix Messages: every subject is a text box in the list. */
   let fixing = $state(false);
+  /** Split Commit's sheet, open on a commit of the stack. */
+  let splitting = $state<string | null>(null);
   /** After a rebase: what it did, until the plan changes again. */
   let done = $state<{ line: string; push: string[]; moved: string[] } | null>(null);
 
@@ -159,7 +164,7 @@
     }, 250);
   });
 
-  const byId = $derived(new Map(stack?.commits.map((c) => [c.id, c]) ?? []));
+  const byId = $derived(new Map(stack ? commitsWithSplits(stack, draft).map((c) => [c.id, c]) : []));
   const actOf = (id: string): StepAction => draft.acts[id] ?? "pick";
   const isFold = (id: string) => (actOf(id) === "squash" || actOf(id) === "fixup") && !!foldTarget(draft, id);
 
@@ -228,9 +233,34 @@
       entries: [
         ...ACTIONS.map((a): MenuEntry => ({ kind: "item", label: `${a.label}  ·  ${a.hint}`, icon: ICONS[a.id], keys: shortcut(a.command) || undefined, danger: a.id === "drop", run: () => setAct(id, a.id) })),
         { kind: "sep" },
+        ...splitEntries(id),
+        { kind: "sep" },
         ...moveEntries(id),
       ],
     };
+  }
+
+  /** Split Commit, or for a split commit and its new one, Edit Split and Undo Split. */
+  function splitEntries(id: string): MenuEntry[] {
+    const of = splitOf(id) ?? id;
+    if (!draft.splits?.[of]) return [{ kind: "item", label: "Split Commit…", icon: menuIcons.split, detail: "Picked files or lines become a new commit above it", run: () => (splitting = id) }];
+    return [
+      { kind: "item", label: "Edit Split…", icon: menuIcons.split, run: () => (splitting = of) },
+      { kind: "item", label: "Undo Split", icon: menuIcons.undo, detail: "The new commit’s changes go back into the commit", run: () => unsplit(of) },
+    ];
+  }
+
+  function split(made: DraftSplit) {
+    done = null;
+    splitting = null;
+    draft = withSplit(draft, made);
+    selected = splitPart(made.id);
+  }
+
+  function unsplit(id: string) {
+    done = null;
+    draft = withoutSplit(draft, id);
+    selected = id;
   }
 
   // --- Templates -------------------------------------------------------------------------------
@@ -406,7 +436,7 @@
   }
 
   function onKey(event: KeyboardEvent) {
-    if (!stack || confirm.request || menu || event.defaultPrevented) return;
+    if (!stack || confirm.request || menu || splitting || event.defaultPrevented) return;
     const target = event.target as HTMLElement | null;
     const typing = !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA");
     if (pressed("stackRebase", event)) {
@@ -526,6 +556,7 @@
       preview.dropped && `${preview.dropped} dropped`,
       preview.reworded && `${preview.reworded} reworded`,
       preview.moved && `${preview.moved} moved`,
+      preview.split && `${preview.split} split`,
     ].filter(Boolean);
     const rewritten = preview.rewritten + preview.squashed;
     out.push({
@@ -563,6 +594,13 @@
         title: `${list(stack.leftBehind)} ${stack.leftBehind.length === 1 ? "stays" : "stay"} where ${stack.leftBehind.length === 1 ? "it is" : "they are"}`,
         detail: `${stack.leftBehind.length === 1 ? "It forks" : "They fork"} off the stack, so the rebase doesn’t move ${stack.leftBehind.length === 1 ? "it" : "them"}. Edit ${stack.leftBehind.length === 1 ? "its" : "each one’s"} stack on its own.`,
         tone: "warn",
+      });
+    }
+    if (preview.split) {
+      out.push({
+        icon: icons.commits,
+        title: `${plural(preview.split, "commit")} split in two`,
+        detail: "The picked changes become a commit of their own; the rest keeps the commit’s message and author.",
       });
     }
     if (preview.edits) {
@@ -673,9 +711,13 @@
       return `${a === "squash" ? "Squash into" : "Fix up into"} “${byId.get(target)?.summary ?? shortId(target)}”`;
     }
     if (a === "edit") return "The rebase stops here so you can amend";
+    const of = splitOf(id);
+    if (of) return `New commit, split from “${stack?.commits.find((c) => c.id === of)?.summary ?? shortId(of)}”`;
     if (a === "drop") return "Removed from the branch";
     if (preview?.emptied.includes(id)) return `${stack?.trunk} already has it: left out`;
     if (preview?.conflict?.id === id) return `Likely conflict in ${preview.conflict.files[0]}${preview.conflict.files.length > 1 ? ` and ${preview.conflict.files.length - 1} more` : ""}`;
+    const split = draft.splits?.[id];
+    if (split) return `Split: “${split.message.split("\n")[0]}” takes some of its changes`;
     return "";
   }
 
@@ -810,7 +852,11 @@
                         {#if note}<span class="note" class:warn={preview?.conflict?.id === item.id}>{note}</span>{/if}
                       </span>
                     {/if}
-                    <span class="sha mono" title={c.pushed ? "Already pushed" : "Not pushed yet"}>{shortId(c.id)}</span>
+                    {#if splitOf(c.id)}
+                      <span class="sha new" title="Made by the split when the stack is rebased">new</span>
+                    {:else}
+                      <span class="sha mono" title={c.pushed ? "Already pushed" : "Not pushed yet"}>{shortId(c.id)}</span>
+                    {/if}
                     <span class="stat">{c.additions ? `+${c.additions}` : ""}{c.deletions ? ` −${c.deletions}` : ""}</span>
                     {#if on}
                       <span class="moves">
@@ -950,6 +996,23 @@
 
 {#if menu}
   <Menu x={menu.x} y={menu.y} label={menu.label} entries={menu.entries} onClose={() => (menu = null)} />
+{/if}
+
+{#if splitting && stack}
+  {@const id = splitting}
+  {@const made = draft.splits?.[id]}
+  {@const c = stack.commits.find((x) => x.id === id)}
+  {#if c}
+    <SplitSheet
+      commit={{ id, summary: c.summary }}
+      color={colorOf(c.branch)}
+      picks={made ? picksOf(made) : undefined}
+      message={made?.message ?? ""}
+      button={made ? "Save Split" : "Split"}
+      onDone={split}
+      onClose={() => (splitting = null)}
+    />
+  {/if}
 {/if}
 
 <style>
@@ -1337,6 +1400,13 @@
     font-size: var(--text-caption);
     color: var(--text2);
     flex-shrink: 0;
+  }
+  .sha.new {
+    padding: 0 5px;
+    border-radius: var(--radius-s);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent);
+    font-weight: 600;
   }
   .stat {
     font-size: var(--text-caption);

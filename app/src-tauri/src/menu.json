@@ -413,6 +413,12 @@
     "accelerator": null
    },
    {
+    "id": "splitCommit",
+    "title": "Split Commit…",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
     "id": "resolve",
     "title": "Resolve Conflicts",
     "enabled": false,

@@ -527,6 +527,17 @@ pub(crate) async fn stack_preview(
     read(at(&repo), "Preview the stack", move || repo.stack_preview(&plan)).await
 }
 
+/// The changes of `commit` file by file, as Split Commit picks from them.
+#[tauri::command]
+pub(crate) async fn split_files(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    commit: String,
+) -> CommandResult<Vec<oxbow_core::FileDiff>> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "Read the commit to split", move || repo.split_files(&commit)).await
+}
+
 /// Search the history: messages, code changes, authors or file paths.
 #[tauri::command]
 pub(crate) async fn search(

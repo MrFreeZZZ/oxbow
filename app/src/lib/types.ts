@@ -1547,7 +1547,26 @@ export interface StackPlan {
   onto: string;
   ontoName: string | null;
   head: string | null;
+  /** A split commit has a second step, its new commit, as `split:<id>` (splitPart in stack.ts). */
   steps: StackStep[];
+  /** Commits whose picked changes become a commit of their own right after them. */
+  splits?: StackSplit[];
+}
+
+/** Some of a commit's changes taken out into a new commit right after it. */
+export interface StackSplit {
+  /** The commit split; it keeps its place and message with the changes not picked. */
+  id: string;
+  files: SplitFile[];
+  /** The new commit's message. */
+  message: string;
+}
+
+/** A file whose changes go into the new commit: all of them, or only these lines. */
+export interface SplitFile {
+  path: string;
+  /** Removed lines by their old number, added lines by their new number; null: the whole file. */
+  lines: { removed: number[]; added: number[] } | null;
 }
 
 export interface StackPreview {
@@ -1558,6 +1577,8 @@ export interface StackPreview {
   reworded: number;
   moved: number;
   edits: number;
+  /** Commits split in two. */
+  split: number;
   emptied: string[];
   conflict: { id: string; summary: string; files: string[] } | null;
   /** Top first. */

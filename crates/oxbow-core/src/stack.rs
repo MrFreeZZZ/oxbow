@@ -19,6 +19,7 @@ use crate::error::{Error, Result};
 use crate::plan::paragraphs;
 use crate::remote::CommitBrief;
 use crate::repo::{RefKind, Repo};
+use crate::split::{StackSplit, split_of, split_part};
 
 /// More commits than this are not edited on screen.
 const MAX_COMMITS: usize = 300;
@@ -150,7 +151,11 @@ pub struct StackPlan {
     /// The branch to check out again afterwards, when it is not the top.
     #[serde(default)]
     pub head: Option<String>,
+    /// A commit split in two has a second step, its new commit, named by [`split_part`].
     pub steps: Vec<StackStep>,
+    /// Commits whose picked changes become a commit of their own right after them.
+    #[serde(default)]
+    pub splits: Vec<StackSplit>,
 }
 
 /// What a restack after a merged pull request does, kept in the git directory from its rebase
@@ -225,6 +230,8 @@ pub struct StackPreview {
     pub moved: usize,
     /// Commits the rebase stops at, to be changed by hand.
     pub edits: usize,
+    /// Commits split in two.
+    pub split: usize,
     /// Commits that end up with no changes (the trunk has them already): left out.
     pub emptied: Vec<String>,
     /// The first commit that would stop on conflicts; the dry run stops there.
@@ -298,6 +305,25 @@ struct Range {
     commits: Vec<Listed>,
     merges: Vec<Listed>,
     base_tree: String,
+    /// Commits split in two, which their parts stand in for in `commits`.
+    split: Vec<Listed>,
+}
+
+/// A plan with its splits made: the steps and the range name the parts by their commits.
+struct Resolved {
+    plan: StackPlan,
+    range: Range,
+    /// Each part's commit, by its step id: the split commit's own id for the rest, and
+    /// [`split_part`] of it for the new commit.
+    commit_of: HashMap<String, String>,
+    /// And back, for what the dry run tells the screen.
+    step_of: HashMap<String, String>,
+}
+
+impl Resolved {
+    fn shown(&self, id: &str) -> String {
+        self.step_of.get(id).cloned().unwrap_or_else(|| id.to_owned())
+    }
 }
 
 impl Repo {
@@ -599,11 +625,16 @@ impl Repo {
     /// Replay `plan` in memory: what it changes, where it would stop, what to push afterwards.
     pub fn stack_preview(&self, plan: &StackPlan) -> Result<StackPreview> {
         let range = self.check_plan(plan)?;
+        let resolved = self.resolve_splits(plan, range)?;
+        let (plan, range) = (&resolved.plan, &resolved.range);
         let emits = lay_out(plan)?;
         let by_id: HashMap<&str, &Listed> = range.commits.iter().map(|c| (c.id.as_str(), c)).collect();
-        let messages = group_messages(plan, &emits, &by_id);
+        let messages = group_messages(plan, &emits, &by_id, &resolved.commit_of);
         let stack = self.stack(Some(&plan.top))?;
-        let mut preview = StackPreview::default();
+        let mut preview = StackPreview {
+            split: plan.splits.len(),
+            ..StackPreview::default()
+        };
 
         // The dry run: `cur` is where the rebase would be after each line.
         let mut changed = plan.onto != plan.base;
@@ -641,7 +672,7 @@ impl Repo {
                             stopped = true;
                         }
                         Ok(tree) => {
-                            let was_empty = range_tree(&range, &c.parent) == c.tree;
+                            let was_empty = range_tree(range, &c.parent) == c.tree;
                             if tree == cur_tree && !was_empty {
                                 // Something folding into it still needs it: it stays, empty.
                                 if has_folds(&emits, i) {
@@ -674,7 +705,7 @@ impl Repo {
                         Ok(tree) => {
                             let (parent, _) = cur_parent.clone().expect("a fold follows a pick");
                             // The commit it folds into was not rewritten yet when it was unchanged.
-                            if !is_dry(&cur, &range) {
+                            if !is_dry(&cur, range) {
                                 preview.rewritten += 1;
                             }
                             cur = self.dry_commit(&tree, &parent)?;
@@ -700,12 +731,19 @@ impl Repo {
                     if by_id.get(id.as_str()).is_some_and(|c| c.message.trim() != m.trim()))
             })
             .count();
-        let original: HashMap<&str, &str> = stack
+        let mut original: HashMap<&str, &str> = stack
             .commits
             .iter()
             .map(|c| (c.id.as_str(), c.branch.as_str()))
             .collect();
-        preview.moved = moved(&range, plan, &emits, &original);
+        // The parts of a split commit start in its branch.
+        for (step, commit) in &resolved.commit_of {
+            let of = split_of(step).unwrap_or(step);
+            if let Some(branch) = stack.commits.iter().find(|c| c.id == of) {
+                original.insert(commit.as_str(), branch.branch.as_str());
+            }
+        }
+        preview.moved = moved(range, plan, &emits, &original);
         preview.changed = changed || preview.moved > 0;
 
         // Branches afterwards, top first, with what they own.
@@ -760,17 +798,33 @@ impl Repo {
                 force_push,
             });
         }
+        // The screen knows the parts of a split by their steps.
+        for id in &mut preview.emptied {
+            *id = resolved.shown(id);
+        }
+        if let Some(conflict) = &mut preview.conflict {
+            conflict.id = resolved.shown(&conflict.id);
+        }
+        for branch in &mut preview.branches {
+            branch.tip_from = resolved.shown(&branch.tip_from);
+        }
         Ok(preview)
     }
 
     /// The rebase that carries out `plan`, and the switch back to the branch that was checked out.
-    pub(crate) fn plan_edit_stack(&self, plan: &StackPlan) -> Result<Vec<GitCommand>> {
-        let range = self.check_plan(plan)?;
+    pub(crate) fn plan_edit_stack(&self, asked: &StackPlan) -> Result<Vec<GitCommand>> {
+        let range = self.check_plan(asked)?;
+        let resolved = self.resolve_splits(asked, range)?;
+        let (plan, range) = (&resolved.plan, &resolved.range);
         let emits = lay_out(plan)?;
         let by_id: HashMap<&str, &Listed> = range.commits.iter().map(|c| (c.id.as_str(), c)).collect();
-        let messages = group_messages(plan, &emits, &by_id);
-        let preview = self.stack_preview(plan)?;
-        let emptied: HashSet<String> = preview.emptied.into_iter().collect();
+        let messages = group_messages(plan, &emits, &by_id, &resolved.commit_of);
+        let preview = self.stack_preview(asked)?;
+        let emptied: HashSet<String> = preview
+            .emptied
+            .into_iter()
+            .map(|id| resolved.commit_of.get(&id).cloned().unwrap_or(id))
+            .collect();
         let todo = todo_text(&emits, &messages, &by_id, &emptied);
         let file = self.git_file(TODO_FILE)?;
         // An empty commit that something folds into stays, so the fold has a place to go.
@@ -801,6 +855,15 @@ impl Repo {
         };
         if args.iter().any(|a| a == "--autostash") {
             comment.push_str("; --autostash: uncommitted changes go aside and come back");
+        }
+        for split in &plan.splits {
+            let part = |step: &str| short(resolved.commit_of.get(step).map_or(step, String::as_str));
+            comment.push_str(&format!(
+                "; {} is split first, with git commit-tree: {} keeps the rest of it, {} gets the picked changes",
+                short(&split.id),
+                part(&split.id),
+                part(&split_part(&split.id)),
+            ));
         }
         let rebase = GitCommand::new(args).comment(comment).todo(todo).env(
             "GIT_SEQUENCE_EDITOR",
@@ -916,10 +979,17 @@ impl Repo {
         ])
     }
 
-    /// The plan's commits must be the stack's commits as they are now.
+    /// The plan's commits must be the stack's commits as they are now, with a new commit for
+    /// each split.
     fn check_plan(&self, plan: &StackPlan) -> Result<Range> {
         let range = self.list_range(&plan.base, &plan.top)?;
-        let mut now: Vec<&str> = range.commits.iter().map(|c| c.id.as_str()).collect();
+        let parts: Vec<String> = plan.splits.iter().map(|s| split_part(&s.id)).collect();
+        let mut now: Vec<&str> = range
+            .commits
+            .iter()
+            .map(|c| c.id.as_str())
+            .chain(parts.iter().map(String::as_str))
+            .collect();
         let mut planned: Vec<&str> = plan
             .steps
             .iter()
@@ -930,13 +1000,65 @@ impl Repo {
             .collect();
         now.sort_unstable();
         planned.sort_unstable();
-        if now != planned {
+        let splits: HashSet<&str> = plan.splits.iter().map(|s| s.id.as_str()).collect();
+        if now != planned || splits.len() != plan.splits.len() {
             return Err(Error::Git(format!(
                 "{} changed since the plan was made: reload and try again",
                 plan.top
             )));
         }
         Ok(range)
+    }
+
+    /// Make the commits of the plan's splits, and put them in place of the commits they split,
+    /// in the plan's steps and in the range.
+    fn resolve_splits(&self, plan: &StackPlan, mut range: Range) -> Result<Resolved> {
+        let mut plan = plan.clone();
+        let mut commit_of = HashMap::new();
+        for split in &plan.splits {
+            let at = range
+                .commits
+                .iter()
+                .position(|c| c.id == split.id)
+                .ok_or_else(|| Error::Git(format!("{} is not a commit of the stack", short(&split.id))))?;
+            let made = self.split_commits(split)?;
+            let original = range.commits[at].clone();
+            let rest = Listed {
+                id: made.rest.clone(),
+                parent: original.parent.clone(),
+                others: Vec::new(),
+                tree: made.rest_tree,
+                message: original.message.clone(),
+            };
+            let picked = Listed {
+                id: made.picked.clone(),
+                parent: made.rest.clone(),
+                others: Vec::new(),
+                tree: original.tree.clone(),
+                message: split.message.trim_end().to_owned(),
+            };
+            range.commits.splice(at..=at, [rest, picked]);
+            range.split.push(original);
+            commit_of.insert(split.id.clone(), made.rest);
+            commit_of.insert(split_part(&split.id), made.picked);
+        }
+        for step in &mut plan.steps {
+            if let StackStep::Commit { id, .. } = step
+                && let Some(commit) = commit_of.get(id.as_str())
+            {
+                *id = commit.clone();
+            }
+        }
+        let step_of = commit_of
+            .iter()
+            .map(|(step, commit)| (commit.clone(), step.clone()))
+            .collect();
+        Ok(Resolved {
+            plan,
+            range,
+            commit_of,
+            step_of,
+        })
     }
 
     /// The commits of `base..top`, oldest first.
@@ -981,6 +1103,7 @@ impl Repo {
             commits,
             merges,
             base_tree: self.tree_of(base)?,
+            split: Vec::new(),
         })
     }
 
@@ -1263,8 +1386,15 @@ fn has_folds(emits: &[Emit], i: usize) -> bool {
 }
 
 /// The new message of each pick (by its index in `emits`) whose message changes: a reword, or
-/// the combined message of squashes into it.
-fn group_messages(plan: &StackPlan, emits: &[Emit], by_id: &HashMap<&str, &Listed>) -> HashMap<usize, String> {
+/// the combined message of squashes into it. The parts of a split always get one, so the
+/// rebase commits them again: they were made unsigned, by the split commit's committer.
+fn group_messages(
+    plan: &StackPlan,
+    emits: &[Emit],
+    by_id: &HashMap<&str, &Listed>,
+    parts: &HashMap<String, String>,
+) -> HashMap<usize, String> {
+    let parts: HashSet<&str> = parts.values().map(String::as_str).collect();
     let asked: HashMap<&str, &str> = plan
         .steps
         .iter()
@@ -1301,6 +1431,8 @@ fn group_messages(plan: &StackPlan, emits: &[Emit], by_id: &HashMap<&str, &Liste
                     .collect::<Vec<_>>()
                     .join("\n\n"),
             ),
+            Some(m) if parts.contains(id.as_str()) => Some(m.trim().to_owned()),
+            _ if parts.contains(id.as_str()) => Some(original.trim().to_owned()),
             _ => None,
         };
         if let Some(message) = message {
@@ -1457,6 +1589,7 @@ fn range_tree(range: &Range, id: &str) -> String {
         .commits
         .iter()
         .chain(&range.merges)
+        .chain(&range.split)
         .find(|c| c.id == id)
         .map_or_else(|| range.base_tree.clone(), |c| c.tree.clone())
 }

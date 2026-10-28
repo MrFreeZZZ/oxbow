@@ -79,6 +79,7 @@
   import { Lazy } from "./lib/lazyScreen.svelte";
   import TrustSheet from "./lib/TrustSheet.svelte";
   import { commitMenu as commitMenuOf } from "./lib/commitMenu";
+  import { splitRequest } from "./lib/stack";
   import RestrictedBadge from "./lib/RestrictedBadge.svelte";
   import WindowTitle from "./lib/WindowTitle.svelte";
   import { windowTitle, type Title } from "./lib/windowTitle";
@@ -96,6 +97,7 @@
   const CloneSheet = new Lazy(() => import("./lib/CloneSheet.svelte"));
   const NewRepoSheet = new Lazy(() => import("./lib/NewRepoSheet.svelte"));
   const FixSheet = new Lazy(() => import("./lib/FixSheet.svelte"));
+  const SplitSheet = new Lazy(() => import("./lib/SplitSheet.svelte"));
   const SubmodulePanel = new Lazy(() => import("./lib/SubmodulePanel.svelte"));
   const SnapshotPanel = new Lazy(() => import("./lib/SnapshotPanel.svelte"));
   const LostCommitPanel = new Lazy(() => import("./lib/LostCommitPanel.svelte"));
@@ -520,6 +522,14 @@
   let stashSel = $state<string | null>(null);
   /** Fix a Mistake's list, open, with what it planned from. */
   let fixing = $state<FixContext | null>(null);
+  /** Split Commit's sheet, open on a commit, with the file it was opened on picked. */
+  let splitting = $state<{ row: HistoryRow; path: string | null } | null>(null);
+
+  /** Split Commit on a commit of the checked-out branch's own: the picks, then the dry run's sheet. */
+  function openSplit(row: HistoryRow, path: string | null = null) {
+    if (!branchCtx || confirm.request || !headStack.has(row.id) || row.parents.length !== 1) return;
+    splitting = { row, path };
+  }
 
   const branchCount = $derived(history ? history.refs.filter((r) => r.kind === "local").length : 0);
 
@@ -1187,6 +1197,10 @@
     }
     add("branch", newBranch, h.head.branch ? "Create Branch…" : "Create Branch at HEAD…");
     if (h.head.branch && !busy) add("editStack", () => openStack(null));
+    if (selectedRow && !busy && !operation && headStack.has(selectedRow.id) && selectedRow.parents.length === 1) {
+      const row = selectedRow;
+      add("splitCommit", () => openSplit(row));
+    }
     const saving = selectedRow && !selectedRow.worktree && !h.stashes.some((s) => s.id === selectedRow.id) ? patchTarget(selectedRow) : null;
     if (saving) add("savePatches", () => void run(savePatchesRequest(saving)), saving.count === 1 && !saving.since ? "Save as Patch…" : undefined);
     if (!busy) add("applyPatches", () => void applyPatches());
@@ -1456,7 +1470,7 @@
 
   /** The right-click menu of a commit in the graph (commitMenu.ts). */
   function commitMenu(row: HistoryRow): MenuEntry[] {
-    return commitMenuOf(row, { history, ctx: branchCtx, headStack, run, copyText, copyMessage, openStack, openFixes, openCompare, patchTarget, openPull });
+    return commitMenuOf(row, { history, ctx: branchCtx, headStack, run, copyText, copyMessage, openStack, openSplit, openFixes, openCompare, patchTarget, openPull });
   }
 
   /** G, B or S while bisecting: the answer for the commit under test. */
@@ -2681,6 +2695,7 @@
             {:else if selectedRow}
               <CommitPanel row={selectedRow} childIds={childrenOf.get(selectedRow.id) ?? []} lookup={(id) => rowsById.get(id)} onSelect={jump} localTags={history.localTags} {version}
                 inHead={(id) => ancestors(history!, history!.head.commit).has(id)}
+                onSplit={!operation && headStack.has(selectedRow.id) && selectedRow.parents.length === 1 ? (path) => openSplit(selectedRow!, path) : null}
                 onUnshallow={history.shallow && history.defaultRemote ? () => run(unshallowRequest(history!.defaultRemote!)) : null}
                 find={found?.mode === "code" ? found.text : null}
                 foundFiles={found?.hits.get(selectedRow.id) ?? []}
@@ -2711,6 +2726,20 @@
         quickInitial = "";
         picker = { kind: "commands", initial: query };
       }}
+    />
+  {/if}
+  {#if splitting}
+    {@const { row, path } = splitting}
+    <SplitSheet.component
+      commit={{ id: row.id, summary: row.summary }}
+      color={headColor}
+      picks={path ? new Map([[path, { whole: true }]]) : undefined}
+      button="Split…"
+      onDone={(split, files) => {
+        splitting = null;
+        if (branchCtx) void run(splitRequest(branchCtx, row, split, files));
+      }}
+      onClose={() => (splitting = null)}
     />
   {/if}
   {#if fixing}

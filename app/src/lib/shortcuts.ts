@@ -94,6 +94,7 @@ export const COMMANDS = {
   branch: { category: "Git", title: "Create Branch…" },
   newWorktree: { category: "Git", title: "New Worktree…" },
   editStack: { category: "Git", title: "Edit Stack…" },
+  splitCommit: { category: "Git", title: "Split Commit…" },
   savePatches: { category: "Git", title: "Save as Patches…" },
   applyPatches: { category: "Git", title: "Apply Patches…" },
   resolve: { category: "Git", title: "Resolve Conflicts" },

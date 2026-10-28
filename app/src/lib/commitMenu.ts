@@ -27,6 +27,8 @@ export interface CommitMenuApp {
   copyText: (text: string, done: string) => void;
   copyMessage: (id: string) => void;
   openStack: (branch: string | null) => void;
+  /** Split Commit's sheet on a commit of `headStack`. */
+  openSplit: (row: HistoryRow) => void;
   openFixes: (commit: string) => void;
   openCompare: (base: string, target: string) => void;
   /** The commits Save as Patches writes for a row. */
@@ -89,6 +91,7 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
       const staged = history.rows[0]?.worktree?.staged ?? 0;
       if (staged) editing.push(item("Add Staged Changes to This Commit…", menuIcons.stage, () => run(addToCommitRequest(ctx, row))));
     }
+    if (own && row.parents.length === 1) editing.push(item("Split Commit…", menuIcons.split, () => app.openSplit(row)));
     if (own && headStack.has(row.parents[0] ?? "")) editing.push(item("Squash into Previous…", menuIcons.merge, () => run(squashRequest(ctx, row))));
     if (own) editing.push(item("Drop Commit…", menuIcons.drop, () => run(dropCommitRequest(ctx, row)), true));
     if (own) editing.push(item("Edit Stack…", menuIcons.rebase, () => app.openStack(null)));
