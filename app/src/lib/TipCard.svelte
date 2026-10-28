@@ -82,11 +82,12 @@
     min-width: 0;
     flex-grow: 1;
   }
+  /* Its first line level with the bulb; a long one goes on to a second line in a narrow column. */
   .title {
     font-size: var(--text-body);
     font-weight: 600;
-    line-height: 24px;
-    height: 24px;
+    line-height: 18px;
+    padding: 3px 0;
     margin-bottom: -3px;
   }
   .body {

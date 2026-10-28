@@ -4,7 +4,7 @@
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { CommitDetail, FileChange, FileDiff, HistoryRow } from "./types";
   import { fullDate, initials, relativeTime, lane, person, plate, shortId, tint } from "./format";
-  import { fileTabs, tabStepper } from "./tabs";
+  import { fileTabs, keyFocus, tabStepper } from "./tabs";
   import { confirm } from "./confirm.svelte";
   import DiffView from "./DiffView.svelte";
   import DiffTools from "./DiffTools.svelte";
@@ -13,6 +13,10 @@
   import CommitChain from "./CommitChain.svelte";
   import FileBadge from "./FileBadge.svelte";
   import { byFolder, filesWidth, listView, resizeFiles, setFolders } from "./listView.svelte";
+  import Menu, { type MenuEntry } from "./Menu.svelte";
+  import { commitFileMenu } from "./changesMenu";
+  import { nav } from "./nav.svelte";
+  import { pressed } from "./shortcuts";
 
   let {
     row,
@@ -239,6 +243,31 @@
     if (scroller) scroller.scrollTop = 0;
   }
 
+  /** A click on a row gives it the keys, so ↑ ↓ go on from there: WebKit on macOS doesn't focus
+   *  a button it clicks. */
+  function rowClick(event: MouseEvent, path: string | null) {
+    (event.currentTarget as HTMLElement).focus({ preventScroll: true });
+    openTab(path);
+  }
+
+  /** ↑ ↓ on a row of the list open the file over or under it, as in Changes. */
+  function onFilesKey(event: KeyboardEvent) {
+    if (!(event.target as HTMLElement).closest(".file, .all")) return;
+    const by = pressed("nextFile", event) ? 1 : pressed("previousFile", event) ? -1 : 0;
+    if (!by) return;
+    event.preventDefault();
+    if (fileTabs(paths, tab, openTab)(by, false)) requestAnimationFrame(() => {
+        const open = filesBox?.querySelector<HTMLElement>('.list [aria-current="true"]');
+        if (open) keyFocus(open);
+      });
+  }
+
+  let menu = $state<{ x: number; y: number; entries: MenuEntry[]; label: string } | null>(null);
+  function openFileMenu(event: MouseEvent, file: FileChange) {
+    event.preventDefault();
+    menu = { x: event.clientX, y: event.clientY, ...commitFileMenu(nav.repo, file, row.id) };
+  }
+
   /** Only files whose path has this text are listed. */
   let filter = $state("");
   const needle = $derived(filter.trim().toLowerCase());
@@ -326,7 +355,7 @@
   </div>
 
   <div class="body" class:stacked bind:clientWidth={bodyWidth}>
-    <div class="files" bind:this={filesBox} aria-label="Changed files" data-steps use:tabStepper={fileTabs(paths, tab, openTab)} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
+    <div class="files" bind:this={filesBox} aria-label="Changed files" data-steps use:tabStepper={fileTabs(paths, tab, openTab)} onkeydown={onFilesKey} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
       <div class="tools">
         <label class="filter">
           <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
@@ -362,7 +391,7 @@
             class="all"
             aria-current={tab === null ? "true" : undefined}
             style:background={tab === null ? tint(color) : undefined}
-            onclick={() => openTab(null)}
+            onclick={(e) => rowClick(e, null)}
             title="Show the changes of every file"
           >
             <span class="gtitle" style:color={plate(color)}>All Changes</span>
@@ -377,7 +406,7 @@
           </button>
           {#snippet fileRow(file: FileChange, nested: boolean)}
             {@const open = tab === file.path}
-            <button class="file" class:nested aria-current={open ? "true" : undefined} style:background={open ? tint(color) : undefined} onclick={() => openTab(file.path)} title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
+            <button class="file" class:nested aria-current={open ? "true" : undefined} style:background={open ? tint(color) : undefined} onclick={(e) => rowClick(e, file.path)} oncontextmenu={(e) => openFileMenu(e, file)} title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
               <span class="badge {tone[file.status]}">{statusIcon[file.status]}</span>
               <PathName path={file.path} folders={!nested} />
               {#if foundFiles.includes(file.path)}
@@ -503,6 +532,10 @@
     </div>
   </div>
 </div>
+
+{#if menu}
+  <Menu x={menu.x} y={menu.y} label={menu.label} entries={menu.entries} onClose={() => (menu = null)} />
+{/if}
 
 <style>
   .panel {

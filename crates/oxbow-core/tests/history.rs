@@ -909,6 +909,15 @@ fn a_failing_status_keeps_the_row_of_changes_as_unknown() {
             .iter()
             .any(|p| p.part == oxbow_core::ReadPart::Changes && !p.error.is_empty())
     );
+    // Without a .gitmodules there are no submodules, read or not: that part didn't fail.
+    assert!(
+        !history
+            .problems
+            .iter()
+            .any(|p| p.part == oxbow_core::ReadPart::Submodules),
+        "{:?}",
+        history.problems
+    );
     let row = &history.rows[0];
     assert!(row.worktree.as_ref().is_some_and(|w| w.unknown));
     assert_eq!(history.rows[1].summary, "First");

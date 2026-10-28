@@ -74,7 +74,7 @@
   import { keys, mac } from "./lib/keys";
   import type { BisectMark, OpEntry } from "./lib/types";
   import { fitWindow } from "./lib/windowSize";
-  import { stepperOf } from "./lib/tabs";
+  import { keyFocus, stepperOf } from "./lib/tabs";
   import { Lazy } from "./lib/lazyScreen.svelte";
   import TrustSheet from "./lib/TrustSheet.svelte";
   import { commitMenu as commitMenuOf } from "./lib/commitMenu";
@@ -2103,14 +2103,6 @@
       next.click();
       keyFocus(next);
     }
-  }
-
-  /** Focus moved by a key shows its ring, also after a click put the focus where it came from
-   *  (the browser then counts the move as a mouse one). */
-  function keyFocus(el: HTMLElement) {
-    el.focus({ focusVisible: true } as FocusOptions);
-    el.classList.add("key-focus");
-    el.addEventListener("blur", () => el.classList.remove("key-focus"), { once: true });
   }
 
   function startResize(event: PointerEvent) {

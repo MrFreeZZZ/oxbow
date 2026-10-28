@@ -224,6 +224,8 @@ fn nothing_runs_when_the_state_before_cant_be_saved_unless_chosen() {
     let never = std::sync::atomic::AtomicBool::new(false);
     let err = repo.perform_with(&discard, &mut |_| {}, &never).unwrap_err();
     assert!(matches!(err, oxbow_core::Error::NoUndo(_)));
+    // Said in plain words, not as the system's «File exists (os error 17)».
+    assert!(err.to_string().contains("a file named .git/oxbow"), "{err}");
     assert_eq!(
         oxbow_core::classify_failure(&err, false),
         oxbow_core::FailureKind::NoUndo

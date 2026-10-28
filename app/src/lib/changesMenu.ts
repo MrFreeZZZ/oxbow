@@ -1,4 +1,5 @@
-// The right-click menu of a file in the Changes panel's lists, or of several picked files.
+// The right-click menu of a file in the Changes panel's lists, or of several picked files, and of
+// a file of a commit.
 
 import { api } from "./api";
 import { ignoreChoices, ignoreRequest, stashFilesRequest, stashMessageFor, type StashCandidate } from "./changes";
@@ -96,5 +97,20 @@ export function fileMenu(repo: string, file: FileChange, group: Side | "untracke
     entries.push({ kind: "sep" });
     entries.push({ kind: "item", label: file.status === "untracked" ? "Delete File…" : "Discard Changes…", icon: menuIcons.drop, danger: true, run: () => a.discard([file]) });
   }
+  return { entries, label: `${name} menu` };
+}
+
+/** The menu of a file of a commit: what can be done with it, as with a file in Changes, but
+ *  nothing to stage, stash or discard. */
+export function commitFileMenu(repo: string, file: FileChange, commit: string): FileMenu {
+  const name = splitPath(file.path).name;
+  const what = { modified: "modified", added: "added", untracked: "added", deleted: "deleted", renamed: "renamed", copied: "copied", conflicted: "conflicted" }[file.status];
+  const entries: MenuEntry[] = [{ kind: "header", label: `${name} · ${what} in this commit` }];
+  if (file.status !== "deleted") {
+    entries.push({ kind: "item", label: "Open in Editor", icon: menuIcons.open, run: () => api.openInEditor(file.path, null).catch((err) => confirm.fail(err)) });
+    entries.push({ kind: "item", label: revealLabel, icon: menuIcons.reveal, run: () => api.revealFile(file.path).catch((err) => confirm.fail(err)) });
+  }
+  entries.push(copyMenu(repo, [file.path]));
+  entries.push({ kind: "item", label: "File History", icon: menuIcons.history, run: () => nav.openFile(file.path, commit) });
   return { entries, label: `${name} menu` };
 }

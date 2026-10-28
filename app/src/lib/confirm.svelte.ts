@@ -600,7 +600,9 @@ class ConfirmState {
 
   async #fail(failure: Failure) {
     this.failure = failure;
-    if (!this.lines.length && failure.output) {
+    // Why Undo isn't ready, in one line, is in the sheet's words already: not again under them.
+    const said = failure.kind === "noUndo" && !failure.output.trim().includes("\n");
+    if (!this.lines.length && failure.output && !said) {
       const lines: TermLine[] = [];
       for (const text of failure.output.split("\n")) addLine(lines, { kind: lineKind(text, true), text }, cutLine);
       this.lines = lines;
@@ -755,8 +757,8 @@ function noUndoRecovery(running: { action: Action; status: string; done?: string
   return {
     title: "Undo isn’t ready for this step",
     body: [
-      "Oxbow saves the repository’s state before each step, so Undo can take it back. This time it couldn’t, so nothing ran yet: ",
-      { code: errorLine(failure.output) || "the snapshot failed" },
+      // Oxbow's own words when it knows why, e.g. that .git/oxbow is a file; git's are under them.
+      `Oxbow saves the repository’s state before each step, so Undo can take it back. This time it couldn’t, so nothing ran yet: ${(errorLine(failure.output) || "the snapshot failed").replace(/\.?$/, ".")}`,
     ],
     icon: "undo",
     tone: "warn",

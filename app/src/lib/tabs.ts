@@ -43,3 +43,11 @@ export function fileTabs(paths: string[], tab: string | null, open: (path: strin
     return true;
   };
 }
+
+/** Focus moved by a key shows its ring, also after a click put the focus where it came from
+ *  (the browser then counts the move as a mouse one). */
+export function keyFocus(el: HTMLElement) {
+  el.focus({ focusVisible: true } as FocusOptions);
+  el.classList.add("key-focus");
+  el.addEventListener("blur", () => el.classList.remove("key-focus"), { once: true });
+}
