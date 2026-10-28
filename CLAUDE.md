@@ -59,6 +59,8 @@ app/src/                    Svelte front end
                             (Oxbow's own), settingsGit.ts (git config), settingsKeys.svelte.ts; a row: SettingsRow
   lib/confirm.svelte.ts     confirmations (ConfirmSheet.svelte);  activity.svelte.ts = Activity
   lib/*.svelte              one component per view/sheet (HistoryList, DiffView, ChangesPanel…)
+  lib/ChangesPanel.svelte   Changes: the lists of files; CommitForm, ChangesDiff (the diff column), changesMenu.ts,
+                            commitDrafts.svelte.ts (the message kept per folder), changes.ts (its requests)
   lib/ReviewsView.svelte    Reviews screen (lib/reviews.ts sorts it);  PullFiles.svelte = PR Files tab
   lib/review.svelte.ts      one PR's review: draft, Viewed, sending;  reviewDraft.ts = its pure logic
   lib/*.ts                  pure logic next to its view (diffRows, conflicts, branches, graph…)

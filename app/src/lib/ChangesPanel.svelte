@@ -1,73 +1,4 @@
 <script lang="ts" module>
-  interface Draft {
-    summary: string;
-    description: string;
-    amend: boolean;
-    /** The commit Amend was turned on for: it replaces that one only. */
-    amendOn: string | null;
-    prefilled: string;
-  }
-
-  // The commit message outlives the panel, so picking another commit and coming back keeps the
-  // draft. Each repository has its own: a message or Amend from one never lands in another.
-  const drafts = new Map<string, Draft>();
-  // It outlives the app too. Each folder has its own key, so a worktree keeps its own draft and
-  // two windows never write over each other's.
-  const DRAFT_KEY = "oxbow.commitDraft:";
-
-  function savedDraft(repo: string): Partial<Draft> {
-    try {
-      const saved = JSON.parse(localStorage.getItem(DRAFT_KEY + repo) ?? "null");
-      return saved && typeof saved === "object" ? saved : {};
-    } catch {
-      return {};
-    }
-  }
-
-  function saveDraft(repo: string, draft: Draft) {
-    try {
-      if (!draft.summary.trim() && !draft.description.trim() && !draft.amend) localStorage.removeItem(DRAFT_KEY + repo);
-      else localStorage.setItem(DRAFT_KEY + repo, JSON.stringify(draft));
-    } catch {
-      // Private mode or full storage: the draft lasts until the app quits.
-    }
-  }
-
-  /** The commit message draft saved for the folder `repo`, as it was saved. */
-  export function savedMessage(repo: string): unknown {
-    return drafts.get(repo) ?? savedDraft(repo);
-  }
-
-  /** The folder `from` was moved to `to`: its commit message goes along, unless `to` has one of
-   *  its own. True when it went. */
-  export function moveMessage(from: string, to: string): boolean {
-    const draft = draftFor(from);
-    if (!draft.summary.trim() && !draft.description.trim() && !draft.amend) return false;
-    const there = draftFor(to);
-    if (there.summary.trim() || there.description.trim() || there.amend) return false;
-    Object.assign(there, $state.snapshot(draft));
-    saveDraft(to, there);
-    drafts.delete(from);
-    saveDraft(from, { summary: "", description: "", amend: false, amendOn: null, prefilled: "" });
-    return true;
-  }
-
-  function draftFor(repo: string): Draft {
-    const known = drafts.get(repo);
-    if (known) return known;
-    const saved = savedDraft(repo);
-    const text = (value: unknown) => (typeof value === "string" ? value : "");
-    const draft = $state<Draft>({
-      summary: text(saved.summary),
-      description: text(saved.description),
-      amend: saved.amend === true,
-      amendOn: typeof saved.amendOn === "string" ? saved.amendOn : null,
-      prefilled: text(saved.prefilled),
-    });
-    drafts.set(repo, draft);
-    return draft;
-  }
-
   /** Untracked files start folded away, apart from the edits, and stay open once opened until
    *  the app quits; every window and repository shares that. */
   const view = $state({ untracked: false });
@@ -75,26 +6,23 @@
 
 <script lang="ts">
   import { tick, untrack } from "svelte";
-  import TipCard from "./TipCard.svelte";
-  import { shortcut } from "./keys";
   import { pressed } from "./shortcuts";
   import { api, stopped } from "./api";
-  import { diffSettings, prefs, wholeByDefault } from "./prefs.svelte";
+  import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import { confirm, type Part, type Request } from "./confirm.svelte";
   import type { FileChange, FileDiff, Hunk, HistoryRow, Side, WorkingTree } from "./types";
-  import { lane, plate, splitPath, tint } from "./format";
+  import { plate, splitPath, tint } from "./format";
   import { tabStepper } from "./tabs";
-  import DiffView, { type LinePicker } from "./DiffView.svelte";
-  import DiffTools from "./DiffTools.svelte";
-  import FoldAll from "./FoldAll.svelte";
+  import ChangesDiff from "./ChangesDiff.svelte";
+  import type { LinePicker } from "./DiffView.svelte";
   import PathName from "./PathName.svelte";
-  import WhyNote from "./WhyNote.svelte";
-  import Menu, { menuIcons, type MenuEntry, type SubEntry } from "./Menu.svelte";
-  import { nav } from "./nav.svelte";
+  import CommitForm from "./CommitForm.svelte";
+  import Menu, { type MenuEntry } from "./Menu.svelte";
+  import { fileMenu, filesMenu, type FileMenuActions } from "./changesMenu";
   import { BIG_FILE, bytes } from "./unusual";
-  import { commitRecovery, ignoreChoices, ignoreRequest, linesRequest, stashFilesRequest, stashMessageFor, type LinesKind } from "./changes";
+  import { discardRequest, stageRequest, unstageRequest } from "./changes";
   import { keepShown, nextAfter, pickRange, sameShown, stepShown, type Shown } from "./changesView";
-  import { updateFolderRequest } from "./submodules";
+  import { draftFor, saveDraft } from "./commitDrafts.svelte";
   import { byFolder, filesWidth, listView, resizeFiles, setFolders } from "./listView.svelte";
 
   let {
@@ -127,9 +55,6 @@
     onResolve?: () => void;
   } = $props();
 
-  /** Settings › Git › Subject line guide; 0 hides the counter. */
-  const SUMMARY_LIMIT = $derived(prefs.get("oxbow.commit.subjectGuide"));
-
   let tree = $state<WorkingTree | null>(null);
   /** What the diff column shows: a file on one side, or every file of a side. */
   let shown = $state<Shown | null>(null);
@@ -150,7 +75,6 @@
   let sel = $state<{ hunk: Hunk; lines: number[]; anchor: number } | null>(null);
   let menu = $state<{ x: number; y: number; entries: MenuEntry[]; label: string } | null>(null);
   let diffScroller = $state<HTMLDivElement>();
-  let diffView = $state<DiffView>();
 
   const staged = $derived(tree?.staged ?? []);
   const unstaged = $derived(tree?.unstaged ?? []);
@@ -226,34 +150,6 @@
     if (!next.delete(key)) next.add(key);
     folded = next;
   }
-
-  // Amend replaces the commit it was turned on for. Once HEAD moves (another branch, a commit made
-  // elsewhere), it turns off, with the old commit's message if it was not edited.
-  $effect(() => {
-    if (draft.amend && head && head.id !== draft.amendOn) turnOffAmend();
-  });
-
-  const message = $derived([draft.summary.trim(), draft.description.trim()].filter(Boolean).join("\n\n"));
-  const canCommit = $derived(!!draft.summary.trim() && conflicted.length === 0 && (staged.length > 0 || (draft.amend && !!head)) && (!draft.amend || head?.id === draft.amendOn));
-  let summaryBox = $state<HTMLInputElement>();
-  /** Why Commit is grey, over it, with the way out when there is one. */
-  const commitHint = $derived.by((): { text: string; warn?: boolean; fix?: { label: string; run: () => void } } | null => {
-    if (conflicted.length) {
-      return {
-        text: `${conflicted.length} ${conflicted.length === 1 ? "file has" : "files have"} conflicts`,
-        warn: true,
-        fix: onResolve ? { label: "Resolve…", run: onResolve } : undefined,
-      };
-    }
-    if (!staged.length && !draft.amend) {
-      if (!unstaged.length) return { text: "No changes to commit" };
-      // Edits first: new files, listed apart, are staged by their own list's Stage All.
-      const pool = tracked.length ? tracked : untracked;
-      return { text: "Nothing staged yet", fix: { label: pool.length === 1 ? "Stage 1 File" : `Stage All ${pool.length} Files`, run: () => stage(pool) } };
-    }
-    if (!draft.summary.trim()) return { text: "A commit needs a summary", fix: { label: "Write It", run: () => summaryBox?.focus() } };
-    return null;
-  });
 
   /** Which reading of the files `tree` is, for diffs of the same one; null for one of its own. */
   let reading: number | null = null;
@@ -634,80 +530,9 @@
     await (how === "discard" ? discard(files) : group === "staged" ? unstage(files) : stage(files));
   }
 
-  const name = (files: FileChange[]): Part[] =>
-    files.length === 1 ? [{ code: files[0].path }] : [`${files.length} files`];
-  const count = (files: FileChange[]) => (files.length === 1 ? splitPath(files[0].path).name : `${files.length} files`);
-
-  function stage(files: FileChange[]) {
-    return act({
-      title: `Stage ${count(files)}?`,
-      body: ["Adds the changes in ", ...name(files), " to the next commit on ", branchPart, "."],
-      icon: "stage",
-      button: "Stage",
-      past: `Staged ${count(files)}`,
-      action: { kind: "stage", paths: files.map((f) => f.path) },
-    });
-  }
-
-  function unstage(files: FileChange[]) {
-    return act({
-      title: `Unstage ${count(files)}?`,
-      body: ["Takes ", ...name(files), " out of the next commit. Your edits stay in the files."],
-      icon: "unstage",
-      button: "Unstage",
-      past: `Unstaged ${count(files)}`,
-      action: { kind: "unstage", paths: files.map((f) => f.path) },
-    });
-  }
-
-  function discard(files: FileChange[]) {
-    const fresh = files.filter((f) => f.status === "untracked");
-    const body: Part[] =
-      fresh.length === files.length
-        ? ["Deletes ", ...name(files), ". Git does not track ", files.length === 1 ? "it" : "them", " yet."]
-        : fresh.length
-          ? ["Throws away your edits in ", ...name(files.filter((f) => !fresh.includes(f))), " and deletes ", ...name(fresh), ", which git does not track yet."]
-          : ["Throws away your edits in ", ...name(files), " and puts back the staged or committed version."];
-    return act({
-      title: `Discard changes in ${count(files)}?`,
-      body,
-      icon: "discard",
-      button: "Discard",
-      danger: true,
-      note: "Undo brings it back, from the toast or the Operation Log.",
-      done: `Discarded changes in ${count(files)}.`,
-      action: { kind: "discard", paths: files.map((f) => f.path) },
-    });
-  }
-
-  /** The changed lines of a hunk, without its context: new line numbers, or old ones when it only removes. */
-  function lines(hunk: Hunk): string {
-    const added = hunk.lines.filter((l) => l.kind === "added").map((l) => l.newLine ?? 0);
-    const numbers = added.length ? added : hunk.lines.filter((l) => l.kind === "removed").map((l) => l.oldLine ?? 0);
-    if (!numbers.length) return "a hunk";
-    const first = Math.min(...numbers);
-    const last = Math.max(...numbers);
-    return first === last ? `line ${first}` : `lines ${first}–${last}`;
-  }
-
-  function hunkAction(kind: "stageHunk" | "unstageHunk" | "discardHunk", path: string, hunk: Hunk) {
-    const where: Part[] = [`${lines(hunk)} of `, { code: path }];
-    const file = path.slice(path.lastIndexOf("/") + 1);
-    const request: Record<typeof kind, Omit<Request, "action">> = {
-      stageHunk: { title: "Stage this hunk?", body: ["Adds ", ...where, " to the next commit. The rest of the file stays unstaged."], icon: "stage", button: "Stage Hunk", past: `Staged ${lines(hunk)} of ${file}` },
-      unstageHunk: { title: "Unstage this hunk?", body: ["Takes ", ...where, " out of the next commit. Your edits stay in the file."], icon: "unstage", button: "Unstage Hunk", past: `Unstaged ${lines(hunk)} of ${file}` },
-      discardHunk: {
-        title: "Discard this hunk?",
-        body: ["Throws away your edits in ", ...where, ". The rest of the file stays as it is."],
-        icon: "discard",
-        button: "Discard",
-        danger: true,
-        note: "Undo brings it back, from the toast or the Operation Log.",
-        done: `Discarded ${lines(hunk)} of ${file}.`,
-      },
-    };
-    act({ ...request[kind], action: { kind, path, header: hunk.header, check: hunk.check ?? "" } });
-  }
+  const stage = (files: FileChange[]) => act(stageRequest(files, branchPart));
+  const unstage = (files: FileChange[]) => act(unstageRequest(files));
+  const discard = (files: FileChange[]) => act(discardRequest(files));
 
   /** Changed lines can be picked in the hunks of a tracked file, not in the whole-file view. */
   const picker: LinePicker = {
@@ -728,10 +553,6 @@
     },
   };
 
-  function linesAction(kind: LinesKind, path: string, hunk: Hunk) {
-    if (sel?.hunk === hunk) act(linesRequest(kind, path, hunk, [...sel.lines].sort((a, b) => a - b)));
-  }
-
   /** Every file with changes once, for a stash of a few of them. */
   function stashCandidates() {
     const seen = new Map<string, { path: string; untracked: boolean; staged: boolean; unstaged: boolean }>();
@@ -741,147 +562,14 @@
   }
 
   const modClick = navigator.platform.startsWith("Mac") ? "⌘-click" : "Ctrl-click";
-  const revealLabel = navigator.platform.startsWith("Mac") ? "Reveal in Finder" : navigator.platform.startsWith("Win") ? "Show in Explorer" : "Open Containing Folder";
 
-  /** Stage's menu on the bar of the open file: Stage & Next File first, as the way through a
-   *  review, then Stage itself, and Discard the Rest for a file staged in part. */
-  function stageMenu(event: MouseEvent, file: FileChange, label: string) {
-    const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    const entries: MenuEntry[] = [
-      { kind: "item", label: "Stage & Next File", icon: menuIcons.skip, keys: shortcut("stageAndNext"), run: () => stageAndNext(file) },
-      { kind: "item", label, icon: menuIcons.stage, keys: shortcut("stageFile"), run: () => stage([file]) },
-    ];
-    if (stagedByPath.has(file.path)) {
-      entries.push({ kind: "sep" });
-      entries.push({ kind: "item", label: "Discard the Rest…", icon: menuIcons.drop, danger: true, run: () => discard([file]) });
-    }
-    menu = { x: box.right - 240, y: box.bottom + 4, entries, label: "Stage menu" };
-  }
-
-  /** Copy Path/Reference, as in JetBrains IDEs: the path from the disk's root, the name, or the
-   *  path in the repository, of one file or of several on lines of their own. */
-  function copyMenu(paths: string[]): MenuEntry {
-    // Windows paths come with backslashes.
-    const sep = repo.includes("\\") && !repo.includes("/") ? "\\" : "/";
-    const absolute = (path: string) => repo.replace(/[\\/]+$/, "") + sep + path.replaceAll("/", sep);
-    const one = paths.length === 1;
-    const item = (label: string, texts: string[]): SubEntry => ({
-      label,
-      hint: one ? texts[0] : undefined,
-      run: () => navigator.clipboard.writeText(texts.join("\n")).then(() => confirm.say(one ? `Copied ${texts[0]}.` : `Copied ${paths.length} paths.`, "done"), () => {}),
-    });
-    return {
-      kind: "sub",
-      label: "Copy Path/Reference",
-      icon: menuIcons.copy,
-      entries: [
-        item(one ? "Absolute Path" : "Absolute Paths", paths.map(absolute)),
-        item(one ? "File Name" : "File Names", paths.map((p) => splitPath(p).name)),
-        item(one ? "Path from Repository Root" : "Paths from Repository Root", paths),
-      ],
-    };
-  }
-
-  function fileMenu(event: MouseEvent, file: FileChange, group: List | "conflicted") {
+  function openFileMenu(event: MouseEvent, file: FileChange, group: List | "conflicted") {
     event.preventDefault();
+    const actions: FileMenuActions = { stage, unstage, discard, act, actOnPicked: (how) => group !== "conflicted" && actOnPicked(group, how), stashCandidates };
     // A right-click on one of several picked files acts on all of them.
     const several = group !== "conflicted" && tickedSet[group].has(file.path) ? pickedFiles(group) : [];
-    if (several.length > 1 && group !== "conflicted") {
-      const n = several.length;
-      const fresh = several.every((f) => f.status === "untracked");
-      const entries: MenuEntry[] = [{ kind: "header", label: `${n} selected files` }];
-      if (group === "staged") entries.push({ kind: "item", label: `Unstage ${n} Files`, icon: menuIcons.unstage, run: () => actOnPicked(group) });
-      else entries.push({ kind: "item", label: `Stage ${n} Files`, icon: menuIcons.stage, run: () => actOnPicked(group) });
-      entries.push({ kind: "item", label: "Stash These Files…", icon: menuIcons.stash, run: () => act(stashFilesRequest(stashCandidates(), several.map((f) => f.path), stashMessageFor(several[0].path))) });
-      entries.push({ kind: "sep" });
-      entries.push(copyMenu(several.map((f) => f.path)));
-      if (group !== "staged") {
-        entries.push({ kind: "sep" });
-        entries.push({ kind: "item", label: fresh ? `Delete ${n} Files…` : `Discard ${n} Files…`, icon: menuIcons.drop, danger: true, run: () => actOnPicked(group, "discard") });
-      }
-      menu = { x: event.clientX, y: event.clientY, entries, label: `${n} files menu` };
-      return;
-    }
-    const side = group === "untracked" ? "unstaged" : group;
-    const name = splitPath(file.path).name;
-    const what = { modified: "modified", added: "new file", untracked: "untracked", deleted: "deleted", renamed: "renamed", copied: "copied", conflicted: "conflicted" }[file.status];
-    const entries: MenuEntry[] = [{ kind: "header", label: `${name} · ${what}${side === "staged" ? ", staged" : ""}` }];
-    if (side === "staged") entries.push({ kind: "item", label: "Unstage File", icon: menuIcons.unstage, run: () => unstage([file]) });
-    else if (side === "unstaged") entries.push({ kind: "item", label: "Stage File", icon: menuIcons.stage, run: () => stage([file]) });
-    if (side !== "conflicted")
-      entries.push({ kind: "item", label: "Stash This File…", icon: menuIcons.stash, run: () => act(stashFilesRequest(stashCandidates(), [file.path], stashMessageFor(file.path))) });
-    if (file.status !== "conflicted" && file.status !== "deleted")
-      entries.push({
-        kind: "sub",
-        label: "Add to .gitignore",
-        icon: menuIcons.ignore,
-        entries: ignoreChoices(file.path, file.status !== "untracked").map((choice) => ({ label: choice.label, hint: choice.pattern, run: () => act(ignoreRequest(file.path, choice)) })),
-      });
-    entries.push({ kind: "sep" });
-    if (file.status !== "deleted")
-      entries.push({ kind: "item", label: "Open in Editor", icon: menuIcons.open, run: () => api.openInEditor(file.path, null).catch((err) => confirm.fail(err)) });
-    if (file.status !== "deleted")
-      entries.push({ kind: "item", label: revealLabel, icon: menuIcons.reveal, run: () => api.revealFile(file.path).catch((err) => confirm.fail(err)) });
-    entries.push(copyMenu([file.path]));
-    if (file.status !== "untracked" && file.status !== "added") entries.push({ kind: "item", label: "File History", icon: menuIcons.history, run: () => nav.openFile(file.path) });
-    if (side === "unstaged") {
-      entries.push({ kind: "sep" });
-      entries.push({ kind: "item", label: file.status === "untracked" ? "Delete File…" : "Discard Changes…", icon: menuIcons.drop, danger: true, run: () => discard([file]) });
-    }
-    menu = { x: event.clientX, y: event.clientY, entries, label: `${name} menu` };
-  }
-
-  async function commit() {
-    if (!canCommit) return;
-    const files = staged.length;
-    const pushed = draft.amend && head && !head.unpushed;
-    const action = { kind: "commit" as const, message, amend: draft.amend };
-    const summary = draft.summary.trim();
-    const where = branch ?? "HEAD";
-    const done = await confirm.run({
-      title: draft.amend ? `Amend the last commit on ${branch ?? "HEAD"}?` : `Commit ${files} ${files === 1 ? "file" : "files"} to ${branch ?? "HEAD"}?`,
-      body: draft.amend ? amendBody(files) : ["Makes the commit ", { quote: draft.summary.trim() }, " on ", branchPart, " with the staged changes."],
-      icon: "commit",
-      button: draft.amend ? "Amend" : "Commit",
-      note: pushed ? "The last commit is already pushed. After amending, pushing will need --force-with-lease." : undefined,
-      status: `Committing to ${where}…`,
-      past: draft.amend ? `Amended the last commit on ${where}` : `Committed ${files} ${files === 1 ? "file" : "files"} to ${where}`,
-      recover: (failure) => commitRecovery(failure, action, summary, where),
-      action,
-    });
-    if (done) {
-      draft.summary = "";
-      draft.description = "";
-      draft.amend = false;
-      draft.amendOn = null;
-      draft.prefilled = "";
-      onChanged();
-    }
-  }
-
-  function amendBody(files: number): Part[] {
-    const last = { quote: head?.summary ?? "" };
-    const reworded = draft.summary.trim() !== (head?.summary ?? "");
-    if (!files) return ["Rewords the last commit ", last, " on ", branchPart, " to ", { quote: draft.summary.trim() }, ". Its changes stay the same."];
-    if (!reworded) return ["Adds the staged changes to the last commit ", last, " on ", branchPart, ". The message stays the same."];
-    return ["Replaces the last commit ", last, " on ", branchPart, " with ", { quote: draft.summary.trim() }, ", adding the staged changes."];
-  }
-
-  /** Amend starts from the last commit's message; turning it off again drops that message if it was not edited. */
-  async function toggleAmend() {
-    if (draft.amend) return turnOffAmend();
-    if (!head) return;
-    const own = draft;
-    own.amend = true;
-    own.amendOn = head.id;
-    if (!own.summary.trim() && !own.description.trim()) {
-      const detail = await api.commitDetail(head.id).catch(() => null);
-      if (detail && own.amend && own.amendOn === detail.id && !own.summary.trim()) {
-        own.summary = detail.summary;
-        own.description = detail.body;
-        own.prefilled = [own.summary.trim(), own.description.trim()].filter(Boolean).join("\n\n");
-      }
-    }
+    const opened = several.length > 1 && group !== "conflicted" ? filesMenu(repo, several, group, actions) : fileMenu(repo, file, group, actions);
+    menu = { x: event.clientX, y: event.clientY, ...opened };
   }
 
   /** The files of the commit Amend replaces, under Staged: they stay in it with the staged ones. */
@@ -930,56 +618,6 @@
   const lastRoom = $derived.by(() => (lastFiles.length ? 24 + Math.min(lastFiles.length, 3) * ROW : 0));
   /** Files the amended commit will have: its own and the staged ones. */
   const amendedCount = $derived(new Set([...lastFiles, ...staged].map((f) => f.path)).size);
-
-  function turnOffAmend() {
-    const prefilled = draft.prefilled && message === draft.prefilled;
-    draft.amend = false;
-    draft.amendOn = null;
-    if (prefilled) {
-      draft.summary = "";
-      draft.description = "";
-    }
-    draft.prefilled = "";
-  }
-
-  /** The description grows with its text while it is being written, up to DESC_LINES, and goes
-   *  back to two lines after, so the lists keep their room. Empty, it is one line, as tall as the
-   *  summary, until it is clicked or tabbed into; Amend keeps it open. */
-  const DESC_LINES = 10;
-  let descBox = $state<HTMLTextAreaElement>();
-  let descOpen = $state(false);
-  const descFolded = $derived(!draft.description && !descOpen && !draft.amend);
-  $effect(() => {
-    draft.description;
-    const open = descOpen;
-    const box = descBox;
-    const one = descFolded;
-    if (!box) return;
-    const style = getComputedStyle(box);
-    const line = parseFloat(style.lineHeight);
-    const frame = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
-    if (one) {
-      box.style.height = `${SUMMARY_HEIGHT}px`;
-      return;
-    }
-    const least = 2 * line + frame;
-    box.style.height = `${least}px`;
-    const wanted = Math.min(box.scrollHeight + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth), DESC_LINES * line + frame);
-    box.style.height = `${open ? Math.max(least, wanted) : least}px`;
-  });
-  /** The height of the summary box, which a folded description matches. */
-  const SUMMARY_HEIGHT = 34;
-
-  /** The room for the buttons under the commit form, and what the fix and Commit side by side take. */
-  let actionsWidth = $state(0);
-  let buttonsWidth = $state(0);
-
-  function onCommitKey(event: KeyboardEvent) {
-    if (pressed("commitNow", event)) {
-      event.preventDefault();
-      commit();
-    }
-  }
 
   /** Two columns, the files beside their diff, from this width of the panel; under it the files
    *  sit over the diff, with a border to drag between them. */
@@ -1060,16 +698,6 @@
     }
     return shown.side === "staged" ? shownStaged : shown.untracked ? shownUntracked : [...shownConflicted, ...shownTracked];
   });
-  const sideTotals = $derived(sideFiles.reduce((sum, f) => ({ add: sum.add + f.additions, del: sum.del + f.deletions }), { add: 0, del: 0 }));
-
-  /** What the open file's side holds, under the switch. */
-  function caption(file: Shown & { kind: "file" }): string {
-    if (file.side === "staged") return "Goes into the commit";
-    const f = openUnstaged;
-    if (f?.status === "conflicted") return "Has conflicts to resolve";
-    if (f?.status === "untracked") return "New file git does not track yet";
-    return "Stays out of the commit";
-  }
 
   const badge: Record<string, { text: string; tone: string; title: string }> = {
     modified: { text: "M", tone: "orange", title: "Modified" },
@@ -1099,7 +727,7 @@
     style:background={open ? tint(color) : undefined}
     data-group={group}
     data-path={file.path}
-    oncontextmenu={(e) => fileMenu(e, file, group)}
+    oncontextmenu={(e) => openFileMenu(e, file, group)}
   >
     {#if group !== "conflicted"}
       <button
@@ -1231,72 +859,6 @@
   <button class="chev" aria-expanded={open} aria-label={label} title={disabled ? "Shown while the filter is on" : label} {disabled} onclick={toggle}>
     <svg class="chevron" class:open viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" /></svg>
   </button>
-{/snippet}
-
-{#snippet hunkBar(d: FileDiff, hunk: Hunk, side: Side)}
-  {#if !whole && d.file.status !== "untracked" && d.file.status !== "conflicted"}
-    {@const n = sel?.hunk === hunk ? sel.lines.length : 0}
-    {@const lineWord = n === 1 ? "Line" : "Lines"}
-    <div class="hunk">
-      <span class="header">{hunk.header}</span>
-      {#if n}
-        <button class="state picked" onclick={() => (sel = null)} title="Clear the picked lines">{n} of {hunk.lines.filter((l) => l.kind !== "context").length} lines</button>
-        {#if side === "unstaged"}
-          <button class="button mini text" onclick={() => linesAction("discardHunk", d.file.path, hunk)}>Discard {n} {lineWord}</button>
-          <button class="button mini quiet" onclick={() => linesAction("stageHunk", d.file.path, hunk)}>Stage {n} {lineWord}</button>
-        {:else}
-          <button class="button mini text" onclick={() => linesAction("unstageHunk", d.file.path, hunk)}>Unstage {n} {lineWord}</button>
-        {/if}
-      {:else}
-        <span class="state" class:staged={side === "staged"}>{side === "staged" ? "Staged" : "Unstaged"}</span>
-        {#if side === "unstaged"}
-          <button class="button mini text" onclick={() => hunkAction("discardHunk", d.file.path, hunk)}>Discard</button>
-          <button class="button mini quiet" onclick={() => hunkAction("stageHunk", d.file.path, hunk)}>Stage Hunk</button>
-        {:else}
-          <button class="button mini text" onclick={() => hunkAction("unstageHunk", d.file.path, hunk)}>Unstage Hunk</button>
-        {/if}
-      {/if}
-    </div>
-  {/if}
-{/snippet}
-{#snippet unstagedHunk(d: FileDiff, hunk: Hunk)}{@render hunkBar(d, hunk, "unstaged")}{/snippet}
-{#snippet stagedHunk(d: FileDiff, hunk: Hunk)}{@render hunkBar(d, hunk, "staged")}{/snippet}
-
-<!-- The whole file's actions on its header bar. -->
-{#snippet unstagedFile(d: FileDiff)}
-  {#if d.submodule}
-    <!-- A submodule's own files are committed in it; here only the commit it is at can be staged. -->
-    {#if d.file.submodule?.moved}
-      {@const move = d.submodule}
-      {#if move.old}<button class="button mini text" onclick={() => act(updateFolderRequest(move))} title="Check out the commit recorded here again">Update to {move.old.slice(0, 7)}</button>{/if}
-      <button class="button mini quiet" onclick={() => stage([d.file])} title="Record the commit it is at in the next commit">Stage</button>
-    {:else}
-      <button class="button mini text" onclick={() => api.openWindow(d.file.path).catch((err) => confirm.fail(err))} title="Its changes are committed in it">Open in New Window</button>
-    {/if}
-  {:else if d.file.status === "conflicted"}
-    {#if onResolve}<button class="button mini text" onclick={onResolve}>Resolve Conflicts…</button>{/if}
-  {:else}
-    {@const rest = stagedByPath.has(d.file.path)}
-    {@const label = rest ? "Stage the Rest" : "Stage"}
-    {@const keys = shortcut("stageFile")}
-    <!-- A file staged in part has Discard the Rest in the Stage menu: Discard beside Stage the Rest would read as the whole file. -->
-    {#if !rest || diffsOf?.kind !== "file"}
-      <button class="button mini text" onclick={() => discard([d.file])} title={d.file.status === "untracked" ? "Delete this new file" : rest ? "Throw away the edits not staged; the staged part stays" : "Throw away the edits in this file"}>Discard</button>
-    {/if}
-    {#if diffsOf?.kind === "file"}
-      <span class="split">
-        <button class="button mini quiet" onclick={() => stage([d.file])} title="{rest ? 'Add the rest of the file to the next commit' : 'Add the whole file to the next commit'}{keys ? ` (${keys})` : ''}">{label}</button>
-        <button class="button mini quiet more" onclick={(e) => stageMenu(e, d.file, label)} aria-label="More ways to stage" aria-haspopup="menu" title="More ways to stage">
-          <svg class="icon" viewBox="0 0 16 16"><path d="M4.5 6.5 8 10l3.5-3.5" /></svg>
-        </button>
-      </span>
-    {:else}
-      <button class="button mini quiet" onclick={() => stage([d.file])} title={rest ? "Add the rest of the file to the next commit" : "Add the whole file to the next commit"}>{label}</button>
-    {/if}
-  {/if}
-{/snippet}
-{#snippet stagedFile(d: FileDiff)}
-  <button class="button mini text" onclick={() => unstage([d.file])} title="Take the whole file out of the next commit">Unstage</button>
 {/snippet}
 
 <div class="panel">
@@ -1441,55 +1003,7 @@
         {/if}
       </div>
 
-      <div class="commit" role="group" aria-label="Commit" style:background={tint(color)} style:border-color={`color-mix(in srgb, ${lane(color)} 40%, transparent)`}>
-        <div class="row">
-          <span class="grow to">Commit to <b style:color={plate(color)}>{branch ?? "detached HEAD"}</b></span>
-          <button class="amend" role="switch" aria-checked={draft.amend} onclick={toggleAmend} disabled={!head} title="Replace the last commit instead of adding a new one">
-            Amend
-            <span class="switch" class:on={draft.amend}><span class="knob"></span></span>
-          </button>
-        </div>
-        <div class="summary">
-          <input type="text" aria-label="Commit summary" placeholder="Summary" bind:this={summaryBox} bind:value={draft.summary} onkeydown={onCommitKey} spellcheck="true" />
-          {#if SUMMARY_LIMIT}<span class="counter" class:over={draft.summary.length > SUMMARY_LIMIT}>{draft.summary.length}/{SUMMARY_LIMIT}</span>{/if}
-        </div>
-        <textarea
-          aria-label="Commit description"
-          placeholder="Description"
-          rows="1"
-          class:folded={descFolded}
-          bind:this={descBox}
-          bind:value={draft.description}
-          onkeydown={onCommitKey}
-          onfocus={() => (descOpen = true)}
-          onblur={() => (descOpen = false)}
-        ></textarea>
-        {#if commitHint}<WhyNote text={commitHint.text} warn={commitHint.warn} />{/if}
-        {#snippet goLabel()}{draft.amend ? "Amend" : "Commit"} {#if shortcut("commitNow")}<span class="keys">{shortcut("commitNow")}</span>{/if}{/snippet}
-        <div class="row actions" bind:clientWidth={actionsWidth}>
-          {#if commitHint?.fix}
-            <!-- The fix and Commit side by side, unseen, to tell whether they fit on one line. -->
-            <div class="buttons measure" aria-hidden="true" inert bind:offsetWidth={buttonsWidth}>
-              <span class="button">{commitHint.fix.label}</span><span class="button primary go">{@render goLabel()}</span>
-            </div>
-            <div class="buttons" class:column={buttonsWidth > actionsWidth}>
-              <button class="button" onclick={commitHint.fix.run}>{commitHint.fix.label}</button>
-              <button class="button primary go" onclick={commit} disabled={!canCommit} title={commitHint.text}>{@render goLabel()}</button>
-            </div>
-          {:else}
-            {#if !commitHint}
-              <span class="staged-count"
-                >{draft.amend
-                  ? staged.length
-                    ? `${amendedCount} ${amendedCount === 1 ? "file" : "files"}`
-                    : "Message only"
-                  : `${staged.length} ${staged.length === 1 ? "file" : "files"} staged`}</span
-              >
-            {/if}
-            <button class="button primary go" onclick={commit} disabled={!canCommit} title={commitHint?.text}>{@render goLabel()}</button>
-          {/if}
-        </div>
-      </div>
+      <CommitForm {draft} {branch} {color} {head} {staged} {unstaged} {conflicted} {amendedCount} {stage} {onChanged} {onResolve} />
     </div>
 
     {#if stacked}
@@ -1498,83 +1012,37 @@
 
     {#if !stacked}<button class="edge" tabindex="-1" style:left={`${filesWidth(bodyWidth) - 4}px`} onpointerdown={(e) => resizeFiles(e, bodyWidth)} aria-label="Resize the files" title="Drag to resize"></button>{/if}
     <div class="diff" aria-label="Diff">
-      {#if lastOpen}
-        <div class="dhead">
-          <div class="grow">
-            <div class="dtitle"><b>From last commit</b></div>
-            <div class="caption">Amend keeps these changes in the commit</div>
-          </div>
-          <DiffTools {whole} onToggleWhole={() => (whole = !whole)} working />
-        </div>
-      {:else if shown}
-        <div class="dhead">
-          {#if shown.kind === "file"}
-            {@const file = shown}
-            <div class="segmented" role="radiogroup" aria-label="Which part of the file">
-              <button role="radio" aria-checked={file.side === "unstaged"} class:on={file.side === "unstaged"} disabled={!openUnstaged} onclick={() => show({ ...file, side: "unstaged" })} title={openUnstaged ? "What stays out of the commit" : "Nothing of this file is left out of the commit"}>Unstaged</button>
-              <button role="radio" aria-checked={file.side === "staged"} class:on={file.side === "staged"} disabled={!openStaged} onclick={() => show({ ...file, side: "staged" })} title={openStaged ? "What goes into the commit" : "Nothing of this file is staged yet"}>Staged</button>
-            </div>
-            <span class="caption grow">{caption(file)}</span>
-          {:else}
-            <div class="grow">
-              <div class="dtitle">
-                <b>{shown.kind === "files" ? "Selected files" : shown.side === "staged" ? "Next commit" : shown.untracked ? "Untracked files" : "Unstaged changes"}</b>
-                <span class="n">{sideFiles.length} {sideFiles.length === 1 ? "file" : "files"}</span>
-                {#if sideFiles.length}<span class="mono add">+{sideTotals.add}</span><span class="mono del">−{sideTotals.del}</span>{/if}
-              </div>
-              <div class="caption">{shown.side === "staged" ? "Only staged changes go into the commit" : shown.untracked ? "New files git does not track yet stay out of the commit until staged" : "They stay out of the commit until staged"}</div>
-            </div>
-            {#if diffs.length > 1}<FoldAll onFold={(fold) => diffView?.setAll(fold)} />{/if}
-          {/if}
-          <DiffTools {whole} onToggleWhole={() => (whole = !whole)} working />
-        </div>
-      {/if}
-      <div class="scroll" bind:this={diffScroller}>
-        {#if error}<p class="error" role="alert">{error}</p>{/if}
-        {#if openFile && openUnstaged && openStaged && !lastOpen}<div class="tip"><TipCard id="partlyStaged" /></div>{/if}
-        {#if lastOpen}
-          <DiffView diffs={lastDiffs} {color} {whole} onToggleWhole={() => (whole = !whole)} tools={false} />
-        {:else if !shown}
-          <p class="nothing">No uncommitted changes.</p>
-        {:else if shown.kind === "all" && !sideFiles.length && !needle}
-          <!-- Nothing left on this side: a short line with the way on, not a big empty screen. -->
-          <div class="done-strip">
-            <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" /><path d="M5.5 8.2 7.2 10l3.3-3.8" /></svg>
-            {#if shown.untracked}
-              <span class="grow">{staged.length ? "All new files staged" : "No untracked files"}</span>
-              {#if tracked.length || conflicted.length}<button class="button mini quiet" onclick={() => show({ kind: "all", side: "unstaged" })}>Review Unstaged</button>{/if}
-              {#if staged.length}<button class="button mini quiet" onclick={() => show({ kind: "all", side: "staged" })}>Review Staged</button>{/if}
-            {:else if shown.side === "unstaged"}
-              <span class="grow">{staged.length ? "All changes staged" : "No edits to tracked files"}</span>
-              {#if untracked.length}<button class="button mini" onclick={() => show({ kind: "file", path: untracked[0].path, side: "unstaged" })}>Next Unstaged File</button>{/if}
-              {#if staged.length}<button class="button mini quiet" onclick={() => show({ kind: "all", side: "staged" })}>Review Staged</button>{/if}
-            {:else}
-              <span class="grow">Nothing staged yet</span>
-              {#if tracked.length || conflicted.length}<button class="button mini quiet" onclick={() => show({ kind: "all", side: "unstaged" })}>Review Unstaged</button>{/if}
-            {/if}
-          </div>
-        {:else if diffsOf}
-          {@const side = diffsOf.side}
-          <DiffView
-            bind:this={diffView}
-            foldable={diffsOf.kind !== "file"}
-            {diffs}
-            {color}
-            {whole}
-            onToggleWhole={() => (whole = !whole)}
-            hunkBar={side === "staged" ? stagedHunk : unstagedHunk}
-            fileActions={side === "staged" ? stagedFile : unstagedFile}
-            {picker}
-            pending={diffsOf.kind !== "file" ? pending : 0}
-            onMore={loadMore}
-            loadFull={(d) => api.workingDiff(d.file.path, side, whole, true)}
-            command={(d) => (side === "staged" ? `git diff --cached -- ${d.file.path}` : `git diff -- ${d.file.path}`)}
-            working
-            {side}
-            tools={false}
-          />
-        {/if}
-      </div>
+      <ChangesDiff
+        {color}
+        {shown}
+        {diffs}
+        {diffsOf}
+        {pending}
+        {error}
+        {lastOpen}
+        {lastDiffs}
+        {needle}
+        bind:whole
+        bind:sel
+        bind:scroller={diffScroller}
+        {openUnstaged}
+        {openStaged}
+        {sideFiles}
+        {staged}
+        {tracked}
+        {untracked}
+        {conflicted}
+        {stagedByPath}
+        {picker}
+        onShow={show}
+        onMore={loadMore}
+        {onResolve}
+        {act}
+        {stage}
+        {unstage}
+        {discard}
+        {stageAndNext}
+      />
     </div>
   </div>
 </div>
@@ -1789,26 +1257,6 @@
     padding: 0 var(--space-2) 0 22px;
     font-size: var(--text-caption);
     color: var(--text2);
-  }
-  /* Stage with its menu on the bar of the open file: one capsule cut in two. */
-  .split {
-    display: inline-flex;
-    gap: 1px;
-    flex-shrink: 0;
-  }
-  .split .button:first-child {
-    border-radius: var(--radius-pill) 0 0 var(--radius-pill);
-    padding-right: 8px;
-  }
-  .split .more {
-    width: 22px;
-    padding: 0;
-    border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
-  }
-  .split .more .icon {
-    width: 11px;
-    height: 11px;
-    stroke-width: 1.8;
   }
   /* A border to drag: over the staged files, and between the files and the diff in one column. */
   .grip {
@@ -2064,10 +1512,6 @@
     color: var(--text);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
   }
-  .segmented button:disabled:not(.on) {
-    opacity: 0.45;
-    cursor: default;
-  }
   .segmented.icons button {
     min-width: 0;
     width: 28px;
@@ -2243,276 +1687,8 @@
     background: var(--win);
   }
 
-  /* Over the diff: which side of the file it is, or which side's files, and how it is drawn. */
-  .dhead {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-height: 46px;
-    padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
-    flex-shrink: 0;
-  }
-  .caption {
-    font-size: var(--text-small);
-    color: var(--text2);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .dtitle {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    white-space: nowrap;
-  }
-  .dtitle b {
-    font-size: var(--text-body);
-    font-weight: 600;
-  }
-  .dtitle .n {
-    font-size: var(--text-small);
-    color: var(--text2);
-  }
-  .dtitle .mono {
-    font-size: var(--text-small);
-  }
-  .tip {
-    margin: 0 var(--space-3) var(--space-2);
-    display: flex;
-    flex-direction: column;
-  }
-  .scroll {
-    flex-grow: 1;
-    min-height: 0;
-    overflow-y: auto;
-  }
-  .error {
-    margin: 12px 20px 0;
-    font-size: var(--text-small);
-    color: var(--red);
-  }
-  .nothing {
-    margin: var(--space-5);
-    color: var(--text2);
-    font-size: var(--text-small);
-  }
-  /* A side with nothing left: one line with the way on. */
-  .done-strip {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-height: 40px;
-    margin: 0 var(--space-3);
-    padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
-    border-radius: var(--radius-m);
-    background: var(--field);
-    font-size: var(--text-small);
-    color: var(--text2);
-  }
-  .done-strip .icon {
-    width: 15px;
-    height: 15px;
-    flex-shrink: 0;
-  }
-  .done-strip .button {
-    flex-shrink: 0;
-    white-space: nowrap;
-  }
-  /* Hunk bar, as in the design: the @@ line, its state and the actions over it. */
-  .hunk {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    height: 34px;
-    margin: var(--space-2) 0 var(--space-1);
-    padding: 0 var(--space-2) 0 var(--space-3);
-    border-radius: var(--radius-m);
-    background: var(--hunk-bg);
-    color: var(--hunk-text);
-    font-family: var(--mono);
-    font-size: var(--text-small);
-    line-height: normal;
-  }
-  .hunk .header {
-    flex-grow: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .state {
-    font-family: var(--font);
-    font-size: var(--text-caption);
-    font-weight: 600;
-    color: var(--text2);
-  }
-  .state.staged {
-    color: var(--green);
-  }
-  .state.picked {
-    color: var(--text);
-    padding: 0 4px;
-  }
-
-  /* The commit, as a card in the branch color, as «this commit» is in a commit's chain. */
-  .commit {
-    flex-shrink: 0;
-    margin: var(--space-2) var(--space-3) var(--space-3);
-    padding: 12px;
-    border: 1px solid transparent;
-    border-radius: var(--radius-xl);
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .to {
-    font-size: var(--text-caption);
-    color: var(--text2);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .to b {
-    font-weight: 600;
-  }
-  .staged-count {
-    font-size: var(--text-small);
-    color: var(--text2);
-    white-space: nowrap;
-  }
-  .amend {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: var(--text-small);
-    flex-shrink: 0;
-  }
-  .amend:disabled {
-    opacity: 0.5;
-  }
-  .switch {
-    position: relative;
-    width: 28px;
-    height: 16px;
-    border-radius: var(--radius-pill);
-    background: var(--switch-off);
-    transition: background-color 0.15s;
-  }
-  .switch.on {
-    background: var(--accent);
-  }
-  .knob {
-    position: absolute;
-    left: 2px;
-    top: 2px;
-    width: 12px;
-    height: 12px;
-    border-radius: var(--radius-pill);
-    background: #fff;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
-    transition: transform 0.15s;
-  }
-  .switch.on .knob {
-    transform: translateX(12px);
-  }
-  .summary {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    height: 34px;
-    padding: 0 var(--space-3);
-    border-radius: var(--radius-m);
-    background: var(--win);
-    border: 0.5px solid var(--glass-border);
-  }
-  .summary:focus-within {
-    box-shadow: var(--focus-ring);
-  }
-  .summary input {
-    flex-grow: 1;
-    min-width: 0;
-    border: 0;
-    outline: 0;
-    background: transparent;
-    font: inherit;
-    font-weight: 600;
-    color: var(--text);
-    box-shadow: none;
-  }
-  .counter {
-    font-size: var(--text-caption);
-    color: var(--text2);
-  }
-  .counter.over {
-    color: var(--orange);
-  }
-  textarea {
-    resize: none;
-    border-radius: var(--radius-m);
-    padding: var(--space-2) var(--space-3);
-    background: var(--win);
-    border: 0.5px solid var(--glass-border);
-    outline: 0;
-    font: inherit;
-    line-height: 1.45;
-    color: var(--text);
-    transition: height 0.15s ease;
-  }
-  /* Empty and not written in: one line, as tall as the summary. */
-  textarea.folded {
-    padding-top: 7px;
-    padding-bottom: 7px;
-    overflow: hidden;
-  }
-  input::placeholder,
-  textarea::placeholder {
+  input::placeholder {
     color: var(--text2);
     font-weight: 400;
-  }
-  .actions {
-    position: relative;
-  }
-  /* A fix, such as Stage All 10 Files, is as big as Commit beside it. */
-  .actions .button {
-    height: 32px;
-    padding: 0 var(--space-4);
-    min-width: 96px;
-  }
-  .go {
-    margin-left: auto;
-    gap: 8px;
-  }
-  .buttons {
-    display: flex;
-    gap: 8px;
-    margin-left: auto;
-  }
-  .buttons .go {
-    margin-left: 0;
-  }
-  /* Too wide for one line, a long fix stands over Commit, both as wide as the wider one, on the right. */
-  .buttons.column {
-    display: grid;
-    grid-template-columns: max-content;
-    justify-items: stretch;
-  }
-  .buttons.measure {
-    position: absolute;
-    top: 0;
-    right: 0;
-    width: max-content;
-    visibility: hidden;
-    pointer-events: none;
-  }
-
-  .keys {
-    font-size: var(--text-caption);
-    font-weight: 500;
-    opacity: 0.85;
   }
 </style>
