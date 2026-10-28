@@ -154,14 +154,41 @@ pub struct Snapshot {
 impl Repo {
     /// What the repository is like now.
     pub fn snapshot(&self) -> Result<Snapshot> {
+        // The files take the longest; HEAD, the refs and the stash are read beside them.
+        let helpers = crate::console::Helpers::here();
+        let stop = crate::cli::current_stop();
+        let (worktree, rest) = std::thread::scope(|scope| {
+            let worktree = scope.spawn(|| {
+                helpers.help(|| match &stop {
+                    Some(stop) => crate::cli::stoppable(stop, || self.worktree_tree()),
+                    None => self.worktree_tree(),
+                })
+            });
+            let index = self.index_tree();
+            let rest = (|| Ok((index?, self.head_state()?, self.all_refs()?, self.stash_records()?)))();
+            (worktree.join(), rest)
+        });
+        helpers.join();
+        let worktree = worktree.map_err(|_| Error::Git("the snapshot of the files failed".into()))??;
+        let (index, head, refs, stash) = rest?;
         Ok(Snapshot {
-            head: self.head_state()?,
-            refs: self.all_refs()?,
-            stash: self.stash_records()?,
+            head,
+            refs,
+            stash,
+            trees: Trees { worktree, index },
+        })
+    }
+
+    /// What the repository is like after a step that changed only the index (staging): `before`
+    /// with the index as it is now. Files, branches and stashes are as they were, so the files
+    /// aren't read again: that is most of a snapshot's cost.
+    pub(crate) fn snapshot_of_index(&self, before: &Snapshot) -> Result<Snapshot> {
+        Ok(Snapshot {
             trees: Trees {
-                worktree: self.worktree_tree()?,
+                worktree: before.trees.worktree.clone(),
                 index: self.index_tree()?,
             },
+            ..before.clone()
         })
     }
 
@@ -602,7 +629,9 @@ impl Repo {
     fn scratch_index(&self) -> Result<std::path::PathBuf> {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let scratch = self.git_path(&format!("oxbow/snapshot-{}-{n}.index", std::process::id()))?;
+        let scratch = self
+            .git_path("oxbow")?
+            .join(format!("snapshot-{}-{n}.index", std::process::id()));
         if let Some(dir) = scratch.parent() {
             std::fs::create_dir_all(dir).map_err(io)?;
         }
@@ -629,17 +658,18 @@ impl Repo {
     fn index_tree(&self) -> Result<Option<String>> {
         let scratch = self.scratch_index()?;
         let with_scratch = |cmd: GitCommand| cmd.env("GIT_INDEX_FILE", scratch.to_string_lossy().into_owned());
-        let result = (|| {
-            if !self
-                .run(&with_scratch(GitCommand::new(["ls-files", "-u", "-z"])))?
-                .stdout
-                .is_empty()
-            {
-                return Ok(None);
-            }
-            let tree = self.run(&with_scratch(GitCommand::new(["write-tree"])))?.stdout;
-            Ok(Some(tree.trim().to_owned()))
-        })();
+        // write-tree refuses an index with conflicts: only then are they looked for.
+        let result = self
+            .run(&with_scratch(GitCommand::new(["write-tree"])))
+            .map(|out| Some(out.stdout.trim().to_owned()))
+            .or_else(|err| {
+                let conflicts = self.run(&with_scratch(GitCommand::new(["ls-files", "-u", "-z"])))?;
+                if conflicts.stdout.is_empty() {
+                    Err(err)
+                } else {
+                    Ok(None)
+                }
+            });
         let _ = std::fs::remove_file(&scratch);
         result
     }
@@ -771,9 +801,16 @@ impl Repo {
         self.run(&GitCommand::new(["cat-file", "-e", id])).is_ok()
     }
 
-    fn git_path(&self, name: &str) -> Result<PathBuf> {
+    pub(crate) fn git_path(&self, name: &str) -> Result<PathBuf> {
+        if let Some(path) = self.git_paths.lock().ok().and_then(|paths| paths.get(name).cloned()) {
+            return Ok(path);
+        }
         let out = self.run(&GitCommand::new(["rev-parse", "--git-path", name]))?;
-        Ok(self.workdir().join(out.stdout.trim()))
+        let path = self.workdir().join(out.stdout.trim());
+        if let Ok(mut paths) = self.git_paths.lock() {
+            paths.insert(name.to_owned(), path.clone());
+        }
+        Ok(path)
     }
 
     fn oplog_file(&self) -> Result<PathBuf> {

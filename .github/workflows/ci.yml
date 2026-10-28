@@ -1,8 +1,10 @@
 name: CI
 
 # Every pull request runs the checks on Linux: format, lint, tests and the type check, the same
-# scripts/check.sh as before a push. The app is built for macOS only, once per merge to main (or
-# when run by hand from the Actions tab).
+# scripts/check.sh as before a push. They run again on each merge to main, beside the macOS build,
+# so the very commit an app is built from has checks of its own: a release is made only from one
+# whose checks are green. The app is built for macOS only, once per merge to main (or when run by
+# hand from the Actions tab).
 on:
   pull_request:
   push:
@@ -19,7 +21,6 @@ env:
 jobs:
   checks:
     name: Checks
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

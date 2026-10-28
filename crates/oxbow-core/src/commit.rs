@@ -643,13 +643,23 @@ impl Repo {
     /// has: the unchanged lines between hunks, shown as they are asked for. Past its end it has
     /// none, so a count of 0 only says how long it is.
     pub fn read_lines(&self, source: &Source, start: u32, count: u32) -> Result<SourceLines> {
-        let data = self.read_source(source)?;
-        let all = data.split_inclusive(|&b| b == b'\n');
-        let total = data.split_inclusive(|&b| b == b'\n').count() as u32;
-        let lines = all
-            .skip(start.saturating_sub(1) as usize)
-            .take(count as usize)
-            .map(|line| {
+        let text = match source {
+            // An object never changes: its lines are found once, then each page is a slice.
+            Source::Blob { id } => match cached_lines(id) {
+                Some(text) => text,
+                None => {
+                    let text = Arc::new(LineIndex::new(self.read_source(source)?));
+                    keep_lines(id, &text);
+                    text
+                }
+            },
+            Source::Worktree { .. } => Arc::new(LineIndex::new(self.read_source(source)?)),
+        };
+        let first = start.saturating_sub(1) as usize;
+        let last = first.saturating_add(count as usize).min(text.starts.len());
+        let lines = (first.min(last)..last)
+            .map(|i| {
+                let line = text.line(i);
                 let line = line.strip_suffix(b"\n").unwrap_or(line);
                 let (line, cr) = match line.strip_suffix(b"\r") {
                     Some(line) => (line, true),
@@ -661,7 +671,10 @@ impl Repo {
                 }
             })
             .collect();
-        Ok(SourceLines { lines, total })
+        Ok(SourceLines {
+            lines,
+            total: text.starts.len() as u32,
+        })
     }
 
     /// [`Repo::read_source`], reading at most `limit` bytes of a file in the working tree. An
@@ -698,6 +711,66 @@ impl Repo {
                     .ok_or_else(|| Error::Git(format!("could not read {path}: not a plain file")))
             }
         }
+    }
+}
+
+/// A file's bytes and where each of its lines starts.
+struct LineIndex {
+    data: Vec<u8>,
+    starts: Vec<usize>,
+}
+
+impl LineIndex {
+    fn new(data: Vec<u8>) -> Self {
+        let mut starts = Vec::new();
+        if !data.is_empty() {
+            starts.push(0);
+        }
+        starts.extend(
+            data.iter()
+                .enumerate()
+                .filter(|&(i, &b)| b == b'\n' && i + 1 < data.len())
+                .map(|(i, _)| i + 1),
+        );
+        LineIndex { data, starts }
+    }
+
+    /// Line `i` (from 0) with its line end.
+    fn line(&self, i: usize) -> &[u8] {
+        let end = self.starts.get(i + 1).copied().unwrap_or(self.data.len());
+        &self.data[self.starts[i]..end]
+    }
+
+    fn cost(&self) -> usize {
+        self.data.len() + self.starts.len() * std::mem::size_of::<usize>()
+    }
+}
+
+/// The blobs whose lines were asked for last, newest at the end, at most [`MAX_LINES_KEPT`]
+/// bytes of them: the lines between hunks come a page at a time, and a big file would be read
+/// and split again for every page.
+static LINES_KEPT: Mutex<Vec<(String, Arc<LineIndex>)>> = Mutex::new(Vec::new());
+const MAX_LINES_KEPT: usize = 64 * 1024 * 1024;
+
+fn cached_lines(id: &str) -> Option<Arc<LineIndex>> {
+    let mut kept = LINES_KEPT.lock().ok()?;
+    let at = kept.iter().position(|(kept, _)| kept == id)?;
+    let entry = kept.remove(at);
+    let text = entry.1.clone();
+    kept.push(entry);
+    Some(text)
+}
+
+fn keep_lines(id: &str, text: &Arc<LineIndex>) {
+    if text.cost() > MAX_LINES_KEPT / 2 {
+        return;
+    }
+    let Ok(mut kept) = LINES_KEPT.lock() else { return };
+    kept.retain(|(kept, _)| kept != id);
+    kept.push((id.to_owned(), text.clone()));
+    let mut total: usize = kept.iter().map(|(_, t)| t.cost()).sum();
+    while total > MAX_LINES_KEPT && kept.len() > 1 {
+        total -= kept.remove(0).1.cost();
     }
 }
 
@@ -1356,6 +1429,16 @@ pub(crate) fn word_diff(before: &str, after: &str) -> (Vec<WordPart>, Vec<WordPa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lines_are_found_as_split_finds_them() {
+        for text in ["", "a", "a\n", "a\nb", "\n\n", "one\r\ntwo\n\nfour"] {
+            let index = LineIndex::new(text.as_bytes().to_vec());
+            let split: Vec<&[u8]> = text.as_bytes().split_inclusive(|&b| b == b'\n').collect();
+            let found: Vec<&[u8]> = (0..index.starts.len()).map(|i| index.line(i)).collect();
+            assert_eq!(found, split, "{text:?}");
+        }
+    }
 
     #[test]
     fn hunk_headers_are_written_like_git_writes_them() {

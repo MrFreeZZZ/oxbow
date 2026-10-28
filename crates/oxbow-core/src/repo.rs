@@ -21,6 +21,9 @@ pub struct Repo {
     pub(crate) untracked: crate::worktree::UntrackedCounts,
     pub(crate) pair_changes: crate::commit::PairChangesCache,
     pub(crate) unpushed: crate::history::UnpushedAnswers,
+    /// Where git keeps its files (`git rev-parse --git-path`), asked once each: that never
+    /// changes for a repository, and an Undo snapshot needs several.
+    pub(crate) git_paths: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, PathBuf>>>,
 }
 
 /// How diffs are shown, from the user's settings.
@@ -108,6 +111,7 @@ impl Repo {
             untracked: Default::default(),
             pair_changes: Default::default(),
             unpushed: Default::default(),
+            git_paths: Default::default(),
         })
     }
 
