@@ -296,6 +296,7 @@ export const api = {
   githubRepo: () => invoke<GitHubRepo | null>("github_repo"),
   /** The GitLab projects the remotes point at, the default remote's first. */
   gitlabProjects: () => invoke<GitLabProject[]>("gitlab_projects"),
+  gitlabMergeRequests: () => invoke<{ project: GitLabProject; mergeRequests: PullSummary[] } | null>("gitlab_merge_requests"),
   /** Opens a merge request page of one of them in the browser. */
   openGitLab: (url: string) => invoke<void>("open_gitlab", { url }),
   /** Open and recently closed, the latest updated first. */

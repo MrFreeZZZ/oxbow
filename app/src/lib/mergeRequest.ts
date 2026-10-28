@@ -4,6 +4,7 @@
 // in the browser instead, with both branches picked.
 
 import { api } from "./api";
+import { github } from "./github.svelte";
 import type { Part, Request } from "./confirm.svelte";
 import { hostName, pushRecovery, type RemoteContext } from "./remote";
 import type { BranchContext } from "./branches";
@@ -151,6 +152,8 @@ export function mergeRequestRequest(ctx: MergeRequestContext, state: NewMergeReq
       const link = mergeRequestLink(output, project);
       const url = link ? (state.open ? link.url : null) : newMergeRequestUrl(project, upstream, state.target, state.title);
       if (url) api.openGitLab(url).catch(() => {});
+      // Signed in there: the branch shows its !N.
+      if (link) github.refresh();
     },
     recover: (failure) => pushRecovery(failure, ctx, action),
     action,

@@ -43,6 +43,7 @@ fn main() {
         .manage(Session::default())
         .manage(menu::MenuState::default())
         .manage(accounts::Accounts::default())
+        .manage(gitlab_accounts::GitLabTokens::default())
         .on_window_event(|window, event| {
             let session = window.state::<Session>();
             let label = window.label().to_owned();
@@ -219,6 +220,7 @@ fn main() {
             gitlab_accounts::gitlab_sign_out,
             pulls::github_repo,
             pulls::gitlab_projects,
+            pulls::gitlab_merge_requests,
             pulls::open_gitlab,
             pulls::github_pulls,
             pulls::github_pull,

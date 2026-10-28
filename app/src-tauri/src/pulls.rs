@@ -54,6 +54,44 @@ pub async fn gitlab_projects(
     .await
 }
 
+/// The merge requests of a GitLab project.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLabList {
+    project: GitLabProject,
+    merge_requests: Vec<PullSummary>,
+}
+
+/// The merge requests of the repository's GitLab project on a server Oxbow is signed in to (the
+/// default remote's first); none without a sign-in, where Create Merge Request pushes instead.
+#[tauri::command]
+pub async fn gitlab_merge_requests(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
+) -> CommandResult<Option<GitLabList>> {
+    let repo = current(&session, &window)?;
+    let servers = crate::gitlab_accounts::servers(&app);
+    let found = servers.clone();
+    let projects = read(at(&repo), "Find the GitLab projects", move || {
+        Ok(repo.gitlab_projects(&found))
+    })
+    .await?;
+    let Some(project) = projects.into_iter().find(|p| servers.iter().any(|s| s.host == p.host)) else {
+        return Ok(None);
+    };
+    let client = tokens.client(&app, &project.host)?;
+    blocking(move || {
+        let merge_requests = client.merge_requests(&project)?;
+        Ok(Some(GitLabList {
+            project,
+            merge_requests,
+        }))
+    })
+    .await
+}
+
 /// Open a merge request page of one of the repository's GitLab projects in the browser.
 #[tauri::command]
 pub async fn open_gitlab(

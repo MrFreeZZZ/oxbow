@@ -113,3 +113,60 @@ fn a_signed_in_server_is_gitlab_whatever_its_name() {
         ]
     );
 }
+
+#[test]
+fn merge_requests_come_as_pull_requests() {
+    let (address, seen) = stand_in(vec![(
+        "/api/v4/projects/team%2Fapp/merge_requests",
+        r#"[
+          {"id":9101,"iid":12,"title":"Export CSV","state":"opened","draft":true,"source_branch":"csv","target_branch":"main",
+           "sha":"abc123","source_project_id":5,"target_project_id":5,"web_url":"https://git.corp/team/app/-/merge_requests/12",
+           "description":null,"author":{"username":"anna"},"created_at":"2026-10-20T10:00:00.000Z","updated_at":"2026-10-28T09:30:15.512Z",
+           "reviewers":[{"username":"boris"}]},
+          {"id":9100,"iid":11,"title":"Fix login","state":"merged","draft":false,"source_branch":"login","target_branch":"main",
+           "sha":"def456","source_project_id":8,"target_project_id":5,"web_url":"https://git.corp/team/app/-/merge_requests/11",
+           "description":"Closes #3","author":{"username":"boris"},"created_at":"2026-10-01T10:00:00Z","updated_at":"2026-10-02T10:00:00Z",
+           "reviewers":[]}
+        ]"#,
+    )]);
+    let project = oxbow_core::GitLabProject {
+        remote: "origin".into(),
+        host: "git.corp".into(),
+        path: "team/app".into(),
+        web_url: "https://git.corp/team/app".into(),
+    };
+    let list = client(&address).merge_requests(&project).unwrap();
+    assert_eq!(
+        seen.lock().unwrap()[0].0,
+        "/api/v4/projects/team%2Fapp/merge_requests?state=all&order_by=updated_at&sort=desc&per_page=100"
+    );
+    let first = &list[0];
+    assert_eq!(
+        (first.number, first.title.as_str(), first.draft),
+        (12, "Export CSV", true)
+    );
+    assert_eq!(
+        (first.head.as_str(), first.base.as_str(), first.head_sha.as_str()),
+        ("csv", "main", "abc123")
+    );
+    assert_eq!((first.head_owner.as_deref(), first.body.as_str()), (None, ""));
+    assert_eq!(
+        (first.author.login.as_str(), first.requested.clone()),
+        ("anna", vec!["boris".to_owned()])
+    );
+    assert_eq!(first.updated, 1_793_179_815);
+    assert_eq!(first.node_id, "9101");
+    assert_eq!(
+        serde_json::to_value(list[1].state).unwrap(),
+        serde_json::json!("merged")
+    );
+    assert_eq!(
+        list[1].head_owner.as_deref(),
+        Some("project 8"),
+        "a fork's merge request"
+    );
+
+    let (address, _) = stand_in(vec![("/api/v4/projects", r#"404 {"message":"404 Project Not Found"}"#)]);
+    let message = client(&address).merge_requests(&project).unwrap_err().to_string();
+    assert!(message.contains("doesn't know this project"), "{message}");
+}
