@@ -2,36 +2,58 @@
 // a file, so a line can't rely on the ones before it (a comment that started above the hunk shows
 // as code). The theme picks the colors through --syn-* variables (see themes.ts).
 
-import hljs from "highlight.js/lib/core";
-import bash from "highlight.js/lib/languages/bash";
-import c from "highlight.js/lib/languages/c";
-import cpp from "highlight.js/lib/languages/cpp";
-import csharp from "highlight.js/lib/languages/csharp";
-import css from "highlight.js/lib/languages/css";
-import dockerfile from "highlight.js/lib/languages/dockerfile";
-import go from "highlight.js/lib/languages/go";
-import ini from "highlight.js/lib/languages/ini";
-import java from "highlight.js/lib/languages/java";
-import javascript from "highlight.js/lib/languages/javascript";
-import json from "highlight.js/lib/languages/json";
-import kotlin from "highlight.js/lib/languages/kotlin";
-import makefile from "highlight.js/lib/languages/makefile";
-import markdown from "highlight.js/lib/languages/markdown";
-import objectivec from "highlight.js/lib/languages/objectivec";
-import php from "highlight.js/lib/languages/php";
-import python from "highlight.js/lib/languages/python";
-import ruby from "highlight.js/lib/languages/ruby";
-import rust from "highlight.js/lib/languages/rust";
-import scss from "highlight.js/lib/languages/scss";
-import sql from "highlight.js/lib/languages/sql";
-import swift from "highlight.js/lib/languages/swift";
-import typescript from "highlight.js/lib/languages/typescript";
-import xml from "highlight.js/lib/languages/xml";
-import yaml from "highlight.js/lib/languages/yaml";
+import type { HLJSApi, LanguageFn } from "highlight.js";
+import { SvelteSet } from "svelte/reactivity";
 import type { WordPart } from "./types";
 
-const LANGUAGES = { bash, c, cpp, csharp, css, dockerfile, go, ini, java, javascript, json, kotlin, makefile, markdown, objectivec, php, python, ruby, rust, scss, sql, swift, typescript, xml, yaml };
-for (const [name, language] of Object.entries(LANGUAGES)) hljs.registerLanguage(name, language);
+// Each grammar, and highlight.js itself, loads the first time a file in its language is shown:
+// they are not part of what the window loads to start.
+const LANGUAGES: Record<string, () => Promise<{ default: LanguageFn }>> = {
+  bash: () => import("highlight.js/lib/languages/bash"),
+  c: () => import("highlight.js/lib/languages/c"),
+  cpp: () => import("highlight.js/lib/languages/cpp"),
+  csharp: () => import("highlight.js/lib/languages/csharp"),
+  css: () => import("highlight.js/lib/languages/css"),
+  dockerfile: () => import("highlight.js/lib/languages/dockerfile"),
+  go: () => import("highlight.js/lib/languages/go"),
+  ini: () => import("highlight.js/lib/languages/ini"),
+  java: () => import("highlight.js/lib/languages/java"),
+  javascript: () => import("highlight.js/lib/languages/javascript"),
+  json: () => import("highlight.js/lib/languages/json"),
+  kotlin: () => import("highlight.js/lib/languages/kotlin"),
+  makefile: () => import("highlight.js/lib/languages/makefile"),
+  markdown: () => import("highlight.js/lib/languages/markdown"),
+  objectivec: () => import("highlight.js/lib/languages/objectivec"),
+  php: () => import("highlight.js/lib/languages/php"),
+  python: () => import("highlight.js/lib/languages/python"),
+  ruby: () => import("highlight.js/lib/languages/ruby"),
+  rust: () => import("highlight.js/lib/languages/rust"),
+  scss: () => import("highlight.js/lib/languages/scss"),
+  sql: () => import("highlight.js/lib/languages/sql"),
+  swift: () => import("highlight.js/lib/languages/swift"),
+  typescript: () => import("highlight.js/lib/languages/typescript"),
+  xml: () => import("highlight.js/lib/languages/xml"),
+  yaml: () => import("highlight.js/lib/languages/yaml"),
+};
+
+let hljs: HLJSApi | null = null;
+/** The languages ready to color; reading it makes a view draw again once one is. */
+const ready = new SvelteSet<string>();
+const loading = new Set<string>();
+
+function load(language: string) {
+  if (loading.has(language)) return;
+  loading.add(language);
+  Promise.all([import("highlight.js/lib/core"), LANGUAGES[language]()]).then(
+    ([core, grammar]) => {
+      hljs = core.default;
+      hljs.registerLanguage(language, grammar.default);
+      ready.add(language);
+    },
+    // Tried again the next time a file in it is shown.
+    () => loading.delete(language),
+  );
+}
 
 const BY_EXTENSION: Record<string, keyof typeof LANGUAGES> = {
   sh: "bash", bash: "bash", zsh: "bash",
@@ -60,14 +82,17 @@ const BY_NAME: Record<string, keyof typeof LANGUAGES> = {
   rakefile: "ruby",
 };
 
-/** The language of a file, from its name; `null` for plain text. */
+/** The language of a file, from its name; `null` for plain text, and until its colors are loaded:
+ *  the first call starts that, and the view draws again with them once they are. */
 export function languageOf(path: string): string | null {
   const name = path.split("/").pop()!.toLowerCase();
-  // Own keys only: a file can be called `constructor`, or end in `.tostring`.
-  if (Object.hasOwn(BY_NAME, name)) return BY_NAME[name];
   const dot = name.lastIndexOf(".");
   const ext = name.slice(dot + 1);
-  return dot > 0 && Object.hasOwn(BY_EXTENSION, ext) ? BY_EXTENSION[ext] : null;
+  // Own keys only: a file can be called `constructor`, or end in `.tostring`.
+  const language = Object.hasOwn(BY_NAME, name) ? BY_NAME[name] : dot > 0 && Object.hasOwn(BY_EXTENSION, ext) ? BY_EXTENSION[ext] : null;
+  if (!language || ready.has(language)) return language;
+  load(language);
+  return null;
 }
 
 /** What a piece of code is, as the theme colors it. */
@@ -106,7 +131,7 @@ let cachedChars = 0;
 
 /** The line's text in runs of one color. */
 function tokens(text: string, language: string): { text: string; role: Role }[] {
-  if (text.length > MAX_HIGHLIGHTED) return [{ text, role: null }];
+  if (text.length > MAX_HIGHLIGHTED || !hljs) return [{ text, role: null }];
   const key = `${language}\u0000${text}`;
   const hit = cache.get(key);
   if (hit) {
