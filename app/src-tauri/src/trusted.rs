@@ -34,7 +34,7 @@ fn read(app: &AppHandle) -> Vec<TrustedRepo> {
     match std::fs::read_to_string(&file) {
         Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
         Err(_) => {
-            let seeded: Vec<TrustedRepo> = crate::read_recent(app)
+            let seeded: Vec<TrustedRepo> = crate::recent::read_recent(app)
                 .into_iter()
                 .map(|r| TrustedRepo {
                     path: r.path,
@@ -115,7 +115,7 @@ pub fn check(app: &AppHandle, repo: &Repo) -> (Vec<TrustFinding>, bool) {
         note(app, workdir, &found);
         return (found, true);
     }
-    let asks = crate::read_settings(app)
+    let asks = crate::preferences::read_settings(app)
         .get("oxbow.git.askTrust")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(true);

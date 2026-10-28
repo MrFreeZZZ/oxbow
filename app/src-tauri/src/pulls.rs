@@ -13,8 +13,9 @@ use oxbow_core::{ActionEvent, OutputLine};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::CommandResult;
 use crate::accounts::Accounts;
-use crate::{CommandResult, Session, at, blocking, current, logged, read};
+use crate::session::{Session, at, blocking, current, logged, read};
 
 fn github_repo_of(
     session: &State<'_, Session>,

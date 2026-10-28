@@ -8,7 +8,8 @@ use oxbow_core::console::{self, Entry};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
-use crate::{CommandResult, Session};
+use crate::CommandResult;
+use crate::session::Session;
 
 /// A repository whose log the Console can show.
 #[derive(Serialize)]
@@ -82,7 +83,7 @@ pub fn show_console(app: &AppHandle) -> CommandResult<()> {
         .title("Console")
         .inner_size(1000.0, 760.0)
         .min_inner_size(640.0, 400.0)
-        .theme(crate::appearance(&crate::read_settings(app)));
+        .theme(crate::preferences::appearance(&crate::preferences::read_settings(app)));
     #[cfg(target_os = "macos")]
     let builder = builder
         .title_bar_style(tauri::TitleBarStyle::Overlay)
@@ -111,7 +112,7 @@ pub async fn console_repos(app: AppHandle, session: State<'_, Session>) -> Comma
             .collect();
         (current, open)
     };
-    let recent: Vec<String> = crate::recent_repos(app).into_iter().map(|r| r.path).collect();
+    let recent: Vec<String> = crate::recent::recent_repos(app).into_iter().map(|r| r.path).collect();
     tauri::async_runtime::spawn_blocking(move || {
         let mut seen = HashSet::new();
         let mut repos = Vec::new();

@@ -40,7 +40,10 @@ crates/oxbow-core/          UI-free core library (all Git logic lives here)
   examples/history.rs       history load benchmark;  reads.rs = opening with worktrees/submodules;
                             steps.rs = Stage with Undo and pages of lines of a big file
 app/src-tauri/              Tauri shell (crate oxbow-app)
-  src/main.rs               all #[tauri::command]s and the generate_handler! list
+  src/main.rs               the app's setup and the generate_handler! list of every command
+  src/session.rs            each window's repository and Stop buttons; current(), read(), logged()
+  src/<area>.rs             the #[tauri::command]s by area: repos recent setup history working
+                            conflicts actions git_config preferences outside windows
   src/accounts.rs pulls.rs open_in.rs console_window.rs
   src/trusted.rs            trusted-repositories.json: which repositories may run their own programs
   src/settings.rs           settings.json: read (never written over when broken), atomic write
@@ -65,7 +68,7 @@ docs/architecture.md        layout, git access, graph rules, development;  docs/
 ```
 
 A new backend action usually touches, in order: `crates/oxbow-core/src/<area>.rs` (+ test in
-`tests/<area>.rs`) → a command in `app/src-tauri/src/main.rs` and its `generate_handler!` entry →
+`tests/<area>.rs`) → a command in `app/src-tauri/src/<area>.rs` and its `generate_handler!` entry →
 a wrapper in `app/src/lib/api.ts` and types in `lib/types.ts` → the Svelte view.
 
 ## Checking
