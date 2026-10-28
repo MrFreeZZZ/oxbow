@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::cli::GitCommand;
+use crate::cli::{GitCommand, literal};
 use crate::commit::FileChange;
 use crate::error::{Error, Result};
 use crate::repo::Repo;
@@ -142,6 +142,58 @@ impl Repo {
             behind_count,
             mode,
             from,
+            files,
+            command,
+        })
+    }
+
+    /// Compare with Working Copy: the file `path` as `commit` has it, beside the file on disk.
+    /// The other side is the commit's tree with only that file as it is on disk, written through
+    /// a scratch index, so the diff has that file alone, however big the repository.
+    pub fn compare_with_working_copy(&self, commit: &str, path: &str) -> Result<Comparison> {
+        let commit_id = self.commit_id(commit)?;
+        let scratch = self.scratch_index()?;
+        let index = scratch.to_string_lossy().into_owned();
+        let now = (|| {
+            let with_scratch = |cmd: GitCommand| cmd.env("GIT_INDEX_FILE", index.clone());
+            self.run(&with_scratch(GitCommand::new(["read-tree", &commit_id])))?;
+            // -A: a file deleted since leaves the tree.
+            self.run(&with_scratch(GitCommand::new(["add", "-A", "--", &literal(path)])))?;
+            Ok::<_, Error>(
+                self.run(&with_scratch(GitCommand::new(["write-tree"])))?
+                    .stdout
+                    .trim()
+                    .to_owned(),
+            )
+        })();
+        let _ = std::fs::remove_file(&scratch);
+        let now = now?;
+        let files = self
+            .tree_files_with(&commit_id, &now, None, &std::sync::atomic::AtomicBool::new(false))?
+            .into_iter()
+            .map(|file| CompareFile {
+                file,
+                last: None,
+                only_base: false,
+            })
+            .collect();
+        let command = GitCommand::new([
+            "diff".to_owned(),
+            commit_id[..commit_id.len().min(7)].to_owned(),
+            "--".to_owned(),
+            path.to_owned(),
+        ])
+        .display();
+        Ok(Comparison {
+            base_id: commit_id.clone(),
+            target_id: now,
+            merge_base: None,
+            ahead: Vec::new(),
+            behind: Vec::new(),
+            ahead_count: 0,
+            behind_count: 0,
+            mode: CompareMode::Tips,
+            from: commit_id,
             files,
             command,
         })

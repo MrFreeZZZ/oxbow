@@ -18,6 +18,7 @@ below, for what only a Mac shows (FSEvents, ⌘Q, its windows and keyboard layou
 | A status that fails | a status git can't read | `tests/worktrees.rs`, `tests/history.rs` | M8 |
 | A setting that can't be saved | a setting that can't be saved | `settings.rs`, `settingSaves.test.ts` | M8 |
 | Keys and sheets | keys and modals | `shortcuts.test.ts`, `focus.test.ts` | M9, M10 |
+| A file of a commit, the message box | a file of a commit | `tests/edit.rs`, `tests/worktree.rs`, `commitFiles.test.ts`, `messageHistory.test.ts` | — |
 
 ## In the cloud
 

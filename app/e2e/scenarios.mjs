@@ -359,6 +359,56 @@ export const SCENARIOS = [
       }
     },
   },
+  {
+    name: "a file of a commit",
+    // Revert This File from a commit's file menu changes only that file on disk, and Undo takes
+    // it back; ↑ in the empty summary brings the last message, and Sign-off signs the commit.
+    async run(ctx) {
+      const r = repo(`${ctx.dir}/r`, 2);
+      git(r, "config", "user.name", "Fixture");
+      git(r, "config", "user.email", "fixture@example.com");
+      write(r, "src/f1.txt", read(r, "src/f1.txt").replace("file 1 5", "file 1 five"));
+      write(r, "src/f2.txt", read(r, "src/f2.txt").replace("file 2 5", "file 2 five"));
+      git(r, "commit", "-q", "-am", "Spell five");
+      const app = await ctx.start(r);
+      await app.js(async (page) => {
+        page.all("[aria-label=Commits] [role=option]", "Spell five")[0].click();
+        const file = await page.until(() => page.all(".files .file", "f1.txt")[0], "the commit's file");
+        const box = file.getBoundingClientRect();
+        file.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: box.left + 20, clientY: box.top + 8 }));
+        await page.paint();
+        await page.act("Revert This File", "Revert File");
+      });
+      await eventually(() => !read(r, "src/f1.txt").includes("five"), "the file reverted");
+      assert.match(read(r, "src/f2.txt"), /file 2 five/, "the commit's other file changed too");
+      assert.equal(git(r, "log", "-1", "--format=%s"), "Spell five");
+      assert.equal(git(r, "diff", "--cached", "--name-only"), "", "the revert was staged");
+      await app.js((page) => page.act("Undo"));
+      await eventually(() => read(r, "src/f1.txt").includes("five"), "the file back");
+
+      write(r, "src/f1.txt", "changed\n");
+      await shows(app, "1 changed");
+      await app.js(async (page) => {
+        await page.click("Changes");
+        (await page.until(() => document.querySelector("input[aria-label='Commit summary']"), "the summary box")).focus();
+      });
+      await app.keys("ArrowUp");
+      const recalled = await app.js(async (page) => page.until(() => document.querySelector("input[aria-label='Commit summary']").value, "a message"));
+      assert.equal(recalled, "Spell five");
+      await app.keys("ArrowDown");
+      assert.equal(await app.js(async (page) => document.querySelector("input[aria-label='Commit summary']").value), "", "↓ went back to the empty box");
+      await app.keys("Sign the change");
+      await app.js(async (page) => {
+        await page.click("Sign-off");
+        await page.click("Stage 1 File");
+        await page.until(() => page.words(document.body).includes("1 file staged"), "the file staged");
+        document.querySelector("input[aria-label='Commit summary']").focus();
+      });
+      await app.keys("Ctrl+Enter");
+      await eventually(() => git(r, "log", "-1", "--format=%s") === "Sign the change", "the commit");
+      assert.equal(git(r, "log", "-1", "--format=%b").trim(), "Signed-off-by: Fixture <fixture@example.com>");
+    },
+  },
 ];
 
 function hasXdotool() {

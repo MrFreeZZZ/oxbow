@@ -138,6 +138,8 @@ export const api = {
   /** Stop the reads running in these lanes: their answers are no longer wanted. */
   stopReads: (lanes: string[]) => invoke<void>("stop_reads", { lanes }),
   compare: (base: string, target: string, mode: CompareMode) => invoke<Comparison>("compare", { base, target, mode }),
+  /** A file of `commit` beside the file on disk. */
+  compareWithWorkingCopy: (commit: string, path: string) => invoke<Comparison>("compare_with_working_copy", { commit, path }),
   compareDiff: (from: string, to: string, path: string | null, wholeFile: boolean, full = false, lane: string | null = null) =>
     invoke<FileDiff[]>("compare_diff", { from, to, path, wholeFile, full, lane }),
   /** A page of a comparison's diffs, from the `start`th file until about `budget` lines. */
@@ -155,6 +157,8 @@ export const api = {
   filePickaxe: (path: string, text: string, matchCase: boolean, rev: string, lane: string | null = null) =>
     invoke<string[]>("file_pickaxe", { path, text, matchCase, rev, lane }),
   workingTree: () => invoke<WorkingTree>("working_tree"),
+  /** Your latest commit messages, newest first, for ↑ in the commit message box. */
+  recentMessages: () => invoke<string[]>("recent_messages"),
   workingDiff: (path: string, side: Side, wholeFile: boolean, full = false) =>
     invoke<FileDiff>("working_diff", { path, side, wholeFile, full }),
   /** A page of the diffs of `paths` on one side, in that order, from the `from`th file with

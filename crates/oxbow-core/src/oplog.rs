@@ -31,7 +31,7 @@ pub const OPLOG_REF: &str = "refs/oxbow/oplog";
 /// Untracked files bigger than this stay out of snapshots, and an undo never deletes them.
 pub const MAX_UNTRACKED: u64 = 50 * 1024 * 1024;
 /// The empty tree, for a working copy or staging area with nothing in it.
-const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+pub(crate) const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 static KEEP_DAYS: AtomicU32 = AtomicU32::new(30);
 
@@ -626,7 +626,7 @@ impl Repo {
 
     /// A copy of the index of its own to work on, so the real one is untouched. Each call has
     /// its own: a compare running next to a step must not delete the step's.
-    fn scratch_index(&self) -> Result<std::path::PathBuf> {
+    pub(crate) fn scratch_index(&self) -> Result<std::path::PathBuf> {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let scratch = self
@@ -919,6 +919,11 @@ impl Repo {
                 },
             ),
             Action::Revert { commit } => ("revert", format!("Revert {}", short_id(commit))),
+            Action::RevertFile { commit, path, .. } => ("revert", format!("Revert {path} of {}", short_id(commit))),
+            Action::CherryPickFile { commit, path, .. } => {
+                ("cherry", format!("Cherry-pick {path} from {}", short_id(commit)))
+            }
+            Action::TakeVersion { commit, path } => ("checkout", format!("Take {path} from {}", short_id(commit))),
             Action::Reset { commit, mode } => (
                 "reset",
                 format!(

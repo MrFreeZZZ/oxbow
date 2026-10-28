@@ -240,6 +240,21 @@ pub(crate) async fn compare(
     read(at(&repo), "Compare", move || repo.compare(&base, &target, mode)).await
 }
 
+/// Compare with Working Copy: a file of a commit beside the file on disk.
+#[tauri::command]
+pub(crate) async fn compare_with_working_copy(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    commit: String,
+    path: String,
+) -> CommandResult<oxbow_core::Comparison> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "Compare with the working copy", move || {
+        repo.compare_with_working_copy(&commit, &path)
+    })
+    .await
+}
+
 /// The changed files of a comparison with their line counts, from the `count_from`th on: the
 /// ones before are counted by the first page of diffs.
 #[tauri::command]

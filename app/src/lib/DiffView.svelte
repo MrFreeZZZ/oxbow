@@ -232,11 +232,14 @@
     else folded = { ...folded, [diff.file.path]: fold };
   }
 
-  /** Open the file in the editor, at its first change. */
-  function openInEditor(diff: FileDiff) {
+  /** Open the file in the editor, at its first change, or at `line`. */
+  function openInEditor(diff: FileDiff, line: number | null = null) {
     const first = diff.hunks[0]?.lines.find((l) => l.kind !== "context" && l.newLine !== null) ?? diff.hunks[0]?.lines[0];
-    api.openInEditor(diff.file.path, first?.newLine ?? null).catch((err) => confirm.fail(err));
+    api.openInEditor(diff.file.path, line ?? first?.newLine ?? null).catch((err) => confirm.fail(err));
   }
+
+  /** Whether a line number of the file's new side opens it in the editor there. */
+  const lineOpens = (diff: FileDiff) => openable && diff.file.status !== "deleted" && !diff.file.submodule;
 
   /** Lines shown past `lineBudget`: each Show More adds a portion, never everything at once. */
   let extra = $state(0);
@@ -528,6 +531,15 @@
   {#if notes?.has(diff, line)}<div class="notes">{@render notes.under(diff, line)}</div>{/if}
 {/snippet}
 
+<!-- The number of a line of the file as it is now: a click opens the file in the editor there. -->
+{#snippet newNo(diff: FileDiff, no: number | null)}
+  {#if no !== null && lineOpens(diff)}
+    <button class="no opens" tabindex="-1" onclick={() => openInEditor(diff, no)} title="Open in Editor at line {no}">{no}</button>
+  {:else}
+    <span class="no">{no ?? ""}</span>
+  {/if}
+{/snippet}
+
 <!-- One side of a Side by Side row: the old line on the left, the new one on the right. -->
 {#snippet half(diff: FileDiff, hunk: Hunk, rows: Row[], r: number, side: "left" | "right", language: ReturnType<typeof languageOf>, picking: boolean, picked: number[])}
   {@const at = side === "left" ? rows[r].left : rows[r].right}
@@ -544,7 +556,7 @@
     {#if picking}
       {#if line && at !== null && line.kind !== "context"}{@render pickBox(hunk, line, at, on)}{:else}<span></span>{/if}
     {/if}
-    <span class="no">{line ? ((side === "left" ? line.oldLine : line.newLine) ?? "") : ""}</span>
+    {#if side === "right" && line}{@render newNo(diff, line.newLine)}{:else}<span class="no">{line ? ((side === "left" ? line.oldLine : line.newLine) ?? "") : ""}</span>{/if}
     {#if line}{@render code(diff, line, language, side === "right" || line.kind !== "context")}{/if}
   </div>
 {/snippet}
@@ -595,7 +607,7 @@
               {#if line.kind !== "context"}{@render pickBox(hunk, line, i, on)}{:else}<span></span>{/if}
             {/if}
             <span class="no">{line.oldLine ?? ""}</span>
-            <span class="no">{line.newLine ?? ""}</span>
+            {@render newNo(diff, line.newLine)}
             {@render code(diff, line, language, true)}
           </div>
           {@render under(diff, line)}
@@ -1149,6 +1161,10 @@
     padding-right: 10px;
     user-select: none;
     -webkit-user-select: none;
+  }
+  .no.opens:hover {
+    color: var(--accent-text);
+    text-decoration: underline;
   }
   /* Wrapped, a long line breaks between words, and inside a word only one longer than the line. */
   .text {

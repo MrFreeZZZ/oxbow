@@ -7,6 +7,7 @@
   import { lane, relativeTime, shortId, tint } from "./format";
   import RefPicker from "./RefPicker.svelte";
   import CompareChanges from "./CompareChanges.svelte";
+  import { ancestors } from "./commits";
   import CommitPanel from "./CommitPanel.svelte";
 
   let {
@@ -189,7 +190,7 @@
       <aside class="panel" style:width="{panelWidth}px" aria-label="Changes">
         <button class="grip" onpointerdown={onGrip} aria-label="Resize the changes" title="Drag to resize"></button>
         {#if picked && pickedRow}
-          <CommitPanel row={pickedRow} childIds={childrenOf(pickedRow.id)} {lookup} onSelect={(id) => (picked = id)} localTags={history.localTags} />
+          <CommitPanel row={pickedRow} childIds={childrenOf(pickedRow.id)} {lookup} onSelect={(id) => (picked = id)} localTags={history.localTags} {version} inHead={(id) => ancestors(history, history.head.commit).has(id)} />
         {:else if picked}
           <p class="missing">This commit is older than the loaded history, so its details aren’t shown here.</p>
         {:else}

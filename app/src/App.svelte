@@ -2483,7 +2483,7 @@
         {/key}
       {:else if view === "file" && nav.file}
         {#key repo.path + nav.file.path}
-          <FileHistoryView.component {history} path={nav.file.path} start={nav.file.commit} lookup={(id) => rowsById.get(id)} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "the command" : text}.`)} />
+          <FileHistoryView.component {history} path={nav.file.path} start={nav.file.commit} lookup={(id) => rowsById.get(id)} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "the command" : text}.`)} {version} />
         {/key}
       {:else if view === "compare"}
         {#key repo.path}
@@ -2679,6 +2679,7 @@
               />
             {:else if selectedRow}
               <CommitPanel row={selectedRow} childIds={childrenOf.get(selectedRow.id) ?? []} lookup={(id) => rowsById.get(id)} onSelect={jump} localTags={history.localTags} {version}
+                inHead={(id) => ancestors(history!, history!.head.commit).has(id)}
                 onUnshallow={history.shallow && history.defaultRemote ? () => run(unshallowRequest(history!.defaultRemote!)) : null}
                 find={found?.mode === "code" ? found.text : null}
                 foundFiles={found?.hits.get(selectedRow.id) ?? []}

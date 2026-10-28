@@ -540,7 +540,7 @@ export type Action =
   | { kind: "unstageHunk"; path: string; header: string; check: string; lines?: number[] | null }
   | { kind: "discardHunk"; path: string; header: string; check: string; lines?: number[] | null }
   | { kind: "ignore"; pattern: string; untrack?: string }
-  | { kind: "commit"; message: string; amend: boolean; noVerify?: boolean; allowSecrets?: boolean }
+  | { kind: "commit"; message: string; amend: boolean; noVerify?: boolean; allowSecrets?: boolean; signOff?: boolean }
   | { kind: "fetch"; remote: string | null }
   | { kind: "pull"; remote: string; branch: string; fetchFirst?: boolean; submodules?: boolean; mode?: "rebase" | "merge" | "fastForward" }
   | {
@@ -581,6 +581,11 @@ export type Action =
   /** Mailed patches become commits (git am); a plain diff goes into the files (git apply). */
   | { kind: "applyPatches"; paths: string[] }
   | { kind: "revert"; commit: string }
+  /** One file of `commit`: its change undone in the file on disk, or brought into it, uncommitted. */
+  | { kind: "revertFile"; commit: string; path: string; oldPath?: string | null }
+  | { kind: "cherryPickFile"; commit: string; path: string; oldPath?: string | null }
+  /** The file on disk as `commit` has it; nothing is staged. */
+  | { kind: "takeVersion"; commit: string; path: string }
   | { kind: "reset"; commit: string; mode: ResetMode }
   | { kind: "reword"; message: string; noVerify?: boolean }
   /** `paths`: only these files; every change when empty or missing. */

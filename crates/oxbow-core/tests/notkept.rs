@@ -253,6 +253,7 @@ fn undoing_a_pushed_commit_says_only_this_copy_changes_and_offers_revert() {
         amend: false,
         no_verify: false,
         allow_secrets: false,
+        sign_off: false,
     })
     .unwrap();
     let second = fx.git(&["rev-parse", "HEAD"]);
@@ -396,4 +397,24 @@ fn a_step_shows_until_when_it_is_kept_and_compares_with_now() {
     // Right after the discard, a.txt was as committed; now it is "c".
     let after = repo.compare_snapshot(&log[0].id, true).unwrap();
     assert_eq!(after.comparison.files.len(), 2);
+}
+
+#[test]
+fn taking_a_version_over_a_big_file_git_does_not_track_names_it() {
+    let mut fx = Fixture::new();
+    let added = fx.commit("video.mov", "small then\n", "Add the video");
+    fx.git(&["rm", "-q", "--cached", "video.mov"]);
+    fx.git(&["commit", "-q", "-m", "Stop tracking the video"]);
+    big(&fx, "video.mov");
+    let repo = Repo::open(fx.path()).unwrap();
+    let take = |path: &str| Action::TakeVersion {
+        commit: added.clone(),
+        path: path.into(),
+    };
+    match repo.not_kept(&take("video.mov")).unwrap().as_slice() {
+        [NotKept::BigFiles { files, .. }] => assert_eq!(files[0].path, "video.mov"),
+        other => panic!("{other:?}"),
+    }
+    std::fs::remove_file(fx.path().join("video.mov")).unwrap();
+    assert!(repo.not_kept(&take("video.mov")).unwrap().is_empty());
 }

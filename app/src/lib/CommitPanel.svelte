@@ -15,6 +15,8 @@
   import { byFolder, filesWidth, listView, resizeFiles, setFolders } from "./listView.svelte";
   import Menu, { type MenuEntry } from "./Menu.svelte";
   import { commitFileMenu } from "./changesMenu";
+  import type { CommitFile } from "./commitFiles";
+  import WorkingCopyPanel from "./WorkingCopyPanel.svelte";
   import { nav } from "./nav.svelte";
   import { pressed } from "./shortcuts";
 
@@ -30,6 +32,7 @@
     banner,
     version = 0,
     onUnshallow = null,
+    inHead = null,
   }: {
     row: HistoryRow;
     childIds: string[];
@@ -49,6 +52,9 @@
     version?: number;
     /** Fetch Full History, for a commit where a shallow clone stops. */
     onUnshallow?: (() => void) | null;
+    /** Whether a commit is in the checked-out commit's history, for the file menu's Revert or
+     *  Cherry-Pick This File; without it both are offered. */
+    inHead?: ((id: string) => boolean) | null;
   } = $props();
 
   let diffView = $state<DiffView>();
@@ -265,8 +271,16 @@
   let menu = $state<{ x: number; y: number; entries: MenuEntry[]; label: string } | null>(null);
   function openFileMenu(event: MouseEvent, file: FileChange) {
     event.preventDefault();
-    menu = { x: event.clientX, y: event.clientY, ...commitFileMenu(nav.repo, file, row.id) };
+    const ctx = { summary: detail?.summary ?? row.summary, inHead: inHead ? inHead(row.id) : null, compare: (f: CommitFile) => (comparing = { commit: row.id, file: f }) };
+    menu = { x: event.clientX, y: event.clientY, ...commitFileMenu(nav.repo, file, row.id, ctx) };
   }
+  /** Compare with Working Copy: a file of this commit beside the file on disk, in place of the details. */
+  let comparing = $state<{ commit: string; file: CommitFile } | null>(null);
+  // Another commit shows its details again.
+  $effect(() => {
+    row.id;
+    untrack(() => (comparing = null));
+  });
 
   /** Only files whose path has this text are listed. */
   let filter = $state("");
@@ -326,6 +340,11 @@
   const tone: Record<string, string> = { added: "green", deleted: "red", modified: "orange", renamed: "orange", copied: "orange" };
 </script>
 
+{#if comparing && comparing.commit === row.id}
+<div class="panel">
+  <WorkingCopyPanel commit={row.id} summary={detail?.summary ?? row.summary} file={comparing.file} {color} {version} onClose={() => (comparing = null)} />
+</div>
+{:else}
 <div class="panel">
   {@render banner?.()}
   <div class="head">
@@ -532,6 +551,8 @@
     </div>
   </div>
 </div>
+
+{/if}
 
 {#if menu}
   <Menu x={menu.x} y={menu.y} label={menu.label} entries={menu.entries} onClose={() => (menu = null)} />

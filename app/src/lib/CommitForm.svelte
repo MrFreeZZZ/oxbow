@@ -10,6 +10,7 @@
   import { shortcut } from "./keys";
   import { prefs } from "./prefs.svelte";
   import { pressed } from "./shortcuts";
+  import { browsing, splitMessage, stepMessage } from "./messageHistory";
   import type { FileChange, HistoryRow } from "./types";
   import WhyNote from "./WhyNote.svelte";
 
@@ -85,7 +86,7 @@
     if (!canCommit) return;
     const files = staged.length;
     const pushed = draft.amend && head && !head.unpushed;
-    const action = { kind: "commit" as const, message, amend: draft.amend };
+    const action = { kind: "commit" as const, message, amend: draft.amend, signOff: draft.signOff };
     const summary = draft.summary.trim();
     const where = branch ?? "HEAD";
     const done = await confirm.run({
@@ -105,6 +106,9 @@
       draft.amend = false;
       draft.amendOn = null;
       draft.prefilled = "";
+      // The new commit is the newest message.
+      messages = null;
+      shownAt = -1;
       onChanged();
     }
   }
@@ -184,18 +188,53 @@
     }
   }
 
+  /** Your latest commit messages, read on the first ↑, and which one the box shows (-1: none). */
+  let messages: string[] | null = null;
+  let shownAt = -1;
+  function onSummaryKey(event: KeyboardEvent) {
+    onCommitKey(event);
+    const by = pressed("previousMessage", event) ? 1 : pressed("nextMessage", event) ? -1 : 0;
+    // Amend starts from the last commit's message, which these keys would replace.
+    if (!by || event.isComposing || draft.amend || !browsing(messages ?? [], shownAt, draft)) return;
+    event.preventDefault();
+    const own = draft;
+    const step = (list: string[]) => {
+      const next = stepMessage(list, shownAt, by, own);
+      if (next === null || own !== draft) return;
+      shownAt = next;
+      const shown = next === -1 ? { summary: "", description: "" } : splitMessage(list[next]);
+      own.summary = shown.summary;
+      own.description = shown.description;
+    };
+    if (messages) step(messages);
+    else
+      api.recentMessages().then(
+        (list) => {
+          messages = list;
+          step(list);
+        },
+        () => {},
+      );
+  }
+
 </script>
 
 <div class="commit" role="group" aria-label="Commit" style:background={tint(color)} style:border-color={`color-mix(in srgb, ${lane(color)} 40%, transparent)`}>
-  <div class="row">
+  <div class="row top">
     <span class="grow to">Commit to <b style:color={plate(color)}>{branch ?? "detached HEAD"}</b></span>
-    <button class="amend" role="switch" aria-checked={draft.amend} onclick={toggleAmend} disabled={!head} title="Replace the last commit instead of adding a new one">
-      Amend
-      <span class="switch" class:on={draft.amend}><span class="knob"></span></span>
-    </button>
+    <span class="switches">
+      <button class="amend" role="switch" aria-checked={draft.signOff} onclick={() => (draft.signOff = !draft.signOff)} title="End the message with Signed-off-by and your name and email (git commit --signoff); stays on for this repository">
+        Sign-off
+        <span class="switch" class:on={draft.signOff}><span class="knob"></span></span>
+      </button>
+      <button class="amend" role="switch" aria-checked={draft.amend} onclick={toggleAmend} disabled={!head} title="Replace the last commit instead of adding a new one">
+        Amend
+        <span class="switch" class:on={draft.amend}><span class="knob"></span></span>
+      </button>
+    </span>
   </div>
   <div class="summary">
-    <input type="text" aria-label="Commit summary" placeholder="Summary" bind:this={summaryBox} bind:value={draft.summary} onkeydown={onCommitKey} spellcheck="true" />
+    <input type="text" aria-label="Commit summary" placeholder={`Summary (${shortcut("previousMessage") || "↑"} history)`} title="{shortcut("previousMessage") || "↑"} and {shortcut("nextMessage") || "↓"} bring back your past messages" bind:this={summaryBox} bind:value={draft.summary} onkeydown={onSummaryKey} spellcheck="true" />
     {#if SUMMARY_LIMIT}<span class="counter" class:over={draft.summary.length > SUMMARY_LIMIT}>{draft.summary.length}/{SUMMARY_LIMIT}</span>{/if}
   </div>
   <textarea
@@ -249,6 +288,21 @@
     gap: 10px;
   }
   .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  /* Where the commit goes keeps its line: the switches move under it when both don't fit. */
+  .top {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    row-gap: 6px;
+  }
+  .top .to {
+    flex: 1 0 auto;
+    max-width: 100%;
+  }
+  .switches {
     display: flex;
     align-items: center;
     gap: 8px;

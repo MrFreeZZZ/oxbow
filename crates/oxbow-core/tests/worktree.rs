@@ -152,6 +152,7 @@ fn files_are_staged_discarded_and_committed() {
         amend: false,
         no_verify: false,
         allow_secrets: false,
+        sign_off: false,
     };
     assert_eq!(
         repo.plan(&commit).unwrap().commands[0].display(),
@@ -366,4 +367,58 @@ fn new_files_are_counted_once_until_they_change() {
     fx.write("new.txt", "a\nb\nc\n");
     old(&mut fx, "2021-01-01 00:00:00");
     assert_eq!(count(&repo.reopen().unwrap()), (1, false));
+}
+
+#[test]
+fn a_commit_with_sign_off_ends_with_the_committers_line() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    fx.write("a.txt", "a changed\n");
+    fx.git(&["add", "a.txt"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let action = Action::Commit {
+        message: "Change a".into(),
+        amend: false,
+        no_verify: false,
+        allow_secrets: false,
+        sign_off: true,
+    };
+    let shown = repo.plan(&action).unwrap().commands[0].display();
+    assert!(
+        shown.starts_with("git commit") && shown.contains(" --signoff -m 'Change a'"),
+        "{shown}"
+    );
+    repo.perform(&action).unwrap();
+    assert_eq!(
+        fx.git(&["log", "-1", "--format=%B"]),
+        "Change a\n\nSigned-off-by: Alexander <alexander@example.com>"
+    );
+}
+
+#[test]
+fn recent_messages_are_yours_newest_first_and_each_once() {
+    let mut fx = Fixture::new();
+    assert!(Repo::open(fx.path()).unwrap().recent_messages(10).unwrap().is_empty());
+    fx.commit("a.txt", "1\n", "Fix the build");
+    fx.write("b.txt", "b\n");
+    fx.git(&["add", "b.txt"]);
+    fx.git(&[
+        "commit",
+        "-q",
+        "-m",
+        "Someone else's",
+        "--author=Other <other@example.com>",
+    ]);
+    fx.commit("a.txt", "2\n", "Add a test\n\nWith a body.");
+    fx.commit("a.txt", "3\n", "Fix the build");
+    fx.git(&["switch", "-q", "-c", "side", "HEAD~1"]);
+    fx.commit("c.txt", "c\n", "On the side");
+    fx.git(&["switch", "-q", "main"]);
+    fx.git(&["merge", "-q", "--no-ff", "-m", "Merge side", "side"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    assert_eq!(
+        repo.recent_messages(10).unwrap(),
+        ["On the side", "Fix the build", "Add a test\n\nWith a body."]
+    );
+    assert_eq!(repo.recent_messages(1).unwrap(), ["On the side"]);
 }
