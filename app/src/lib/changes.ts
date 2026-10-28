@@ -1,9 +1,9 @@
-// The finer actions of the working copy: single lines of a hunk, ignoring a file, stashing a
-// few files, and the way out when a commit hook or the secrets check says no.
+// The actions of the working copy: whole files and hunks, single lines of a hunk, ignoring a
+// file, stashing a few files, and the way out when a commit hook or the secrets check says no.
 
 import type { Part, Recovery, Request } from "./confirm.svelte";
 import { splitPath } from "./format";
-import type { Action, Failure, Hunk, SecretFinding } from "./types";
+import type { Action, Failure, FileChange, Hunk, SecretFinding } from "./types";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -122,6 +122,84 @@ function quoted(texts: string[]): Part[] {
   });
   if (texts.length > shown.length) parts.push(` and ${texts.length - shown.length} more`);
   return parts;
+}
+
+const name = (files: FileChange[]): Part[] =>
+  files.length === 1 ? [{ code: files[0].path }] : [`${files.length} files`];
+const count = (files: FileChange[]) => (files.length === 1 ? splitPath(files[0].path).name : `${files.length} files`);
+
+/** Stage whole files. */
+export function stageRequest(files: FileChange[], branch: Part): Request {
+  return {
+    title: `Stage ${count(files)}?`,
+    body: ["Adds the changes in ", ...name(files), " to the next commit on ", branch, "."],
+    icon: "stage",
+    button: "Stage",
+    past: `Staged ${count(files)}`,
+    action: { kind: "stage", paths: files.map((f) => f.path) },
+  };
+}
+
+export function unstageRequest(files: FileChange[]): Request {
+  return {
+    title: `Unstage ${count(files)}?`,
+    body: ["Takes ", ...name(files), " out of the next commit. Your edits stay in the files."],
+    icon: "unstage",
+    button: "Unstage",
+    past: `Unstaged ${count(files)}`,
+    action: { kind: "unstage", paths: files.map((f) => f.path) },
+  };
+}
+
+/** Throw away the edits in files, or delete those git does not track yet. */
+export function discardRequest(files: FileChange[]): Request {
+  const fresh = files.filter((f) => f.status === "untracked");
+  const body: Part[] =
+    fresh.length === files.length
+      ? ["Deletes ", ...name(files), ". Git does not track ", files.length === 1 ? "it" : "them", " yet."]
+      : fresh.length
+        ? ["Throws away your edits in ", ...name(files.filter((f) => !fresh.includes(f))), " and deletes ", ...name(fresh), ", which git does not track yet."]
+        : ["Throws away your edits in ", ...name(files), " and puts back the staged or committed version."];
+  return {
+    title: `Discard changes in ${count(files)}?`,
+    body,
+    icon: "discard",
+    button: "Discard",
+    danger: true,
+    note: "Undo brings it back, from the toast or the Operation Log.",
+    done: `Discarded changes in ${count(files)}.`,
+    action: { kind: "discard", paths: files.map((f) => f.path) },
+  };
+}
+
+/** The changed lines of a hunk, without its context: new line numbers, or old ones when it only removes. */
+function lines(hunk: Hunk): string {
+  const added = hunk.lines.filter((l) => l.kind === "added").map((l) => l.newLine ?? 0);
+  const numbers = added.length ? added : hunk.lines.filter((l) => l.kind === "removed").map((l) => l.oldLine ?? 0);
+  if (!numbers.length) return "a hunk";
+  const first = Math.min(...numbers);
+  const last = Math.max(...numbers);
+  return first === last ? `line ${first}` : `lines ${first}–${last}`;
+}
+
+/** Stage, unstage or discard one hunk of a file. */
+export function hunkRequest(kind: LinesKind, path: string, hunk: Hunk): Request {
+  const where: Part[] = [`${lines(hunk)} of `, { code: path }];
+  const file = path.slice(path.lastIndexOf("/") + 1);
+  const request: Record<typeof kind, Omit<Request, "action">> = {
+    stageHunk: { title: "Stage this hunk?", body: ["Adds ", ...where, " to the next commit. The rest of the file stays unstaged."], icon: "stage", button: "Stage Hunk", past: `Staged ${lines(hunk)} of ${file}` },
+    unstageHunk: { title: "Unstage this hunk?", body: ["Takes ", ...where, " out of the next commit. Your edits stay in the file."], icon: "unstage", button: "Unstage Hunk", past: `Unstaged ${lines(hunk)} of ${file}` },
+    discardHunk: {
+      title: "Discard this hunk?",
+      body: ["Throws away your edits in ", ...where, ". The rest of the file stays as it is."],
+      icon: "discard",
+      button: "Discard",
+      danger: true,
+      note: "Undo brings it back, from the toast or the Operation Log.",
+      done: `Discarded ${lines(hunk)} of ${file}.`,
+    },
+  };
+  return { ...request[kind], action: { kind, path, header: hunk.header, check: hunk.check ?? "" } };
 }
 
 export type LinesKind = "stageHunk" | "unstageHunk" | "discardHunk";

@@ -10,7 +10,8 @@
   import GraphLegend from "./lib/GraphLegend.svelte";
   import { focusedView } from "./lib/graph";
   import CommitPanel from "./lib/CommitPanel.svelte";
-  import ChangesPanel, { moveMessage, savedMessage } from "./lib/ChangesPanel.svelte";
+  import ChangesPanel from "./lib/ChangesPanel.svelte";
+  import { moveMessage, savedMessage } from "./lib/commitDrafts.svelte";
   import FolderGone from "./lib/FolderGone.svelte";
   import { goneScreen, messageOf } from "./lib/gone";
   import { tilde } from "./lib/term";

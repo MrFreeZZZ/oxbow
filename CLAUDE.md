@@ -55,9 +55,12 @@ app/src/                    Svelte front end
   lib/types.ts              TS mirrors of oxbow-core serde types
   lib/shortcuts.ts          every command and its keys (VS Code's, yours over them); keys.ts shows them;
                             shortcutEdit.svelte.ts = Settings › Keyboard Shortcuts
-  lib/prefs.svelte.ts       settings;  SettingsWindow.svelte = Settings UI
+  lib/prefs.svelte.ts       settings;  SettingsWindow.svelte = Settings UI: its sections in settingsSections.ts
+                            (Oxbow's own), settingsGit.ts (git config), settingsKeys.svelte.ts; a row: SettingsRow
   lib/confirm.svelte.ts     confirmations (ConfirmSheet.svelte);  activity.svelte.ts = Activity
   lib/*.svelte              one component per view/sheet (HistoryList, DiffView, ChangesPanel…)
+  lib/ChangesPanel.svelte   Changes: the lists of files; CommitForm, ChangesDiff (the diff column), changesMenu.ts,
+                            commitDrafts.svelte.ts (the message kept per folder), changes.ts (its requests)
   lib/ReviewsView.svelte    Reviews screen (lib/reviews.ts sorts it);  PullFiles.svelte = PR Files tab
   lib/review.svelte.ts      one PR's review: draft, Viewed, sending;  reviewDraft.ts = its pure logic
   lib/*.ts                  pure logic next to its view (diffRows, conflicts, branches, graph…)
