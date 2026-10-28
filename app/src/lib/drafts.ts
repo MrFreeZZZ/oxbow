@@ -6,6 +6,9 @@
 
 import type { Decision } from "./conflicts";
 
+/** Conflicts of a file that Oxbow merged, as the sides changed different lines. */
+const mergedIn = (choices: Decision[] | undefined) => choices?.filter((d) => typeof d === "object" && d !== null && d.merged === true).length ?? 0;
+
 /** A file written as text: what it is now, what it started as, and its stray marker lines. */
 export type DraftText = { text: string; start: string; stray: number };
 
@@ -38,6 +41,9 @@ export interface Draft {
   seen: string[];
   files: DraftFile[];
   old: OldDraft[];
+  /** Files of the step with conflicts Oxbow merged, and how many: they stay marked once
+   *  resolved, until the step is over. */
+  merged?: [string, number][];
 }
 
 /** What the screen keeps, by file; a Map, as a file may be called `constructor`. */
@@ -48,7 +54,13 @@ export interface DraftState {
   results: Map<string, string>;
   old: Map<string, OldDraft>;
   seen: string[];
+  /** Files with conflicts Oxbow merged that are no longer in `choices`, as after a restart. */
+  merged: Map<string, number>;
 }
+
+/** How many conflicts of `path` Oxbow merged in this step. */
+export const mergedCount = (state: Pick<DraftState, "choices" | "merged">, path: string): number =>
+  state.choices.has(path) ? mergedIn(state.choices.get(path)) : (state.merged.get(path) ?? 0);
 
 /** Something was decided or typed: a file with nothing in it isn't worth a draft. */
 export const hasWork = (choices: Decision[] | undefined, text: DraftText | null | undefined) =>
@@ -69,7 +81,11 @@ export function makeDraft(step: string, state: DraftState, conflicted: string[],
     if (was) old.push(was);
   }
   if (!files.length && !old.length) return null;
-  return { version: 1, step, savedAt, seen: state.seen, files, old };
+  const merged = state.seen.flatMap((path): [string, number][] => {
+    const n = mergedCount(state, path);
+    return n ? [[path, n]] : [];
+  });
+  return { version: 1, step, savedAt, seen: state.seen, files, old, merged };
 }
 
 const isDecision = (d: unknown): d is Decision =>
@@ -93,7 +109,8 @@ export function readDraft(value: unknown): Draft | null {
       (f.text === null || isText(f.text)),
   );
   const old = d.old.filter((o): o is OldDraft => typeof o?.path === "string" && typeof o.result === "string" && typeof o.savedAt === "number");
-  return { version: 1, step: d.step, savedAt: d.savedAt, seen: d.seen.filter((p) => typeof p === "string"), files, old };
+  const merged = Array.isArray(d.merged) ? d.merged.filter((m): m is [string, number] => Array.isArray(m) && typeof m[0] === "string" && typeof m[1] === "number") : [];
+  return { version: 1, step: d.step, savedAt: d.savedAt, seen: d.seen.filter((p) => typeof p === "string"), files, old, merged };
 }
 
 /** The file as a draft would write it: its text, or else what its decisions make. */
@@ -103,7 +120,7 @@ const resultIn = (f: DraftFile) => (f.text ? f.text.text : f.result);
  *  this step (each still checked against the file's versions when it opens), otherwise only the
  *  results, to compare. */
 export function takeDraft(draft: Draft | null, step: string, conflicted: string[]): DraftState {
-  const state: DraftState = { choices: new Map(), texts: new Map(), stages: new Map(), results: new Map(), old: new Map(), seen: [...conflicted] };
+  const state: DraftState = { choices: new Map(), texts: new Map(), stages: new Map(), results: new Map(), old: new Map(), seen: [...conflicted], merged: new Map() };
   if (!draft) return state;
   for (const o of draft.old) state.old.set(o.path, o);
   if (draft.step === step) {
@@ -114,6 +131,7 @@ export function takeDraft(draft: Draft | null, step: string, conflicted: string[
       state.results.set(f.path, resultIn(f));
     }
     state.seen = [...draft.seen, ...conflicted.filter((p) => !draft.seen.includes(p))];
+    for (const [path, n] of draft.merged ?? []) if (!state.choices.has(path)) state.merged.set(path, n);
   } else {
     for (const f of draft.files) state.old.set(f.path, { path: f.path, result: resultIn(f), savedAt: draft.savedAt });
   }

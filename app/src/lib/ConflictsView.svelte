@@ -2,7 +2,10 @@
   // The Conflicts screen: conflicted files on the left; for the open file, both sides on top
   // (named by branch, never "ours" and "theirs"), with the version they started from when asked,
   // and the result underneath, where each conflict gets a side, both, or lines typed by hand,
-  // or the whole file is written as text, before the file is marked resolved. All of it is saved
+  // or the whole file is written as text, before the file is marked resolved. A conflict whose
+  // sides changed different lines merges with one click, and Apply Non-Conflicting Changes merges
+  // every such conflict of a file or of all files; what Oxbow merged stays marked until the step
+  // is over. All of it is saved
   // as a draft as the user goes (lib/drafts.ts), so quitting Oxbow keeps it. Long files are drawn
   // in blocks near the screen, like a long diff, so a file of 100,000 lines opens and answers as
   // fast as a short one.
@@ -16,7 +19,7 @@
   import { confirm, type Request } from "./confirm.svelte";
   import { kept } from "./kept";
   import { prefs } from "./prefs.svelte";
-  import { hasWork, makeDraft, readDraft, takeDraft, type Draft, type DraftState, type DraftText, type OldDraft } from "./drafts";
+  import { hasWork, makeDraft, mergedCount, readDraft, takeDraft, type Draft, type DraftState, type DraftText, type OldDraft } from "./drafts";
   import {
     conflictSteps,
     joinLines,
@@ -25,6 +28,9 @@
     linesOf,
     markOf,
     fileText,
+    isMerged,
+    mergeConflict,
+    mergeSimple,
     markerRoles,
     markerStarts,
     openMarkers,
@@ -91,6 +97,8 @@
   let stages = new Map<string, string>();
   /** Every file that was conflicted in this step, so resolved ones still show as done. */
   let seen = $state<string[]>([]);
+  /** Conflicts Oxbow merged in files no longer in `choices`, as after a restart. */
+  let merged = $state.raw(new Map<string, number>());
   /** Each file as its decisions or text would write it, for a draft that stops fitting it. */
   let results = new Map<string, string>();
   /** Writes the open file's entry in `results`, put off until a draft is saved or the file left:
@@ -192,6 +200,7 @@
         results = state.results;
         old = state.old;
         seen = state.seen;
+        merged = state.merged ?? new Map();
         step = key;
         if (draft?.step === key) draftAt = draft.savedAt;
         if (draft) tellRestored(draft, state);
@@ -283,7 +292,7 @@
       const [of, path, decisions, text, by] = [file, current, picked, asText, sides];
       unwritten = () => results.set(path, resultOf(of, decisions, text, by));
     }
-    const state: Saved = { step, choices, texts, stages, results, old, seen };
+    const state: Saved = { step, choices, texts, stages, results, old, seen, merged };
     kept.set(KEPT_CONFLICTS, state);
     const paths = conflicted;
     const make = () => {
@@ -306,9 +315,11 @@
       .then((found) => (tool = found))
       .catch(() => (tool = null));
     conflictSteps.step = stepConflict;
+    conflictSteps.applyAll = applyAll;
     window.addEventListener("beforeunload", flush);
     return () => {
       if (conflictSteps.step === stepConflict) conflictSteps.step = null;
+      if (conflictSteps.applyAll === applyAll) conflictSteps.applyAll = null;
       window.removeEventListener("beforeunload", flush);
       writeResult();
       flush();
@@ -323,6 +334,85 @@
   const lineByLine = $derived(!!file && file.chunks.length > 0);
   const kind = $derived(file ? kindOf(file, labelOf) : null);
   const showBase = $derived(prefs.get("oxbow.conflicts.showBase") && !!file?.base && lineByLine);
+
+  /** Each conflict of the open file merged with both changes, where the sides changed different
+   *  lines, with where each line comes from; null where they changed the same lines. */
+  type MergedRow = { text: string; from: Choice | null; edge: "top" | "bottom" | "both" | null };
+  const mergedRows = $derived(
+    conflicts.map((chunk): MergedRow[] | null => {
+      const lines = mergeConflict(chunk);
+      if (!lines) return null;
+      const rows = lines.map((l) => ({ text: l.text, from: l.from === "base" ? null : l.from === leftSide ? ("left" as Choice) : ("right" as Choice) }));
+      return rows.map((r, i) => {
+        const top = i === 0 || rows[i - 1].from !== r.from;
+        const bottom = i === rows.length - 1 || rows[i + 1].from !== r.from;
+        return { ...r, edge: r.from === null ? null : top && bottom ? "both" : top ? "top" : bottom ? "bottom" : null };
+      });
+    }),
+  );
+  /** Open conflicts of the open file that Apply Non-Conflicting Changes would merge. */
+  const simpleOpen = $derived(mergedRows.filter((rows, k) => rows && (picked[k] ?? null) === null).length);
+
+  /** Both changes of a conflict whose sides changed different lines. */
+  function merge(k: number) {
+    const rows = mergedRows[k];
+    if (rows) decide(k, { lines: rows.map((r) => r.text), merged: true });
+  }
+
+  /** Apply Non-Conflicting Changes in the open file. */
+  function applySimple() {
+    if (!current || !file || asText) return;
+    const { decisions, merged: n } = mergeSimple(file.chunks, picked);
+    if (!n) return;
+    choices = new Map(choices).set(current, decisions);
+    const left = decisions.filter((d) => d === null).length;
+    confirm.say(`Merged ${n} ${n === 1 ? "conflict" : "conflicts"} of ${splitPath(current).name}: the sides changed different lines.${left ? ` ${left} left for you.` : " It is ready to mark resolved."}`, "done");
+  }
+
+  /** Apply Non-Conflicting Changes in every conflicted file not being written as text. */
+  let applying = $state(false);
+  async function applyAll() {
+    if (applying || !step) return;
+    applying = true;
+    try {
+      let count = 0;
+      let files = 0;
+      let ready = 0;
+      let next = choices;
+      for (const path of conflicted) {
+        if (texts.has(path)) continue;
+        const f = path === current && file?.path === path ? file : await api.conflictFile(path);
+        // Decisions made for other versions of the file are the file's own to sort out on opening.
+        const was = stages.get(path);
+        if (was !== undefined && was !== f.stages) continue;
+        const count_ = f.chunks.filter((c) => c.kind === "conflict").length;
+        if (!count_) continue;
+        stages.set(path, f.stages);
+        const start = next.get(path)?.length === count_ ? next.get(path)! : Array<Decision>(count_).fill(null);
+        const { decisions, merged: n } = mergeSimple(f.chunks, start);
+        if (!n) continue;
+        next = new Map(next).set(path, decisions);
+        results.set(path, resultOf(f, decisions, null, sides));
+        count += n;
+        files++;
+        if (decisions.every((d) => d !== null)) ready++;
+      }
+      choices = next;
+      if (!count) confirm.say("No conflict left can be merged by itself: in each, both sides changed the same lines.", "info");
+      else
+        confirm.say(
+          `Merged ${count} ${count === 1 ? "conflict" : "conflicts"} in ${files} ${files === 1 ? "file" : "files"}, where the sides changed different lines.${ready ? ` ${ready} ${ready === 1 ? "file is" : "files are"} ready to mark resolved.` : ""}`,
+          "done",
+        );
+    } catch (err) {
+      confirm.fail(err);
+    } finally {
+      applying = false;
+    }
+  }
+
+  /** How many conflicts of `path` Oxbow merged, for the list of files. */
+  const mergedIn = (path: string) => mergedCount({ choices, merged }, path);
 
   function decide(k: number, decision: Decision) {
     if (!current) return;
@@ -447,7 +537,7 @@
       }
       const choice = picked[piece.k] ?? null;
       if (piece.head) rows += choice === null ? 2.8 : 1.3;
-      const lines = choice === null ? 0 : typeof choice === "object" ? (piece.head ? choice.lines.length : 0) : pickedLines(chunk, choice).length;
+      const lines = choice === null ? 0 : isMerged(choice) ? choice.lines.length : typeof choice === "object" ? (piece.head ? choice.lines.length : 0) : pickedLines(chunk, choice).length;
       rows += Math.max(0, Math.min(lines, piece.to) - piece.from);
     }
     return rows;
@@ -456,7 +546,7 @@
   /** A block stays drawn while it holds a conflict being typed, so its text box is never made
    *  afresh, or the conflict stepped to. */
   const keepDrawn = (part: ResultBlock) =>
-    (reach !== null && part.first <= reach && reach <= part.last) || part.pieces.some((p) => p.head && picked[p.k] !== null && typeof picked[p.k] === "object");
+    (reach !== null && part.first <= reach && reach <= part.last) || part.pieces.some((p) => p.head && picked[p.k] !== null && typeof picked[p.k] === "object" && !isMerged(picked[p.k]));
 
   const leftItems = $derived(file ? sideItems(file.chunks, leftSide) : []);
   const rightItems = $derived(file ? sideItems(file.chunks, rightSide) : []);
@@ -527,7 +617,7 @@
       return;
     }
     const list = picked as Exclude<Decision, null>[];
-    const words = list.map((c) => (typeof c === "object" ? "lines you typed" : c === "both" ? "both sides" : c === "left" ? leftLabel : rightLabel));
+    const words = list.map((c) => (isMerged(c) ? "both changes merged" : typeof c === "object" ? "lines you typed" : c === "both" ? "both sides" : c === "left" ? leftLabel : rightLabel));
     const same = words.every((w) => w === words[0]);
     run({
       ...request,
@@ -661,6 +751,8 @@
               <!-- The base and the text: nothing to take from here. -->
             {:else if chosen}
               <span class="in" style:color={plate(color)}>✓ In result</span>
+            {:else if isMerged(decision)}
+              <span class="in" style:color={plate(color)}>✓ Merged in result</span>
             {:else if decision !== null && typeof decision === "object"}
               <span class="in muted">Typed in the result</span>
             {:else}
@@ -692,8 +784,9 @@
     {#if piece.head && !choice}
       <div class="open" class:current={at === k} data-conflict={k}>
         <div class="open-head">
-          <span class="ellipsis">Conflict {k + 1} · both sides changed these lines</span>
+          <span class="ellipsis">Conflict {k + 1} · {mergedRows[k] ? "the sides changed different lines" : "both sides changed these lines"}</span>
           <span class="spacer"></span>
+          {#if mergedRows[k]}<button class="pick merge" title="Take both changes: each side changed other lines of the version they started from" onclick={() => merge(k)}>Merge</button>{/if}
           <button class="pick" style:color={plate(leftColor)} onclick={() => decide(k, "left")}>{leftLabel}</button>
           <button class="pick" style:color={plate(rightColor)} onclick={() => decide(k, "right")}>{rightLabel}</button>
           <button class="pick" onclick={() => decide(k, "both")}>Both</button>
@@ -701,6 +794,19 @@
         </div>
         <div class="placeholder">Pick a side, keep both, or edit</div>
       </div>
+    {:else if choice && isMerged(choice)}
+      {#if piece.head}
+        <div class="bar merged" class:current={at === k} data-conflict={k}>
+          <span>Conflict {k + 1}: merged by Oxbow, both changes in</span>
+          {#if !textWhy}<button class="undo" onclick={() => edit(k)}>Edit</button>{/if}
+          <button class="undo" onclick={() => decide(k, null)}>Undo</button>
+        </div>
+      {/if}
+      {#each (mergedRows[k] ?? choice.lines.map((text) => ({ text, from: null, edge: null }))).slice(piece.from, piece.to) as line, j (j)}
+        <div class="line picked automerged" style:background={line.from ? tint(colorFor(line.from), "bar") : undefined} style:border-radius={radius(line.edge)}>
+          <span class="no">{first + j}</span><span class="text">{line.text}</span>
+        </div>
+      {/each}
     {:else if piece.head && choice && typeof choice === "object"}
       {@const value = joinLines(choice.lines)}
       <div class="bar" class:current={at === k} data-conflict={k}>
@@ -741,6 +847,11 @@
       {#if step}<span class="count">{resolved.length} of {seen.length} {seen.length === 1 ? "file" : "files"} resolved</span>{/if}
     </div>
     <div class="track"><span class="fill" style:width="{seen.length ? (resolved.length / seen.length) * 100 : 0}%"></span></div>
+    {#if step && conflicted.length}
+      <button class="button small apply-all" disabled={applying} title="In every conflicted file, merge the conflicts where the sides changed different lines; the others stay for you" onclick={applyAll}>
+        {applying ? "Merging…" : "Apply Non-Conflicting Changes"}
+      </button>
+    {/if}
     <div class="list">
       {#each conflicted as path (path)}
         {@const p = splitPath(path)}
@@ -754,6 +865,7 @@
             <span class="sub ellipsis" class:orange={left !== 0 || strays > 0} class:green={left === 0 && !strays}>
               {left === null ? (what ?? "Conflicted") : `${what ? `${what} · ` : ""}${left === 0 && strays ? `${strays} stray ${strays === 1 ? "marker" : "markers"}` : left === 0 ? "Ready to mark resolved" : `${left} ${left === 1 ? "conflict" : "conflicts"} left`}${texts.has(path) ? " · as text" : ""}`}{old.has(path) ? " · old draft" : ""}
             </span>
+            {#if mergedIn(path)}<span class="sub ellipsis accent">{mergedIn(path)} merged by Oxbow</span>{/if}
           </span>
         </button>
       {/each}
@@ -764,6 +876,7 @@
           <span class="fwords">
             <span class="ellipsis"><span class="dir">{p.dir}</span>{p.name}</span>
             <span class="sub green">Resolved · staged</span>
+            {#if mergedIn(path)}<span class="sub ellipsis accent" title="Oxbow merged these where the sides changed different lines; check them before you continue">{mergedIn(path)} merged by Oxbow</span>{/if}
           </span>
         </div>
       {/each}
@@ -878,6 +991,9 @@
               >
                 Edit as Text
               </button>
+              {#if !asText && simpleOpen}
+                <button class="button small" onclick={applySimple} title="Merge the {simpleOpen} {simpleOpen === 1 ? 'conflict' : 'conflicts'} of this file where the sides changed different lines; the others stay for you">Apply Non-Conflicting Changes</button>
+              {/if}
               {#if !asText}
                 <button class="button small" onclick={() => takeFile(leftSide)} title="Use {leftLabel}’s whole file">All {leftLabel}</button>
                 <button class="button small" onclick={() => takeFile(rightSide)} title="Use {rightLabel}’s whole file">All {rightLabel}</button>
@@ -1043,6 +1159,22 @@
   }
   .green {
     color: var(--green);
+  }
+  .accent {
+    color: var(--accent);
+  }
+  .apply-all {
+    align-self: stretch;
+    margin: 6px 4px 2px;
+  }
+  .pick.merge {
+    color: var(--accent);
+  }
+  .bar.merged span:first-child {
+    color: var(--accent);
+  }
+  .line.automerged .no {
+    color: var(--accent);
   }
   .small {
     font-size: var(--text-small);

@@ -1,3 +1,4 @@
+import { isMerged, mergeConflict, mergedDecision, mergeSimple, simpleCount } from "../src/lib/conflicts.ts";
 import { fileText, joinLines, kindOf, markedText, markerRoles, markerStarts, openMarkers, resultBlocks, resultStarts, sideBlocks, sideItems, splitLines, stepIndex, strayMarkers, toResolution, type Sides } from "../src/lib/conflicts.ts";
 import type { Chunk, ConflictFile } from "../src/lib/types.ts";
 import assert from "node:assert/strict";
@@ -149,4 +150,64 @@ const chunks: Chunk[] = [
   assert.deepEqual(parts.map((b) => [b.first, b.last]), [[0, 0], [Infinity, -1], [1, 1]]);
   const long: Chunk[] = [{ kind: "same", lines: Array.from({ length: 150 }, (_, i) => `${i}`) }];
   assert.deepEqual(resultBlocks(long, 64).map((b) => b.pieces.map((p) => [p.from, p.to])), [[[0, 64]], [[64, 128]], [[128, 150]]]);
+}
+
+// Simple conflicts: the sides changed different lines of what they started from.
+{
+  type C = Extract<Chunk, { kind: "conflict" }>;
+  const c = (base: string[], ours: string[], theirs: string[]): C => ({ kind: "conflict", base, ours, theirs });
+  const text = (chunk: C) => mergeConflict(chunk)?.map((l) => `${l.from}:${l.text}`) ?? null;
+
+  // Next to each other: git conflicts, the lines merge, each from its side.
+  assert.deepEqual(text(c(["a", "b"], ["A", "b"], ["a", "B"])), ["ours:A", "theirs:B"]);
+  // Apart, with an untouched line in between, and lines added on one side.
+  assert.deepEqual(text(c(["a", "b", "c", "d"], ["A", "b", "c", "d", "e"], ["a", "b", "C", "d"])), ["ours:A", "base:b", "theirs:C", "base:d", "ours:e"]);
+  // A line removed on one side and another changed on the other.
+  assert.deepEqual(text(c(["a", "b"], ["b"], ["a", "B"])), ["theirs:B"]);
+  // The same change on both sides goes in once, beside a change of one side.
+  assert.deepEqual(text(c(["a", "b", "c"], ["A", "b", "c"], ["A", "b", "C"])), ["ours:A", "base:b", "theirs:C"]);
+
+  // The same line changed on both sides: a real conflict.
+  assert.equal(mergeConflict(c(["a"], ["A"], ["á"])), null);
+  // Both add lines in the same place: their order isn't clear.
+  assert.equal(mergeConflict(c(["a"], ["a", "x"], ["a", "y"])), null);
+  // One adds right next to a line the other changed.
+  assert.equal(mergeConflict(c(["a", "b"], ["A", "b"], ["a", "x", "b"])), null);
+  // No common version, as when both sides add the file.
+  assert.equal(mergeConflict(c([], ["x"], ["y"])), null);
+  // A side that changed nothing is no conflict to merge here.
+  assert.equal(mergeConflict(c(["a", "b"], ["a", "b"], ["a", "B"])), null);
+
+  // The decision holds the lines, marked as Oxbow's merge.
+  const merged = mergedDecision(c(["a", "b"], ["A", "b"], ["a", "B"]));
+  assert.deepEqual(merged, { lines: ["A", "B"], merged: true });
+  assert.equal(isMerged(merged), true);
+  assert.equal(isMerged({ lines: ["A"] }), false);
+  assert.equal(isMerged("left"), false);
+  assert.equal(isMerged(null), false);
+  assert.equal(mergedDecision({ kind: "same", lines: ["a"] }), null);
+  // What it writes is a resolution of lines, as one typed by hand.
+  assert.deepEqual(toResolution(merged!, sides), { lines: ["A", "B"] });
+
+  // Apply Non-Conflicting Changes: open simple conflicts merge, decided and real ones stay.
+  const file: Chunk[] = [
+    { kind: "same", lines: ["top"] },
+    c(["a", "b"], ["A", "b"], ["a", "B"]),
+    { kind: "same", lines: ["middle"] },
+    c(["x"], ["X"], ["ẋ"]),
+    c(["p", "q"], ["P", "q"], ["p", "Q"]),
+  ];
+  assert.equal(simpleCount(file, [null, null, null]), 2);
+  const { decisions, merged: count } = mergeSimple(file, [null, null, "right"]);
+  assert.equal(count, 1);
+  assert.deepEqual(decisions, [{ lines: ["A", "B"], merged: true }, null, "right"]);
+  assert.equal(markedText(file, decisions, sides, false).split("\n").slice(0, 4).join(","), "top,A,B,middle");
+}
+
+// A conflict too long to line up stays for the user.
+{
+  const long = Array.from({ length: 2100 }, (_, i) => `line ${i}`);
+  const ours = long.map((l, i) => (i % 2 ? l : `${l} ours`));
+  const theirs = long.map((l, i) => (i % 2 ? `${l} theirs` : l));
+  assert.equal(mergeConflict({ kind: "conflict", base: long, ours, theirs }), null);
 }

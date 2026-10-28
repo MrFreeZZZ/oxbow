@@ -117,6 +117,8 @@ export interface CommitFileContext {
   inHead: boolean | null;
   /** Compare with Working Copy, in the view. */
   compare: (file: CommitFile) => void;
+  /** Split Commit with the file picked, for a commit of the checked-out branch's own. */
+  split?: ((path: string) => void) | null;
 }
 
 /** The menu of a file of a commit: what can be done with it, as with a file in Changes, but
@@ -126,6 +128,8 @@ export function commitFileMenu(repo: string, file: FileChange, commit: string, c
   const what = { modified: "modified", added: "added", untracked: "added", deleted: "deleted", renamed: "renamed", copied: "copied", conflicted: "conflicted" }[file.status];
   const entries: MenuEntry[] = [{ kind: "header", label: `${name} · ${what} in this commit` }];
   const actions = commitFileEntries(file, commit, ctx);
+  const split = ctx.split;
+  if (split) actions.push({ kind: "item", label: "Split into a New Commit…", icon: menuIcons.split, run: () => split(file.path) });
   if (actions.length) entries.push(...actions, { kind: "sep" });
   if (file.status !== "deleted") {
     entries.push({ kind: "item", label: "Open in Editor", icon: menuIcons.open, run: () => api.openInEditor(file.path, null).catch((err) => confirm.fail(err)) });

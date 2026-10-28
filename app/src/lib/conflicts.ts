@@ -1,13 +1,15 @@
 // The Conflicts screen's model, apart from the page so it can be tested: what each conflict was
-// decided as (a side, both, or lines written by hand), the whole result as text with git's
-// markers around the conflicts still open, and what kind of conflict a file has.
+// decided as (a side, both, lines written by hand, or both changes merged when the sides changed
+// different lines), the whole result as text with git's markers around the conflicts still open,
+// and what kind of conflict a file has.
 
 import type { Chunk, ConflictFile, ConflictSide, Pick, Resolution } from "./types";
 
 /** Left is the side brought in, right the user's own work, as on the screen. */
 export type Choice = "left" | "right" | "both";
-/** A conflict picked, written by hand, or still open. */
-export type Decision = Choice | { lines: string[] } | null;
+/** A conflict picked, written by hand, merged by Oxbow (`merged`: both sides changed different
+ *  lines, so both changes are in), or still open. */
+export type Decision = Choice | { lines: string[]; merged?: true } | null;
 
 export interface Sides {
   left: ConflictSide;
@@ -364,5 +366,137 @@ export function kindOf(file: ConflictFile, labelOf: (side: ConflictSide) => stri
  *  operation is in progress, so a later one never starts from them. */
 export const KEPT_CONFLICTS = "conflicts";
 
-/** The Conflicts screen, while it is open, takes ⌥F5 and ⇧⌥F5 to step through its conflicts. */
-export const conflictSteps: { step: ((by: 1 | -1) => boolean) | null } = { step: null };
+/** The Conflicts screen, while it is open, takes ⌥F5 and ⇧⌥F5 to step through its conflicts,
+ *  and Apply Non-Conflicting Changes from the palette and the Git menu. */
+export const conflictSteps: { step: ((by: 1 | -1) => boolean) | null; applyAll: (() => void) | null } = { step: null, applyAll: null };
+
+// --- Simple conflicts -------------------------------------------------------------------------
+// git marks a conflict wherever both sides changed lines next to each other, even when they
+// changed different lines. Those can be merged line by line, the way PyCharm's Resolve Simple
+// Conflicts does: each side's own changes against the version both started from, applied
+// together when no two of them touch the same lines.
+
+/** A run of lines of the common version, `from` up to `to`, that one side replaced with `lines`. */
+interface Edit {
+  from: number;
+  to: number;
+  lines: string[];
+}
+
+/** A line of a merged conflict and where it comes from. */
+export interface MergedLine {
+  text: string;
+  from: ConflictSide | "base";
+}
+
+/** The largest conflict, in lines of the common version times lines of a side, that is merged
+ *  line by line; a longer one stays for the user. */
+const MAX_CELLS = 4_000_000;
+
+/** What `side` changed against `base`, as runs of replaced lines, in order; null when too long
+ *  to work out. */
+function editsOf(base: string[], side: string[]): Edit[] | null {
+  // Lines both keep at the start and the end are no change; the rest is lined up by the longest
+  // run of lines in common.
+  let head = 0;
+  while (head < base.length && head < side.length && base[head] === side[head]) head++;
+  let tail = 0;
+  while (tail < base.length - head && tail < side.length - head && base[base.length - 1 - tail] === side[side.length - 1 - tail]) tail++;
+  const b = base.slice(head, base.length - tail);
+  const s = side.slice(head, side.length - tail);
+  if (!b.length && !s.length) return [];
+  if ((b.length + 1) * (s.length + 1) > MAX_CELLS) return null;
+  // common[i][j]: lines in common of b[i..] and s[j..].
+  const width = s.length + 1;
+  const common = new Uint32Array((b.length + 1) * width);
+  for (let i = b.length - 1; i >= 0; i--) {
+    for (let j = s.length - 1; j >= 0; j--) {
+      common[i * width + j] = b[i] === s[j] ? common[(i + 1) * width + j + 1] + 1 : Math.max(common[(i + 1) * width + j], common[i * width + j + 1]);
+    }
+  }
+  const edits: Edit[] = [];
+  let open: Edit | null = null;
+  let i = 0;
+  let j = 0;
+  const grow = () => (open ??= { from: head + i, to: head + i, lines: [] });
+  while (i < b.length || j < s.length) {
+    if (i < b.length && j < s.length && b[i] === s[j] && common[i * width + j] === common[(i + 1) * width + j + 1] + 1) {
+      if (open) edits.push(open);
+      open = null;
+      i++;
+      j++;
+    } else if (j < s.length && (i === b.length || common[i * width + j + 1] >= common[(i + 1) * width + j])) {
+      grow().lines.push(s[j++]);
+    } else {
+      grow();
+      i++;
+      open!.to = head + i;
+    }
+  }
+  if (open) edits.push(open);
+  return edits;
+}
+
+/** Whether two edits of the common version touch the same lines. One that only adds lines
+ *  touches what is right before and after it: where both sides add, or one adds next to what
+ *  the other changed, the order of the lines is not clear. */
+function overlap(a: Edit, b: Edit): boolean {
+  if (a.from === a.to || b.from === b.to) return a.from <= b.to && b.from <= a.to;
+  return a.from < b.to && b.from < a.to;
+}
+
+const same = (a: Edit, b: Edit) => a.from === b.from && a.to === b.to && a.lines.length === b.lines.length && a.lines.every((l, i) => l === b.lines[i]);
+
+/** Both sides' changes in one, when the sides of the conflict changed different lines of the
+ *  version they started from; null when they touch the same lines, or a side has no version. */
+export function mergeConflict(chunk: Conflict): MergedLine[] | null {
+  const ours = editsOf(chunk.base, chunk.ours);
+  const theirs = editsOf(chunk.base, chunk.theirs);
+  if (!ours || !theirs || !ours.length || !theirs.length) return null;
+  const all: { edit: Edit; from: ConflictSide }[] = [];
+  for (const edit of ours) all.push({ edit, from: "ours" });
+  for (const edit of theirs) {
+    // The same change on both sides goes in once.
+    if (ours.some((o) => same(o, edit))) continue;
+    if (ours.some((o) => overlap(o, edit))) return null;
+    all.push({ edit, from: "theirs" });
+  }
+  all.sort((a, b) => a.edit.from - b.edit.from || a.edit.to - b.edit.to);
+  const out: MergedLine[] = [];
+  let at = 0;
+  for (const { edit, from } of all) {
+    for (; at < edit.from; at++) out.push({ text: chunk.base[at], from: "base" });
+    for (const text of edit.lines) out.push({ text, from });
+    at = edit.to;
+  }
+  for (; at < chunk.base.length; at++) out.push({ text: chunk.base[at], from: "base" });
+  return out;
+}
+
+/** The decision that merges a simple conflict, or null for one that isn't. */
+export function mergedDecision(chunk: Chunk): Exclude<Decision, null> | null {
+  if (chunk.kind !== "conflict") return null;
+  const merged = mergeConflict(chunk);
+  return merged ? { lines: merged.map((l) => l.text), merged: true } : null;
+}
+
+/** Whether a decision is a merge Oxbow made. */
+export const isMerged = (d: Decision): d is { lines: string[]; merged: true } => typeof d === "object" && d !== null && d.merged === true;
+
+/** Apply Non-Conflicting Changes: every open conflict of a file whose sides changed different
+ *  lines gets both changes; the others stay as they are. How many it merged comes with it. */
+export function mergeSimple(chunks: Chunk[], decisions: Decision[]): { decisions: Decision[]; merged: number } {
+  const conflicts = chunks.filter((c): c is Conflict => c.kind === "conflict");
+  let merged = 0;
+  const next = conflicts.map((chunk, k) => {
+    const was = decisions[k] ?? null;
+    if (was !== null) return was;
+    const made = mergedDecision(chunk);
+    if (made) merged++;
+    return made;
+  });
+  return { decisions: next, merged };
+}
+
+/** How many open conflicts of a file Apply Non-Conflicting Changes would merge. */
+export const simpleCount = (chunks: Chunk[], decisions: Decision[]): number => mergeSimple(chunks, decisions).merged;

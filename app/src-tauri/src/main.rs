@@ -153,6 +153,7 @@ fn main() {
             history::save_restack,
             history::landed_on,
             history::stack_preview,
+            history::split_files,
             actions::plan_action,
             actions::perform_action,
             session::stop_action,

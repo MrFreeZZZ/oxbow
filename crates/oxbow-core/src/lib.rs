@@ -39,6 +39,7 @@ pub mod search;
 pub mod secrets;
 pub mod series;
 pub mod setup;
+pub mod split;
 pub mod ssh;
 pub mod stack;
 pub mod stash;
@@ -88,6 +89,7 @@ pub use series::{
     SeriesPair,
 };
 pub use setup::{CloneOptions, NewRepoOptions, NewRepoPlan, RemoteProbe, RepoGlance};
+pub use split::{SplitFile, SplitLines, StackSplit, split_of, split_part};
 pub use ssh::{SshCheck, SshProblem, SshStep};
 pub use stack::{
     BranchAfter, Landing, Restack, RestackFailure, RestackState, RestackStep, Stack, StackBranch, StackCommit,

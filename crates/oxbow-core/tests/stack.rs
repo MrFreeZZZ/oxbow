@@ -44,6 +44,7 @@ fn as_is(stack: &Stack) -> StackPlan {
         onto_name: None,
         head: stack.head.clone(),
         steps,
+        splits: Vec::new(),
     }
 }
 

@@ -33,6 +33,7 @@
     version = 0,
     onUnshallow = null,
     inHead = null,
+    onSplit = null,
   }: {
     row: HistoryRow;
     childIds: string[];
@@ -55,6 +56,8 @@
     /** Whether a commit is in the checked-out commit's history, for the file menu's Revert or
      *  Cherry-Pick This File; without it both are offered. */
     inHead?: ((id: string) => boolean) | null;
+    /** Split Commit with a file picked, for a commit of the checked-out branch's own. */
+    onSplit?: ((path: string) => void) | null;
   } = $props();
 
   let diffView = $state<DiffView>();
@@ -271,7 +274,7 @@
   let menu = $state<{ x: number; y: number; entries: MenuEntry[]; label: string } | null>(null);
   function openFileMenu(event: MouseEvent, file: FileChange) {
     event.preventDefault();
-    const ctx = { summary: detail?.summary ?? row.summary, inHead: inHead ? inHead(row.id) : null, compare: (f: CommitFile) => (comparing = { commit: row.id, file: f }) };
+    const ctx = { summary: detail?.summary ?? row.summary, inHead: inHead ? inHead(row.id) : null, compare: (f: CommitFile) => (comparing = { commit: row.id, file: f }), split: onSplit };
     menu = { x: event.clientX, y: event.clientY, ...commitFileMenu(nav.repo, file, row.id, ctx) };
   }
   /** Compare with Working Copy: a file of this commit beside the file on disk, in place of the details. */
