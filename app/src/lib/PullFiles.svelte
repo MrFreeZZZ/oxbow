@@ -16,7 +16,7 @@
   import DraftNote from "./DraftNote.svelte";
   import ReviewThread from "./ReviewThread.svelte";
   import type { ReviewSession } from "./review.svelte";
-  import { commentable, covers, liveThreads, lineKey, placeOf, pushedText, spotLabel, spotOf, type Thread } from "./reviewDraft";
+  import { addProblem, commentable, covers, liveThreads, lineKey, placeOf, pushedText, spotLabel, spotOf, type Thread, type Writing } from "./reviewDraft";
 
   let {
     session,
@@ -277,9 +277,8 @@
     top: movedNotes,
   };
 
-  /** Why a comment on this file can't go into the review. */
-  const addOff = (path: string) =>
-    !reviewed ? null : changed === null ? "Working out what changed since your review started…" : changed.has(path) ? `${path} changed since your review started on ${shortId(reviewed)}: comment now, or send the review first.` : null;
+  /** Why the comment being written can't go into the review. */
+  const addOff = (writing: Writing) => addProblem(session.draft, writing, pr.headSha, changed === null ? null : !changed.has(writing.spot.path));
 
   const statusIcon: Record<string, string> = { added: "A", deleted: "D", modified: "M", renamed: "R", copied: "C" };
 </script>
@@ -298,7 +297,7 @@
       <CommentEditor
         bind:value={writing.body}
         now="Comment Now"
-        addOff={addOff(diff.file.path)}
+        addOff={addOff(writing)}
         onCancel={() => (session.editing = null)}
         onNow={() => session.commentNow(writing)}
         onAdd={() => session.addComment(writing)}

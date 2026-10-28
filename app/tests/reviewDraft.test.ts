@@ -1,4 +1,4 @@
-import { commentCall, commentable, countWords, pushedSince, spotOf, submitCalls, submitProblem, withEdit, withComment, emptyDraft } from "../src/lib/reviewDraft.ts";
+import { addProblem, commentCall, commentable, countWords, pushedSince, spotOf, submitCalls, submitProblem, withEdit, withComment, emptyDraft } from "../src/lib/reviewDraft.ts";
 import type { DiffLine, Hunk, PullCommit, PullRequest } from "../src/lib/types.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -56,6 +56,26 @@ test("Comment Now goes on the commit whose diff the line was picked on", () => {
   // B is pushed and loads before Comment Now: the comment still goes on A's line 9.
   const later = { ...pr, headSha: "B" };
   assert.deepEqual(commentCall(later.number, writing), { kind: "comment", number: 421, commit: "A", spot: writing.spot, body: "Why?" });
+});
+
+test("a comment written on one commit never goes into a review on another", () => {
+  const spot = { path: "file.txt", side: "RIGHT" as const, line: 9 };
+  const onA = { spot, commit: "A", body: "Why?" };
+  // B loaded while the comment on A was open, and the review was then started on B.
+  const onB = emptyDraft("B");
+  assert.match(addProblem(onB, onA, "B", null) ?? "", /^This comment is on A and your review on B/);
+  assert.match(addProblem(onB, onA, "B", true) ?? "", /^This comment is on A/);
+  // Comment Now still sends it, on A.
+  assert.equal(commentCall(421, onA).commit, "A");
+  // On the review's own commit, or with no review yet, it goes in.
+  assert.equal(addProblem(onB, { ...onA, commit: "B" }, "B", null), null);
+  assert.equal(addProblem(null, onA, "B", null), null);
+  // A review started on A, the comment written on the newest, B: only where the file is the same.
+  const onAReview = emptyDraft("A");
+  const onNewest = { ...onA, commit: "B" };
+  assert.equal(addProblem(onAReview, onNewest, "B", true), null);
+  assert.match(addProblem(onAReview, onNewest, "B", false) ?? "", /^file.txt changed since your review started on A/);
+  assert.match(addProblem(onAReview, onNewest, "B", null) ?? "", /^Working out/);
 });
 
 test("what a review needs before it is sent", () => {
