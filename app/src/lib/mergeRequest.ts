@@ -23,6 +23,8 @@ export interface MergeRequestContext extends RemoteContext {
   /** Branches it can go into, the trunk first. */
   targets: string[];
   colorOf: (name: string) => number;
+  /** Only the remote has the branch: there is nothing to push, GitLab's page opens. */
+  remoteOnly?: boolean;
 }
 
 /** The GitLab project `ref` pushes to: its upstream's remote, else the default remote. */
@@ -36,23 +38,27 @@ export function gitlabOf(history: History, projects: GitLabProject[], ref: RefIn
  *  or a branch like develop that the remote has. */
 export function branchMergeRequest(ctx: BranchContext, ref: RefInfo, project: GitLabProject): Request {
   const history = ctx.history;
-  const onRemote = (name: string) => history.refs.some((r) => r.kind === "remote" && r.name === `${project.remote}/${name}`);
+  // A branch only the remote has, e.g. origin/sigma-tg: it is already there.
+  const remoteOnly = ref.kind === "remote";
+  const name = remoteOnly ? ref.name.slice(project.remote.length + 1) : ref.name;
+  const onRemote = (branch: string) => history.refs.some((r) => r.kind === "remote" && r.name === `${project.remote}/${branch}`);
   const trunk = history.trunk ?? "main";
-  const targets = [trunk, ...["develop", "dev", "staging"].filter(onRemote)].filter((name, i, all) => name !== ref.name && all.indexOf(name) === i);
+  const targets = [trunk, ...["develop", "dev", "staging"].filter(onRemote)].filter((branch, i, all) => branch !== name && all.indexOf(branch) === i);
   const summary = history.rows.find((r) => r.id === ref.target)?.summary;
   return mergeRequestRequest(
     {
-      branch: ref.name,
+      branch: name,
       color: ctx.colorOf(ref.name),
-      tracking: ref.tracking,
+      tracking: remoteOnly ? { remote: project.remote, branch: name, ahead: 0, behind: 0, gone: false, rewritten: null, replay: null } : ref.tracking,
       remote: project.remote,
       remotes: history.remotes,
-      unpushed: history.rows.filter((r) => r.unpushed && !r.worktree && r.graph.branch === ref.name),
+      unpushed: remoteOnly ? [] : history.rows.filter((r) => r.unpushed && !r.worktree && r.graph.branch === ref.name),
       project,
       targets,
       colorOf: ctx.colorOf,
+      remoteOnly,
     },
-    { target: targets[0] ?? trunk, title: mergeRequestTitle(summary, ref.name), draft: true, removeSource: false, open: true },
+    { target: targets[0] ?? trunk, title: mergeRequestTitle(summary, name), draft: true, removeSource: false, open: true },
   );
 }
 
@@ -75,14 +81,16 @@ export function mergeRequestRequest(ctx: MergeRequestContext, state: NewMergeReq
     const url = newMergeRequestUrl(project, upstream, state.target, state.title);
     return {
       title: `Open a merge request for ${branch}?`,
-      body: [
-        chip(`${remote}/${upstream}`),
-        ` already has every commit of `,
-        chip(branch),
-        `, so there is nothing to push that could ask ${host} for it. Opens ${host}’s New merge request page with it going into `,
-        chip(state.target),
-        ".",
-      ],
+      body: ctx.remoteOnly
+        ? [`Opens ${host}’s New merge request page with `, chip(`${remote}/${upstream}`), " going into ", chip(state.target), "."]
+        : [
+            chip(`${remote}/${upstream}`),
+            ` already has every commit of `,
+            chip(branch),
+            `, so there is nothing to push that could ask ${host} for it. Opens ${host}’s New merge request page with it going into `,
+            chip(state.target),
+            ".",
+          ],
       icon: "push",
       button: "Open in Browser",
       fields,

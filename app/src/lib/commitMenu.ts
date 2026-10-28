@@ -121,6 +121,14 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
     const project = gitlabOf(history, github.gitlab, ref);
     if (project) reviewing.push(item(`Create Merge Request for ${ref.name}…`, menuIcons.pull, () => run(branchMergeRequest(ctx, ref, project))));
   }
+  // A branch only a GitLab remote has, e.g. a teammate's: its New merge request page.
+  const locals = new Set(history.refs.filter((r) => r.kind === "local").map((r) => r.name));
+  for (const ref of history.refs.filter((r) => r.kind === "remote" && r.target === row.id).slice(0, 2)) {
+    const project = github.gitlab.find((p) => ref.name.startsWith(`${p.remote}/`));
+    const name = project ? ref.name.slice(project.remote.length + 1) : "";
+    if (!project || name === "HEAD" || name === history.trunk || locals.has(name)) continue;
+    reviewing.push(item(`Create Merge Request for ${ref.name}…`, menuIcons.pull, () => run(branchMergeRequest(ctx, ref, project))));
+  }
   group(reviewing);
 
   group([isHead && !history.head.branch ? item("Create Branch…", menuIcons.branch, () => run(keepRequest(ctx))) : item("New Branch from Here…", menuIcons.branch, () => run(newBranchRequest(ctx, undefined, row)))]);
