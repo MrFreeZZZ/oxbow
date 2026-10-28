@@ -1,4 +1,4 @@
-import { commentable, countWords, pushedSince, spotOf, submitCalls, submitProblem, withEdit, withComment, emptyDraft } from "../src/lib/reviewDraft.ts";
+import { commentCall, commentable, countWords, pushedSince, spotOf, submitCalls, submitProblem, withEdit, withComment, emptyDraft } from "../src/lib/reviewDraft.ts";
 import type { DiffLine, Hunk, PullCommit, PullRequest } from "../src/lib/types.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -48,6 +48,14 @@ test("a review goes as start, comments, replies, verdict", () => {
   assert.deepEqual(submitCalls(pr, null, "approve", "", "seen")[0], { kind: "startReview", id: "PR_421", commit: "seen" });
   assert.deepEqual(submitCalls(pr, draft, "approve", "", "seen")[0], { kind: "startReview", id: "PR_421", commit: "old" });
   assert.equal(withEdit(draft, draft.comments[0].id, null).comments.length, 0);
+});
+
+test("Comment Now goes on the commit whose diff the line was picked on", () => {
+  // The line is picked while the files of commit A are shown.
+  const writing = { spot: { path: "file.txt", side: "RIGHT" as const, line: 9 }, commit: "A", body: " Why? " };
+  // B is pushed and loads before Comment Now: the comment still goes on A's line 9.
+  const later = { ...pr, headSha: "B" };
+  assert.deepEqual(commentCall(later.number, writing), { kind: "comment", number: 421, commit: "A", spot: writing.spot, body: "Why?" });
 });
 
 test("what a review needs before it is sent", () => {

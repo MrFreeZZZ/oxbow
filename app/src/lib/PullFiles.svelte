@@ -257,10 +257,11 @@
       const path = diff.file.path;
       const from = range && anchor && anchor.path === path && anchor.hunk === hunk ? anchor.index : index;
       const spot = spotOf(path, hunk, from, index);
-      if (!spot) return;
+      if (!spot || !comparison) return;
       if (!range) anchor = { path, hunk, index };
       const body = writing?.body ?? "";
-      session.editing = { kind: "comment", spot, body };
+      // The diffs shown are always of `comparison`: the comment is on its head.
+      session.editing = { kind: "comment", spot, commit: comparison.targetId, body };
     },
     lit: (diff, line) => {
       const at = placeOf(line);
@@ -299,8 +300,8 @@
         now="Comment Now"
         addOff={addOff(diff.file.path)}
         onCancel={() => (session.editing = null)}
-        onNow={() => session.commentNow(writing.spot, writing.body)}
-        onAdd={() => session.addComment(writing.spot, writing.body)}
+        onNow={() => session.commentNow(writing)}
+        onAdd={() => session.addComment(writing)}
       />
     </div>
   {/if}

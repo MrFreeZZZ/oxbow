@@ -54,6 +54,15 @@ export function spotLabel(spot: { line: number | null; startLine?: number | null
   return spot.startLine && spot.startLine !== spot.line ? `lines ${spot.startLine}–${spot.line}` : `line ${spot.line}`;
 }
 
+/** A comment being written on a line, with the commit whose diff showed that line: it goes to
+ *  GitHub on that commit, even once newer ones load while it is written. */
+export type Writing = { spot: Spot; commit: string; body: string };
+
+/** Comment Now: the comment, outside a review, on the commit it was written on. */
+export function commentCall(number: number, writing: Writing): PullCall {
+  return { kind: "comment", number, commit: writing.commit, spot: writing.spot, body: writing.body.trim() };
+}
+
 export function emptyDraft(commit: string): ReviewDraft {
   return { commit, body: "", verdict: null, comments: [], replies: [] };
 }
