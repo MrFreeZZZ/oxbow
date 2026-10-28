@@ -52,7 +52,9 @@
 
   let diffs = $state.raw<FileDiff[] | null>(null);
   let error = $state<string | null>(null);
+  // svelte-ignore state_referenced_locally
   let picks = $state.raw<Picks>(new Map(start));
+  // svelte-ignore state_referenced_locally
   let message = $state(startMessage);
   let open = $state<string | null>(null);
   /** The line clicked last, for Shift-click to pick the lines from it. */

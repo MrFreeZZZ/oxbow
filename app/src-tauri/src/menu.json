@@ -425,6 +425,12 @@
     "accelerator": null
    },
    {
+    "id": "applyNonConflicting",
+    "title": "Apply Non-Conflicting Changes in All Files",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
     "id": "-",
     "title": "",
     "enabled": true,

@@ -98,6 +98,7 @@ export const COMMANDS = {
   savePatches: { category: "Git", title: "Save as Patches…" },
   applyPatches: { category: "Git", title: "Apply Patches…" },
   resolve: { category: "Git", title: "Resolve Conflicts" },
+  applyNonConflicting: { category: "Git", title: "Apply Non-Conflicting Changes in All Files" },
   // Git: Clone (Oxbow's own key), and New File: here a new repository.
   clone: { category: "Git", title: "Clone…", mac: ["Mod+Shift+C"], other: ["Mod+Shift+C"] },
   newRepo: { category: "Git", title: "Initialize Repository…", mac: ["Mod+N"], other: ["Mod+N"] },

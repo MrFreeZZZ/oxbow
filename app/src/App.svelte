@@ -1205,6 +1205,8 @@
     if (saving) add("savePatches", () => void run(savePatchesRequest(saving)), saving.count === 1 && !saving.since ? "Save as Patch…" : undefined);
     if (!busy) add("applyPatches", () => void applyPatches());
     if (operation?.conflicted) add("resolve", () => (resolving = true));
+    const applyAll = showConflicts ? conflictSteps.applyAll : null;
+    if (applyAll) add("applyNonConflicting", applyAll);
     add("undo", () => void undoLatest());
     add("redo", () => void redoLatest());
     add("fixMistake", () => void openFixes());
@@ -2736,8 +2738,10 @@
       picks={path ? new Map([[path, { whole: true }]]) : undefined}
       button="Split…"
       onDone={(split, files) => {
+        // Read before the sheet goes: {@const} reads `splitting` again.
+        const commit = row;
         splitting = null;
-        if (branchCtx) void run(splitRequest(branchCtx, row, split, files));
+        if (branchCtx) void run(splitRequest(branchCtx, commit, split, files));
       }}
       onClose={() => (splitting = null)}
     />

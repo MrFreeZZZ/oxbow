@@ -1,4 +1,4 @@
-import { hasWork, makeDraft, readDraft, takeDraft, type DraftState } from "../src/lib/drafts.ts";
+import { hasWork, makeDraft, mergedCount, readDraft, takeDraft, type DraftState } from "../src/lib/drafts.ts";
 import { resultOf, type Sides } from "../src/lib/conflicts.ts";
 import type { Chunk, ConflictFile } from "../src/lib/types.ts";
 import assert from "node:assert/strict";
@@ -23,7 +23,7 @@ const file = (over: Partial<ConflictFile> = {}): ConflictFile => ({
   ...over,
 });
 
-const empty = (): DraftState => ({ choices: new Map(), texts: new Map(), stages: new Map(), results: new Map(), old: new Map(), seen: [] });
+const empty = (): DraftState => ({ choices: new Map(), texts: new Map(), stages: new Map(), results: new Map(), old: new Map(), seen: [], merged: new Map() });
 /** Saved and read back the way the backend does: as JSON. */
 const roundTrip = (value: unknown) => readDraft(JSON.parse(JSON.stringify(value)));
 
@@ -76,6 +76,27 @@ const roundTrip = (value: unknown) => readDraft(JSON.parse(JSON.stringify(value)
   // In another step the text is what is kept to compare.
   const other = takeDraft(draft, "merge:x:z", conflicted);
   assert.equal(other.old.get("crlf.txt")!.result, "one\r\ntwo\r\n");
+}
+
+// Conflicts Oxbow merged stay counted for a file once it is resolved, also after a restart.
+{
+  const state = empty();
+  state.choices.set("done.txt", [{ lines: ["A", "B"], merged: true }, "left", { lines: ["x"], merged: true }]);
+  state.choices.set("open.txt", [{ lines: ["typed"] }, null]);
+  state.stages.set("open.txt", "s");
+  state.seen = ["done.txt", "open.txt", "gone.txt"];
+  state.merged.set("gone.txt", 1);
+  assert.equal(mergedCount(state, "done.txt"), 2);
+  assert.equal(mergedCount(state, "open.txt"), 0);
+  const draft = roundTrip(makeDraft("merge:x:y", state, ["open.txt"], 1));
+  assert.deepEqual(draft?.merged, [["done.txt", 2], ["gone.txt", 1]]);
+  const back = takeDraft(draft, "merge:x:y", ["open.txt"]);
+  assert.equal(mergedCount(back, "done.txt"), 2);
+  assert.equal(mergedCount(back, "gone.txt"), 1);
+  // Another step starts with none; a draft from before has none.
+  assert.equal(takeDraft(draft, "merge:x:z", ["open.txt"]).merged.size, 0);
+  assert.deepEqual(readDraft({ version: 1, step: "x", savedAt: 1, seen: [], files: [], old: [] })?.merged, []);
+  assert.deepEqual(readDraft({ version: 1, step: "x", savedAt: 1, seen: [], files: [], old: [], merged: [["a", "two"], "b", ["c", 1]] })?.merged, [["c", 1]]);
 }
 
 // A file resolved since isn't kept: what was written is in the file now.
