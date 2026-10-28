@@ -297,7 +297,13 @@ export const api = {
   /** The GitLab projects the remotes point at, the default remote's first. */
   gitlabProjects: () => invoke<GitLabProject[]>("gitlab_projects"),
   gitlabMergeRequests: () => invoke<{ project: GitLabProject; mergeRequests: PullSummary[] } | null>("gitlab_merge_requests"),
-  /** Opens a merge request page of one of them in the browser. */
+  /** Merge request `!number` in full, in the shape of a pull request. */
+  gitlabMergeRequest: (number: number) => invoke<PullRequest>("gitlab_merge_request", { number }),
+  /** The requests `calls` send to GitLab, as curl. */
+  gitlabCallsPreview: (calls: PullCall[]) => invoke<string[]>("gitlab_calls_preview", { calls }),
+  /** Sends them in order, each shown in the sheet; answers with the merge request as it is now. */
+  gitlabRun: (calls: PullCall[]) => invoke<unknown>("gitlab_run", { calls }),
+  /** Opens a merge request, pipeline or job page of one of them in the browser. */
   openGitLab: (url: string) => invoke<void>("open_gitlab", { url }),
   /** Open and recently closed, the latest updated first. */
   githubPulls: () => invoke<PullSummary[]>("github_pulls"),

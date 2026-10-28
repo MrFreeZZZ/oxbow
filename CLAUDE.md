@@ -32,6 +32,8 @@ crates/oxbow-core/          UI-free core library (all Git logic lives here)
   src/filehistory.rs        file history and blame;  reflog.rs = lost work
   src/fix.rs                Fix a Mistake plans;  secrets.rs = pre-commit secrets check
   src/github.rs pulls.rs    GitHub REST: sign-in, publish, pull requests
+  src/gitlab.rs gitlab_api.rs   GitLab: Create Merge Request by push options; signed in, merge
+                            requests as pull requests (one screen for both, words in app lib/forge.ts)
   src/review.rs             reviewing a pull request: statuses, Viewed, fetch into refs/oxbow/pull/N,
                             the draft review kept in .git/oxbow/reviews
   src/config.rs setup.rs    git settings; clone/init;  console.rs = Console process log

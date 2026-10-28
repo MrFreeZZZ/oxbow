@@ -12,8 +12,8 @@ export interface Shown {
   file: { path: string; line: number | null } | null;
   github: { place: string | null; open: number };
   /** The branch of the Pull Request screen and its pull request, if it has one; `byNumber`: the
-   *  screen was opened on the pull request, not the branch. */
-  pull: { branch: string; pr: number | null; byNumber: boolean } | null;
+   *  screen was opened on the pull request, not the branch; `gitlab`: a merge request. */
+  pull: { branch: string; pr: number | null; byNumber: boolean; gitlab?: boolean } | null;
   series: { branch: string; from: string } | null;
   compare: { base: string; target: string };
   head: string | null;
@@ -53,7 +53,8 @@ export function windowTitle(s: Shown): Title {
   }
   if (s.screen === "reviews") return here("Reviews", `${s.github.place ?? s.repo} · ${s.github.open} open`);
   if (s.screen === "pull" && s.pull) {
-    const { branch, pr, byNumber } = s.pull;
+    const { branch, pr, byNumber, gitlab } = s.pull;
+    if (gitlab) return here(pr !== null && byNumber ? `MR !${pr}` : branch, pr !== null ? `Merge request !${pr}` : "No merge request yet");
     const place = s.github.place && !s.steps ? ` · ${s.github.place}` : "";
     return here(pr !== null && byNumber ? `PR #${pr}` : branch, `${pr !== null ? `Pull request #${pr}` : "No pull request yet"}${place}`);
   }

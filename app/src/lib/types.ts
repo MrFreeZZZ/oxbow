@@ -1668,7 +1668,8 @@ export type PullEntry =
 export interface PullCheck {
   name: string;
   detail: string;
-  state: "ok" | "fail" | "run" | "skip";
+  /** `warn`: a GitLab job that failed but is allowed to. */
+  state: "ok" | "fail" | "run" | "skip" | "warn";
   seconds: number | null;
   url: string | null;
 }
@@ -1703,17 +1704,40 @@ export interface PullRequest extends PullSummary {
   checks: PullCheck[];
   requiredApprovals: number | null;
   settings: MergeSettings;
+  /** What only a merge request on GitLab has; null on GitHub. */
+  gitlab: GitLabFacts | null;
+}
+
+/** A GitLab merge request's own facts. */
+export interface GitLabFacts {
+  /** GitLab's say on merging it (`detailed_merge_status`): `mergeable`, `ci_must_pass`,
+   *  `ci_still_running`, `not_approved`, `discussions_not_resolved`, `draft_status`,
+   *  `need_rebase`, `conflict`, `blocked_status`, `checking`… */
+  mergeStatus: string;
+  /** The project's merge method: `merge`, `rebase_merge` or `ff` (fast-forward only). */
+  mergeMethod: string;
+  squashOption: "never" | "always" | "default_on" | "default_off" | string;
+  squash: boolean;
+  removeSourceBranch: boolean;
+  /** Commits of the target it doesn't have. */
+  behind: number | null;
+  pipeline: { id: number; status: string; url: string } | null;
+  diff: { baseSha: string; startSha: string; headSha: string } | null;
+  /** `additions` and `deletions` are counted: its commits are here. */
+  lineCounts: boolean;
 }
 
 export type MergeMethodName = "merge" | "squash" | "rebase";
 
 /** A change to a pull request; `number` 0 is the one a `create` earlier in the same run made. */
 export type PullCall =
-  | { kind: "merge"; number: number; method: MergeMethodName; title?: string | null; message?: string | null; sha: string }
+  | { kind: "merge"; number: number; method: MergeMethodName; title?: string | null; message?: string | null; sha: string; deleteBranch?: boolean }
   | { kind: "create"; head: string; base: string; title: string; body: string; draft: boolean }
   | { kind: "requestReviewers"; number: number; reviewers: string[] }
   | { kind: "update"; number: number; base?: string | null; body?: string | null }
-  | { kind: "readyForReview"; number: number; id: string }
+  | { kind: "readyForReview"; number: number; id: string; title?: string | null }
+  | { kind: "convertToDraft"; number: number; id: string; title?: string | null }
+  | { kind: "setState"; number: number; open: boolean }
   | { kind: "updateBranch"; number: number; sha: string }
   | { kind: "autoMerge"; number: number; id: string; method?: MergeMethodName | null }
   | { kind: "viewed"; id: string; path: string; viewed: boolean }

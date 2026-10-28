@@ -15,8 +15,9 @@ export type Place =
   | { view: "oplog" }
   | { view: "compare"; base: string; target: string; mode: CompareMode }
   | { view: "series"; query: SeriesQuery }
-  /** A pull request: of a branch here, or by its number when it is another account's or a fork's. */
-  | { view: "pull"; branch: string; number?: number | null }
+  /** A pull request: of a branch here, or by its number when it is another account's or a fork's;
+   *  `forge` "gitlab": the branch's merge request. */
+  | { view: "pull"; branch: string; number?: number | null; forge?: "github" | "gitlab" }
   | { view: "reviews" }
   | { view: "stack"; branch: string | null };
 

@@ -3,6 +3,7 @@
   import { oplog } from "./oplog.svelte";
   import { shortcut } from "./keys";
   import type { History, HistoryRow, RefInfo, RepoSummary } from "./types";
+  import type { ForgeKind } from "./forge";
   import { lane, NO_BRANCH_COLOR, shortTime, tint } from "./format";
   import { sharedLeads } from "./refNames";
   import type { Request } from "./confirm.svelte";
@@ -104,7 +105,8 @@
     /** Open Edit Stack for the stack `branch` is in. */
     onEditStack: (branch: string) => void;
     /** Open the Pull Request screen of `branch`. */
-    onPullRequest: (branch: string) => void;
+    /** The Pull Request screen of `branch`; `forge` "gitlab": its merge request. */
+    onPullRequest: (branch: string, number?: number | null, forge?: ForgeKind) => void;
     /** The path of the submodule shown next to the sidebar, if one is. */
     submodule?: string | null;
     /** Show a submodule's card in place of the commit's. */
@@ -348,7 +350,7 @@
     }
     const project = !isTrunk ? gitlabOf(history, github.gitlab, ref) : null;
     const mr = project ? github.mergeRequestOf(ref.name) : null;
-    if (mr) entries.push(item(`Merge Request !${mr.number}`, PULL_ICON, () => void api.openGitLab(mr.htmlUrl)));
+    if (mr) entries.push(item(`Merge Request !${mr.number}`, PULL_ICON, () => onPullRequest(ref.name, null, "gitlab")));
     else if (project) entries.push(item("Create Merge Request…", PULL_ICON, () => run(branchMergeRequest(ctx, ref, project))));
     entries.push({ kind: "sep" });
     entries.push(item(`New Branch from ${ref.name}…`, menuIcons.branch, () => run(newBranchRequest(ctx, ref.name))));

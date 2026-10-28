@@ -4,10 +4,12 @@
   // and how, on the right, with the one step it waits for next on top. Another account's pull
   // request, or a fork's, is picked by its number. A branch without one gets the form that
   // opens it. After the base of a stack merged, the rest of the stack can be restacked onto the
-  // trunk from here, in three steps kept between runs: a push that fails goes on later.
+  // trunk from here, in three steps kept between runs: a push that fails goes on later. A merge
+  // request on GitLab shows here the same way, in GitLab's words.
   import { untrack } from "svelte";
   import { api } from "./api";
   import { github } from "./github.svelte";
+  import { wordsOf, type ForgeKind } from "./forge";
   import type { Request } from "./confirm.svelte";
   import type { BranchContext } from "./branches";
   import type { Action, History, MergeMethodName, Landing, PullCheck, PullEntry, PullRequest, PullSummary, Restack, RestackState, ReviewState, Rewrite, Stack, StackPreview } from "./types";
@@ -15,6 +17,7 @@
   import { lane, person, plate, relativeTime, shortId, splitPath, tint } from "./format";
   import { kept } from "./kept";
   import PullFiles from "./PullFiles.svelte";
+  import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import ReviewThread from "./ReviewThread.svelte";
   import FinishReview from "./FinishReview.svelte";
   import { ReviewSession } from "./review.svelte";
@@ -27,10 +30,15 @@
   import { blockers, nextStep, restackFinished, restackLines, restackTouches, stillToRetarget, type RestackLine } from "./nextStep";
   import {
     autoMergeRequest,
+    closeRequest,
     createRequest,
+    defaultMethod,
+    draftRequest,
     mergeMessage,
     mergeRequest,
     METHODS,
+    methodsOf,
+    targetRequest,
     NEW_NUMBER,
     readBody,
     readyRequest,
@@ -44,6 +52,7 @@
   let {
     branch,
     number = null,
+    forge = "github",
     history,
     ctx,
     colorOf,
@@ -56,6 +65,8 @@
     branch: string;
     /** The pull request by its number, when it is no branch's here. */
     number?: number | null;
+    /** `gitlab`: the branch's merge request on GitLab. */
+    forge?: ForgeKind;
     history: History;
     ctx: BranchContext;
     colorOf: (name: string) => number;
@@ -71,8 +82,14 @@
 
   const HEIGHT = 42;
 
-  const gh = $derived(github.repo);
-  const summary = $derived(number ? github.byNumber(number) : github.pullOf(branch));
+  const lab = $derived(forge === "gitlab");
+  const w = $derived(wordsOf(forge));
+  const gh = $derived(lab ? null : github.repo);
+  /** Where it lives: the remote, and the account that owns the repository on GitHub. */
+  const place = $derived(lab ? (github.mrProject ? { remote: github.mrProject.remote, owner: null as string | null } : null) : gh ? { remote: gh.remote, owner: gh.owner as string | null } : null);
+  const pulls = $derived(github.listOf(forge));
+  const summary = $derived(number ? github.byNumber(number, forge) : github.pullOf(branch, forge));
+  const signedIn = $derived(lab ? github.mrMe : github.me);
   let pr = $state<PullRequest | null>(null);
   let loading = $state(false);
   let error = $state<string | null>(null);
@@ -131,20 +148,21 @@
   $effect(() => {
     const p = pr;
     untrack(() => {
-      if (!p) review = null;
+      // Reviewing a merge request comes with GitLab's review calls.
+      if (!p || p.gitlab) review = null;
       else if (review?.number === p.number) review.pr = p;
       else review = new ReviewSession(p, run, () => load(p.number));
     });
   });
   let finishAt = $state<HTMLButtonElement>();
-  const mine = $derived(!!pr && !!github.me && pr.author.login === github.me);
+  const mine = $derived(!!pr && !!signedIn && pr.author.login === signedIn);
   /** Finish Review shows on someone else's open pull request, and on one's own with comments to send. */
   const reviewable = $derived(!!review && !!github.me && pr?.state === "open" && (!mine || review.count > 0));
 
   async function load(number: number) {
     loading = !pr || pr.number !== number;
     try {
-      const fresh = await api.githubPull(number);
+      const fresh = await (lab ? api.gitlabMergeRequest(number) : api.githubPull(number));
       if (summary?.number !== number) return;
       pr = fresh;
       error = null;
@@ -197,7 +215,7 @@
   // --- The stack strip ---
 
   /** The trunk's name without its remote, e.g. "main". */
-  const trunk = $derived(gh && pr ? pr.settings.defaultBranch : (stack?.trunk.replace(/^[^/]+\//, "") ?? history.trunk ?? "main"));
+  const trunk = $derived(place && pr ? pr.settings.defaultBranch : (stack?.trunk.replace(/^[^/]+\//, "") ?? history.trunk ?? "main"));
   const stackNames = $derived(stack && stack.branches.length > 1 ? stack.branches.map((b) => b.name) : []);
   const arrows = $derived(stripWidth > 0 && stackNames.length ? softArrows(stackNames.length, stripWidth, HEIGHT).map((shape, i) => ({ ...shape, name: stackNames[i] })) : []);
 
@@ -206,11 +224,11 @@
   }
 
   function stripStatus(name: string): string {
-    const p = github.pullOf(name);
-    if (p) return `#${p.number} · ${p.number === pr?.number ? status.label : stateWord(p)}`;
+    const p = github.pullOf(name, forge);
+    if (p) return `${w.mark}${p.number} · ${p.number === pr?.number ? status.label : stateWord(p)}`;
     const b = stack?.branches.find((x) => x.name === name);
     const toPush = b?.upstream ? b.ahead : (stack?.commits.filter((c) => c.branch === name).length ?? 0);
-    return toPush ? `No pull request · ${toPush} to push` : "No pull request";
+    return toPush ? `No ${w.noun} · ${toPush} to push` : `No ${w.noun}`;
   }
 
   // --- A restack under way ---
@@ -226,10 +244,10 @@
     saved = await api.restack().catch(() => null);
   }
 
-  const savedLines = $derived(saved ? restackLines(saved, github.pulls) : null);
+  const savedLines = $derived(saved ? restackLines(saved, pulls) : null);
   // Once its last step is done, there is nothing to go on with.
   $effect(() => {
-    if (savedLines && github.pulls.length && restackFinished(savedLines)) {
+    if (savedLines && pulls.length && restackFinished(savedLines)) {
       saved = null;
       api.saveRestack(null).catch(() => {});
     }
@@ -253,15 +271,15 @@
 
   /** The merged pull request this one is still built on, when the stack wasn't restacked yet. */
   const mergedBelow = $derived(
-    pr && pr.state === "open" ? (github.pulls.find((p) => p.state === "merged" && p.head !== pr!.head && pr!.commits.some((c) => c.sha === p.headSha)) ?? null) : null,
+    pr && pr.state === "open" ? (pulls.find((p) => p.state === "merged" && p.head !== pr!.head && pr!.commits.some((c) => c.sha === p.headSha)) ?? null) : null,
   );
-  const basePull = $derived(pr && pr.base !== pr.settings.defaultBranch ? github.openPullOf(pr.base) : null);
+  const basePull = $derived(pr && pr.base !== pr.settings.defaultBranch ? github.openPullOf(pr.base, forge) : null);
 
   const failing = $derived(pr ? pr.checks.filter((c) => c.state === "fail") : []);
   const running = $derived(pr ? pr.checks.filter((c) => c.state === "run") : []);
   const facts = $derived(
     pr
-      ? { pr, mergedBelow, basePull, restack: saved && restackTouches(saved, pr) ? savedLines : null, trunk, checkedOut: history.head.branch === pr.head }
+      ? { pr, mergedBelow, basePull, restack: saved && savedLines && restackTouches(saved, pr) ? savedLines : null, trunk, checkedOut: history.head.branch === pr.head, words: w }
       : null,
   );
   /** What keeps it from merging, the first one first. */
@@ -271,24 +289,27 @@
   const checking = $derived(!!pr && pr.state === "open" && pr.mergeableState === "unknown");
   const canMerge = $derived(!!pr && pr.state === "open" && !blocked.length && !checking && pr.mergeable !== false);
 
-  const methods = $derived(pr ? METHODS.filter((m) => (m.id === "merge" ? pr!.settings.mergeCommit : m.id === "squash" ? pr!.settings.squash : pr!.settings.rebase)) : []);
-  const chosen = $derived(method && methods.some((m) => m.id === method) ? method : (methods.find((m) => m.id === "squash") ?? methods[0])?.id ?? "merge");
-  const preview = $derived(pr && gh ? mergeMessage(gh, pr, chosen) : { title: null, message: null });
+  const methods = $derived(pr ? methodsOf(pr) : []);
+  const chosen = $derived(method && methods.some((m) => m.id === method) ? method : pr ? defaultMethod(pr, methods) : "merge");
+  const chosenMethod = $derived(methods.find((m) => m.id === chosen) ?? METHODS[0]);
+  const preview = $derived(pr && place ? mergeMessage(place.owner ?? "", pr, chosen) : { title: null, message: null });
+  /** A fast-forward on GitLab: no commit of its own, so no message. */
+  const fastForward = $derived(!!pr?.gitlab && pr.gitlab.mergeMethod === "ff" && chosen === "merge");
   const autoMergeNote = $derived.by(() => {
     if (!pr) return "";
     if (!pr.settings.autoMerge) return "Turned off for this repository on GitHub";
     if (pr.base !== pr.settings.defaultBranch) return `Once it goes into ${pr.settings.defaultBranch}`;
-    return "When checks pass and it is approved";
+    return lab ? "When the pipeline passes" : "When checks pass and it is approved";
   });
   const autoMergeOff = $derived(!pr || !pr.settings.autoMerge || pr.base !== pr.settings.defaultBranch || !pr.settings.canPush);
 
   const baseLine = $derived.by((): { tone: "ok" | "warn" | "stack" | "grey"; text: string } | null => {
     if (!pr || pr.state !== "open") return null;
     if (mergedBelow) return { tone: "warn", text: `Based on ${mergedBelow.head}, which is merged. Restack to move it onto ${trunk}.` };
-    if (basePull) return { tone: "stack", text: `Based on ${pr.base} (#${basePull.number}). It can merge once #${basePull.number} is in ${basePull.base}.` };
+    if (basePull) return { tone: "stack", text: `Based on ${pr.base} (${w.mark}${basePull.number}). It can merge once ${w.mark}${basePull.number} is in ${basePull.base}.` };
     if (pr.mergeable === false || pr.mergeableState === "dirty") return { tone: "warn", text: `Conflicts with ${pr.base}` };
-    if (pr.mergeableState === "behind") return { tone: "warn", text: `Behind ${pr.base}` };
-    if (checking) return { tone: "grey", text: "GitHub is checking whether it merges cleanly…" };
+    if (pr.mergeableState === "behind") return { tone: "warn", text: pr.gitlab?.behind ? `${plural(pr.gitlab.behind, "commit")} behind ${pr.base}` : `Behind ${pr.base}` };
+    if (checking) return { tone: "grey", text: `${w.name} is checking whether it merges cleanly…` };
     return { tone: "ok", text: `No conflicts with ${pr.base}` };
   });
 
@@ -334,44 +355,83 @@
     return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
   }
 
+  /** A check's page opens from here: one on github.com, or one of the project on GitLab. */
+  const opens = (check: PullCheck) => !!check.url && (lab ? !!github.mrProject && check.url.startsWith(`${github.mrProject.webUrl}/-/`) : check.url.startsWith("https://github.com/"));
+
   function openCheck(check: PullCheck) {
-    if (check.url?.startsWith("https://github.com/")) api.openGitHub(check.url).catch(() => {});
+    if (!opens(check)) return;
+    (lab ? api.openGitLab(check.url!) : api.openGitHub(check.url!)).catch(() => {});
   }
 
   // --- Checking it out ---
 
   /** A pull request from another account's copy of the repository. */
-  const fork = $derived(!!pr?.headOwner && pr.headOwner !== gh?.owner);
+  const fork = $derived(!!pr?.headOwner && pr.headOwner !== place?.owner);
   /** The worktree button: none for a branch checked out here, or one of this repository's
    *  branches that has no local copy yet but is the one this screen is about. */
   const worktreeLabel = $derived.by(() => {
-    if (!pr || !gh) return null;
-    if (fork) return "Check Out in Worktree";
+    if (!pr || !place) return null;
+    // A fork's merge request is fetched by GitLab's own refs, which comes with reviewing it.
+    if (fork) return lab ? null : "Check Out in Worktree";
     if (history.head.branch === pr.head) return null;
     return worktreeOf(history, pr.head) ? "Open Its Worktree" : "Check Out in Worktree";
   });
 
   function checkOut() {
-    if (!pr || !gh) return;
+    if (!pr || !place) return;
     const elsewhere = worktreeOf(history, pr.head);
     if (elsewhere && !fork) {
       api.openWindow(elsewhere.path).catch(() => {});
       return;
     }
     const here = history.worktrees.find((t) => t.current)?.path ?? "";
-    act(pullWorktreeRequest(ctx, here, pr, gh.remote, fork));
+    act(pullWorktreeRequest(ctx, here, pr, place.remote, fork));
   }
 
   // --- Merging ---
 
   function merge() {
-    if (!pr || !gh || !canMerge) return;
-    act(mergeRequest(ctx, gh, pr, chosen, deleteBranch));
+    if (!pr || !place || !canMerge) return;
+    act(mergeRequest(ctx, place, pr, chosen, deleteBranch));
   }
 
   function toggleAutoMerge() {
     if (!pr || autoMergeOff) return;
     act(autoMergeRequest(pr, pr.autoMerge ? null : chosen));
+  }
+
+  // --- More: draft, target, rebase, close ---
+
+  let menu = $state<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
+
+  /** Branches it could merge into instead: the one under it in the stack, the trunk, then the
+   *  others the remote has. */
+  const targets = $derived.by(() => {
+    if (!pr || !place) return [];
+    const p = pr;
+    const prefix = `${place.remote}/`;
+    const there = history.refs.filter((r) => r.kind === "remote" && r.name.startsWith(prefix)).map((r) => r.name.slice(prefix.length));
+    const all = [...(below ? [below] : []), p.settings.defaultBranch, ...there];
+    return all.filter((b, i) => b !== "HEAD" && b !== p.base && b !== p.head && all.indexOf(b) === i).slice(0, 8);
+  });
+
+  function openMore(event: MouseEvent) {
+    if (!pr) return;
+    const p = pr;
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const item = (label: string, icon: string, run: () => void, danger = false): MenuEntry => ({ kind: "item", label, icon, run, danger });
+    const entries: MenuEntry[] = [];
+    const may = p.settings.canPush || mine;
+    if (p.state === "open" && may) {
+      entries.push(p.draft ? item("Ready for Review…", menuIcons.edit, () => act(readyRequest(p))) : item("Mark as Draft…", menuIcons.edit, () => act(draftRequest(p))));
+      entries.push(item(lab ? "Change Target Branch…" : "Change Base Branch…", menuIcons.merge, () => act(targetRequest(ctx, p, targets))));
+      if (lab ? p.gitlab?.behind !== 0 : p.mergeableState === "behind") entries.push(item(lab ? `Rebase onto ${p.base}…` : "Update Branch…", lab ? menuIcons.rebase : menuIcons.merge, () => act(updateBranchRequest(ctx, p))));
+    }
+    if (p.state !== "merged" && may) {
+      if (entries.length) entries.push({ kind: "sep" });
+      entries.push(p.state === "open" ? item(`Close ${lab ? "Merge" : "Pull"} Request…`, menuIcons.drop, () => act(closeRequest(p, false)), true) : item("Reopen…", menuIcons.undo, () => act(closeRequest(p, true))));
+    }
+    menu = { x: box.left, y: box.bottom + 4, entries };
   }
 
   // --- Restacking after the base merged ---
@@ -394,10 +454,10 @@
    *  the merged commits never leave the stack for a base without them. */
   async function landing(s: Stack, merged: PullRequest): Promise<Landing | null> {
     if (!merged.mergeCommit) return null;
-    const candidates = [...new Set([s.trunk, ...(gh ? [`${gh.remote}/${merged.base}`] : []), merged.base])];
+    const candidates = [...new Set([s.trunk, ...(place ? [`${place.remote}/${merged.base}`] : []), merged.base])];
     const found = await api.landedOn(merged.mergeCommit, candidates);
-    if (found || !gh) return found;
-    await api.fetchInBackground(gh.remote).catch(() => {});
+    if (found || !place) return found;
+    await api.fetchInBackground(place.remote).catch(() => {});
     return api.landedOn(merged.mergeCommit, candidates);
   }
 
@@ -405,17 +465,17 @@
    *  has the merge. */
   async function planRestack(merged: PullRequest): Promise<Plan | null> {
     const shas = new Set(merged.commits.map((c) => c.sha));
-    const candidates = github.pulls.filter((p) => p.state === "open" && p.head !== merged.head && ctx.history.refs.some((r) => r.kind === "local" && r.name === p.head));
+    const candidates = pulls.filter((p) => p.state === "open" && p.head !== merged.head && ctx.history.refs.some((r) => r.kind === "local" && r.name === p.head));
     for (const candidate of candidates) {
       let s = await api.stack(candidate.head).catch(() => null);
       if (!s) continue;
       const drop = s.commits.filter((c) => shas.has(c.id)).map((c) => c.id);
       if (!drop.length) continue;
       const names = new Set(s.branches.map((b) => b.name));
-      const retarget = github.pulls.filter((p) => p.state === "open" && names.has(p.head) && p.base === merged.head);
+      const retarget = pulls.filter((p) => p.state === "open" && names.has(p.head) && p.base === merged.head);
       const stuck = (problem: string): Plan => ({ merged, stack: s!, drop, preview: { changed: false } as StackPreview, retarget, problem });
       if (!merged.commitsComplete)
-        return stuck(`#${merged.number} has more commits than GitHub lists (250), so Oxbow can’t tell which ones to leave out. Use Edit Stack to drop them by hand.`);
+        return stuck(`${w.mark}${merged.number} has more commits than ${w.name} lists (${lab ? 500 : 250}), so Oxbow can’t tell which ones to leave out. Use Edit Stack to drop them by hand.`);
       const onto = await landing(s, merged);
       if (!onto) return stuck(`${merged.base} here doesn’t have the merge yet. Fetch, then come back to restack.`);
       s = { ...s, trunk: onto.name, trunkTip: onto.tip };
@@ -437,7 +497,7 @@
   });
 
   async function startRestack(merged: PullSummary) {
-    const detail = merged.number === pr?.number ? pr : await api.githubPull(merged.number);
+    const detail = merged.number === pr?.number ? pr : await (lab ? api.gitlabMergeRequest(merged.number) : api.githubPull(merged.number));
     const plan = restack?.merged.number === merged.number ? restack : await planRestack(detail);
     if (!plan || plan.problem) return;
     const draft = freshDraft(plan.stack, true);
@@ -467,9 +527,10 @@
   async function pushAndRetarget(kept: Restack, state: RestackState | null) {
     const left = state ? kept.push.filter((p) => state.unpushed.includes(p.branch)) : kept.push;
     const push: (Action & { kind: "pushBranches" }) | null = kept.remote && left.length ? { kind: "pushBranches", remote: kept.remote, branches: left } : null;
-    const retarget = (state ? stillToRetarget(state, github.pulls) : kept.retarget).map((number) => ({ number, base: kept.base }));
+    const retarget = (state ? stillToRetarget(state, pulls) : kept.retarget).map((number) => ({ number, base: kept.base }));
     const next = await restackPushRequest(
       ctx,
+      w,
       push,
       retarget,
       (step, message) => api.saveRestack({ ...kept, failed: { step, message } }),
@@ -499,7 +560,7 @@
     const steps = [`Rebase ${plural(kept, "commit")} of ${names.join(" and ")} onto ${s.trunk}, leaving out ${plural(drop.length, "commit")} ${merged.base} has now`];
     const forced = p.branches.filter((b) => b.forcePush).length;
     if (forced) steps.push(`Force push ${plural(forced, "branch")} with --force-with-lease`);
-    for (const r of retarget) steps.push(`Change the base of #${r.number} to ${merged.base}`);
+    for (const r of retarget) steps.push(`Change the ${lab ? "target" : "base"} of ${w.mark}${r.number} to ${merged.base}`);
     steps.push(p.conflict ? `Stops on a conflict in “${p.conflict.summary}” for you to resolve` : "No conflicts expected (dry run)");
     return steps;
   });
@@ -517,9 +578,9 @@
 
   /** The button of the next step, when it has one. */
   const nextAction = $derived.by((): { label: string; go: () => void } | null => {
-    if (!pr || !next || !gh) return null;
+    if (!pr || !next || !place) return null;
     const p = pr;
-    const remote = gh.remote;
+    const remote = place.remote;
     const local = history.refs.some((r) => r.kind === "local" && r.name === p.head);
     switch (next.kind) {
       case "continueRestack":
@@ -534,15 +595,16 @@
         if (history.head.branch === p.head) return { label: `Merge ${p.base}…`, go: () => act(mergeIntoRequest(ctx, `${remote}/${p.base}`)) };
         return local ? { label: `Switch to ${p.head}…`, go: () => act(switchRequest(ctx, p.head)) } : null;
       case "update":
-        return p.settings.canPush ? { label: "Update Branch…", go: () => act(updateBranchRequest(ctx, p)) } : null;
+        return p.settings.canPush ? { label: lab ? "Rebase…" : "Update Branch…", go: () => act(updateBranchRequest(ctx, p)) } : null;
       case "fixChecks": {
-        const check = failing.find((c) => c.url?.startsWith("https://github.com/"));
-        return check ? { label: "Show on GitHub", go: () => openCheck(check) } : null;
+        const check = failing.find(opens);
+        return check ? { label: `Show on ${w.name}`, go: () => openCheck(check) } : null;
       }
       case "changes":
+      case "threads":
         return tab !== "conversation" ? { label: "Show Conversation", go: () => (tab = "conversation") } : null;
       case "review":
-        return p.settings.canPush && !p.requested.length ? { label: "Ask for Review…", go: () => reviewerBox?.focus() } : null;
+        return p.settings.canPush && !lab && !p.requested.length ? { label: "Ask for Review…", go: () => reviewerBox?.focus() } : null;
       default:
         return null;
     }
@@ -580,7 +642,7 @@
 
   // The form starts from the branch's own commits.
   $effect(() => {
-    if (summary || !stack || form?.branch === branch) return;
+    if (lab || summary || !stack || form?.branch === branch) return;
     const base = below ?? trunk;
     const own = stack.commits.filter((c) => c.branch === branch);
     // The newest commit says best where the branch ended up.
@@ -722,30 +784,35 @@
       {/each}
     </div>
 
-    {#if !gh}
-      <div class="empty">This repository has no remote on github.com.</div>
-    {:else if github.problem && !github.pulls.length}
+    {#if !place}
+      <div class="empty">{lab ? "This repository has no GitLab project on a server you are signed in to." : "This repository has no remote on github.com."}</div>
+    {:else if (lab ? github.mrProblem : github.problem) && !pulls.length}
       <div class="empty">
-        <span>{github.problem}</span>
+        <span>{lab ? github.mrProblem : github.problem}</span>
         <button class="capsule" onclick={() => api.openSettings()}>Open Settings</button>
       </div>
     {:else if summary && !pr}
-      <div class="empty">{error ?? (loading ? `Loading #${summary.number}…` : "")}</div>
+      <div class="empty">{error ?? (loading ? `Loading ${w.mark}${summary.number}…` : "")}</div>
     {:else if pr}
       <div class="title-block">
         <div class="title-row">
           <h1>{pr.title}</h1>
-          <span class="number">#{pr.number}</span>
+          <span class="number">{w.mark}{pr.number}</span>
           {#if status.label}
             {@const [bg, fg] = toneOf(status.tone)}
             <span class="status" style:background={bg} style:color={fg}>{status.label}</span>
+          {/if}
+          {#if pr.state !== "merged" && (pr.settings.canPush || mine)}
+          <button class="button icon-only small more" onclick={openMore} aria-label="More" title="More">
+            <svg class="icon small" viewBox="0 0 16 16"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" /></svg>
+          </button>
           {/if}
         </div>
         <div class="meta-row">
           {@render capsule(pr.head)}
           <svg class="icon small" viewBox="0 0 16 16"><path d="M13 8H3.5M7 4.5 3.5 8 7 11.5" /></svg>
           {@render capsule(pr.base)}
-          <span class="ellipsis">{pr.author.login} opened {relativeTime(pr.created).toLowerCase()} · {plural(pr.commitCount, "commit")} · {plural(pr.changedFiles, "file")} · +{pr.additions} −{pr.deletions}</span>
+          <span class="ellipsis">{pr.author.login} opened {relativeTime(pr.created).toLowerCase()} · {plural(pr.commitCount, "commit")} · {plural(pr.changedFiles, "file")}{#if !pr.gitlab || pr.gitlab.lineCounts}{` · +${pr.additions} −${pr.deletions}`}{/if}</span>
         </div>
       </div>
       <div class="tabs" role="tablist" aria-label="Pull request">
@@ -753,8 +820,10 @@
           style:--on-bg={tint(colorOf(pr.head))} style:--on-fg={plate(colorOf(pr.head))}>Conversation</button>
         <button role="tab" class="tab" class:on={tab === "commits"} aria-selected={tab === "commits"} onclick={() => (tab = "commits")}
           style:--on-bg={tint(colorOf(pr.head))} style:--on-fg={plate(colorOf(pr.head))}>Commits {pr.commits.length}</button>
-        <button role="tab" class="tab" class:on={tab === "files"} aria-selected={tab === "files"} onclick={() => (tab = "files")}
-          style:--on-bg={tint(colorOf(pr.head))} style:--on-fg={plate(colorOf(pr.head))}>Files {pr.changedFiles}</button>
+        {#if !pr.gitlab}
+          <button role="tab" class="tab" class:on={tab === "files"} aria-selected={tab === "files"} onclick={() => (tab = "files")}
+            style:--on-bg={tint(colorOf(pr.head))} style:--on-fg={plate(colorOf(pr.head))}>Files {pr.changedFiles}</button>
+        {/if}
         {#if error}<span class="load-error">{error}</span>{/if}
         {#if rewrite || worktreeLabel || (tab === "files" && review)}<span class="grow"></span>{/if}
         {#if tab === "files" && review}
@@ -766,7 +835,7 @@
             </span>
           {/if}
         {:else if worktreeLabel && pr.state === "open"}
-          <button class="rewrite keep" onclick={checkOut} title={worktreeLabel === "Open Its Worktree" ? `${pr.head} is checked out in another worktree` : `A working folder of its own with #${pr.number} checked out`}>
+          <button class="rewrite keep" onclick={checkOut} title={worktreeLabel === "Open Its Worktree" ? `${pr.head} is checked out in another worktree` : `A working folder of its own with ${w.mark}${pr.number} checked out`}>
             <svg class="icon small" viewBox="0 0 16 16"><path d="M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1zM8 7.5v3.5M6.25 9.25h3.5" /></svg>
             {worktreeLabel}
           </button>
@@ -788,7 +857,7 @@
             <div class="card-row">
               {@render avatar(pr.author.login, pr.author.avatarUrl, 30)}
               <div class="card">
-                <div class="card-head"><span class="who">{pr.author.login}</span><span class="ellipsis">opened this pull request</span><span class="when">· {relativeTime(pr.created)}</span></div>
+                <div class="card-head"><span class="who">{pr.author.login}</span><span class="ellipsis">opened this {w.noun}</span><span class="when">· {relativeTime(pr.created)}</span></div>
                 {#if body.text}<p class="text selectable">{body.text}</p>{:else}<p class="text muted">No description.</p>{/if}
                 {#if body.stack.length}
                   <div class="stack-box">
@@ -832,7 +901,7 @@
                   {@render avatar(first.author.login, first.author.avatarUrl, 30)}
                   <div class="card">
                     <div class="card-head">
-                      <span class="who">{first.author.login}</span><span class="ellipsis">commented on {e.path}{e.line ? ` ${spotLabel(e)}` : ""}</span><span class="when">· {relativeTime(e.time)}</span>
+                      <span class="who">{first.author.login}</span><span class="ellipsis">{e.path ? `commented on ${e.path}${e.line ? ` ${spotLabel(e)}` : ""}` : "started a thread"}</span><span class="when">· {relativeTime(e.time)}</span>
                       <span class="grow"></span>
                       {#if review && e.node && pr.state === "open" && github.me}
                         <button class="button mini text" onclick={() => review?.resolve(e)} title={e.resolved ? "Open the thread again" : "Fold the thread away on GitHub"}>{e.resolved ? "Unresolve" : "Resolve"}</button>
@@ -850,7 +919,7 @@
                         {/each}
                       </div>
                     {/if}
-                    <div class="thread"><ReviewThread thread={e} session={review} me={github.me} resolve={false} /></div>
+                    <div class="thread"><ReviewThread thread={e} session={review} me={signedIn} resolve={false} /></div>
                   </div>
                 </div>
               {/if}
@@ -870,7 +939,7 @@
         {/if}
       </div>
       {/if}
-    {:else if form && gh}
+    {:else if form && gh && !lab}
       <div class="title-block">
         <h1>New pull request</h1>
         <span class="muted small-text">
@@ -956,7 +1025,7 @@
         <div class="next" class:ready>
           <span class="next-label">{ready ? "Ready to merge" : "Next step"}</span>
           <span class="next-title">{next.title}</span>
-          <span class="next-text">{next.text}{pr.autoMerge && !ready ? " GitHub merges it on its own once it is ready." : ""}</span>
+          <span class="next-text">{next.text}{pr.autoMerge && !ready ? ` ${w.name} merges it on its own once it is ready.` : ""}</span>
           {#if next.kind === "continueRestack" && savedLines}
             <div class="steps">{@render restackList(savedLines)}</div>
           {/if}
@@ -975,12 +1044,12 @@
       {/if}
       {#if pr.checks.length}
         <div class="group">
-          <div class="group-head"><span class="grow">Checks</span><span class="tone-{checksSummary.tone}">{checksSummary.text}</span></div>
-          {#each pr.checks as ck (ck.name)}
-            {@const [bg, fg] = toneOf(ck.state === "ok" ? "ok" : ck.state === "fail" ? "bad" : ck.state === "run" ? "warn" : "grey")}
-            <button class="check" onclick={() => openCheck(ck)} disabled={!ck.url?.startsWith("https://github.com/")} title={ck.url ? "Open on GitHub" : ck.name}>
+          <div class="group-head"><span class="grow">{lab ? "Pipeline" : "Checks"}</span><span class="tone-{checksSummary.tone}">{checksSummary.text}</span></div>
+          {#each pr.checks as ck, i (`${ck.name}\0${i}`)}
+            {@const [bg, fg] = toneOf(ck.state === "ok" ? "ok" : ck.state === "fail" ? "bad" : ck.state === "run" || ck.state === "warn" ? "warn" : "grey")}
+            <button class="check" onclick={() => openCheck(ck)} disabled={!opens(ck)} title={opens(ck) ? `Open on ${w.name}` : ck.name}>
               {@render dot(ck.state, bg, fg)}
-              <span class="ellipsis grow">{ck.name}{#if ck.detail}<span class="muted"> {ck.detail}</span>{/if}</span>
+              <span class="ellipsis grow">{ck.name}{#if ck.detail}<span class="muted">{` · ${ck.detail}`}</span>{/if}</span>
               <span class="when">{ck.state === "run" ? "running" : ck.state === "skip" ? "skipped" : duration(ck.seconds)}</span>
             </button>
           {/each}
@@ -998,7 +1067,7 @@
         {:else}
           <span class="muted small-text">Nobody is asked to review it yet.</span>
         {/each}
-        {#if pr.settings.canPush}
+        {#if pr.settings.canPush && !lab}
           <input
             class="add-reviewer ask"
             placeholder="+ Ask someone"
@@ -1036,20 +1105,22 @@
         {#if preview.title}
           <span class="message-title ellipsis">{preview.title}</span>
           {#if preview.message}<span class="muted message-body">{preview.message}</span>{/if}
+        {:else if lab && !fastForward}
+          <span class="muted">GitLab writes the commit message from the project’s template.</span>
         {:else}
           <span class="muted">Each commit goes onto {pr.base} as it is.</span>
         {/if}
       </div>
       {#if canMerge}
-        {@render toggle(deleteBranch, `Delete ${pr.head} after merging`, pr.settings.deleteBranchOnMerge ? "GitHub deletes it there itself; here too" : "On GitHub and here", false, () => (deleteBranch = !deleteBranch))}
+        {@render toggle(deleteBranch, `Delete ${pr.head} after merging`, lab ? "On GitLab and here" : pr.settings.deleteBranchOnMerge ? "GitHub deletes it there itself; here too" : "On GitHub and here", false, () => (deleteBranch = !deleteBranch))}
       {:else}
         {@render toggle(!!pr.autoMerge, "Merge automatically when ready", autoMergeNote, autoMergeOff, toggleAutoMerge)}
       {/if}
       <button class="button primary merge" disabled={!canMerge} onclick={merge}>
-        {pr.autoMerge && !canMerge ? "Will Merge When Ready" : METHODS.find((m) => m.id === chosen)?.button}
+        {pr.autoMerge && !canMerge ? "Will Merge When Ready" : chosenMethod.button}
       </button>
       <span class="note center">
-        {#if canMerge}Merges on GitHub, then updates your local {pr.base}.{:else if pr.autoMerge}GitHub merges it once it is ready.{:else if checking}GitHub is still checking it.{:else}Merging waits for the steps above.{/if}
+        {#if canMerge}Merges on {w.name}, then updates your local {pr.base}.{:else if pr.autoMerge}{w.name} merges it once it is ready.{:else if checking}{w.name} is still checking it.{:else}Merging waits for the steps above.{/if}
       </span>
     {:else if pr && pr.state === "merged"}
       {@const kept = history.refs.some((r) => r.kind === "local" && r.name === pr!.head)}
@@ -1121,6 +1192,10 @@
     {/if}
   </aside>
 </div>
+
+{#if menu}
+  <Menu x={menu.x} y={menu.y} label={`${w.name} ${w.noun}`} entries={menu.entries} onClose={() => (menu = null)} />
+{/if}
 
 <style>
   .pull {
@@ -1281,6 +1356,9 @@
   .number {
     font-size: var(--text-title);
     color: var(--text2);
+    flex-shrink: 0;
+  }
+  .more {
     flex-shrink: 0;
   }
   .status {

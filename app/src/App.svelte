@@ -63,6 +63,7 @@
   import { relativeTime } from "./lib/format";
   import { activity, failureShort, type ActivityItem } from "./lib/activity.svelte";
   import { github } from "./lib/github.svelte";
+  import type { ForgeKind } from "./lib/forge";
   import { lfs } from "./lib/lfs.svelte";
   import LfsBanner from "./lib/LfsBanner.svelte";
   import StatusLine from "./lib/StatusLine.svelte";
@@ -283,10 +284,13 @@
   let pullBranch = $state<string | null>(null);
   /** The pull request shown, when it is picked by its number: one of another account or a fork. */
   let pullNumber = $state<number | null>(null);
+  /** `gitlab`: the screen shows the branch's merge request on GitLab. */
+  let pullForge = $state<ForgeKind>("github");
 
-  function openPull(branch: string, number: number | null = null) {
+  function openPull(branch: string, number: number | null = null, forge: ForgeKind = "github") {
     pullBranch = branch;
     pullNumber = number;
+    pullForge = forge;
     view = "pull";
     resolving = false;
     if (repo) github.load(repo.path, true);
@@ -297,8 +301,8 @@
     if (repo) github.load(repo.path, true);
   }
   /** Someone else's pull request, opened from Reviews: the sidebar shows Reviews picked. */
-  const reviewing = $derived(view === "pull" && pullNumber !== null && (!history?.head.branch || github.pullOf(history.head.branch)?.number !== pullNumber));
-  const shownPull = $derived(view === "pull" && pullBranch ? (pullNumber ? github.byNumber(pullNumber) : github.pullOf(pullBranch)) : null);
+  const reviewing = $derived(view === "pull" && pullNumber !== null && (!history?.head.branch || github.pullOf(history.head.branch, pullForge)?.number !== pullNumber));
+  const shownPull = $derived(view === "pull" && pullBranch ? (pullNumber ? github.byNumber(pullNumber, pullForge) : github.pullOf(pullBranch, pullForge)) : null);
 
   // A diff's File History button opens the screen.
   $effect(() => {
@@ -377,7 +381,7 @@
       case "series":
         return seriesQuery ? { view, query: seriesQuery } : null;
       case "pull":
-        return pullBranch ? { view, branch: pullBranch, number: pullNumber } : null;
+        return pullBranch ? { view, branch: pullBranch, number: pullNumber, forge: pullForge } : null;
       case "reviews":
         return { view };
       case "stack":
@@ -470,7 +474,7 @@
         view = "series";
         break;
       case "pull":
-        openPull(p.branch, p.number ?? null);
+        openPull(p.branch, p.number ?? null, p.forge ?? "github");
         break;
       case "reviews":
         openReviews();
@@ -529,7 +533,7 @@
       conflicts: showConflicts && operation ? { kind: operation.kind, noun: describe(operation).noun, conflicted: operation.conflicted } : null,
       file: nav.file ? { path: nav.file.path, line } : null,
       github: { place: github.repo ? `${github.repo.owner}/${github.repo.name}` : null, open: github.pulls.filter((p) => p.state === "open").length },
-      pull: pullBranch ? { branch: pullBranch, pr: shownPull?.number ?? null, byNumber: !!pullNumber } : null,
+      pull: pullBranch ? { branch: pullBranch, pr: shownPull?.number ?? null, byNumber: !!pullNumber, gitlab: pullForge === "gitlab" } : null,
       series: seriesQuery,
       compare: comparing,
       head: history.head.branch,
@@ -1451,7 +1455,7 @@
 
   /** The right-click menu of a commit in the graph (commitMenu.ts). */
   function commitMenu(row: HistoryRow): MenuEntry[] {
-    return commitMenuOf(row, { history, ctx: branchCtx, headStack, run, copyText, copyMessage, openStack, openFixes, openCompare, patchTarget, openPull: (branch) => openPull(branch) });
+    return commitMenuOf(row, { history, ctx: branchCtx, headStack, run, copyText, copyMessage, openStack, openFixes, openCompare, patchTarget, openPull });
   }
 
   /** G, B or S while bisecting: the answer for the commit under test. */
@@ -2362,9 +2366,14 @@
             </button>
           {/if}
           {#if view === "pull" && shownPull && !showConflicts}
-            <button class="capsule" onclick={() => api.openGitHub(shownPull!.htmlUrl)} title="Open the pull request on GitHub">
+            {@const lab = pullForge === "gitlab"}
+            <button
+              class="capsule"
+              onclick={() => void (lab ? api.openGitLab(shownPull!.htmlUrl) : api.openGitHub(shownPull!.htmlUrl)).catch(() => {})}
+              title={lab ? "Open the merge request on GitLab" : "Open the pull request on GitHub"}
+            >
               <svg class="icon" viewBox="0 0 16 16"><path d="M9.5 2.5h4v4M13.5 2.5 8 8M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" /></svg>
-              Open on GitHub
+              Open on {lab ? "GitLab" : "GitHub"}
             </button>
           {/if}
           <!-- Undo and Fix a Mistake: the two ways back, side by side. -->
@@ -2516,6 +2525,7 @@
           <PullRequestView.component
             branch={pullBranch}
             number={pullNumber}
+            forge={pullForge}
             {history}
             ctx={branchCtx}
             {colorOf}
