@@ -1,7 +1,6 @@
 // The right-click menu of a commit in the graph: what can be done with it, from where the
 // repository is now. While bisecting it answers about the commit instead.
 
-import { api } from "./api";
 import type { History, HistoryRow } from "./types";
 import type { BisectMark } from "./types";
 import type { Request } from "./confirm.svelte";
@@ -33,7 +32,8 @@ export interface CommitMenuApp {
   /** The commits Save as Patches writes for a row. */
   patchTarget: (row: HistoryRow) => PatchTarget;
   /** The Pull Request screen of a branch: its pull request, or the form for a new one. */
-  openPull: (branch: string) => void;
+  /** The Pull Request screen of `branch`; `forge` "gitlab": its merge request. */
+  openPull: (branch: string, number?: number | null, forge?: "github" | "gitlab") => void;
 }
 
 /** The right-click menu of a commit in the graph. */
@@ -121,7 +121,7 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
     }
     const project = gitlabOf(history, github.gitlab, ref);
     const mr = project ? github.mergeRequestOf(ref.name) : null;
-    if (mr) reviewing.push(item(`Merge Request !${mr.number} of ${ref.name}`, menuIcons.pull, () => void api.openGitLab(mr.htmlUrl)));
+    if (mr) reviewing.push(item(`Merge Request !${mr.number} of ${ref.name}`, menuIcons.pull, () => app.openPull(ref.name, null, "gitlab")));
     else if (project) reviewing.push(item(`Create Merge Request for ${ref.name}…`, menuIcons.pull, () => run(branchMergeRequest(ctx, ref, project))));
   }
   // A branch only a GitLab remote has, e.g. a teammate's: its New merge request page.
@@ -131,7 +131,7 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
     const name = project ? ref.name.slice(project.remote.length + 1) : "";
     if (!project || name === "HEAD" || name === history.trunk || locals.has(name)) continue;
     const mr = github.mergeRequestOf(name);
-    if (mr) reviewing.push(item(`Merge Request !${mr.number} of ${ref.name}`, menuIcons.pull, () => void api.openGitLab(mr.htmlUrl)));
+    if (mr) reviewing.push(item(`Merge Request !${mr.number} of ${ref.name}`, menuIcons.pull, () => app.openPull(name, null, "gitlab")));
     else reviewing.push(item(`Create Merge Request for ${ref.name}…`, menuIcons.pull, () => run(branchMergeRequest(ctx, ref, project))));
   }
   group(reviewing);

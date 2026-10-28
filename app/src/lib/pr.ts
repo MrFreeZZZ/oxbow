@@ -1,17 +1,24 @@
 // Pull requests: the sheets that open, merge and change them, and the stack list Oxbow keeps in
 // the description of each pull request of a stack. GitHub's side shows as curl (and the `gh`
-// command that does the same); what happens here afterwards is ordinary git.
+// command that does the same); what happens here afterwards is ordinary git. A merge request on
+// GitLab (one with `gitlab` facts) goes through the same sheets, in GitLab's words and calls.
 
 import { api } from "./api";
 import type { Part, Request } from "./confirm.svelte";
 import type { BranchContext } from "./branches";
 import { shortId } from "./format";
-import type { Action, Failure, GitHubRepo, MergeMethodName, Plan, PullCall, PullRequest, PullSummary } from "./types";
+import { GITHUB, GITLAB, type Words } from "./forge";
+import type { Action, Failure, MergeMethodName, Plan, PullCall, PullRequest, PullSummary } from "./types";
 
 /** "Squash and Merge" as the start of a sentence: "Squash and merge". */
 const sentence = (label: string) => label.charAt(0) + label.slice(1).toLowerCase();
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const chip = (ctx: BranchContext, name: string): Part => ({ branch: name, color: ctx.colorOf(name) });
+
+/** GitHub's words, or GitLab's for a merge request. */
+export const wordsOfPull = (pr: PullRequest): Words => (pr.gitlab ? GITLAB : GITHUB);
+const preview = (w: Words, calls: PullCall[]) => (w.kind === "gitlab" ? api.gitlabCallsPreview(calls) : api.githubCallsPreview(calls));
+const send = (w: Words, calls: PullCall[]) => (w.kind === "gitlab" ? api.gitlabRun(calls) : api.githubRun(calls));
 
 /** A failed git step says what git said. */
 async function perform(action: Action) {
@@ -82,32 +89,62 @@ export const METHODS: { id: MergeMethodName; label: string; button: string; tip:
   { id: "rebase", label: "Rebase", button: "Rebase and Merge", tip: "Replay each commit onto the base, no merge commit" },
 ];
 
-/** The commit message GitHub is asked to write, as the screen previews it. */
-export function mergeMessage(gh: GitHubRepo, pr: PullRequest, method: MergeMethodName): { title: string | null; message: string | null } {
+export type MethodChoice = (typeof METHODS)[number];
+
+/** The ways it may merge: what the repository allows on GitHub; on GitLab a merge (or a
+ *  fast-forward) and a squash, as the project allows. */
+export function methodsOf(pr: PullRequest): MethodChoice[] {
+  const g = pr.gitlab;
+  if (!g) return METHODS.filter((m) => (m.id === "merge" ? pr.settings.mergeCommit : m.id === "squash" ? pr.settings.squash : pr.settings.rebase));
+  const ff = g.mergeMethod === "ff";
+  const merge: MethodChoice = {
+    id: "merge",
+    label: ff ? "Fast-forward" : "Merge",
+    button: "Merge",
+    tip: ff ? "Move the target onto its commits, without a merge commit" : g.mergeMethod === "rebase_merge" ? "Keep every commit and add a merge commit, onto the newest target only" : "Keep every commit and add a merge commit",
+  };
+  const squash: MethodChoice = { ...METHODS[1], tip: "One commit on the target for the whole merge request" };
+  return g.squashOption === "always" ? [squash] : g.squashOption === "never" ? [merge] : [merge, squash];
+}
+
+/** The way picked when none is: GitLab's own choice for the merge request, else Squash. */
+export function defaultMethod(pr: PullRequest, methods: MethodChoice[]): MergeMethodName {
+  const wanted = pr.gitlab ? (pr.gitlab.squash ? "squash" : "merge") : "squash";
+  return (methods.find((m) => m.id === wanted) ?? methods[0])?.id ?? "merge";
+}
+
+/** The commit message GitHub is asked to write, as the screen previews it; `owner` is the
+ *  repository's. GitLab writes its own from the project's templates. */
+export function mergeMessage(owner: string, pr: PullRequest, method: MergeMethodName): { title: string | null; message: string | null } {
+  if (pr.gitlab) return { title: null, message: null };
   if (method === "squash") return { title: `${pr.title} (#${pr.number})`, message: readBody(pr.body).text };
-  if (method === "merge") return { title: `Merge pull request #${pr.number} from ${pr.headOwner ?? gh.owner}/${pr.head}`, message: pr.title };
+  if (method === "merge") return { title: `Merge pull request #${pr.number} from ${pr.headOwner ?? owner}/${pr.head}`, message: pr.title };
   return { title: null, message: null };
 }
 
 /** The first line of what git said, for a note. */
 const firstLine = (err: unknown) => String(err).trim().split("\n").find((line) => line.trim())?.replace(/^(error|fatal): /, "") ?? "";
 
-/** Merge on GitHub, then bring the merge here; deleting the branch comes last, and a delete
- *  that fails only adds a note: the merge is in by then. */
-export async function mergeRequest(ctx: BranchContext, gh: GitHubRepo, pr: PullRequest, method: MergeMethodName, deleteBranch: boolean): Promise<Request> {
-  const { title, message } = mergeMessage(gh, pr, method);
-  const calls: PullCall[] = [{ kind: "merge", number: pr.number, method, title, message, sha: pr.headSha }];
+/** Merge on GitHub (or GitLab), then bring the merge here; deleting the branch comes last, and a
+ *  delete that fails only adds a note: the merge is in by then. `place` is where it lives: the
+ *  remote, and on GitHub the repository's owner. */
+export async function mergeRequest(ctx: BranchContext, place: { remote: string; owner: string | null }, pr: PullRequest, method: MergeMethodName, deleteBranch: boolean): Promise<Request> {
+  const w = wordsOfPull(pr);
+  const lab = w.kind === "gitlab";
+  const n = `${w.mark}${pr.number}`;
+  const { title, message } = mergeMessage(place.owner ?? "", pr, method);
+  const calls: PullCall[] = [{ kind: "merge", number: pr.number, method, title, message, sha: pr.headSha, deleteBranch: lab && deleteBranch }];
   const local = ctx.history.refs.find((r) => r.kind === "local" && r.name === pr.head);
-  const fromFork = !!pr.headOwner && pr.headOwner !== gh.owner;
+  const fromFork = !!pr.headOwner && pr.headOwner !== place.owner;
   // A local branch with commits GitHub doesn't have stays, so nothing is lost. The delete
   // itself checks again: only while the branch is still at the merged commit.
   const deleteLocal = deleteBranch && local?.target === pr.headSha;
-  const landed: Action = { kind: "pullRequestMerged", remote: gh.remote, base: pr.base, branch: pr.head };
+  const landed: Action = { kind: "pullRequestMerged", remote: place.remote, base: pr.base, branch: pr.head };
   const cleanup: { action: Action; failed: (err: unknown) => string }[] = [];
   if (deleteBranch && !fromFork && !pr.settings.deleteBranchOnMerge)
     cleanup.push({
-      action: { kind: "deleteRemoteBranch", remote: gh.remote, branch: pr.head, expect: pr.headSha },
-      failed: (err) => `${pr.head} stays on ${gh.remote}: ${firstLine(err)}`,
+      action: { kind: "deleteRemoteBranch", remote: place.remote, branch: pr.head, expect: pr.headSha },
+      failed: (err) => `${pr.head} stays on ${place.remote}: ${firstLine(err)}`,
     });
   if (deleteLocal)
     cleanup.push({
@@ -116,32 +153,34 @@ export async function mergeRequest(ctx: BranchContext, gh: GitHubRepo, pr: PullR
     });
   // A delete that can't be done (uncommitted changes on the branch) is left out and said so.
   const [curls, plan, ...cleanupPlans] = await Promise.all([
-    api.githubCallsPreview(calls),
+    preview(w, calls),
     api.planAction(landed),
     ...cleanup.map((c) => api.planAction(c.action).catch((err: unknown) => String(err))),
   ]);
   const skipped = cleanupPlans.filter((p): p is string => typeof p === "string");
   const steps = cleanup.filter((_, i) => typeof cleanupPlans[i] !== "string");
   const commands = [plan, ...cleanupPlans.filter((p): p is Plan => typeof p !== "string")].flatMap((p) => p.commands);
-  const verb = method === "squash" ? `squashes ${plural(pr.commitCount, "commit")} of ` : method === "rebase" ? `replays ${plural(pr.commitCount, "commit")} of ` : "merges ";
-  const body: Part[] = ["GitHub ", verb, chip(ctx, pr.head), " into ", chip(ctx, pr.base)];
-  body.push(method === "squash" ? " as one commit" : method === "merge" ? " with a merge commit" : "", ", then your ", chip(ctx, pr.base), " catches up here, unless it has commits of its own.");
-  if (deleteBranch && pr.settings.deleteBranchOnMerge) body.push(" GitHub deletes its branch there itself.");
-  if (deleteBranch && local && !deleteLocal) body.push(" The local branch stays: it has commits GitHub doesn’t.");
+  const ff = lab && method === "merge" && pr.gitlab!.mergeMethod === "ff";
+  const verb = method === "squash" ? `squashes ${plural(pr.commitCount, "commit")} of ` : method === "rebase" ? `replays ${plural(pr.commitCount, "commit")} of ` : ff ? "fast-forwards " : "merges ";
+  const body: Part[] = ff ? [`${w.name} fast-forwards `, chip(ctx, pr.base), " to ", chip(ctx, pr.head)] : [`${w.name} `, verb, chip(ctx, pr.head), " into ", chip(ctx, pr.base)];
+  body.push(method === "squash" ? " as one commit" : method === "merge" && !ff ? " with a merge commit" : "", ", then your ", chip(ctx, pr.base), " catches up here, unless it has commits of its own.");
+  if (deleteBranch && pr.settings.deleteBranchOnMerge) body.push(` ${w.name} deletes its branch there itself.`);
+  if (deleteBranch && local && !deleteLocal) body.push(` The local branch stays: it has commits ${w.name} doesn’t.`);
   for (const why of skipped) body.push(` The local branch stays: ${why.replace(/^(error|fatal): /, "")}.`);
-  const flags = `--${method}${deleteBranch ? " --delete-branch" : ""}`;
+  const flags = lab ? `${method === "squash" ? " --squash" : ""}${deleteBranch ? " --remove-source-branch" : ""}` : ` --${method}${deleteBranch ? " --delete-branch" : ""}`;
+  const button = lab ? methodsOf(pr).find((m) => m.id === method)!.button : METHODS.find((m) => m.id === method)!.button;
   return {
-    title: `${sentence(METHODS.find((m) => m.id === method)!.button)} #${pr.number}?`,
+    title: `${sentence(button)} ${n}?`,
     body,
     icon: "merge",
-    button: METHODS.find((m) => m.id === method)!.button,
-    status: `Merging #${pr.number} on GitHub…`,
-    note: "Undo can’t take back a merge on GitHub. The steps here are in the Operation Log.",
+    button,
+    status: `Merging ${n} on ${w.name}…`,
+    note: `Undo can’t take back a merge on ${w.name}. The steps here are in the Operation Log.`,
     local: {
       commands: [...curls, ...commands.map((c) => c.display)],
-      comments: [`gh pr merge ${pr.number} ${flags} does the same`, ...commands.map((c) => c.comment)],
+      comments: [`${w.cli} merge ${pr.number}${flags} does the same`, ...commands.map((c) => c.comment)],
       run: async () => {
-        await api.githubRun(calls);
+        await send(w, calls);
         await perform(landed);
         const notes: string[] = [];
         for (const step of steps) {
@@ -151,51 +190,155 @@ export async function mergeRequest(ctx: BranchContext, gh: GitHubRepo, pr: PullR
             notes.push(step.failed((err as Failure)?.output ?? err));
           }
         }
-        return [`Merged #${pr.number} into ${pr.base}.`, ...notes].join(" ");
+        return [`Merged ${n} into ${pr.base}.`, ...notes].join(" ");
       },
     },
   };
 }
 
-/** Ask GitHub to merge it on its own once checks pass and it is approved, or stop asking. */
+/** Ask GitHub to merge it on its own once checks pass and it is approved, or stop asking; on
+ *  GitLab, once the pipeline passes. */
 export async function autoMergeRequest(pr: PullRequest, method: MergeMethodName | null): Promise<Request> {
+  const w = wordsOfPull(pr);
+  const lab = w.kind === "gitlab";
+  const n = `${w.mark}${pr.number}`;
   const calls: PullCall[] = [{ kind: "autoMerge", number: pr.number, id: pr.nodeId, method }];
-  const [curl] = await api.githubCallsPreview(calls);
+  const [curl] = await preview(w, calls);
   const on = method !== null;
+  const how = method ? (lab ? methodsOf(pr) : METHODS).find((m) => m.id === method)!.label.toLowerCase() : "";
+  const comment = lab
+    ? on
+      ? `${w.cli} merge ${pr.number} --auto-merge${method === "squash" ? " --squash" : ""} does the same`
+      : "Cancel auto-merge on GitLab’s page does the same"
+    : on
+      ? `gh pr merge ${pr.number} --auto --${method} does the same`
+      : `gh pr merge ${pr.number} --disable-auto does the same`;
   return {
-    title: on ? `Merge #${pr.number} automatically when it is ready?` : `Stop merging #${pr.number} automatically?`,
+    title: on ? `Merge ${n} automatically when it is ready?` : `Stop merging ${n} automatically?`,
     body: on
-      ? [`GitHub merges it into ${pr.base} by ${METHODS.find((m) => m.id === method)!.label.toLowerCase()} as soon as the required checks pass and it has the approvals it needs. Nothing changes here until then.`]
+      ? [
+          lab
+            ? `GitLab merges it into ${pr.base} by ${how} as soon as the pipeline passes and it meets the project’s rules. Nothing changes here until then.`
+            : `GitHub merges it into ${pr.base} by ${how} as soon as the required checks pass and it has the approvals it needs. Nothing changes here until then.`,
+        ]
       : ["It stays open until someone merges it."],
     icon: "merge",
     button: on ? "Turn On" : "Turn Off",
     status: on ? "Turning on auto-merge…" : "Turning off auto-merge…",
     local: {
       commands: [curl],
-      comment: on ? `gh pr merge ${pr.number} --auto --${method} does the same` : `gh pr merge ${pr.number} --disable-auto does the same`,
+      comment,
       run: async () => {
-        await api.githubRun(calls);
-        return on ? `#${pr.number} merges once it is ready.` : `Auto-merge of #${pr.number} is off.`;
+        await send(w, calls);
+        return on ? `${n} merges once it is ready.` : `Auto-merge of ${n} is off.`;
       },
     },
   };
 }
 
 export async function readyRequest(pr: PullRequest): Promise<Request> {
-  const calls: PullCall[] = [{ kind: "readyForReview", number: pr.number, id: pr.nodeId }];
-  const [curl] = await api.githubCallsPreview(calls);
+  const w = wordsOfPull(pr);
+  const n = `${w.mark}${pr.number}`;
+  const calls: PullCall[] = [{ kind: "readyForReview", number: pr.number, id: pr.nodeId, title: pr.gitlab ? pr.title : null }];
+  const [curl] = await preview(w, calls);
   return {
-    title: `Mark #${pr.number} ready for review?`,
-    body: ["It stops being a draft, and the reviewers it asks for hear about it."],
+    title: `Mark ${n} ready for review?`,
+    body: [w.kind === "gitlab" ? "It stops being a draft: GitLab takes Draft: off its title, and it can merge." : "It stops being a draft, and the reviewers it asks for hear about it."],
     icon: "edit",
     button: "Ready for Review",
     status: "Marking it ready…",
     local: {
       commands: [curl],
-      comment: `gh pr ready ${pr.number} does the same`,
+      comment: `${w.cli} ${w.kind === "gitlab" ? "update" : "ready"} ${pr.number}${w.kind === "gitlab" ? " --ready" : ""} does the same`,
       run: async () => {
-        await api.githubRun(calls);
-        return `#${pr.number} is ready for review.`;
+        await send(w, calls);
+        return `${n} is ready for review.`;
+      },
+    },
+  };
+}
+
+/** Make it a draft again: it can't merge until it is marked ready. */
+export async function draftRequest(pr: PullRequest): Promise<Request> {
+  const w = wordsOfPull(pr);
+  const n = `${w.mark}${pr.number}`;
+  const calls: PullCall[] = [{ kind: "convertToDraft", number: pr.number, id: pr.nodeId, title: pr.gitlab ? pr.title : null }];
+  const [curl] = await preview(w, calls);
+  return {
+    title: `Mark ${n} as a draft?`,
+    body: [w.kind === "gitlab" ? "GitLab puts Draft: before its title, and it can’t merge until it is marked ready." : "It can’t merge until it is marked ready for review again; the reviews it has stay."],
+    icon: "edit",
+    button: "Mark as Draft",
+    status: "Marking it as a draft…",
+    local: {
+      commands: [curl],
+      comment: `${w.cli} ${w.kind === "gitlab" ? `update ${pr.number} --draft` : `ready ${pr.number} --undo`} does the same`,
+      run: async () => {
+        await send(w, calls);
+        return `${n} is a draft.`;
+      },
+    },
+  };
+}
+
+/** Close it, or open it again; its branch stays as it is. */
+export async function closeRequest(pr: PullRequest, open: boolean): Promise<Request> {
+  const w = wordsOfPull(pr);
+  const n = `${w.mark}${pr.number}`;
+  const calls: PullCall[] = [{ kind: "setState", number: pr.number, open }];
+  const [curl] = await preview(w, calls);
+  return {
+    title: open ? `Reopen ${n}?` : `Do you really want to close ${n}?`,
+    body: [open ? `It is open again on ${w.name}, with its conversation and reviews.` : `It stays on ${w.name}, closed, and can be reopened. Its branch stays.`],
+    icon: "edit",
+    button: open ? "Reopen" : "Close",
+    status: open ? "Reopening it…" : "Closing it…",
+    local: {
+      commands: [curl],
+      comment: `${w.cli} ${open ? "reopen" : "close"} ${pr.number} does the same`,
+      run: async () => {
+        await send(w, calls);
+        return open ? `${n} is open again.` : `Closed ${n}.`;
+      },
+    },
+  };
+}
+
+/** Point it at another branch to merge into, picked from `choices` or typed. */
+export async function targetRequest(ctx: BranchContext, pr: PullRequest, choices: string[]): Promise<Request> {
+  const w = wordsOfPull(pr);
+  // The request once, with a stand-in for the branch the sheet then fills in as it is picked.
+  const [shape] = await preview(w, [{ kind: "update", number: pr.number, base: TARGET }]);
+  return targetSheet(ctx, pr, w, choices, "", shape);
+}
+
+const TARGET = "OXBOW_TARGET_BRANCH";
+
+function targetSheet(ctx: BranchContext, pr: PullRequest, w: Words, choices: string[], target: string, shape: string): Request {
+  const n = `${w.mark}${pr.number}`;
+  const name = target.trim();
+  const calls: PullCall[] = [{ kind: "update", number: pr.number, base: name }];
+  const again = (next: string) => targetSheet(ctx, pr, w, choices, next, shape);
+  return {
+    title: `Change what ${n} merges into?`,
+    body: ["It merges into ", chip(ctx, pr.base), ` now. ${w.name} shows its changes against the new target, and ${w.checks} ${w.kind === "gitlab" ? "runs" : "run"} again.`],
+    icon: "merge",
+    button: "Change Target",
+    status: "Changing the target…",
+    invalid: !name ? "Pick a branch" : name === pr.base ? `It merges into ${name} already` : name === pr.head ? "It can’t merge into itself" : null,
+    fields: [
+      {
+        label: "Into",
+        chips: choices.map((b) => ({ label: b, on: b === name, pick: () => again(b) })),
+        text: { value: name, placeholder: "Branch name", edit: again },
+      },
+    ],
+    local: {
+      commands: [shape.replace(TARGET, JSON.stringify(name || "<branch>").slice(1, -1))],
+      comment: `${w.cli} ${w.kind === "gitlab" ? "update" : "edit"} ${pr.number} --${w.kind === "gitlab" ? "target-branch" : "base"} ${name || "<branch>"} does the same`,
+      run: async () => {
+        await send(w, calls);
+        return `${n} merges into ${name} now.`;
       },
     },
   };
@@ -285,6 +428,7 @@ export async function createRequest(ctx: BranchContext, pull: NewPull): Promise<
  *  going on from it later; `done` runs once both went through. */
 export async function restackPushRequest(
   ctx: BranchContext,
+  w: Words,
   push: (Action & { kind: "pushBranches" }) | null,
   retarget: { number: number; base: string }[],
   failed: (step: "push" | "base", message: string) => Promise<void>,
@@ -292,7 +436,7 @@ export async function restackPushRequest(
 ): Promise<Request | null> {
   const calls: PullCall[] = retarget.map((r) => ({ kind: "update", number: r.number, base: r.base }));
   if (!push && !calls.length) return null;
-  const [curls, plan] = await Promise.all([calls.length ? api.githubCallsPreview(calls) : Promise.resolve([]), push ? api.planAction(push) : Promise.resolve(null)]);
+  const [curls, plan] = await Promise.all([calls.length ? preview(w, calls) : Promise.resolve([]), push ? api.planAction(push) : Promise.resolve(null)]);
   const pushed = plan?.commands ?? [];
   const body: Part[] = [];
   if (push) {
@@ -300,9 +444,9 @@ export async function restackPushRequest(
     push.branches.forEach((b, i) => body.push(...(i ? [i === push.branches.length - 1 ? " and " : ", "] : []), chip(ctx, b.branch)));
     body.push(` to ${push.remote}, replacing the commits the rebase rewrote.`);
   }
-  if (retarget.length) body.push(` ${retarget.map((r) => `#${r.number}`).join(", ")} then ${retarget.length === 1 ? "goes" : "go"} into `, chip(ctx, retarget[0].base), ".");
+  if (retarget.length) body.push(` ${retarget.map((r) => `${w.mark}${r.number}`).join(", ")} then ${retarget.length === 1 ? "goes" : "go"} into `, chip(ctx, retarget[0].base), ".");
   return {
-    title: push ? `Push the restacked branches to ${push.remote}?` : "Point the pull requests at the trunk?",
+    title: push ? `Push the restacked branches to ${push.remote}?` : `Point the ${w.noun}s at the trunk?`,
     body,
     icon: "push",
     tone: push ? "warn" : undefined,
@@ -312,7 +456,10 @@ export async function restackPushRequest(
     note: "If a step fails, the restack goes on from it later.",
     local: {
       commands: [...pushed.map((c) => c.display), ...curls],
-      comments: [...pushed.map((c) => c.comment), ...retarget.map((r) => `gh pr edit ${r.number} --base ${r.base} does the same`)],
+      comments: [
+        ...pushed.map((c) => c.comment),
+        ...retarget.map((r) => (w.kind === "gitlab" ? `glab mr update ${r.number} --target-branch ${r.base} does the same` : `gh pr edit ${r.number} --base ${r.base} does the same`)),
+      ],
       run: async () => {
         if (push)
           try {
@@ -323,7 +470,7 @@ export async function restackPushRequest(
           }
         if (calls.length)
           try {
-            await api.githubRun(calls);
+            await send(w, calls);
           } catch (err) {
             await failed("base", firstLine(err)).catch(() => {});
             throw err;
@@ -337,29 +484,34 @@ export async function restackPushRequest(
 
 // --- Getting it ready ---------------------------------------------------------------------------
 
-/** Merge the base into the branch on GitHub, like its Update branch button. */
+/** Merge the base into the branch on GitHub, like its Update branch button; on GitLab rebase
+ *  the branch onto the target, like its Rebase button. */
 export async function updateBranchRequest(ctx: BranchContext, pr: PullRequest): Promise<Request> {
+  const w = wordsOfPull(pr);
+  const lab = w.kind === "gitlab";
   const calls: PullCall[] = [{ kind: "updateBranch", number: pr.number, sha: pr.headSha }];
-  const [curl] = await api.githubCallsPreview(calls);
+  const [curl] = await preview(w, calls);
   const local = ctx.history.refs.find((r) => r.kind === "local" && r.name === pr.head);
   const ahead = local?.tracking && !local.tracking.gone ? local.tracking.ahead : 0;
-  const body: Part[] = ["GitHub merges the newest ", chip(ctx, pr.base), " into ", chip(ctx, pr.head), " with a merge commit, and the checks run again."];
-  if (local) body.push(" Pull it here afterwards to have the merge locally.");
+  const body: Part[] = lab
+    ? ["GitLab rebases ", chip(ctx, pr.head), " onto the newest ", chip(ctx, pr.base), ", and the pipeline runs again."]
+    : ["GitHub merges the newest ", chip(ctx, pr.base), " into ", chip(ctx, pr.head), " with a merge commit, and the checks run again."];
+  if (local) body.push(lab ? " Its commits get new ids there: pull it here afterwards with rebase." : " Pull it here afterwards to have the merge locally.");
   return {
-    title: `Update ${pr.head} with ${pr.base}?`,
+    title: lab ? `Rebase ${pr.head} onto ${pr.base}?` : `Update ${pr.head} with ${pr.base}?`,
     body,
-    icon: "merge",
-    button: "Update Branch",
-    status: "Updating the branch…",
+    icon: lab ? "rebase" : "merge",
+    button: lab ? "Rebase" : "Update Branch",
+    status: lab ? "Rebasing the branch…" : "Updating the branch…",
     warning: ahead
-      ? { title: `${plural(ahead, "commit")} here aren’t on GitHub yet`, body: ["Push them first, or pull after the update: ", chip(ctx, pr.head), " then has a merge to bring in."] }
+      ? { title: `${plural(ahead, "commit")} here aren’t on ${w.name} yet`, body: lab ? ["Push them first: after the rebase, ", chip(ctx, pr.head), " here and there no longer line up."] : ["Push them first, or pull after the update: ", chip(ctx, pr.head), " then has a merge to bring in."] }
       : undefined,
     local: {
       commands: [curl],
-      comment: `gh pr update-branch ${pr.number} does the same`,
+      comment: lab ? `glab mr rebase ${pr.number} does the same` : `gh pr update-branch ${pr.number} does the same`,
       run: async () => {
-        await api.githubRun(calls);
-        return `GitHub is updating ${pr.head}.`;
+        await send(w, calls);
+        return `${w.name} is ${lab ? "rebasing" : "updating"} ${pr.head}.`;
       },
     },
   };

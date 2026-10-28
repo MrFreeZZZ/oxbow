@@ -62,6 +62,29 @@ pub struct GitLabList {
     merge_requests: Vec<PullSummary>,
 }
 
+/// The repository's GitLab project on a server Oxbow is signed in to (the default remote's
+/// first), and a client signed in there; `None` without a sign-in.
+async fn signed_in_project(
+    app: &AppHandle,
+    window: &tauri::WebviewWindow,
+    session: &State<'_, Session>,
+    tokens: &State<'_, crate::gitlab_accounts::GitLabTokens>,
+) -> CommandResult<Option<(oxbow_core::Repo, GitLabProject, oxbow_core::gitlab_api::Client)>> {
+    let repo = current(session, window)?;
+    let servers = crate::gitlab_accounts::servers(app);
+    let found = servers.clone();
+    let here = repo.clone();
+    let projects = read(at(&repo), "Find the GitLab projects", move || {
+        Ok(here.gitlab_projects(&found))
+    })
+    .await?;
+    let Some(project) = projects.into_iter().find(|p| servers.iter().any(|s| s.host == p.host)) else {
+        return Ok(None);
+    };
+    let client = tokens.client(app, &project.host)?;
+    Ok(Some((repo, project, client)))
+}
+
 /// The merge requests of the repository's GitLab project on a server Oxbow is signed in to (the
 /// default remote's first); none without a sign-in, where Create Merge Request pushes instead.
 #[tauri::command]
@@ -71,17 +94,9 @@ pub async fn gitlab_merge_requests(
     session: State<'_, Session>,
     tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
 ) -> CommandResult<Option<GitLabList>> {
-    let repo = current(&session, &window)?;
-    let servers = crate::gitlab_accounts::servers(&app);
-    let found = servers.clone();
-    let projects = read(at(&repo), "Find the GitLab projects", move || {
-        Ok(repo.gitlab_projects(&found))
-    })
-    .await?;
-    let Some(project) = projects.into_iter().find(|p| servers.iter().any(|s| s.host == p.host)) else {
+    let Some((_, project, client)) = signed_in_project(&app, &window, &session, &tokens).await? else {
         return Ok(None);
     };
-    let client = tokens.client(&app, &project.host)?;
     blocking(move || {
         let merge_requests = client.merge_requests(&project)?;
         Ok(Some(GitLabList {
@@ -92,7 +107,89 @@ pub async fn gitlab_merge_requests(
     .await
 }
 
-/// Open a merge request page of one of the repository's GitLab projects in the browser.
+/// Merge request `!number` in full, as a pull request; what its commits here tell (line counts,
+/// the code under comments) is filled in.
+#[tauri::command]
+pub async fn gitlab_merge_request(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
+    number: u64,
+) -> CommandResult<PullRequest> {
+    let (repo, project, client) = signed_in_project(&app, &window, &session, &tokens)
+        .await?
+        .ok_or_else(|| "Sign in to this repository’s GitLab in Settings › Accounts".to_owned())?;
+    blocking(move || {
+        let mut mr = client.merge_request(&project, number)?;
+        repo.merge_request_here(&mut mr);
+        Ok(mr)
+    })
+    .await
+}
+
+/// The requests `calls` send to GitLab, as curl, for the sheet.
+#[tauri::command]
+pub async fn gitlab_calls_preview(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
+    calls: Vec<Call>,
+) -> CommandResult<Vec<String>> {
+    let (_, project, client) = signed_in_project(&app, &window, &session, &tokens)
+        .await?
+        .ok_or_else(|| "Sign in to this repository’s GitLab in Settings › Accounts".to_owned())?;
+    calls
+        .iter()
+        .map(|call| client.call_request(&project, call).map(|r| r.display()))
+        .collect()
+}
+
+/// Send `calls` to GitLab in order, each shown in the sheet as it goes. Answers with what the
+/// last one returned: the merge request as it is now.
+#[tauri::command]
+pub async fn gitlab_run(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
+    calls: Vec<Call>,
+) -> CommandResult<Value> {
+    let (_, project, client) = signed_in_project(&app, &window, &session, &tokens)
+        .await?
+        .ok_or_else(|| "Sign in to this repository’s GitLab in Settings › Accounts".to_owned())?;
+    let label = window.label().to_owned();
+    let cancel = app.state::<Session>().cancel(&window);
+    cancel.store(false, Ordering::Relaxed);
+    tauri::async_runtime::spawn_blocking(move || {
+        let emit = |event: ActionEvent| {
+            let _ = app.emit_to(label.as_str(), "action-event", event);
+        };
+        let mut answer = Value::Null;
+        for call in &calls {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("Stopped. Nothing else was sent.".to_owned());
+            }
+            let request = client.call_request(&project, call)?;
+            emit(ActionEvent::Command {
+                display: request.display(),
+            });
+            answer = client.perform(&project, call).map_err(|err| err.to_string())?;
+            emit(ActionEvent::Line(OutputLine {
+                text: "Done.".to_owned(),
+                stderr: false,
+                progress: false,
+            }));
+        }
+        Ok(answer)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+/// Open a page of one of the repository's GitLab projects in the browser: a merge request's, or
+/// a pipeline's or job's from the screen's checks.
 #[tauri::command]
 pub async fn open_gitlab(
     app: AppHandle,
@@ -106,11 +203,15 @@ pub async fn open_gitlab(
         Ok(repo.gitlab_projects(&servers))
     })
     .await?;
-    if !projects
-        .iter()
-        .any(|p| url.starts_with(&format!("{}/-/merge_requests/", p.web_url)))
-    {
-        return Err("Only merge request pages of this repository's GitLab projects open from here".into());
+    let pages = ["merge_requests", "pipelines", "jobs"];
+    if !projects.iter().any(|p| {
+        pages
+            .iter()
+            .any(|page| url.starts_with(&format!("{}/-/{page}/", p.web_url)))
+    }) {
+        return Err(
+            "Only merge request, pipeline and job pages of this repository's GitLab projects open from here".into(),
+        );
     }
     crate::open_in::open_url(&url)
 }

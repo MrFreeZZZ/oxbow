@@ -93,7 +93,10 @@ impl Repo {
             return HashMap::new();
         }
         let query: String = shas.iter().map(|sha| format!("{sha}^{{commit}}\n")).collect();
-        let Ok(out) = self.run(&GitCommand::new(["cat-file", "--batch-check=%(objectname)"]).input(query)) else {
+        let Ok(out) = self.run_with_input(
+            &GitCommand::new(["cat-file", "--batch-check=%(objectname)"]),
+            Some(query.as_bytes()),
+        ) else {
             return HashMap::new();
         };
         let here: Vec<String> = out
@@ -476,6 +479,8 @@ pub struct PullRequest {
     /// Approvals the base branch's rules ask for, when this account may read them.
     pub required_approvals: Option<u32>,
     pub settings: RepoSettings,
+    /// What only a merge request on GitLab has; `None` on GitHub.
+    pub gitlab: Option<crate::gitlab_api::GitLabFacts>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -582,7 +587,7 @@ impl Entry {
 pub struct Check {
     pub name: String,
     pub detail: String,
-    /// `ok`, `fail`, `run` or `skip`.
+    /// `ok`, `fail`, `run` or `skip`; `warn` for a GitLab job that failed but may.
     pub state: String,
     /// How long it took, once it finished.
     pub seconds: Option<i64>,
@@ -678,6 +683,9 @@ pub enum Call {
         message: Option<String>,
         /// Merge only if the head is still this commit.
         sha: String,
+        /// GitLab deletes the source branch once merged (GitHub's is deleted by a push).
+        #[serde(default)]
+        delete_branch: bool,
     },
     Create {
         head: String,
@@ -700,6 +708,21 @@ pub enum Call {
     ReadyForReview {
         number: u64,
         id: String,
+        /// The title it gets: GitLab marks a draft by the title's `Draft:`.
+        #[serde(default)]
+        title: Option<String>,
+    },
+    /// Make it a draft again.
+    ConvertToDraft {
+        number: u64,
+        id: String,
+        #[serde(default)]
+        title: Option<String>,
+    },
+    /// Close it, or open it again.
+    SetState {
+        number: u64,
+        open: bool,
     },
     /// Merge the base into the head on GitHub, like its Update branch button, if the head is
     /// still this commit.
@@ -790,6 +813,8 @@ impl Call {
 
 const READY: &str =
     "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { isDraft } } }";
+const DRAFT: &str =
+    "mutation($id: ID!) { convertPullRequestToDraft(input: {pullRequestId: $id}) { pullRequest { isDraft } } }";
 const AUTO_ON: &str = "mutation($id: ID!, $method: PullRequestMergeMethod!) { enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method}) { clientMutationId } }";
 const AUTO_OFF: &str =
     "mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }";
@@ -845,6 +870,7 @@ impl Client {
                 title,
                 message,
                 sha,
+                ..
             } => {
                 let mut body = json!({ "merge_method": method.rest(), "sha": sha });
                 if let Some(title) = title {
@@ -895,6 +921,12 @@ impl Client {
                 Some(json!({ "expected_head_sha": sha })),
             ),
             Call::ReadyForReview { id, .. } => self.graphql_request(READY, json!({ "id": id })),
+            Call::ConvertToDraft { id, .. } => self.graphql_request(DRAFT, json!({ "id": id })),
+            Call::SetState { number: n, open } => self.api_request(
+                "PATCH",
+                &repo.path(&format!("/pulls/{}", number(*n))),
+                Some(json!({ "state": if *open { "open" } else { "closed" } })),
+            ),
             Call::AutoMerge { id, method, .. } => match method {
                 Some(method) => self.graphql_request(AUTO_ON, json!({ "id": id, "method": method.graphql() })),
                 None => self.graphql_request(AUTO_OFF, json!({ "id": id })),
@@ -1091,6 +1123,7 @@ impl Client {
             checks,
             required_approvals,
             settings,
+            gitlab: None,
             summary,
         })
     }
@@ -1129,7 +1162,7 @@ fn path_part(name: &str) -> String {
         .collect()
 }
 
-fn text(value: &Value, key: &str) -> String {
+pub(crate) fn text(value: &Value, key: &str) -> String {
     value.get(key).and_then(Value::as_str).unwrap_or_default().to_owned()
 }
 
@@ -1712,6 +1745,7 @@ mod tests {
             title: Some("Add models (#418)".into()),
             message: None,
             sha: "2d8b6e1".into(),
+            delete_branch: true,
         };
         assert_eq!(
             client.call_request(&repo, &merge, None).display(),

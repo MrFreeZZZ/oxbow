@@ -154,3 +154,56 @@ const pulls = [{ number: 419, state: "open", base: "auth/1-models" }] as PullSum
     ["stopped", "next", "next"],
   );
 }
+
+// GitLab: its own words, and its merge status decides what blocks it.
+{
+  const lab = { kind: "gitlab", name: "GitLab", mark: "!", noun: "merge request", check: "job", checks: "the pipeline", cli: "glab mr" } as const;
+  const gitlab = (mergeStatus: string): PullRequest["gitlab"] => ({
+    mergeStatus,
+    mergeMethod: "merge",
+    squashOption: "default_off",
+    squash: false,
+    removeSourceBranch: false,
+    behind: null,
+    pipeline: null,
+    diff: null,
+    lineCounts: false,
+  });
+  const thread = (resolved: boolean) => ({ kind: "thread", resolved }) as unknown as PullRequest["timeline"][number];
+
+  // A job allowed to fail doesn't block, and open threads do when the project asks.
+  const pr = pull({
+    requiredApprovals: null,
+    mergeableState: "blocked",
+    gitlab: gitlab("discussions_not_resolved"),
+    checks: [check("lint", "warn"), check("build", "ok")],
+    timeline: [thread(false), thread(true), thread(false)],
+  });
+  const blocked = blockers(facts(pr, { words: lab }));
+  assert.deepEqual(blocked.map((b) => b.kind), ["threads"]);
+  assert.equal(blocked[0].text, "This project merges only once every thread is resolved. 2 threads are still open.");
+
+  // A failing pipeline the project waits for: in jobs, and the pipeline runs again.
+  const failing = pull({ mergeableState: "blocked", requiredApprovals: null, gitlab: gitlab("ci_must_pass"), checks: [check("rspec", "fail")] });
+  const fix = nextStep(facts(failing, { words: lab }))!;
+  assert.equal(fix.title, "Fix the failing job");
+  assert.equal(fix.text, "rspec failed. Push a fix, and the pipeline runs again.");
+
+  // Needs a rebase: GitLab rebases it.
+  const behind = pull({ mergeableState: "behind", requiredApprovals: null, gitlab: gitlab("need_rebase") });
+  assert.equal(nextStep(facts(behind, { words: lab }))!.title, "Rebase onto main");
+
+  // Approvals GitLab asks for without saying how many; another merge request first.
+  assert.deepEqual(
+    blockers(facts(pull({ mergeableState: "blocked", requiredApprovals: null, gitlab: gitlab("not_approved") }), { words: lab })).map((b) => b.title),
+    ["Get it approved"],
+  );
+  assert.equal(
+    blockers(facts(pull({ mergeableState: "blocked", requiredApprovals: null, gitlab: gitlab("blocked_status") }), { words: lab }))[0].title,
+    "Merge what it depends on first",
+  );
+
+  // Mergeable: jobs passed, the allowed failure said in GitLab's words.
+  const ready = nextStep(facts(pull({ requiredApprovals: null, gitlab: gitlab("mergeable"), checks: [check("lint", "warn"), check("build", "ok")] }), { words: lab }))!;
+  assert.equal(ready.text, "1 job passed, the failing ones may fail, no conflicts with main.");
+}

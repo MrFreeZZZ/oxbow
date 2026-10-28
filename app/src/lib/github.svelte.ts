@@ -4,6 +4,7 @@
 // changed them.
 
 import { api } from "./api";
+import type { ForgeKind } from "./forge";
 import type { GitHubRepo, GitLabProject, PullStatus, PullSummary } from "./types";
 
 const FRESH_FOR = 60_000;
@@ -19,6 +20,8 @@ class GitHubState {
   mergeRequests = $state<PullSummary[]>([]);
   /** Why they couldn't be loaded, e.g. the token expired. */
   mrProblem = $state<string | null>(null);
+  /** The account signed in to that project's server, by its username. */
+  mrMe = $state<string | null>(null);
   /** Open and recently closed pull requests, the latest updated first. */
   pulls = $state<PullSummary[]>([]);
   /** GitHub's verdict and checks of the open ones, by number. */
@@ -71,9 +74,10 @@ class GitHubState {
 
   async #loadMergeRequests(load: number) {
     try {
-      const list = await api.gitlabMergeRequests();
+      const [list, accounts] = await Promise.all([api.gitlabMergeRequests(), api.gitlabAccounts().catch(() => [])]);
       if (load !== this.#load) return;
       this.mrProject = list?.project ?? null;
+      this.mrMe = accounts.find((a) => a.host === list?.project.host)?.username ?? null;
       this.mergeRequests = list?.mergeRequests ?? [];
       this.mrProblem = null;
     } catch (err) {
@@ -94,6 +98,7 @@ class GitHubState {
     this.mrProject = null;
     this.mergeRequests = [];
     this.mrProblem = null;
+    this.mrMe = null;
     this.pulls = [];
     this.statuses = {};
     this.me = null;
@@ -106,15 +111,22 @@ class GitHubState {
     return this.#path ? this.load(this.#path, true) : Promise.resolve();
   }
 
-  /** The pull request of `branch`: its open one, else the latest one. Forks don't count. */
-  pullOf(branch: string): PullSummary | null {
+  /** The pull request of `branch`: its open one, else the latest one. Forks don't count. On
+   *  `gitlab`, its merge request. */
+  pullOf(branch: string, forge: ForgeKind = "github"): PullSummary | null {
+    if (forge === "gitlab") return this.mergeRequestOf(branch);
     const own = this.pulls.filter((p) => p.head === branch && (!p.headOwner || p.headOwner === this.repo?.owner));
     return own.find((p) => p.state === "open") ?? own[0] ?? null;
   }
 
-  /** Pull request `number`, if the list has it. */
-  byNumber(number: number): PullSummary | null {
-    return this.pulls.find((p) => p.number === number) ?? null;
+  /** Pull request `number`, if the list has it; on `gitlab`, merge request `!number`. */
+  byNumber(number: number, forge: ForgeKind = "github"): PullSummary | null {
+    return (forge === "gitlab" ? this.mergeRequests : this.pulls).find((p) => p.number === number) ?? null;
+  }
+
+  /** The pull requests, or on `gitlab` the merge requests. */
+  listOf(forge: ForgeKind): PullSummary[] {
+    return forge === "gitlab" ? this.mergeRequests : this.pulls;
   }
 
   /** The merge request of `branch` on GitLab: its open one, else the latest one. Forks don't count. */
@@ -135,9 +147,9 @@ class GitHubState {
     return me ? this.pulls.filter((p) => p.state === "open" && !p.draft && p.author.login !== me && p.requested.includes(me)) : [];
   }
 
-  /** The open pull request whose head is `branch`. */
-  openPullOf(branch: string): PullSummary | null {
-    const pull = this.pullOf(branch);
+  /** The open pull request whose head is `branch`; on `gitlab`, its open merge request. */
+  openPullOf(branch: string, forge: ForgeKind = "github"): PullSummary | null {
+    const pull = this.pullOf(branch, forge);
     return pull?.state === "open" ? pull : null;
   }
 }
