@@ -356,7 +356,16 @@ impl Repo {
                     {
                         self.note_bisect_stash(before.as_deref());
                     }
-                    last = if out.stdout.trim().is_empty() {
+                    // GitLab says where the merge request is on stderr, beside git's own words.
+                    last = if matches!(
+                        action,
+                        Action::Push {
+                            merge_request: Some(_),
+                            ..
+                        }
+                    ) {
+                        format!("{}{}", out.stderr, out.stdout)
+                    } else if out.stdout.trim().is_empty() {
                         out.stderr
                     } else {
                         out.stdout

@@ -210,6 +210,8 @@ fn main() {
             accounts::github_owners,
             accounts::github_publish,
             pulls::github_repo,
+            pulls::gitlab_projects,
+            pulls::open_gitlab,
             pulls::github_pulls,
             pulls::github_pull,
             pulls::github_calls_preview,

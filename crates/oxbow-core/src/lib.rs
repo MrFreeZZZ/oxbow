@@ -18,6 +18,7 @@ pub mod filehistory;
 pub mod fix;
 pub mod folders;
 pub mod github;
+pub mod gitlab;
 pub mod graph;
 pub mod history;
 pub mod lfs;
@@ -61,6 +62,7 @@ pub use fetched::RemoteFetch;
 pub use filehistory::{Blame, BlameCommit, BlameLine, FileCommit, FileHistory};
 pub use fix::{Fix, FixExpect, FixFile, FixState, FixStep, StepKind};
 pub use folders::{FolderCache, FolderState};
+pub use gitlab::{GitLabProject, MergeRequest};
 pub use history::{
     Focus, History, HistoryCache, HistoryOptions, HistoryRow, Label, PAGE, Piece, ReadPart, ReadProblem, WORKTREE_ID,
     WorktreeSummary,

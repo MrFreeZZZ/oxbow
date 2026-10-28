@@ -425,7 +425,7 @@ function whoPushed(incoming: CommitBrief[]): Part[] {
   return [`${who} pushed ${plural(incoming.length, "commit")}, the newest `, { code: shortId(incoming[0].id) }, " ", { quote: incoming[0].summary }];
 }
 
-function pushRecovery(failure: Failure, ctx: RemoteContext, action: Action & { kind: "push" }): Recovery | null {
+export function pushRecovery(failure: Failure, ctx: RemoteContext, action: Action & { kind: "push" }): Recovery | null {
   const remoteBranch = `${action.remote}/${action.upstream}`;
   const pullAndPush: Action = { kind: "pullAndPush", remote: action.remote, branch: action.branch, upstream: action.upstream, noVerify: action.noVerify };
   const n = Math.max(ctx.unpushed.length, ctx.tracking?.ahead ?? 0);

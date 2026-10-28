@@ -554,6 +554,8 @@ export type Action =
       noVerify: boolean;
       /** Push the submodule commits it records that their remotes don't have, first. */
       submodules?: boolean;
+      /** Ask GitLab to open a merge request of the branch with the push. */
+      mergeRequest?: MergeRequest | null;
     }
   | { kind: "pullAndPush"; remote: string; branch: string; upstream: string; noVerify: boolean }
   | { kind: "replayAndPush"; remote: string; branch: string; upstream: string; base: string; lease: string; noVerify: boolean }
@@ -1529,6 +1531,27 @@ export interface GitHubRepo {
   name: string;
   /** The remote that points at it. */
   remote: string;
+}
+
+/** A project on GitLab, the way a remote points at it. */
+export interface GitLabProject {
+  /** The remote that points at it. */
+  remote: string;
+  host: string;
+  /** `group/subgroup/project`. */
+  path: string;
+  /** The project's page, e.g. `https://gitlab.com/group/project`. */
+  webUrl: string;
+}
+
+/** What a push asks GitLab for: a merge request of the pushed branch into `target`. */
+export interface MergeRequest {
+  target: string;
+  title: string;
+  /** The title starts with `Draft:`. */
+  draft: boolean;
+  /** GitLab deletes the pushed branch there once it is merged. */
+  removeSource: boolean;
 }
 
 export interface GitHubPerson {

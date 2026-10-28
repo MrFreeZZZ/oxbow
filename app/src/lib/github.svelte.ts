@@ -1,14 +1,16 @@
 // The open repository's place on GitHub and its pull requests, for the sidebar, Reviews and the
-// Pull Request screen. The list is asked for at most once a minute unless something changed it.
+// Pull Request screen; also its projects on GitLab, for Create Merge Request. The list is asked for at most once a minute unless something changed it.
 
 import { api } from "./api";
-import type { GitHubRepo, PullStatus, PullSummary } from "./types";
+import type { GitHubRepo, GitLabProject, PullStatus, PullSummary } from "./types";
 
 const FRESH_FOR = 60_000;
 
 class GitHubState {
   /** The GitHub repository the open one pushes to; null when it has none there. */
   repo = $state<GitHubRepo | null>(null);
+  /** The GitLab projects the remotes point at, the default remote's first. */
+  gitlab = $state<GitLabProject[]>([]);
   /** Open and recently closed pull requests, the latest updated first. */
   pulls = $state<PullSummary[]>([]);
   /** GitHub's verdict and checks of the open ones, by number. */
@@ -32,9 +34,10 @@ class GitHubState {
     if (!force && Date.now() - this.#loadedAt < FRESH_FOR) return;
     this.#loadedAt = Date.now();
     const load = ++this.#load;
-    const repo = await api.githubRepo().catch(() => null);
+    const [repo, gitlab] = await Promise.all([api.githubRepo().catch(() => null), api.gitlabProjects().catch(() => [])]);
     if (load !== this.#load) return;
     this.repo = repo;
+    this.gitlab = gitlab;
     if (!repo) {
       this.pulls = [];
       return;
@@ -65,6 +68,7 @@ class GitHubState {
   #forget() {
     this.#load += 1;
     this.repo = null;
+    this.gitlab = [];
     this.pulls = [];
     this.statuses = {};
     this.me = null;
