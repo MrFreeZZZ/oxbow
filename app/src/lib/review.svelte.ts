@@ -6,10 +6,10 @@ import { api } from "./api";
 import { github } from "./github.svelte";
 import { confirm, type Request } from "./confirm.svelte";
 import type { PullCall, PullRequest, ReviewDraft, Spot, Verdict, Viewing } from "./types";
-import { countWords, emptyDraft, isEmpty, spotLabel, submitCalls, withComment, withEdit, withReply, type Thread } from "./reviewDraft";
+import { commentCall, countWords, emptyDraft, isEmpty, spotLabel, submitCalls, withComment, withEdit, withReply, type Thread, type Writing } from "./reviewDraft";
 
 /** The comment being written: a new one on lines, a reply to a thread, or one of the draft's again. */
-export type Editing = { kind: "comment"; spot: Spot; body: string } | { kind: "reply"; thread: number; body: string } | { kind: "edit"; id: string; body: string };
+export type Editing = ({ kind: "comment" } & Writing) | { kind: "reply"; thread: number; body: string } | { kind: "edit"; id: string; body: string };
 
 /** How long typing in the review's summary waits before it is kept. */
 const KEEP_AFTER = 500;
@@ -90,8 +90,10 @@ export class ReviewSession {
     return this.draft ?? emptyDraft(this.shown ?? this.pr.headSha);
   }
 
-  addComment(spot: Spot, body: string) {
-    this.#keep(withComment(this.#started(), spot, body.trim(), Math.floor(Date.now() / 1000)));
+  addComment(writing: Writing) {
+    // A review not started yet starts on the commit the comment was written on.
+    const draft = this.draft ?? emptyDraft(writing.commit);
+    this.#keep(withComment(draft, writing.spot, writing.body.trim(), Math.floor(Date.now() / 1000)));
     this.editing = null;
   }
 
@@ -136,9 +138,10 @@ export class ReviewSession {
     return ok;
   }
 
-  async commentNow(spot: Spot, body: string) {
+  async commentNow(writing: Writing) {
+    const { spot } = writing;
     const ok = await this.#send(
-      { kind: "comment", number: this.number, commit: this.pr.headSha, spot, body: body.trim() },
+      commentCall(this.number, writing),
       { title: `Comment on ${spot.path}?`, body: [`It goes to GitHub now, on ${spotLabel(spot)}, outside a review.`], button: "Comment", status: "Commenting…" },
       `Commented on ${spot.path}.`,
     );

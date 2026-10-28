@@ -827,6 +827,9 @@ pub fn run_streaming_in(
     let mut output = CommandOutput::default();
     let mut heard = Instant::now();
     let mut exited: Option<(std::process::ExitStatus, Instant)> = None;
+    // Both pipes are closed. That doesn't mean it is done: it may have sent its output
+    // elsewhere and go on, and Stop still stops it.
+    let mut closed = false;
     let status = loop {
         // Before each line: a command that prints without a pause still stops at once.
         if cancel.load(Ordering::Relaxed) {
@@ -837,7 +840,13 @@ pub fn run_streaming_in(
             log.stopped(logged);
             return Err(Error::Cancelled);
         }
-        match receive.recv_timeout(Duration::from_millis(50)) {
+        let next = if closed {
+            std::thread::sleep(Duration::from_millis(20));
+            Err(mpsc::RecvTimeoutError::Timeout)
+        } else {
+            receive.recv_timeout(Duration::from_millis(50))
+        };
+        match next {
             Ok(line) => {
                 heard = Instant::now();
                 if !line.progress {
@@ -855,9 +864,10 @@ pub fn run_streaming_in(
             }
             Err(mpsc::RecvTimeoutError::Timeout) => match exited {
                 // Exited, but something it left running holds its output: what came is all.
-                Some((status, at)) if at.elapsed() >= AFTER_EXIT => break status,
+                Some((status, at)) if closed || at.elapsed() >= AFTER_EXIT => break status,
                 Some(_) => {}
                 None => match child.try_wait() {
+                    Ok(Some(status)) if closed => break status,
                     Ok(Some(status)) => exited = Some((status, Instant::now())),
                     Ok(None) if command.quiet_limit.is_some_and(|limit| heard.elapsed() >= limit) => {
                         kill_tree(&mut child);
@@ -884,16 +894,9 @@ pub fn run_streaming_in(
                     }
                 },
             },
-            // Both pipes are closed: the command is done, or about to be.
             Err(mpsc::RecvTimeoutError::Disconnected) => match exited {
                 Some((status, _)) => break status,
-                None => match child.wait() {
-                    Ok(status) => break status,
-                    Err(err) => {
-                        log.not_started(&err.to_string());
-                        return Err(Error::GitNotFound(err.to_string()));
-                    }
-                },
+                None => closed = true,
             },
         }
     };
@@ -1229,6 +1232,32 @@ mod tests {
         kill(&lines.concat());
         assert_eq!(lines.len(), 1);
         assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_ends_a_streamed_command_that_closed_its_output() {
+        let dir = tempfile::tempdir().unwrap();
+        // Like a hook that sends its output elsewhere and goes on working.
+        let late = dir.path().join("late");
+        let script = format!("exec >/dev/null 2>&1; sleep 2; touch '{}'", late.display());
+        let command = GitCommand::new(["-c", &script]).program("sh");
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let stop = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            stop.store(true, Ordering::Relaxed);
+        });
+        let started = Instant::now();
+        let result = run_streaming_in(dir.path(), &command, &mut |_| {}, &cancel);
+        assert!(matches!(result, Err(Error::Cancelled)), "{result:?}");
+        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+        std::thread::sleep(Duration::from_millis(2500));
+        assert!(!late.exists(), "it went on after Stop");
+        // Not stopped, it is waited for to the end.
+        let never = AtomicBool::new(false);
+        run_streaming_in(dir.path(), &command, &mut |_| {}, &never).unwrap();
+        assert!(late.exists());
     }
 
     #[test]
