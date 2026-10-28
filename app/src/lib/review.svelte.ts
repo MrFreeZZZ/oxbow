@@ -6,7 +6,7 @@ import { api } from "./api";
 import { github } from "./github.svelte";
 import { confirm, type Request } from "./confirm.svelte";
 import type { PullCall, PullRequest, ReviewDraft, Spot, Verdict, Viewing } from "./types";
-import { commentCall, countWords, emptyDraft, isEmpty, spotLabel, submitCalls, withComment, withEdit, withReply, type Thread, type Writing } from "./reviewDraft";
+import { addProblem, commentCall, countWords, emptyDraft, isEmpty, spotLabel, submitCalls, withComment, withEdit, withReply, type Thread, type Writing } from "./reviewDraft";
 
 /** The comment being written: a new one on lines, a reply to a thread, or one of the draft's again. */
 export type Editing = ({ kind: "comment" } & Writing) | { kind: "reply"; thread: number; body: string } | { kind: "edit"; id: string; body: string };
@@ -91,6 +91,9 @@ export class ReviewSession {
   }
 
   addComment(writing: Writing) {
+    // Whether its file is the same on the newest commit is for the Files tab to say, before Add
+    // is offered; a comment on an older commit than the review's never goes in.
+    if (addProblem(this.draft, writing, this.pr.headSha, true)) return;
     // A review not started yet starts on the commit the comment was written on.
     const draft = this.draft ?? emptyDraft(writing.commit);
     this.#keep(withComment(draft, writing.spot, writing.body.trim(), Math.floor(Date.now() / 1000)));

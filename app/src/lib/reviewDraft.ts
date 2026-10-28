@@ -63,6 +63,18 @@ export function commentCall(number: number, writing: Writing): PullCall {
   return { kind: "comment", number, commit: writing.commit, spot: writing.spot, body: writing.body.trim() };
 }
 
+/** Why the comment being written can't go into the review, or null. A review's comments go on
+ *  the commit it started on, so one written on another commit goes in only when it was written on
+ *  the newest, `head`, and its file is the same there (`unchanged`; null while worked out). Its
+ *  text stays; Comment Now still sends it on its own commit. */
+export function addProblem(draft: ReviewDraft | null, writing: Writing, head: string, unchanged: boolean | null): string | null {
+  if (!draft || draft.commit === writing.commit) return null;
+  const short = (id: string) => id.slice(0, 7);
+  if (writing.commit !== head) return `This comment is on ${short(writing.commit)} and your review on ${short(draft.commit)}: comment now, or send the review first.`;
+  if (unchanged === null) return "Working out what changed since your review started…";
+  return unchanged ? null : `${writing.spot.path} changed since your review started on ${short(draft.commit)}: comment now, or send the review first.`;
+}
+
 export function emptyDraft(commit: string): ReviewDraft {
   return { commit, body: "", verdict: null, comments: [], replies: [] };
 }
