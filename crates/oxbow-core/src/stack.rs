@@ -951,18 +951,18 @@ impl Repo {
             "--".to_owned(),
         ]))?;
         let fields: Vec<&str> = out.stdout.split('\0').collect();
-        let commits = fields
-            .chunks_exact(4)
-            .map(|record| {
-                let id = record[0].trim_start_matches('\n');
-                let mut parents = record[1].split_whitespace().map(str::to_owned);
-                let tree = record[2];
+        let (records, _) = fields.as_chunks::<4>();
+        let commits = records
+            .iter()
+            .map(|[id, parents, tree, message]| {
+                let id = id.trim_start_matches('\n');
+                let mut parents = parents.split_whitespace().map(str::to_owned);
                 let listed = Listed {
                     id: id.to_owned(),
                     parent: parents.next().unwrap_or_default(),
                     others: parents.collect(),
-                    tree: tree.to_owned(),
-                    message: record[3].trim_end().to_owned(),
+                    tree: (*tree).to_owned(),
+                    message: message.trim_end().to_owned(),
                 };
                 let ids_only = crate::cli::is_oid(id)
                     && crate::cli::is_oid(tree)
