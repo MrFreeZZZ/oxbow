@@ -1,4 +1,4 @@
-import { mergeRequestLink, mergeRequestTitle, newMergeRequestUrl } from "../src/lib/gitlab.ts";
+import { mergeRequestLink, mergeRequestTitle, newMergeRequestUrl, tokenExpiry } from "../src/lib/gitlab.ts";
 import type { GitLabProject } from "../src/lib/types.ts";
 import assert from "node:assert/strict";
 
@@ -40,4 +40,13 @@ const project: GitLabProject = { remote: "origin", host: "gitlab.com", path: "ac
 {
   assert.equal(mergeRequestTitle("Export CSV", "csv"), "Export CSV");
   assert.equal(mergeRequestTitle(undefined, "csv"), "csv");
+}
+
+// A signed-in token's last days: Settings warns two weeks ahead.
+{
+  const now = new Date(Date.UTC(2026, 9, 28, 15));
+  assert.equal(tokenExpiry(null, now), null);
+  assert.deepEqual(tokenExpiry("2027-01-15", now), { text: "token until 15 Jan 2027", soon: false, expired: false });
+  assert.deepEqual(tokenExpiry("2026-11-05", now), { text: "token until 5 Nov 2026", soon: true, expired: false });
+  assert.deepEqual(tokenExpiry("2026-10-28", now), { text: "token expired on 28 Oct 2026", soon: true, expired: true });
 }

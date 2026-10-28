@@ -60,7 +60,7 @@ pub struct Accounts {
     cancels: AtomicU64,
 }
 
-fn accounts_file(app: &AppHandle) -> CommandResult<PathBuf> {
+pub(crate) fn accounts_file(app: &AppHandle) -> CommandResult<PathBuf> {
     app.path()
         .app_config_dir()
         .map(|dir| dir.join("accounts.json"))
@@ -73,9 +73,7 @@ pub fn saved(app: &AppHandle) -> Option<Account> {
 }
 
 fn saved_in(file: &Path) -> Option<Account> {
-    let text = std::fs::read_to_string(file).ok()?;
-    let mut all: serde_json::Map<String, Value> = serde_json::from_str(&text).ok()?;
-    serde_json::from_value(all.remove("github.com")?).ok()
+    serde_json::from_value(read_all(file).remove("github.com")?).ok()
 }
 
 fn save(app: &AppHandle, account: Option<&Account>) -> CommandResult<()> {
@@ -83,14 +81,29 @@ fn save(app: &AppHandle, account: Option<&Account>) -> CommandResult<()> {
 }
 
 fn save_in(file: &Path, account: Option<&Account>) -> CommandResult<()> {
+    let account = account
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|err| err.to_string())?;
+    write_entry(file, "github.com", account)
+}
+
+/// Every entry of the accounts file: `github.com`, and `gitlab` with the GitLab accounts.
+pub(crate) fn read_all(file: &Path) -> serde_json::Map<String, Value> {
+    std::fs::read_to_string(file)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+/// Write one entry of the accounts file, or take it out with `None`, keeping the others.
+pub(crate) fn write_entry(file: &Path, key: &str, value: Option<Value>) -> CommandResult<()> {
     std::fs::create_dir_all(file.parent().expect("accounts file has a parent")).map_err(|err| err.to_string())?;
-    let mut all = serde_json::Map::new();
-    if let Some(account) = account {
-        all.insert(
-            "github.com".into(),
-            serde_json::to_value(account).map_err(|err| err.to_string())?,
-        );
-    }
+    let mut all = read_all(file);
+    match value {
+        Some(value) => all.insert(key.to_owned(), value),
+        None => all.remove(key),
+    };
     let text = serde_json::to_string_pretty(&all).map_err(|err| err.to_string())?;
     // Written whole or not at all: a half-written file would forget who is signed in.
     let part = file.with_extension("json.part");
@@ -101,26 +114,29 @@ fn save_in(file: &Path, account: Option<&Account>) -> CommandResult<()> {
     })
 }
 
-fn entry(item: &str) -> CommandResult<keyring::Entry> {
-    keyring::Entry::new(SERVICE, item).map_err(|err| keychain_error(&err))
+fn entry(service: &str, item: &str) -> CommandResult<keyring::Entry> {
+    keyring::Entry::new(service, item).map_err(|err| keychain_error(&err))
 }
 
 /// Where tokens are kept, by item: the computer's credential store, or a map in tests.
-trait Store {
+pub(crate) trait Store {
     fn set(&self, item: &str, token: &str) -> CommandResult<()>;
     /// Take `item` out; one that isn't there is fine.
     fn delete(&self, item: &str) -> CommandResult<()>;
 }
 
-struct Keyring;
+/// The credential store, under a service such as "Oxbow GitHub".
+pub(crate) struct Keyring(pub &'static str);
 
 impl Store for Keyring {
     fn set(&self, item: &str, token: &str) -> CommandResult<()> {
-        entry(item)?.set_password(token).map_err(|err| keychain_error(&err))
+        entry(self.0, item)?
+            .set_password(token)
+            .map_err(|err| keychain_error(&err))
     }
 
     fn delete(&self, item: &str) -> CommandResult<()> {
-        match entry(item)?.delete_credential() {
+        match entry(self.0, item)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(err) => Err(keychain_error(&err)),
         }
@@ -161,7 +177,7 @@ fn switch_to(
     Ok(account)
 }
 
-fn keychain_error(err: &keyring::Error) -> String {
+pub(crate) fn keychain_error(err: &keyring::Error) -> String {
     match err {
         keyring::Error::NoStorageAccess(_) | keyring::Error::PlatformFailure(_) => {
             format!("Oxbow can't use the {}: {err}", store_name())
@@ -187,7 +203,7 @@ impl Accounts {
         let mut cached = self.token.lock().expect("token lock");
         if cached.is_none() {
             let account = saved(app)?;
-            *cached = entry(account.item()).ok()?.get_password().ok();
+            *cached = entry(SERVICE, account.item()).ok()?.get_password().ok();
         }
         cached.clone()
     }
@@ -205,16 +221,16 @@ impl Accounts {
     }
 
     /// The count of cancels now, for a sign-in to start with.
-    fn attempt(&self) -> u64 {
+    pub(crate) fn attempt(&self) -> u64 {
         self.cancels.load(Ordering::SeqCst)
     }
 
     /// Stop every sign-in under way: none of them keeps a token any more.
-    fn cancel(&self) {
+    pub(crate) fn cancel(&self) {
         self.cancels.fetch_add(1, Ordering::SeqCst);
     }
 
-    fn cancelled(&self, attempt: u64) -> bool {
+    pub(crate) fn cancelled(&self, attempt: u64) -> bool {
         self.attempt() != attempt
     }
 
@@ -241,7 +257,7 @@ impl Accounts {
         };
         let file = accounts_file(app)?;
         // The Keychain may have asked first: a Cancel meanwhile still wins.
-        let account = switch_to(&Keyring, &file, account, &token, &|| self.cancelled(attempt))?;
+        let account = switch_to(&Keyring(SERVICE), &file, account, &token, &|| self.cancelled(attempt))?;
         *self.token.lock().expect("token lock") = Some(token);
         Ok(account)
     }
@@ -395,7 +411,7 @@ async fn finish(
 #[tauri::command]
 pub fn github_sign_out(app: AppHandle, accounts: State<'_, Accounts>) -> CommandResult<()> {
     if let Some(account) = saved(&app) {
-        Keyring.delete(account.item())?;
+        Keyring(SERVICE).delete(account.item())?;
     }
     save(&app, None)?;
     *accounts.token.lock().expect("token lock") = None;

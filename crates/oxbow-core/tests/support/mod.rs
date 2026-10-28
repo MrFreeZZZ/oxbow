@@ -77,8 +77,8 @@ impl Fixture {
     }
 }
 
-/// A stand-in for GitHub's API answering each request by its path: the first route whose
-/// prefix matches, else 404. A route `"/graphql markFileAsViewed"` also needs its words in the body.
+/// A stand-in for GitHub's or GitLab's API answering each request by its path: the first route
+/// whose prefix matches, else 404; an answer starting with a status (`"401 {…}"`) has it. A route `"/graphql markFileAsViewed"` also needs its words in the body.
 pub fn server(routes: Vec<(&'static str, &'static str)>) -> String {
     stand_in(routes).0
 }
@@ -122,7 +122,13 @@ pub fn stand_in(routes: Vec<(&'static str, &'static str)>) -> (String, Seen) {
                     let (prefix, words) = route.split_once(' ').unwrap_or((route, ""));
                     path.starts_with(prefix) && body.contains(words)
                 })
-                .map_or((404, r#"{"message":"Not Found"}"#), |(_, answer)| (200, answer));
+                .map_or((404, r#"{"message":"Not Found"}"#), |(_, answer)| {
+                    // `"401 {…}"` answers with that status.
+                    match answer.split_once(' ').filter(|(code, _)| code.len() == 3) {
+                        Some((code, rest)) if code.parse::<u16>().is_ok() => (code.parse().unwrap(), rest),
+                        _ => (200, *answer),
+                    }
+                });
             let mut stream = stream;
             let _ = write!(
                 stream,

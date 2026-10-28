@@ -42,27 +42,31 @@ pub async fn github_repo(
 /// The GitLab projects the remotes point at, the default remote's first. Asks nothing of GitLab.
 #[tauri::command]
 pub async fn gitlab_projects(
+    app: AppHandle,
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
 ) -> CommandResult<Vec<GitLabProject>> {
     let repo = current(&session, &window)?;
-    read(
-        at(&repo),
-        "Find the GitLab projects",
-        move || Ok(repo.gitlab_projects()),
-    )
+    let servers = crate::gitlab_accounts::servers(&app);
+    read(at(&repo), "Find the GitLab projects", move || {
+        Ok(repo.gitlab_projects(&servers))
+    })
     .await
 }
 
 /// Open a merge request page of one of the repository's GitLab projects in the browser.
 #[tauri::command]
-pub async fn open_gitlab(window: tauri::WebviewWindow, session: State<'_, Session>, url: String) -> CommandResult<()> {
+pub async fn open_gitlab(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    url: String,
+) -> CommandResult<()> {
     let repo = current(&session, &window)?;
-    let projects = read(
-        at(&repo),
-        "Find the GitLab projects",
-        move || Ok(repo.gitlab_projects()),
-    )
+    let servers = crate::gitlab_accounts::servers(&app);
+    let projects = read(at(&repo), "Find the GitLab projects", move || {
+        Ok(repo.gitlab_projects(&servers))
+    })
     .await?;
     if !projects
         .iter()

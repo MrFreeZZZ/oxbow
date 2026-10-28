@@ -19,6 +19,7 @@ pub mod fix;
 pub mod folders;
 pub mod github;
 pub mod gitlab;
+pub mod gitlab_api;
 pub mod graph;
 pub mod history;
 pub mod lfs;
