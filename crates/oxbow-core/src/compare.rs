@@ -16,6 +16,9 @@ use crate::repo::Repo;
 /// At most this many commits of each side are listed.
 const LIMIT: usize = 500;
 
+/// Paths looked for in one `git log` past the newest [`LIMIT`] commits.
+const TOUCHED_BATCH: usize = 200;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CompareMode {
@@ -104,13 +107,21 @@ impl Repo {
             (CompareMode::Split, Some(m)) => m.id.clone(),
             _ => base_id.clone(),
         };
-        let touched_ahead = self.touched(&base_id, &target_id)?;
+        let changes = self.tree_files_with(&from, &target_id, None, &std::sync::atomic::AtomicBool::new(false))?;
+        let paths: Vec<&str> = changes.iter().map(|f| f.path.as_str()).collect();
+        let touched_ahead = self.touched(&base_id, &target_id, &paths)?;
         let touched_behind = match mode {
-            CompareMode::Tips => self.touched(&target_id, &base_id)?,
+            CompareMode::Tips => {
+                let left: Vec<&str> = paths
+                    .iter()
+                    .copied()
+                    .filter(|p| !touched_ahead.contains_key(*p))
+                    .collect();
+                self.touched(&target_id, &base_id, &left)?
+            }
             CompareMode::Split => HashMap::new(),
         };
-        let files = self
-            .tree_files_with(&from, &target_id, None, &std::sync::atomic::AtomicBool::new(false))?
+        let files = changes
             .into_iter()
             .map(|file| {
                 let last = touched_ahead.get(&file.path).cloned();
@@ -155,40 +166,75 @@ impl Repo {
         let out = self.run(&GitCommand::new([
             "log".to_owned(),
             format!("--max-count={LIMIT}"),
-            "--format=%H%x1f%s%x1f%an%x1f%at".to_owned(),
+            "--format=%H%x00%s%x00%an%x00%at".to_owned(),
             format!("{from}..{to}"),
         ]))?;
         Ok(out.stdout.lines().filter_map(parse_commit).collect())
     }
 
     fn commit_info(&self, id: &str) -> Result<Option<CompareCommit>> {
-        let out = self.run(&GitCommand::new(["log", "-1", "--format=%H%x1f%s%x1f%an%x1f%at", id]))?;
+        let out = self.run(&GitCommand::new(["log", "-1", "--format=%H%x00%s%x00%an%x00%at", id]))?;
         Ok(out.stdout.lines().next().and_then(parse_commit))
     }
 
-    /// Files the commits in `from..to` touched, each with the newest commit that did.
-    fn touched(&self, from: &str, to: &str) -> Result<HashMap<String, String>> {
-        let out = self.run(&GitCommand::new([
-            "log".to_owned(),
-            format!("--max-count={LIMIT}"),
-            // The names as they are, not quoted, as the diff has them.
-            "-z".to_owned(),
-            "--format=%x00%H".to_owned(),
-            "--name-only".to_owned(),
-            format!("{from}..{to}"),
-        ]))?;
-        let mut files = HashMap::new();
-        for hit in crate::search::parse_log(&out.stdout) {
-            for path in hit.files {
-                files.entry(path).or_insert_with(|| hit.id.clone());
+    /// Which of `paths` the commits in `from..to` touched, each with the newest commit that did.
+    /// The newest [`LIMIT`] commits are read whole; paths none of them touched are looked for
+    /// further back, so a file changed only in an old commit still gets it.
+    fn touched(&self, from: &str, to: &str, paths: &[&str]) -> Result<HashMap<String, String>> {
+        if paths.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let (mut files, walked) = self.touched_by(from, to, Some(LIMIT), &[])?;
+        if walked >= LIMIT {
+            let older: Vec<&str> = paths.iter().copied().filter(|p| !files.contains_key(*p)).collect();
+            // In batches, to keep each command line short.
+            for batch in older.chunks(TOUCHED_BATCH) {
+                for (path, id) in self.touched_by(from, to, None, batch)?.0 {
+                    files.entry(path).or_insert(id);
+                }
             }
         }
         Ok(files)
     }
+
+    /// The files the commits in `from..to` touched, newest first, at most `max` commits of them,
+    /// only `paths` when given; and how many commits were read.
+    fn touched_by(
+        &self,
+        from: &str,
+        to: &str,
+        max: Option<usize>,
+        paths: &[&str],
+    ) -> Result<(HashMap<String, String>, usize)> {
+        let mut args = vec!["log".to_owned()];
+        if let Some(max) = max {
+            args.push(format!("--max-count={max}"));
+        }
+        args.extend([
+            // The names as they are, not quoted, as the diff has them.
+            "-z".to_owned(),
+            "--format=%x00%H".to_owned(),
+            "--name-only".to_owned(),
+            "--end-of-options".to_owned(),
+            format!("{from}..{to}"),
+            "--".to_owned(),
+        ]);
+        args.extend(paths.iter().map(|p| crate::cli::literal(p)));
+        let out = self.run(&GitCommand::new(args))?;
+        let hits = crate::search::parse_log(&out.stdout);
+        let walked = hits.len();
+        let mut files = HashMap::new();
+        for hit in hits {
+            for path in hit.files {
+                files.entry(path).or_insert_with(|| hit.id.clone());
+            }
+        }
+        Ok((files, walked))
+    }
 }
 
 fn parse_commit(line: &str) -> Option<CompareCommit> {
-    let mut parts = line.split('\u{1f}');
+    let mut parts = line.split('\0');
     let id = parts.next()?.trim().to_owned();
     if id.is_empty() {
         return None;

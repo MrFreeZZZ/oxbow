@@ -116,6 +116,7 @@
       if (pr.headSha !== sha) return;
       const same = comparison && comparison.from === c.from && comparison.targetId === c.targetId;
       comparison = c;
+      session.shown = c.targetId;
       if (!since) session.files = c.files.length;
       if (!same) readDiffs(c);
     } catch (err) {

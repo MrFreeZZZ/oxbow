@@ -3875,6 +3875,7 @@ name = "oxbow-core"
 version = "0.1.0"
 dependencies = [
  "gix",
+ "libc",
  "notify",
  "regex",
  "serde",

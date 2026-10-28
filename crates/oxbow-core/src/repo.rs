@@ -86,8 +86,18 @@ impl Repo {
     /// Open the repository that contains `path`.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let shared = gix::ThreadSafeRepository::discover(path).map_err(|_| Error::NotARepository {
-            path: path.display().to_string(),
+        let shared = gix::ThreadSafeRepository::discover(path).map_err(|_| {
+            let path = path.display().to_string();
+            // gix reads SHA-1 repositories only. Git can say what a repository it opens uses.
+            let format = crate::cli::run_in(
+                Path::new(&path),
+                &crate::cli::GitCommand::new(["rev-parse", "--show-object-format"]),
+                None,
+            );
+            match format {
+                Ok(out) if out.stdout.trim() == "sha256" => Error::Sha256 { path },
+                _ => Error::NotARepository { path },
+            }
         })?;
         let workdir = shared.work_dir().ok_or(Error::Bare)?.to_path_buf();
         Ok(Repo {

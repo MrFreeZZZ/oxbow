@@ -119,3 +119,43 @@ fn a_file_with_a_tab_or_a_quote_in_its_name_knows_its_last_commit() {
     let file = c.files.iter().find(|f| f.file.path.starts_with("tab")).unwrap();
     assert_eq!(file.last.as_deref(), Some(tab.as_str()));
 }
+
+#[test]
+fn a_file_changed_before_the_newest_500_commits_keeps_its_commit() {
+    let mut fx = Fixture::new();
+    fx.commit("shared.txt", "one\n", "Base");
+    fx.git(&["switch", "-q", "-c", "feature"]);
+    let old = fx.commit("shared.txt", "one\nfeature\n", "Extend shared");
+    // 501 more commits on top, in one go.
+    let mut stream = String::new();
+    for i in 0..501 {
+        let message = format!("Step {i}");
+        stream += &format!(
+            "commit refs/heads/feature\ncommitter Alexander <alexander@example.com> {} +0000\ndata {}\n{message}\n",
+            1_800_000_000 + i,
+            message.len()
+        );
+        if i == 0 {
+            stream += &format!("from {old}\n");
+        }
+    }
+    let mut import = std::process::Command::new("git")
+        .args(["fast-import", "--quiet"])
+        .current_dir(fx.path())
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(&mut import.stdin.take().unwrap(), stream.as_bytes()).unwrap();
+    assert!(import.wait().unwrap().success());
+    fx.git(&["checkout", "-q", "-f", "feature"]);
+    fx.git(&["switch", "-q", "main"]);
+    fx.commit("shared.txt", "one\nmain\n", "Change shared on main");
+    let repo = Repo::open(fx.path()).unwrap();
+    for mode in [CompareMode::Split, CompareMode::Tips] {
+        let c = repo.compare("main", "feature", mode).unwrap();
+        assert_eq!(c.ahead_count, 502);
+        let shared = c.files.iter().find(|f| f.file.path == "shared.txt").unwrap();
+        assert_eq!(shared.last.as_deref(), Some(old.as_str()));
+        assert!(!shared.only_base);
+    }
+}

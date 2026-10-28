@@ -11,6 +11,9 @@ pub enum Error {
     FolderGone { path: String },
     #[error("bare repositories are not supported yet")]
     Bare,
+    /// Made with `git init --object-format=sha256`: git reads it, Oxbow can't yet.
+    #[error("{path} names its objects with SHA-256, which Oxbow can't read yet; git in a terminal can")]
+    Sha256 { path: String },
     #[error("no commit {0}")]
     UnknownCommit(String),
     #[error("{0}")]

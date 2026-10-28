@@ -46,6 +46,22 @@ fn rules_are_read_without_git_lfs() {
 }
 
 #[test]
+fn the_lfs_version_never_comes_from_an_alias_of_the_repository() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    let planted = fx.path().join("planted");
+    fx.git(&[
+        "config",
+        "alias.lfs",
+        &format!("!touch '{}'; echo git-lfs/planted", planted.display()),
+    ]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let status = repo.lfs_status().unwrap();
+    assert_ne!(status.version.as_deref(), Some("planted"));
+    assert!(!planted.exists());
+}
+
+#[test]
 fn tracking_turns_a_staged_file_into_a_pointer() {
     if !has_lfs() {
         return;

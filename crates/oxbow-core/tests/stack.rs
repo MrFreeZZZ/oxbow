@@ -724,3 +724,19 @@ fn a_restack_stopped_on_a_conflict_is_kept() {
     repo.perform(&Action::Abort).unwrap();
     assert!(repo.restack().is_none());
 }
+
+#[test]
+fn separators_in_a_message_never_become_a_git_option() {
+    let mut fx = stacked();
+    let out = fx.path().parent().unwrap().join("written-by-git");
+    let message = format!("Innocent\n\n\u{1e}--output={}\u{1f}\u{1f}\u{1f}rest", out.display());
+    fx.git(&["switch", "-q", "auth/3"]);
+    fx.write("ui.rs", "banner 2\n");
+    fx.git(&["add", "-A"]);
+    fx.git(&["commit", "-q", "-m", &message]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let stack = repo.stack(Some("auth/1")).unwrap();
+    assert!(!out.exists(), "git wrote {}", out.display());
+    assert!(stack.commits.iter().all(|c| c.id.len() == 40));
+    assert!(stack.commits.iter().any(|c| c.summary == "Innocent"));
+}

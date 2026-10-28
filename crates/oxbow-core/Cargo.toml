@@ -15,3 +15,6 @@ regex = "1"
 ureq = { version = "3.4", features = ["platform-verifier"] }
 notify = "8"
 tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

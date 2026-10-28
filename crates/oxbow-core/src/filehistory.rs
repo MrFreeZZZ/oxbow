@@ -16,7 +16,7 @@ use crate::worktree::path_field;
 const LIMIT: usize = 2000;
 /// Bytes of `git blame --porcelain` read at most: past them the blame stops at the lines read.
 const MAX_BLAME_BYTES: usize = 8 * 1024 * 1024;
-const FORMAT: &str = "--format=%x01%H%x1f%P%x1f%s%x1f%an%x1f%ae%x1f%at";
+const FORMAT: &str = "--format=%x00%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s";
 
 /// A commit that changed the file, with the file's path in it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -159,10 +159,11 @@ impl Repo {
                     .split_whitespace()
                     .map(str::to_owned)
                     .collect();
-                let summary = f.next().unwrap_or_default().to_owned();
                 let author_name = f.next().unwrap_or_default().to_owned();
                 let author_email = f.next().unwrap_or_default().to_owned();
                 let time = f.next().and_then(|t| t.parse().ok()).unwrap_or(0);
+                // Last, so a \x1f in it stays in it.
+                let summary = f.collect::<Vec<_>>().join("\u{1f}");
                 // A merge lists no files of its own; it keeps the path of the commit after it.
                 let (status, path, old_path) =
                     raw.map(name_status)
@@ -288,9 +289,10 @@ impl Repo {
     }
 }
 
-/// Commits of `git log` output whose format starts with \x01: the format line and the lines after it.
+/// Commits of `git log` output whose format starts with NUL: the format line and the lines after
+/// it. A subject never holds NUL, so it can't start a commit of its own.
 fn chunks(out: &str) -> impl Iterator<Item = (&str, Vec<&str>)> {
-    out.split('\u{1}').filter_map(|chunk| {
+    out.split('\0').filter_map(|chunk| {
         let mut lines = chunk.lines();
         let head = lines.next()?.trim();
         if head.is_empty() {

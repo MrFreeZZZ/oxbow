@@ -29,6 +29,8 @@
   const body = $derived(draft?.body ?? "");
   const what = $derived(countWords(draft?.comments.length ?? 0, draft?.replies.length ?? 0));
   const moved = $derived(!!draft && draft.commit !== session.pr.headSha);
+  /** Commits came in after the files shown: the review goes on the ones read. */
+  const behind = $derived(!draft && !!session.shown && session.shown !== session.pr.headSha);
   const problem = $derived(
     session.pending
       ? `A review you started on GitHub${session.pending.comments ? ` with ${countWords(session.pending.comments, 0)}` : ""} is waiting there: send or discard it on GitHub first.`
@@ -54,7 +56,7 @@
       </button>
     {/each}
   </div>
-  {#if what || problem}
+  {#if what || problem || behind}
     <div class="info" class:warn={!!session.pending}>
       <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" /><path d="M8 7.5v3M8 5.3v.2" /></svg>
       <span>
@@ -62,8 +64,10 @@
           {problem}
         {:else if what}
           <b>{what}</b> go with it, on lines of {shortId(draft!.commit)}{moved ? ", the version you read. GitHub marks the ones whose lines changed since as outdated." : "."}
-        {:else}
+        {:else if problem}
           {problem}
+        {:else}
+          It goes on {shortId(session.shown!)}, the version you read. Newer commits aren’t in Files yet, so it doesn’t cover them.
         {/if}
       </span>
     </div>

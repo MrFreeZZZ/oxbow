@@ -75,9 +75,11 @@ export function countWords(comments: number, replies: number): string {
 }
 
 /** The calls of sending a review: started on the commit its comments are on, then its comments
- *  and replies, then the verdict. Without a draft, on the pull request's head. */
-export function submitCalls(pr: PullRequest, draft: ReviewDraft | null, verdict: Verdict, body: string): PullCall[] {
-  const calls: PullCall[] = [{ kind: "startReview", id: pr.nodeId, commit: draft?.commit ?? pr.headSha }];
+ *  and replies, then the verdict. Without a draft, on the commit whose files were `shown`: an
+ *  approval is for what was read, not for commits pushed while their files were still loading.
+ *  Only when the files were never shown, on the pull request's head. */
+export function submitCalls(pr: PullRequest, draft: ReviewDraft | null, verdict: Verdict, body: string, shown: string | null = null): PullCall[] {
+  const calls: PullCall[] = [{ kind: "startReview", id: pr.nodeId, commit: draft?.commit ?? shown ?? pr.headSha }];
   for (const c of draft?.comments ?? []) calls.push({ kind: "reviewComment", spot: c.spot, body: c.body });
   for (const r of draft?.replies ?? []) calls.push({ kind: "reviewReply", thread: r.thread, body: r.body });
   calls.push({ kind: "submitReview", verdict, body: body.trim() });

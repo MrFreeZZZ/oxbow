@@ -139,7 +139,16 @@
     phase = "creating";
     let path: string | null = null;
     try {
-      path = await api.createRepo(asked);
+      const created = await api.createRepo(asked);
+      path = created.path;
+      const secret = created.secrets[0];
+      if (secret) {
+        // The files are staged without a commit: Changes shows them, and the commit asks there.
+        made = path;
+        const more = created.secrets.length > 1 ? ` and ${created.secrets.length - 1} more` : "";
+        failure = `The repository is made, but the secrets check held back the first commit: ${secret.kind} in ${secret.path}, line ${secret.line}${more}. The files are staged; check them in Changes, then commit.`;
+        return;
+      }
       if (toGitHub) {
         phase = "publishing";
         await api.githubPublish(path, toGitHub);

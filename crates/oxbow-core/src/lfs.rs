@@ -356,10 +356,14 @@ impl Repo {
         if let Some(version) = FOUND.lock().ok().and_then(|found| found.clone()) {
             return Some(version);
         }
-        let version = self.run(&GitCommand::new(["lfs", "version"])).ok().map(|out| {
-            let first = out.stdout.split_whitespace().next().unwrap_or_default().to_owned();
-            first.strip_prefix("git-lfs/").map_or(first.clone(), str::to_owned)
-        })?;
+        // Asked outside the repository: where git-lfs is missing, git would run an alias `lfs`
+        // from the repository's own .git/config instead, and only reading must not run that.
+        let version = crate::cli::run_in(&std::env::temp_dir(), &GitCommand::new(["lfs", "version"]), None)
+            .ok()
+            .map(|out| {
+                let first = out.stdout.split_whitespace().next().unwrap_or_default().to_owned();
+                first.strip_prefix("git-lfs/").map_or(first.clone(), str::to_owned)
+            })?;
         if let Ok(mut found) = FOUND.lock() {
             *found = Some(version.clone());
         }

@@ -44,6 +44,9 @@ test("a review goes as start, comments, replies, verdict", () => {
   assert.deepEqual(kinds, ["startReview", "reviewComment", "reviewReply", "submitReview"]);
   assert.deepEqual(submitCalls(pr, draft, "approve", "")[0], { kind: "startReview", id: "PR_421", commit: "old" });
   assert.deepEqual(submitCalls(pr, null, "approve", "")[0], { kind: "startReview", id: "PR_421", commit: "new" });
+  // New commits came in while the files shown were still the earlier ones: those are approved.
+  assert.deepEqual(submitCalls(pr, null, "approve", "", "seen")[0], { kind: "startReview", id: "PR_421", commit: "seen" });
+  assert.deepEqual(submitCalls(pr, draft, "approve", "", "seen")[0], { kind: "startReview", id: "PR_421", commit: "old" });
   assert.equal(withEdit(draft, draft.comments[0].id, null).comments.length, 0);
 });
 

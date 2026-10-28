@@ -431,7 +431,7 @@ impl Repo {
         let out = self.run(&GitCommand::new([
             "log",
             "-1",
-            "--format=%H%x1f%s%x1f%an%x1f%ct",
+            "--format=%H%x00%s%x00%an%x00%ct",
             rev,
             "--",
         ]))?;
@@ -452,7 +452,7 @@ impl Repo {
         let out = self.run(&GitCommand::new([
             "log".to_owned(),
             format!("--max-count={PREVIEW_COMMITS}"),
-            "--format=%H%x1f%s%x1f%an%x1f%ct".to_owned(),
+            "--format=%H%x00%s%x00%an%x00%ct".to_owned(),
             range.to_owned(),
             "--".to_owned(),
         ]))?;

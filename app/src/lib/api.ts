@@ -69,6 +69,7 @@ import type {
   Viewing,
   PullSummary,
   LfsStatus,
+  SecretFinding,
 } from "./types";
 import type { PullSetup } from "./remote";
 import type { ConsoleEntry, ConsoleRepos } from "./console";
@@ -96,7 +97,7 @@ export const api = {
   /** Sends `clone-line` events while it runs; Stop is `stopAction`. */
   cloneRepo: (options: CloneOptions) => invoke<string>("clone_repo", { options }),
   planNewRepo: (options: NewRepoOptions) => invoke<NewRepoPlan>("plan_new_repo", { options }),
-  createRepo: (options: NewRepoOptions) => invoke<string>("create_repo", { options }),
+  createRepo: (options: NewRepoOptions) => invoke<{ path: string; secrets: SecretFinding[] }>("create_repo", { options }),
   /** The latest `limit` commits, or more to reach `until`. */
   /** With `known`, the key of the history on screen, rows that came out the same are left out. */
   /** With `focus`, also the history of Current Branch Only: `History.focus`. With `quiet`, a
