@@ -30,6 +30,9 @@ pub enum Error {
     /// A GitHub API call failed; `message` says why in words for people.
     #[error("{message}")]
     GitHub { status: Option<u16>, message: String },
+    /// A GitLab API call failed; `message` says why in words for people.
+    #[error("{message}")]
+    GitLab { status: Option<u16>, message: String },
     #[error("stopped")]
     Cancelled,
     /// The repository is not how it was when the action was planned, so it did not run.

@@ -7,6 +7,7 @@ mod conflicts;
 mod console_window;
 mod drafts;
 mod git_config;
+mod gitlab_accounts;
 mod history;
 mod menu;
 mod open_in;
@@ -209,6 +210,13 @@ fn main() {
             accounts::open_github,
             accounts::github_owners,
             accounts::github_publish,
+            gitlab_accounts::gitlab_accounts,
+            gitlab_accounts::gitlab_sign_in_setup,
+            gitlab_accounts::gitlab_open_new_token,
+            gitlab_accounts::gitlab_open_profile,
+            gitlab_accounts::gitlab_sign_in,
+            gitlab_accounts::gitlab_sign_in_stop,
+            gitlab_accounts::gitlab_sign_out,
             pulls::github_repo,
             pulls::gitlab_projects,
             pulls::open_gitlab,

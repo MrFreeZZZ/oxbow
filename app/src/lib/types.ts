@@ -1095,6 +1095,39 @@ export interface GitHubAccount {
   scopes: string[] | null;
 }
 
+/** A GitLab account: one per server, gitlab.com or your own. */
+export interface GitLabAccount {
+  /** `gitlab.com` or `git.example.com:8443`. */
+  host: string;
+  /** `https://gitlab.com`. */
+  web: string;
+  username: string;
+  name: string | null;
+  /** The account's picture as a `data:` address. */
+  avatar: string | null;
+  webUrl: string;
+  /** The token's scopes; null when GitLab doesn't say. */
+  scopes: string[] | null;
+  /** The last day the token works, `2026-12-01`; null when it never expires. */
+  expiresAt: string | null;
+  /** The server's GitLab version, `17.5.1-ee`. */
+  version: string;
+  /** The credential store item with the token. */
+  item: string;
+}
+
+/** What the GitLab sign-in sheet shows for the server typed so far. */
+export interface GitLabSignInSetup {
+  server: { host: string; web: string };
+  /** The requests signing in makes, as curl. */
+  requests: string[];
+  newTokenUrl: string;
+  scopes: string[];
+  store: string;
+  /** The oldest GitLab Oxbow signs in to, `16.0`. */
+  oldest: string;
+}
+
 /** Where Publish can put a repository: the account and its organizations. */
 export interface GitHubOwners {
   login: string;

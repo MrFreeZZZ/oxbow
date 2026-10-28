@@ -199,23 +199,11 @@ impl Default for Client {
 impl Client {
     /// A client for another address, e.g. a local test server.
     pub fn new(api: &str, web: &str) -> Self {
-        let tls = ureq::tls::TlsConfig::builder()
-            // The computer's own trust store, so a company proxy's certificate works as in a
-            // browser.
-            .root_certs(ureq::tls::RootCerts::PlatformVerifier)
-            .build();
-        let agent = ureq::Agent::config_builder()
-            .http_status_as_error(false)
-            .timeout_global(Some(Duration::from_secs(30)))
-            .user_agent(concat!("Oxbow/", env!("CARGO_PKG_VERSION")))
-            .tls_config(tls)
-            .build()
-            .new_agent();
         Client {
             api: api.trim_end_matches('/').to_owned(),
             web: web.trim_end_matches('/').to_owned(),
             token: None,
-            agent,
+            agent: agent(),
         }
     }
 
@@ -437,6 +425,22 @@ impl Client {
     }
 }
 
+/// The HTTP agent every API call goes through: errors come back as answers, 30 seconds at most.
+pub(crate) fn agent() -> ureq::Agent {
+    let tls = ureq::tls::TlsConfig::builder()
+        // The computer's own trust store, so a company proxy's certificate works as in a
+        // browser.
+        .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+        .build();
+    ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_global(Some(Duration::from_secs(30)))
+        .user_agent(concat!("Oxbow/", env!("CARGO_PKG_VERSION")))
+        .tls_config(tls)
+        .build()
+        .new_agent()
+}
+
 /// An API answer.
 #[derive(Debug, Clone)]
 pub(crate) struct Response {
@@ -528,7 +532,7 @@ fn form_encode(pairs: &[(String, String)]) -> String {
         .join("&")
 }
 
-fn percent(text: &str) -> String {
+pub(crate) fn percent(text: &str) -> String {
     text.bytes()
         .map(|b| match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
