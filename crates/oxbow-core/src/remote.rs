@@ -358,7 +358,7 @@ impl Repo {
         let theirs = self.run(&GitCommand::new([
             "log",
             "--reverse",
-            "--format=%H%x1f%s%x1f%an%x1f%ct",
+            "--format=%H%x00%s%x00%an%x00%ct",
             &format!("{from}..{to}"),
         ]))?;
         Ok(parse_briefs(&theirs.stdout)
@@ -518,7 +518,7 @@ impl Repo {
         let mut args = vec![
             "log".to_owned(),
             "--max-count=50".to_owned(),
-            "--format=%H%x1f%s%x1f%an%x1f%ct".to_owned(),
+            "--format=%H%x00%s%x00%an%x00%ct".to_owned(),
         ];
         args.extend(branch.map(|b| format!("refs/heads/{b}")));
         args.extend(remote_branch.map(|b| format!("refs/remotes/{b}")));
@@ -548,7 +548,7 @@ impl Repo {
         let out = self.run(&GitCommand::new([
             "log",
             "--max-count=20",
-            "--format=%H%x1f%s%x1f%an%x1f%ct",
+            "--format=%H%x00%s%x00%an%x00%ct",
             &format!("HEAD..refs/remotes/{remote}/{branch}"),
         ]))?;
         Ok(parse_briefs(&out.stdout))
@@ -595,11 +595,12 @@ pub struct DeletionCheck {
     pub lost_with_upstream: Vec<CommitBrief>,
 }
 
-/// Lines of `git log --format=%H%x1f%s%x1f%an%x1f%ct`.
+/// Lines of `git log --format=%H%x00%s%x00%an%x00%ct`: NUL, unlike any other byte, is never in
+/// a subject or a name.
 pub(crate) fn parse_briefs(out: &str) -> Vec<CommitBrief> {
     out.lines()
         .filter_map(|line| {
-            let mut parts = line.split('\u{1f}');
+            let mut parts = line.split('\0');
             Some(CommitBrief {
                 id: parts.next()?.to_owned(),
                 summary: parts.next()?.to_owned(),

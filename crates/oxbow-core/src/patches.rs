@@ -77,7 +77,7 @@ impl Repo {
             "log".to_owned(),
             "--no-merges".to_owned(),
             "--reverse".to_owned(),
-            "--format=%H%x1f%s%x1f%an%x1f%at".to_owned(),
+            "--format=%H%x00%s%x00%an%x00%at".to_owned(),
         ];
         args.extend(range);
         args.push("--".to_owned());

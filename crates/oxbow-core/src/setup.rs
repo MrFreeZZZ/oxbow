@@ -343,7 +343,9 @@ pub fn plan_new_repo(options: &NewRepoOptions) -> Result<NewRepoPlan> {
 }
 
 /// Make the repository: `git init`, the starter files, and the first commit when asked for.
-pub fn create_repo(options: &NewRepoOptions) -> Result<()> {
+/// That commit goes through the secrets check like any other: what it finds is returned, and the
+/// files stay staged, without a commit, for the user to look at in Changes.
+pub fn create_repo(options: &NewRepoOptions) -> Result<Vec<crate::secrets::SecretFinding>> {
     let plan = plan_new_repo(options)?;
     if let Some(repo) = plan.repository {
         return Err(Error::Git(format!("{repo} is a repository already")));
@@ -370,9 +372,15 @@ pub fn create_repo(options: &NewRepoOptions) -> Result<()> {
         std::fs::write(path.join(file), text).map_err(|err| Error::Git(format!("could not write {file}: {err}")))?;
     }
     for command in commands {
+        if command.args.first().is_some_and(|a| a == "commit") && crate::secrets::check_secrets() {
+            let found = Repo::open(path)?.staged_secrets()?;
+            if !found.is_empty() {
+                return Ok(found);
+            }
+        }
         run_in(path, &command, None)?;
     }
-    Ok(())
+    Ok(Vec::new())
 }
 
 /// The starter `.gitignore`: the chosen template, then the Finder's files.

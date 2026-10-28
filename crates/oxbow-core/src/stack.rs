@@ -940,34 +940,41 @@ impl Repo {
 
     /// The commits of `base..top`, oldest first.
     fn list_range(&self, base: &str, top: &str) -> Result<Range> {
+        // Fields end in NUL: git prints a message only up to its first NUL, so a message can't
+        // hold one, while any other byte, \x1e or \x1f too, may be in it.
         let out = self.run(&GitCommand::new([
             "log".to_owned(),
             "--reverse".to_owned(),
-            "--format=%H%x1f%P%x1f%T%x1f%B%x1e".to_owned(),
+            "--format=%H%x00%P%x00%T%x00%B%x00".to_owned(),
+            "--end-of-options".to_owned(),
             format!("{base}..{top}"),
             "--".to_owned(),
         ]))?;
-        let commits = out
-            .stdout
-            .split('\u{1e}')
-            .filter_map(|record| {
-                let record = record.trim_start_matches('\n');
-                let mut parts = record.splitn(4, '\u{1f}');
-                let id = parts.next()?.trim().to_owned();
-                let mut parents = parts.next()?.split_whitespace().map(str::to_owned);
-                let parent = parents.next().unwrap_or_default();
-                let others = parents.collect();
-                let tree = parts.next()?.to_owned();
-                let message = parts.next().unwrap_or_default().trim_end().to_owned();
-                (!id.is_empty()).then_some(Listed {
-                    id,
-                    parent,
-                    others,
-                    tree,
-                    message,
-                })
+        let fields: Vec<&str> = out.stdout.split('\0').collect();
+        let commits = fields
+            .chunks_exact(4)
+            .map(|record| {
+                let id = record[0].trim_start_matches('\n');
+                let mut parents = record[1].split_whitespace().map(str::to_owned);
+                let tree = record[2];
+                let listed = Listed {
+                    id: id.to_owned(),
+                    parent: parents.next().unwrap_or_default(),
+                    others: parents.collect(),
+                    tree: tree.to_owned(),
+                    message: record[3].trim_end().to_owned(),
+                };
+                let ids_only = crate::cli::is_oid(id)
+                    && crate::cli::is_oid(tree)
+                    && (listed.parent.is_empty() || crate::cli::is_oid(&listed.parent))
+                    && listed.others.iter().all(|p| crate::cli::is_oid(p));
+                if ids_only {
+                    Ok(listed)
+                } else {
+                    Err(Error::Git(format!("could not read the commits of {base}..{top}")))
+                }
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         let (merges, commits) = commits.into_iter().partition(|c| !c.others.is_empty());
         Ok(Range {
             commits,
@@ -978,7 +985,14 @@ impl Repo {
 
     /// Added and deleted lines per commit of `range`.
     fn range_stats(&self, range: &str) -> Result<HashMap<String, (u32, u32)>> {
-        let out = self.run(&GitCommand::new(["log", "--format=%x1e%H", "--numstat", range, "--"]))?;
+        let out = self.run(&GitCommand::new([
+            "log",
+            "--format=%x1e%H",
+            "--numstat",
+            "--end-of-options",
+            range,
+            "--",
+        ]))?;
         let mut stats = HashMap::new();
         for record in out.stdout.split('\u{1e}').filter(|r| !r.trim().is_empty()) {
             let mut lines = record.lines();
@@ -1153,7 +1167,8 @@ impl Repo {
         let out = self.run(&GitCommand::new([
             "log",
             "-1",
-            "--format=%H%x1f%s%x1f%an%x1f%ct",
+            "--format=%H%x00%s%x00%an%x00%ct",
+            "--end-of-options",
             rev,
             "--",
         ]))?;
@@ -1165,7 +1180,7 @@ impl Repo {
 
     fn count(&self, range: &str) -> Result<usize> {
         Ok(self
-            .run(&GitCommand::new(["rev-list", "--count", range]))?
+            .run(&GitCommand::new(["rev-list", "--count", "--end-of-options", range]))?
             .stdout
             .trim()
             .parse()
@@ -1188,6 +1203,7 @@ impl Repo {
             "rev-list",
             "--min-parents=2",
             "--max-count=1",
+            "--end-of-options",
             range,
         ]))?;
         Ok(!out.stdout.trim().is_empty())

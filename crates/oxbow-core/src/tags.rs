@@ -36,13 +36,12 @@ pub(crate) fn plan_create(name: &str, commit: &str, message: Option<&str>, push:
 }
 
 pub(crate) fn push_command(remote: &str, names: &[String]) -> GitCommand {
-    let mut args = vec!["push".to_owned(), remote.to_owned()];
-    for name in names {
-        args.push("tag".to_owned());
-        args.push(name.clone());
-    }
+    // A tag may be named `--receive-pack=…`: given in full after --end-of-options, a name is only
+    // ever a name.
+    let mut args = vec!["push".to_owned(), "--end-of-options".to_owned(), remote.to_owned()];
+    args.extend(names.iter().map(|name| format!("refs/tags/{name}")));
     GitCommand::new(args)
-        .comment("git push never sends tags on its own; tag <name> sends that one")
+        .comment("git push never sends tags on its own; refs/tags/<name> sends that one")
         .with_progress()
 }
 
@@ -51,12 +50,20 @@ pub(crate) fn plan_delete(name: &str, remote: Option<&str>) -> Vec<GitCommand> {
     // The remote first: if it can't be reached, the tag is still here to try again.
     if let Some(remote) = remote {
         commands.push(
-            GitCommand::new(["push", remote, "--delete", &format!("refs/tags/{name}")])
-                .comment(format!("--delete: remove the tag on {remote}"))
-                .with_progress(),
+            GitCommand::new([
+                "push",
+                remote,
+                "--delete",
+                "--end-of-options",
+                &format!("refs/tags/{name}"),
+            ])
+            .comment(format!("--delete: remove the tag on {remote}"))
+            .with_progress(),
         );
     }
-    commands.push(GitCommand::new(["tag", "-d", name]).comment("-d: delete the tag here; the commit stays"));
+    commands.push(
+        GitCommand::new(["tag", "-d", "--end-of-options", name]).comment("-d: delete the tag here; the commit stays"),
+    );
     commands
 }
 
@@ -162,7 +169,10 @@ mod tests {
     fn annotated_tag_carries_its_message() {
         let commands = plan_create("v1.0.0", "abc123", Some("First release"), Some("origin"));
         assert_eq!(commands[0].display(), "git tag -a v1.0.0 -m 'First release' abc123");
-        assert_eq!(commands[1].display(), "git push origin tag v1.0.0");
+        assert_eq!(
+            commands[1].display(),
+            "git push --end-of-options origin refs/tags/v1.0.0"
+        );
         let light = plan_create("v1.0.0", "abc123", Some("  "), None);
         assert_eq!(light.len(), 1);
         assert_eq!(light[0].display(), "git tag v1.0.0 abc123");

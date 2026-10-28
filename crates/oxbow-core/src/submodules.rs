@@ -355,7 +355,7 @@ fn counts(dir: &Path, from: &str, to: &str) -> Option<(usize, usize)> {
 /// Commit `id` of the clone in `dir`, when it has it.
 fn brief(dir: &Path, id: &str) -> Option<CommitBrief> {
     let commit = format!("{id}^{{commit}}");
-    git(dir, ["log", "-1", "--format=%H%x1f%s%x1f%an%x1f%ct", &commit, "--"])
+    git(dir, ["log", "-1", "--format=%H%x00%s%x00%an%x00%ct", &commit, "--"])
         .and_then(|out| parse_briefs(&out).into_iter().next())
 }
 
@@ -367,7 +367,7 @@ fn briefs(dir: &Path, from: &str, to: &str) -> Vec<CommitBrief> {
         [
             "log",
             &limit,
-            "--format=%H%x1f%s%x1f%an%x1f%ct",
+            "--format=%H%x00%s%x00%an%x00%ct",
             &format!("{from}..{to}"),
         ],
     )

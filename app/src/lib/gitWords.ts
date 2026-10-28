@@ -73,6 +73,7 @@ const FLAGS: Record<string, Meaning> = {
   // Before the subcommand.
   "-c": { title: "A setting for this command only", text: "Like a line in .git/config, but just for this one run." },
   "--": { title: "Paths follow", text: "Everything after it is a file name, even if it looks like a flag or a branch." },
+  "--end-of-options": { title: "Names follow", text: "What comes after it is a name, even one that starts with a dash like a flag." },
   "-q": { title: "Quiet", text: "Prints only errors." },
   "--quiet": { title: "Quiet", text: "Prints only errors." },
   "--no-verify": { title: "Skip the hooks", text: "Runs without the repository’s pre-commit, commit-msg or pre-push scripts." },

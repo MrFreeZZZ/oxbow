@@ -284,7 +284,7 @@ impl Repo {
         // last two stop the command: one may close its output a moment before it exits.
         let status = loop {
             if cancel.load(Ordering::Relaxed) {
-                let _ = child.kill();
+                kill_tree(&mut child);
                 let _ = child.wait();
                 let output = log.output();
                 log.stopped(output);
@@ -299,12 +299,12 @@ impl Repo {
                 stdout = all;
                 cut = stdout.len() > max;
                 if let Err(err) = read {
-                    let _ = child.kill();
+                    kill_tree(&mut child);
                     let _ = child.wait();
                     return Err(Error::Git(err.to_string()));
                 }
                 if cut {
-                    let _ = child.kill();
+                    kill_tree(&mut child);
                     break child.wait().map_err(|err| Error::GitNotFound(err.to_string()))?;
                 }
             }
@@ -427,33 +427,75 @@ fn command_in(dir: &Path, command: &GitCommand) -> Command {
         Some(program) => Command::new(program),
         None => crate::config::git(),
     };
-    if command.program.is_none() && talks_to_remote(&command.args) {
-        crate::config::lend_github_token(&mut git);
+    if command.program.is_none()
+        && let Some(rest) = remote_args(&command.args)
+    {
+        crate::config::lend_github_token(&mut git, dir, rest);
     }
     git.args(command.run_args()).current_dir(dir);
     git.envs(command.env.iter().map(|(k, v)| (k, v)));
+    own_group(&mut git);
     git
 }
 
-/// Whether a git command may need a password: it fetches from or pushes to a remote.
-fn talks_to_remote(args: &[String]) -> bool {
-    let mut args = args.iter();
-    while let Some(arg) = args.next() {
+/// Start the command as the head of a process group of its own, so that stopping it also stops
+/// what it started: a hook, ssh, a credential helper.
+fn own_group(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    #[cfg(not(unix))]
+    let _ = command;
+}
+
+/// Stop `child` and every process it started. On Unix that is its process group (see
+/// [`own_group`]), on Windows the tree of processes under it.
+fn kill_tree(child: &mut Child) {
+    #[cfg(unix)]
+    if let Ok(pid) = i32::try_from(child.id()) {
+        // SAFETY: kill(2) only takes two integers. The group is the child's own, and its id
+        // can't be reused before the child is waited for.
+        unsafe { libc::kill(-pid, libc::SIGKILL) };
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let _ = Command::new("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+}
+
+/// The arguments after the subcommand of a git command that may need a password, one that
+/// fetches from or pushes to a remote; `None` for any other command.
+fn remote_args(args: &[String]) -> Option<&[String]> {
+    let mut i = 0;
+    while let Some(arg) = args.get(i) {
         match arg.as_str() {
             // Options of git itself that take a value.
-            "-c" | "-C" => {
-                args.next();
-            }
-            option if option.starts_with('-') => {}
+            "-c" | "-C" => i += 2,
+            option if option.starts_with('-') => i += 1,
             command => {
-                return matches!(
+                let remote = matches!(
                     command,
                     "push" | "pull" | "fetch" | "clone" | "ls-remote" | "remote" | "submodule" | "lfs"
                 );
+                let rest = &args[i + 1..];
+                // `git lfs version` only asks git-lfs which version it is.
+                let probe = command == "lfs" && rest.first().is_some_and(|a| a == "version");
+                return (remote && !probe).then_some(rest);
             }
         }
     }
-    false
+    None
 }
 
 /// Run `command` in `dir`, which need not be a repository (`clone`, `init`), and wait for it.
@@ -606,7 +648,7 @@ fn collect(
     }
     let status = loop {
         if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
+            kill_tree(child);
             let _ = child.wait();
             let output = log.output();
             log.stopped(output);
@@ -672,7 +714,7 @@ pub fn run_streaming_in(
     let status = loop {
         // Before each line: a command that prints without a pause still stops at once.
         if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
+            kill_tree(&mut child);
             let _ = child.wait();
             log.stopped(logged);
             return Err(Error::Cancelled);
@@ -788,6 +830,12 @@ pub fn literal(path: &str) -> String {
     }
 }
 
+/// Whether `text` is a full object id (SHA-1 or SHA-256), as git prints it: an id read back
+/// from git's output that is anything else came from a commit message, not from git.
+pub(crate) fn is_oid(text: &str) -> bool {
+    matches!(text.len(), 40 | 64) && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 /// Quote an argument for display the way a POSIX shell would need it.
 pub(crate) fn shell_quote(arg: &str) -> String {
     let plain = !arg.is_empty() && arg.chars().all(|c| c.is_alphanumeric() || "-_./:=@+,%^~{}".contains(c));
@@ -865,6 +913,40 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn stop_stops_what_the_command_started_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        // Like a hook or ssh that git starts: a process of its own under the command.
+        let script = format!("sleep 30 & echo $! > '{}'; wait", pid_file.display());
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let stop = cancel.clone();
+        let file = pid_file.clone();
+        let later = std::thread::spawn(move || {
+            while !file.exists() {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            stop.store(true, Ordering::Relaxed);
+        });
+        let result = run_cancellable_in(dir.path(), &GitCommand::new(["-c", &script]).program("sh"), &cancel);
+        later.join().unwrap();
+        assert!(matches!(result, Err(Error::Cancelled)), "{result:?}");
+        let pid = std::fs::read_to_string(&pid_file).unwrap();
+        let alive = || {
+            std::process::Command::new("kill")
+                .args(["-0", pid.trim()])
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        };
+        let started = std::time::Instant::now();
+        while alive() && started.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!alive(), "sleep {} still runs", pid.trim());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn output_past_the_limit_is_cut_and_the_command_stopped() {
         let dir = tempfile::tempdir().unwrap();
         std::process::Command::new("git")
@@ -930,12 +1012,13 @@ mod tests {
 
     #[test]
     fn commands_that_reach_a_remote_are_told_apart() {
-        let talks = |args: &[&str]| talks_to_remote(&args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>());
+        let talks = |args: &[&str]| remote_args(&args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>()).is_some();
         assert!(talks(&["push", "-u", "origin", "main"]));
         assert!(talks(&["-c", "core.hooksPath=x", "fetch", "--prune"]));
         assert!(talks(&["-C", "/tmp/a", "clone", "https://github.com/a/b"]));
         assert!(!talks(&["commit", "-m", "push the button"]));
         assert!(!talks(&["-c", "push.default=simple", "status"]));
+        assert!(!talks(&["lfs", "version"]));
     }
 
     #[test]

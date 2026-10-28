@@ -1,7 +1,7 @@
 mod support;
 
 use oxbow_core::graph::{STASH_COLOR, TRUNK_COLOR, color_for_name};
-use oxbow_core::{History, HistoryOptions, HistoryRow, RefKind, Repo};
+use oxbow_core::{Error, History, HistoryOptions, HistoryRow, RefKind, Repo};
 use support::Fixture;
 
 #[test]
@@ -12,7 +12,21 @@ fn opens_from_a_subfolder_and_rejects_plain_folders() {
     assert_eq!(repo.name(), "repo");
 
     let plain = tempfile::tempdir().unwrap();
-    assert!(Repo::open(plain.path()).is_err());
+    assert!(matches!(Repo::open(plain.path()), Err(Error::NotARepository { .. })));
+}
+
+#[test]
+fn a_sha256_repository_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let made = std::process::Command::new("git")
+        .args(["init", "-q", "--object-format=sha256"])
+        .current_dir(dir.path())
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let err = Repo::open(dir.path()).err().unwrap();
+    assert!(matches!(err, Error::Sha256 { .. }), "{err}");
+    assert!(err.to_string().contains("SHA-256"));
 }
 
 #[test]

@@ -779,3 +779,32 @@ fn a_failing_pre_push_hook_is_recognized_and_can_be_skipped() {
     repo.perform(&skip).unwrap();
     assert_eq!(repo.tracking().unwrap().unwrap().ahead, 0);
 }
+
+#[test]
+fn a_tag_named_like_an_option_is_pushed_as_a_tag() {
+    let mut team = Team::new();
+    // A valid tag name that git push would read as `--receive-pack=touch` after `tag`.
+    team.me.git(&["update-ref", "refs/tags/--receive-pack=touch", "HEAD"]);
+    team.me.git(&["tag", "tag"]);
+    team.me.git(&["tag", "v1"]);
+    let repo = Repo::open(team.me.path()).unwrap();
+    repo.perform(&Action::PushTags {
+        remote: "origin".into(),
+        names: vec!["--receive-pack=touch".into(), "v1".into()],
+    })
+    .unwrap();
+    let tags = team.kirill.git(&["ls-remote", "--tags", "origin"]);
+    assert!(tags.contains("refs/tags/--receive-pack=touch"), "{tags}");
+    assert!(tags.contains("refs/tags/v1"), "{tags}");
+    repo.perform(&Action::DeleteTag {
+        name: "--receive-pack=touch".into(),
+        remote: Some("origin".into()),
+    })
+    .unwrap();
+    assert!(
+        !team
+            .kirill
+            .git(&["ls-remote", "--tags", "origin"])
+            .contains("receive-pack")
+    );
+}

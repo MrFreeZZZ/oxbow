@@ -204,7 +204,7 @@ impl Repo {
             "reflog".to_owned(),
             "show".to_owned(),
             "--date=unix".to_owned(),
-            "--format=%H%x1f%gd%x1f%gs".to_owned(),
+            "--format=%H%x00%gd%x00%gs".to_owned(),
             format!("--max-count={REWRITE_ENTRIES}"),
             upstream.clone(),
             "--".to_owned(),
@@ -215,7 +215,7 @@ impl Repo {
             .stdout
             .lines()
             .filter_map(|line| {
-                let mut parts = line.split('\u{1f}');
+                let mut parts = line.split('\0');
                 let id = parts.next()?;
                 let time = parts
                     .next()?
@@ -411,7 +411,7 @@ impl Repo {
             &GitCommand::new([
                 "log",
                 "--no-walk=unsorted",
-                "--format=%H%x1f%s%x1f%an%x1f%ae%x1f%at%x1f%P",
+                "--format=%H%x00%s%x00%an%x00%ae%x00%at%x00%P",
                 "--stdin",
             ]),
             Some((ids.join("\n") + "\n").as_bytes()),
@@ -420,7 +420,7 @@ impl Repo {
             .stdout
             .lines()
             .filter_map(|line| {
-                let mut parts = line.split('\u{1f}');
+                let mut parts = line.split('\0');
                 let id = parts.next()?.to_owned();
                 Some((
                     id.clone(),

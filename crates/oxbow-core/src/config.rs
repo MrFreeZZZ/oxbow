@@ -36,16 +36,92 @@ pub fn set_github_token(source: Option<TokenSource>) {
 /// list of running processes; on `store` and `erase` it does nothing.
 const GITHUB_HELPER: &str = "credential.https://github.com.helper=!f() { if [ \"$1\" = get ]; then echo username=x-access-token; echo \"password=$OXBOW_GITHUB_TOKEN\"; fi; }; f";
 
-/// Add the GitHub helper to a command that talks to a remote, when signed in.
-pub(crate) fn lend_github_token(git: &mut Command) {
-    let token = GITHUB_TOKEN
-        .read()
-        .expect("github token lock")
-        .as_ref()
-        .and_then(|source| source());
-    if let Some(token) = token {
+/// Add the GitHub helper to a command that talks to a remote, when signed in and the remote can
+/// be github.com over HTTPS. Commands for other servers don't get the token: their hooks, SSH
+/// commands and helpers have no business seeing it.
+pub(crate) fn lend_github_token(git: &mut Command, dir: &Path, args: &[String]) {
+    let lock = GITHUB_TOKEN.read().expect("github token lock");
+    let Some(source) = lock.as_ref() else { return };
+    if !reaches_github(dir, args) {
+        return;
+    }
+    if let Some(token) = source() {
         git.args(["-c", GITHUB_HELPER]).env("OXBOW_GITHUB_TOKEN", token);
     }
+}
+
+/// Whether a command with these arguments (those after its subcommand) may reach github.com over
+/// HTTPS: the URL or remote it names says so; naming neither (`git pull`, `git submodule
+/// update`), any remote of the repository or of its submodules does.
+fn reaches_github(dir: &Path, args: &[String]) -> bool {
+    let named: Vec<&str> = args
+        .iter()
+        .map(String::as_str)
+        .filter(|a| !a.starts_with('-'))
+        .collect();
+    if let Some(url) = named.iter().find(|a| a.contains("://")) {
+        return is_github_https(url);
+    }
+    let remotes = remote_urls(dir, None);
+    let chosen: Vec<&str> = remotes
+        .iter()
+        .filter(|(name, _)| named.contains(&name.as_str()))
+        .map(|(_, url)| url.as_str())
+        .collect();
+    if !chosen.is_empty() {
+        return chosen.into_iter().any(is_github_https);
+    }
+    remotes.iter().any(|(_, url)| is_github_https(url))
+        || remote_urls(dir, Some(".gitmodules"))
+            .iter()
+            .any(|(_, url)| is_github_https(url))
+}
+
+/// `https://github.com/…`, also with a user name before the host.
+fn is_github_https(url: &str) -> bool {
+    let Some(rest) = url
+        .get(..8)
+        .filter(|s| s.eq_ignore_ascii_case("https://"))
+        .map(|_| &url[8..])
+    else {
+        return false;
+    };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
+    host.eq_ignore_ascii_case("github.com") || host.eq_ignore_ascii_case("github.com:443")
+}
+
+/// The URLs of the remotes set up in `dir`, by remote name, or of the submodules in `file`.
+fn remote_urls(dir: &Path, file: Option<&str>) -> Vec<(String, String)> {
+    let mut config = git();
+    config.arg("config");
+    if let Some(file) = file {
+        config.args(["--file", file]);
+    }
+    let pattern = if file.is_some() {
+        r"^submodule\..*\.url$"
+    } else {
+        r"^remote\..*\.(url|pushurl)$"
+    };
+    let Ok(out) = config
+        .args(["-z", "--get-regexp", pattern])
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    // `-z`: each entry is the key, a newline, the value and NUL.
+    String::from_utf8_lossy(&out.stdout)
+        .split('\0')
+        .filter_map(|entry| {
+            let (key, url) = entry.split_once('\n')?;
+            let (_, rest) = key.split_once('.')?;
+            let (name, _) = rest.rsplit_once('.')?;
+            Some((name.to_owned(), url.to_owned()))
+        })
+        .collect()
 }
 
 /// Run this `git` instead of the first one on `PATH`; `None` goes back to that one.
@@ -477,6 +553,38 @@ fn fingerprint(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_github_sign_in_goes_only_to_github_over_https() {
+        assert!(is_github_https("https://github.com/a/b.git"));
+        assert!(is_github_https("HTTPS://x-access-token@GitHub.com/a/b"));
+        assert!(!is_github_https("https://github.com.evil.example/a/b"));
+        assert!(!is_github_https("https://gitlab.com/a/b"));
+        assert!(!is_github_https("git@github.com:a/b.git"));
+        assert!(!is_github_https("http://github.com/a/b"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(dir.path())
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        };
+        git(&["init", "-q"]);
+        git(&["remote", "add", "origin", "https://github.com/a/b.git"]);
+        git(&["remote", "add", "work", "https://git.example.com/a/b.git"]);
+        let args = |list: &[&str]| list.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        assert!(reaches_github(dir.path(), &args(&["origin", "main"])));
+        assert!(!reaches_github(dir.path(), &args(&["-u", "work", "main"])));
+        assert!(!reaches_github(dir.path(), &args(&["https://git.example.com/c.git"])));
+        // Naming no remote, any of them may be the one.
+        assert!(reaches_github(dir.path(), &args(&["--prune"])));
+    }
 
     #[test]
     fn config_list_is_parsed() {

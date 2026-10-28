@@ -28,6 +28,9 @@ export class ReviewSession {
   finishing = $state(false);
   /** Files the pull request changes, as the Files tab counts them. */
   files = $state(0);
+  /** The head commit whose files the Files tab shows; it can be behind `pr` while newer ones
+   *  load. A review begins on it, never on a head nobody saw. */
+  shown = $state<string | null>(null);
   #run: (request: Request | Promise<Request>) => Promise<boolean>;
   #changed: () => void;
   #timer: ReturnType<typeof setTimeout> | undefined;
@@ -84,7 +87,7 @@ export class ReviewSession {
   }
 
   #started(): ReviewDraft {
-    return this.draft ?? emptyDraft(this.pr.headSha);
+    return this.draft ?? emptyDraft(this.shown ?? this.pr.headSha);
   }
 
   addComment(spot: Spot, body: string) {
@@ -164,7 +167,7 @@ export class ReviewSession {
   /** Send the review with its comments and replies, then put the draft away. */
   async submit(verdict: Verdict, body: string) {
     const draft = this.draft;
-    const calls = submitCalls(this.pr, draft, verdict, body);
+    const calls = submitCalls(this.pr, draft, verdict, body, this.shown);
     const curls = await api.githubCallsPreview(calls);
     const what = countWords(draft?.comments.length ?? 0, draft?.replies.length ?? 0);
     const said = verdict === "approve" ? "Approved" : verdict === "requestChanges" ? "Asked for changes on" : "Reviewed";

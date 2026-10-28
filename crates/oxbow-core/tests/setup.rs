@@ -179,3 +179,29 @@ fn glance_sees_a_merge_that_stopped() {
     assert_eq!(glance.operation, Some(OperationKind::Merge));
     assert_eq!(glance.conflicts, 1);
 }
+
+#[test]
+fn the_first_commit_waits_when_the_folder_holds_a_secret() {
+    identity();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("billing");
+    std::fs::create_dir(&path).unwrap();
+    // A fake key, split so that secret scanners don't take this file for a leak.
+    let key = concat!("AKIA", "Q7XKZ3M4P2LJ6WVB");
+    std::fs::write(path.join("deploy.env"), format!("AWS_ACCESS_KEY_ID={key}\n")).unwrap();
+    let options = NewRepoOptions {
+        path: path.clone(),
+        branch: "main".into(),
+        readme: false,
+        gitignore: None,
+        license: None,
+        commit: true,
+    };
+    let found = setup::create_repo(&options).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].path, "deploy.env");
+    // The repository is there with the file staged, and no commit yet.
+    let repo = Repo::open(&path).unwrap();
+    assert!(repo.head().unwrap().commit.is_none());
+    assert_eq!(repo.working_tree().unwrap().staged.len(), 1);
+}

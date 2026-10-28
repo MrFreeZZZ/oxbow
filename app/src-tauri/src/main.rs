@@ -1039,17 +1039,25 @@ async fn plan_new_repo(options: oxbow_core::NewRepoOptions) -> CommandResult<oxb
     blocking(move || oxbow_core::setup::plan_new_repo(&options)).await
 }
 
+/// The repository New Repository made, and what the secrets check found that held back its
+/// first commit.
+#[derive(Serialize)]
+struct CreatedRepo {
+    path: String,
+    secrets: Vec<oxbow_core::SecretFinding>,
+}
+
 #[tauri::command]
-async fn create_repo(options: oxbow_core::NewRepoOptions) -> CommandResult<String> {
+async fn create_repo(options: oxbow_core::NewRepoOptions) -> CommandResult<CreatedRepo> {
     let path = options.path.display().to_string();
-    logged(
+    let secrets = logged(
         Some(options.path.clone()),
         console::EntryKind::Action,
         "Create a repository",
         move || oxbow_core::setup::create_repo(&options),
     )
     .await?;
-    Ok(path)
+    Ok(CreatedRepo { path, secrets })
 }
 
 #[tauri::command]

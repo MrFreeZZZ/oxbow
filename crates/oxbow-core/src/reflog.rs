@@ -93,7 +93,7 @@ impl Repo {
             "reflog".to_owned(),
             "show".to_owned(),
             "--date=unix".to_owned(),
-            "--format=%H%x1f%gd%x1f%gs%x1f%s%x1f%an%x1f%ae%x1f%P".to_owned(),
+            "--format=%H%x00%gd%x00%gs%x00%s%x00%an%x00%ae%x00%P".to_owned(),
             format!("--max-count={max}"),
             reference,
             "--".to_owned(),
@@ -104,7 +104,7 @@ impl Repo {
             .lines()
             .enumerate()
             .filter_map(|(n, line)| {
-                let mut parts = line.split('\x1f');
+                let mut parts = line.split('\0');
                 let id = parts.next()?.to_owned();
                 let time = parts
                     .next()?
