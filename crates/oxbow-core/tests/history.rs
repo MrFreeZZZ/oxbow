@@ -138,6 +138,51 @@ fn commits_missing_from_the_remote_are_unpushed() {
 }
 
 #[test]
+fn unpushed_commits_of_branches_and_merges_are_the_ones_git_names() {
+    use std::collections::HashSet;
+    let mut fx = Fixture::new();
+    for i in 0..60 {
+        fx.commit("a.txt", &format!("{i}\n"), &format!("Main {i}"));
+    }
+    let remote = tempfile::tempdir().unwrap();
+    let remote_path = remote.path().to_str().unwrap().to_owned();
+    fx.git(&["init", "-q", "--bare", &remote_path]);
+    fx.git(&["remote", "add", "origin", &remote_path]);
+    fx.git(&["push", "-q", "-u", "origin", "main"]);
+    // A branch from far back, pushed in part; main goes on and merges it.
+    fx.git(&["checkout", "-q", "-b", "feature", "main~40"]);
+    for i in 0..5 {
+        fx.commit("b.txt", &format!("{i}\n"), &format!("Feature {i}"));
+    }
+    fx.git(&["push", "-q", "origin", "feature~2:refs/heads/feature"]);
+    fx.git(&["checkout", "-q", "main"]);
+    fx.commit("a.txt", "local\n", "Main local");
+    fx.git(&["merge", "-q", "--no-ff", "-m", "Merge feature", "feature"]);
+    fx.git(&["checkout", "-q", "-b", "spare", "main~1"]);
+    fx.commit("c.txt", "1\n", "Spare");
+    fx.git(&["checkout", "-q", "main"]);
+    let exact: HashSet<String> = fx
+        .git(&["rev-list", "--branches", "HEAD", "--not", "--remotes"])
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(exact.len(), 5);
+
+    let history = Repo::open(fx.path())
+        .unwrap()
+        .history(&HistoryOptions::default())
+        .unwrap();
+    assert!(!history.unpushed_pending);
+    let marked: HashSet<String> = history
+        .rows
+        .iter()
+        .filter(|r| r.unpushed)
+        .map(|r| r.id.clone())
+        .collect();
+    assert_eq!(marked, exact);
+}
+
+#[test]
 fn history_limit_truncates() {
     let mut fx = Fixture::new();
     for i in 0..5 {

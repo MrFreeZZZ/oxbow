@@ -66,8 +66,12 @@ app/src/                    Svelte front end
   lib/*.ts                  pure logic next to its view (diffRows, conflicts, branches, graph…)
   app.css themes.ts branchPalettes.ts   design tokens, code theme Estuary, branch colors
 app/tests/*.test.ts         node:test unit tests for the pure lib/*.ts modules
+app/e2e/                    acceptance on the real app (WebDriver, no npm packages): scenarios.mjs,
+                            speed.mjs (window timings), fixtures.mjs, driver.mjs; make-repos.mjs = Mac checklist's
 scripts/check.sh            quiet checks (below);  make-demo-repo.sh = demo repository
+scripts/acceptance.sh       runs app/e2e on a release build under Xvfb;  docs/acceptance.md = scenarios, Mac checklist
 scripts/make-perf-fixtures.sh   big fixtures for examples/;  docs/measuring-reads.md = how to run them
+scripts/compare-clients.py  Mac: Oxbow against other clients, timed from the screen;  docs/speed.md = all numbers
 docs/architecture.md        layout, git access, graph rules, development;  docs/images/ = README pictures
 ```
 
@@ -96,6 +100,8 @@ Read a log with `grep`/`tail`, never `cat` it whole.
 - Never paste long build or test output into the chat or the thread; summarize it.
 - One run of a single Rust test: `cargo test -p oxbow-core --test <file> <name> -q 2>&1 | tail -n 20`.
 - UI changes are verified in a production build with the CSP on (`cd app && npm run build`).
+- `scripts/acceptance.sh [words]` runs the acceptance scenarios on the real app (minutes; not in
+  check.sh): after a change to a scenario in docs/acceptance.md. `--speed ~/oxbow-perf` times the window.
 
 Cloud sessions: `.claude/hooks/session-start.sh` installs the Tauri Linux packages
 (libwebkit2gtk-4.1-dev, libgtk-3-dev, librsvg2-dev), runs `npm ci` and `cargo fetch`, and

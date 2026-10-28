@@ -77,9 +77,20 @@ enum Kind {
 }
 
 impl Repo {
-    /// The Git folder shared by all the repository's worktrees.
+    /// The Git folder shared by all the repository's worktrees. Without the `..` a worktree's
+    /// `commondir` file gives (`.git/worktrees/<name>/../..`), so its parent is the main folder.
     pub fn common_dir(&self) -> PathBuf {
-        self.local().common_dir().to_path_buf()
+        let mut dir = PathBuf::new();
+        for part in self.local().common_dir().components() {
+            match part {
+                Component::ParentDir if dir.file_name().is_some() => {
+                    dir.pop();
+                }
+                Component::CurDir => {}
+                part => dir.push(part),
+            }
+        }
+        dir
     }
 
     /// Watch the repository: `on_change` hears what changed, from a thread of its own, until the

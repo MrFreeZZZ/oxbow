@@ -383,6 +383,12 @@ fn a_worktree_whose_folder_is_gone_says_so_instead_of_reading_half_a_history() {
     assert_eq!(worktree.locked, None);
     let main = worktree.main.unwrap();
     assert!(Path::new(&main).canonicalize().unwrap() == fx.path().canonicalize().unwrap());
+
+    // The window that had the worktree open knows the main folder: its shared Git folder's parent.
+    let common = repo.common_dir();
+    assert_eq!(common.file_name().and_then(|name| name.to_str()), Some(".git"));
+    let known = [common.parent().unwrap().to_path_buf()];
+    assert!(gone_folder(&path, &known).unwrap().worktree.is_some());
 }
 
 #[test]

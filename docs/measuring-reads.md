@@ -15,6 +15,7 @@ About three minutes; it needs about 1 GB. It makes:
 | Folder | What is in it |
 |---|---|
 | `history-100k` | 100,000 commits, 30 side branches (half merged back), 20 tags |
+| `history-100k-clone` | a clone of it, as most repositories are: origin's branches, and one commit not pushed |
 | `worktrees-20/main` | 2,000 files and 20 more worktrees; every third has 3 changed and 2 new files |
 | `worktrees-50/main` | the same with 50 worktrees |
 | `submodules-20` | 20 submodules: clean, changed inside, behind, ahead, two not cloned |
@@ -35,14 +36,14 @@ About three minutes; it needs about 1 GB. It makes:
 
    ```sh
    RUNS=30 SLOW=2 cargo run --release -p oxbow-core --example reads -- \
-     ~/oxbow-perf/history-100k ~/oxbow-perf/worktrees-20/main \
+     ~/oxbow-perf/history-100k ~/oxbow-perf/history-100k-clone ~/oxbow-perf/worktrees-20/main \
      ~/oxbow-perf/worktrees-50/main ~/oxbow-perf/submodules-20 | tee ~/oxbow-perf/warm.txt
    ```
 
 4. Cold, with the disk cache emptied first (asks for your password):
 
    ```sh
-   for f in history-100k worktrees-20/main worktrees-50/main submodules-20; do
+   for f in history-100k history-100k-clone worktrees-20/main worktrees-50/main submodules-20; do
      sudo purge
      RUNS=1 cargo run --release -q -p oxbow-core --example reads -- ~/oxbow-perf/$f
    done | tee ~/oxbow-perf/cold.txt

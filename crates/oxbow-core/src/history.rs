@@ -1287,6 +1287,91 @@ fn unpushed_tips(refs: &[RefInfo], head: &HeadInfo) -> (Vec<ObjectId>, Vec<Objec
     (local, remote)
 }
 
+/// Commits reachable from `local` but from none of `hidden`, the way `git rev-list <local>
+/// --not <hidden>` finds them: newest first from both sides at once, stopping once all that is
+/// left to walk is hidden. `None` past `limit` of them: a hidden commit older than what it
+/// holds may still be to come. gix's own walk with hidden tips first walks all they reach,
+/// which in a clone is the whole history: 0.7 s for 100,000 commits to find the one not pushed.
+fn only_from(repo: &gix::Repository, local: &[ObjectId], hidden: &[ObjectId], limit: usize) -> Option<Vec<ObjectId>> {
+    const LOCAL: u8 = 1;
+    const HIDDEN: u8 = 2;
+    const WALKED: u8 = 4;
+    // As git: once only hidden commits are left, a few more are walked in case a commit's
+    // time is older than its parent's.
+    const SLOP: usize = 5;
+    struct Seen {
+        flags: u8,
+        parents: Vec<ObjectId>,
+    }
+    let mut seen: HashMap<ObjectId, Seen> = HashMap::new();
+    let mut queue: BinaryHeap<(i64, ObjectId)> = BinaryHeap::new();
+    // Marks `id` and queues it the first time it is met; a commit that turns out hidden after
+    // it was walked passes that on to the ancestors walked through it.
+    let mark = |id: ObjectId, flag: u8, seen: &mut HashMap<ObjectId, Seen>, queue: &mut BinaryHeap<(i64, ObjectId)>| {
+        if let Some(known) = seen.get_mut(&id) {
+            let newly_hidden = flag == HIDDEN && known.flags & HIDDEN == 0;
+            known.flags |= flag;
+            if newly_hidden && known.flags & WALKED != 0 {
+                let mut stack = known.parents.clone();
+                while let Some(p) = stack.pop() {
+                    if let Some(parent) = seen.get_mut(&p)
+                        && parent.flags & HIDDEN == 0
+                    {
+                        parent.flags |= HIDDEN;
+                        if parent.flags & WALKED != 0 {
+                            stack.extend(parent.parents.iter().copied());
+                        }
+                    }
+                }
+            }
+            return;
+        }
+        // Past a shallow clone's boundary the parent isn't there: as if there were none.
+        let Ok(commit) = repo.find_commit(id) else {
+            return;
+        };
+        let time = commit.time().map(|t| t.seconds).unwrap_or_default();
+        let parents = commit.parent_ids().map(|p| p.detach()).collect();
+        seen.insert(id, Seen { flags: flag, parents });
+        queue.push((time, id));
+    };
+    for &id in hidden {
+        mark(id, HIDDEN, &mut seen, &mut queue);
+    }
+    for &id in local {
+        mark(id, LOCAL, &mut seen, &mut queue);
+    }
+    let mut found = Vec::new();
+    let mut slop = SLOP;
+    while let Some((_, id)) = queue.pop() {
+        let (flags, parents) = {
+            let commit = seen.get_mut(&id).expect("queued commits are seen");
+            commit.flags |= WALKED;
+            (commit.flags, commit.parents.clone())
+        };
+        let flag = if flags & HIDDEN != 0 { HIDDEN } else { LOCAL };
+        for parent in parents {
+            mark(parent, flag, &mut seen, &mut queue);
+        }
+        if flag == LOCAL {
+            found.push(id);
+            if found.len() > limit {
+                return None;
+            }
+        }
+        if queue.iter().all(|(_, id)| seen[id].flags & HIDDEN != 0) {
+            slop -= 1;
+            if slop == 0 {
+                break;
+            }
+        } else {
+            slop = SLOP;
+        }
+    }
+    found.retain(|id| seen[id].flags & HIDDEN == 0);
+    Some(found)
+}
+
 /// What the answers of [`Repo::settle_unpushed`] hold for: the tips both ways.
 fn tips_key(local: &[ObjectId], remote: &[ObjectId]) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -1313,6 +1398,10 @@ impl Repo {
         if remote.is_empty() || local.is_empty() {
             return Ok((HashSet::new(), false));
         }
+        if let Some(found) = only_from(repo, &local, &remote, UNPUSHED_WALK) {
+            return Ok((found.into_iter().collect(), false));
+        }
+        // Many: gix's walk, which knows each commit it gives is unpushed, as far as the limit.
         let walk = repo
             .rev_walk(local.iter().copied())
             .with_hidden(remote.iter().copied())
@@ -1322,22 +1411,25 @@ impl Repo {
         for info in walk {
             out.insert(info.map_err(Error::git)?.id);
             if out.len() > UNPUSHED_WALK {
-                let answers = self.unpushed.0.lock().expect("unpushed lock");
-                let known = (answers.tips == tips_key(&local, &remote)).then_some(&answers.unpushed);
-                let mut pending = false;
-                let mut more = Vec::new();
-                for node in nodes.iter().filter(|n| !out.contains(&n.id)) {
-                    match known.and_then(|k| k.get(&node.id)) {
-                        Some(true) => more.push(node.id),
-                        Some(false) => {}
-                        None => pending = true,
-                    }
-                }
-                out.extend(more);
-                return Ok((out, pending));
+                break;
             }
         }
-        Ok((out, false))
+        if out.len() <= UNPUSHED_WALK {
+            return Ok((out, false));
+        }
+        let answers = self.unpushed.0.lock().expect("unpushed lock");
+        let known = (answers.tips == tips_key(&local, &remote)).then_some(&answers.unpushed);
+        let mut pending = false;
+        let mut extra = Vec::new();
+        for node in nodes.iter().filter(|n| !out.contains(&n.id)) {
+            match known.and_then(|k| k.get(&node.id)) {
+                Some(true) => extra.push(node.id),
+                Some(false) => {}
+                None => pending = true,
+            }
+        }
+        out.extend(extra);
+        Ok((out, pending))
     }
 
     /// Which of `ids`, loaded commits the history could not tell, are unpushed: the whole walk

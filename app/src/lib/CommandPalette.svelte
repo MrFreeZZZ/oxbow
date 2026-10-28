@@ -5,6 +5,7 @@
 
   import { untrack } from "svelte";
   import { keys, shortcut } from "./keys";
+  import { modal } from "./modal";
   import { labelOf, rank, recentCommands, rememberCommand, type PaletteItem } from "./palette";
   import { combo } from "./shortcuts";
 
@@ -112,7 +113,8 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="catcher" onclick={onClose}></div>
-<div class="pop" role="dialog" aria-label={commands ? "Command Palette" : placeholder}>
+<!-- Closed, it gives the focus back to where it was, as a sheet does. -->
+<div class="pop" use:modal role="dialog" aria-label={commands ? "Command Palette" : placeholder}>
   <div class="field">
     <svg class="icon" viewBox="0 0 16 16">
       {#if commands}<path d="M3.5 4.5 7 8l-3.5 3.5M8.5 11.5h4" />{:else}<path d="M8 3.5V8l3 2M8 1.8a6.2 6.2 0 1 0 0 12.4a6.2 6.2 0 1 0 0-12.4" />{/if}
