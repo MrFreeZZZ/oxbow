@@ -3,7 +3,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { api, settings, stopped } from "./lib/api";
   import { WORKTREE_ID, type History, type HistoryRow, type OutsideChange, type ReadPart, type RecentRepo, type ReflogEntry, type RepoSummary } from "./lib/types";
-  import { reloadNews, retried, settle, stillFailing, type ReadStates } from "./lib/reads";
+  import { reloadNews, retried, settle, stillFailing, withRows, type ReadStates } from "./lib/reads";
   import { carryStates, failChecking, withState } from "./lib/folders";
   import Sidebar from "./lib/Sidebar.svelte";
   import HistoryList from "./lib/HistoryList.svelte";
@@ -21,19 +21,18 @@
   import DetachedBanner from "./lib/DetachedBanner.svelte";
   import OperationBanner from "./lib/OperationBanner.svelte";
   import { draftSaves } from "./lib/conflictDrafts";
-  import { abortRequest, continueRequest, describe, mergeRequest, skipRequest } from "./lib/merge";
+  import { abortRequest, continueRequest, describe, skipRequest } from "./lib/merge";
   import { applyPatchesRequest, choosePatchFiles, savePatchesRequest, type PatchTarget } from "./lib/patches";
-  import { stashMenu, stashRequest } from "./lib/stash";
+  import { stashRequest } from "./lib/stash";
   import { newWorktreeRequest } from "./lib/worktrees";
   import StashesView from "./lib/StashesView.svelte";
-  import { ancestors, cherryPickRequest, editMessageRequest, resetModes, resetRequest, revertRequest, undoCommitRequest } from "./lib/commits";
+  import { ancestors } from "./lib/commits";
   import type { Gone, Operation } from "./lib/types";
   import Menu, { menuIcons, type MenuEntry } from "./lib/Menu.svelte";
   import { fetchRequest, pullRequest, pushRequest, syncBlock, unshallowRequest, type RemoteContext, type SyncFix } from "./lib/remote";
-  import WhyPopover from "./lib/WhyPopover.svelte";
+  import SyncButtons from "./lib/SyncButtons.svelte";
   import Welcome from "./lib/Welcome.svelte";
   import { prefs } from "./lib/prefs.svelte";
-  import { deleteTagRequest, isLocalTag, newTagRequest, pushTagsRequest } from "./lib/tags";
   import SearchField from "./lib/SearchField.svelte";
   import SearchBar from "./lib/SearchBar.svelte";
   import { search, type Found } from "./lib/search.svelte";
@@ -57,13 +56,11 @@
   import OperationLog from "./lib/OperationLog.svelte";
   import { shortcut, withKeys } from "./lib/keys";
   import { isRedo, lostRow, oplog, undoRequest } from "./lib/oplog.svelte";
-  import { amend, canBack, canForward, crumbs, emptyTrail, go, visit, type Place, type Trail } from "./lib/backStack";
+  import { amend, canBack, canForward, crumbs, detailOfPlace, emptyTrail, go, nameOfPlace, visit, type Place, type Trail } from "./lib/backStack";
   import { kept } from "./lib/kept";
   import { stepQuery, type SeriesQuery } from "./lib/series";
   import { relativeTime } from "./lib/format";
-  import ActivityPopover from "./lib/ActivityPopover.svelte";
   import { activity, failureShort, type ActivityItem } from "./lib/activity.svelte";
-  import { addToCommitRequest, dropCommitRequest, rewordRequest, squashRequest } from "./lib/stack";
   import { github } from "./lib/github.svelte";
   import { lfs } from "./lib/lfs.svelte";
   import LfsBanner from "./lib/LfsBanner.svelte";
@@ -72,14 +69,17 @@
   import TipCard from "./lib/TipCard.svelte";
   import { tips } from "./lib/tips.svelte";
   import { fixChoices, fixRequest, fixStateLine, loadFixState, type FixContext, type FixId } from "./lib/fixes";
-  import { bisectMarkRequest, bisectResetRequest, bisectStartRequest } from "./lib/bisect";
+  import { bisectMarkRequest, bisectResetRequest } from "./lib/bisect";
   import { keys, mac } from "./lib/keys";
   import type { BisectMark, OpEntry } from "./lib/types";
   import { fitWindow } from "./lib/windowSize";
   import { stepperOf } from "./lib/tabs";
   import { Lazy } from "./lib/lazyScreen.svelte";
   import TrustSheet from "./lib/TrustSheet.svelte";
+  import { commitMenu as commitMenuOf } from "./lib/commitMenu";
   import RestrictedBadge from "./lib/RestrictedBadge.svelte";
+  import WindowTitle from "./lib/WindowTitle.svelte";
+  import { windowTitle, type Title } from "./lib/windowTitle";
   import type { TrustFinding } from "./lib/types";
 
   // Screens and sheets a window seldom shows load the first time they are (lazyScreen.svelte.ts).
@@ -402,53 +402,9 @@
     select(id);
   }
 
-  /** What a place is called, in the header's path and the list of places. */
-  function placeName(p: Place): string {
-    switch (p.view) {
-      case "history":
-        return "History";
-      case "file":
-        return p.line ? `Line ${p.line}` : p.path.slice(p.path.lastIndexOf("/") + 1);
-      case "stashes":
-        return "Stashes";
-      case "oplog":
-        return "Operation Log";
-      case "compare":
-        return "Compare";
-      case "series":
-        return "Compare Series";
-      case "pull": {
-        const pull = p.number ? github.byNumber(p.number) : github.pullOf(p.branch);
-        return pull ? `PR #${pull.number}` : `Pull Request ${p.branch}`;
-      }
-      case "reviews":
-        return "Reviews";
-      case "stack":
-        return "Edit Stack";
-    }
-  }
-
-  /** The grey line under a place's name in the list of places. */
-  function placeDetail(p: Place): string | undefined {
-    switch (p.view) {
-      case "history": {
-        const row = p.commit ? rowsById.get(p.commit) : undefined;
-        return row ? (row.worktree ? "Uncommitted changes" : row.summary) : undefined;
-      }
-      case "file":
-        return p.line ? `${p.path} · Blame` : `${p.path} · ${p.mode === "blame" ? "Blame" : "Changes"}`;
-      case "compare":
-        return `${p.target} with ${p.base}`;
-      case "series":
-        return p.query.branch;
-      case "pull":
-        return p.branch;
-      case "stack":
-        return p.branch ?? history?.head.branch ?? undefined;
-      default:
-        return undefined;
-    }
-  }
+  /** What a place is called, and the grey line under it in the list of places (backStack.ts). */
+  const placeName = (p: Place) => nameOfPlace(p, (branch, number) => (number ? github.byNumber(number) : github.pullOf(branch)));
+  const placeDetail = (p: Place) => detailOfPlace(p, (id) => rowsById.get(id), history?.head.branch ?? null);
 
   const placeIcons: Record<Place["view"], string> = {
     history: menuIcons.branch,
@@ -561,6 +517,28 @@
   let fixing = $state<FixContext | null>(null);
 
   const branchCount = $derived(history ? history.refs.filter((r) => r.kind === "local").length : 0);
+
+  /** What the window's title tells about the screen shown. */
+  function titleOf(repo: RepoSummary, history: History): Title {
+    const line = fileLive ? fileLive.line : (nav.file?.line ?? null);
+    return windowTitle({
+      screen: view,
+      repo: repo.name,
+      steps: trailPath.length > 0,
+      conflicts: showConflicts && operation ? { kind: operation.kind, noun: describe(operation).noun, conflicted: operation.conflicted } : null,
+      file: nav.file ? { path: nav.file.path, line } : null,
+      github: { place: github.repo ? `${github.repo.owner}/${github.repo.name}` : null, open: github.pulls.filter((p) => p.state === "open").length },
+      pull: pullBranch ? { branch: pullBranch, pr: shownPull?.number ?? null, byNumber: !!pullNumber } : null,
+      series: seriesQuery,
+      compare: comparing,
+      head: history.head.branch,
+      running: activity.running ? { title: activity.running.title, percent: activity.percent } : null,
+      failed: activity.problem?.failure ? failureShort(activity.problem.failure) : null,
+      branches: branchCount,
+      bisect: history.bisect,
+      detached: !history.head.branch && !operation?.branch,
+    });
+  }
   const rowsById = $derived(new Map(history?.rows.map((r) => [r.id, r]) ?? []));
   /** What the graph shows: the whole history, or Current Branch Only once its rows are in. */
   const graphHistory = $derived(history && focusOnly ? focusedView(history) : history);
@@ -975,7 +953,6 @@
 
   /** A repository's name to head the History: "oxbow" as "Oxbow". A name with capitals of its
    *  own, such as "iOS-app", keeps them. */
-  const titled = (name: string) => (name === name.toLowerCase() ? name.charAt(0).toUpperCase() + name.slice(1) : name);
 
   function openPalette() {
     nav.quickOpen = false;
@@ -1471,158 +1448,9 @@
     if (paths && branchCtx === ctx) await run(applyPatchesRequest(ctx, paths));
   }
 
-  /** The right-click menu of a commit in the graph. */
+  /** The right-click menu of a commit in the graph (commitMenu.ts). */
   function commitMenu(row: HistoryRow): MenuEntry[] {
-    const ctx = branchCtx;
-    if (!ctx || !history) return [];
-    if (row.worktree) {
-      return [
-        { kind: "header", label: row.summary },
-        { kind: "item", label: "Stash Changes…", icon: menuIcons.stash, run: () => run(stashRequest(ctx)) },
-      ];
-    }
-    const stash = history.stashes.find((s) => s.id === row.id);
-    if (stash) return stashMenu(ctx, stash, run, (text) => copyText(text, `Copied ${text.length > 40 ? "it" : text}.`));
-    const item = (label: string, icon: string, act: () => void, danger = false): MenuEntry => ({ kind: "item", label, icon, run: act, danger });
-    if (history.bisect) return bisectMenu(row, ctx, item);
-    const isHead = row.id === history.head.commit;
-    const here = history.head.branch ?? "HEAD";
-    const entries: MenuEntry[] = [{ kind: "header", label: `${row.id.slice(0, 7)} · ${row.summary}` }];
-    const group = (items: MenuEntry[]) => {
-      if (items.length) entries.push(...(entries.length > 1 ? [{ kind: "sep" } as MenuEntry] : []), ...items);
-    };
-    // A commit many branches point at lists the first few; the rest are in the branch list.
-    const others = row.labels.filter((l) => l.kind === "local" && l.name !== history!.head.branch);
-    const switching: MenuEntry[] = others.slice(0, 3).map((label) => item(`Check Out ${label.name}`, menuIcons.checkout, () => run(switchRequest(ctx, label.name))));
-    if (others.length > 3) switching.push({ kind: "note", label: `${others.length - 3} more branches here, in the branch list.` });
-    if (!isHead) switching.push(item("Check Out This Commit…", menuIcons.checkout, () => run(detachRequest(ctx, row))));
-    group(switching);
-
-    // Branches at this commit can be merged or rebased onto right here, as from the branch list;
-    // the commit itself can be copied, undone or made the branch's tip. None of it while a merge
-    // or rebase waits to be finished.
-    if (!history.operation) {
-      const locals = new Set(row.labels.filter((l) => l.kind === "local").map((l) => l.name));
-      const mergeable = row.labels
-        .filter((l) => (l.kind === "local" || (l.kind === "remote" && !locals.has(l.name.slice(l.name.indexOf("/") + 1)))) && l.name !== here)
-        .slice(0, 2);
-      const merging: MenuEntry[] = [];
-      for (const label of mergeable) {
-        merging.push(item(`Merge ${label.name} into ${here}…`, menuIcons.merge, () => run(mergeRequest(ctx, label.name))));
-        if (history.head.branch) merging.push(item(`Rebase ${here} onto ${label.name}…`, menuIcons.rebase, () => run(mergeRequest(ctx, label.name, "rebase"))));
-      }
-      group(merging);
-
-      const inHead = ancestors(history, history.head.commit).has(row.id);
-      const editing: MenuEntry[] = [];
-      if (isHead && row.parents.length === 1) editing.push(item("Undo Commit", menuIcons.undo, () => run(undoCommitRequest(ctx, row))));
-      if (isHead) editing.push(item("Edit Message…", menuIcons.edit, () => run(editMessageRequest(ctx, row))));
-      // The checked-out branch's own commits, above the trunk, can be rewritten in place.
-      const own = headStack.has(row.id);
-      if (own && !isHead) {
-        editing.push(item("Edit Message…", menuIcons.edit, () => run(rewordRequest(ctx, row))));
-        const staged = history.rows[0]?.worktree?.staged ?? 0;
-        if (staged) editing.push(item("Add Staged Changes to This Commit…", menuIcons.stage, () => run(addToCommitRequest(ctx, row))));
-      }
-      if (own && headStack.has(row.parents[0] ?? "")) editing.push(item("Squash into Previous…", menuIcons.merge, () => run(squashRequest(ctx, row))));
-      if (own) editing.push(item("Drop Commit…", menuIcons.drop, () => run(dropCommitRequest(ctx, row)), true));
-      if (own) editing.push(item("Edit Stack…", menuIcons.rebase, () => openStack(null)));
-      if (!inHead && history.head.commit) editing.push(item(`Cherry-Pick onto ${here}`, menuIcons.cherry, () => run(cherryPickRequest(ctx, row))));
-      if (inHead) editing.push(item("Revert Commit…", menuIcons.revert, () => run(revertRequest(ctx, row))));
-      if (inHead && history.head.branch) editing.push(item("Fix a Mistake…", menuIcons.fix, () => openFixes(row.id)));
-      if (!isHead && history.head.commit) {
-        editing.push({
-          kind: "sub",
-          label: `Reset ${here} to Here`,
-          icon: menuIcons.reset,
-          entries: resetModes.map((m) => ({ label: m.label, hint: m.keeps, danger: m.mode === "hard", run: () => run(resetRequest(ctx, row, m.mode)) })),
-        });
-      }
-      group(editing);
-
-      // Bisect: from a branch tip (or HEAD) back to a tag, or from an older commit up to HEAD.
-      const finding: MenuEntry[] = [];
-      if (isHead || row.labels.some((l) => l.kind === "local")) finding.push(item("Find What Broke This…", menuIcons.bisect, () => run(bisectStartRequest(ctx, { bad: row }))));
-      else if (inHead) finding.push(item("Find First Bad Commit After This…", menuIcons.bisect, () => run(bisectStartRequest(ctx, { good: row }))));
-      group(finding);
-    }
-
-    group([isHead && !history.head.branch ? item("Create Branch…", menuIcons.branch, () => run(keepRequest(ctx))) : item("New Branch from Here…", menuIcons.branch, () => run(newBranchRequest(ctx, undefined, row)))]);
-    // Tags: a new one here, and pushing or deleting the ones on this commit.
-    // Push Tag and Delete Tag list the commit's tags in submenus, like Reset and Copy.
-    const tagging: MenuEntry[] = [item("New Tag Here…", menuIcons.tag, () => run(newTagRequest(ctx, row)))];
-    const tagsHere = row.labels.filter((l) => l.kind === "tag").map((l) => l.name);
-    const unpushed = history.defaultRemote ? tagsHere.filter((name) => isLocalTag(ctx, name)) : [];
-    if (unpushed.length) {
-      tagging.push({
-        kind: "sub",
-        label: `Push Tag to ${history.defaultRemote}`,
-        icon: menuIcons.push,
-        entries: [
-          ...unpushed.map((name) => ({ label: name, run: () => run(pushTagsRequest(ctx, [name])) })),
-          ...(unpushed.length > 1 ? [{ label: `All ${unpushed.length}`, run: () => run(pushTagsRequest(ctx, unpushed)) }] : []),
-        ],
-      });
-    }
-    if (tagsHere.length) {
-      tagging.push({
-        kind: "sub",
-        label: "Delete Tag",
-        icon: menuIcons.drop,
-        entries: tagsHere.map((name) => ({ label: `${name}…`, danger: true, run: () => run(deleteTagRequest(ctx, name)) })),
-      });
-    }
-    group(tagging);
-    const saving = patchTarget(row);
-    group([item(saving.since ? `Save ${saving.count} Commits as Patches…` : "Save as Patch…", menuIcons.patch, () => run(savePatchesRequest(saving)))]);
-    // Compare this commit, named by its branch when one ends here, with HEAD or the default branch.
-    const name = row.labels.find((l) => l.kind === "local")?.name ?? row.id.slice(0, 7);
-    const against = [...new Set([isHead ? null : here, history.trunk])].filter((b): b is string => !!b && b !== name);
-    if (against.length) {
-      group([{ kind: "sub", label: "Compare", icon: menuIcons.compare, entries: against.map((b) => ({ label: `With ${b}`, run: () => openCompare(b, name) })) }]);
-    }
-    group([
-      {
-        kind: "sub",
-        label: "Copy",
-        icon: menuIcons.copy,
-        entries: [
-          { label: "SHA", hint: row.id.slice(0, 7) + "…", run: () => copyText(row.id, `Copied ${row.id.slice(0, 7)}.`) },
-          { label: "Short SHA", hint: row.id.slice(0, 7), run: () => copyText(row.id.slice(0, 7), `Copied ${row.id.slice(0, 7)}.`) },
-          { label: "Message", run: () => copyMessage(row.id) },
-        ],
-      },
-    ]);
-    return entries;
-  }
-
-  /** The commit menu while bisecting: answers about the commit, Stop or Finish, and the
-   *  things that don't move HEAD. */
-  function bisectMenu(row: HistoryRow, ctx: BranchContext, item: (label: string, icon: string, act: () => void, danger?: boolean) => MenuEntry): MenuEntry[] {
-    const bisect = history!.bisect!;
-    const entries: MenuEntry[] = [{ kind: "header", label: `${row.id.slice(0, 7)} · ${row.summary}` }];
-    if (!bisect.found) {
-      const testing = row.id === history!.head.commit;
-      const mark = (label: string, icon: string, kind: BisectMark, key: string): MenuEntry => ({ ...item(label, icon, () => run(bisectMarkRequest(ctx, kind, row))), ...(testing ? { keys: keys(key) } : {}) });
-      entries.push(mark("Mark as Good", menuIcons.good, "good", "G"), mark("Mark as Bad", menuIcons.bad, "bad", "B"), mark("Skip This Commit", menuIcons.skip, "skip", "S"), { kind: "sep" });
-    }
-    entries.push(item(bisect.found ? "Finish Bisect…" : "Stop Bisect…", menuIcons.bisect, () => run(bisectResetRequest(ctx, bisect))), { kind: "sep" });
-    entries.push(item("New Branch from Here…", menuIcons.branch, () => run(newBranchRequest(ctx, undefined, row))), item("New Tag Here…", menuIcons.tag, () => run(newTagRequest(ctx, row))));
-    const name = row.labels.find((l) => l.kind === "local")?.name ?? row.id.slice(0, 7);
-    const against = [bisect.startIsBranch ? bisect.start : null, history!.trunk].filter((b, i, all): b is string => !!b && b !== name && all.indexOf(b) === i);
-    entries.push({ kind: "sep" });
-    if (against.length) entries.push({ kind: "sub", label: "Compare", icon: menuIcons.compare, entries: against.map((b) => ({ label: `With ${b}`, run: () => openCompare(b, name) })) });
-    entries.push({
-      kind: "sub",
-      label: "Copy",
-      icon: menuIcons.copy,
-      entries: [
-        { label: "SHA", hint: row.id.slice(0, 7) + "…", run: () => copyText(row.id, `Copied ${row.id.slice(0, 7)}.`) },
-        { label: "Short SHA", hint: row.id.slice(0, 7), run: () => copyText(row.id.slice(0, 7), `Copied ${row.id.slice(0, 7)}.`) },
-        { label: "Message", run: () => copyMessage(row.id) },
-      ],
-    });
-    return entries;
+    return commitMenuOf(row, { history, ctx: branchCtx, headStack, run, copyText, copyMessage, openStack, openFixes, openCompare, patchTarget });
   }
 
   /** G, B or S while bisecting: the answer for the commit under test. */
@@ -1663,13 +1491,8 @@
   );
   const pullBlock = $derived(remoteCtx && syncBlock(remoteCtx, "pull"));
   const pushBlock = $derived(remoteCtx && syncBlock(remoteCtx, "push"));
-  /** The grey Pull or Push button clicked last: its reason shows under it. */
+  /** The grey Pull or Push button clicked last: its reason shows under it (SyncButtons). */
   let why = $state<"pull" | "push" | null>(null);
-  const whyBlock = $derived(why === "pull" ? pullBlock : why === "push" ? pushBlock : null);
-  // Once the button can run again, its reason is gone for good.
-  $effect(() => {
-    if (why && !whyBlock) why = null;
-  });
 
   /** The way out a reason offers, e.g. Publish… when the branch has no upstream to pull from. */
   function fixSync(fix: SyncFix) {
@@ -1998,24 +1821,6 @@
     } catch (err) {
       if (mine === generation && reads) reads = stillFailing(reads, part, String(err));
     }
-  }
-
-  /** `next` with the commit rows it left out because `shown`, the history it was asked with, has
-   *  them. The same key, the same rows: only the row of uncommitted changes comes anew.
-   *  Otherwise `pieces` say which of `shown`'s rows stand where, between the new ones. */
-  function withRows(next: History, shown: History | null): History {
-    if (!shown) return next;
-    if (next.same) {
-      const commits = shown.rows[0]?.worktree ? shown.rows.slice(1) : shown.rows;
-      return { ...next, rows: [...next.rows, ...commits], runs: shown.runs, leadIns: shown.leadIns };
-    }
-    if (!next.pieces.length) return next;
-    const rows: HistoryRow[] = [];
-    let fresh = 0;
-    for (const piece of next.pieces) {
-      for (let k = 0; k < piece.len; k++) rows.push(piece.known === null ? next.rows[fresh++] : shown.rows[piece.known + k]);
-    }
-    return { ...next, rows, pieces: [] };
   }
 
   /** The page of older commits on its way, if one is. */
@@ -2505,51 +2310,7 @@
     <div class="main">
       <header data-tauri-drag-region>
         <div class="lead" data-tauri-drag-region>
-          {#snippet steps()}
-            {#each trailPath as crumb (crumb.at)}
-              <button class="crumb" onclick={() => goTo(crumb.at)} title="Back to {crumb.label}">{crumb.label}</button><span class="crumb-sep" aria-hidden="true">›</span>
-            {/each}
-          {/snippet}
-          <div class="title" data-tauri-drag-region>
-            {#if showConflicts && operation}
-              <span class="name">Resolve Conflicts</span>
-              <span class="sub">{operation.kind === "am" ? "Applying patches" : `${describe(operation).noun} in progress`} · {operation.conflicted} {operation.conflicted === 1 ? "file" : "files"} left</span>
-            {:else if view === "file" && nav.file}
-              <span class="name">{nav.file.path.slice(nav.file.path.lastIndexOf("/") + 1)}</span>
-              {@const line = fileLive ? fileLive.line : (nav.file.line ?? null)}
-              <span class="sub">{@render steps()}{#if trailPath.length && line}Line {line}{:else}{trailPath.length ? "" : `${repo.name} · `}{nav.file.path}{line ? ` · line ${line}` : ""}{/if}</span>
-            {:else if view === "reviews"}
-              <span class="name">Reviews</span>
-              <span class="sub">{@render steps()}{github.repo ? `${github.repo.owner}/${github.repo.name}` : repo.name} · {github.pulls.filter((p) => p.state === "open").length} open</span>
-            {:else if view === "pull" && pullBranch}
-              <span class="name">{shownPull && pullNumber ? `PR #${shownPull.number}` : pullBranch}</span>
-              <span class="sub">{@render steps()}{shownPull ? `Pull request #${shownPull.number}` : "No pull request yet"}{github.repo && !trailPath.length ? ` · ${github.repo.owner}/${github.repo.name}` : ""}</span>
-            {:else if view === "stack"}
-              <span class="name">Edit Stack</span>
-              <span class="sub">{@render steps()}Interactive rebase{trailPath.length ? "" : ` · ${repo.name}`}</span>
-            {:else if view === "series" && seriesQuery}
-              <span class="name">Compare Series</span>
-              <span class="sub">{@render steps()}{seriesQuery.branch} · {seriesQuery.from}</span>
-            {:else if view === "compare"}
-              <span class="name">Compare</span>
-              <span class="sub">{@render steps()}{comparing.target} with {comparing.base}</span>
-            {:else if view === "stashes"}
-              <span class="name">Stashes</span>
-              <span class="sub">{@render steps()}{trailPath.length ? "" : `${repo.name} · `}on {history.head.branch ?? "detached HEAD"}</span>
-            {:else if view === "oplog"}
-              <span class="name">Operation Log</span>
-              <span class="sub">{@render steps()}{trailPath.length ? "" : `${repo.name} · `}every step, to undo or restore</span>
-            {:else}
-              <span class="name">{titled(repo.name)} history</span>
-              {#if activity.running}
-                <span class="sub">{activity.running.title}{activity.percent !== null ? ` · ${activity.percent}%` : "…"}</span>
-              {:else if activity.problem?.failure}
-                <span class="sub amber">Fetch failed · {failureShort(activity.problem.failure)}</span>
-              {:else}
-                <span class="sub">{branchCount} {branchCount === 1 ? "branch" : "branches"}{history.bisect ? (history.bisect.found ? " · Bisect done" : " · Bisecting") : !history.head.branch && !operation?.branch ? " · detached HEAD" : ""}</span>
-              {/if}
-            {/if}
-          </div>
+          <WindowTitle title={titleOf(repo, history)} steps={trailPath} onStep={goTo} />
           {#if repo.restricted.length}
             <RestrictedBadge findings={repo.restricted} onTrust={trustOpen} />
           {/if}
@@ -2589,68 +2350,18 @@
         <div class="trail" data-tauri-drag-region>
           {#if error}<span class="error" role="alert">{error}</span>{/if}
           {#if history.remotes.length && remoteCtx}
-            {@const t = history.tracking}
-            <div class="sync">
-            <div class="group" role="group" aria-label="Sync with remote">
-              <button
-                class="fetch"
-                onclick={() => sync("fetch")}
-                oncontextmenu={(event) => {
-                  event.preventDefault();
-                  activity.open = !activity.open;
-                }}
-                aria-label={activity.running ? "Fetching, show Activity" : activity.problem ? "Fetch failed, show Activity" : "Fetch"}
-                aria-haspopup="dialog"
-                aria-expanded={activity.open}
-                title={activity.running
-                  ? `${activity.running.title} · click for Activity`
-                  : activity.problem
-                    ? `${activity.problem.sub} · click for Activity`
-                    : `Fetch from ${history.remotes.length > 1 ? "all remotes" : remoteCtx.remote} · right-click, or the repository menu, for Activity`}
-              >
-                {#if activity.running}
-                  <svg class="icon ring" class:spin={activity.percent === null} viewBox="0 0 16 16">
-                    <circle cx="8" cy="8" r="5.5" class="ring-track" />
-                    <circle cx="8" cy="8" r="5.5" class="ring-fill" pathLength="100" stroke-dasharray="{activity.percent ?? 25} 100" />
-                  </svg>
-                {:else}
-                  <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 0 1-8.6 3.5M3 8a5 5 0 0 1 8.6-3.5" /><path d="M11.8 1.8v2.9H8.9M4.2 14.2v-2.9h2.9" /></svg>
-                  {#if activity.problem}<span class="dot"></span>{/if}
-                {/if}
-              </button>
-              <!-- Grey when it can't run, but it still answers a click: with why, under it. -->
-              <button
-                class:off={!!pullBlock}
-                class:asking={why === "pull"}
-                onclick={() => (pullBlock ? (why = why === "pull" ? null : "pull") : sync("pull"))}
-                aria-disabled={!!pullBlock}
-                aria-haspopup={pullBlock ? "dialog" : undefined}
-                aria-label={t?.behind && !t.rewritten ? `Pull ${t.behind} commits` : "Pull"}
-                title={why === "pull" ? undefined : pullBlock ? `${pullBlock.title} · click for more` : `Pull from ${t?.remote}/${t?.branch}`}
-              >
-                <svg class="icon" viewBox="0 0 16 16"><path d="M8 2v9M4.5 7.5 8 11l3.5-3.5M3 14h10" /></svg>
-                <!-- Old versions of commits rewritten here are nothing to pull. -->
-                {#if t?.behind && !t.rewritten}<span class="count">{t.behind}</span>{/if}
-              </button>
-              <button
-                class:off={!!pushBlock}
-                class:asking={why === "push"}
-                onclick={() => (pushBlock ? (why = why === "push" ? null : "push") : sync("push"))}
-                aria-disabled={!!pushBlock}
-                aria-haspopup={pushBlock ? "dialog" : undefined}
-                aria-label={t ? (t.ahead ? `Push ${t.ahead} commits` : "Push") : "Publish branch"}
-                title={why === "push" ? undefined : pushBlock ? `${pushBlock.title} · click for more` : t?.rewritten ? `Force push to ${t.remote}/${t.branch}: it has the old versions of commits you rewrote` : t && !t.gone ? `Push to ${t.remote}/${t.branch}` : `Publish ${history.head.branch} to ${remoteCtx.remote}`}
-              >
-                <svg class="icon" viewBox="0 0 16 16"><path d="M8 12V3M4.5 6.5 8 3l3.5 3.5M3 14h10" /></svg>
-                {#if t?.ahead}<span class="count">{t.ahead}</span>{:else if !t && history.head.branch && !remoteCtx.unread}<span class="count">Publish</span>{/if}
-              </button>
-            </div>
-            <ActivityPopover fix={fixFetch} retry={() => backgroundFetch(false)} settings={() => ((activity.open = false), api.openSettings())} reload={reload} />
-            {#if whyBlock}
-              {@const block = whyBlock}
-              <WhyPopover title={block.title} body={block.body} fixes={block.fixes} onFix={(i) => fixSync(block.fixes[i].fix)} onClose={() => (why = null)} />
-            {/if}
-            </div>
+            <SyncButtons
+              {history}
+              remote={remoteCtx}
+              {pullBlock}
+              {pushBlock}
+              bind:why
+              onSync={(kind) => sync(kind)}
+              onFixFetch={fixFetch}
+              onRetryFetch={() => backgroundFetch(false)}
+              onReload={reload}
+              onFix={fixSync}
+            />
           {:else if history.head.branch && history.head.commit}
             <button class="capsule publish" onclick={publishToGitHub} title="Make a repository on GitHub and push {history.head.branch} there">
               <svg class="icon" viewBox="0 0 16 16"><path d="M8 12V3M4.5 6.5 8 3l3.5 3.5M3 14h10" /></svg>
@@ -3189,27 +2900,6 @@
     align-items: center;
     align-self: stretch;
   }
-  .title {
-    display: flex;
-    flex-direction: column;
-    line-height: 1.2;
-    margin-right: 4px;
-    min-width: 0;
-    flex-shrink: 100;
-  }
-  .title span {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .name {
-    font-size: var(--text-heading);
-    font-weight: 700;
-  }
-  .sub {
-    font-size: var(--text-caption);
-    color: var(--text2);
-  }
   .capsule {
     flex-shrink: 0;
     display: flex;
@@ -3231,53 +2921,6 @@
   .joined.steps > button:disabled {
     opacity: 0.4;
     background: none;
-  }
-  /* The path that led here, before the screen's own subtitle: quiet links, as in Finder's path bar. */
-  .crumb {
-    padding: 0;
-    color: inherit;
-    font: inherit;
-  }
-  .crumb:hover {
-    color: var(--accent-text);
-    text-decoration: underline;
-  }
-  .crumb-sep {
-    margin: 0 5px;
-    opacity: 0.7;
-  }
-  .group {
-    display: flex;
-    align-items: center;
-    height: 34px;
-    padding: 0 4px;
-    border-radius: var(--radius-pill);
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--icon);
-  }
-  .group button {
-    height: 34px;
-    min-width: 36px;
-    padding: 0 9px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 3px;
-    border-radius: var(--radius-pill);
-  }
-  .group button:disabled,
-  .group button.off {
-    opacity: 0.4;
-  }
-  .group button.off.asking {
-    opacity: 0.55;
-    background: var(--hover-wash);
-  }
-  .sync {
-    position: relative;
-    display: flex;
   }
   /* Controls that belong together share one glass capsule, split by a hairline. The parts drop
      their own glass; a hover washes just the part under the pointer. */
@@ -3331,52 +2974,6 @@
     width: 1px;
     height: 18px;
     background: var(--sep);
-  }
-  .fetch {
-    position: relative;
-  }
-  .ring {
-    transform: rotate(-90deg);
-  }
-  .ring circle {
-    fill: none;
-    stroke-width: 1.8;
-  }
-  .ring-track {
-    stroke: var(--sep);
-  }
-  .ring-fill {
-    stroke: var(--accent);
-    stroke-linecap: round;
-    transition: stroke-dasharray 0.2s;
-  }
-  .ring.spin {
-    animation: ring-spin 1.2s linear infinite;
-  }
-  @keyframes ring-spin {
-    from {
-      transform: rotate(-90deg);
-    }
-    to {
-      transform: rotate(270deg);
-    }
-  }
-  .dot {
-    position: absolute;
-    top: 7px;
-    right: 7px;
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--orange);
-  }
-  .sub.amber {
-    color: var(--orange);
-  }
-  .count {
-    font-size: var(--text-caption);
-    font-weight: 600;
-    color: var(--text);
   }
   .segmented {
     display: flex;

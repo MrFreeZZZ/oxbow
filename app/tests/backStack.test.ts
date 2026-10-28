@@ -1,4 +1,4 @@
-import { LIMIT, amend, canBack, canForward, crumbs, emptyTrail, go, placeKey, visit, type Place, type Trail } from "../src/lib/backStack.ts";
+import { LIMIT, amend, canBack, canForward, crumbs, detailOfPlace, emptyTrail, go, nameOfPlace, placeKey, visit, type Place, type Trail } from "../src/lib/backStack.ts";
 import { Keymap } from "../src/lib/shortcuts.ts";
 import assert from "node:assert/strict";
 
@@ -102,4 +102,20 @@ const walk = (...places: Place[]): Trail => places.reduce((t, p) => visit(t, p),
   assert.equal(id(other.match(press({ key: "ArrowRight", code: "ArrowRight", altKey: true }))), "forward");
   assert.equal(id(other.match(press({ key: "-", code: "Minus", ctrlKey: true, altKey: true }))), "back");
   assert.equal(id(other.match(press({ key: "_", code: "Minus", ctrlKey: true, shiftKey: true }))), "forward");
+}
+
+// Places are named for the header and the list of places: a pull request by its number once
+// it has one, a commit by its summary.
+{
+  const pulls = (branch: string, number: number | null) => (number === 7 || branch === "feature/login" ? { number: 7 } : null);
+  assert.equal(nameOfPlace(pull, pulls), "PR #7");
+  assert.equal(nameOfPlace({ view: "pull", branch: "other" }, pulls), "Pull Request other");
+  assert.equal(nameOfPlace(file("src/app/main.rs"), pulls), "main.rs");
+  assert.equal(nameOfPlace(file("src/app/main.rs", null, 12), pulls), "Line 12");
+  const rows = new Map([["a", { summary: "Fix login", worktree: null }], ["w", { summary: "", worktree: {} }]]);
+  assert.equal(detailOfPlace(history("a"), (id) => rows.get(id), "main"), "Fix login");
+  assert.equal(detailOfPlace(history("w"), (id) => rows.get(id), "main"), "Uncommitted changes");
+  assert.equal(detailOfPlace(history("gone"), (id) => rows.get(id), "main"), undefined);
+  assert.equal(detailOfPlace({ view: "stack", branch: null }, (id) => rows.get(id), "main"), "main");
+  assert.equal(detailOfPlace(file("a.rs"), (id) => rows.get(id), "main"), "a.rs · Blame");
 }

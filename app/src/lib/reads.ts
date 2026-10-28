@@ -4,7 +4,7 @@
 // one: "0 changed", "no changes" or "not published" are things git said, not what is shown when
 // it said nothing. A part that failed after a good reading keeps that reading, marked stale.
 
-import type { FileChange, History, ReadPart, RefInfo } from "./types";
+import type { FileChange, History, HistoryRow, ReadPart, RefInfo } from "./types";
 
 /** loading: being read again (Retry); ready: from the last read; stale: the last read failed,
  *  so this is an earlier one; failed: never read well, so not known at all. */
@@ -167,4 +167,22 @@ function changesKey(h: History): string {
   if (!c) return "";
   const side = (name: string, files: FileChange[]) => files.map((f) => `${name} ${f.status} ${f.path} ${f.additions} ${f.deletions}`);
   return [...side("s", c.staged), ...side("u", c.unstaged), ...side("c", c.conflicted)].join("\n");
+}
+
+/** `next` with the commit rows it left out because `shown`, the history it was asked with, has
+ *  them. The same key, the same rows: only the row of uncommitted changes comes anew.
+ *  Otherwise `pieces` say which of `shown`'s rows stand where, between the new ones. */
+export function withRows(next: History, shown: History | null): History {
+  if (!shown) return next;
+  if (next.same) {
+    const commits = shown.rows[0]?.worktree ? shown.rows.slice(1) : shown.rows;
+    return { ...next, rows: [...next.rows, ...commits], runs: shown.runs, leadIns: shown.leadIns };
+  }
+  if (!next.pieces.length) return next;
+  const rows: HistoryRow[] = [];
+  let fresh = 0;
+  for (const piece of next.pieces) {
+    for (let k = 0; k < piece.len; k++) rows.push(piece.known === null ? next.rows[fresh++] : shown.rows[piece.known + k]);
+  }
+  return { ...next, rows, pieces: [] };
 }

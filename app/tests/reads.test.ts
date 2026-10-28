@@ -1,4 +1,4 @@
-import { errorLine, loadingStates, reloadNews, retried, settle, stillFailing, troubled } from "../src/lib/reads.ts";
+import { errorLine, loadingStates, reloadNews, retried, settle, stillFailing, troubled, withRows } from "../src/lib/reads.ts";
 import type { History, ReadProblem, RefInfo, Tracking, Worktree } from "../src/lib/types.ts";
 import assert from "node:assert/strict";
 
@@ -121,4 +121,20 @@ const failed = (part: ReadProblem["part"]): ReadProblem => ({ part, error: "`git
     stashes: [{ index: 0, id: "s1" }],
   } as Partial<History>);
   assert.deepEqual(reloadNews(at(2), stashed), { text: "1 stash", partial: false });
+}
+
+// A reload that found the commits as they were sends only the row of uncommitted changes; one
+// that found some of them moved says where the known rows stand between the new ones.
+{
+  const row = (id: string, worktree = false) => ({ id, worktree: worktree ? { files: 1 } : null }) as unknown as History["rows"][number];
+  const shown = history([], { rows: [row("worktree", true), row("b"), row("a")], runs: [], leadIns: [] });
+  const ids = (h: History) => h.rows.map((r) => r.id);
+  const same = withRows(history([], { rows: [row("worktree", true)], same: true, pieces: [] }), shown);
+  assert.deepEqual(ids(same), ["worktree", "b", "a"]);
+  const moved = withRows(history([], { rows: [row("c")], same: false, pieces: [{ known: null, len: 1 }, { known: 1, len: 2 }] }), shown);
+  assert.deepEqual(ids(moved), ["c", "b", "a"]);
+  assert.deepEqual(moved.pieces, []);
+  const fresh = history([], { rows: [row("x")], same: false, pieces: [] });
+  assert.equal(withRows(fresh, shown), fresh);
+  assert.equal(withRows(fresh, null), fresh);
 }
