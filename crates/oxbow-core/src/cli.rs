@@ -433,6 +433,7 @@ fn command_in(dir: &Path, command: &GitCommand) -> Command {
         crate::config::lend_github_token(&mut git, dir, rest);
     }
     git.args(command.run_args()).current_dir(dir);
+    crate::trust::apply(&mut git, dir);
     git.envs(command.env.iter().map(|(k, v)| (k, v)));
     own_group(&mut git);
     git

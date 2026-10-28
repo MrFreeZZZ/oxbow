@@ -57,6 +57,9 @@ export const defaults = {
   "oxbow.git.englishOutput": true,
   "oxbow.git.path": "",
   "oxbow.git.runHooks": true,
+  /** Ask before opening a repository whose own settings run programs (hooks, fsmonitor,
+   *  filters…), unless Oxbow cloned or created it or it was trusted before. */
+  "oxbow.git.askTrust": true,
   "oxbow.fetch.auto": true,
   /** Pull runs `git fetch <remote>` first, so the remote's other branches are current too. */
   "oxbow.pull.fetchFirst": true,

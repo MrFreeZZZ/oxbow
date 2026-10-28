@@ -497,6 +497,30 @@ export interface SubmoduleMove {
 export interface RepoSummary {
   name: string;
   path: string;
+  /** Open Restricted: the repository's settings that git runs with off. */
+  restricted: TrustFinding[];
+  /** Nothing was opened: the repository's settings run programs, and the user hasn't said
+   *  whether to trust it. */
+  untrusted: TrustFinding[] | null;
+}
+
+/** What a setting of a repository makes git run, and so what Restricted turns off. */
+export type TrustKind = "fsmonitor" | "hook" | "ssh" | "credential" | "filter" | "textconv" | "mergeDriver" | "mergeTool" | "signing" | "remote" | "command";
+
+export interface TrustFinding {
+  kind: TrustKind;
+  /** As git names it (`core.sshCommand`), or `hooks/post-checkout` for a hook. */
+  key: string;
+  /** The command or path it gives. */
+  value: string;
+  /** The file it is in. */
+  origin: string;
+}
+
+export interface TrustedRepo {
+  path: string;
+  /** Its settings that run programs, when last opened. */
+  settings: string[];
 }
 
 export interface WorkingTree {

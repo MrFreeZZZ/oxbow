@@ -23,7 +23,8 @@
   import ShortcutKeys from "./ShortcutKeys.svelte";
   import { anyChanged, fits, nameOf, resetAllRequest, shortcutEdit } from "./shortcutEdit.svelte";
   import { bindingsOf, changedKeys, commandIds, commandOf, defaultsOf, startsWith, strokeOf, type ShortcutId } from "./shortcuts";
-  import type { ConfigScope, FileDiff, GitHubAccount, GitSettings, OpenApp, RemoteInfo, RepoSettings } from "./types";
+  import type { ConfigScope, FileDiff, GitHubAccount, GitSettings, OpenApp, RemoteInfo, RepoSettings, TrustedRepo } from "./types";
+  import { settingsTag } from "./trust";
 
   const GEAR =
     "M12.78 6.52L14.44 6.56L14.44 9.44L12.78 9.48L12.42 10.33L13.57 11.54L11.54 13.57L10.33 12.42L9.48 12.78L9.44 14.44L6.56 14.44L6.52 12.78L5.67 12.42L4.46 13.57L2.43 11.54L3.58 10.33L3.22 9.48L1.56 9.44L1.56 6.56L3.22 6.52L3.58 5.67L2.43 4.46L4.46 2.43L5.67 3.58L6.52 3.22L6.56 1.56L9.44 1.56L9.48 3.22L10.33 3.58L11.54 2.43L13.57 4.46L12.42 5.67zM8 5.8a2.2 2.2 0 1 0 0 4.4a2.2 2.2 0 1 0 0-4.4";
@@ -100,15 +101,30 @@
   let repo = $state<RepoSettings | null>(null);
   let problem = $state<string | null>(null);
 
+  /** Repositories trusted to run their own settings' programs, with such settings. */
+  let trusted = $state<TrustedRepo[]>([]);
+
   async function load() {
-    const [g, r, a] = await Promise.all([api.gitSettings().catch(() => null), api.repoSettings().catch(() => null), api.githubAccount().catch(() => null)]);
+    const [g, r, a, t] = await Promise.all([
+      api.gitSettings().catch(() => null),
+      api.repoSettings().catch(() => null),
+      api.githubAccount().catch(() => null),
+      api.trustedRepos().catch(() => []),
+    ]);
     git = g;
     repo = r;
     account = a;
+    trusted = t;
   }
   load();
   listen("repo-changed", () => load()).catch(() => {});
   listen("account-changed", () => load()).catch(() => {});
+  listen("trust-changed", () => load()).catch(() => {});
+
+  async function untrust(path: string) {
+    await api.untrustRepo(path);
+    trusted = trusted.filter((t) => t.path !== path);
+  }
 
   // GitHub: who is signed in, and the sign-in sheet.
   let account = $state<GitHubAccount | null>(null);
@@ -667,6 +683,23 @@
               off: () => !prefs.get("oxbow.commit.checkSecrets"),
               control: { type: "button", label: "Add…", run: () => confirm.run(patternRequest("", "name")) },
             },
+          ],
+        },
+        {
+          title: "Repository Trust",
+          foot: "Repositories Oxbow cloned or created never ask. Only trusted ones with such settings are listed; removing one makes Oxbow ask again the next time it opens.",
+          rows: [
+            prefRow("oxbow.git.askTrust", "Ask before opening a repository whose settings run programs", "switch", {
+              sub: "Hooks, fsmonitor, filters, ssh and credential commands of the repository itself",
+            }),
+            ...trusted.map((t): Row => ({
+              id: `trusted:${t.path}`,
+              label: t.path.split(/[/\\]/).filter(Boolean).pop() ?? t.path,
+              sub: t.path,
+              badge: () => settingsTag(t.settings),
+              control: { type: "button", label: "Remove", run: () => untrust(t.path) },
+            })),
+            ...(trusted.length ? [] : [{ id: "trusted:none", label: "No trusted repositories with such settings yet" } as Row]),
           ],
         },
       ],

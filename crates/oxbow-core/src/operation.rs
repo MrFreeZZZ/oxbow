@@ -674,6 +674,11 @@ impl Repo {
     /// The command that opens `path` in the merge tool. Git writes the file with conflict
     /// markers, waits for the tool to quit, and stages the file if the merge worked.
     pub fn merge_tool_command(&self, path: &str) -> Result<GitCommand> {
+        if crate::trust::merge_tool_off(self.workdir()) {
+            return Err(Error::Git(
+                "the merge tool comes from this repository's own settings, which are off while it is restricted".into(),
+            ));
+        }
         let tool = self
             .merge_tool()
             .ok_or_else(|| Error::Git("no merge tool is set: git config --global merge.tool <name>".into()))?;
