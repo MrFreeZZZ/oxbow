@@ -70,6 +70,7 @@ pub(crate) fn paragraphs(message: &str) -> Vec<String> {
 impl Repo {
     /// The commands `action` will run.
     pub fn plan(&self, action: &Action) -> Result<Plan> {
+        self.check_protected(action)?;
         let paths = |args: &[&str], paths: &[String]| {
             GitCommand::new(
                 args.iter()

@@ -8,6 +8,7 @@ import type {
   Worktree,
   FolderState,
   Blame,
+  BlameOptions,
   Source,
   SourceLines,
   FileHistory,
@@ -152,7 +153,7 @@ export const api = {
   /** The full id of the commit a SHA prefix names, anywhere in the repository. */
   resolveCommit: (prefix: string) => invoke<string | null>("resolve_commit", { prefix }),
   fileHistory: (path: string, rev: string | null, lane: string | null = null) => invoke<FileHistory>("file_history", { path, rev, lane }),
-  blame: (path: string, rev: string, lane: string | null = null) => invoke<Blame>("blame", { path, rev, lane }),
+  blame: (path: string, rev: string, options: BlameOptions, lane: string | null = null) => invoke<Blame>("blame", { path, rev, options, lane }),
   lineHistory: (path: string, line: number, rev: string, lane: string | null = null) => invoke<string[]>("line_history", { path, line, rev, lane }),
   files: () => invoke<string[]>("files"),
   filePickaxe: (path: string, text: string, matchCase: boolean, rev: string, lane: string | null = null) =>

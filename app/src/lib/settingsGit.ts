@@ -13,6 +13,7 @@ import type { Row, Section, Value } from "./settingsRows";
 import { tokenExpiry } from "./gitlab";
 import { settingsTag } from "./trust";
 import { checkCommands, checkProblem, checkSub, movedCheck, withCheck } from "./commitChecks";
+import { matching, PROTECTED_KEY, protectedProblem, protectedValue } from "./protect";
 import type { CommitCheck, GitLabAccount, RemoteInfo } from "./types";
 
 // GitHub: who is signed in, and the sign-in sheet.
@@ -175,6 +176,82 @@ function checkRequest(index: number | null, command: string): Request {
       },
     },
   };
+}
+
+/** Keep `list` as the protected branches; `null` goes back to the default list. */
+async function saveProtected(list: string[] | null) {
+  await writeGit("local", [[PROTECTED_KEY, list === null ? null : protectedValue(list)]]);
+}
+
+/** "Matches main and origin/main", from the branches Settings knows. */
+function matchNote(pattern: string): string {
+  const found = matching(pattern, model.repo?.production.branches ?? []);
+  if (!found.length) return pattern.includes("*") ? "No branch here matches it yet" : "No branch of this name here yet";
+  const shown = found.slice(0, 3).join(", ");
+  return found.length > 3 ? `Matches ${shown} and ${found.length - 3} more` : `Matches ${shown}`;
+}
+
+/** The sheet that protects one more branch or pattern. */
+function protectRequest(name: string): Request {
+  const list = model.repo?.protected.branches ?? [];
+  const invalid = protectedProblem(list, name);
+  const next = [...list, name.trim()];
+  return {
+    title: "Protect a branch",
+    body: [
+      "Oxbow won’t force push it in ",
+      { code: model.repo?.name ?? "this repository" },
+      " or rewrite its commits that are already pushed; Revert undoes them instead.",
+    ],
+    icon: "branch",
+    button: "Protect",
+    always: true,
+    invalid,
+    fields: [
+      {
+        label: "Branch",
+        text: { value: name, placeholder: "release/*", focus: true, edit: (value) => protectRequest(value) },
+        note: name.trim() && !invalid ? matchNote(name.trim()) : "A branch name, or a pattern where * stands for any characters, e.g. release/* or *-stable.",
+        error: name.trim() && invalid ? invalid : undefined,
+      },
+    ],
+    status: "Saving…",
+    local: {
+      commands: [`git config --local ${PROTECTED_KEY} "${protectedValue(next)}"`],
+      run: async () => {
+        await saveProtected(next);
+        if (model.problem) throw new Error(model.problem);
+        return `${name.trim()} is protected.`;
+      },
+    },
+  };
+}
+
+/** The protected branches, the row that adds one, and the way back to the default list. */
+function protectedRows(protect: { branches: string[]; default: boolean }): Row[] {
+  const rows: Row[] = protect.branches.map((name, i) => ({
+    id: `protected:${name}`,
+    label: name,
+    mono: true,
+    sub: () => matchNote(name),
+    badge: () => (protect.default ? "default" : null),
+    control: { type: "button", label: "Remove", run: () => saveProtected(protect.branches.filter((_, j) => j !== i)) },
+  }));
+  rows.push({
+    id: "protected:add",
+    label: protect.branches.length ? "Protect another branch" : "No protected branches",
+    sub: protect.branches.length ? undefined : "Every branch can be force pushed and rewritten",
+    control: { type: "button", label: "Add…", run: () => confirm.run(protectRequest("")) },
+  });
+  if (!protect.default) {
+    rows.push({
+      id: "protected:default",
+      label: "Default list",
+      sub: "main, master and the production branch",
+      control: { type: "button", label: "Use", run: () => saveProtected(null) },
+    });
+  }
+  return rows;
 }
 
 /** The rows of the checks before commit, and the one that adds a check. */
@@ -605,6 +682,11 @@ export const repoSection: Section = {
           { ...gitEdit("local", "user.name", "Name", { shown: () => config("local", "user.name") ?? "", placeholder: "Your Name" }), off: () => !ownIdentity() },
           { ...gitEdit("local", "user.email", "Email", { shown: () => config("local", "user.email") ?? "", placeholder: "you@work.example" }), off: () => !ownIdentity() },
         ],
+      },
+      {
+        title: "Protected Branches",
+        foot: `Oxbow doesn’t force push them or rewrite their commits that are already pushed: no Amend, Edit Message, Drop, Squash, Split, Edit Stack, Reset or rebase of those. Revert undoes such a commit. Commits not pushed yet stay editable. Kept as ${PROTECTED_KEY} in .git/config.`,
+        rows: protectedRows(r.protected ?? { branches: [], default: true }),
       },
       {
         title: "Checks Before Commit",

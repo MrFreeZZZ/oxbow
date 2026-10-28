@@ -30,6 +30,7 @@
     branch,
     color,
     head,
+    locked = null,
     version,
     changes,
     snapshot,
@@ -42,6 +43,8 @@
     color: number;
     /** The checked-out commit, for Amend. */
     head: HistoryRow | null;
+    /** The protected branch whose last commit is already pushed: Amend stays off. */
+    locked?: string | null;
     /** Goes up whenever the history is reloaded; the panel reloads with it. */
     version: number;
     /** The files the reload read, and which reading that was: the panel shows those, so git
@@ -1020,7 +1023,7 @@
         {/if}
       </div>
 
-      <CommitForm {draft} {branch} {color} {head} {staged} {unstaged} {conflicted} {amendedCount} {stage} {onChanged} {onResolve} />
+      <CommitForm {draft} {branch} {color} {head} {locked} {staged} {unstaged} {conflicted} {amendedCount} {stage} {onChanged} {onResolve} />
     </div>
 
     {#if stacked}

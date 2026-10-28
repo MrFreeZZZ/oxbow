@@ -8,6 +8,7 @@ import type { Action, Bisect, CommitBrief, Failure, HistoryRow, Operation, SshCh
 import { unpushedWarning } from "./submodules";
 import { shortId } from "./format";
 import { errorLine } from "./reads";
+import { isProtected } from "./protect";
 
 export interface RemoteContext {
   /** Checked-out branch; null when HEAD is detached. */
@@ -25,6 +26,8 @@ export interface RemoteContext {
   bisect?: Bisect | null;
   /** git's error when the upstreams couldn't be read: `tracking` null then says nothing. */
   unread?: string | null;
+  /** The protected branches' names and patterns: never force pushed. */
+  protected?: string[];
 }
 
 /** The way out offered next to a reason, done by the caller. */
@@ -288,6 +291,7 @@ function plainPushRequest(ctx: RemoteContext): Request {
   const commits = ctx.unpushed;
   const rewritten = ctx.tracking?.rewritten;
   const replay = ctx.tracking?.replay;
+  if (rewritten && isProtected(ctx.protected, to.upstream)) return protectedPushRequest(ctx, action);
   if (rewritten && replay) return replayPushRequest(ctx, action, rewritten, replay);
   if (rewritten) return rewrittenPushRequest(ctx, action, to, rewritten);
   const body: Part[] = [`Uploads ${plural(commits.length, "commit")} of `, chip(ctx, branch), ` to ${to.remote}${commits.length ? ": " : ""}`];
@@ -308,6 +312,42 @@ function plainPushRequest(ctx: RemoteContext): Request {
     done: commits.length ? `Pushed ${plural(commits.length, "commit")} to ${to.remote}/${to.upstream}.` : `${to.remote}/${to.upstream} is up to date.`,
     recover,
     action,
+  };
+}
+
+/** Pull and Push for a push of rewritten commits to a protected branch, which isn't force pushed. */
+function protectedPullAndPush(ctx: RemoteContext, action: Action & { kind: "push" }) {
+  const remoteBranch = `${action.remote}/${action.upstream}`;
+  return {
+    action: { kind: "pullAndPush", remote: action.remote, branch: action.branch, upstream: action.upstream, noVerify: action.noVerify } as Action,
+    body: [
+      "You rewrote commits that are already on ",
+      chip(ctx, remoteBranch),
+      ". ",
+      chip(ctx, action.branch),
+      " is protected, so Oxbow doesn’t force push it: the commits there stay. Pull and Push puts yours on top of them; a commit whose message you only edited keeps the old message.",
+    ] as Part[],
+    status: `Pulling ${remoteBranch}, then pushing ${action.branch}…`,
+    done: `Pulled and pushed ${action.branch}.`,
+    note: "To undo a pushed commit, revert it from its menu. Settings › This Repository lists the protected branches.",
+  };
+}
+
+/** Push after commits on a protected branch's remote were rewritten here, in a terminal or before
+ *  the branch was protected: no force push, Pull and Push instead. */
+function protectedPushRequest(ctx: RemoteContext, push: Action & { kind: "push" }): Request {
+  const way = protectedPullAndPush(ctx, push);
+  return {
+    title: `Pull ${push.remote}/${push.upstream} first, then push?`,
+    body: way.body,
+    icon: "push",
+    tone: "warn",
+    button: "Pull and Push",
+    note: way.note,
+    status: way.status,
+    done: way.done,
+    recover: (failure) => pushRecovery(failure, ctx, push),
+    action: way.action,
   };
 }
 
@@ -430,6 +470,18 @@ export function pushRecovery(failure: Failure, ctx: RemoteContext, action: Actio
   const pullAndPush: Action = { kind: "pullAndPush", remote: action.remote, branch: action.branch, upstream: action.upstream, noVerify: action.noVerify };
   const n = Math.max(ctx.unpushed.length, ctx.tracking?.ahead ?? 0);
   const rewrite = failure.tracking;
+  const guarded = isProtected(ctx.protected, action.upstream);
+  if ((failure.kind === "rejected" || failure.kind === "staleLease") && rewrite?.rewritten && guarded) {
+    const way = protectedPullAndPush(ctx, action);
+    return {
+      title: `${remoteBranch} has the old versions of your commits`,
+      body: way.body,
+      icon: "warn",
+      tone: "warn",
+      button: { label: "Pull and Push", action: way.action, status: way.status, done: way.done },
+      note: way.note,
+    };
+  }
   if ((failure.kind === "rejected" || failure.kind === "staleLease") && rewrite?.rewritten) {
     return rewrittenRecovery(failure, ctx, action, rewrite.rewritten, rewrite.replay);
   }
@@ -447,7 +499,7 @@ export function pushRecovery(failure: Failure, ctx: RemoteContext, action: Actio
       icon: "warn",
       tone: "warn",
       button: { label: "Pull and Push", action: pullAndPush, status: `Pulling ${remoteBranch}, then pushing ${action.branch}…`, done: `Pulled and pushed ${action.branch}.` },
-      alt: failure.remoteTip ? { label: "Force Push…", danger: true, request: () => forcePushRequest(ctx, action, failure, true) } : undefined,
+      alt: failure.remoteTip && !guarded ? { label: "Force Push…", danger: true, request: () => forcePushRequest(ctx, action, failure, true) } : undefined,
       note: "If the commits clash, the pull stops and you can undo it.",
     };
   }

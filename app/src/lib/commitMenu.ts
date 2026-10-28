@@ -16,6 +16,7 @@ import { bisectMarkRequest, bisectResetRequest, bisectStartRequest } from "./bis
 import { keys } from "./keys";
 import { github } from "./github.svelte";
 import { branchMergeRequest, gitlabOf } from "./mergeRequest";
+import { dropsPushed, lockedCommit, lockedNote, protectedHead } from "./protect";
 
 /** What the menu needs from the window: the repository as shown, and what its items do. */
 export interface CommitMenuApp {
@@ -73,17 +74,20 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
     const mergeable = row.labels
       .filter((l) => (l.kind === "local" || (l.kind === "remote" && !locals.has(l.name.slice(l.name.indexOf("/") + 1)))) && l.name !== here)
       .slice(0, 2);
+    // A protected branch isn't rebased, reset or edited where that would rewrite pushed commits.
+    const inHead = ancestors(history, history.head.commit).has(row.id);
+    const locked = inHead && lockedCommit(history, row);
+    const dropping = dropsPushed(history, row.id);
     const merging: MenuEntry[] = [];
     for (const label of mergeable) {
       merging.push(item(`Merge ${label.name} into ${here}…`, menuIcons.merge, () => run(mergeRequest(ctx, label.name))));
-      if (history.head.branch) merging.push(item(`Rebase ${here} onto ${label.name}…`, menuIcons.rebase, () => run(mergeRequest(ctx, label.name, "rebase"))));
+      if (history.head.branch && !dropping) merging.push(item(`Rebase ${here} onto ${label.name}…`, menuIcons.rebase, () => run(mergeRequest(ctx, label.name, "rebase"))));
     }
     group(merging);
 
-    const inHead = ancestors(history, history.head.commit).has(row.id);
     const editing: MenuEntry[] = [];
-    if (isHead && row.parents.length === 1) editing.push(item("Undo Commit", menuIcons.undo, () => run(undoCommitRequest(ctx, row))));
-    if (isHead) editing.push(item("Edit Message…", menuIcons.edit, () => run(editMessageRequest(ctx, row))));
+    if (isHead && row.parents.length === 1 && !locked) editing.push(item("Undo Commit", menuIcons.undo, () => run(undoCommitRequest(ctx, row))));
+    if (isHead && !locked) editing.push(item("Edit Message…", menuIcons.edit, () => run(editMessageRequest(ctx, row))));
     // The checked-out branch's own commits, above the trunk, can be rewritten in place.
     const own = headStack.has(row.id);
     if (own && !isHead) {
@@ -98,7 +102,7 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
     if (!inHead && history.head.commit) editing.push(item(`Cherry-Pick onto ${here}`, menuIcons.cherry, () => run(cherryPickRequest(ctx, row))));
     if (inHead) editing.push(item("Revert Commit…", menuIcons.revert, () => run(revertRequest(ctx, row))));
     if (inHead && history.head.branch) editing.push(item("Fix a Mistake…", menuIcons.fix, () => app.openFixes(row.id)));
-    if (!isHead && history.head.commit) {
+    if (!isHead && history.head.commit && !dropping) {
       editing.push({
         kind: "sub",
         label: `Reset ${here} to Here`,
@@ -106,6 +110,8 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
         entries: resetModes.map((m) => ({ label: m.label, hint: m.keeps, danger: m.mode === "hard", run: () => run(resetRequest(ctx, row, m.mode)) })),
       });
     }
+    const branch = protectedHead(history);
+    if (branch && (locked || dropping)) editing.push({ kind: "note", label: lockedNote(branch) });
     group(editing);
 
     // Bisect: from a branch tip (or HEAD) back to a tag, or from an older commit up to HEAD.

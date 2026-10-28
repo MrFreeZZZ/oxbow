@@ -130,6 +130,8 @@ export interface RemoteFetch {
 export interface History {
   head: HeadInfo;
   trunk: string | null;
+  /** The protected branches' names and patterns (`*` for any characters): see protect.ts. */
+  protected: string[];
   trunkTipRow: number | null;
   /** Gray dashed lines from the top of the graph down to a row, in an otherwise empty column. */
   leadIns: { column: number; row: number }[];
@@ -364,6 +366,15 @@ export interface Blame {
   command: string;
   /** The file is too long to blame whole: `lines` are its first ones. */
   cut: boolean;
+  /** The repository's list of commits blame skips (.git-blame-ignore-revs): found, and whether
+   *  this blame used it; `problem` is why git couldn't read it. */
+  ignoreRevs: { file: string; commits: number; used: boolean; problem: string | null } | null;
+}
+
+/** Blame's switches. */
+export interface BlameOptions {
+  ignoreWhitespace: boolean;
+  ignoreRevs: boolean;
 }
 
 export type CompareMode = "split" | "tips";
@@ -1216,6 +1227,8 @@ export interface RepoSettings {
   checks: CommitCheck[];
   /** Restricted: the repository's own programs don't run, these checks neither. */
   restricted: boolean;
+  /** Protected branches: names and patterns, and whether they are the default list (not set). */
+  protected: { branches: string[]; default: boolean };
 }
 
 /** A command of the user's own that runs before each commit, kept as `oxbow.check` in .git/config. */

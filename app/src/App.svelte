@@ -28,6 +28,7 @@
   import { newWorktreeRequest } from "./lib/worktrees";
   import StashesView from "./lib/StashesView.svelte";
   import { ancestors } from "./lib/commits";
+  import { lockedCommit } from "./lib/protect";
   import type { Gone, Operation } from "./lib/types";
   import Menu, { menuIcons, type MenuEntry } from "./lib/Menu.svelte";
   import { fetchRequest, pullRequest, pushRequest, syncBlock, unshallowRequest, type RemoteContext, type SyncFix } from "./lib/remote";
@@ -1393,7 +1394,8 @@
   }
 
   /** Commits of the checked-out branch that are not on the trunk, in a straight line: the part of
-   *  its stack the commit menu can rewrite. Empty with a merge among them. */
+   *  its stack the commit menu can rewrite. Empty with a merge among them. A protected branch's
+   *  pushed commits are left out: they stay as they are. */
   const headStack = $derived.by(() => {
     const out = new Set<string>();
     if (!history?.head.branch || !history.head.commit || history.head.branch === history.trunk) return out;
@@ -1401,6 +1403,8 @@
     const onTrunk = ancestors(history, trunkTip ?? null);
     for (const id of ancestors(history, history.head.commit)) {
       if (onTrunk.has(id)) continue;
+      const row = rowsById.get(id);
+      if (row && lockedCommit(history, row)) continue;
       if ((rowsById.get(id)?.parents.length ?? 0) > 1) return new Set<string>();
       out.add(id);
     }
@@ -1508,6 +1512,7 @@
       unpushed: history.rows.filter((r) => r.unpushed && !r.worktree && r.graph.branch === history!.head.branch),
       operation: history.operation,
       bisect: history.bisect,
+      protected: history.protected,
       unread: reads?.tracking.phase === "failed" || (reads?.tracking.phase === "loading" && reads.tracking.at === null) ? reads.tracking.error : null,
     },
   );
@@ -2688,6 +2693,7 @@
                 branch={history.head.branch}
                 color={selectedRow.graph.color}
                 head={headRow}
+                locked={headRow && lockedCommit(history, headRow) ? history.head.branch : null}
                 {version}
                 changes={history.changes}
                 snapshot={history.snapshot}

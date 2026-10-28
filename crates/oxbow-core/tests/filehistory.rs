@@ -1,6 +1,8 @@
 mod support;
 
-use oxbow_core::{FileStatus, Repo};
+use std::sync::atomic::AtomicBool;
+
+use oxbow_core::{BlameOptions, FileStatus, Repo};
 use support::Fixture;
 
 #[test]
@@ -77,7 +79,6 @@ fn history_follows_renames_and_blame_names_each_line() {
 
 #[test]
 fn a_huge_blame_stops_at_its_last_whole_line_and_reads_stop() {
-    use std::sync::atomic::AtomicBool;
     let mut fx = Fixture::new();
     // About 12 MiB of porcelain: more than blame reads.
     let text: String = (0..150_000)
@@ -94,7 +95,7 @@ fn a_huge_blame_stops_at_its_last_whole_line_and_reads_stop() {
 
     let stop = AtomicBool::new(true);
     assert!(matches!(
-        repo.blame_with("big.txt", "HEAD", &stop),
+        repo.blame_with("big.txt", "HEAD", &Default::default(), &stop),
         Err(oxbow_core::Error::Cancelled)
     ));
     assert!(matches!(
@@ -135,4 +136,83 @@ fn names_git_quotes_come_back_as_they_are() {
         .map(|l| blame.commits[l.commit].path.as_str())
         .collect();
     assert_eq!(paths, [tab, "new\tname.txt"]);
+}
+
+/// Who blame names for each line of `f.txt` at HEAD, as commit ids.
+fn owners(blame: &oxbow_core::Blame) -> Vec<String> {
+    blame.lines.iter().map(|l| blame.commits[l.commit].id.clone()).collect()
+}
+
+#[test]
+fn blame_can_look_past_whitespace_and_the_commits_of_git_blame_ignore_revs() {
+    let mut fx = Fixture::new();
+    let first = fx.commit("f.txt", "fn a() {\nreturn 1;\n}\n", "Write a");
+    let indent = fx.commit("f.txt", "fn a() {\n    return 1;\n}\n", "Indent");
+    let format = fx.commit("f.txt", "fn a()\n{\n    return 1;\n}\n", "Reformat");
+    let repo = Repo::open(fx.path()).unwrap();
+    let stop = AtomicBool::new(false);
+
+    let plain = repo.blame("f.txt", "HEAD").unwrap();
+    assert_eq!(owners(&plain), [&format, &format, &indent, &first].map(String::clone));
+    assert_eq!(plain.ignore_revs, None);
+    assert!(plain.command.starts_with("git blame "), "{}", plain.command);
+
+    // -w: the indented line keeps the commit that wrote it.
+    let options = BlameOptions {
+        ignore_whitespace: true,
+        ignore_revs: true,
+    };
+    let blame = repo.blame_with("f.txt", "HEAD", &options, &stop).unwrap();
+    assert_eq!(blame.lines[2].text, "    return 1;");
+    assert_eq!(owners(&blame)[2], first);
+    assert!(blame.command.starts_with("git blame -w "), "{}", blame.command);
+
+    // The reformat listed as a commit to skip: its lines go to the commits before it.
+    fx.write(".git-blame-ignore-revs", &format!("# Reformat\n{format}\n\n"));
+    let blame = repo.blame_with("f.txt", "HEAD", &options, &stop).unwrap();
+    assert!(!owners(&blame).contains(&format), "{:?}", owners(&blame));
+    let found = blame.ignore_revs.clone().unwrap();
+    assert_eq!(
+        (found.file.as_str(), found.commits, found.used),
+        (".git-blame-ignore-revs", 1, true)
+    );
+    assert!(
+        blame.command.contains("--ignore-revs-file .git-blame-ignore-revs"),
+        "{}",
+        blame.command
+    );
+
+    // Off, the list is still found, and not used.
+    let off = BlameOptions {
+        ignore_whitespace: false,
+        ignore_revs: false,
+    };
+    let blame = repo.blame_with("f.txt", "HEAD", &off, &stop).unwrap();
+    assert_eq!(owners(&blame), owners(&plain));
+    assert!(!blame.ignore_revs.unwrap().used);
+}
+
+#[test]
+fn a_list_git_cant_read_or_a_missing_one_in_settings_doesnt_stop_blame() {
+    let mut fx = Fixture::new();
+    let first = fx.commit("f.txt", "one\n", "One");
+    // Set in git's settings and not there, git itself would stop.
+    fx.git(&["config", "blame.ignoreRevsFile", ".missing-revs"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let options = BlameOptions {
+        ignore_whitespace: false,
+        ignore_revs: true,
+    };
+    let stop = AtomicBool::new(false);
+    let blame = repo.blame_with("f.txt", "HEAD", &options, &stop).unwrap();
+    assert_eq!(owners(&blame), std::slice::from_ref(&first));
+    assert_eq!(blame.ignore_revs, None);
+
+    fx.write(".missing-revs", "not a commit\n");
+    let blame = repo.blame_with("f.txt", "HEAD", &options, &stop).unwrap();
+    assert_eq!(owners(&blame), [first]);
+    let found = blame.ignore_revs.unwrap();
+    assert_eq!(found.file, ".missing-revs", "the file git's settings name comes first");
+    assert!(!found.used);
+    assert!(found.problem.unwrap().contains("not a commit"));
 }

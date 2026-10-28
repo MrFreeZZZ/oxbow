@@ -494,6 +494,20 @@ impl Repo {
         }
         commits.reverse();
 
+        // A protected branch's pushed commits stay as they are: Revert undoes one instead.
+        let protected = self.protected_branches();
+        for b in branches
+            .iter()
+            .filter(|b| crate::protect::is_protected(&protected, &b.name))
+        {
+            if self.drops_pushed(&b.tip, Some(&base))? {
+                return Err(Error::Git(format!(
+                    "{} is a protected branch, and its commits are already pushed: Edit Stack doesn’t rewrite them. Revert a commit instead, or take {} out of Protected Branches in Settings › This Repository",
+                    b.name, b.name
+                )));
+            }
+        }
+
         // Branches that share some of the stack's commits but are not in it keep the old ones.
         let mut left_behind = Vec::new();
         if let Some(oldest) = listed.commits.first() {

@@ -78,6 +78,8 @@ pub struct History {
     pub head: HeadInfo,
     /// Name of the branch drawn as the trunk in column 0.
     pub trunk: Option<String>,
+    /// The protected branches' names and patterns: see [`crate::protect`].
+    pub protected: Vec<String>,
     /// Row of the trunk's newest commit. Rows above it are newer commits on other branches.
     pub trunk_tip_row: Option<usize>,
     /// Gray dashed lines that fill empty columns above lines starting below the top.
@@ -704,6 +706,7 @@ impl Repo {
             refs,
             tracking,
             default_remote: self.default_remote(),
+            protected: self.protected_branches(),
             remotes,
             stashes,
             rows,

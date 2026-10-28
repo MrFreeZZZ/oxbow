@@ -62,6 +62,8 @@ impl Repo {
         cancel: &AtomicBool,
         without_undo: bool,
     ) -> Result<String> {
+        // Nothing force pushes a protected branch or rewrites its pushed commits.
+        self.check_protected(action)?;
         // A fix planned for another state never starts: the sheet shows the new plan.
         if let Action::Fix { expect, .. } = action {
             self.check_fix(expect)?;

@@ -7,6 +7,7 @@ import type { Part, PreviewRow, Recovery, Request } from "./confirm.svelte";
 import type { BranchContext } from "./branches";
 import type { CommitBrief, Failure, MergeMethod, MergePreview, Operation } from "./types";
 import { shortId } from "./format";
+import { dropsPushed } from "./protect";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const chip = (ctx: BranchContext, name: string): Part => ({
@@ -200,6 +201,10 @@ function mergeSheet(ctx: BranchContext, p: MergePreview, method: MergeMethod, ty
   const diverged = p.oursCount > 0;
   // Fast-forward is only possible while the checked-out branch has nothing of its own.
   if (method === "fastForward" && diverged) method = "merge";
+  // A protected branch isn't rebased when that would rewrite its pushed commits.
+  const tip = ctx.history.refs.find((r) => (r.kind === "local" || r.kind === "remote") && r.name === branch)?.target ?? null;
+  const locked = diverged && dropsPushed(ctx.history, tip);
+  if (method === "rebase" && locked) method = "merge";
   const message = typed ?? (method === "squash" ? squashMessage(p) : mergeMessage(ctx, branch));
   const again = (next: Partial<{ branch: string; method: MergeMethod; message: string }>) => {
     const name = next.branch ?? branch;
@@ -228,7 +233,12 @@ function mergeSheet(ctx: BranchContext, p: MergePreview, method: MergeMethod, ty
       chips: METHODS.map((m) => ({
         label: m.label,
         on: m.method === method,
-        off: m.method === "fastForward" && diverged ? `${here} has commits of its own, so it can’t just move up to ${branch}.` : undefined,
+        off:
+          m.method === "fastForward" && diverged
+            ? `${here} has commits of its own, so it can’t just move up to ${branch}.`
+            : m.method === "rebase" && locked
+              ? `${here} is protected, and a rebase would rewrite its pushed commits.`
+              : undefined,
         pick: () => again({ method: m.method }),
       })),
       note:

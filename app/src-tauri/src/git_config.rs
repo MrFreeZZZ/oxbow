@@ -48,6 +48,17 @@ pub(crate) struct RepoSettings {
     checks: Vec<oxbow_core::CommitCheck>,
     /// Restricted: the repository's own programs, the checks too, don't run.
     restricted: bool,
+    /// The protected branches' names and patterns, and whether they are the default ones.
+    protected: Protected,
+}
+
+/// Settings › This Repository › Protected Branches.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Protected {
+    branches: Vec<String>,
+    /// Not set: main, master and the production branch.
+    default: bool,
 }
 
 /// Settings › This Repository › Production branch.
@@ -74,6 +85,8 @@ pub(crate) async fn repo_settings(
         return Ok(None);
     };
     read(at(&repo), "Read repository settings", move || {
+        // Afresh: the built-in engine reads .git/config once, and a setting may have just changed.
+        let repo = repo.reopen().unwrap_or(repo);
         Ok(Some(RepoSettings {
             name: repo.name(),
             path: repo.workdir().display().to_string(),
@@ -82,6 +95,10 @@ pub(crate) async fn repo_settings(
             storage: repo.storage().ok(),
             checks: repo.commit_checks()?,
             restricted: oxbow_core::trust::is_restricted(repo.workdir()),
+            protected: Protected {
+                branches: repo.protected_branches(),
+                default: repo.protected_setting().is_none(),
+            },
             production: {
                 let refs = repo.refs()?;
                 let chosen = repo.production_setting();
@@ -117,8 +134,10 @@ pub(crate) async fn set_git_config(
         ConfigScope::Local => Some(current(&session, &window)?),
         ConfigScope::Global => None,
     };
-    // The production branch changes how the main window draws the graph.
-    let redraw = key.eq_ignore_ascii_case(oxbow_core::history::PRODUCTION_KEY);
+    // The production branch changes how the main window draws the graph, and both it and the
+    // protected branches what its menus offer.
+    let redraw = key.eq_ignore_ascii_case(oxbow_core::history::PRODUCTION_KEY)
+        || key.eq_ignore_ascii_case(oxbow_core::protect::PROTECTED_KEY);
     let dir = repo.as_ref().map(at);
     let title = match value {
         Some(_) => format!("Set {key}"),

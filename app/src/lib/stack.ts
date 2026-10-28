@@ -9,6 +9,7 @@ import type { Part, Recovery, Request } from "./confirm.svelte";
 import type { BranchContext } from "./branches";
 import { stoppedOnConflicts } from "./merge";
 import { shortId } from "./format";
+import { isProtected } from "./protect";
 import { commitsWithSplits, plannedSplits, withSplit, type DraftSplit } from "./split";
 import type { ShortcutId } from "./shortcuts";
 import type { Action, Failure, HistoryRow, Stack, StackPlan, StackPreview, StackStep, StepAction } from "./types";
@@ -196,9 +197,9 @@ export function editStackRequest(ctx: BranchContext, stack: Stack, draft: Draft,
   };
 }
 
-/** Push the branches the rebase rewrote, each to its upstream. */
+/** Push the branches the rebase rewrote, each to its upstream. Protected ones aren't force pushed. */
 export function pushBranchesRequest(ctx: BranchContext, stack: Stack, names: string[]): Request | null {
-  const branches = stack.branches.filter((b) => names.includes(b.name) && b.upstream);
+  const branches = stack.branches.filter((b) => names.includes(b.name) && b.upstream && !isProtected(ctx.history.protected, b.upstream.branch));
   if (!branches.length) return null;
   const remote = branches[0].upstream!.remote;
   const same = branches.filter((b) => b.upstream!.remote === remote);

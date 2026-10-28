@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::cli::{GitCommand, literal};
 use crate::commit::FileStatus;
@@ -82,6 +82,36 @@ pub struct Blame {
     pub command: String,
     /// The file is too long to blame whole: `lines` are its first ones.
     pub cut: bool,
+    /// The list of commits blame skips, when the repository has one: found, used or not.
+    pub ignore_revs: Option<IgnoreRevs>,
+}
+
+/// How to blame: Blame's two switches.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlameOptions {
+    /// `-w`: a line whose only change was whitespace keeps the commit before.
+    pub ignore_whitespace: bool,
+    /// Skip the commits of [`IGNORE_REVS_FILE`] (or `blame.ignoreRevsFile`): reformatting and
+    /// the like, so a line keeps the commit that really changed it.
+    pub ignore_revs: bool,
+}
+
+/// The file of commits blame skips, by the convention GitHub and VS Code follow.
+pub const IGNORE_REVS_FILE: &str = ".git-blame-ignore-revs";
+
+/// A list of commits blame skips that the repository has.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IgnoreRevs {
+    /// Its path, from the repository's top folder.
+    pub file: String,
+    /// How many commits it lists.
+    pub commits: usize,
+    /// This blame skipped them.
+    pub used: bool,
+    /// Why git couldn't read it, e.g. a line that is no commit: the blame went on without it.
+    pub problem: Option<String>,
 }
 
 impl Repo {
@@ -188,39 +218,114 @@ impl Repo {
 
     /// Who last changed each line of `path` as of `rev`.
     pub fn blame(&self, path: &str, rev: &str) -> Result<Blame> {
-        self.blame_with(path, rev, &AtomicBool::new(false))
+        self.blame_with(path, rev, &BlameOptions::default(), &AtomicBool::new(false))
     }
 
-    /// [`Repo::blame`]; setting `cancel` stops it. A file whose blame is longer than
-    /// [`MAX_BLAME_BYTES`] is blamed as far as that, and comes `cut`.
-    pub fn blame_with(&self, path: &str, rev: &str, cancel: &AtomicBool) -> Result<Blame> {
+    /// The list of commits blame skips: `blame.ignoreRevsFile` when it is set and there, else
+    /// [`IGNORE_REVS_FILE`] in the top folder. Its path from there, and how many it lists.
+    pub fn ignore_revs_file(&self) -> Option<(String, usize)> {
+        let top = self.workdir();
+        let configured = self.config_value("blame.ignoreRevsFile").filter(|f| !f.is_empty());
+        [configured.as_deref(), Some(IGNORE_REVS_FILE)]
+            .into_iter()
+            .flatten()
+            .find_map(|file| {
+                let text = std::fs::read_to_string(top.join(file)).ok()?;
+                let commits = text
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                    .count();
+                Some((file.to_owned(), commits))
+            })
+    }
+
+    /// [`Repo::blame`] with `options`; setting `cancel` stops it. A file whose blame is longer
+    /// than [`MAX_BLAME_BYTES`] is blamed as far as that, and comes `cut`.
+    pub fn blame_with(&self, path: &str, rev: &str, options: &BlameOptions, cancel: &AtomicBool) -> Result<Blame> {
         let rev = self.commit_id(rev)?;
-        let command = GitCommand::new(["blame", "--porcelain", &rev, "--", path]);
-        let out = self.spawn_cancellable_within(&command, MAX_BLAME_BYTES, cancel)?;
+        let found = self.ignore_revs_file();
+        let list = found
+            .as_ref()
+            .filter(|_| options.ignore_revs)
+            .map(|(file, _)| file.clone());
+        let list = list.as_deref();
+        let mut problem = None;
+        let (out, command) = match self.run_blame(path, &rev, options.ignore_whitespace, list, cancel) {
+            // A list git can't read (a line that isn't a commit) leaves the blame without it.
+            Err(Error::Command { output, .. })
+                if list.is_some() && !cancel.load(std::sync::atomic::Ordering::Relaxed) =>
+            {
+                problem = Some(output.trim().trim_start_matches("fatal: ").to_owned());
+                self.run_blame(path, &rev, options.ignore_whitespace, None, cancel)?
+            }
+            other => other?,
+        };
         let text = String::from_utf8_lossy(&out.stdout);
+        // A cut blame ends with the last line read whole: its text line comes last.
+        let whole = if out.cut { whole_lines(&text) } else { &text };
+        let (commits, lines) = parse_porcelain(whole);
+        Ok(Blame {
+            command,
+            rev,
+            path: path.to_owned(),
+            commits,
+            lines,
+            cut: out.cut,
+            ignore_revs: found.map(|(file, commits)| IgnoreRevs {
+                file,
+                commits,
+                used: list.is_some() && problem.is_none(),
+                problem,
+            }),
+        })
+    }
+
+    /// `git blame --porcelain` of `path` at `rev`, skipping the commits of `list`, and the command
+    /// as the user would type it. The files git's own settings name are left out first: a
+    /// missing one would stop git, and only the list Oxbow found and shows is used.
+    fn run_blame(
+        &self,
+        path: &str,
+        rev: &str,
+        whitespace: bool,
+        list: Option<&str>,
+        cancel: &AtomicBool,
+    ) -> Result<(crate::cli::Limited, String)> {
+        let mut flags: Vec<String> = Vec::new();
+        if whitespace {
+            flags.push("-w".to_owned());
+        }
+        let mut shown = flags.clone();
+        flags.push("--no-ignore-revs-file".to_owned());
+        if let Some(file) = list {
+            flags.extend(["--ignore-revs-file".to_owned(), file.to_owned()]);
+            shown.extend(["--ignore-revs-file".to_owned(), file.to_owned()]);
+        }
+        let args = |porcelain: bool, flags: &[String], rev: &str| {
+            let mut args = vec!["blame".to_owned()];
+            if porcelain {
+                args.push("--porcelain".to_owned());
+            }
+            args.extend(flags.iter().cloned());
+            args.extend([rev.to_owned(), "--".to_owned(), path.to_owned()]);
+            args
+        };
+        let command = GitCommand::new(args(true, &flags, rev));
+        let out = self.spawn_cancellable_within(&command, MAX_BLAME_BYTES, cancel)?;
         if !out.success && !out.cut {
             let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
             return Err(Error::Command {
                 command: command.display(),
                 code: out.code,
                 output: if stderr.trim().is_empty() {
-                    text.into_owned()
+                    String::from_utf8_lossy(&out.stdout).into_owned()
                 } else {
                     stderr
                 },
             });
         }
-        // A cut blame ends with the last line read whole: its text line comes last.
-        let whole = if out.cut { whole_lines(&text) } else { &text };
-        let (commits, lines) = parse_porcelain(whole);
-        Ok(Blame {
-            command: GitCommand::new(["blame", &rev[..7], "--", path]).display(),
-            rev,
-            path: path.to_owned(),
-            commits,
-            lines,
-            cut: out.cut,
-        })
+        Ok((out, GitCommand::new(args(false, &shown, &rev[..7])).display()))
     }
 
     /// The commits that changed line `line` of `path`, as of `rev`, newest first (`git log -L`).

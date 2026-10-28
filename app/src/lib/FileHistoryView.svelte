@@ -135,10 +135,11 @@
     const target = blameAt;
     // A commit's blame never changes; HEAD's does once HEAD moves.
     if (target.rev === "HEAD") headCommit;
+    const options = { ignoreWhitespace: prefs.get("oxbow.blame.ignoreWhitespace"), ignoreRevs: prefs.get("oxbow.blame.ignoreRevs") };
     blameError = null;
-    api.blame(target.path, target.rev, BLAME).then(
+    api.blame(target.path, target.rev, options, BLAME).then(
       (b) => {
-        if (blameAt.rev === target.rev && blameAt.path === target.path) blame = b;
+        if (blameAt.rev === target.rev && blameAt.path === target.path && sameOptions(options)) blame = b;
       },
       (err) => {
         // A newer blame, or leaving the screen, stopped it.
@@ -163,6 +164,13 @@
       () => {},
     );
   });
+
+  /** Whether Blame's switches are still as `options` says: a blame read before a switch changed
+   *  doesn't land after the newer one. */
+  const sameOptions = (options: { ignoreWhitespace: boolean; ignoreRevs: boolean }) =>
+    options.ignoreWhitespace === prefs.get("oxbow.blame.ignoreWhitespace") && options.ignoreRevs === prefs.get("oxbow.blame.ignoreRevs");
+  const blameSpaces = $derived(prefs.get("oxbow.blame.ignoreWhitespace"));
+  const skipRevs = $derived(prefs.get("oxbow.blame.ignoreRevs"));
 
   /** Lanes of this view's reads: a newer read in a lane stops the older one. */
   const DIFF = "history-diff";
@@ -596,6 +604,33 @@
         {#if at}<button class="back" onclick={() => ((at = null), (line = null))}>Back to HEAD</button>
         {:else}<button class="back" onclick={openInEditor} title={line ? `Open ${splitPath(path).name} in the editor at line ${line.no}` : `Open ${splitPath(path).name} in the editor`}>{line ? `Open Line ${line.no} in Editor` : "Open in Editor"}</button>{/if}
         <span class="spacer"></span>
+        {#if blame?.ignoreRevs}
+          {@const revs = blame.ignoreRevs}
+          <button
+            class="skip"
+            class:on={revs.used}
+            class:warn={!!revs.problem}
+            aria-pressed={revs.used}
+            onclick={() => prefs.set("oxbow.blame.ignoreRevs", !skipRevs)}
+            title={revs.problem
+              ? `git couldn’t read ${revs.file}, so no commit is skipped: ${revs.problem}`
+              : revs.used
+                ? `Lines of the ${revs.commits === 1 ? "commit" : `${revs.commits} commits`} listed in ${revs.file} (reformatting and the like) go to the commit before. Click to blame them too`
+                : `Click to skip the ${revs.commits === 1 ? "commit" : `${revs.commits} commits`} listed in ${revs.file}, as GitHub does`}
+          >
+            {revs.problem ? "Skip list unreadable" : `${revs.used ? "Skipping" : "Not skipping"} ${revs.commits === 1 ? "1 commit" : `${revs.commits} commits`}`}
+          </button>
+        {/if}
+        <button
+          class="tool"
+          class:on={blameSpaces}
+          onclick={() => prefs.set("oxbow.blame.ignoreWhitespace", !blameSpaces)}
+          aria-pressed={blameSpaces}
+          aria-label="Ignore whitespace"
+          title={blameSpaces ? "A line whose only change was whitespace keeps the commit before it (git blame -w). Click to blame whitespace changes too" : "Ignore whitespace: a line whose only change was whitespace keeps the commit before it (git blame -w)"}
+        >
+          <svg class="icon" viewBox="0 0 16 16"><path d="M3.5 5.5v5h9v-5" /><path d="M2 13.5h12" /></svg>
+        </button>
         {#if blame}<button class="mono cmd" onclick={() => copy(blame!.command)} title="Copy the command">$ git {blame.command.replace(/^git /, "")}</button>{/if}
         <span class="legend">Older <span class="heat">{#each [0.25, 0.45, 0.65, 0.85, 1] as o (o)}<i style:opacity={o}></i>{/each}</span> Newer</span>
       </div>
@@ -922,6 +957,8 @@
     overflow: hidden;
     text-overflow: ellipsis;
     min-width: 0;
+    flex-shrink: 0;
+    max-width: 40%;
   }
   .dir,
   .at {
@@ -937,6 +974,44 @@
   }
   .spacer {
     flex-grow: 1;
+  }
+  .tool {
+    width: 26px;
+    height: 26px;
+    border-radius: var(--radius-pill);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--icon);
+    flex-shrink: 0;
+  }
+  .tool:hover {
+    background: var(--field);
+  }
+  .tool.on {
+    background: var(--side-sel);
+    color: var(--text);
+  }
+  .tool .icon {
+    width: 15px;
+    height: 15px;
+  }
+  .skip {
+    height: 24px;
+    padding: 0 10px;
+    border-radius: var(--radius-pill);
+    background: var(--field);
+    color: var(--text2);
+    font-size: var(--text-caption);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .skip.on {
+    background: var(--side-sel);
+    color: var(--text);
+  }
+  .skip.warn {
+    color: var(--orange);
   }
   .cmd {
     font-size: var(--text-caption);

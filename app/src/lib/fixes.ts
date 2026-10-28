@@ -8,6 +8,7 @@ import type { Icon, Part, Recovery, Request, StepLine } from "./confirm.svelte";
 import { nameProblem, onNoBranch, type BranchContext } from "./branches";
 import type { Action, Failure, Fix, FixState, FixStep, HistoryRow, ResetMode } from "./types";
 import { relativeTime, shortId } from "./format";
+import { lockedCommit } from "./protect";
 
 export type FixId = "move" | "forgot" | "undo" | "revert" | "detached";
 
@@ -93,6 +94,8 @@ export function fixChoices(fc: FixContext, busy: string | null): FixChoice[] {
   const unpushed = commits.filter((r) => !onRemote(ctx, r)).length;
   const pushed = commits.filter((r) => onRemote(ctx, r));
   const noCommit = !head ? "There are no commits yet." : null;
+  // A protected branch's pushed last commit stays as it is: Revert undoes it.
+  const locked = head && lockedCommit(h, head) ? `${branch} is protected and its last commit is already pushed. Undo a Commit That Is Already Pushed reverts it instead.` : null;
   const choices: FixChoice[] = [
     {
       id: "move",
@@ -108,14 +111,14 @@ export function fixChoices(fc: FixContext, busy: string | null): FixChoice[] {
       title: "I forgot a file in the last commit",
       sub: head ? `Add some of your ${plural(state.changed.length, "changed file")} to “${head.summary}”.` : "",
       icon: "stage",
-      off: noCommit ?? (!state.changed.length ? "There are no changed files to add." : null),
+      off: noCommit ?? locked ?? (!state.changed.length ? "There are no changed files to add." : null),
     },
     {
       id: "undo",
       title: "Undo the last commit, keep its changes",
       sub: head ? `“${head.summary}” comes off ${hereName(ctx)}; its changes go back to staged.` : "",
       icon: "undo",
-      off: noCommit ?? (head && !head.parents.length ? "This is the first commit; there is nothing before it to go back to." : null),
+      off: noCommit ?? locked ?? (head && !head.parents.length ? "This is the first commit; there is nothing before it to go back to." : null),
     },
     {
       id: "revert",
