@@ -13,6 +13,7 @@
   import BranchPreview from "./BranchPreview.svelte";
   import DiffPreview from "./DiffPreview.svelte";
   import GitHubSignIn from "./GitHubSignIn.svelte";
+  import GitLabSignIn from "./GitLabSignIn.svelte";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import { defaults, prefs, type PrefKey } from "./prefs.svelte";
   import { accountsSection, gitSection, repoSection } from "./settingsGit";
@@ -355,6 +356,16 @@
     onDone={(signedIn) => {
       model.account = signedIn;
       model.signIn = null;
+    }}
+  />
+{/if}
+{#if model.gitlabSignIn}
+  <GitLabSignIn
+    server={model.gitlabSignIn.server}
+    onClose={() => (model.gitlabSignIn = null)}
+    onDone={() => {
+      model.gitlabSignIn = null;
+      load();
     }}
   />
 {/if}

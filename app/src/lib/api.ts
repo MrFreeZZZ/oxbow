@@ -58,6 +58,8 @@ import type {
   StackPlan,
   StackPreview,
   GitHubAccount,
+  GitLabAccount,
+  GitLabSignInSetup,
   SignInSetup,
   DeviceCode,
   GitHubOwners,
@@ -280,6 +282,13 @@ export const api = {
   githubSignOut: () => invoke<void>("github_sign_out"),
   /** Opens a github.com page in the browser. */
   openGitHub: (url: string) => invoke<void>("open_github", { url }),
+  gitlabAccounts: () => invoke<GitLabAccount[]>("gitlab_accounts"),
+  gitlabSignInSetup: (server: string) => invoke<GitLabSignInSetup>("gitlab_sign_in_setup", { server }),
+  gitlabOpenNewToken: (server: string) => invoke<void>("gitlab_open_new_token", { server }),
+  gitlabOpenProfile: (host: string) => invoke<void>("gitlab_open_profile", { host }),
+  gitlabSignIn: (server: string, token: string) => invoke<GitLabAccount>("gitlab_sign_in", { server, token }),
+  gitlabSignInStop: () => invoke<void>("gitlab_sign_in_stop"),
+  gitlabSignOut: (host: string) => invoke<void>("gitlab_sign_out", { host }),
   githubOwners: () => invoke<GitHubOwners>("github_owners"),
   /** Sends `action-event`s while it runs; Stop is `stopAction`. Resolves to the repository's page. */
   /** `create: false`: the repository is on GitHub already, only origin and the push are left. */

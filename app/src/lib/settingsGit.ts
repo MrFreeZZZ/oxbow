@@ -10,8 +10,9 @@ import { prefs, type SecretPattern } from "./prefs.svelte";
 import { addRemoteRequest, optimizeRequest, removeRemoteRequest, setUrlRequest } from "./repoSettings";
 import { config, copy, gitEdit, gitSetting, gitSwitch, load, model, prefRow, truthy, writeGit } from "./settingsModel.svelte";
 import type { Row, Section, Value } from "./settingsRows";
+import { tokenExpiry } from "./gitlab";
 import { settingsTag } from "./trust";
-import type { RemoteInfo } from "./types";
+import type { GitLabAccount, RemoteInfo } from "./types";
 
 // GitHub: who is signed in, and the sign-in sheet.
 const storeName = navigator.platform.startsWith("Mac") ? "Keychain" : navigator.platform.startsWith("Win") ? "Credential Manager" : "keyring";
@@ -46,6 +47,37 @@ async function signOut() {
         await api.githubSignOut();
         await load();
         return `Signed out of GitHub.`;
+      },
+    },
+  });
+}
+
+/** The command that removes a GitLab token from the credential store. */
+function forgetGitLabCommand(item: string): string {
+  const platform = navigator.platform;
+  if (platform.startsWith("Mac")) return `security delete-generic-password -s "Oxbow GitLab" -a '${item}'`;
+  if (platform.startsWith("Win")) return `cmdkey /delete:'${item}.Oxbow GitLab'`;
+  return `secret-tool clear service "Oxbow GitLab" username '${item}'`;
+}
+
+async function gitlabSignOut(account: GitLabAccount) {
+  await confirm.run({
+    title: `Sign out of ${account.host} as ${account.username}?`,
+    body: [
+      `Oxbow forgets the token: it leaves the ${storeName}, and merge requests there go back to working through the push. Git’s own saved passwords and SSH keys stay. GitLab keeps the token until it expires or you revoke it in `,
+      { code: "Preferences › Access tokens" },
+      " there.",
+    ],
+    icon: "key",
+    button: "Sign Out",
+    status: "Signing out…",
+    local: {
+      commands: [forgetGitLabCommand(account.item)],
+      comment: "Oxbow does this itself; no git command runs",
+      run: async () => {
+        await api.gitlabSignOut(account.host);
+        await load();
+        return `Signed out of ${account.host}.`;
       },
     },
   });
@@ -209,6 +241,37 @@ export const accountsSection: Section = {
               control: { type: "button", label: "Sign In…", run: () => (model.signIn = { tokenFirst: false }) },
             },
           ],
+    },
+    {
+      title: "GitLab",
+      foot: "Without signing in, Create Merge Request works through the push. Signing in to gitlab.com or a server of your own (GitLab 16.0 or later) brings merge requests into Oxbow.",
+      rows: [
+        ...model.gitlab.map((account): Row => {
+          const expiry = tokenExpiry(account.expiresAt);
+          return {
+            id: `gitlab:${account.host}`,
+            label: account.name ?? account.username,
+            image: () => account.avatar,
+            sub: () => `@${account.username} on ${account.host} · ${expiry?.text ?? "token without an expiry date"}`,
+            subTone: () => (expiry?.expired ? "error" : expiry?.soon ? "warn" : undefined),
+            badge: () => (expiry?.expired ? "Expired" : expiry?.soon ? "Expires soon" : "Connected"),
+            control: expiry?.soon
+              ? { type: "button", label: "Sign In Again…", run: () => (model.gitlabSignIn = { server: account.web }) }
+              : { type: "button", label: "Sign Out…", run: () => gitlabSignOut(account) },
+            more: () => [
+              { kind: "item", label: "Open Profile on GitLab", icon: menuIcons.reveal, run: () => void api.gitlabOpenProfile(account.host) },
+              { kind: "item", label: "Sign In Again…", icon: menuIcons.fetch, run: () => void (model.gitlabSignIn = { server: account.web }) },
+              { kind: "item", label: "Sign Out…", icon: menuIcons.drop, run: () => void gitlabSignOut(account) },
+            ],
+          };
+        }),
+        {
+          id: "gitlab:add",
+          label: model.gitlab.length ? "Another server" : "GitLab",
+          sub: model.gitlab.length ? "gitlab.com or a GitLab server of your own" : "Sign in to work with merge requests on gitlab.com or a server of your own",
+          control: { type: "button", label: "Sign In…", run: () => (model.gitlabSignIn = { server: model.gitlab.some((a) => a.host === "gitlab.com") ? "" : "gitlab.com" }) },
+        },
+      ],
     },
     {
       title: "Commit identity",

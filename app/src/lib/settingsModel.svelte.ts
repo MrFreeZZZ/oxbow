@@ -1,11 +1,11 @@
 // What the Settings window reads besides Oxbow's own settings: Git's settings from `git config
-// --list` (whose keys are lower case), this repository's, the GitHub account and the trusted
-// repositories, with the rows that show and write them.
+// --list` (whose keys are lower case), this repository's, the GitHub and GitLab accounts and the
+// trusted repositories, with the rows that show and write them.
 
 import { api } from "./api";
 import { prefs, type PrefKey } from "./prefs.svelte";
 import type { Option, Row, Setting, Text, Value } from "./settingsRows";
-import type { ConfigScope, GitHubAccount, GitSettings, RepoSettings, TrustedRepo } from "./types";
+import type { ConfigScope, GitHubAccount, GitLabAccount, GitSettings, RepoSettings, TrustedRepo } from "./types";
 
 export const model = $state({
   /** The window's search, over every section. */
@@ -14,6 +14,8 @@ export const model = $state({
   repo: null as RepoSettings | null,
   /** Who is signed in to GitHub. */
   account: null as GitHubAccount | null,
+  /** Who is signed in to GitLab: one account per server. */
+  gitlab: [] as GitLabAccount[],
   /** Repositories trusted to run their own settings' programs, with such settings. */
   trusted: [] as TrustedRepo[],
   /** Why the last write to Git's settings failed. */
@@ -24,18 +26,22 @@ export const model = $state({
   copied: null as string | null,
   /** The GitHub sign-in sheet. */
   signIn: null as { tokenFirst: boolean } | null,
+  /** The GitLab sign-in sheet, with the server to start from. */
+  gitlabSignIn: null as { server: string } | null,
 });
 
 export async function load() {
-  const [g, r, a, t] = await Promise.all([
+  const [g, r, a, l, t] = await Promise.all([
     api.gitSettings().catch(() => null),
     api.repoSettings().catch(() => null),
     api.githubAccount().catch(() => null),
+    api.gitlabAccounts().catch(() => []),
     api.trustedRepos().catch(() => []),
   ]);
   model.git = g;
   model.repo = r;
   model.account = a;
+  model.gitlab = l;
   model.trusted = t;
 }
 

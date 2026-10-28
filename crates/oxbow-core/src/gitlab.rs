@@ -1,11 +1,13 @@
 //! Merge requests on GitLab, opened by the push itself: GitLab reads push options
 //! (`git push -o merge_request.create …`) and opens one for the branch it receives, so it needs
 //! no sign-in or token and works on a GitLab server of your own too. Nothing here talks to
-//! GitLab's API; when there is nothing to push, its New merge request page opens in the browser.
+//! GitLab's API (that is `gitlab_api.rs`, once signed in); when there is nothing to push, its New
+//! merge request page opens in the browser.
 
 use serde::{Deserialize, Serialize};
 
 use crate::cli::GitCommand;
+use crate::gitlab_api::Server;
 use crate::repo::Repo;
 
 /// A project on GitLab, the way a remote points at it.
@@ -64,7 +66,8 @@ impl MergeRequest {
 
 /// Host and project path from a remote's address in any form git takes: `https://host/g/p.git`,
 /// `git@host:g/p.git`, `ssh://git@host:2222/g/p`. Only GitLab's own host and hosts named for it
-/// (`gitlab.example.com`, `gitlab-ce.corp`) count: a server of another name looks like any other.
+/// (`gitlab.example.com`, `gitlab-ce.corp`) count: a server of another name looks like any other,
+/// unless the repository or a sign-in says otherwise (see [`Repo::gitlab_projects`]).
 pub fn parse_gitlab_url(url: &str) -> Option<(String, String)> {
     project_url(url).filter(|(host, _)| named_gitlab(host))
 }
@@ -117,8 +120,9 @@ const OTHER_HOSTS: &[&str] = &[
 impl Repo {
     /// The GitLab projects the remotes point at, the default remote's first. A server of any
     /// name counts when the repository has GitLab's pipeline file, `.gitlab-ci.yml`, on any
-    /// branch: the one checked out may be older than it.
-    pub fn gitlab_projects(&self) -> Vec<GitLabProject> {
+    /// branch (the one checked out may be older than it), or when it is in `signed_in`; then
+    /// its pages are where the sign-in says.
+    pub fn gitlab_projects(&self, signed_in: &[Server]) -> Vec<GitLabProject> {
         let Ok(remotes) = self.remotes_info() else {
             return Vec::new();
         };
@@ -135,6 +139,19 @@ impl Repo {
         let mut projects: Vec<GitLabProject> = remotes
             .iter()
             .filter_map(|r| {
+                let known = [&r.push_url, &r.fetch_url].into_iter().find_map(|url| {
+                    let (host, path) = project_url(url)?;
+                    let server = signed_in.iter().find(|s| bare_host(&s.host) == bare_host(&host))?;
+                    Some((server, path))
+                });
+                if let Some((server, path)) = known {
+                    return Some(GitLabProject {
+                        remote: r.name.clone(),
+                        web_url: format!("{}/{path}", server.web),
+                        host: server.host.clone(),
+                        path,
+                    });
+                }
                 let (host, path) = gitlab(&r.push_url).or_else(|| gitlab(&r.fetch_url))?;
                 // An address over ssh has the ssh port, never the page's; one over plain http
                 // has its pages there too.

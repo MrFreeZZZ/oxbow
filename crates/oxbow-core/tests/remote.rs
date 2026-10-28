@@ -159,14 +159,14 @@ fn a_gitlab_server_of_another_name_is_known_by_its_pipeline_file() {
     me.git(&["remote", "add", "mirror", "https://github.com/acme/auth.git"]);
     me.git(&["remote", "add", "lab", "http://code.local:8080/team/auth.git"]);
     let repo = Repo::open(me.path()).unwrap();
-    assert!(repo.gitlab_projects().is_empty());
+    assert!(repo.gitlab_projects(&[]).is_empty());
 
     // The pipeline is on another branch than the one checked out.
     me.git(&["checkout", "-q", "-b", "ci"]);
     me.commit(".gitlab-ci.yml", "test:\n  script: make\n", "Add the pipeline");
     me.git(&["checkout", "-q", "-"]);
     assert!(!me.path().join(".gitlab-ci.yml").exists());
-    let projects = repo.gitlab_projects();
+    let projects = repo.gitlab_projects(&[]);
     let pages: Vec<(&str, &str)> = projects
         .iter()
         .map(|p| (p.remote.as_str(), p.web_url.as_str()))
