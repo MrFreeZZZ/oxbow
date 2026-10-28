@@ -18,6 +18,7 @@ fn stashed() -> (Fixture, Repo) {
         message: Some("Shout two".into()),
         untracked: true,
         paths: Vec::new(),
+        staged: false,
     };
     assert_eq!(
         repo.plan(&push).unwrap().commands[0].display(),
@@ -110,6 +111,7 @@ fn an_action_on_a_stash_that_moved_is_refused() {
         message: None,
         untracked: false,
         paths: Vec::new(),
+        staged: false,
     })
     .unwrap();
     // stash@{0} is the new one now.
@@ -260,6 +262,7 @@ fn undo_apply_works_for_a_stash_without_untracked_files() {
             message: None,
             untracked: false,
             paths: Vec::new(),
+            staged: false,
         })
         .unwrap();
         fx.commit("a.txt", "one\n2 committed\nthree\n", "Number two");
@@ -354,4 +357,220 @@ fn each_undo_keeps_its_own_copies() {
     }
     assert_eq!(removed(&fx), ["new\n", "new\n"]);
     assert_eq!(repo.stashes().unwrap().len(), 1);
+}
+
+/// Ten lines, `n1` … `n10`, so changes at the top and the bottom are two hunks.
+const TEN: &str = "n1\nn2\nn3\nn4\nn5\nn6\nn7\nn8\nn9\nn10\n";
+
+#[test]
+fn stash_staged_keeps_what_is_not_staged() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", TEN, "Root");
+    fx.commit("c.txt", "c\n", "Second");
+    fx.write("a.txt", &TEN.replace("n1\n", "N1 staged\n"));
+    fx.write("b.txt", "new and staged\n");
+    fx.git(&["add", "a.txt", "b.txt"]);
+    fx.write(
+        "a.txt",
+        &TEN.replace("n1\n", "N1 staged\n").replace("n10\n", "N10 not staged\n"),
+    );
+    fx.write("c.txt", "c not staged\n");
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let push = Action::StashPush {
+        message: Some("Staged bits".into()),
+        untracked: true,
+        paths: Vec::new(),
+        staged: true,
+    };
+    let plan = repo.plan(&push).unwrap();
+    assert_eq!(plan.commands[0].display(), "git stash push --staged -m 'Staged bits'");
+    repo.perform(&push).unwrap();
+
+    assert_eq!(repo.stashes().unwrap()[0].title, "Staged bits");
+    assert_eq!(fx.git(&["diff", "--cached", "--name-only"]), "", "nothing is staged");
+    assert_eq!(read(&fx, "a.txt"), TEN.replace("n10\n", "N10 not staged\n"));
+    assert_eq!(read(&fx, "c.txt"), "c not staged\n");
+    assert!(!fx.path().join("b.txt").exists());
+    let stashed = fx.git(&["stash", "show", "--name-only", "stash@{0}"]);
+    assert_eq!(stashed, "a.txt\nb.txt");
+    assert!(!fx.git(&["stash", "show", "-p", "stash@{0}"]).contains("N10"));
+}
+
+#[test]
+fn a_hunk_goes_into_a_stash_and_out_of_the_file() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", TEN, "Root");
+    let edited = TEN.replace("n1\n", "N1 top\n").replace("n10\n", "N10 bottom\n");
+    fx.write("a.txt", &edited);
+    let repo = Repo::open(fx.path()).unwrap();
+    let diff = repo.working_diff("a.txt", oxbow_core::Side::Unstaged, false).unwrap();
+    assert_eq!(diff.hunks.len(), 2);
+    let top = &diff.hunks[0];
+    let action = Action::StashHunk {
+        path: "a.txt".into(),
+        header: top.header.clone(),
+        check: top.check.clone(),
+        lines: None,
+        message: None,
+    };
+    let shown: Vec<String> = repo
+        .plan(&action)
+        .unwrap()
+        .commands
+        .iter()
+        .map(|c| c.display())
+        .collect();
+    assert_eq!(shown.len(), 2, "{shown:?}");
+    assert!(shown[0].starts_with("git stash store -m 'WIP on main: "), "{shown:?}");
+    assert!(
+        shown[0].ends_with(" Root'") || shown[0].contains(" Root' "),
+        "{shown:?}"
+    );
+    assert_eq!(shown[1], "git apply --reverse -");
+    repo.perform(&action).unwrap();
+
+    assert_eq!(read(&fx, "a.txt"), TEN.replace("n10\n", "N10 bottom\n"));
+    let stash = &repo.stashes().unwrap()[0];
+    assert_eq!(stash.branch.as_deref(), Some("main"));
+    assert_eq!(stash.base, fx.git(&["rev-parse", "HEAD"]));
+    let patch = fx.git(&["stash", "show", "-p", "stash@{0}"]);
+    assert!(patch.contains("+N1 top") && !patch.contains("N10"), "{patch}");
+
+    // It comes back like any stash; git wants the file it changes without other edits.
+    fx.git(&["checkout", "--", "a.txt"]);
+    repo.perform(&apply(&repo, true)).unwrap();
+    assert_eq!(read(&fx, "a.txt"), TEN.replace("n1\n", "N1 top\n"));
+    assert!(repo.stashes().unwrap().is_empty());
+}
+
+#[test]
+fn picked_lines_go_into_a_stash_and_staged_changes_stay() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", TEN, "Root");
+    // n1 is staged; n9 and n10 changed in the file, one hunk, of which only n10 is picked.
+    fx.write("a.txt", &TEN.replace("n1\n", "N1 staged\n"));
+    fx.git(&["add", "a.txt"]);
+    let edited = TEN
+        .replace("n1\n", "N1 staged\n")
+        .replace("n9\n", "N9 stays\n")
+        .replace("n10\n", "N10 picked\n");
+    fx.write("a.txt", &edited);
+    let repo = Repo::open(fx.path()).unwrap();
+    let diff = repo.working_diff("a.txt", oxbow_core::Side::Unstaged, false).unwrap();
+    assert_eq!(diff.hunks.len(), 1);
+    let hunk = &diff.hunks[0];
+    let picked: Vec<usize> = hunk
+        .lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.text.contains("10") && l.kind != oxbow_core::LineKind::Context)
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(picked.len(), 2, "n10 and N10 picked");
+    repo.perform(&Action::StashHunk {
+        path: "a.txt".into(),
+        header: hunk.header.clone(),
+        check: hunk.check.clone(),
+        lines: Some(picked),
+        message: Some("Bottom line".into()),
+    })
+    .unwrap();
+
+    assert_eq!(read(&fx, "a.txt"), edited.replace("N10 picked\n", "n10\n"));
+    assert_eq!(
+        fx.git(&["show", ":a.txt"]) + "\n",
+        TEN.replace("n1\n", "N1 staged\n"),
+        "the staged change stays staged"
+    );
+    let stash = &repo.stashes().unwrap()[0];
+    assert_eq!(stash.title, "Bottom line");
+    let patch = fx.git(&["stash", "show", "-p", "stash@{0}"]);
+    assert!(patch.contains("+N10 picked"), "{patch}");
+    assert!(!patch.contains("N9") && !patch.contains("N1 staged"), "{patch}");
+    // Nothing of it is staged in the stash: --index brings back no staged lines.
+    assert_eq!(fx.git(&["diff", "stash@{0}^1", "stash@{0}^2"]), "");
+}
+
+#[test]
+fn stashing_lines_is_undone_whole() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", TEN, "Root");
+    let edited = TEN.replace("n5\n", "N5\n");
+    fx.write("a.txt", &edited);
+    let repo = Repo::open(fx.path()).unwrap();
+    let diff = repo.working_diff("a.txt", oxbow_core::Side::Unstaged, false).unwrap();
+    let hunk = &diff.hunks[0];
+    repo.perform(&Action::StashHunk {
+        path: "a.txt".into(),
+        header: hunk.header.clone(),
+        check: hunk.check.clone(),
+        lines: None,
+        message: Some("Five".into()),
+    })
+    .unwrap();
+    assert_eq!(read(&fx, "a.txt"), TEN);
+    assert_eq!(repo.stashes().unwrap().len(), 1);
+
+    let log = repo.operation_log().unwrap();
+    assert_eq!(log[0].kind, "stash");
+    repo.perform(&Action::Restore {
+        id: log[0].id.clone(),
+        after: false,
+    })
+    .unwrap();
+    assert_eq!(read(&fx, "a.txt"), edited);
+    assert!(repo.stashes().unwrap().is_empty());
+}
+
+#[test]
+fn a_hunk_that_changed_since_it_was_shown_is_refused() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", TEN, "Root");
+    fx.write("a.txt", &TEN.replace("n5\n", "N5\n"));
+    let repo = Repo::open(fx.path()).unwrap();
+    let diff = repo.working_diff("a.txt", oxbow_core::Side::Unstaged, false).unwrap();
+    let hunk = diff.hunks[0].clone();
+    fx.write("a.txt", &TEN.replace("n5\n", "N5 again\n"));
+    let err = repo
+        .perform(&Action::StashHunk {
+            path: "a.txt".into(),
+            header: hunk.header,
+            check: hunk.check,
+            lines: None,
+            message: None,
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("changed since it was shown"), "{err}");
+    assert!(repo.stashes().unwrap().is_empty());
+    assert_eq!(read(&fx, "a.txt"), TEN.replace("n5\n", "N5 again\n"));
+}
+
+#[test]
+fn lines_next_to_staged_changes_are_refused_with_the_way_out() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", TEN, "Root");
+    fx.write("a.txt", &TEN.replace("n5\n", "N5 staged\n"));
+    fx.git(&["add", "a.txt"]);
+    let edited = TEN.replace("n5\n", "N5 staged\n").replace("n6\n", "N6\n");
+    fx.write("a.txt", &edited);
+    let repo = Repo::open(fx.path()).unwrap();
+    let diff = repo.working_diff("a.txt", oxbow_core::Side::Unstaged, false).unwrap();
+    let hunk = &diff.hunks[0];
+    let err = repo
+        .perform(&Action::StashHunk {
+            path: "a.txt".into(),
+            header: hunk.header.clone(),
+            check: hunk.check.clone(),
+            lines: None,
+            message: None,
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("next to staged changes"), "{err}");
+    assert!(repo.stashes().unwrap().is_empty());
+    assert_eq!(read(&fx, "a.txt"), edited);
+    assert!(
+        repo.operation_log().unwrap().is_empty(),
+        "no failed step in the Operation Log"
+    );
 }

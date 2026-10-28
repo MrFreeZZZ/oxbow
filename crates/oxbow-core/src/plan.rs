@@ -187,6 +187,7 @@ impl Repo {
                 amend,
                 no_verify,
                 sign_off,
+                skip_checks,
                 ..
             } => {
                 let mut args = vec!["commit".to_owned()];
@@ -204,7 +205,10 @@ impl Repo {
                     args.push("-m".to_owned());
                     args.push(paragraph);
                 }
-                let cmd = GitCommand::new(args);
+                let mut cmd = GitCommand::new(args);
+                if !skip_checks {
+                    cmd.before = self.checks_before();
+                }
                 vec![if *amend {
                     cmd.comment("replace the last commit with one that also has the staged changes")
                 } else if *no_verify {
@@ -495,8 +499,49 @@ impl Repo {
             Action::Reset { commit, mode } => plan_reset(commit, *mode),
             Action::StashPush {
                 message,
+                paths,
+                staged: true,
+                ..
+            } => {
+                if !config::git_at_least(2, 35) {
+                    return Err(Error::Git(
+                        "Stash Staged needs git 2.35 or later; update git, or stash the files instead".into(),
+                    ));
+                }
+                let mut args = vec!["stash".to_owned(), "push".to_owned(), "--staged".to_owned()];
+                if let Some(message) = message.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+                    args.extend(["-m".to_owned(), message.to_owned()]);
+                }
+                if !paths.is_empty() {
+                    args.push("--".to_owned());
+                    args.extend(paths.iter().map(|p| literal(p)));
+                }
+                vec![GitCommand::new(args).comment("--staged: only what is staged goes into the stash; unstaged changes stay")]
+            }
+            Action::StashHunk {
+                path,
+                header,
+                check,
+                lines,
+                message,
+            } => {
+                let lines = lines.as_deref();
+                let forward = self.hunk_patch(path, Side::Unstaged, header, check, lines, true)?;
+                let back = self.hunk_patch(path, Side::Unstaged, header, check, lines, false)?;
+                let (stash, message) = self.stash_commit_of(&forward, message.as_deref())?;
+                vec![
+                    GitCommand::new(["stash", "store", "-m", &message, &stash])
+                        .comment("a stash Oxbow made of these lines on the last commit joins the list"),
+                    GitCommand::new(["apply", "--reverse", "-"])
+                        .comment("--reverse: take just these lines out of the file on disk")
+                        .input(back),
+                ]
+            }
+            Action::StashPush {
+                message,
                 untracked,
                 paths,
+                ..
             } => {
                 let mut args = vec!["stash".to_owned(), "push".to_owned()];
                 if *untracked {
@@ -589,7 +634,14 @@ impl Repo {
                     .comment("the snapshots go with git's next clean-up"),
             ],
             Action::EditStack { plan } => self.plan_edit_stack(plan)?,
-            Action::AddToCommit { commit, .. } => self.plan_add_to_commit(commit)?,
+            Action::AddToCommit { commit, skip_checks, .. } => {
+                let mut commands = self.plan_add_to_commit(commit)?;
+                // The checks run before anything: shown before the first command.
+                if !skip_checks && let Some(first) = commands.first_mut().filter(|c| c.before.is_none()) {
+                    first.before = self.checks_before();
+                }
+                commands
+            }
             Action::PushBranches { remote, branches } => {
                 let mut args = vec!["push".to_owned(), "--force-with-lease".to_owned()];
                 if !config::run_hooks() {

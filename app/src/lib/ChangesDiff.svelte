@@ -4,7 +4,8 @@
   // nothing left.
 
   import { api } from "./api";
-  import { hunkRequest, linesRequest, type LinesKind } from "./changes";
+  import { hunkRequest, linesRequest, stashMessageFor, type LinesKind } from "./changes";
+  import { stashLinesRequest } from "./stashLines";
   import type { Shown } from "./changesView";
   import { confirm, type Request } from "./confirm.svelte";
   import DiffTools from "./DiffTools.svelte";
@@ -109,6 +110,12 @@
     if (sel?.hunk === hunk) act(linesRequest(kind, path, hunk, [...sel.lines].sort((a, b) => a - b)));
   }
 
+  /** Stash the hunk, or its picked lines when some are. */
+  function stashLines(path: string, hunk: Hunk) {
+    const lines = sel?.hunk === hunk && sel.lines.length ? [...sel.lines].sort((a, b) => a - b) : null;
+    act(stashLinesRequest(path, hunk, lines, stashMessageFor(path)));
+  }
+
   /** Stage's menu on the bar of the open file: Stage & Next File first, as the way through a
    *  review, then Stage itself, and Discard the Rest for a file staged in part. */
   function stageMenu(event: MouseEvent, file: FileChange, label: string) {
@@ -135,6 +142,7 @@
         <button class="state picked" onclick={() => (sel = null)} title="Clear the picked lines">{n} of {hunk.lines.filter((l) => l.kind !== "context").length} lines</button>
         {#if side === "unstaged"}
           <button class="button mini text" onclick={() => linesAction("discardHunk", d.file.path, hunk)}>Discard {n} {lineWord}</button>
+          <button class="button mini text" onclick={() => stashLines(d.file.path, hunk)} title="Put the picked lines aside in a new stash">Stash {n} {lineWord}</button>
           <button class="button mini quiet" onclick={() => linesAction("stageHunk", d.file.path, hunk)}>Stage {n} {lineWord}</button>
         {:else}
           <button class="button mini text" onclick={() => linesAction("unstageHunk", d.file.path, hunk)}>Unstage {n} {lineWord}</button>
@@ -143,6 +151,7 @@
         <span class="state" class:staged={side === "staged"}>{side === "staged" ? "Staged" : "Unstaged"}</span>
         {#if side === "unstaged"}
           <button class="button mini text" onclick={() => hunkAction("discardHunk", d.file.path, hunk)}>Discard</button>
+          <button class="button mini text" onclick={() => stashLines(d.file.path, hunk)} title="Put this hunk aside in a new stash">Stash</button>
           <button class="button mini quiet" onclick={() => hunkAction("stageHunk", d.file.path, hunk)}>Stage Hunk</button>
         {:else}
           <button class="button mini text" onclick={() => hunkAction("unstageHunk", d.file.path, hunk)}>Unstage Hunk</button>

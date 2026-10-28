@@ -6,6 +6,7 @@
 
 pub mod action;
 pub mod bisect;
+pub mod checks;
 pub mod cli;
 pub mod commit;
 pub mod compare;
@@ -50,6 +51,7 @@ pub mod worktrees;
 
 pub use action::{Action, ActionEvent, BranchPush, PartState, Plan, PullMode, RemoteBranch};
 pub use bisect::{Bisect, BisectMark};
+pub use checks::{CheckFailure, CommitCheck};
 pub use cli::{CommandOutput, GitCommand, OutputLine};
 pub use commit::{
     CommitDetail, DiffContext, DiffLine, DiffPage, EolChange, FileChange, FileDiff, FileStatus, Hunk, LineKind,

@@ -1155,44 +1155,72 @@ fn partial_hunk(text: &str, selected: &[usize], forward: bool) -> Option<String>
     // The function name git shows after the second @@, and the line end.
     let tail = &rest[end + 3..];
 
-    let mut body = String::new();
-    let (mut old, mut new, mut index, mut picked) = (0u32, 0u32, 0usize, 0usize);
-    // Whether the line before a "\ No newline at end of file" made it into the patch.
-    let mut kept = false;
+    // Each line with its index, and the "\ No newline at end of file" that follows it.
+    let mut parsed: Vec<(&str, Option<&str>, usize)> = Vec::new();
     for row in rows {
         match row.as_bytes().first() {
-            Some(b'+') | Some(b'-') => {
-                let added = row.starts_with('+');
-                if selected.contains(&index) {
-                    picked += 1;
-                    body.push_str(row);
-                    if added {
-                        new += 1;
-                    } else {
-                        old += 1;
-                    }
-                    kept = true;
-                } else if added != forward {
-                    body.push(' ');
-                    body.push_str(&row[1..]);
-                    old += 1;
-                    new += 1;
-                    kept = true;
-                } else {
-                    kept = false;
+            Some(b'+' | b'-' | b' ') => parsed.push((row, None, parsed.len())),
+            Some(b'\\') => {
+                if let Some(last) = parsed.last_mut() {
+                    last.1 = Some(row);
                 }
-                index += 1;
             }
-            Some(b' ') => {
-                body.push_str(row);
-                old += 1;
-                new += 1;
-                kept = true;
-                index += 1;
-            }
-            Some(b'\\') if kept => body.push_str(row),
             _ => {}
         }
+    }
+    let mut body = String::new();
+    let (mut old, mut new, mut picked) = (0u32, 0u32, 0usize);
+    let mut emit = |(row, no_newline, index): (&str, Option<&str>, usize)| {
+        let added = row.starts_with('+');
+        if row.starts_with(' ') {
+            body.push_str(row);
+            old += 1;
+            new += 1;
+        } else if selected.contains(&index) {
+            picked += 1;
+            body.push_str(row);
+            if added {
+                new += 1;
+            } else {
+                old += 1;
+            }
+        } else if added != forward {
+            body.push(' ');
+            body.push_str(&row[1..]);
+            old += 1;
+            new += 1;
+        } else {
+            return;
+        }
+        if let Some(marker) = no_newline {
+            body.push_str(marker);
+        }
+    };
+    // A run of changed lines goes pair by pair, the n-th removed line beside the n-th added one,
+    // so the lines left out keep their places: discarding `b`/`B` alone of `-a -b +A +B`
+    // leaves `A`, `b`, not `b`, `A`.
+    let mut at = 0;
+    while at < parsed.len() {
+        if parsed[at].0.starts_with(' ') {
+            emit(parsed[at]);
+            at += 1;
+            continue;
+        }
+        let end = (at..parsed.len())
+            .find(|&i| parsed[i].0.starts_with(' '))
+            .unwrap_or(parsed.len());
+        let run = &parsed[at..end];
+        let removed: Vec<_> = run.iter().filter(|r| r.0.starts_with('-')).copied().collect();
+        let added: Vec<_> = run.iter().filter(|r| r.0.starts_with('+')).copied().collect();
+        for n in 0..removed.len().max(added.len()) {
+            if let Some(&row) = removed.get(n) {
+                emit(row);
+            }
+            if let Some(&row) = added.get(n) {
+                emit(row);
+            }
+        }
+        at = end;
     }
     if picked == 0 {
         return None;
@@ -1333,5 +1361,25 @@ mod tests {
         assert_eq!((second.hunk.old_start, second.hunk.old_lines), (10, 1));
         assert!(second.text.ends_with("\\ No newline at end of file\n"));
         assert_eq!(second.hunk.lines.len(), 2);
+    }
+
+    #[test]
+    fn picked_lines_of_a_run_keep_the_others_in_their_places() {
+        let hunk = "@@ -1,3 +1,3 @@\n x\n-a\n-b\n+A\n+B\n";
+        // Indexes as in Hunk::lines: x 0, -a 1, -b 2, +A 3, +B 4.
+        // Staging a/A alone: b stays, after A.
+        assert_eq!(
+            partial_hunk(hunk, &[1, 3], true).unwrap(),
+            "@@ -1,3 +1,3 @@\n x\n-a\n+A\n b\n"
+        );
+        // Discarding b/B alone: A stays, before b.
+        assert_eq!(
+            partial_hunk(hunk, &[2, 4], false).unwrap(),
+            "@@ -1,3 +1,3 @@\n x\n A\n-b\n+B\n"
+        );
+        // More added than removed: the extra ones come after the pairs.
+        let more = "@@ -1,1 +1,3 @@\n-a\n+A\n+A2\n+A3\n";
+        assert_eq!(partial_hunk(more, &[3], true).unwrap(), "@@ -1,1 +1,2 @@\n a\n+A3\n");
+        assert_eq!(partial_hunk(hunk, &[0], true), None, "a context line is no pick");
     }
 }

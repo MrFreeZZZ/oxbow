@@ -209,6 +209,7 @@ fn a_forgotten_file_goes_into_the_last_commit_with_its_message() {
         Fix::AddToLast {
             paths: vec!["forgotten.txt".into()],
             allow_secrets: false,
+            skip_checks: false,
         },
     );
     assert_eq!(
@@ -394,6 +395,7 @@ fn a_forgotten_file_with_a_secret_stops_until_allowed() {
             Fix::AddToLast {
                 paths: vec!["deploy.env".into()],
                 allow_secrets,
+                skip_checks: false,
             },
         )
     };
@@ -427,6 +429,7 @@ fn files_left_unpicked_stay_out_of_the_last_commit_even_when_staged() {
         Fix::AddToLast {
             paths: vec!["forgotten.txt".into()],
             allow_secrets: false,
+            skip_checks: false,
         },
     );
     repo.perform(&action).unwrap();
@@ -458,6 +461,7 @@ fn a_staged_file_can_be_added_to_the_last_commit() {
         Fix::AddToLast {
             paths: vec!["b.txt".into(), "forgotten.txt".into()],
             allow_secrets: false,
+            skip_checks: false,
         },
     );
     repo.perform(&action).unwrap();

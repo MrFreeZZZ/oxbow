@@ -3,6 +3,7 @@
 
 import { api } from "./api";
 import { ignoreChoices, ignoreRequest, stashFilesRequest, stashMessageFor, type StashCandidate } from "./changes";
+import { stashStagedRequest } from "./stashLines";
 import { commitFileActions, commitFileRequest, type CommitFile } from "./commitFiles";
 import { confirm, type Request } from "./confirm.svelte";
 import { splitPath } from "./format";
@@ -20,7 +21,12 @@ export interface FileMenuActions {
   actOnPicked: (how?: "move" | "discard") => unknown;
   /** Every file with changes once, for a stash of a few of them. */
   stashCandidates: () => StashCandidate[];
+  /** How many files are staged, for Stash Staged. */
+  stagedCount: () => number;
 }
+
+/** Stash Staged Changes…, in the menus of staged files. */
+const stashStagedItem = (a: FileMenuActions): MenuEntry => ({ kind: "item", label: "Stash Staged Changes…", icon: menuIcons.stash, run: () => a.act(stashStagedRequest(a.stagedCount(), "")) });
 
 export interface FileMenu {
   entries: MenuEntry[];
@@ -61,6 +67,7 @@ export function filesMenu(repo: string, several: FileChange[], group: Side | "un
   if (group === "staged") entries.push({ kind: "item", label: `Unstage ${n} Files`, icon: menuIcons.unstage, run: () => a.actOnPicked() });
   else entries.push({ kind: "item", label: `Stage ${n} Files`, icon: menuIcons.stage, run: () => a.actOnPicked() });
   entries.push({ kind: "item", label: "Stash These Files…", icon: menuIcons.stash, run: () => a.act(stashFilesRequest(a.stashCandidates(), several.map((f) => f.path), stashMessageFor(several[0].path))) });
+  if (group === "staged") entries.push(stashStagedItem(a));
   entries.push({ kind: "sep" });
   entries.push(copyMenu(repo, several.map((f) => f.path)));
   if (group !== "staged") {
@@ -80,6 +87,7 @@ export function fileMenu(repo: string, file: FileChange, group: Side | "untracke
   else if (side === "unstaged") entries.push({ kind: "item", label: "Stage File", icon: menuIcons.stage, run: () => a.stage([file]) });
   if (side !== "conflicted")
     entries.push({ kind: "item", label: "Stash This File…", icon: menuIcons.stash, run: () => a.act(stashFilesRequest(a.stashCandidates(), [file.path], stashMessageFor(file.path))) });
+  if (side === "staged") entries.push(stashStagedItem(a));
   if (file.status !== "conflicted" && file.status !== "deleted")
     entries.push({
       kind: "sub",

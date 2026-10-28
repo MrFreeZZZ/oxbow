@@ -9,6 +9,7 @@ import { stoppedOnConflicts } from "./merge";
 import { menuIcons, type MenuEntry } from "./Menu.svelte";
 import type { StashCheck, StashInfo } from "./types";
 import { shortId } from "./format";
+import { stashStagedRequest } from "./stashLines";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const chip = (ctx: BranchContext, name: string): Part => ({ branch: name, color: ctx.colorOf(name) });
@@ -34,9 +35,17 @@ function listFiles(paths: string[]): Part[] {
   return parts;
 }
 
-/** Put every uncommitted change aside. */
-export function stashRequest(ctx: BranchContext, message = "", untracked = true): Request {
+/** Put every uncommitted change aside, or with `staged` only what is staged. */
+export function stashRequest(ctx: BranchContext, message = "", untracked = true, staged = false): Request {
   const files = ctx.uncommitted;
+  const stagedFiles = ctx.history.rows[0]?.worktree?.staged ?? 0;
+  const onlyStaged = (on: boolean) => ({
+    label: "Only what is staged",
+    sub: "Changes that are not staged stay in your files (git stash push --staged).",
+    on,
+    toggle: () => stashRequest(ctx, message, untracked, !on),
+  });
+  if (staged) return { ...stashStagedRequest(stagedFiles, message, (value) => stashRequest(ctx, value, untracked, true)), options: [onlyStaged(true)] };
   return {
     title: `Stash ${plural(files, "changed file")}?`,
     body: [
@@ -59,6 +68,7 @@ export function stashRequest(ctx: BranchContext, message = "", untracked = true)
         on: untracked,
         toggle: () => stashRequest(ctx, message, !untracked),
       },
+      ...(stagedFiles ? [onlyStaged(false)] : []),
     ],
     invalid: files ? null : "Nothing to stash: there are no uncommitted changes.",
     status: "Stashing your changes…",

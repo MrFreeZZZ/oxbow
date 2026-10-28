@@ -42,6 +42,8 @@ pub enum TrustKind {
     Signing,
     /// `remote.*.uploadpack` or `receivepack`: runs for a remote in a local folder.
     Remote,
+    /// `oxbow.check`: a check Oxbow runs before each commit.
+    Check,
     /// Any other command a setting gives: `core.askPass`, `core.gitProxy`,
     /// `core.alternateRefsCommand`, `sequence.editor`, `submodule.*.update`, an `ext::`
     /// transport, an LFS transfer agent.
@@ -161,6 +163,7 @@ fn kind_of(key: &str, value: &str) -> Option<TrustKind> {
         ("protocol", None, "allow") if value.trim().eq_ignore_ascii_case("always") => TrustKind::Command,
         ("protocol", Some("ext"), "allow") if !value.trim().eq_ignore_ascii_case("never") => TrustKind::Command,
         ("lfs", Some(sub), "path") if sub.starts_with("customtransfer.") && set => TrustKind::Command,
+        ("oxbow", None, "check") if crate::checks::runs(value) => TrustKind::Check,
         _ => return None,
     })
 }
@@ -400,7 +403,8 @@ fn restriction(found: &[TrustFinding], user: &[Entry]) -> Result<Restriction> {
         let key = finding.key.as_str();
         let lower = key.to_ascii_lowercase();
         match finding.kind {
-            TrustKind::Fsmonitor | TrustKind::Hook => {}
+            // Oxbow runs the checks itself, and not in Restricted: git is given nothing.
+            TrustKind::Fsmonitor | TrustKind::Hook | TrustKind::Check => {}
             TrustKind::Credential => credentials = true,
             TrustKind::Ssh => set(&mut out.config, key, users(key).unwrap_or_else(|| "ssh".to_owned())),
             TrustKind::Filter => {

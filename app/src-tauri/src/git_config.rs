@@ -44,6 +44,10 @@ pub(crate) struct RepoSettings {
     remotes: Vec<oxbow_core::RemoteInfo>,
     storage: Option<oxbow_core::Storage>,
     production: Production,
+    /// The checks before commit, in the order they run.
+    checks: Vec<oxbow_core::CommitCheck>,
+    /// Restricted: the repository's own programs, the checks too, don't run.
+    restricted: bool,
 }
 
 /// Settings › This Repository › Production branch.
@@ -76,6 +80,8 @@ pub(crate) async fn repo_settings(
             local: repo.local_config(),
             remotes: repo.remotes_info()?,
             storage: repo.storage().ok(),
+            checks: repo.commit_checks()?,
+            restricted: oxbow_core::trust::is_restricted(repo.workdir()),
             production: {
                 let refs = repo.refs()?;
                 let chosen = repo.production_setting();
@@ -127,4 +133,30 @@ pub(crate) async fn set_git_config(
         let _ = app.emit_to(session.label(&window).as_str(), "repo-touched", ());
     }
     Ok(())
+}
+
+/// Keep `checks` as the open repository's checks before commit. The user wrote them, so when
+/// the repository isn't restricted it is trusted too: it won't ask about them when it opens.
+#[tauri::command]
+pub(crate) async fn set_commit_checks(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    checks: Vec<oxbow_core::CommitCheck>,
+) -> CommandResult<()> {
+    let repo = current(&session, &window)?;
+    logged(
+        Some(at(&repo)),
+        console::EntryKind::Action,
+        "Set the checks before commit",
+        move || {
+            repo.set_commit_checks(&checks)?;
+            let workdir = repo.workdir();
+            if !oxbow_core::trust::is_restricted(workdir) && checks.iter().any(|c| c.on) {
+                crate::trusted::add(&app, workdir, &oxbow_core::trust::scan(workdir).unwrap_or_default());
+            }
+            Ok(())
+        },
+    )
+    .await
 }

@@ -75,6 +75,9 @@ pub enum Action {
         /// Commit even though the secrets check finds something, this one time.
         #[serde(default)]
         allow_secrets: bool,
+        /// Commit without running the checks before commit, this one time.
+        #[serde(default)]
+        skip_checks: bool,
         /// End the message with a `Signed-off-by:` line of the committer (`--signoff`).
         #[serde(default)]
         sign_off: bool,
@@ -283,12 +286,25 @@ pub enum Action {
         no_verify: bool,
     },
     /// Put uncommitted changes aside in a new stash, untracked files too with `untracked`: those
-    /// of `paths`, or every change when it is empty.
+    /// of `paths`, or every change when it is empty. With `staged`, only what is staged
+    /// (`--staged`, git 2.35+); unstaged changes stay.
     StashPush {
         message: Option<String>,
         untracked: bool,
         #[serde(default)]
         paths: Vec<String>,
+        #[serde(default)]
+        staged: bool,
+    },
+    /// Put the unstaged hunk of `path` that starts at `header` aside in a new stash, only its
+    /// changed lines at `lines` when given, and take it out of the file.
+    StashHunk {
+        path: String,
+        header: String,
+        check: String,
+        #[serde(default)]
+        lines: Option<Vec<usize>>,
+        message: Option<String>,
     },
     /// Bring the changes of `stash@{index}` (whose id is `id`) back into the working copy;
     /// `pop` deletes the stash afterwards, `keep_index` restages what was staged.
@@ -378,6 +394,9 @@ pub enum Action {
         /// Add them even though the secrets check finds something, this one time.
         #[serde(default)]
         allow_secrets: bool,
+        /// Add them without running the checks before commit, this one time.
+        #[serde(default)]
+        skip_checks: bool,
     },
     /// Push several local branches to `remote` at once, each to its upstream, overwriting what
     /// the rebase replaced there while nobody else pushed (`--force-with-lease`).

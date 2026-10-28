@@ -48,6 +48,8 @@ export function trustWhy(f: TrustFinding): string {
       return "Runs on every signed commit and tag";
     case "remote":
       return "Runs when fetching from or pushing to this remote";
+    case "check":
+      return "Oxbow runs it before each commit";
     case "command":
       if (key === "core.askpass") return "Asks for your passwords";
       if (key === "core.gitproxy") return "Connects to git:// servers";
