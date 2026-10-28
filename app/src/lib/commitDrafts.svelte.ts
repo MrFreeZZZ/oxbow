@@ -8,6 +8,9 @@ export interface Draft {
   /** The commit Amend was turned on for: it replaces that one only. */
   amendOn: string | null;
   prefilled: string;
+  /** Sign-off: the message ends with Signed-off-by (`--signoff`). It stays on for the folder
+   *  until turned off, over commits. */
+  signOff: boolean;
 }
 
 // The commit message outlives the panel, so picking another commit and coming back keeps the
@@ -28,7 +31,7 @@ function savedDraft(repo: string): Partial<Draft> {
 
 export function saveDraft(repo: string, draft: Draft) {
   try {
-    if (!draft.summary.trim() && !draft.description.trim() && !draft.amend) localStorage.removeItem(DRAFT_KEY + repo);
+    if (!draft.summary.trim() && !draft.description.trim() && !draft.amend && !draft.signOff) localStorage.removeItem(DRAFT_KEY + repo);
     else localStorage.setItem(DRAFT_KEY + repo, JSON.stringify(draft));
   } catch {
     // Private mode or full storage: the draft lasts until the app quits.
@@ -50,7 +53,7 @@ export function moveMessage(from: string, to: string): boolean {
   Object.assign(there, $state.snapshot(draft));
   saveDraft(to, there);
   drafts.delete(from);
-  saveDraft(from, { summary: "", description: "", amend: false, amendOn: null, prefilled: "" });
+  saveDraft(from, { summary: "", description: "", amend: false, amendOn: null, prefilled: "", signOff: false });
   return true;
 }
 
@@ -65,6 +68,7 @@ export function draftFor(repo: string): Draft {
     amend: saved.amend === true,
     amendOn: typeof saved.amendOn === "string" ? saved.amendOn : null,
     prefilled: text(saved.prefilled),
+    signOff: saved.signOff === true,
   });
   drafts.set(repo, draft);
   return draft;

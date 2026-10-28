@@ -2679,6 +2679,7 @@
               />
             {:else if selectedRow}
               <CommitPanel row={selectedRow} childIds={childrenOf.get(selectedRow.id) ?? []} lookup={(id) => rowsById.get(id)} onSelect={jump} localTags={history.localTags} {version}
+                inHead={(id) => ancestors(history!, history!.head.commit).has(id)}
                 onUnshallow={history.shallow && history.defaultRemote ? () => run(unshallowRequest(history!.defaultRemote!)) : null}
                 find={found?.mode === "code" ? found.text : null}
                 foundFiles={found?.hits.get(selectedRow.id) ?? []}

@@ -195,6 +195,43 @@ impl Repo {
         }
     }
 
+    /// The messages of your latest commits on `HEAD`, newest first and each once, for ↑ in the
+    /// commit message box: those whose author has your email (`user.email`), or anyone's when
+    /// none is set. Merges are left out: git wrote their messages.
+    pub fn recent_messages(&self, count: usize) -> Result<Vec<String>> {
+        if self.head()?.commit.is_none() {
+            return Ok(Vec::new());
+        }
+        let email = self
+            .run(&GitCommand::new(["config", "user.email"]))
+            .ok()
+            .map(|out| out.stdout.trim().to_owned())
+            .filter(|email| !email.is_empty());
+        // Twice as many, for the ones said twice.
+        let mut args = vec![
+            "log".to_owned(),
+            "-z".to_owned(),
+            "--no-merges".to_owned(),
+            "--format=%B".to_owned(),
+            format!("-n{}", count * 2),
+        ];
+        if let Some(email) = email {
+            args.extend(["--fixed-strings".to_owned(), format!("--author=<{email}>")]);
+        }
+        args.extend(["HEAD".to_owned(), "--".to_owned()]);
+        let out = self.run(&GitCommand::new(args))?;
+        let mut messages: Vec<String> = Vec::new();
+        for message in out.stdout.split('\0').map(str::trim).filter(|m| !m.is_empty()) {
+            if !messages.iter().any(|m| m == message) {
+                messages.push(message.to_owned());
+            }
+            if messages.len() == count {
+                break;
+            }
+        }
+        Ok(messages)
+    }
+
     /// The diff of one file on one side of the working copy.
     pub fn working_diff(&self, path: &str, side: Side, whole_file: bool) -> Result<FileDiff> {
         let tree = self.working_tree()?;

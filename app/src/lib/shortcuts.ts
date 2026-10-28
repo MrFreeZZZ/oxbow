@@ -105,6 +105,10 @@ export const COMMANDS = {
   fixMistake: { category: "Git", title: "Fix a Mistake…", mac: ["Alt+Mod+Z"], other: ["Alt+Mod+Z"] },
   // The commit message's box: Git: Commit, as in VS Code's Source Control.
   commitNow: { category: "Changes", title: "Commit", mac: ["Mod+Enter"], other: ["Mod+Enter"], scope: "changes" },
+  // SCM: View Previous Commit and View Next Commit: in the empty commit message box, your latest
+  // commit messages.
+  previousMessage: { category: "Changes", title: "Previous Commit Message", mac: ["Up"], other: ["Up"], scope: "changes" },
+  nextMessage: { category: "Changes", title: "Next Commit Message", mac: ["Down"], other: ["Down"], scope: "changes" },
   // The list of changed files, while it has the focus, as any list with checkboxes: ↑ and ↓ go
   // through the files, Space ticks one, ⌘A ticks them all; Enter stages the open file (or the
   // ticked ones) or takes it out, ⌥Space stages it and opens the next.

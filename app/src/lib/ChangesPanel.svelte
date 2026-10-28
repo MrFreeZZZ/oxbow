@@ -110,8 +110,8 @@
   const draft = $derived(draftFor(repo));
 
   $effect(() => {
-    const { summary, description, amend, amendOn, prefilled } = draft;
-    saveDraft(repo, { summary, description, amend, amendOn, prefilled });
+    const { summary, description, amend, amendOn, prefilled, signOff } = draft;
+    saveDraft(repo, { summary, description, amend, amendOn, prefilled, signOff });
   });
 
   const shownConflicted = $derived(conflicted.filter(matches));

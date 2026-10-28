@@ -75,6 +75,9 @@ pub enum Action {
         /// Commit even though the secrets check finds something, this one time.
         #[serde(default)]
         allow_secrets: bool,
+        /// End the message with a `Signed-off-by:` line of the committer (`--signoff`).
+        #[serde(default)]
+        sign_off: bool,
     },
     /// Download new commits, branches and tags from `remote`, or from every remote.
     Fetch {
@@ -246,6 +249,26 @@ pub enum Action {
     /// Add a commit that undoes `commit`.
     Revert {
         commit: String,
+    },
+    /// Undo what `commit` changed in the file `path` (`old_path` before a rename), in the files on
+    /// disk, uncommitted: its patch of that file, reversed.
+    RevertFile {
+        commit: String,
+        path: String,
+        #[serde(default)]
+        old_path: Option<String>,
+    },
+    /// Bring what `commit` changed in the file `path` into the files on disk, uncommitted.
+    CherryPickFile {
+        commit: String,
+        path: String,
+        #[serde(default)]
+        old_path: Option<String>,
+    },
+    /// Put the file `path` on disk as it is in `commit`; nothing is staged.
+    TakeVersion {
+        commit: String,
+        path: String,
     },
     /// Point the checked-out branch, or a detached `HEAD`, at `commit` (a sha or `HEAD~1`).
     Reset {

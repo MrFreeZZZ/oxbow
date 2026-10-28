@@ -245,7 +245,7 @@ export const integrationsSection: Section = {
       title: "Open in",
       rows: [
         prefRow("oxbow.openIn.editor", "Editor", "popup", {
-          sub: () => (model.git && !model.git.editors.length ? "None of Visual Studio Code, Zed, Sublime Text or Xcode is installed" : "The ↗ button on a file’s diff opens it at its first change"),
+          sub: () => (model.git && !model.git.editors.length ? "None of Visual Studio Code, Zed, Sublime Text, Xcode or the JetBrains IDEs is installed" : "The ↗ button on a file’s diff opens it at its first change; a click on a line number opens it at that line"),
           off: () => !model.git?.editors.length,
           control: {
             type: "popup",

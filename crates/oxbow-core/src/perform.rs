@@ -65,6 +65,11 @@ impl Repo {
         if let Action::Fix { expect, .. } = action {
             self.check_fix(expect)?;
         }
+        // A file's change that no longer fits, or would conflict, is refused before anything
+        // is saved or runs: no failed step in the Operation Log for it.
+        if let Action::RevertFile { .. } | Action::CherryPickFile { .. } = action {
+            self.plan(action)?;
+        }
         // A commit the secrets check stops never starts: nothing runs, nothing to undo.
         if let Action::Commit {
             allow_secrets: false, ..
@@ -318,8 +323,10 @@ impl Repo {
                     on_event(ActionEvent::Command {
                         display: command.display(),
                     });
-                    let ran = crate::console::main(|| {
-                        self.run_streaming(&command, &mut |line| on_event(ActionEvent::Line(line)), cancel)
+                    // A patch Oxbow made, e.g. one file's change in a commit, goes in on stdin.
+                    let ran = crate::console::main(|| match &command.input {
+                        Some(input) => self.run_with_input(&command, Some(input.as_bytes())),
+                        None => self.run_streaming(&command, &mut |line| on_event(ActionEvent::Line(line)), cancel),
                     });
                     // The files a fix or a bisect put aside whose staged changes no longer fit:
                     // git changed nothing and kept the stash. Say so rather than bring them back

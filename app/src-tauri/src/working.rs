@@ -86,6 +86,19 @@ pub(crate) async fn open_source(
     open_in::open_url(&file.display().to_string())
 }
 
+/// Your latest commit messages, for ↑ in the commit message box.
+#[tauri::command]
+pub(crate) async fn recent_messages(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+) -> CommandResult<Vec<String>> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "Read recent commit messages", move || {
+        repo.recent_messages(50)
+    })
+    .await
+}
+
 #[tauri::command]
 pub(crate) async fn working_tree(
     window: tauri::WebviewWindow,

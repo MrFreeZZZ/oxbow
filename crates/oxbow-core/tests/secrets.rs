@@ -9,6 +9,7 @@ fn commit(allow_secrets: bool) -> Action {
         amend: false,
         no_verify: false,
         allow_secrets,
+        sign_off: false,
     }
 }
 

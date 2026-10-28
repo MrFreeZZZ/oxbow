@@ -229,6 +229,7 @@ type Phase = "ask" | "running" | "failed";
 const RISKY = new Set<Action["kind"]>([
   "discard",
   "discardHunk",
+  "takeVersion",
   "reset",
   "stashDrop",
   "deleteBranch",

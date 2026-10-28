@@ -186,6 +186,7 @@ impl Repo {
                 message,
                 amend,
                 no_verify,
+                sign_off,
                 ..
             } => {
                 let mut args = vec!["commit".to_owned()];
@@ -194,6 +195,9 @@ impl Repo {
                 }
                 if *no_verify || !config::run_hooks() {
                     args.push("--no-verify".to_owned());
+                }
+                if *sign_off {
+                    args.push("--signoff".to_owned());
                 }
                 // One -m per paragraph, as people type it; git puts the blank lines back between them.
                 for paragraph in paragraphs(message) {
@@ -207,6 +211,8 @@ impl Repo {
                     cmd.comment("--no-verify: skip the pre-commit and commit-msg hooks this once")
                 } else if !config::run_hooks() {
                     cmd.comment(HOOKS_OFF)
+                } else if *sign_off {
+                    cmd.comment("--signoff: the message ends with Signed-off-by and your name and email")
                 } else {
                     cmd
                 }]
@@ -479,6 +485,13 @@ impl Repo {
             } => self.plan_save_patches(to, since.as_deref(), *count, into, *one_file)?,
             Action::ApplyPatches { paths } => self.plan_apply_patches(paths)?,
             Action::Revert { commit } => self.plan_revert(commit)?,
+            Action::RevertFile { commit, path, old_path } => {
+                self.plan_file_patch(commit, path, old_path.as_deref(), true)?
+            }
+            Action::CherryPickFile { commit, path, old_path } => {
+                self.plan_file_patch(commit, path, old_path.as_deref(), false)?
+            }
+            Action::TakeVersion { commit, path } => self.plan_take_version(commit, path)?,
             Action::Reset { commit, mode } => plan_reset(commit, *mode),
             Action::StashPush {
                 message,

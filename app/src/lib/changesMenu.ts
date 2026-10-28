@@ -3,6 +3,7 @@
 
 import { api } from "./api";
 import { ignoreChoices, ignoreRequest, stashFilesRequest, stashMessageFor, type StashCandidate } from "./changes";
+import { commitFileActions, commitFileRequest, type CommitFile } from "./commitFiles";
 import { confirm, type Request } from "./confirm.svelte";
 import { splitPath } from "./format";
 import { menuIcons, type MenuEntry, type SubEntry } from "./Menu.svelte";
@@ -100,12 +101,24 @@ export function fileMenu(repo: string, file: FileChange, group: Side | "untracke
   return { entries, label: `${name} menu` };
 }
 
+/** What the menu of a file of a commit needs from the view it is in. */
+export interface CommitFileContext {
+  /** The commit's summary, for the sheets. */
+  summary: string | null;
+  /** Whether the commit is in the checked-out commit's history; null when that isn't known. */
+  inHead: boolean | null;
+  /** Compare with Working Copy, in the view. */
+  compare: (file: CommitFile) => void;
+}
+
 /** The menu of a file of a commit: what can be done with it, as with a file in Changes, but
- *  nothing to stage, stash or discard. */
-export function commitFileMenu(repo: string, file: FileChange, commit: string): FileMenu {
+ *  nothing to stage, stash or discard; and its change on its own, undone or copied. */
+export function commitFileMenu(repo: string, file: FileChange, commit: string, ctx: CommitFileContext): FileMenu {
   const name = splitPath(file.path).name;
   const what = { modified: "modified", added: "added", untracked: "added", deleted: "deleted", renamed: "renamed", copied: "copied", conflicted: "conflicted" }[file.status];
   const entries: MenuEntry[] = [{ kind: "header", label: `${name} · ${what} in this commit` }];
+  const actions = commitFileEntries(file, commit, ctx);
+  if (actions.length) entries.push(...actions, { kind: "sep" });
   if (file.status !== "deleted") {
     entries.push({ kind: "item", label: "Open in Editor", icon: menuIcons.open, run: () => api.openInEditor(file.path, null).catch((err) => confirm.fail(err)) });
     entries.push({ kind: "item", label: revealLabel, icon: menuIcons.reveal, run: () => api.revealFile(file.path).catch((err) => confirm.fail(err)) });
@@ -113,4 +126,20 @@ export function commitFileMenu(repo: string, file: FileChange, commit: string): 
   entries.push(copyMenu(repo, [file.path]));
   entries.push({ kind: "item", label: "File History", icon: menuIcons.history, run: () => nav.openFile(file.path, commit) });
   return { entries, label: `${name} menu` };
+}
+
+const actionIcons = { revertFile: menuIcons.revert, cherryPickFile: menuIcons.cherry, takeVersion: menuIcons.checkout, compare: menuIcons.compare };
+
+/** Revert This File, Cherry-Pick This File, Take This Version and Compare with Working Copy, as
+ *  menu items; the same in File History. */
+export function commitFileEntries(file: CommitFile, commit: string, ctx: CommitFileContext): MenuEntry[] {
+  return commitFileActions(file, ctx.inHead).map((action) => ({
+    kind: "item",
+    label: action.label,
+    icon: actionIcons[action.id],
+    run: () => {
+      if (action.id === "compare") ctx.compare(file);
+      else confirm.runner?.(commitFileRequest(action.id, file, commit, ctx.summary));
+    },
+  }));
 }

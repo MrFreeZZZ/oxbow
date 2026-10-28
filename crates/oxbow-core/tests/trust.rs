@@ -59,6 +59,7 @@ fn a_restricted_repository_runs_none_of_its_own_programs() {
         amend: false,
         no_verify: false,
         allow_secrets: true,
+        sign_off: false,
     })
     .unwrap();
     let ran: Vec<String> = std::fs::read_dir(marks.path())

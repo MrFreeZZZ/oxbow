@@ -6,11 +6,15 @@
   import { tick, untrack } from "svelte";
   import { api, stopped } from "./api";
   import { nav } from "./nav.svelte";
+  import { confirm } from "./confirm.svelte";
   import { diffSettings, prefs, wholeByDefault } from "./prefs.svelte";
   import type { Blame, FileCommit, FileDiff, FileHistory, History, HistoryRow } from "./types";
   import { initials, lane, person, relativeTime, shortId, splitPath, tint } from "./format";
   import { languageOf, occurrences, paint } from "./syntax";
   import DiffView from "./DiffView.svelte";
+  import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
+  import WorkingCopyPanel from "./WorkingCopyPanel.svelte";
+  import { commitFileEntries } from "./changesMenu";
   import Lazy, { BLOCK, matchesIn, placeOf, type FindHits } from "./Lazy.svelte";
 
   let {
@@ -50,6 +54,11 @@
   let finding = $state<{ text: string; ids: string[] } | null>(null);
 
   const mode = $derived(nav.fileMode);
+  // Changes or Blame shows its own again.
+  $effect(() => {
+    mode;
+    untrack(() => (comparing = null));
+  });
   const all = $derived(file ? [...(showElsewhere ? file.elsewhere : []), ...file.commits] : []);
   const byId = $derived(new Map(all.map((c) => [c.id, c])));
   const pick = $derived(selected ? (byId.get(selected) ?? null) : null);
@@ -229,6 +238,7 @@
 
   function select(id: string) {
     selected = id;
+    comparing = null;
   }
 
   /** Blame as of the commit before this one: who wrote the lines it changed. */
@@ -269,6 +279,26 @@
     } catch (err) {
       if (!stopped(err)) blameError = String(err);
     }
+  }
+
+  /** The menu of a change to the file: Revert or Cherry-Pick This File, Take This Version,
+   *  Compare with Working Copy; `inHead` when the commit is on the checked-out branch. */
+  let menu = $state<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
+  /** Compare with Working Copy: a commit's file beside the file on disk, in place of the diff. */
+  let comparing = $state<FileCommit | null>(null);
+  const onOther = (c: FileCommit) => !byId.has(c.id) || !!file?.elsewhere.some((e) => e.id === c.id);
+  function changeMenu(event: MouseEvent, c: FileCommit) {
+    event.preventDefault();
+    const entries: MenuEntry[] = [{ kind: "header", label: `${splitPath(c.path).name} in ${shortId(c.id)}` }];
+    entries.push(...commitFileEntries(c, c.id, { summary: c.summary, inHead: !onOther(c), compare: () => (select(c.id), (comparing = c)) }));
+    entries.push({ kind: "sep" }, { kind: "item", label: "Copy SHA", icon: menuIcons.copy, run: () => copy(c.id) });
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    menu = { x: event.type === "contextmenu" ? event.clientX : box.left, y: event.type === "contextmenu" ? event.clientY : box.bottom + 4, entries };
+  }
+
+  /** Blame at HEAD: the file in the editor, at the line followed. */
+  function openInEditor() {
+    api.openInEditor(path, line?.no ?? null).catch((err) => confirm.fail(err));
   }
 
   /** Where Blame is: "at main (HEAD)" or "at 1a2b3c4, before ‘Edit config’". */
@@ -440,7 +470,7 @@
 {#snippet commitRow(c: FileCommit, other: boolean)}
   {@const color = colorOfCommit(c.id)}
   {@const dim = (!!line && !line.ids.includes(c.id)) || (!!finding && !finding.ids.includes(c.id))}
-  <button class="commit" class:on={selected === c.id} class:dim class:other style:--lane={lane(color)} style:--sel={tint(color)} onclick={() => select(c.id)}>
+  <button class="commit" class:on={selected === c.id} class:dim class:other style:--lane={lane(color)} style:--sel={tint(color)} onclick={() => select(c.id)} oncontextmenu={(e) => changeMenu(e, c)}>
     <span class="rail"><span class="dot" class:hollow={other}></span></span>
     <span class="lines">
       <span class="summary">{c.summary}</span>
@@ -503,8 +533,10 @@
     {/if}
   </section>
 
-  <section class="main" bind:this={main} aria-label={mode === "blame" ? "Blame" : "Changes"}>
-    {#if mode === "changes"}
+  <section class="main" bind:this={main} aria-label={comparing ? "Compare with Working Copy" : mode === "blame" ? "Blame" : "Changes"}>
+    {#if comparing}
+      <WorkingCopyPanel commit={comparing.id} summary={comparing.summary} file={comparing} color={colorOfCommit(comparing.id)} onClose={() => (comparing = null)} />
+    {:else if mode === "changes"}
       {#if pick}
         {@const color = colorOfCommit(pick.id)}
         <div class="head">
@@ -514,6 +546,9 @@
             <span class="byline">{pick.authorName} · {relativeTime(pick.time)} · <button class="mono link" onclick={() => copy(pick.id)} title="Copy the SHA">{shortId(pick.id)}</button></span>
           </span>
           <button class="button" onclick={() => blameHere(pick)} disabled={pick.status === "deleted"}>Blame Here</button>
+          <button class="button more" onclick={(e) => changeMenu(e, pick)} aria-label="More for this change" title="Revert, Cherry-Pick, Take This Version, Compare with Working Copy">
+            <svg class="icon" viewBox="0 0 16 16"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" /></svg>
+          </button>
         </div>
         {#if pick.status === "added"}<p class="note">This commit created the file.</p>{/if}
         {#if renamedAt(pick)}<p class="note">This commit renamed it from <span class="mono">{pick.oldPath}</span>.</p>{/if}
@@ -555,7 +590,8 @@
       {/if}
       <div class="revision">
         <span class="where"><span class="dir">{splitPath(blameAt.path).dir}</span><b>{splitPath(blameAt.path).name}</b> <span class="at">{atLabel}</span></span>
-        {#if at}<button class="back" onclick={() => ((at = null), (line = null))}>Back to HEAD</button>{/if}
+        {#if at}<button class="back" onclick={() => ((at = null), (line = null))}>Back to HEAD</button>
+        {:else}<button class="back" onclick={openInEditor} title={line ? `Open ${splitPath(path).name} in the editor at line ${line.no}` : `Open ${splitPath(path).name} in the editor`}>{line ? `Open Line ${line.no} in Editor` : "Open in Editor"}</button>{/if}
         <span class="spacer"></span>
         {#if blame}<button class="mono cmd" onclick={() => copy(blame!.command)} title="Copy the command">$ git {blame.command.replace(/^git /, "")}</button>{/if}
         <span class="legend">Older <span class="heat">{#each [0.25, 0.45, 0.65, 0.85, 1] as o (o)}<i style:opacity={o}></i>{/each}</span> Newer</span>
@@ -582,6 +618,10 @@
   </section>
 </div>
 
+
+{#if menu}
+  <Menu x={menu.x} y={menu.y} label="Change menu" entries={menu.entries} onClose={() => (menu = null)} />
+{/if}
 <style>
   /* No frames: the list of changes on the graph's paper, a hairline to the file. */
   .screen {
