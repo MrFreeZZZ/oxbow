@@ -2235,6 +2235,10 @@ async fn pull_setup(window: tauri::WebviewWindow, session: State<'_, Session>) -
     .await
 }
 
+/// A fetch in the background that hears nothing from the remote for this long has lost the
+/// network: it gives up rather than hold the repository's turn, and the next one tries again.
+const FETCH_QUIET_LIMIT: std::time::Duration = std::time::Duration::from_secs(2 * 60);
+
 /// How a background fetch ended.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2317,7 +2321,10 @@ async fn fetch_in_background(
             });
         };
         let done = console::scope(Some(repo.workdir()), kind, title, || {
-            let command = repo.fetch_command(remote.as_deref()).with_progress();
+            let command = repo
+                .fetch_command(remote.as_deref())
+                .with_progress()
+                .quiet_limit(FETCH_QUIET_LIMIT);
             emit(oxbow_core::ActionEvent::Command {
                 display: command.display(),
             });

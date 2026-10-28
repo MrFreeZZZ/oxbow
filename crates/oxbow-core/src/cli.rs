@@ -11,7 +11,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -95,6 +95,9 @@ pub struct GitCommand {
     /// Before running, stop when the secrets check finds something in the staged lines, as a
     /// commit does; for a commit that stages its files in an earlier command of the same action.
     pub secrets_check: bool,
+    /// How long it may print nothing before it is taken to hang and stopped; `None` for one
+    /// someone waits on, who can Stop it and may have a dialog to answer. Not shown.
+    pub quiet_limit: Option<Duration>,
 }
 
 impl GitCommand {
@@ -115,6 +118,7 @@ impl GitCommand {
             only_if_ancestor: None,
             only_if_moved: None,
             secrets_check: false,
+            quiet_limit: Some(QUIET_LIMIT),
         }
     }
 
@@ -155,6 +159,19 @@ impl GitCommand {
 
     pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.env.push((key.into(), value.into()));
+        self
+    }
+
+    /// Stop it once it prints nothing for `limit`, sooner than [`QUIET_LIMIT`].
+    pub fn quiet_limit(mut self, limit: Duration) -> Self {
+        self.quiet_limit = Some(limit);
+        self
+    }
+
+    /// Someone waits on it and can Stop it: it runs however long it is quiet, e.g. while a
+    /// merge tool is open or a passphrase dialog waits.
+    pub fn waits_for_user(mut self) -> Self {
+        self.quiet_limit = None;
         self
     }
 
@@ -254,86 +271,14 @@ impl Repo {
         cancel: &AtomicBool,
     ) -> Result<Limited> {
         let log = console::started(self.workdir(), &command.display());
-        let mut child = match command_in(self.workdir(), command)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(err) => {
-                log.not_started(&err.to_string());
-                return Err(Error::GitNotFound(err.to_string()));
-            }
-        };
-        let mut pipe = child.stderr.take().expect("stderr is piped");
-        let stderr = std::thread::spawn(move || {
-            let mut all = Vec::new();
-            let _ = pipe.read_to_end(&mut all);
-            all
-        });
-        let out = child.stdout.take().expect("stdout is piped");
-        let mut reader = Some(std::thread::spawn(move || {
-            let mut all = Vec::new();
-            let read = out.take((max as u64).saturating_add(1)).read_to_end(&mut all);
-            (all, read)
-        }));
-        let mut stdout = Vec::new();
-        let mut cut = false;
-        // The reader stops at the end of the output, past `max` bytes, or on an error. Only the
-        // last two stop the command: one may close its output a moment before it exits.
-        let status = loop {
-            if cancel.load(Ordering::Relaxed) {
-                kill_tree(&mut child);
-                let _ = child.wait();
-                let output = log.output();
-                log.stopped(output);
-                return Err(Error::Cancelled);
-            }
-            if reader.as_ref().is_some_and(|r| r.is_finished()) {
-                let (all, read) = reader
-                    .take()
-                    .expect("reader is running")
-                    .join()
-                    .map_err(|_| Error::Git("reading the output of git failed".into()))?;
-                stdout = all;
-                cut = stdout.len() > max;
-                if let Err(err) = read {
-                    kill_tree(&mut child);
-                    let _ = child.wait();
-                    return Err(Error::Git(err.to_string()));
-                }
-                if cut {
-                    kill_tree(&mut child);
-                    break child.wait().map_err(|err| Error::GitNotFound(err.to_string()))?;
-                }
-            }
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) => std::thread::sleep(Duration::from_millis(2)),
-                Err(err) => return Err(Error::GitNotFound(err.to_string())),
-            }
-        };
-        // Exited while its output was still being read: the rest is in the pipe.
-        if let Some(reader) = reader {
-            let (all, read) = reader
-                .join()
-                .map_err(|_| Error::Git("reading the output of git failed".into()))?;
-            read.map_err(|err| Error::Git(err.to_string()))?;
-            stdout = all;
-            cut = stdout.len() > max;
-        }
-        if cut {
-            stdout.truncate(max);
-        }
-        let stderr = stderr.join().unwrap_or_default();
-        log.done(status.code(), &stdout, &stderr);
+        let (mut child, log) = start(command_in(self.workdir(), command), false, log)?;
+        let waited = wait_for(&mut child, command, log, None, Some(cancel), Keep::First(max))?;
         Ok(Limited {
-            stdout,
-            stderr,
-            success: status.success() && !cut,
-            code: status.code(),
-            cut,
+            success: waited.status.success() && !waited.cut,
+            code: waited.status.code(),
+            cut: waited.cut,
+            stdout: waited.stdout,
+            stderr: waited.stderr,
         })
     }
 
@@ -521,35 +466,80 @@ fn spawn_in(dir: &Path, command: &GitCommand, input: Option<&[u8]>) -> Result<st
         return Err(Error::Cancelled);
     }
     let log = console::started(dir, &command.display());
-    let mut child = match command_in(dir, command)
-        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+    let (mut child, log) = start(command_in(dir, command), input.is_some(), log)?;
+    let keep = Keep::All(MAX_OUTPUT_BYTES);
+    let waited = wait_for(&mut child, command, log, input, stop.as_deref(), keep)?;
+    Ok(std::process::Output {
+        status: waited.status,
+        stdout: waited.stdout,
+        stderr: waited.stderr,
+    })
+}
+
+/// Run `program`, set up by the caller, the way a [`GitCommand`] runs: in the Console as
+/// `shown`, stopped after [`QUIET_LIMIT`] without output or past [`MAX_OUTPUT_BYTES`]. For git
+/// outside any repository and for ssh, which need no repository's settings.
+pub(crate) fn output_of(mut program: Command, dir: &Path, shown: &GitCommand) -> Result<std::process::Output> {
+    own_group(&mut program);
+    let log = console::started(dir, &shown.display());
+    let (mut child, log) = start(program, false, log)?;
+    let waited = wait_for(&mut child, shown, log, None, None, Keep::All(MAX_OUTPUT_BYTES))?;
+    Ok(std::process::Output {
+        status: waited.status,
+        stdout: waited.stdout,
+        stderr: waited.stderr,
+    })
+}
+
+/// Run `command` in `dir` and wait for it, unless `cancel` is set first: the command is then
+/// stopped and fails with [`Error::Cancelled`].
+pub fn run_cancellable_in(dir: &Path, command: &GitCommand, cancel: &AtomicBool) -> Result<CommandOutput> {
+    let log = console::started(dir, &command.display());
+    let (mut child, log) = start(command_in(dir, command), false, log)?;
+    let waited = wait_for(
+        &mut child,
+        command,
+        log,
+        None,
+        Some(cancel),
+        Keep::All(MAX_OUTPUT_BYTES),
+    )?;
+    let stdout = String::from_utf8_lossy(&waited.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&waited.stderr).into_owned();
+    if waited.status.success() {
+        Ok(CommandOutput { stdout, stderr })
+    } else {
+        Err(Error::Command {
+            command: command.display(),
+            code: waited.status.code(),
+            output: if stderr.trim().is_empty() { stdout } else { stderr },
+        })
+    }
+}
+
+/// How long a command may print nothing before it is taken to hang and stopped, with all it
+/// started. Whatever it prints starts the wait over, so a slow command that shows progress runs
+/// on. Commands someone waits on and can Stop have none: see [`GitCommand::waits_for_user`].
+pub const QUIET_LIMIT: Duration = Duration::from_secs(10 * 60);
+
+/// The most of a command's standard output read whole: past it the command is stopped and
+/// fails rather than fill memory. The status of a million files is a small part of it.
+const MAX_OUTPUT_BYTES: usize = 256 * 1024 * 1024;
+
+/// How long to wait for a command's output to end once it has exited: something it started and
+/// left running, such as a hook's job in the background, may hold the pipes open.
+const AFTER_EXIT: Duration = Duration::from_millis(500);
+
+/// Start `program` with its output piped, and `input` piped in when there is one. `log` is
+/// told when it can't start.
+fn start(mut program: Command, input: bool, log: console::Started) -> Result<(Child, console::Started)> {
+    match program
+        .stdin(if input { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
     {
-        Ok(child) => child,
-        Err(err) => {
-            log.not_started(&err.to_string());
-            return Err(Error::GitNotFound(err.to_string()));
-        }
-    };
-    if let Some(stop) = stop {
-        return collect(&mut child, log, input, &stop);
-    }
-    let stderr = read_stderr(&mut child);
-    if let Some(input) = input {
-        let mut stdin = child.stdin.take().expect("stdin is piped");
-        // A command that exits early closes its end; its exit status tells what went wrong.
-        let _ = stdin.write_all(input);
-    }
-    let mut stdout = Vec::new();
-    let _ = child.stdout.take().expect("stdout is piped").read_to_end(&mut stdout);
-    let stderr = stderr.join().unwrap_or_default();
-    match child.wait() {
-        Ok(status) => {
-            log.done(status.code(), &stdout, &stderr);
-            Ok(std::process::Output { status, stdout, stderr })
-        }
+        Ok(child) => Ok((child, log)),
         Err(err) => {
             log.not_started(&err.to_string());
             Err(Error::GitNotFound(err.to_string()))
@@ -557,120 +547,256 @@ fn spawn_in(dir: &Path, command: &GitCommand, input: Option<&[u8]>) -> Result<st
     }
 }
 
-/// Read the child's stderr on a thread of its own, keeping its last [`MAX_KEPT_BYTES`]: what
-/// a remote prints there has no end of its own.
-fn read_stderr(child: &mut Child) -> std::thread::JoinHandle<Vec<u8>> {
-    let pipe = child.stderr.take().expect("stderr is piped");
-    std::thread::spawn(move || read_tail(pipe, MAX_KEPT_BYTES))
+/// What to keep of a command's standard output.
+#[derive(Clone, Copy)]
+enum Keep {
+    /// All of it: past this many bytes the command is stopped and fails.
+    All(usize),
+    /// This many bytes from the start: past them the command is stopped and its output cut.
+    First(usize),
 }
 
-/// All of `pipe`, or its last `max` bytes from a line start when it prints more, saying so.
-fn read_tail(mut pipe: impl Read, max: usize) -> Vec<u8> {
-    let mut all = Vec::new();
-    let mut cut = false;
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let n = match pipe.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => break,
-        };
-        all.extend_from_slice(&buffer[..n]);
-        // Dropped in large steps, so a long output isn't moved for every read.
-        if all.len() > 2 * max {
-            all.drain(..all.len() - max);
-            cut = true;
-        }
-    }
-    if !cut && all.len() <= max {
-        return all;
-    }
-    let from = all.len().saturating_sub(max);
-    let start = all[from..]
-        .iter()
-        .position(|&c| c == b'\n')
-        .map_or(all.len(), |i| from + i + 1);
-    let mut kept = b"\xe2\x80\xa6 (earlier output cut)\n".to_vec();
-    kept.extend_from_slice(&all[start..]);
-    kept
+/// How a command ended, and what it printed.
+struct Waited {
+    status: std::process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    /// It printed more than [`Keep::First`] keeps, and was stopped.
+    cut: bool,
 }
 
-/// Run `command` in `dir` and wait for it, unless `cancel` is set first: the command is then
-/// stopped and fails with [`Error::Cancelled`].
-pub fn run_cancellable_in(dir: &Path, command: &GitCommand, cancel: &AtomicBool) -> Result<CommandOutput> {
-    let log = console::started(dir, &command.display());
-    let mut child = match command_in(dir, command)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(err) => {
-            log.not_started(&err.to_string());
-            return Err(Error::GitNotFound(err.to_string()));
-        }
-    };
-    let output = collect(&mut child, log, None, cancel)?;
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    if output.status.success() {
-        Ok(CommandOutput { stdout, stderr })
-    } else {
-        Err(Error::Command {
-            command: command.display(),
-            code: output.status.code(),
-            output: if stderr.trim().is_empty() { stdout } else { stderr },
-        })
-    }
+/// Some of what a command printed, as it came.
+enum Piece {
+    Out(Vec<u8>),
+    Err(Vec<u8>),
+    /// One of the two pipes ended.
+    Closed,
 }
 
-/// Feed `input` to `child`, read what it prints and wait for it, checking `cancel` meanwhile:
-/// once it is set the command is killed. `log` is told how it ended.
-fn collect(
+/// Feed `input` to `child`, read what it prints and wait for it. It is stopped with all it
+/// started when `cancel` is set, when it prints nothing for the command's quiet limit, and when
+/// it prints more than `keep` allows. `log` is told how it ended.
+fn wait_for(
     child: &mut Child,
+    command: &GitCommand,
     log: console::Started,
     input: Option<&[u8]>,
-    cancel: &AtomicBool,
-) -> Result<std::process::Output> {
-    let mut pipe = child.stdout.take().expect("stdout is piped");
-    let stdout = std::thread::spawn(move || {
-        let mut all = Vec::new();
-        let _ = pipe.read_to_end(&mut all);
-        all
-    });
-    let stderr = read_stderr(child);
-    if let Some(input) = input
-        && let Some(mut stdin) = child.stdin.take()
-    {
+    cancel: Option<&AtomicBool>,
+    keep: Keep,
+) -> Result<Waited> {
+    let (send, receive) = mpsc::sync_channel(16);
+    pump(child.stdout.take(), false, send.clone());
+    pump(child.stderr.take(), true, send);
+    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+        let input = input.to_vec();
         // A command that exits early closes its end; its exit status tells what went wrong.
-        let _ = stdin.write_all(input);
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&input);
+        });
     }
-    let status = loop {
-        if cancel.load(Ordering::Relaxed) {
-            kill_tree(child);
-            let _ = child.wait();
+    let mut stdout = Vec::new();
+    let mut stderr = Tail::new(MAX_KEPT_BYTES);
+    let mut open = 2;
+    let mut cut = false;
+    let mut heard = Instant::now();
+    let mut exited: Option<(std::process::ExitStatus, Instant)> = None;
+    let gave_up = loop {
+        if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            if exited.is_none() {
+                kill_tree(child);
+                let _ = child.wait();
+            }
             let output = log.output();
             log.stopped(output);
             return Err(Error::Cancelled);
         }
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => std::thread::sleep(Duration::from_millis(5)),
-            Err(err) => {
-                log.not_started(&err.to_string());
-                return Err(Error::GitNotFound(err.to_string()));
+        if exited.is_none() {
+            match child.try_wait() {
+                Ok(status) => exited = status.map(|status| (status, Instant::now())),
+                Err(err) => {
+                    log.not_started(&err.to_string());
+                    return Err(Error::GitNotFound(err.to_string()));
+                }
+            }
+        }
+        match exited {
+            Some(_) if open == 0 => break None,
+            // Exited, but something it left running holds its output: what came is all.
+            Some((_, at)) if at.elapsed() >= AFTER_EXIT => {
+                while let Ok(piece) = receive.try_recv() {
+                    match piece {
+                        Piece::Out(bytes) => stdout.extend_from_slice(&bytes),
+                        Piece::Err(bytes) => stderr.push(&bytes),
+                        Piece::Closed => {}
+                    }
+                }
+                break None;
+            }
+            None if command.quiet_limit.is_some_and(|limit| heard.elapsed() >= limit) => {
+                break Some(quiet_note(command.quiet_limit.unwrap_or_default()));
+            }
+            _ => {}
+        }
+        // Both pipes closed a moment before it exits.
+        if open == 0 {
+            std::thread::sleep(Duration::from_millis(1));
+            continue;
+        }
+        match receive.recv_timeout(Duration::from_millis(20)) {
+            Ok(Piece::Out(bytes)) => {
+                heard = Instant::now();
+                stdout.extend_from_slice(&bytes);
+                match keep {
+                    Keep::All(max) if stdout.len() > max => {
+                        stdout.clear();
+                        break Some(format!("it printed more than {} MB", max.div_ceil(1024 * 1024)));
+                    }
+                    Keep::First(max) if stdout.len() > max => {
+                        stdout.truncate(max);
+                        cut = true;
+                        break None;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Piece::Err(bytes)) => {
+                heard = Instant::now();
+                stderr.push(&bytes);
+            }
+            Ok(Piece::Closed) => open -= 1,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => open = 0,
+        }
+    };
+    let stderr = stderr.finish();
+    // Once waited for, its id may go to another process: only a running command is stopped.
+    let status = match exited {
+        Some((status, _)) => status,
+        None => {
+            if gave_up.is_some() || cut {
+                kill_tree(child);
+            }
+            match child.wait() {
+                Ok(status) => status,
+                Err(err) => {
+                    log.not_started(&err.to_string());
+                    return Err(Error::GitNotFound(err.to_string()));
+                }
             }
         }
     };
-    let output = std::process::Output {
+    if let Some(why) = gave_up {
+        return Err(gave_up_on(command, log, status.code(), &stdout, stderr, &why));
+    }
+    log.done(status.code(), &stdout, &stderr);
+    Ok(Waited {
         status,
-        stdout: stdout.join().unwrap_or_default(),
-        stderr: stderr.join().unwrap_or_default(),
-    };
-    log.done(output.status.code(), &output.stdout, &output.stderr);
-    Ok(output)
+        stdout,
+        stderr,
+        cut,
+    })
+}
+
+/// Read `pipe` on a thread of its own, sending what comes as it comes, then [`Piece::Closed`].
+fn pump(pipe: Option<impl Read + Send + 'static>, stderr: bool, send: mpsc::SyncSender<Piece>) {
+    std::thread::spawn(move || {
+        if let Some(mut pipe) = pipe {
+            let mut buffer = vec![0u8; 64 * 1024];
+            loop {
+                let n = match pipe.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                };
+                let bytes = buffer[..n].to_vec();
+                // Nobody reads any more: the command was stopped, or left this pipe open.
+                if send
+                    .send(if stderr { Piece::Err(bytes) } else { Piece::Out(bytes) })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }
+        let _ = send.send(Piece::Closed);
+    });
+}
+
+/// Why Oxbow stopped a command that printed nothing for `limit`, in its words.
+fn quiet_note(limit: Duration) -> String {
+    match limit.as_secs() {
+        secs if secs >= 120 => format!("nothing came from it for {} minutes", secs / 60),
+        secs => format!("nothing came from it for {secs} seconds"),
+    }
+}
+
+/// The failure of `command`, stopped by Oxbow for `why`; `log` is told so.
+fn gave_up_on(
+    command: &GitCommand,
+    log: console::Started,
+    code: Option<i32>,
+    stdout: &[u8],
+    stderr: Vec<u8>,
+    why: &str,
+) -> Error {
+    let mut said = String::from_utf8_lossy(&stderr).into_owned();
+    if said.trim().is_empty() {
+        said = String::from_utf8_lossy(stdout).into_owned();
+    }
+    if !said.is_empty() && !said.ends_with('\n') {
+        said.push('\n');
+    }
+    said.push_str(&format!("Oxbow stopped it: {why}."));
+    log.done(code, stdout, said.as_bytes());
+    Error::Command {
+        command: command.display(),
+        code,
+        output: said,
+    }
+}
+
+/// The end of what a command printed to standard error, at most `max` bytes from a line
+/// start: what a remote prints there has no end of its own.
+struct Tail {
+    all: Vec<u8>,
+    max: usize,
+    cut: bool,
+}
+
+impl Tail {
+    fn new(max: usize) -> Self {
+        Tail {
+            all: Vec::new(),
+            max,
+            cut: false,
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8]) {
+        self.all.extend_from_slice(bytes);
+        // Dropped in large steps, so a long output isn't moved for every piece.
+        if self.all.len() > 2 * self.max {
+            self.all.drain(..self.all.len() - self.max);
+            self.cut = true;
+        }
+    }
+
+    /// All of it, or its last `max` bytes from a line start, saying so.
+    fn finish(self) -> Vec<u8> {
+        let Tail { all, max, cut } = self;
+        if !cut && all.len() <= max {
+            return all;
+        }
+        let from = all.len().saturating_sub(max);
+        let start = all[from..]
+            .iter()
+            .position(|&c| c == b'\n')
+            .map_or(all.len(), |i| from + i + 1);
+        let mut kept = b"\xe2\x80\xa6 (earlier output cut)\n".to_vec();
+        kept.extend_from_slice(&all[start..]);
+        kept
+    }
 }
 
 /// A line of a command's output longer than this is cut; the rest of it is dropped.
@@ -692,36 +818,28 @@ pub fn run_streaming_in(
     cancel: &AtomicBool,
 ) -> Result<CommandOutput> {
     let log = console::started(dir, &command.display());
-    let mut child = match command_in(dir, command)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(err) => {
-            log.not_started(&err.to_string());
-            return Err(Error::GitNotFound(err.to_string()));
-        }
-    };
+    let (mut child, log) = start(command_in(dir, command), false, log)?;
     let (send, receive) = mpsc::sync_channel(QUEUED_LINES);
     // What the Console shows: the lines in the order they came, without progress.
     let mut logged = log.output();
-    let readers = [
-        read_lines(child.stdout.take().expect("stdout is piped"), false, send.clone()),
-        read_lines(child.stderr.take().expect("stderr is piped"), true, send),
-    ];
+    read_lines(child.stdout.take().expect("stdout is piped"), false, send.clone());
+    read_lines(child.stderr.take().expect("stderr is piped"), true, send);
     let mut output = CommandOutput::default();
+    let mut heard = Instant::now();
+    let mut exited: Option<(std::process::ExitStatus, Instant)> = None;
     let status = loop {
         // Before each line: a command that prints without a pause still stops at once.
         if cancel.load(Ordering::Relaxed) {
-            kill_tree(&mut child);
-            let _ = child.wait();
+            if exited.is_none() {
+                kill_tree(&mut child);
+                let _ = child.wait();
+            }
             log.stopped(logged);
             return Err(Error::Cancelled);
         }
         match receive.recv_timeout(Duration::from_millis(50)) {
             Ok(line) => {
+                heard = Instant::now();
                 if !line.progress {
                     let all = if line.stderr {
                         &mut output.stderr
@@ -735,20 +853,50 @@ pub fn run_streaming_in(
                 }
                 on_line(line);
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => match exited {
+                // Exited, but something it left running holds its output: what came is all.
+                Some((status, at)) if at.elapsed() >= AFTER_EXIT => break status,
+                Some(_) => {}
+                None => match child.try_wait() {
+                    Ok(Some(status)) => exited = Some((status, Instant::now())),
+                    Ok(None) if command.quiet_limit.is_some_and(|limit| heard.elapsed() >= limit) => {
+                        kill_tree(&mut child);
+                        let code = child.wait().ok().and_then(|status| status.code());
+                        let why = quiet_note(command.quiet_limit.unwrap_or_default());
+                        let said = if output.stderr.trim().is_empty() {
+                            output.stdout
+                        } else {
+                            output.stderr
+                        };
+                        let note = format!("Oxbow stopped it: {why}.");
+                        logged.push(&note, true);
+                        log.done_lines(code, logged);
+                        return Err(Error::Command {
+                            command: command.display(),
+                            code,
+                            output: format!("{said}{note}"),
+                        });
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        log.not_started(&err.to_string());
+                        return Err(Error::GitNotFound(err.to_string()));
+                    }
+                },
+            },
             // Both pipes are closed: the command is done, or about to be.
-            Err(mpsc::RecvTimeoutError::Disconnected) => match child.wait() {
-                Ok(status) => break status,
-                Err(err) => {
-                    log.not_started(&err.to_string());
-                    return Err(Error::GitNotFound(err.to_string()));
-                }
+            Err(mpsc::RecvTimeoutError::Disconnected) => match exited {
+                Some((status, _)) => break status,
+                None => match child.wait() {
+                    Ok(status) => break status,
+                    Err(err) => {
+                        log.not_started(&err.to_string());
+                        return Err(Error::GitNotFound(err.to_string()));
+                    }
+                },
             },
         }
     };
-    for reader in readers {
-        let _ = reader.join();
-    }
     log.done_lines(status.code(), logged);
     if status.success() {
         Ok(output)
@@ -864,11 +1012,19 @@ mod tests {
 
     #[test]
     fn endless_stderr_keeps_its_end() {
+        let tail = |pieces: Vec<Vec<u8>>| {
+            let mut tail = Tail::new(1000);
+            for piece in pieces {
+                tail.push(&piece);
+            }
+            tail.finish()
+        };
         let small = b"one\ntwo\n".to_vec();
-        assert_eq!(read_tail(std::io::Cursor::new(small.clone()), 100), small);
-        let lines: String = (0..10_000).map(|i| format!("remote: line {i}\n")).collect();
-        let kept = read_tail(std::io::Cursor::new(lines.into_bytes()), 1000);
-        let kept = String::from_utf8(kept).unwrap();
+        assert_eq!(tail(vec![small.clone()]), small);
+        let lines = (0..10_000)
+            .map(|i| format!("remote: line {i}\n").into_bytes())
+            .collect();
+        let kept = String::from_utf8(tail(lines)).unwrap();
         assert!(kept.starts_with("… (earlier output cut)\nremote: line "));
         assert!(kept.ends_with("remote: line 9999\n"));
         assert!(kept.len() <= 1000 + "… (earlier output cut)\n".len());
@@ -1009,6 +1165,70 @@ mod tests {
         later.join().unwrap();
         assert!(matches!(out, Err(Error::Cancelled)));
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_command_quiet_for_too_long_is_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let sh = |script: &str| {
+            GitCommand::new(["-c", script])
+                .program("sh")
+                .quiet_limit(Duration::from_millis(400))
+        };
+        let started = Instant::now();
+        let result = run_in(dir.path(), &sh("echo working >&2; sleep 30"), None);
+        let Err(Error::Command { output, .. }) = result else {
+            panic!("{result:?}");
+        };
+        assert_eq!(output, "working\nOxbow stopped it: nothing came from it for 0 seconds.");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let never = AtomicBool::new(false);
+        let result = run_streaming_in(dir.path(), &sh("sleep 30"), &mut |_| {}, &never);
+        assert!(matches!(result, Err(Error::Command { code: None, .. })), "{result:?}");
+        assert!(started.elapsed() < Duration::from_secs(10));
+        // Slow, but printing all along.
+        let busy = sh("for i in 1 2 3 4 5 6; do echo $i; sleep 0.2; done");
+        assert_eq!(run_in(dir.path(), &busy, None).unwrap().stdout, "1\n2\n3\n4\n5\n6\n");
+        assert!(run_streaming_in(dir.path(), &busy, &mut |_| {}, &never).is_ok());
+        // Someone waits on it: no limit.
+        let waiting = sh("sleep 1; echo done").waits_for_user();
+        assert_eq!(run_in(dir.path(), &waiting, None).unwrap().stdout, "done\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_past_what_is_read_whole_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let command = GitCommand::new(["y"]).program("yes");
+        let log = console::started(dir.path(), &command.display());
+        let (mut child, log) = start(command_in(dir.path(), &command), false, log).unwrap();
+        let result = wait_for(&mut child, &command, log, None, None, Keep::All(100_000));
+        let Err(Error::Command { output, .. }) = result else {
+            panic!("expected a failure");
+        };
+        assert_eq!(output, "Oxbow stopped it: it printed more than 1 MB.");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_command_is_done_when_it_exits_even_if_what_it_started_runs_on() {
+        let dir = tempfile::tempdir().unwrap();
+        // Like a hook that starts a job in the background, which keeps the output open.
+        let command = GitCommand::new(["-c", "sleep 30 & echo $!"]).program("sh");
+        let kill = |pid: &str| {
+            let _ = std::process::Command::new("kill").arg(pid.trim()).status();
+        };
+        let started = Instant::now();
+        let out = run_in(dir.path(), &command, None).unwrap();
+        kill(&out.stdout);
+        assert!(out.stdout.trim().parse::<u32>().is_ok(), "{out:?}");
+        let never = AtomicBool::new(false);
+        let mut lines = Vec::new();
+        run_streaming_in(dir.path(), &command, &mut |line| lines.push(line.text), &never).unwrap();
+        kill(&lines.concat());
+        assert_eq!(lines.len(), 1);
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
     }
 
     #[test]
