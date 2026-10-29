@@ -521,3 +521,133 @@ fn a_repository_opened_again_still_knows_where_git_keeps_its_files() {
     assert!(!ran.iter().any(|ran| ran.contains("--git-path")), "{ran:?}");
     assert_eq!(repo.operation_log().unwrap().len(), 2);
 }
+
+/// The commands of the Console entries named `title` of the repository at `fx`.
+fn ran(fx: &Fixture, title: &str) -> Vec<String> {
+    oxbow_core::console::entries(Some(fx.path()))
+        .into_iter()
+        .filter(|entry| entry.title == title)
+        .flat_map(|entry| entry.commands)
+        .map(|ran| ran.display)
+        .collect()
+}
+
+/// Run `action` in a Console entry named `title`.
+fn perform_as(repo: &Repo, fx: &Fixture, title: &str, action: Action) {
+    oxbow_core::console::scope(Some(fx.path()), oxbow_core::console::EntryKind::Action, title, || {
+        repo.perform(&action)
+    })
+    .unwrap();
+}
+
+/// Wait until the watch's count has moved on from `from` and then stayed still for a moment.
+fn settled(watch: &oxbow_core::Watch, from: u64) {
+    let started = std::time::Instant::now();
+    let mut last = (watch.seen().unwrap(), std::time::Instant::now());
+    while started.elapsed() < std::time::Duration::from_secs(5) {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let now = watch.seen().unwrap();
+        if now != last.0 {
+            last = (now, std::time::Instant::now());
+        } else if now != from && last.1.elapsed() > std::time::Duration::from_millis(300) {
+            return;
+        }
+    }
+    panic!("the watch saw no change");
+}
+
+fn staged(fx: &mut Fixture) -> String {
+    fx.git(&["diff", "--cached", "--name-only"])
+}
+
+#[test]
+fn staging_one_file_after_another_reuses_the_snapshot_until_a_file_changes() {
+    let mut fx = Fixture::new();
+    fx.write("a.txt", "a1\n");
+    fx.commit("b.txt", "b1\n", "Root");
+    let repo = Repo::open(fx.path()).unwrap();
+    let watch = repo.watch(|_| {}).unwrap();
+    assert!(watch.files);
+    let from = watch.seen().unwrap();
+    fx.write("a.txt", "a2\n");
+    fx.write("b.txt", "b2\n");
+    settled(&watch, from);
+
+    let stage = |path: &str| Action::Stage {
+        paths: vec![path.into()],
+    };
+    perform_as(&repo, &fx, "Stage a", stage("a.txt"));
+    assert!(ran(&fx, "Stage a").iter().any(|r| r == "git add -u"));
+    // Nothing changed since: the files aren't read again, as the history's refresh would leave it.
+    let repo = repo.reopen().unwrap();
+    perform_as(&repo, &fx, "Stage b", stage("b.txt"));
+    let b = ran(&fx, "Stage b");
+    assert!(
+        !b.iter().any(|r| r == "git add -u" || r.starts_with("git for-each-ref")),
+        "{b:?}"
+    );
+    assert_eq!(staged(&mut fx), "a.txt\nb.txt");
+    undo_last(&repo);
+    assert_eq!(staged(&mut fx), "a.txt");
+    assert_eq!(read(&fx, "b.txt").as_deref(), Some("b2\n"));
+
+    // A file saved outside between two steps is read again: Undo leaves it as saved.
+    let from = watch.seen().unwrap();
+    fx.write("a.txt", "a3\n");
+    settled(&watch, from);
+    perform_as(&repo, &fx, "Stage a again", stage("a.txt"));
+    assert!(ran(&fx, "Stage a again").iter().any(|r| r == "git add -u"));
+    undo_last(&repo);
+    assert_eq!(read(&fx, "a.txt").as_deref(), Some("a3\n"));
+    assert_eq!(fx.git(&["show", ":a.txt"]), "a2");
+}
+
+#[test]
+fn what_is_staged_outside_between_two_steps_is_kept_by_undo() {
+    let mut fx = Fixture::new();
+    fx.write("a.txt", "a1\n");
+    fx.commit("b.txt", "b1\n", "Root");
+    let repo = Repo::open(fx.path()).unwrap();
+    let watch = repo.watch(|_| {}).unwrap();
+    let from = watch.seen().unwrap();
+    fx.write("a.txt", "a2\n");
+    fx.write("b.txt", "b2\n");
+    settled(&watch, from);
+    perform_as(
+        &repo,
+        &fx,
+        "Stage",
+        Action::Stage {
+            paths: vec!["a.txt".into()],
+        },
+    );
+    // Staged in a terminal: the watch counts no change of files for it, the index stages more.
+    fx.git(&["add", "b.txt"]);
+    perform_as(
+        &repo,
+        &fx,
+        "Unstage",
+        Action::Unstage {
+            paths: vec!["a.txt".into()],
+        },
+    );
+    assert_eq!(staged(&mut fx), "b.txt");
+    undo_last(&repo);
+    assert_eq!(staged(&mut fx), "a.txt\nb.txt");
+}
+
+#[test]
+fn a_longer_expiry_of_the_logs_own_ref_counts() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    fx.git(&["config", "gc.reflogExpireUnreachable", "40.days"]);
+    fx.git(&["config", "gc.refs/oxbow/oplog.reflogExpireUnreachable", "5.days"]);
+    fx.write("a.txt", "b\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&Action::Stage {
+        paths: vec!["a.txt".into()],
+    })
+    .unwrap();
+    let log = repo.operation_log().unwrap();
+    assert_eq!(log[0].expires, log[0].time + 5 * 86_400);
+}

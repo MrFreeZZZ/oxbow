@@ -5,7 +5,9 @@
 //!
 //! Stage with Undo is also taken apart by the git processes it starts, as the Console lists
 //! them: how many of each kind and how long they ran. The snapshot before the action reads the
-//! files on one thread and the rest beside it, so the parts add up to more than the whole.
+//! files on one thread and the rest beside it, so the parts add up to more than the whole. It is
+//! timed three ways: without a watch, with one that saw the file change just before, and
+//! staging files changed earlier one after another, when the last step's snapshot still holds.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -14,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use oxbow_core::console::{self, Entry, EntryKind};
-use oxbow_core::{Action, Repo, Source};
+use oxbow_core::{Action, Repo, Source, Watch};
 
 const RUNS: usize = 15;
 
@@ -50,22 +52,67 @@ fn part(display: &str, role: Option<&str>) -> &'static str {
     }
 }
 
+/// How the files staged were changed.
+#[derive(Clone, Copy, PartialEq)]
+enum Edits {
+    /// Each just before it is staged, with the repository not watched: every step reads the files.
+    Unwatched,
+    /// Each just before it is staged, seen by the watch, as when one is saved and then staged.
+    Watched,
+    /// All of them beforehand, as when one is staged after another.
+    Before,
+}
+
+/// Wait until `watch` has counted a change since `from`, or until it counts none for a while.
+fn settle(watch: &Watch, from: Option<u64>) {
+    let started = Instant::now();
+    let mut last = (watch.seen(), Instant::now());
+    while started.elapsed() < Duration::from_secs(3) {
+        std::thread::sleep(Duration::from_millis(1));
+        let now = watch.seen();
+        if from.is_some() && now != from {
+            return;
+        }
+        if now != last.0 {
+            last = (now, Instant::now());
+        } else if from.is_none() && last.1.elapsed() > Duration::from_millis(500) {
+            return;
+        }
+    }
+}
+
 /// Stage one changed file `RUNS` times with Undo kept, each in a Console entry, the repository
-/// opened again before each one when `reopen` (as each read of the history does). The median
-/// time, and the processes by part: the median of how many a run had, and of their time.
+/// opened again before each one (as each read of the history does). The median time, and the
+/// processes by part: the median of how many a run had, and of their time.
 fn stage(
     repo: &Repo,
+    watch: Option<&Watch>,
     path: &Path,
     entries: &Mutex<Vec<Entry>>,
     dir: usize,
-    reopen: bool,
+    edits: Edits,
 ) -> (f64, BTreeMap<&'static str, (usize, f64)>) {
+    let file = |run: usize| format!("src/{dir}/file{}.rs", dir + run * 40);
+    if edits == Edits::Before {
+        for run in 0..RUNS {
+            std::fs::write(path.join(file(run)), format!("// run {run}\n")).unwrap();
+        }
+        if let Some(watch) = watch {
+            settle(watch, None);
+        }
+    }
     let mut times = Vec::new();
     let mut parts: BTreeMap<&'static str, Vec<(usize, Duration)>> = BTreeMap::new();
     for run in 0..RUNS {
-        let repo = if reopen { repo.reopen().unwrap() } else { repo.clone() };
-        let file = format!("src/{dir}/file{}.rs", dir + run * 40);
-        std::fs::write(path.join(&file), format!("// run {run}\n")).unwrap();
+        let repo = repo.reopen().unwrap();
+        let file = file(run);
+        if edits != Edits::Before {
+            let seen = watch.and_then(Watch::seen);
+            std::fs::write(path.join(&file), format!("// run {run}\n")).unwrap();
+            if let Some(watch) = watch {
+                settle(watch, seen);
+            }
+        }
         entries.lock().unwrap().clear();
         let mut took = Duration::ZERO;
         console::scope(Some(path), EntryKind::Action, "Stage", || {
@@ -133,8 +180,26 @@ fn main() {
         }
     });
 
-    let (logged, parts) = stage(&repo, path, &entries, 0, false);
-    let (reopened, reopened_parts) = stage(&repo, path, &entries, 2, true);
+    let watched = Repo::open(path).unwrap();
+    let watch = watched.watch(|_| {}).unwrap();
+    let runs = [
+        ("a file just edited, not watched", &repo, None, 0, Edits::Unwatched),
+        (
+            "a file just edited, seen by the watch",
+            &watched,
+            Some(&watch),
+            2,
+            Edits::Watched,
+        ),
+        (
+            "one after another, nothing changed between",
+            &watched,
+            Some(&watch),
+            3,
+            Edits::Before,
+        ),
+    ]
+    .map(|(name, repo, watch, dir, edits)| (name, stage(repo, watch, path, &entries, dir, edits)));
     let mut plain = Vec::new();
     for run in 0..RUNS {
         let other = format!("src/1/file{}.rs", 1 + run * 40);
@@ -144,10 +209,10 @@ fn main() {
         plain.push(started.elapsed());
     }
     println!("{files} files, median of {RUNS}");
-    println!("  Stage with Undo:  {logged:7.1} ms");
-    print_parts(&parts);
-    println!("  the same, opened again first (as after a refresh): {reopened:5.1} ms");
-    print_parts(&reopened_parts);
+    for (name, (time, parts)) in &runs {
+        println!("  Stage with Undo, {name}: {time:5.1} ms");
+        print_parts(parts);
+    }
     println!("  git add:          {:7.1} ms", median(plain));
 
     let blob = Source::Blob {

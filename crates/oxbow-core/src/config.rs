@@ -264,9 +264,27 @@ pub fn git_info() -> GitInfo {
     }
 }
 
+/// The version of the `git` Oxbow runs, asked once for each program chosen in Settings: an
+/// Undo snapshot asks it every step. Not kept while git doesn't run.
+fn git_version() -> Option<String> {
+    static KNOWN: std::sync::Mutex<Option<(Option<PathBuf>, String)>> = std::sync::Mutex::new(None);
+    let program = PROGRAM.read().expect("git program lock").clone();
+    if let Ok(known) = KNOWN.lock()
+        && let Some((of, version)) = &*known
+        && *of == program
+    {
+        return Some(version.clone());
+    }
+    let version = git_info().version?;
+    if let Ok(mut known) = KNOWN.lock() {
+        *known = Some((program, version.clone()));
+    }
+    Some(version)
+}
+
 /// Whether the `git` Oxbow runs is at least `major.minor`; `false` when it does not run.
 pub(crate) fn git_at_least(major: u32, minor: u32) -> bool {
-    let Some(version) = git_info().version else {
+    let Some(version) = git_version() else {
         return false;
     };
     let mut parts = version.split(['.', ' ']).map(|part| part.parse::<u32>().unwrap_or(0));
