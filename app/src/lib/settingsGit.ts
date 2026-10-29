@@ -536,14 +536,6 @@ export const gitSection: Section = {
       ],
     },
     {
-      title: "Branches and stacks",
-      rows: [
-        gitEdit("global", "init.defaultBranch", "Default branch for new repositories", { mono: false, shown: () => config("global", "init.defaultBranch") ?? "master (Git’s default)", placeholder: "main" }),
-        gitSwitch("global", "rebase.updateRefs", "Move stacked branches along when rebasing", true, { sub: "git rebase --update-refs: branches built on the rebased one follow it" }),
-        gitSwitch("global", "fetch.prune", "Remove branches deleted on the remote when fetching", true),
-      ],
-    },
-    {
       title: "Commits",
       rows: [
         prefRow("oxbow.git.runHooks", "Run Git hooks", "switch", {

@@ -185,12 +185,18 @@ pub enum Action {
         stash: bool,
     },
     /// Create the branch `name` at `start` (a branch or commit; `HEAD` when missing), optionally
-    /// check it out and publish it to a remote.
+    /// check it out and publish it to a remote. `fetch`: fetch that remote first, for a `start`
+    /// on it such as `origin/main`, which the new branch then doesn't follow. `stash`: the
+    /// uncommitted files stay behind in a stash instead of coming along.
     CreateBranch {
         name: String,
         start: Option<String>,
         switch: bool,
         publish: Option<String>,
+        #[serde(default)]
+        fetch: Option<String>,
+        #[serde(default)]
+        stash: bool,
     },
     /// Rename a local branch; with `upstream`, publish the new name there and delete the old one.
     RenameBranch {

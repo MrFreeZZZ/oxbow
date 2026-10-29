@@ -6,6 +6,8 @@ import { api } from "./api";
 import { checkFailed } from "./commitChecks";
 import type { Icon, Part, Recovery, Request, StepLine } from "./confirm.svelte";
 import { nameProblem, onNoBranch, type BranchContext } from "./branches";
+import { onlyPrefix } from "./branchPrefixes";
+import { firstName, prefixesFor, similarNote } from "./branchPrefs";
 import type { Action, Failure, Fix, FixState, FixStep, HistoryRow, ResetMode } from "./types";
 import { relativeTime, shortId } from "./format";
 import { lockedCommit } from "./protect";
@@ -152,7 +154,7 @@ export function fixRequest(fc: FixContext, id: FixId): Request {
       const commits = chain(ctx);
       const unpushed = commits.filter((r) => !onRemote(ctx, r)).length;
       const count = Math.max(1, Math.min(unpushed, 5, commits.length - 1));
-      return moveSheet(fc, { count, create: true, to: "", name: "" });
+      return moveSheet(fc, { count, create: true, to: "", name: firstName(prefixesFor(ctx.history)) });
     }
     case "forgot": {
       // Files staged already are the ones made ready for it; otherwise a single changed file.
@@ -168,7 +170,7 @@ export function fixRequest(fc: FixContext, id: FixId): Request {
       return revertSheet(fc, candidates[0]?.id ?? "", !!(ctx.history.head.branch && t && !t.gone && !t.behind));
     }
     case "detached":
-      return detachedSheet(fc, { name: "", commit: ctx.history.head.branch ? (fc.state.lost[0]?.id ?? null) : null, switchTo: false });
+      return detachedSheet(fc, { name: firstName(prefixesFor(ctx.history)), commit: ctx.history.head.branch ? (fc.state.lost[0]?.id ?? null) : null, switchTo: false });
   }
 }
 
@@ -305,8 +307,6 @@ interface Move {
   name: string;
 }
 
-const PREFIXES = ["feature/", "fix/", "chore/"];
-
 function moveSheet(fc: FixContext, s: Move): Request {
   const { ctx } = fc;
   const h = ctx.history;
@@ -367,15 +367,11 @@ function moveSheet(fc: FixContext, s: Move): Request {
     },
   ];
   if (s.create) {
-    const withPrefix = (prefix: string) => {
-      const bare = PREFIXES.reduce((n, p) => (n.startsWith(p) ? n.slice(p.length) : n), s.name);
-      return s.name.startsWith(prefix) ? bare : prefix + bare;
-    };
     fields.push({
       label: "Name",
-      text: { value: s.name, placeholder: "feature/csv-export", focus: true, edit: (value) => again({ name: value }) },
-      chips: PREFIXES.map((p) => ({ label: p, on: s.name.startsWith(p), pick: () => again({ name: withPrefix(p) }) })),
-      error: target && problem ? problem : undefined,
+      text: { value: s.name, placeholder: "csv-export", focus: true, prefixes: prefixesFor(ctx.history), edit: (value) => again({ name: value }) },
+      error: !onlyPrefix(target) && problem ? problem : undefined,
+      note: !problem ? (similarNote(ctx.history, target) ?? undefined) : undefined,
     });
   }
 
@@ -596,23 +592,17 @@ interface Rescue {
   switchTo: boolean;
 }
 
-const KEEP_PREFIXES = ["experiment/", "feature/", "fix/"];
-
 function detachedSheet(fc: FixContext, s: Rescue): Request {
   const { ctx, state } = fc;
   const again = (change: Partial<Rescue>) => detachedSheet(fc, { ...s, ...change });
   const name = s.name.trim();
   const problem = nameProblem(ctx, name);
   const nameChip: Part = name && !problem ? chip(ctx, name) : "a new branch";
-  const withPrefix = (prefix: string) => {
-    const bare = KEEP_PREFIXES.reduce((n, p) => (n.startsWith(p) ? n.slice(p.length) : n), s.name);
-    return s.name.startsWith(prefix) ? bare : prefix + bare;
-  };
   const nameField = {
     label: "Name",
-    text: { value: s.name, placeholder: "experiment/new-cache", focus: true, edit: (value: string) => again({ name: value }) },
-    chips: KEEP_PREFIXES.map((p) => ({ label: p, on: s.name.startsWith(p), pick: () => again({ name: withPrefix(p) }) })),
-    error: name && problem ? problem : undefined,
+    text: { value: s.name, placeholder: "new-cache", focus: true, prefixes: prefixesFor(ctx.history), edit: (value: string) => again({ name: value }) },
+    error: !onlyPrefix(name) && problem ? problem : undefined,
+    note: !problem ? (similarNote(ctx.history, name) ?? undefined) : undefined,
   };
   const common = {
     icon: "branch" as Icon,

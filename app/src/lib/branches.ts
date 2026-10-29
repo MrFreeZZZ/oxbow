@@ -4,6 +4,9 @@ import type { Part, Recovery, Request } from "./confirm.svelte";
 import { remoteTrouble } from "./remote";
 import type { Action, CommitBrief, DeletionCheck, Failure, History, HistoryRow, RefInfo } from "./types";
 import { shortId } from "./format";
+import { onlyPrefix, splitPrefix, type BranchPrefix } from "./branchPrefixes";
+import { firstName, prefixesFor, prefixStart, similarNote } from "./branchPrefs";
+import { prefs } from "./prefs.svelte";
 import { elsewhereRequest, refusedForWorktree, worktreeOf } from "./worktrees";
 
 export interface BranchContext {
@@ -44,7 +47,7 @@ export function upstreamOf(ref: RefInfo) {
 
 /** Why `name` can't be a new branch, or null. `except` is the branch being renamed. */
 export function nameProblem(ctx: BranchContext, name: string, except?: string): string | null {
-  if (!name) return "Type a name for the branch.";
+  if (onlyPrefix(name)) return "Type a name for the branch.";
   if (/\s/.test(name)) return "Branch names can’t contain spaces.";
   if (/[~^:?*[\\\x00-\x1f\x7f]/.test(name)) return "Branch names can’t contain ~ ^ : ? * [ or \\.";
   if (
@@ -193,11 +196,9 @@ export function detachRequest(ctx: BranchContext, row: HistoryRow, tag?: string)
   };
 }
 
-const KEEP_PREFIXES = ["experiment/", "feature/", "fix/"];
-
 /** Create a branch at a detached HEAD, so its commits belong to it. With `then`, switch there afterwards. */
 export function keepRequest(ctx: BranchContext, then?: string): Request {
-  return keepSheet(ctx, then, "", false);
+  return keepSheet(ctx, then, firstName(prefixesFor(ctx.history)), false);
 }
 
 function keepSheet(ctx: BranchContext, then: string | undefined, typed: string, publishIt: boolean): Request {
@@ -222,10 +223,6 @@ function keepSheet(ctx: BranchContext, then: string | undefined, typed: string, 
   const action: Action = then
     ? { kind: "switch", branch: then, stash: false, keep: name }
     : { kind: "createBranch", name, start: null, switch: true, publish };
-  const withPrefix = (prefix: string) => {
-    const bare = KEEP_PREFIXES.reduce((n, p) => (n.startsWith(p) ? n.slice(p.length) : n), typed);
-    return typed.startsWith(prefix) ? bare : prefix + bare;
-  };
   return {
     title: then ? `Keep ${plural(lost.length, "commit")}, then switch` : lost.length ? `Keep ${plural(lost.length, "commit")} on a new branch` : `New branch at ${tag ?? (commit ? shortId(commit) : "HEAD")}`,
     body,
@@ -234,9 +231,9 @@ function keepSheet(ctx: BranchContext, then: string | undefined, typed: string, 
     fields: [
       {
         label: "Name",
-        text: { value: typed, placeholder: "experiment/new-cache", edit: (value) => again(value) },
-        chips: KEEP_PREFIXES.map((p) => ({ label: p, on: typed.startsWith(p), pick: () => again(withPrefix(p)) })),
-        error: name && problem ? problem : undefined,
+        text: { value: typed, placeholder: "new-cache", prefixes: prefixesFor(ctx.history), edit: (value) => again(value) },
+        error: !onlyPrefix(name) && problem ? problem : undefined,
+        note: !problem ? (similarNote(ctx.history, name) ?? undefined) : undefined,
       },
     ],
     options:
@@ -263,10 +260,16 @@ function keepSheet(ctx: BranchContext, then: string | undefined, typed: string, 
 
 interface NewBranch {
   name: string;
-  /** Key of the chosen base. */
+  /** Key of the base the sheet opened with. */
   base: string;
+  /** The base was picked by hand, or the sheet was opened on it: the prefix doesn't move it. */
+  picked: boolean;
   switchTo: boolean;
   publish: boolean;
+  /** Fetch first and start at the upstream's tip; null: as Settings says. */
+  fetch: boolean | null;
+  /** Leave the uncommitted files behind in a stash; null: as Settings says. */
+  stash: boolean | null;
 }
 
 interface Base {
@@ -277,8 +280,6 @@ interface Base {
   sha: string | null;
   color: number;
 }
-
-const PREFIXES = ["feature/", "fix/", "chore/"];
 
 /** The New Branch sheet. `from` is the branch it was opened on, if any; `at` a commit it was opened on. */
 /** `switchTo` is the sheet's first choice: a branch that rescues lost work starts without one,
@@ -299,38 +300,61 @@ export function newBranchRequest(ctx: BranchContext, from?: string, at?: History
   if (from && from !== head.branch && from !== trunk) bases.push({ key: "from", label: from, ref: from, sha: target(from), color: ctx.colorOf(from) });
   if (at && at.id !== head.commit) bases.push({ key: "commit", label: shortId(at.id), ref: at.id, sha: at.id, color: at.graph.color });
   const start = at && at.id !== head.commit ? "commit" : from === head.branch ? "head" : from === trunk ? "trunk" : from ? "from" : "head";
-  return newBranchSheet(ctx, bases, { name: "", base: start, switchTo, publish: false });
+  const list = prefixesFor(ctx.history);
+  return newBranchSheet(ctx, bases, list, { name: firstName(list), base: start, picked: !!from || !!at, switchTo, publish: false, fetch: null, stash: null });
 }
 
-function newBranchSheet(ctx: BranchContext, bases: Base[], state: NewBranch): Request {
-  const again = (change: Partial<NewBranch>) => newBranchSheet(ctx, bases, { ...state, ...change });
+function newBranchSheet(ctx: BranchContext, bases: Base[], list: BranchPrefix[], state: NewBranch): Request {
+  const again = (change: Partial<NewBranch>) => newBranchSheet(ctx, bases, list, { ...state, ...change });
+  const { history } = ctx;
   const name = state.name.trim();
-  const base = bases.find((b) => b.key === state.base) ?? bases[0];
-  const remote = ctx.history.defaultRemote;
+  // hotfix/ and the like start from the production branch, until another base is picked.
+  const production = !state.picked && prefixStart(splitPrefix(name, list).prefix, list) === "production" && history.trunk;
+  const productionBase = production ? bases.find((b) => b.key === "trunk") ?? (history.head.branch === history.trunk ? bases[0] : undefined) : undefined;
+  const base = productionBase ?? bases.find((b) => b.key === state.base) ?? bases[0];
+  const remote = history.defaultRemote;
   const problem = nameProblem(ctx, name);
-  const clash = remote && name && ctx.history.refs.some((r) => r.kind === "remote" && r.name === `${remote}/${name}`);
+  const clash = remote && name && history.refs.some((r) => r.kind === "remote" && r.name === `${remote}/${name}`);
   const color = base.color;
 
-  const body: Part[] = ["Creates ", name && !problem ? chip(ctx, name, color) : "a new branch", " at "];
-  const named = base.key !== "commit" && (base.ref || ctx.history.head.branch);
-  if (named) body.push(chip(ctx, base.ref ?? ctx.history.head.branch!, color));
-  if (base.sha) body.push(named ? ", commit " : "commit ", { code: shortId(base.sha) });
-  if (state.switchTo) body.push(`, and switches to it.${comeAlong(ctx)}`);
-  else if (ctx.history.head.branch) body.push(". You stay on ", here(ctx), ".");
+  // Fetch first: the production branch, with no commits of its own, starts at its upstream's tip.
+  // Any other base stays local, so New Branch needs the network only for the production branch.
+  const baseBranch = base.key === "commit" ? null : (base.ref ?? history.head.branch);
+  const tracking = baseBranch && baseBranch === history.trunk ? local(ctx, baseBranch)?.tracking : null;
+  // An upstream of "." is another local branch: nothing to fetch.
+  const canFetch = !!tracking && tracking.remote !== "." && !tracking.gone && tracking.ahead === 0;
+  const fetching = canFetch && (state.fetch ?? prefs.get("oxbow.branch.fetchFirst"));
+  const upstream = tracking ? `${tracking.remote}/${tracking.branch}` : null;
+  const leaving = state.switchTo && ctx.uncommitted > 0 && (state.stash ?? prefs.get("oxbow.branch.uncommitted") === "stash");
+
+  const nameChip = name && !problem ? chip(ctx, name, color) : "a new branch";
+  const body: Part[] = [];
+  if (fetching && upstream) {
+    body.push(`Fetches ${tracking!.remote}, then creates `, nameChip, " at ", chip(ctx, upstream, color), ", the latest commit there");
+  } else {
+    body.push("Creates ", nameChip, " at ");
+    const named = base.key !== "commit" && (base.ref || history.head.branch);
+    if (named) body.push(chip(ctx, base.ref ?? history.head.branch!, color));
+    if (base.sha) body.push(named ? ", commit " : "commit ", { code: shortId(base.sha) });
+  }
+  if (state.switchTo) {
+    body.push(", and switches to it.");
+    if (leaving) body.push(` Your ${plural(ctx.uncommitted, "uncommitted file")} stay${ctx.uncommitted === 1 ? "s" : ""} on `, here(ctx), " in a stash.");
+    else body.push(comeAlong(ctx));
+  } else if (history.head.branch) body.push(". You stay on ", here(ctx), ".");
   else body.push(".");
   if (state.publish && remote) body.push(` Then it is published to ${remote}, so others can see it.`);
 
   const action: Action = {
     kind: "createBranch",
     name,
-    start: base.ref,
+    start: fetching && upstream ? upstream : base.ref,
     switch: state.switchTo,
     publish: state.publish && remote ? remote : null,
+    fetch: fetching && tracking ? tracking.remote : null,
+    stash: leaving,
   };
-  const withPrefix = (prefix: string) => {
-    const bare = PREFIXES.reduce((n, p) => (n.startsWith(p) ? n.slice(p.length) : n), state.name);
-    return state.name.startsWith(prefix) ? bare : prefix + bare;
-  };
+  const similar = !clash && !problem ? similarNote(history, name) : null;
   return {
     title: "New Branch",
     body,
@@ -339,18 +363,43 @@ function newBranchSheet(ctx: BranchContext, bases: Base[], state: NewBranch): Re
     fields: [
       {
         label: "Name",
-        text: { value: state.name, placeholder: "feature/csv-export", edit: (value) => again({ name: value }) },
-        chips: PREFIXES.map((p) => ({ label: p, on: state.name.startsWith(p), pick: () => again({ name: withPrefix(p) }) })),
-        error: name && problem ? problem : undefined,
-        note: clash ? `${remote} already has ${name}. To work on it, use Check Out as Local Branch on ${remote}/${name} in the sidebar.` : undefined,
+        text: { value: state.name, placeholder: "csv-export", prefixes: list, edit: (value) => again({ name: value }) },
+        error: !onlyPrefix(name) && problem ? problem : undefined,
+        note: clash ? `${remote} already has ${name}. To work on it, use Check Out as Local Branch on ${remote}/${name} in the sidebar.` : (similar ?? undefined),
       },
       {
         label: "From",
-        chips: bases.map((b) => ({ label: b.label, on: b.key === base.key, pick: () => again({ base: b.key }) })),
+        chips: bases.map((b) => ({ label: b.label, on: b.key === base.key, pick: () => again({ base: b.key, picked: true }) })),
+        note:
+          productionBase && productionBase.key !== state.base
+            ? `${splitPrefix(name, list).prefix} starts from the production branch`
+            : production && !productionBase
+              ? `${splitPrefix(name, list).prefix} starts from the production branch, but ${history.trunk} isn’t a local branch here. Check it out first, or start from here.`
+              : undefined,
       },
     ],
     options: [
       { label: "Switch to the new branch", on: state.switchTo, toggle: () => again({ switchTo: !state.switchTo }) },
+      ...(canFetch && upstream
+        ? [
+            {
+              label: `Fetch ${tracking!.remote} first`,
+              sub: `Starts at ${upstream}’s latest commit, not where your ${baseBranch} is`,
+              on: fetching,
+              toggle: () => again({ fetch: !fetching }),
+            },
+          ]
+        : []),
+      ...(state.switchTo && ctx.uncommitted
+        ? [
+            {
+              label: `Leave ${plural(ctx.uncommitted, "uncommitted file")} on ${history.head.branch ?? "HEAD"}`,
+              sub: `Stashed as “Before switching to ${name || "…"}”: Apply it when you come back`,
+              on: leaving,
+              toggle: () => again({ stash: !leaving }),
+            },
+          ]
+        : []),
       ...(remote
         ? [
             {
@@ -363,9 +412,34 @@ function newBranchSheet(ctx: BranchContext, bases: Base[], state: NewBranch): Re
         : []),
     ],
     invalid: problem,
-    status: `Creating ${name}…`,
-    done: `Created ${name}${state.switchTo ? " and switched to it" : ""}.`,
-    recover: (failure) => remoteTrouble(failure, action, "Publishing to", remote ?? "the remote", `Created and published ${name}.`),
+    status: fetching ? `Fetching ${tracking!.remote}…` : `Creating ${name}…`,
+    done: `Created ${name}${state.switchTo ? " and switched to it" : ""}.${leaving ? ` Your files are in the stash.` : ""}`,
+    recover: (failure) => {
+      // A start other than HEAD can differ in a file you changed.
+      if (failure.kind === "localChanges" && !leaving) {
+        return {
+          title: "Your uncommitted changes are in the way",
+          body: [
+            "Some files you changed are different at ",
+            chip(ctx, action.start ?? "HEAD", color),
+            ", so switching would overwrite your changes. Leave them in a stash, on ",
+            here(ctx),
+            ", and they wait under Stashes in the sidebar until you bring them back.",
+          ],
+          icon: "warn",
+          tone: "warn",
+          button: { label: "Stash and Create", action: { ...action, stash: true }, status: `Creating ${name}…`, done: `Created ${name} and switched to it. Your files are in the stash.` },
+          close: "Cancel",
+          note: "No branch was created.",
+        };
+      }
+      const via = fetching && tracking ? tracking.remote : (remote ?? "the remote");
+      const verb = fetching && action.publish ? "Reaching" : fetching ? "Fetching from" : "Publishing to";
+      const trouble = remoteTrouble(failure, action, verb, via, `Created ${name}.`);
+      // Offline, a branch can still start where the local production branch is.
+      if (trouble && fetching && !action.publish && baseBranch) trouble.alt = { label: `Start from Your ${baseBranch}`, request: () => again({ fetch: false }) };
+      return trouble;
+    },
     action,
   };
 }

@@ -218,6 +218,13 @@ impl Repo {
             | Action::PushBranches { remote, .. }
             | Action::PullRequestMerged { remote, .. }
             | Action::DeleteRemoteBranch { remote, .. } => Some(remote.clone()),
+            // New Branch fetches first, or publishes after.
+            Action::CreateBranch {
+                fetch: Some(remote), ..
+            }
+            | Action::CreateBranch {
+                publish: Some(remote), ..
+            } => Some(remote.clone()),
             _ => None,
         }
     }

@@ -6,6 +6,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import { BRANCH_PALETTES, branchPaletteById, branchVariables, type BranchPaletteId } from "./branchPalettes";
+import { BRANCH_PREFIXES, prefixesProblem, type BranchPrefix } from "./branchPrefixes";
 import { isNewer, loadedOver, SaveQueue } from "./settingSaves";
 import { isCommand, useCustom, validCombo, type Custom } from "./shortcuts";
 import { paletteOf, THEMES, themeById, themeVariables } from "./themes";
@@ -87,6 +88,23 @@ export const defaults = {
   "oxbow.theme.variant": "auto" as "auto" | "light" | "dark",
   /** Colors of branches everywhere: graph, sidebar, capsules, stacks. */
   "oxbow.branchPalette": "mineral" as BranchPaletteId,
+  /** New branch names: spaces become dashes and what git refuses goes, as they are typed. */
+  "oxbow.branch.cleanNames": true,
+  "oxbow.branch.lowercase": true,
+  /** The prefix a new branch's Name box starts with: "last" for the one used last, "" for none. */
+  "oxbow.branch.firstPrefix": "last",
+  /** The prefix picked last in a Name box, which "last" starts the next one with. */
+  "oxbow.branch.lastPrefix": "feature/",
+  /** The prefixes the pop-up at the start of a Name box offers, in this order. */
+  "oxbow.branch.prefixes": BRANCH_PREFIXES as BranchPrefix[],
+  /** Also offer the prefixes the repository's branches have, such as renovate/. */
+  "oxbow.branch.repoPrefixes": true,
+  /** A prefix with "from": "production" starts the branch there, e.g. hotfix/. */
+  "oxbow.branch.prefixStart": true,
+  /** New Branch fetches first, so a branch from the production branch starts at the remote's tip. */
+  "oxbow.branch.fetchFirst": true,
+  /** Uncommitted files when switching to a new branch: "bring" them along, or "stash" them. */
+  "oxbow.branch.uncommitted": "bring" as "bring" | "stash",
   /** Your own keyboard shortcuts by command, over VS Code's: { "push": ["Mod+Shift+K"] }; an
    *  empty list takes a command's keys away. Settings › Keyboard Shortcuts writes it. */
   "oxbow.keyboard.shortcuts": {} as Custom,
@@ -121,6 +139,7 @@ export const rules: Partial<Record<PrefKey, Rule>> = {
   "oxbow.theme": { oneOf: THEMES.map((theme) => theme.id) },
   "oxbow.theme.variant": { oneOf: ["auto", "light", "dark"] },
   "oxbow.branchPalette": { oneOf: BRANCH_PALETTES.map((palette) => palette.id) },
+  "oxbow.branch.uncommitted": { oneOf: ["bring", "stash"] },
 };
 
 /** Keys Oxbow keeps in settings.json by itself, e.g. the width of a panel, with their type. */
@@ -140,6 +159,7 @@ export function problemOf(key: string, value: unknown): string | null {
   const actual = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
   if (actual !== expected) return `Expected ${named(expected)}, not ${named(actual)}`;
   if (key === "oxbow.secrets.patterns") return patternsProblem(value as unknown[]);
+  if (key === "oxbow.branch.prefixes") return prefixesProblem(value as unknown[]);
   if (key === "oxbow.keyboard.shortcuts") return shortcutsProblem(value as Record<string, unknown>);
   if (key === "oxbow.tips.seen" && (value as unknown[]).some((id) => typeof id !== "string")) return "Expected a list of tip names";
   const rule = rules[key as PrefKey];
