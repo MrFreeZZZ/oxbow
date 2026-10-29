@@ -14,8 +14,6 @@
 //!   point. Only the trunk moves out of its way, into the column that line had, and curves back
 //!   at the fork point; every other line keeps its column and color.
 
-use std::sync::atomic::{AtomicU8, Ordering};
-
 use serde::Serialize;
 
 /// Index of a commit in the display order.
@@ -26,31 +24,16 @@ pub type RowIndex = usize;
 /// open for each, in every row down to the bottom of the history.
 const MAX_LANES: usize = 256;
 
-/// Most branch colors a palette has, not counting the trunk color: the Oxbow palette's nine.
-/// Mineral, Paper and Signal have seven. None of them has red or pink (removed lines), green
-/// (added lines) or yellow (tags).
-pub const MAX_BRANCH_COLORS: u8 = 9;
-
-/// Branch colors of the default palette, Mineral.
-pub const DEFAULT_BRANCH_COLORS: u8 = 7;
+/// Branch colors of every palette, not counting the trunk color: branch names hash into
+/// `1..=BRANCH_COLORS`. No palette has red or pink (removed lines), green (added lines) or yellow
+/// (tags).
+pub const BRANCH_COLORS: u8 = 7;
 
 /// Neutral color for stashes, outside every branch palette.
 pub const STASH_COLOR: u8 = 10;
 
 /// Gray for commits that belong to no branch: made on a detached `HEAD`.
 pub const NO_BRANCH_COLOR: u8 = 11;
-
-static BRANCH_COLORS: AtomicU8 = AtomicU8::new(DEFAULT_BRANCH_COLORS);
-
-/// How many branch colors the chosen palette has (Settings › Themes › Branch palette).
-pub fn set_branch_colors(count: u8) {
-    BRANCH_COLORS.store(count.clamp(1, MAX_BRANCH_COLORS), Ordering::Relaxed);
-}
-
-/// Branch colors of the chosen palette: names hash into `1..=branch_colors()`.
-pub fn branch_colors() -> u8 {
-    BRANCH_COLORS.load(Ordering::Relaxed)
-}
 
 /// Color of the trunk lane.
 pub const TRUNK_COLOR: u8 = 0;
@@ -119,7 +102,7 @@ pub struct LeadIn {
 pub struct RowLayout {
     /// Column of the commit dot.
     pub column: u16,
-    /// Color of the commit dot (0 = trunk, `1..=branch_colors()` = branch palette, `STASH_COLOR` = stash).
+    /// Color of the commit dot (0 = trunk, `1..=BRANCH_COLORS` = branch palette, `STASH_COLOR` = stash).
     pub color: u8,
     /// Colors of branches that fork from this commit, drawn as a ring around the dot.
     pub fork_colors: Vec<u8>,
@@ -286,7 +269,7 @@ pub fn color_for_name(name: &str) -> u8 {
         hash ^= u32::from(byte);
         hash = hash.wrapping_mul(0x0100_0193);
     }
-    1 + (hash % u32::from(branch_colors())) as u8
+    1 + (hash % u32::from(BRANCH_COLORS)) as u8
 }
 
 /// Lay out `commits`, which must be ordered children before parents. `focus` is the row of the
@@ -1124,7 +1107,7 @@ mod tests {
         for name in ["main", "feature/x", "", "renovate/serde-1.x"] {
             let c = color_for_name(name);
             assert_eq!(c, color_for_name(name));
-            assert!((1..=branch_colors()).contains(&c));
+            assert!((1..=BRANCH_COLORS).contains(&c));
         }
     }
 

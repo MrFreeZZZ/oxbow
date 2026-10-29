@@ -38,30 +38,26 @@
   --red: #c4282c;
   --lead-in: #bcc0c7;
 
-  /* Branch palette 1-9, muted: no red or pink (removed lines), no green (added lines), no yellow (tags),
+  /* Branch palette 1-7, muted: no red or pink (removed lines), no green (added lines), no yellow (tags),
      no two colors of nearly the same hue. 10 is the stash grey, 11 the grey of commits on no branch. */
   --lane-0: #4a6680;
   --lane-1: #487e79;
   --lane-2: #77bbc3;
   --lane-3: #4d90ac;
-  --lane-4: #7fa0d0;
-  --lane-5: #64619b;
-  --lane-6: #9b8db5;
-  --lane-7: #77546f;
-  --lane-8: #cc986e;
-  --lane-9: #846047;
+  --lane-4: #64619b;
+  --lane-5: #77546f;
+  --lane-6: #cc986e;
+  --lane-7: #846047;
   --lane-10: #9b9ea4;
   --lane-11: #8a8f98;
   --plate-0: #3b5266;
   --plate-1: #04534e;
   --plate-2: #0b5158;
   --plate-3: #064f67;
-  --plate-4: #174687;
-  --plate-5: #43388a;
-  --plate-6: #513975;
-  --plate-7: #68305d;
-  --plate-8: #6a3a07;
-  --plate-9: #6d3705;
+  --plate-4: #43388a;
+  --plate-5: #68305d;
+  --plate-6: #6a3a07;
+  --plate-7: #6d3705;
   --plate-10: #5c6168;
   --plate-11: #4a4f57;
   /* Author avatars: the original palette, apart from the branch palette chosen in Settings. */
@@ -213,24 +209,20 @@
   --lane-1: #5d938e;
   --lane-2: #8dd2da;
   --lane-3: #63a6c2;
-  --lane-4: #94b6e7;
-  --lane-5: #7875b1;
-  --lane-6: #b1a2cb;
-  --lane-7: #8c6884;
-  --lane-8: #e3ae83;
-  --lane-9: #99745b;
+  --lane-4: #7875b1;
+  --lane-5: #8c6884;
+  --lane-6: #e3ae83;
+  --lane-7: #99745b;
   --lane-10: #8f949b;
   --lane-11: #9ea3ab;
   --plate-0: #94b2cc;
   --plate-1: #96d9d3;
   --plate-2: #93d8e0;
   --plate-3: #9ad4ee;
-  --plate-4: #aecdf9;
-  --plate-5: #c5c5f7;
-  --plate-6: #d2c1f2;
-  --plate-7: #e8badd;
-  --plate-8: #edc09d;
-  --plate-9: #efbf9f;
+  --plate-4: #c5c5f7;
+  --plate-5: #e8badd;
+  --plate-6: #edc09d;
+  --plate-7: #efbf9f;
   --plate-10: #bcc1c8;
   --plate-11: #c7cbd1;
   /* Author avatars, dark. */

@@ -358,7 +358,7 @@
             {#if !needle && group.key === "theme:0"}
               <ThemeSample />
             {:else if !needle && group.key === "theme:1"}
-              <BranchPreview colors={prefs.get("oxbow.branchPalette") === "oxbow" ? 9 : 7} />
+              <BranchPreview />
             {/if}
             <div class="panel">
               {#each group.rows as row (row.id)}

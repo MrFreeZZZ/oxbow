@@ -184,10 +184,6 @@ pub(crate) fn apply_settings(app: &AppHandle, session: &Session, settings: &serd
             .and_then(Value::as_u64)
             .map_or(oxbow_core::localhistory::DEFAULT_DAYS, |days| days.min(30) as u32),
     );
-    oxbow_core::graph::set_branch_colors(match settings.get("oxbow.branchPalette").and_then(Value::as_str) {
-        Some("oxbow") => oxbow_core::graph::MAX_BRANCH_COLORS,
-        _ => oxbow_core::graph::DEFAULT_BRANCH_COLORS,
-    });
     let theme = appearance(settings);
     for window in app.webview_windows().values() {
         let _ = window.set_theme(theme);

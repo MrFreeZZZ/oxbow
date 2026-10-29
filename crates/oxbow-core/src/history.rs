@@ -575,7 +575,7 @@ fn rows_key(
         (&stash.id, stash.index).hash(&mut hasher);
     }
     remotes.hash(&mut hasher);
-    (rebasing, changes, production, shallow, settled, graph::branch_colors()).hash(&mut hasher);
+    (rebasing, changes, production, shallow, settled).hash(&mut hasher);
     hasher.finish()
 }
 
