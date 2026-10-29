@@ -50,7 +50,8 @@ crates/oxbow-core/          UI-free core library (all Git logic lives here)
   tests/<area>.rs           integration tests, one file per area; tests/support/mod.rs = Fixture
   examples/history.rs       history load benchmark;  reads.rs = opening with worktrees/submodules;
                             steps.rs = Stage with Undo and pages of lines of a big file;
-                            localhistory.rs = what Local History costs on a real repository
+                            localhistory.rs = what Local History costs on a real repository;
+                            pages.rs = older pages of History, scrolled down to 100,000
 app/src-tauri/              Tauri shell (crate oxbow-app)
   src/main.rs               the app's setup and the generate_handler! list of every command
   src/session.rs            each window's repository and Stop buttons; current(), read(), logged()
