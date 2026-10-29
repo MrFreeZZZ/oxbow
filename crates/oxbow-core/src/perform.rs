@@ -9,7 +9,8 @@
 //! exactly the hunk `git apply` gets when it is staged. Every change to the repository is an
 //! [`Action`] that turns into the [`GitCommand`]s shown in the confirmation sheet.
 
-use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::action::{Action, ActionEvent};
 use crate::cli::GitCommand;
@@ -27,19 +28,21 @@ pub(crate) const MAX_GITIGNORE_BYTES: u64 = 16 * 1024 * 1024;
 impl Repo {
     /// Run `action`. Returns what the last command printed.
     pub fn perform(&self, action: &Action) -> Result<String> {
-        self.perform_with(action, &mut |_| {}, &AtomicBool::new(false))
+        self.perform_with(action, &mut |_| {}, &Arc::new(AtomicBool::new(false)))
     }
 
     /// Run `action`, reporting each command and each line it prints to `on_event`. Setting
-    /// `cancel` stops the running command. The step goes into the Operation Log with the state
-    /// before and after it, so it can be undone. When the state before can't be saved nothing
-    /// runs ([`Error::NoUndo`]): see [`Repo::perform_without_undo`]. A step that ran but can't
-    /// be written to the log is reported as [`ActionEvent::NotLogged`].
+    /// `cancel` stops it: while the state before is still being saved nothing has run, and it
+    /// ends there with [`Error::Cancelled`]; once the action runs, its running command stops,
+    /// and what it did by then is still written down for Undo. The step goes into the Operation
+    /// Log with the state before and after it, so it can be undone. When the state before can't
+    /// be saved nothing runs ([`Error::NoUndo`]): see [`Repo::perform_without_undo`]. A step
+    /// that ran but can't be written to the log is reported as [`ActionEvent::NotLogged`].
     pub fn perform_with(
         &self,
         action: &Action,
         on_event: &mut dyn FnMut(ActionEvent),
-        cancel: &AtomicBool,
+        cancel: &Arc<AtomicBool>,
     ) -> Result<String> {
         self.perform_logged(action, on_event, cancel, false)
     }
@@ -50,7 +53,7 @@ impl Repo {
         &self,
         action: &Action,
         on_event: &mut dyn FnMut(ActionEvent),
-        cancel: &AtomicBool,
+        cancel: &Arc<AtomicBool>,
     ) -> Result<String> {
         self.perform_logged(action, on_event, cancel, true)
     }
@@ -59,7 +62,7 @@ impl Repo {
         &self,
         action: &Action,
         on_event: &mut dyn FnMut(ActionEvent),
-        cancel: &AtomicBool,
+        cancel: &Arc<AtomicBool>,
         without_undo: bool,
     ) -> Result<String> {
         // Nothing force pushes a protected branch or rewrites its pushed commits.
@@ -82,12 +85,14 @@ impl Repo {
         } = action
             && crate::secrets::check_secrets()
         {
-            let found = crate::console::role("secrets check", || match action {
-                // A changelist's commit adds what the list holds, not what is staged.
-                Action::Commit {
-                    changelist: Some(_), ..
-                } => self.changelist_secrets(&self.plan(action)?.commands),
-                _ => self.staged_secrets(),
+            let found = crate::console::role("secrets check", || {
+                crate::cli::stoppable(cancel, || match action {
+                    // A changelist's commit adds what the list holds, not what is staged.
+                    Action::Commit {
+                        changelist: Some(_), ..
+                    } => self.changelist_secrets(&self.plan(action)?.commands),
+                    _ => self.staged_secrets(),
+                })
             })?;
             if !found.is_empty() {
                 return Err(Error::Secrets(found));
@@ -138,12 +143,17 @@ impl Repo {
         // The state before, for Undo, saved before anything is written: without it the step
         // can't be undone, which is asked about first rather than found out after. A fetch
         // mostly moves branches on remotes, which Undo leaves alone anyway: it never waits.
+        // Stop while it is saved ends the step here: nothing has been written yet.
         let required = !without_undo && !matches!(action, Action::Fetch { .. });
-        let before = match crate::console::role(UNDO_SNAPSHOT, || self.snapshot()) {
+        let before = match crate::console::role(UNDO_SNAPSHOT, || crate::cli::stoppable(cancel, || self.snapshot())) {
             Ok(before) => Some(before),
+            Err(Error::Cancelled) => return Err(Error::Cancelled),
             Err(err) if required => return Err(Error::NoUndo(err.to_string())),
             Err(_) => None,
         };
+        if cancel.load(Ordering::Relaxed) {
+            return Err(Error::Cancelled);
+        }
         if let Action::Restore { id, .. } = action {
             self.prepare_restore(id)?;
         }
@@ -193,19 +203,22 @@ impl Repo {
             let _ = self.run(&GitCommand::new(["update-index", "-q", "--refresh"]));
         }
         // The action ran (or failed part way): a step that can't be written is said apart from
-        // the action's own result, which stands either way.
+        // the action's own result, which stands either way. Stop pressed meanwhile doesn't stop
+        // the writing down: without it Undo couldn't take back what the action did.
         let recorded = match before {
             Some(before) => crate::console::role(UNDO_SNAPSHOT, || {
-                // Staging changes the index only; it never writes a file.
-                let after = match action {
-                    Action::Stage { .. }
-                    | Action::Unstage { .. }
-                    | Action::StageChangelist { .. }
-                    | Action::StageHunk { .. }
-                    | Action::UnstageHunk { .. } => self.snapshot_of_index(&before)?,
-                    _ => self.snapshot()?,
-                };
-                self.record(action, &before, &after, result.is_err())
+                crate::cli::unstoppable(|| {
+                    // Staging changes the index only; it never writes a file.
+                    let after = match action {
+                        Action::Stage { .. }
+                        | Action::Unstage { .. }
+                        | Action::StageChangelist { .. }
+                        | Action::StageHunk { .. }
+                        | Action::UnstageHunk { .. } => self.snapshot_of_index(&before)?,
+                        _ => self.snapshot()?,
+                    };
+                    self.record(action, &before, &after, result.is_err())
+                })
             })
             .map(|_| ()),
             None => Err(Error::Git("there was no snapshot from before it".into())),

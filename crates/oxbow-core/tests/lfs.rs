@@ -1,6 +1,7 @@
 mod support;
 
 use std::process::Command;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use oxbow_core::{Action, ActionEvent, Error, PartState, Repo, Side};
@@ -220,7 +221,7 @@ fn a_download_brings_each_file_and_names_the_one_that_failed() {
         include: None,
         paths: Vec::new(),
     };
-    let result = repo.perform_with(&pull, &mut |e| events.push(e), &AtomicBool::new(false));
+    let result = repo.perform_with(&pull, &mut |e| events.push(e), &Arc::new(AtomicBool::new(false)));
     match result {
         Err(Error::PartlyDone { of: 3, failed }) => {
             assert_eq!(failed.len(), 1);

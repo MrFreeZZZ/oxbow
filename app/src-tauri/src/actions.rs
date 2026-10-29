@@ -12,6 +12,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::CommandResult;
 use crate::repos::tell_others;
 use crate::session::{Session, at, current, logged, read};
+use crate::turns::{GiveWay, Running};
 
 /// The git commands an action will run, for the confirmation sheet.
 #[tauri::command]
@@ -55,16 +56,18 @@ pub(crate) async fn perform_action(
         check: None,
         tracking: None,
     })?;
-    let cancel = session.cancel(&window);
-    cancel.store(false, Ordering::Relaxed);
+    // Its own Stop, heard by the Stop of the window that asked until the run is over.
+    let stop = session.new_stop(&window);
+    let cancel = stop.cancel.clone();
     let events = app.clone();
     let turns = session.turns.clone();
     let turn_window = repo_window.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
         let title = repo.action_title(&action);
-        // Another window of the repository changing it goes first.
+        // A change running in the repository goes first, from this window, Settings or another.
         let common = repo.common_dir();
-        let turn = turns.take(&common, &turn_window, repo.name(), title.clone(), &cancel, |other| {
+        let change = Running::new(&turn_window, repo.name(), title.clone());
+        let turn = turns.take(&common, change, &cancel, |other| {
             let event = oxbow_core::ActionEvent::Waiting {
                 title: other.title.clone(),
                 window: other.folder.clone(),
@@ -149,6 +152,8 @@ const FETCH_QUIET_LIMIT: std::time::Duration = std::time::Duration::from_secs(2 
 pub(crate) struct Fetched {
     /// Remote branches and tags that are new, moved or gone.
     updated: u32,
+    /// It stopped part way for an action, as a fetch of the timer does.
+    gave_way: bool,
 }
 
 /// What a background fetch printed, with the number Activity gave the fetch: a fetch of the
@@ -189,6 +194,8 @@ pub(crate) async fn fetch_in_background(
     } else {
         Arc::new(AtomicBool::new(false))
     };
+    // A fetch of the timer stops for an action rather than make it wait.
+    let gives_way = (auto == Some(true)).then(|| GiveWay::new(cancel.clone()));
     let label = window.label().to_owned();
     let turn_window = session.label(&window);
     let turns = session.turns.clone();
@@ -205,20 +212,18 @@ pub(crate) async fn fetch_in_background(
         let emit = |event| {
             let _ = app.emit_to(label.as_str(), "fetch-event", FetchEvent { fetch, event });
         };
-        // Another window of the repository changing it goes first.
-        let turn = turns.take(
-            &repo.common_dir(),
-            &turn_window,
-            repo.name(),
-            title.clone(),
-            &cancel,
-            |other| {
-                emit(oxbow_core::ActionEvent::Waiting {
-                    title: other.title.clone(),
-                    window: other.folder.clone(),
-                })
-            },
-        );
+        // A change running in the repository goes first, from any window.
+        let mut change = Running::new(&turn_window, repo.name(), title.clone());
+        if let Some(way) = &gives_way {
+            change = change.giving_way(way.clone());
+        }
+        let turn = turns.take(&repo.common_dir(), change, &cancel, |other| {
+            emit(oxbow_core::ActionEvent::Waiting {
+                title: other.title.clone(),
+                window: other.folder.clone(),
+            })
+        });
+        let gave_way = || gives_way.as_ref().is_some_and(GiveWay::gave_way);
         let Some(_turn) = turn else {
             return Err(Failure {
                 kind: oxbow_core::FailureKind::Cancelled,
@@ -247,7 +252,15 @@ pub(crate) async fn fetch_in_background(
                 )
             });
             match result {
-                Ok(_) => Ok(Fetched { updated }),
+                Ok(_) => Ok(Fetched {
+                    updated,
+                    gave_way: false,
+                }),
+                // Stopped for an action: the next fetch of the timer tries again.
+                Err(oxbow_core::Error::Cancelled) if gave_way() => Ok(Fetched {
+                    updated,
+                    gave_way: true,
+                }),
                 Err(err) => Err(repo.explain_failure(&action, &err)),
             }
         });

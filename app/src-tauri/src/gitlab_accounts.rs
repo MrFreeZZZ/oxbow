@@ -8,7 +8,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use oxbow_core::gitlab_api::{self, Client, GitLabPublish, Namespace, Server};
@@ -159,8 +158,9 @@ pub async fn gitlab_publish(
     }
     let client = tokens.client(&app, &host)?;
     let label = window.label().to_owned();
-    let cancel = app.state::<crate::session::Session>().cancel(&window);
-    cancel.store(false, Ordering::Relaxed);
+    // Dropped once the run is over: Stop no longer reaches it.
+    let stop = app.state::<crate::session::Session>().new_stop(&window);
+    let cancel = stop.cancel.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let emit = |event: ActionEvent| {
             let _ = app.emit_to(label.as_str(), "action-event", event);

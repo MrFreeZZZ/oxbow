@@ -240,7 +240,7 @@ fn undo_apply_keeps_an_untracked_file_made_just_before_git_ran() {
         .perform_with(
             &apply(&repo, false),
             &mut on_event,
-            &std::sync::atomic::AtomicBool::new(false),
+            &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
         .unwrap_err();
     assert!(err.to_string().contains("already exists"), "{err}");
@@ -303,7 +303,7 @@ fn undo_apply_keeps_a_restored_file_edited_after_the_plan_was_made() {
     repo.perform_with(
         &Action::Abort,
         &mut on_event,
-        &std::sync::atomic::AtomicBool::new(false),
+        &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
     .unwrap();
     assert!(repo.operation().unwrap().is_none());

@@ -123,8 +123,10 @@ class Activity {
     const current = () => this.running?.id === id;
     let ok = false;
     try {
-      const { updated } = await api.fetchInBackground(remote, id, auto);
+      const { updated, gaveWay } = await api.fetchInBackground(remote, id, auto);
       if (!current()) return false;
+      // The timer's fetch stopped for an action: the next one fetches again, nothing to tell.
+      if (gaveWay) return false;
       ok = true;
       this.#fixProblem();
       this.#finished({

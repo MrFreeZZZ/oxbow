@@ -1,5 +1,6 @@
 mod support;
 
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use oxbow_core::{Action, ActionEvent, FailureKind, PullMode, Repo};
@@ -627,7 +628,7 @@ fn push_streams_its_output() {
     team.me.commit("b.txt", "mine\n", "Mine");
     let repo = Repo::open(team.me.path()).unwrap();
     let mut events = Vec::new();
-    repo.perform_with(&push(false), &mut |e| events.push(e), &AtomicBool::new(false))
+    repo.perform_with(&push(false), &mut |e| events.push(e), &Arc::new(AtomicBool::new(false)))
         .unwrap();
     assert_eq!(
         events[0],

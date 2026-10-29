@@ -35,15 +35,64 @@ pub(crate) struct Session {
     /// so two saves at once can't lose each other's key, and sent with every change, so each
     /// window takes the changes in the order they were saved.
     pub(crate) settings: Mutex<u64>,
-    /// Changes running in each repository, which its other windows wait for.
+    /// Changes running in each repository, one at a time.
     pub(crate) turns: Arc<turns::Turns>,
+    /// The Stop of each run going now.
+    pub(crate) stops: Arc<Stops>,
+}
+
+/// The Stop of each action, clone and GitHub or GitLab call running now, by the label of the
+/// window whose sheet runs it: Settings has its own.
+#[derive(Default)]
+pub(crate) struct Stops {
+    running: Mutex<HashMap<String, Vec<Arc<AtomicBool>>>>,
+}
+
+/// A run's own Stop, heard by its window's Stop button until it is dropped.
+pub(crate) struct RunStop {
+    stops: Arc<Stops>,
+    window: String,
+    pub(crate) cancel: Arc<AtomicBool>,
+}
+
+impl Stops {
+    /// A Stop of its own for a run starting now in `window`: a run after it never clears it,
+    /// and Stop in another window doesn't reach it.
+    pub(crate) fn start(self: &Arc<Self>, window: &str) -> RunStop {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut running = self.running.lock().expect("stops lock");
+        running.entry(window.to_owned()).or_default().push(cancel.clone());
+        RunStop {
+            stops: self.clone(),
+            window: window.to_owned(),
+            cancel,
+        }
+    }
+
+    /// Stop what `window` runs.
+    pub(crate) fn stop(&self, window: &str) {
+        let running = self.running.lock().expect("stops lock");
+        for cancel in running.get(window).into_iter().flatten() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+impl Drop for RunStop {
+    fn drop(&mut self) {
+        let mut running = self.stops.running.lock().expect("stops lock");
+        if let Some(list) = running.get_mut(&self.window) {
+            list.retain(|cancel| !Arc::ptr_eq(cancel, &self.cancel));
+            if list.is_empty() {
+                running.remove(&self.window);
+            }
+        }
+    }
 }
 
 #[derive(Default)]
 pub(crate) struct Slot {
     pub(crate) repo: Option<Repo>,
-    /// Set by Stop; the running action checks it.
-    pub(crate) cancel: Arc<AtomicBool>,
     /// Stop of the fetch running in the background, apart from actions in the sheet.
     pub(crate) fetch_cancel: Arc<AtomicBool>,
     /// The commit rows of the last history, for the next reload to reuse.
@@ -204,8 +253,9 @@ impl Session {
         f(self.windows.lock().expect("session lock").entry(label).or_default())
     }
 
-    pub(crate) fn cancel(&self, window: &tauri::WebviewWindow) -> Arc<AtomicBool> {
-        self.slot(window, |slot| slot.cancel.clone())
+    /// A Stop of its own for a run starting now in `window`, which its Stop button reaches.
+    pub(crate) fn new_stop(&self, window: &tauri::WebviewWindow) -> RunStop {
+        self.stops.start(window.label())
     }
 
     pub(crate) fn fetch_cancel(&self, window: &tauri::WebviewWindow) -> Arc<AtomicBool> {
@@ -325,10 +375,10 @@ pub(crate) fn stop_reads(window: tauri::WebviewWindow, session: State<'_, Sessio
     });
 }
 
-/// Stop the running action.
+/// Stop the action running in this window's sheet.
 #[tauri::command]
 pub(crate) fn stop_action(window: tauri::WebviewWindow, session: State<'_, Session>) {
-    session.cancel(&window).store(true, Ordering::Relaxed);
+    session.stops.stop(window.label());
 }
 
 #[cfg(test)]
@@ -371,6 +421,26 @@ mod tests {
         let changes = history.changes.clone().map(|tree| (number, Arc::new(tree)));
         let folders = Arc::new((history.worktrees.clone(), history.submodules.clone()));
         slot.keep_history(number, cache, changes, folders);
+    }
+
+    #[test]
+    fn each_run_has_a_stop_of_its_own() {
+        let stops = Arc::new(Stops::default());
+        let main = stops.start("main");
+        // Settings acts for the main window, but its Stop is its own.
+        let settings = stops.start("settings");
+        stops.stop("settings");
+        assert!(settings.cancel.load(Ordering::Relaxed));
+        assert!(
+            !main.cancel.load(Ordering::Relaxed),
+            "Stop in Settings stopped the main window's action"
+        );
+        // A run started after Stop doesn't take it back from the one stopped.
+        let later = stops.start("settings");
+        assert!(settings.cancel.load(Ordering::Relaxed));
+        assert!(!later.cancel.load(Ordering::Relaxed));
+        drop((main, settings, later));
+        assert!(stops.running.lock().unwrap().is_empty());
     }
 
     #[test]
