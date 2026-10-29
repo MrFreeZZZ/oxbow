@@ -137,6 +137,8 @@ fn main() {
             working::recent_messages,
             working::working_diff,
             working::working_diff_page,
+            working::changelists,
+            working::edit_changelists,
             working::source_bytes,
             working::source_lines,
             working::open_source,

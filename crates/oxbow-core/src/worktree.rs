@@ -678,6 +678,19 @@ impl Repo {
         Ok(format!("{}{}", parsed.file_header, text))
     }
 
+    /// The unstaged patch of `file`, a tracked file: its file header, and each hunk's text with
+    /// the hunk, for the part of it a changelist holds. No hunks for a binary file.
+    pub(crate) fn unstaged_hunks(&self, file: &FileChange) -> Result<(String, Vec<(String, Hunk)>)> {
+        let parsed = parse_patch(&self.raw_diff(file, Side::Unstaged, false)?);
+        if parsed.binary {
+            return Ok((parsed.file_header, Vec::new()));
+        }
+        Ok((
+            parsed.file_header,
+            parsed.hunks.into_iter().map(|h| (h.text, h.hunk)).collect(),
+        ))
+    }
+
     /// `git diff` output for one file.
     fn raw_diff(&self, file: &FileChange, side: Side, whole_file: bool) -> Result<String> {
         let (patch, _) = self.raw_diff_within(file, side, whole_file, usize::MAX, &AtomicBool::new(false))?;
@@ -784,7 +797,7 @@ impl Side {
 }
 
 /// A fingerprint of a hunk's text (FNV-1a), enough to notice that it changed.
-fn fingerprint(text: &str) -> String {
+pub(crate) fn fingerprint(text: &str) -> String {
     let hash = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
     });
@@ -1063,6 +1076,7 @@ fn parse_patch_within(patch: &str, max: usize) -> ParsedPatch {
                     new_lines,
                     lines: Vec::new(),
                     check: String::new(),
+                    runs: Vec::new(),
                 },
             });
             continue;
@@ -1124,6 +1138,13 @@ fn parse_patch_within(patch: &str, max: usize) -> ParsedPatch {
             mark_words(&mut hunk.hunk.lines);
             hunk.hunk.check = fingerprint(&hunk.text);
         }
+        let mut seen = HashMap::new();
+        for hunk in &mut hunks {
+            hunk.hunk.runs = crate::changelists::runs_of(&hunk.hunk.lines, &mut seen)
+                .into_iter()
+                .map(|run| run.key)
+                .collect();
+        }
     }
     let mode = match (old_mode, new_mode) {
         (Some(old), Some(new)) => Some(ModeChange { old, new }),
@@ -1144,7 +1165,7 @@ fn parse_patch_within(patch: &str, max: usize) -> ParsedPatch {
 /// git has no command for single lines; this is what `git add -p` and `e` do by hand. A changed
 /// line left out is dropped when it only exists on the side the patch makes, and becomes
 /// context when the side the patch applies to already has it. `None` when nothing is selected.
-fn partial_hunk(text: &str, selected: &[usize], forward: bool) -> Option<String> {
+pub(crate) fn partial_hunk(text: &str, selected: &[usize], forward: bool) -> Option<String> {
     let mut rows = text.split_inclusive('\n');
     let head = rows.next()?;
     let rest = head.strip_prefix("@@ ")?;

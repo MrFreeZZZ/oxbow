@@ -47,6 +47,10 @@
     unstage,
     discard,
     stageAndNext,
+    hunkChip = null,
+    onHunkChip,
+    fileCaption = null,
+    listTitle = null,
   }: {
     color: number;
     /** What the column shows: a file on one side, or every file of a side. */
@@ -87,6 +91,14 @@
     unstage: (files: FileChange[]) => unknown;
     discard: (files: FileChange[]) => unknown;
     stageAndNext: (file: FileChange) => unknown;
+    /** With changelists, the chip on an unstaged hunk's bar: the list its changes are in. */
+    hunkChip?: ((d: FileDiff, hunk: Hunk) => { label: string; listed: boolean }) | null;
+    /** The chip's menu, which moves the hunk's changes to another list. */
+    onHunkChip?: (event: MouseEvent, d: FileDiff, hunk: Hunk) => void;
+    /** Under the switch of an unstaged file in a changelist: what of it the list holds. */
+    fileCaption?: string | null;
+    /** The changelist whose files are all shown. */
+    listTitle?: string | null;
   } = $props();
 
   let diffView = $state<DiffView>();
@@ -140,6 +152,11 @@
       <span class="header">{hunk.header}</span>
       {#if n}
         <button class="state picked" onclick={() => (sel = null)} title="Clear the picked lines">{n} of {hunk.lines.filter((l) => l.kind !== "context").length} lines</button>
+        {#if side === "unstaged" && hunkChip}
+          <button class="state chip" onclick={(e) => onHunkChip?.(e, d, hunk)} aria-haspopup="menu" title="Move the changes of the picked lines to another changelist">
+            Move<svg class="icon" viewBox="0 0 16 16"><path d="M4.5 6.5 8 10l3.5-3.5" /></svg>
+          </button>
+        {/if}
         {#if side === "unstaged"}
           <button class="button mini text" onclick={() => linesAction("discardHunk", d.file.path, hunk)}>Discard {n} {lineWord}</button>
           <button class="button mini text" onclick={() => stashLines(d.file.path, hunk)} title="Put the picked lines aside in a new stash">Stash {n} {lineWord}</button>
@@ -148,7 +165,14 @@
           <button class="button mini text" onclick={() => linesAction("unstageHunk", d.file.path, hunk)}>Unstage {n} {lineWord}</button>
         {/if}
       {:else}
-        <span class="state" class:staged={side === "staged"}>{side === "staged" ? "Staged" : "Unstaged"}</span>
+        {#if side === "unstaged" && hunkChip}
+          {@const chip = hunkChip(d, hunk)}
+          <button class="state chip" class:listed={chip.listed} onclick={(e) => onHunkChip?.(e, d, hunk)} aria-haspopup="menu" title="Move this change to another changelist">
+            {chip.label}<svg class="icon" viewBox="0 0 16 16"><path d="M4.5 6.5 8 10l3.5-3.5" /></svg>
+          </button>
+        {:else}
+          <span class="state" class:staged={side === "staged"}>{side === "staged" ? "Staged" : "Unstaged"}</span>
+        {/if}
         {#if side === "unstaged"}
           <button class="button mini text" onclick={() => hunkAction("discardHunk", d.file.path, hunk)}>Discard</button>
           <button class="button mini text" onclick={() => stashLines(d.file.path, hunk)} title="Put this hunk aside in a new stash">Stash</button>
@@ -216,15 +240,15 @@
         <button role="radio" aria-checked={file.side === "unstaged"} class:on={file.side === "unstaged"} disabled={!openUnstaged} onclick={() => onShow({ ...file, side: "unstaged" })} title={openUnstaged ? "What stays out of the commit" : "Nothing of this file is left out of the commit"}>Unstaged</button>
         <button role="radio" aria-checked={file.side === "staged"} class:on={file.side === "staged"} disabled={!openStaged} onclick={() => onShow({ ...file, side: "staged" })} title={openStaged ? "What goes into the commit" : "Nothing of this file is staged yet"}>Staged</button>
       </div>
-      <span class="caption grow">{caption(file)}</span>
+      <span class="caption grow">{file.side === "unstaged" && fileCaption ? fileCaption : caption(file)}</span>
     {:else}
       <div class="grow">
         <div class="dtitle">
-          <b>{shown.kind === "files" ? "Selected files" : shown.side === "staged" ? "Next commit" : shown.untracked ? "Untracked files" : "Unstaged changes"}</b>
+          <b>{shown.kind === "files" ? "Selected files" : listTitle ? listTitle : shown.side === "staged" ? "Next commit" : shown.untracked ? "Untracked files" : "Unstaged changes"}</b>
           <span class="n">{sideFiles.length} {sideFiles.length === 1 ? "file" : "files"}</span>
           {#if sideFiles.length}<span class="mono add">+{sideTotals.add}</span><span class="mono del">−{sideTotals.del}</span>{/if}
         </div>
-        <div class="caption">{shown.side === "staged" ? "Only staged changes go into the commit" : shown.untracked ? "New files git does not track yet stay out of the commit until staged" : "They stay out of the commit until staged"}</div>
+        <div class="caption">{shown.side === "staged" ? "Only staged changes go into the commit" : listTitle ? "A changelist: its changes stay out of the commit until staged, or committed on their own with Commit…" : shown.untracked ? "New files git does not track yet stay out of the commit until staged" : "They stay out of the commit until staged"}</div>
       </div>
       {#if diffs.length > 1}<FoldAll onFold={(fold) => diffView?.setAll(fold)} />{/if}
     {/if}
@@ -242,7 +266,10 @@
     <!-- Nothing left on this side: a short line with the way on, not a big empty screen. -->
     <div class="done-strip">
       <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" /><path d="M5.5 8.2 7.2 10l3.3-3.8" /></svg>
-      {#if shown.untracked}
+      {#if shown.list}
+        <span class="grow">No changes in {listTitle ?? "this changelist"} yet</span>
+        {#if tracked.length || conflicted.length}<button class="button mini quiet" onclick={() => onShow({ kind: "all", side: "unstaged" })}>Review Unstaged</button>{/if}
+      {:else if shown.untracked}
         <span class="grow">{staged.length ? "All new files staged" : "No untracked files"}</span>
         {#if tracked.length || conflicted.length}<button class="button mini quiet" onclick={() => onShow({ kind: "all", side: "unstaged" })}>Review Unstaged</button>{/if}
         {#if staged.length}<button class="button mini quiet" onclick={() => onShow({ kind: "all", side: "staged" })}>Review Staged</button>{/if}
@@ -434,6 +461,28 @@
   }
   .state.staged {
     color: var(--green);
+  }
+  /* With changelists, the hunk's list, as a chip that moves it to another. */
+  .state.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    height: 20px;
+    padding: 0 6px 0 8px;
+    border-radius: var(--radius-pill);
+    background: var(--field);
+  }
+  .state.chip .icon {
+    width: 10px;
+    height: 10px;
+    stroke-width: 1.8;
+  }
+  .state.chip.listed {
+    color: var(--accent-ink);
+    background: var(--accent-quiet);
+  }
+  .state.chip:hover {
+    color: var(--text);
   }
   .state.picked {
     color: var(--text);

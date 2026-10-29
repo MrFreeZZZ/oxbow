@@ -5,7 +5,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use oxbow_core::{
-    CommitBrief, DeletionCheck, DiffPage, FileDiff, MergePreview, PatchPreview, Side, Source, StashCheck, WorkingTree,
+    ChangelistEdit, Changelists, CommitBrief, DeletionCheck, DiffPage, FileDiff, MergePreview, PatchPreview, Side,
+    Source, StashCheck, WorkingTree,
 };
 use tauri::State;
 
@@ -204,6 +205,49 @@ pub(crate) async fn working_diff_page(
             None => Arc::new(repo.working_tree()?),
         };
         repo.working_diff_page(&tree, &paths, side, whole_file, from, budget, &cancel)
+    })
+    .await
+}
+
+/// The changelists and what each holds of the unstaged files: of the files the history just read
+/// when `snapshot` is that reading.
+#[tauri::command]
+pub(crate) async fn changelists(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    snapshot: Option<u64>,
+) -> CommandResult<Changelists> {
+    let repo = current(&session, &window)?;
+    let tree = session.slot(&window, |slot| {
+        slot.changes
+            .as_ref()
+            .filter(|(number, _)| Some(*number) == snapshot)
+            .map(|(_, tree)| tree.clone())
+    });
+    read(at(&repo), "Read the changelists", move || {
+        // With none kept, the files needn't be read again.
+        if !repo.has_changelists() {
+            return Ok(Changelists::default());
+        }
+        let tree = match tree {
+            Some(tree) => tree,
+            None => Arc::new(repo.working_tree()?),
+        };
+        repo.changelists(&tree)
+    })
+    .await
+}
+
+/// Make, rename, delete or activate a changelist, or move changes between them; the lists after.
+#[tauri::command]
+pub(crate) async fn edit_changelists(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    edit: ChangelistEdit,
+) -> CommandResult<Changelists> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "Change the changelists", move || {
+        repo.edit_changelists(&edit)
     })
     .await
 }

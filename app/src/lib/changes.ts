@@ -256,10 +256,12 @@ export function commitRecovery(failure: Failure, action: Action & { kind: "commi
 function secretsRecovery(found: SecretFinding[], action: Action & { kind: "commit" }, summary: string, branch: string): Recovery {
   const paths = [...new Set(found.map((f) => f.path))];
   const files = paths.length === 1 ? splitPath(paths[0]).name : plural(paths.length, "file");
+  // A changelist's lines aren't staged: they stay as they are, and the list is fixed in its files.
+  const list = !!action.changelist;
   return {
     title: found.length === 1 ? `Possible ${found[0].kind} in ${files}` : `Possible secrets in ${files}`,
     body: [
-      "Oxbow checked the staged lines before committing and stopped: ",
+      list ? "Oxbow checked the changelist’s lines before committing and stopped: " : "Oxbow checked the staged lines before committing and stopped: ",
       found.length === 1 ? "this one looks" : "these look",
       " like a password or key. Once pushed, a secret has to be revoked: deleting it from history is not enough.",
     ],
@@ -267,14 +269,16 @@ function secretsRecovery(found: SecretFinding[], action: Action & { kind: "commi
     tone: "warn",
     secrets: found,
     checked: [{ kind: "hint", text: "# Oxbow searched the lines this commit adds; git commit did not run" }],
-    button: {
-      label: paths.length === 1 ? "Unstage File" : `Unstage ${plural(paths.length, "File")}`,
-      action: { kind: "unstage", paths },
-      status: "Unstaging…",
-      done: `Unstaged ${paths.length === 1 ? files : plural(paths.length, "file")}. Your files do not change.`,
-    },
+    button: list
+      ? undefined
+      : {
+          label: paths.length === 1 ? "Unstage File" : `Unstage ${plural(paths.length, "File")}`,
+          action: { kind: "unstage", paths },
+          status: "Unstaging…",
+          done: `Unstaged ${paths.length === 1 ? files : plural(paths.length, "file")}. Your files do not change.`,
+        },
     alt: { label: "Commit Anyway…", danger: true, request: () => allowSecretsRequest(action, summary, branch, found.length) },
-    note: "Your message is kept. A line with oxbow:allow is never flagged.",
+    note: list ? "Your message is kept: fix the file, or move the line out of the changelist. A line with oxbow:allow is never flagged." : "Your message is kept. A line with oxbow:allow is never flagged.",
     close: "Close",
   };
 }

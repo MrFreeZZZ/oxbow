@@ -10,17 +10,19 @@
   import { api, stopped } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import { confirm, type Part, type Request } from "./confirm.svelte";
-  import type { FileChange, FileDiff, Hunk, HistoryRow, Side, WorkingTree } from "./types";
+  import type { ChangelistEdit, Changelists, FileChange, FileDiff, Hunk, HistoryRow, Moving, Side, WorkingTree } from "./types";
   import { plate, splitPath, tint } from "./format";
   import { keyFocus as focusByKey, tabStepper } from "./tabs";
   import ChangesDiff from "./ChangesDiff.svelte";
   import type { LinePicker } from "./DiffView.svelte";
   import PathName from "./PathName.svelte";
   import CommitForm from "./CommitForm.svelte";
-  import Menu, { type MenuEntry } from "./Menu.svelte";
+  import Menu, { menuIcons, type MenuEntry, type SubEntry } from "./Menu.svelte";
   import { fileMenu, filesMenu, type FileMenuActions } from "./changesMenu";
   import { BIG_FILE, bytes } from "./unusual";
-  import { discardRequest, stageRequest, unstageRequest } from "./changes";
+  import { discardRequest, stageRequest, stashFilesRequest, unstageRequest } from "./changes";
+  import { discardPartRequest, groupFiles, hunkLists, idOf, keyOf, listName, nameRequest, runList, runsOfLines, shareOf, stagePartRequest, type ListKey } from "./changelists";
+  import type { Changelist } from "./types";
   import { keepShown, nextAfter, pickRange, sameShown, stepShown, type Shown } from "./changesView";
   import { draftFor, saveDraft } from "./commitDrafts.svelte";
   import { byFolder, filesWidth, listView, resizeFiles, setFolders } from "./listView.svelte";
@@ -59,14 +61,19 @@
   } = $props();
 
   let tree = $state<WorkingTree | null>(null);
+  /** The changelists, read with the files; null until read, or when they can't be. */
+  let lists = $state<Changelists | null>(null);
+  /** The unstaged files sorted into Unstaged, Untracked and the changelists. */
+  const grouped = $derived(groupFiles(tree?.unstaged ?? [], lists));
   /** What the diff column shows: a file on one side, or every file of a side. */
   let shown = $state<Shown | null>(null);
   /** The diffs in the diff column, and what they were read for: until a new read is in, the
    *  column keeps the old diffs, with their own side's actions. */
   let diffs = $state<FileDiff[]>([]);
   let diffsOf = $state<Shown | null>(null);
-  /** The lists of files: untracked files are unstaged ones listed apart. */
-  type List = Side | "untracked";
+  /** The lists of files: untracked files are unstaged ones listed apart, and each changelist
+   *  holds some of the unstaged ones. */
+  type List = ListKey;
   let whole = $state(wholeByDefault());
   // Diff & Text's default view applies again when it changes.
   $effect(() => {
@@ -82,20 +89,23 @@
   const staged = $derived(tree?.staged ?? []);
   const unstaged = $derived(tree?.unstaged ?? []);
   const conflicted = $derived(tree?.conflicted ?? []);
-  /** Unstaged files split as Sublime Merge does: edits to tracked files, and new files git does not track yet. */
-  const tracked = $derived(unstaged.filter((f) => f.status !== "untracked"));
-  const untracked = $derived(unstaged.filter((f) => f.status === "untracked"));
+  /** Unstaged files split as Sublime Merge does: edits to tracked files, and new files git does
+   *  not track yet; those in a changelist are listed in it. */
+  const tracked = $derived(grouped.tracked);
+  const untracked = $derived(grouped.untracked);
   /** Only files whose path has this text are listed, and their diffs shown with every file of a side. */
   let filter = $state("");
   const needle = $derived(filter.trim().toLowerCase());
   const matches = (file: FileChange) => !needle || file.path.toLowerCase().includes(needle) || !!file.oldPath?.toLowerCase().includes(needle);
   /** Untracked files show while a filter is typed, so it finds them too. */
   const untrackedOpen = $derived(view.untracked || !!needle);
-  /** Unstaged and Staged fold to their heading, until the app quits. */
-  let shut = $state({ unstaged: false, staged: false });
+  /** Unstaged, Staged and the changelists fold to their heading, until the app quits. */
+  let shut = $state<Record<string, boolean>>({ unstaged: false, staged: false });
   /** Each list's files by path, for the other side of a file staged in part. */
   const stagedByPath = $derived(new Map(staged.map((f) => [f.path, f])));
   const unstagedByPath = $derived(new Map(unstaged.map((f) => [f.path, f])));
+  /** Unstaged files in a changelist. */
+  const listedCount = $derived(new Set(grouped.lists.flatMap((g) => g.files.map((f) => f.path))).size);
   const fileCount = $derived(new Set([...conflicted, ...unstaged, ...staged].map((f) => f.path)).size);
   const branchPart = $derived<Part>(branch ? { branch, color } : { code: "HEAD" });
 
@@ -113,14 +123,16 @@
   const draft = $derived(draftFor(repo));
 
   $effect(() => {
-    const { summary, description, amend, amendOn, prefilled, signOff } = draft;
-    saveDraft(repo, { summary, description, amend, amendOn, prefilled, signOff });
+    const { summary, description, amend, amendOn, prefilled, signOff, changelist } = draft;
+    saveDraft(repo, { summary, description, amend, amendOn, prefilled, signOff, changelist });
   });
 
   const shownConflicted = $derived(conflicted.filter(matches));
   const shownTracked = $derived(tracked.filter(matches));
   const shownUntracked = $derived(untracked.filter(matches));
   const shownStaged = $derived(staged.filter(matches));
+  /** Each changelist with its files, and those of them the filter lets through. */
+  const shownLists = $derived(grouped.lists.map((g) => ({ ...g, shown: g.files.filter(matches) })));
   /** The filter the diffs of a whole side follow, a moment after typing stops. */
   let diffNeedle = $state("");
   $effect(() => {
@@ -132,7 +144,7 @@
   /** Rows drawn at first in each list, and more on each request: thousands of files draw the
    *  rest when asked. */
   const LIST_STEP = 300;
-  let listed = $state<Record<List | "conflicted", number>>({ unstaged: LIST_STEP, staged: LIST_STEP, untracked: LIST_STEP, conflicted: LIST_STEP });
+  let listed = $state<Record<string, number>>({});
 
   /** Each folder with how many of its files' rows are drawn: the files of an open folder count
    *  toward `limit`, a closed one as one row, and a folder past the limit waits with its files. */
@@ -161,18 +173,64 @@
     try {
       const given = changes;
       const next = given ?? (await api.workingTree());
-      reading = given ? snapshot : null;
+      const read = given ? snapshot : null;
+      let listsError: string | null = null;
+      const found = await api.changelists(read).catch((err) => ((listsError = String(err)), null));
+      reading = read;
       tree = next;
-      error = null;
+      lists = found;
+      error = listsError;
       // A file staged or unstaged whole is shown where it went; a selection keeps the files still there.
-      shown = keepShown(shown, next);
+      shown = inItsList(keepShown(shown, next));
       // Ticks go with the files that left their list.
-      const left = (list: FileChange[]) => new Set(list.map((f) => f.path));
-      const now = { unstaged: left(next.unstaged.filter((f) => f.status !== "untracked")), untracked: left(next.unstaged.filter((f) => f.status === "untracked")), staged: left(next.staged) };
-      ticked = { unstaged: ticked.unstaged.filter((p) => now.unstaged.has(p)), staged: ticked.staged.filter((p) => now.staged.has(p)), untracked: ticked.untracked.filter((p) => now.untracked.has(p)) };
+      pruneTicks();
       loads++;
     } catch (err) {
       error = String(err);
+    }
+  }
+
+  /** All the files of a list, the filter aside. */
+  function filesOf(group: List | "conflicted"): FileChange[] {
+    if (group === "conflicted") return conflicted;
+    if (group === "staged") return staged;
+    if (group === "untracked") return untracked;
+    if (group === "unstaged") return tracked;
+    return grouped.lists.find((g) => keyOf(g.list.id) === group)?.files ?? [];
+  }
+
+  /** Ticks of files that left their list go. */
+  function pruneTicks() {
+    const kept: Record<string, string[]> = {};
+    for (const [group, paths] of Object.entries(ticked)) {
+      const there = new Set(filesOf(group as List).map((f) => f.path));
+      kept[group] = paths.filter((p) => there.has(p));
+    }
+    ticked = kept;
+  }
+
+  /** What is shown, with the changelist it is in now: a file moved to another list is shown in
+   *  that one, and every file of a deleted list gives way to Unstaged. */
+  function inItsList(next: Shown | null): Shown | null {
+    if (!next || next.side !== "unstaged") return next;
+    if (next.kind === "all") return next.list && !lists?.lists.some((l) => l.id === next.list) ? { kind: "all", side: "unstaged" } : next;
+    if (next.kind === "files") return next;
+    const group = groupOf(next.path, "unstaged", next.list ?? null);
+    const list = group ? idOf(group) : null;
+    return (next.list ?? null) === list ? next : { ...next, list };
+  }
+
+  /** Change the changelists; `said` goes to the toast. */
+  async function editLists(edit: ChangelistEdit, said?: string): Promise<boolean> {
+    try {
+      lists = await api.editChangelists(edit);
+      shown = inItsList(shown);
+      pruneTicks();
+      if (said) confirm.say(said, "done");
+      return true;
+    } catch (err) {
+      confirm.fail(err);
+      return false;
     }
   }
 
@@ -189,6 +247,7 @@
     diffSettings();
     loads;
     const t = tree;
+    const g = grouped;
     if (!t || !target) {
       asked = null;
       diffs = [];
@@ -201,9 +260,11 @@
         ? t.staged
         : target.kind !== "all"
           ? [...t.conflicted, ...t.unstaged]
-          : target.untracked
-            ? t.unstaged.filter((f) => f.status === "untracked")
-            : [...t.conflicted, ...t.unstaged.filter((f) => f.status !== "untracked")];
+          : target.list
+            ? (g.lists.find((l) => l.list.id === target.list)?.files ?? [])
+            : target.untracked
+              ? g.untracked
+              : [...t.conflicted, ...g.tracked];
     const chosen = target.kind === "files" ? new Set(target.paths) : null;
     const paths = pool
       .filter((f) => (target.kind === "file" ? f.path === target.path : chosen ? chosen.has(f.path) : !n || f.path.toLowerCase().includes(n) || !!f.oldPath?.toLowerCase().includes(n)))
@@ -260,7 +321,7 @@
     lastOpen = null;
     shown = next;
     if (next.kind === "file") {
-      const group = groupOf(next.path, next.side);
+      const group = groupOf(next.path, next.side, next.list ?? null);
       anchor = group ? { group, path: next.path } : null;
     }
     // Stepped to with the keys, the file may be scrolled out of its list.
@@ -268,18 +329,45 @@
   }
 
   const sideOf = (group: List | "conflicted"): Side => (group === "staged" ? "staged" : "unstaged");
-  /** The list a file on a side is in; null for a conflicted file, which is never selected with others. */
-  function groupOf(path: string, side: Side): List | null {
+  /** Unstaged, Untracked or a changelist: the lists whose files can be staged, moved and discarded. */
+  const unstagedList = (group: List | "conflicted"): group is List => group !== "staged" && group !== "conflicted";
+  /** The list a file on a side is in, `prefer` (a changelist's id; null: Unstaged) when it holds
+   *  part of a shared file; null for a conflicted file, which is never selected with others. */
+  function groupOf(path: string, side: Side, prefer: string | null = null): List | null {
     if (side === "staged") return "staged";
     const file = unstagedByPath.get(path);
-    return !file || file.status === "conflicted" ? null : file.status === "untracked" ? "untracked" : "unstaged";
+    if (!file || file.status === "conflicted") return null;
+    const holding = grouped.lists.filter((g) => g.files.some((f) => f.path === path)).map((g) => keyOf(g.list.id));
+    if (prefer !== null && holding.includes(keyOf(prefer))) return keyOf(prefer);
+    const free = (file.status === "untracked" ? untracked : tracked).some((f) => f.path === path);
+    if (free) return file.status === "untracked" ? "untracked" : "unstaged";
+    return holding[0] ?? null;
   }
+  /** One file of a list, as the diff shows it. */
+  const fileShown = (path: string, group: List | "conflicted"): Shown => ({ kind: "file", path, side: sideOf(group), list: group === "staged" ? undefined : idOf(group) });
+  /** Every file of a list. */
+  function allOf(group: List): Shown {
+    if (group === "staged") return { kind: "all", side: "staged" };
+    if (group === "untracked") return { kind: "all", side: "unstaged", untracked: true };
+    const list = idOf(group);
+    return list ? { kind: "all", side: "unstaged", list } : { kind: "all", side: "unstaged" };
+  }
+  /** The list the diff column shows, or the open file's. */
+  const shownGroup = $derived.by((): List | null => {
+    if (!shown) return null;
+    if (shown.kind === "file") return groupOf(shown.path, shown.side, shown.list ?? null);
+    if (shown.side === "staged") return "staged";
+    if (shown.list) return keyOf(shown.list);
+    return shown.untracked ? "untracked" : "unstaged";
+  });
 
   /** The files ticked in each list, for Stage, Unstage and Discard of several at once: apart
    *  from the file open, as in any list with checkboxes. */
-  let ticked = $state<Record<List, string[]>>({ unstaged: [], staged: [], untracked: [] });
+  let ticked = $state<Record<string, string[]>>({ unstaged: [], staged: [], untracked: [] });
   /** The same ticks as sets, so a list of thousands of files checks each one at once. */
-  const tickedSet = $derived({ unstaged: new Set(ticked.unstaged), staged: new Set(ticked.staged), untracked: new Set(ticked.untracked) });
+  const tickedSet = $derived(Object.fromEntries(Object.entries(ticked).map(([group, paths]) => [group, new Set(paths)])) as Record<string, Set<string>>);
+  const NONE = new Set<string>();
+  const ticksOf = (group: List | "conflicted") => tickedSet[group] ?? NONE;
 
   /** A clicked row or heading takes the keyboard, so ↑ ↓ and Space go on from it: WebKit on
    *  macOS doesn't focus a button on a click. */
@@ -289,14 +377,15 @@
   function openGroup(event: MouseEvent, group: List) {
     keyFocus(event);
     const fresh = group === "untracked";
-    const side = fresh ? "unstaged" : group;
-    if (!isAll(side, fresh)) return show(fresh ? { kind: "all", side, untracked: true } : { kind: "all", side });
+    const list = idOf(group);
+    if (!isAll(sideOf(group), fresh, list)) return show(allOf(group));
     if (group === "untracked") {
       if (!needle) view.untracked = !view.untracked;
     } else shut[group] = !shut[group];
   }
-  const isOpen = (file: FileChange, group: List | "conflicted") => !lastOpen && shown?.kind === "file" && shown.path === file.path && shown.side === sideOf(group);
-  const isAll = (side: Side, fresh = false) => !lastOpen && shown?.kind === "all" && shown.side === side && !!shown.untracked === fresh;
+  const isOpen = (file: FileChange, group: List | "conflicted") =>
+    !lastOpen && shown?.kind === "file" && shown.path === file.path && shown.side === sideOf(group) && (group === "staged" || (shown.list ?? null) === idOf(group));
+  const isAll = (side: Side, fresh = false, list: string | null = null) => !lastOpen && shown?.kind === "all" && shown.side === side && !!shown.untracked === fresh && (shown.list ?? null) === list;
 
   /** The side and file each hunk shown belongs to. */
   const hunkFile = $derived.by(() => {
@@ -309,7 +398,8 @@
   let anchor: { group: List; path: string } | null = null;
 
   /** The files a list shows, the filter applied. */
-  const listOf = (group: List) => (group === "staged" ? shownStaged : group === "untracked" ? shownUntracked : shownTracked);
+  const listOf = (group: List): FileChange[] =>
+    group === "staged" ? shownStaged : group === "untracked" ? shownUntracked : group === "unstaged" ? shownTracked : (shownLists.find((g) => keyOf(g.list.id) === group)?.shown ?? []);
 
   /** The files of a list in the order they are shown, without those in closed folders. */
   function order(group: List | "conflicted"): string[] {
@@ -328,14 +418,14 @@
       tickFile(group, file.path, event.shiftKey);
       return;
     }
-    show({ kind: "file", path: file.path, side: sideOf(group) });
+    show(fileShown(file.path, group));
   }
 
   /** A file's checkbox, ⌘-click or Space ticks or unticks it; with `range`, ticks every file
    *  from the one clicked last to it. */
   function tickFile(group: List, path: string, range = false) {
-    const list = ticked[group];
-    const on = tickedSet[group];
+    const list = ticked[group] ?? [];
+    const on = ticksOf(group);
     ticked = {
       ...ticked,
       [group]: range ? pickRange(order(group), list, anchor?.group === group ? anchor.path : null, path) : on.has(path) ? list.filter((p) => p !== path) : [...list, path],
@@ -345,8 +435,8 @@
 
   /** The checkbox of a list or a folder: ticks all of its files, or unticks them when they all are. */
   function tickAll(group: List, paths: string[]) {
-    const list = ticked[group];
-    const on = tickedSet[group];
+    const list = ticked[group] ?? [];
+    const on = ticksOf(group);
     const these = new Set(paths);
     const all = paths.length > 0 && paths.every((p) => on.has(p));
     ticked = { ...ticked, [group]: all ? list.filter((p) => !these.has(p)) : [...list, ...paths.filter((p) => !on.has(p))] };
@@ -359,10 +449,15 @@
    *  steps of Next Tab and Previous Tab. */
   const steps = $derived.by((): Shown[] => {
     const out: Shown[] = [];
-    const add = (group: List | "conflicted") => out.push(...order(group).map((path): Shown => ({ kind: "file", path, side: sideOf(group) })));
+    const add = (group: List | "conflicted") => out.push(...order(group).map((path) => fileShown(path, group)));
     if (conflicted.length || tracked.length) out.push({ kind: "all", side: "unstaged" });
     add("conflicted");
     if (!shut.unstaged) add("unstaged");
+    for (const g of grouped.lists) {
+      const key = keyOf(g.list.id);
+      if (g.files.length) out.push(allOf(key));
+      if (!shut[key]) add(key);
+    }
     if (untracked.length) out.push({ kind: "all", side: "unstaged", untracked: true });
     if (untrackedOpen) add("untracked");
     if (staged.length) out.push({ kind: "all", side: "staged" });
@@ -371,34 +466,43 @@
   });
   const stepper = $derived((by: 1 | -1, wrap: boolean) => {
     // From several files, the keys go on from the one clicked last.
-    const from: Shown | null = shown?.kind === "files" && anchor ? { kind: "file", path: anchor.path, side: shown.side } : shown;
+    const from: Shown | null = shown?.kind === "files" && anchor ? fileShown(anchor.path, anchor.group) : shown;
     const next = stepShown(steps, from, by, wrap);
     if (!next) return false;
     show(next);
     return true;
   });
 
-  /** The files Stage & Next File goes through: the unstaged edits, then the new files. */
-  const unstagedOrder = () => [...order("unstaged"), ...(untrackedOpen ? order("untracked") : [])];
+  /** The files Stage & Next File goes through: the unstaged edits, each changelist's, then the
+   *  new files; each as its list and its path. */
+  const unstagedOrder = () => {
+    const groups: List[] = ["unstaged", ...grouped.lists.map((g) => keyOf(g.list.id)), ...(untrackedOpen ? (["untracked"] as const) : [])];
+    return groups.flatMap((group) => order(group).map((path) => `${group}\n${path}`));
+  };
 
   /** Stages the open unstaged file and opens the one after it; the next commit when none is left. */
   async function stageAndNext(file: FileChange) {
-    const next = nextAfter(unstagedOrder(), file.path);
-    if (!(await stage([file]))) return;
-    show(next && next !== file.path ? { kind: "file", path: next, side: "unstaged" } : { kind: "all", side: "staged" });
+    const group = shownGroup ?? "unstaged";
+    const here = `${group}\n${file.path}`;
+    const next = nextAfter(unstagedOrder(), here);
+    if (!(await stageIn(group, [file]))) return;
+    if (!next || next === here) return show({ kind: "all", side: "staged" });
+    const at = next.indexOf("\n");
+    show(fileShown(next.slice(at + 1), next.slice(0, at) as List));
   }
 
   /** Enter: the ticked files of a list, else the open file, else every file of the open side,
    *  go to the other side. */
   function stageOrUnstage() {
-    for (const group of ["unstaged", "untracked", "staged"] as const) if (pickedFiles(group).length) return actOnPicked(group);
-    if (shown?.kind === "all") {
-      const files = shown.side === "staged" ? shownStaged : shown.untracked ? shownUntracked : shownTracked;
-      return files.length && (shown.side === "staged" ? unstage(files) : stage(files));
+    for (const group of Object.keys(ticked) as List[]) if (pickedFiles(group).length) return actOnPicked(group);
+    const group = shownGroup;
+    if (shown?.kind === "all" && group) {
+      const files = listOf(group);
+      return files.length && (group === "staged" ? unstage(files) : stageIn(group, files));
     }
     if (shown?.kind !== "file") return;
     if (shown.side === "staged") return openStaged && unstage([openStaged]);
-    if (openUnstaged && openUnstaged.status !== "conflicted") return stage([openUnstaged]);
+    if (openUnstaged && openUnstaged.status !== "conflicted") return stageIn(group ?? "unstaged", [openUnstaged]);
   }
 
   /** The list's own keys, while a file or a heading of it has the focus: the filter field and
@@ -430,14 +534,14 @@
       if (pressed("selectAllFiles", event)) ticked = { ...ticked, [group]: listOf(group).map((f) => f.path) };
       else if (path) tickFile(group, path);
       else tickAll(group, listOf(group).map((f) => f.path));
-    } else if (event.key === "Escape" && (ticked.unstaged.length || ticked.untracked.length || ticked.staged.length)) {
+    } else if (event.key === "Escape" && Object.values(ticked).some((paths) => paths.length)) {
       event.preventDefault();
       ticked = { unstaged: [], staged: [], untracked: [] };
     } else if (event.key === "Escape" && shown && shown.kind !== "all" && !lastOpen) {
       // As in a Finder list, the selection goes; its list is shown whole, with Stage All.
       event.preventDefault();
-      const fresh = shown.kind === "files" ? !!shown.untracked : groupOf(shown.path, shown.side) === "untracked";
-      show(fresh ? { kind: "all", side: shown.side, untracked: true } : { kind: "all", side: shown.side });
+      const group = shown.kind === "files" ? (shown.list ? keyOf(shown.list) : shown.untracked ? "untracked" : shown.side) : shownGroup;
+      if (group) show(allOf(group));
     }
   }
 
@@ -461,8 +565,8 @@
   /** The files being dragged to the other side, and where the pointer is. Pointer events, not the
    *  page's drag and drop, which the window's own file drop takes over on Windows. */
   let dragging = $state<{ group: List; files: FileChange[]; x: number; y: number } | null>(null);
-  /** Whether the files would be dropped where the pointer is. */
-  let dropping = $state(false);
+  /** Where the files would be dropped: a list they can go to, under the pointer. */
+  let dropOn = $state<List | null>(null);
   /** A drag ends with a click on the row it started from, which must not open the file. */
   let dragged = false;
   let listsBox = $state<HTMLDivElement>();
@@ -474,12 +578,11 @@
   function dragFile(event: PointerEvent, file: FileChange, group: List | "conflicted") {
     if (group === "conflicted" || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
     const from = { x: event.clientX, y: event.clientY };
-    const files = () => (tickedSet[group].has(file.path) ? pickedFiles(group) : [file]);
+    const files = () => (ticksOf(group).has(file.path) ? pickedFiles(group) : [file]);
     const move = (e: PointerEvent) => {
       if (!dragging && Math.hypot(e.clientX - from.x, e.clientY - from.y) < 5) return;
       dragging = { group, files: dragging?.files ?? files(), x: e.clientX, y: e.clientY };
-      const box = (group === "staged" ? listsBox : stagedBox)?.getBoundingClientRect();
-      dropping = !!box && e.clientX >= box.left && e.clientX <= box.right && e.clientY >= box.top && e.clientY <= box.bottom;
+      dropOn = dropTarget(e.clientX, e.clientY, group);
     };
     const end = (drop: boolean) => {
       window.removeEventListener("pointermove", move);
@@ -488,14 +591,15 @@
       window.removeEventListener("keydown", key, true);
       const done = dragging;
       dragging = null;
-      const there = dropping;
-      dropping = false;
+      const to = dropOn;
+      dropOn = null;
       if (!done) return;
       dragged = true;
       setTimeout(() => (dragged = false));
-      if (!drop || !there) return;
-      if (done.group === "staged") unstage(done.files);
-      else stage(done.files);
+      if (!drop || !to) return;
+      if (done.group === "staged") unstageInto(done.files, idOf(to));
+      else if (to === "staged") stageIn(done.group, done.files);
+      else moveFiles(done.files, done.group, idOf(to));
     };
     const up = () => end(true);
     const cancel = () => end(false);
@@ -511,8 +615,34 @@
     window.addEventListener("keydown", key, true);
   }
 
+  /** The list files dragged from `from` would go to with the pointer at `x`, `y`: Staged, a
+   *  changelist, or Unstaged; null where they can't be dropped. */
+  function dropTarget(x: number, y: number, from: List): List | null {
+    const to = (document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-drop]")?.dataset.drop as List | undefined) ?? null;
+    return to && canGo(from, to) ? to : null;
+  }
+
+  /** Whether files can go from list `from` to list `to`: Unstaged and Untracked are both in no
+   *  changelist, so neither takes the other's files. */
+  const canGo = (from: List, to: List) => to !== from && (from === "staged" || to === "staged" || idOf(from) !== idOf(to));
+  /** Whether files being dragged can be dropped on list `group`. */
+  const canDrop = (group: List) => !!dragging && canGo(dragging.group, group);
+
+  /** Move what list `from` holds of `files` to the changelist `to` (null: Unstaged). */
+  function moveFiles(files: FileChange[], from: List, to: string | null) {
+    const what = files.length === 1 ? splitPath(files[0].path).name : `${files.length} files`;
+    return editLists({ kind: "move", moving: { kind: "part", paths: files.map((f) => f.path), from: idOf(from) }, to }, `Moved ${what} to ${listName(lists, to)}.`);
+  }
+
+  /** Unstage `files` into the changelist `to` (null: Unstaged). */
+  async function unstageInto(files: FileChange[], to: string | null) {
+    if (!to) return unstage(files);
+    // Into the list first: the unstaged changes land there.
+    if (await editLists({ kind: "move", moving: { kind: "files", paths: files.map((f) => f.path) }, to })) await unstage(files);
+  }
+
   /** Only picked files that are listed: the filter can hide some. */
-  const pickedFiles = (group: List) => listOf(group).filter((f) => tickedSet[group].has(f.path));
+  const pickedFiles = (group: List) => listOf(group).filter((f) => ticksOf(group).has(f.path));
   const pickedUnstaged = $derived(pickedFiles("unstaged"));
   const pickedUntracked = $derived(pickedFiles("untracked"));
   const pickedStaged = $derived(pickedFiles("staged"));
@@ -537,12 +667,20 @@
   async function actOnPicked(group: List, how: "move" | "discard" = "move") {
     const files = pickedFiles(group);
     if (!files.length) return;
-    await (how === "discard" ? discard(files) : group === "staged" ? unstage(files) : stage(files));
+    await (how === "discard" ? discardIn(group, files) : group === "staged" ? unstage(files) : stageIn(group, files));
   }
 
   const stage = (files: FileChange[]) => act(stageRequest(files, branchPart));
   const unstage = (files: FileChange[]) => act(unstageRequest(files));
   const discard = (files: FileChange[]) => act(discardRequest(files));
+  /** Whether list `group` holds only part of one of `files`, which it shares with another. */
+  const shares = (group: List | "conflicted", files: FileChange[]) => unstagedList(group) && files.some((f) => !!shareOf(lists, f.path, idOf(group)));
+  /** Stage or discard files of a list: of a file it shares with another list, only its part. */
+  const stageIn = (group: List | "conflicted", files: FileChange[]) => (shares(group, files) ? act(stagePartRequest(files, idOf(group), lists, branchPart)) : stage(files));
+  const discardIn = (group: List | "conflicted", files: FileChange[]) => (shares(group, files) ? act(discardPartRequest(files, idOf(group), lists)) : discard(files));
+  /** Stage and discard in the diff column: of the list it shows. */
+  const stageShown = (files: FileChange[]) => stageIn(shownGroup ?? "unstaged", files);
+  const discardShown = (files: FileChange[]) => discardIn(shownGroup ?? "unstaged", files);
 
   /** Changed lines can be picked in the hunks of a tracked file, not in the whole-file view. */
   const picker: LinePicker = {
@@ -575,12 +713,147 @@
 
   function openFileMenu(event: MouseEvent, file: FileChange, group: List | "conflicted") {
     event.preventDefault();
-    const actions: FileMenuActions = { stage, unstage, discard, act, actOnPicked: (how) => group !== "conflicted" && actOnPicked(group, how), stashCandidates, stagedCount: () => staged.length };
     // A right-click on one of several picked files acts on all of them.
-    const several = group !== "conflicted" && tickedSet[group].has(file.path) ? pickedFiles(group) : [];
-    const opened = several.length > 1 && group !== "conflicted" ? filesMenu(repo, several, group, actions) : fileMenu(repo, file, group, actions);
+    const several = group !== "conflicted" && ticksOf(group).has(file.path) ? pickedFiles(group) : [];
+    const list = idOf(group);
+    const actions: FileMenuActions = {
+      stage: (files) => stageIn(group, files),
+      unstage,
+      discard: (files) => discardIn(group, files),
+      act,
+      actOnPicked: (how) => group !== "conflicted" && actOnPicked(group, how),
+      stashCandidates,
+      stagedCount: () => staged.length,
+      extra: group === "conflicted" ? [] : [moveEntry(several.length > 1 ? several : [file], group)],
+      where: list ? `in ${listName(lists, list)}` : undefined,
+    };
+    // The menus of Unstaged and Untracked serve the changelists' files too.
+    const kind = group === "staged" || group === "conflicted" ? group : file.status === "untracked" ? "untracked" : "unstaged";
+    const opened = several.length > 1 && kind !== "conflicted" ? filesMenu(repo, several, kind, actions) : fileMenu(repo, file, kind, actions);
     menu = { x: event.clientX, y: event.clientY, ...opened };
   }
+
+  /** Move to Changelist ▸: the other lists, Unstaged, and a new one. A staged file is unstaged into it. */
+  function moveEntry(files: FileChange[], group: List): MenuEntry {
+    const paths = files.map((f) => f.path);
+    const what = files.length === 1 ? splitPath(files[0].path).name : `${files.length} files`;
+    const to = (list: string | null) => (group === "staged" ? unstageInto(files, list) : moveFiles(files, group, list));
+    const entries: SubEntry[] = [];
+    if (group !== "unstaged" && group !== "untracked") entries.push({ label: "Unstaged", hint: group === "staged" ? "unstage" : undefined, run: () => to(null) });
+    for (const l of lists?.lists ?? []) if (keyOf(l.id) !== group) entries.push({ label: l.name, hint: lists?.active === l.id ? "active" : undefined, run: () => to(l.id) });
+    const moving: Moving = group === "staged" ? { kind: "files", paths } : { kind: "part", paths, from: idOf(group) };
+    entries.push({ label: "New Changelist…", run: () => newList(moving, what, group === "staged" ? () => unstage(files) : null) });
+    return { kind: "sub", label: "Move to Changelist", icon: menuIcons.changelist, entries };
+  }
+
+  /** Ask for a new list's name and make it, with `moving` in it; `then` runs once it is made. */
+  async function newList(moving: Moving | null = null, what = "", then: (() => unknown) | null = null) {
+    const made = await confirm.run(
+      nameRequest(lists?.lists ?? [], null, "", async (name) => {
+        lists = await api.editChangelists({ kind: "create", name, moving });
+        shown = inItsList(shown);
+        pruneTicks();
+        return moving ? `Made the changelist “${name}” with ${what}.` : `Made the changelist “${name}”.`;
+      }, what),
+    );
+    if (made && then) await then();
+  }
+
+  /** A list's menu, from its ⋯ button or a right-click on its heading. */
+  function openListMenu(event: MouseEvent, g: { list: Changelist; files: FileChange[] }) {
+    event.preventDefault();
+    const { list, files } = g;
+    const key = keyOf(list.id);
+    const n = files.length;
+    const none = n ? {} : { off: true, detail: "It has no changes" };
+    const active = lists?.active === list.id;
+    const entries: MenuEntry[] = [
+      { kind: "header", label: `${list.name} · ${n === 1 ? "1 file" : `${n} files`}` },
+      { kind: "item", label: `Commit “${list.name}”…`, icon: menuIcons.commit, run: () => commitList(list.id), ...none },
+      { kind: "item", label: n === 1 ? "Stage File" : `Stage All ${n} Files`, icon: menuIcons.stage, run: () => stageIn(key, files), ...none },
+      { kind: "item", label: "Stash These Files…", icon: menuIcons.stash, run: () => act(stashFilesRequest(stashCandidates(), files.map((f) => f.path), list.name)), ...none },
+      { kind: "sep" },
+      {
+        kind: "item",
+        label: active ? "Stop Taking New Changes" : "New Changes Go Here",
+        icon: menuIcons.good,
+        detail: active ? "Files that start changing go to Unstaged again" : "Files that start changing go to this list",
+        run: () => editLists({ kind: "activate", id: active ? null : list.id }, active ? "New changes go to Unstaged." : `New changes go to “${list.name}”.`),
+      },
+      { kind: "item", label: "Rename…", icon: menuIcons.edit, run: () => renameList(list) },
+      { kind: "item", label: "New Changelist…", icon: menuIcons.changelist, run: () => newList() },
+      { kind: "sep" },
+      { kind: "item", label: "Delete Changelist", icon: menuIcons.bad, detail: "Its changes go back to Unstaged", run: () => editLists({ kind: "delete", id: list.id }, `Deleted “${list.name}”: its changes are in Unstaged.`) },
+      { kind: "item", label: "Discard All Changes…", icon: menuIcons.drop, danger: true, run: () => discardIn(key, files), ...none },
+    ];
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const at = event.type === "contextmenu" ? { x: event.clientX, y: event.clientY } : { x: box.right - 240, y: box.bottom + 4 };
+    menu = { ...at, entries, label: `${list.name} menu` };
+  }
+
+  /** The menu of Unstaged's heading. */
+  function openUnstagedMenu(event: MouseEvent) {
+    event.preventDefault();
+    const entries: MenuEntry[] = [{ kind: "header", label: "Unstaged" }];
+    if (shownTracked.length) entries.push({ kind: "item", label: "Stage All", icon: menuIcons.stage, run: () => stageIn("unstaged", shownTracked) });
+    entries.push({ kind: "item", label: "New Changelist…", icon: menuIcons.changelist, run: () => newList() });
+    if (lists?.active) entries.push({ kind: "item", label: "New Changes Go Here", icon: menuIcons.good, detail: `Instead of to “${listName(lists, lists.active)}”`, run: () => editLists({ kind: "activate", id: null }, "New changes go to Unstaged.") });
+    menu = { x: event.clientX, y: event.clientY, entries, label: "Unstaged menu" };
+  }
+
+  function renameList(list: Changelist) {
+    confirm.run(
+      nameRequest(lists?.lists ?? [], list, list.name, async (name) => {
+        lists = await api.editChangelists({ kind: "rename", id: list.id, name });
+        return `Renamed “${list.name}” to “${name}”.`;
+      }),
+    );
+  }
+
+  let commitForm = $state<CommitForm>();
+  /** Commit takes list `id`, and the cursor goes to the message. */
+  function commitList(id: string) {
+    commitForm?.pickList(id, true);
+  }
+
+  /** The chip on an unstaged hunk's bar: the list its changes are in. */
+  function hunkChip(d: FileDiff, hunk: Hunk): { label: string; listed: boolean } {
+    const ids = hunkLists(lists, d.file.path, hunk);
+    return { label: ids.map((id) => listName(lists, id)).join(" + "), listed: ids.some((id) => id !== null) };
+  }
+
+  /** The chip's menu: move the hunk's changes to another list, or only those of the lines
+   *  picked in it. */
+  function openHunkMenu(event: MouseEvent, d: FileDiff, hunk: Hunk) {
+    const path = d.file.path;
+    const picked = sel?.hunk === hunk && sel.lines.length ? sel.lines : null;
+    const keys = picked ? runsOfLines(hunk, picked) : (hunk.runs ?? []);
+    const ids = picked ? [...new Set(keys.map((k) => runList(lists, path, k)))] : hunkLists(lists, path, hunk);
+    const what = picked ? (keys.length === 1 ? "the change" : "the changes") : "the change";
+    const move = async (to: string | null) => {
+      if (await editLists({ kind: "move", moving: { kind: "runs", path, keys }, to }, `Moved ${what} to ${listName(lists, to)}.`)) sel = null;
+    };
+    const entries: MenuEntry[] = [{ kind: "header", label: picked ? `Move the picked lines’ ${keys.length === 1 ? "change" : "changes"} to` : "Move this change to" }];
+    const off = keys.length ? {} : { off: true, detail: "Its lines aren't shown, so it goes with its file" };
+    const here = (id: string | null) => ids.length === 1 && ids[0] === id;
+    entries.push({ kind: "item", label: "Unstaged", icon: here(null) ? menuIcons.good : menuIcons.changelist, run: () => move(null), ...(here(null) ? { off: true, detail: "It is here" } : off) });
+    for (const l of lists?.lists ?? []) entries.push({ kind: "item", label: l.name, icon: here(l.id) ? menuIcons.good : menuIcons.changelist, run: () => move(l.id), ...(here(l.id) ? { off: true, detail: "It is here" } : off) });
+    entries.push({ kind: "sep" });
+    entries.push({ kind: "item", label: "New Changelist…", icon: menuIcons.changelist, run: () => newList({ kind: "runs", path, keys }, `a change of ${splitPath(path).name}`), ...off });
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    menu = { x: box.left, y: box.bottom + 4, entries, label: "Move this change menu" };
+  }
+
+  /** Under the switch of a file a list shares with others: what of it is here. */
+  const fileCaption = $derived.by(() => {
+    if (shown?.kind !== "file" || shown.side !== "unstaged" || !lists?.lists.length) return null;
+    const list = shown.list ?? null;
+    const share = shareOf(lists, shown.path, list);
+    if (!share) return list ? `In ${listName(lists, list)}: stays out of the commit until staged or committed with the list` : null;
+    const rest = share.total - share.runs;
+    const others = share.others.map((id) => listName(lists, id)).join(" and ");
+    return `In ${listName(lists, list)}: ${share.runs} of its ${share.total} changes. The other${rest === 1 ? " is" : "s are"} in ${others}`;
+  });
 
   /** The files of the commit Amend replaces, under Staged: they stay in it with the staged ones. */
   let lastFiles = $state<FileChange[]>([]);
@@ -706,9 +979,9 @@
     if (shown?.kind !== "all" && shown?.kind !== "files") return [];
     if (shown.kind === "files") {
       const chosen = new Set(shown.paths);
-      return (shown.side === "staged" ? staged : shown.untracked ? untracked : tracked).filter((f) => chosen.has(f.path));
+      return (shown.side === "staged" ? staged : shown.list ? filesOf(keyOf(shown.list)) : shown.untracked ? untracked : tracked).filter((f) => chosen.has(f.path));
     }
-    return shown.side === "staged" ? shownStaged : shown.untracked ? shownUntracked : [...shownConflicted, ...shownTracked];
+    return shown.side === "staged" ? shownStaged : shown.list ? listOf(keyOf(shown.list)) : shown.untracked ? shownUntracked : [...shownConflicted, ...shownTracked];
   });
 
   const badge: Record<string, { text: string; tone: string; title: string }> = {
@@ -724,16 +997,18 @@
 
 {#snippet fileRow(file: FileChange, group: List | "conflicted", nested: boolean)}
   {@const b = badge[file.status]}
-  {@const on = group !== "conflicted" && tickedSet[group].has(file.path)}
+  {@const on = group !== "conflicted" && ticksOf(group).has(file.path)}
   {@const open = isOpen(file, group)}
   <!-- The part of a file staged in part that the other list holds. -->
-  {@const other = group === "staged" ? unstagedByPath.get(file.path) : group === "unstaged" ? stagedByPath.get(file.path) : undefined}
+  {@const other = group === "staged" ? unstagedByPath.get(file.path) : unstagedList(group) ? stagedByPath.get(file.path) : undefined}
+  <!-- What the list holds of a file it shares with another. -->
+  {@const share = unstagedList(group) ? shareOf(lists, file.path, idOf(group)) : null}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="file"
     class:open
     class:nested
-    class:bin={group === "unstaged" || group === "untracked"}
+    class:bin={unstagedList(group)}
     class:moving={dragging?.group === group && dragging.files.includes(file)}
     class:ticked={on && !open}
     style:background={open ? tint(color) : undefined}
@@ -765,6 +1040,11 @@
     >
       <span class="badge {b.tone}" title={b.title}>{b.text}</span>
       <PathName path={file.path} folders={!nested} />
+      {#if share}
+        <span class="note partial" title="{share.runs} of its {share.total} changes are here; the other{share.total - share.runs === 1 ? ' is' : 's are'} in {share.others.map((id) => listName(lists, id)).join(' and ')}">
+          <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" /><path class="fill" d="M8 2.5a5.5 5.5 0 0 0 0 11z" /></svg>{share.runs} of {share.total}
+        </span>
+      {/if}
       {#if other}
         <span class="note partial" title={group === "staged" ? `Staged in part: ${counts(file)} go into the commit, ${counts(other)} stay out` : `Staged in part: ${counts(other)} go into the commit, ${counts(file)} stay out`}>
           <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" /><path class="fill" d="M8 2.5a5.5 5.5 0 0 0 0 11z" /></svg>Partial
@@ -780,8 +1060,8 @@
         <span class="counts mono"><span class="add">+{file.additions}</span> <span class="del">−{file.deletions}</span></span>
       {/if}
     </button>
-    {#if group === "unstaged" || group === "untracked"}
-      <button class="discard" onclick={() => discard([file])} aria-label="{file.status === 'untracked' ? 'Delete' : 'Discard changes in'} {file.path}" title={file.status === "untracked" ? "Delete this new file" : "Discard changes"}>
+    {#if unstagedList(group)}
+      <button class="discard" onclick={() => discardIn(group, [file])} aria-label="{file.status === 'untracked' ? 'Delete' : 'Discard changes in'} {file.path}" title={file.status === "untracked" ? "Delete this new file" : "Discard changes"}>
         <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 4.5h11M6 4.5V3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5M4 4.5l.7 9a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.7-9" /></svg>
       </button>
     {/if}
@@ -794,7 +1074,7 @@
 
 <!-- Ticks every listed file of a list or a folder, or none once they all are. -->
 {#snippet tickAllBox(group: List, files: FileChange[], label: string, focus: string)}
-  {@const n = files.filter((f) => tickedSet[group].has(f.path)).length}
+  {@const n = files.filter((f) => ticksOf(group).has(f.path)).length}
   {@const all = n > 0 && n === files.length}
   <button
     class="tick"
@@ -819,16 +1099,16 @@
 {/snippet}
 
 <!-- Discard or Delete for the selected files, beside Stage: the bin of a row, held in view. -->
-{#snippet binPicked(files: FileChange[])}
+{#snippet binPicked(files: FileChange[], group: List)}
   {@const fresh = files.every((f) => f.status === "untracked")}
   {@const what = files.length === 1 ? splitPath(files[0].path).name : `${files.length} files`}
-  <button class="discard held" onclick={() => discard(files)} aria-label={fresh ? `Delete ${what}` : `Discard changes in ${what}`} title={fresh ? `Delete ${what}…` : `Discard changes in ${what}…`}>
+  <button class="discard held" onclick={() => discardIn(group, files)} aria-label={fresh ? `Delete ${what}` : `Discard changes in ${what}`} title={fresh ? `Delete ${what}…` : `Discard changes in ${what}…`}>
     <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 4.5h11M6 4.5V3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5M4 4.5l.7 9a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.7-9" /></svg>
   </button>
 {/snippet}
 
 {#snippet fileList(files: FileChange[], group: List | "conflicted")}
-  {@const limit = listed[group]}
+  {@const limit = listed[group] ?? LIST_STEP}
   {#if listView.folders}
     {@const cut = foldersWithin(byFolder(files), group, limit)}
     {#each cut.folders as { folder, room } (folder.dir)}
@@ -861,7 +1141,7 @@
 {/snippet}
 
 {#snippet moreRows(group: List | "conflicted", left: number)}
-  <button class="more-rows" onclick={() => (listed = { ...listed, [group]: listed[group] + LIST_STEP })}
+  <button class="more-rows" onclick={() => (listed = { ...listed, [group]: (listed[group] ?? LIST_STEP) + LIST_STEP })}
     >Show {Math.min(left, LIST_STEP).toLocaleString()} more {Math.min(left, LIST_STEP) === 1 ? "file" : "files"}</button
   >
 {/snippet}
@@ -886,7 +1166,7 @@
     </h1>
     <span class="sub">
       {fileCount}
-      {fileCount === 1 ? "file" : "files"}{#if conflicted.length} · {conflicted.length} conflicted{/if} · {staged.length} staged · {tracked.length} unstaged{#if untracked.length}{` · ${untracked.length} untracked`}{/if}
+      {fileCount === 1 ? "file" : "files"}{#if conflicted.length} · {conflicted.length} conflicted{/if} · {staged.length} staged · {tracked.length} unstaged{#if listedCount}{` · ${listedCount} in ${grouped.lists.length === 1 ? "a changelist" : `${grouped.lists.length} changelists`}`}{/if}{#if untracked.length}{` · ${untracked.length} untracked`}{/if}
     </span>
   </div>
 
@@ -918,9 +1198,12 @@
             <svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5a1 1 0 0 1 1-1H6l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" /></svg>
           </button>
         </div>
+        <button class="button icon-only small" onclick={() => newList()} aria-label="New Changelist…" title="New Changelist: a named group of unstaged changes, committed on its own">
+          <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 4h7M2.5 8h7M2.5 12h4.5M12 9.5v5M9.5 12h5" /></svg>
+        </button>
       </div>
 
-      <div class="lists" class:drop={dragging?.group === "staged"} class:over={dragging?.group === "staged" && dropping} bind:this={listsBox}>
+      <div class="lists" class:drop={dragging?.group === "staged"} class:over={dragging?.group === "staged" && dropOn === "unstaged"} data-drop={dragging?.group === "staged" ? "unstaged" : undefined} bind:this={listsBox}>
         {#if dragging?.group === "staged"}{@render dropRow("Drop to Unstage")}{/if}
         {#if shownConflicted.length}
           <div class="group">
@@ -928,27 +1211,62 @@
             {@render fileList(shownConflicted, "conflicted")}
           </div>
         {/if}
-        <div class="group">
-          <div class="ghead" class:on={isAll("unstaged")} style:background={isAll("unstaged") ? tint(color) : undefined} data-group="unstaged">
+        <div class="group" class:drop={dragging?.group !== "staged" && canDrop("unstaged")} class:over={dragging?.group !== "staged" && dropOn === "unstaged"} data-drop="unstaged">
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div class="ghead" class:on={isAll("unstaged")} style:background={isAll("unstaged") ? tint(color) : undefined} data-group="unstaged" oncontextmenu={openUnstagedMenu}>
             {@render tickAllBox("unstaged", shownTracked, "Select every unstaged file", ".gname")}
             {@render chevron(!shut.unstaged, shut.unstaged ? "Show the unstaged files" : "Hide the unstaged files", () => (shut.unstaged = !shut.unstaged))}
             <button class="gname" onclick={(e) => openGroup(e, "unstaged")} aria-current={isAll("unstaged") ? "true" : undefined} aria-expanded={!shut.unstaged} title={!isAll("unstaged") ? "Show every unstaged change" : shut.unstaged ? "Show the unstaged files" : "Hide the unstaged files"}>
               <span class="gtitle" style:color={plate(color)}>Unstaged</span><span class="n">{needle ? `${shownTracked.length} of ${tracked.length}` : tracked.length}</span>
             </button>
             {#if pickedUnstaged.length}
-              {@render binPicked(pickedUnstaged)}
+              {@render binPicked(pickedUnstaged, "unstaged")}
               <button class="button mini primary" onclick={() => actOnPicked("unstaged")}>{@render pickedLabel("Stage", pickedUnstaged.length)}</button>
             {:else if shownTracked.length}
-              <button class="button mini" onclick={() => stage(shownTracked)}>{needle && shownTracked.length < tracked.length ? "Stage Shown" : "Stage All"}</button>
+              <button class="button mini" onclick={() => stageIn("unstaged", shownTracked)}>{needle && shownTracked.length < tracked.length ? "Stage Shown" : "Stage All"}</button>
             {/if}
           </div>
           {#if !shut.unstaged}
             {@render fileList(shownTracked, "unstaged")}
             {#if !shownTracked.length}
-              <p class="empty">{needle && tracked.length ? "No unstaged files match the filter." : untracked.length ? "No edits to tracked files." : "Nothing left to stage."}</p>
+              <p class="empty">{needle && tracked.length ? "No unstaged files match the filter." : grouped.lists.some((g) => g.files.length) ? "Every edit is in a changelist." : untracked.length ? "No edits to tracked files." : "Nothing left to stage."}</p>
             {/if}
           {/if}
         </div>
+        {#each shownLists as g (g.list.id)}
+          <!-- A changelist: some of the unstaged changes, under the name it was given. -->
+          {@const key = keyOf(g.list.id)}
+          {@const all = isAll("unstaged", false, g.list.id)}
+          {@const open = !shut[key]}
+          {@const picked = pickedFiles(key)}
+          <div class="group" class:drop={canDrop(key)} class:over={dropOn === key} data-drop={key}>
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="ghead" class:on={all} style:background={all ? tint(color) : undefined} data-group={key} oncontextmenu={(e) => openListMenu(e, g)}>
+              {@render tickAllBox(key, g.shown, `Select every file of ${g.list.name}`, ".gname")}
+              {@render chevron(open, open ? `Hide the files of ${g.list.name}` : `Show the files of ${g.list.name}`, () => (shut = { ...shut, [key]: open }))}
+              <button class="gname" onclick={(e) => openGroup(e, key)} aria-current={all ? "true" : undefined} aria-expanded={open} title={!all ? `Show every change of ${g.list.name}` : open ? "Hide its files" : "Show its files"}>
+                <svg class="icon clmark" style:color={plate(color)} viewBox="0 0 16 16"><path d="M3 3.5h10v9.5l-5-2.6L3 13z" /></svg>
+                <span class="gtitle cltitle" style:color={plate(color)}>{g.list.name}</span><span class="n">{needle ? `${g.shown.length} of ${g.files.length}` : g.files.length}</span>
+                {#if lists?.active === g.list.id}<span class="active" title="New changes go here: files that start changing join this list">Active</span>{/if}
+              </button>
+              {#if picked.length}
+                {@render binPicked(picked, key)}
+                <button class="button mini primary" onclick={() => actOnPicked(key)}>{@render pickedLabel("Stage", picked.length)}</button>
+              {:else if g.files.length}
+                <button class="button mini" onclick={() => commitList(g.list.id)} title="Commit the changes of {g.list.name}, and only those">Commit…</button>
+              {/if}
+              <button class="button icon-only mini" onclick={(e) => openListMenu(e, g)} aria-label="{g.list.name} menu" title="Stage, stash, rename or delete {g.list.name}">
+                <svg class="icon" viewBox="0 0 16 16"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" /></svg>
+              </button>
+            </div>
+            {#if open}
+              {@render fileList(g.shown, key)}
+              {#if !g.shown.length}
+                <p class="empty">{needle && g.files.length ? "No files of this list match the filter." : "No changes yet: drag files here, or use Move to Changelist."}</p>
+              {/if}
+            {/if}
+          </div>
+        {/each}
         {#if untracked.length}
           <!-- New files git does not track yet, apart from the edits and folded at first, as in Sublime Merge. -->
           <div class="group">
@@ -959,10 +1277,10 @@
                 <span class="gtitle" style:color={plate(color)}>Untracked</span><span class="n">{needle ? `${shownUntracked.length} of ${untracked.length}` : untracked.length}</span>
               </button>
               {#if pickedUntracked.length}
-                {@render binPicked(pickedUntracked)}
+                {@render binPicked(pickedUntracked, "untracked")}
                 <button class="button mini primary" onclick={() => actOnPicked("untracked")}>{@render pickedLabel("Stage", pickedUntracked.length)}</button>
               {:else if shownUntracked.length}
-                <button class="button mini" onclick={() => stage(shownUntracked)}>{needle && shownUntracked.length < untracked.length ? "Stage Shown" : "Stage All"}</button>
+                <button class="button mini" onclick={() => stageIn("untracked", shownUntracked)}>{needle && shownUntracked.length < untracked.length ? "Stage Shown" : "Stage All"}</button>
               {/if}
             </div>
             {#if untrackedOpen}
@@ -977,8 +1295,9 @@
       {#if !stacked}<button class="grip" tabindex="-1" onpointerdown={dragStaged} aria-label="Resize the staged files" title="Drag to resize"></button>{/if}
       <div
         class="group staged"
-        class:drop={!!dragging && dragging.group !== "staged"}
-        class:over={!!dragging && dragging.group !== "staged" && dropping}
+        class:drop={canDrop("staged")}
+        class:over={dropOn === "staged"}
+        data-drop="staged"
         bind:this={stagedBox}
         style:min-height={stacked || shut.staged ? null : `min(${30 + Math.min(stagedHeight + lastRoom, stagedRows)}px, 45%)`}
       >
@@ -1023,7 +1342,7 @@
         {/if}
       </div>
 
-      <CommitForm {draft} {branch} {color} {head} {locked} {staged} {unstaged} {conflicted} {amendedCount} {stage} {onChanged} {onResolve} />
+      <CommitForm bind:this={commitForm} {draft} {branch} {color} {head} {locked} {staged} {unstaged} {conflicted} {amendedCount} {stage} {onChanged} {onResolve} lists={lists?.lists ?? null} listFiles={grouped.lists} />
     </div>
 
     {#if stacked}
@@ -1058,10 +1377,14 @@
         onMore={loadMore}
         {onResolve}
         {act}
-        {stage}
+        stage={stageShown}
         {unstage}
-        {discard}
+        discard={discardShown}
         {stageAndNext}
+        hunkChip={lists?.lists.length ? hunkChip : null}
+        onHunkChip={openHunkMenu}
+        {fileCaption}
+        listTitle={shown?.kind === "all" && shown.list ? listName(lists, shown.list) : null}
       />
     </div>
   </div>
@@ -1352,6 +1675,35 @@
   .gtitle {
     font-weight: 700;
   }
+  /* A changelist's name: the words it was given, as typed, after the list's mark. */
+  .cltitle {
+    min-width: 2em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--text-small);
+    letter-spacing: normal;
+    text-transform: none;
+  }
+  .clmark {
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+  }
+  .active {
+    display: inline-flex;
+    align-items: center;
+    height: 16px;
+    padding: 0 6px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: normal;
+    text-transform: none;
+    color: var(--accent-ink);
+    background: var(--accent-quiet);
+    flex-shrink: 0;
+  }
   .gtitle.conflicted {
     color: var(--red);
     padding-left: 44px;
@@ -1371,6 +1723,17 @@
   @container (max-width: 300px) {
     .ghead .word {
       display: none;
+    }
+    /* No list mark, and Active as a dot: the list's name keeps the room. */
+    .clmark {
+      display: none;
+    }
+    .active {
+      width: 7px;
+      height: 7px;
+      padding: 0;
+      font-size: 0;
+      background: var(--accent);
     }
   }
   .n {

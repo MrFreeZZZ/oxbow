@@ -681,7 +681,9 @@ impl Repo {
         let file = scratch.to_string_lossy().into_owned();
         let with_scratch = |cmd: GitCommand| cmd.env("GIT_INDEX_FILE", file.clone());
         let result = (|| {
-            self.run(&with_scratch(GitCommand::new(["add", "-u", "--", ":/"])))?;
+            // No pathspec: the whole tree, and no error when nothing is tracked yet (newer git
+            // refuses `:/` then, as a pathspec that matches no file).
+            self.run(&with_scratch(GitCommand::new(["add", "-u"])))?;
             let untracked: Vec<String> = self
                 .run(&GitCommand::new(["ls-files", "-z", "-o", "--exclude-standard"]))?
                 .stdout
@@ -867,7 +869,15 @@ impl Repo {
             Action::DiscardHunk { path, lines, .. } => ("discard", format!("Discard {}", hunk(lines, path))),
             Action::Ignore { pattern, .. } => ("ignore", format!("Ignore {pattern}")),
             Action::Commit { amend: true, .. } => ("commit", format!("Amend the last commit on {here}")),
+            Action::Commit {
+                changelist: Some(id), ..
+            } => match self.changelist_name(id) {
+                Ok(name) => ("commit", format!("Commit “{name}” to {here}")),
+                Err(_) => ("commit", format!("Commit a changelist to {here}")),
+            },
             Action::Commit { .. } => ("commit", format!("Commit to {here}")),
+            Action::StageChangelist { paths, .. } => ("stage", format!("Stage {}", files(paths))),
+            Action::DiscardChangelist { paths, .. } => ("discard", format!("Discard changes in {}", files(paths))),
             Action::Fetch { remote } => ("fetch", format!("Fetch {}", remote.as_deref().unwrap_or("all remotes"))),
             Action::Pull { remote, branch, .. } => ("pull", format!("Pull {remote}/{branch}")),
             Action::Push {

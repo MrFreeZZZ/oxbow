@@ -82,7 +82,13 @@ impl Repo {
         } = action
             && crate::secrets::check_secrets()
         {
-            let found = crate::console::role("secrets check", || self.staged_secrets())?;
+            let found = crate::console::role("secrets check", || match action {
+                // A changelist's commit adds what the list holds, not what is staged.
+                Action::Commit {
+                    changelist: Some(_), ..
+                } => self.changelist_secrets(&self.plan(action)?.commands),
+                _ => self.staged_secrets(),
+            })?;
             if !found.is_empty() {
                 return Err(Error::Secrets(found));
             }
@@ -194,6 +200,7 @@ impl Repo {
                 let after = match action {
                     Action::Stage { .. }
                     | Action::Unstage { .. }
+                    | Action::StageChangelist { .. }
                     | Action::StageHunk { .. }
                     | Action::UnstageHunk { .. } => self.snapshot_of_index(&before)?,
                     _ => self.snapshot()?,
@@ -207,6 +214,13 @@ impl Repo {
             on_event(ActionEvent::NotLogged {
                 reason: err.to_string(),
             });
+        }
+        if let Action::Commit {
+            changelist: Some(id), ..
+        } = action
+        {
+            // The commit stands either way: a list left behind is only tidied up later.
+            let _ = self.after_changelist_commit(id, result.is_ok());
         }
         result
     }

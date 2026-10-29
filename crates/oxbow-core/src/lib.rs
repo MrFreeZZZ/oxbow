@@ -7,6 +7,7 @@
 pub mod action;
 pub mod bisect;
 pub mod browse;
+pub mod changelists;
 pub mod checks;
 pub mod cli;
 pub mod commit;
@@ -55,6 +56,7 @@ pub mod worktrees;
 
 pub use action::{Action, ActionEvent, BranchPush, PartState, Plan, PullMode, RemoteBranch};
 pub use bisect::{Bisect, BisectMark};
+pub use changelists::{ChangelistEdit, Changelists};
 pub use checks::{CheckFailure, CommitCheck};
 pub use cli::{CommandOutput, GitCommand, OutputLine};
 pub use commit::{

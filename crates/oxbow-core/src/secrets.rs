@@ -377,6 +377,15 @@ impl Repo {
 
     /// The same for the staged lines of `paths` only; all of them without any.
     pub(crate) fn staged_secrets_in(&self, paths: &[String]) -> Result<Vec<SecretFinding>> {
+        self.secrets_in_index(paths, None)
+    }
+
+    /// The same for what the staging area in the file `index` adds, all of it.
+    pub(crate) fn staged_secrets_with_index(&self, index: &str) -> Result<Vec<SecretFinding>> {
+        self.secrets_in_index(&[], Some(index))
+    }
+
+    fn secrets_in_index(&self, paths: &[String], index: Option<&str>) -> Result<Vec<SecretFinding>> {
         let mut args: Vec<String> = [
             "diff",
             "--cached",
@@ -396,7 +405,11 @@ impl Repo {
             args.extend(paths.iter().map(|p| crate::cli::literal(p)));
         }
         // The Console keeps the command, not the lines it read: they are what is checked.
-        let patch = crate::console::without_output(|| self.run(&GitCommand::new(args)))?.stdout;
+        let mut command = GitCommand::new(args);
+        if let Some(index) = index {
+            command = command.env("GIT_INDEX_FILE", index);
+        }
+        let patch = crate::console::without_output(|| self.run(&command))?.stdout;
         Ok(scan_patch(&patch))
     }
 }

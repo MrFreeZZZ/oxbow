@@ -189,6 +189,10 @@ pub struct Hunk {
     /// since it was shown is refused.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub check: String,
+    /// For unstaged changes: the key of each run of changed lines in the hunk, in order, which
+    /// names it in a changelist ([`crate::changelists`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -1378,6 +1382,7 @@ pub(crate) fn diff_text_within(
             new_lines: n - new_start,
             lines,
             check: String::new(),
+            runs: Vec::new(),
         });
     }
     Ok(hunks)

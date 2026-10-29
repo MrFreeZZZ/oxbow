@@ -377,6 +377,12 @@
     "accelerator": null
    },
    {
+    "id": "newChangelist",
+    "title": "New Changelist…",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
     "id": "stash",
     "title": "Stash",
     "enabled": false,

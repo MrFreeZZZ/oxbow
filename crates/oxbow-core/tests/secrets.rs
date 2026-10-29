@@ -11,6 +11,7 @@ fn commit(allow_secrets: bool) -> Action {
         allow_secrets,
         skip_checks: false,
         sign_off: false,
+        changelist: None,
     }
 }
 

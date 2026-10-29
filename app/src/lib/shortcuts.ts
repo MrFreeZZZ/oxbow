@@ -90,6 +90,8 @@ export const COMMANDS = {
   publishGitHub: { category: "Git", title: "Publish to GitHub…" },
   publishGitLab: { category: "Git", title: "Publish to GitLab…" },
   commit: { category: "Git", title: "Commit…" },
+  newChangelist: { category: "Git", title: "New Changelist…" },
+  commitChangelist: { category: "Git", title: "Commit Changelist…" },
   stash: { category: "Git", title: "Stash" },
   stashStaged: { category: "Git", title: "Stash Staged" },
   checkout: { category: "Git", title: "Checkout to…" },

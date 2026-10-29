@@ -18,6 +18,8 @@ crates/oxbow-core/          UI-free core library (all Git logic lives here)
   src/cli.rs                running `git`: commands, plans shown in confirmations, literal(),
                             the quiet limit and output limits every command runs with
   src/worktree.rs           working copy: status, diffs, patches of hunks and lines
+  src/changelists.rs        changelists: named groups of unstaged files and runs of lines, kept in
+                            .git/oxbow/changelists.json; a list commits on an index of its own
   src/action.rs             `enum Action`, Plan, ActionEvent: every change is an Action planned
                             into git commands (plan.rs: Repo::plan), then run (perform.rs)
   src/edit.rs               History menu: cherry-pick, revert, reset, reword last
@@ -64,7 +66,8 @@ app/src/                    Svelte front end
   lib/confirm.svelte.ts     confirmations (ConfirmSheet.svelte);  activity.svelte.ts = Activity
   lib/*.svelte              one component per view/sheet (HistoryList, DiffView, ChangesPanel…)
   lib/ChangesPanel.svelte   Changes: the lists of files; CommitForm, ChangesDiff (the diff column), changesMenu.ts,
-                            commitDrafts.svelte.ts (the message kept per folder), changes.ts (its requests)
+                            commitDrafts.svelte.ts (the message kept per folder), changes.ts (its requests),
+                            changelists.ts (which list holds what, their requests)
   lib/BrowseView.svelte     Browse Files at This Commit (browseTree.ts: the tree's rows, Find a file)
   lib/ReviewsView.svelte    Reviews screen (lib/reviews.ts sorts it);  PullFiles.svelte = PR Files tab
   lib/review.svelte.ts      one PR's review: draft, Viewed, sending;  reviewDraft.ts = its pure logic;

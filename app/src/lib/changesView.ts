@@ -5,11 +5,11 @@ import type { FileChange, Side } from "./types";
 
 /** One file on one side of the staging area, several files of one list selected together, or
  *  every file of a side: the unstaged edits, the new files git does not track yet (`untracked`),
- *  or the next commit. */
+ *  or the next commit. `list`: of the unstaged ones, the changelist they are in. */
 export type Shown =
-  | { kind: "file"; path: string; side: Side }
-  | { kind: "files"; paths: string[]; side: Side; untracked?: boolean }
-  | { kind: "all"; side: Side; untracked?: boolean };
+  | { kind: "file"; path: string; side: Side; list?: string | null }
+  | { kind: "files"; paths: string[]; side: Side; untracked?: boolean; list?: string | null }
+  | { kind: "all"; side: Side; untracked?: boolean; list?: string | null };
 
 export interface Lists {
   unstaged: FileChange[];
@@ -19,7 +19,7 @@ export interface Lists {
 
 export function sameShown(a: Shown | null, b: Shown | null): boolean {
   if (a === b) return true;
-  if (!a || !b || a.kind !== b.kind || a.side !== b.side) return false;
+  if (!a || !b || a.kind !== b.kind || a.side !== b.side || (a.list ?? null) !== (b.list ?? null)) return false;
   if (a.kind === "file") return a.path === (b as typeof a).path;
   if (a.kind === "files") return a.paths.join("\0") === (b as typeof a).paths.join("\0");
   return !!a.untracked === !!(b as typeof a).untracked;
