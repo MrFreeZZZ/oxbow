@@ -3,7 +3,8 @@
 Three kinds of numbers, each from its own script:
 
 - **Reads** (`examples/reads.rs`, `examples/steps.rs`; docs/measuring-reads.md): what Oxbow's
-  core takes to read a repository and to stage, without a window.
+  core takes to read a repository and to stage, without a window; `examples/localhistory.rs`,
+  what Local History costs.
 - **Oxbow's window** (`scripts/acceptance.sh --speed`): from a real key press or start to what
   the window shows, in the release build. Linux, under Xvfb.
 - **Against other clients** (`scripts/compare-clients.py`): the same three actions in each
@@ -45,6 +46,26 @@ Found and fixed on the way:
   git command waited 20 ms after its output closed; now 1 ms at first (`cli.rs`): 71–76 ms.
 - **A worktree's own Git folder was named with `..`** (`.git/worktrees/side/../..`), so a gone
   worktree wasn't matched to its main folder (`watch.rs`, `common_dir`).
+
+## Local History (29 October)
+
+Before Local History was written, what it would keep was measured on a shallow clone of VS Code
+(21,126 files of at most 1 MB, 261 MB; 72 MB compressed as git compresses loose objects), then
+again with the code (`cargo run --release -p oxbow-core --example localhistory -- <clone>`; cloud,
+Xeon, 4 cores):
+
+| What happens | Kept on disk | Time |
+|---|---|---|
+| A day: 50 saves of 20 files of 5–100 KB | 6.3 MB | 8 ms a save of all 20 |
+| A formatter over every file | 90 MB, once | 3.4 s, in the background (writing the files took 2.8 s) |
+| A branch switch writing every file back | 0.2 MB: the index has them | 0.4 s |
+| Letting old versions go, then reading the lists | lists 3.9 MB | 84 ms, then 36 ms |
+
+So the limits: versions are kept 7 days (3 or off in Settings › General), at most 256 MB of blobs
+a repository with the oldest going first, files over 1 MB are left out (19 in VS Code, bundles
+and pictures), and saves of a file within 30 seconds make one version, so an editor saving every
+second keeps two a minute, not sixty. The blobs stay outside git's own objects, so `git gc`
+neither keeps nor counts them, and nothing a branch switch writes costs a blob.
 
 ## Oxbow's window
 

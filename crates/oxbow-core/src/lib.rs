@@ -26,6 +26,7 @@ pub mod gitlab_api;
 pub mod graph;
 pub mod history;
 pub mod lfs;
+pub mod localhistory;
 pub mod notkept;
 pub mod operation;
 pub mod oplog;
@@ -77,6 +78,7 @@ pub use history::{
     WorktreeSummary,
 };
 pub use lfs::{LfsChange, LfsPattern, LfsPointer, LfsStatus};
+pub use localhistory::{LocalHistory, LocalVersion};
 pub use notkept::{NotKept, PushedCommit, SizedFile};
 pub use operation::{
     Chunk, ConflictFile, ConflictSide, MergeMethod, MergePreview, MergeTool, Operation, OperationKind, Pick, Renamed,

@@ -12,6 +12,8 @@
 //!
 //! What the watch notices is also counted as it comes, before the quiet spell: while the count
 //! stays the same, a reload needn't ask git what changed in the files (see `history.rs`).
+//!
+//! The files it tells changed are kept as they are by Local History (see `localhistory.rs`).
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -25,6 +27,7 @@ use notify::{EventKind, RecursiveMode, Watcher};
 use serde::Serialize;
 
 use crate::error::{Error, Result};
+use crate::localhistory::{self, Keeper};
 use crate::repo::Repo;
 
 /// Quiet after a change in Git's folders before it is told: a commit writes several files.
@@ -112,6 +115,8 @@ impl Repo {
         let counted = Arc::new(AtomicU64::new(0));
         let mut seen = Seen::new(self, &workdir, &git_dirs);
         seen.counted = counted.clone();
+        // Without the files watched there are no saves to keep.
+        seen.keeper = if files { localhistory::keeper(self) } else { None };
         std::thread::Builder::new()
             .name("oxbow-watch".into())
             .spawn(move || seen.run(rx, &mut on_change))
@@ -132,6 +137,8 @@ struct Seen {
     indexes: HashMap<PathBuf, u64>,
     /// Changes noticed, for [`Watch::seen`].
     counted: Arc<AtomicU64>,
+    /// Where the files that changed go to be kept.
+    keeper: Option<Arc<Keeper>>,
 }
 
 /// Changes gathered since the last one told.
@@ -143,6 +150,8 @@ struct Batch {
     git: bool,
     files: bool,
     indexes: Vec<PathBuf>,
+    /// The files of the working copy that changed, in it, for Local History.
+    saved: Vec<String>,
     /// Whether each folder of the working copy is ignored, found out for this batch.
     ignored: HashMap<PathBuf, bool>,
 }
@@ -154,6 +163,7 @@ impl Seen {
             roots: Roots::new(workdir, git_dirs),
             indexes: HashMap::new(),
             counted: Arc::default(),
+            keeper: None,
         };
         // What the index stages now, so that the first reload's rewrite of it counts for nothing.
         let own = repo.local().index_path();
@@ -185,6 +195,9 @@ impl Seen {
                             kind => kind,
                         };
                         counts |= matches!(kind, Kind::Git | Kind::Files);
+                        if kind == Kind::Files && self.keeper.is_some() {
+                            batch.save(&self.roots, path);
+                        }
                         noted |= batch.note(kind, path);
                     }
                     // Counted before it is told: a reload beginning after this sees it.
@@ -206,6 +219,11 @@ impl Seen {
                     let done = std::mem::take(&mut batch);
                     excludes = None;
                     let git = done.git || done.indexes.iter().any(|index| self.restaged(index));
+                    if let Some(keeper) = &self.keeper
+                        && !done.saved.is_empty()
+                    {
+                        keeper.tell(done.saved);
+                    }
                     if git || done.files {
                         on_change(Changed {
                             git,
@@ -274,6 +292,26 @@ impl Batch {
             Kind::Nothing => return false,
         }
         true
+    }
+
+    /// Note a file of the working copy that changed, for Local History.
+    fn save(&mut self, roots: &Roots, path: &Path) {
+        if self.saved.len() >= localhistory::MAX_TOLD {
+            return;
+        }
+        let Some(relative) = roots.in_workdir(path) else {
+            return;
+        };
+        let parts: Option<Vec<&str>> = relative
+            .components()
+            .map(|c| match c {
+                Component::Normal(part) => part.to_str(),
+                _ => None,
+            })
+            .collect();
+        if let Some(parts) = parts.filter(|parts| !parts.is_empty()) {
+            self.saved.push(parts.join("/"));
+        }
     }
 
     fn touch(&mut self) {

@@ -12,6 +12,7 @@ import type {
   Source,
   SourceLines,
   FileHistory,
+  LocalVersion,
   CompareMode,
   Comparison,
   Action,
@@ -168,6 +169,14 @@ export const api = {
   filesAt: (rev: string) => invoke<string[]>("files_at", { rev }),
   fileAt: (rev: string, path: string) => invoke<FileAt>("file_at", { rev, path }),
   saveFileAt: (rev: string, path: string, to: string) => invoke<void>("save_file_at", { rev, path, to }),
+  /** Local History of one file, newest first. */
+  localHistory: (path: string) => invoke<LocalVersion[]>("local_history", { path }),
+  /** Local History of every file, newest first. */
+  localHistoryAll: () => invoke<LocalVersion[]>("local_history_all"),
+  /** What version `id` of `path` changed since `base`, or with `againstDisk` how the file on disk differs from it. */
+  localVersionDiff: (path: string, id: string, base: string | null, againstDisk: boolean, wholeFile: boolean, full = false, lane: string | null = null) =>
+    invoke<FileDiff[]>("local_version_diff", { path, id, base, againstDisk, wholeFile, full, lane }),
+  saveLocalVersion: (id: string, to: string) => invoke<void>("save_local_version", { id, to }),
   filePickaxe: (path: string, text: string, matchCase: boolean, rev: string, lane: string | null = null) =>
     invoke<string[]>("file_pickaxe", { path, text, matchCase, rev, lane }),
   workingTree: () => invoke<WorkingTree>("working_tree"),

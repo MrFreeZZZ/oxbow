@@ -26,6 +26,8 @@ crates/oxbow-core/          UI-free core library (all Git logic lives here)
   src/patches.rs            Save as Patches (format-patch); Apply Patches (git am, or git apply for a diff)
   src/operation.rs          merge/rebase and anything git can stop midway; conflicts
   src/oplog.rs              Operation Log and Undo; notkept.rs = what Undo can't bring back
+  src/localhistory.rs       Local History: each saved version of a file, told by watch.rs, kept a
+                            few days in .git/oxbow/local-history; Restore through git restore
   src/stack.rs              Edit Stack (rewrite stacked branches); series.rs = before/after a rewrite
   src/remote.rs             push/pull/fetch, upstreams, remote errors; ssh.rs, fetched.rs
   src/folders.rs            other worktrees' and submodules' folders: read after the history,
@@ -45,7 +47,8 @@ crates/oxbow-core/          UI-free core library (all Git logic lives here)
                             found before opening it; Restricted runs git with them off
   tests/<area>.rs           integration tests, one file per area; tests/support/mod.rs = Fixture
   examples/history.rs       history load benchmark;  reads.rs = opening with worktrees/submodules;
-                            steps.rs = Stage with Undo and pages of lines of a big file
+                            steps.rs = Stage with Undo and pages of lines of a big file;
+                            localhistory.rs = what Local History costs on a real repository
 app/src-tauri/              Tauri shell (crate oxbow-app)
   src/main.rs               the app's setup and the generate_handler! list of every command
   src/session.rs            each window's repository and Stop buttons; current(), read(), logged()
@@ -69,6 +72,8 @@ app/src/                    Svelte front end
                             commitDrafts.svelte.ts (the message kept per folder), changes.ts (its requests),
                             changelists.ts (which list holds what, their requests)
   lib/BrowseView.svelte     Browse Files at This Commit (browseTree.ts: the tree's rows, Find a file)
+  lib/LocalHistoryView.svelte   Local History screen; LocalVersionView = one version (also in File
+                            History); localHistory.ts its pure logic, localHistoryMenu.ts its menu
   lib/ReviewsView.svelte    Reviews screen (lib/reviews.ts sorts it);  PullFiles.svelte = PR Files tab
   lib/review.svelte.ts      one PR's review: draft, Viewed, sending;  reviewDraft.ts = its pure logic;
                             suggestion.ts = ```suggestion blocks (CommentBody shows them)

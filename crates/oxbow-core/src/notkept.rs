@@ -112,8 +112,9 @@ impl Repo {
                 let big: Vec<&String> = paths.iter().filter(|p| untracked.contains(*p)).collect();
                 out.extend(self.big_files(big));
             }
-            // A file git doesn't track, ignored ones too, that the commit's version writes over.
-            Action::TakeVersion { path, .. } => {
+            // A file git doesn't track, ignored ones too, that the commit's or Local History's version
+            // writes over.
+            Action::TakeVersion { path, .. } | Action::RestoreLocalVersion { path, .. } => {
                 let out_of_git = !self
                     .run(&GitCommand::new([
                         "ls-files",

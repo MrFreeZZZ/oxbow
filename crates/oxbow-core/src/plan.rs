@@ -513,6 +513,7 @@ impl Repo {
                 self.plan_file_patch(commit, path, old_path.as_deref(), false)?
             }
             Action::TakeVersion { commit, path } => self.plan_take_version(commit, path)?,
+            Action::RestoreLocalVersion { path, id } => self.plan_restore_local(path, id)?,
             Action::ApplySuggestion {
                 commit,
                 path,

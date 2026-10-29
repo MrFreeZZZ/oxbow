@@ -287,6 +287,11 @@ pub enum Action {
         commit: String,
         path: String,
     },
+    /// Put the file `path` on disk as Local History kept it, blob `id`; nothing is staged.
+    RestoreLocalVersion {
+        path: String,
+        id: String,
+    },
     /// Apply Suggestion: `lines`, suggested in a review of a pull request, in place of lines
     /// `start` to `end` of the file `path` as `commit` has it, in the file on disk, uncommitted.
     ApplySuggestion {

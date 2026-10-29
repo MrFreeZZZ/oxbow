@@ -13,6 +13,7 @@ export type Place =
   | { view: "file"; path: string; commit: string | null; mode: FileMode; at: { rev: string; path: string } | null; line: number | null }
   | { view: "stashes"; stash: string | null }
   | { view: "oplog" }
+  | { view: "local" }
   | { view: "compare"; base: string; target: string; mode: CompareMode }
   | { view: "series"; query: SeriesQuery }
   /** A pull request: of a branch here, or by its number when it is another account's or a fork's;
@@ -118,6 +119,8 @@ export function nameOfPlace(p: Place, pullOf: (branch: string, number: number | 
       return "Stashes";
     case "oplog":
       return "Operation Log";
+    case "local":
+      return "Local History";
     case "compare":
       return "Compare";
     case "series":

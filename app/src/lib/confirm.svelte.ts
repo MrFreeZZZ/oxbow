@@ -230,6 +230,7 @@ const RISKY = new Set<Action["kind"]>([
   "discard",
   "discardHunk",
   "takeVersion",
+  "restoreLocalVersion",
   "reset",
   "stashDrop",
   "deleteBranch",

@@ -89,6 +89,7 @@
   // Screens and sheets a window seldom shows load the first time they are (lazyScreen.svelte.ts).
   const ConflictsView = new Lazy(() => import("./lib/ConflictsView.svelte"));
   const FileHistoryView = new Lazy(() => import("./lib/FileHistoryView.svelte"));
+  const LocalHistoryView = new Lazy(() => import("./lib/LocalHistoryView.svelte"));
   const BrowseView = new Lazy(() => import("./lib/BrowseView.svelte"));
   const CompareView = new Lazy(() => import("./lib/CompareView.svelte"));
   const SeriesView = new Lazy(() => import("./lib/SeriesView.svelte"));
@@ -275,7 +276,7 @@
     panelWidth === null ? panelMax : Math.min(Math.max(panelWidth + panelBonus, PANEL_MIN), panelMax),
   );
   /** The screen next to the sidebar. */
-  let view = $state<"history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull" | "series" | "reviews" | "browse">("history");
+  let view = $state<"history" | "stashes" | "oplog" | "local" | "compare" | "file" | "stack" | "pull" | "series" | "reviews" | "browse">("history");
   /** The branch whose stack Edit Stack shows; the checked-out one when null. */
   let stackBranch = $state<string | null>(null);
 
@@ -391,6 +392,7 @@
       case "stashes":
         return { view, stash: stashSel };
       case "oplog":
+      case "local":
         return { view };
       case "compare":
         return { view, ...comparing };
@@ -434,6 +436,7 @@
     file: menuIcons.history,
     stashes: menuIcons.stash,
     oplog: menuIcons.undo,
+    local: menuIcons.history,
     compare: menuIcons.compare,
     series: menuIcons.compare,
     pull: menuIcons.merge,
@@ -483,6 +486,9 @@
         break;
       case "oplog":
         view = "oplog";
+        break;
+      case "local":
+        view = "local";
         break;
       case "compare":
         comparing = { base: p.base, target: p.target, mode: p.mode };
@@ -1198,6 +1204,7 @@
     add("history", () => ((view = "history"), (resolving = false)));
     add("stashes", () => ((view = "stashes"), (resolving = false)));
     add("oplog", () => ((view = "oplog"), (resolving = false)));
+    add("localHistory", () => ((view = "local"), (resolving = false)));
     if (view === "history" && !showConflicts) {
       add("details", toggleDetails, detailsHidden ? "Show Details" : "Hide Details");
       add("expand", toggleExpanded, expanded ? "Show Graph" : "Expand Details");
@@ -2642,6 +2649,10 @@
       {:else if view === "stack" && branchCtx}
         {#key repo.path}
           <EditStackView.component branch={stackBranch} ctx={branchCtx} {colorOf} {version} {run} onClose={() => (view = "history")} onSeries={seriesOfLastStep} />
+        {/key}
+      {:else if view === "local"}
+        {#key repo.path}
+          <LocalHistoryView.component color={headColor} {version} />
         {/key}
       {:else if view === "oplog"}
         {#key repo.path}
