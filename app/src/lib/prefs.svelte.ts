@@ -90,7 +90,7 @@ export const defaults = {
   "oxbow.branchPalette": "mineral" as BranchPaletteId,
   /** New branch names: spaces become dashes and what git refuses goes, as they are typed. */
   "oxbow.branch.cleanNames": true,
-  "oxbow.branch.lowercase": false,
+  "oxbow.branch.lowercase": true,
   /** The prefix a new branch's Name box starts with: "last" for the one used last, "" for none. */
   "oxbow.branch.firstPrefix": "last",
   /** The prefixes the pop-up at the start of a Name box offers, in this order. */
