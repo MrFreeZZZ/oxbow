@@ -12,18 +12,18 @@
   import { wordsOf, type ForgeKind } from "./forge";
   import type { Request } from "./confirm.svelte";
   import type { BranchContext } from "./branches";
-  import type { Action, GitLabCreateFacts, GitLabUser, History, MergeMethodName, Landing, PullCheck, PullEntry, PullRequest, PullSummary, Restack, RestackState, ReviewState, Rewrite, Stack, StackPreview } from "./types";
+  import type { Action, History, MergeMethodName, Landing, PullCheck, PullEntry, PullRequest, PullSummary, Restack, RestackState, ReviewState, Rewrite, Stack, StackPreview } from "./types";
   import type { SeriesQuery } from "./series";
   import { lane, person, plate, relativeTime, shortId, splitPath, tint } from "./format";
-  import PickChips, { type Pick } from "./PickChips.svelte";
-  import { defaultTemplate, exactPerson, matchLabels, squashChosen, squashStarts } from "./mrForm";
-  import { branchMergeRequest } from "./mergeRequest";
+  import PickChips from "./PickChips.svelte";
+  import { exactPerson, matchLabels, squashChosen } from "./mrForm";
   import { kept } from "./kept";
   import PullFiles from "./PullFiles.svelte";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import ReviewThread from "./ReviewThread.svelte";
   import FinishReview from "./FinishReview.svelte";
   import { ReviewSession } from "./review.svelte";
+  import { PullDraft } from "./pullDraft.svelte";
   import { countWords, spotLabel } from "./reviewDraft";
   import { pullWorktreeRequest, worktreeOf } from "./worktrees";
   import { softArrows } from "./shapes";
@@ -47,8 +47,6 @@
     restackPushRequest,
     reviewersRequest,
     updateBranchRequest,
-    type NewPull,
-    type StackLine,
   } from "./pr";
 
   let {
@@ -200,7 +198,7 @@
     tab = left?.tab ?? "conversation";
     method = left?.method ?? null;
     deleteBranch = left?.deleteBranch ?? true;
-    form = left?.form ?? null;
+    draft.form = left?.form ?? null;
     restackSkipped = false;
   });
 
@@ -583,11 +581,10 @@
 
   /** The box that asks someone on GitLab, picked from the people found. */
   let askBox = $state<HTMLElement | null>(null);
-  const askedIds: Record<string, number> = {};
 
   async function askGitLab(username: string) {
     if (!pr) return;
-    let id: number | undefined = askedIds[username] ?? form?.known?.[username];
+    let id: number | undefined = draft.idOf(username);
     if (!id) id = exactPerson(await api.gitlabPeople(username).catch(() => []), username)?.id;
     if (id) act(reviewersRequest(pr, [username], [id]));
   }
@@ -628,203 +625,44 @@
 
   // --- A new pull request ---
 
-  let form = $state<{
-    branch: string;
-    title: string;
-    body: string;
-    base: string;
-    draft: boolean;
-    reviewers: string[];
-    adding: string;
-    suggested: string[];
-    /** GitLab: what else it opens with, and the account ids of the usernames picked. */
-    assignee?: string | null;
-    labels?: string[];
-    removeSource?: boolean;
-    squash?: boolean;
-    template?: string | null;
-    known?: Record<string, number>;
-  } | null>(null);
-  /** GitLab's labels and settings for the form, and the templates on the trunk. */
-  let labFacts = $state<GitLabCreateFacts | null>(null);
-  let labFactsError = $state<string | null>(null);
-
-  /** The branch under this one in the stack, the natural base. */
-  const below = $derived.by(() => {
-    if (!stack) return null;
-    const i = stack.branches.findIndex((b) => b.name === branch);
-    return i >= 0 && i + 1 < stack.branches.length ? stack.branches[i + 1].name : null;
+  // The form, what it starts with and what it would open: pullDraft.svelte.ts.
+  const draft = new PullDraft({
+    get branch() {
+      return branch;
+    },
+    get forge() {
+      return forge;
+    },
+    get summary() {
+      return summary;
+    },
+    get stack() {
+      return stack;
+    },
+    get trunk() {
+      return trunk;
+    },
+    get me() {
+      return me;
+    },
+    get history() {
+      return history;
+    },
+    get place() {
+      return place;
+    },
+    get ctx() {
+      return ctx;
+    },
   });
-  const bases = $derived([...(below ? [below] : []), trunk].filter((b, i, all) => all.indexOf(b) === i));
-
-  /** Commits `branch` brings into `base`, from the stack (newest first). */
-  function commitsOver(base: string): number {
-    if (!stack) return 0;
-    const tipOf = (name: string) => stack!.commits.findIndex((c) => c.id === stack!.branches.find((b) => b.name === name)?.at);
-    const from = tipOf(branch);
-    if (from < 0) return 0;
-    const to = base === below ? tipOf(base) : stack.commits.length;
-    return Math.max(0, (to < 0 ? stack.commits.length : to) - from);
-  }
-
-  const localRef = $derived(history.refs.find((r) => r.kind === "local" && r.name === branch) ?? null);
-  const toPush = $derived.by(() => {
-    if (!localRef) return 0;
-    const t = localRef.tracking;
-    if (!t || t.gone) return commitsOver(form?.base ?? trunk) || 1;
-    return t.ahead;
-  });
-
-  // The form starts from the branch's own commits.
-  $effect(() => {
-    if (summary || !stack || form?.branch === branch) return;
-    const base = below ?? trunk;
-    const own = stack.commits.filter((c) => c.branch === branch);
-    // The newest commit says best where the branch ended up.
-    const title = own[0]?.summary ?? branch;
-    const text = own.length === 1 ? own[0].message.split("\n").slice(1).join("\n").trim() : "";
-    form = { branch, title, body: text, base, draft: true, reviewers: [], adding: "", suggested: [] };
-    if (lab) {
-      form = { ...form, assignee: null, labels: [], removeSource: true, squash: false, template: null, known: {} };
-      const facts = untrack(() => labFacts);
-      if (facts) startFrom(facts);
-      else fresh = true;
-    }
-    suggest(base);
-  });
-
-  /** A new form waits for GitLab's facts to take its defaults from. */
-  let fresh = false;
-  let factsAsked = false;
-  $effect(() => {
-    if (!lab || !form || !stack || labFacts || labFactsError || factsAsked) return;
-    const rev = stack.trunk;
-    untrack(() => loadLabFacts(rev));
-  });
-
-  async function loadLabFacts(rev: string) {
-    factsAsked = true;
-    try {
-      labFacts = await api.gitlabCreateFacts(rev);
-      if (fresh && form) startFrom(labFacts);
-      fresh = false;
-    } catch (err) {
-      labFactsError = String(err);
-    } finally {
-      factsAsked = false;
-    }
-  }
-
-  /** The defaults GitLab gives a new merge request: the project's way with merged branches and
-   *  squashing, and the Default template for the description. */
-  function startFrom(facts: GitLabCreateFacts) {
-    if (!form) return;
-    form.removeSource = facts.removeSourceBranch;
-    form.squash = squashStarts(facts.squashOption);
-    const start = defaultTemplate(facts.templates);
-    if (start) {
-      form.template = start.name;
-      form.body = start.text;
-    }
-  }
-
-  function pickTemplate(name: string | null) {
-    if (!form || !labFacts) return;
-    form.template = name;
-    form.body = labFacts.templates.find((t) => t.name === name)?.text ?? "";
-  }
-
-  async function suggest(base: string) {
-    const name = branch;
-    const ref = base === below ? base : (stack?.trunk ?? base);
-    if (lab) {
-      const owners = await api.gitlabCodeOwners(ref, name).catch(() => [] as GitLabUser[]);
-      if (!form || form.branch !== name) return;
-      const others = owners.filter((o) => o.username !== github.mrMe);
-      form.known = { ...form.known, ...Object.fromEntries(others.map((o) => [o.username, o.id])) };
-      form.suggested = others.map((o) => o.username);
-      form.reviewers = [...form.suggested];
-      return;
-    }
-    const owners = await api.codeOwners(ref, name).catch(() => [] as string[]);
-    if (!form || form.branch !== name) return;
-    form.suggested = owners.filter((o) => o !== me);
-    form.reviewers = [...form.suggested];
-  }
-
-  /** GitLab's people for a box of the form: name, username and their id kept for sending. */
-  async function findPeople(text: string): Promise<Pick[]> {
-    if (!text.trim()) return [];
-    const people = await api.gitlabPeople(text);
-    for (const p of people) askedIds[p.username] = p.id;
-    if (form) form.known = { ...form.known, ...Object.fromEntries(people.map((p) => [p.username, p.id])) };
-    return people.map((p) => ({ key: p.username, label: p.username, sub: p.name }));
-  }
-
-  const labelPicks = (names: string[]): Pick[] => names.map((name) => ({ key: name, label: name, color: labFacts?.labels.find((l) => l.name === name)?.color }));
-
-  function pickBase(base: string) {
-    if (!form || form.base === base) return;
-    form.base = base;
-    suggest(base);
-  }
-
-  function addReviewer() {
-    if (!form) return;
-    const login = form.adding.trim().replace(/^@/, "");
-    if (login && !form.reviewers.includes(login)) form.reviewers = [...form.reviewers, login];
-    form.adding = "";
-  }
-
-  const stackLines = $derived.by((): StackLine[] | null => {
-    if (!stack || stack.branches.length < 2) return null;
-    const lines = [...stack.branches].reverse().map((b) => {
-      const p = github.pullOf(b.name, forge);
-      return { branch: b.name, number: b.name === branch ? `${w.mark}$NUMBER` : p ? `${w.mark}${p.number}` : null, merged: p?.state === "merged" };
-    });
-    return lines.some((l) => l.branch !== branch && l.number) ? lines : null;
-  });
-  /** The stack's other open pull requests, oldest first. */
-  const others = $derived(stack ? [...stack.branches].reverse().map((b) => github.openPullOf(b.name, forge)).filter((p): p is PullSummary => !!p && p.head !== branch) : []);
-
-  const newPull = $derived.by((): NewPull | null => {
-    if (!form || !place) return null;
-    const t = localRef?.tracking;
-    const remote = t && !t.gone ? t.remote : place.remote;
-    const needsPush = !t || t.gone || t.ahead > 0;
-    const known = form.known ?? {};
-    const project = github.mrProject;
-    const ref = localRef;
-    const gitlab =
-      lab && project && ref
-        ? {
-            create: {
-              reviewerIds: form.reviewers.flatMap((r) => (known[r] ? [known[r]] : [])),
-              assigneeIds: form.assignee && known[form.assignee] ? [known[form.assignee]] : [],
-              labels: form.labels ?? [],
-              removeSourceBranch: !!form.removeSource,
-              squash: !!form.squash,
-            },
-            assignee: form.assignee ?? null,
-            fallback: () => branchMergeRequest(ctx, ref, project),
-          }
-        : null;
-    // A merge request needs its local branch: that's what goes up, and what the push path asks for.
-    if (lab && !gitlab) return null;
-    return {
-      branch,
-      base: form.base,
-      title: form.title,
-      body: form.body,
-      draft: form.draft,
-      reviewers: form.reviewers,
-      push: needsPush ? { kind: "push", remote, branch, upstream: t && !t.gone ? t.branch : branch, setUpstream: !t || t.gone, force: false, lease: null, noVerify: false } : null,
-      stack: stackLines,
-      others,
-      commits: commitsOver(form.base),
-      gitlab,
-    };
-  });
+  $effect(() => draft.start());
+  $effect(() => draft.askFacts());
+  const form = $derived(draft.form);
+  const labFacts = $derived(draft.labFacts);
+  const below = $derived(draft.below);
+  const newPull = $derived(draft.newPull);
+  const toPush = $derived(draft.toPush);
+  const findPeople = (text: string) => draft.findPeople(text);
 
   function create() {
     if (newPull) act(createRequest(ctx, newPull));
@@ -1074,8 +912,8 @@
         <div class="form-row">
           <span class="form-label">{lab ? "Target" : "Base"}</span>
           <span class="chips">
-            {#each bases as b (b)}
-              <button class="chip" class:on={form.base === b} style:background={form.base === b ? tint(colorOf(b), "label") : undefined} style:color={form.base === b ? plate(colorOf(b)) : undefined} onclick={() => pickBase(b)}>{b}</button>
+            {#each draft.bases as b (b)}
+              <button class="chip" class:on={form.base === b} style:background={form.base === b ? tint(colorOf(b), "label") : undefined} style:color={form.base === b ? plate(colorOf(b)) : undefined} onclick={() => draft.pickBase(b)}>{b}</button>
             {/each}
             {#if below && form.base === below}<span class="note">Picked from the stack: {branch} is built on {below}</span>{/if}
           </span>
@@ -1085,9 +923,9 @@
             <span class="form-label">Template</span>
             <span class="chips">
               {#each labFacts.templates as t (t.name)}
-                <button class="chip" class:on={form.template === t.name} onclick={() => pickTemplate(t.name)}>{t.name}</button>
+                <button class="chip" class:on={form.template === t.name} onclick={() => draft.pickTemplate(t.name)}>{t.name}</button>
               {/each}
-              <button class="chip" class:on={!form.template} onclick={() => pickTemplate(null)}>None</button>
+              <button class="chip" class:on={!form.template} onclick={() => draft.pickTemplate(null)}>None</button>
               <span class="note">From .gitlab/merge_request_templates on {trunk}</span>
             </span>
           </div>
@@ -1096,10 +934,10 @@
           <span class="form-label">Description</span>
           <textarea class="field" rows={lab && form.template ? 8 : 5} bind:value={form.body} placeholder="Optional"></textarea>
         </label>
-        {#if stackLines}
+        {#if draft.stackLines}
           <div class="form-row">
             <span class="form-label"></span>
-            <span class="note">Stack: {stackLines.map((l) => (l.branch === branch ? "this one" : (l.number ?? l.branch))).join(" → ")} (added by Oxbow)</span>
+            <span class="note">Stack: {draft.stackLines.map((l) => (l.branch === branch ? "this one" : (l.number ?? l.branch))).join(" → ")} (added by Oxbow)</span>
           </div>
         {/if}
         <div class="form-row">
@@ -1129,10 +967,10 @@
               onkeydown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
-                  addReviewer();
+                  draft.addReviewer();
                 }
               }}
-              onblur={addReviewer}
+              onblur={() => draft.addReviewer()}
             />
             {#if form.suggested.length}<span class="note">Suggested from CODEOWNERS</span>{/if}
           </span>
@@ -1161,14 +999,14 @@
             <PickChips
               label="Add a label"
               placeholder={labFacts && !labFacts.labels.length ? "No labels in this project" : "+ Add"}
-              chosen={labelPicks(form.labels ?? [])}
+              chosen={draft.labelPicks(form.labels ?? [])}
               find={(text) => matchLabels(labFacts?.labels ?? [], form?.labels ?? [], text).map((l) => ({ key: l.name, label: l.name, color: l.color }))}
               onPick={(p) => form && (form.labels = [...(form.labels ?? []), p.key])}
               onRemove={(key) => form && (form.labels = (form.labels ?? []).filter((l) => l !== key))}
             />
           </div>
-          {#if labFactsError}
-            <div class="form-row"><span class="form-label"></span><span class="note">{labFactsError}</span></div>
+          {#if draft.labFactsError}
+            <div class="form-row"><span class="form-label"></span><span class="note">{draft.labFactsError}</span></div>
           {/if}
         {/if}
       </div>
@@ -1364,8 +1202,8 @@
           >Open a {w.noun} into {form.base}{form.base === below ? `, so reviewers see only these ${plural(newPull.commits, "commit")}` : ""}</span
         ></span
       >
-      {#if newPull.stack && others.length}
-        <span class="step"><span class="num">{newPull.push ? 3 : 2}</span><span>Add the stack list to {others.map((o) => `${w.mark}${o.number}`).join(", ")} and the new {w.noun}</span></span>
+      {#if newPull.stack && draft.others.length}
+        <span class="step"><span class="num">{newPull.push ? 3 : 2}</span><span>Add the stack list to {draft.others.map((o) => `${w.mark}${o.number}`).join(", ")} and the new {w.noun}</span></span>
       {/if}
       <div class="sep"></div>
       {@render toggle(form.draft, "Create as draft", lab ? "GitLab puts Draft: before its title; it can’t merge until marked ready" : "Reviewers hear about it when you mark it ready", false, () => form && (form.draft = !form.draft))}
