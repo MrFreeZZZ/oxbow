@@ -5,9 +5,9 @@
   // is typed, and errors keep it from being saved.
 
   import { onDestroy } from "svelte";
-  import { api } from "./api";
+  import { api, stopped } from "./api";
   import { keys } from "./keys";
-  import { applyFix, banner, lineStart, messageParts, notesByLine, paintLine, status } from "./repoFiles";
+  import { applyFix, banner, drawnLines, lineStart, mergedCheck, messageParts, notesByLine, paintLine, problemsByLine, status } from "./repoFiles";
   import { loadRepoFiles, repoFiles, untrack } from "./repoFileState.svelte";
   import type { FileCheck, FileProblem, RepoFileKind, RepoFileText } from "./types";
 
@@ -38,6 +38,15 @@
   const errors = $derived(checked.problems.filter((p) => p.level === "error").length);
   const lines = $derived(text.split("\n").map((line) => line.replace(/\r$/, "")));
   const notes = $derived(notesByLine(checked.notes));
+  const problemsAt = $derived(problemsByLine(checked.problems));
+  /** Height of a line and of the text box, for the lines drawn: a long file draws only the
+   *  blocks of lines near what is on screen. */
+  let lineHeight = $state(0);
+  let boxHeight = $state(0);
+  const drawn = $derived(drawnLines(scroll.top, boxHeight, lineHeight, lines.length));
+  $effect(() => {
+    if (editor) lineHeight = parseFloat(getComputedStyle(editor).lineHeight) || 0;
+  });
   const uncommitted = $derived(repoFiles.list?.files.find((f) => f.kind === kind)?.uncommitted ?? false);
   const bar = $derived(readOnly ? null : status(checked.problems, dirty, exists, uncommitted));
   /** A new file whose starter brings lines of its own, not only comments. */
@@ -48,6 +57,7 @@
   onDestroy(() => {
     gone = true;
     clearTimeout(timer);
+    api.stopReads([LANE]).catch(() => {});
   });
 
   // Back from another app: a file changed there is taken in when nothing is typed here, and
@@ -110,14 +120,29 @@
   // The check of the text as it was typed last; an answer to an older text is dropped.
   let asked = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  /** The working copy and the history are being read for the checks; it stops when the file is left. */
+  let reading = false;
+  const LANE = "repo-file-check";
 
+  /** Check the text at once by itself; while the working copy and the history are read for
+   *  the rest, typing goes on being checked so, and the text is checked whole once they are in. */
   async function check(fresh: boolean) {
     const n = ++asked;
     try {
-      const answer = await api.checkRepoFile(kind, gitlab, text, fresh);
-      if (n === asked && !gone) checked = answer;
+      const now = await api.checkRepoFile(kind, gitlab, text, fresh, false);
+      if (n !== asked || gone) return;
+      checked = mergedCheck(checked, now);
+      if (!now.pending || reading) return;
+      reading = true;
+      try {
+        await api.checkRepoFile(kind, gitlab, text, fresh, true, LANE);
+      } finally {
+        reading = false;
+      }
+      // Read now: the text as it is by then is checked whole, at once.
+      if (!gone) await check(false);
     } catch (err) {
-      if (n === asked && !gone) error = String(err);
+      if (n === asked && !gone && !stopped(err)) error = String(err);
     }
   }
 
@@ -230,15 +255,17 @@
   <div class="code">
     <div class="gutter" aria-hidden="true">
       <div style:transform="translateY({-scroll.top}px)">
-        {#each lines as _, i (i)}
-          <div class="no">{i + 1}</div>
+        <div style:height="{drawn.from * lineHeight}px"></div>
+        {#each lines.slice(drawn.from, drawn.to) as _, k (drawn.from + k)}
+          <div class="no">{drawn.from + k + 1}</div>
         {/each}
       </div>
     </div>
     <div class="painted" aria-hidden="true">
       <div style:transform="translate({-scroll.left}px, {-scroll.top}px)">
-        {#each lines as line, i (i)}
-          {@const here = checked.problems.filter((p) => p.line === i + 1)}
+        <div style:height="{drawn.from * lineHeight}px"></div>
+        {#each lines.slice(drawn.from, drawn.to) as line, k (drawn.from + k)}
+          {@const here = problemsAt.get(drawn.from + k + 1) ?? []}
           <div class="ln">
             {#if line === ""}{" "}{:else}{#each paintLine(kind, line, here) as piece, j (j)}<span class:com={piece.comment} class:bad={piece.level === "error"} class:odd={piece.level === "warn"}>{piece.text}</span>{/each}{/if}
           </div>
@@ -247,8 +274,9 @@
     </div>
     <div class="notes" aria-hidden="true">
       <div style:transform="translateY({-scroll.top}px)">
-        {#each lines as _, i (i)}
-          {@const note = notes.get(i + 1)}
+        <div style:height="{drawn.from * lineHeight}px"></div>
+        {#each lines.slice(drawn.from, drawn.to) as _, k (drawn.from + k)}
+          {@const note = notes.get(drawn.from + k + 1)}
           <div class="note {note?.level ?? ''}">{note?.text ?? ""}</div>
         {/each}
       </div>
@@ -264,6 +292,7 @@
       autocomplete="off"
       aria-label={file?.path ?? "File"}
       aria-invalid={errors > 0}
+      bind:clientHeight={boxHeight}
       oninput={edited}
       onscroll={(event) => (scroll = { top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft })}
       onkeydown={(event) => {

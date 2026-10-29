@@ -34,6 +34,7 @@ caches of the speed series of 29 October; the older ones are still to be listed.
 | Cache | Holds | Key | Let go | Budget | Stale answer? |
 |---|---|---|---|---|---|
 | `HistoryCache.walked` (history.rs) | the commits walked so far, newest first, and where the walk goes on from | the tips (refs, `HEAD`) and where a shallow history stops | another tip or a deeper fetch; another repository in the window | the commits loaded, about 60 bytes each | no: a commit never changes under its id |
+| `CACHE` in repofiles.rs | each repository's working copy (files and folders, what the index tracks) and the people of its history, for the checks of Repository Files | the repository's folder; `fresh` when a file is opened | after 10 minutes; a saved file; the oldest past the budget | 8 repositories, 600,000 files of working copies | yes, up to 10 minutes: only for warnings and notes, never for errors |
 | `HistoryCache.asked.changes`, the window's `changes` (session.rs) | the uncommitted files of the last history, once counted with their lines (`working_counts`) | what the watch noticed, `HEAD`, what is staged | any change the watch notices; the next reading | one reading | no: a reading with other files keeps its own counts |
 
 ## Development

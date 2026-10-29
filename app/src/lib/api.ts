@@ -270,7 +270,11 @@ export const api = {
   repoFiles: () => invoke<RepoFiles>("repo_files"),
   repoFileText: (kind: RepoFileKind, gitlab: boolean) => invoke<RepoFileText>("repo_file_text", { kind, gitlab }),
   /** `fresh` reads the working copy and the history again. */
-  checkRepoFile: (kind: RepoFileKind, gitlab: boolean, text: string, fresh: boolean) => invoke<FileCheck>("check_repo_file", { kind, gitlab, text, fresh }),
+  /** The check of `text`. With `wait` false, the text alone while the working copy and the
+   *  history are being read (`pending`); otherwise after they are read, stopped by a newer check
+   *  in the same `lane`. */
+  checkRepoFile: (kind: RepoFileKind, gitlab: boolean, text: string, fresh: boolean, wait = true, lane: string | null = null) =>
+    invoke<FileCheck>("check_repo_file", { kind, gitlab, text, fresh, wait, lane }),
   /** Writes the file, unless it has errors or is no longer `over`, the text it was typed over
    *  (null for a new file); nothing is staged. */
   saveRepoFile: (kind: RepoFileKind, gitlab: boolean, text: string, over: string | null) =>
