@@ -66,7 +66,7 @@ private keys, with your own patterns on top.
 
 ## Everything you use every day
 
-- Staging by file, hunk or line; amend, reword, fixup
+- Staging by file, hunk or line; changelists, each committed on its own; amend, reword, fixup
 - Branches, tags, stashes, worktrees, submodules, Git LFS
 - Merge, rebase, cherry-pick and revert with a three-way conflict editor
 - Push, pull and fetch with clear messages when a remote refuses

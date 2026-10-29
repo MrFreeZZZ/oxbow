@@ -59,6 +59,17 @@ pub enum Action {
         #[serde(default)]
         lines: Option<Vec<usize>>,
     },
+    /// Stage what changelist `list` (`None`: Unstaged) holds of `paths`: whole files, and only
+    /// its own changes of a file shared with other lists.
+    StageChangelist {
+        list: Option<String>,
+        paths: Vec<String>,
+    },
+    /// Throw away what changelist `list` (`None`: Unstaged) holds of `paths`.
+    DiscardChangelist {
+        list: Option<String>,
+        paths: Vec<String>,
+    },
     /// Add `pattern` as a line of the top `.gitignore` and stage it.
     Ignore {
         pattern: String,
@@ -81,6 +92,9 @@ pub enum Action {
         /// End the message with a `Signed-off-by:` line of the committer (`--signoff`).
         #[serde(default)]
         sign_off: bool,
+        /// Commit what this changelist holds instead of the staged changes, which stay staged.
+        #[serde(default)]
+        changelist: Option<String>,
     },
     /// Download new commits, branches and tags from `remote`, or from every remote.
     Fetch {

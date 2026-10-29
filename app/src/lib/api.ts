@@ -38,6 +38,8 @@ import type {
   Side,
   StashCheck,
   WorkingTree,
+  Changelists,
+  ChangelistEdit,
   RecentRepo,
   TrustedRepo,
   Gone,
@@ -169,6 +171,8 @@ export const api = {
   filePickaxe: (path: string, text: string, matchCase: boolean, rev: string, lane: string | null = null) =>
     invoke<string[]>("file_pickaxe", { path, text, matchCase, rev, lane }),
   workingTree: () => invoke<WorkingTree>("working_tree"),
+  changelists: (snapshot: number | null) => invoke<Changelists>("changelists", { snapshot }),
+  editChangelists: (edit: ChangelistEdit) => invoke<Changelists>("edit_changelists", { edit }),
   /** Your latest commit messages, newest first, for ↑ in the commit message box. */
   recentMessages: () => invoke<string[]>("recent_messages"),
   workingDiff: (path: string, side: Side, wholeFile: boolean, full = false) =>

@@ -1057,6 +1057,22 @@
   }
 
   /** Changes, with the cursor in the commit's summary, as VS Code's Source Control view has it. */
+  /** Shows Changes and clicks its button `label`; says `missing` when the button never comes. */
+  function inChanges(label: string, missing?: string) {
+    view = "history";
+    resolving = false;
+    showChanges();
+    // The panel and its changelists come up a few frames later.
+    let tries = 0;
+    const click = () => {
+      const button = content?.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+      if (button) button.click();
+      else if (++tries < 40) requestAnimationFrame(click);
+      else if (missing) confirm.say(missing);
+    };
+    requestAnimationFrame(click);
+  }
+
   function commitChanges() {
     view = "history";
     resolving = false;
@@ -1190,6 +1206,8 @@
     if (h.rows.some((r) => r.worktree)) {
       add("changes", () => ((view = "history"), (resolving = false), showChanges()));
       add("commit", commitChanges);
+      add("newChangelist", () => inChanges("New Changelist…"));
+      add("commitChangelist", () => inChanges("What to commit", "There are no changelists yet: make one with New Changelist…"));
       if (!busy) add("stash", () => void run(stashRequest(branchCtx!)));
       if (!busy && h.rows[0]?.worktree?.staged) add("stashStaged", () => void run(stashRequest(branchCtx!, "", false, true)));
     }

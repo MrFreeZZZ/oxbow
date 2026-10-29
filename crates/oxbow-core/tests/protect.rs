@@ -55,6 +55,7 @@ fn amend() -> Action {
         allow_secrets: false,
         skip_checks: false,
         sign_off: false,
+        changelist: None,
     }
 }
 

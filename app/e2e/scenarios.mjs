@@ -409,6 +409,63 @@ export const SCENARIOS = [
       assert.equal(git(r, "log", "-1", "--format=%b").trim(), "Signed-off-by: Fixture <fixture@example.com>");
     },
   },
+  {
+    name: "a changelist",
+    // A file's menu puts it in a new changelist, a hunk's chip moves one change of another file
+    // there, and Commit… commits the list alone: the staged file stays staged, the rest unstaged.
+    async run(ctx) {
+      const r = repo(`${ctx.dir}/r`, 3);
+      git(r, "config", "user.name", "Fixture");
+      git(r, "config", "user.email", "fixture@example.com");
+      write(r, "src/f1.txt", read(r, "src/f1.txt").replace("file 1 3", "file 1 three"));
+      write(r, "src/f2.txt", read(r, "src/f2.txt").replace("file 2 2", "file 2 two").replace("file 2 18", "file 2 eighteen"));
+      write(r, "src/f3.txt", read(r, "src/f3.txt").replace("file 3 1", "file 3 one"));
+      git(r, "add", "src/f3.txt");
+      const app = await ctx.start(r);
+      await app.js(async (page) => {
+        await page.click("Changes");
+        const row = await page.until(() => page.all('.file[data-group="unstaged"]', "f1.txt")[0], "f1.txt");
+        const box = row.getBoundingClientRect();
+        row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: box.left + 60, clientY: box.top + 8 }));
+        await page.click("Move to Changelist");
+        (await page.until(() => page.all(".submenu [role=menuitem]", "New Changelist")[0], "New Changelist…")).click();
+        const name = await page.until(() => document.querySelector("[role=alertdialog] input.text"), "the name box");
+        name.value = "Fix";
+        name.dispatchEvent(new Event("input", { bubbles: true }));
+        await page.paint();
+        await page.answer("Create");
+        await page.until(() => page.all(".gtitle", "Fix").length, "the list");
+        // f2.txt's second change goes to Fix too.
+        page.all('.file[data-group="unstaged"] button.name', "f2.txt")[0].click();
+        const chips = await page.until(() => (page.all(".hunk .chip").length === 2 ? page.all(".hunk .chip") : null), "two hunks");
+        chips[1].click();
+        (await page.until(() => page.all("[role=menu] [role=menuitem]").find((b) => page.words(b) === "Fix"), "Fix in the menu")).click();
+        await page.until(() => page.all(".note.partial", "1 of 2").length === 2, "f2.txt in both lists");
+        await page.click("Commit…");
+        await page.until(() => document.querySelector("input[aria-label='Commit summary']").value === "Fix", "the list's name as the summary");
+      });
+      assert.ok(fs.existsSync(path.join(r, ".git/oxbow/changelists.json")), "the lists are kept in .git/oxbow");
+      await app.js(async (page) => {
+        const go = page.all(".commit button.go")[0];
+        go.click();
+        const end = performance.now() + 2000;
+        while (performance.now() < end) {
+          const sheet = page.all("[role=alertdialog]")[0];
+          const yes = sheet && [...sheet.querySelectorAll("button")].find((b) => page.words(b) === "Commit");
+          if (yes) return yes.click();
+          await page.sleep(20);
+        }
+      });
+      await eventually(() => git(r, "log", "-1", "--format=%s") === "Fix", "the list's commit");
+      assert.equal(git(r, "show", "--name-only", "--format=", "HEAD"), "src/f1.txt\nsrc/f2.txt");
+      assert.match(git(r, "show", "HEAD", "--", "src/f2.txt"), /file 2 eighteen/);
+      assert.doesNotMatch(git(r, "show", "HEAD", "--", "src/f2.txt"), /file 2 two/);
+      assert.equal(git(r, "diff", "--cached", "--name-only"), "src/f3.txt", "the staged file stays staged");
+      assert.equal(git(r, "diff", "--name-only"), "src/f2.txt");
+      assert.match(git(r, "diff"), /file 2 two/);
+      await eventually(() => !fs.existsSync(path.join(r, ".git/oxbow/changelists.json")), "the list gone with its last change");
+    },
+  },
 ];
 
 function hasXdotool() {

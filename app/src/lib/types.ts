@@ -462,6 +462,8 @@ export interface Hunk {
   lines: DiffLine[];
   /** Uncommitted changes only: fingerprint of the hunk's bytes, sent back with hunk actions. */
   check?: string;
+  /** Unstaged changes only: the key of each run of changed lines, in order, which names it in a changelist. */
+  runs?: string[];
 }
 
 export interface FileDiff {
@@ -542,6 +544,45 @@ export interface WorkingTree {
 
 export type Side = "staged" | "unstaged";
 
+/** Named groups of the unstaged changes (crates/oxbow-core/src/changelists.rs). */
+export interface Changelists {
+  lists: Changelist[];
+  /** The list files that start changing go to; null: Unstaged. */
+  active: string | null;
+  /** Files whose unstaged changes are in more than one list, Unstaged counting as one. */
+  split: SharedFile[];
+}
+
+export interface Changelist {
+  id: string;
+  name: string;
+  /** The unstaged files with changes in it. */
+  paths: string[];
+}
+
+export interface SharedFile {
+  path: string;
+  parts: FilePart[];
+}
+
+/** What one list (null: Unstaged) holds of a split file. */
+export interface FilePart {
+  list: string | null;
+  runs: string[];
+  additions: number;
+  deletions: number;
+}
+
+/** What moves to another list: what list `from` holds of files, whole files, or runs of one file. */
+export type Moving = { kind: "part"; paths: string[]; from: string | null } | { kind: "files"; paths: string[] } | { kind: "runs"; path: string; keys: string[] };
+
+export type ChangelistEdit =
+  | { kind: "create"; name: string; moving?: Moving | null }
+  | { kind: "rename"; id: string; name: string }
+  | { kind: "delete"; id: string }
+  | { kind: "move"; moving: Moving; to: string | null }
+  | { kind: "activate"; id: string | null };
+
 export type Action =
   | { kind: "stage"; paths: string[] }
   | { kind: "unstage"; paths: string[] }
@@ -551,7 +592,11 @@ export type Action =
   | { kind: "unstageHunk"; path: string; header: string; check: string; lines?: number[] | null }
   | { kind: "discardHunk"; path: string; header: string; check: string; lines?: number[] | null }
   | { kind: "ignore"; pattern: string; untrack?: string }
-  | { kind: "commit"; message: string; amend: boolean; noVerify?: boolean; allowSecrets?: boolean; skipChecks?: boolean; signOff?: boolean }
+  /** `changelist`: commit what that changelist holds, not the staged changes. */
+  | { kind: "commit"; message: string; amend: boolean; noVerify?: boolean; allowSecrets?: boolean; skipChecks?: boolean; signOff?: boolean; changelist?: string | null }
+  /** What changelist `list` (null: Unstaged) holds of `paths`: whole files, and its own changes of a shared one. */
+  | { kind: "stageChangelist"; list: string | null; paths: string[] }
+  | { kind: "discardChangelist"; list: string | null; paths: string[] }
   | { kind: "fetch"; remote: string | null }
   | { kind: "pull"; remote: string; branch: string; fetchFirst?: boolean; submodules?: boolean; mode?: "rebase" | "merge" | "fastForward" }
   | {

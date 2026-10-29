@@ -2,6 +2,7 @@
   // The commit form under the staged files: the summary and description, Amend, and Commit with
   // why it is grey and the way out when there is one.
 
+  import { tick } from "svelte";
   import { api } from "./api";
   import { commitRecovery } from "./changes";
   import type { Draft } from "./commitDrafts.svelte";
@@ -11,7 +12,8 @@
   import { prefs } from "./prefs.svelte";
   import { pressed } from "./shortcuts";
   import { browsing, splitMessage, stepMessage } from "./messageHistory";
-  import type { FileChange, HistoryRow } from "./types";
+  import type { Changelist, FileChange, HistoryRow } from "./types";
+  import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import WhyNote from "./WhyNote.svelte";
 
   let {
@@ -27,6 +29,8 @@
     stage,
     onChanged,
     onResolve,
+    lists = null,
+    listFiles = [],
   }: {
     /** The repository's commit message, which outlives the panel. */
     draft: Draft;
@@ -47,7 +51,58 @@
     onChanged: () => void;
     /** Opens the Conflicts screen. */
     onResolve?: () => void;
+    /** The changelists, one of which Commit can take instead of the staged changes; null until read. */
+    lists?: Changelist[] | null;
+    /** Each changelist with its files. */
+    listFiles?: { list: Changelist; files: FileChange[] }[];
   } = $props();
+
+  /** The changelist Commit takes, while it is there; null: the staged changes. */
+  const target = $derived(draft.changelist ? (lists?.find((l) => l.id === draft.changelist) ?? null) : null);
+  const targetFiles = $derived(target ? (listFiles.find((g) => g.list.id === target.id)?.files ?? []) : []);
+  // A list deleted, or committed and gone, gives Commit back to the staged changes.
+  $effect(() => {
+    if (draft.changelist && lists && !lists.some((l) => l.id === draft.changelist)) draft.changelist = null;
+  });
+
+  /** Commit takes changelist `id` (null: the staged changes). An empty summary gets the list's
+   *  name, and one that only had the name of the list before follows the new pick. */
+  export function pickList(id: string | null, focus = false) {
+    const own = draft;
+    const before = own.changelist ? lists?.find((l) => l.id === own.changelist)?.name : undefined;
+    const named = !!before && own.summary === before && !own.description.trim();
+    const name = id ? lists?.find((l) => l.id === id)?.name : undefined;
+    own.changelist = id;
+    if (!own.amend && name && (named || !own.summary.trim())) own.summary = name;
+    else if (named) own.summary = "";
+    if (focus)
+      tick().then(() => {
+        summaryBox?.focus();
+        summaryBox?.select();
+      });
+  }
+
+  let menu = $state<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
+  /** What Commit takes: the staged changes, or one changelist. */
+  function openTargets(event: MouseEvent) {
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const count = (n: number) => (n === 1 ? "1 file" : `${n} files`);
+    const entries: MenuEntry[] = [
+      { kind: "header", label: "Commit" },
+      { kind: "item", label: "Staged Changes", icon: target ? menuIcons.stage : menuIcons.good, detail: count(staged.length), run: () => pickList(null) },
+      ...listFiles.map(
+        (g): MenuEntry => ({
+          kind: "item",
+          label: g.list.name,
+          icon: target?.id === g.list.id ? menuIcons.good : menuIcons.changelist,
+          detail: g.files.length ? count(g.files.length) : "No changes",
+          off: !g.files.length && target?.id !== g.list.id,
+          run: () => pickList(g.list.id),
+        }),
+      ),
+    ];
+    menu = { x: box.left, y: box.bottom + 4, entries };
+  }
 
   const branchPart = $derived<Part>(branch ? { branch, color } : { code: "HEAD" });
   /** Edits to tracked files, and new files git does not track yet, for Stage All. */
@@ -64,7 +119,9 @@
   });
 
   const message = $derived([draft.summary.trim(), draft.description.trim()].filter(Boolean).join("\n\n"));
-  const canCommit = $derived(!!draft.summary.trim() && conflicted.length === 0 && (staged.length > 0 || (draft.amend && !!head)) && (!draft.amend || head?.id === draft.amendOn));
+  const canCommit = $derived(
+    !!draft.summary.trim() && conflicted.length === 0 && (target ? targetFiles.length > 0 : staged.length > 0 || (draft.amend && !!head)) && (!draft.amend || head?.id === draft.amendOn),
+  );
   let summaryBox = $state<HTMLInputElement>();
   /** Why Commit is grey, over it, with the way out when there is one. */
   const commitHint = $derived.by((): { text: string; warn?: boolean; fix?: { label: string; run: () => void } } | null => {
@@ -75,7 +132,8 @@
         fix: onResolve ? { label: "Resolve…", run: onResolve } : undefined,
       };
     }
-    if (!staged.length && !draft.amend) {
+    if (target && !targetFiles.length) return { text: `“${target.name}” has no changes`, fix: { label: "Commit Staged", run: () => pickList(null) } };
+    if (!target && !staged.length && !draft.amend) {
       if (!unstaged.length) return { text: "No changes to commit" };
       // Edits first: new files, listed apart, are staged by their own list's Stage All.
       const pool = tracked.length ? tracked : untracked;
@@ -87,19 +145,33 @@
 
   async function commit() {
     if (!canCommit) return;
-    const files = staged.length;
+    const list = target;
+    const files = list ? targetFiles.length : staged.length;
     const pushed = draft.amend && head && !head.unpushed;
-    const action = { kind: "commit" as const, message, amend: draft.amend, signOff: draft.signOff };
+    const action = { kind: "commit" as const, message, amend: draft.amend, signOff: draft.signOff, ...(list ? { changelist: list.id } : {}) };
     const summary = draft.summary.trim();
     const where = branch ?? "HEAD";
+    const fileWord = `${files} ${files === 1 ? "file" : "files"}`;
+    // Staged files of other lists stay staged for the next commit.
+    const stays = list && staged.some((f) => !targetFiles.some((t) => t.path === f.path)) ? " The staged changes of other files stay staged." : "";
     const done = await confirm.run({
-      title: draft.amend ? `Amend the last commit on ${branch ?? "HEAD"}?` : `Commit ${files} ${files === 1 ? "file" : "files"} to ${branch ?? "HEAD"}?`,
-      body: draft.amend ? amendBody(files) : ["Makes the commit ", { quote: draft.summary.trim() }, " on ", branchPart, " with the staged changes."],
+      title: draft.amend
+        ? list
+          ? `Amend the last commit on ${where} with “${list.name}”?`
+          : `Amend the last commit on ${where}?`
+        : list
+          ? `Commit “${list.name}” to ${where}?`
+          : `Commit ${fileWord} to ${where}?`,
+      body: draft.amend
+        ? amendBody(files, list)
+        : list
+          ? ["Makes the commit ", { quote: summary }, " on ", branchPart, " with the changes of the changelist ", { quote: list.name }, ` (${fileWord}), staged or not.${stays}`]
+          : ["Makes the commit ", { quote: summary }, " on ", branchPart, " with the staged changes."],
       icon: "commit",
       button: draft.amend ? "Amend" : "Commit",
       note: pushed ? "The last commit is already pushed. After amending, pushing will need --force-with-lease." : undefined,
       status: `Committing to ${where}…`,
-      past: draft.amend ? `Amended the last commit on ${where}` : `Committed ${files} ${files === 1 ? "file" : "files"} to ${where}`,
+      past: draft.amend ? `Amended the last commit on ${where}` : list ? `Committed “${list.name}” to ${where}` : `Committed ${fileWord} to ${where}`,
       recover: (failure) => commitRecovery(failure, action, summary, where),
       action,
     });
@@ -109,6 +181,7 @@
       draft.amend = false;
       draft.amendOn = null;
       draft.prefilled = "";
+      draft.changelist = null;
       // The new commit is the newest message.
       messages = null;
       shownAt = -1;
@@ -116,9 +189,14 @@
     }
   }
 
-  function amendBody(files: number): Part[] {
+  function amendBody(files: number, list: Changelist | null = null): Part[] {
     const last = { quote: head?.summary ?? "" };
     const reworded = draft.summary.trim() !== (head?.summary ?? "");
+    if (list) {
+      const what: Part[] = ["the changes of ", { quote: list.name }];
+      if (!reworded) return ["Adds ", ...what, " to the last commit ", last, " on ", branchPart, ". The message stays the same."];
+      return ["Replaces the last commit ", last, " on ", branchPart, " with ", { quote: draft.summary.trim() }, ", adding ", ...what, "."];
+    }
     if (!files) return ["Rewords the last commit ", last, " on ", branchPart, " to ", { quote: draft.summary.trim() }, ". Its changes stay the same."];
     if (!reworded) return ["Adds the staged changes to the last commit ", last, " on ", branchPart, ". The message stays the same."];
     return ["Replaces the last commit ", last, " on ", branchPart, " with ", { quote: draft.summary.trim() }, ", adding the staged changes."];
@@ -224,7 +302,16 @@
 
 <div class="commit" role="group" aria-label="Commit" style:background={tint(color)} style:border-color={`color-mix(in srgb, ${lane(color)} 40%, transparent)`}>
   <div class="row top">
-    <span class="grow to">Commit to <b style:color={plate(color)}>{branch ?? "detached HEAD"}</b></span>
+    {#if lists?.length}
+      <!-- With changelists, Commit takes the staged changes or one list. -->
+      <span class="grow to"
+        >Commit <button class="target" class:list={!!target} onclick={openTargets} aria-haspopup="menu" aria-label="What to commit" title="Commit the staged changes, or one changelist"
+          >{target ? target.name : "Staged"}<svg class="icon" viewBox="0 0 16 16"><path d="M4.5 6.5 8 10l3.5-3.5" /></svg></button
+        > to <b style:color={plate(color)}>{branch ?? "detached HEAD"}</b></span
+      >
+    {:else}
+      <span class="grow to">Commit to <b style:color={plate(color)}>{branch ?? "detached HEAD"}</b></span>
+    {/if}
     <span class="switches">
       <button class="amend" role="switch" aria-checked={draft.signOff} onclick={() => (draft.signOff = !draft.signOff)} title="End the message with Signed-off-by and your name and email (git commit --signoff); stays on for this repository">
         Sign-off
@@ -270,13 +357,19 @@
             ? staged.length
               ? `${amendedCount} ${amendedCount === 1 ? "file" : "files"}`
               : "Message only"
-            : `${staged.length} ${staged.length === 1 ? "file" : "files"} staged`}</span
+            : target
+              ? `${targetFiles.length} ${targetFiles.length === 1 ? "file" : "files"}`
+              : `${staged.length} ${staged.length === 1 ? "file" : "files"} staged`}</span
         >
       {/if}
       <button class="button primary go" onclick={commit} disabled={!canCommit} title={commitHint?.text}>{@render goLabel()}</button>
     {/if}
   </div>
 </div>
+
+{#if menu}
+  <Menu x={menu.x} y={menu.y} label="What to commit" entries={menu.entries} onClose={() => (menu = null)} />
+{/if}
 
 <style>
   /* The commit, as a card in the branch color, as «this commit» is in a commit's chain. */
@@ -319,6 +412,34 @@
   }
   .to b {
     font-weight: 600;
+  }
+  /* What Commit takes, with changelists: a quiet capsule that opens the choice. */
+  .target {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    max-width: 160px;
+    height: 20px;
+    padding: 0 6px 0 8px;
+    border-radius: var(--radius-pill);
+    background: var(--field);
+    font: inherit;
+    font-weight: 600;
+    color: var(--text);
+    vertical-align: middle;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .target.list {
+    color: var(--accent-ink);
+    background: var(--accent-quiet);
+  }
+  .target .icon {
+    width: 10px;
+    height: 10px;
+    flex-shrink: 0;
+    stroke-width: 1.8;
   }
   .staged-count {
     font-size: var(--text-small);

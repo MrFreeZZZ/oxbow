@@ -12,6 +12,7 @@ fn commit(skip_checks: bool) -> Action {
         allow_secrets: false,
         skip_checks,
         sign_off: false,
+        changelist: None,
     }
 }
 

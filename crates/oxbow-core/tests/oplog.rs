@@ -71,6 +71,7 @@ fn a_commit_and_a_hard_reset_are_undone_and_redone() {
         allow_secrets: false,
         skip_checks: false,
         sign_off: false,
+        changelist: None,
     })
     .unwrap();
     let commit = fx.git(&["rev-parse", "HEAD"]);
@@ -120,6 +121,7 @@ fn restore_to_here_goes_back_several_steps() {
             allow_secrets: false,
             skip_checks: false,
             sign_off: false,
+            changelist: None,
         })
         .unwrap();
     };

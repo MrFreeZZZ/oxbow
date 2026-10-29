@@ -290,6 +290,7 @@ fn a_failing_pre_commit_hook_is_told_apart_and_can_be_skipped() {
         allow_secrets: false,
         skip_checks: false,
         sign_off: false,
+        changelist: None,
     };
     let err = repo.perform(&commit).unwrap_err();
     let failure = repo.explain_failure(&commit, &err);
@@ -304,6 +305,7 @@ fn a_failing_pre_commit_hook_is_told_apart_and_can_be_skipped() {
         allow_secrets: false,
         skip_checks: false,
         sign_off: false,
+        changelist: None,
     };
     assert_eq!(
         repo.plan(&skip).unwrap().commands[0].display(),

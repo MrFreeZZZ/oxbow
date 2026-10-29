@@ -23,6 +23,10 @@ export interface FileMenuActions {
   stashCandidates: () => StashCandidate[];
   /** How many files are staged, for Stash Staged. */
   stagedCount: () => number;
+  /** Items after Stage or Unstage, e.g. Move to Changelist. */
+  extra?: MenuEntry[];
+  /** Which changelist the files are in, after the heading: "in Login fix". */
+  where?: string;
 }
 
 /** Stash Staged Changes…, in the menus of staged files. */
@@ -63,9 +67,10 @@ function copyMenu(repo: string, paths: string[]): MenuEntry {
 export function filesMenu(repo: string, several: FileChange[], group: Side | "untracked", a: FileMenuActions): FileMenu {
   const n = several.length;
   const fresh = several.every((f) => f.status === "untracked");
-  const entries: MenuEntry[] = [{ kind: "header", label: `${n} selected files` }];
+  const entries: MenuEntry[] = [{ kind: "header", label: `${n} selected files${a.where ? ` ${a.where}` : ""}` }];
   if (group === "staged") entries.push({ kind: "item", label: `Unstage ${n} Files`, icon: menuIcons.unstage, run: () => a.actOnPicked() });
   else entries.push({ kind: "item", label: `Stage ${n} Files`, icon: menuIcons.stage, run: () => a.actOnPicked() });
+  entries.push(...(a.extra ?? []));
   entries.push({ kind: "item", label: "Stash These Files…", icon: menuIcons.stash, run: () => a.act(stashFilesRequest(a.stashCandidates(), several.map((f) => f.path), stashMessageFor(several[0].path))) });
   if (group === "staged") entries.push(stashStagedItem(a));
   entries.push({ kind: "sep" });
@@ -82,9 +87,10 @@ export function fileMenu(repo: string, file: FileChange, group: Side | "untracke
   const side = group === "untracked" ? "unstaged" : group;
   const name = splitPath(file.path).name;
   const what = { modified: "modified", added: "new file", untracked: "untracked", deleted: "deleted", renamed: "renamed", copied: "copied", conflicted: "conflicted" }[file.status];
-  const entries: MenuEntry[] = [{ kind: "header", label: `${name} · ${what}${side === "staged" ? ", staged" : ""}` }];
+  const entries: MenuEntry[] = [{ kind: "header", label: `${name} · ${what}${side === "staged" ? ", staged" : ""}${a.where ? ` ${a.where}` : ""}` }];
   if (side === "staged") entries.push({ kind: "item", label: "Unstage File", icon: menuIcons.unstage, run: () => a.unstage([file]) });
   else if (side === "unstaged") entries.push({ kind: "item", label: "Stage File", icon: menuIcons.stage, run: () => a.stage([file]) });
+  entries.push(...(a.extra ?? []));
   if (side !== "conflicted")
     entries.push({ kind: "item", label: "Stash This File…", icon: menuIcons.stash, run: () => a.act(stashFilesRequest(a.stashCandidates(), [file.path], stashMessageFor(file.path))) });
   if (side === "staged") entries.push(stashStagedItem(a));

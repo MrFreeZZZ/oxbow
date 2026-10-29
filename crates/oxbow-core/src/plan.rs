@@ -168,6 +168,8 @@ impl Repo {
                     }
                 }
             }
+            Action::StageChangelist { list, paths } => self.plan_list_part(list.as_deref(), paths, false)?,
+            Action::DiscardChangelist { list, paths } => self.plan_list_part(list.as_deref(), paths, true)?,
             Action::Ignore { pattern, untrack } => {
                 let mut commands = Vec::new();
                 if let Some(path) = untrack {
@@ -189,6 +191,7 @@ impl Repo {
                 no_verify,
                 sign_off,
                 skip_checks,
+                changelist,
                 ..
             } => {
                 let mut args = vec!["commit".to_owned()];
@@ -210,7 +213,19 @@ impl Repo {
                 if !skip_checks {
                     cmd.before = self.checks_before();
                 }
-                vec![if *amend {
+                if let Some(id) = changelist {
+                    let cmd = if *amend {
+                        cmd.comment("replace the last commit with one that also has the changes of the list")
+                    } else if *no_verify {
+                        cmd.comment("--no-verify: skip the pre-commit and commit-msg hooks this once")
+                    } else if !config::run_hooks() {
+                        cmd.comment(HOOKS_OFF)
+                    } else {
+                        cmd.comment("commit what that staging area has")
+                    };
+                    self.plan_changelist_commit(id, cmd)?
+                } else {
+                    vec![if *amend {
                     cmd.comment("replace the last commit with one that also has the staged changes")
                 } else if *no_verify {
                     cmd.comment("--no-verify: skip the pre-commit and commit-msg hooks this once")
@@ -221,6 +236,7 @@ impl Repo {
                 } else {
                     cmd
                 }]
+                }
             }
             Action::Fetch { remote } => vec![self.fetch_command(remote.as_deref()).with_progress()],
             Action::Pull {

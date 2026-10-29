@@ -255,6 +255,7 @@ fn undoing_a_pushed_commit_says_only_this_copy_changes_and_offers_revert() {
         allow_secrets: false,
         skip_checks: false,
         sign_off: false,
+        changelist: None,
     })
     .unwrap();
     let second = fx.git(&["rev-parse", "HEAD"]);

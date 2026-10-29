@@ -154,6 +154,7 @@ fn files_are_staged_discarded_and_committed() {
         allow_secrets: false,
         skip_checks: false,
         sign_off: false,
+        changelist: None,
     };
     assert_eq!(
         repo.plan(&commit).unwrap().commands[0].display(),
@@ -384,6 +385,7 @@ fn a_commit_with_sign_off_ends_with_the_committers_line() {
         allow_secrets: false,
         skip_checks: false,
         sign_off: true,
+        changelist: None,
     };
     let shown = repo.plan(&action).unwrap().commands[0].display();
     assert!(
