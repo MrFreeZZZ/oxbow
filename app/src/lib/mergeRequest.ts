@@ -35,6 +35,13 @@ export function gitlabOf(history: History, projects: GitLabProject[], ref: RefIn
   return projects.find((p) => p.remote === remote) ?? null;
 }
 
+/** Whether Oxbow is signed in to `project`'s server: then Create Merge Request opens the full
+ *  form on the Merge Request screen rather than asking GitLab through the push. */
+export function signedInTo(project: GitLabProject): boolean {
+  const signed = github.mrProject;
+  return !!signed && signed.remote === project.remote && signed.host === project.host;
+}
+
 /** Create Merge Request for a local branch, from the branch list or the graph: into the trunk,
  *  or a branch like develop that the remote has. */
 export function branchMergeRequest(ctx: BranchContext, ref: RefInfo, project: GitLabProject): Request {

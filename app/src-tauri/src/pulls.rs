@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 
 use oxbow_core::console::EntryKind;
 use oxbow_core::github::Client;
+use oxbow_core::gitlab_api::GitLabUser;
 use oxbow_core::pulls::{Call, GitHubRepo, PullRequest, PullSummary, started_review};
 use oxbow_core::review::{PullStatus, ReviewDraft, Viewing};
 use oxbow_core::{ActionEvent, GitLabProject, OutputLine};
@@ -128,6 +129,31 @@ pub async fn gitlab_merge_request(
     .await
 }
 
+/// Fetch merge request `!number` and its target `base` here, quietly, to show its changes.
+#[tauri::command]
+pub async fn gitlab_fetch(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
+    number: u64,
+    base: String,
+) -> CommandResult<()> {
+    let (repo, project, _) = signed_in_project(&app, &window, &session, &tokens)
+        .await?
+        .ok_or_else(|| "Sign in to this repository’s GitLab in Settings › Accounts".to_owned())?;
+    logged(
+        Some(at(&repo)),
+        EntryKind::Background,
+        format!("Fetch merge request !{number}"),
+        move || {
+            repo.run(&repo.merge_request_fetch_command(&project.remote, number, &base))
+                .map(|_| ())
+        },
+    )
+    .await
+}
+
 /// The requests `calls` send to GitLab, as curl, for the sheet.
 #[tauri::command]
 pub async fn gitlab_calls_preview(
@@ -176,8 +202,15 @@ pub async fn gitlab_run(
                 display: request.display(),
             });
             answer = client.perform(&project, call).map_err(|err| err.to_string())?;
+            let said = match call {
+                Call::Create { .. } => answer
+                    .get("web_url")
+                    .and_then(Value::as_str)
+                    .map(|url| format!("Opened {url}")),
+                _ => None,
+            };
             emit(ActionEvent::Line(OutputLine {
-                text: "Done.".to_owned(),
+                text: said.unwrap_or_else(|| "Done.".to_owned()),
                 stderr: false,
                 progress: false,
             }));
@@ -186,6 +219,100 @@ pub async fn gitlab_run(
     })
     .await
     .map_err(|err| err.to_string())?
+}
+
+/// What the form that opens a merge request needs: GitLab's labels and settings for the project,
+/// the account's id, and the merge request templates on `rev` (the trunk, where GitLab reads them).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLabCreateFacts {
+    #[serde(flatten)]
+    facts: oxbow_core::gitlab_api::CreateFacts,
+    templates: Vec<Template>,
+}
+
+#[derive(serde::Serialize)]
+pub struct Template {
+    name: String,
+    text: String,
+}
+
+#[tauri::command]
+pub async fn gitlab_create_facts(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
+    rev: String,
+) -> CommandResult<GitLabCreateFacts> {
+    let (repo, project, client) = signed_in_project(&app, &window, &session, &tokens)
+        .await?
+        .ok_or_else(|| "Sign in to this repository’s GitLab in Settings › Accounts".to_owned())?;
+    blocking(move || {
+        let facts = client.create_facts(&project)?;
+        let templates = repo
+            .merge_request_templates(&rev)
+            .into_iter()
+            .map(|(name, text)| Template { name, text })
+            .collect();
+        Ok(GitLabCreateFacts { facts, templates })
+    })
+    .await
+}
+
+/// Who GitLab's CODEOWNERS asks to review what `branch` changes against `base`, as accounts:
+/// groups and names GitLab has no account for are left out.
+#[tauri::command]
+pub async fn gitlab_code_owners(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
+    base: String,
+    branch: String,
+) -> CommandResult<Vec<GitLabUser>> {
+    let (repo, _, client) = signed_in_project(&app, &window, &session, &tokens)
+        .await?
+        .ok_or_else(|| "Sign in to this repository’s GitLab in Settings › Accounts".to_owned())?;
+    blocking(move || {
+        let names = repo.code_owners(&base, &branch, true);
+        Ok(if names.is_empty() {
+            Vec::new()
+        } else {
+            client.users_named(&names)
+        })
+    })
+    .await
+}
+
+/// People who can see the project, by part of their name or username.
+#[tauri::command]
+pub async fn gitlab_people(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
+    search: String,
+) -> CommandResult<Vec<GitLabUser>> {
+    let (_, project, client) = signed_in_project(&app, &window, &session, &tokens)
+        .await?
+        .ok_or_else(|| "Sign in to this repository’s GitLab in Settings › Accounts".to_owned())?;
+    blocking(move || client.people(&project, &search)).await
+}
+
+/// GitLab's say on the open merge requests `numbers`, for the Reviews screen.
+#[tauri::command]
+pub async fn gitlab_statuses(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
+    numbers: Vec<u64>,
+) -> CommandResult<Vec<PullStatus>> {
+    let Some((_, project, client)) = signed_in_project(&app, &window, &session, &tokens).await? else {
+        return Ok(Vec::new());
+    };
+    blocking(move || Ok(client.statuses(&project, &numbers))).await
 }
 
 /// Open a page of one of the repository's GitLab projects in the browser: a merge request's, or
@@ -365,7 +492,7 @@ pub async fn code_owners(
 ) -> CommandResult<Vec<String>> {
     let repo = current(&session, &window)?;
     read(at(&repo), "Read the code owners", move || {
-        Ok(repo.code_owners(&base, &branch))
+        Ok(repo.code_owners(&base, &branch, false))
     })
     .await
 }

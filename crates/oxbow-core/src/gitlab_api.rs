@@ -13,6 +13,7 @@ use crate::pulls::{
     RepoSettings, Review, parse_time, text,
 };
 use crate::repo::Repo;
+use crate::review::PullStatus;
 
 /// gitlab.com's address, the server when none is named.
 pub const WEB: &str = "https://gitlab.com";
@@ -85,6 +86,9 @@ impl Server {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "camelCase"))]
 pub struct User {
+    /// The account's number, which GitLab names reviewers and assignees by.
+    #[serde(default)]
+    pub id: u64,
     pub username: String,
     pub name: Option<String>,
     pub avatar_url: Option<String>,
@@ -220,11 +224,49 @@ impl Client {
     }
 
     /// The request `call` sends to merge request `!number`. The calls GitLab has no such
-    /// request for yet (creating one, asking reviewers, reviewing) come back as an error.
+    /// request for yet (reviewing) come back as an error.
     pub fn call_request(&self, project: &GitLabProject, call: &Call) -> std::result::Result<Request, String> {
         let mr = |n: &u64| format!("/projects/{}/merge_requests/{n}", project_id(project));
         let update = |n: &u64, json: Value| self.api_request("PUT", &mr(n), Some(json));
         Ok(match call {
+            Call::Create {
+                head,
+                base,
+                title,
+                body,
+                draft,
+                gitlab,
+            } => {
+                let mut json = json!({
+                    "source_branch": head,
+                    "target_branch": base,
+                    "title": draft_title(title, *draft),
+                    "description": body,
+                });
+                let extra = gitlab.clone().unwrap_or_default();
+                if !extra.reviewer_ids.is_empty() {
+                    json["reviewer_ids"] = json!(extra.reviewer_ids);
+                }
+                if !extra.assignee_ids.is_empty() {
+                    json["assignee_ids"] = json!(extra.assignee_ids);
+                }
+                if !extra.labels.is_empty() {
+                    json["labels"] = json!(extra.labels.join(","));
+                }
+                if extra.remove_source_branch {
+                    json["remove_source_branch"] = json!(true);
+                }
+                if extra.squash {
+                    json["squash"] = json!(true);
+                }
+                self.api_request(
+                    "POST",
+                    &format!("/projects/{}/merge_requests", project_id(project)),
+                    Some(json),
+                )
+            }
+            // GitLab takes the whole list, by account id: the screen adds to the ones it has.
+            Call::RequestReviewers { number, ids, .. } => update(number, json!({ "reviewer_ids": ids })),
             Call::Merge {
                 number,
                 method,
@@ -440,6 +482,13 @@ impl Client {
             pipeline,
             diff,
             line_counts: false,
+            reviewer_ids: detail
+                .get("reviewers")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|r| r.get("id").and_then(Value::as_u64))
+                .collect(),
         };
         Ok(PullRequest {
             additions: 0,
@@ -483,6 +532,116 @@ impl Client {
             gitlab: Some(facts),
             summary,
         })
+    }
+
+    /// What opening a merge request needs from the project: its labels, how it squashes and
+    /// whether it deletes merged branches, and the account's own id, for "assign to me".
+    pub fn create_facts(&self, project: &GitLabProject) -> Result<CreateFacts> {
+        let at = format!("/projects/{}", project_id(project));
+        let (settings, labels, me) = std::thread::scope(|s| {
+            let settings = s.spawn(|| self.call(&self.api_request("GET", &at, None)));
+            let labels = s.spawn(|| self.pages(&format!("{at}/labels"), 5));
+            let me = s.spawn(|| self.call(&self.user_request()));
+            (settings.join(), labels.join(), me.join())
+        });
+        let settings = settings.unwrap_or(Ok(Value::Null))?;
+        let labels = labels
+            .unwrap_or(Ok((Vec::new(), true)))
+            .map_or_else(|_| Vec::new(), |(l, _)| l);
+        let me = me.unwrap_or(Ok(Value::Null)).unwrap_or(Value::Null);
+        Ok(CreateFacts {
+            labels: labels
+                .iter()
+                .map(|l| Label {
+                    name: text(l, "name"),
+                    color: text(l, "color"),
+                })
+                .filter(|l| !l.name.is_empty())
+                .collect(),
+            squash_option: settings
+                .get("squash_option")
+                .and_then(Value::as_str)
+                .unwrap_or("default_off")
+                .to_owned(),
+            remove_source_branch: settings
+                .get("remove_source_branch_after_merge")
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+            me: Some(gitlab_user(&me)).filter(|u| u.id != 0),
+        })
+    }
+
+    /// People who can see the project whose name or username has `search` in it, at most 20.
+    pub fn people(&self, project: &GitLabProject, search: &str) -> Result<Vec<GitLabUser>> {
+        let request = self.api_request(
+            "GET",
+            &format!(
+                "/projects/{}/users?search={}&per_page=20",
+                project_id(project),
+                crate::github::percent(search.trim())
+            ),
+            None,
+        );
+        Ok(self
+            .call(&request)?
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(gitlab_user)
+            .filter(|u| u.id != 0)
+            .collect())
+    }
+
+    /// The accounts with these usernames, in their order; a name GitLab has no account for (a
+    /// group, a typo) is left out.
+    pub fn users_named(&self, names: &[String]) -> Vec<GitLabUser> {
+        std::thread::scope(|s| {
+            let asks: Vec<_> = names
+                .iter()
+                .take(20)
+                .map(|name| {
+                    let request = self.api_request(
+                        "GET",
+                        &format!("/users?username={}", crate::github::percent(name)),
+                        None,
+                    );
+                    s.spawn(move || self.call(&request))
+                })
+                .collect();
+            asks.into_iter()
+                .filter_map(|ask| ask.join().ok()?.ok())
+                .filter_map(|list| list.as_array()?.first().map(gitlab_user))
+                .filter(|u| u.id != 0)
+                .collect()
+        })
+    }
+
+    /// GitLab's say on each of the open merge requests, for the Reviews screen: approvals,
+    /// changes asked for and the newest pipeline. At most the first 40, six asked at a time.
+    pub fn statuses(&self, project: &GitLabProject, open: &[u64]) -> Vec<PullStatus> {
+        let at = format!("/projects/{}/merge_requests", project_id(project));
+        let mut out = Vec::new();
+        for chunk in open.iter().take(40).collect::<Vec<_>>().chunks(6) {
+            let found: Vec<PullStatus> = std::thread::scope(|s| {
+                let asks: Vec<_> = chunk
+                    .iter()
+                    .map(|&&iid| {
+                        let at = &at;
+                        s.spawn(move || {
+                            let get =
+                                |path: String| self.call(&self.api_request("GET", &path, None)).unwrap_or(Value::Null);
+                            let approvals = get(format!("{at}/{iid}/approvals"));
+                            let reviewers = get(format!("{at}/{iid}/reviewers"));
+                            let pipelines = get(format!("{at}/{iid}/pipelines?per_page=1"));
+                            status(iid, &approvals, &reviewers, &pipelines)
+                        })
+                    })
+                    .collect();
+                asks.into_iter().filter_map(|ask| ask.join().ok()).collect()
+            });
+            out.extend(found);
+        }
+        out
     }
 
     /// The picture at `url`, such as an account's avatar, as a `data:` address the window can
@@ -584,6 +743,8 @@ pub struct GitLabFacts {
     pub diff: Option<DiffRefs>,
     /// `additions` and `deletions` are counted: the commits are here.
     pub line_counts: bool,
+    /// The reviewers it asks, by account id: asking one more sends them all.
+    pub reviewer_ids: Vec<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -603,6 +764,85 @@ pub struct DiffRefs {
     /// The target's commit the diff was made against.
     pub start_sha: String,
     pub head_sha: String,
+}
+
+/// Someone on GitLab, to ask for a review or assign.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLabUser {
+    pub id: u64,
+    pub username: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Label {
+    pub name: String,
+    /// `#d9534f`, as GitLab paints it.
+    pub color: String,
+}
+
+/// What the form that opens a merge request needs from GitLab.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateFacts {
+    pub labels: Vec<Label>,
+    /// `never`, `always`, `default_on` or `default_off`.
+    pub squash_option: String,
+    /// The project deletes the source branch of a merged merge request by default.
+    pub remove_source_branch: bool,
+    /// The account signed in.
+    pub me: Option<GitLabUser>,
+}
+
+fn gitlab_user(user: &Value) -> GitLabUser {
+    GitLabUser {
+        id: user.get("id").and_then(Value::as_u64).unwrap_or(0),
+        username: text(user, "username"),
+        name: text(user, "name"),
+    }
+}
+
+/// One merge request's say for the Reviews screen, in GitHub's words: changes asked for wins,
+/// then approved (nothing left to approve, by someone), then a review still required.
+fn status(iid: u64, approvals: &Value, reviewers: &Value, pipelines: &Value) -> PullStatus {
+    let asked_changes = reviewers
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|r| r.get("state").and_then(Value::as_str) == Some("requested_changes"));
+    let approved_by = approvals
+        .get("approved_by")
+        .and_then(Value::as_array)
+        .is_some_and(|list| !list.is_empty());
+    let left = approvals.get("approvals_left").and_then(Value::as_u64).unwrap_or(0);
+    let required = approvals.get("approvals_required").and_then(Value::as_u64).unwrap_or(0);
+    let decision = if asked_changes {
+        Some("changesRequested")
+    } else if approved_by && left == 0 {
+        Some("approved")
+    } else if required > 0 || left > 0 {
+        Some("reviewRequired")
+    } else {
+        None
+    };
+    let checks = pipelines
+        .as_array()
+        .and_then(|list| list.first())
+        .and_then(|p| p.get("status"))
+        .and_then(Value::as_str)
+        .map(|status| match status {
+            "success" => "success",
+            "failed" => "failure",
+            "canceled" | "skipped" => "error",
+            _ => "pending",
+        });
+    PullStatus {
+        number: iid,
+        decision: decision.map(str::to_owned),
+        checks: checks.map(str::to_owned),
+    }
 }
 
 impl Repo {
@@ -1164,9 +1404,10 @@ mod tests {
             client
                 .call_request(
                     &project,
-                    &Call::RequestReviewers {
-                        number: 12,
-                        reviewers: vec![]
+                    &Call::Viewed {
+                        id: String::new(),
+                        path: "a.rs".into(),
+                        viewed: true
                     }
                 )
                 .is_err()
@@ -1195,6 +1436,7 @@ mod tests {
     fn old_servers_and_tokens_without_api_are_refused() {
         let me = |version: &str, scopes: Option<&[&str]>| Me {
             user: User {
+                id: 1,
                 username: "anna".into(),
                 name: None,
                 avatar_url: None,

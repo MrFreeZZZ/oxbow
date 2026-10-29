@@ -154,6 +154,7 @@ fn calls_reach_github_and_graphql_errors_count() {
                 title: "UI".into(),
                 body: String::new(),
                 draft: true,
+                gitlab: None,
             },
             None,
         )
@@ -192,7 +193,7 @@ fn code_owners_name_who_reviews_the_changed_files() {
     fixture.commit("src/api/sessions.rs", "fn revoke() {}\n", "Revoke");
     fixture.commit("docs/api.md", "# API\n", "Docs");
     let repo = Repo::open(fixture.path()).unwrap();
-    assert_eq!(repo.code_owners("main", "feature"), ["maria", "kirill"]);
+    assert_eq!(repo.code_owners("main", "feature", false), ["maria", "kirill"]);
 }
 
 /// A bare repository standing in for GitHub, and a clone of it with `main` pushed.

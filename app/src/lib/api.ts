@@ -68,6 +68,8 @@ import type {
   Publish,
   GitHubRepo,
   GitLabProject,
+  GitLabCreateFacts,
+  GitLabUser,
   PullCall,
   PullRequest,
   PullStatus,
@@ -314,6 +316,14 @@ export const api = {
   gitlabRun: (calls: PullCall[]) => invoke<unknown>("gitlab_run", { calls }),
   /** Opens a merge request, pipeline or job page of one of them in the browser. */
   openGitLab: (url: string) => invoke<void>("open_gitlab", { url }),
+  /** Labels, settings and templates (on `rev`) for the form that opens a merge request. */
+  gitlabCreateFacts: (rev: string) => invoke<GitLabCreateFacts>("gitlab_create_facts", { rev }),
+  /** Who GitLab's CODEOWNERS asks to review what `branch` changes against `base`. */
+  gitlabCodeOwners: (base: string, branch: string) => invoke<GitLabUser[]>("gitlab_code_owners", { base, branch }),
+  gitlabPeople: (search: string) => invoke<GitLabUser[]>("gitlab_people", { search }),
+  /** Fetch merge request `!number` and its target here, into refs/oxbow/mr/<number>/. */
+  gitlabFetch: (number: number, base: string) => invoke<void>("gitlab_fetch", { number, base }),
+  gitlabStatuses: (numbers: number[]) => invoke<PullStatus[]>("gitlab_statuses", { numbers }),
   /** Open and recently closed, the latest updated first. */
   githubPulls: () => invoke<PullSummary[]>("github_pulls"),
   githubPull: (number: number) => invoke<PullRequest>("github_pull", { number }),

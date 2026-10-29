@@ -22,6 +22,8 @@ class GitHubState {
   mrProblem = $state<string | null>(null);
   /** The account signed in to that project's server, by its username. */
   mrMe = $state<string | null>(null);
+  /** GitLab's approvals and pipeline of the open merge requests, by number. */
+  mrStatuses = $state<Record<number, PullStatus>>({});
   /** Open and recently closed pull requests, the latest updated first. */
   pulls = $state<PullSummary[]>([]);
   /** GitHub's verdict and checks of the open ones, by number. */
@@ -82,7 +84,12 @@ class GitHubState {
       this.mrProblem = null;
     } catch (err) {
       if (load === this.#load) this.mrProblem = String(err);
+      return;
     }
+    // Approvals and pipelines are a nicety, as on GitHub: the list stays without them.
+    const open = this.mergeRequests.filter((p) => p.state === "open").map((p) => p.number);
+    const statuses = open.length ? await api.gitlabStatuses(open).catch(() => []) : [];
+    if (load === this.#load) this.mrStatuses = Object.fromEntries(statuses.map((s) => [s.number, s]));
   }
 
   /** Signed in as someone else, or out: what the old account could see goes at once. */
@@ -99,6 +106,7 @@ class GitHubState {
     this.mergeRequests = [];
     this.mrProblem = null;
     this.mrMe = null;
+    this.mrStatuses = {};
     this.pulls = [];
     this.statuses = {};
     this.me = null;
@@ -129,6 +137,22 @@ class GitHubState {
     return forge === "gitlab" ? this.mergeRequests : this.pulls;
   }
 
+  /** GitHub's verdict and checks by number, or GitLab's approvals and pipeline. */
+  statusesOf(forge: ForgeKind): Record<number, PullStatus> {
+    return forge === "gitlab" ? this.mrStatuses : this.statuses;
+  }
+
+  /** The account signed in to GitHub, or to the GitLab server of the merge requests. */
+  meOf(forge: ForgeKind): string | null {
+    return forge === "gitlab" ? this.mrMe : this.me;
+  }
+
+  /** Where Reviews and the sidebar look: GitHub when the repository is there, else GitLab
+   *  once signed in to its server. */
+  get forge(): ForgeKind {
+    return !this.repo && this.mrProject ? "gitlab" : "github";
+  }
+
   /** The merge request of `branch` on GitLab: its open one, else the latest one. Forks don't count. */
   mergeRequestOf(branch: string): PullSummary | null {
     const own = this.mergeRequests.filter((p) => p.head === branch && !p.headOwner);
@@ -141,10 +165,11 @@ class GitHubState {
     return mr?.state === "open" ? mr : null;
   }
 
-  /** Open pull requests of others that ask this account for a review. */
+  /** Open pull requests of others that ask this account for a review, and merge requests on
+   *  GitLab that ask its account there. */
   get waiting(): PullSummary[] {
-    const me = this.me;
-    return me ? this.pulls.filter((p) => p.state === "open" && !p.draft && p.author.login !== me && p.requested.includes(me)) : [];
+    const asks = (list: PullSummary[], me: string | null) => (me ? list.filter((p) => p.state === "open" && !p.draft && p.author.login !== me && p.requested.includes(me)) : []);
+    return [...asks(this.pulls, this.me), ...asks(this.mergeRequests, this.mrMe)];
   }
 
   /** The open pull request whose head is `branch`; on `gitlab`, its open merge request. */

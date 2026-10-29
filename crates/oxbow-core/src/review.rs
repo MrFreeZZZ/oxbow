@@ -154,6 +154,12 @@ pub fn pull_ref(number: u64, part: &str) -> String {
     format!("refs/oxbow/pull/{number}/{part}")
 }
 
+/// Where a GitLab merge request's commits are kept here, as [`pull_ref`] keeps a pull request's:
+/// `refs/oxbow/mr/<iid>/head`, `/base` and `/reviewed`.
+pub fn mr_ref(number: u64, part: &str) -> String {
+    format!("refs/oxbow/mr/{number}/{part}")
+}
+
 // --- The draft -----------------------------------------------------------------------------------
 
 /// A comment of the draft, on lines of the draft's commit.
@@ -210,6 +216,22 @@ impl Repo {
         ])
         .comment(format!(
             "pull request #{number} and {base}, kept out of the branch lists"
+        ))
+    }
+
+    /// `git fetch` of a GitLab merge request's head (GitLab keeps it as
+    /// `refs/merge-requests/<iid>/head`, a fork's too) and its target into [`mr_ref`]s.
+    pub fn merge_request_fetch_command(&self, remote: &str, number: u64, base: &str) -> GitCommand {
+        GitCommand::new([
+            "fetch".to_owned(),
+            "--no-tags".to_owned(),
+            "--no-write-fetch-head".to_owned(),
+            remote.to_owned(),
+            format!("+refs/merge-requests/{number}/head:{}", mr_ref(number, "head")),
+            format!("+refs/heads/{base}:{}", mr_ref(number, "base")),
+        ])
+        .comment(format!(
+            "merge request !{number} and {base}, kept out of the branch lists"
         ))
     }
 

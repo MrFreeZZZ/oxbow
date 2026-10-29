@@ -25,7 +25,7 @@
   import { pushRequest } from "./remote";
   import { mergeRequest } from "./merge";
   import { dropsPushed, isProtected, lockedNote } from "./protect";
-  import { branchMergeRequest, gitlabOf } from "./mergeRequest";
+  import { branchMergeRequest, gitlabOf, signedInTo } from "./mergeRequest";
   import { savePatchesRequest } from "./patches";
   import { stashMenu } from "./stash";
   import { deleteTagRequest, fetchTagsRequest, isLocalTag, newTagRequest, pushTagsRequest } from "./tags";
@@ -124,6 +124,7 @@
 
   /** The checked-out branch's pull request, for the Workspace item. */
   const headPull = $derived(history.head.branch ? github.pullOf(history.head.branch) : null);
+  const headMr = $derived(history.head.branch && github.mrProject ? github.mergeRequestOf(history.head.branch) : null);
 
   const headName = $derived(history.head.branch ?? "HEAD");
   const compareItem = (name: string): MenuEntry => ({ kind: "item", label: `Compare with ${headName}`, icon: menuIcons.compare, run: () => onCompare(headName, name) });
@@ -355,7 +356,7 @@
     const project = !isTrunk ? gitlabOf(history, github.gitlab, ref) : null;
     const mr = project ? github.mergeRequestOf(ref.name) : null;
     if (mr) entries.push(item(`Merge Request !${mr.number}`, PULL_ICON, () => onPullRequest(ref.name, null, "gitlab")));
-    else if (project) entries.push(item("Create Merge Request…", PULL_ICON, () => run(branchMergeRequest(ctx, ref, project))));
+    else if (project) entries.push(item("Create Merge Request…", PULL_ICON, () => (ref.kind === "local" && signedInTo(project) ? onPullRequest(ref.name, null, "gitlab") : run(branchMergeRequest(ctx, ref, project)))));
     entries.push({ kind: "sep" });
     entries.push(item(`New Branch from ${ref.name}…`, menuIcons.branch, () => run(newBranchRequest(ctx, ref.name))));
     if (!isTrunk) entries.push(item("Rename…", menuIcons.edit, () => run(renameRequest(ctx, ref))));
@@ -691,9 +692,18 @@
         {#if headPull}<span class="meta">#{headPull.number}</span>{/if}
       </button>
     {/if}
-    {#if github.repo}
+    {#if github.mrProject && history.head.branch && history.head.branch !== history.trunk}
+      {@const branch = history.head.branch}
+      <button class="item" class:current={view === "pull"} onclick={() => onPullRequest(branch, null, "gitlab")} title={headMr ? `Merge request !${headMr.number} of ${branch}` : `Open a merge request for ${branch}`}>
+        <svg class="icon" viewBox="0 0 16 16"><path d={PULL_ICON} /></svg>
+        <span class="grow">Merge Request</span>
+        {#if headMr}<span class="meta">!{headMr.number}</span>{/if}
+      </button>
+    {/if}
+    {#if github.repo || github.mrProject}
       {@const waiting = github.waiting.length}
-      <button class="item" class:current={view === "reviews"} onclick={() => onView("reviews")} title={waiting ? `${waiting} pull ${waiting === 1 ? "request asks" : "requests ask"} for your review` : "Open pull requests, yours and others’"}>
+      {@const noun = github.repo ? "pull request" : "merge request"}
+      <button class="item" class:current={view === "reviews"} onclick={() => onView("reviews")} title={waiting ? `${waiting} ${noun}${waiting === 1 ? " asks" : "s ask"} for your review` : `Open ${noun}s, yours and others’`}>
         <svg class="icon" viewBox="0 0 16 16"><path d={REVIEW_ICON} /></svg>
         <span class="grow">Reviews</span>
         {#if waiting}<span class="meta count">{waiting}</span>{/if}

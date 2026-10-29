@@ -1780,6 +1780,35 @@ export interface GitLabFacts {
   diff: { baseSha: string; startSha: string; headSha: string } | null;
   /** `additions` and `deletions` are counted: its commits are here. */
   lineCounts: boolean;
+  /** The reviewers it asks, by account id: asking one more sends them all. */
+  reviewerIds: number[];
+}
+
+/** What only a merge request on GitLab is opened with: people by account id, labels by name. */
+export interface GitLabCreate {
+  reviewerIds: number[];
+  assigneeIds: number[];
+  labels: string[];
+  removeSourceBranch: boolean;
+  squash: boolean;
+}
+
+/** Someone on GitLab, to ask for a review or assign. */
+export interface GitLabUser {
+  id: number;
+  username: string;
+  name: string;
+}
+
+/** What the form that opens a merge request needs from GitLab and the trunk. */
+export interface GitLabCreateFacts {
+  labels: { name: string; color: string }[];
+  squashOption: "never" | "always" | "default_on" | "default_off" | string;
+  /** The project deletes the source branch of a merged merge request by default. */
+  removeSourceBranch: boolean;
+  me: GitLabUser | null;
+  /** `.gitlab/merge_request_templates/*.md` on the trunk, Default first. */
+  templates: { name: string; text: string }[];
 }
 
 export type MergeMethodName = "merge" | "squash" | "rebase";
@@ -1787,8 +1816,8 @@ export type MergeMethodName = "merge" | "squash" | "rebase";
 /** A change to a pull request; `number` 0 is the one a `create` earlier in the same run made. */
 export type PullCall =
   | { kind: "merge"; number: number; method: MergeMethodName; title?: string | null; message?: string | null; sha: string; deleteBranch?: boolean }
-  | { kind: "create"; head: string; base: string; title: string; body: string; draft: boolean }
-  | { kind: "requestReviewers"; number: number; reviewers: string[] }
+  | { kind: "create"; head: string; base: string; title: string; body: string; draft: boolean; gitlab?: GitLabCreate | null }
+  | { kind: "requestReviewers"; number: number; reviewers: string[]; ids?: number[] }
   | { kind: "update"; number: number; base?: string | null; body?: string | null }
   | { kind: "readyForReview"; number: number; id: string; title?: string | null }
   | { kind: "convertToDraft"; number: number; id: string; title?: string | null }
