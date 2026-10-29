@@ -259,9 +259,9 @@
     openTab(path);
   }
 
-  /** ↑ ↓ on a row of the list open the file over or under it, as in Changes. */
+  /** ↑ ↓ on a row of the list open the file over or under it, as in Changes. Each row's own
+   *  keys: All Changes, a file and Show More. */
   function onFilesKey(event: KeyboardEvent) {
-    if (!(event.target as HTMLElement).closest(".file, .all")) return;
     const by = pressed("nextFile", event) ? 1 : pressed("previousFile", event) ? -1 : 0;
     if (!by) return;
     event.preventDefault();
@@ -377,7 +377,7 @@
   </div>
 
   <div class="body" class:stacked bind:clientWidth={bodyWidth}>
-    <div class="files" bind:this={filesBox} aria-label="Changed files" data-steps use:tabStepper={fileTabs(paths, tab, openTab)} onkeydown={onFilesKey} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
+    <div class="files" bind:this={filesBox} aria-label="Changed files" data-steps use:tabStepper={fileTabs(paths, tab, openTab)} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
       <div class="tools">
         <label class="filter">
           <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
@@ -414,6 +414,7 @@
             aria-current={tab === null ? "true" : undefined}
             style:background={tab === null ? tint(color) : undefined}
             onclick={(e) => rowClick(e, null)}
+            onkeydown={onFilesKey}
             title="Show the changes of every file"
           >
             <span class="gtitle" style:color={plate(color)}>All Changes</span>
@@ -428,7 +429,7 @@
           </button>
           {#snippet fileRow(file: FileChange, nested: boolean)}
             {@const open = tab === file.path}
-            <button class="file" class:nested aria-current={open ? "true" : undefined} style:background={open ? tint(color) : undefined} onclick={(e) => rowClick(e, file.path)} oncontextmenu={(e) => openFileMenu(e, file)} title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
+            <button class="file" class:nested aria-current={open ? "true" : undefined} style:background={open ? tint(color) : undefined} onclick={(e) => rowClick(e, file.path)} onkeydown={onFilesKey} oncontextmenu={(e) => openFileMenu(e, file)} title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
               <span class="badge {tone[file.status]}">{statusIcon[file.status]}</span>
               <PathName path={file.path} folders={!nested} />
               {#if foundFiles.includes(file.path)}
@@ -456,7 +457,7 @@
             {#each shownFiles.slice(0, listed) as file (file.path)}{@render fileRow(file, false)}{/each}
           {/if}
           {#if shownFiles.length > listed}
-            <button class="file more" onclick={() => (listed += LIST_STEP)}>Show {Math.min(shownFiles.length - listed, LIST_STEP).toLocaleString()} more {shownFiles.length - listed === 1 ? "file" : "files"}</button>
+            <button class="file more" onclick={() => (listed += LIST_STEP)} onkeydown={onFilesKey}>Show {Math.min(shownFiles.length - listed, LIST_STEP).toLocaleString()} more {shownFiles.length - listed === 1 ? "file" : "files"}</button>
           {/if}
           {#if needle && !shownFiles.length}<p class="empty">No files match the filter.</p>{/if}
         {/if}
