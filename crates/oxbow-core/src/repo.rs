@@ -117,7 +117,8 @@ impl Repo {
 
     /// The same repository opened afresh, so that settings changed since (a remote Publish just
     /// added) are seen, keeping what was learned about its working tree: the line counts of new
-    /// files, the change lists last read, and which commits are unpushed.
+    /// files, the change lists last read, and which commits are unpushed; and, while its Git
+    /// folder is still the same one, where git keeps its files.
     pub fn reopen(&self) -> Result<Self> {
         let mut fresh = Repo::open(&self.workdir)?;
         if fresh.workdir == self.workdir {
@@ -126,6 +127,9 @@ impl Repo {
             fresh.pair_changes = self.pair_changes.clone();
             fresh.unpushed = self.unpushed.clone();
             fresh.diff = self.diff;
+            if fresh.shared.git_dir() == self.shared.git_dir() {
+                fresh.git_paths = self.git_paths.clone();
+            }
         }
         Ok(fresh)
     }

@@ -195,8 +195,11 @@ impl Seen {
                             kind => kind,
                         };
                         counts |= matches!(kind, Kind::Git | Kind::Files);
-                        if kind == Kind::Files && self.keeper.is_some() {
-                            batch.save(&self.roots, path);
+                        if kind == Kind::Files {
+                            crate::commit::forget_file_lines(path);
+                            if self.keeper.is_some() {
+                                batch.save(&self.roots, path);
+                            }
                         }
                         noted |= batch.note(kind, path);
                     }

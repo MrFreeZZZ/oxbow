@@ -646,18 +646,40 @@ impl Repo {
     /// Lines `start` to `start + count - 1` (from 1) of one side of a file diff, and how many it
     /// has: the unchanged lines between hunks, shown as they are asked for. Past its end it has
     /// none, so a count of 0 only says how long it is.
+    /// A side bigger than [`MAX_LINES_BYTES`] is not read.
     pub fn read_lines(&self, source: &Source, start: u32, count: u32) -> Result<SourceLines> {
         let text = match source {
             // An object never changes: its lines are found once, then each page is a slice.
             Source::Blob { id } => match cached_lines(id) {
                 Some(text) => text,
                 None => {
-                    let text = Arc::new(LineIndex::new(self.read_source(source)?));
+                    let text = Arc::new(LineIndex::new(self.read_source_within(source, MAX_LINES_BYTES)?));
                     keep_lines(id, &text);
                     text
                 }
             },
-            Source::Worktree { .. } => Arc::new(LineIndex::new(self.read_source(source)?)),
+            // A file is kept by its size, time and inode: an edit saved since changes one of them,
+            // and the watch forgets the file as it sees it change anyway.
+            Source::Worktree { path } => {
+                let full = self.workdir().join(path);
+                let stamp = file_stamp(&full);
+                match stamp.as_ref().and_then(|(key, _)| cached_lines(key)) {
+                    Some(text) => text,
+                    None => {
+                        let text = Arc::new(LineIndex::new(self.read_source_within(source, MAX_LINES_BYTES)?));
+                        // Not when it was written to while it was read, nor just before: the
+                        // system's clock for files ticks in milliseconds, so an edit right after
+                        // may leave the size and time as they were.
+                        if let Some((key, time)) = stamp
+                            && file_stamp(&full).is_some_and(|(again, _)| again == key)
+                            && time.elapsed().is_ok_and(|age| age > SETTLED)
+                        {
+                            keep_lines(&key, &text);
+                        }
+                        text
+                    }
+                }
+            }
         };
         let first = start.saturating_sub(1) as usize;
         let last = first.saturating_add(count as usize).min(text.starts.len());
@@ -750,11 +772,41 @@ impl LineIndex {
     }
 }
 
-/// The blobs whose lines were asked for last, newest at the end, at most [`MAX_LINES_KEPT`]
-/// bytes of them: the lines between hunks come a page at a time, and a big file would be read
-/// and split again for every page.
+/// The blobs and files whose lines were asked for last, newest at the end, at most
+/// [`MAX_LINES_KEPT`] bytes of them: the lines between hunks come a page at a time, and a big
+/// file would be read and split again for every page. A blob is kept by its id, a file by
+/// [`file_stamp`].
 static LINES_KEPT: Mutex<Vec<(String, Arc<LineIndex>)>> = Mutex::new(Vec::new());
 const MAX_LINES_KEPT: usize = 64 * 1024 * 1024;
+/// A side bigger than this has no lines read from it, as a preview reads no bigger file.
+pub const MAX_LINES_BYTES: u64 = 32 * 1024 * 1024;
+
+/// How long after its last change a file's lines may be kept.
+const SETTLED: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// What a plain file in the working tree is kept by: its path, size, time of change and inode;
+/// and that time. `None` for anything else, such as a symlink, whose side is short to read anyway.
+fn file_stamp(full: &std::path::Path) -> Option<(String, std::time::SystemTime)> {
+    let meta = std::fs::symlink_metadata(full).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    let time = meta.modified().ok()?;
+    let nanos = time.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
+    #[cfg(unix)]
+    let inode = std::os::unix::fs::MetadataExt::ino(&meta);
+    #[cfg(not(unix))]
+    let inode = 0u64;
+    Some((format!("{}\0{}\0{nanos}\0{inode}", full.display(), meta.len()), time))
+}
+
+/// Forget the lines kept of the file at `full`, which changed.
+pub(crate) fn forget_file_lines(full: &std::path::Path) {
+    let prefix = format!("{}\0", full.display());
+    if let Ok(mut kept) = LINES_KEPT.lock() {
+        kept.retain(|(key, _)| !key.starts_with(&prefix));
+    }
+}
 
 fn cached_lines(id: &str) -> Option<Arc<LineIndex>> {
     let mut kept = LINES_KEPT.lock().ok()?;

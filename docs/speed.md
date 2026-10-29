@@ -47,6 +47,32 @@ Found and fixed on the way:
 - **A worktree's own Git folder was named with `..`** (`.git/worktrees/side/../..`), so a gone
   worktree wasn't matched to its main folder (`watch.rs`, `common_dir`).
 
+## Stage with Undo, and lines of a file (29 October)
+
+`cargo run --release -p oxbow-core --example steps` (2,000 files and one of 15 MB; cloud, Xeon,
+4 cores, git 2.43; median of 15). It takes Stage with Undo apart by the git processes it starts,
+as the Console lists them; the parts before the action run side by side, so they add up to more
+than the whole.
+
+| Measure | Before (df32540) | After |
+|---|---|---|
+| Stage with Undo | 44–48 ms, 18 git | |
+| The same after a refresh (the repository opened again) | 56–61 ms, 25 git: 7 of them ask where git keeps its files | 49 ms, 18 git |
+| `git add` alone | 4–5 ms | |
+| 20 lines of a 15 MB file on disk, asked again | 16 ms: read and split again each time | 0.003 ms |
+| The same of a committed file | 0.002 ms | 0.002 ms |
+
+Where Stage with Undo goes, before: HEAD, refs and stash 4 git (6 ms), the staging area and the
+files 5 git (18 ms), `git add` itself (5 ms), writing the step down 8 git (16 ms).
+
+- **A refresh made the next Undo ask git where its files are again.** Each read of the history
+  opens the repository again, and that forgot the answers; they are now kept while the Git
+  folder is the same (`repo.rs`, `reopen`).
+- **Lines of a file on disk were read whole for every page.** They are now kept like a blob's,
+  by the file's size, time of change and inode, and forgotten when the watch sees the file
+  change; a file changed in the last 2 seconds isn't kept yet, since the system's clock for
+  files is coarse. Neither side is read past 32 MB, as a preview (`commit.rs`, `read_lines`).
+
 ## Local History (29 October)
 
 Before Local History was written, what it would keep was measured on a shallow clone of VS Code
