@@ -470,7 +470,8 @@ fn a_list_commits_in_a_repository_without_commits() {
     let id = create(&repo, "First", &["first.txt"]);
     let plan = repo.plan(&commit_list(&id, "First")).unwrap();
     assert_eq!(plan.commands[0].display(), "git read-tree --empty");
-    repo.perform(&commit_list(&id, "First")).unwrap();
+    // As an assertion, so a failure shows git's own words.
+    assert_eq!(repo.perform(&commit_list(&id, "First")).err().map(|e| e.to_string()), None);
     assert_eq!(fx.git(&["ls-tree", "--name-only", "HEAD"]), "first.txt");
     let tree = repo.working_tree().unwrap();
     assert!(tree.staged.is_empty());
