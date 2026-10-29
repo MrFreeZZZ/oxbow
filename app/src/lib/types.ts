@@ -1356,6 +1356,10 @@ export interface RepoFileText {
   readOnly: string | null;
 }
 
+/** What Save did: written, or nothing because something else changed the file since it was
+ *  opened (`text` is what is there now, nothing when it was removed). */
+export type RepoFileSaved = { kind: "written"; path: string } | { kind: "changed"; text: string | null };
+
 export type FileFix = { kind: "replace"; label: string; line: number; text: string | null } | { kind: "untrack"; label: string; paths: string[] };
 
 /** Something wrong in a line: `from`..`to` in UTF-16 units; line 0 is the whole file. An error keeps it from being saved. */

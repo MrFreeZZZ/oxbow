@@ -2,7 +2,7 @@
 //! repository, read, checked as they are typed and saved.
 
 use oxbow_core::console;
-use oxbow_core::repofiles::{FileCheck, RepoFile, RepoFileKind, RepoFileText};
+use oxbow_core::repofiles::{FileCheck, RepoFile, RepoFileKind, RepoFileText, Saved};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
@@ -69,7 +69,7 @@ pub(crate) async fn check_repo_file(
     .await
 }
 
-/// Write the file; nothing is staged. Returns its path.
+/// Write the file, unless something else changed it since it was opened; nothing is staged.
 #[tauri::command]
 pub(crate) async fn save_repo_file(
     app: AppHandle,
@@ -78,16 +78,19 @@ pub(crate) async fn save_repo_file(
     kind: RepoFileKind,
     gitlab: bool,
     text: String,
-) -> CommandResult<String> {
+    over: Option<String>,
+) -> CommandResult<Saved> {
     let repo = current(&session, &window)?;
-    let path = logged(
+    let saved = logged(
         Some(at(&repo)),
         console::EntryKind::Action,
         "Save a repository file",
-        move || repo.save_repo_file(kind, gitlab, &text),
+        move || repo.save_repo_file(kind, gitlab, &text, over.as_deref()),
     )
     .await?;
     // Changes shows the file at once.
-    let _ = app.emit_to(session.label(&window).as_str(), "repo-touched", ());
-    Ok(path)
+    if matches!(saved, Saved::Written { .. }) {
+        let _ = app.emit_to(session.label(&window).as_str(), "repo-touched", ());
+    }
+    Ok(saved)
 }

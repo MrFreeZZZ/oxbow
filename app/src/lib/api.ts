@@ -4,6 +4,7 @@ import type {
   AllSettings,
   FileCheck,
   RepoFileKind,
+  RepoFileSaved,
   RepoFileText,
   RepoFiles,
   SubmoduleMove,
@@ -264,8 +265,10 @@ export const api = {
   repoFileText: (kind: RepoFileKind, gitlab: boolean) => invoke<RepoFileText>("repo_file_text", { kind, gitlab }),
   /** `fresh` reads the working copy and the history again. */
   checkRepoFile: (kind: RepoFileKind, gitlab: boolean, text: string, fresh: boolean) => invoke<FileCheck>("check_repo_file", { kind, gitlab, text, fresh }),
-  /** Writes the file, unless it has errors; nothing is staged. Resolves to its path. */
-  saveRepoFile: (kind: RepoFileKind, gitlab: boolean, text: string) => invoke<string>("save_repo_file", { kind, gitlab, text }),
+  /** Writes the file, unless it has errors or is no longer `over`, the text it was typed over
+   *  (null for a new file); nothing is staged. */
+  saveRepoFile: (kind: RepoFileKind, gitlab: boolean, text: string, over: string | null) =>
+    invoke<RepoFileSaved>("save_repo_file", { kind, gitlab, text, over }),
   /** Sends `fetch-event`s marked with `fetch`, Activity's number for it, while it runs; rejects
    *  with a `Failure`. Without a number, Stop doesn't reach it. */
   fetchInBackground: (remote: string | null, fetch: number | null = null, auto = false) =>

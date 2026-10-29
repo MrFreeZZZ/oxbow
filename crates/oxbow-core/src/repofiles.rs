@@ -93,6 +93,17 @@ pub struct RepoFileText {
     pub read_only: Option<String>,
 }
 
+/// What Save did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Saved {
+    /// The file is written, at this path.
+    Written { path: String },
+    /// The file on disk is not the one the text was typed over: something else changed or
+    /// removed it since. Nothing is written; `text` is what is there now.
+    Changed { text: Option<String> },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Level {
@@ -278,8 +289,9 @@ impl Repo {
         Ok(self.check_text(kind, gitlab, text, Some(&context)))
     }
 
-    /// Write `text` as the file, unless it has errors. Nothing is staged.
-    pub fn save_repo_file(&self, kind: RepoFileKind, gitlab: bool, text: &str) -> Result<String> {
+    /// Write `text` as the file, unless it has errors or is no longer `over`: the text it was
+    /// typed over, nothing for a new file. Nothing is staged.
+    pub fn save_repo_file(&self, kind: RepoFileKind, gitlab: bool, text: &str, over: Option<&str>) -> Result<Saved> {
         if kind == RepoFileKind::Gitmodules {
             return Err(Error::Git(".gitmodules is kept by the submodule commands.".into()));
         }
@@ -315,6 +327,16 @@ impl Repo {
             }
             std::fs::create_dir_all(dir).map_err(io)?;
         }
+        // One save at a time, so none writes between another's look and its write.
+        let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
+        let there = match read_file(&file, limit(kind, gitlab)) {
+            None => None,
+            Some(Ok(there)) => Some(there),
+            Some(Err(why)) => return Err(Error::Git(format!("{path} changed on disk: {why}"))),
+        };
+        if there.as_deref() != over {
+            return Ok(Saved::Changed { text: there });
+        }
         // A new file of a unique name, made here and never one that was there before, so a
         // link put in its place can't take the text elsewhere; then it takes the file's place.
         let name = file.file_name().unwrap_or_default().to_string_lossy().into_owned();
@@ -331,7 +353,7 @@ impl Repo {
         new.write_all(text.as_bytes()).map_err(io)?;
         new.persist(&file).map_err(|err| io(err.error))?;
         forget_context(self.workdir());
-        Ok(path)
+        Ok(Saved::Written { path })
     }
 
     /// Where `kind` is, or goes when it is created.
@@ -473,6 +495,7 @@ struct Cached {
 }
 
 static CACHE: Mutex<Option<(PathBuf, Cached)>> = Mutex::new(None);
+static SAVING: Mutex<()> = Mutex::new(());
 
 /// How long what was read stays without `fresh`.
 const KEEP: Duration = Duration::from_secs(10 * 60);

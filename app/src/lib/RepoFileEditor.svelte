@@ -4,6 +4,7 @@
   // wrong; the gray notes beside each line say what it matches. The core checks the text as it
   // is typed, and errors keep it from being saved.
 
+  import { onDestroy } from "svelte";
   import { api } from "./api";
   import { keys } from "./keys";
   import { applyFix, banner, lineStart, messageParts, notesByLine, paintLine, status } from "./repoFiles";
@@ -22,6 +23,14 @@
   let scroll = $state({ top: 0, left: 0 });
   /** The problem last gone to, highlighted in the list. */
   let current = $state<FileProblem | null>(null);
+  /** Something else changed the file since it was opened here: what is on disk now, nothing
+   *  when it was removed. The text typed stays until one of the two is picked. */
+  let changed = $state<{ text: string | null } | null>(null);
+  let saving = $state(false);
+  /** Save was asked again while one was being written. */
+  let again = false;
+  /** Settings left the file, or the window closed: answers that come after are dropped. */
+  let gone = false;
 
   const readOnly = $derived(file?.readOnly ?? null);
   const exists = $derived(file?.exists ?? false);
@@ -36,9 +45,59 @@
 
   open();
 
+  onDestroy(() => {
+    gone = true;
+    clearTimeout(timer);
+  });
+
+  // Back from another app: a file changed there is taken in when nothing is typed here, and
+  // said otherwise, before Save would write over it.
+  function cameBack() {
+    if (file && !readOnly && !saving && !changed) reread();
+  }
+
+  async function reread() {
+    try {
+      const read = await api.repoFileText(kind, gitlab);
+      if (gone || saving) return;
+      const there = read.exists ? read.text : null;
+      if (there === (exists ? saved : null)) return;
+      if (dirty) {
+        changed = { text: there };
+        return;
+      }
+      take(read);
+    } catch {
+      // Read again at the next return.
+    }
+  }
+
+  /** The file as it is on disk, over what was typed. */
+  function take(read: RepoFileText) {
+    file = read;
+    saved = read.exists ? read.text : "";
+    text = read.text;
+    changed = null;
+    error = null;
+    const drafts = { ...repoFiles.drafts };
+    delete drafts[kind];
+    repoFiles.drafts = drafts;
+    check(true);
+  }
+
+  async function reload() {
+    try {
+      const read = await api.repoFileText(kind, gitlab);
+      if (!gone) take(read);
+    } catch (err) {
+      if (!gone) error = String(err);
+    }
+  }
+
   async function open() {
     try {
       const read = await api.repoFileText(kind, gitlab);
+      if (gone) return;
       file = read;
       saved = read.exists ? read.text : "";
       text = repoFiles.drafts[kind] ?? read.text;
@@ -56,9 +115,9 @@
     const n = ++asked;
     try {
       const answer = await api.checkRepoFile(kind, gitlab, text, fresh);
-      if (n === asked) checked = answer;
+      if (n === asked && !gone) checked = answer;
     } catch (err) {
-      if (n === asked) error = String(err);
+      if (n === asked && !gone) error = String(err);
     }
   }
 
@@ -97,20 +156,44 @@
     await check(true);
   }
 
-  async function save() {
-    if (errors || readOnly || !dirty) return;
+  /** Write the text as it is now. Only that text counts as saved: what is typed while it is
+   *  written stays not saved, and a Save asked meanwhile comes after this one. `anyway` writes
+   *  over what something else saved since the file was opened. */
+  async function save(anyway = false) {
+    if (errors || readOnly || !dirty || (changed && !anyway)) return;
+    if (saving) {
+      again = true;
+      return;
+    }
+    saving = true;
+    const sent = text;
+    const over = anyway && changed ? changed.text : exists ? saved : null;
     try {
-      await api.saveRepoFile(kind, gitlab, text);
-      saved = text;
+      const answer = await api.saveRepoFile(kind, gitlab, sent, over);
+      if (gone) return;
+      if (answer.kind === "changed") {
+        changed = { text: answer.text };
+        return;
+      }
+      changed = null;
+      saved = sent;
       if (file) file = { ...file, exists: true };
-      const drafts = { ...repoFiles.drafts };
-      delete drafts[kind];
-      repoFiles.drafts = drafts;
+      if (text === sent) {
+        const drafts = { ...repoFiles.drafts };
+        delete drafts[kind];
+        repoFiles.drafts = drafts;
+      }
       error = null;
       await loadRepoFiles();
       await check(true);
     } catch (err) {
-      error = String(err);
+      if (!gone) error = String(err);
+    } finally {
+      saving = false;
+      if (again && !gone) {
+        again = false;
+        save();
+      }
     }
   }
 
@@ -121,8 +204,19 @@
   }
 </script>
 
+<svelte:window onfocus={cameBack} />
+
 <div class="file-editor">
-  {#if readOnly}
+  {#if changed}
+    <div class="banner changed" role="alert">
+      <span class="what"
+        >{#if changed.text === null}<code>{file?.path}</code> was removed from disk since you opened it here.{:else}<code>{file?.path}</code> was changed
+          on disk since you opened it here.{/if} Your text isn't saved.</span
+      >
+      <button class="button mini" onclick={reload}>{changed.text === null ? "Discard My Text" : "Reload from Disk"}</button>
+      <button class="button mini" disabled={errors > 0} onclick={() => save(true)}>Save Anyway</button>
+    </div>
+  {:else if readOnly}
     <p class="banner">{readOnly}</p>
   {:else if file && !exists}
     <p class="banner new">
@@ -211,7 +305,7 @@
       {/if}
       <span class="spacer"></span>
       <button class="button small" disabled={!dirty || (!exists && text === file?.text)} onclick={revert}>Revert</button>
-      <button class="button small primary" disabled={!dirty || errors > 0} onclick={save} title={errors ? "Fix the errors underlined in red to save" : undefined}
+      <button class="button small primary" disabled={!dirty || errors > 0 || !!changed} onclick={() => save()} title={errors ? "Fix the errors underlined in red to save" : undefined}
         >{exists ? "Save" : "Create"} <span class="keys">{keys("Mod+S")}</span></button
       >
     </div>
@@ -237,6 +331,21 @@
     font-size: var(--text-small);
     line-height: 1.4;
     color: var(--text2);
+  }
+
+  .banner.changed {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px 6px 12px;
+    background: var(--accent-quiet);
+    border-color: transparent;
+    color: var(--accent-ink);
+  }
+
+  .banner.changed .what {
+    flex-grow: 1;
+    min-width: 0;
   }
 
   .banner.new {
