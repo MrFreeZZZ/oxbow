@@ -131,6 +131,7 @@ fn main() {
             history::file_pickaxe,
             history::local_history,
             history::local_history_all,
+            history::local_history_problem,
             history::local_version_diff,
             history::save_local_version,
             history::files,

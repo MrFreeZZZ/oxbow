@@ -3,15 +3,19 @@
 //!
 //! The watch (see `watch.rs`) tells which files changed; each one that isn't ignored, isn't in a
 //! submodule and is at most [`MAX_FILE`] is read once it has been quiet a moment. A version the
-//! index already stages (a checkout, a reset, an edit taken back) isn't kept: git has it. One git
-//! has elsewhere (a stash brought back, an older commit) costs a line of the list only. The rest
-//! is kept as a blob, compressed as git keeps loose objects, in `oxbow/local-history/objects` of
-//! the worktree's Git folder: outside git's own objects, so `git gc` neither counts nor keeps
-//! them. Saves of a file within [`GROUP`] of the first make one version, the last: an editor
-//! saving every second keeps two versions a minute.
+//! index already stages (a checkout, a reset, an edit taken back) isn't kept: git has it. Every
+//! other one is kept as a blob, compressed as git keeps loose objects, in
+//! `oxbow/local-history/objects` of the worktree's Git folder: outside git's own objects, so
+//! `git gc` neither counts nor keeps them. Also one git has a blob of (a stash brought back, a
+//! file staged and unstaged): nothing may still reach that blob, and git may drop it any time.
+//! Saves of a file within [`GROUP`] of the first make one version, the last: an editor saving
+//! every second keeps two versions a minute.
 //!
 //! The versions are listed one per line in `oxbow/local-history/<day>.jsonl`, a file a day,
-//! appended as they come. When a window opens the repository and every hour after, versions older
+//! appended as they come. A version that can't be written (the disk full, the folder not
+//! writable) waits and is tried again with the next save or within [`RETRY`], and
+//! [`Repo::local_history_problem`] says why until it is written. When a window opens the
+//! repository and every hour after, versions older
 //! than the days in Settings go (7 by default), then the oldest ones until the kept blobs take at
 //! most [`MAX_BYTES`]; blobs no version names are deleted.
 //!
@@ -50,6 +54,10 @@ pub const MAX_LISTED: usize = 300;
 pub const MAX_LISTED_ALL: usize = 2000;
 /// Files one change of the watch may name; past that the rest of it isn't kept.
 pub const MAX_TOLD: usize = 50_000;
+/// How soon versions that couldn't be written are tried again when no save comes first.
+pub const RETRY: Duration = Duration::from_secs(60);
+/// Versions waiting to be written at most; past that the oldest of them are given up.
+const MAX_WAITING: usize = 10_000;
 
 const DAY: u64 = 24 * 60 * 60 * 1000;
 /// How often old versions go while a window has the repository open.
@@ -110,11 +118,33 @@ pub struct LocalVersion {
 pub struct LocalHistory {
     dir: PathBuf,
     objects: gix::odb::loose::Store,
-    /// The newest version of each file: a save soon after it joins its group.
+    /// The newest version of each file written to the list: a save soon after it joins its
+    /// group.
     last: HashMap<String, Entry>,
+    /// Versions whose blob is kept but whose line couldn't be written yet, oldest first.
+    waiting: Vec<Entry>,
+    /// Files whose blob couldn't be written: read again when tried again.
+    unread: Vec<String>,
+    /// Why the last try failed, and since when versions wait.
+    problem: Option<LocalHistoryProblem>,
     /// Bytes of blobs written since old versions last went.
     written: u64,
 }
+
+/// Versions Local History couldn't write, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalHistoryProblem {
+    /// What went wrong the last time, in the system's words.
+    pub error: String,
+    /// When the first of the versions waiting was to be written, in milliseconds since 1970.
+    pub since: u64,
+    /// Versions waiting, and files to read again.
+    pub waiting: usize,
+}
+
+/// The problems of the keepers, by the Git folder of their worktree.
+static PROBLEMS: Mutex<Vec<(PathBuf, LocalHistoryProblem)>> = Mutex::new(Vec::new());
 
 /// Where a worktree's Local History is.
 fn folder(repo: &Repo) -> PathBuf {
@@ -149,16 +179,29 @@ impl LocalHistory {
             objects: object_store(repo, &dir),
             dir,
             last: HashMap::new(),
+            waiting: Vec::new(),
+            unread: Vec::new(),
+            problem: None,
             written: 0,
         }
     }
 
+    /// Versions not written yet, and why: tried again with the next [`LocalHistory::keep`].
+    pub fn problem(&self) -> Option<&LocalHistoryProblem> {
+        self.problem.as_ref()
+    }
+
     /// Keep the files at `paths` (in the working copy, with `/` between folders) as they are on
-    /// disk now, `now` in milliseconds since 1970. How many versions it noted.
+    /// disk now, `now` in milliseconds since 1970, and try again the versions that couldn't be
+    /// written before. How many versions it wrote: those that can't be written yet wait, and
+    /// [`LocalHistory::problem`] says why.
     pub fn keep(&mut self, repo: &Repo, paths: &[String], now: u64) -> usize {
-        if keep_days() == 0 || paths.is_empty() {
+        if keep_days() == 0 || (paths.is_empty() && self.problem.is_none()) {
             return 0;
         }
+        let mut error = None;
+        let unread = std::mem::take(&mut self.unread);
+        let paths: Vec<&String> = unread.iter().chain(paths).collect();
         let local = repo.local();
         let hash = local.object_hash();
         let index = local.index_or_empty().ok();
@@ -174,8 +217,6 @@ impl LocalHistory {
             })
             .collect();
         let mut seen = HashSet::new();
-        let mut lines = String::new();
-        let mut kept = 0;
         for path in paths {
             if !seen.insert(path.as_str())
                 || gitlinks.iter().any(|link| path.starts_with(link.as_str()))
@@ -205,10 +246,16 @@ impl LocalHistory {
                 .is_some_and(|entry| entry.id == id);
             if staged {
                 // The file is back as git has it: a save after this is a version of its own.
-                self.last.remove(path);
+                self.last.remove(path.as_str());
+                self.waiting.retain(|e| e.path != **path);
                 continue;
             }
-            let last = self.last.get(path);
+            let last = self
+                .waiting
+                .iter()
+                .rev()
+                .find(|e| e.path == **path)
+                .or(self.last.get(path.as_str()));
             if last.is_some_and(|last| id.to_hex() == last.id) {
                 continue;
             }
@@ -216,41 +263,90 @@ impl LocalHistory {
                 Some(last) if now.saturating_sub(last.since) < GROUP => last.since,
                 _ => now,
             };
-            if !local.has_object(id) && !self.objects.contains(&id) {
-                let _ = std::fs::create_dir_all(self.objects.path());
-                if self.objects.write_buf(gix::object::Kind::Blob, &data).is_err() {
+            if !self.objects.contains(&id) {
+                let wrote = std::fs::create_dir_all(self.objects.path())
+                    .map_err(|err| io_words(&err))
+                    .and_then(|_| {
+                        self.objects.write_buf(gix::object::Kind::Blob, &data).map_err(|err| {
+                            match err.downcast_any_ref::<std::io::Error>() {
+                                Some(io) => io_words(io),
+                                None => err.to_string(),
+                            }
+                        })
+                    });
+                if let Err(err) = wrote {
+                    error = Some(format!("Couldn’t keep a version of {path}: {err}"));
+                    self.unread.push(path.to_string());
                     continue;
                 }
                 self.written += std::fs::metadata(self.objects.object_path(&id)).map_or(0, |m| m.len());
             }
-            let entry = Entry {
-                path: path.clone(),
+            self.waiting.push(Entry {
+                path: path.to_string(),
                 id: id.to_string(),
                 at: now,
                 since,
                 size: data.len() as u64,
-            };
-            if let Ok(line) = serde_json::to_string(&entry) {
-                lines.push_str(&line);
-                lines.push('\n');
-                self.last.insert(path.clone(), entry);
-                kept += 1;
-            }
+            });
         }
-        if !lines.is_empty() {
-            let _ = std::fs::create_dir_all(&self.dir);
-            let file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(self.dir.join(format!("{}.jsonl", now / DAY)));
-            if let Ok(mut file) = file {
-                let _ = file.write_all(lines.as_bytes());
-            }
-        }
+        let written = self.write_waiting().unwrap_or_else(|err| {
+            error = Some(err);
+            0
+        });
+        // Past the most that wait, the oldest are given up: their blobs go with the next prune.
+        let over = self.waiting.len().saturating_sub(MAX_WAITING);
+        self.waiting.drain(..over);
+        self.unread.truncate(MAX_WAITING);
+        self.problem = match error {
+            Some(error) if !self.waiting.is_empty() || !self.unread.is_empty() => Some(LocalHistoryProblem {
+                error,
+                since: self.problem.as_ref().map_or(now, |p| p.since),
+                waiting: self.waiting.len() + self.unread.len(),
+            }),
+            _ => None,
+        };
         if self.written > PRUNE_AFTER {
             let _ = self.prune(now);
         }
-        kept
+        written
+    }
+
+    /// Append the versions waiting to their days' lists; a version counts as kept only once its
+    /// line is written. How many were written, or why some of them weren't: those still wait.
+    fn write_waiting(&mut self) -> std::result::Result<usize, String> {
+        let mut days: Vec<u64> = self.waiting.iter().map(|e| e.at / DAY).collect();
+        days.dedup();
+        let mut written = 0;
+        let mut failed = None;
+        for day in days {
+            let (lines, entries): (String, Vec<&Entry>) = {
+                let entries: Vec<&Entry> = self.waiting.iter().filter(|e| e.at / DAY == day).collect();
+                let mut lines = String::new();
+                for entry in &entries {
+                    lines.push_str(&serde_json::to_string(entry).map_err(|err| err.to_string())?);
+                    lines.push('\n');
+                }
+                (lines, entries)
+            };
+            if entries.is_empty() {
+                continue;
+            }
+            match append_line(&self.dir, &self.dir.join(format!("{day}.jsonl")), &lines) {
+                Ok(()) => {
+                    written += entries.len();
+                    let done: Vec<Entry> = entries.into_iter().cloned().collect();
+                    self.waiting.retain(|e| e.at / DAY != day);
+                    for entry in done {
+                        self.last.insert(entry.path.clone(), entry);
+                    }
+                }
+                Err(err) => failed = Some(format!("Couldn’t write the list of versions: {}", io_words(&err))),
+            }
+        }
+        match failed {
+            Some(err) => Err(err),
+            None => Ok(written),
+        }
     }
 
     /// Let versions older than the days kept go, then the oldest until the blobs take at most
@@ -325,7 +421,8 @@ impl LocalHistory {
             std::fs::write(&fresh, text).map_err(Error::git)?;
             std::fs::rename(&fresh, &file).map_err(Error::git)?;
         }
-        let named: HashSet<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+        // A version waiting to be written names its blob too.
+        let named: HashSet<&str> = entries.iter().chain(&self.waiting).map(|e| e.id.as_str()).collect();
         for id in self.objects.iter().filter_map(|id| id.ok()) {
             if !named.contains(id.to_string().as_str()) {
                 let _ = std::fs::remove_file(self.objects.object_path(&id));
@@ -334,6 +431,38 @@ impl LocalHistory {
         self.last = entries.into_iter().map(|e| (e.path.clone(), e)).collect();
         Ok(total)
     }
+}
+
+/// The system's words for what went wrong, without its number: «No space left on device».
+fn io_words(err: &std::io::Error) -> String {
+    let text = err.to_string();
+    match text.rfind(" (os error ") {
+        Some(at) => text[..at].to_owned(),
+        None => text,
+    }
+}
+
+/// Append `lines` to the list `file` in `dir`, on a line of its own: a write cut short before
+/// left half a line, which is then read as one that can't be.
+fn append_line(dir: &Path, file: &Path, lines: &str) -> std::io::Result<()> {
+    use std::io::{Read, Seek, SeekFrom};
+    std::fs::create_dir_all(dir)?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .append(true)
+        .open(file)?;
+    let len = file.metadata()?.len();
+    if len > 0 {
+        let mut last = [0];
+        file.seek(SeekFrom::Start(len - 1))?;
+        file.read_exact(&mut last)?;
+        if last[0] != b'\n' {
+            file.write_all(b"\n")?;
+        }
+    }
+    file.write_all(lines.as_bytes())?;
+    file.flush()
 }
 
 fn days_kept() -> u64 {
@@ -537,6 +666,13 @@ impl Repo {
             .collect())
     }
 
+    /// What Local History couldn't write in this worktree lately, while some of it still waits.
+    pub fn local_history_problem(&self) -> Option<LocalHistoryProblem> {
+        let key = keeper_key(self);
+        let problems = PROBLEMS.lock().expect("problems lock");
+        problems.iter().find(|(at, _)| *at == key).map(|(_, p)| p.clone())
+    }
+
     /// Put blob `id` of a version where git finds it, from Local History's blobs when git hasn't
     /// it: a diff and a restore read it from git.
     fn local_into_git(&self, local: &gix::Repository, id: &str) -> Result<ObjectId> {
@@ -654,12 +790,25 @@ impl Keeper {
     }
 }
 
+/// What keepers and problems are known by: the Git folder of the worktree, not Local History's
+/// folder, which may not be there yet, and a later window would name it otherwise.
+fn keeper_key(repo: &Repo) -> PathBuf {
+    let git_dir = repo.local().git_dir().to_path_buf();
+    git_dir.canonicalize().unwrap_or(git_dir)
+}
+
+/// Tell windows what `history` couldn't write, or that it wrote it all.
+fn publish(key: &Path, history: &LocalHistory) {
+    let mut problems = PROBLEMS.lock().expect("problems lock");
+    problems.retain(|(at, _)| at != key);
+    if let Some(problem) = history.problem() {
+        problems.push((key.to_path_buf(), problem.clone()));
+    }
+}
+
 /// The keeper of `repo`'s worktree, started when it has none.
 pub(crate) fn keeper(repo: &Repo) -> Option<Arc<Keeper>> {
-    // The Git folder, not Local History's: that one may not be there yet, and a later window
-    // would name it otherwise.
-    let git_dir = repo.local().git_dir().to_path_buf();
-    let key = git_dir.canonicalize().unwrap_or(git_dir);
+    let key = keeper_key(repo);
     let mut keepers = KEEPERS.lock().expect("keepers lock");
     keepers.retain(|(_, keeper)| keeper.strong_count() > 0);
     if let Some(keeper) = keepers.iter().find(|(at, _)| *at == key).and_then(|(_, k)| k.upgrade()) {
@@ -667,6 +816,7 @@ pub(crate) fn keeper(repo: &Repo) -> Option<Arc<Keeper>> {
     }
     let (tx, rx) = mpsc::channel::<Vec<String>>();
     let repo = repo.clone();
+    let at = key.clone();
     std::thread::Builder::new()
         .name("oxbow-local-history".into())
         .spawn(move || {
@@ -674,12 +824,27 @@ pub(crate) fn keeper(repo: &Repo) -> Option<Arc<Keeper>> {
             let _ = history.prune(now_ms());
             let mut pruned = Instant::now();
             loop {
-                match rx.recv_timeout(PRUNE_EVERY) {
+                // Versions that couldn't be written are tried again soon, with a save or without.
+                let wait = match history.problem() {
+                    Some(_) => RETRY,
+                    None => PRUNE_EVERY,
+                };
+                match rx.recv_timeout(wait) {
                     Ok(paths) => {
                         history.keep(&repo, &paths, now_ms());
+                        publish(&at, &history);
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) if history.problem().is_some() => {
+                        history.keep(&repo, &[], now_ms());
+                        publish(&at, &history);
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
-                    Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        // The last window went: one more try for what waits, then nobody asks.
+                        history.keep(&repo, &[], now_ms());
+                        publish(&at, &LocalHistory::open(&repo));
+                        return;
+                    }
                 }
                 if pruned.elapsed() >= PRUNE_EVERY {
                     let _ = history.prune(now_ms());

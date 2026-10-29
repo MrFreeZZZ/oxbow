@@ -454,6 +454,21 @@ pub(crate) async fn local_history_all(
     read(at(&repo), "Read Local History", move || repo.local_history_all()).await
 }
 
+/// What Local History couldn't write lately, while some of it waits to be tried again.
+#[tauri::command]
+pub(crate) async fn local_history_problem(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+) -> CommandResult<Option<oxbow_core::LocalHistoryProblem>> {
+    let repo = current(&session, &window)?;
+    read(
+        at(&repo),
+        "Read Local History",
+        move || Ok(repo.local_history_problem()),
+    )
+    .await
+}
+
 /// What a version of Local History changed since `base`, or with `against_disk`, how the file
 /// on disk now differs from it.
 #[tauri::command]

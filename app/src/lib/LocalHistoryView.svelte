@@ -9,7 +9,7 @@
   import { prefs } from "./prefs.svelte";
   import { byDay, keyOf, MAX_LISTED_ALL } from "./localHistory";
   import { localVersionEntries } from "./localHistoryMenu";
-  import type { LocalVersion } from "./types";
+  import type { LocalHistoryProblem, LocalVersion } from "./types";
   import LocalVersionView from "./LocalVersionView.svelte";
   import Menu, { type MenuEntry } from "./Menu.svelte";
 
@@ -25,6 +25,8 @@
 
   let versions = $state<LocalVersion[] | null>(null);
   let error = $state<string | null>(null);
+  /** Versions saved that couldn't be written yet, and why. */
+  let problem = $state<LocalHistoryProblem | null>(null);
   let picked = $state<string | null>(null);
   let comparing = $state(false);
   let filter = $state("");
@@ -41,6 +43,12 @@
           if (!picked || !all.some((v) => keyOf(v) === picked)) picked = all[0] ? keyOf(all[0]) : null;
         },
         (err) => (error = String(err)),
+      ),
+    );
+    untrack(() =>
+      api.localHistoryProblem().then(
+        (p) => (problem = p),
+        () => (problem = null),
       ),
     );
   });
@@ -86,6 +94,12 @@
       <span>{versions ? `${versions.length}${versions.length >= MAX_LISTED_ALL ? "+" : ""} saved ${versions.length === 1 ? "version" : "versions"}` : "Saved versions"}</span>
       <span class="days">{off ? "Off in Settings" : `Kept ${prefs.get("oxbow.localHistory.keepDays")} days`}</span>
     </div>
+    {#if problem}
+      <p class="problem" role="status">
+        {problem.waiting === 1 ? "A version saved" : `${problem.waiting} versions saved`} since {time(problem.since)}
+        {problem.waiting === 1 ? "isn’t" : "aren’t"} kept yet. {problem.error}. Local History tries again with the next save and every minute.
+      </p>
+    {/if}
     <input class="filter" type="search" placeholder="Filter by file" bind:value={filter} aria-label="Filter by file" spellcheck="false" />
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="list" bind:this={list} onkeydown={keys}>
@@ -247,6 +261,16 @@
   }
   .error {
     color: var(--red);
+  }
+  .problem {
+    margin: 2px 12px 6px;
+    padding: 8px 10px;
+    border-radius: var(--radius-m);
+    background: var(--field);
+    font-size: var(--text-caption);
+    line-height: 1.45;
+    color: var(--text);
+    overflow-wrap: anywhere;
   }
   .main {
     flex-grow: 1;
