@@ -348,6 +348,8 @@ fn an_undo_that_moves_a_branch_checked_out_elsewhere_says_its_files_stay() {
         start: None,
         switch: false,
         publish: None,
+        fetch: None,
+        stash: false,
     })
     .unwrap();
     let path = sibling(&fx, "repo-fix");

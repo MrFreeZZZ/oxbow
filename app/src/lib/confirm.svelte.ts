@@ -9,6 +9,7 @@ import { prefs } from "./prefs.svelte";
 import { addLine, cutLine } from "./liveLines";
 import { errorLine } from "./reads";
 import type { Action, ActionEvent, Failure, FixStep, GitCommand, NotKept, SecretFinding } from "./types";
+import type { BranchPrefix } from "./branchPrefixes";
 
 /** What a toast reports: an action done, a note, something to look at, or a failure. */
 export type Tone = "done" | "info" | "warn" | "error";
@@ -173,8 +174,8 @@ export interface Field {
   label: string;
   /** `multiline` for a commit message: Return makes a new line, ⌘Return runs the action. */
   /** `focus` puts the cursor in it when it appears, e.g. the search box Other… opens. */
-  /** `prefixes`: a branch name, its prefix (feature/, bugfix/…) a pop-up at the start of the box. */
-  text?: { value: string; placeholder?: string; multiline?: boolean; focus?: boolean; prefixes?: boolean; edit: (value: string) => Request };
+  /** `prefixes`: a new branch's name, one of these prefixes a pop-up at the start of the box. */
+  text?: { value: string; placeholder?: string; multiline?: boolean; focus?: boolean; prefixes?: BranchPrefix[]; edit: (value: string) => Request };
   /** `off` says why a chip can't be picked. */
   chips?: { label: string; on: boolean; mono?: boolean; off?: string; pick: () => Request | Promise<Request> }[];
   note?: string;

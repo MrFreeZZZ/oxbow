@@ -93,6 +93,8 @@ export const defaults = {
   "oxbow.branch.lowercase": true,
   /** The prefix a new branch's Name box starts with: "last" for the one used last, "" for none. */
   "oxbow.branch.firstPrefix": "last",
+  /** The prefix picked last in a Name box, which "last" starts the next one with. */
+  "oxbow.branch.lastPrefix": "feature/",
   /** The prefixes the pop-up at the start of a Name box offers, in this order. */
   "oxbow.branch.prefixes": BRANCH_PREFIXES as BranchPrefix[],
   /** Also offer the prefixes the repository's branches have, such as renovate/. */

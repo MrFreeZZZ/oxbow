@@ -391,25 +391,46 @@ impl Repo {
                 start,
                 switch,
                 publish,
+                fetch,
+                stash,
             } => {
                 let at = start
                     .as_deref()
                     .map_or("the current commit".to_owned(), |s| s.to_owned());
-                let mut args = if *switch {
-                    vec!["switch".to_owned(), "-c".to_owned(), name.clone()]
-                } else {
-                    vec!["branch".to_owned(), name.clone()]
-                };
+                // A start on the remote just fetched is where the branch begins, not what it follows.
+                let no_track = fetch
+                    .as_deref()
+                    .is_some_and(|remote| start.as_deref().is_some_and(|s| s.starts_with(&format!("{remote}/"))));
+                let mut args = if *switch { vec!["switch".to_owned()] } else { vec!["branch".to_owned()] };
+                if no_track {
+                    args.push("--no-track".to_owned());
+                }
+                if *switch {
+                    args.push("-c".to_owned());
+                }
+                args.push(name.clone());
                 args.extend(start.iter().cloned());
                 let head = self.head()?.branch;
-                let mut commands = vec![GitCommand::new(args).comment(if *switch {
-                    format!("-c: create the branch at {at}, then switch to it")
+                let mut commands = Vec::new();
+                if let Some(remote) = fetch {
+                    commands.push(self.fetch_command(Some(remote)).with_progress());
+                }
+                if *stash && *switch {
+                    commands.push(stash_before(name));
+                }
+                let follows = if no_track {
+                    format!("; --no-track: it doesn’t follow {at}")
+                } else {
+                    String::new()
+                };
+                commands.push(GitCommand::new(args).comment(if *switch {
+                    format!("-c: create the branch at {at}, then switch to it{follows}")
                 } else {
                     format!(
-                        "creates the branch at {at}, you stay on {}",
+                        "creates the branch at {at}, you stay on {}{follows}",
                         head.as_deref().unwrap_or("the current commit")
                     )
-                })];
+                }));
                 if let Some(remote) = publish {
                     commands.push(
                         GitCommand::new(["push", "-u", remote, name])

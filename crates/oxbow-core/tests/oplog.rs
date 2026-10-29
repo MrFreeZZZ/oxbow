@@ -358,6 +358,8 @@ fn a_step_taken_during_a_merge_with_conflicts_cant_be_gone_back_to() {
         start: None,
         switch: false,
         publish: None,
+        fetch: None,
+        stash: false,
     })
     .unwrap();
     let id = repo.operation_log().unwrap()[0].id.clone();

@@ -658,7 +658,8 @@ export type Action =
   | { kind: "switch"; branch: string; stash: boolean; keep: string | null }
   | { kind: "detach"; commit: string; stash: boolean }
   | { kind: "track"; remote: string; branch: string; stash: boolean }
-  | { kind: "createBranch"; name: string; start: string | null; switch: boolean; publish: string | null }
+  /** `fetch`: fetch that remote first, `start` being on it; `stash`: leave the uncommitted files in a stash. */
+  | { kind: "createBranch"; name: string; start: string | null; switch: boolean; publish: string | null; fetch?: string | null; stash?: boolean }
   | { kind: "renameBranch"; from: string; to: string; upstream: RemoteBranch | null }
   | { kind: "deleteBranch"; name: string; force: boolean; upstream: RemoteBranch | null }
   /** `expect`: only while the branch there is still at this commit (--force-with-lease). */

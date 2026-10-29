@@ -1,20 +1,25 @@
 <script lang="ts">
   // A branch's Name box with its prefix as a pop-up at the start, whose menu says what each prefix
   // is for. The name stays one string: a known prefix typed or pasted in the box takes the pop-up's
-  // place, and Backspace at the start of the box takes the prefix off.
+  // place, and Backspace at the start of the box takes the prefix off. What is typed is cleaned
+  // up as Settings › Git › Branches says.
 
   import { tick } from "svelte";
-  import { BRANCH_PREFIXES, splitPrefix, typedAfter, withPrefix } from "./branchPrefixes";
+  import { splitPrefix, typedAfter, withPrefix, type BranchPrefix } from "./branchPrefixes";
+  import { cleanTyped, rememberPrefix } from "./branchPrefs";
 
   let {
     value,
+    list,
     placeholder,
     label,
     focus = false,
     onedit,
-  }: { value: string; placeholder?: string; label: string; focus?: boolean; onedit: (value: string) => void } = $props();
+  }: { value: string; list: BranchPrefix[]; placeholder?: string; label: string; focus?: boolean; onedit: (value: string) => void } = $props();
 
-  const parts = $derived(splitPrefix(value));
+  const parts = $derived(splitPrefix(value, list));
+  const own = $derived(list.filter((p) => !p.repo));
+  const here = $derived(list.filter((p) => p.repo));
   let open = $state(false);
   let at = $state({ left: 0, top: 0 });
   let box = $state<HTMLDivElement>();
@@ -47,8 +52,23 @@
   }
 
   function pick(prefix: string | null) {
-    onedit(withPrefix(value, prefix));
+    rememberPrefix(prefix);
+    onedit(withPrefix(value, prefix, list));
     hide();
+  }
+
+  function onInput(event: Event) {
+    const el = event.currentTarget as HTMLInputElement;
+    const name = typedAfter(parts.prefix, cleanTyped(el.value), list);
+    const split = splitPrefix(name, list);
+    if (split.prefix && split.prefix !== parts.prefix) rememberPrefix(split.prefix);
+    // The box shows the cleaned name at once, even when the name itself stays the same.
+    if (el.value !== split.rest) {
+      const caret = Math.max(0, (el.selectionStart ?? el.value.length) - (el.value.length - split.rest.length));
+      el.value = split.rest;
+      el.setSelectionRange(caret, caret);
+    }
+    onedit(name);
   }
 
   // Escape and Tab close only the menu, not the sheet; Return and Space pick the focused item.
@@ -109,26 +129,32 @@
     class="text"
     bind:this={input}
     value={parts.rest}
-    placeholder={placeholder === undefined ? undefined : splitPrefix(placeholder).rest}
+    placeholder={placeholder === undefined ? undefined : splitPrefix(placeholder, list).rest}
     aria-label={label}
     spellcheck="false"
     autocomplete="off"
     use:focusIf={focus}
     onkeydown={onInputKey}
-    oninput={(e) => onedit(typedAfter(parts.prefix, e.currentTarget.value))}
+    oninput={onInput}
   />
 </div>
 
 {#if open}
   <div class="menu" role="menu" tabindex="-1" aria-label="Prefix" bind:this={menu} style:left="{at.left}px" style:top="{at.top}px" onkeydown={onMenuKey}>
-    {#each BRANCH_PREFIXES as p (p.prefix)}
+    {#snippet item(p: BranchPrefix)}
       <button role="menuitemradio" aria-checked={parts.prefix === p.prefix} onclick={() => pick(p.prefix)}>
         <span class="check">{#if parts.prefix === p.prefix}<svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" /></svg>{/if}</span>
         <span class="prefix">{p.prefix}</span>
         <span class="words">{p.words}</span>
       </button>
-    {/each}
-    <span class="sep"></span>
+    {/snippet}
+    {#each own as p (p.prefix)}{@render item(p)}{/each}
+    {#if here.length}
+      {#if own.length}<span class="sep"></span>{/if}
+      <span class="head">In this repository</span>
+      {#each here as p (p.prefix)}{@render item(p)}{/each}
+    {/if}
+    {#if list.length}<span class="sep"></span>{/if}
     <button role="menuitemradio" aria-checked={!parts.prefix} onclick={() => pick(null)}>
       <span class="check">{#if !parts.prefix}<svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" /></svg>{/if}</span>
       <span>No prefix</span>
@@ -258,6 +284,14 @@
   }
   .words {
     font-size: var(--text-small);
+    color: var(--text2);
+  }
+  .head {
+    height: 24px;
+    padding: 0 10px 0 28px;
+    font-size: var(--text-caption);
+    font-weight: 600;
+    line-height: 24px;
     color: var(--text2);
   }
   .sep {

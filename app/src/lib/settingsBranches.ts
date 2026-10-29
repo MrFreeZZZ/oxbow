@@ -152,7 +152,7 @@ export const branchesSection: Section = {
           sub: () =>
             prefs.get("oxbow.branch.uncommitted") === "bring"
               ? "They come along to the new branch, as with git switch -c"
-              : "They stay behind in a stash named after the branch you leave; Apply it when you come back",
+              : "They stay behind in a stash, “Before switching to” the new branch; Apply it when you come back",
           options: () => [
             { value: "bring", label: "Come along" },
             { value: "stash", label: "Stay behind" },

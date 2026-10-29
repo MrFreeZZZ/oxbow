@@ -7,7 +7,8 @@ import { homeDir } from "@tauri-apps/api/path";
 import { api } from "./api";
 import type { Part, Recovery, Request } from "./confirm.svelte";
 import { nameProblem, type BranchContext } from "./branches";
-import { FIRST_PREFIX, splitPrefix } from "./branchPrefixes";
+import { onlyPrefix } from "./branchPrefixes";
+import { firstName, prefixesFor, similarNote } from "./branchPrefs";
 import { checking, stale } from "./folders";
 import { shortId } from "./format";
 import { tilde as tildeIn } from "./term";
@@ -81,7 +82,7 @@ function freeBranches(history: History): string[] {
 function folderFor(repoPath: string, branch: string): string {
   const repo = repoPath.replace(/[/\\]$/, "");
   // A prefix alone is no name yet: feature/ makes repo-new, not repo-feature.
-  const last = (splitPrefix(branch).rest || "new").split("/").filter(Boolean).pop() ?? "worktree";
+  const last = (onlyPrefix(branch) ? "new" : branch).split("/").filter(Boolean).pop() ?? "worktree";
   return `${parentOf(repo)}/${repo.split(/[/\\]/).pop()}-${last.replace(/[^\w.-]+/g, "-")}`;
 }
 
@@ -103,7 +104,7 @@ export async function newWorktreeRequest(ctx: BranchContext, repoPath: string, b
   const first = branch && free.includes(branch) ? branch : free[0];
   const state: NewWorktree = first
     ? { branch: first, create: false, from: null, folder: "", edited: false, open: true, search: null }
-    : { branch: FIRST_PREFIX, create: true, from: null, folder: "", edited: false, open: true, search: null };
+    : { branch: firstName(prefixesFor(ctx.history)), create: true, from: null, folder: "", edited: false, open: true, search: null };
   state.folder = tilde(await freeFolder(ctx.history, repoPath, state.branch || "new"));
   const shown = [...new Set([first, ...free].filter((b): b is string => !!b))].slice(0, 3);
   return newWorktreeSheet(ctx, repoPath, shown, free, state);
@@ -157,7 +158,7 @@ function newWorktreeSheet(ctx: BranchContext, repoPath: string, shown: string[],
   if (state.create) {
     const problem = nameProblem(ctx, name);
     invalid = problem;
-    if (splitPrefix(name).rest && problem) nameError = problem;
+    if (!onlyPrefix(name) && problem) nameError = problem;
   } else if (!name) invalid = "Every branch is checked out in a worktree already: pick New branch.";
   if (!invalid && state.search !== null) invalid = "Pick one of the branches found.";
   let folderError: string | undefined;
@@ -168,7 +169,7 @@ function newWorktreeSheet(ctx: BranchContext, repoPath: string, shown: string[],
   }
 
   const body: Part[] = ["Makes a second working folder, ", { code: folderName || "a new folder" }, nextTo ? ", next to this one, with " : ", with "];
-  if (state.create) body.push("a new branch ", ...(splitPrefix(name).rest && !nameError ? [{ branch: name, color: ctx.colorOf(fromName) }, " "] : []), "from ", { branch: fromName, color: ctx.colorOf(fromName) });
+  if (state.create) body.push("a new branch ", ...(!onlyPrefix(name) && !nameError ? [{ branch: name, color: ctx.colorOf(fromName) }, " "] : []), "from ", { branch: fromName, color: ctx.colorOf(fromName) });
   else if (name) body.push({ branch: name, color: ctx.colorOf(name) });
   body.push(" checked out. Both folders share one repository: commit in either and it shows up in both.");
   if (ctx.uncommitted) body.push(` Your ${plural(ctx.uncommitted, "uncommitted file")} stay${ctx.uncommitted === 1 ? "s" : ""} here.`);
@@ -199,7 +200,7 @@ function newWorktreeSheet(ctx: BranchContext, repoPath: string, shown: string[],
       chips: [
         ...names.map(branchChip),
         ...(free.length > shown.length && !searching ? [{ label: "Other…", on: false, pick: () => again({ search: "" }) }] : []),
-        { label: "New branch", on: !searching && state.create, pick: () => pickBranch({ branch: state.create ? state.branch : FIRST_PREFIX, create: true, search: null }) },
+        { label: "New branch", on: !searching && state.create, pick: () => pickBranch({ branch: state.create ? state.branch : firstName(prefixesFor(history)), create: true, search: null }) },
       ],
       note: notes.join(" ") || undefined,
     },
@@ -208,7 +209,7 @@ function newWorktreeSheet(ctx: BranchContext, repoPath: string, shown: string[],
     const follow = (branch: string): Partial<NewWorktree> => ({ branch, ...(state.edited ? {} : { folder: tilde(folderFor(repoPath, branch || "new")) }) });
     fields.push({
       label: "Name",
-      text: { value: state.branch, placeholder: "csv-export", prefixes: true, edit: (value) => again(follow(value)) },
+      text: { value: state.branch, placeholder: "csv-export", prefixes: prefixesFor(history), edit: (value) => again(follow(value)) },
       error: nameError,
     });
     // A start of its own, such as a pull request's head, comes first.

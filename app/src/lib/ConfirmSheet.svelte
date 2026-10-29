@@ -7,7 +7,7 @@
   import MergePreview from "./MergePreview.svelte";
   import WhyNote from "./WhyNote.svelte";
   import PrefixField from "./PrefixField.svelte";
-  import { prefixWords, splitPrefix } from "./branchPrefixes";
+  import { splitPrefix, type BranchPrefix } from "./branchPrefixes";
   import { prefs } from "./prefs.svelte";
   import CommandWords from "./CommandWords.svelte";
   import TipCard from "./TipCard.svelte";
@@ -24,6 +24,8 @@
   let linesBox = $state<HTMLDivElement>();
 
   const request = $derived(confirm.request);
+  /** The prefix a new branch's name has, for the words under its box. */
+  const prefixOf = (name: string, list: BranchPrefix[]) => list.find((p) => p.prefix === splitPrefix(name, list).prefix);
   const failed = $derived(confirm.phase === "failed");
   const running = $derived(confirm.phase === "running");
   /** A commit message: Return makes a new line, so the action runs with ⌘Return. */
@@ -310,7 +312,7 @@
                   ></textarea>
                 {:else if field.text?.prefixes}
                   {@const text = field.text}
-                  <PrefixField value={text.value} placeholder={text.placeholder} label={field.label} focus={text.focus} onedit={(value) => confirm.edit(text.edit(value))} />
+                  <PrefixField value={text.value} list={field.text.prefixes} placeholder={text.placeholder} label={field.label} focus={text.focus} onedit={(value) => confirm.edit(text.edit(value))} />
                 {:else if field.text}
                   {@const text = field.text}
                   <input
@@ -340,8 +342,8 @@
                   </span>
                 {/if}
                 {#if field.error}<span class="field-note error">{field.error}</span>{:else if field.note}<span class="field-note">{field.note}</span
-                  >{:else if field.text?.prefixes && prefixWords(field.text.value)}<span class="field-note"
-                    ><span class="mono">{splitPrefix(field.text.value).prefix}</span> · {prefixWords(field.text.value)}</span
+                  >{:else if field.text?.prefixes && prefixOf(field.text.value, field.text.prefixes)}{@const p = prefixOf(field.text.value, field.text.prefixes)}<span
+                    class="field-note"><span class="mono">{p?.prefix}</span> · {p?.words}</span
                   >{/if}
               </div>
             </div>

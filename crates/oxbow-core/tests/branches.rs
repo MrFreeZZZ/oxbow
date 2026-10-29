@@ -86,6 +86,8 @@ fn new_branches_are_created_switched_to_and_published() {
         start: Some("main".into()),
         switch: true,
         publish: Some("origin".into()),
+        fetch: None,
+        stash: false,
     };
     let displays: Vec<String> = repo
         .plan(&create)
@@ -110,6 +112,8 @@ fn new_branches_are_created_switched_to_and_published() {
         start: None,
         switch: false,
         publish: None,
+        fetch: None,
+        stash: false,
     };
     assert_eq!(repo.plan(&stay).unwrap().commands[0].display(), "git branch fix/y");
     repo.perform(&stay).unwrap();
@@ -124,6 +128,71 @@ fn new_branches_are_created_switched_to_and_published() {
     };
     assert_eq!(local("feature/csv").unwrap().tracking.unwrap().branch, "feature/csv");
     assert!(local("fix/y").unwrap().tracking.is_none());
+}
+
+#[test]
+fn a_new_branch_can_start_at_the_fetched_remote_and_leave_the_files_behind() {
+    let (remote, mut fx) = with_remote();
+    // A teammate pushes to main; this clone hasn't fetched it yet.
+    let other = tempfile::tempdir().unwrap();
+    let url = remote.path().join("acme.git");
+    let theirs = std::process::Command::new("git")
+        .args(["clone", "-q"])
+        .arg(&url)
+        .arg(other.path().join("c"))
+        .status()
+        .unwrap();
+    assert!(theirs.success());
+    let clone = other.path().join("c");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=T", "-c", "user.email=t@x", "-C"])
+            .arg(&clone)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    };
+    std::fs::write(clone.join("hot.txt"), "fix\n").unwrap();
+    git(&["add", "hot.txt"]);
+    git(&["commit", "-q", "-m", "Their fix"]);
+    git(&["push", "-q", "origin", "main"]);
+    fx.write("draft.txt", "mine\n");
+
+    let repo = Repo::open(fx.path()).unwrap();
+    let create = Action::CreateBranch {
+        name: "hotfix/rounding".into(),
+        start: Some("origin/main".into()),
+        switch: true,
+        publish: None,
+        fetch: Some("origin".into()),
+        stash: true,
+    };
+    let displays: Vec<String> = repo
+        .plan(&create)
+        .unwrap()
+        .commands
+        .iter()
+        .map(|c| c.display())
+        .collect();
+    assert_eq!(
+        displays,
+        [
+            "git fetch --prune origin",
+            "git stash push --include-untracked -m 'Before switching to hotfix/rounding'",
+            "git switch --no-track -c hotfix/rounding origin/main",
+        ]
+    );
+    repo.perform(&create).unwrap();
+    assert_eq!(head(&mut fx), "hotfix/rounding");
+    assert_eq!(fx.git(&["log", "-1", "--format=%s"]), "Their fix");
+    assert!(!fx.path().join("draft.txt").exists());
+    assert_eq!(
+        fx.git(&["stash", "list"]),
+        "stash@{0}: On main: Before switching to hotfix/rounding"
+    );
+    // It follows nothing, so its first push publishes it under its own name.
+    assert!(!fx.git(&["config", "--list"]).contains("branch.hotfix/rounding.merge"));
 }
 
 #[test]

@@ -6,7 +6,8 @@ import { api } from "./api";
 import { checkFailed } from "./commitChecks";
 import type { Icon, Part, Recovery, Request, StepLine } from "./confirm.svelte";
 import { nameProblem, onNoBranch, type BranchContext } from "./branches";
-import { FIRST_PREFIX, splitPrefix } from "./branchPrefixes";
+import { onlyPrefix } from "./branchPrefixes";
+import { firstName, prefixesFor, similarNote } from "./branchPrefs";
 import type { Action, Failure, Fix, FixState, FixStep, HistoryRow, ResetMode } from "./types";
 import { relativeTime, shortId } from "./format";
 import { lockedCommit } from "./protect";
@@ -153,7 +154,7 @@ export function fixRequest(fc: FixContext, id: FixId): Request {
       const commits = chain(ctx);
       const unpushed = commits.filter((r) => !onRemote(ctx, r)).length;
       const count = Math.max(1, Math.min(unpushed, 5, commits.length - 1));
-      return moveSheet(fc, { count, create: true, to: "", name: FIRST_PREFIX });
+      return moveSheet(fc, { count, create: true, to: "", name: firstName(prefixesFor(ctx.history)) });
     }
     case "forgot": {
       // Files staged already are the ones made ready for it; otherwise a single changed file.
@@ -169,7 +170,7 @@ export function fixRequest(fc: FixContext, id: FixId): Request {
       return revertSheet(fc, candidates[0]?.id ?? "", !!(ctx.history.head.branch && t && !t.gone && !t.behind));
     }
     case "detached":
-      return detachedSheet(fc, { name: FIRST_PREFIX, commit: ctx.history.head.branch ? (fc.state.lost[0]?.id ?? null) : null, switchTo: false });
+      return detachedSheet(fc, { name: firstName(prefixesFor(ctx.history)), commit: ctx.history.head.branch ? (fc.state.lost[0]?.id ?? null) : null, switchTo: false });
   }
 }
 
@@ -368,8 +369,9 @@ function moveSheet(fc: FixContext, s: Move): Request {
   if (s.create) {
     fields.push({
       label: "Name",
-      text: { value: s.name, placeholder: "csv-export", focus: true, prefixes: true, edit: (value) => again({ name: value }) },
-      error: splitPrefix(target).rest && problem ? problem : undefined,
+      text: { value: s.name, placeholder: "csv-export", focus: true, prefixes: prefixesFor(ctx.history), edit: (value) => again({ name: value }) },
+      error: !onlyPrefix(target) && problem ? problem : undefined,
+      note: !problem ? (similarNote(ctx.history, target) ?? undefined) : undefined,
     });
   }
 
@@ -598,8 +600,9 @@ function detachedSheet(fc: FixContext, s: Rescue): Request {
   const nameChip: Part = name && !problem ? chip(ctx, name) : "a new branch";
   const nameField = {
     label: "Name",
-    text: { value: s.name, placeholder: "new-cache", focus: true, prefixes: true, edit: (value: string) => again({ name: value }) },
-    error: splitPrefix(name).rest && problem ? problem : undefined,
+    text: { value: s.name, placeholder: "new-cache", focus: true, prefixes: prefixesFor(ctx.history), edit: (value: string) => again({ name: value }) },
+    error: !onlyPrefix(name) && problem ? problem : undefined,
+    note: !problem ? (similarNote(ctx.history, name) ?? undefined) : undefined,
   };
   const common = {
     icon: "branch" as Icon,
