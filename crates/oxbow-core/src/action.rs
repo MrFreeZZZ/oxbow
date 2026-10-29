@@ -294,12 +294,13 @@ pub enum Action {
     },
     /// Apply Suggestion: `lines`, suggested in a review of a pull request, in place of lines
     /// `start` to `end` of the file `path` as `commit` has it, in the file on disk, uncommitted.
+    /// None takes those lines out; one empty line puts a blank line in their place.
     ApplySuggestion {
         commit: String,
         path: String,
         start: u32,
         end: u32,
-        lines: String,
+        lines: Vec<String>,
     },
     /// Point the checked-out branch, or a detached `HEAD`, at `commit` (a sha or `HEAD~1`).
     Reset {

@@ -667,7 +667,7 @@ export type Action =
   | { kind: "takeVersion"; commit: string; path: string }
   /** The file on disk as Local History kept it, blob `id`; nothing is staged. */
   | { kind: "restoreLocalVersion"; path: string; id: string }
-  | { kind: "applySuggestion"; commit: string; path: string; start: number; end: number; lines: string }
+  | { kind: "applySuggestion"; commit: string; path: string; start: number; end: number; lines: string[] }
   | { kind: "reset"; commit: string; mode: ResetMode }
   | { kind: "reword"; message: string; noVerify?: boolean }
   /** `paths`: only these files; every change when empty or missing. */

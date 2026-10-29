@@ -17,7 +17,7 @@ impl Repo {
         path: &str,
         start: u32,
         end: u32,
-        lines: &str,
+        lines: &[String],
     ) -> Result<Vec<GitCommand>> {
         let sha = short_id(commit);
         let (old_id, text) = self.text_at(commit, path)?;
@@ -74,22 +74,18 @@ impl Repo {
 }
 
 /// The lines that go in place of lines `start` to `end` (counted from 1) of the file's `old`
-/// lines: `lines`, one per line without the last line's end, ending the way the file's lines end,
-/// `\r\n` or `\n`. None when the file has no such lines.
-fn new_lines(old: &[&str], start: usize, end: usize, lines: &str) -> Option<Vec<String>> {
+/// lines: `lines`, each without its end, ending the way the file's lines end, `\r\n` or `\n`.
+/// None when the file has no such lines.
+fn new_lines(old: &[&str], start: usize, end: usize, lines: &[String]) -> Option<Vec<String>> {
     if start == 0 || end < start || end > old.len() {
         return None;
     }
     let eol = if old[start - 1].ends_with("\r\n") { "\r\n" } else { "\n" };
-    // A suggestion of nothing takes the lines out.
-    let mut new: Vec<String> = if lines.is_empty() {
-        Vec::new()
-    } else {
-        lines
-            .split('\n')
-            .map(|l| format!("{}{eol}", l.strip_suffix('\r').unwrap_or(l)))
-            .collect()
-    };
+    // A suggestion of no lines takes them out; of one empty line, leaves a blank one.
+    let mut new: Vec<String> = lines
+        .iter()
+        .map(|l| format!("{}{eol}", l.strip_suffix('\r').unwrap_or(l)))
+        .collect();
     // The file's last line without an end stays without one.
     if end == old.len()
         && !old[end - 1].ends_with('\n')
@@ -101,7 +97,7 @@ fn new_lines(old: &[&str], start: usize, end: usize, lines: &str) -> Option<Vec<
 }
 
 /// The whole file once the suggestion is in, or None when it has no such lines.
-fn suggested(text: &str, start: usize, end: usize, lines: &str) -> Option<String> {
+fn suggested(text: &str, start: usize, end: usize, lines: &[String]) -> Option<String> {
     let old: Vec<&str> = text.split_inclusive('\n').collect();
     let new = new_lines(&old, start, end, lines)?;
     Some(old[..start - 1].concat() + &new.concat() + &old[end..].concat())
@@ -115,7 +111,7 @@ pub fn suggestion_patch(
     text: &str,
     start: usize,
     end: usize,
-    lines: &str,
+    lines: &[String],
     index: Option<&str>,
 ) -> Option<String> {
     let old: Vec<&str> = text.split_inclusive('\n').collect();
@@ -189,9 +185,18 @@ mod tests {
 
     const TEN: &str = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n";
 
+    /// The lines of a suggestion written out, none for "".
+    fn ls(text: &str) -> Vec<String> {
+        if text.is_empty() {
+            Vec::new()
+        } else {
+            text.split('\n').map(str::to_owned).collect()
+        }
+    }
+
     #[test]
     fn the_suggested_lines_replace_the_ones_commented_on_with_three_lines_around() {
-        let patch = suggestion_patch("a.txt", TEN, 5, 6, "five\nsix\nmore", None).unwrap();
+        let patch = suggestion_patch("a.txt", TEN, 5, 6, &ls("five\nsix\nmore"), None).unwrap();
         assert_eq!(
             patch,
             "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -2,8 +2,9 @@\n 2\n 3\n 4\n-5\n-6\n+five\n+six\n+more\n 7\n 8\n 9\n"
@@ -200,21 +205,27 @@ mod tests {
 
     #[test]
     fn the_first_and_last_lines_have_fewer_around_them() {
-        let patch = suggestion_patch("a.txt", TEN, 1, 1, "one", None).unwrap();
+        let patch = suggestion_patch("a.txt", TEN, 1, 1, &ls("one"), None).unwrap();
         assert!(patch.contains("@@ -1,4 +1,4 @@\n-1\n+one\n 2\n"), "{patch}");
-        let patch = suggestion_patch("a.txt", TEN, 10, 10, "ten", None).unwrap();
+        let patch = suggestion_patch("a.txt", TEN, 10, 10, &ls("ten"), None).unwrap();
         assert!(patch.contains("@@ -7,4 +7,4 @@\n 7\n 8\n 9\n-10\n+ten\n"), "{patch}");
     }
 
     #[test]
     fn an_empty_suggestion_takes_the_lines_out() {
-        let patch = suggestion_patch("a.txt", "x\n", 1, 1, "", None).unwrap();
+        let patch = suggestion_patch("a.txt", "x\n", 1, 1, &ls(""), None).unwrap();
         assert!(patch.ends_with("@@ -1,1 +0,0 @@\n-x\n"), "{patch}");
     }
 
     #[test]
+    fn a_suggestion_of_one_empty_line_leaves_a_blank_line() {
+        let patch = suggestion_patch("a.txt", "a\nx\nb\n", 2, 2, &["".to_owned()], None).unwrap();
+        assert!(patch.ends_with("@@ -1,3 +1,3 @@\n a\n-x\n+\n b\n"), "{patch}");
+    }
+
+    #[test]
     fn a_last_line_without_an_end_keeps_none() {
-        let patch = suggestion_patch("a.txt", "a\nb", 2, 2, "B", None).unwrap();
+        let patch = suggestion_patch("a.txt", "a\nb", 2, 2, &ls("B"), None).unwrap();
         assert!(
             patch.ends_with(" a\n-b\n\\ No newline at end of file\n+B\n\\ No newline at end of file\n"),
             "{patch}"
@@ -223,23 +234,26 @@ mod tests {
 
     #[test]
     fn lines_of_a_crlf_file_end_with_crlf() {
-        let patch = suggestion_patch("a.txt", "a\r\nb\r\n", 2, 2, "B\r\nC", None).unwrap();
+        let patch = suggestion_patch("a.txt", "a\r\nb\r\n", 2, 2, &ls("B\r\nC"), None).unwrap();
         assert!(patch.ends_with("-b\r\n+B\r\n+C\r\n"), "{patch:?}");
     }
 
     #[test]
     fn lines_the_file_has_not_got_or_already_has_make_no_patch() {
-        assert_eq!(suggestion_patch("a.txt", TEN, 10, 11, "x", None), None);
-        assert_eq!(suggestion_patch("a.txt", TEN, 0, 1, "x", None), None);
-        assert_eq!(suggestion_patch("a.txt", TEN, 3, 2, "x", None), None);
-        assert_eq!(suggestion_patch("a.txt", TEN, 2, 3, "2\n3", None).as_deref(), Some(""));
+        assert_eq!(suggestion_patch("a.txt", TEN, 10, 11, &ls("x"), None), None);
+        assert_eq!(suggestion_patch("a.txt", TEN, 0, 1, &ls("x"), None), None);
+        assert_eq!(suggestion_patch("a.txt", TEN, 3, 2, &ls("x"), None), None);
+        assert_eq!(
+            suggestion_patch("a.txt", TEN, 2, 3, &ls("2\n3"), None).as_deref(),
+            Some("")
+        );
     }
 
     #[test]
     fn the_file_after_has_the_suggestion_and_the_patch_names_both_blobs() {
-        assert_eq!(suggested("a\nb\nc", 2, 3, "B\nC").as_deref(), Some("a\nB\nC"));
-        assert_eq!(suggested("a\n", 2, 2, "x"), None);
-        let patch = suggestion_patch("a.txt", "a\n", 1, 1, "b", Some("index 1111..2222")).unwrap();
+        assert_eq!(suggested("a\nb\nc", 2, 3, &ls("B\nC")).as_deref(), Some("a\nB\nC"));
+        assert_eq!(suggested("a\n", 2, 2, &ls("x")), None);
+        let patch = suggestion_patch("a.txt", "a\n", 1, 1, &ls("b"), Some("index 1111..2222")).unwrap();
         assert!(
             patch.starts_with("diff --git a/a.txt b/a.txt\nindex 1111..2222\n--- a/a.txt\n"),
             "{patch}"
@@ -250,7 +264,7 @@ mod tests {
     fn a_name_with_a_quote_is_quoted() {
         assert_eq!(quoted("a b/c.txt"), "a b/c.txt");
         assert_eq!(quoted("say \"hi\".txt"), "\"say \\\"hi\\\".txt\"");
-        let patch = suggestion_patch("say \"hi\".txt", "x\n", 1, 1, "y", None).unwrap();
+        let patch = suggestion_patch("say \"hi\".txt", "x\n", 1, 1, &ls("y"), None).unwrap();
         assert!(
             patch.starts_with("diff --git \"a/say \\\"hi\\\".txt\" \"b/say \\\"hi\\\".txt\"\n"),
             "{patch}"

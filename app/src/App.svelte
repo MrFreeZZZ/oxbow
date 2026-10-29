@@ -2593,6 +2593,7 @@
             lookup={(id) => rowsById.get(id)}
             copy={copyText}
             onPath={(path) => browsing && (browsing = { ...browsing, path })}
+            {version}
           />
         {/key}
       {:else if view === "compare"}

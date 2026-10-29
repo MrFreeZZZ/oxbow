@@ -1,7 +1,8 @@
 <script lang="ts">
   // Browse Files at This Commit: the repository as one commit has it, its folders on the left,
   // read one at a time, and the picked file on the right as text or a picture. A file is saved
-  // elsewhere as it is there, or followed back through File History from that commit.
+  // elsewhere as it is there, followed back through File History from that commit, compared
+  // with the file on disk, or taken onto disk as it is there.
 
   import { untrack } from "svelte";
   import { save } from "@tauri-apps/plugin-dialog";
@@ -16,6 +17,8 @@
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import { findFiles, foldersOf, leftOf, linesOf, stepRow, treeRows } from "./browseTree";
   import { NEWEST_SAVED } from "./localHistory";
+  import { takeVersionRequest, type CommitFile } from "./commitFiles";
+  import WorkingCopyPanel from "./WorkingCopyPanel.svelte";
 
   let {
     rev,
@@ -24,6 +27,7 @@
     lookup,
     copy,
     onPath,
+    version = 0,
   }: {
     /** The commit whose files these are. */
     rev: string;
@@ -35,6 +39,8 @@
     copy: (text: string, done: string) => void;
     /** Another file was picked: Back comes back to it. */
     onPath: (path: string | null) => void;
+    /** Goes up on every reload, so Compare with Working Copy follows the file on disk. */
+    version?: number;
   } = $props();
 
   const row = $derived(lookup(rev));
@@ -52,6 +58,16 @@
   let list = $state<HTMLDivElement>();
   /** The row the arrows are on: a folder or the file shown. */
   let cursor = $state<string | null>(null);
+  /** Compare with Working Copy, of the file shown, in place of its text. */
+  let comparing = $state(false);
+  // Another file or commit shows its text again.
+  $effect(() => {
+    rev;
+    path;
+    untrack(() => (comparing = false));
+  });
+  /** A file of the commit, as Take This Version and the comparison know it. */
+  const asFile = (target: string): CommitFile => ({ path: target, status: "modified" });
 
   // Another commit starts afresh.
   $effect(() => {
@@ -196,6 +212,12 @@
     }
   }
 
+  function compare(target: string) {
+    if (target !== path) onPath(target);
+    // After the effect that closes it for another file.
+    requestAnimationFrame(() => (comparing = true));
+  }
+
   // Blame starts at this commit: the file as it is here, and the commits that made it so.
   const fileHistory = (target: string) => nav.openFile(target, rev, rev);
 
@@ -207,6 +229,9 @@
         { kind: "item", label: "File History", icon: menuIcons.history, run: () => fileHistory(item.path) },
         { kind: "item", label: "Local History", icon: menuIcons.history, run: () => nav.openFile(item.path, NEWEST_SAVED) },
         { kind: "item", label: "Save As…", icon: menuIcons.patch, run: () => saveAs(item.path) },
+        { kind: "sep" },
+        { kind: "item", label: "Take This Version…", icon: menuIcons.checkout, run: () => confirm.runner?.(takeVersionRequest(asFile(item.path), rev, row?.summary ?? null)) },
+        { kind: "item", label: "Compare with Working Copy", icon: menuIcons.compare, run: () => compare(item.path) },
         { kind: "sep" },
       );
     }
@@ -294,8 +319,10 @@
     </div>
   </section>
 
-  <section class="main" aria-label={path ?? "File"}>
-    {#if path}
+  <section class="main" aria-label={comparing ? "Compare with Working Copy" : (path ?? "File")}>
+    {#if path && comparing}
+      <WorkingCopyPanel commit={rev} summary={row?.summary ?? null} file={asFile(path)} color={row?.graph.color ?? 0} {version} onClose={() => (comparing = false)} />
+    {:else if path}
       {@const where = splitPath(path)}
       <div class="head">
         <span class="path" title={path}><span class="dir">{where.dir}</span><b>{where.name}</b></span>
