@@ -24,6 +24,7 @@
   } from "./branches";
   import { pushRequest } from "./remote";
   import { mergeRequest } from "./merge";
+  import { dropsPushed, isProtected, lockedNote } from "./protect";
   import { branchMergeRequest, gitlabOf } from "./mergeRequest";
   import { savePatchesRequest } from "./patches";
   import { stashMenu } from "./stash";
@@ -339,9 +340,12 @@
         ),
       );
     }
+    // A protected branch on a remote has pushed commits Edit Stack would rewrite.
+    const locked = isProtected(history.protected, ref.name) && !!t && !t.gone;
     if (!isTrunk && !history.operation) {
       entries.push({ kind: "sep" });
-      entries.push(item("Edit Stack…", menuIcons.rebase, () => onEditStack(ref.name)));
+      if (locked) entries.push({ kind: "note", label: lockedNote(ref.name) });
+      else entries.push(item("Edit Stack…", menuIcons.rebase, () => onEditStack(ref.name)));
     }
     if (!isTrunk && github.repo) {
       const pull = github.pullOf(ref.name);
@@ -377,9 +381,11 @@
     const here = history.head.branch ?? "HEAD";
     // A merge in progress has to be finished first; the banner says so.
     if (history.operation) return [];
+    // Not a rebase that would rewrite pushed commits of a protected branch.
+    const tip = history.refs.find((r) => (r.kind === "local" || r.kind === "remote") && r.name === name)?.target ?? null;
     return [
       { kind: "item", label: `Merge into ${here}…`, icon: menuIcons.merge, run: () => run(mergeRequest(ctx, name)) },
-      ...(history.head.branch ? [{ kind: "item", label: `Rebase ${here} onto ${name}…`, icon: menuIcons.rebase, run: () => run(mergeRequest(ctx, name, "rebase")) } as MenuEntry] : []),
+      ...(history.head.branch && !dropsPushed(history, tip) ? [{ kind: "item", label: `Rebase ${here} onto ${name}…`, icon: menuIcons.rebase, run: () => run(mergeRequest(ctx, name, "rebase")) } as MenuEntry] : []),
     ];
   }
 

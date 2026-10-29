@@ -9,6 +9,7 @@
   import { activity, failureShort } from "./activity.svelte";
   import { PART_NAMES, errorLine, readAgo, troubled, type ReadStates } from "./reads";
   import { lane, plate, relativeTime, tint } from "./format";
+  import { isProtected } from "./protect";
 
   let {
     history,
@@ -195,8 +196,9 @@
           {:else if t && !t.gone}
             <span class="n" class:zero={!ahead}>{ahead}</span>
             <span class="what">{ahead === 1 ? "commit" : "commits"} to push</span>
-            <span class="detail">{t.rewritten ? `Replace old versions on ${t.remote}` : ahead ? `Not on ${t.remote} yet` : `All on ${t.remote}`}</span>
-            <button class="button small act" disabled={!ahead && !t.rewritten} onclick={then(onPush)}>{t.rewritten ? "Force Push…" : "Push…"}</button>
+            {@const force = !!t.rewritten && !isProtected(history.protected, t.branch)}
+            <span class="detail">{force ? `Replace old versions on ${t.remote}` : t.rewritten ? `Old versions stay on ${t.remote}: protected` : ahead ? `Not on ${t.remote} yet` : `All on ${t.remote}`}</span>
+            <button class="button small act" disabled={!ahead && !t.rewritten} onclick={then(onPush)}>{force ? "Force Push…" : "Push…"}</button>
           {:else}
             <span class="n">{history.head.commit ? "—" : 0}</span>
             <span class="what">{history.head.commit ? "no upstream" : "no commits yet"}</span>

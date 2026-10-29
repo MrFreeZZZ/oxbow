@@ -19,6 +19,7 @@
     branch,
     color,
     head,
+    locked = null,
     staged,
     unstaged,
     conflicted,
@@ -33,6 +34,8 @@
     color: number;
     /** The checked-out commit, for Amend. */
     head: HistoryRow | null;
+    /** The protected branch whose last commit is already pushed: Amend stays off. */
+    locked?: string | null;
     staged: FileChange[];
     unstaged: FileChange[];
     conflicted: FileChange[];
@@ -57,7 +60,7 @@
   // Amend replaces the commit it was turned on for. Once HEAD moves (another branch, a commit made
   // elsewhere), it turns off, with the old commit's message if it was not edited.
   $effect(() => {
-    if (draft.amend && head && head.id !== draft.amendOn) turnOffAmend();
+    if (draft.amend && head && (head.id !== draft.amendOn || locked)) turnOffAmend();
   });
 
   const message = $derived([draft.summary.trim(), draft.description.trim()].filter(Boolean).join("\n\n"));
@@ -227,7 +230,7 @@
         Sign-off
         <span class="switch" class:on={draft.signOff}><span class="knob"></span></span>
       </button>
-      <button class="amend" role="switch" aria-checked={draft.amend} onclick={toggleAmend} disabled={!head} title="Replace the last commit instead of adding a new one">
+      <button class="amend" role="switch" aria-checked={draft.amend} onclick={toggleAmend} disabled={!head || !!locked} title={locked ? `${locked} is protected and its last commit is already pushed: make a new commit, or revert it from its menu` : "Replace the last commit instead of adding a new one"}>
         Amend
         <span class="switch" class:on={draft.amend}><span class="knob"></span></span>
       </button>

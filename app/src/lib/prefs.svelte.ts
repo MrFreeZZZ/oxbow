@@ -34,6 +34,10 @@ export const defaults = {
   "oxbow.conflicts.showBase": false,
   "oxbow.diff.wordHighlight": true,
   "oxbow.diff.ignoreWhitespace": false,
+  /** Blame gives a line whose only change was whitespace to the commit before (-w). */
+  "oxbow.blame.ignoreWhitespace": false,
+  /** Blame skips the commits of the repository's .git-blame-ignore-revs, as GitHub does. */
+  "oxbow.blame.ignoreRevs": true,
   /** Long lines wrap at the edge; off, they run on and the lines of a file scroll sideways. */
   "oxbow.diff.wrap": true,
   /** Which files of a commit start open in its diff. */

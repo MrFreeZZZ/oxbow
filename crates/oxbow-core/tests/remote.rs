@@ -28,11 +28,14 @@ impl Team {
         me.commit("a.txt", "one\n", "Root");
         me.git(&["remote", "add", "origin", url]);
         me.git(&["push", "-q", "-u", "origin", "main"]);
+        // These rewrite and force push main itself, which is protected by default.
+        me.git(&["config", "oxbow.protectedBranches", ""]);
 
         let mut kirill = Fixture::new();
         kirill.git(&["remote", "add", "origin", url]);
         kirill.git(&["fetch", "-q", "origin"]);
         kirill.git(&["checkout", "-q", "-B", "main", "origin/main"]);
+        kirill.git(&["config", "oxbow.protectedBranches", ""]);
         Team {
             _remote: remote,
             me,

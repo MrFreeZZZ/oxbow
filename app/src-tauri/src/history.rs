@@ -347,11 +347,16 @@ pub(crate) async fn blame(
     session: State<'_, Session>,
     path: String,
     rev: String,
+    options: Option<oxbow_core::BlameOptions>,
     lane: Option<String>,
 ) -> CommandResult<oxbow_core::Blame> {
     let repo = current(&session, &window)?;
     let cancel = session.lane(&window, lane);
-    read(at(&repo), "Blame", move || repo.blame_with(&path, &rev, &cancel)).await
+    let options = options.unwrap_or_default();
+    read(at(&repo), "Blame", move || {
+        repo.blame_with(&path, &rev, &options, &cancel)
+    })
+    .await
 }
 
 #[tauri::command]

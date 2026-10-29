@@ -204,6 +204,17 @@ export const diffSection: Section = {
       ],
     },
     {
+      title: "Blame",
+      rows: [
+        prefRow("oxbow.blame.ignoreWhitespace", "Ignore whitespace changes", "switch", {
+          sub: "A line whose only change was whitespace keeps the commit before it (git blame -w)",
+        }),
+        prefRow("oxbow.blame.ignoreRevs", "Skip the commits of .git-blame-ignore-revs", "switch", {
+          sub: "Reformatting and the like listed there, as GitHub does; or the file blame.ignoreRevsFile names",
+        }),
+      ],
+    },
+    {
       title: "Text",
       rows: [
         prefRow("oxbow.text.font", "Font", "popup", {
