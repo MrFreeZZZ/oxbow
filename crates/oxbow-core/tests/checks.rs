@@ -1,6 +1,7 @@
 mod support;
 
 use oxbow_core::{Action, ActionEvent, CommitCheck, Error, FailureKind, Fix, Repo, TrustKind, trust};
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use support::Fixture;
 
@@ -78,7 +79,7 @@ fn a_failing_check_stops_the_commit_until_skipped() {
                     shown.push(display);
                 }
             },
-            &AtomicBool::new(false),
+            &Arc::new(AtomicBool::new(false)),
         )
         .unwrap_err();
     let Error::Check(failed) = &err else { panic!("{err}") };

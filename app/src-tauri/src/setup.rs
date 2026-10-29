@@ -1,7 +1,6 @@
 //! The Welcome window: cloning a repository and creating a new one.
 
 use std::path::Path;
-use std::sync::atomic::Ordering;
 
 use oxbow_core::config;
 use oxbow_core::console;
@@ -108,8 +107,9 @@ pub(crate) async fn clone_repo(
     session: State<'_, Session>,
     options: oxbow_core::CloneOptions,
 ) -> CommandResult<String> {
-    let cancel = session.cancel(&window);
-    cancel.store(false, Ordering::Relaxed);
+    // Dropped once the run is over: Stop no longer reaches it.
+    let stop = session.new_stop(&window);
+    let cancel = stop.cancel.clone();
     let path = options.path.display().to_string();
     let title = format!("Clone {}", console::mask(&options.url));
     logged(

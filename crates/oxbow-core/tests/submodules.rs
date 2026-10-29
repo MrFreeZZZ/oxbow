@@ -1,5 +1,6 @@
 mod support;
 
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use oxbow_core::{
@@ -555,7 +556,7 @@ fn update_all_goes_one_at_a_time_and_says_how_each_ended() {
 
     let mut events = Vec::new();
     let err = repo
-        .perform_with(&all, &mut |e| events.push(e), &AtomicBool::new(false))
+        .perform_with(&all, &mut |e| events.push(e), &Arc::new(AtomicBool::new(false)))
         .unwrap_err();
     // The one that failed doesn't stop the other, and the answer says which one it was.
     let Error::PartlyDone { of, failed } = &err else {

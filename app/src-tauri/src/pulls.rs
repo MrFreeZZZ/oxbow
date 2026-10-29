@@ -183,8 +183,9 @@ pub async fn gitlab_run(
         .await?
         .ok_or_else(|| "Sign in to this repository’s GitLab in Settings › Accounts".to_owned())?;
     let label = window.label().to_owned();
-    let cancel = app.state::<Session>().cancel(&window);
-    cancel.store(false, Ordering::Relaxed);
+    // Dropped once the run is over: Stop no longer reaches it.
+    let stop = app.state::<Session>().new_stop(&window);
+    let cancel = stop.cancel.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let stopped = || cancel.load(Ordering::Relaxed);
         client.run(&project, &calls, &stopped, &mut |step| {
@@ -392,8 +393,9 @@ pub async fn github_run(
     let (_, github) = github_repo_of(&session, &window)?;
     let client = accounts.client(&app)?;
     let label = window.label().to_owned();
-    let cancel = app.state::<Session>().cancel(&window);
-    cancel.store(false, Ordering::Relaxed);
+    // Dropped once the run is over: Stop no longer reaches it.
+    let stop = app.state::<Session>().new_stop(&window);
+    let cancel = stop.cancel.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let emit = |event: ActionEvent| {
             let _ = app.emit_to(label.as_str(), "action-event", event);

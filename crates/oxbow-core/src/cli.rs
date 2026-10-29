@@ -317,16 +317,25 @@ thread_local! {
 /// and none starts any more. For a read whose answer is no longer wanted, such as the history
 /// of a repository the window has left.
 pub fn stoppable<T>(cancel: &Arc<AtomicBool>, f: impl FnOnce() -> T) -> T {
-    let outer = STOP.with(|stop| stop.borrow_mut().replace(cancel.clone()));
-    // A panic in `f` must not leave the Stop in place for whatever runs on this thread next.
-    struct Reset(Option<Arc<AtomicBool>>);
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            let outer = self.0.take();
-            STOP.with(|stop| *stop.borrow_mut() = outer);
-        }
+    let _reset = PutBack(STOP.with(|stop| stop.borrow_mut().replace(cancel.clone())));
+    f()
+}
+
+/// Puts the Stop that was set on this thread back when dropped: a panic must not leave another
+/// one in place for whatever runs on this thread next.
+struct PutBack(Option<Arc<AtomicBool>>);
+
+impl Drop for PutBack {
+    fn drop(&mut self) {
+        let outer = self.0.take();
+        STOP.with(|stop| *stop.borrow_mut() = outer);
     }
-    let _reset = Reset(outer);
+}
+
+/// Run `f` so that no Stop set by [`stoppable`] around it reaches the git commands it runs:
+/// for work that must finish once begun, such as writing down for Undo what an action did.
+pub(crate) fn unstoppable<T>(f: impl FnOnce() -> T) -> T {
+    let _reset = PutBack(STOP.with(|stop| stop.borrow_mut().take()));
     f()
 }
 

@@ -227,7 +227,7 @@ fn nothing_runs_when_the_state_before_cant_be_saved_unless_chosen() {
     let discard = Action::Discard {
         paths: vec!["a.txt".into()],
     };
-    let never = std::sync::atomic::AtomicBool::new(false);
+    let never = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let err = repo.perform_with(&discard, &mut |_| {}, &never).unwrap_err();
     assert!(matches!(err, oxbow_core::Error::NoUndo(_)));
     // Said in plain words, not as the system's «File exists (os error 17)».
@@ -264,7 +264,7 @@ fn a_step_that_cant_be_written_is_reported_apart_from_the_action() {
             paths: vec!["a.txt".into()],
         },
         &mut |e| events.push(e),
-        &std::sync::atomic::AtomicBool::new(false),
+        &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
     .unwrap();
     assert_eq!(read(&fx, "a.txt").unwrap(), "a\n");
@@ -290,7 +290,7 @@ fn a_step_written_down_reports_nothing() {
             paths: vec!["a.txt".into()],
         },
         &mut |e| events.push(e),
-        &std::sync::atomic::AtomicBool::new(false),
+        &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
     .unwrap();
     assert!(
@@ -363,4 +363,124 @@ fn a_step_taken_during_a_merge_with_conflicts_cant_be_gone_back_to() {
     let id = repo.operation_log().unwrap()[0].id.clone();
     let err = repo.plan_restore(&id, false).unwrap_err();
     assert!(err.to_string().contains("middle of a merge"), "{err}");
+}
+
+/// Set `cancel` from another thread once `ready` holds.
+#[cfg(unix)]
+fn stop_when(
+    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ready: impl Fn() -> bool + Send + 'static,
+) -> std::thread::JoinHandle<()> {
+    let stop = cancel.clone();
+    std::thread::spawn(move || {
+        let start = std::time::Instant::now();
+        while !ready() && start.elapsed() < std::time::Duration::from_secs(20) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    })
+}
+
+#[cfg(unix)]
+#[test]
+fn stop_ends_the_snapshot_before_an_action_and_nothing_runs() {
+    let mut fx = Fixture::new();
+    // A clean filter that takes long: saving the files for Undo runs it on the changed file.
+    fx.commit(".gitattributes", "slow.txt filter=slow\n", "Attributes");
+    fx.commit("slow.txt", "a\n", "Slow");
+    fx.git(&["config", "filter.slow.clean", "touch filter-ran; sleep 20; cat"]);
+    fx.write("slow.txt", "edited\n");
+    fx.write("b.txt", "new\n");
+    let _ = std::fs::remove_file(fx.path().join("filter-ran"));
+    let repo = Repo::open(fx.path()).unwrap();
+    let logged = repo.operation_log().unwrap().len();
+
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let ran = fx.path().join("filter-ran");
+    let stopper = stop_when(&cancel, move || ran.exists());
+    let started = std::time::Instant::now();
+    let err = repo
+        .perform_with(
+            &Action::Stage {
+                paths: vec!["b.txt".into()],
+            },
+            &mut |_| {},
+            &cancel,
+        )
+        .unwrap_err();
+    stopper.join().unwrap();
+    assert!(matches!(err, oxbow_core::Error::Cancelled), "{err}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "Stop waited for the snapshot: {:?}",
+        started.elapsed()
+    );
+    // The action never ran, and there is no step to undo.
+    assert_eq!(fx.git(&["diff", "--cached", "--name-only"]), "");
+    assert_eq!(repo.operation_log().unwrap().len(), logged);
+}
+
+#[test]
+fn stop_pressed_before_an_action_starts_runs_nothing() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    fx.write("b.txt", "new\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let err = repo
+        .perform_with(
+            &Action::Stage {
+                paths: vec!["b.txt".into()],
+            },
+            &mut |_| {},
+            &cancel,
+        )
+        .unwrap_err();
+    assert!(matches!(err, oxbow_core::Error::Cancelled), "{err}");
+    assert_eq!(fx.git(&["diff", "--cached", "--name-only"]), "");
+    assert!(repo.operation_log().unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_action_stopped_while_it_runs_is_still_written_down_for_undo() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "a\n", "Root");
+    fx.write("a.txt", "edited\n");
+    fx.git(&["add", "a.txt"]);
+    // The hook changes a file and then hangs: Stop ends it after it changed the file.
+    let hook = fx.path().join(".git/hooks/pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\necho made > hook-made.txt\nsleep 20\n").unwrap();
+    let mut permissions = std::fs::metadata(&hook).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&hook, permissions).unwrap();
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let made = fx.path().join("hook-made.txt");
+    let stopper = stop_when(&cancel, move || made.exists());
+    // Even with Stop set around it the way a read's is, the writing down isn't stopped.
+    let err = oxbow_core::cli::stoppable(&cancel, || {
+        repo.perform_with(
+            &Action::Commit {
+                message: "Second".into(),
+                amend: false,
+                allow_secrets: true,
+                skip_checks: true,
+                no_verify: false,
+                sign_off: false,
+                changelist: None,
+            },
+            &mut |_| {},
+            &cancel,
+        )
+    })
+    .unwrap_err();
+    stopper.join().unwrap();
+    assert!(matches!(err, oxbow_core::Error::Cancelled), "{err}");
+    let log = repo.operation_log().unwrap();
+    assert_eq!(log.len(), 1, "the stopped step isn't in the Operation Log");
+    // Undo takes back the file the hook made.
+    undo_last(&repo);
+    assert_eq!(read(&fx, "hook-made.txt"), None);
 }
