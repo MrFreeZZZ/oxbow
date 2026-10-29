@@ -4,7 +4,8 @@ name: CI
 # scripts/check.sh as before a push. They run again on each merge to main, beside the macOS build,
 # so the very commit an app is built from has checks of its own: a release is made only from one
 # whose checks are green. The app is built for macOS only, once per merge to main (or when run by
-# hand from the Actions tab).
+# hand from the Actions tab); beside it, without holding it up, the core's and the shell's tests
+# run on macOS too, for what only a Mac's disk and git do differently.
 on:
   pull_request:
   push:
@@ -81,3 +82,26 @@ jobs:
         with:
           name: oxbow-macOS
           path: target/release/bundle/macos/*.app
+
+  macos-tests:
+    name: Tests (macOS)
+    if: github.event_name != 'pull_request'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Test builds of their own, apart from the release build of the app job.
+          key: tests
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+        working-directory: app
+      # The shell crate compiles the front end in, as on Linux.
+      - run: npm run build
+        working-directory: app
+      - run: cargo test -p oxbow-core -p oxbow-app

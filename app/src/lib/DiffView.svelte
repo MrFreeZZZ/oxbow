@@ -232,21 +232,33 @@
     else folded = { ...folded, [diff.file.path]: fold };
   }
 
-  /** Open the file in the editor, at its first change, or at `line`. */
-  /** The hunk whose + is held down: dragging over its other lines makes the comment theirs. */
-  let dragging: Hunk | null = null;
+  /** While a line's + is held down, dragging over the other lines of its hunk makes the comment
+   *  theirs. Lines say which they are in `data-line` ("<hunk>:<index>"): one listener for the
+   *  drag, none on each line. */
   function plusDown(e: PointerEvent, diff: FileDiff, hunk: Hunk, i: number) {
     if (e.button !== 0 || !notes) return;
     // No text selection while the lines are dragged over.
     e.preventDefault();
     notes.start(diff, hunk, i, e.shiftKey);
-    dragging = hunk;
-    window.addEventListener("pointerup", () => (dragging = null), { once: true });
-  }
-  function dragOver(diff: FileDiff, hunk: Hunk, i: number | null) {
-    if (dragging && dragging === hunk && i !== null && notes?.can(diff, hunk, i)) notes.start(diff, hunk, i, true);
+    const from = (e.currentTarget as HTMLElement).closest<HTMLElement>("[data-line]");
+    const code = from?.closest(".code");
+    const part = from?.dataset.line?.split(":")[0];
+    if (!code || part === undefined) return;
+    let last = i;
+    const move = (ev: PointerEvent) => {
+      const line = (ev.target as Element | null)?.closest?.<HTMLElement>("[data-line]");
+      if (!line || line.closest(".code") !== code) return;
+      const [p, at] = line.dataset.line!.split(":");
+      const n = Number(at);
+      if (p !== part || n === last || !notes?.can(diff, hunk, n)) return;
+      last = n;
+      notes.start(diff, hunk, n, true);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", () => window.removeEventListener("pointermove", move), { once: true });
   }
 
+  /** Open the file in the editor, at its first change, or at `line`. */
   function openInEditor(diff: FileDiff, line: number | null = null) {
     const first = diff.hunks[0]?.lines.find((l) => l.kind !== "context" && l.newLine !== null) ?? diff.hunks[0]?.lines[0];
     api.openInEditor(diff.file.path, line ?? first?.newLine ?? null).catch((err) => confirm.fail(err));
@@ -556,7 +568,7 @@
 {/snippet}
 
 <!-- One side of a Side by Side row: the old line on the left, the new one on the right. -->
-{#snippet half(diff: FileDiff, hunk: Hunk, rows: Row[], r: number, side: "left" | "right", language: ReturnType<typeof languageOf>, picking: boolean, picked: number[])}
+{#snippet half(diff: FileDiff, hunk: Hunk, h: number | string, rows: Row[], r: number, side: "left" | "right", language: ReturnType<typeof languageOf>, picking: boolean, picked: number[])}
   {@const at = side === "left" ? rows[r].left : rows[r].right}
   {@const line = at === null ? null : hunk.lines[at]}
   {@const on = at !== null && picked.includes(at)}
@@ -566,7 +578,7 @@
     class:faded={picked.length > 0 && !!line && line.kind !== "context" && !on}
     class:lit={!!line && !!notes?.lit(diff, line)}
     style:border-radius={sideRadius(hunk.lines, rows, r, side)}
-    onpointerenter={notes ? () => dragOver(diff, hunk, at) : undefined}
+    data-line={notes && at !== null ? `${h}:${at}` : undefined}
   >
     {#if line && at !== null && (side === "right" || line.kind === "removed")}{@render plus(diff, hunk, line, at)}{/if}
     {#if picking}
@@ -592,8 +604,8 @@
       >
         {#each rows.slice(start, end) as _, j (j)}
           <div class="row">
-            {@render half(diff, hunk, rows, start + j, "left", language, picking, picked)}
-            {@render half(diff, hunk, rows, start + j, "right", language, picking, picked)}
+            {@render half(diff, hunk, h, rows, start + j, "left", language, picking, picked)}
+            {@render half(diff, hunk, h, rows, start + j, "right", language, picking, picked)}
           </div>
           {#if notes}
             {@const row = rows[start + j]}
@@ -617,7 +629,7 @@
             class:lit={!!notes?.lit(diff, line)}
             style:border-radius={radius(hunk.lines, i)}
             style:margin-top="{gap(hunk.lines, i)}px"
-            onpointerenter={notes ? () => dragOver(diff, hunk, i) : undefined}
+            data-line={notes ? `${h}:${i}` : undefined}
           >
             {@render plus(diff, hunk, line, i)}
             {#if picking}

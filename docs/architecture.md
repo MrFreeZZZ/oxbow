@@ -73,5 +73,6 @@ scripts/check.sh all
 To measure how fast a repository's history loads, see [measuring-reads.md](measuring-reads.md).
 
 Build an installable app with `cd app && npm run tauri build`. CI runs `scripts/check.sh all` on
-Linux for every pull request, and builds an unsigned macOS app on every merge to `main`; you can download it from the workflow run's artifacts. Because it is
+Linux for every pull request, and builds an unsigned macOS app on every merge to `main`, with the
+tests of the core and the shell run on macOS beside it; you can download the app from the workflow run's artifacts. Because it is
 unsigned, run `xattr -cr Oxbow.app` once before opening it.

@@ -528,11 +528,11 @@
     if (openUnstaged && openUnstaged.status !== "conflicted") return stageIn(group ?? "unstaged", [openUnstaged]);
   }
 
-  /** The list's own keys, while a file or a heading of it has the focus: the filter field and
-   *  the buttons keep theirs. Esc unticks every file, then shows the open file's list whole. */
+  /** The list's own keys, on a file's row or a list's heading (each of them has these two
+   *  handlers): the filter field and the other buttons keep theirs. Esc unticks every file, then
+   *  shows the open file's list whole. */
   function onFilesKey(event: KeyboardEvent) {
-    const target = event.target as HTMLElement;
-    if (!target.closest(".name, .gname")) return;
+    const target = event.currentTarget as HTMLElement;
     keysInList = true;
     const by = pressed("nextFile", event) ? 1 : pressed("previousFile", event) ? -1 : 0;
     if (by) {
@@ -570,7 +570,7 @@
 
   /** Space ticks: the row or heading it is pressed on must not take it as a click too. */
   function onFilesKeyUp(event: KeyboardEvent) {
-    if (event.key === " " && (event.target as HTMLElement).closest(".name, .gname")) event.preventDefault();
+    if (event.key === " ") event.preventDefault();
   }
 
   /** Whether the list's keys were used: a file staged with them leaves its row, and the keys go
@@ -1055,6 +1055,8 @@
       class="name"
       onclick={(e) => rowClick(e, file, group)}
       onpointerdown={(e) => dragFile(e, file, group)}
+      onkeydown={onFilesKey}
+      onkeyup={onFilesKeyUp}
       aria-current={open ? "true" : undefined}
       title={dragging ? undefined : `${file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}${group === "conflicted" ? "" : ` · ${modClick} to select, Shift-click to select a range, drag to ${group === "staged" ? "unstage" : "stage"}`}`}
     >
@@ -1193,7 +1195,7 @@
   </div>
 
   <div class="body" class:stacked bind:clientWidth={bodyWidth} bind:clientHeight={bodyHeight}>
-    <div class="files" bind:this={filesBox} aria-label="Working copy" data-steps use:tabStepper={stepper} onkeydown={onFilesKey} onkeyup={onFilesKeyUp} class:dragging={!!dragging} style:height={stacked ? `${Math.round(filesShare * 100)}%` : null} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
+    <div class="files" bind:this={filesBox} aria-label="Working copy" data-steps use:tabStepper={stepper} class:dragging={!!dragging} style:height={stacked ? `${Math.round(filesShare * 100)}%` : null} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
       <div class="tools">
         <label class="filter">
           <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
@@ -1238,7 +1240,7 @@
           <div class="ghead" class:on={isAll("unstaged")} style:background={isAll("unstaged") ? tint(color) : undefined} data-group="unstaged" oncontextmenu={openUnstagedMenu}>
             {@render tickAllBox("unstaged", shownTracked, "Select every unstaged file", ".gname")}
             {@render chevron(!shut.unstaged, shut.unstaged ? "Show the unstaged files" : "Hide the unstaged files", () => (shut.unstaged = !shut.unstaged))}
-            <button class="gname" onclick={(e) => openGroup(e, "unstaged")} aria-current={isAll("unstaged") ? "true" : undefined} aria-expanded={!shut.unstaged} title={!isAll("unstaged") ? "Show every unstaged change" : shut.unstaged ? "Show the unstaged files" : "Hide the unstaged files"}>
+            <button class="gname" onkeydown={onFilesKey} onkeyup={onFilesKeyUp} onclick={(e) => openGroup(e, "unstaged")} aria-current={isAll("unstaged") ? "true" : undefined} aria-expanded={!shut.unstaged} title={!isAll("unstaged") ? "Show every unstaged change" : shut.unstaged ? "Show the unstaged files" : "Hide the unstaged files"}>
               <span class="gtitle" style:color={plate(color)}>Unstaged</span><span class="n">{needle ? `${shownTracked.length} of ${tracked.length}` : tracked.length}</span>
             </button>
             {#if pickedUnstaged.length}
@@ -1266,7 +1268,7 @@
             <div class="ghead" class:on={all} style:background={all ? tint(color) : undefined} data-group={key} oncontextmenu={(e) => openListMenu(e, g)}>
               {@render tickAllBox(key, g.shown, `Select every file of ${g.list.name}`, ".gname")}
               {@render chevron(open, open ? `Hide the files of ${g.list.name}` : `Show the files of ${g.list.name}`, () => (shut = { ...shut, [key]: open }))}
-              <button class="gname" onclick={(e) => openGroup(e, key)} aria-current={all ? "true" : undefined} aria-expanded={open} title={!all ? `Show every change of ${g.list.name}` : open ? "Hide its files" : "Show its files"}>
+              <button class="gname" onkeydown={onFilesKey} onkeyup={onFilesKeyUp} onclick={(e) => openGroup(e, key)} aria-current={all ? "true" : undefined} aria-expanded={open} title={!all ? `Show every change of ${g.list.name}` : open ? "Hide its files" : "Show its files"}>
                 <svg class="icon clmark" style:color={plate(color)} viewBox="0 0 16 16"><path d="M3 3.5h10v9.5l-5-2.6L3 13z" /></svg>
                 <span class="gtitle cltitle" style:color={plate(color)}>{g.list.name}</span><span class="n">{needle ? `${g.shown.length} of ${g.files.length}` : g.files.length}</span>
                 {#if lists?.active === g.list.id}<span class="active" title="New changes go here: files that start changing join this list">Active</span>{/if}
@@ -1295,7 +1297,7 @@
             <div class="ghead" class:on={isAll("unstaged", true)} style:background={isAll("unstaged", true) ? tint(color) : undefined} data-group="untracked">
               {@render tickAllBox("untracked", shownUntracked, "Select every untracked file", ".gname")}
               {@render chevron(untrackedOpen, untrackedOpen ? "Hide the untracked files" : "Show the new files git does not track yet", () => (view.untracked = !view.untracked), !!needle)}
-              <button class="gname" onclick={(e) => openGroup(e, "untracked")} aria-current={isAll("unstaged", true) ? "true" : undefined} aria-expanded={untrackedOpen} title={!isAll("unstaged", true) ? "Show every new file git does not track yet" : untrackedOpen ? "Hide the untracked files" : "Show the untracked files"}>
+              <button class="gname" onkeydown={onFilesKey} onkeyup={onFilesKeyUp} onclick={(e) => openGroup(e, "untracked")} aria-current={isAll("unstaged", true) ? "true" : undefined} aria-expanded={untrackedOpen} title={!isAll("unstaged", true) ? "Show every new file git does not track yet" : untrackedOpen ? "Hide the untracked files" : "Show the untracked files"}>
                 <span class="gtitle" style:color={plate(color)}>Untracked</span><span class="n">{needle ? `${shownUntracked.length} of ${untracked.length}` : untracked.length}</span>
               </button>
               {#if pickedUntracked.length}
@@ -1326,7 +1328,7 @@
         <div class="ghead" class:on={isAll("staged")} style:background={isAll("staged") ? tint(color) : undefined} data-group="staged">
           {@render tickAllBox("staged", shownStaged, "Select every staged file", ".gname")}
           {@render chevron(!shut.staged, shut.staged ? "Show the staged files" : "Hide the staged files", () => (shut.staged = !shut.staged))}
-          <button class="gname" onclick={(e) => openGroup(e, "staged")} aria-current={isAll("staged") ? "true" : undefined} aria-expanded={!shut.staged} title={!isAll("staged") ? "Show the next commit: every staged change" : shut.staged ? "Show the staged files" : "Hide the staged files"}>
+          <button class="gname" onkeydown={onFilesKey} onkeyup={onFilesKeyUp} onclick={(e) => openGroup(e, "staged")} aria-current={isAll("staged") ? "true" : undefined} aria-expanded={!shut.staged} title={!isAll("staged") ? "Show the next commit: every staged change" : shut.staged ? "Show the staged files" : "Hide the staged files"}>
             <span class="gtitle" style:color={plate(color)}>Staged</span><span class="n">{needle ? `${shownStaged.length} of ${staged.length}` : staged.length}</span>
           </button>
           {#if pickedStaged.length}
@@ -1352,7 +1354,7 @@
                   {@const b = badge[file.status]}
                   {@const open = lastOpen === file.path}
                   <div class="file" class:open style:background={open ? tint(color) : undefined}>
-                    <button class="name" onclick={() => openLast(file.path)} aria-current={open ? "true" : undefined} title="{file.path} · its changes in the last commit">
+                    <button class="name" onkeydown={onFilesKey} onkeyup={onFilesKeyUp} onclick={() => openLast(file.path)} aria-current={open ? "true" : undefined} title="{file.path} · its changes in the last commit">
                       <span class="badge {b.tone}" title={b.title}>{b.text}</span>
                       <PathName path={file.path} />
                     </button>
