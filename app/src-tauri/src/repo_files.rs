@@ -52,8 +52,10 @@ pub(crate) async fn repo_file_text(
 }
 
 /// What is wrong in `text`, and the notes beside its lines; `fresh` reads the working copy and
-/// the history again.
+/// the history again. Without `wait`, the text alone while they are being read (`pending`); with
+/// it, after they are read, which a newer check in the same `lane` stops.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn check_repo_file(
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
@@ -61,10 +63,19 @@ pub(crate) async fn check_repo_file(
     gitlab: bool,
     text: String,
     fresh: bool,
+    wait: Option<bool>,
+    lane: Option<String>,
 ) -> CommandResult<FileCheck> {
     let repo = current(&session, &window)?;
+    if wait == Some(false) {
+        return read(at(&repo), "Check a repository file", move || {
+            Ok(repo.check_repo_file_now(kind, gitlab, &text, fresh))
+        })
+        .await;
+    }
+    let cancel = session.lane(&window, lane);
     read(at(&repo), "Check a repository file", move || {
-        repo.check_repo_file(kind, gitlab, &text, fresh)
+        oxbow_core::cli::stoppable(&cancel, || repo.check_repo_file(kind, gitlab, &text, fresh))
     })
     .await
 }

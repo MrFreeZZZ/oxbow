@@ -1,5 +1,5 @@
-import { applyFix, lineStart, messageParts, paintLine, rowSub, status } from "../src/lib/repoFiles.ts";
-import type { FileProblem, RepoFile } from "../src/lib/types.ts";
+import { applyFix, drawnLines, LINE_BLOCK, lineStart, mergedCheck, messageParts, paintLine, problemsByLine, rowSub, status } from "../src/lib/repoFiles.ts";
+import type { FileCheck, FileProblem, RepoFile } from "../src/lib/types.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -54,3 +54,30 @@ test("the bar says what stops saving", () => {
   assert.equal(status([], false, true, true).text, "Saved, not committed yet: commit it in Changes");
   assert.equal(status([], true, false, false).text, "Not created yet");
 });
+
+// A long file draws whole blocks of lines around what is on screen, a screen more each side.
+{
+  // 20 px lines, 400 px on screen, scrolled to line 1,000.
+  const drawn = drawnLines(20_000, 400, 20, 100_000);
+  assert.ok(drawn.from <= 980 && drawn.to >= 1040, JSON.stringify(drawn));
+  assert.equal(drawn.from % LINE_BLOCK, 0);
+  assert.ok(drawn.to - drawn.from <= 4 * LINE_BLOCK);
+  assert.deepEqual(drawnLines(0, 400, 20, 10), { from: 0, to: 10 });
+  // Not measured yet: every line.
+  assert.deepEqual(drawnLines(0, 0, 0, 500), { from: 0, to: 500 });
+}
+
+// The problems of a line are looked up by its number.
+{
+  const p = (line: number, message: string) => ({ line, from: 0, to: 1, level: "warn", message }) as FileProblem;
+  const map = problemsByLine([p(2, "a"), p(5, "b"), p(2, "c")]);
+  assert.deepEqual(map.get(2)?.map((x) => x.message), ["a", "c"]);
+  assert.equal(map.get(3), undefined);
+}
+
+// Checked by the text alone while the working copy is read, the notes shown stay.
+{
+  const shown = { problems: [], notes: [{ line: 1, text: "3 files", level: null }] } as FileCheck;
+  assert.deepEqual(mergedCheck(shown, { problems: [], notes: [], pending: true }).notes, shown.notes);
+  assert.deepEqual(mergedCheck(shown, { problems: [], notes: [] }).notes, []);
+}

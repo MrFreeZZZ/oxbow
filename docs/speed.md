@@ -159,6 +159,20 @@ the rows the window has, about 250 ms at 100,000. Every row already shown comes 
 (64,000 of 64,000 on the last page), so the graph doesn't move as older commits come in. A jump
 straight to an old commit still walks everything above it once.
 
+## Repository Files on a big working copy (29 October)
+
+A working copy of 200,000 files (`node_modules`, 400 folders of 500), `.gitignore` checked as it
+is typed (cloud, Xeon, 4 cores, warm):
+
+| Check | Before | After |
+|---|---|---|
+| A key typed while the files are read | waited for the reading, 143 ms | 0.02 ms, the text alone; the rest when read |
+| A key typed after | 7 ms | 7 ms |
+| Another repository's file meanwhile | waited for the reading too | not held up: each repository is read under its own lock |
+
+Each repository keeps what was read of it (8 repositories at most, and 600,000 files of working
+copies together), and leaving the file stops a reading still going.
+
 ## Oxbow's window
 
 ```sh

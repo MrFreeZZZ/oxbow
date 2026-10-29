@@ -477,3 +477,43 @@ fn stop_tracking_keeps_the_files_on_disk() {
     assert!(fx.path.join("config/local.json").is_file());
     assert_eq!(fx.git(&["status", "--porcelain"]), "D  config/local.json\n?? config/");
 }
+
+#[test]
+fn typing_is_checked_at_once_while_the_working_copy_is_read() {
+    let mut one = Fixture::new();
+    one.commit("a.txt", "a", "a");
+    one.write("dist/a.js", "a");
+    let mut two = Fixture::new();
+    two.commit("b.txt", "b", "b");
+    two.write("dist/b.js", "b");
+    let (one_repo, two_repo) = (Repo::open(&one.path).unwrap(), Repo::open(&two.path).unwrap());
+    let text = "dist/\nbuild\\out\n";
+    let kind = RepoFileKind::Gitignore;
+
+    // Not read yet: the text alone, its errors at once, the rest pending.
+    let now = one_repo.check_repo_file_now(kind, false, text, false);
+    assert!(now.pending);
+    assert_eq!(
+        problems(&now, Level::Error).iter().map(|e| e.0).collect::<Vec<_>>(),
+        vec![2]
+    );
+    assert!(note(&now, 1).is_none());
+
+    // A Stop while it is read leaves nothing read.
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let stopped = oxbow_core::cli::stoppable(&stop, || one_repo.check_repo_file(kind, false, text, true));
+    assert!(matches!(stopped, Err(oxbow_core::Error::Cancelled)));
+    assert!(one_repo.check_repo_file_now(kind, false, text, false).pending);
+
+    // Read, each repository keeps its own: checking the second doesn't let the first go.
+    let full = one_repo.check_repo_file(kind, false, text, true).unwrap();
+    assert!(!full.pending && note(&full, 1).is_some());
+    two_repo.check_repo_file(kind, false, text, true).unwrap();
+    for repo in [&one_repo, &two_repo] {
+        let now = repo.check_repo_file_now(kind, false, text, false);
+        assert!(!now.pending);
+        assert_eq!(note(&now, 1).as_deref(), note(&full, 1).as_deref());
+    }
+    // `fresh` asks for it all again.
+    assert!(one_repo.check_repo_file_now(kind, false, text, true).pending);
+}

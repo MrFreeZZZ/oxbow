@@ -7,7 +7,8 @@
 //! git-lfs) would read a line other than meant or stop, and warnings, which are only shown. Errors
 //! come from the text alone; warnings and the gray notes beside each line also look at the
 //! working copy and the history, read once when the file is opened ([`Repo::check_repo_file`]
-//! with `fresh`) and kept while it is edited.
+//! with `fresh`) and kept while it is edited. Reading them takes a while in a big repository, so
+//! [`Repo::check_repo_file_now`] checks the text alone until they are in.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -155,6 +156,10 @@ pub struct LineNote {
 pub struct FileCheck {
     pub problems: Vec<Problem>,
     pub notes: Vec<LineNote>,
+    /// Checked by the text alone: the working copy or the history is still being read, and what
+    /// comes from them (warnings, notes) is missing.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub pending: bool,
 }
 
 impl FileCheck {
@@ -284,9 +289,21 @@ impl Repo {
 
     /// What is wrong in `text` as `kind`, with the notes beside its lines. `fresh` reads the
     /// working copy and the history again instead of using what was read when the file opened.
+    /// Reading them stops with the read's Stop ([`crate::cli::stoppable`]).
     pub fn check_repo_file(&self, kind: RepoFileKind, gitlab: bool, text: &str, fresh: bool) -> Result<FileCheck> {
-        let context = Context::of(self, kind, fresh);
+        let context = Context::of(self, kind, fresh)?;
         Ok(self.check_text(kind, gitlab, text, Some(&context)))
+    }
+
+    /// [`Repo::check_repo_file`] without waiting for the working copy and the history: while they
+    /// are not read (or `fresh` asks for them again), the text alone, with `pending` set.
+    pub fn check_repo_file_now(&self, kind: RepoFileKind, gitlab: bool, text: &str, fresh: bool) -> FileCheck {
+        let context = if fresh { None } else { Context::ready(self, kind) };
+        let pending = context.is_none();
+        FileCheck {
+            pending,
+            ..self.check_text(kind, gitlab, text, context.as_ref())
+        }
     }
 
     /// Write `text` as the file, unless it has errors or is no longer `over`: the text it was
@@ -487,60 +504,123 @@ struct Context {
     people: Option<Arc<People>>,
 }
 
-#[derive(Default)]
+/// What was read of one repository. Each part is read under its own lock, outside the list of
+/// repositories: another repository's file is checked meanwhile, and a second check of this one
+/// waits for the reading and takes it.
 struct Cached {
-    made: Option<Instant>,
-    tree: Option<Arc<Tree>>,
-    people: Option<Arc<People>>,
+    workdir: PathBuf,
+    made: Instant,
+    tree: Mutex<Option<Arc<Tree>>>,
+    people: Mutex<Option<Arc<People>>>,
 }
 
-static CACHE: Mutex<Option<(PathBuf, Cached)>> = Mutex::new(None);
+/// What was read of the repositories whose files were checked last, the newest last.
+static CACHE: Mutex<Vec<Arc<Cached>>> = Mutex::new(Vec::new());
 static SAVING: Mutex<()> = Mutex::new(());
 
 /// How long what was read stays without `fresh`.
 const KEEP: Duration = Duration::from_secs(10 * 60);
+/// Repositories whose working copy and history are kept: a window each, about.
+const KEPT_REPOS: usize = 8;
+/// Entries of working copies kept at most, all repositories together: two of the biggest.
+const KEPT_ENTRIES: usize = 2 * MAX_ENTRIES;
 
 fn forget_context(workdir: &Path) {
-    if let Ok(mut cache) = CACHE.lock()
-        && cache.as_ref().is_some_and(|(dir, _)| dir == workdir)
-    {
-        *cache = None;
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.retain(|c| c.workdir != workdir);
     }
 }
 
+/// What was read of the repository at `workdir`, or a new place for it when there is none, it
+/// is too old, or `fresh` asks for it afresh.
+fn cached(workdir: &Path, fresh: bool) -> Arc<Cached> {
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let at = cache.iter().position(|c| c.workdir == workdir);
+    let kept = at
+        .map(|i| cache.remove(i))
+        .filter(|c| !fresh && c.made.elapsed() <= KEEP);
+    let entry = kept.unwrap_or_else(|| {
+        Arc::new(Cached {
+            workdir: workdir.to_path_buf(),
+            made: Instant::now(),
+            tree: Mutex::default(),
+            people: Mutex::default(),
+        })
+    });
+    cache.push(entry.clone());
+    // The ones checked longest ago go first, past the budget; one being read counts as none.
+    let entries = |c: &Cached| taken(&c.tree).map_or(0, |t| t.entries.len());
+    while cache.len() > 1
+        && (cache.len() > KEPT_REPOS || cache.iter().map(|c| entries(c)).sum::<usize>() > KEPT_ENTRIES)
+    {
+        cache.remove(0);
+    }
+    entry
+}
+
+/// What `part` holds, unless it is being read now or not read yet.
+fn taken<T>(part: &Mutex<Option<Arc<T>>>) -> Option<Arc<T>> {
+    part.try_lock().ok().and_then(|p| p.clone())
+}
+
+/// What `kind`'s checks read besides the text.
+fn wants(kind: RepoFileKind) -> (bool, bool) {
+    let tree = !matches!(
+        kind,
+        RepoFileKind::Mailmap | RepoFileKind::BlameIgnoreRevs | RepoFileKind::Lfsconfig
+    );
+    (tree, kind == RepoFileKind::Mailmap)
+}
+
 impl Context {
-    fn of(repo: &Repo, kind: RepoFileKind, fresh: bool) -> Context {
-        let wants_tree = !matches!(
-            kind,
-            RepoFileKind::Mailmap | RepoFileKind::BlameIgnoreRevs | RepoFileKind::Lfsconfig
-        );
-        let wants_people = kind == RepoFileKind::Mailmap;
-        let workdir = repo.workdir().to_path_buf();
-        let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        let stale = fresh
-            || cache
-                .as_ref()
-                .is_none_or(|(dir, c)| *dir != workdir || c.made.is_none_or(|t| t.elapsed() > KEEP));
-        if stale {
-            *cache = Some((
-                workdir.clone(),
-                Cached {
-                    made: Some(Instant::now()),
-                    ..Cached::default()
-                },
-            ));
+    /// Read what `kind` needs, unless it was read already. A Stop leaves nothing read.
+    fn of(repo: &Repo, kind: RepoFileKind, fresh: bool) -> Result<Context> {
+        let (wants_tree, wants_people) = wants(kind);
+        let cached = cached(repo.workdir(), fresh);
+        let mut context = Context {
+            tree: None,
+            people: None,
+        };
+        if wants_tree {
+            let mut tree = cached.tree.lock().unwrap_or_else(|e| e.into_inner());
+            if tree.is_none() {
+                *tree = Some(Arc::new(Tree::read(repo)?));
+            }
+            context.tree = tree.clone();
         }
-        let (_, cached) = cache.as_mut().expect("just set");
-        if wants_tree && cached.tree.is_none() {
-            cached.tree = Some(Arc::new(Tree::read(repo)));
+        if wants_people {
+            let mut people = cached.people.lock().unwrap_or_else(|e| e.into_inner());
+            if people.is_none() {
+                *people = Some(Arc::new(People::read(repo)?));
+            }
+            context.people = people.clone();
         }
-        if wants_people && cached.people.is_none() {
-            cached.people = Some(Arc::new(People::read(repo)));
+        Ok(context)
+    }
+
+    /// What `kind` needs when it is read already and not being read now; nothing otherwise.
+    fn ready(repo: &Repo, kind: RepoFileKind) -> Option<Context> {
+        let (wants_tree, wants_people) = wants(kind);
+        if !wants_tree && !wants_people {
+            return Some(Context {
+                tree: None,
+                people: None,
+            });
         }
-        Context {
-            tree: cached.tree.clone().filter(|_| wants_tree),
-            people: cached.people.clone().filter(|_| wants_people),
-        }
+        let cached = {
+            let cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+            cache
+                .iter()
+                .find(|c| c.workdir == repo.workdir() && c.made.elapsed() <= KEEP)
+                .cloned()?
+        };
+        let tree = if wants_tree { Some(taken(&cached.tree)?) } else { None };
+        let people = if wants_people {
+            Some(taken(&cached.people)?)
+        } else {
+            None
+        };
+        Some(Context { tree, people })
     }
 }
 
@@ -571,7 +651,7 @@ struct Entry {
 }
 
 impl Tree {
-    fn read(repo: &Repo) -> Tree {
+    fn read(repo: &Repo) -> Result<Tree> {
         let local = repo.local();
         let fold = local.config_snapshot().boolean("core.ignorecase").unwrap_or(false);
         let mut tracked = HashSet::new();
@@ -594,14 +674,15 @@ impl Tree {
             matched: Mutex::default(),
             counted: Mutex::default(),
         };
-        tree.walk(repo.workdir(), "");
-        tree
+        tree.walk(repo.workdir(), "")?;
+        Ok(tree)
     }
 
     /// Add what is in `dir` (`prefix` from the top), returning how many files.
-    fn walk(&mut self, dir: &Path, prefix: &str) -> usize {
+    fn walk(&mut self, dir: &Path, prefix: &str) -> Result<usize> {
+        crate::cli::check_stop()?;
         let Ok(read) = std::fs::read_dir(dir) else {
-            return 0;
+            return Ok(0);
         };
         let mut names: Vec<(String, bool)> = read
             .filter_map(|e| e.ok())
@@ -638,7 +719,7 @@ impl Tree {
                 let inner = if full.join(".git").exists() {
                     0
                 } else {
-                    self.walk(&full, &path)
+                    self.walk(&full, &path)?
                 };
                 self.entries[at].files = inner;
                 self.entries[at].end = self.entries.len();
@@ -647,7 +728,7 @@ impl Tree {
                 files += 1;
             }
         }
-        files
+        Ok(files)
     }
 
     fn case(&self) -> gix::glob::pattern::Case {
@@ -762,13 +843,14 @@ fn glob_matches(pattern: &gix::glob::Pattern, path: &str, dir: bool, case: gix::
 }
 
 /// Who wrote and committed the history: name and e-mail as written, with their commits.
+#[derive(Default)]
 struct People {
     /// (name, e-mail) → commits.
     ids: HashMap<(String, String), usize>,
 }
 
 impl People {
-    fn read(repo: &Repo) -> People {
+    fn read(repo: &Repo) -> Result<People> {
         let mut ids: HashMap<(String, String), usize> = HashMap::new();
         let local = repo.local();
         let mut tips: Vec<gix::ObjectId> = repo
@@ -788,12 +870,15 @@ impl People {
         tips.sort();
         tips.dedup();
         if tips.is_empty() {
-            return People { ids };
+            return Ok(People { ids });
         }
         let Ok(walk) = local.rev_walk(tips).all() else {
-            return People { ids };
+            return Ok(People { ids });
         };
-        for info in walk.take(MAX_COMMITS).flatten() {
+        for (n, info) in walk.take(MAX_COMMITS).flatten().enumerate() {
+            if n % 1024 == 0 {
+                crate::cli::check_stop()?;
+            }
             let Ok(commit) = local.find_commit(info.id) else {
                 continue;
             };
@@ -812,7 +897,7 @@ impl People {
                 seen(committer, 0);
             }
         }
-        People { ids }
+        Ok(People { ids })
     }
 
     fn by_email(&self, email: &str) -> impl Iterator<Item = (&(String, String), &usize)> {
@@ -1615,8 +1700,9 @@ impl Repo {
             "# One person under one name and e-mail in History and Blame.\n# Proper Name <proper@e-mail> Name in Commits <e-mail in commits>\n",
         );
         let people = Context::of(self, RepoFileKind::Mailmap, false)
-            .people
-            .unwrap_or_else(|| Arc::new(People::read(self)));
+            .ok()
+            .and_then(|c| c.people)
+            .unwrap_or_default();
         let mut by_name: HashMap<String, Vec<(&String, &String, usize)>> = HashMap::new();
         for ((name, email), &n) in &people.ids {
             if n > 0 && !name.is_empty() {

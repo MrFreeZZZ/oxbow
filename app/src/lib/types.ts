@@ -1397,6 +1397,9 @@ export interface LineNote {
 export interface FileCheck {
   problems: FileProblem[];
   notes: LineNote[];
+  /** Checked by the text alone: the working copy or the history is still being read, and the
+   *  warnings and notes that come from them are missing. */
+  pending?: boolean;
 }
 
 /** A command of the user's own that runs before each commit, kept as `oxbow.check` in .git/config. */
