@@ -125,3 +125,47 @@ fn file_search_finds_names_with_control_bytes() {
     );
     assert_eq!(find(&repo, SearchMode::File, &header), [(other, vec![header.clone()])]);
 }
+
+#[test]
+fn a_file_search_takes_the_text_as_it_is_not_as_a_pattern() {
+    let mut fx = Fixture::new();
+    fx.commit("pagea.txt", "a\n", "Plain");
+    let brackets = fx.commit("routes/page[ab].txt", "x\n", "Brackets");
+    let unicode = fx.commit("docs/Straße.md", "s\n", "Unicode");
+    let repo = Repo::open(fx.path()).unwrap();
+    let files = |text: &str| -> Vec<String> {
+        find(&repo, SearchMode::File, text)
+            .into_iter()
+            .flat_map(|(_, files)| files)
+            .collect()
+    };
+    assert_eq!(files("page[ab]"), ["routes/page[ab].txt"]);
+    assert_eq!(files("PAGE[AB]"), ["routes/page[ab].txt"]);
+    assert_eq!(find(&repo, SearchMode::File, "[ab]")[0].0, brackets);
+    assert_eq!(files("e[a"), ["routes/page[ab].txt"]);
+    assert_eq!(files("straße"), ["docs/Straße.md"]);
+    assert_eq!(find(&repo, SearchMode::File, "straße")[0].0, unicode);
+    assert_eq!(files("pagea"), ["pagea.txt"]);
+}
+
+/// Names a Windows disk can't hold.
+#[cfg(unix)]
+#[test]
+fn a_file_search_finds_stars_question_marks_and_backslashes_as_they_are() {
+    let mut fx = Fixture::new();
+    fx.commit("axb.txt", "a\n", "Plain");
+    fx.commit("a*b.txt", "s\n", "Star");
+    fx.commit("what?.txt", "q\n", "Question");
+    fx.commit("back\\slash.txt", "b\n", "Backslash");
+    let repo = Repo::open(fx.path()).unwrap();
+    let files = |text: &str| -> Vec<String> {
+        find(&repo, SearchMode::File, text)
+            .into_iter()
+            .flat_map(|(_, files)| files)
+            .collect()
+    };
+    assert_eq!(files("a*b"), ["a*b.txt"]);
+    assert_eq!(files("t?"), ["what?.txt"]);
+    assert_eq!(files("k\\s"), ["back\\slash.txt"]);
+    assert_eq!(files("*"), ["a*b.txt"]);
+}

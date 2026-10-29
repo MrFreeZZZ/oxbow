@@ -1011,3 +1011,42 @@ fn a_quiet_refresh_with_nothing_changed_runs_no_git() {
     let blind = repo.history_with(&unwatched, &mut cache, Some(&gone.key)).unwrap();
     assert!(asked(&blind, "status") && !blind.unchanged);
 }
+
+#[test]
+fn an_upstream_set_in_an_included_file_shows_once_the_file_changes() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "base\n", "base");
+    fx.git(&["remote", "add", "origin", "/nonexistent/remote"]);
+    fx.git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    fx.git(&["update-ref", "refs/remotes/origin/other", "HEAD"]);
+    fx.write(".git/upstreams.conf", "");
+    fx.git(&["config", "include.path", "upstreams.conf"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let mut cache = oxbow_core::HistoryCache::default();
+    let branch = |h: &History| h.tracking.as_ref().map(|t| t.branch.clone());
+    let first = repo.history_with(&HistoryOptions::default(), &mut cache, None).unwrap();
+    assert_eq!(branch(&first), None);
+
+    // The included file was empty when the repository was opened.
+    fx.write(
+        ".git/upstreams.conf",
+        "[branch \"main\"]\nremote = origin\nmerge = refs/heads/main\n",
+    );
+    let set = repo.history_with(&HistoryOptions::default(), &mut cache, None).unwrap();
+    assert_eq!(branch(&set).as_deref(), Some("main"));
+
+    // Changed again, refs where they were: a reload after the window comes back to the front
+    // sees it as well.
+    fx.write(
+        ".git/upstreams.conf",
+        "[branch \"main\"]\nremote = origin\nmerge = refs/heads/other\n",
+    );
+    let options = HistoryOptions {
+        quiet: true,
+        seen: Some(1),
+        ..Default::default()
+    };
+    let quiet = repo.history_with(&options, &mut cache, Some(&set.key)).unwrap();
+    assert_eq!(branch(&quiet).as_deref(), Some("other"));
+    assert!(!quiet.unchanged);
+}

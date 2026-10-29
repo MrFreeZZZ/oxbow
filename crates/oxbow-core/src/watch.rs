@@ -469,7 +469,7 @@ fn git_kind(relative: &Path) -> Kind {
         ["refs", ..] | ["logs", "refs", "stash"] => Kind::Git,
         ["rebase-merge", ..] | ["rebase-apply", ..] | ["sequencer", ..] => Kind::Git,
         ["info", "exclude"] => Kind::Files,
-        [name] if matches!(*name, "HEAD" | "packed-refs" | "config" | "shallow") => Kind::Git,
+        [name] if matches!(*name, "HEAD" | "packed-refs" | "config" | "config.worktree" | "shallow") => Kind::Git,
         // MERGE_HEAD, CHERRY_PICK_HEAD and the like say an operation is under way; FETCH_HEAD and
         // ORIG_HEAD come with changes told otherwise.
         [name] if name.ends_with("_HEAD") && !matches!(*name, "FETCH_HEAD" | "ORIG_HEAD") => Kind::Git,
@@ -526,6 +526,8 @@ mod tests {
         assert_eq!(kind("modules/lib/packed-refs"), Kind::Git);
         assert_eq!(kind("modules/lib/refs/heads/main.lock"), Kind::Nothing);
         assert_eq!(kind("info/exclude"), Kind::Files);
+        assert_eq!(kind("config.worktree"), Kind::Git);
+        assert_eq!(kind("worktrees/feature/config.worktree"), Kind::Git);
     }
 
     #[cfg(unix)]

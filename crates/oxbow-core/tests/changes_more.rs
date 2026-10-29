@@ -538,3 +538,58 @@ fn a_page_stops_while_it_is_read() {
         "stopped {took:?} after Stop, the whole read took {whole:?}"
     );
 }
+
+/// A diff driver's `textconv` changes what `git diff` prints, not the file: the hunks staged and
+/// thrown away come from the bytes themselves, on a page of files as for one file.
+#[cfg(unix)]
+#[test]
+fn a_textconv_driver_leaves_the_hunks_as_the_file_has_them() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "foo before\n", "Root");
+    fx.commit("b.txt", "foo one\n", "Second");
+    fx.commit(".gitattributes", "*.txt diff=demo\n", "Attributes");
+    fx.git(&["config", "diff.demo.textconv", "sed s/foo/bar/g"]);
+    fx.write("a.txt", "foo after\n");
+    fx.write("b.txt", "foo two\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    let texts = |diff: &oxbow_core::FileDiff| -> Vec<String> {
+        diff.hunks
+            .iter()
+            .flat_map(|h| &h.lines)
+            .map(|l| l.text.clone())
+            .collect()
+    };
+
+    let one = repo.working_diff("a.txt", Side::Unstaged, false).unwrap();
+    assert_eq!(texts(&one), ["foo before", "foo after"]);
+    let tree = repo.working_tree().unwrap();
+    let paths = vec!["a.txt".to_owned(), "b.txt".to_owned()];
+    let never = std::sync::atomic::AtomicBool::new(false);
+    let page = repo
+        .working_diff_page(&tree, &paths, Side::Unstaged, false, 0, usize::MAX, &never)
+        .unwrap();
+    assert_eq!(texts(&page.diffs[0]), ["foo before", "foo after"]);
+    assert_eq!(texts(&page.diffs[1]), ["foo one", "foo two"]);
+
+    let hunk = &page.diffs[1].hunks[0];
+    repo.perform(&Action::StageHunk {
+        path: "b.txt".into(),
+        header: hunk.header.clone(),
+        check: hunk.check.clone(),
+        lines: None,
+    })
+    .unwrap();
+    assert_eq!(staged_text(&mut fx, "b.txt"), "foo two\n");
+    let hunk = &one.hunks[0];
+    repo.perform(&Action::DiscardHunk {
+        path: "a.txt".into(),
+        header: hunk.header.clone(),
+        check: hunk.check.clone(),
+        lines: None,
+    })
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(fx.path().join("a.txt")).unwrap(),
+        "foo before\n"
+    );
+}
