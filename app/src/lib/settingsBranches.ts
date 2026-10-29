@@ -111,6 +111,15 @@ export const branchesSection: Section = {
   child: true,
   groups: () => [
     {
+      title: "Git",
+      foot: "Saved in ~/.gitconfig. The production branch and protected branches are set for each repository in This Repository; branch colors in Themes.",
+      rows: [
+        gitEdit("global", "init.defaultBranch", "Default branch for new repositories", { mono: false, shown: () => config("global", "init.defaultBranch") ?? "master (Git’s default)", placeholder: "main" }),
+        gitSwitch("global", "rebase.updateRefs", "Move stacked branches along when rebasing", true, { sub: "git rebase --update-refs: branches built on the rebased one follow it" }),
+        gitSwitch("global", "fetch.prune", "Remove branches deleted on the remote when fetching", true),
+      ],
+    },
+    {
       title: "New branch names",
       rows: [
         prefRow("oxbow.branch.cleanNames", "Clean up names as you type", "switch", {
@@ -122,14 +131,6 @@ export const branchesSection: Section = {
           sub: "The prefix in the Name box when the sheet opens",
           options: () => [{ value: "last", label: "The prefix used last" }, ...prefixes().map((p) => ({ value: p.prefix, label: p.prefix })), { value: "", label: "No prefix" }],
         }),
-      ],
-    },
-    {
-      title: "Prefixes",
-      foot: "The pop-up at the start of the Name box offers them in this order, each with what it is for. A prefix typed by hand works too.",
-      rows: [
-        ...prefixRows(),
-        prefRow("oxbow.branch.repoPrefixes", "Also offer the prefixes this repository uses", "switch", { sub: "Such as renovate/ or a teammate’s own, under the list, with how many branches have them" }),
       ],
     },
     {
@@ -160,12 +161,11 @@ export const branchesSection: Section = {
       ],
     },
     {
-      title: "Git",
-      foot: "Saved in ~/.gitconfig. The production branch and protected branches are set for each repository in This Repository; branch colors in Themes.",
+      title: "Prefixes",
+      foot: "The pop-up at the start of the Name box offers them in this order, each with what it is for. A prefix typed by hand works too.",
       rows: [
-        gitEdit("global", "init.defaultBranch", "Default branch for new repositories", { mono: false, shown: () => config("global", "init.defaultBranch") ?? "master (Git’s default)", placeholder: "main" }),
-        gitSwitch("global", "rebase.updateRefs", "Move stacked branches along when rebasing", true, { sub: "git rebase --update-refs: branches built on the rebased one follow it" }),
-        gitSwitch("global", "fetch.prune", "Remove branches deleted on the remote when fetching", true),
+        ...prefixRows(),
+        prefRow("oxbow.branch.repoPrefixes", "Also offer the prefixes this repository uses", "switch", { sub: "Such as renovate/ or a teammate’s own, under the list, with how many branches have them" }),
       ],
     },
   ],
