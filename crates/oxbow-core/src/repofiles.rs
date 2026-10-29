@@ -10,6 +10,7 @@
 //! with `fresh`) and kept while it is edited.
 
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -215,7 +216,7 @@ impl Repo {
             .iter()
             .zip(paths)
             .map(|(&kind, path)| {
-                let text = read_file(&self.workdir().join(&path));
+                let text = read_file(&self.workdir().join(&path), limit(kind, gitlab));
                 let exists = text.is_some();
                 let text = text.unwrap_or(Ok(String::new()));
                 let problem = match &text {
@@ -248,7 +249,7 @@ impl Repo {
     /// The file's text, or a starter for a new one.
     pub fn repo_file_text(&self, kind: RepoFileKind, gitlab: bool) -> Result<RepoFileText> {
         let path = self.repo_file_path(kind, gitlab);
-        let read = read_file(&self.workdir().join(&path));
+        let read = read_file(&self.workdir().join(&path), limit(kind, gitlab));
         let exists = read.is_some();
         let (text, unreadable) = match read {
             Some(Ok(text)) => (text, None),
@@ -314,13 +315,21 @@ impl Repo {
             }
             std::fs::create_dir_all(dir).map_err(io)?;
         }
+        // A new file of a unique name, made here and never one that was there before, so a
+        // link put in its place can't take the text elsewhere; then it takes the file's place.
         let name = file.file_name().unwrap_or_default().to_string_lossy().into_owned();
-        let new = file.with_file_name(format!(".{name}.oxbow-{}", std::process::id()));
-        std::fs::write(&new, text).map_err(io)?;
-        if let Err(err) = std::fs::rename(&new, &file) {
-            let _ = std::fs::remove_file(&new);
-            return Err(io(err));
+        let prefix = format!(".{name}.");
+        let mut temp = tempfile::Builder::new();
+        temp.prefix(&prefix).suffix(".oxbow");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&file).map_or(0o666, |seen| seen.permissions().mode() & 0o7777);
+            temp.permissions(std::fs::Permissions::from_mode(mode));
         }
+        let mut new = temp.tempfile_in(file.parent().unwrap_or(self.workdir())).map_err(io)?;
+        new.write_all(text.as_bytes()).map_err(io)?;
+        new.persist(&file).map_err(|err| io(err.error))?;
         forget_context(self.workdir());
         Ok(path)
     }
@@ -367,17 +376,8 @@ impl Repo {
             );
             return check;
         }
-        let limit = if kind == RepoFileKind::Codeowners && !gitlab {
-            GITHUB_CODEOWNERS_BYTES
-        } else {
-            MAX_BYTES
-        };
+        let (limit, message) = limit(kind, gitlab);
         if text.len() > limit {
-            let message = if kind == RepoFileKind::Codeowners {
-                "GitHub doesn't read a CODEOWNERS file over 3 MB."
-            } else {
-                "The file is over 1 MB, more than Oxbow takes."
-            };
             check.error(0, "", (0, 0), message, None);
             return check;
         }
@@ -397,14 +397,27 @@ impl Repo {
     }
 }
 
+/// The most the file can be, the same for reading, checking and saving it, and what is said
+/// when it is bigger.
+fn limit(kind: RepoFileKind, gitlab: bool) -> (usize, &'static str) {
+    if kind == RepoFileKind::Codeowners && !gitlab {
+        (
+            GITHUB_CODEOWNERS_BYTES,
+            "GitHub doesn't read a CODEOWNERS file over 3 MB.",
+        )
+    } else {
+        (MAX_BYTES, "The file is over 1 MB, more than Oxbow takes.")
+    }
+}
+
 /// The file at `path` when it is there: its text, or why it can't be shown.
-fn read_file(path: &Path) -> Option<std::result::Result<String, String>> {
+fn read_file(path: &Path, (limit, too_big): (usize, &str)) -> Option<std::result::Result<String, String>> {
     std::fs::symlink_metadata(path).ok()?;
-    let Some(bytes) = crate::lfs::read_regular(path, MAX_BYTES as u64 + 1) else {
+    let Some(bytes) = crate::lfs::read_regular(path, limit as u64 + 1) else {
         return Some(Err("It is not a plain file here, so Oxbow doesn't open it.".into()));
     };
-    if bytes.len() > MAX_BYTES {
-        return Some(Err("The file is over 1 MB, more than Oxbow takes.".into()));
+    if bytes.len() > limit {
+        return Some(Err(too_big.into()));
     }
     Some(
         String::from_utf8(bytes)
@@ -2189,7 +2202,7 @@ fn editorconfig_regex(glob: &str) -> Option<regex::Regex> {
                     && let (Ok(a), Ok(b)) = (a.parse::<i64>(), b.parse::<i64>())
                 {
                     let (lo, hi) = (a.min(b), a.max(b));
-                    if hi - lo > 1000 {
+                    if hi.checked_sub(lo).is_none_or(|count| count > 1000) {
                         return None;
                     }
                     out.push_str(&format!(
