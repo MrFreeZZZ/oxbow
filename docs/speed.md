@@ -120,6 +120,23 @@ and pictures), and saves of a file within 30 seconds make one version, so an edi
 second keeps two a minute, not sixty. The blobs stay outside git's own objects, so `git gc`
 neither keeps nor counts them, and nothing a branch switch writes costs a blob.
 
+## Changes of 10,000 files (29 October)
+
+`cargo run --release -p oxbow-core --example reads -- ~/oxbow-perf/changes-10k` (the fixture of
+`make-perf-fixtures.sh changes`; cloud, Xeon, 4 cores, git 2.43; median of 7).
+
+| Measure | Before (43098e7) | After |
+|---|---|---|
+| History shown, with the list of changed files | 1.2 s, 6 git | 92 ms, 3 git |
+| Changed lines counted after, while the list already shows | — | 1.0 s |
+| Refresh, nothing changed | 28 ms | 21 ms |
+
+`git status` lists the 10,000 files in about 50 ms; `git diff --numstat` of the files not staged
+takes 600 ms of the second, as it reads and compares every file. The history no longer waits
+for it: the list shows with "…" for each file's lines, the file open counts its own lines with
+its diff, and the rest come in one answer after. Running the two `numstat` side by side would
+save at most the 50 ms of the staged one, so they still run one after the other.
+
 ## Oxbow's window
 
 ```sh

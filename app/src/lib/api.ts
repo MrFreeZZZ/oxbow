@@ -188,6 +188,9 @@ export const api = {
   filePickaxe: (path: string, text: string, matchCase: boolean, rev: string, lane: string | null = null) =>
     invoke<string[]>("file_pickaxe", { path, text, matchCase, rev, lane }),
   workingTree: () => invoke<WorkingTree>("working_tree"),
+  /** The files of reading `snapshot` with their changed lines counted; null once a newer reading
+   *  came in. A newer request in the same `lane` stops this one. */
+  workingCounts: (snapshot: number, lane: string | null = null) => invoke<WorkingTree | null>("working_counts", { snapshot, lane }),
   changelists: (snapshot: number | null) => invoke<Changelists>("changelists", { snapshot }),
   editChangelists: (edit: ChangelistEdit) => invoke<Changelists>("edit_changelists", { edit }),
   /** Your latest commit messages, newest first, for ↑ in the commit message box. */

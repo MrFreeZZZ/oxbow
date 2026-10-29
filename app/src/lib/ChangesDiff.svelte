@@ -33,6 +33,7 @@
     openUnstaged,
     openStaged,
     sideFiles,
+    counted,
     staged,
     tracked,
     untracked,
@@ -75,6 +76,8 @@
     openStaged: FileChange | null;
     /** Files of every file of a side shown, for the heading over them. */
     sideFiles: FileChange[];
+    /** The lines of the files are counted: until then their totals show "…", not 0. */
+    counted: boolean;
     staged: FileChange[];
     tracked: FileChange[];
     untracked: FileChange[];
@@ -246,7 +249,7 @@
         <div class="dtitle">
           <b>{shown.kind === "files" ? "Selected files" : listTitle ? listTitle : shown.side === "staged" ? "Next commit" : shown.untracked ? "Untracked files" : "Unstaged changes"}</b>
           <span class="n">{sideFiles.length} {sideFiles.length === 1 ? "file" : "files"}</span>
-          {#if sideFiles.length}<span class="mono add">+{sideTotals.add}</span><span class="mono del">−{sideTotals.del}</span>{/if}
+          {#if sideFiles.length && !counted}<span class="mono" title="Counting the changed lines…">…</span>{:else if sideFiles.length}<span class="mono add">+{sideTotals.add}</span><span class="mono del">−{sideTotals.del}</span>{/if}
         </div>
         <div class="caption">{shown.side === "staged" ? "Only staged changes go into the commit" : listTitle ? "A changelist: its changes stay out of the commit until staged, or committed on their own with Commit…" : shown.untracked ? "New files git does not track yet stay out of the commit until staged" : "They stay out of the commit until staged"}</div>
       </div>

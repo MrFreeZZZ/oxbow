@@ -1050,3 +1050,56 @@ fn an_upstream_set_in_an_included_file_shows_once_the_file_changes() {
     assert_eq!(branch(&quiet).as_deref(), Some("other"));
     assert!(!quiet.unchanged);
 }
+
+#[test]
+fn the_changes_come_with_the_history_before_their_lines_are_counted() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "1\n2\n3\n4\n5\n6\n7\n8\n", "Root");
+    fx.write("a.txt", "1\nx\n3\n4\n5\n6\ny\n8\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    let mut cache = oxbow_core::HistoryCache::default();
+    let read = |cache: &mut oxbow_core::HistoryCache, quiet: bool| {
+        let options = HistoryOptions {
+            seen: Some(1),
+            quiet,
+            ..Default::default()
+        };
+        repo.history_with(&options, cache, None).unwrap()
+    };
+    let asked = |h: &History, what: &str| h.reads.iter().any(|r| r.contains(what));
+
+    // Listed by `git status` alone: no `git diff --numstat` before the history is answered.
+    let first = read(&mut cache, false);
+    assert!(asked(&first, "status") && !asked(&first, "numstat"));
+    let listed = first.changes.clone().unwrap();
+    assert!(!listed.counted);
+    assert_eq!(listed.unstaged[0].additions, 0);
+
+    // Counted after, they are what the next quiet read gives while nothing changes.
+    let mut counted = listed.clone();
+    repo.count_lines(&mut counted).unwrap();
+    assert!(counted.counted);
+    assert_eq!((counted.unstaged[0].additions, counted.unstaged[0].deletions), (2, 2));
+    cache.keep_counts(&counted);
+    let quiet = read(&mut cache, true);
+    assert_eq!(quiet.reads, Vec::<String>::new());
+    assert!(quiet.changes.as_ref().unwrap().counted);
+
+    // Staging a part of the file instead of another changes no file and no list: the stamp
+    // still tells.
+    let stage = |fx: &mut Fixture, text: &str| {
+        fx.write("part.tmp", text);
+        let id = fx.git(&["hash-object", "-w", "part.tmp"]);
+        std::fs::remove_file(fx.path().join("part.tmp")).unwrap();
+        fx.git(&["update-index", "--cacheinfo", &format!("100644,{},a.txt", id.trim())]);
+    };
+    stage(&mut fx, "1\nx\n3\n4\n5\n6\n7\n8\n");
+    let one = read(&mut cache, false);
+    stage(&mut fx, "1\n2\n3\n4\n5\n6\ny\n8\n");
+    let other = read(&mut cache, false);
+    assert_eq!(
+        format!("{:?}", one.changes.as_ref().map(|c| (&c.staged, &c.unstaged))),
+        format!("{:?}", other.changes.as_ref().map(|c| (&c.staged, &c.unstaged)))
+    );
+    assert_ne!(one.changes_stamp, other.changes_stamp);
+}

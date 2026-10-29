@@ -109,6 +109,47 @@ pub(crate) async fn working_tree(
     read(at(&repo), "Read the changes", move || repo.working_tree()).await
 }
 
+/// The files of `snapshot`, the reading of the working tree the history read last, with their
+/// changed lines counted: the history lists the files at once, and they are counted after.
+/// `None` when a newer reading came in since, which is counted on its own.
+#[tauri::command]
+pub(crate) async fn working_counts(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    snapshot: u64,
+    lane: Option<String>,
+) -> CommandResult<Option<WorkingTree>> {
+    let repo = current(&session, &window)?;
+    let kept = |slot: &mut crate::session::Slot| {
+        slot.changes
+            .as_ref()
+            .filter(|(number, _)| *number == snapshot)
+            .map(|(_, tree)| tree.clone())
+    };
+    let Some(tree) = session.slot(&window, kept) else {
+        return Ok(None);
+    };
+    if tree.counted {
+        return Ok(Some((*tree).clone()));
+    }
+    let cancel = session.lane(&window, lane);
+    let counted = read(at(&repo), "Count the changed lines", move || {
+        let mut tree = (*tree).clone();
+        oxbow_core::cli::stoppable(&cancel, || repo.count_lines(&mut tree))?;
+        Ok(tree)
+    })
+    .await?;
+    // Kept for the diffs of the same reading, and for the next reload while nothing changes.
+    let counted = Arc::new(counted);
+    session.slot(&window, |slot| {
+        if slot.changes.as_ref().is_some_and(|(number, _)| *number == snapshot) {
+            slot.changes = Some((snapshot, counted.clone()));
+            slot.history.keep_counts(&counted);
+        }
+    });
+    Ok(Some((*counted).clone()))
+}
+
 #[tauri::command]
 pub(crate) async fn working_diff(
     window: tauri::WebviewWindow,

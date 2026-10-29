@@ -17,7 +17,7 @@ use crate::cli::{GitCommand, literal};
 use crate::commit::{DiffLine, FileChange, FileStatus, LineKind};
 use crate::error::{Error, Result};
 use crate::repo::Repo;
-use crate::worktree::{WorkingTree, fingerprint, partial_hunk};
+use crate::worktree::{Side, WorkingTree, fingerprint, partial_hunk};
 
 /// Where the lists are kept, in each working copy's own git folder.
 const STORE: &str = "oxbow/changelists.json";
@@ -351,6 +351,23 @@ impl Repo {
         if store.lists.is_empty() {
             return Ok(Changelists::default());
         }
+        // Runs are read from the patches of the files they are in, which only counting tells
+        // from binary and LFS files.
+        let mut copy;
+        let tree = if tree.counted || store.runs.is_empty() {
+            tree
+        } else {
+            copy = tree.clone();
+            let at: Vec<usize> = (0..copy.unstaged.len())
+                .filter(|&i| store.keyed(&copy.unstaged[i].path))
+                .collect();
+            let mut keyed: Vec<FileChange> = at.iter().map(|&i| copy.unstaged[i].clone()).collect();
+            self.count_some(&mut keyed, Side::Unstaged)?;
+            for (i, file) in at.into_iter().zip(keyed) {
+                copy.unstaged[i] = file;
+            }
+            &copy
+        };
         // Two steps, so both run: `|` and not `||`.
         if drop_unchanged(&mut store, tree) | take_new_files(&mut store, tree) {
             self.write_store(&store)?;

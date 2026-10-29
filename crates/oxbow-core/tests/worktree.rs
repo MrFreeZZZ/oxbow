@@ -426,3 +426,63 @@ fn recent_messages_are_yours_newest_first_and_each_once() {
     );
     assert_eq!(repo.recent_messages(1).unwrap(), ["On the side"]);
 }
+
+#[test]
+fn files_listed_before_their_lines_are_counted_show_the_same_diffs() {
+    use std::sync::atomic::AtomicBool;
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", &lines(5, &[]), "Root");
+    fx.commit("long.txt", &lines(60, &[]), "Long");
+    fx.commit("blob.bin", "\0old", "Binary");
+    fx.write("a.txt", &lines(5, &[2]));
+    fx.git(&["add", "a.txt"]);
+    fx.write("a.txt", &lines(5, &[2, 4]));
+    // Past the limit of 10 changed lines: its patch is never read, counted or not.
+    fx.write("long.txt", &lines(60, &(1..=30).collect::<Vec<_>>()));
+    std::fs::write(fx.path().join("blob.bin"), b"\0new").unwrap();
+    fx.write("new.md", "one\ntwo\n");
+    let mut repo = Repo::open(fx.path()).unwrap();
+    repo.set_diff_options(oxbow_core::DiffOptions {
+        max_lines: 10,
+        ..Default::default()
+    });
+
+    let listed = repo.working_files().unwrap();
+    assert!(!listed.counted);
+    assert!(listed.unstaged.iter().all(|f| f.additions == 0 && !f.binary));
+    let mut counted = listed.clone();
+    repo.count_lines(&mut counted).unwrap();
+    let whole = repo.working_tree().unwrap();
+    assert!(counted.counted && whole.counted);
+    assert_eq!(
+        serde_json::to_value(&counted).unwrap(),
+        serde_json::to_value(&whole).unwrap()
+    );
+
+    let never = AtomicBool::new(false);
+    for side in [Side::Unstaged, Side::Staged] {
+        let list = if side == Side::Staged {
+            &whole.staged
+        } else {
+            &whole.unstaged
+        };
+        let paths: Vec<String> = list.iter().map(|f| f.path.clone()).collect();
+        let page = |tree| {
+            let page = repo
+                .working_diff_page(tree, &paths, side, false, 0, usize::MAX, &never)
+                .unwrap();
+            serde_json::to_value(&page).unwrap()
+        };
+        assert_eq!(page(&listed), page(&whole), "{side:?}");
+    }
+    let long = repo.working_diff_page(
+        &listed,
+        &["long.txt".into()],
+        Side::Unstaged,
+        false,
+        0,
+        usize::MAX,
+        &never,
+    );
+    assert!(long.unwrap().diffs[0].limited);
+}

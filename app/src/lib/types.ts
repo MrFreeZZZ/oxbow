@@ -574,6 +574,9 @@ export interface WorkingTree {
   staged: FileChange[];
   unstaged: FileChange[];
   conflicted: FileChange[];
+  /** The changed lines are counted. The history lists the files first, with 0 lines each until
+   *  `api.workingCounts` counts them. */
+  counted: boolean;
 }
 
 export type Side = "staged" | "unstaged";

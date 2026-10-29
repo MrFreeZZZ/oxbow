@@ -1,4 +1,4 @@
-import { firstShown, keepShown, nextAfter, pickRange, stepShown, type Lists, type Shown } from "../src/lib/changesView.ts";
+import { countedFile, firstShown, keepShown, lineCounts, nextAfter, pickRange, stepShown, type Lists, type Shown } from "../src/lib/changesView.ts";
 import type { FileChange } from "../src/lib/types.ts";
 import assert from "node:assert/strict";
 
@@ -51,3 +51,19 @@ assert.equal(nextAfter(order, "b"), "c");
 assert.equal(nextAfter(order, "d"), "c");
 assert.equal(nextAfter(["a"], "a"), null);
 assert.equal(nextAfter(order, "gone"), "a");
+
+// Listed before their lines are counted, files never look empty: "…" until the counts or their
+// diff come, whose counts the row takes.
+{
+  const edited = { path: "a", status: "modified", additions: 0, deletions: 0 } as FileChange;
+  const none = new Map<string, FileChange>();
+  assert.equal(countedFile(edited, false, none, "unstaged"), null);
+  assert.equal(lineCounts(countedFile(edited, false, none, "unstaged")), "…");
+  const shown = new Map([["unstaged:a", { ...edited, additions: 3, deletions: 1 }]]);
+  assert.equal(lineCounts(countedFile(edited, false, shown, "unstaged")), "+3 −1");
+  // The diff of the other side is not this row's.
+  assert.equal(lineCounts(countedFile(edited, false, shown, "staged")), "…");
+  // Counted, a file with no changed lines says so; a conflicted file has nothing to wait for.
+  assert.equal(lineCounts(countedFile(edited, true, none, "unstaged")), "no lines");
+  assert.equal(countedFile({ ...edited, status: "conflicted" }, false, none, "unstaged")?.path, "a");
+}
