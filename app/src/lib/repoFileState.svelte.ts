@@ -4,11 +4,14 @@
 
 import { api } from "./api";
 import { confirm, type Part, type Request } from "./confirm.svelte";
+import { Latest } from "./latest";
 import { rowSub } from "./repoFiles";
 import type { Row, Section } from "./settingsRows";
 import type { RepoFileKind, RepoFiles } from "./types";
 
 export const repoFiles = $state({
+  /** The repository the list is of, by its path. */
+  repo: null as string | null,
   list: null as RepoFiles | null,
   problem: null as string | null,
   /** The file open in the editor. */
@@ -17,12 +20,19 @@ export const repoFiles = $state({
   drafts: {} as Partial<Record<RepoFileKind, string>>,
 });
 
+// Loads overlap (a Save, the window's focus, the section opened): only the newest reply is shown,
+// and none for a repository the window has left.
+const loads = new Latest(() => repoFiles.repo);
+
 export async function loadRepoFiles() {
+  const current = loads.begin();
   try {
-    repoFiles.list = await api.repoFiles();
+    const list = await api.repoFiles();
+    if (!current()) return;
+    repoFiles.list = list;
     repoFiles.problem = null;
   } catch (err) {
-    repoFiles.problem = String(err);
+    if (current()) repoFiles.problem = String(err);
   }
 }
 
@@ -35,9 +45,13 @@ export function closeRepoFile() {
   loadRepoFiles();
 }
 
-/** Another repository: what was typed for this one goes. */
-export function forgetRepoFiles() {
+/** Another repository (`repo`, by its path): what was typed for the last one goes, and a list of
+ *  it still on its way isn't shown. */
+export function forgetRepoFiles(repo: string | null) {
+  loads.drop();
+  repoFiles.repo = repo;
   repoFiles.list = null;
+  repoFiles.problem = null;
   repoFiles.open = null;
   repoFiles.drafts = {};
 }

@@ -94,7 +94,9 @@
       <span>{versions ? `${versions.length}${versions.length >= MAX_LISTED_ALL ? "+" : ""} saved ${versions.length === 1 ? "version" : "versions"}` : "Saved versions"}</span>
       <span class="days">{off ? "Off in Settings" : `Kept ${prefs.get("oxbow.localHistory.keepDays")} days`}</span>
     </div>
-    {#if problem}
+    {#if problem && problem.waiting === 0}
+      <p class="problem" role="status">Saves since {time(problem.since)} aren’t kept. {problem.error}. Local History tries again with the next save.</p>
+    {:else if problem}
       <p class="problem" role="status">
         {problem.waiting === 1 ? "A version saved" : `${problem.waiting} versions saved`} since {time(problem.since)}
         {problem.waiting === 1 ? "isn’t" : "aren’t"} kept yet. {problem.error}. Local History tries again with the next save and every minute.

@@ -152,7 +152,7 @@
     untrack(() => {
       if (path === filesFor) return;
       filesFor = path;
-      forgetRepoFiles();
+      forgetRepoFiles(path);
       if (path) loadRepoFiles();
     });
   });
