@@ -1,7 +1,7 @@
 mod support;
 
 use oxbow_core::Repo;
-use oxbow_core::repofiles::{Fix, Level, RepoFileKind};
+use oxbow_core::repofiles::{Fix, Level, RepoFileKind, Saved};
 use support::Fixture;
 
 fn problems(check: &oxbow_core::repofiles::FileCheck, level: Level) -> Vec<(usize, String)> {
@@ -102,19 +102,31 @@ fn gitignore_errors_and_what_each_line_matches() {
 fn save_writes_only_a_file_without_errors() {
     let fx = Fixture::new();
     let repo = Repo::open(&fx.path).unwrap();
-    let refused = repo.save_repo_file(RepoFileKind::Gitignore, false, "./dist\n");
+    let refused = repo.save_repo_file(RepoFileKind::Gitignore, false, "./dist\n", None);
     assert!(refused.is_err());
     assert!(!fx.path.join(".gitignore").exists());
 
-    let path = repo.save_repo_file(RepoFileKind::Gitignore, false, "/dist\n").unwrap();
-    assert_eq!(path, ".gitignore");
+    let path = repo
+        .save_repo_file(RepoFileKind::Gitignore, false, "/dist\n", None)
+        .unwrap();
+    assert_eq!(
+        path,
+        Saved::Written {
+            path: ".gitignore".into()
+        }
+    );
     assert_eq!(std::fs::read_to_string(fx.path.join(".gitignore")).unwrap(), "/dist\n");
     let owners = repo
-        .save_repo_file(RepoFileKind::Codeowners, false, "* @acme/core\n")
+        .save_repo_file(RepoFileKind::Codeowners, false, "* @acme/core\n", None)
         .unwrap();
-    assert_eq!(owners, ".github/CODEOWNERS");
+    assert_eq!(
+        owners,
+        Saved::Written {
+            path: ".github/CODEOWNERS".into()
+        }
+    );
     assert!(fx.path.join(".github/CODEOWNERS").is_file());
-    assert!(repo.save_repo_file(RepoFileKind::Gitmodules, false, "").is_err());
+    assert!(repo.save_repo_file(RepoFileKind::Gitmodules, false, "", None).is_err());
     // Nothing is staged.
     let status = std::process::Command::new("git")
         .args(["diff", "--cached", "--name-only"])
@@ -122,6 +134,56 @@ fn save_writes_only_a_file_without_errors() {
         .output()
         .unwrap();
     assert!(status.stdout.is_empty());
+}
+
+#[test]
+fn save_writes_nothing_over_a_file_changed_since_it_was_opened() {
+    let mut fx = Fixture::new();
+    fx.commit(".gitignore", "/dist\n", "ignore");
+    let repo = Repo::open(&fx.path).unwrap();
+    let opened = repo.repo_file_text(RepoFileKind::Gitignore, false).unwrap().text;
+    // Another editor saves its own text, then Oxbow's typed over the old one comes.
+    std::fs::write(fx.path.join(".gitignore"), "/dist\n/build\n").unwrap();
+    let saved = repo
+        .save_repo_file(RepoFileKind::Gitignore, false, "/dist\n*.log\n", Some(&opened))
+        .unwrap();
+    assert_eq!(
+        saved,
+        Saved::Changed {
+            text: Some("/dist\n/build\n".into())
+        }
+    );
+    assert_eq!(
+        std::fs::read_to_string(fx.path.join(".gitignore")).unwrap(),
+        "/dist\n/build\n"
+    );
+    // Saving over what is there now is asked for: it is written.
+    let saved = repo
+        .save_repo_file(
+            RepoFileKind::Gitignore,
+            false,
+            "/dist\n*.log\n",
+            Some("/dist\n/build\n"),
+        )
+        .unwrap();
+    assert!(matches!(saved, Saved::Written { .. }));
+    // A file made by something else while a new one was typed, and one removed.
+    std::fs::write(fx.path.join(".mailmap"), "A <a@b.c>\n").unwrap();
+    let saved = repo
+        .save_repo_file(RepoFileKind::Mailmap, false, "B <b@b.c>\n", None)
+        .unwrap();
+    assert_eq!(
+        saved,
+        Saved::Changed {
+            text: Some("A <a@b.c>\n".into())
+        }
+    );
+    std::fs::remove_file(fx.path.join(".gitignore")).unwrap();
+    let saved = repo
+        .save_repo_file(RepoFileKind::Gitignore, false, "/x\n", Some("/dist\n*.log\n"))
+        .unwrap();
+    assert_eq!(saved, Saved::Changed { text: None });
+    assert!(!fx.path.join(".gitignore").exists());
 }
 
 #[cfg(unix)]
@@ -132,7 +194,7 @@ fn save_never_writes_through_a_link() {
     std::os::unix::fs::symlink(outside.path().join("x"), fx.path.join(".mailmap")).unwrap();
     let repo = Repo::open(&fx.path).unwrap();
     assert!(
-        repo.save_repo_file(RepoFileKind::Mailmap, false, "A <a@b.c> <x@y.z>\n")
+        repo.save_repo_file(RepoFileKind::Mailmap, false, "A <a@b.c> <x@y.z>\n", None)
             .is_err()
     );
     assert!(!outside.path().join("x").exists());
@@ -149,7 +211,8 @@ fn save_never_writes_through_a_link_waiting_where_its_new_file_was() {
     let guessed = fx.path.join(format!("..gitignore.oxbow-{}", std::process::id()));
     std::os::unix::fs::symlink(outside.path(), &guessed).unwrap();
     let repo = Repo::open(&fx.path).unwrap();
-    repo.save_repo_file(RepoFileKind::Gitignore, false, "*.log\n").unwrap();
+    repo.save_repo_file(RepoFileKind::Gitignore, false, "*.log\n", None)
+        .unwrap();
     assert_eq!(std::fs::read_to_string(outside.path()).unwrap(), "outside original");
     let saved = std::fs::symlink_metadata(fx.path.join(".gitignore")).unwrap();
     assert!(saved.file_type().is_file());
@@ -157,7 +220,8 @@ fn save_never_writes_through_a_link_waiting_where_its_new_file_was() {
     // A new file can be read by others as one git writes would be, an old one keeps its mode.
     assert_eq!(saved.permissions().mode() & 0o644, 0o644);
     std::fs::set_permissions(fx.path.join(".gitignore"), std::fs::Permissions::from_mode(0o640)).unwrap();
-    repo.save_repo_file(RepoFileKind::Gitignore, false, "*.tmp\n").unwrap();
+    repo.save_repo_file(RepoFileKind::Gitignore, false, "*.tmp\n", Some("*.log\n"))
+        .unwrap();
     let saved = std::fs::metadata(fx.path.join(".gitignore")).unwrap();
     assert_eq!(saved.permissions().mode() & 0o777, 0o640);
     // Nothing of its own is left beside it.
@@ -174,7 +238,8 @@ fn codeowners_saved_on_github_opens_again_up_to_its_limit() {
     let fx = Fixture::new();
     let repo = Repo::open(&fx.path).unwrap();
     let text = format!("#{}\n* @team\n", "a".repeat(1024 * 1024));
-    repo.save_repo_file(RepoFileKind::Codeowners, false, &text).unwrap();
+    repo.save_repo_file(RepoFileKind::Codeowners, false, &text, None)
+        .unwrap();
     let file = repo.repo_file_text(RepoFileKind::Codeowners, false).unwrap();
     assert_eq!(file.read_only, None);
     assert_eq!(file.text, text);
@@ -187,7 +252,10 @@ fn codeowners_saved_on_github_opens_again_up_to_its_limit() {
     let file = repo.repo_file_text(RepoFileKind::Codeowners, true).unwrap();
     assert!(file.read_only.unwrap().contains("over 1 MB"));
     let too_big = format!("#{}\n", "a".repeat(3 * 1024 * 1024));
-    assert!(repo.save_repo_file(RepoFileKind::Codeowners, false, &too_big).is_err());
+    assert!(
+        repo.save_repo_file(RepoFileKind::Codeowners, false, &too_big, Some(&text))
+            .is_err()
+    );
 }
 
 #[test]
