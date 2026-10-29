@@ -173,7 +173,8 @@ export interface Field {
   label: string;
   /** `multiline` for a commit message: Return makes a new line, ⌘Return runs the action. */
   /** `focus` puts the cursor in it when it appears, e.g. the search box Other… opens. */
-  text?: { value: string; placeholder?: string; multiline?: boolean; focus?: boolean; edit: (value: string) => Request };
+  /** `prefixes`: a branch name, its prefix (feature/, bugfix/…) a pop-up at the start of the box. */
+  text?: { value: string; placeholder?: string; multiline?: boolean; focus?: boolean; prefixes?: boolean; edit: (value: string) => Request };
   /** `off` says why a chip can't be picked. */
   chips?: { label: string; on: boolean; mono?: boolean; off?: string; pick: () => Request | Promise<Request> }[];
   note?: string;

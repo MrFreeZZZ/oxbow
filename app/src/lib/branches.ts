@@ -4,6 +4,7 @@ import type { Part, Recovery, Request } from "./confirm.svelte";
 import { remoteTrouble } from "./remote";
 import type { Action, CommitBrief, DeletionCheck, Failure, History, HistoryRow, RefInfo } from "./types";
 import { shortId } from "./format";
+import { FIRST_PREFIX, splitPrefix } from "./branchPrefixes";
 import { elsewhereRequest, refusedForWorktree, worktreeOf } from "./worktrees";
 
 export interface BranchContext {
@@ -44,7 +45,7 @@ export function upstreamOf(ref: RefInfo) {
 
 /** Why `name` can't be a new branch, or null. `except` is the branch being renamed. */
 export function nameProblem(ctx: BranchContext, name: string, except?: string): string | null {
-  if (!name) return "Type a name for the branch.";
+  if (!splitPrefix(name).rest) return "Type a name for the branch.";
   if (/\s/.test(name)) return "Branch names can’t contain spaces.";
   if (/[~^:?*[\\\x00-\x1f\x7f]/.test(name)) return "Branch names can’t contain ~ ^ : ? * [ or \\.";
   if (
@@ -193,11 +194,9 @@ export function detachRequest(ctx: BranchContext, row: HistoryRow, tag?: string)
   };
 }
 
-const KEEP_PREFIXES = ["experiment/", "feature/", "fix/"];
-
 /** Create a branch at a detached HEAD, so its commits belong to it. With `then`, switch there afterwards. */
 export function keepRequest(ctx: BranchContext, then?: string): Request {
-  return keepSheet(ctx, then, "", false);
+  return keepSheet(ctx, then, FIRST_PREFIX, false);
 }
 
 function keepSheet(ctx: BranchContext, then: string | undefined, typed: string, publishIt: boolean): Request {
@@ -222,10 +221,6 @@ function keepSheet(ctx: BranchContext, then: string | undefined, typed: string, 
   const action: Action = then
     ? { kind: "switch", branch: then, stash: false, keep: name }
     : { kind: "createBranch", name, start: null, switch: true, publish };
-  const withPrefix = (prefix: string) => {
-    const bare = KEEP_PREFIXES.reduce((n, p) => (n.startsWith(p) ? n.slice(p.length) : n), typed);
-    return typed.startsWith(prefix) ? bare : prefix + bare;
-  };
   return {
     title: then ? `Keep ${plural(lost.length, "commit")}, then switch` : lost.length ? `Keep ${plural(lost.length, "commit")} on a new branch` : `New branch at ${tag ?? (commit ? shortId(commit) : "HEAD")}`,
     body,
@@ -234,9 +229,8 @@ function keepSheet(ctx: BranchContext, then: string | undefined, typed: string, 
     fields: [
       {
         label: "Name",
-        text: { value: typed, placeholder: "experiment/new-cache", edit: (value) => again(value) },
-        chips: KEEP_PREFIXES.map((p) => ({ label: p, on: typed.startsWith(p), pick: () => again(withPrefix(p)) })),
-        error: name && problem ? problem : undefined,
+        text: { value: typed, placeholder: "new-cache", prefixes: true, edit: (value) => again(value) },
+        error: splitPrefix(name).rest && problem ? problem : undefined,
       },
     ],
     options:
@@ -278,8 +272,6 @@ interface Base {
   color: number;
 }
 
-const PREFIXES = ["feature/", "fix/", "chore/"];
-
 /** The New Branch sheet. `from` is the branch it was opened on, if any; `at` a commit it was opened on. */
 /** `switchTo` is the sheet's first choice: a branch that rescues lost work starts without one,
  *  so nothing but the new branch changes. */
@@ -299,7 +291,7 @@ export function newBranchRequest(ctx: BranchContext, from?: string, at?: History
   if (from && from !== head.branch && from !== trunk) bases.push({ key: "from", label: from, ref: from, sha: target(from), color: ctx.colorOf(from) });
   if (at && at.id !== head.commit) bases.push({ key: "commit", label: shortId(at.id), ref: at.id, sha: at.id, color: at.graph.color });
   const start = at && at.id !== head.commit ? "commit" : from === head.branch ? "head" : from === trunk ? "trunk" : from ? "from" : "head";
-  return newBranchSheet(ctx, bases, { name: "", base: start, switchTo, publish: false });
+  return newBranchSheet(ctx, bases, { name: FIRST_PREFIX, base: start, switchTo, publish: false });
 }
 
 function newBranchSheet(ctx: BranchContext, bases: Base[], state: NewBranch): Request {
@@ -327,10 +319,6 @@ function newBranchSheet(ctx: BranchContext, bases: Base[], state: NewBranch): Re
     switch: state.switchTo,
     publish: state.publish && remote ? remote : null,
   };
-  const withPrefix = (prefix: string) => {
-    const bare = PREFIXES.reduce((n, p) => (n.startsWith(p) ? n.slice(p.length) : n), state.name);
-    return state.name.startsWith(prefix) ? bare : prefix + bare;
-  };
   return {
     title: "New Branch",
     body,
@@ -339,9 +327,8 @@ function newBranchSheet(ctx: BranchContext, bases: Base[], state: NewBranch): Re
     fields: [
       {
         label: "Name",
-        text: { value: state.name, placeholder: "feature/csv-export", edit: (value) => again({ name: value }) },
-        chips: PREFIXES.map((p) => ({ label: p, on: state.name.startsWith(p), pick: () => again({ name: withPrefix(p) }) })),
-        error: name && problem ? problem : undefined,
+        text: { value: state.name, placeholder: "csv-export", prefixes: true, edit: (value) => again({ name: value }) },
+        error: splitPrefix(name).rest && problem ? problem : undefined,
         note: clash ? `${remote} already has ${name}. To work on it, use Check Out as Local Branch on ${remote}/${name} in the sidebar.` : undefined,
       },
       {

@@ -18,6 +18,7 @@
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import { defaults, prefs, type PrefKey } from "./prefs.svelte";
   import { accountsSection, gitSection, repoSection } from "./settingsGit";
+  import { branchesSection } from "./settingsBranches";
   import SettingsJson from "./SettingsJson.svelte";
   import { keysSection } from "./settingsKeys.svelte";
   import { config, copy, load, model } from "./settingsModel.svelte";
@@ -37,7 +38,7 @@
   listen("account-changed", () => load()).catch(() => {});
   listen("trust-changed", () => load()).catch(() => {});
 
-  const sections: Section[] = [generalSection, themeSection, accountsSection, gitSection, diffSection, keysSection, integrationsSection, repoSection, repoFilesSection];
+  const sections: Section[] = [generalSection, themeSection, accountsSection, gitSection, branchesSection, diffSection, keysSection, integrationsSection, repoSection, repoFilesSection];
 
   const shownSections = $derived(sections.filter((s) => (s.id !== "repo" && s.id !== "repoFiles") || model.repo));
   const labelOf = (section: Section) => (section.id === "repo" ? (model.repo?.name ?? "") : section.label);
@@ -456,14 +457,12 @@
     height: 14px;
   }
 
+  /* The main window's sidebar: the full height of the window, a line on its right. */
   nav {
-    margin: 8px 0 8px 8px;
-    width: 222px;
+    width: 230px;
     flex-shrink: 0;
-    border-radius: var(--radius-xl);
     background: var(--side);
-    border: 0.5px solid var(--side-border);
-    box-shadow: var(--panel-shadow);
+    border-right: 1px solid var(--sep);
     display: flex;
     flex-direction: column;
     gap: 2px;

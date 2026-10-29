@@ -6,6 +6,8 @@
   import { plate, tint } from "./format";
   import MergePreview from "./MergePreview.svelte";
   import WhyNote from "./WhyNote.svelte";
+  import PrefixField from "./PrefixField.svelte";
+  import { prefixWords, splitPrefix } from "./branchPrefixes";
   import { prefs } from "./prefs.svelte";
   import CommandWords from "./CommandWords.svelte";
   import TipCard from "./TipCard.svelte";
@@ -306,6 +308,9 @@
                     rows="4"
                     oninput={(e) => confirm.edit(text.edit(e.currentTarget.value))}
                   ></textarea>
+                {:else if field.text?.prefixes}
+                  {@const text = field.text}
+                  <PrefixField value={text.value} placeholder={text.placeholder} label={field.label} focus={text.focus} onedit={(value) => confirm.edit(text.edit(value))} />
                 {:else if field.text}
                   {@const text = field.text}
                   <input
@@ -334,7 +339,10 @@
                     {/each}
                   </span>
                 {/if}
-                {#if field.error}<span class="field-note error">{field.error}</span>{:else if field.note}<span class="field-note">{field.note}</span>{/if}
+                {#if field.error}<span class="field-note error">{field.error}</span>{:else if field.note}<span class="field-note">{field.note}</span
+                  >{:else if field.text?.prefixes && prefixWords(field.text.value)}<span class="field-note"
+                    ><span class="mono">{splitPrefix(field.text.value).prefix}</span> · {prefixWords(field.text.value)}</span
+                  >{/if}
               </div>
             </div>
           {/each}
