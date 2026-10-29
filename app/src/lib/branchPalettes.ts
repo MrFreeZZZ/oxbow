@@ -1,10 +1,12 @@
 // Branch palettes (Settings › Themes › Branches & graph). A palette colors branches everywhere:
 // the graph, the sidebar, capsules, stacks and selection. Color 0 is the production branch (the
-// trunk), the others are what branch names hash into. Values from the Branch palettes v2 spec;
-// B7 of Mineral, Paper and Signal is Clay. Oxbow is the original palette and lives in app.css.
-// Stash (10) and no-branch (11) grays are the same in every palette, also in app.css.
+// trunk), the seven others are what branch names hash into (graph::BRANCH_COLORS in the core).
+// Mineral is from the Branch palettes v2 spec, its B7 is Clay. Each palette has a character of
+// its own: Paper is warm, Signal vivid, Winter cold on white. Oxbow is the original palette and
+// lives in app.css. Stash (10) and no-branch (11) grays are the same in every palette, also in
+// app.css.
 
-export type BranchPaletteId = "mineral" | "paper" | "signal" | "oxbow";
+export type BranchPaletteId = "mineral" | "paper" | "signal" | "winter" | "oxbow";
 
 interface Look {
   /** Background of the graph and the other surfaces drawn on `--graph-bg`. */
@@ -43,31 +45,46 @@ export const BRANCH_PALETTES: BranchPalette[] = [
   {
     id: "paper",
     name: "Paper",
-    note: "Warm neutral, iris production",
+    note: "Warm earth tones, iris production",
     light: {
-      bg: "#F8F5F0",
-      lines: ["#544380", "#4468A0", "#147C7F", "#694936", "#3F312A", "#5C8BAA", "#9976B7", "#AC704E"],
-      plates: ["#484063", "#445A7B", "#276163", "#5F402D", "#362821", "#3B617B", "#685578", "#975D3B"],
+      bg: "#F8F3EA",
+      lines: ["#3C3469", "#AD5B33", "#367C78", "#5F4024", "#AA813C", "#84577D", "#335B83", "#362C24"],
+      plates: ["#3C3663", "#924E2E", "#336B68", "#5C412A", "#7E5D24", "#7A5575", "#3A5B7D", "#342C25"],
     },
     dark: {
-      bg: "#211F24",
-      lines: ["#9E98E1", "#A3D3FE", "#5DC2C9", "#B18D6D", "#F2DFD8", "#6C9AAF", "#D6AFF4", "#F4B390"],
-      plates: ["#D5D3FF", "#E4F2FF", "#AFEBEF", "#F0CBAB", "#FFFCFA", "#A8D8EE", "#F1E3FC", "#F4B390"],
+      bg: "#24201B",
+      lines: ["#B6ADF3", "#EB9A75", "#80C6C5", "#A17E61", "#F0CB8D", "#B57DA8", "#6C96C2", "#EEE3D7"],
+      plates: ["#C9C5F0", "#EDBBA4", "#A9D0D0", "#CFB9A7", "#E4CEAA", "#D8B4CF", "#A7C1DC", "#EAE3DC"],
     },
   },
   {
     id: "signal",
     name: "Signal",
-    note: "Graphite, cyan production",
+    note: "Vivid and high contrast, cyan production",
     light: {
       bg: "#F3F6F7",
-      lines: ["#04808A", "#9777BF", "#3C609A", "#6B4222", "#31363C", "#6F889C", "#4E4171", "#A57543"],
-      plates: ["#286167", "#66567B", "#435778", "#5C3B22", "#282D33", "#475F72", "#443B5E", "#8F612E"],
+      lines: ["#0E8395", "#8552C2", "#2F5BC2", "#C56C09", "#33393E", "#47358D", "#834A2B", "#488ACB"],
+      plates: ["#0F6C7B", "#764DAA", "#375EB5", "#975106", "#34383D", "#463983", "#7E4D33", "#30669B"],
     },
     dark: {
       bg: "#131B20",
-      lines: ["#81DBE7", "#D2B7F9", "#80BAF5", "#ECB699", "#DAE1EB", "#629BB3", "#A093DD", "#B2814E"],
-      plates: ["#C6F7FE", "#EFE7FD", "#CCE4FE", "#FCE4D8", "#F7FAFF", "#A5D7ED", "#D7D1FC", "#CE9B68"],
+      lines: ["#58E0F6", "#C399FF", "#618BF9", "#FFA659", "#E0E5EB", "#7B67CC", "#B87C59", "#5FBCF4"],
+      plates: ["#92D8E5", "#CFB6F8", "#A0BDFE", "#F0BB90", "#E2E5E8", "#B9B1F1", "#DBB49F", "#98CCEE"],
+    },
+  },
+  {
+    id: "winter",
+    name: "Winter",
+    note: "White, cold blues and violets, navy production",
+    light: {
+      bg: "#FFFFFF",
+      lines: ["#1D4176", "#4493D0", "#19838D", "#826BB3", "#5D646C", "#4947A0", "#055959", "#B47548"],
+      plates: ["#24426F", "#2E6E9F", "#21737B", "#725F9B", "#5E646A", "#4A4B95", "#1C5757", "#925E39"],
+    },
+    dark: {
+      bg: "#121A24",
+      lines: ["#D4E7FC", "#65B2F1", "#89DAE3", "#B9A2EE", "#7D8792", "#7981DF", "#68ADA8", "#EAB084"],
+      plates: ["#DAE6F2", "#9AC7ED", "#A7D4D9", "#C9BCEA", "#B5BBC2", "#B1B9F4", "#A0C7C4", "#E3BFA5"],
     },
   },
   {
@@ -76,13 +93,13 @@ export const BRANCH_PALETTES: BranchPalette[] = [
     note: "The original muted palette, steel production",
     light: {
       bg: "#F7F6F2",
-      lines: ["#4A6680", "#487E79", "#77BBC3", "#4D90AC", "#7FA0D0", "#64619B", "#9B8DB5", "#77546F", "#CC986E", "#846047"],
-      plates: ["#3B5266", "#04534E", "#0B5158", "#064F67", "#174687", "#43388A", "#513975", "#68305D", "#6A3A07", "#6D3705"],
+      lines: ["#4A6680", "#487E79", "#77BBC3", "#4D90AC", "#64619B", "#77546F", "#CC986E", "#846047"],
+      plates: ["#3B5266", "#04534E", "#0B5158", "#064F67", "#43388A", "#68305D", "#6A3A07", "#6D3705"],
     },
     dark: {
       bg: "#252422",
-      lines: ["#94B2CC", "#5D938E", "#8DD2DA", "#63A6C2", "#94B6E7", "#7875B1", "#B1A2CB", "#8C6884", "#E3AE83", "#99745B"],
-      plates: ["#94B2CC", "#96D9D3", "#93D8E0", "#9AD4EE", "#AECDF9", "#C5C5F7", "#D2C1F2", "#E8BADD", "#EDC09D", "#EFBF9F"],
+      lines: ["#94B2CC", "#5D938E", "#8DD2DA", "#63A6C2", "#7875B1", "#8C6884", "#E3AE83", "#99745B"],
+      plates: ["#94B2CC", "#96D9D3", "#93D8E0", "#9AD4EE", "#C5C5F7", "#E8BADD", "#EDC09D", "#EFBF9F"],
     },
   },
 ];
@@ -97,7 +114,7 @@ const darkPaper = (bg: string) => `color-mix(in srgb, ${bg} 30%, #222225)`;
  *  others' are removed (`null`). */
 export function branchVariables(palette: BranchPalette, look: "light" | "dark"): Record<string, string | null> {
   const vars: Record<string, string | null> = { "--graph-bg": null };
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 8; i++) {
     vars[`--lane-${i}`] = null;
     vars[`--plate-${i}`] = null;
   }
