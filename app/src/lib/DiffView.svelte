@@ -233,6 +233,20 @@
   }
 
   /** Open the file in the editor, at its first change, or at `line`. */
+  /** The hunk whose + is held down: dragging over its other lines makes the comment theirs. */
+  let dragging: Hunk | null = null;
+  function plusDown(e: PointerEvent, diff: FileDiff, hunk: Hunk, i: number) {
+    if (e.button !== 0 || !notes) return;
+    // No text selection while the lines are dragged over.
+    e.preventDefault();
+    notes.start(diff, hunk, i, e.shiftKey);
+    dragging = hunk;
+    window.addEventListener("pointerup", () => (dragging = null), { once: true });
+  }
+  function dragOver(diff: FileDiff, hunk: Hunk, i: number | null) {
+    if (dragging && dragging === hunk && i !== null && notes?.can(diff, hunk, i)) notes.start(diff, hunk, i, true);
+  }
+
   function openInEditor(diff: FileDiff, line: number | null = null) {
     const first = diff.hunks[0]?.lines.find((l) => l.kind !== "context" && l.newLine !== null) ?? diff.hunks[0]?.lines[0];
     api.openInEditor(diff.file.path, line ?? first?.newLine ?? null).catch((err) => confirm.fail(err));
@@ -521,8 +535,9 @@
     <button
       class="plus"
       aria-label="Comment on line {line.kind === 'removed' ? line.oldLine : line.newLine}"
-      title="Comment on this line; Shift-click: on the lines from the one picked before"
-      onclick={(e) => notes!.start(diff, hunk, i, e.shiftKey)}
+      title="Comment on this line; drag over more lines, or Shift-click, for several"
+      onpointerdown={(e) => plusDown(e, diff, hunk, i)}
+      onclick={(e) => e.detail === 0 && notes!.start(diff, hunk, i, e.shiftKey)}
     ><svg viewBox="0 0 16 16"><path d="M8 4v8M4 8h8" /></svg></button>
   {/if}
 {/snippet}
@@ -551,6 +566,7 @@
     class:faded={picked.length > 0 && !!line && line.kind !== "context" && !on}
     class:lit={!!line && !!notes?.lit(diff, line)}
     style:border-radius={sideRadius(hunk.lines, rows, r, side)}
+    onpointerenter={notes ? () => dragOver(diff, hunk, at) : undefined}
   >
     {#if line && at !== null && (side === "right" || line.kind === "removed")}{@render plus(diff, hunk, line, at)}{/if}
     {#if picking}
@@ -601,6 +617,7 @@
             class:lit={!!notes?.lit(diff, line)}
             style:border-radius={radius(hunk.lines, i)}
             style:margin-top="{gap(hunk.lines, i)}px"
+            onpointerenter={notes ? () => dragOver(diff, hunk, i) : undefined}
           >
             {@render plus(diff, hunk, line, i)}
             {#if picking}

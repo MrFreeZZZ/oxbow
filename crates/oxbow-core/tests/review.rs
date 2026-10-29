@@ -3,10 +3,10 @@
 
 mod support;
 
-use oxbow_core::Repo;
 use oxbow_core::github::Client;
 use oxbow_core::pulls::{Call, GitHubRepo, Spot, Verdict, started_review};
 use oxbow_core::review::{DraftComment, DraftReply, ReviewDraft, Reviewed, pull_ref};
+use oxbow_core::{Action, Repo};
 use support::{Fixture, stand_in};
 
 fn acme() -> GitHubRepo {
@@ -271,4 +271,98 @@ fn a_merge_requests_draft_and_viewed_ticks_stay_here() {
 
     repo.set_viewed_here(&lab, 7, "a.txt", false).unwrap();
     assert_eq!(repo.viewed_here(&lab, 7).viewed, ["gone.txt"]);
+}
+
+// --- Apply Suggestion ---
+
+const TEN: &str = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n";
+
+fn suggest(commit: &str, start: u32, end: u32, lines: &str) -> Action {
+    Action::ApplySuggestion {
+        commit: commit.into(),
+        path: "a.txt".into(),
+        start,
+        end,
+        lines: lines.into(),
+    }
+}
+
+fn read(fx: &Fixture) -> String {
+    std::fs::read_to_string(fx.path().join("a.txt")).unwrap()
+}
+
+#[test]
+fn a_suggestion_replaces_its_lines_on_disk_and_undo_takes_it_back() {
+    let mut fx = Fixture::new();
+    let head = fx.commit("a.txt", TEN, "Ten");
+    let repo = Repo::open(fx.path()).unwrap();
+    let action = suggest(&head, 4, 5, "four\nfive");
+    let plan = repo.plan(&action).unwrap();
+    assert_eq!(plan.commands[0].display(), "git apply -");
+    repo.perform(&action).unwrap();
+    assert_eq!(read(&fx), TEN.replace("4\n5\n", "four\nfive\n"));
+    // Nothing is staged or committed: the author commits it with the rest.
+    assert_eq!(fx.git(&["diff", "--cached", "--name-only"]), "");
+    assert_eq!(fx.git(&["rev-parse", "HEAD"]), head);
+    let log = repo.operation_log().unwrap();
+    assert_eq!(log[0].title, "Apply a suggestion to a.txt");
+    repo.perform(&Action::Restore {
+        id: log[0].id.clone(),
+        after: false,
+    })
+    .unwrap();
+    assert_eq!(read(&fx), TEN);
+}
+
+#[test]
+fn a_suggestion_finds_its_lines_after_edits_above_them() {
+    let mut fx = Fixture::new();
+    let head = fx.commit("a.txt", TEN, "Ten");
+    // Two lines added at the top since: the suggested ones moved down.
+    fx.write("a.txt", &format!("new\nnewer\n{TEN}"));
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&suggest(&head, 7, 7, "seven")).unwrap();
+    assert_eq!(read(&fx), format!("new\nnewer\n{}", TEN.replace("7\n", "seven\n")));
+}
+
+#[test]
+fn a_suggestion_is_merged_in_when_its_context_changed() {
+    let mut fx = Fixture::new();
+    let head = fx.commit("a.txt", TEN, "Ten");
+    fx.commit("a.txt", &TEN.replace("3\n", "three\n"), "Spell three");
+    let repo = Repo::open(fx.path()).unwrap();
+    let action = suggest(&head, 5, 5, "five");
+    assert_eq!(repo.plan(&action).unwrap().commands[0].display(), "git apply --3way -");
+    repo.perform(&action).unwrap();
+    assert_eq!(read(&fx), TEN.replace("3\n", "three\n").replace("5\n", "five\n"));
+}
+
+#[test]
+fn a_suggestion_on_lines_changed_since_is_refused_before_anything_runs() {
+    let mut fx = Fixture::new();
+    let head = fx.commit("a.txt", TEN, "Ten");
+    fx.commit("a.txt", &TEN.replace("5\n", "FIVE\n"), "Shout five");
+    let repo = Repo::open(fx.path()).unwrap();
+    let steps = repo.operation_log().unwrap().len();
+    let err = repo.perform(&suggest(&head, 5, 5, "five")).unwrap_err().to_string();
+    assert!(err.contains("conflicts with the file as it is now"), "{err}");
+    assert!(err.contains("Change the file by hand"), "{err}");
+    assert_eq!(repo.operation_log().unwrap().len(), steps);
+    assert_eq!(read(&fx), TEN.replace("5\n", "FIVE\n"));
+}
+
+#[test]
+fn a_suggestion_on_lines_the_file_has_not_got_says_so() {
+    let mut fx = Fixture::new();
+    let head = fx.commit("a.txt", TEN, "Ten");
+    let repo = Repo::open(fx.path()).unwrap();
+    let err = repo.plan(&suggest(&head, 11, 12, "x")).unwrap_err().to_string();
+    assert!(err.contains("no lines 11–12"), "{err}");
+    let err = repo.plan(&suggest(&head, 2, 2, "2")).unwrap_err().to_string();
+    assert!(err.contains("already has the suggested lines"), "{err}");
+    let err = repo
+        .plan(&suggest("0123456789012345678901234567890123456789", 1, 1, "x"))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("fetch the pull request first"), "{err}");
 }

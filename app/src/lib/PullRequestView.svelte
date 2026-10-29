@@ -155,6 +155,11 @@
       else review = new ReviewSession(p, run, () => load(p.number), p.gitlab ? "gitlab" : "github");
     });
   });
+  // A suggestion goes into the files only while its branch is the one checked out.
+  $effect(() => {
+    const on = !!pr && history.head.branch === pr.head;
+    if (review) review.onBranch = on;
+  });
   let finishAt = $state<HTMLButtonElement>();
   const mine = $derived(!!pr && !!signedIn && pr.author.login === signedIn);
   /** Finish Review shows on someone else's open pull request, and on one's own with comments to send. */

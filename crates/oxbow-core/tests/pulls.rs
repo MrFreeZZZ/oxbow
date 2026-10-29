@@ -33,7 +33,7 @@ const COMMITS: &str = r#"[
  {"sha":"e17a5c9","commit":{"message":"Expose /v2/sessions endpoint\n\nGET and DELETE.","author":{"name":"Alexander"},"committer":{"date":"2026-10-08T09:30:00Z"}}}]"#;
 
 const COMMENTS: &str = r#"[
- {"id":11,"path":"src/api/sessions.rs","line":42,"original_line":42,"diff_hunk":"@@ -40,2 +40,3 @@\n pub async fn revoke() {\n+    app.sessions.revoke(id).await?;","body":"Revoking twice returns 500.","user":{"login":"kirill","avatar_url":"https://a/3"},"created_at":"2026-10-08T10:10:00Z"},
+ {"id":11,"path":"src/api/sessions.rs","commit_id":"c42","line":42,"original_line":42,"diff_hunk":"@@ -40,2 +40,3 @@\n pub async fn revoke() {\n+    app.sessions.revoke(id).await?;","body":"Revoking twice returns 500.","user":{"login":"kirill","avatar_url":"https://a/3"},"created_at":"2026-10-08T10:10:00Z"},
  {"id":12,"in_reply_to_id":11,"path":"src/api/sessions.rs","line":42,"diff_hunk":"","body":"Will fix.","user":{"login":"alexander","avatar_url":"https://a/1"},"created_at":"2026-10-08T10:20:00Z"}]"#;
 
 const TIMELINE: &str = r#"[
@@ -102,8 +102,12 @@ fn a_pull_request_is_read_in_full() {
                 comments,
                 resolved,
                 line,
+                commit,
                 ..
-            } => format!("thread on {line:?}: {} comments, resolved {resolved:?}", comments.len()),
+            } => format!(
+                "thread on {line:?} of {commit:?}: {} comments, resolved {resolved:?}",
+                comments.len()
+            ),
         })
         .collect();
     assert_eq!(
@@ -111,7 +115,7 @@ fn a_pull_request_is_read_in_full() {
         [
             "event: pushed 2 commits",
             "event: requested a review from maria",
-            "thread on Some(42): 2 comments, resolved Some(false)",
+            "thread on Some(42) of Some(\"c42\"): 2 comments, resolved Some(false)",
             "review: changesRequested",
             "comment: Looking today."
         ]

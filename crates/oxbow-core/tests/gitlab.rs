@@ -198,15 +198,18 @@ fn a_merge_request_in_full_comes_as_a_pull_request() {
         ("/api/v4/projects/team%2Fapp/merge_requests/12/commits", commits),
         (
             "/api/v4/projects/team%2Fapp/merge_requests/12/discussions",
-            r#"[
+            leak(
+                r#"[
               {"id":"d1","individual_note":true,"notes":[{"id":1,"system":true,"body":"added 2 commits\n\n<ul><li>…</li></ul>","author":{"username":"anna"},"created_at":"2026-10-21T10:00:00Z"}]},
               {"id":"d2","individual_note":true,"notes":[{"id":2,"system":false,"body":"Looks close","author":{"username":"vera"},"created_at":"2026-10-21T11:00:00Z"}]},
               {"id":"d3","individual_note":false,"notes":[
                 {"id":3,"type":"DiffNote","system":false,"body":"Name it export_csv?","author":{"username":"boris"},"created_at":"2026-10-21T12:00:00Z",
-                 "resolvable":true,"resolved":false,"position":{"new_path":"app.py","old_path":"app.py","new_line":5,"old_line":null}},
+                 "resolvable":true,"resolved":false,"position":{"new_path":"app.py","old_path":"app.py","new_line":5,"old_line":null,"head_sha":"NOTE_HEAD"}},
                 {"id":4,"type":"DiffNote","system":false,"body":"Sure","author":{"username":"anna"},"created_at":"2026-10-21T13:00:00Z","resolvable":true,"resolved":false}]},
               {"id":"d4","individual_note":true,"notes":[{"id":5,"system":true,"body":"approved this merge request","author":{"username":"vera"},"created_at":"2026-10-22T10:00:00Z"}]}
-            ]"#,
+            ]"#
+                .replace("NOTE_HEAD", &first),
+            ),
         ),
         (
             "/api/v4/projects/team%2Fapp/merge_requests/12/approvals",
@@ -294,6 +297,8 @@ fn a_merge_request_in_full_comes_as_a_pull_request() {
     );
     assert_eq!(thread["comments"].as_array().unwrap().len(), 2);
     assert_eq!(thread["node"], "d3");
+    // The version its lines are of, for a suggestion in it.
+    assert_eq!(thread["commit"], first.as_str());
 
     // What the commits here tell: the lines, and the code under the comment.
     let repo = Repo::open(fx.path()).unwrap();

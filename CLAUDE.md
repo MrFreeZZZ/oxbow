@@ -36,7 +36,7 @@ crates/oxbow-core/          UI-free core library (all Git logic lives here)
   src/gitlab.rs gitlab_api.rs   GitLab: Create Merge Request by push options; signed in, merge
                             requests as pull requests (one screen for both, words in app lib/forge.ts)
   src/review.rs             reviewing a pull request: statuses, Viewed, fetch into refs/oxbow/pull/N,
-                            the draft review kept in .git/oxbow/reviews
+                            the draft review kept in .git/oxbow/reviews; suggestion.rs = Apply Suggestion
   src/config.rs setup.rs    git settings; clone/init;  console.rs = Console process log
   src/trust.rs              settings of a repository that run programs (hooks, fsmonitor, filters…),
                             found before opening it; Restricted runs git with them off
@@ -65,7 +65,8 @@ app/src/                    Svelte front end
   lib/ChangesPanel.svelte   Changes: the lists of files; CommitForm, ChangesDiff (the diff column), changesMenu.ts,
                             commitDrafts.svelte.ts (the message kept per folder), changes.ts (its requests)
   lib/ReviewsView.svelte    Reviews screen (lib/reviews.ts sorts it);  PullFiles.svelte = PR Files tab
-  lib/review.svelte.ts      one PR's review: draft, Viewed, sending;  reviewDraft.ts = its pure logic
+  lib/review.svelte.ts      one PR's review: draft, Viewed, sending;  reviewDraft.ts = its pure logic;
+                            suggestion.ts = ```suggestion blocks (CommentBody shows them)
   lib/*.ts                  pure logic next to its view (diffRows, conflicts, branches, graph…)
   app.css themes.ts branchPalettes.ts   design tokens, code theme Estuary, branch colors
 app/tests/*.test.ts         node:test unit tests for the pure lib/*.ts modules

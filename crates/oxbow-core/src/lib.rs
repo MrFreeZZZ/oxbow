@@ -45,6 +45,7 @@ pub mod ssh;
 pub mod stack;
 pub mod stash;
 pub mod submodules;
+pub mod suggestion;
 pub mod tags;
 pub mod trust;
 pub mod watch;

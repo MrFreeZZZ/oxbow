@@ -644,6 +644,10 @@ pub enum Entry {
         resolved: Option<bool>,
         /// The code changed since, so the comment is about an older version.
         outdated: bool,
+        /// The commit whose lines it is on, when GitHub or GitLab says: a suggestion in it is
+        /// applied from that version of the file.
+        #[serde(default)]
+        commit: Option<String>,
         time: i64,
     },
     /// Something that happened, in one line: "pushed 2 commits".
@@ -1620,7 +1624,11 @@ fn threads(comments: &Value, resolved: &HashMap<u64, (bool, String)>) -> Vec<Ent
             id,
             node: thread.map(|(_, node)| node.clone()),
             path: text(first, "path"),
-            hunk: hunk_tail(&text(first, "diff_hunk"), 4),
+            hunk: hunk_tail(
+                &text(first, "diff_hunk"),
+                4,
+                number("start_line").filter(|_| line.is_some() && text(first, "side") != "LEFT"),
+            ),
             outdated: line.is_none(),
             start_line: if line.is_some() {
                 number("start_line")
@@ -1630,6 +1638,7 @@ fn threads(comments: &Value, resolved: &HashMap<u64, (bool, String)>) -> Vec<Ent
             side: first.get("side").and_then(Value::as_str).unwrap_or("RIGHT").to_owned(),
             line: line.or_else(|| number("original_line")),
             resolved: thread.map(|(resolved, _)| *resolved),
+            commit: first.get("commit_id").and_then(Value::as_str).map(str::to_owned),
             time: list[0].time,
             comments: list,
         });
@@ -1638,8 +1647,8 @@ fn threads(comments: &Value, resolved: &HashMap<u64, (bool, String)>) -> Vec<Ent
 }
 
 /// The last `count` lines of a review comment's hunk, numbered as in the new file; the last one
-/// is the line commented on.
-pub fn hunk_tail(hunk: &str, count: usize) -> Vec<HunkLine> {
+/// is the line commented on. A comment on new lines `from` and on keeps all of them, marked.
+pub fn hunk_tail(hunk: &str, count: usize, from: Option<u32>) -> Vec<HunkLine> {
     let mut lines = hunk.lines();
     let start = lines
         .next()
@@ -1663,7 +1672,15 @@ pub fn hunk_tail(hunk: &str, count: usize) -> Vec<HunkLine> {
             mark: false,
         });
     }
-    let skip = out.len().saturating_sub(count);
+    let mut skip = out.len().saturating_sub(count);
+    if let Some(from) = from
+        && let Some(at) = out.iter().position(|l| l.number == Some(from))
+    {
+        skip = skip.min(at);
+        for line in &mut out[at..] {
+            line.mark = line.number.is_some();
+        }
+    }
     let mut tail: Vec<HunkLine> = out.into_iter().skip(skip).collect();
     if let Some(last) = tail.last_mut() {
         last.mark = true;
@@ -1857,7 +1874,7 @@ mod tests {
     #[test]
     fn a_hunk_keeps_its_last_lines_numbered() {
         let hunk = "@@ -6,4 +6,5 @@ pub struct RefreshToken {\n pub struct RefreshToken {\n-    pub hash: String,\n+    pub hash: [u8; 32],\n+    pub family: Uuid,";
-        let tail = hunk_tail(hunk, 3);
+        let tail = hunk_tail(hunk, 3, None);
         let shown: Vec<(Option<u32>, &str, bool)> = tail.iter().map(|l| (l.number, l.text.as_str(), l.mark)).collect();
         assert_eq!(
             shown,
@@ -1865,6 +1882,24 @@ mod tests {
                 (None, "    pub hash: String,", false),
                 (Some(7), "    pub hash: [u8; 32],", false),
                 (Some(8), "    pub family: Uuid,", true)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_hunk_of_a_comment_on_lines_keeps_them_all_marked() {
+        let hunk = "@@ -1,2 +1,6 @@\n a\n+b\n+c\n+d\n-x\n+e\n f";
+        let tail = hunk_tail(hunk, 4, Some(2));
+        let shown: Vec<(Option<u32>, bool)> = tail.iter().map(|l| (l.number, l.mark)).collect();
+        assert_eq!(
+            shown,
+            [
+                (Some(2), true),
+                (Some(3), true),
+                (Some(4), true),
+                (None, false),
+                (Some(5), true),
+                (Some(6), true)
             ]
         );
     }

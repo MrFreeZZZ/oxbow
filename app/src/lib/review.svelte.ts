@@ -9,6 +9,7 @@ import { confirm, type Request } from "./confirm.svelte";
 import type { PullCall, PullRequest, ReviewDraft, Spot, Verdict, Viewing } from "./types";
 import { addProblem, approvedBy, commentCall, countWords, emptyDraft, isEmpty, spotLabel, submitCalls, withComment, withEdit, withReply, type Thread, type Writing } from "./reviewDraft";
 import { wordsOf, type ForgeKind, type Words } from "./forge";
+import { applyRequest, suggestedRange, type BodyPart } from "./suggestion";
 
 /** The comment being written: a new one on lines, a reply to a thread, or one of the draft's again. */
 export type Editing = ({ kind: "comment" } & Writing) | { kind: "reply"; thread: number; body: string } | { kind: "edit"; id: string; body: string };
@@ -36,6 +37,8 @@ export class ReviewSession {
   /** The head commit whose files the Files tab shows; it can be behind `pr` while newer ones
    *  load. A review begins on it, never on a head nobody saw. */
   shown = $state<string | null>(null);
+  /** Its branch is the one checked out here, so a suggestion can go into its files. */
+  onBranch = $state(false);
   #run: (request: Request | Promise<Request>) => Promise<boolean>;
   #changed: () => void;
   #timer: ReturnType<typeof setTimeout> | undefined;
@@ -190,6 +193,17 @@ export class ReviewSession {
       { title: `${again ? "Unresolve" : "Resolve"} the thread on ${thread.path || `${this.words.mark}${this.number}`}?`, body: [again ? "It opens again." : `It folds away on ${this.words.name}.`], button: again ? "Unresolve" : "Resolve", status: again ? "Unresolving…" : "Resolving…" },
       again ? "The thread is open again." : "The thread is resolved.",
     );
+  }
+
+  /** Apply Suggestion: `who`'s suggested lines in place of the ones the thread is on, in the
+   *  file on disk, from the commit it was on (the newest without word from GitHub), fetched
+   *  first if it isn't here. */
+  async applySuggestion(thread: Thread, part: Extract<BodyPart, { kind: "suggestion" }>, who: string) {
+    const range = suggestedRange(part, thread, this.lab);
+    if (!range || !thread.path) return;
+    const commit = thread.commit || this.pr.headSha;
+    await (this.lab ? api.gitlabFetch(this.number, this.pr.base) : api.pullFetch(this.number, this.pr.base)).catch(() => {});
+    await this.#run(applyRequest(thread.path, commit, range, part.lines, who));
   }
 
   /** Send the review with its comments and replies, then put the draft away. */

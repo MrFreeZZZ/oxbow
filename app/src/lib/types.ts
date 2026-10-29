@@ -597,6 +597,7 @@ export type Action =
   | { kind: "cherryPickFile"; commit: string; path: string; oldPath?: string | null }
   /** The file on disk as `commit` has it; nothing is staged. */
   | { kind: "takeVersion"; commit: string; path: string }
+  | { kind: "applySuggestion"; commit: string; path: string; start: number; end: number; lines: string }
   | { kind: "reset"; commit: string; mode: ResetMode }
   | { kind: "reword"; message: string; noVerify?: boolean }
   /** `paths`: only these files; every change when empty or missing. */
@@ -1736,6 +1737,8 @@ export type PullEntry =
       comments: PullComment[];
       resolved: boolean | null;
       outdated: boolean;
+      /** The commit whose lines it is on, when GitHub or GitLab says. */
+      commit?: string | null;
       time: number;
     }
   | { kind: "event"; actor: string; text: string; icon: "push" | "ok" | "fail" | "review" | "draft" | "dot"; tone: "ok" | "bad" | null; time: number };

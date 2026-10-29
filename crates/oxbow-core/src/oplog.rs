@@ -924,6 +924,7 @@ impl Repo {
                 ("cherry", format!("Cherry-pick {path} from {}", short_id(commit)))
             }
             Action::TakeVersion { commit, path } => ("checkout", format!("Take {path} from {}", short_id(commit))),
+            Action::ApplySuggestion { path, .. } => ("edit", format!("Apply a suggestion to {path}")),
             Action::Reset { commit, mode } => (
                 "reset",
                 format!(
