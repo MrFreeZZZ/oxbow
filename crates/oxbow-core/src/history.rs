@@ -4,8 +4,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use gix::ObjectId;
 use gix::bstr::ByteSlice;
-use gix::revision::walk::Sorting;
-use gix::traverse::commit::simple::CommitTimeOrder;
 use serde::Serialize;
 
 use crate::bisect::Bisect;
@@ -299,14 +297,19 @@ struct Walked {
     key: u64,
     /// In pieces, one for each time the walk went on, so that a copy of the cache costs little.
     pieces: Vec<Arc<Vec<Node>>>,
-    /// Where the walk goes on from: the parents of the commits walked that are not walked yet.
-    next: Vec<ObjectId>,
+    /// Where the walk goes on from: the parents of the commits walked that are not walked yet,
+    /// each with the time it was committed.
+    next: Vec<(i64, ObjectId)>,
     /// The walk reached the first commits: there is nothing more.
     ended: bool,
 }
 
 /// Commits newest first from the tips of `walked`: the ones it has, then on from where it
 /// stopped. [`Resumed::keep`] keeps what was walked for the next page.
+///
+/// The walk is Oxbow's own, newest commit time first and, between commits of the same second
+/// (a rebase writes many), the greater id first: what comes next depends only on the commits
+/// waiting, so going on from them gives what one walk from the tips gives.
 struct Resumed<'repo> {
     repo: &'repo gix::Repository,
     walked: Walked,
@@ -314,7 +317,43 @@ struct Resumed<'repo> {
     at: (usize, usize),
     /// The commits walked now, past those of `walked`.
     fresh: Vec<Node>,
-    walk: Option<gix::revision::Walk<'repo>>,
+    walk: Option<Walk>,
+}
+
+/// The commits waiting to be walked and those walked or waiting already.
+struct Walk {
+    waiting: BinaryHeap<(i64, ObjectId)>,
+    known: HashSet<ObjectId>,
+    /// git's commit-graph file, which has each commit's parents and time without reading it.
+    graph: Option<gix::commitgraph::Graph>,
+    /// The commits of a shallow clone whose parents aren't there.
+    shallow: HashSet<ObjectId>,
+    buf: Vec<u8>,
+}
+
+impl Walk {
+    /// The parents of `id` and when it was committed.
+    fn commit(&mut self, repo: &gix::Repository, id: &ObjectId) -> Result<(Vec<ObjectId>, i64)> {
+        if let Some(graph) = &self.graph
+            && let Some(commit) = graph.commit_by_id(id)
+        {
+            let time = commit.committer_timestamp() as i64;
+            let parents: std::result::Result<Vec<ObjectId>, _> = commit
+                .iter_parents()
+                .map(|parent| parent.map(|at| graph.id_at(at).to_owned()))
+                .collect();
+            if let Ok(parents) = parents {
+                return Ok((parents, time));
+            }
+            // A broken commit-graph: the commits themselves say it.
+            self.graph = None;
+        }
+        use gix::prelude::FindExt;
+        let commit = repo.objects.find_commit_iter(id, &mut self.buf).map_err(Error::git)?;
+        let time = commit.committer().map(|c| c.seconds()).unwrap_or_default();
+        let parents = commit.parent_ids().collect();
+        Ok((parents, time))
+    }
 }
 
 impl<'repo> Resumed<'repo> {
@@ -326,17 +365,22 @@ impl<'repo> Resumed<'repo> {
             Walked {
                 key,
                 pieces: Vec::new(),
-                next: tips.to_vec(),
+                next: Vec::new(),
                 ended: tips.is_empty(),
             }
         };
-        Resumed {
+        let mut resumed = Resumed {
             repo,
             walked,
             at: (0, 0),
             fresh: Vec::new(),
             walk: None,
+        };
+        // The tips wait like any commit, by their own time.
+        if resumed.walked.pieces.is_empty() && !resumed.walked.ended {
+            resumed.walked.next = tips.iter().map(|&id| (i64::MAX, id)).collect();
         }
+        resumed
     }
 
     fn next(&mut self) -> Result<Option<Node>> {
@@ -351,65 +395,68 @@ impl<'repo> Resumed<'repo> {
             return Ok(None);
         }
         if self.walk.is_none() {
-            // Commits walked already are left out, with what only they lead to: a commit dated
-            // before its parent can be reached again.
-            let seen: HashSet<ObjectId> = self.walked.pieces.iter().flat_map(|p| p.iter().map(|n| n.id)).collect();
-            let walk = self
-                .repo
-                .rev_walk(self.walked.next.iter().copied())
-                .sorting(Sorting::ByCommitTime(CommitTimeOrder::NewestFirst))
-                .selected(move |id| !seen.contains(id))
-                .map_err(Error::git)?;
+            let repo = self.repo;
+            let known: HashSet<ObjectId> = self
+                .walked
+                .pieces
+                .iter()
+                .flat_map(|p| p.iter().map(|n| n.id))
+                .chain(self.walked.next.iter().map(|&(_, id)| id))
+                .collect();
+            let shallow = repo
+                .shallow_commits()
+                .map_err(Error::git)?
+                .map(|commits| commits.iter().copied().collect())
+                .unwrap_or_default();
+            let mut walk = Walk {
+                waiting: BinaryHeap::new(),
+                known,
+                graph: repo.commit_graph_if_enabled().ok().flatten(),
+                shallow,
+                buf: Vec::new(),
+            };
+            for &(time, id) in &self.walked.next {
+                // A tip's time is read as it is taken.
+                let time = if time == i64::MAX {
+                    walk.commit(repo, &id)?.1
+                } else {
+                    time
+                };
+                walk.waiting.push((time, id));
+            }
             self.walk = Some(walk);
         }
+        let repo = self.repo;
         let walk = self.walk.as_mut().expect("walk started");
-        match walk.next() {
-            Some(info) => {
-                let info = info.map_err(Error::git)?;
-                let node = Node {
-                    id: info.id,
-                    parents: info.parent_ids.iter().copied().collect(),
-                    time: info.commit_time.unwrap_or_default(),
-                };
-                self.fresh.push(node.clone());
-                Ok(Some(node))
-            }
-            None => {
-                self.walked.ended = true;
-                Ok(None)
+        let Some((time, id)) = walk.waiting.pop() else {
+            self.walked.ended = true;
+            return Ok(None);
+        };
+        let (parents, _) = walk.commit(repo, &id)?;
+        // Past a shallow clone's boundary the parents aren't there to walk.
+        if !walk.shallow.contains(&id) {
+            for parent in &parents {
+                if walk.known.insert(*parent) {
+                    let (_, at) = walk.commit(repo, parent)?;
+                    walk.waiting.push((at, *parent));
+                }
             }
         }
+        let node = Node { id, parents, time };
+        self.fresh.push(node.clone());
+        Ok(Some(node))
     }
 
     /// What was walked, for the next page: the commits of the last walks and of this one, and
-    /// where to go on from.
+    /// the commits waiting, to go on from.
     fn keep(mut self) -> Walked {
         if self.fresh.is_empty() {
             return self.walked;
         }
-        if self.walked.ended {
-            self.walked.next.clear();
-        } else {
-            let seen: HashSet<ObjectId> = self
-                .walked
-                .pieces
-                .iter()
-                .flat_map(|p| p.iter())
-                .chain(&self.fresh)
-                .map(|n| n.id)
-                .collect();
-            let mut next: Vec<ObjectId> = self
-                .walked
-                .next
-                .iter()
-                .chain(self.fresh.iter().flat_map(|n| &n.parents))
-                .copied()
-                .filter(|id| !seen.contains(id))
-                .collect();
-            next.sort_unstable();
-            next.dedup();
-            self.walked.next = next;
-        }
+        self.walked.next = match (&self.walk, self.walked.ended) {
+            (Some(walk), false) => walk.waiting.iter().copied().collect(),
+            _ => Vec::new(),
+        };
         self.walked.pieces.push(Arc::new(self.fresh));
         self.walked
     }

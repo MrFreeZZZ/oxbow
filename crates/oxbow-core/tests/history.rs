@@ -1162,3 +1162,86 @@ fn older_pages_go_on_from_where_the_last_page_stopped() {
         assert_eq!(h.rows[0].summary, "Newest");
     }
 }
+
+#[test]
+fn older_pages_of_commits_made_in_the_same_second_come_as_one_walk_gives_them() {
+    let mut fx = Fixture::new();
+    // As a rebase writes them: every commit at the same time.
+    let git = |fx: &Fixture, args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(fx.path())
+            .env("GIT_AUTHOR_DATE", "1700000000 +0000")
+            .env("GIT_COMMITTER_DATE", "1700000000 +0000")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    };
+    fx.commit("root.txt", "r\n", "Root");
+    for b in 0..6 {
+        git(&fx, &["checkout", "-q", "-B", &format!("b{b}"), "main"]);
+        for i in 0..7 {
+            fx.write(&format!("b{b}.txt"), &format!("{i}\n"));
+            git(&fx, &["add", "-A"]);
+            git(&fx, &["commit", "-q", "-m", &format!("b{b} {i}")]);
+        }
+        if b % 2 == 0 {
+            git(&fx, &["checkout", "-q", "main"]);
+            git(
+                &fx,
+                &["merge", "-q", "--no-ff", "-m", &format!("Merge b{b}"), &format!("b{b}")],
+            );
+        }
+    }
+    let repo = Repo::open(fx.path()).unwrap();
+    let rows = |h: &History| h.rows.iter().map(|r| r.summary.clone()).collect::<Vec<_>>();
+    let mut cache = oxbow_core::HistoryCache::default();
+    for limit in [3, 7, 11, 19, 26, 33, 41, 100] {
+        let options = HistoryOptions {
+            limit,
+            ..Default::default()
+        };
+        let resumed = repo.history_with(&options, &mut cache, None).unwrap();
+        let fresh = repo.history(&options).unwrap();
+        assert_eq!(rows(&resumed), rows(&fresh), "{limit} commits");
+    }
+}
+
+#[test]
+fn older_pages_of_a_shallow_clone_go_on_past_its_boundary() {
+    let mut fx = Fixture::new();
+    for i in 0..10 {
+        fx.commit("a.txt", &format!("{i}\n"), &format!("Main {i}"));
+    }
+    fx.git(&["checkout", "-q", "-b", "feature", "HEAD~5"]);
+    for i in 0..4 {
+        fx.commit("b.txt", &format!("{i}\n"), &format!("Feature {i}"));
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let clone = dir.path().join("clone");
+    let url = format!("file://{}", fx.path().display());
+    let cloned = std::process::Command::new("git")
+        .args(["clone", "-q", "--depth", "2", "--no-single-branch", &url])
+        .arg(&clone)
+        .status()
+        .unwrap();
+    assert!(cloned.success());
+    let repo = Repo::open(&clone).unwrap();
+    let rows = |h: &History| h.rows.iter().map(|r| r.summary.clone()).collect::<Vec<_>>();
+    // Pages that stop right after a commit whose parents the clone doesn't have, too.
+    for step in 1..4 {
+        let mut cache = oxbow_core::HistoryCache::default();
+        for limit in (step..10).step_by(step) {
+            let options = HistoryOptions {
+                limit,
+                ..Default::default()
+            };
+            let resumed = repo.history_with(&options, &mut cache, None).unwrap();
+            assert_eq!(
+                rows(&resumed),
+                rows(&repo.history(&options).unwrap()),
+                "{limit} by {step}"
+            );
+        }
+    }
+}
