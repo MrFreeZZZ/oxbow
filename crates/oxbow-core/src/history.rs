@@ -451,16 +451,67 @@ impl Repo {
     }
 
     /// Stands for what the upstreams and their ahead/behind counts are worked out from: `HEAD`,
-    /// the refs, where the history stops, and the repository's settings as written.
+    /// the refs, where the history stops, and the settings of branches and remotes.
     fn state_print(&self, head: &HeadInfo, refs: &[RefInfo], boundary: u64) -> u64 {
-        let local = self.local();
         let refs: Vec<_> = refs.iter().map(|r| (&r.name, r.kind as u8, &r.target)).collect();
-        let settings = [
-            local.common_dir().join("config"),
-            local.git_dir().join("config.worktree"),
-        ]
-        .map(|file| std::fs::read(file).ok());
-        keyed(&(&head.branch, &head.commit, refs, boundary, settings))
+        keyed(&(&head.branch, &head.commit, refs, boundary, self.upstream_settings(head)))
+    }
+
+    /// The `branch.*` and `remote.*` settings as git takes them now: from the repository's files,
+    /// the files they include, the user's and the system's. Read from the files each time, not
+    /// from what was read when the repository was opened, so an upstream set in an included file
+    /// counts as soon as it is written. When they can't be read, the repository's files as they
+    /// are.
+    fn upstream_settings(&self, head: &HeadInfo) -> Vec<Vec<u8>> {
+        let local = self.local();
+        let files = [
+            (local.common_dir().join("config"), gix::config::Source::Local),
+            (local.git_dir().join("config.worktree"), gix::config::Source::Worktree),
+        ];
+        let branch = head
+            .branch
+            .as_ref()
+            .and_then(|b| gix::refs::FullName::try_from(format!("refs/heads/{b}")).ok());
+        let home = crate::config::home_dir();
+        let options = gix::config::file::init::Options {
+            includes: gix::config::file::includes::Options::follow(
+                gix::config::path::interpolate::Context {
+                    home_dir: home.as_deref(),
+                    ..Default::default()
+                },
+                gix::config::file::includes::conditional::Context {
+                    git_dir: Some(local.git_dir()),
+                    branch_name: branch.as_ref().map(|b| b.as_ref()),
+                },
+            ),
+            ..Default::default()
+        };
+        let read = || -> Option<gix::config::File> {
+            let mut all = gix::config::File::from_globals().ok()?;
+            all.resolve_includes(options).ok()?;
+            for (path, source) in files.clone() {
+                if !path.exists() {
+                    continue;
+                }
+                let mut file = gix::config::File::from_path_no_includes(path, source).ok()?;
+                file.resolve_includes(options).ok()?;
+                all.append(file).ok()?;
+            }
+            all.append(gix::config::File::from_environment_overrides().ok()?).ok()?;
+            Some(all)
+        };
+        match read() {
+            Some(all) => all
+                .sections()
+                .filter(|s| {
+                    ["branch", "remote"]
+                        .iter()
+                        .any(|n| s.header().name().eq_ignore_ascii_case(n.as_bytes()))
+                })
+                .map(|s| s.to_bstring().into())
+                .collect(),
+            None => files.map(|(file, _)| std::fs::read(file).unwrap_or_default()).to_vec(),
+        }
     }
 
     /// Load the commit history of all branches and tags with its graph layout.

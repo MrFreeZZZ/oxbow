@@ -391,6 +391,7 @@ impl Repo {
             "--cached",
             "--no-color",
             "--no-ext-diff",
+            "--no-textconv",
             "--no-renames",
             "--text",
             "-U0",

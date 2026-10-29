@@ -384,7 +384,9 @@ impl Repo {
     }
 
     /// The patches of tracked `paths` on `side` from one `git diff`, by path. A path whose part
-    /// is missing or cut short is left out, for a command of its own.
+    /// is missing or cut short is left out, for a command of its own. Like every diff of the
+    /// working copy, of the bytes themselves, not the text a `textconv` makes of them: a hunk
+    /// staged or thrown away has to apply to the file.
     fn batch_patches(
         &self,
         paths: &[&str],
@@ -397,6 +399,7 @@ impl Repo {
             "diff",
             "--no-color",
             "--no-ext-diff",
+            "--no-textconv",
             "--no-renames",
             "--full-index",
             "--src-prefix=a/",
@@ -712,6 +715,7 @@ impl Repo {
             "diff",
             "--no-color",
             "--no-ext-diff",
+            "--no-textconv",
             "--no-renames",
             "--full-index",
             &context,
@@ -761,7 +765,7 @@ impl Repo {
 
     /// Added and deleted lines per path (`None` counts for binary files).
     fn numstat(&self, side: Side) -> Result<std::collections::HashMap<String, (u32, u32, bool)>> {
-        let mut args = vec!["diff", "--numstat", "-z", "--no-renames"];
+        let mut args = vec!["diff", "--numstat", "-z", "--no-renames", "--no-textconv"];
         if side == Side::Staged {
             if self.head()?.commit.is_none() {
                 // Nothing committed yet: compare the index with the empty tree.

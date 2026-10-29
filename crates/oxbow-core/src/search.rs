@@ -90,7 +90,7 @@ impl SearchQuery {
     }
 
     fn pathspec(&self) -> Option<String> {
-        (self.mode == SearchMode::File).then(|| format!(":(icase)*{}*", self.text))
+        (self.mode == SearchMode::File).then(|| format!(":(icase)*{}*", glob_literal(&self.text)))
     }
 
     /// What the search looks like typed in a terminal.
@@ -104,6 +104,19 @@ impl SearchQuery {
         }
         GitCommand::new(args)
     }
+}
+
+/// `text` matched as it is inside a pathspec's pattern: `page[ab]` finds `page[ab].txt`, not
+/// `pagea.txt`. Each character a pattern reads otherwise goes after a backslash.
+fn glob_literal(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if matches!(c, '*' | '?' | '[' | ']' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 impl Repo {
@@ -221,6 +234,10 @@ mod tests {
         assert_eq!(
             q.command().display(),
             "git log main --oneline --since=1.week.ago -- ':(icase)*banner*'"
+        );
+        assert_eq!(
+            query(SearchMode::File, "page[ab]").command().display(),
+            "git log --all --oneline -- ':(icase)*page\\[ab\\]*'"
         );
     }
 
