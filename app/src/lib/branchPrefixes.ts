@@ -22,13 +22,24 @@ export const BRANCH_PREFIXES: BranchPrefix[] = [
   { prefix: "test/", words: "Tests" },
 ];
 
+/** Why git can't start a branch name with `prefix`, or null: one or more words, each followed by a /. */
+export function prefixProblem(prefix: string): string | null {
+  if (!/^([^/\s~^:?*[\\.][^/\s~^:?*[\\]*\/)+$/.test(prefix) || prefix.includes("..") || prefix.includes("@{") || /\.lock\//.test(prefix))
+    return `“${prefix}” is not a prefix git can take: words and a /, such as feature/`;
+  return null;
+}
+
 /** Why a list of prefixes from settings.json can't be used, or null. */
 export function prefixesProblem(list: unknown[]): string | null {
+  const seen = new Set<string>();
   for (const item of list) {
     const p = item as Partial<BranchPrefix> | null;
     if (!p || typeof p !== "object" || typeof p.prefix !== "string" || typeof p.words !== "string" || (p.from !== undefined && p.from !== "production"))
       return 'Expected items like { "prefix": "feature/", "words": "New functionality" }, with "from": "production" for a prefix that starts from the production branch';
-    if (!/^[^\s~^:?*[\\]+\/$/.test(p.prefix)) return `“${p.prefix}” is not a prefix: a word and a /, such as feature/`;
+    const problem = prefixProblem(p.prefix);
+    if (problem) return problem;
+    if (seen.has(p.prefix)) return `${p.prefix} is in the list twice`;
+    seen.add(p.prefix);
   }
   return null;
 }
@@ -50,8 +61,8 @@ export function typedAfter(prefix: string | null, typed: string, list: BranchPre
   return splitPrefix(typed, list).prefix ? typed : (prefix ?? "") + typed;
 }
 
-/** A name that is nothing yet but a prefix, such as feature/, or nothing at all. */
-export const onlyPrefix = (name: string) => name === "" || /^[^/]+\/$/.test(name);
+/** A name that is nothing yet but a prefix, such as feature/ or team/feature/, or nothing at all. */
+export const onlyPrefix = (name: string) => name === "" || name.endsWith("/");
 
 /** A name as git can take it: spaces become dashes, characters git refuses go, and with
  *  `lowercase` capitals become small letters. What is still being typed, such as a dash at the

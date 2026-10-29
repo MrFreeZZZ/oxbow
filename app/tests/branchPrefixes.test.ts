@@ -1,4 +1,4 @@
-import { BRANCH_PREFIXES, cleanName, onlyPrefix, prefixesProblem, repoPrefixes, similarBranch, splitPrefix, typedAfter, withPrefix } from "../src/lib/branchPrefixes.ts";
+import { BRANCH_PREFIXES, cleanName, onlyPrefix, prefixProblem, prefixesProblem, repoPrefixes, similarBranch, splitPrefix, typedAfter, withPrefix } from "../src/lib/branchPrefixes.ts";
 import assert from "node:assert/strict";
 
 // A known prefix comes off the front; any other start stays in the name.
@@ -32,6 +32,7 @@ import assert from "node:assert/strict";
 {
   assert.ok(onlyPrefix(""));
   assert.ok(onlyPrefix("feature/"));
+  assert.ok(onlyPrefix("team/feature/"));
   assert.ok(!onlyPrefix("feature/x"));
   assert.ok(!onlyPrefix("main"));
 }
@@ -71,4 +72,11 @@ import assert from "node:assert/strict";
   assert.equal(prefixesProblem(BRANCH_PREFIXES), null);
   assert.match(prefixesProblem([{ prefix: "feature", words: "x" }]) ?? "", /not a prefix/);
   assert.match(prefixesProblem([{ prefix: "a/" }]) ?? "", /Expected items/);
+  assert.match(prefixesProblem([BRANCH_PREFIXES[0], BRANCH_PREFIXES[0]]) ?? "", /twice/);
+}
+
+// The Settings sheet and settings.json take the same prefixes: words git can start a name with.
+{
+  assert.equal(prefixProblem("team/feature/"), null);
+  for (const bad of ["feature", "/x/", "a//", ".wip/", "a b/", "x..y/", "fix:/"]) assert.ok(prefixProblem(bad), bad);
 }

@@ -4,7 +4,7 @@
 import { confirm, type Request } from "./confirm.svelte";
 import { menuIcons, type MenuEntry } from "./Menu.svelte";
 import { prefs } from "./prefs.svelte";
-import { BRANCH_PREFIXES, type BranchPrefix } from "./branchPrefixes";
+import { BRANCH_PREFIXES, prefixProblem, type BranchPrefix } from "./branchPrefixes";
 import { config, gitEdit, gitSwitch, prefRow } from "./settingsModel.svelte";
 import type { Row, Section } from "./settingsRows";
 
@@ -20,7 +20,7 @@ function prefixRequest(index: number | null, draft: BranchPrefix): Request {
   const prefix = typed && !typed.endsWith("/") ? `${typed}/` : typed;
   let invalid: string | null = null;
   if (!prefix) invalid = "Type a prefix";
-  else if (/[\s~^:?*[\\]/.test(prefix) || prefix.startsWith("/") || prefix.includes("//")) invalid = "Git can’t take that in a branch name";
+  else if (prefixProblem(prefix)) invalid = "Git can’t start a branch name with that";
   else if (list.some((p, i) => i !== index && p.prefix === prefix)) invalid = "This prefix is in the list already";
   const item: BranchPrefix = { prefix, words: draft.words.trim(), ...(draft.from ? { from: draft.from } : {}) };
   return {
@@ -145,7 +145,7 @@ export const branchesSection: Section = {
         prefRow("oxbow.branch.fetchFirst", "Fetch first", "switch", {
           sub: () =>
             prefs.get("oxbow.branch.fetchFirst")
-              ? "A branch from master starts at origin/master’s latest commit, unless master has commits of its own"
+              ? "A branch from the production branch starts at its latest commit on the remote, unless yours has commits of its own"
               : "A branch starts where the local branch is, even when the remote has moved on",
         }),
         prefRow("oxbow.branch.uncommitted", "Uncommitted files", "seg", {

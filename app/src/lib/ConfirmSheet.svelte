@@ -310,7 +310,7 @@
                     rows="4"
                     oninput={(e) => confirm.edit(text.edit(e.currentTarget.value))}
                   ></textarea>
-                {:else if field.text?.prefixes}
+                {:else if field.text?.prefixes?.length}
                   {@const text = field.text}
                   <PrefixField value={text.value} list={field.text.prefixes} placeholder={text.placeholder} label={field.label} focus={text.focus} onedit={(value) => confirm.edit(text.edit(value))} />
                 {:else if field.text}
@@ -342,7 +342,7 @@
                   </span>
                 {/if}
                 {#if field.error}<span class="field-note error">{field.error}</span>{:else if field.note}<span class="field-note">{field.note}</span
-                  >{:else if field.text?.prefixes && prefixOf(field.text.value, field.text.prefixes)}{@const p = prefixOf(field.text.value, field.text.prefixes)}<span
+                  >{:else if field.text?.prefixes?.length && prefixOf(field.text.value, field.text.prefixes)}{@const p = prefixOf(field.text.value, field.text.prefixes)}<span
                     class="field-note"><span class="mono">{p?.prefix}</span> · {p?.words}</span
                   >{/if}
               </div>

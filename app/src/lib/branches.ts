@@ -317,10 +317,12 @@ function newBranchSheet(ctx: BranchContext, bases: Base[], list: BranchPrefix[],
   const clash = remote && name && history.refs.some((r) => r.kind === "remote" && r.name === `${remote}/${name}`);
   const color = base.color;
 
-  // Fetch first: a branch base with an upstream and no commits of its own starts at the upstream's tip.
+  // Fetch first: the production branch, with no commits of its own, starts at its upstream's tip.
+  // Any other base stays local, so New Branch needs the network only for the production branch.
   const baseBranch = base.key === "commit" ? null : (base.ref ?? history.head.branch);
-  const tracking = baseBranch ? local(ctx, baseBranch)?.tracking : null;
-  const canFetch = !!tracking && !tracking.gone && tracking.ahead === 0;
+  const tracking = baseBranch && baseBranch === history.trunk ? local(ctx, baseBranch)?.tracking : null;
+  // An upstream of "." is another local branch: nothing to fetch.
+  const canFetch = !!tracking && tracking.remote !== "." && !tracking.gone && tracking.ahead === 0;
   const fetching = canFetch && (state.fetch ?? prefs.get("oxbow.branch.fetchFirst"));
   const upstream = tracking ? `${tracking.remote}/${tracking.branch}` : null;
   const leaving = state.switchTo && ctx.uncommitted > 0 && (state.stash ?? prefs.get("oxbow.branch.uncommitted") === "stash");
@@ -368,7 +370,12 @@ function newBranchSheet(ctx: BranchContext, bases: Base[], list: BranchPrefix[],
       {
         label: "From",
         chips: bases.map((b) => ({ label: b.label, on: b.key === base.key, pick: () => again({ base: b.key, picked: true }) })),
-        note: productionBase && productionBase.key !== state.base ? `${splitPrefix(name, list).prefix} starts from the production branch` : undefined,
+        note:
+          productionBase && productionBase.key !== state.base
+            ? `${splitPrefix(name, list).prefix} starts from the production branch`
+            : production && !productionBase
+              ? `${splitPrefix(name, list).prefix} starts from the production branch, but ${history.trunk} isn’t a local branch here. Check it out first, or start from here.`
+              : undefined,
       },
     ],
     options: [
@@ -407,8 +414,32 @@ function newBranchSheet(ctx: BranchContext, bases: Base[], list: BranchPrefix[],
     invalid: problem,
     status: fetching ? `Fetching ${tracking!.remote}…` : `Creating ${name}…`,
     done: `Created ${name}${state.switchTo ? " and switched to it" : ""}.${leaving ? ` Your files are in the stash.` : ""}`,
-    recover: (failure) =>
-      fetching && tracking ? remoteTrouble(failure, action, "Fetching from", tracking.remote, `Created ${name}.`) : remoteTrouble(failure, action, "Publishing to", remote ?? "the remote", `Created and published ${name}.`),
+    recover: (failure) => {
+      // A start other than HEAD can differ in a file you changed.
+      if (failure.kind === "localChanges" && !leaving) {
+        return {
+          title: "Your uncommitted changes are in the way",
+          body: [
+            "Some files you changed are different at ",
+            chip(ctx, action.start ?? "HEAD", color),
+            ", so switching would overwrite your changes. Leave them in a stash, on ",
+            here(ctx),
+            ", and they wait under Stashes in the sidebar until you bring them back.",
+          ],
+          icon: "warn",
+          tone: "warn",
+          button: { label: "Stash and Create", action: { ...action, stash: true }, status: `Creating ${name}…`, done: `Created ${name} and switched to it. Your files are in the stash.` },
+          close: "Cancel",
+          note: "No branch was created.",
+        };
+      }
+      const via = fetching && tracking ? tracking.remote : (remote ?? "the remote");
+      const verb = fetching && action.publish ? "Reaching" : fetching ? "Fetching from" : "Publishing to";
+      const trouble = remoteTrouble(failure, action, verb, via, `Created ${name}.`);
+      // Offline, a branch can still start where the local production branch is.
+      if (trouble && fetching && !action.publish && baseBranch) trouble.alt = { label: `Start from Your ${baseBranch}`, request: () => again({ fetch: false }) };
+      return trouble;
+    },
     action,
   };
 }
