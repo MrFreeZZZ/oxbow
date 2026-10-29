@@ -63,6 +63,8 @@ app/src-tauri/              Tauri shell (crate oxbow-app)
   tauri.conf.json           window, CSP; build.rs sets version 0.1.<commit count>
 app/src/                    Svelte front end
   App.svelte                main window: layout, wiring, most state (large: grep, don't read whole)
+  lib/repoSession.svelte.ts the window's repository: open (Trust), gone folder, close; Phase and Tickets in loads.ts
+  lib/historyLoad.svelte.ts its history: first page, reloads one at a time, older pages, outside changes
   lib/api.ts                typed invoke() wrappers, one per Tauri command
   lib/types.ts              TS mirrors of oxbow-core serde types
   lib/shortcuts.ts          every command and its keys (VS Code's, yours over them); keys.ts shows them;
