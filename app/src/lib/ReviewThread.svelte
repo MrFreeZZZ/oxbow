@@ -1,18 +1,39 @@
 <script lang="ts">
   // A thread of review comments on GitHub or GitLab with the replies of the review written here, and a
-  // reply: into the review, or sent at once. Resolve folds it away on GitHub or GitLab.
+  // reply: into the review, or sent at once. Resolve folds it away on GitHub or GitLab. A suggested
+  // change in a comment shows as one, with Apply Suggestion while its lines are the newest.
   import Avatar from "./Avatar.svelte";
+  import CommentBody from "./CommentBody.svelte";
   import CommentEditor from "./CommentEditor.svelte";
   import DraftNote from "./DraftNote.svelte";
   import type { ReviewSession } from "./review.svelte";
   import type { Thread } from "./reviewDraft";
   import { relativeTime } from "./format";
+  import { suggestedRange, suggestionBlock, threadText, type BodyPart } from "./suggestion";
 
   let { thread, session, me, resolve = true }: { thread: Thread; session: ReviewSession | null; me: string | null; resolve?: boolean } = $props();
 
   const replies = $derived(session?.draft?.replies.filter((r) => r.to === thread.id) ?? []);
   const writing = $derived(session?.editing?.kind === "reply" && session.editing.thread === thread.id ? session.editing : null);
   const open = $derived(session?.pr.state === "open");
+
+  /** On the newest version of new lines: a suggestion there can be written and applied. */
+  const onNewLines = $derived(!!thread.path && thread.side === "RIGHT" && !thread.outdated && thread.line !== null);
+  const lab = $derived(!!session?.lab);
+  const before = (part: Extract<BodyPart, { kind: "suggestion" }>) => {
+    const range = onNewLines ? suggestedRange(part, thread, lab) : null;
+    return range ? threadText(thread.hunk, range.start, range.end) : null;
+  };
+  /** Apply Suggestion shows to whoever has the branch checked out, and to the author. */
+  const canApply = $derived(!!session && onNewLines && open && (session.onBranch || (!!me && session.pr.author.login === me)));
+  const applyOff = $derived(session && !session.onBranch ? `Check out ${session.pr.head} to apply it` : null);
+  /** Suggest Change in a reply: the thread's lines, when they show here. */
+  const suggest = $derived.by(() => {
+    if (!onNewLines || thread.line === null) return null;
+    const start = Math.min(thread.startLine ?? thread.line, thread.line);
+    const lines = threadText(thread.hunk, start, thread.line);
+    return lines ? () => suggestionBlock(lines, lab, thread.line! - start + 1) : null;
+  });
 </script>
 
 <div class="thread">
@@ -21,7 +42,7 @@
       <Avatar login={c.author.login} url={c.author.avatarUrl} size={22} />
       <div class="main">
         <div class="head"><span class="who">{c.author.login}</span><span class="muted">{relativeTime(c.time).toLowerCase()}</span></div>
-        <p class="body selectable">{c.body}</p>
+        <CommentBody body={c.body} {before} onApply={canApply ? (part) => session?.applySuggestion(thread, part, c.author.login) : undefined} {applyOff} />
       </div>
     </div>
   {/each}
@@ -40,6 +61,7 @@
             onCancel={() => (session.editing = null)}
             onNow={() => session.replyNow(thread, writing.body)}
             onAdd={() => session.addReply(thread, writing.body)}
+            {suggest}
           />
         {:else}
           <Avatar login={me} size={22} />
@@ -90,13 +112,6 @@
   }
   .muted {
     color: var(--text2);
-  }
-  .body {
-    margin: 0;
-    font-size: var(--text-body);
-    line-height: 1.45;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
   }
   .foot {
     display: flex;

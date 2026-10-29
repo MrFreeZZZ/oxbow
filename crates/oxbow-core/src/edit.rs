@@ -14,6 +14,15 @@ use crate::repo::Repo;
 /// and the sheet gets it too.
 const MAX_FILE_PATCH: usize = 16 * 1024 * 1024;
 
+/// The words of a patch put on the file on disk: the comment when it fits, what changed when it
+/// doesn't, the comment when it is merged in, and what to do instead when it would conflict.
+pub(crate) struct OnDisk {
+    pub fits: String,
+    pub since: String,
+    pub merged: String,
+    pub instead: String,
+}
+
 /// What a reset keeps of the commits it takes off the branch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,10 +72,7 @@ impl Repo {
     }
 
     /// Revert This File (`reverse`) or Cherry-Pick This File: the commit's patch of the file,
-    /// applied to the file on disk. When the file changed since, so the patch no longer fits as
-    /// it is, git merges it in (`--3way`), which needs the file on disk as it is staged. A merge
-    /// that would conflict is refused before anything runs: conflicts outside a merge or a
-    /// cherry-pick would have nothing to finish them.
+    /// applied to the file on disk, or merged in when the file changed since.
     pub(crate) fn plan_file_patch(
         &self,
         commit: &str,
@@ -83,35 +89,63 @@ impl Repo {
         if reverse {
             args.push("--reverse");
         }
+        let words = if reverse {
+            OnDisk {
+                fits: format!(
+                    "--reverse: what {sha} changed in {path} comes out of the file on disk; nothing is staged"
+                ),
+                since: format!("{path} changed since {sha}"),
+                merged: format!(
+                    "--3way: {path} changed since {sha}, so the change is merged in; the merged file is staged"
+                ),
+                instead: "Revert the whole commit to resolve the conflicts, or change the file by hand".into(),
+            }
+        } else {
+            OnDisk {
+                fits: format!("what {sha} changed in {path} goes into the file on disk; nothing is staged"),
+                since: format!("{path} changed since {sha}"),
+                merged: format!(
+                    "--3way: {path} changed since {sha}, so the change is merged in; the merged file is staged"
+                ),
+                instead: "Cherry-pick the whole commit to resolve the conflicts, or change the file by hand".into(),
+            }
+        };
+        self.plan_patch_on_disk(args, patch, path, &words)
+    }
+
+    /// `git <args> -` with `patch` on the file `path` on disk. When the file changed since, so
+    /// the patch no longer fits as it is, git merges it in (`--3way`), which needs the file on
+    /// disk as it is staged. A merge that would conflict is refused before anything runs:
+    /// conflicts outside a merge or a cherry-pick would have nothing to finish them.
+    pub(crate) fn plan_patch_on_disk(
+        &self,
+        mut args: Vec<&str>,
+        patch: String,
+        path: &str,
+        words: &OnDisk,
+    ) -> Result<Vec<GitCommand>> {
         let check = [args.as_slice(), &["--check", "-"]].concat();
         let fits = self
             .spawn(&GitCommand::new(check), Some(patch.as_bytes()))?
             .status
             .success();
         let comment = if fits {
-            if reverse {
-                format!("--reverse: what {sha} changed in {path} comes out of the file on disk; nothing is staged")
-            } else {
-                format!("what {sha} changed in {path} goes into the file on disk; nothing is staged")
-            }
+            words.fits.clone()
         } else {
+            let since = &words.since;
             if self.has_unstaged(path)? {
                 return Err(Error::Git(format!(
-                    "{path} changed since {sha}, so its change has to be merged in, and the file has unstaged changes; stage or stash them first"
+                    "{since}, so its change has to be merged in, and the file has unstaged changes; stage or stash them first"
                 )));
             }
             args.push("--3way");
             if !self.merges_cleanly(&args, &patch)? {
-                let whole = if reverse {
-                    "Revert the whole commit"
-                } else {
-                    "Cherry-pick the whole commit"
-                };
                 return Err(Error::Git(format!(
-                    "{path} changed since {sha}, and its change conflicts with the file as it is now. {whole} to resolve the conflicts, or change the file by hand"
+                    "{since}, and its change conflicts with the file as it is now. {}",
+                    words.instead
                 )));
             }
-            format!("--3way: {path} changed since {sha}, so the change is merged in; the merged file is staged")
+            words.merged.clone()
         };
         args.push("-");
         Ok(vec![GitCommand::new(args).comment(comment).input(patch)])

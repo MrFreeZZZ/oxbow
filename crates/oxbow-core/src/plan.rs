@@ -497,6 +497,13 @@ impl Repo {
                 self.plan_file_patch(commit, path, old_path.as_deref(), false)?
             }
             Action::TakeVersion { commit, path } => self.plan_take_version(commit, path)?,
+            Action::ApplySuggestion {
+                commit,
+                path,
+                start,
+                end,
+                lines,
+            } => self.plan_apply_suggestion(commit, path, *start, *end, lines)?,
             Action::Reset { commit, mode } => plan_reset(commit, *mode),
             Action::StashPush {
                 message,

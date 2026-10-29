@@ -1197,15 +1197,28 @@ impl Repo {
             if let Entry::Thread {
                 path,
                 line: Some(line),
+                start_line,
                 side,
                 hunk,
+                commit,
                 ..
             } = entry
                 && hunk.is_empty()
                 && !path.is_empty()
             {
-                let at = if side == "LEFT" { &diff.base_sha } else { &diff.head_sha };
-                *hunk = lines_above(&local, at, path, *line, 4, side != "LEFT");
+                // New lines as the comment saw them: its own version when it is here.
+                let mine = commit.as_deref().filter(|c| local.rev_parse_single(*c).is_ok());
+                let at = if side == "LEFT" {
+                    diff.base_sha.as_str()
+                } else {
+                    mine.unwrap_or(&diff.head_sha)
+                };
+                // A comment on several new lines shows them all, for a suggestion on them.
+                let from = start_line.filter(|s| side != "LEFT" && *s <= *line).unwrap_or(*line);
+                *hunk = lines_above(&local, at, path, *line, (*line - from + 1).max(4), side != "LEFT");
+                for l in hunk.iter_mut() {
+                    l.mark = l.number.is_some_and(|n| n >= from);
+                }
             }
         }
     }
@@ -1424,6 +1437,10 @@ fn conversation(discussions: &[Value]) -> Vec<Entry> {
                     .all(|n| n.get("resolved").and_then(Value::as_bool) == Some(true))
             }),
             outdated: false,
+            commit: position
+                .and_then(|p| p.get("head_sha"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             time: time(first, "created_at"),
         });
     }

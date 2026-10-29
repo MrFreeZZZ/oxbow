@@ -70,7 +70,7 @@ impl Repo {
         }
         // A file's change that no longer fits, or would conflict, is refused before anything
         // is saved or runs: no failed step in the Operation Log for it.
-        if let Action::RevertFile { .. } | Action::CherryPickFile { .. } = action {
+        if let Action::RevertFile { .. } | Action::CherryPickFile { .. } | Action::ApplySuggestion { .. } = action {
             self.plan(action)?;
         }
         // A commit the secrets check stops never starts: nothing runs, nothing to undo.

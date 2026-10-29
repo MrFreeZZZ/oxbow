@@ -273,6 +273,15 @@ pub enum Action {
         commit: String,
         path: String,
     },
+    /// Apply Suggestion: `lines`, suggested in a review of a pull request, in place of lines
+    /// `start` to `end` of the file `path` as `commit` has it, in the file on disk, uncommitted.
+    ApplySuggestion {
+        commit: String,
+        path: String,
+        start: u32,
+        end: u32,
+        lines: String,
+    },
     /// Point the checked-out branch, or a detached `HEAD`, at `commit` (a sha or `HEAD~1`).
     Reset {
         commit: String,

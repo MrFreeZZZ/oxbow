@@ -1,11 +1,33 @@
 <script lang="ts">
   // A comment or reply of the review written here, not sent yet: Pending, to edit or take out.
   import Avatar from "./Avatar.svelte";
+  import CommentBody from "./CommentBody.svelte";
   import CommentEditor from "./CommentEditor.svelte";
   import type { ReviewSession } from "./review.svelte";
   import { relativeTime } from "./format";
+  import type { BodyPart } from "./suggestion";
 
-  let { session, id, body, time, me, label = "" }: { session: ReviewSession; id: string; body: string; time: number; me: string; label?: string } = $props();
+  let {
+    session,
+    id,
+    body,
+    time,
+    me,
+    label = "",
+    before,
+    suggest = null,
+  }: {
+    session: ReviewSession;
+    id: string;
+    body: string;
+    time: number;
+    me: string;
+    label?: string;
+    /** The lines a suggestion in it goes in place of, when they are known. */
+    before?: (part: Extract<BodyPart, { kind: "suggestion" }>) => string[] | null;
+    /** Suggest Change while it is written again. */
+    suggest?: (() => string | null) | null;
+  } = $props();
 
   const editing = $derived(session.editing?.kind === "edit" && session.editing.id === id ? session.editing : null);
 </script>
@@ -25,9 +47,9 @@
       {/if}
     </div>
     {#if editing}
-      <CommentEditor bind:value={editing.body} add="Save" onCancel={() => (session.editing = null)} onAdd={() => session.edit(id, editing.body)} />
+      <CommentEditor bind:value={editing.body} add="Save" onCancel={() => (session.editing = null)} onAdd={() => session.edit(id, editing.body)} {suggest} />
     {:else}
-      <p class="body selectable">{body}</p>
+      <CommentBody {body} {before} />
     {/if}
   </div>
 </div>
@@ -68,12 +90,5 @@
     color: var(--accent-ink);
     font-size: var(--text-caption);
     font-weight: 600;
-  }
-  .body {
-    margin: 0;
-    font-size: var(--text-body);
-    line-height: 1.45;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
   }
 </style>

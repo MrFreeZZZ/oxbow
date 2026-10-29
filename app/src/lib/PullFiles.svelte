@@ -9,7 +9,7 @@
   import { untrack } from "svelte";
   import { api, stopped } from "./api";
   import { wholeByDefault } from "./prefs.svelte";
-  import type { Comparison, DiffLine, DraftComment, FileChange, FileDiff, Hunk } from "./types";
+  import type { Comparison, DiffLine, DraftComment, FileChange, FileDiff, Hunk, Spot } from "./types";
   import { shortId, splitPath } from "./format";
   import DiffView, { type LineNotes } from "./DiffView.svelte";
   import FileBadge from "./FileBadge.svelte";
@@ -19,6 +19,7 @@
   import ReviewThread from "./ReviewThread.svelte";
   import type { ReviewSession } from "./review.svelte";
   import { addProblem, commentable, covers, liveThreads, lineKey, placeOf, pushedText, spotLabel, spotOf, type Thread, type Writing } from "./reviewDraft";
+  import { hunkText, suggestedRange, suggestionBlock, type BodyPart } from "./suggestion";
 
   let {
     session,
@@ -280,6 +281,27 @@
     top: movedNotes,
   };
 
+  /** New lines `start` to `end` of a file as its diff here shows them, or null. */
+  function newText(path: string, start: number, end: number): string[] | null {
+    for (const hunk of diffs.find((d) => d.file.path === path)?.hunks ?? []) {
+      const lines = hunkText(hunk, start, end);
+      if (lines) return lines;
+    }
+    return null;
+  }
+  /** Suggest Change on the new lines a comment is on. */
+  function suggestFor(spot: Spot): (() => string) | null {
+    if (spot.side !== "RIGHT") return null;
+    const start = Math.min(spot.startLine ?? spot.line, spot.line);
+    const lines = newText(spot.path, start, spot.line);
+    return lines ? () => suggestionBlock(lines, session.lab, spot.line - start + 1) : null;
+  }
+  /** The lines a suggestion of the draft goes in place of. */
+  const beforeFor = (spot: Spot) => (part: Extract<BodyPart, { kind: "suggestion" }>) => {
+    const range = spot.side === "RIGHT" ? suggestedRange(part, spot, session.lab) : null;
+    return range ? newText(spot.path, range.start, range.end) : null;
+  };
+
   /** Why the comment being written can't go into the review. */
   const addOff = (writing: Writing) => addProblem(session.draft, writing, pr.headSha, changed === null ? null : !changed.has(writing.spot.path));
 
@@ -292,7 +314,7 @@
     <ReviewThread thread={t} {session} {me} />
   {/each}
   {#each drafts.get(key) ?? [] as c (c.id)}
-    <DraftNote {session} id={c.id} body={c.body} time={c.time} me={me ?? ""} label={c.spot.startLine ? spotLabel(c.spot) : ""} />
+    <DraftNote {session} id={c.id} body={c.body} time={c.time} me={me ?? ""} label={c.spot.startLine ? spotLabel(c.spot) : ""} before={beforeFor(c.spot)} suggest={suggestFor(c.spot)} />
   {/each}
   {#if writing && writing.spot.path === diff.file.path && key === lineKey(writing.spot.path, writing.spot.side, writing.spot.line)}
     <div class="write">
@@ -304,6 +326,7 @@
         onCancel={() => (session.editing = null)}
         onNow={() => session.commentNow(writing)}
         onAdd={() => session.addComment(writing)}
+        suggest={suggestFor(writing.spot)}
       />
     </div>
   {/if}
