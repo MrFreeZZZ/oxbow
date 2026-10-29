@@ -19,6 +19,13 @@
 //! than the days in Settings go (7 by default), then the oldest ones until the kept blobs take at
 //! most [`MAX_BYTES`]; blobs no version names are deleted.
 //!
+//! What can be lost: Local History never deletes a version it can't read the list of, and says
+//! so when a version can't be written or the keeping stopped. Saves aren't forced to the disk
+//! (no `sync_all`): they come with every save of every file, and a power cut may take only the
+//! last moments' versions, whose half-written line is then left out. The one rewrite of a day's
+//! list, when old versions go, is forced to the disk before it takes the list's place, so a power
+//! cut leaves the old list or the new one, never an empty one.
+//!
 //! Measured on a clone of VS Code (21,000 files, 261 MB): a day's work on 20 files keeps a few
 //! MB, a formatter run over every file 90 MB once, a branch switch nothing (docs/speed.md).
 
@@ -139,7 +146,8 @@ pub struct LocalHistoryProblem {
     pub error: String,
     /// When the first of the versions waiting was to be written, in milliseconds since 1970.
     pub since: u64,
-    /// Versions waiting, and files to read again.
+    /// Versions waiting, and files to read again; none when the keeping couldn't start, so
+    /// saves since aren't kept.
     pub waiting: usize,
 }
 
@@ -204,6 +212,7 @@ impl LocalHistory {
         let paths: Vec<&String> = unread.iter().chain(paths).collect();
         let local = repo.local();
         let hash = local.object_hash();
+        // Without the index, a version git stages is kept too: more is kept, nothing lost.
         let index = local.index_or_empty().ok();
         // Files in a submodule's folder are another repository's.
         let gitlinks: Vec<String> = index
@@ -306,6 +315,7 @@ impl LocalHistory {
             _ => None,
         };
         if self.written > PRUNE_AFTER {
+            // Old versions that can't go now go with a later prune; nothing kept is lost.
             let _ = self.prune(now);
         }
         written
@@ -361,12 +371,18 @@ impl LocalHistory {
         let cutoff = now.saturating_sub(days_kept() * DAY);
         let mut entries = Vec::new();
         let mut days = Vec::new();
+        // A day's list that can't be read now is left as it is, and so are the blobs: its
+        // versions may name any of them.
+        let mut unread = false;
         for (day, file) in day_files(&self.dir) {
             if (day + 1) * DAY <= cutoff {
                 std::fs::remove_file(&file).map_err(Error::git)?;
                 continue;
             }
-            let read = read_day(&file);
+            let Ok(read) = read_day(&file) else {
+                unread = true;
+                continue;
+            };
             days.push((day, file, read.len()));
             entries.extend(read);
         }
@@ -417,16 +433,14 @@ impl LocalHistory {
                 text.push_str(&serde_json::to_string(entry).map_err(Error::git)?);
                 text.push('\n');
             }
-            let fresh = file.with_extension("jsonl.new");
-            std::fs::write(&fresh, text).map_err(Error::git)?;
-            std::fs::rename(&fresh, &file).map_err(Error::git)?;
+            replace_list(&file, &text).map_err(Error::git)?;
         }
         // A version waiting to be written names its blob too.
         let named: HashSet<&str> = entries.iter().chain(&self.waiting).map(|e| e.id.as_str()).collect();
-        for id in self.objects.iter().filter_map(|id| id.ok()) {
-            if !named.contains(id.to_string().as_str()) {
-                let _ = std::fs::remove_file(self.objects.object_path(&id));
-            }
+        let ids = self.objects.iter().filter_map(|id| id.ok());
+        for id in ids.filter(|id| !unread && !named.contains(id.to_string().as_str())) {
+            // A blob that can't be deleted only takes space; the next prune tries again.
+            let _ = std::fs::remove_file(self.objects.object_path(&id));
         }
         self.last = entries.into_iter().map(|e| (e.path.clone(), e)).collect();
         Ok(total)
@@ -465,6 +479,16 @@ fn append_line(dir: &Path, file: &Path, lines: &str) -> std::io::Result<()> {
     file.flush()
 }
 
+/// Put `text` in place of the list `file`: written beside it and forced to the disk first, so
+/// that after a power cut the list is the old one or the new one, never an empty file.
+fn replace_list(file: &Path, text: &str) -> std::io::Result<()> {
+    let fresh = file.with_extension("jsonl.new");
+    let mut out = std::fs::File::create(&fresh)?;
+    out.write_all(text.as_bytes())?;
+    out.sync_all()?;
+    std::fs::rename(&fresh, file)
+}
+
 fn days_kept() -> u64 {
     match keep_days() {
         0 => DEFAULT_DAYS as u64,
@@ -488,13 +512,18 @@ fn day_files(dir: &Path) -> Vec<(u64, PathBuf)> {
     out
 }
 
-/// A day's lines; one that can't be read, as from a write cut short, is left out.
-fn read_day(file: &Path) -> Vec<Entry> {
-    std::fs::read_to_string(file)
-        .unwrap_or_default()
+/// A day's lines; one that can't be read, as from a write cut short, is left out. A list gone
+/// meanwhile (old versions went) has none; one that is there but can't be read is an error.
+fn read_day(file: &Path) -> std::io::Result<Vec<Entry>> {
+    let text = match std::fs::read_to_string(file) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err),
+    };
+    Ok(text
         .lines()
         .filter_map(|line| serde_json::from_str(line).ok())
-        .collect()
+        .collect())
 }
 
 /// The versions in order, each group of saves as its last one.
@@ -542,15 +571,23 @@ fn is_executable(_: &Path) -> bool {
 impl Repo {
     /// The versions kept, oldest first, each group of saves as its last one: those of `path`, or
     /// of every file.
-    fn local_entries(&self, path: Option<&str>) -> Vec<Entry> {
+    fn local_entries(&self, path: Option<&str>) -> Result<Vec<Entry>> {
         let cutoff = now_ms().saturating_sub(days_kept() * DAY);
-        let entries = day_files(&folder(self))
-            .into_iter()
-            .filter(|(day, _)| (day + 1) * DAY > cutoff)
-            .flat_map(|(_, file)| read_day(&file))
-            .filter(|e| path.is_none_or(|p| p == e.path))
-            .collect();
-        groups(entries).into_iter().filter(|e| e.at >= cutoff).collect()
+        let mut entries = Vec::new();
+        for (day, file) in day_files(&folder(self)) {
+            if (day + 1) * DAY <= cutoff {
+                continue;
+            }
+            let read = read_day(&file).map_err(|err| {
+                Error::Git(format!(
+                    "Couldn’t read Local History’s list {}: {}",
+                    file.display(),
+                    io_words(&err)
+                ))
+            })?;
+            entries.extend(read.into_iter().filter(|e| path.is_none_or(|p| p == e.path)));
+        }
+        Ok(groups(entries).into_iter().filter(|e| e.at >= cutoff).collect())
     }
 
     /// The bytes of a version: from Local History's blobs, or git's.
@@ -566,7 +603,7 @@ impl Repo {
     pub fn local_history(&self, path: &str) -> Result<Vec<LocalVersion>> {
         let local = self.local();
         let objects = object_store(self, &folder(self));
-        let entries = self.local_entries(Some(path));
+        let entries = self.local_entries(Some(path))?;
         let head = local
             .head_tree()
             .ok()
@@ -615,7 +652,7 @@ impl Repo {
     /// The versions of every file Local History kept, the newest first: when, how big, what each
     /// changed from, and whether the file is still on disk; no line counts.
     pub fn local_history_all(&self) -> Result<Vec<LocalVersion>> {
-        let entries = self.local_entries(None);
+        let entries = self.local_entries(None)?;
         let mut before: HashMap<String, String> = HashMap::new();
         let bases: Vec<Option<String>> = entries
             .iter()
@@ -779,14 +816,31 @@ fn line_counts(old: &str, new: &str) -> (u32, u32) {
 /// Keeps the versions the watches of one worktree tell, on a thread of its own, until the last
 /// of those watches is dropped: two windows of one repository keep one list.
 pub(crate) struct Keeper {
-    tx: mpsc::Sender<Vec<String>>,
+    tx: Mutex<mpsc::Sender<Vec<String>>>,
+    repo: Repo,
+    /// The worktree's key in [`PROBLEMS`].
+    key: PathBuf,
 }
 
 static KEEPERS: Mutex<Vec<(PathBuf, Weak<Keeper>)>> = Mutex::new(Vec::new());
 
 impl Keeper {
+    /// Keep the files at `paths`. When the thread that keeps them ended on an error, or could
+    /// never start, a new one is started for them; when that can't start either, windows say
+    /// that saves aren't kept, and the next save tries again.
     pub(crate) fn tell(&self, paths: Vec<String>) {
-        let _ = self.tx.send(paths);
+        let mut tx = self.tx.lock().expect("keeper lock");
+        let Err(mpsc::SendError(paths)) = tx.send(paths) else {
+            return;
+        };
+        match start(&self.repo, &self.key) {
+            Ok(fresh) => {
+                // Only a thread that ends at once can't take them: the next save starts another.
+                let _ = fresh.send(paths);
+                *tx = fresh;
+            }
+            Err(err) => stopped(&self.key, &format!("Couldn’t start keeping them: {}", io_words(&err))),
+        }
     }
 }
 
@@ -806,6 +860,24 @@ fn publish(key: &Path, history: &LocalHistory) {
     }
 }
 
+/// Say that the keeper of `key` keeps nothing, and why: the saves since aren't kept.
+fn stopped(key: &Path, why: &str) {
+    let mut problems = PROBLEMS.lock().expect("problems lock");
+    let since = problems
+        .iter()
+        .find(|(at, _)| at == key)
+        .map_or_else(now_ms, |(_, p)| p.since);
+    problems.retain(|(at, _)| at != key);
+    problems.push((
+        key.to_path_buf(),
+        LocalHistoryProblem {
+            error: why.to_owned(),
+            since,
+            waiting: 0,
+        },
+    ));
+}
+
 /// The keeper of `repo`'s worktree, started when it has none.
 pub(crate) fn keeper(repo: &Repo) -> Option<Arc<Keeper>> {
     let key = keeper_key(repo);
@@ -814,13 +886,30 @@ pub(crate) fn keeper(repo: &Repo) -> Option<Arc<Keeper>> {
     if let Some(keeper) = keepers.iter().find(|(at, _)| *at == key).and_then(|(_, k)| k.upgrade()) {
         return Some(keeper);
     }
+    let tx = start(repo, &key).unwrap_or_else(|err| {
+        stopped(&key, &format!("Couldn’t start keeping them: {}", io_words(&err)));
+        // Nobody listens: the first save tries to start it again.
+        mpsc::channel().0
+    });
+    let keeper = Arc::new(Keeper {
+        tx: Mutex::new(tx),
+        repo: repo.clone(),
+        key: key.clone(),
+    });
+    keepers.push((key, Arc::downgrade(&keeper)));
+    Some(keeper)
+}
+
+/// Start the thread that keeps the versions of `repo`'s worktree, known by `key`.
+fn start(repo: &Repo, key: &Path) -> std::io::Result<mpsc::Sender<Vec<String>>> {
     let (tx, rx) = mpsc::channel::<Vec<String>>();
     let repo = repo.clone();
-    let at = key.clone();
+    let at = key.to_path_buf();
     std::thread::Builder::new()
         .name("oxbow-local-history".into())
         .spawn(move || {
             let mut history = LocalHistory::open(&repo);
+            // Old versions that can't go now go with a later prune; nothing kept is lost.
             let _ = history.prune(now_ms());
             let mut pruned = Instant::now();
             loop {
@@ -847,15 +936,13 @@ pub(crate) fn keeper(repo: &Repo) -> Option<Arc<Keeper>> {
                     }
                 }
                 if pruned.elapsed() >= PRUNE_EVERY {
+                    // As at the start: what can't go now goes with a later prune.
                     let _ = history.prune(now_ms());
                     pruned = Instant::now();
                 }
             }
-        })
-        .ok()?;
-    let keeper = Arc::new(Keeper { tx });
-    keepers.push((key, Arc::downgrade(&keeper)));
-    Some(keeper)
+        })?;
+    Ok(tx)
 }
 
 #[cfg(test)]
@@ -900,6 +987,31 @@ mod tests {
         set_keep_days(DEFAULT_DAYS);
         assert_eq!(off, 0);
         assert_eq!(history.keep(&repo, &["a.txt".into()], now_ms()), 1);
+    }
+
+    #[test]
+    fn a_keeper_whose_thread_ended_starts_another_with_the_next_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let status = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .status();
+        assert!(status.unwrap().success());
+        std::fs::write(dir.path().join("a.txt"), "a\n").unwrap();
+        let repo = Repo::open(dir.path()).unwrap();
+        // Nobody listens, as after the thread ended on an error.
+        let keeper = Keeper {
+            tx: Mutex::new(mpsc::channel().0),
+            repo: repo.clone(),
+            key: keeper_key(&repo),
+        };
+        keeper.tell(vec!["a.txt".into()]);
+        let end = Instant::now() + Duration::from_secs(10);
+        while repo.local_history("a.txt").unwrap().is_empty() {
+            assert!(Instant::now() < end, "the save was never kept");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(repo.local_history_problem().is_none());
     }
 
     #[test]

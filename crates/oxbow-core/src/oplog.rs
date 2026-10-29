@@ -251,6 +251,7 @@ impl Repo {
                     None => tree(),
                 })
             });
+            // Not taken only when the files' thread already failed, which its join reports.
             let _ = send.send(self.untracked_files());
             let index = self.index_tree();
             let rest = (|| Ok((index?, self.head_state()?, self.all_refs()?, self.stash_records()?)))();
@@ -460,7 +461,9 @@ impl Repo {
         if let Some(dir) = file.parent() {
             make_folder(dir)?;
         }
-        // Said with the file, for the message that the step isn't in the log.
+        // Said with the file, for the message that the step isn't in the log. Not forced to the
+        // disk: a power cut may take the last step's line, half written lines are left out
+        // when read, and the snapshots themselves are commits git writes.
         let cant_write = |err: std::io::Error| Error::Git(format!("can't write .git/oxbow/oplog.jsonl: {err}"));
         let mut out = std::fs::OpenOptions::new()
             .create(true)
@@ -761,6 +764,7 @@ impl Repo {
                 .and_then(|f| f.set_modified(modified))
                 .map_err(io)?;
         } else {
+            // A scratch left from before; if it can't go, git reads the index as missing anyway.
             let _ = std::fs::remove_file(&scratch);
         }
         Ok(scratch)
@@ -786,6 +790,7 @@ impl Repo {
                     Ok(None)
                 }
             });
+        // A scratch index left behind only takes space; the next one has another name.
         let _ = std::fs::remove_file(&scratch);
         result.map(|tree| (tree, staged))
     }
@@ -835,6 +840,7 @@ impl Repo {
                 .trim()
                 .to_owned())
         })();
+        // As above: left behind, it only takes space.
         let _ = std::fs::remove_file(&scratch);
         // With nothing at all to write, the scratch index has no entries: the empty tree.
         result.map(|tree: String| if tree.is_empty() { EMPTY_TREE.to_owned() } else { tree })
@@ -952,6 +958,8 @@ impl Repo {
         let key = format!("gc.{OPLOG_REF}.reflogExpireUnreachable");
         let value = format!("{days} days");
         if self.config_value(&key).as_deref() != Some(value.as_str()) {
+            // Tried again with the next step, and the Console shows why it failed. Until then git
+            // may let steps older than 30 days go, and Undo says it can't bring those back.
             let _ = self.run(&GitCommand::new(["config", &key, &value]));
         }
     }

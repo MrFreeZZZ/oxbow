@@ -187,6 +187,69 @@ fn old_versions_go_after_the_days_kept_and_their_blobs_with_them() {
     assert_eq!(repo.local_history("a.txt").unwrap()[0].id, fx_id(&fx, "yesterday\n"));
 }
 
+#[test]
+fn a_days_list_that_cant_be_read_is_said_and_its_versions_keep_their_blobs() {
+    let fx = base();
+    let repo = Repo::open(fx.path()).unwrap();
+    let mut history = LocalHistory::open(&repo);
+    let t = now();
+    fx.write("a.txt", "today\n");
+    assert_eq!(history.keep(&repo, &paths(&["a.txt"]), t), 1);
+    assert_eq!(blobs(&fx), 1);
+    // Today's list, as if the disk couldn't read it: a folder in its place.
+    let list = fx.path().join(format!(".git/oxbow/local-history/{}.jsonl", t / DAY));
+    let aside = list.with_extension("aside");
+    std::fs::rename(&list, &aside).unwrap();
+    std::fs::create_dir(&list).unwrap();
+
+    let err = repo.local_history("a.txt").unwrap_err().to_string();
+    assert!(err.contains("Couldn’t read Local History’s list"), "{err}");
+    assert!(repo.local_history_all().is_err());
+    // Old versions going leaves that day, and every blob, as they are.
+    history.prune(t).unwrap();
+    assert!(list.is_dir());
+    assert_eq!(blobs(&fx), 1, "the blob only that list names is still there");
+
+    std::fs::remove_dir(&list).unwrap();
+    std::fs::rename(&aside, &list).unwrap();
+    let versions = repo.local_history("a.txt").unwrap();
+    assert_eq!(versions.len(), 1);
+    assert!(versions[0].kept);
+}
+
+#[test]
+fn a_days_list_rewritten_when_old_versions_go_keeps_the_rest() {
+    let fx = base();
+    let repo = Repo::open(fx.path()).unwrap();
+    let mut history = LocalHistory::open(&repo);
+    let t = now();
+    for (at, text) in [(t - 2 * DAY, "one\n"), (t - 2 * DAY + GROUP + 1, "two\n")] {
+        fx.write("a.txt", text);
+        history.keep(&repo, &paths(&["a.txt"]), at);
+    }
+    // Room for one of the two: the older goes, and the day's list is written again.
+    let one = fx.path().join(".git/oxbow/local-history/objects");
+    let size = std::fs::read_dir(&one)
+        .unwrap()
+        .flatten()
+        .flat_map(|d| std::fs::read_dir(d.path()).unwrap().flatten())
+        .map(|f| f.metadata().unwrap().len())
+        .max()
+        .unwrap();
+    history.prune_within(t, size).unwrap();
+    let versions = repo.local_history("a.txt").unwrap();
+    assert_eq!(versions.len(), 1);
+    assert_eq!(versions[0].id, fx_id(&fx, "two\n"));
+    let dir = fx.path().join(".git/oxbow/local-history");
+    let left: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".new"))
+        .collect();
+    assert!(left.is_empty(), "no list written beside is left: {left:?}");
+}
+
 fn fx_id(fx: &Fixture, text: &str) -> String {
     let file = fx.path().join("scratch-for-id");
     std::fs::write(&file, text).unwrap();
@@ -450,7 +513,8 @@ fn a_version_that_cant_be_written_waits_and_is_written_when_it_can() {
     std::fs::create_dir_all(&list).unwrap();
     let mut history = LocalHistory::open(&repo);
     assert_eq!(history.keep(&repo, &paths(&["a.txt"]), t), 0);
-    assert!(repo.local_history("a.txt").unwrap().is_empty());
+    // A list there that can't be read is said, not shown as no versions.
+    assert!(repo.local_history("a.txt").is_err());
     let problem = history.problem().unwrap().clone();
     assert_eq!((problem.since, problem.waiting), (t, 1));
     assert!(

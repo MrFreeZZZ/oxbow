@@ -355,7 +355,7 @@ export interface LocalHistoryProblem {
   error: string;
   /** When the first of the versions waiting was saved, in milliseconds since 1970. */
   since: number;
-  /** Versions waiting. */
+  /** Versions waiting; none when the keeping couldn't start, so saves since aren't kept. */
   waiting: number;
 }
 
