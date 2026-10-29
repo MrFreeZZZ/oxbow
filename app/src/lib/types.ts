@@ -348,6 +348,29 @@ export interface FileHistory {
   more: boolean;
 }
 
+/** A version of a file Local History kept: the file as it was saved, between commits. */
+export interface LocalVersion {
+  path: string;
+  /** The blob of the file's bytes as they were saved. */
+  id: string;
+  /** When it was saved, in milliseconds since 1970. */
+  at: number;
+  size: number;
+  /** What it changed from: the version saved before it, or for the oldest the file as HEAD has
+   *  it; null when the file wasn't there. Only in one file's list. */
+  base: string | null;
+  /** The base is the file as HEAD has it. */
+  fromHead: boolean;
+  /** Lines added and removed since the base; null for a binary file and in the list of every file. */
+  additions: number | null;
+  deletions: number | null;
+  binary: boolean;
+  /** Its bytes can still be read. */
+  kept: boolean;
+  /** The file isn't on disk now. */
+  gone: boolean;
+}
+
 export interface BlameCommit {
   id: string;
   summary: string;
@@ -642,6 +665,8 @@ export type Action =
   | { kind: "cherryPickFile"; commit: string; path: string; oldPath?: string | null }
   /** The file on disk as `commit` has it; nothing is staged. */
   | { kind: "takeVersion"; commit: string; path: string }
+  /** The file on disk as Local History kept it, blob `id`; nothing is staged. */
+  | { kind: "restoreLocalVersion"; path: string; id: string }
   | { kind: "applySuggestion"; commit: string; path: string; start: number; end: number; lines: string }
   | { kind: "reset"; commit: string; mode: ResetMode }
   | { kind: "reword"; message: string; noVerify?: boolean }

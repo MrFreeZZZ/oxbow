@@ -1,6 +1,6 @@
 // The title of a repository window: the name of what it shows, and the line under it.
 
-export type Screen = "history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull" | "series" | "reviews" | "browse";
+export type Screen = "history" | "stashes" | "oplog" | "local" | "compare" | "file" | "stack" | "pull" | "series" | "reviews" | "browse";
 
 export interface Shown {
   screen: Screen;
@@ -71,6 +71,7 @@ export function windowTitle(s: Shown): Title {
   if (s.screen === "compare") return here("Compare", `${s.compare.target} with ${s.compare.base}`);
   if (s.screen === "stashes") return here("Stashes", `${inRepo}on ${s.head ?? "detached HEAD"}`);
   if (s.screen === "oplog") return here("Operation Log", `${inRepo}every step, to undo or restore`);
+  if (s.screen === "local") return here("Local History", `${inRepo}every version saved lately, to compare or restore`);
   const name = `${titled(s.repo)} history`;
   if (s.running) return { name, sub: `${s.running.title}${s.running.percent !== null ? ` · ${s.running.percent}%` : "…"}`, steps: false, amber: false };
   if (s.failed) return { name, sub: `Fetch failed · ${s.failed}`, steps: false, amber: true };

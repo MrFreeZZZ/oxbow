@@ -45,7 +45,8 @@ Every change runs your own `git`, so hooks, credentials and SSH behave exactly a
 
 **Nothing is lost.** Dropped stashes and aborted operations keep a copy for 30 days. Lost Work
 finds commits from the reflog, and Fix a Mistake plans the way out of a commit on the wrong
-branch, a forgotten file or a push you want to take back.
+branch, a forgotten file or a push you want to take back. Local History keeps every version of a
+file you save between commits, from any editor, for a week, to compare or restore.
 
 **Stacked branches.** Edit Stack rewrites a chain of branches in one go. Pull requests keep their
 stack list up to date and the rest of a stack is restacked when its base is merged.

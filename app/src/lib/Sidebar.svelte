@@ -95,8 +95,8 @@
     /** Confirm and run a change to the repository. */
     run: (request: Request | Promise<Request>) => void;
     /** The screen shown next to the sidebar. */
-    view: "history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull" | "reviews" | "browse";
-    onView: (view: "history" | "stashes" | "oplog" | "reviews") => void;
+    view: "history" | "stashes" | "oplog" | "local" | "compare" | "file" | "stack" | "pull" | "reviews" | "browse";
+    onView: (view: "history" | "stashes" | "oplog" | "local" | "reviews") => void;
     /** Open the uncommitted changes in the details panel, next to History. */
     onChanges: () => void;
     /** On the Stashes screen a stash in the list is picked there instead of in History. */
@@ -719,6 +719,10 @@
       <svg class="icon" viewBox="0 0 16 16"><path d="M5.5 4 2.5 7l3 3M3 7h6.5a3.5 3.5 0 0 1 0 7H7" /></svg>
       <span class="grow">Operation Log</span>
       {#if oplog.entries.length}<span class="meta">{oplog.entries.length}</span>{/if}
+    </button>
+    <button class="item" class:current={view === "local"} onclick={() => onView("local")} title="Every version of a file saved lately, by any editor, to compare or restore">
+      <svg class="icon" viewBox="0 0 16 16"><path d="M8 2.5a5.5 5.5 0 1 1-5.5 5.5M8 5v3l2 1.5M2.5 3v2.5H5" /></svg>
+      <span class="grow">Local History</span>
     </button>
 
     <div class="heading with-button">

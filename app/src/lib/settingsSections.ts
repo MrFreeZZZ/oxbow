@@ -111,6 +111,14 @@ export const generalSection: Section = {
             { value: 90, label: "90 days" },
           ],
         }),
+        prefRow("oxbow.localHistory.keepDays", "Keep local history for", "seg", {
+          sub: "Each version of a file saved between commits, by any editor, to compare or restore; up to 256 MB a repository",
+          options: () => [
+            { value: 0, label: "Off" },
+            { value: 3, label: "3 days" },
+            { value: 7, label: "7 days" },
+          ],
+        }),
         prefRow("oxbow.push.confirmForce", "Ask before force pushing", "switch", { sub: "Oxbow always force pushes with --force-with-lease" }),
       ],
     },

@@ -15,6 +15,7 @@
   import Lazy, { BLOCK } from "./Lazy.svelte";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import { findFiles, foldersOf, leftOf, linesOf, stepRow, treeRows } from "./browseTree";
+  import { NEWEST_SAVED } from "./localHistory";
 
   let {
     rev,
@@ -204,6 +205,7 @@
     if (item.kind !== "folder" && item.kind !== "submodule") {
       entries.push(
         { kind: "item", label: "File History", icon: menuIcons.history, run: () => fileHistory(item.path) },
+        { kind: "item", label: "Local History", icon: menuIcons.history, run: () => nav.openFile(item.path, NEWEST_SAVED) },
         { kind: "item", label: "Save As…", icon: menuIcons.patch, run: () => saveAs(item.path) },
         { kind: "sep" },
       );

@@ -71,6 +71,7 @@ export const COMMANDS = {
   history: { category: "View", title: "Show History" },
   stashes: { category: "View", title: "Show Stashes" },
   oplog: { category: "View", title: "Show Operation Log" },
+  localHistory: { category: "View", title: "Show Local History" },
   activity: { category: "View", title: "Show Activity" },
   focusOnly: { category: "View", title: "Toggle Current Branch Only" },
   diffLayout: { category: "View", title: "Toggle Side by Side Diffs" },

@@ -9,6 +9,7 @@ import { confirm, type Request } from "./confirm.svelte";
 import { splitPath } from "./format";
 import { menuIcons, type MenuEntry, type SubEntry } from "./Menu.svelte";
 import { nav } from "./nav.svelte";
+import { NEWEST_SAVED } from "./localHistory";
 import type { FileChange, Side } from "./types";
 
 /** What the menu's items do, in the panel. */
@@ -108,6 +109,8 @@ export function fileMenu(repo: string, file: FileChange, group: Side | "untracke
     entries.push({ kind: "item", label: revealLabel, icon: menuIcons.reveal, run: () => api.revealFile(file.path).catch((err) => confirm.fail(err)) });
   entries.push(copyMenu(repo, [file.path]));
   if (file.status !== "untracked" && file.status !== "added") entries.push({ kind: "item", label: "File History", icon: menuIcons.history, run: () => nav.openFile(file.path) });
+  // Saved versions of any file, new or deleted ones too.
+  entries.push({ kind: "item", label: "Local History", icon: menuIcons.history, run: () => nav.openFile(file.path, NEWEST_SAVED) });
   if (side === "unstaged") {
     entries.push({ kind: "sep" });
     entries.push({ kind: "item", label: file.status === "untracked" ? "Delete File…" : "Discard Changes…", icon: menuIcons.drop, danger: true, run: () => a.discard([file]) });
@@ -143,6 +146,7 @@ export function commitFileMenu(repo: string, file: FileChange, commit: string, c
   }
   entries.push(copyMenu(repo, [file.path]));
   entries.push({ kind: "item", label: "File History", icon: menuIcons.history, run: () => nav.openFile(file.path, commit) });
+  entries.push({ kind: "item", label: "Local History", icon: menuIcons.history, run: () => nav.openFile(file.path, NEWEST_SAVED) });
   if (file.status !== "deleted" && !file.submodule) entries.push({ kind: "item", label: "Browse Files at This Commit", icon: menuIcons.folder, run: () => nav.openBrowse(commit, null, file.path) });
   return { entries, label: `${name} menu` };
 }

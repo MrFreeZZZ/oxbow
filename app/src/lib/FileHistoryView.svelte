@@ -8,7 +8,7 @@
   import { nav } from "./nav.svelte";
   import { confirm } from "./confirm.svelte";
   import { diffSettings, prefs, wholeByDefault } from "./prefs.svelte";
-  import type { Blame, FileCommit, FileDiff, FileHistory, History, HistoryRow } from "./types";
+  import type { Blame, FileCommit, FileDiff, FileHistory, History, HistoryRow, LocalVersion } from "./types";
   import { initials, lane, person, relativeTime, shortId, splitPath, tint } from "./format";
   import { languageOf, occurrences, paint } from "./syntax";
   import DiffView from "./DiffView.svelte";
@@ -16,6 +16,10 @@
   import WorkingCopyPanel from "./WorkingCopyPanel.svelte";
   import { commitFileEntries } from "./changesMenu";
   import Lazy, { BLOCK, matchesIn, placeOf, type FindHits } from "./Lazy.svelte";
+  import LocalVersionView from "./LocalVersionView.svelte";
+  import { countsOf, keyOf, NEWEST_SAVED, whenSaved } from "./localHistory";
+  import { localVersionEntries } from "./localHistoryMenu";
+  import { bytes } from "./unusual";
 
   let {
     history,
@@ -55,6 +59,14 @@
   let main = $state<HTMLElement>();
   /** Commits that added or removed the text being found (git log -S); null while there is none. */
   let finding = $state<{ text: string; ids: string[] } | null>(null);
+  /** Local History: the versions saved since the file was committed, newest first. */
+  let saved = $state<LocalVersion[]>([]);
+  /** The saved version shown in place of a commit's change. */
+  let savedPick = $state<LocalVersion | null>(null);
+  let savedComparing = $state(false);
+  let allSaved = $state(false);
+  /** Saved versions listed before Show All. */
+  const SAVED_SHOWN = 5;
 
   const mode = $derived(nav.fileMode);
   // Changes or Blame shows its own again.
@@ -92,6 +104,45 @@
       },
     );
   });
+
+  // The saved versions, again on every reload: a save in an editor is told as one. File History
+  // opened for them starts on the newest.
+  let startSaved = false;
+  $effect(() => {
+    if (start !== NEWEST_SAVED) return;
+    nav.file?.seq;
+    untrack(() => {
+      // The list may still be another file's, read before this one was opened.
+      const ready = saved.length > 0 && saved[0].path === path;
+      startSaved = !ready;
+      if (ready) pickSaved(saved[0]);
+    });
+  });
+  $effect(() => {
+    const p = path;
+    version;
+    api.localHistory(p).then(
+      (list) => {
+        if (path !== p) return;
+        saved = list;
+        if (startSaved && list.length) {
+          startSaved = false;
+          pickSaved(list[0]);
+        } else if (savedPick) {
+          // The same version, as read again; gone once it is no longer kept.
+          const key = keyOf(savedPick);
+          savedPick = list.find((v) => keyOf(v) === key) ?? null;
+        }
+      },
+      () => {},
+    );
+  });
+
+  function pickSaved(v: LocalVersion, compare = false) {
+    savedPick = v;
+    savedComparing = compare;
+    comparing = null;
+  }
 
   // Another file starts over at HEAD.
   $effect(() => {
@@ -250,6 +301,7 @@
   function select(id: string) {
     selected = id;
     comparing = null;
+    savedPick = null;
   }
 
   /** Blame as of the commit before this one: who wrote the lines it changed. */
@@ -306,6 +358,13 @@
     entries.push({ kind: "sep" }, { kind: "item", label: "Copy SHA", icon: menuIcons.copy, run: () => copy(c.id) });
     const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
     menu = { x: event.type === "contextmenu" ? event.clientX : box.left, y: event.type === "contextmenu" ? event.clientY : box.bottom + 4, entries };
+  }
+
+  function savedMenu(event: MouseEvent, v: LocalVersion) {
+    event.preventDefault();
+    const entries: MenuEntry[] = [{ kind: "header", label: `${splitPath(v.path).name}, saved ${whenSaved(v.at)}` }];
+    entries.push(...localVersionEntries(v, { compare: () => pickSaved(v, true), history: false }));
+    menu = { x: event.clientX, y: event.clientY, entries };
   }
 
   /** Blame at HEAD: the file in the editor, at the line followed. */
@@ -479,10 +538,24 @@
   </div>
 {/snippet}
 
+{#snippet savedRow(v: LocalVersion)}
+  {@const counts = countsOf(v)}
+  <button class="commit saved" class:on={savedPick !== null && keyOf(savedPick) === keyOf(v)} class:dim={!v.kept} style:--lane={lane(colorOfCommit(headCommit ?? ""))} style:--sel={tint(colorOfCommit(headCommit ?? ""))} onclick={() => pickSaved(v)} oncontextmenu={(e) => savedMenu(e, v)}>
+    <span class="rail"><span class="dot"></span></span>
+    <span class="lines">
+      <span class="summary">Saved {whenSaved(v.at)}</span>
+      <span class="byline">{relativeTime(v.at / 1000)} · {bytes(v.size)}{v.binary ? " · binary" : ""}</span>
+    </span>
+    {#if counts}
+      <span class="stats"><span class="nums"><span class="add">+{counts.add}</span> <span class="del">−{counts.del}</span></span></span>
+    {/if}
+  </button>
+{/snippet}
+
 {#snippet commitRow(c: FileCommit, other: boolean)}
   {@const color = colorOfCommit(c.id)}
   {@const dim = (!!line && !line.ids.includes(c.id)) || (!!finding && !finding.ids.includes(c.id))}
-  <button class="commit" class:on={selected === c.id} class:dim class:other style:--lane={lane(color)} style:--sel={tint(color)} onclick={() => select(c.id)} oncontextmenu={(e) => changeMenu(e, c)}>
+  <button class="commit" class:on={selected === c.id && !savedPick} class:dim class:other style:--lane={lane(color)} style:--sel={tint(color)} onclick={() => select(c.id)} oncontextmenu={(e) => changeMenu(e, c)}>
     <span class="rail"><span class="dot" class:hollow={other}></span></span>
     <span class="lines">
       <span class="summary">{c.summary}</span>
@@ -532,6 +605,15 @@
         </div>
       {/if}
       <div class="list" bind:this={list}>
+        {#if saved.length}
+          <div class="savedhead" title="Kept by Local History for a few days: every version saved since the last commit, by any editor">
+            <span>Local History · {saved.length} saved</span>
+            {#if saved.length > SAVED_SHOWN}<button onclick={() => (allSaved = !allSaved)}>{allSaved ? "Show Fewer" : `Show All ${saved.length}`}</button>{/if}
+          </div>
+          {#each allSaved ? saved : saved.slice(0, SAVED_SHOWN) as v (keyOf(v))}{@render savedRow(v)}{/each}
+          {#if !allSaved && savedPick && !saved.slice(0, SAVED_SHOWN).some((v) => keyOf(v) === keyOf(savedPick!))}{@render savedRow(savedPick)}{/if}
+          <div class="sep"></div>
+        {/if}
         {#if showElsewhere}
           {#each file.elsewhere as c (c.id)}{@render commitRow(c, true)}{/each}
           <div class="sep"></div>
@@ -545,8 +627,10 @@
     {/if}
   </section>
 
-  <section class="main" bind:this={main} aria-label={comparing ? "Compare with Working Copy" : mode === "blame" ? "Blame" : "Changes"}>
-    {#if comparing}
+  <section class="main" bind:this={main} aria-label={savedPick ? "Saved version" : comparing ? "Compare with Working Copy" : mode === "blame" ? "Blame" : "Changes"}>
+    {#if savedPick}
+      <LocalVersionView version={savedPick} color={colorOfCommit(headCommit ?? "")} reload={version} bind:comparing={savedComparing} />
+    {:else if comparing}
       <WorkingCopyPanel commit={comparing.id} summary={comparing.summary} file={comparing} color={colorOfCommit(comparing.id)} {version} onClose={() => (comparing = null)} />
     {:else if mode === "changes"}
       {#if pick}
@@ -765,6 +849,31 @@
   }
   .commit.dim {
     opacity: 0.4;
+  }
+  /* A saved version: a dashed line and a hollow dot, as work not yet in a commit. */
+  .saved .rail::before {
+    background: none;
+    border-left: 2px dashed var(--lane);
+  }
+  .saved .dot {
+    background: var(--graph-bg);
+    border: 2px solid var(--lane);
+    width: 6px;
+    height: 6px;
+  }
+  .savedhead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 10px 2px 8px;
+    font-size: var(--text-caption);
+    font-weight: 600;
+    color: var(--text2);
+  }
+  .savedhead button {
+    font-weight: 400;
+    color: var(--accent-text);
   }
   .rail {
     position: relative;

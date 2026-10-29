@@ -169,6 +169,12 @@
     "accelerator": null
    },
    {
+    "id": "localHistory",
+    "title": "Show Local History",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
     "id": "activity",
     "title": "Show Activity",
     "enabled": false,

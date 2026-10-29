@@ -430,6 +430,73 @@ pub(crate) async fn save_file_at(
     .await
 }
 
+/// Local History of one file: the versions saved since it was last committed, newest first.
+#[tauri::command]
+pub(crate) async fn local_history(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    path: String,
+) -> CommandResult<Vec<oxbow_core::LocalVersion>> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "Read a file's Local History", move || {
+        repo.local_history(&path)
+    })
+    .await
+}
+
+/// Local History of every file, newest first.
+#[tauri::command]
+pub(crate) async fn local_history_all(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+) -> CommandResult<Vec<oxbow_core::LocalVersion>> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "Read Local History", move || repo.local_history_all()).await
+}
+
+/// What a version of Local History changed since `base`, or with `against_disk`, how the file
+/// on disk now differs from it.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn local_version_diff(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    path: String,
+    id: String,
+    base: Option<String>,
+    against_disk: bool,
+    whole_file: bool,
+    full: Option<bool>,
+    lane: Option<String>,
+) -> CommandResult<Vec<FileDiff>> {
+    let repo = current_full(&session, &window, full)?;
+    let cancel = session.lane(&window, lane);
+    let context = if whole_file {
+        DiffContext::WholeFile
+    } else {
+        DiffContext::Compact
+    };
+    read(at(&repo), "Read a version of Local History", move || {
+        repo.local_version_diff_with(&path, &id, base.as_deref(), against_disk, context, &cancel)
+    })
+    .await
+}
+
+/// Save As: a version of Local History, written where the user chose.
+#[tauri::command]
+pub(crate) async fn save_local_version(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    id: String,
+    to: String,
+) -> CommandResult<()> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "Save a version of Local History", move || {
+        repo.save_local_version(&id, std::path::Path::new(&to))
+    })
+    .await
+}
+
 #[tauri::command]
 pub(crate) async fn file_pickaxe(
     window: tauri::WebviewWindow,

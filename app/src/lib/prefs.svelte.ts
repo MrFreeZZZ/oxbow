@@ -26,6 +26,8 @@ export const defaults = {
   "oxbow.push.confirmForce": true,
   /** Days the Operation Log keeps its steps, so they can be undone. */
   "oxbow.undo.keepDays": 30,
+  /** Days Local History keeps the versions of saved files; 0 keeps no new ones. */
+  "oxbow.localHistory.keepDays": 7,
   "oxbow.diff.view": "changes" as "changes" | "full",
   /** Old and new lines one under the other, or next to each other. */
   "oxbow.diff.layout": "unified" as "unified" | "split",
@@ -102,6 +104,7 @@ export const rules: Partial<Record<PrefKey, Rule>> = {
   "oxbow.history.rowStyle": { oneOf: ["twoLines", "compact"] },
   "oxbow.confirm.scope": { oneOf: ["all", "risky"] },
   "oxbow.undo.keepDays": { min: 1, max: 3650, whole: true },
+  "oxbow.localHistory.keepDays": { min: 0, max: 30, whole: true },
   "oxbow.diff.view": { oneOf: ["changes", "full"] },
   "oxbow.diff.layout": { oneOf: ["unified", "split"] },
   "oxbow.diff.contextLines": { min: 0, max: 100, whole: true },
