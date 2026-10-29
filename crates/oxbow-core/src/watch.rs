@@ -58,6 +58,9 @@ pub struct Watch {
     pub files: bool,
     /// Changes noticed so far, see [`Watch::seen`].
     seen: Arc<AtomicU64>,
+    /// While it is here, the Undo snapshots of the repository trust the count: see
+    /// `Repo::snapshot_before`.
+    _alive: Arc<()>,
 }
 
 impl Watch {
@@ -121,10 +124,15 @@ impl Repo {
             .name("oxbow-watch".into())
             .spawn(move || seen.run(rx, &mut on_change))
             .map_err(|err| Error::Git(err.to_string()))?;
+        let alive = Arc::new(());
+        if files {
+            self.follow_watch(Arc::downgrade(&alive), counted.clone());
+        }
         Ok(Watch {
             _watcher: watcher,
             files,
             seen: counted,
+            _alive: alive,
         })
     }
 }
@@ -469,6 +477,8 @@ fn git_kind(relative: &Path) -> Kind {
         ["modules", rest @ ..] if rest.contains(&"refs") || rest.last() == Some(&"packed-refs") => Kind::Git,
         ["modules", ..] => Kind::Nothing,
         ["index"] => Kind::Index,
+        // The Operation Log's own ref moves with every step Oxbow writes down, staging too.
+        ["refs", "oxbow"] | ["refs", "oxbow", "oplog"] => Kind::Nothing,
         ["refs", ..] | ["logs", "refs", "stash"] => Kind::Git,
         ["rebase-merge", ..] | ["rebase-apply", ..] | ["sequencer", ..] => Kind::Git,
         ["info", "exclude"] => Kind::Files,
@@ -516,6 +526,9 @@ mod tests {
         assert_eq!(kind("logs/HEAD"), Kind::Nothing);
         assert_eq!(kind("objects/ab/cdef"), Kind::Nothing);
         assert_eq!(kind("oxbow/oplog"), Kind::Nothing);
+        assert_eq!(kind("refs/oxbow/oplog"), Kind::Nothing);
+        assert_eq!(kind("refs/oxbow"), Kind::Nothing);
+        assert_eq!(kind("refs/oxbow/pull/7/head"), Kind::Git);
         assert_eq!(kind("MERGE_HEAD"), Kind::Git);
         assert_eq!(kind("FETCH_HEAD"), Kind::Nothing);
         assert_eq!(kind("COMMIT_EDITMSG"), Kind::Nothing);

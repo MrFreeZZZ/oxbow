@@ -13,8 +13,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 
 use serde::{Deserialize, Serialize};
 
@@ -149,33 +149,123 @@ pub struct Snapshot {
     refs: BTreeMap<String, String>,
     stash: Vec<StashRecord>,
     trees: Trees,
+    /// The watch's count of changes from just before it was taken ([`crate::Watch::seen`]):
+    /// while the count stays the same, the files, branches and stashes are still as it has them.
+    seen: Option<u64>,
+    /// What the index staged, without the files' times ([`crate::watch::staged`]): while it
+    /// stages the same, its tree is the same.
+    staged: Option<u64>,
+}
+
+/// The last snapshot of a repository and the watch's count of changes, for the next step to
+/// reuse what nothing changed since: see [`Repo::snapshot_before`]. Shared by every clone.
+#[derive(Clone, Default)]
+pub(crate) struct KeptSnapshot(Arc<Mutex<Kept>>);
+
+#[derive(Default)]
+struct Kept {
+    /// The watch's count, while the watch is there: it holds the other end of the `Weak`.
+    watch: Option<(Weak<()>, Arc<AtomicU64>)>,
+    last: Option<Snapshot>,
+}
+
+/// Steps that change only what is staged: the files, branches and stashes stay as they were.
+pub(crate) fn stages_only(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::Stage { .. }
+            | Action::Unstage { .. }
+            | Action::StageChangelist { .. }
+            | Action::StageHunk { .. }
+            | Action::UnstageHunk { .. }
+    )
 }
 
 impl Repo {
+    /// Count what `watch` notices (see [`crate::Watch::seen`]) for the snapshots, until `alive`
+    /// is dropped with the watch.
+    pub(crate) fn follow_watch(&self, alive: Weak<()>, seen: Arc<AtomicU64>) {
+        if let Ok(mut kept) = self.kept.0.lock() {
+            kept.watch = Some((alive, seen));
+            kept.last = None;
+        }
+    }
+
+    /// The watch's count of changes now; `None` without a watch of the files.
+    fn watch_count(&self) -> Option<u64> {
+        let kept = self.kept.0.lock().ok()?;
+        let (alive, seen) = kept.watch.as_ref()?;
+        alive.upgrade().map(|_| seen.load(Ordering::SeqCst))
+    }
+
+    /// Keep `snapshot` for the next step to reuse; `None`: the next step takes a new one.
+    pub(crate) fn keep_snapshot(&self, snapshot: Option<&Snapshot>) {
+        if let Ok(mut kept) = self.kept.0.lock() {
+            kept.last = snapshot.filter(|s| s.seen.is_some()).cloned();
+        }
+    }
+
+    /// What the repository is like before `action`. A step that changes only what is staged
+    /// reuses the last snapshot while the watch has noticed nothing since: the files, branches
+    /// and stashes are as it has them, and the index is written as a tree again only when it
+    /// stages something else. Every other step, or without a watch, takes a new snapshot.
+    pub(crate) fn snapshot_before(&self, action: &Action) -> Result<Snapshot> {
+        if !stages_only(action) {
+            return self.snapshot();
+        }
+        let last = self.kept.0.lock().ok().and_then(|kept| kept.last.clone());
+        match last {
+            Some(last) if last.seen.is_some() && last.seen == self.watch_count() => {
+                let staged = crate::watch::staged(&self.git_path("index")?, self.local().object_hash());
+                if staged.is_some() && staged == last.staged {
+                    Ok(last)
+                } else {
+                    self.snapshot_of_index(&last)
+                }
+            }
+            _ => self.snapshot(),
+        }
+    }
+
     /// What the repository is like now.
     pub fn snapshot(&self) -> Result<Snapshot> {
-        // The files take the longest; HEAD, the refs and the stash are read beside them.
+        // Read first: whatever changes while the snapshot is taken counts as a change after it.
+        let seen = self.watch_count();
+        // The files take the longest; their untracked ones are found beside them, and then the
+        // index, HEAD, the refs and the stash are read.
         let helpers = crate::console::Helpers::here();
         let stop = crate::cli::current_stop();
+        let (send, untracked) = std::sync::mpsc::channel();
         let (worktree, rest) = std::thread::scope(|scope| {
-            let worktree = scope.spawn(|| {
-                helpers.help(|| match &stop {
-                    Some(stop) => crate::cli::stoppable(stop, || self.worktree_tree()),
-                    None => self.worktree_tree(),
+            let (helpers, stop) = (&helpers, &stop);
+            let worktree = scope.spawn(move || {
+                let tree = || {
+                    self.worktree_tree_with(|| {
+                        untracked
+                            .recv()
+                            .unwrap_or_else(|_| Err(Error::Git("the untracked files weren't listed".into())))
+                    })
+                };
+                helpers.help(|| match stop {
+                    Some(stop) => crate::cli::stoppable(stop, tree),
+                    None => tree(),
                 })
             });
+            let _ = send.send(self.untracked_files());
             let index = self.index_tree();
             let rest = (|| Ok((index?, self.head_state()?, self.all_refs()?, self.stash_records()?)))();
             (worktree.join(), rest)
         });
         helpers.join();
         let worktree = worktree.map_err(|_| Error::Git("the snapshot of the files failed".into()))??;
-        let (index, head, refs, stash) = rest?;
+        let ((index, staged), head, refs, stash) = rest?;
         Ok(Snapshot {
             head,
             refs,
             stash,
             trees: Trees { worktree, index },
+            seen,
+            staged,
         })
     }
 
@@ -183,11 +273,13 @@ impl Repo {
     /// with the index as it is now. Files, branches and stashes are as they were, so the files
     /// aren't read again: that is most of a snapshot's cost.
     pub(crate) fn snapshot_of_index(&self, before: &Snapshot) -> Result<Snapshot> {
+        let (index, staged) = self.index_tree()?;
         Ok(Snapshot {
             trees: Trees {
                 worktree: before.trees.worktree.clone(),
-                index: self.index_tree()?,
+                index,
             },
+            staged,
             ..before.clone()
         })
     }
@@ -314,17 +406,36 @@ impl Repo {
         }
         args.extend(["-m".to_owned(), format!("Oxbow: {title}")]);
         let id = self.run(&identity(GitCommand::new(args)))?.stdout.trim().to_owned();
-        self.run(&GitCommand::new([
-            "update-ref",
-            "--create-reflog",
-            "-m",
-            &format!("oxbow: {title}"),
-            OPLOG_REF,
-            &id,
-        ]))?;
-        // The tip goes back to HEAD's commit, so `git log --all` shows no extra commit.
-        if let Some(head) = &after.head.commit {
-            self.run(&GitCommand::new(["update-ref", "-m", "oxbow: tip", OPLOG_REF, head]))?;
+        // The tip goes back to HEAD's commit, so `git log --all` shows no extra commit. Both in
+        // one git where it can (2.27+): one transaction after the other.
+        match &after.head.commit {
+            Some(head) if crate::config::git_at_least(2, 27) => {
+                let input =
+                    format!("start\nupdate {OPLOG_REF} {id}\ncommit\nstart\nupdate {OPLOG_REF} {head}\ncommit\n");
+                self.run_with_input(
+                    &GitCommand::new([
+                        "update-ref",
+                        "--create-reflog",
+                        "-m",
+                        &format!("oxbow: {title}"),
+                        "--stdin",
+                    ]),
+                    Some(input.as_bytes()),
+                )?;
+            }
+            head => {
+                self.run(&GitCommand::new([
+                    "update-ref",
+                    "--create-reflog",
+                    "-m",
+                    &format!("oxbow: {title}"),
+                    OPLOG_REF,
+                    &id,
+                ]))?;
+                if let Some(head) = head {
+                    self.run(&GitCommand::new(["update-ref", "-m", "oxbow: tip", OPLOG_REF, head]))?;
+                }
+            }
         }
         self.keep_long_enough();
 
@@ -558,9 +669,12 @@ impl Repo {
     /// How many days a step can be gone back to: the setting, unless git expires the entries
     /// that keep its objects sooner.
     fn snapshot_days(&self) -> u32 {
-        let git = self
-            .config_value(&format!("gc.{OPLOG_REF}.reflogExpireUnreachable"))
-            .or_else(|| self.config_value("gc.reflogExpireUnreachable"))
+        // Read in Oxbow, as the repository was opened: each read of the history opens it again.
+        let repo = self.local();
+        let config = repo.config_snapshot();
+        let value = |key: &str| config.string(key).map(|v| v.to_string());
+        let git = value(&format!("gc.{OPLOG_REF}.reflogExpireUnreachable"))
+            .or_else(|| value("gc.reflogExpireUnreachable"))
             .map_or(Some(30), |value| expiry_days(&value));
         git.map_or(keep_days(), |git| git.min(keep_days()))
     }
@@ -655,8 +769,10 @@ impl Repo {
     /// What the index stages, as a tree; `None` while it has conflicts, as in a merge or rebase
     /// that stopped. Written from a copy: `write-tree` on the real index may take `index.lock`
     /// and fail while anything else holds it, which is no reason for a snapshot without it.
-    fn index_tree(&self) -> Result<Option<String>> {
+    /// With what the copy staged ([`crate::watch::staged`]), to know the tree again by.
+    fn index_tree(&self) -> Result<(Option<String>, Option<u64>)> {
         let scratch = self.scratch_index()?;
+        let staged = crate::watch::staged(&scratch, self.local().object_hash());
         let with_scratch = |cmd: GitCommand| cmd.env("GIT_INDEX_FILE", scratch.to_string_lossy().into_owned());
         // write-tree refuses an index with conflicts: only then are they looked for.
         let result = self
@@ -671,12 +787,29 @@ impl Repo {
                 }
             });
         let _ = std::fs::remove_file(&scratch);
-        result
+        result.map(|tree| (tree, staged))
     }
 
     /// The working copy as a tree: tracked files as they are on disk, and untracked ones that
     /// are not ignored or too big, written through a scratch index so the real one is untouched.
     fn worktree_tree(&self) -> Result<String> {
+        self.worktree_tree_with(|| self.untracked_files())
+    }
+
+    /// The untracked files a snapshot keeps: not ignored, and not too big.
+    fn untracked_files(&self) -> Result<Vec<String>> {
+        Ok(self
+            .run(&GitCommand::new(["ls-files", "-z", "-o", "--exclude-standard"]))?
+            .stdout
+            .split('\0')
+            .filter(|p| !p.is_empty() && !p.ends_with('/') && self.small_file(p))
+            .map(str::to_owned)
+            .collect())
+    }
+
+    /// [`Self::worktree_tree`] with the untracked files from `untracked`, asked once the tracked
+    /// ones are in: a snapshot finds them on another thread meanwhile.
+    fn worktree_tree_with(&self, untracked: impl FnOnce() -> Result<Vec<String>>) -> Result<String> {
         let scratch = self.scratch_index()?;
         let file = scratch.to_string_lossy().into_owned();
         let with_scratch = |cmd: GitCommand| cmd.env("GIT_INDEX_FILE", file.clone());
@@ -684,13 +817,7 @@ impl Repo {
             // No pathspec: the whole tree, and no error when nothing is tracked yet (newer git
             // refuses `:/` then, as a pathspec that matches no file).
             self.run(&with_scratch(GitCommand::new(["add", "-u"])))?;
-            let untracked: Vec<String> = self
-                .run(&GitCommand::new(["ls-files", "-z", "-o", "--exclude-standard"]))?
-                .stdout
-                .split('\0')
-                .filter(|p| !p.is_empty() && !p.ends_with('/') && self.small_file(p))
-                .map(str::to_owned)
-                .collect();
+            let untracked = untracked()?;
             if !untracked.is_empty() {
                 let list = untracked.iter().map(|p| literal(p)).collect::<Vec<_>>().join("\0");
                 self.run_with_input(
@@ -713,57 +840,59 @@ impl Repo {
         result.map(|tree: String| if tree.is_empty() { EMPTY_TREE.to_owned() } else { tree })
     }
 
+    /// Read in Oxbow, as `git symbolic-ref HEAD` and `git rev-parse HEAD` would say it.
     pub(crate) fn head_state(&self) -> Result<HeadState> {
-        let branch = self
-            .run(&GitCommand::new(["symbolic-ref", "-q", "HEAD"]))
-            .ok()
-            .map(|o| o.stdout.trim().trim_start_matches("refs/heads/").to_owned())
-            .filter(|b| !b.is_empty());
-        let commit = self
-            .run(&GitCommand::new(["rev-parse", "-q", "--verify", "HEAD"]))
-            .ok()
-            .map(|o| o.stdout.trim().to_owned())
-            .filter(|c| !c.is_empty());
-        Ok(HeadState { branch, commit })
+        let head = self.head()?;
+        Ok(HeadState {
+            branch: head.branch,
+            commit: head.commit,
+        })
     }
 
     /// Every ref and the object it points at, except the stash (see [`Self::stash_records`])
-    /// and the log's own ref.
+    /// and the log's own ref: what `git for-each-ref` lists, read in Oxbow. A symbolic ref such
+    /// as `origin/HEAD` points at what its target does; a broken one is left out, as git does.
     pub(crate) fn all_refs(&self) -> Result<BTreeMap<String, String>> {
-        let out = self.run(&GitCommand::new(["for-each-ref", "--format=%(objectname) %(refname)"]))?;
-        Ok(out
-            .stdout
-            .lines()
-            .filter_map(|line| line.split_once(' '))
+        let repo = self.local();
+        let platform = repo.references().map_err(Error::git)?;
+        let mut out = BTreeMap::new();
+        for reference in platform.all().map_err(Error::git)? {
+            let Ok(reference) = reference else { continue };
+            let name = reference.name().as_bstr().to_string();
             // git's notes on a bisect are its own: a restore must not move them under it.
-            .filter(|(_, name)| {
-                *name != "refs/stash" && !name.starts_with("refs/oxbow/") && !name.starts_with("refs/bisect/")
-            })
-            .map(|(id, name)| (name.to_owned(), id.to_owned()))
-            .collect())
+            if name == "refs/stash" || name.starts_with("refs/oxbow/") || name.starts_with("refs/bisect/") {
+                continue;
+            }
+            let mut at = reference;
+            let mut hops = 0;
+            let id = loop {
+                match at.target() {
+                    gix::refs::TargetRef::Object(id) => break Some(id.to_owned()),
+                    gix::refs::TargetRef::Symbolic(_) if hops < 5 => match at.follow() {
+                        Some(Ok(next)) => {
+                            at = next;
+                            hops += 1;
+                        }
+                        _ => break None,
+                    },
+                    gix::refs::TargetRef::Symbolic(_) => break None,
+                }
+            };
+            if let Some(id) = id {
+                out.insert(name, id.to_string());
+            }
+        }
+        Ok(out)
     }
 
+    /// The stash list, newest first, as `git log -g refs/stash` gives it: read in Oxbow.
     fn stash_records(&self) -> Result<Vec<StashRecord>> {
-        if self
-            .run(&GitCommand::new(["rev-parse", "-q", "--verify", "refs/stash"]))
-            .is_err()
-        {
-            return Ok(Vec::new());
-        }
-        let out = self.run(&GitCommand::new([
-            "log",
-            "-g",
-            "--format=%H%x00%gs",
-            "refs/stash",
-            "--",
-        ]))?;
-        Ok(out
-            .stdout
-            .lines()
-            .filter_map(|line| line.split_once('\0'))
-            .map(|(id, message)| StashRecord {
-                id: id.to_owned(),
-                message: message.to_owned(),
+        Ok(self
+            .stashes()?
+            .into_iter()
+            .map(|stash| StashRecord {
+                id: stash.id,
+                message: stash.message,
             })
             .collect())
     }
@@ -782,20 +911,14 @@ impl Repo {
     /// The kind of each object that exists: `commit`, `tag`, `tree` or `blob`.
     fn object_kinds(&self, ids: &[String]) -> Result<Vec<(String, String)>> {
         let unique: BTreeSet<&String> = ids.iter().collect();
-        if unique.is_empty() {
-            return Ok(Vec::new());
-        }
-        let input = unique.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n") + "\n";
-        let out = self.run_with_input(
-            &GitCommand::new(["cat-file", "--batch-check=%(objectname) %(objecttype)"]),
-            Some(input.as_bytes()),
-        )?;
-        Ok(out
-            .stdout
-            .lines()
-            .filter_map(|line| line.split_once(' '))
-            .filter(|(_, kind)| *kind != "missing")
-            .map(|(id, kind)| (id.to_owned(), kind.to_owned()))
+        let repo = self.local();
+        Ok(unique
+            .into_iter()
+            .filter_map(|id| {
+                let oid = gix::ObjectId::from_hex(id.as_bytes()).ok()?;
+                let header = repo.find_header(oid).ok()?;
+                Some((id.clone(), header.kind().to_string()))
+            })
             .collect())
     }
 
@@ -1121,9 +1244,19 @@ impl Repo {
                 }
             ));
         }
+        // Files whose path, id or mode differ, as `git diff-tree -r` lists them.
+        let repo = self.local();
         let changed = |a: &str, b: &str| {
-            self.run(&GitCommand::new(["diff-tree", "-r", "--name-only", "-z", a, b]))
-                .map(|o| o.stdout.split('\0').filter(|p| !p.is_empty()).count())
+            let tree = |id: &str| {
+                gix::ObjectId::from_hex(id.as_bytes())
+                    .ok()
+                    .and_then(|id| repo.find_tree(id).ok())
+            };
+            let (Some(a), Some(b)) = (tree(a), tree(b)) else {
+                return 0;
+            };
+            repo.diff_tree_to_tree(Some(&a), Some(&b), Some(gix::diff::Options::default()))
+                .map(|changes| changes.iter().filter(|c| !c.entry_mode().is_tree()).count())
                 .unwrap_or(0)
         };
         if before.trees.worktree != after.trees.worktree {

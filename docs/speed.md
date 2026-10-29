@@ -73,6 +73,33 @@ files 5 git (18 ms), `git add` itself (5 ms), writing the step down 8 git (16 ms
   change; a file changed in the last 2 seconds isn't kept yet, since the system's clock for
   files is coarse. Neither side is read past 32 MB, as a preview (`commit.rs`, `read_lines`).
 
+Then the snapshot by step: the example timed again with a watch, as the window has one, and the
+repository opened again before each step. Old (8e4c6f3) and new built side by side and run in
+turns, four times each on a busier machine than the table above:
+
+| Stage with Undo | Old | New |
+|---|---|---|
+| A file just edited | 53–61 ms, 18 git | 39–43 ms, 9 git |
+| Files edited earlier, staged one after another | 51–60 ms, 18 git | 27–29 ms, 5 git |
+| `git add` alone | 5 ms | 5 ms |
+
+- **A step that only stages reuses the last snapshot** while the watch has counted no change of
+  files or branches since: the files, HEAD, the refs and the stash are as it has them. The index
+  is written as a tree again only when it stages something else than then, which is told by
+  reading it in Oxbow (`oplog.rs`, `snapshot_before`). Any other step, or a repository whose
+  files aren't watched, takes a whole snapshot, and Discard does so always: what it throws away
+  must be the file as it is.
+- **The Operation Log's own ref is no change for the watch**: it moves with every step, so each
+  Stage counted as a change and the next one read every file again (`watch.rs`).
+- **HEAD, the refs and the stash are read in Oxbow**, not by 4 git processes; writing the step
+  down takes 3 git instead of 8: the ref is moved and put back in one `update-ref --stdin`, the
+  objects' kinds, the count of files a step changed and the expiry settings are read in Oxbow,
+  and git's version is asked once (`config.rs`). The untracked files are listed while the
+  tracked ones are added.
+
+What a step after an edit still costs is git processes that write: the tree of the index and of
+the files, `git add` itself, the tree of the index after it, and the step's tree, commit and ref.
+
 ## Local History (29 October)
 
 Before Local History was written, what it would keep was measured on a shallow clone of VS Code

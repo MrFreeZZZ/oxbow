@@ -24,6 +24,8 @@ pub struct Repo {
     /// Where git keeps its files (`git rev-parse --git-path`), asked once each: that never
     /// changes for a repository, and an Undo snapshot needs several.
     pub(crate) git_paths: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, PathBuf>>>,
+    /// The last Undo snapshot and the watch's count of changes, shared by every clone.
+    pub(crate) kept: crate::oplog::KeptSnapshot,
 }
 
 /// How diffs are shown, from the user's settings.
@@ -112,13 +114,14 @@ impl Repo {
             pair_changes: Default::default(),
             unpushed: Default::default(),
             git_paths: Default::default(),
+            kept: Default::default(),
         })
     }
 
     /// The same repository opened afresh, so that settings changed since (a remote Publish just
     /// added) are seen, keeping what was learned about its working tree: the line counts of new
     /// files, the change lists last read, and which commits are unpushed; and, while its Git
-    /// folder is still the same one, where git keeps its files.
+    /// folder is still the same one, where git keeps its files and the last Undo snapshot.
     pub fn reopen(&self) -> Result<Self> {
         let mut fresh = Repo::open(&self.workdir)?;
         if fresh.workdir == self.workdir {
@@ -129,6 +132,7 @@ impl Repo {
             fresh.diff = self.diff;
             if fresh.shared.git_dir() == self.shared.git_dir() {
                 fresh.git_paths = self.git_paths.clone();
+                fresh.kept = self.kept.clone();
             }
         }
         Ok(fresh)
