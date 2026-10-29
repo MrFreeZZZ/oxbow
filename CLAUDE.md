@@ -97,6 +97,9 @@ docs/architecture.md        layout, git access, graph rules, development;  docs/
 A new backend action usually touches, in order: `crates/oxbow-core/src/<area>.rs` (+ test in
 `tests/<area>.rs`) → a command in `app/src-tauri/src/<area>.rs` and its `generate_handler!` entry →
 a wrapper in `app/src/lib/api.ts` and types in `lib/types.ts` → the Svelte view.
+`app/tests/contract.test.ts` checks that every command has its wrapper and that the JSON shapes in
+`app/tests/contract.json` match `types.ts`; after changing a type listed there, write the shapes
+again: `OXBOW_CONTRACT=write cargo test -p oxbow-core --test contract`.
 
 ## Checking
 
