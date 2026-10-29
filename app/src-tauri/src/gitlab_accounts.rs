@@ -6,13 +6,15 @@
 //! under `gitlab`, so Settings can show it without reading the Keychain.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use oxbow_core::gitlab_api::{self, Client, Server};
+use oxbow_core::gitlab_api::{self, Client, GitLabPublish, Namespace, Server};
+use oxbow_core::{ActionEvent, OutputLine};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::CommandResult;
 use crate::accounts::{Accounts, Keyring, Store, accounts_file, read_all, store_name, write_entry};
@@ -114,6 +116,85 @@ fn save_in(file: &Path, accounts: &[GitLabAccount]) -> CommandResult<()> {
 /// The servers signed in to, for knowing a remote on one as GitLab whatever it is called.
 pub fn servers(app: &AppHandle) -> Vec<Server> {
     saved(app).iter().map(GitLabAccount::server).collect()
+}
+
+/// Lend git the GitLab sign-ins for HTTPS remotes on their servers, read when a command first
+/// needs one.
+pub fn lend_to_git(app: &AppHandle) {
+    let app = app.clone();
+    oxbow_core::config::set_gitlab_tokens(Some(Box::new(move |base: &str| {
+        let account = saved(&app).into_iter().find(|a| a.web.eq_ignore_ascii_case(base))?;
+        app.state::<GitLabTokens>().token(&account)
+    })));
+}
+
+/// Where the account on `host` can make a project, for Publish to GitLab.
+#[tauri::command]
+pub async fn gitlab_namespaces(
+    app: AppHandle,
+    tokens: State<'_, GitLabTokens>,
+    host: String,
+) -> CommandResult<Vec<Namespace>> {
+    let client = tokens.client(&app, &host)?;
+    tauri::async_runtime::spawn_blocking(move || client.namespaces().map_err(|err| err.to_string()))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+/// Make the project on GitLab, add it as origin and push the branch, each step to the window
+/// that asked as an `action-event`; Stop stops the push. With `create` false the project is on
+/// GitLab already (an earlier Publish made it, then stopped): only origin and the push are left.
+#[tauri::command]
+pub async fn gitlab_publish(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    tokens: State<'_, GitLabTokens>,
+    path: String,
+    host: String,
+    publish: GitLabPublish,
+    create: Option<bool>,
+) -> CommandResult<String> {
+    if !oxbow_core::github::valid_repository_name(&publish.name) || publish.name.starts_with('-') {
+        return Err("Use letters, digits, - _ and . for the name".into());
+    }
+    let client = tokens.client(&app, &host)?;
+    let label = window.label().to_owned();
+    let cancel = app.state::<crate::session::Session>().cancel(&window);
+    cancel.store(false, Ordering::Relaxed);
+    tauri::async_runtime::spawn_blocking(move || {
+        let emit = |event: ActionEvent| {
+            let _ = app.emit_to(label.as_str(), "action-event", event);
+        };
+        let server = client.server().clone();
+        let web_url = if create == Some(false) {
+            format!("{}/{}/{}", server.web, publish.namespace, publish.name)
+        } else {
+            emit(ActionEvent::Command {
+                display: client.create_project_request(&publish).display(),
+            });
+            let made = client.create_project(&publish).map_err(|err| err.to_string())?;
+            emit(ActionEvent::Line(OutputLine {
+                text: format!("Created {} ({})", made.web_url, made.visibility),
+                stderr: false,
+                progress: false,
+            }));
+            made.web_url
+        };
+        let dir = PathBuf::from(&path);
+        for command in publish.commands(&server) {
+            emit(ActionEvent::Command {
+                display: command.display(),
+            });
+            oxbow_core::cli::run_streaming_in(&dir, &command, &mut |line| emit(ActionEvent::Line(line)), &cancel)
+                .map_err(|err| match err {
+                    oxbow_core::Error::Command { output, .. } => output,
+                    other => other.to_string(),
+                })?;
+        }
+        Ok(web_url)
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 /// Sign in as `account` with `token`, replacing the account on the same server. As with GitHub

@@ -10,7 +10,7 @@ use crate::error::{Error, Result};
 use crate::gitlab::GitLabProject;
 use crate::pulls::{
     Call, Check, Comment, Entry, HunkLine, Method, Person, PullCommit, PullRequest, PullState, PullSummary,
-    RepoSettings, Review, parse_time, text,
+    RepoSettings, Review, Verdict, parse_time, text,
 };
 use crate::repo::Repo;
 use crate::review::PullStatus;
@@ -223,8 +223,9 @@ impl Client {
         )
     }
 
-    /// The request `call` sends to merge request `!number`. The calls GitLab has no such
-    /// request for yet (reviewing) come back as an error.
+    /// The request `call` sends to merge request `!number`. Reviewing, which can take several
+    /// or none, goes through [`Client::call_requests`]; Viewed, which GitLab doesn't keep, is
+    /// an error.
     pub fn call_request(&self, project: &GitLabProject, call: &Call) -> std::result::Result<Request, String> {
         let mr = |n: &u64| format!("/projects/{}/merge_requests/{n}", project_id(project));
         let update = |n: &u64, json: Value| self.api_request("PUT", &mr(n), Some(json));
@@ -315,12 +316,241 @@ impl Client {
         })
     }
 
-    /// Send `call`; GitLab answers with the merge request as it is now.
-    pub fn perform(&self, project: &GitLabProject, call: &Call) -> Result<Value> {
-        let request = self
-            .call_request(project, call)
+    /// The requests `call` sends, in order: most send one; reviewing sends none to start a
+    /// review (GitLab's drafts need no start) and several to finish it. Comments on lines need
+    /// the `refs` of the version of the diff they were written on.
+    pub fn call_requests(
+        &self,
+        project: &GitLabProject,
+        call: &Call,
+        refs: Option<&DiffRefs>,
+    ) -> std::result::Result<Vec<Request>, String> {
+        let mr = |n: u64| format!("/projects/{}/merge_requests/{n}", project_id(project));
+        // A review here is the merge request it is of, by number.
+        let of = |review: &Option<String>| -> std::result::Result<u64, String> {
+            review
+                .as_deref()
+                .and_then(|r| r.parse().ok())
+                .ok_or_else(|| "The review isn’t started".to_owned())
+        };
+        let refs =
+            || refs.ok_or_else(|| "GitLab no longer has the version of the diff these comments are on".to_owned());
+        Ok(match call {
+            Call::StartReview { .. } | Call::DeleteReview { .. } => Vec::new(),
+            Call::Comment { number, spot, body, .. } => vec![self.api_request(
+                "POST",
+                &format!("{}/discussions", mr(*number)),
+                Some(json!({ "body": body, "position": position(refs()?, spot) })),
+            )],
+            Call::Reply {
+                number, thread, body, ..
+            } => {
+                let thread = thread.as_deref().ok_or("GitLab didn’t name this thread")?;
+                vec![self.api_request(
+                    "POST",
+                    &format!("{}/discussions/{thread}/notes", mr(*number)),
+                    Some(json!({ "body": body })),
+                )]
+            }
+            Call::Resolve {
+                number,
+                thread,
+                resolved,
+            } => vec![self.api_request(
+                "PUT",
+                &format!("{}/discussions/{thread}", mr(*number)),
+                Some(json!({ "resolved": resolved })),
+            )],
+            Call::ReviewComment { review, spot, body } => vec![self.api_request(
+                "POST",
+                &format!("{}/draft_notes", mr(of(review)?)),
+                Some(json!({ "note": body, "position": position(refs()?, spot) })),
+            )],
+            Call::ReviewReply { review, thread, body } => vec![self.api_request(
+                "POST",
+                &format!("{}/draft_notes", mr(of(review)?)),
+                Some(json!({ "note": body, "in_reply_to_discussion_id": thread })),
+            )],
+            Call::SubmitReview {
+                review,
+                verdict,
+                body,
+                revoke,
+            } => {
+                let at = mr(of(review)?);
+                let mut out = Vec::new();
+                // The summary goes as a draft of its own, so a GitLab before 17 keeps it too.
+                if !body.trim().is_empty() {
+                    out.push(self.api_request("POST", &format!("{at}/draft_notes"), Some(json!({ "note": body }))));
+                }
+                let state = match verdict {
+                    Verdict::RequestChanges => json!({ "reviewer_state": "requested_changes" }),
+                    _ => json!({ "reviewer_state": "reviewed" }),
+                };
+                out.push(self.api_request("POST", &format!("{at}/draft_notes/bulk_publish"), Some(state)));
+                if *verdict == Verdict::Approve {
+                    out.push(self.api_request("POST", &format!("{at}/approve"), None));
+                } else if *revoke {
+                    out.push(self.api_request("POST", &format!("{at}/unapprove"), None));
+                }
+                out
+            }
+            _ => vec![self.call_request(project, call)?],
+        })
+    }
+
+    /// Throw away a draft comment a review made, when the review couldn't be sent.
+    fn delete_draft_request(&self, project: &GitLabProject, number: u64, draft: u64) -> Request {
+        self.api_request(
+            "DELETE",
+            &format!(
+                "/projects/{}/merge_requests/{number}/draft_notes/{draft}",
+                project_id(project)
+            ),
+            None,
+        )
+    }
+
+    /// Send `call`; GitLab answers with the merge request as it is now, or with what the last
+    /// request of several made.
+    pub fn perform(&self, project: &GitLabProject, call: &Call, refs: Option<&DiffRefs>) -> Result<Value> {
+        let requests = self
+            .call_requests(project, call, refs)
             .map_err(|message| gitlab(None, message))?;
-        self.call(&request)
+        let mut answer = Value::Null;
+        for request in &requests {
+            answer = self.call(request)?;
+        }
+        Ok(answer)
+    }
+
+    /// The requests `calls` send, as curl, for the sheet: comments on lines show the version of
+    /// the diff as `$BASE_SHA` and `$START_SHA`, which GitLab names only when they are sent.
+    pub fn preview(&self, project: &GitLabProject, calls: &[Call]) -> std::result::Result<Vec<String>, String> {
+        let mut review: Option<String> = None;
+        let mut reviewed = "$HEAD_SHA".to_owned();
+        let mut out = Vec::new();
+        for call in calls {
+            let mut call = call.clone();
+            if let Some(id) = &review {
+                call.in_review(id);
+            }
+            let head = match &call {
+                Call::StartReview { id, commit } => {
+                    review = Some(id.clone());
+                    reviewed = commit.clone();
+                    commit.clone()
+                }
+                Call::Comment { commit, .. } => commit.clone(),
+                _ => reviewed.clone(),
+            };
+            let refs = DiffRefs {
+                base_sha: "$BASE_SHA".to_owned(),
+                start_sha: "$START_SHA".to_owned(),
+                head_sha: head,
+            };
+            let requests = self.call_requests(project, &call, Some(&refs))?;
+            out.extend(requests.iter().map(Request::display));
+        }
+        Ok(out)
+    }
+
+    /// Send `calls` in order, telling `step` each request before it goes and what came of each
+    /// call. A review's calls go into the merge request `StartReview` names, on the version of
+    /// the diff its commit is the head of; when one fails or the run is `stopped`, the draft
+    /// comments it made are deleted, so none wait on GitLab to go out with a later review.
+    /// Answers with what the last call returned.
+    pub fn run(
+        &self,
+        project: &GitLabProject,
+        calls: &[Call],
+        stopped: &dyn Fn() -> bool,
+        step: &mut dyn FnMut(Step),
+    ) -> std::result::Result<Value, String> {
+        let mut review: Option<String> = None;
+        let mut commit: Option<String> = None;
+        let mut refs: Option<(u64, String, DiffRefs)> = None;
+        let mut drafts: Vec<(u64, u64)> = Vec::new();
+        let unsent = |drafts: &[(u64, u64)], why: String| {
+            for (number, draft) in drafts {
+                let _ = self.call(&self.delete_draft_request(project, *number, *draft));
+            }
+            why
+        };
+        let mut answer = Value::Null;
+        for call in calls {
+            if stopped() {
+                return Err(unsent(&drafts, "Stopped. Nothing else was sent.".to_owned()));
+            }
+            let mut call = call.clone();
+            if let Some(id) = &review {
+                call.in_review(id);
+            }
+            if let Call::StartReview { id, commit: on } = &call {
+                review = Some(id.clone());
+                commit = Some(on.clone());
+            }
+            // Comments on lines go on the version of the diff they were written on.
+            let on = match &call {
+                Call::Comment { number, commit, .. } => Some((*number, commit.clone())),
+                Call::ReviewComment {
+                    review: Some(review), ..
+                } => review.parse().ok().zip(commit.clone()),
+                _ => None,
+            };
+            if let Some((number, head)) = on
+                && refs.as_ref().is_none_or(|(n, h, _)| *n != number || *h != head)
+            {
+                refs = match self.diff_refs_at(project, number, &head) {
+                    Ok(found) => found.map(|found| (number, head, found)),
+                    Err(err) => return Err(unsent(&drafts, err.to_string())),
+                };
+            }
+            let requests = self
+                .call_requests(project, &call, refs.as_ref().map(|(_, _, r)| r))
+                .map_err(|message| unsent(&drafts, message))?;
+            for request in &requests {
+                step(Step::Request(request.display()));
+                answer = self.call(request).map_err(|err| unsent(&drafts, err.to_string()))?;
+                if request.method == "POST" && request.url.ends_with("/draft_notes") {
+                    let number = review.as_deref().and_then(|r| r.parse().ok()).unwrap_or(0);
+                    if let Some(id) = answer.get("id").and_then(Value::as_u64) {
+                        drafts.push((number, id));
+                    }
+                }
+                if request.url.ends_with("/bulk_publish") {
+                    drafts.clear();
+                }
+            }
+            if matches!(call, Call::SubmitReview { .. } | Call::DeleteReview { .. }) {
+                review = None;
+            }
+            step(Step::Done(match call {
+                Call::Create { .. } => answer
+                    .get("web_url")
+                    .and_then(Value::as_str)
+                    .map(|url| format!("Opened {url}")),
+                _ => None,
+            }));
+        }
+        Ok(answer)
+    }
+
+    /// The commits of the version of merge request `number`'s diff whose head is `head`: GitLab
+    /// keeps every version, and a comment goes on the one it was written on.
+    pub fn diff_refs_at(&self, project: &GitLabProject, number: u64, head: &str) -> Result<Option<DiffRefs>> {
+        let (versions, _) = self.pages(
+            &format!("/projects/{}/merge_requests/{number}/versions", project_id(project)),
+            3,
+        )?;
+        Ok(versions
+            .iter()
+            .find(|v| v.get("head_commit_sha").and_then(Value::as_str) == Some(head))
+            .map(|v| DiffRefs {
+                base_sha: text(v, "base_commit_sha"),
+                start_sha: text(v, "start_commit_sha"),
+                head_sha: head.to_owned(),
+            }))
     }
 
     pub(crate) fn api_request(&self, method: &'static str, path: &str, json: Option<Value>) -> Request {
@@ -332,6 +562,44 @@ impl Client {
     }
 
     // Calls.
+
+    /// Where the account can make a project: its own namespace first, then its groups'.
+    pub fn namespaces(&self) -> Result<Vec<Namespace>> {
+        let (list, _) = self.pages("/namespaces", 3)?;
+        let mut out: Vec<Namespace> = list
+            .iter()
+            .map(|n| Namespace {
+                id: n.get("id").and_then(Value::as_u64).unwrap_or(0),
+                full_path: text(n, "full_path"),
+                kind: text(n, "kind"),
+            })
+            .filter(|n| n.id != 0 && !n.full_path.is_empty())
+            .collect();
+        out.sort_by_key(|n| n.kind != "user");
+        Ok(out)
+    }
+
+    /// Make the project Publish to GitLab pushes to, empty.
+    pub fn create_project_request(&self, publish: &GitLabPublish) -> Request {
+        let mut body = json!({
+            "name": publish.name,
+            "path": publish.name,
+            "namespace_id": publish.namespace_id,
+            "visibility": publish.visibility,
+        });
+        if !publish.description.trim().is_empty() {
+            body["description"] = json!(publish.description.trim());
+        }
+        self.api_request("POST", "/projects", Some(body))
+    }
+
+    pub fn create_project(&self, publish: &GitLabPublish) -> Result<NewProject> {
+        let made = self.call(&self.create_project_request(publish))?;
+        Ok(NewProject {
+            web_url: text(&made, "web_url"),
+            visibility: text(&made, "visibility"),
+        })
+    }
 
     /// Who the token belongs to, what it may do and which GitLab the server runs.
     pub fn me(&self) -> Result<Me> {
@@ -766,6 +1034,61 @@ pub struct DiffRefs {
     pub head_sha: String,
 }
 
+/// A namespace a project can go in: the account's own (`user`) or a group's (`group`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Namespace {
+    pub id: u64,
+    /// `anna`, `acme/platform`.
+    pub full_path: String,
+    pub kind: String,
+}
+
+/// What Publish to GitLab makes: a project in a namespace, then `origin` pointing at it and the
+/// branch pushed there.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLabPublish {
+    pub namespace_id: u64,
+    /// The namespace's full path, for the project's address.
+    pub namespace: String,
+    pub name: String,
+    /// `private`, `internal` or `public`.
+    pub visibility: String,
+    #[serde(default)]
+    pub description: String,
+    pub branch: String,
+}
+
+impl GitLabPublish {
+    /// Where the project will be, before it exists: its HTTP address, which the sign-in answers
+    /// for.
+    pub fn url(&self, server: &Server) -> String {
+        format!("{}/{}/{}.git", server.web, self.namespace, self.name)
+    }
+
+    /// The git half of publishing, run in the repository after GitLab made the project.
+    pub fn commands(&self, server: &Server) -> Vec<crate::cli::GitCommand> {
+        crate::github::origin_and_push(&self.url(server), &self.branch, "the new GitLab project becomes origin")
+    }
+}
+
+/// The project Publish to GitLab made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewProject {
+    pub web_url: String,
+    pub visibility: String,
+}
+
+/// What a run of calls says as it goes: the request about to be sent, as curl, and once a call
+/// is done, what came of it when there is something to say.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Step {
+    Request(String),
+    Done(Option<String>),
+}
+
 /// Someone on GitLab, to ask for a review or assign.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1176,6 +1499,65 @@ fn checks(jobs: &[Value]) -> Vec<Check> {
             }
         })
         .collect()
+}
+
+/// Where on the diff a comment goes, as GitLab takes it: the commits of the diff's version, the
+/// file, and the line by its old number (a deleted line), its new one (an added line) or both
+/// (an unchanged line); several lines as a range of line codes.
+fn position(refs: &DiffRefs, spot: &crate::pulls::Spot) -> Value {
+    let mut p = json!({
+        "base_sha": refs.base_sha,
+        "start_sha": refs.start_sha,
+        "head_sha": refs.head_sha,
+        "position_type": "text",
+        "old_path": spot.path,
+        "new_path": spot.path,
+    });
+    match &spot.lines {
+        Some(lines) => {
+            let end = &lines.end;
+            if end.kind != "added" {
+                p["old_line"] = json!(end.old);
+            }
+            if end.kind != "removed" {
+                p["new_line"] = json!(end.new);
+            }
+            if let Some(start) = &lines.start {
+                p["line_range"] = json!({ "start": range_line(&spot.path, start), "end": range_line(&spot.path, end) });
+            }
+        }
+        // Written before Oxbow kept both numbers: the one GitHub names.
+        None if spot.side == "LEFT" => p["old_line"] = json!(spot.line),
+        None => p["new_line"] = json!(spot.line),
+    }
+    p
+}
+
+/// One end of a range of lines: its line code, `new` for an added line or `old` for any other,
+/// and its numbers.
+fn range_line(path: &str, line: &crate::pulls::LinePair) -> Value {
+    let mut out = json!({
+        "line_code": line_code(path, line.old, line.new),
+        "type": if line.kind == "added" { "new" } else { "old" },
+    });
+    if line.kind != "added" {
+        out["old_line"] = json!(line.old);
+    }
+    if line.kind != "removed" {
+        out["new_line"] = json!(line.new);
+    }
+    out
+}
+
+/// GitLab's name for a line of a diff: the SHA-1 of the file's path, its old and new numbers.
+pub fn line_code(path: &str, old: u32, new: u32) -> String {
+    let mut hasher = gix::hash::hasher(gix::hash::Kind::Sha1);
+    hasher.update(path.as_bytes());
+    let hash = hasher
+        .try_finalize()
+        .map(|id| id.to_hex().to_string())
+        .unwrap_or_default();
+    format!("{hash}_{old}_{new}")
 }
 
 /// `title` as a draft's, starting with `Draft:`, or without it. GitLab also reads the older

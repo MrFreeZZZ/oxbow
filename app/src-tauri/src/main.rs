@@ -87,6 +87,7 @@ fn main() {
             let handle = app.handle();
             apply_settings(handle, &handle.state::<Session>(), &read_settings(handle));
             accounts::lend_to_git(handle);
+            gitlab_accounts::lend_to_git(handle);
             console_window::follow(handle);
             menu::recent_changed(handle);
             Ok(())
@@ -245,7 +246,11 @@ fn main() {
             pulls::github_send,
             pulls::review_draft,
             pulls::review_drafts,
-            pulls::save_review_draft
+            pulls::save_review_draft,
+            pulls::gitlab_viewing,
+            pulls::gitlab_set_viewed,
+            gitlab_accounts::gitlab_namespaces,
+            gitlab_accounts::gitlab_publish
         ])
         .run(tauri::generate_context!())
         .expect("error while running Oxbow");

@@ -22,6 +22,8 @@ class GitHubState {
   mrProblem = $state<string | null>(null);
   /** The account signed in to that project's server, by its username. */
   mrMe = $state<string | null>(null);
+  /** That server's GitLab version, `17.5.1-ee`. */
+  mrVersion = $state<string | null>(null);
   /** GitLab's approvals and pipeline of the open merge requests, by number. */
   mrStatuses = $state<Record<number, PullStatus>>({});
   /** Open and recently closed pull requests, the latest updated first. */
@@ -79,7 +81,9 @@ class GitHubState {
       const [list, accounts] = await Promise.all([api.gitlabMergeRequests(), api.gitlabAccounts().catch(() => [])]);
       if (load !== this.#load) return;
       this.mrProject = list?.project ?? null;
-      this.mrMe = accounts.find((a) => a.host === list?.project.host)?.username ?? null;
+      const account = accounts.find((a) => a.host === list?.project.host);
+      this.mrMe = account?.username ?? null;
+      this.mrVersion = account?.version ?? null;
       this.mergeRequests = list?.mergeRequests ?? [];
       this.mrProblem = null;
     } catch (err) {
@@ -106,6 +110,7 @@ class GitHubState {
     this.mergeRequests = [];
     this.mrProblem = null;
     this.mrMe = null;
+    this.mrVersion = null;
     this.mrStatuses = {};
     this.pulls = [];
     this.statuses = {};

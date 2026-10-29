@@ -87,6 +87,7 @@ export const COMMANDS = {
   push: { category: "Git", title: "Push" },
   publish: { category: "Git", title: "Publish Branch…" },
   publishGitHub: { category: "Git", title: "Publish to GitHub…" },
+  publishGitLab: { category: "Git", title: "Publish to GitLab…" },
   commit: { category: "Git", title: "Commit…" },
   stash: { category: "Git", title: "Stash" },
   stashStaged: { category: "Git", title: "Stash Staged" },

@@ -4,6 +4,8 @@
   // a viewed file folds, and GitHub unticks it once it changes again. Lines near a change take
   // comments, into the review or sent at once; GitHub's threads show under their lines. After
   // the author pushed again, the changes since the review started can be read on their own.
+  // A merge request on GitLab the same, fetched from refs/merge-requests; its Viewed ticks stay
+  // on this computer.
   import { untrack } from "svelte";
   import { api, stopped } from "./api";
   import { wholeByDefault } from "./prefs.svelte";
@@ -60,8 +62,9 @@
   /** Files the author changed since the review started; null while unknown. */
   let changed = $state.raw<Set<string> | null>(null);
 
-  const head = $derived(`refs/oxbow/pull/${pr.number}/head`);
-  const base = $derived(`refs/oxbow/pull/${pr.number}/base`);
+  const refs = $derived(session.lab ? "mr" : "pull");
+  const head = $derived(`refs/oxbow/${refs}/${pr.number}/head`);
+  const base = $derived(`refs/oxbow/${refs}/${pr.number}/base`);
   /** The commit the draft's comments are on, when the pull request moved on from it. */
   const reviewed = $derived(session.draft && session.draft.commit !== pr.headSha ? session.draft.commit : null);
 
@@ -99,7 +102,7 @@
     const still = () => pr.number === number && pr.headSha === sha;
     loading = !comparison;
     error = null;
-    stale = await api.pullFetch(number, onto).then(
+    stale = await (session.lab ? api.gitlabFetch(number, onto) : api.pullFetch(number, onto)).then(
       () => null,
       (err) => String(err),
     );
@@ -190,10 +193,10 @@
   const shownFiles = $derived(filter.trim() ? files.filter((f) => f.path.toLowerCase().includes(filter.trim().toLowerCase())) : files);
   const viewedCount = $derived(files.filter((f) => session.viewed.has(f.path)).length);
 
-  /** Tick or untick a file's Viewed box, here at once and then on GitHub. */
+  /** Tick or untick a file's Viewed box, here at once and then on GitHub (GitLab's stay here). */
   function setViewed(path: string, on: boolean) {
     diffView?.fold(path, on);
-    session.setViewed(path, on, (err) => (error = `Couldn’t mark ${path} ${on ? "viewed" : "not viewed"} on GitHub: ${err}`));
+    session.setViewed(path, on, (err) => (error = `Couldn’t mark ${path} ${on ? "viewed" : "not viewed"}${session.lab ? "" : " on GitHub"}: ${err}`));
   }
 
   /** Show a file's diff, loading pages of diffs until it is there. */
@@ -256,7 +259,7 @@
     start: (diff, hunk, index, range) => {
       const path = diff.file.path;
       const from = range && anchor && anchor.path === path && anchor.hunk === hunk ? anchor.index : index;
-      const spot = spotOf(path, hunk, from, index);
+      const spot = spotOf(path, hunk, from, index, session.lab);
       if (!spot || !comparison) return;
       if (!range) anchor = { path, hunk, index };
       const body = writing?.body ?? "";
@@ -326,7 +329,7 @@
     role="checkbox"
     aria-checked={on}
     aria-label="Viewed"
-    title={on ? "Viewed: click when it needs another look" : session.dismissed.has(path) ? "Changed since you viewed it" : "Mark viewed: it folds, and GitHub keeps the tick"}
+    title={on ? "Viewed: click when it needs another look" : session.dismissed.has(path) ? "Changed since you viewed it" : `Mark viewed: it folds, and ${session.lab ? "the tick stays on this computer" : "GitHub keeps the tick"}`}
     onclick={(e) => {
       e.stopPropagation();
       setViewed(path, !on);
@@ -348,10 +351,11 @@
       <input type="text" placeholder="Filter files" bind:value={filter} spellcheck="false" />
     </label>
     {#if files.length}
-      <div class="progress" title="Files ticked Viewed, here and on GitHub">
+      <div class="progress" title={session.lab ? "Files ticked Viewed, on this computer" : "Files ticked Viewed, here and on GitHub"}>
         <span>Viewed {viewedCount} of {files.length}</span>
         <span class="bar"><span style:width="{(viewedCount * 100) / files.length}%"></span></span>
       </div>
+      {#if session.lab}<div class="kept">GitLab keeps no Viewed ticks: these stay on this computer.</div>{/if}
     {/if}
     <div class="rows">
       {#each shownFiles as file (file.path)}
@@ -455,6 +459,11 @@
   .icon.small {
     width: 13px;
     height: 13px;
+  }
+  .kept {
+    margin: 0 6px 4px;
+    color: var(--text2);
+    font-size: var(--text-caption);
   }
   .progress {
     display: flex;

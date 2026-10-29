@@ -1,6 +1,6 @@
 // A review of someone's pull request: where on a diff a comment can go, the draft written here,
 // and the calls that send it to GitHub in one go.
-import type { DiffLine, DiffSide, DraftComment, DraftReply, Hunk, PullCall, PullCommit, PullEntry, PullRequest, ReviewDraft, Spot, Verdict } from "./types";
+import type { DiffLine, DiffSide, DraftComment, DraftReply, Hunk, LinePair, PullCall, PullCommit, PullEntry, PullRequest, ReviewDraft, Spot, Verdict } from "./types";
 
 export type Thread = Extract<PullEntry, { kind: "thread" }>;
 
@@ -28,9 +28,29 @@ export function commentable(hunk: Hunk, index: number): boolean {
   return false;
 }
 
+/** Line `index` of a hunk by both counts, as GitLab's diffs number it: an added line takes the
+ *  old file's count at its row (the next old line's number), a deleted one the new file's. */
+export function linePair(hunk: Hunk, index: number): LinePair {
+  const line = hunk.lines[index];
+  const count = (side: "oldLine" | "newLine", start: number) => {
+    if (line[side] !== null) return line[side];
+    for (let i = index - 1; i >= 0; i--) {
+      const n = hunk.lines[i][side];
+      if (n !== null) return n + 1;
+    }
+    for (let i = index + 1; i < hunk.lines.length; i++) {
+      const n = hunk.lines[i][side];
+      if (n !== null) return n;
+    }
+    return start;
+  };
+  return { old: count("oldLine", hunk.oldStart), new: count("newLine", hunk.newStart), kind: line.kind };
+}
+
 /** The spot of lines `from` to `to` of a hunk: the side of the last one, from the first one that
- *  has a number on that side. */
-export function spotOf(path: string, hunk: Hunk, from: number, to: number): Spot | null {
+ *  has a number on that side. With `both`, also both numbers of its first and last line, for
+ *  GitLab. */
+export function spotOf(path: string, hunk: Hunk, from: number, to: number, both = false): Spot | null {
   const [a, b] = from <= to ? [from, to] : [to, from];
   const end = placeOf(hunk.lines[b]);
   if (!end) return null;
@@ -40,7 +60,9 @@ export function spotOf(path: string, hunk: Hunk, from: number, to: number): Spot
     const n = end.side === "LEFT" ? (line.kind === "added" ? null : line.oldLine) : line.kind === "removed" ? null : line.newLine;
     if (n !== null && n < end.line) start = n;
   }
-  return { path, side: end.side, line: end.line, startLine: start };
+  const spot: Spot = { path, side: end.side, line: end.line, startLine: start };
+  if (both) spot.lines = { end: linePair(hunk, b), start: a < b ? linePair(hunk, a) : null };
+  return spot;
 }
 
 /** Whether `spot` covers a line, for lighting the lines a comment is on. */
@@ -99,17 +121,28 @@ export function countWords(comments: number, replies: number): string {
  *  and replies, then the verdict. Without a draft, on the commit whose files were `shown`: an
  *  approval is for what was read, not for commits pushed while their files were still loading.
  *  Only when the files were never shown, on the pull request's head. */
-export function submitCalls(pr: PullRequest, draft: ReviewDraft | null, verdict: Verdict, body: string, shown: string | null = null): PullCall[] {
-  const calls: PullCall[] = [{ kind: "startReview", id: pr.nodeId, commit: draft?.commit ?? shown ?? pr.headSha }];
+export function submitCalls(pr: PullRequest, draft: ReviewDraft | null, verdict: Verdict, body: string, shown: string | null = null, lab: { revoke: boolean } | null = null): PullCall[] {
+  // GitLab keeps draft comments on the merge request itself, so its number is the review.
+  const calls: PullCall[] = [{ kind: "startReview", id: lab ? String(pr.number) : pr.nodeId, commit: draft?.commit ?? shown ?? pr.headSha }];
   for (const c of draft?.comments ?? []) calls.push({ kind: "reviewComment", spot: c.spot, body: c.body });
   for (const r of draft?.replies ?? []) calls.push({ kind: "reviewReply", thread: r.thread, body: r.body });
-  calls.push({ kind: "submitReview", verdict, body: body.trim() });
+  calls.push(lab ? { kind: "submitReview", verdict, body: body.trim(), revoke: lab.revoke && verdict === "requestChanges" } : { kind: "submitReview", verdict, body: body.trim() });
   return calls;
 }
 
+/** Whether `me` approved it before: on GitLab an approval stays until it is taken back, and
+ *  Request Changes takes it back. */
+export const approvedBy = (pr: PullRequest, me: string | null) => !!me && pr.reviews.some((r) => r.author.login === me && r.state === "approved");
+
+/** Whether GitLab takes Request changes: from 17, where a review can end with it. */
+export function asksChanges(version: string | null): boolean {
+  const major = Number.parseInt(version ?? "", 10);
+  return Number.isFinite(major) && major >= 17;
+}
+
 /** Why the review can't be sent as it is, or null. */
-export function submitProblem(verdict: Verdict, body: string, draft: ReviewDraft | null, mine: boolean): string | null {
-  if (mine && verdict !== "comment") return "GitHub doesn’t take a verdict on your own pull request.";
+export function submitProblem(verdict: Verdict, body: string, draft: ReviewDraft | null, mine: boolean, lab = false): string | null {
+  if (mine && verdict !== "comment") return lab ? "GitLab doesn’t take a verdict on your own merge request." : "GitHub doesn’t take a verdict on your own pull request.";
   if (verdict === "comment" && !body.trim() && !draft?.comments.length && !draft?.replies.length) return "Write something, or add comments to the review.";
   if (verdict === "requestChanges" && !body.trim() && !draft?.comments.length) return "Say what needs to change.";
   return null;

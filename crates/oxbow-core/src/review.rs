@@ -1,6 +1,7 @@
 //! Reviewing a pull request: the open ones with GitHub's verdict and checks for the Reviews
 //! screen, its head and base fetched to compare here, which files this account marked viewed,
-//! and the draft of a review, kept in `.git/oxbow/reviews` until it is sent.
+//! and the draft of a review, kept in `.git/oxbow/reviews` until it is sent. A merge request on
+//! GitLab is reviewed the same way; GitLab keeps no Viewed ticks, so they stay here too.
 //!
 //! The draft's comments are on lines of the commit the review started on. Sending them goes
 //! through [`Call`](crate::pulls::Call)s: a pending review of that commit, its comments and
@@ -15,6 +16,7 @@ use serde_json::{Value, json};
 use crate::cli::GitCommand;
 use crate::error::{Error, Result};
 use crate::github::Client;
+use crate::gitlab::GitLabProject;
 use crate::pulls::{GitHubRepo, Spot, Verdict, graphql_error};
 use crate::repo::Repo;
 
@@ -160,6 +162,39 @@ pub fn mr_ref(number: u64, part: &str) -> String {
     format!("refs/oxbow/mr/{number}/{part}")
 }
 
+/// Where the reviews of one repository's pull requests are kept here: files named from the
+/// repository on GitHub or the project on GitLab, commits under [`pull_ref`] or [`mr_ref`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reviewed {
+    prefix: String,
+    gitlab: bool,
+}
+
+impl Reviewed {
+    pub fn github(repo: &GitHubRepo) -> Self {
+        Reviewed {
+            prefix: format!("{}-{}-", repo.owner, repo.name),
+            gitlab: false,
+        }
+    }
+
+    pub fn gitlab(project: &GitLabProject) -> Self {
+        Reviewed {
+            prefix: format!("gitlab-{}-", project.path.replace('/', "-")),
+            gitlab: true,
+        }
+    }
+
+    /// Where pull request (or merge request) `number`'s commit `part` is kept.
+    pub fn reference(&self, number: u64, part: &str) -> String {
+        if self.gitlab {
+            mr_ref(number, part)
+        } else {
+            pull_ref(number, part)
+        }
+    }
+}
+
 // --- The draft -----------------------------------------------------------------------------------
 
 /// A comment of the draft, on lines of the draft's commit.
@@ -235,16 +270,16 @@ impl Repo {
         ))
     }
 
-    fn draft_file(&self, github: &GitHubRepo, number: u64) -> PathBuf {
+    fn draft_file(&self, place: &Reviewed, number: u64) -> PathBuf {
         self.common_dir()
             .join("oxbow")
             .join("reviews")
-            .join(format!("{}-{}-{number}.json", github.owner, github.name))
+            .join(format!("{}{number}.json", place.prefix))
     }
 
     /// The draft review of pull request `number`, if one was started here.
-    pub fn review_draft(&self, github: &GitHubRepo, number: u64) -> Result<Option<ReviewDraft>> {
-        match std::fs::read_to_string(self.draft_file(github, number)) {
+    pub fn review_draft(&self, place: &Reviewed, number: u64) -> Result<Option<ReviewDraft>> {
+        match std::fs::read_to_string(self.draft_file(place, number)) {
             Ok(text) => serde_json::from_str(&text)
                 .map(Some)
                 .map_err(|err| Error::Git(format!("The draft review of #{number} can't be read: {err}"))),
@@ -255,9 +290,9 @@ impl Repo {
 
     /// Keep `draft`, written whole to a new file that then takes the old one's place. Its commit
     /// gets a ref, so it stays here after the pull request moves on.
-    pub fn save_review_draft(&self, github: &GitHubRepo, number: u64, draft: &ReviewDraft) -> Result<()> {
+    pub fn save_review_draft(&self, place: &Reviewed, number: u64, draft: &ReviewDraft) -> Result<()> {
         let io = |err: std::io::Error| Error::Git(err.to_string());
-        let file = self.draft_file(github, number);
+        let file = self.draft_file(place, number);
         if let Some(dir) = file.parent() {
             std::fs::create_dir_all(dir).map_err(io)?;
         }
@@ -265,7 +300,7 @@ impl Repo {
         let new = file.with_extension(format!("json.{}", std::process::id()));
         std::fs::write(&new, text).map_err(io)?;
         std::fs::rename(&new, &file).map_err(io)?;
-        let reviewed = pull_ref(number, "reviewed");
+        let reviewed = place.reference(number, "reviewed");
         if self.commit_id(&reviewed).ok().as_deref() != Some(draft.commit.as_str()) {
             // Without the commit here (not fetched yet) there's nothing to keep.
             let _ = self.run(&GitCommand::new(["update-ref", &reviewed, &draft.commit]));
@@ -275,8 +310,8 @@ impl Repo {
 
     /// Put the draft away once it is sent, or thrown away: a copy goes to `.git/oxbow/removed`
     /// for 30 days.
-    pub fn drop_review_draft(&self, github: &GitHubRepo, number: u64) -> Result<()> {
-        let file = self.draft_file(github, number);
+    pub fn drop_review_draft(&self, place: &Reviewed, number: u64) -> Result<()> {
+        let file = self.draft_file(place, number);
         if file.exists() {
             let io = |err: std::io::Error| Error::Git(err.to_string());
             let root = self.common_dir().join("oxbow").join("removed");
@@ -289,13 +324,17 @@ impl Repo {
             std::fs::create_dir_all(&folder).map_err(io)?;
             std::fs::rename(&file, folder.join(file.file_name().unwrap_or_default())).map_err(io)?;
         }
-        let _ = self.run(&GitCommand::new(["update-ref", "-d", &pull_ref(number, "reviewed")]));
+        let _ = self.run(&GitCommand::new([
+            "update-ref",
+            "-d",
+            &place.reference(number, "reviewed"),
+        ]));
         Ok(())
     }
 
     /// The draft reviews kept here, by pull request number, for the Reviews screen.
-    pub fn review_drafts(&self, github: &GitHubRepo) -> HashMap<u64, ReviewDraft> {
-        let prefix = format!("{}-{}-", github.owner, github.name);
+    pub fn review_drafts(&self, place: &Reviewed) -> HashMap<u64, ReviewDraft> {
+        let prefix = &place.prefix;
         let dir = self.common_dir().join("oxbow").join("reviews");
         let Ok(entries) = std::fs::read_dir(dir) else {
             return HashMap::new();
@@ -304,10 +343,94 @@ impl Repo {
             .flatten()
             .filter_map(|entry| {
                 let name = entry.file_name().to_string_lossy().into_owned();
-                let number = name.strip_prefix(&prefix)?.strip_suffix(".json")?.parse::<u64>().ok()?;
-                let draft = self.review_draft(github, number).ok().flatten()?;
+                let number = name.strip_prefix(prefix)?.strip_suffix(".json")?.parse::<u64>().ok()?;
+                let draft = self.review_draft(place, number).ok().flatten()?;
                 Some((number, draft))
             })
             .collect()
     }
+}
+
+impl Repo {
+    fn viewed_file(&self, place: &Reviewed, number: u64) -> PathBuf {
+        self.common_dir()
+            .join("oxbow")
+            .join("reviews")
+            .join(format!("{}{number}.viewed.json", place.prefix))
+    }
+
+    /// The files of merge request `number` ticked Viewed here, for a server that keeps no ticks
+    /// (GitLab). A file whose content at the fetched head is not what it was when ticked is
+    /// `dismissed`, as GitHub does.
+    pub fn viewed_here(&self, place: &Reviewed, number: u64) -> Viewing {
+        let kept: HashMap<String, String> = std::fs::read_to_string(self.viewed_file(place, number))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default();
+        let mut paths: Vec<&String> = kept.keys().collect();
+        paths.sort();
+        let now = self.blobs_at(&place.reference(number, "head"), &paths);
+        let mut out = Viewing::default();
+        for (path, was) in paths.into_iter().zip(now) {
+            if now_or_gone(&was) == kept.get(path).map(String::as_str).unwrap_or_default() {
+                out.viewed.push(path.clone());
+            } else {
+                out.dismissed.push(path.clone());
+            }
+        }
+        out
+    }
+
+    /// Tick or untick `path` of merge request `number` Viewed here, at its content on the
+    /// fetched head.
+    pub fn set_viewed_here(&self, place: &Reviewed, number: u64, path: &str, viewed: bool) -> Result<()> {
+        let io = |err: std::io::Error| Error::Git(err.to_string());
+        let file = self.viewed_file(place, number);
+        let mut kept: HashMap<String, String> = std::fs::read_to_string(&file)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default();
+        if viewed {
+            let path = path.to_owned();
+            let blob = self.blobs_at(&place.reference(number, "head"), &[&path]).remove(0);
+            kept.insert(path, now_or_gone(&blob));
+        } else {
+            kept.remove(path);
+        }
+        if let Some(dir) = file.parent() {
+            std::fs::create_dir_all(dir).map_err(io)?;
+        }
+        let text = serde_json::to_string_pretty(&kept).map_err(|err| Error::Git(err.to_string()))?;
+        let new = file.with_extension(format!("json.{}", std::process::id()));
+        std::fs::write(&new, text).map_err(io)?;
+        std::fs::rename(&new, &file).map_err(io)
+    }
+
+    /// The blob of each of `paths` at `rev`, `None` where it has none (deleted there).
+    fn blobs_at(&self, rev: &str, paths: &[&String]) -> Vec<Option<String>> {
+        if paths.is_empty() {
+            return Vec::new();
+        }
+        let query: String = paths.iter().map(|p| format!("{rev}:{p}\n")).collect();
+        let lines: Vec<String> = self
+            .run_with_input(
+                &GitCommand::new(["cat-file", "--batch-check=%(objectname) %(objecttype)"]),
+                Some(query.as_bytes()),
+            )
+            .map(|out| out.stdout.lines().map(str::to_owned).collect())
+            .unwrap_or_default();
+        (0..paths.len())
+            .map(|i| {
+                lines
+                    .get(i)
+                    .and_then(|line| line.strip_suffix(" blob"))
+                    .map(str::to_owned)
+            })
+            .collect()
+    }
+}
+
+/// A blob as the Viewed file keeps it: its id, or `deleted`.
+fn now_or_gone(blob: &Option<String>) -> String {
+    blob.clone().unwrap_or_else(|| "deleted".to_owned())
 }

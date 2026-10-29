@@ -8,9 +8,9 @@ use std::sync::atomic::Ordering;
 
 use oxbow_core::console::EntryKind;
 use oxbow_core::github::Client;
-use oxbow_core::gitlab_api::GitLabUser;
+use oxbow_core::gitlab_api::{GitLabUser, Step};
 use oxbow_core::pulls::{Call, GitHubRepo, PullRequest, PullSummary, started_review};
-use oxbow_core::review::{PullStatus, ReviewDraft, Viewing};
+use oxbow_core::review::{PullStatus, ReviewDraft, Reviewed, Viewing};
 use oxbow_core::{ActionEvent, GitLabProject, OutputLine};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -166,10 +166,7 @@ pub async fn gitlab_calls_preview(
     let (_, project, client) = signed_in_project(&app, &window, &session, &tokens)
         .await?
         .ok_or_else(|| "Sign in to this repository’s GitLab in Settings › Accounts".to_owned())?;
-    calls
-        .iter()
-        .map(|call| client.call_request(&project, call).map(|r| r.display()))
-        .collect()
+    client.preview(&project, &calls)
 }
 
 /// Send `calls` to GitLab in order, each shown in the sheet as it goes. Answers with what the
@@ -189,33 +186,18 @@ pub async fn gitlab_run(
     let cancel = app.state::<Session>().cancel(&window);
     cancel.store(false, Ordering::Relaxed);
     tauri::async_runtime::spawn_blocking(move || {
-        let emit = |event: ActionEvent| {
-            let _ = app.emit_to(label.as_str(), "action-event", event);
-        };
-        let mut answer = Value::Null;
-        for call in &calls {
-            if cancel.load(Ordering::Relaxed) {
-                return Err("Stopped. Nothing else was sent.".to_owned());
-            }
-            let request = client.call_request(&project, call)?;
-            emit(ActionEvent::Command {
-                display: request.display(),
-            });
-            answer = client.perform(&project, call).map_err(|err| err.to_string())?;
-            let said = match call {
-                Call::Create { .. } => answer
-                    .get("web_url")
-                    .and_then(Value::as_str)
-                    .map(|url| format!("Opened {url}")),
-                _ => None,
+        let stopped = || cancel.load(Ordering::Relaxed);
+        client.run(&project, &calls, &stopped, &mut |step| {
+            let event = match step {
+                Step::Request(display) => ActionEvent::Command { display },
+                Step::Done(said) => ActionEvent::Line(OutputLine {
+                    text: said.unwrap_or_else(|| "Done.".to_owned()),
+                    stderr: false,
+                    progress: false,
+                }),
             };
-            emit(ActionEvent::Line(OutputLine {
-                text: said.unwrap_or_else(|| "Done.".to_owned()),
-                stderr: false,
-                progress: false,
-            }));
-        }
-        Ok(answer)
+            let _ = app.emit_to(label.as_str(), "action-event", event);
+        })
     })
     .await
     .map_err(|err| err.to_string())?
@@ -559,39 +541,96 @@ pub async fn github_send(
     blocking(move || client.perform(&github, &call, None)).await
 }
 
+/// Where the reviews of the open repository's pull requests are kept, or with `gitlab` those of
+/// its merge requests on the GitLab it is signed in to.
+async fn reviewed_place(
+    app: &AppHandle,
+    window: &tauri::WebviewWindow,
+    session: &State<'_, Session>,
+    tokens: &State<'_, crate::gitlab_accounts::GitLabTokens>,
+    gitlab: bool,
+) -> CommandResult<(oxbow_core::Repo, Reviewed)> {
+    if !gitlab {
+        let (repo, github) = github_repo_of(session, window)?;
+        return Ok((repo, Reviewed::github(&github)));
+    }
+    let (repo, project, _) = signed_in_project(app, window, session, tokens)
+        .await?
+        .ok_or_else(|| "Sign in to this repository’s GitLab in Settings › Accounts".to_owned())?;
+    Ok((repo, Reviewed::gitlab(&project)))
+}
+
 /// The draft review of pull request `number` kept here, if any.
 #[tauri::command]
 pub async fn review_draft(
+    app: AppHandle,
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
+    tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
     number: u64,
+    gitlab: Option<bool>,
 ) -> CommandResult<Option<ReviewDraft>> {
-    let (repo, github) = github_repo_of(&session, &window)?;
-    blocking(move || repo.review_draft(&github, number)).await
+    let (repo, place) = reviewed_place(&app, &window, &session, &tokens, gitlab.unwrap_or(false)).await?;
+    blocking(move || repo.review_draft(&place, number)).await
 }
 
 /// Every draft review kept here, by pull request number.
 #[tauri::command]
 pub async fn review_drafts(
+    app: AppHandle,
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
+    tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
+    gitlab: Option<bool>,
 ) -> CommandResult<HashMap<u64, ReviewDraft>> {
-    let (repo, github) = github_repo_of(&session, &window)?;
-    blocking(move || Ok(repo.review_drafts(&github))).await
+    let (repo, place) = reviewed_place(&app, &window, &session, &tokens, gitlab.unwrap_or(false)).await?;
+    blocking(move || Ok(repo.review_drafts(&place))).await
 }
 
 /// Keep the draft review of pull request `number`; with none, put it away (sent or thrown away).
 #[tauri::command]
 pub async fn save_review_draft(
+    app: AppHandle,
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
+    tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
     number: u64,
     draft: Option<ReviewDraft>,
+    gitlab: Option<bool>,
 ) -> CommandResult<()> {
-    let (repo, github) = github_repo_of(&session, &window)?;
+    let (repo, place) = reviewed_place(&app, &window, &session, &tokens, gitlab.unwrap_or(false)).await?;
     blocking(move || match draft {
-        Some(draft) => repo.save_review_draft(&github, number, &draft),
-        None => repo.drop_review_draft(&github, number),
+        Some(draft) => repo.save_review_draft(&place, number, &draft),
+        None => repo.drop_review_draft(&place, number),
     })
     .await
+}
+
+/// The files of merge request `number` ticked Viewed: GitLab keeps no ticks, so they are kept
+/// here.
+#[tauri::command]
+pub async fn gitlab_viewing(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
+    number: u64,
+) -> CommandResult<Viewing> {
+    let (repo, place) = reviewed_place(&app, &window, &session, &tokens, true).await?;
+    blocking(move || Ok(repo.viewed_here(&place, number))).await
+}
+
+/// Tick or untick a file of merge request `number` Viewed, here.
+#[tauri::command]
+pub async fn gitlab_set_viewed(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
+    number: u64,
+    path: String,
+    viewed: bool,
+) -> CommandResult<()> {
+    let (repo, place) = reviewed_place(&app, &window, &session, &tokens, true).await?;
+    blocking(move || repo.set_viewed_here(&place, number, &path, viewed)).await
 }

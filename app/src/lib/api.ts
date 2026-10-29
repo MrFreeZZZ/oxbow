@@ -61,6 +61,8 @@ import type {
   StackPreview,
   GitHubAccount,
   GitLabAccount,
+  GitLabNamespace,
+  GitLabPublish,
   GitLabSignInSetup,
   SignInSetup,
   DeviceCode,
@@ -304,6 +306,9 @@ export const api = {
   /** Sends `action-event`s while it runs; Stop is `stopAction`. Resolves to the repository's page. */
   /** `create: false`: the repository is on GitHub already, only origin and the push are left. */
   githubPublish: (path: string, publish: Publish, create = true) => invoke<string>("github_publish", { path, publish, create }),
+  gitlabNamespaces: (host: string) => invoke<GitLabNamespace[]>("gitlab_namespaces", { host }),
+  /** Makes the project on GitLab (unless `create` is false), adds origin and pushes. */
+  gitlabPublish: (path: string, host: string, publish: GitLabPublish, create = true) => invoke<string>("gitlab_publish", { path, host, publish, create }),
   githubRepo: () => invoke<GitHubRepo | null>("github_repo"),
   /** The GitLab projects the remotes point at, the default remote's first. */
   gitlabProjects: () => invoke<GitLabProject[]>("gitlab_projects"),
@@ -338,10 +343,12 @@ export const api = {
   githubViewing: (number: number) => invoke<Viewing>("github_viewing", { number }),
   /** One small call, sent quietly: no sheet, no Activity. */
   githubSend: (call: PullCall) => invoke<unknown>("github_send", { call }),
-  reviewDraft: (number: number) => invoke<ReviewDraft | null>("review_draft", { number }),
-  reviewDrafts: () => invoke<Record<string, ReviewDraft>>("review_drafts"),
+  reviewDraft: (number: number, gitlab = false) => invoke<ReviewDraft | null>("review_draft", { number, gitlab }),
+  reviewDrafts: (gitlab = false) => invoke<Record<string, ReviewDraft>>("review_drafts", { gitlab }),
   /** Keeps the draft; null puts it away, a copy kept for 30 days. */
-  saveReviewDraft: (number: number, draft: ReviewDraft | null) => invoke<void>("save_review_draft", { number, draft }),
+  saveReviewDraft: (number: number, draft: ReviewDraft | null, gitlab = false) => invoke<void>("save_review_draft", { number, draft, gitlab }),
+  gitlabViewing: (number: number) => invoke<Viewing>("gitlab_viewing", { number }),
+  gitlabSetViewed: (number: number, path: string, viewed: boolean) => invoke<void>("gitlab_set_viewed", { number, path, viewed }),
 };
 
 /** Keys of `settings.json`. */

@@ -1156,6 +1156,26 @@ export interface GitHubOwners {
   orgs: string[];
 }
 
+/** Where a new project on GitLab can go: the account's own namespace or a group's. */
+export interface GitLabNamespace {
+  id: number;
+  /** `anna`, `acme/platform`. */
+  fullPath: string;
+  kind: "user" | "group" | string;
+}
+
+export type GitLabVisibility = "private" | "internal" | "public";
+
+/** A project to make on GitLab and push to. */
+export interface GitLabPublish {
+  namespaceId: number;
+  namespace: string;
+  name: string;
+  visibility: GitLabVisibility;
+  description: string;
+  branch: string;
+}
+
 /** A repository to make on GitHub and push to. */
 export interface Publish {
   owner: string;
@@ -1826,12 +1846,12 @@ export type PullCall =
   | { kind: "autoMerge"; number: number; id: string; method?: MergeMethodName | null }
   | { kind: "viewed"; id: string; path: string; viewed: boolean }
   | { kind: "comment"; number: number; commit: string; spot: Spot; body: string }
-  | { kind: "reply"; number: number; to: number; body: string }
-  | { kind: "resolve"; thread: string; resolved: boolean }
+  | { kind: "reply"; number: number; to: number; body: string; thread?: string | null }
+  | { kind: "resolve"; thread: string; resolved: boolean; number?: number }
   | { kind: "startReview"; id: string; commit: string }
   | { kind: "reviewComment"; review?: string | null; spot: Spot; body: string }
   | { kind: "reviewReply"; review?: string | null; thread: string; body: string }
-  | { kind: "submitReview"; review?: string | null; verdict: Verdict; body: string }
+  | { kind: "submitReview"; review?: string | null; verdict: Verdict; body: string; revoke?: boolean }
   | { kind: "deleteReview"; review?: string | null };
 
 /** `RIGHT`: a line of the new file; `LEFT`: a deleted line, by its old number. */
@@ -1843,6 +1863,16 @@ export interface Spot {
   line: number;
   side: DiffSide;
   startLine?: number | null;
+  /** GitLab: both numbers of its last line and, for several, its first. */
+  lines?: { end: LinePair; start?: LinePair | null } | null;
+}
+
+/** A line of a diff by both files' counts at its row, as GitLab names it: an added line has the
+ *  old file's count there, a deleted one the new file's. */
+export interface LinePair {
+  old: number;
+  new: number;
+  kind: LineKind;
 }
 
 export type Verdict = "comment" | "approve" | "requestChanges";

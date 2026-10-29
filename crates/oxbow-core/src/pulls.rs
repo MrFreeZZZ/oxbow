@@ -753,6 +753,29 @@ pub struct Spot {
     pub side: String,
     #[serde(default)]
     pub start_line: Option<u32>,
+    /// Both numbers of its last and first line, as GitLab names a line of a diff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<SpotLines>,
+}
+
+/// The last line of a spot and, for several, its first, as GitLab numbers lines of a diff.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpotLines {
+    pub end: LinePair,
+    #[serde(default)]
+    pub start: Option<LinePair>,
+}
+
+/// A line of a diff by both files' counts at its row: an added line has the old file's next
+/// number, a deleted one the new file's next, as GitLab counts them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinePair {
+    pub old: u32,
+    pub new: u32,
+    /// `added`, `removed` or `context`.
+    pub kind: String,
 }
 
 /// What a merge request on GitLab is opened with besides a pull request's fields: people by
@@ -853,9 +876,22 @@ pub enum Call {
         body: String,
     },
     /// A reply, sent at once, to the thread comment `to` starts.
-    Reply { number: u64, to: u64, body: String },
+    Reply {
+        number: u64,
+        to: u64,
+        body: String,
+        /// GitLab: the discussion, by its id.
+        #[serde(default)]
+        thread: Option<String>,
+    },
     /// Resolve the thread with GraphQL id `thread`, or open it again.
-    Resolve { thread: String, resolved: bool },
+    Resolve {
+        thread: String,
+        resolved: bool,
+        /// GitLab: the merge request the discussion is on.
+        #[serde(default)]
+        number: u64,
+    },
     /// Start a review of `commit`, pending until it is submitted.
     StartReview { id: String, commit: String },
     /// A comment in a pending review.
@@ -878,6 +914,9 @@ pub enum Call {
         review: Option<String>,
         verdict: Verdict,
         body: String,
+        /// GitLab: take back the approval this account gave before.
+        #[serde(default)]
+        revoke: bool,
     },
     /// Throw away a pending review.
     DeleteReview {
@@ -1047,12 +1086,14 @@ impl Client {
                     Some(json),
                 )
             }
-            Call::Reply { number: n, to, body } => self.api_request(
+            Call::Reply {
+                number: n, to, body, ..
+            } => self.api_request(
                 "POST",
                 &repo.path(&format!("/pulls/{}/comments/{to}/replies", number(*n))),
                 Some(json!({ "body": body })),
             ),
-            Call::Resolve { thread, resolved } => {
+            Call::Resolve { thread, resolved, .. } => {
                 self.graphql_request(if *resolved { RESOLVE } else { UNRESOLVE }, json!({ "id": thread }))
             }
             Call::StartReview { id, commit } => {
@@ -1074,7 +1115,9 @@ impl Client {
                 REVIEW_REPLY,
                 json!({ "review": review_id(review), "thread": thread, "body": body }),
             ),
-            Call::SubmitReview { review, verdict, body } => self.graphql_request(
+            Call::SubmitReview {
+                review, verdict, body, ..
+            } => self.graphql_request(
                 SUBMIT_REVIEW,
                 json!({ "review": review_id(review), "event": verdict.graphql(), "body": body }),
             ),

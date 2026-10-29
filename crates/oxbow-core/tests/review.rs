@@ -6,7 +6,7 @@ mod support;
 use oxbow_core::Repo;
 use oxbow_core::github::Client;
 use oxbow_core::pulls::{Call, GitHubRepo, Spot, Verdict, started_review};
-use oxbow_core::review::{DraftComment, DraftReply, ReviewDraft, pull_ref};
+use oxbow_core::review::{DraftComment, DraftReply, ReviewDraft, Reviewed, pull_ref};
 use support::{Fixture, stand_in};
 
 fn acme() -> GitHubRepo {
@@ -63,6 +63,7 @@ fn spot(line: u32, start: Option<u32>) -> Spot {
         line,
         side: "RIGHT".into(),
         start_line: start,
+        lines: None,
     }
 }
 
@@ -98,6 +99,7 @@ fn a_review_is_sent_in_steps() {
             review: None,
             verdict: Verdict::RequestChanges,
             body: "Two things.".into(),
+            revoke: false,
         },
     ];
     assert!(
@@ -179,7 +181,7 @@ fn a_draft_lasts_until_it_is_put_away() {
     let mut me = Fixture::new();
     let head = me.commit("a.txt", "one\n", "Root");
     let repo = Repo::open(me.path()).unwrap();
-    assert_eq!(repo.review_draft(&acme(), 421).unwrap(), None);
+    assert_eq!(repo.review_draft(&Reviewed::github(&acme()), 421).unwrap(), None);
 
     let draft = ReviewDraft {
         commit: head.clone(),
@@ -199,17 +201,74 @@ fn a_draft_lasts_until_it_is_put_away() {
             time: 2,
         }],
     };
-    repo.save_review_draft(&acme(), 421, &draft).unwrap();
+    repo.save_review_draft(&Reviewed::github(&acme()), 421, &draft).unwrap();
     // Another Repo, as after a restart.
     let again = Repo::open(me.path()).unwrap();
-    assert_eq!(again.review_draft(&acme(), 421).unwrap().as_ref(), Some(&draft));
-    assert_eq!(again.review_drafts(&acme()).len(), 1);
+    assert_eq!(
+        again.review_draft(&Reviewed::github(&acme()), 421).unwrap().as_ref(),
+        Some(&draft)
+    );
+    assert_eq!(again.review_drafts(&Reviewed::github(&acme())).len(), 1);
     assert_eq!(me.git(&["rev-parse", &pull_ref(421, "reviewed")]), head);
 
-    again.drop_review_draft(&acme(), 421).unwrap();
-    assert_eq!(again.review_draft(&acme(), 421).unwrap(), None);
+    again.drop_review_draft(&Reviewed::github(&acme()), 421).unwrap();
+    assert_eq!(again.review_draft(&Reviewed::github(&acme()), 421).unwrap(), None);
     assert!(me.git(&["for-each-ref", "refs/oxbow/"]).is_empty());
     let removed = me.path().join(".git/oxbow/removed");
     let kept = std::fs::read_dir(removed).unwrap().count();
     assert_eq!(kept, 1);
+}
+
+fn team_app() -> oxbow_core::GitLabProject {
+    oxbow_core::GitLabProject {
+        remote: "origin".into(),
+        host: "git.corp".into(),
+        path: "team/app".into(),
+        web_url: "https://git.corp/team/app".into(),
+    }
+}
+
+#[test]
+fn a_merge_requests_draft_and_viewed_ticks_stay_here() {
+    let mut me = Fixture::new();
+    let head = me.commit("a.txt", "one\n", "Root");
+    me.commit("b.txt", "two\n", "Second");
+    let head2 = me.git(&["rev-parse", "HEAD"]);
+    me.git(&["update-ref", "refs/oxbow/mr/7/head", &head2]);
+    let repo = Repo::open(me.path()).unwrap();
+    let lab = Reviewed::gitlab(&team_app());
+
+    let draft = ReviewDraft {
+        commit: head.clone(),
+        body: String::new(),
+        verdict: None,
+        comments: Vec::new(),
+        replies: Vec::new(),
+    };
+    repo.save_review_draft(&lab, 7, &draft).unwrap();
+    assert!(me.path().join(".git/oxbow/reviews/gitlab-team-app-7.json").exists());
+    assert_eq!(me.git(&["rev-parse", "refs/oxbow/mr/7/reviewed"]), head);
+    assert_eq!(repo.review_drafts(&lab).len(), 1);
+    // A pull request of the same number on GitHub has a draft of its own.
+    assert!(repo.review_drafts(&Reviewed::github(&acme())).is_empty());
+
+    repo.set_viewed_here(&lab, 7, "a.txt", true).unwrap();
+    repo.set_viewed_here(&lab, 7, "b.txt", true).unwrap();
+    repo.set_viewed_here(&lab, 7, "gone.txt", true).unwrap();
+    // The viewed file doesn't read as a draft.
+    assert_eq!(repo.review_drafts(&lab).len(), 1);
+    let v = repo.viewed_here(&lab, 7);
+    assert_eq!(v.viewed, ["a.txt", "b.txt", "gone.txt"]);
+    assert!(v.dismissed.is_empty());
+
+    // The author pushes a change to b.txt and deletes nothing: b.txt is unticked, as changed.
+    me.commit("b.txt", "two, changed\n", "Third");
+    let head3 = me.git(&["rev-parse", "HEAD"]);
+    me.git(&["update-ref", "refs/oxbow/mr/7/head", &head3]);
+    let v = repo.viewed_here(&lab, 7);
+    assert_eq!(v.viewed, ["a.txt", "gone.txt"]);
+    assert_eq!(v.dismissed, ["b.txt"]);
+
+    repo.set_viewed_here(&lab, 7, "a.txt", false).unwrap();
+    assert_eq!(repo.viewed_here(&lab, 7).viewed, ["gone.txt"]);
 }
