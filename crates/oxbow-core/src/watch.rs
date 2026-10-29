@@ -58,9 +58,6 @@ pub struct Watch {
     pub files: bool,
     /// Changes noticed so far, see [`Watch::seen`].
     seen: Arc<AtomicU64>,
-    /// While it is here, the Undo snapshots of the repository trust the count: see
-    /// `Repo::snapshot_before`.
-    _alive: Arc<()>,
 }
 
 impl Watch {
@@ -124,15 +121,10 @@ impl Repo {
             .name("oxbow-watch".into())
             .spawn(move || seen.run(rx, &mut on_change))
             .map_err(|err| Error::Git(err.to_string()))?;
-        let alive = Arc::new(());
-        if files {
-            self.follow_watch(Arc::downgrade(&alive), counted.clone());
-        }
         Ok(Watch {
             _watcher: watcher,
             files,
             seen: counted,
-            _alive: alive,
         })
     }
 }

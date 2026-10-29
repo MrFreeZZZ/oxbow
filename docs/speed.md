@@ -83,12 +83,9 @@ turns, four times each on a busier machine than the table above:
 | Files edited earlier, staged one after another | 51–60 ms, 18 git | 27–29 ms, 5 git |
 | `git add` alone | 5 ms | 5 ms |
 
-- **A step that only stages reuses the last snapshot** while the watch has counted no change of
-  files or branches since: the files, HEAD, the refs and the stash are as it has them. The index
-  is written as a tree again only when it stages something else than then, which is told by
-  reading it in Oxbow (`oplog.rs`, `snapshot_before`). Any other step, or a repository whose
-  files aren't watched, takes a whole snapshot, and Discard does so always: what it throws away
-  must be the file as it is.
+- **A step that only stages reused the last snapshot** while the watch had counted no change of
+  files or branches since. Taken back the same day, see below: a file saved a moment before the
+  step was not counted yet, and Undo put back the older text.
 - **The Operation Log's own ref is no change for the watch**: it moves with every step, so each
   Stage counted as a change and the next one read every file again (`watch.rs`).
 - **HEAD, the refs and the stash are read in Oxbow**, not by 4 git processes; writing the step
@@ -99,6 +96,26 @@ turns, four times each on a busier machine than the table above:
 
 What a step after an edit still costs is git processes that write: the tree of the index and of
 the files, `git add` itself, the tree of the index after it, and the step's tree, commit and ref.
+
+Then the snapshot before a stage is read whole again (the recheck of the audit, R01). The watch
+counts a change only once the system has told it, a moment after the file is written: a file
+saved just before Stage wasn't counted yet, the step reused the snapshot without it, and Undo of
+that Stage wrote the file back as it was before the save, or deleted a file made just then. No
+count of what the watch heard can say the files are as they were, so every step reads them
+(`perform.rs`); the tests in `tests/oplog.rs` save and stage with no wait between. The snapshot
+after a stage still takes the files from the one before it: staging writes no file. Old (40e7a47)
+and new, the same example in turns, four times each (cloud, Xeon, 4 cores, 2,000 files):
+
+| Stage with Undo | Old | New |
+|---|---|---|
+| A file just edited, not watched | 31–37 ms, 9 git | 29–39 ms, 9 git |
+| A file just edited, seen by the watch | 31–38 ms, 9 git | 29–40 ms, 9 git |
+| Files edited earlier, staged one after another | 21–25 ms, 5 git | 32–42 ms, 9 git |
+| `git add` alone | 4–5 ms | 4–5 ms |
+
+Staging one file after another costs as much as staging right after an edit again, about 10 ms
+more than with the reuse; the rest of the gain of that day (3 git to write a step down instead
+of 8, HEAD and refs read in Oxbow) stays.
 
 ## Local History (29 October)
 

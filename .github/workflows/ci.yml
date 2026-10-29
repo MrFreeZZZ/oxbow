@@ -2,10 +2,14 @@ name: CI
 
 # Every pull request runs the checks on Linux: format, lint, tests and the type check, the same
 # scripts/check.sh as before a push. They run again on each merge to main, beside the macOS build,
-# so the very commit an app is built from has checks of its own: a release is made only from one
-# whose checks are green. The app is built for macOS only, once per merge to main (or when run by
-# hand from the Actions tab); beside it, without holding it up, the core's and the shell's tests
-# run on macOS too, for what only a Mac's disk and git do differently.
+# so the very commit an app is built from has checks of its own. The app is built for macOS only,
+# once per merge to main (or when run by hand from the Actions tab); beside it the core's and the
+# shell's tests run on macOS too, for what only a Mac's disk and git do differently.
+#
+# The macOS build waits for neither, on purpose: the app comes in about the same time as the
+# checks instead of after them. So its artifact is an unchecked build until Checks and Tests
+# (macOS) of the same run are green; the job's name and the run's summary say so, and a release
+# is made only from a run whose jobs are all green.
 on:
   pull_request:
   push:
@@ -55,7 +59,7 @@ jobs:
         working-directory: app
 
   app:
-    name: App (macOS)
+    name: App (macOS, unchecked until the checks are green)
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
     steps:
@@ -82,6 +86,10 @@ jobs:
         with:
           name: oxbow-macOS
           path: target/release/bundle/macos/*.app
+      - name: Say what the build is
+        run: |
+          echo "The oxbow-macOS artifact is built beside the checks, not after them: it counts as" >> "$GITHUB_STEP_SUMMARY"
+          echo "checked only when Checks and Tests (macOS) of this run are green too." >> "$GITHUB_STEP_SUMMARY"
 
   macos-tests:
     name: Tests (macOS)
