@@ -1,0 +1,218 @@
+{
+  "Blame": [
+    "command",
+    "commits",
+    "cut",
+    "ignoreRevs",
+    "lines",
+    "path",
+    "rev"
+  ],
+  "BlameCommit": [
+    "authorEmail",
+    "authorName",
+    "boundary",
+    "id",
+    "path",
+    "summary",
+    "time"
+  ],
+  "CommitDetail": [
+    "author",
+    "body",
+    "committer",
+    "counted",
+    "countedFrom",
+    "files",
+    "id",
+    "parents",
+    "shallowEnd",
+    "summary"
+  ],
+  "DiffLine": [
+    "kind",
+    "newLine",
+    "oldLine",
+    "text",
+    "words"
+  ],
+  "FileChange": [
+    "additions",
+    "binary",
+    "deletions",
+    "oldPath",
+    "path",
+    "status"
+  ],
+  "FileCheck": [
+    "notes",
+    "problems"
+  ],
+  "FileCommit": [
+    "additions",
+    "authorEmail",
+    "authorName",
+    "deletions",
+    "id",
+    "oldPath",
+    "parents",
+    "path",
+    "status",
+    "summary",
+    "time"
+  ],
+  "FileDiff": [
+    "file",
+    "hunks",
+    "limited",
+    "new",
+    "old",
+    "tooLarge"
+  ],
+  "FileHistory": [
+    "commits",
+    "elsewhere",
+    "more",
+    "path"
+  ],
+  "FileProblem": [
+    "fix",
+    "from",
+    "level",
+    "line",
+    "message",
+    "to"
+  ],
+  "HeadInfo": [
+    "branch",
+    "commit"
+  ],
+  "History": [
+    "bisect",
+    "changes",
+    "changesStamp",
+    "defaultRemote",
+    "fetched",
+    "focus",
+    "head",
+    "key",
+    "leadIns",
+    "loaded",
+    "localTags",
+    "operation",
+    "pieces",
+    "previousBranch",
+    "problems",
+    "protected",
+    "reads",
+    "refs",
+    "remotes",
+    "rows",
+    "runs",
+    "same",
+    "shallow",
+    "snapshot",
+    "stashes",
+    "submodules",
+    "tracking",
+    "truncated",
+    "trunk",
+    "trunkTipRow",
+    "unchanged",
+    "worktrees"
+  ],
+  "HistoryRow": [
+    "authorEmail",
+    "authorName",
+    "graph",
+    "id",
+    "labels",
+    "noBranch",
+    "parents",
+    "summary",
+    "time",
+    "unpushed",
+    "worktree"
+  ],
+  "Hunk": [
+    "check",
+    "header",
+    "lines",
+    "newLines",
+    "newStart",
+    "oldLines",
+    "oldStart",
+    "runs"
+  ],
+  "LineNote": [
+    "level",
+    "line",
+    "text"
+  ],
+  "LocalVersion": [
+    "additions",
+    "at",
+    "base",
+    "binary",
+    "deletions",
+    "fromHead",
+    "gone",
+    "id",
+    "kept",
+    "path",
+    "size"
+  ],
+  "OpEntry": [
+    "after",
+    "before",
+    "detail",
+    "expires",
+    "failed",
+    "headAfter",
+    "headBefore",
+    "id",
+    "kind",
+    "refs",
+    "rewrites",
+    "stash",
+    "time",
+    "title"
+  ],
+  "Person": [
+    "email",
+    "name",
+    "offset",
+    "time"
+  ],
+  "RefInfo": [
+    "kind",
+    "name",
+    "remote",
+    "target",
+    "tracking"
+  ],
+  "RepoFile": [
+    "exists",
+    "kind",
+    "path",
+    "problem",
+    "rules",
+    "uncommitted"
+  ],
+  "StashInfo": [
+    "base",
+    "branch",
+    "id",
+    "index",
+    "message",
+    "time",
+    "title",
+    "untracked"
+  ],
+  "WorkingTree": [
+    "conflicted",
+    "counted",
+    "staged",
+    "unstaged"
+  ]
+}
