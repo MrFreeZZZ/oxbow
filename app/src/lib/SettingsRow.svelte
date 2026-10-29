@@ -52,6 +52,12 @@
       <svg class="icon" viewBox="0 0 16 16"><path d={GEAR} /></svg>
     </button>
   {/if}
+  {#if row.file}
+    {@const file = row.file()}
+    <span class="file" class:missing={file.missing} aria-hidden="true">
+      <svg class="icon" viewBox="0 0 16 16"><path d={file.missing ? "M8 4.5v7M4.5 8h7" : "M4 1.8h5l3 3v9.4H4zM9 1.8v3h3"} /></svg>
+    </span>
+  {/if}
   {#if row.image?.()}<img class="avatar" src={row.image()} alt="" />{/if}
   <span class="text" class:off>
     <span class="name" class:mono={row.mono}>{text(row.label)}</span>
@@ -195,6 +201,28 @@
     border-radius: var(--radius-pill);
     flex-shrink: 0;
     background: var(--field);
+  }
+
+  .file {
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    background: var(--field);
+    color: var(--icon);
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+  }
+
+  .file .icon {
+    width: 14px;
+    height: 14px;
+  }
+
+  .file.missing {
+    background: none;
+    border: 1px dashed var(--glass-border);
+    color: var(--text2);
   }
 
   .chip {

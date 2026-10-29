@@ -351,7 +351,7 @@ impl Repo {
     /// The version of git-lfs, `None` when it is not installed. Once found it is not asked again
     /// while the app runs: starting git-lfs on every reload costs more than the rest of the status.
     /// Not having it is asked again each time, so installing it in a terminal shows at once.
-    fn lfs_version(&self) -> Option<String> {
+    pub(crate) fn lfs_version(&self) -> Option<String> {
         static FOUND: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
         if let Some(version) = FOUND.lock().ok().and_then(|found| found.clone()) {
             return Some(version);

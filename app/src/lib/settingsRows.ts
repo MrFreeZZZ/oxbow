@@ -37,6 +37,8 @@ export type Row = {
   badge?: () => string | null;
   /** A round picture before the label, e.g. an account's avatar. */
   image?: () => string | null;
+  /** A file's picture before the label; `missing` draws it dashed with a plus. */
+  file?: () => { missing: boolean };
   control?: Control;
   setting?: Setting;
   /** Greyed out while another setting makes this one irrelevant. */
@@ -45,7 +47,16 @@ export type Row = {
   more?: () => MenuEntry[];
 };
 export type Group = { title?: string; foot?: Text; rows: Row[] };
-export type Section = { id: string; label: string; color: string; icon: string; groups: () => Group[]; head?: string };
+export type Section = {
+  id: string;
+  label: string;
+  color: string;
+  icon: string;
+  groups: () => Group[];
+  head?: string;
+  /** Drawn in the sidebar under the section before it, e.g. Repository Files under the repository. */
+  child?: boolean;
+};
 
 export const text = (t: Text | undefined) => (typeof t === "function" ? t() : (t ?? ""));
 export const opts = (...values: (string | number)[]): Option[] => values.map((value) => ({ value, label: String(value) }));

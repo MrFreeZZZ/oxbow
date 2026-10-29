@@ -15,6 +15,7 @@ mod outside;
 mod preferences;
 mod pulls;
 mod recent;
+mod repo_files;
 mod repos;
 mod session;
 mod settings;
@@ -178,6 +179,10 @@ fn main() {
             git_config::repo_settings,
             git_config::set_git_config,
             git_config::set_commit_checks,
+            repo_files::repo_files,
+            repo_files::repo_file_text,
+            repo_files::check_repo_file,
+            repo_files::save_repo_file,
             actions::fetch_in_background,
             actions::stop_fetch,
             actions::public_key,

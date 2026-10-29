@@ -615,6 +615,8 @@ export type Action =
   | { kind: "unstageHunk"; path: string; header: string; check: string; lines?: number[] | null }
   | { kind: "discardHunk"; path: string; header: string; check: string; lines?: number[] | null }
   | { kind: "ignore"; pattern: string; untrack?: string }
+  /** Stop tracking `paths`: they leave the index and stay on disk. */
+  | { kind: "untrack"; paths: string[] }
   /** `changelist`: commit what that changelist holds, not the staged changes. */
   | { kind: "commit"; message: string; amend: boolean; noVerify?: boolean; allowSecrets?: boolean; skipChecks?: boolean; signOff?: boolean; changelist?: string | null }
   /** What changelist `list` (null: Unstaged) holds of `paths`: whole files, and its own changes of a shared one. */
@@ -1320,6 +1322,63 @@ export interface RepoSettings {
   restricted: boolean;
   /** Protected branches: names and patterns, and whether they are the default list (not set). */
   protected: { branches: string[]; default: boolean };
+}
+
+/** Settings › Repository Files: one of the shared files committed with the repository. */
+export type RepoFileKind = "gitignore" | "gitattributes" | "mailmap" | "blameIgnoreRevs" | "lfsconfig" | "gitmodules" | "codeowners" | "editorconfig";
+
+export interface RepoFile {
+  kind: RepoFileKind;
+  /** From the top of the repository. */
+  path: string;
+  exists: boolean;
+  /** Lines that say something: not blank, not a comment. */
+  rules: number;
+  /** Changed since the last commit, or new and not committed. */
+  uncommitted: boolean;
+  /** The first error in it. */
+  problem: FileProblem | null;
+}
+
+export interface RepoFiles {
+  /** The remotes are on GitLab, which reads CODEOWNERS from other places. */
+  gitlab: boolean;
+  files: RepoFile[];
+}
+
+/** A file's text, or what a new one starts with. */
+export interface RepoFileText {
+  kind: RepoFileKind;
+  path: string;
+  exists: boolean;
+  text: string;
+  /** Why it can only be read, e.g. .gitmodules. */
+  readOnly: string | null;
+}
+
+export type FileFix = { kind: "replace"; label: string; line: number; text: string | null } | { kind: "untrack"; label: string; paths: string[] };
+
+/** Something wrong in a line: `from`..`to` in UTF-16 units; line 0 is the whole file. An error keeps it from being saved. */
+export interface FileProblem {
+  line: number;
+  from: number;
+  to: number;
+  level: "error" | "warn";
+  /** Plain words, `code` in backticks. */
+  message: string;
+  fix: FileFix | null;
+}
+
+/** The gray words beside a line: what it matches, the commit it names. */
+export interface LineNote {
+  line: number;
+  text: string;
+  level: "error" | "warn" | null;
+}
+
+export interface FileCheck {
+  problems: FileProblem[];
+  notes: LineNote[];
 }
 
 /** A command of the user's own that runs before each commit, kept as `oxbow.check` in .git/config. */

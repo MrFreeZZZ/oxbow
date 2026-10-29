@@ -415,7 +415,7 @@ fn parse_gitlab_owners(text: &str) -> Vec<Vec<(String, Vec<String>)>> {
 }
 
 /// Whether a CODEOWNERS pattern (gitignore rules) covers `path`.
-fn owner_pattern_matches(pattern: &str, path: &str) -> bool {
+pub(crate) fn owner_pattern_matches(pattern: &str, path: &str) -> bool {
     let anchored = pattern.starts_with('/') || pattern.trim_end_matches('/').contains('/');
     let directory = pattern.ends_with('/');
     // `docs/*` is the files right in docs, not deeper ones (GitHub's own example).
