@@ -3,7 +3,8 @@
   // and replies. The summary and verdict stay with the draft while it waits.
   import type { ReviewSession } from "./review.svelte";
   import type { Verdict } from "./types";
-  import { countWords, submitProblem } from "./reviewDraft";
+  import { approvedBy, asksChanges, countWords, submitProblem } from "./reviewDraft";
+  import { github } from "./github.svelte";
   import { shortId } from "./format";
   import { api } from "./api";
 
@@ -18,14 +19,21 @@
     place = { top: r.bottom + 6, left: Math.max(16, Math.min(r.right - WIDTH, window.innerWidth - WIDTH - 16)) };
   });
 
-  const VERDICTS: { id: Verdict; label: string; text: string }[] = [
+  const lab = $derived(session.lab);
+  /** On GitLab an approval stays: it can't be given twice, and Request Changes takes it back. */
+  const approved = $derived(lab && approvedBy(session.pr, github.mrMe));
+  const VERDICTS = $derived<{ id: Verdict; label: string; text: string }[]>([
     { id: "comment", label: "Comment", text: "Feedback, without a verdict" },
-    { id: "approve", label: "Approve", text: "Fine to merge as it is" },
-    { id: "requestChanges", label: "Request Changes", text: "Needs changes before it merges" },
-  ];
+    { id: "approve", label: "Approve", text: approved ? "You approved it already" : "Fine to merge as it is" },
+    // GitLab ends a review with it from 17.
+    ...(!lab || asksChanges(github.mrVersion)
+      ? [{ id: "requestChanges" as Verdict, label: "Request Changes", text: approved ? "Needs changes; takes back your approval" : "Needs changes before it merges" }]
+      : []),
+  ]);
 
   const draft = $derived(session.draft);
-  const verdict = $derived<Verdict>(draft?.verdict ?? "comment");
+  // A verdict this GitLab doesn't take, kept from before, goes as a comment.
+  const verdict = $derived<Verdict>(VERDICTS.find((v) => v.id === draft?.verdict)?.id ?? "comment");
   const body = $derived(draft?.body ?? "");
   const what = $derived(countWords(draft?.comments.length ?? 0, draft?.replies.length ?? 0));
   const moved = $derived(!!draft && draft.commit !== session.pr.headSha);
@@ -34,7 +42,9 @@
   const problem = $derived(
     session.pending
       ? `A review you started on GitHub${session.pending.comments ? ` with ${countWords(session.pending.comments, 0)}` : ""} is waiting there: send or discard it on GitHub first.`
-      : submitProblem(verdict, body, draft, mine),
+      : approved && verdict === "approve"
+        ? "You approved it already."
+        : submitProblem(verdict, body, draft, mine, lab),
   );
 
   let box = $state<HTMLTextAreaElement>();
@@ -49,8 +59,8 @@
   <textarea bind:this={box} rows="3" placeholder="Sum it up (optional)" value={body} oninput={(e) => session.setBody(e.currentTarget.value)}></textarea>
   <div class="verdicts" role="radiogroup" aria-label="Verdict">
     {#each VERDICTS as v (v.id)}
-      {@const off = mine && v.id !== "comment"}
-      <button class="verdict" role="radio" aria-checked={verdict === v.id} disabled={off} title={off ? "Not on your own pull request" : undefined} onclick={() => session.setVerdict(v.id)}>
+      {@const off = (mine && v.id !== "comment") || (approved && v.id === "approve")}
+      <button class="verdict" role="radio" aria-checked={verdict === v.id} disabled={off} title={off ? (mine ? `Not on your own ${session.words.noun}` : "You approved it already") : undefined} onclick={() => session.setVerdict(v.id)}>
         <span class="radio" class:on={verdict === v.id}></span>
         <span class="words"><span class="label">{v.label}</span><span class="text">{v.text}</span></span>
       </button>
@@ -63,7 +73,7 @@
         {#if session.pending}
           {problem}
         {:else if what}
-          <b>{what}</b> go with it, on lines of {shortId(draft!.commit)}{moved ? ", the version you read. GitHub marks the ones whose lines changed since as outdated." : "."}
+          <b>{what}</b> go with it, on lines of {shortId(draft!.commit)}{moved ? `, the version you read. ${session.words.name} marks the ones whose lines changed since as outdated.` : "."}
         {:else if problem}
           {problem}
         {:else}

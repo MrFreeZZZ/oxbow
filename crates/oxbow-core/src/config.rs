@@ -21,6 +21,7 @@ static PROGRAM: RwLock<Option<PathBuf>> = RwLock::new(None);
 static ENGLISH: AtomicBool = AtomicBool::new(true);
 static HOOKS: AtomicBool = AtomicBool::new(true);
 static GITHUB_TOKEN: RwLock<Option<TokenSource>> = RwLock::new(None);
+static GITLAB_TOKENS: RwLock<Option<GitLabTokens>> = RwLock::new(None);
 
 /// Where the GitHub sign-in's token comes from, asked only when a command talks to a remote.
 pub type TokenSource = Box<dyn Fn() -> Option<String> + Send + Sync>;
@@ -36,45 +37,94 @@ pub fn set_github_token(source: Option<TokenSource>) {
 /// list of running processes; on `store` and `erase` it does nothing.
 const GITHUB_HELPER: &str = "credential.https://github.com.helper=!f() { if [ \"$1\" = get ]; then echo username=x-access-token; echo \"password=$OXBOW_GITHUB_TOKEN\"; fi; }; f";
 
+/// The GitLab sign-ins' tokens: given a server's address as a remote's URL starts
+/// (`https://gitlab.example.com`), the token of the account signed in there.
+pub type GitLabTokens = Box<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
+/// Lend git the GitLab sign-ins for HTTPS remotes on their servers, as [`set_github_token`]
+/// does for GitHub: the user's own helpers are asked first. `None` stops.
+pub fn set_gitlab_tokens(source: Option<GitLabTokens>) {
+    *GITLAB_TOKENS.write().expect("gitlab token lock") = source;
+}
+
+/// GitLab's helper, for `credential.<server>.helper`: a token is the password of `oauth2`.
+const GITLAB_HELPER: &str =
+    "!f() { if [ \"$1\" = get ]; then echo username=oauth2; echo \"password=$OXBOW_GITLAB_TOKEN\"; fi; }; f";
+
 /// Add the GitHub helper to a command that talks to a remote, when signed in and the remote can
-/// be github.com over HTTPS. Commands for other servers don't get the token: their hooks, SSH
-/// commands and helpers have no business seeing it.
-pub(crate) fn lend_github_token(git: &mut Command, dir: &Path, args: &[String]) {
-    let lock = GITHUB_TOKEN.read().expect("github token lock");
-    let Some(source) = lock.as_ref() else { return };
-    if !reaches_github(dir, args) {
+/// be github.com over HTTPS, and GitLab's for a remote on a GitLab server signed in to. Commands
+/// for other servers don't get a token: their hooks, SSH commands and helpers have no business
+/// seeing it.
+pub(crate) fn lend_tokens(git: &mut Command, dir: &Path, args: &[String]) {
+    let github = GITHUB_TOKEN.read().expect("github token lock");
+    let gitlab = GITLAB_TOKENS.read().expect("gitlab token lock");
+    if github.is_none() && gitlab.is_none() {
         return;
     }
-    if let Some(token) = source() {
+    let urls = reached_urls(dir, args);
+    if let Some(source) = github.as_ref()
+        && urls.iter().any(|url| is_github_https(url))
+        && let Some(token) = source()
+    {
         git.args(["-c", GITHUB_HELPER]).env("OXBOW_GITHUB_TOKEN", token);
+    }
+    if let Some(source) = gitlab.as_ref() {
+        let lent = urls
+            .iter()
+            .filter_map(|url| web_base(url))
+            .filter(|base| !is_github_https(base))
+            .find_map(|base| source(&base).map(|token| (base, token)));
+        if let Some((base, token)) = lent {
+            git.args(["-c", &format!("credential.{base}.helper={GITLAB_HELPER}")])
+                .env("OXBOW_GITLAB_TOKEN", token);
+        }
     }
 }
 
-/// Whether a command with these arguments (those after its subcommand) may reach github.com over
-/// HTTPS: the URL or remote it names says so; naming neither (`git pull`, `git submodule
-/// update`), any remote of the repository or of its submodules does.
-fn reaches_github(dir: &Path, args: &[String]) -> bool {
+/// The URLs a command with these arguments (those after its subcommand) may reach: the URL or
+/// remote it names; naming neither (`git pull`, `git submodule update`), every remote of the
+/// repository and of its submodules.
+fn reached_urls(dir: &Path, args: &[String]) -> Vec<String> {
     let named: Vec<&str> = args
         .iter()
         .map(String::as_str)
         .filter(|a| !a.starts_with('-'))
         .collect();
     if let Some(url) = named.iter().find(|a| a.contains("://")) {
-        return is_github_https(url);
+        return vec![(*url).to_owned()];
     }
     let remotes = remote_urls(dir, None);
-    let chosen: Vec<&str> = remotes
+    let chosen: Vec<String> = remotes
         .iter()
         .filter(|(name, _)| named.contains(&name.as_str()))
-        .map(|(_, url)| url.as_str())
+        .map(|(_, url)| url.clone())
         .collect();
     if !chosen.is_empty() {
-        return chosen.into_iter().any(is_github_https);
+        return chosen;
     }
-    remotes.iter().any(|(_, url)| is_github_https(url))
-        || remote_urls(dir, Some(".gitmodules"))
-            .iter()
-            .any(|(_, url)| is_github_https(url))
+    remotes
+        .into_iter()
+        .chain(remote_urls(dir, Some(".gitmodules")))
+        .map(|(_, url)| url)
+        .collect()
+}
+
+#[cfg(test)]
+fn reaches_github(dir: &Path, args: &[String]) -> bool {
+    reached_urls(dir, args).iter().any(|url| is_github_https(url))
+}
+
+/// `https://host` (or `http://`) of an HTTP remote URL, without a user name or path: where
+/// git asks credentials for.
+fn web_base(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let scheme = scheme.to_ascii_lowercase();
+    if scheme != "https" && scheme != "http" {
+        return None;
+    }
+    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
+    (!host.is_empty()).then(|| format!("{scheme}://{}", host.to_ascii_lowercase()))
 }
 
 /// `https://github.com/…`, also with a user name before the host.
@@ -630,5 +680,75 @@ mod tests {
         let text = String::from_utf8_lossy(&output.stdout);
         assert!(text.contains("username=x-access-token"), "{text}");
         assert!(text.contains("password=gho_secret"), "{text}");
+    }
+
+    #[test]
+    fn a_gitlab_sign_in_goes_only_to_its_server() {
+        assert_eq!(
+            web_base("https://anna@Git.Corp:8443/team/app.git").as_deref(),
+            Some("https://git.corp:8443")
+        );
+        assert_eq!(web_base("git@git.corp:team/app.git"), None);
+        assert_eq!(web_base("ssh://git@git.corp/team/app.git"), None);
+
+        let dir = tempfile::tempdir().unwrap();
+        let init = |args: &[&str]| {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(dir.path())
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        };
+        init(&["init", "-q"]);
+        init(&[
+            "remote",
+            "add",
+            "origin",
+            "http://gitlab.acme.test:8929/acme/billing.git",
+        ]);
+        init(&["remote", "add", "other", "https://git.example.com/a/b.git"]);
+        set_gitlab_tokens(Some(Box::new(|base: &str| {
+            (base == "http://gitlab.acme.test:8929").then(|| "glpat-secret".to_owned())
+        })));
+        let lent = |args: &[&str]| {
+            let mut git = Command::new("git");
+            lend_tokens(
+                &mut git,
+                dir.path(),
+                &args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>(),
+            );
+            git
+        };
+        let other = lent(&["other", "main"]);
+        let origin = lent(&["-u", "origin", "main"]);
+        set_gitlab_tokens(None);
+        assert_eq!(other.get_args().count(), 0);
+        let args: Vec<String> = origin.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(args.len(), 2);
+        assert!(args[1].starts_with("credential.http://gitlab.acme.test:8929.helper=!f()"));
+
+        // The helper answers git for that server.
+        let mut git = Command::new("git");
+        git.args(["-c", "credential.helper=", "-c", &args[1], "credential", "fill"])
+            .env("OXBOW_GITLAB_TOKEN", "glpat-secret")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped());
+        let mut child = git.spawn().expect("git runs");
+        use std::io::Write;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"protocol=http\nhost=gitlab.acme.test:8929\n\n")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.contains("username=oauth2"), "{text}");
+        assert!(text.contains("password=glpat-secret"), "{text}");
     }
 }

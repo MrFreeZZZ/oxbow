@@ -150,16 +150,15 @@
   $effect(() => {
     const p = pr;
     untrack(() => {
-      // Reviewing a merge request comes with GitLab's review calls.
-      if (!p || p.gitlab) review = null;
-      else if (review?.number === p.number) review.pr = p;
-      else review = new ReviewSession(p, run, () => load(p.number));
+      if (!p) review = null;
+      else if (review?.number === p.number && review.lab === !!p.gitlab) review.pr = p;
+      else review = new ReviewSession(p, run, () => load(p.number), p.gitlab ? "gitlab" : "github");
     });
   });
   let finishAt = $state<HTMLButtonElement>();
   const mine = $derived(!!pr && !!signedIn && pr.author.login === signedIn);
   /** Finish Review shows on someone else's open pull request, and on one's own with comments to send. */
-  const reviewable = $derived(!!review && !!github.me && pr?.state === "open" && (!mine || review.count > 0));
+  const reviewable = $derived(!!review && !!signedIn && pr?.state === "open" && (!mine || review.count > 0));
 
   async function load(number: number) {
     loading = !pr || pr.number !== number;
@@ -938,10 +937,8 @@
           style:--on-bg={tint(colorOf(pr.head))} style:--on-fg={plate(colorOf(pr.head))}>Conversation</button>
         <button role="tab" class="tab" class:on={tab === "commits"} aria-selected={tab === "commits"} onclick={() => (tab = "commits")}
           style:--on-bg={tint(colorOf(pr.head))} style:--on-fg={plate(colorOf(pr.head))}>Commits {pr.commits.length}</button>
-        {#if !pr.gitlab}
-          <button role="tab" class="tab" class:on={tab === "files"} aria-selected={tab === "files"} onclick={() => (tab = "files")}
-            style:--on-bg={tint(colorOf(pr.head))} style:--on-fg={plate(colorOf(pr.head))}>Files {pr.changedFiles}</button>
-        {/if}
+        <button role="tab" class="tab" class:on={tab === "files"} aria-selected={tab === "files"} onclick={() => (tab = "files")}
+          style:--on-bg={tint(colorOf(pr.head))} style:--on-fg={plate(colorOf(pr.head))}>Files {pr.changedFiles}</button>
         {#if error}<span class="load-error">{error}</span>{/if}
         {#if rewrite || worktreeLabel || (tab === "files" && review)}<span class="grow"></span>{/if}
         {#if tab === "files" && review}
@@ -967,7 +964,7 @@
       </div>
 
       {#if tab === "files"}
-        {#if review}<PullFiles session={review} me={github.me} color={colorOf(pr.head)} {version} />{/if}
+        {#if review}<PullFiles session={review} me={signedIn} color={colorOf(pr.head)} {version} />{/if}
       {:else}
       <div class="scroll">
         {#if tab === "conversation"}
@@ -1021,8 +1018,8 @@
                     <div class="card-head">
                       <span class="who">{first.author.login}</span><span class="ellipsis">{e.path ? `commented on ${e.path}${e.line ? ` ${spotLabel(e)}` : ""}` : "started a thread"}</span><span class="when">· {relativeTime(e.time)}</span>
                       <span class="grow"></span>
-                      {#if review && e.node && pr.state === "open" && github.me}
-                        <button class="button mini text" onclick={() => review?.resolve(e)} title={e.resolved ? "Open the thread again" : "Fold the thread away on GitHub"}>{e.resolved ? "Unresolve" : "Resolve"}</button>
+                      {#if review && e.node && pr.state === "open" && signedIn}
+                        <button class="button mini text" onclick={() => review?.resolve(e)} title={e.resolved ? "Open the thread again" : `Fold the thread away on ${w.name}`}>{e.resolved ? "Unresolve" : "Resolve"}</button>
                       {/if}
                       {#if e.resolved !== null || e.outdated}
                         {@const [bg, fg] = toneOf(e.resolved ? "grey" : e.outdated ? "grey" : "warn")}
@@ -1176,7 +1173,7 @@
   </section>
 
   <aside class="box" aria-label="Merge" class:hidden={!!pr && tab === "files"}>
-    {#if pr && pr.state === "open" && tab !== "files" && review && reviewable && !mine && (review.count > 0 || (!!github.me && pr.requested.includes(github.me)))}
+    {#if pr && pr.state === "open" && tab !== "files" && review && reviewable && !mine && (review.count > 0 || (!!signedIn && pr.requested.includes(signedIn)))}
       {@const what = countWords(review.draft?.comments.length ?? 0, review.draft?.replies.length ?? 0)}
       <div class="next yours">
         <span class="next-label">Your review</span>

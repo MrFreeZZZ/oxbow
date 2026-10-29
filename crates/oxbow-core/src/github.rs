@@ -85,19 +85,24 @@ impl Publish {
 
     /// The git half of publishing, run in the repository after GitHub made its copy.
     pub fn commands(&self) -> Vec<GitCommand> {
-        let mut push = vec!["push".to_owned()];
-        if !crate::config::run_hooks() {
-            push.push("--no-verify".to_owned());
-        }
-        push.extend(["-u".to_owned(), "origin".to_owned(), self.branch.clone()]);
-        vec![
-            GitCommand::new(["remote", "add", "origin", &self.url()])
-                .comment("the new GitHub repository becomes origin"),
-            GitCommand::new(push)
-                .comment(format!("-u: remember origin/{} as the upstream", self.branch))
-                .with_progress(),
-        ]
+        origin_and_push(&self.url(), &self.branch, "the new GitHub repository becomes origin")
     }
+}
+
+/// `url` added as origin and `branch` pushed there with its upstream: the git half of Publish to
+/// GitHub or GitLab.
+pub(crate) fn origin_and_push(url: &str, branch: &str, why: &str) -> Vec<GitCommand> {
+    let mut push = vec!["push".to_owned()];
+    if !crate::config::run_hooks() {
+        push.push("--no-verify".to_owned());
+    }
+    push.extend(["-u".to_owned(), "origin".to_owned(), branch.to_owned()]);
+    vec![
+        GitCommand::new(["remote", "add", "origin", url]).comment(why),
+        GitCommand::new(push)
+            .comment(format!("-u: remember origin/{branch} as the upstream"))
+            .with_progress(),
+    ]
 }
 
 /// Whether a name is one GitHub takes for a repository as it is: letters, digits, `-`, `_` and

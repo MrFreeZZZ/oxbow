@@ -375,7 +375,7 @@ fn command_in(dir: &Path, command: &GitCommand) -> Command {
     if command.program.is_none()
         && let Some(rest) = remote_args(&command.args)
     {
-        crate::config::lend_github_token(&mut git, dir, rest);
+        crate::config::lend_tokens(&mut git, dir, rest);
     }
     git.args(command.run_args()).current_dir(dir);
     crate::trust::apply(&mut git, dir);

@@ -22,6 +22,7 @@
     onFetch,
     onTheirs,
     onPublish,
+    onPublishGitLab = null,
   }: {
     history: History;
     /** How well each part besides the commits was read; null before the first read. */
@@ -40,6 +41,8 @@
     onTheirs: (upstream: string) => void;
     /** Make a repository on GitHub for a project without a remote. */
     onPublish: () => void;
+    /** Signed in to GitLab: publish there instead. */
+    onPublishGitLab?: (() => void) | null;
   } = $props();
 
   let open = $state(false);
@@ -207,6 +210,7 @@
               <button class="button small act" disabled={!history.head.commit} onclick={then(onPush)}>Publish…</button>
             {:else}
               <button class="button small act" disabled={!history.head.commit} onclick={then(onPublish)}>Publish to GitHub…</button>
+              {#if onPublishGitLab}<button class="button small act" disabled={!history.head.commit} onclick={then(onPublishGitLab)}>Publish to GitLab…</button>{/if}
             {/if}
           {/if}
         </div>

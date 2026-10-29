@@ -3,6 +3,7 @@
   // yours, then the others; or the recently closed ones. A row opens the Pull Request screen, or
   // checks the pull request out in a worktree of its own. Merge requests on GitLab show the same
   // way once signed in there; a repository on both picks one at the top.
+  import { untrack } from "svelte";
   import { api } from "./api";
   import { github } from "./github.svelte";
   import type { Request } from "./confirm.svelte";
@@ -32,12 +33,18 @@
   const forge = $derived(picked && (picked === "gitlab" ? !!github.mrProject : !!github.repo) ? picked : github.forge);
   const lab = $derived(forge === "gitlab");
   const w = $derived(wordsOf(forge));
-  /** Draft reviews kept here, by pull request number. */
+  /** Draft reviews kept here, by pull request number, of the forge shown. */
   let drafts = $state<Record<string, ReviewDraft>>({});
-  api.reviewDrafts().then(
-    (d) => (drafts = d),
-    () => {},
-  );
+  $effect(() => {
+    const of = lab;
+    drafts = {};
+    untrack(() =>
+      api.reviewDrafts(of).then(
+        (d) => lab === of && (drafts = d),
+        () => {},
+      ),
+    );
+  });
 
   const gh = $derived(github.repo);
   /** Where the list comes from: the remote, and the repository's name there. */
@@ -53,7 +60,7 @@
   const fork = (p: PullSummary) => !!p.headOwner && (lab || p.headOwner !== gh?.owner);
 
   function draftNote(number: number): string | null {
-    const d = lab ? null : drafts[String(number)];
+    const d = drafts[String(number)];
     if (!d) return null;
     const what = countWords(d.comments.length, d.replies.length);
     return what ? `Your draft · ${what}` : "Your draft";

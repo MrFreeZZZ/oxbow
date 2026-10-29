@@ -6,12 +6,13 @@
   import { open as chooseFolder } from "@tauri-apps/plugin-dialog";
   import { api } from "./api";
   import { prefs } from "./prefs.svelte";
-  import { publishCommands, publishNote, repositoryName } from "./publish";
+  import { labPlaces, publishCommands, publishNote, repositoryName, type LabPlace } from "./publish";
+  import { labPublishCommands, labPublishNote, validProjectName, visibilityText } from "./labPublish";
   import { join, start } from "./start.svelte";
   import TermBlock, { type TermLine } from "./TermBlock.svelte";
   import WhyNote from "./WhyNote.svelte";
   import { tilde } from "./term";
-  import type { GitHubOwners, NewRepoPlan, Publish } from "./types";
+  import type { GitHubOwners, GitLabPublish, GitLabVisibility, NewRepoPlan, Publish } from "./types";
 
   let {
     folder: initialFolder,
@@ -58,6 +59,20 @@
         (o) => ((owners = o), (owner = o.login)),
         () => (owners = { login: account.login, orgs: [] }),
       ),
+    () => {},
+  );
+
+  // Or publish to GitLab, on a server signed in to, in one of its account's namespaces.
+  let places = $state<LabPlace[]>([]);
+  let publishLab = $state(false);
+  /** The namespace picked, as `host namespace-id`. */
+  let space = $state("");
+  let visibility = $state<GitLabVisibility>("private");
+  labPlaces().then(
+    (p) => {
+      places = p;
+      if (p[0]) space = `${p[0].account.host} ${p[0].spaces[0].id}`;
+    },
     () => {},
   );
 
@@ -109,6 +124,12 @@
 
   const hasFiles = $derived(!!plan && plan.entries > 0);
   const publishing = $derived(publish && commit && !!owners);
+  const labPlace = $derived(places.find((p) => space.startsWith(`${p.account.host} `)) ?? null);
+  const labSpace = $derived(labPlace?.spaces.find((n) => space === `${labPlace.account.host} ${n.id}`) ?? null);
+  const labPublishing = $derived(publishLab && commit && !!labSpace);
+  const toLab = $derived<GitLabPublish | null>(
+    labSpace ? { namespaceId: labSpace.id, namespace: labSpace.fullPath, name: repositoryName(name), visibility, description: "", branch: options.branch } : null,
+  );
   const toPublish = $derived<Publish | null>(
     owners ? { owner: owner || owners.login, personal: (owner || owners.login) === owners.login, name: repositoryName(name), private: isPrivate, description: "", branch: options.branch } : null,
   );
@@ -121,7 +142,17 @@
   }
 
   const invalid = $derived(
-    !name.trim() ? "Name the repository" : /[/\\]/.test(name.trim()) ? "The name can't have slashes" : planError ? planError : !plan ? "…" : null,
+    !name.trim()
+      ? "Name the repository"
+      : /[/\\]/.test(name.trim())
+        ? "The name can't have slashes"
+        : planError
+          ? planError
+          : !plan
+            ? "…"
+            : labPublishing && toLab && !validProjectName(toLab.name)
+              ? `GitLab doesn’t take ${toLab.name} as a project’s name`
+              : null,
   );
 
   async function go() {
@@ -134,6 +165,7 @@
     // What was asked for when Create was pressed: the fields can't change it halfway.
     const asked = { ...options };
     const toGitHub = publishing && toPublish ? { ...toPublish, branch: asked.branch } : null;
+    const toGitLab = labPublishing && toLab && labPlace ? { host: labPlace.account.host, publish: { ...toLab, branch: asked.branch } } : null;
     running = true;
     failure = null;
     phase = "creating";
@@ -152,12 +184,15 @@
       if (toGitHub) {
         phase = "publishing";
         await api.githubPublish(path, toGitHub);
+      } else if (toGitLab) {
+        phase = "publishing";
+        await api.gitlabPublish(path, toGitLab.host, toGitLab.publish);
       }
       onDone(path);
     } catch (err) {
       if (path) {
         made = path;
-        failure = `The repository is made here, but publishing to GitHub failed: ${String(err).trim()}`;
+        failure = `The repository is made here, but publishing to ${toGitLab ? "GitLab" : "GitHub"} failed: ${String(err).trim()}`;
         return;
       }
       const message = String(err);
@@ -200,6 +235,9 @@
     if (publishing && toPublish) {
       out.push({ kind: "comment", text: publishNote(toPublish) });
       for (const text of publishCommands(toPublish)) out.push({ kind: "cmd", text });
+    } else if (labPublishing && toLab && labPlace) {
+      out.push({ kind: "comment", text: labPublishNote(toLab) });
+      for (const text of labPublishCommands(toLab, labPlace.account.web, prefs.get("oxbow.git.runHooks"))) out.push({ kind: "cmd", text });
     }
     return out;
   });
@@ -288,7 +326,7 @@
         <div class="starts">
           {#if owners}
             <div class="row wrap">
-              <button class="check" role="checkbox" aria-checked={publishing} disabled={!commit} onclick={() => (publish = !publish)} title={commit ? undefined : "Publishing needs the first commit"}>
+              <button class="check" role="checkbox" aria-checked={publishing} disabled={!commit} onclick={() => ((publish = !publish), (publishLab = false))} title={commit ? undefined : "Publishing needs the first commit"}>
                 <span class="box" class:on={publishing}><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" /></svg></span>
                 Publish to GitHub
               </button>
@@ -312,6 +350,36 @@
             <span class="hint">Sign in to GitHub in Settings › Accounts to publish from here. <button class="link" onclick={() => api.openSettings()}>Open Settings</button></span>
           {/if}
         </div>
+
+        {#if places.length}
+          <span class="label top">GitLab</span>
+          <div class="starts">
+            <div class="row wrap">
+              <button class="check" role="checkbox" aria-checked={labPublishing} disabled={!commit} onclick={() => ((publishLab = !publishLab), (publish = false))} title={commit ? undefined : "Publishing needs the first commit"}>
+                <span class="box" class:on={labPublishing}><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" /></svg></span>
+                Publish to GitLab
+              </button>
+              <label class="popup" class:off={!labPublishing}>
+                <span class="grey">Namespace</span>
+                <select bind:value={space} aria-label="Namespace" disabled={!labPublishing}>
+                  {#each places as p (p.account.host)}
+                    {#each p.spaces as n (n.id)}<option value="{p.account.host} {n.id}">{places.length > 1 ? `${p.account.host}/` : ""}{n.fullPath}</option>{/each}
+                  {/each}
+                </select>
+              </label>
+              <div class="seg" class:off={!labPublishing} role="radiogroup" aria-label="GitLab visibility">
+                {#each [["private", "Private"], ["internal", "Internal"], ["public", "Public"]] as [id, label] (id)}
+                  <button role="radio" aria-checked={visibility === id} class:on={visibility === id} disabled={!labPublishing} onclick={() => (visibility = id as GitLabVisibility)}>{label}</button>
+                {/each}
+              </div>
+            </div>
+            {#if labPublishing && toLab && toLab.name !== name.trim()}
+              <span class="hint">On GitLab it is called {toLab.name}.</span>
+            {:else if labPublishing && toLab && !validProjectName(toLab.name)}
+              <span class="hint warn-text">GitLab doesn’t take {toLab.name} as a project’s name.</span>
+            {/if}
+          </div>
+        {/if}
       {/if}
     </div>
 
@@ -327,12 +395,20 @@
         <WhyNote text={invalid} grow />
       {:else}
       <span class="foot-note"
-        >{publishing ? (isPrivate ? "Private on GitHub: only you can see it." : "Public on GitHub: anyone can see it.") : mac ? "Nothing leaves this Mac." : "Nothing leaves this computer."}</span
+        >{publishing
+          ? isPrivate
+            ? "Private on GitHub: only you can see it."
+            : "Public on GitHub: anyone can see it."
+          : labPublishing && labPlace && labSpace
+            ? visibilityText(visibility, labSpace.fullPath, labSpace.kind === "user", labPlace.account.host)
+            : mac
+              ? "Nothing leaves this Mac."
+              : "Nothing leaves this computer."}</span
       >
       {/if}
       <button class="button" onclick={onClose} disabled={running}>Cancel</button>
       <button class="button primary" onclick={go} disabled={running || (!plan?.repository && !made && !!invalid)} title={plan?.repository || made ? undefined : (invalid ?? undefined)}>
-        {plan?.repository || made ? "Open" : running ? (phase === "publishing" ? "Publishing…" : "Creating…") : publishing ? "Create and Publish" : "Create"}
+        {plan?.repository || made ? "Open" : running ? (phase === "publishing" ? "Publishing…" : "Creating…") : publishing || labPublishing ? "Create and Publish" : "Create"}
       </button>
     </div>
   </div>

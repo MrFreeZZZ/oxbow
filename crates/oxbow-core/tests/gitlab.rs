@@ -5,7 +5,8 @@ mod support;
 
 use oxbow_core::Error;
 use oxbow_core::Repo;
-use oxbow_core::gitlab_api::{Client, Server};
+use oxbow_core::gitlab_api::{Client, Server, Step};
+use oxbow_core::pulls::{Call, LinePair, Spot, SpotLines, Verdict};
 use support::{Fixture, stand_in};
 
 const USER: &str = r#"{"id":7,"username":"anna","name":"Anna Berg","avatar_url":"https://gitlab.com/uploads/anna.png","web_url":"https://gitlab.com/anna"}"#;
@@ -335,7 +336,7 @@ fn team_app() -> oxbow_core::GitLabProject {
 
 #[test]
 fn opening_a_merge_request_sends_its_people_labels_and_choices() {
-    use oxbow_core::pulls::{Call, GitLabCreate};
+    use oxbow_core::pulls::GitLabCreate;
     let (address, seen) = stand_in(vec![(
         "/api/v4/projects/team%2Fapp/merge_requests",
         r#"201 {"iid":13,"web_url":"https://git.corp/team/app/-/merge_requests/13"}"#,
@@ -354,7 +355,7 @@ fn opening_a_merge_request_sends_its_people_labels_and_choices() {
             squash: false,
         }),
     };
-    let made = client(&address).perform(&team_app(), &create).unwrap();
+    let made = client(&address).perform(&team_app(), &create, None).unwrap();
     assert_eq!(made["iid"], 13);
     let (path, body) = seen.lock().unwrap()[0].clone();
     assert_eq!(path, "/api/v4/projects/team%2Fapp/merge_requests");
@@ -517,4 +518,318 @@ fn merge_request_templates_come_from_the_branch_default_first() {
         ]
     );
     assert!(repo.merge_request_templates("no-such-branch").is_empty());
+}
+
+fn spot_on(end: (u32, u32, &str), start: Option<(u32, u32, &str)>) -> Spot {
+    let pair = |(old, new, kind): (u32, u32, &str)| LinePair {
+        old,
+        new,
+        kind: kind.into(),
+    };
+    Spot {
+        path: "src/lib.rs".into(),
+        line: end.1,
+        side: "RIGHT".into(),
+        start_line: start.map(|s| s.1),
+        lines: Some(SpotLines {
+            end: pair(end),
+            start: start.map(pair),
+        }),
+    }
+}
+
+const VERSIONS: &str = r#"[{"id":2,"head_commit_sha":"h2","base_commit_sha":"b2","start_commit_sha":"s2"},
+ {"id":1,"head_commit_sha":"h1","base_commit_sha":"b1","start_commit_sha":"s1"}]"#;
+
+#[test]
+fn gitlab_names_a_line_by_its_path_and_both_numbers() {
+    assert_eq!(
+        oxbow_core::gitlab_api::line_code("src/lib.rs", 8, 9),
+        "b24749917179fb5e3e613ed2a703fcdcc6cdf9da_8_9"
+    );
+}
+
+#[test]
+fn a_comment_on_lines_goes_on_the_version_it_was_written_on() {
+    let (address, seen) = stand_in(vec![
+        ("/api/v4/projects/team%2Fapp/merge_requests/12/versions", VERSIONS),
+        (
+            "/api/v4/projects/team%2Fapp/merge_requests/12/discussions",
+            r#"201 {"id":"d9"}"#,
+        ),
+    ]);
+    let call = Call::Comment {
+        number: 12,
+        commit: "h1".into(),
+        spot: spot_on((9, 10, "added"), Some((8, 9, "context"))),
+        body: "Why here?".into(),
+    };
+    let mut steps = Vec::new();
+    client(&address)
+        .run(&team_app(), &[call], &|| false, &mut |step| steps.push(step))
+        .unwrap();
+    let (path, body) = seen.lock().unwrap()[1].clone();
+    assert_eq!(path, "/api/v4/projects/team%2Fapp/merge_requests/12/discussions");
+    let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let code = |old: u32, new: u32| format!("b24749917179fb5e3e613ed2a703fcdcc6cdf9da_{old}_{new}");
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "body": "Why here?",
+            "position": {
+                "base_sha": "b1", "start_sha": "s1", "head_sha": "h1", "position_type": "text",
+                "old_path": "src/lib.rs", "new_path": "src/lib.rs", "new_line": 10,
+                "line_range": {
+                    "start": { "line_code": code(8, 9), "type": "old", "old_line": 8, "new_line": 9 },
+                    "end": { "line_code": code(9, 10), "type": "new", "new_line": 10 }
+                }
+            }
+        })
+    );
+    assert!(matches!(&steps[0], Step::Request(curl) if curl.contains("/discussions")));
+    assert_eq!(steps[1], Step::Done(None));
+
+    // A version GitLab no longer has can't take it.
+    let gone = Call::Comment {
+        number: 12,
+        commit: "h0".into(),
+        spot: spot_on((4, 4, "removed"), None),
+        body: "Old.".into(),
+    };
+    let err = client(&address)
+        .run(&team_app(), &[gone], &|| false, &mut |_| {})
+        .unwrap_err();
+    assert!(err.contains("no longer has the version"), "{err}");
+}
+
+#[test]
+fn a_review_goes_as_drafts_then_published_with_its_verdict() {
+    let (address, seen) = stand_in(vec![
+        ("/api/v4/projects/team%2Fapp/merge_requests/12/versions", VERSIONS),
+        (
+            "/api/v4/projects/team%2Fapp/merge_requests/12/draft_notes/bulk_publish",
+            "204 ",
+        ),
+        (
+            "/api/v4/projects/team%2Fapp/merge_requests/12/draft_notes",
+            r#"201 {"id":5}"#,
+        ),
+        (
+            "/api/v4/projects/team%2Fapp/merge_requests/12/approve",
+            r#"201 {"approved":true}"#,
+        ),
+    ]);
+    let calls = [
+        Call::StartReview {
+            id: "12".into(),
+            commit: "h2".into(),
+        },
+        Call::ReviewComment {
+            review: None,
+            spot: spot_on((3, 3, "removed"), None),
+            body: "Keep this?".into(),
+        },
+        Call::ReviewReply {
+            review: None,
+            thread: "d1".into(),
+            body: "Agreed.".into(),
+        },
+        Call::SubmitReview {
+            review: None,
+            verdict: Verdict::Approve,
+            body: "Fine.".into(),
+            revoke: false,
+        },
+    ];
+    client(&address)
+        .run(&team_app(), &calls, &|| false, &mut |_| {})
+        .unwrap();
+    let seen = seen.lock().unwrap().clone();
+    let paths: Vec<&str> = seen
+        .iter()
+        .map(|(path, _)| path.trim_start_matches("/api/v4/projects/team%2Fapp/merge_requests/12"))
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "/versions?per_page=100&page=1",
+            "/draft_notes",
+            "/draft_notes",
+            "/draft_notes",
+            "/draft_notes/bulk_publish",
+            "/approve"
+        ]
+    );
+    let json = |i: usize| serde_json::from_str::<serde_json::Value>(&seen[i].1).unwrap();
+    assert_eq!(json(1)["position"]["old_line"], 3);
+    assert_eq!(json(1)["position"]["head_sha"], "h2");
+    assert!(json(1)["position"].get("new_line").is_none());
+    assert_eq!(
+        json(2),
+        serde_json::json!({ "note": "Agreed.", "in_reply_to_discussion_id": "d1" })
+    );
+    assert_eq!(json(3), serde_json::json!({ "note": "Fine." }));
+    assert_eq!(json(4), serde_json::json!({ "reviewer_state": "reviewed" }));
+}
+
+#[test]
+fn a_review_that_fails_or_is_stopped_takes_its_drafts_back() {
+    let routes = vec![
+        ("/api/v4/projects/team%2Fapp/merge_requests/12/versions", VERSIONS),
+        (
+            "/api/v4/projects/team%2Fapp/merge_requests/12/draft_notes/bulk_publish",
+            r#"500 {"message":"boom"}"#,
+        ),
+        (
+            r#"/api/v4/projects/team%2Fapp/merge_requests/12/draft_notes "note":"One""#,
+            r#"201 {"id":5}"#,
+        ),
+        (
+            r#"/api/v4/projects/team%2Fapp/merge_requests/12/draft_notes "note":"Two""#,
+            r#"201 {"id":6}"#,
+        ),
+        ("/api/v4/projects/team%2Fapp/merge_requests/12/draft_notes/", "204 "),
+    ];
+    let calls = [
+        Call::StartReview {
+            id: "12".into(),
+            commit: "h2".into(),
+        },
+        Call::ReviewComment {
+            review: None,
+            spot: spot_on((3, 4, "added"), None),
+            body: "One".into(),
+        },
+        Call::ReviewReply {
+            review: None,
+            thread: "d1".into(),
+            body: "Two".into(),
+        },
+        Call::SubmitReview {
+            review: None,
+            verdict: Verdict::RequestChanges,
+            body: String::new(),
+            revoke: true,
+        },
+    ];
+    let (address, seen) = stand_in(routes.clone());
+    let err = client(&address)
+        .run(&team_app(), &calls, &|| false, &mut |_| {})
+        .unwrap_err();
+    assert!(err.contains("boom"), "{err}");
+    let paths: Vec<String> = seen.lock().unwrap().iter().map(|(p, _)| p.clone()).collect();
+    let tail: Vec<&str> = paths[paths.len() - 2..]
+        .iter()
+        .map(|p| p.trim_start_matches("/api/v4/projects/team%2Fapp/merge_requests/12"))
+        .collect();
+    assert_eq!(tail, ["/draft_notes/5", "/draft_notes/6"]);
+    // Changes asked for: no approval taken back, as nothing was published.
+    assert!(!paths.iter().any(|p| p.ends_with("/unapprove")));
+
+    // Stopped after the first comment: it goes back, and nothing else is sent.
+    let (address, seen) = stand_in(routes);
+    let asked = std::cell::Cell::new(0);
+    let err = client(&address)
+        .run(
+            &team_app(),
+            &calls,
+            &|| {
+                asked.set(asked.get() + 1);
+                asked.get() > 2
+            },
+            &mut |_| {},
+        )
+        .unwrap_err();
+    assert!(err.starts_with("Stopped"), "{err}");
+    let paths: Vec<String> = seen.lock().unwrap().iter().map(|(p, _)| p.clone()).collect();
+    assert_eq!(
+        paths.last().unwrap(),
+        "/api/v4/projects/team%2Fapp/merge_requests/12/draft_notes/5"
+    );
+    assert!(!paths.iter().any(|p| p.ends_with("/bulk_publish")));
+}
+
+#[test]
+fn the_sheet_shows_a_reviews_requests_before_gitlab_names_its_version() {
+    let calls = [
+        Call::StartReview {
+            id: "12".into(),
+            commit: "h2".into(),
+        },
+        Call::ReviewComment {
+            review: None,
+            spot: spot_on((3, 4, "added"), None),
+            body: "One".into(),
+        },
+        Call::SubmitReview {
+            review: None,
+            verdict: Verdict::RequestChanges,
+            body: String::new(),
+            revoke: true,
+        },
+        Call::Reply {
+            number: 12,
+            to: 0,
+            body: "Done.".into(),
+            thread: Some("d1".into()),
+        },
+        Call::Resolve {
+            thread: "d1".into(),
+            resolved: true,
+            number: 12,
+        },
+    ];
+    let shown = client("https://git.corp").preview(&team_app(), &calls).unwrap();
+    let mr = "https://git.corp/api/v4/projects/team%2Fapp/merge_requests/12";
+    assert_eq!(shown.len(), 5);
+    assert!(shown[0].starts_with("curl -X POST") && shown[0].contains(&format!("{mr}/draft_notes -d")));
+    assert!(shown[0].contains(r#""base_sha":"$BASE_SHA""#) && shown[0].contains(r#""head_sha":"h2""#));
+    assert!(shown[1].ends_with(&format!(
+        r#"{mr}/draft_notes/bulk_publish -d '{{"reviewer_state":"requested_changes"}}'"#
+    )));
+    assert!(shown[2].ends_with(&format!("{mr}/unapprove")));
+    assert!(shown[3].ends_with(&format!(r#"{mr}/discussions/d1/notes -d '{{"body":"Done."}}'"#)));
+    assert!(shown[4].starts_with("curl -X PUT"));
+    assert!(shown[4].ends_with(&format!(r#"{mr}/discussions/d1 -d '{{"resolved":true}}'"#)));
+}
+
+#[test]
+fn publishing_makes_a_project_in_a_namespace_then_pushes_there() {
+    let (address, seen) = stand_in(vec![
+        (
+            "/api/v4/namespaces",
+            r#"[{"id":31,"full_path":"acme/platform","kind":"group"},{"id":7,"full_path":"anna","kind":"user"}]"#,
+        ),
+        (
+            "/api/v4/projects",
+            r#"201 {"id":90,"web_url":"https://git.corp/acme/platform/billing","visibility":"internal"}"#,
+        ),
+    ]);
+    let client = client(&address);
+    let spaces = client.namespaces().unwrap();
+    let paths: Vec<&str> = spaces.iter().map(|n| n.full_path.as_str()).collect();
+    assert_eq!(paths, ["anna", "acme/platform"]);
+
+    let publish = oxbow_core::gitlab_api::GitLabPublish {
+        namespace_id: 31,
+        namespace: "acme/platform".into(),
+        name: "billing".into(),
+        visibility: "internal".into(),
+        description: " Invoices ".into(),
+        branch: "main".into(),
+    };
+    let made = client.create_project(&publish).unwrap();
+    assert_eq!(made.web_url, "https://git.corp/acme/platform/billing");
+    let (_, body) = seen.lock().unwrap().last().unwrap().clone();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+        serde_json::json!({ "name": "billing", "path": "billing", "namespace_id": 31, "visibility": "internal", "description": "Invoices" })
+    );
+    let server = Server::parse("https://git.corp").unwrap();
+    let shown: Vec<String> = publish.commands(&server).iter().map(|c| c.display()).collect();
+    assert_eq!(
+        shown[0],
+        "git remote add origin https://git.corp/acme/platform/billing.git"
+    );
+    assert!(shown[1].ends_with("-u origin main"), "{}", shown[1]);
 }

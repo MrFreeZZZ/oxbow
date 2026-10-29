@@ -1,6 +1,6 @@
 <script lang="ts">
-  // A thread of review comments on GitHub with the replies of the review written here, and a
-  // reply: into the review, or sent at once. Resolve folds it away on GitHub.
+  // A thread of review comments on GitHub or GitLab with the replies of the review written here, and a
+  // reply: into the review, or sent at once. Resolve folds it away on GitHub or GitLab.
   import Avatar from "./Avatar.svelte";
   import CommentEditor from "./CommentEditor.svelte";
   import DraftNote from "./DraftNote.svelte";
@@ -36,7 +36,7 @@
             bind:value={writing.body}
             placeholder="Reply"
             now="Reply Now"
-            addOff={thread.node ? null : "GitHub didn’t name this thread, so the reply can only go now."}
+            addOff={thread.node ? null : `${session.words.name} didn’t name this thread, so the reply can only go now.`}
             onCancel={() => (session.editing = null)}
             onNow={() => session.replyNow(thread, writing.body)}
             onAdd={() => session.addReply(thread, writing.body)}
@@ -45,7 +45,7 @@
           <Avatar login={me} size={22} />
           <button class="reply" onclick={() => (session.editing = { kind: "reply", thread: thread.id, body: "" })}>Reply…</button>
           {#if resolve && thread.node}
-            <button class="button small text" onclick={() => session.resolve(thread)} title={thread.resolved ? "Open the thread again" : "Fold the thread away on GitHub"}>
+            <button class="button small text" onclick={() => session.resolve(thread)} title={thread.resolved ? "Open the thread again" : `Fold the thread away on ${session.words.name}`}>
               <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" /><path d="M5.8 8.2 7.3 9.7 10.4 6.4" /></svg>
               {thread.resolved ? "Unresolve" : "Resolve"}
             </button>

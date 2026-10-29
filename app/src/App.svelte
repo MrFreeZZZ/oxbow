@@ -53,7 +53,7 @@
   import { getCurrentWindow, type CloseRequestedEvent } from "@tauri-apps/api/window";
   import { nav } from "./lib/nav.svelte";
   import type { CompareMode } from "./lib/types";
-  import { startPublish } from "./lib/publish";
+  import { startPublish, startPublishGitLab } from "./lib/publish";
   import { start } from "./lib/start.svelte";
   import OperationLog from "./lib/OperationLog.svelte";
   import { shortcut, withKeys } from "./lib/keys";
@@ -1188,6 +1188,7 @@
       }
     } else if (h.head.branch && h.head.commit) {
       add("publishGitHub", () => void publishToGitHub());
+      if (labSignedIn) add("publishGitLab", () => void publishToGitLab());
     }
     if (!busy) {
       add("checkout", () => {
@@ -1543,6 +1544,26 @@
       return;
     }
     await run(startPublish(repo.path, repo.name, history.head.branch, headColor));
+  }
+
+  /** Signed in to a GitLab server: a repository with no remote can be published there too. */
+  let labSignedIn = $state(false);
+  $effect(() => {
+    const none = !!repo && !!history && !history.remotes.length;
+    if (!none) return;
+    untrack(() => api.gitlabAccounts().then((a) => (labSignedIn = a.length > 0), () => (labSignedIn = false)));
+  });
+
+  /** A repository with no remote: make a project on GitLab and push there. */
+  async function publishToGitLab() {
+    if (!repo || !history?.head.branch) return;
+    const request = await startPublishGitLab(repo.path, repo.name, history.head.branch, headColor);
+    if (!request) {
+      confirm.say("Sign in to GitLab in Settings › Accounts first, or check that its server answers.", "warn");
+      api.openSettings();
+      return;
+    }
+    await run(request);
   }
 
   /** `mode` picks merge or rebase for this one pull, over Settings › Git. */
@@ -2386,6 +2407,12 @@
               <svg class="icon" viewBox="0 0 16 16"><path d="M8 12V3M4.5 6.5 8 3l3.5 3.5M3 14h10" /></svg>
               Publish to GitHub
             </button>
+            {#if labSignedIn}
+              <button class="capsule publish" onclick={publishToGitLab} title="Make a project on GitLab and push {history.head.branch} there">
+                <svg class="icon" viewBox="0 0 16 16"><path d="M8 12V3M4.5 6.5 8 3l3.5 3.5M3 14h10" /></svg>
+                Publish to GitLab
+              </button>
+            {/if}
           {/if}
           {#if view === "pull" && shownPull && !showConflicts}
             {@const lab = pullForge === "gitlab"}
@@ -2462,6 +2489,7 @@
           onFetch={() => sync("fetch")}
           onTheirs={(upstream) => openCompare(history!.head.branch!, upstream, "split")}
           onPublish={publishToGitHub}
+          onPublishGitLab={labSignedIn ? publishToGitLab : null}
         />
         {@const t = history.tracking}
         {@const tip = ([t && t.behind > 0 && "fetchedOnly", t && t.ahead > 0 && !t.rewritten && "localCommits"] as const).find((id) => id && tips.shows(id))}
