@@ -3,7 +3,7 @@ mod support;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use oxbow_core::{Changed, Repo};
+use oxbow_core::{Changed, HistoryCache, HistoryOptions, Repo};
 use support::Fixture;
 
 /// Long enough for a change to be told after its quiet spell.
@@ -130,4 +130,63 @@ fn seen_counts_changes_as_they_come() {
     fixture.git(&["branch", "other"]);
     rx.recv_timeout(TOLD).expect("the branch is told");
     assert!(watch.seen().unwrap() > edited);
+}
+
+#[test]
+fn a_tracked_file_an_ignore_rule_covers_is_still_told() {
+    let mut fixture = base();
+    // Committed before the rules came: git still tracks them.
+    fixture.write("old.log", "before\n");
+    fixture.write("target/keep.txt", "kept\n");
+    fixture.git(&["add", "-f", "old.log", "target/keep.txt"]);
+    fixture.git(&["commit", "-q", "-m", "Files the rules cover"]);
+    let (watch, rx) = watched(&fixture);
+    let start = watch.seen().unwrap();
+    fixture.write("old.log", "after\n");
+    assert!(rx.recv_timeout(TOLD).expect("the tracked log is told").files);
+    let edited = watch.seen().unwrap();
+    assert!(edited > start);
+    while rx.recv_timeout(QUIET).is_ok() {}
+    fixture.write("target/keep.txt", "edited\n");
+    assert!(
+        rx.recv_timeout(TOLD)
+            .expect("a tracked file in an ignored folder is told")
+            .files
+    );
+    while rx.recv_timeout(QUIET).is_ok() {}
+    // Untracked files beside them are still ignored.
+    let quiet = watch.seen().unwrap();
+    fixture.write("new.log", "noise\n");
+    fixture.write("target/new.o", "built\n");
+    std::thread::sleep(QUIET);
+    assert_eq!(watch.seen(), Some(quiet));
+}
+
+#[test]
+fn a_quiet_reload_shows_an_edit_of_a_tracked_ignored_file() {
+    let mut fixture = Fixture::new();
+    fixture.commit("tracked.log", "before\n", "Base");
+    fixture.commit(".gitignore", "*.log\n", "Ignore logs");
+    let repo = Repo::open(fixture.path()).unwrap();
+    let (tx, rx) = mpsc::channel();
+    let watch = repo
+        .watch(move |changed| {
+            let _ = tx.send(changed);
+        })
+        .unwrap();
+    let mut cache = HistoryCache::default();
+    let quiet = |seen| HistoryOptions {
+        quiet: true,
+        seen,
+        ..Default::default()
+    };
+    let first = repo.history_with(&quiet(watch.seen()), &mut cache, None).unwrap();
+    while rx.recv_timeout(QUIET).is_ok() {}
+    fixture.write("tracked.log", "after\n");
+    rx.recv_timeout(TOLD).expect("the edit is told");
+    let next = repo
+        .history_with(&quiet(watch.seen()), &mut cache, Some(&first.key))
+        .unwrap();
+    let changes = next.changes.expect("the changes are read again");
+    assert!(changes.unstaged.iter().any(|f| f.path == "tracked.log"));
 }
