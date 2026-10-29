@@ -10,7 +10,7 @@
   import { api, stopped } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import { confirm, type Part, type Request } from "./confirm.svelte";
-  import type { ChangelistEdit, Changelists, FileChange, FileDiff, Hunk, HistoryRow, Moving, Side, WorkingTree } from "./types";
+  import type { ChangelistEdit, FileChange, FileDiff, Hunk, HistoryRow, Moving, Side, WorkingTree } from "./types";
   import { plate, splitPath, tint } from "./format";
   import { keyFocus as focusByKey, tabStepper } from "./tabs";
   import ChangesDiff from "./ChangesDiff.svelte";
@@ -25,6 +25,7 @@
   import type { Changelist } from "./types";
   import { countedFile, keepShown, lineCounts, nextAfter, pickRange, sameShown, stepShown, type Shown } from "./changesView";
   import { draftFor, saveDraft } from "./commitDrafts.svelte";
+  import { ChangesReads } from "./changesReads.svelte";
   import { byFolder, filesWidth, listView, resizeFiles, setFolders } from "./listView.svelte";
 
   let {
@@ -60,17 +61,25 @@
     onResolve?: () => void;
   } = $props();
 
-  let tree = $state<WorkingTree | null>(null);
-  /** The changelists, read with the files; null until read, or when they can't be. */
-  let lists = $state<Changelists | null>(null);
+  // What the panel reads from git: changesReads.svelte.ts.
+  const reads = new ChangesReads(
+    (next) => {
+      // A file staged or unstaged whole is shown where it went; a selection keeps the files still there.
+      shown = inItsList(keepShown(shown, next));
+      // Ticks go with the files that left their list.
+      pruneTicks();
+    },
+    // Picked lines belong to the hunks they were picked in.
+    () => (sel = null),
+  );
+  const tree = $derived(reads.tree);
+  const lists = $derived(reads.lists);
   /** The unstaged files sorted into Unstaged, Untracked and the changelists. */
   const grouped = $derived(groupFiles(tree?.unstaged ?? [], lists));
   /** What the diff column shows: a file on one side, or every file of a side. */
   let shown = $state<Shown | null>(null);
-  /** The diffs in the diff column, and what they were read for: until a new read is in, the
-   *  column keeps the old diffs, with their own side's actions. */
-  let diffs = $state<FileDiff[]>([]);
-  let diffsOf = $state<Shown | null>(null);
+  const diffs = $derived(reads.diffs);
+  const diffsOf = $derived(reads.diffsOf);
   /** The lists of files: untracked files are unstaged ones listed apart, and each changelist
    *  holds some of the unstaged ones. */
   type List = ListKey;
@@ -79,8 +88,7 @@
   $effect(() => {
     whole = wholeByDefault();
   });
-  let error = $state<string | null>(null);
-  let loads = $state(0);
+  const error = $derived(reads.error);
   /** Lines picked in one hunk, with the one clicked last for Shift-click. */
   let sel = $state<{ hunk: Hunk; lines: number[]; anchor: number } | null>(null);
   let menu = $state<{ x: number; y: number; entries: MenuEntry[]; label: string } | null>(null);
@@ -109,16 +117,7 @@
   const fileCount = $derived(new Set([...conflicted, ...unstaged, ...staged].map((f) => f.path)).size);
   const branchPart = $derived<Part>(branch ? { branch, color } : { code: "HEAD" });
 
-  /** Lines of diff a page of every file of a side brings, about what the diff shows at first. */
-  const PAGE_LINES = 4000;
-  /** Lanes of the diff reads of each side: a newer read in a lane stops the older one. */
-  const LANES: Record<Side | "counts", string> = { unstaged: "changes-unstaged", staged: "changes-staged", counts: "changes-counts" };
-  /** Where the next page of diffs starts (null once all are loaded), and how many files are still to come. */
-  let more = $state<number | null>(null);
-  let pending = $state(0);
-  let loadingMore = false;
-  /** What the diffs shown were asked for: later pages must be of the same. */
-  let asked: { side: Side; paths: string[]; whole: boolean; reading: number | null; settings: string; round: number; target: Shown } | null = null;
+  const pending = $derived(reads.pending);
 
   const draft = $derived(draftFor(repo));
 
@@ -166,41 +165,6 @@
     folded = next;
   }
 
-  /** Which reading of the files `tree` is, for diffs of the same one; null for one of its own. */
-  let reading: number | null = null;
-
-  async function load() {
-    try {
-      const given = changes;
-      const read = given ? snapshot : null;
-      // The same reading again, counted here already: its counts stay.
-      const kept = given && !given.counted && read === reading && tree?.counted ? tree : null;
-      const next = kept ?? given ?? (await api.workingTree());
-      let listsError: string | null = null;
-      const found = await api.changelists(read).catch((err) => ((listsError = String(err)), null));
-      reading = read;
-      tree = next;
-      lists = found;
-      error = listsError;
-      // A file staged or unstaged whole is shown where it went; a selection keeps the files still there.
-      shown = inItsList(keepShown(shown, next));
-      // Ticks go with the files that left their list.
-      pruneTicks();
-      loads++;
-      if (!next.counted && read !== null) countLines(read);
-    } catch (err) {
-      error = String(err);
-    }
-  }
-
-  /** The changed lines of the files of reading `read`, which the history lists before they are
-   *  counted: the list shows at once, and the counts come after. */
-  async function countLines(read: number) {
-    const counted = await api.workingCounts(read, LANES.counts).catch(() => null);
-    // A newer reading has counts of its own coming.
-    if (counted && reading === read) tree = counted;
-  }
-
   /** The files of the diffs on screen by "side:path": their rows take the counts from them
    *  while the list is not counted yet, so the file open shows its counts first. */
   const diffFiles = $derived(new Map(diffsOf ? diffs.map((d) => [`${diffsOf!.side}:${d.file.path}`, d.file]) : []));
@@ -240,7 +204,7 @@
   /** Change the changelists; `said` goes to the toast. */
   async function editLists(edit: ChangelistEdit, said?: string): Promise<boolean> {
     try {
-      lists = await api.editChangelists(edit);
+      reads.lists = await api.editChangelists(edit);
       shown = inItsList(shown);
       pruneTicks();
       if (said) confirm.say(said, "done");
@@ -255,87 +219,13 @@
     version;
     // The files often come with the reload, so `load` runs at once: what it reads must not tie
     // this effect to it.
-    untrack(load);
+    untrack(() => reads.load(changes, snapshot));
   });
 
-  $effect(() => {
-    const target = shown;
-    const wholeFile = whole;
-    const settings = diffSettings();
-    const round = loads;
-    const t = tree;
-    const g = grouped;
-    if (!t || !target) {
-      asked = null;
-      diffs = [];
-      diffsOf = target;
-      return;
-    }
-    const n = target.kind === "all" ? diffNeedle : "";
-    const pool =
-      target.side === "staged"
-        ? t.staged
-        : target.kind !== "all"
-          ? [...t.conflicted, ...t.unstaged]
-          : target.list
-            ? (g.lists.find((l) => l.list.id === target.list)?.files ?? [])
-            : target.untracked
-              ? g.untracked
-              : [...t.conflicted, ...g.tracked];
-    const chosen = target.kind === "files" ? new Set(target.paths) : null;
-    const paths = pool
-      .filter((f) => (target.kind === "file" ? f.path === target.path : chosen ? chosen.has(f.path) : !n || f.path.toLowerCase().includes(n) || !!f.oldPath?.toLowerCase().includes(n)))
-      .map((f) => f.path);
-    const ask = { side: target.side, paths, whole: wholeFile, reading, settings, round, target };
-    // The counts of the same reading came in: the diffs shown or on their way are still the ones asked for.
-    if (asked && sameAsk(asked, ask)) return;
-    asked = ask;
-    const first = paths.length ? api.workingDiffPage(paths, target.side, wholeFile, reading, 0, PAGE_LINES, LANES[target.side]) : Promise.resolve({ diffs: [], next: null, files: 0 });
-    first.then(
-      (page) => {
-        if (asked !== ask) return;
-        diffs = page.diffs;
-        diffsOf = target;
-        more = page.next;
-        pending = page.files - page.diffs.length;
-        // Picked lines belong to the hunks they were picked in.
-        sel = null;
-      },
-      (err) => {
-        if (asked === ask && !stopped(err)) error = String(err);
-      },
-    );
-  });
+  $effect(() => reads.show(shown, whole, diffSettings(), grouped, () => diffNeedle));
 
   // The panel's reads stop when it closes: their answers would go nowhere.
-  $effect(() => () => {
-    api.stopReads(Object.values(LANES)).catch(() => {});
-  });
-
-  function sameAsk(a: NonNullable<typeof asked>, b: NonNullable<typeof asked>) {
-    return sameShown(a.target, b.target) && a.side === b.side && a.whole === b.whole && a.reading === b.reading && a.settings === b.settings && a.round === b.round && a.paths.length === b.paths.length && a.paths.every((p, i) => p === b.paths[i]);
-  }
-
-  /** The next page of the diffs of every file of a side. */
-  function loadMore() {
-    const ask = asked;
-    const from = more;
-    if (!ask || from === null || loadingMore) return;
-    loadingMore = true;
-    api.workingDiffPage(ask.paths, ask.side, ask.whole, ask.reading, from, PAGE_LINES, LANES[ask.side]).then(
-      (page) => {
-        loadingMore = false;
-        if (asked !== ask || more !== from) return;
-        diffs = [...diffs, ...page.diffs];
-        more = page.next;
-        pending = Math.max(0, pending - page.diffs.length);
-      },
-      (err) => {
-        loadingMore = false;
-        if (asked === ask && !stopped(err)) error = String(err);
-      },
-    );
-  }
+  $effect(() => () => reads.stop());
 
   let filesBox = $state<HTMLDivElement>();
 
@@ -768,7 +658,7 @@
   async function newList(moving: Moving | null = null, what = "", then: (() => unknown) | null = null) {
     const made = await confirm.run(
       nameRequest(lists?.lists ?? [], null, "", async (name) => {
-        lists = await api.editChangelists({ kind: "create", name, moving });
+        reads.lists = await api.editChangelists({ kind: "create", name, moving });
         shown = inItsList(shown);
         pruneTicks();
         return moving ? `Made the changelist “${name}” with ${what}.` : `Made the changelist “${name}”.`;
@@ -822,7 +712,7 @@
   function renameList(list: Changelist) {
     confirm.run(
       nameRequest(lists?.lists ?? [], list, list.name, async (name) => {
-        lists = await api.editChangelists({ kind: "rename", id: list.id, name });
+        reads.lists = await api.editChangelists({ kind: "rename", id: list.id, name });
         return `Renamed “${list.name}” to “${name}”.`;
       }),
     );
@@ -906,7 +796,7 @@
         if (live) lastDiffs = d;
       },
       (err) => {
-        if (live && !stopped(err)) error = String(err);
+        if (live && !stopped(err)) reads.error = String(err);
       },
     );
     return () => (live = false);
@@ -1399,7 +1289,7 @@
         {stagedByPath}
         {picker}
         onShow={show}
-        onMore={loadMore}
+        onMore={() => reads.loadMore()}
         {onResolve}
         {act}
         stage={stageShown}
