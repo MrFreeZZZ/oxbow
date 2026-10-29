@@ -118,4 +118,14 @@ const walk = (...places: Place[]): Trail => places.reduce((t, p) => visit(t, p),
   assert.equal(detailOfPlace(history("gone"), (id) => rows.get(id), "main"), undefined);
   assert.equal(detailOfPlace({ view: "stack", branch: null }, (id) => rows.get(id), "main"), "main");
   assert.equal(detailOfPlace(file("a.rs"), (id) => rows.get(id), "main"), "a.rs · Blame");
+  // Browse Files: by the branch it was opened from, else the commit; under it the file shown.
+  const browse = (path: string | null, label: string | null = null): Place => ({ view: "browse", rev: "a1b2c3d4e5", label, path });
+  assert.equal(nameOfPlace(browse(null, "main"), pulls), "Files of main");
+  assert.equal(nameOfPlace(browse(null), pulls), "Files at a1b2c3d");
+  assert.equal(detailOfPlace(browse("src/lib.rs"), (id) => rows.get(id), "main"), "src/lib.rs");
+  assert.equal(detailOfPlace({ ...browse(null), rev: "a" }, (id) => rows.get(id), "main"), "Fix login");
+  // Another file of the same commit is how you leave it; another commit is another place.
+  const t = visit(visit(emptyTrail(), browse("a.rs")), browse("b.rs"));
+  assert.deepEqual(t.places, [browse("b.rs")]);
+  assert.equal(visit(t, { ...browse(null), rev: "f00" }).places.length, 2);
 }

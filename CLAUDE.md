@@ -30,6 +30,7 @@ crates/oxbow-core/          UI-free core library (all Git logic lives here)
                             4 at a time, cancellable, kept while HEAD and index stay the same
   src/stash.rs tags.rs bisect.rs lfs.rs submodules.rs worktrees.rs search.rs compare.rs
   src/filehistory.rs        file history and blame;  reflog.rs = lost work
+  src/browse.rs             Browse Files at This Commit: a commit's folders, a file's text, Save As
   src/fix.rs                Fix a Mistake plans;  secrets.rs = pre-commit secrets check;
                             checks.rs = the checks before commit of This Repository (oxbow.check)
   src/github.rs pulls.rs    GitHub REST: sign-in, publish, pull requests
@@ -64,6 +65,7 @@ app/src/                    Svelte front end
   lib/*.svelte              one component per view/sheet (HistoryList, DiffView, ChangesPanel…)
   lib/ChangesPanel.svelte   Changes: the lists of files; CommitForm, ChangesDiff (the diff column), changesMenu.ts,
                             commitDrafts.svelte.ts (the message kept per folder), changes.ts (its requests)
+  lib/BrowseView.svelte     Browse Files at This Commit (browseTree.ts: the tree's rows, Find a file)
   lib/ReviewsView.svelte    Reviews screen (lib/reviews.ts sorts it);  PullFiles.svelte = PR Files tab
   lib/review.svelte.ts      one PR's review: draft, Viewed, sending;  reviewDraft.ts = its pure logic;
                             suggestion.ts = ```suggestion blocks (CommentBody shows them)

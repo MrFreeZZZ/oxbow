@@ -32,6 +32,8 @@ export interface CommitMenuApp {
   openSplit: (row: HistoryRow) => void;
   openFixes: (commit: string) => void;
   openCompare: (base: string, target: string) => void;
+  /** Browse Files at This Commit; `label` the branch or tag that ends there. */
+  openBrowse: (rev: string, label: string | null) => void;
   /** The commits Save as Patches writes for a row. */
   patchTarget: (row: HistoryRow) => PatchTarget;
   /** The Pull Request screen of a branch: its pull request, or the form for a new one. */
@@ -176,9 +178,9 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
   // Compare this commit, named by its branch when one ends here, with HEAD or the default branch.
   const name = row.labels.find((l) => l.kind === "local")?.name ?? row.id.slice(0, 7);
   const against = [...new Set([isHead ? null : here, history.trunk])].filter((b): b is string => !!b && b !== name);
-  if (against.length) {
-    group([{ kind: "sub", label: "Compare", icon: menuIcons.compare, entries: against.map((b) => ({ label: `With ${b}`, run: () => app.openCompare(b, name) })) }]);
-  }
+  const looking: MenuEntry[] = [browseItem(row, item, app)];
+  if (against.length) looking.push({ kind: "sub", label: "Compare", icon: menuIcons.compare, entries: against.map((b) => ({ label: `With ${b}`, run: () => app.openCompare(b, name) })) });
+  group(looking);
   group([
     {
       kind: "sub",
@@ -215,7 +217,7 @@ function bisectMenu(
   entries.push(item("New Branch from Here…", menuIcons.branch, () => run(newBranchRequest(ctx, undefined, row))), item("New Tag Here…", menuIcons.tag, () => run(newTagRequest(ctx, row))));
   const name = row.labels.find((l) => l.kind === "local")?.name ?? row.id.slice(0, 7);
   const against = [bisect.startIsBranch ? bisect.start : null, history.trunk].filter((b, i, all): b is string => !!b && b !== name && all.indexOf(b) === i);
-  entries.push({ kind: "sep" });
+  entries.push({ kind: "sep" }, browseItem(row, item, app));
   if (against.length) entries.push({ kind: "sub", label: "Compare", icon: menuIcons.compare, entries: against.map((b) => ({ label: `With ${b}`, run: () => app.openCompare(b, name) })) });
   entries.push({
     kind: "sub",
@@ -228,4 +230,10 @@ function bisectMenu(
     ],
   });
   return entries;
+}
+
+/** Browse Files at This Commit, named by the branch or tag that ends there. */
+function browseItem(row: HistoryRow, item: (label: string, icon: string, act: () => void) => MenuEntry, app: CommitMenuApp): MenuEntry {
+  const label = row.labels.find((l) => l.kind === "local" || l.kind === "tag")?.name ?? null;
+  return item("Browse Files at This Commit", menuIcons.folder, () => app.openBrowse(row.id, label));
 }

@@ -95,7 +95,7 @@
     /** Confirm and run a change to the repository. */
     run: (request: Request | Promise<Request>) => void;
     /** The screen shown next to the sidebar. */
-    view: "history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull" | "reviews";
+    view: "history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull" | "reviews" | "browse";
     onView: (view: "history" | "stashes" | "oplog" | "reviews") => void;
     /** Open the uncommitted changes in the details panel, next to History. */
     onChanges: () => void;
@@ -128,6 +128,8 @@
 
   const headName = $derived(history.head.branch ?? "HEAD");
   const compareItem = (name: string): MenuEntry => ({ kind: "item", label: `Compare with ${headName}`, icon: menuIcons.compare, run: () => onCompare(headName, name) });
+  /** Browse Files at the commit a branch or tag points to, named by it. */
+  const browseItem = (ref: RefInfo): MenuEntry => ({ kind: "item", label: "Browse Files", icon: menuIcons.folder, run: () => nav.openBrowse(ref.target, ref.name) });
 
   /** The open right-click menu and the ref it belongs to. */
   let menu = $state<{ x: number; y: number; label: string; ref: string; entries: MenuEntry[] } | null>(null);
@@ -323,6 +325,7 @@
     if (!isHead && !elsewhere) entries.push(item("Open in New Worktree…", menuIcons.folder, () => run(newWorktreeRequest(ctx, repo.path, ref.name))));
     if (!isHead) entries.push(...mergeItems(ref.name));
     if (!isHead) entries.push(compareItem(ref.name));
+    entries.push(browseItem(ref));
     if (!upstreamOf(ref) && history.defaultRemote) {
       entries.push({ kind: "sep" });
       const unpushed = history.rows.filter((r) => r.unpushed && !r.worktree && r.graph.branch === ref.name);
@@ -399,6 +402,7 @@
     else entries.push({ kind: "note", label: `A local branch ${short} already exists, so it can’t be checked out under that name.` });
     entries.push(...mergeItems(ref.name));
     entries.push(compareItem(ref.name));
+    entries.push(browseItem(ref));
     entries.push({ kind: "item", label: "Copy Name", icon: menuIcons.copy, run: () => copy(ref.name) });
     entries.push({ kind: "sep" });
     entries.push({ kind: "item", label: `Delete on ${ref.remote}…`, icon: menuIcons.drop, danger: true, run: () => run(api.remoteDeletionCheck(ref.name).then((lost) => deleteRemoteRequest(ctx, ref, author, lost))) });
@@ -411,6 +415,7 @@
     open(event, "Detached HEAD menu", "HEAD", [
       { kind: "header", label: `HEAD · ${sha} · not on a branch` },
       { kind: "item", label: "Create Branch…", icon: menuIcons.branch, run: () => run(keepRequest(ctx)) },
+      { kind: "item", label: "Browse Files", icon: menuIcons.folder, run: () => nav.openBrowse(row.id) },
       { kind: "item", label: "Copy SHA", icon: menuIcons.copy, run: () => copy(row.id) },
     ]);
   }
@@ -425,6 +430,7 @@
     }
     if (row) entries.push({ kind: "item", label: `New Branch from ${ref.name}…`, icon: menuIcons.branch, run: () => run(newBranchRequest(ctx, undefined, row)) });
     entries.push(compareItem(ref.name));
+    entries.push(browseItem(ref));
     const remote = history.defaultRemote;
     if (remote && isLocalTag(ctx, ref.name)) {
       entries.push({ kind: "sep" });

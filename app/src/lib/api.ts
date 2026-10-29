@@ -26,6 +26,7 @@ import type {
   ConflictFile,
   MergeTool,
   DeletionCheck,
+  FileAt,
   FileDiff,
   History,
   MergePreview,
@@ -80,6 +81,7 @@ import type {
   PullSummary,
   LfsStatus,
   SecretFinding,
+  TreeItem,
 } from "./types";
 import type { PullSetup } from "./remote";
 import type { ConsoleEntry, ConsoleRepos } from "./console";
@@ -160,6 +162,10 @@ export const api = {
   blame: (path: string, rev: string, options: BlameOptions, lane: string | null = null) => invoke<Blame>("blame", { path, rev, options, lane }),
   lineHistory: (path: string, line: number, rev: string, lane: string | null = null) => invoke<string[]>("line_history", { path, line, rev, lane }),
   files: () => invoke<string[]>("files"),
+  treeAt: (rev: string, dir: string) => invoke<TreeItem[]>("tree_at", { rev, dir }),
+  filesAt: (rev: string) => invoke<string[]>("files_at", { rev }),
+  fileAt: (rev: string, path: string) => invoke<FileAt>("file_at", { rev, path }),
+  saveFileAt: (rev: string, path: string, to: string) => invoke<void>("save_file_at", { rev, path, to }),
   filePickaxe: (path: string, text: string, matchCase: boolean, rev: string, lane: string | null = null) =>
     invoke<string[]>("file_pickaxe", { path, text, matchCase, rev, lane }),
   workingTree: () => invoke<WorkingTree>("working_tree"),

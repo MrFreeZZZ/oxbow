@@ -35,6 +35,14 @@ class Nav {
     if (count) this.found = { count, at: (at + by + count) % count };
   }
 
+  /** Browse Files at This Commit: the commit, the branch or tag it was opened from, and the file
+   *  to show; null until it is asked for. `seq` tells each request from the one before. */
+  browse = $state<{ rev: string; label: string | null; path: string | null; seq: number } | null>(null);
+
+  openBrowse(rev: string, label: string | null = null, path: string | null = null) {
+    this.browse = { rev, label, path, seq: this.nextFile() };
+  }
+
   /** Quick Open (⌘P): pick a file to open File History on. */
   quickOpen = $state(false);
   /** Quick Open lists only the files a Git LFS pattern matches. */
@@ -46,8 +54,10 @@ class Nav {
   /** The repository the recent files are kept for. */
   repo = "";
 
-  openFile(path: string, commit: string | null = null) {
-    this.file = { path, commit, seq: this.nextFile() };
+  /** File History of `path` with `commit` selected; `at`: Blame of the file as that commit has
+   *  it, as from Browse Files at This Commit. */
+  openFile(path: string, commit: string | null = null, at: string | null = null) {
+    this.file = { path, commit, at: at ? { rev: at, path } : null, seq: this.nextFile() };
     if (!this.repo) return;
     const list = [path, ...(this.recentFiles[this.repo] ?? []).filter((p) => p !== path)].slice(0, 8);
     this.recentFiles = { ...this.recentFiles, [this.repo]: list };

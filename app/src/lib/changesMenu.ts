@@ -137,6 +137,7 @@ export function commitFileMenu(repo: string, file: FileChange, commit: string, c
   }
   entries.push(copyMenu(repo, [file.path]));
   entries.push({ kind: "item", label: "File History", icon: menuIcons.history, run: () => nav.openFile(file.path, commit) });
+  if (file.status !== "deleted" && !file.submodule) entries.push({ kind: "item", label: "Browse Files at This Commit", icon: menuIcons.folder, run: () => nav.openBrowse(commit, null, file.path) });
   return { entries, label: `${name} menu` };
 }
 

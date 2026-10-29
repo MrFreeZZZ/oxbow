@@ -122,15 +122,7 @@ impl Repo {
         let Ok(commit) = repo.head_commit() else {
             return Ok(Vec::new());
         };
-        let tree = commit.tree().map_err(Error::git)?;
-        let entries = tree.traverse().breadthfirst.files().map_err(Error::git)?;
-        let mut paths: Vec<String> = entries
-            .into_iter()
-            .filter(|e| e.mode.is_blob() || e.mode.is_link())
-            .map(|e| e.filepath.to_string())
-            .collect();
-        paths.sort();
-        Ok(paths)
+        crate::browse::paths_of(&commit.tree().map_err(Error::git)?)
     }
 
     /// The commits that changed `path`, from `rev` (HEAD when missing) back, across renames;

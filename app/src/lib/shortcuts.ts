@@ -41,6 +41,7 @@ export const COMMANDS = {
   goToBranch: { category: "Go", title: "Go to Branch…", mac: ["Mod+T"], other: ["Mod+T"] },
   goToTag: { category: "Go", title: "Go to Tag…" },
   goToStash: { category: "Go", title: "Go to Stash…" },
+  browseFiles: { category: "Go", title: "Browse Files at This Commit" },
   // Go Back and Go Forward: VS Code's keys, then ⌘[ and ⌘] as in Safari, Finder and Xcode.
   back: { category: "Go", title: "Go Back", mac: ["Ctrl+-", "Mod+["], other: ["Alt+Left", "Ctrl+Alt+-"] },
   forward: { category: "Go", title: "Go Forward", mac: ["Ctrl+Shift+-", "Mod+]"], other: ["Alt+Right", "Ctrl+Shift+-"] },
