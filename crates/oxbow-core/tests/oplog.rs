@@ -484,3 +484,40 @@ fn an_action_stopped_while_it_runs_is_still_written_down_for_undo() {
     undo_last(&repo);
     assert_eq!(read(&fx, "hook-made.txt"), None);
 }
+
+#[test]
+fn a_repository_opened_again_still_knows_where_git_keeps_its_files() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "one\n", "Root");
+    let repo = Repo::open(fx.path()).unwrap();
+    fx.write("a.txt", "two\n");
+    repo.perform(&Action::Stage {
+        paths: vec!["a.txt".into()],
+    })
+    .unwrap();
+
+    // As each read of the history opens it again.
+    let repo = repo.reopen().unwrap();
+    fx.write("a.txt", "three\n");
+    oxbow_core::console::scope(
+        Some(fx.path()),
+        oxbow_core::console::EntryKind::Action,
+        "Unstage",
+        || {
+            repo.perform(&Action::Unstage {
+                paths: vec!["a.txt".into()],
+            })
+        },
+    )
+    .unwrap();
+    let entries = oxbow_core::console::entries(Some(fx.path()));
+    let ran: Vec<&str> = entries
+        .iter()
+        .filter(|entry| entry.title == "Unstage")
+        .flat_map(|entry| &entry.commands)
+        .map(|ran| ran.display.as_str())
+        .collect();
+    assert!(ran.iter().any(|ran| ran.starts_with("git restore")), "{ran:?}");
+    assert!(!ran.iter().any(|ran| ran.contains("--git-path")), "{ran:?}");
+    assert_eq!(repo.operation_log().unwrap().len(), 2);
+}

@@ -2,7 +2,7 @@ mod support;
 
 use std::sync::atomic::AtomicBool;
 
-use oxbow_core::{DiffContext, Error, FileStatus, LineKind, Repo};
+use oxbow_core::{DiffContext, Error, FileStatus, LineKind, Repo, Source};
 use support::Fixture;
 
 #[test]
@@ -346,4 +346,45 @@ fn unchanged_lines_between_hunks_are_read_from_the_old_side() {
         .unwrap();
     let read = repo.read_lines(&working.old.clone().unwrap(), 50, 1).unwrap();
     assert_eq!(read.lines[0].text, "line fifty");
+}
+
+#[test]
+fn lines_of_a_file_on_disk_are_read_again_once_it_changes() {
+    let mut fx = Fixture::new();
+    let text = |word: &str| -> String { (1..=40).map(|n| format!("{word} {n}\n")).collect() };
+    fx.commit("notes.txt", &text("line"), "Root");
+    let repo = Repo::open(fx.path()).unwrap();
+    let file = Source::Worktree {
+        path: "notes.txt".into(),
+    };
+    let at = |secs: u64| std::time::SystemTime::now() - std::time::Duration::from_secs(secs);
+    let set_time = |time| {
+        std::fs::File::options()
+            .write(true)
+            .open(fx.path().join("notes.txt"))
+            .unwrap()
+            .set_modified(time)
+            .unwrap();
+    };
+    let first = |repo: &Repo| repo.read_lines(&file, 1, 1).unwrap().lines[0].text.clone();
+
+    // Saved a while ago: its lines are kept.
+    set_time(at(60));
+    assert_eq!(first(&repo), "line 1");
+    assert_eq!(repo.read_lines(&file, 40, 5).unwrap().lines.len(), 1);
+    // Edited outside to the same size, and saved later: read again.
+    fx.write("notes.txt", &text("LINE"));
+    set_time(at(30));
+    assert_eq!(first(&repo), "LINE 1");
+    // Grown, at the same time as before: read again.
+    fx.write("notes.txt", &(text("more") + "extra\n"));
+    set_time(at(30));
+    assert_eq!(first(&repo), "more 1");
+    assert_eq!(repo.read_lines(&file, 1, 0).unwrap().total, 41);
+    // Replaced by another file, as editors save: read again.
+    let other = fx.path().join("notes.new");
+    std::fs::write(&other, text("swap") + "extra\n").unwrap();
+    std::fs::rename(&other, fx.path().join("notes.txt")).unwrap();
+    set_time(at(30));
+    assert_eq!(first(&repo.reopen().unwrap()), "swap 1");
 }
