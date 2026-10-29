@@ -159,6 +159,13 @@ the rows the window has, about 250 ms at 100,000. Every row already shown comes 
 (64,000 of 64,000 on the last page), so the graph doesn't move as older commits come in. A jump
 straight to an old commit still walks everything above it once.
 
+The review after the plan (29 October) found that going on from where a page stopped could give
+another order than one walk from the tips when commits share a second, as a rebase writes them,
+and that a shallow clone's next page failed on the parents it doesn't have. The walk is now
+Oxbow's own: newest first, and the greater id first within a second, so the commits waiting
+alone decide what comes next; past a shallow boundary no parent is asked for. On the same clone
+with and without a commit-graph file, every page takes what it took before, within the noise.
+
 ## Repository Files on a big working copy (29 October)
 
 A working copy of 200,000 files (`node_modules`, 400 folders of 500), `.gitignore` checked as it

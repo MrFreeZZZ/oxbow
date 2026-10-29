@@ -246,6 +246,8 @@
     if (!code || part === undefined) return;
     let last = i;
     const move = (ev: PointerEvent) => {
+      // Let go outside the window: no pointerup came, and the drag is over.
+      if (!(ev.buttons & 1)) return window.removeEventListener("pointermove", move);
       const line = (ev.target as Element | null)?.closest?.<HTMLElement>("[data-line]");
       if (!line || line.closest(".code") !== code) return;
       const [p, at] = line.dataset.line!.split(":");
