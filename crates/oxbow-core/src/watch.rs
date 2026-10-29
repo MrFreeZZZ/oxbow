@@ -176,7 +176,7 @@ impl Seen {
     fn run(mut self, rx: mpsc::Receiver<notify::Result<notify::Event>>, on_change: &mut impl FnMut(Changed)) {
         let local = self.repo.local();
         let mut batch = Batch::default();
-        // Made when a batch first needs it: the ignore rules as they are now.
+        // Made when a batch first needs it: the ignore rules and the index as they are now.
         let mut excludes = None;
         loop {
             let event = match batch.due() {
@@ -302,15 +302,8 @@ impl Batch {
         let Some(relative) = roots.in_workdir(path) else {
             return;
         };
-        let parts: Option<Vec<&str>> = relative
-            .components()
-            .map(|c| match c {
-                Component::Normal(part) => part.to_str(),
-                _ => None,
-            })
-            .collect();
-        if let Some(parts) = parts.filter(|parts| !parts.is_empty()) {
-            self.saved.push(parts.join("/"));
+        if let Some(path) = slashed(relative) {
+            self.saved.push(path);
         }
     }
 
@@ -323,30 +316,44 @@ impl Batch {
             .map_or(0, |d| d.as_millis() as u64);
     }
 
-    /// Whether `path` in the working copy, or a folder it is in, is ignored.
+    /// Whether `path` in the working copy, or a folder it is in, is ignored. A file git tracks
+    /// never is, nor a folder with one in it, whatever the rules say: git still sees them.
     fn ignored<'r>(
         &mut self,
         repo: &'r gix::Repository,
-        excludes: &mut Option<Option<gix::AttributeStack<'r>>>,
+        excludes: &mut Option<Option<Excludes<'r>>>,
         roots: &Roots,
         path: &Path,
     ) -> bool {
         let Some(relative) = roots.in_workdir(path) else {
             return false;
         };
-        let stack = excludes.get_or_insert_with(|| {
+        let rules = excludes.get_or_insert_with(|| {
             let index = repo.index_or_empty().ok()?;
-            repo.excludes(
-                &index,
-                None,
-                gix::worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
-            )
-            .ok()
+            let stack = repo
+                .excludes(
+                    &index,
+                    None,
+                    gix::worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
+                )
+                .ok()?;
+            Some(Excludes { stack, index })
         });
         // Rules that can't be read ignore nothing: the change is told.
-        let Some(stack) = stack else {
+        let Some(Excludes { stack, index }) = rules else {
             return false;
         };
+        if let Some(name) = slashed(relative) {
+            let name = gix::bstr::BStr::new(name.as_bytes());
+            if index.entry_by_path(name).is_some() {
+                return false;
+            }
+            let mut folder = name.to_vec();
+            folder.push(b'/');
+            if index.prefixed_entries(folder.as_slice().into()).is_some() {
+                return false;
+            }
+        }
         let mut folder = PathBuf::new();
         let parts: Vec<_> = relative.components().collect();
         for (at, part) in parts.iter().enumerate() {
@@ -369,6 +376,24 @@ impl Batch {
         }
         false
     }
+}
+
+/// The ignore rules and the index as they are when a batch first needs them.
+struct Excludes<'r> {
+    stack: gix::AttributeStack<'r>,
+    index: gix::worktree::Index,
+}
+
+/// `relative` as git names paths, with `/` between its parts.
+fn slashed(relative: &Path) -> Option<String> {
+    let parts: Option<Vec<&str>> = relative
+        .components()
+        .map(|c| match c {
+            Component::Normal(part) => part.to_str(),
+            _ => None,
+        })
+        .collect();
+    parts.filter(|parts| !parts.is_empty()).map(|parts| parts.join("/"))
 }
 
 /// The watched folders, each as given and as the system names it (macOS reports /private/var
