@@ -104,9 +104,10 @@
     </span>
   {/each}
   {#if !single || !chosen.length}
-    <span class="box">
+    <span class="box" data-placeholder={placeholder}>
       <input
         class="add"
+        size="1"
         {placeholder}
         aria-label={label}
         role="combobox"
@@ -186,12 +187,27 @@
     font-size: var(--text-heading);
     line-height: 1;
   }
+  /* The box is as wide as its placeholder (an unseen copy of it sizes the grid), 110px at least. */
   .box {
     position: relative;
-    display: inline-flex;
+    display: inline-grid;
+    min-width: 110px;
+    max-width: 100%;
+  }
+  .box::after {
+    content: attr(data-placeholder);
+    grid-area: 1 / 1;
+    height: 0;
+    padding: 0 6px;
+    overflow: hidden;
+    visibility: hidden;
+    white-space: pre;
+    font-size: var(--text-small);
   }
   .add {
-    width: 110px;
+    grid-area: 1 / 1;
+    width: 100%;
+    min-width: 0;
     height: 24px;
     padding: 0 6px;
     border: 0;

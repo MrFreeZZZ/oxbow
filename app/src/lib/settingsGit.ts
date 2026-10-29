@@ -227,9 +227,12 @@ function protectRequest(name: string): Request {
   };
 }
 
-/** The protected branches, the row that adds one, and the way back to the default list. */
+/** The protected branches, the row that adds one, and the way back to the default list. The
+ *  default list shows only the names this repository has a branch of; the others stay protected. */
 function protectedRows(protect: { branches: string[]; default: boolean }): Row[] {
-  const rows: Row[] = protect.branches.map((name, i) => ({
+  const branches = model.repo?.production.branches ?? [];
+  const shown = protect.branches.flatMap((name, i) => (!protect.default || matching(name, branches).length ? [{ name, i }] : []));
+  const rows: Row[] = shown.map(({ name, i }) => ({
     id: `protected:${name}`,
     label: name,
     mono: true,
@@ -239,7 +242,7 @@ function protectedRows(protect: { branches: string[]; default: boolean }): Row[]
   }));
   rows.push({
     id: "protected:add",
-    label: protect.branches.length ? "Protect another branch" : "No protected branches",
+    label: shown.length ? "Protect another branch" : protect.branches.length ? "Protect a branch" : "No protected branches",
     sub: protect.branches.length ? undefined : "Every branch can be force pushed and rewritten",
     control: { type: "button", label: "Add…", run: () => confirm.run(protectRequest("")) },
   });
