@@ -1,17 +1,16 @@
 <script lang="ts">
   import { message, open } from "@tauri-apps/plugin-dialog";
   import { listen } from "@tauri-apps/api/event";
-  import { api, settings, stopped } from "./lib/api";
+  import { api, settings } from "./lib/api";
   import { WORKTREE_ID, type History, type HistoryRow, type OutsideChange, type ReadPart, type RecentRepo, type ReflogEntry, type RepoSummary } from "./lib/types";
-  import { reloadNews, retried, settle, stillFailing, withRows, type ReadStates } from "./lib/reads";
-  import { carryStates, failChecking, withState } from "./lib/folders";
+  import { RepoSession } from "./lib/repoSession.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
   import HistoryList from "./lib/HistoryList.svelte";
   import GraphLegend from "./lib/GraphLegend.svelte";
   import { focusedView } from "./lib/graph";
   import CommitPanel from "./lib/CommitPanel.svelte";
   import ChangesPanel from "./lib/ChangesPanel.svelte";
-  import { moveMessage, savedMessage } from "./lib/commitDrafts.svelte";
+  import { savedMessage } from "./lib/commitDrafts.svelte";
   import FolderGone from "./lib/FolderGone.svelte";
   import { goneScreen, messageOf } from "./lib/gone";
   import { tilde } from "./lib/term";
@@ -29,7 +28,7 @@
   import StashesView from "./lib/StashesView.svelte";
   import { ancestors } from "./lib/commits";
   import { lockedCommit } from "./lib/protect";
-  import type { Gone, Operation } from "./lib/types";
+  import type { Operation } from "./lib/types";
   import Menu, { menuIcons, type MenuEntry } from "./lib/Menu.svelte";
   import { fetchRequest, pullRequest, pushRequest, syncBlock, unshallowRequest, type RemoteContext, type SyncFix } from "./lib/remote";
   import SyncButtons from "./lib/SyncButtons.svelte";
@@ -84,7 +83,6 @@
   import RestrictedBadge from "./lib/RestrictedBadge.svelte";
   import WindowTitle from "./lib/WindowTitle.svelte";
   import { windowTitle, type Title } from "./lib/windowTitle";
-  import type { TrustFinding } from "./lib/types";
 
   // Screens and sheets a window seldom shows load the first time they are (lazyScreen.svelte.ts).
   const ConflictsView = new Lazy(() => import("./lib/ConflictsView.svelte"));
@@ -106,55 +104,69 @@
   const LostCommitPanel = new Lazy(() => import("./lib/LostCommitPanel.svelte"));
   const PairPanel = new Lazy(() => import("./lib/PairPanel.svelte"));
 
-  let repo = $state<RepoSummary | null>(null);
-  let history = $state<History | null>(null);
-  /** How well each part of `history` besides the commits was read: see reads.ts. */
-  let reads = $state<ReadStates | null>(null);
-
-  /** Past the unpushed commits a load walks, the rest are told in the background, and a reload
-   *  marks them. */
-  let settling = false;
+  // The window's repository and its history: repoSession.svelte.ts, historyLoad.svelte.ts.
+  const session = new RepoSession({
+    leaving() {
+      // The commit panel must not ask the new repository about the old one's commits.
+      selected = null;
+      second = null;
+      submoduleSel = null;
+      search.clear();
+      forgetPlaces();
+      if (view === "compare" || view === "file" || view === "stack" || view === "pull" || view === "series" || view === "reviews" || view === "browse") view = "history";
+      // The Conflicts screen goes too, before the other repository opens: it saves its draft for
+      // its own folder, and reads nothing of the new one.
+      resolving = false;
+    },
+    opened(next) {
+      // Start on the checked-out commit, like the design: HEAD's latest commit is selected.
+      selected = next.head.commit ?? next.rows[0]?.id ?? null;
+      requestAnimationFrame(() => selected && list?.reveal(selected));
+    },
+    reloaded(next) {
+      if (!selected || !next.rows.some((r) => r.id === selected)) selected = next.head.commit ?? next.rows[0]?.id ?? null;
+      // Current Branch Only follows a checkout: a commit it no longer shows gives way to HEAD.
+      else if (next.focus && !next.focus.rows.some((i) => next.rows[i].id === selected)) selected = next.head.commit ?? selected;
+    },
+    closed() {
+      selected = null;
+      second = null;
+      search.clear();
+      forgetPlaces();
+      view = "history";
+      nav.quickOpen = false;
+    },
+  });
+  const loader = session.loader;
+  const repo = $derived(session.repo);
+  const history = $derived(loader.history);
+  const reads = $derived(loader.reads);
+  const error = $derived(session.error);
+  const loading = $derived(session.loading);
+  const paging = $derived(loader.paging);
+  const focusOnly = $derived(loader.focusOnly);
+  /** Goes up on every reload of the history, so the views showing it reload too. */
+  const version = $derived(loader.version);
+  const load = (path: string) => session.load(path);
+  const refresh = () => loader.refresh();
+  const refreshQuietly = () => loader.refreshQuietly();
+  const reload = () => loader.reload();
+  const retryRead = (part: ReadPart) => loader.retryRead(part);
+  const loadOlder = (until: string | null = null) => loader.loadOlder(until);
+  const ensureLoaded = (id: string) => loader.ensureLoaded(id);
+  const closeRepo = () => session.close();
+  const findFolder = (old: string) => session.findFolder(old);
   $effect(() => {
-    const h = history;
-    if (!h?.unpushedPending) return;
-    untrack(() => {
-      if (settling) return;
-      const mine = generation;
-      settling = true;
-      const ids = h.rows.filter((r) => !r.unpushed && !r.worktree).map((r) => r.id);
-      api.settleUnpushed(ids, "history-unpushed").then(
-        (found) => {
-          settling = false;
-          if (found && mine === generation) refreshQuietly();
-        },
-        () => (settling = false),
-      );
-    });
+    if (loader.history?.unpushedPending) untrack(() => loader.settleUnpushed());
   });
   let selected = $state<string | null>(null);
-  let error = $state<string | null>(null);
-  let loading = $state(false);
-  /** Commits of the first load. Each load as the list scrolls on doubles what is loaded, up to
-   *  `MAX_STEP` more at a time, and brings only the rows that are new. */
-  const PAGE = 2_000;
-  const MAX_STEP = 50_000;
-  /** Commits to load: a page, and more once the list has scrolled on or a commit further down was asked for. */
-  let limit = PAGE;
-  /** Older commits on their way: "more" for the next page, or the commit loaded down to. */
-  let paging = $state<string | null>(null);
-  /** Commits loaded down to that no branch reaches, so History never gets them. */
-  let unreachable = new Set<string>();
   let list = $state<HistoryList>();
-  /** Current Branch Only: History shows the checked-out branch, its upstream and the trunk alone. */
-  let focusOnly = $state(false);
   let searchField = $state<SearchField>();
   let findField = $state<FindField>();
   let stashesView = $state<StashesView>();
   /** The width of the details panel, one for Changes and a commit so the graph keeps its width
    *  between them; until it is dragged, as wide as the graph lets it be. */
   let panelWidth = $state<number | null>(null);
-  /** Goes up on every reload of the history, so the changes panel reloads too. */
-  let version = $state(0);
   /** The Conflicts screen is open in place of History. */
   let resolving = $state(false);
   const operation = $derived(history?.operation ?? null);
@@ -582,7 +594,7 @@
       detached: !history.head.branch && !operation?.branch,
     });
   }
-  const rowsById = $derived(new Map(history?.rows.map((r) => [r.id, r]) ?? []));
+  const rowsById = $derived(loader.rowsById);
   /** What the graph shows: the whole history, or Current Branch Only once its rows are in. */
   const graphHistory = $derived(history && focusOnly ? focusedView(history) : history);
   /** The commits Current Branch Only shows; null while it is off. */
@@ -657,7 +669,7 @@
   const hitMap = $derived(new Map(search.result?.hits.map((h) => [h.id, h.files]) ?? []));
   /** Matching commits further down than the loaded history, newest first. */
   const olderMatches = $derived(
-    searching && search.result && history?.truncated ? search.result.hits.filter((h) => !rowsById.has(h.id) && !unreachable.has(h.id)).map((h) => h.id) : [],
+    searching && search.result && history?.truncated ? search.result.hits.filter((h) => !rowsById.has(h.id) && !loader.unreachable.has(h.id)).map((h) => h.id) : [],
   );
   /** Matching commits: the loaded ones in graph order, then the older ones. */
   const matches = $derived(
@@ -702,172 +714,8 @@
     });
   });
 
-  // Opening a repository switches the one the backend answers for. Each open gets a number, and an
-  // answer that belongs to an older one (a reload started before the switch, an earlier open) is
-  // dropped, so the window never shows one repository's commits while the backend has another.
-  let generation = 0;
-  let opening: Promise<void> = Promise.resolve();
-
-  /** The folder of the repository asked for, or of the one open, isn't there any more: its
-   *  screen shows in place of Recent Repositories. */
-  let gone = $state<Gone | null>(null);
-  /** What the last Retry or Find Folder… found, when it didn't work. */
-  let goneNote = $state<string | null>(null);
-  let reconnecting = $state(false);
   const shownPath = (path: string) => tilde(path, start.info?.home ?? "");
-  const goneShown = $derived(gone && goneScreen(gone, { message: messageOf(savedMessage(gone.path)), conflicts: gone.conflictDraft }, shownPath, mac));
-
-  function load(path: string): Promise<void> {
-    const mine = ++generation;
-    // One open at a time: the backend keeps whichever repository was opened last.
-    opening = opening.then(() => loadNow(path, mine));
-    return opening;
-  }
-
-  async function loadNow(path: string, mine: number) {
-    if (mine !== generation) return;
-    loading = true;
-    error = null;
-    // The commit panel must not ask the new repository about the old one's commits.
-    selected = null;
-    second = null;
-    submoduleSel = null;
-    search.clear();
-    oplog.forget();
-    forgetPlaces();
-    lfs.forget();
-    activity.reset();
-    stopPaging();
-    if (view === "compare" || view === "file" || view === "stack" || view === "pull" || view === "series" || view === "reviews" || view === "browse") view = "history";
-    // The Conflicts screen goes too, before the other repository opens: it saves its draft for
-    // its own folder, and reads nothing of the new one.
-    resolving = false;
-    try {
-      limit = PAGE;
-      unreachable = new Set();
-      focusOnly = false;
-      let summary = await api.openRepo(path);
-      if (summary.untrusted) {
-        const answer = await askTrust(summary.name, summary.untrusted, true);
-        if (mine !== generation || !answer) return;
-        summary = await api.openRepo(path, answer);
-      }
-      const next = await api.history(limit);
-      if (mine !== generation) return;
-      gone = null;
-      goneNote = null;
-      repo = summary;
-      nav.repo = summary.path;
-      github.load(summary.path);
-      take(next, null);
-      version++;
-      oplog.load();
-      lfs.load();
-      if (repo) github.load(repo.path);
-      // Start on the checked-out commit, like the design: HEAD's latest commit is selected.
-      selected = next.head.commit ?? next.rows[0]?.id ?? null;
-      requestAnimationFrame(() => selected && list?.reveal(selected));
-    } catch (err) {
-      if (mine === generation) await failed(path, err, mine);
-    } finally {
-      if (mine === generation) loading = false;
-    }
-  }
-
-  /** «Do you really want to let it run these programs?», while opening a repository or once it
-   *  is open Restricted. */
-  let trustAsk = $state<{ name: string; findings: TrustFinding[]; opening: boolean; answer: (a: "trust" | "restricted" | null) => void } | null>(null);
-
-  function askTrust(name: string, findings: TrustFinding[], opening: boolean): Promise<"trust" | "restricted" | null> {
-    return new Promise((answer) => {
-      trustAsk = {
-        name,
-        findings,
-        opening,
-        answer: (a) => {
-          trustAsk = null;
-          answer(a);
-        },
-      };
-    });
-  }
-
-  /** Trust This Repository…: git runs its settings from now on. */
-  async function trustOpen() {
-    if (!repo) return;
-    const shown = repo;
-    if ((await askTrust(shown.name, shown.restricted, false)) !== "trust") return;
-    try {
-      await api.trustRepo(shown.path);
-    } catch (err) {
-      confirm.say(String(err), "warn");
-      return;
-    }
-    if (repo?.path === shown.path) repo = { ...repo, restricted: [] };
-    await reload();
-  }
-
-  /** Opening or reading the repository at `path` failed: when its folder isn't there, the
-   *  screen of a gone folder says why and what is safe, otherwise the error shows. */
-  async function failed(path: string, err: unknown, mine: number) {
-    const found = await api.goneFolder(path).catch(() => null);
-    if (mine !== generation) return;
-    if (!found) {
-      error = String(err);
-      return;
-    }
-    const again = gone?.path === found.path;
-    if (repo) closeRepo();
-    gone = found;
-    goneNote = again ? `Still not there at ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.` : null;
-  }
-
-  /** Open Main Folder: the gone worktree's commit message and Conflicts draft stay with it. */
-  function goneMain() {
-    if (gone?.worktree?.main) load(gone.worktree.main);
-  }
-
-  /** Close: the main window shows Recent Repositories again, another window closes. */
-  function goneClose() {
-    const win = getCurrentWindow();
-    if (win.label !== "main") {
-      win.close();
-      return;
-    }
-    gone = null;
-    goneNote = null;
-    error = null;
-  }
-
-  /** Find Folder… and Locate…: choose where the folder that was at `old` is now, point git at it
-   *  there and open it. It is the same folder, so its commit message and Conflicts draft go
-   *  along, and the toast says they did. */
-  async function findFolder(old: string) {
-    const name = old.split(/[/\\]/).filter(Boolean).pop() ?? old;
-    const near = gone?.path === old ? gone.found : null;
-    const picked = await open({ directory: true, multiple: false, title: `Find ${name}`, defaultPath: near ?? old.replace(/[/\\][^/\\]*[/\\]?$/, "") });
-    if (typeof picked !== "string") return;
-    reconnecting = true;
-    goneNote = null;
-    error = null;
-    let moved: { path: string; conflictDraft: boolean };
-    try {
-      moved = await api.reconnectFolder(old, picked);
-    } catch (err) {
-      if (gone?.path === old) goneNote = String(err);
-      else error = String(err);
-      return;
-    } finally {
-      reconnecting = false;
-    }
-    const message = moveMessage(old, moved.path);
-    await load(moved.path);
-    if (repo?.path !== moved.path) return;
-    const along = [message && "commit message", moved.conflictDraft && "Conflicts draft"].filter(Boolean);
-    const newName = moved.path.split(/[/\\]/).filter(Boolean).pop() ?? moved.path;
-    confirm.say(`Reconnected ${newName}.${along.length ? ` Its ${along.join(" and ")} came along.` : ""}`, "done");
-  }
-
+  const goneShown = $derived(session.gone && goneScreen(session.gone, { message: messageOf(savedMessage(session.gone.path)), conflicts: session.gone.conflictDraft }, shownPath, mac));
 
   const targetOf = $derived(new Map(history?.refs.map((r) => [r.kind === "tag" ? `tag:${r.name}` : r.name, r.target]) ?? []));
   /** Lane color of a branch's latest commit; a name that doesn't exist yet gets HEAD's. */
@@ -899,7 +747,7 @@
     try {
       request = await pending;
     } catch (err) {
-      error = String(err);
+      session.error = String(err);
       return false;
     }
     const before = history?.head;
@@ -1548,7 +1396,7 @@
       const detail = await api.commitDetail(id);
       copyText([detail.summary, detail.body.trim()].filter(Boolean).join("\n\n"), "Copied the message.");
     } catch (err) {
-      error = String(err);
+      session.error = String(err);
     }
   }
 
@@ -1707,171 +1555,6 @@
     if (await api.refreshRemoteTags().catch(() => false)) await refreshQuietly();
   }
 
-  /** Reload after the repository changed, here or outside the app, keeping the selection when it still exists.
-   *  One reload runs at a time: asked for meanwhile (focus, a fetch, an action finishing), one more
-   *  follows it, for everyone who asked, so that it sees what changed. */
-  function refresh(): Promise<void> {
-    refreshAll = true;
-    return refreshOnce();
-  }
-  /** Reload for nothing done here that the watch wouldn't see: the window came back to the
-   *  front, something changed outside, a fetch, which leaves the files alone. What the watch
-   *  noticed no change in isn't asked of git again; when nothing changed, nothing is read again. */
-  function refreshQuietly(): Promise<void> {
-    return refreshOnce();
-  }
-  function refreshOnce(): Promise<void> {
-    if (!repo || loading) return Promise.resolve();
-    // Older commits are on their way: reload once they are in, with the new limit.
-    if (paging) {
-      refreshAfterPaging = true;
-      return Promise.resolve();
-    }
-    if (refreshQueued) return refreshQueued;
-    if (refreshing) {
-      const queued = refreshing.then(() => {
-        if (refreshQueued === queued) refreshQueued = null;
-        return refreshOnce();
-      });
-      refreshQueued = queued;
-      return queued;
-    }
-    const done = refreshNow().finally(() => {
-      if (refreshing === done) refreshing = null;
-    });
-    refreshing = done;
-    return done;
-  }
-  /** Reload, asked for: Activity gets what changed and the git commands it ran, and unless
-   *  Activity is open to show it, so does a toast. */
-  async function reload() {
-    foldersSince = Date.now();
-    const before = history;
-    await refresh();
-    const after = history;
-    if (!before || !after || after === before) return;
-    const news = reloadNews(before, after);
-    activity.reloaded(news.text, after.reads);
-    if (!activity.open) confirm.say(`Reloaded. ${news.text}.`, news.partial ? "warn" : "done");
-  }
-
-  let refreshing: Promise<void> | null = null;
-  /** The next reload asks git for everything: something was done here since the last one began. */
-  let refreshAll = true;
-  /** The reload that follows the one under way. */
-  let refreshQueued: Promise<void> | null = null;
-  let refreshAfterPaging = false;
-  /** Number of the page load under way: one that finishes after another started, or after the
-   *  repository changed, leaves `paging` to the newer one. */
-  let pagingToken = 0;
-
-  /** Another repository, or none: older commits on their way belong to the old one. */
-  function stopPaging() {
-    pagingToken++;
-    paging = null;
-    refreshAfterPaging = false;
-    settling = false;
-    api.stopReads(["history-unpushed"]).catch(() => {});
-  }
-
-  async function refreshNow() {
-    const mine = generation;
-    const shown = history;
-    const quiet = !refreshAll && !!shown;
-    refreshAll = false;
-    readSince = Date.now();
-    try {
-      const next = withRows(await api.history(limit, null, shown?.key ?? null, focusOnly, quiet), shown);
-      // Another repository was opened meanwhile: this answer may come from the old one.
-      if (mine !== generation || loading) return;
-      take(next, shown);
-      // Nothing changed: the views, Undo and LFS have it all already.
-      if (!next.unchanged) {
-        version++;
-        oplog.load();
-        lfs.load();
-      }
-      if (!selected || !next.rows.some((r) => r.id === selected)) selected = next.head.commit ?? next.rows[0]?.id ?? null;
-      // Current Branch Only follows a checkout: a commit it no longer shows gives way to HEAD.
-      else if (next.focus && !next.focus.rows.some((i) => next.rows[i].id === selected)) selected = next.head.commit ?? selected;
-    } catch (err) {
-      // What was done here is still to be read.
-      if (!quiet) refreshAll = true;
-      if (mine === generation && repo) await failed(repo.path, err, mine);
-      else if (mine === generation) error = String(err);
-    }
-  }
-
-  /** Show `next`, read after `shown`: a part it couldn't read keeps `shown`'s reading, marked
-   *  stale, or is not known (see reads.ts). What the other folders have comes after it. */
-  function take(next: History, shown: History | null) {
-    const settled = settle(carryStates(next, shown), shown, shown ? reads : null, Date.now());
-    history = settled.history;
-    reads = settled.states;
-    loadFolders();
-  }
-
-  /** Since when an earlier reading of a folder no longer counts (ms): the window came back to
-   *  the front or Reload was asked for, and files there may have changed with nothing in git
-   *  showing it. */
-  let foldersSince: number | null = null;
-
-  /** Read what the other worktrees and the submodules' folders have, after the history: each
-   *  row fills in as its folder is read. A newer call stops this one. */
-  async function loadFolders() {
-    if (!history || (!history.worktrees.some((t) => t.pending) && !history.submodules.some((s) => s.pending))) return;
-    const mine = generation;
-    try {
-      await api.folderStates(foldersSince, (state) => {
-        if (mine === generation && history) history = withState(history, state);
-      });
-    } catch (err) {
-      if (mine === generation && history && !stopped(err)) history = failChecking(history, String(err));
-    }
-  }
-
-  /** The window came back to the front: what changed meanwhile, also in the other folders. */
-  function cameBack() {
-    foldersSince = Date.now();
-    showsAgain();
-  }
-
-  /** When the reload under way, or the last one, began reading (ms). */
-  let readSince = 0;
-  /** Changes outside that came while the window was out of sight: read once it shows again. */
-  let unseen: OutsideChange | null = null;
-
-  /** Something changed in the repository outside this window: a terminal, an editor, another
-   *  window. Read it now, also while the window is behind others; branches, HEAD, the stashes
-   *  or what is staged moving goes to Activity. The selection and the scrolled-to commit stay. */
-  async function outsideChanged(change: OutsideChange) {
-    if (!repo || !history) return;
-    // This window's own action and the reload after it go first: what they changed is no news.
-    while (confirm.running || refreshing) await (refreshing ?? new Promise((done) => setTimeout(done, 200)));
-    // A reload that began after it sees it already, e.g. the one after an action here.
-    if (readSince > change.at) return;
-    if (document.visibilityState === "hidden") {
-      unseen = unseen ? { git: unseen.git || change.git, files: unseen.files || change.files, at: Math.max(unseen.at, change.at), window: change.window ?? unseen.window } : change;
-      return;
-    }
-    const before = history;
-    const mine = generation;
-    await refreshQuietly();
-    const after = history;
-    if (!change.git || !after || after === before || mine !== generation) return;
-    const news = reloadNews(before, after);
-    if (news.text !== "Nothing new") activity.outside(news.text, after.reads, change.window);
-  }
-
-  /** The window shows again: minimized, hidden or covered by other windows before, which needn't
-   *  bring it to the front. What changed meanwhile is read as it would have been. */
-  function showsAgain() {
-    const change = unseen;
-    unseen = null;
-    if (change) outsideChanged(change);
-    else refreshQuietly();
-  }
-
   /** The window asks whether to close without the conflict draft: a close meanwhile waits. */
   let askingToClose = false;
   /** Closing the window, or quitting, waits for the Conflicts screen's last draft to be written.
@@ -1894,85 +1577,6 @@
     if (answer === "Close Without Saving") return void getCurrentWindow().destroy();
     if (answer === "Try Again") return void getCurrentWindow().close();
     api.cancelQuit().catch(() => {});
-  }
-
-  /** Read one part again after it failed. The worktrees and submodules are read alone; the
-   *  rest come with the history. */
-  async function retryRead(part: ReadPart) {
-    if (!reads || !history) return;
-    const mine = generation;
-    reads = { ...reads, [part]: { ...reads[part], phase: "loading" } };
-    if (part !== "worktrees" && part !== "submodules") {
-      const error = reads[part].error ?? "";
-      await refresh();
-      // No new reading came (the reload failed, or waits for older commits): as it was.
-      if (mine === generation && reads?.[part].phase === "loading") reads = stillFailing(reads, part, error);
-      return;
-    }
-    try {
-      const patch = part === "worktrees" ? { worktrees: await api.worktrees() } : { submodules: await api.submodules() };
-      if (mine !== generation || !history || !reads) return;
-      const done = retried(history, reads, part, patch, Date.now());
-      history = done.history;
-      reads = done.states;
-    } catch (err) {
-      if (mine === generation && reads) reads = stillFailing(reads, part, String(err));
-    }
-  }
-
-  /** The page of older commits on its way, if one is. */
-  let pageRun: Promise<boolean> | null = null;
-
-  /** Load the next page of older commits, or with `until` the history down to that commit.
-   *  Whether `until` is in History now. */
-  function loadOlder(until: string | null = null): Promise<boolean> {
-    const run = loadPage(until);
-    if (paging) {
-      pageRun = run;
-      run.finally(() => pageRun === run && (pageRun = null));
-    }
-    return run;
-  }
-
-  async function loadPage(until: string | null): Promise<boolean> {
-    if (!repo || loading || paging || !history?.truncated) return false;
-    const mine = generation;
-    const token = ++pagingToken;
-    paging = until ?? "more";
-    try {
-      // A reload already on its way would land after this one, with fewer commits.
-      while (refreshing) await refreshing;
-      const shown = history;
-      const next = withRows(await api.history(until ? limit : limit + Math.min(limit, MAX_STEP), until, shown?.key ?? null, focusOnly), shown);
-      if (mine !== generation || loading) return false;
-      limit = Math.max(limit, next.loaded);
-      take(next, shown);
-      const found = !!until && next.rows.some((r) => r.id === until);
-      if (until && !found) unreachable.add(until);
-      return found;
-    } catch (err) {
-      if (mine === generation) error = String(err);
-      return false;
-    } finally {
-      if (token === pagingToken) {
-        paging = null;
-        if (refreshAfterPaging) {
-          refreshAfterPaging = false;
-          refreshOnce();
-        }
-      }
-    }
-  }
-
-  /** Make sure History has the commit, loading older commits down to it when it is further down
-   *  than what is loaded. Whether History has it. */
-  async function ensureLoaded(id: string): Promise<boolean> {
-    if (rowsById.has(id)) return true;
-    // A page on its way may bring it, and the next one can start only after it.
-    if (pageRun) await pageRun;
-    if (rowsById.has(id)) return true;
-    if (!history?.truncated || unreachable.has(id)) return false;
-    return loadOlder(id);
   }
 
   // Background fetch, from Settings › General: keeps ahead/behind counts current. It skips a
@@ -2004,28 +1608,9 @@
     load(path);
   }
 
-  /** Back to the Welcome window; the repository stays in Recent Repositories. */
-  function closeRepo() {
-    ++generation;
-    stopPaging();
-    activity.reset();
-    repo = null;
-    history = null;
-    reads = null;
-    selected = null;
-    second = null;
-    search.clear();
-    oplog.forget();
-    forgetPlaces();
-    view = "history";
-    nav.quickOpen = false;
-    error = null;
-    loading = false;
-  }
-
   /** Current Branch Only on or off. Off shows the whole history at once; on loads its rows. */
   async function setFocusOnly(on: boolean) {
-    focusOnly = on;
+    loader.focusOnly = on;
     if (on && !history?.focus) await refresh();
     // The selected commit stays in view, or gives way to HEAD when the filter hides it.
     if (focusIds && selected && !focusIds.has(selected)) selected = history?.head.commit ?? selected;
@@ -2035,7 +1620,7 @@
 
   /** A commit Current Branch Only hides turns it off, so the graph shows what is selected. */
   function unhide(id: string) {
-    if (focusIds && !focusIds.has(id)) focusOnly = false;
+    if (focusIds && !focusIds.has(id)) loader.focusOnly = false;
   }
 
   function select(id: string) {
@@ -2255,7 +1840,7 @@
     // its own repository.
     const unlisten = getCurrentWindow().listen("repo-touched", () => refresh());
     // A terminal, an editor or another window changed the repository.
-    const outside = getCurrentWindow().listen<OutsideChange>("outside-change", (event) => outsideChanged(event.payload));
+    const outside = getCurrentWindow().listen<OutsideChange>("outside-change", (event) => loader.outsideChanged(event.payload));
     // Signing in or out changes what GitHub tells about the pull requests.
     const account = listen("account-changed", () => repo && github.accountChanged());
     const closing = getCurrentWindow().onCloseRequested(closeRequested);
@@ -2263,7 +1848,7 @@
     const recent = getCurrentWindow().listen<string>("menu-open", (event) => void load(event.payload));
     // Another window trusted a repository: git runs its settings here too.
     const trusted = listen<string>("trust-changed", (event) => {
-      if (repo?.path === event.payload) repo = { ...repo, restricted: [] };
+      session.trusted(event.payload);
     });
     // Back in front: the menu bar shows this window's commands again.
     const front = getCurrentWindow().onFocusChanged(({ payload }) => {
@@ -2284,11 +1869,11 @@
   });
 </script>
 
-<svelte:document onvisibilitychange={() => document.visibilityState === "visible" && unseen && showsAgain()} />
+<svelte:document onvisibilitychange={() => document.visibilityState === "visible" && loader.unseen && loader.showsAgain()} />
 
 <svelte:window
   bind:innerWidth={windowWidth}
-  onfocus={cameBack}
+  onfocus={() => loader.cameBack()}
   onmouseup={(event) => {
     // A mouse's own Back and Forward buttons.
     if ((event.button !== 3 && event.button !== 4) || !history || confirm.request || start.sheet) return;
@@ -2331,19 +1916,19 @@
 />
 
 {#if !repo || !history}
-  <Welcome {loading} error={gone ? null : (error ?? settingsNote?.text ?? null)} onOpen={chooseRepo} onOpenPath={load} onLocate={findFolder} gone={gone ? goneAside : undefined} />
+  <Welcome {loading} error={session.gone ? null : (error ?? settingsNote?.text ?? null)} onOpen={chooseRepo} onOpenPath={load} onLocate={findFolder} gone={session.gone ? goneAside : undefined} />
   {#snippet goneAside()}
-    {#if gone && goneShown}
+    {#if session.gone && goneShown}
       <FolderGone
-        {gone}
+        gone={session.gone}
         screen={goneShown}
         shown={shownPath}
-        busy={loading || reconnecting}
-        note={goneNote}
-        onMain={goneMain}
-        onFind={() => gone && findFolder(gone.path)}
-        onRetry={() => gone && load(gone.path)}
-        onClose={goneClose}
+        busy={loading || session.reconnecting}
+        note={session.goneNote}
+        onMain={() => session.goneMain()}
+        onFind={() => session.gone && findFolder(session.gone.path)}
+        onRetry={() => session.gone && load(session.gone.path)}
+        onClose={() => session.goneClose()}
       />
     {/if}
   {/snippet}
@@ -2401,7 +1986,7 @@
         <div class="lead" data-tauri-drag-region>
           <WindowTitle title={titleOf(repo, history)} steps={trailPath} onStep={goTo} />
           {#if repo.restricted.length}
-            <RestrictedBadge findings={repo.restricted} onTrust={trustOpen} />
+            <RestrictedBadge findings={repo.restricted} onTrust={() => session.trust()} />
           {/if}
           <!-- File History is about one file, Browse Files about one commit: a plain back arrow and no branch picker, as in the design, leave room for Find in file. -->
           {#if (view !== "file" && view !== "browse") || showConflicts}
@@ -2856,8 +2441,8 @@
   {/if}
   <ConfirmSheet repo={repo.name} branch={history.head.branch ?? operation?.branch ?? null} color={headColor} />
 {/if}
-{#if trustAsk}
-  <TrustSheet name={trustAsk.name} findings={trustAsk.findings} opening={trustAsk.opening} home={start.info?.home ?? ""} onAnswer={trustAsk.answer} />
+{#if session.trustAsk}
+  <TrustSheet name={session.trustAsk.name} findings={session.trustAsk.findings} opening={session.trustAsk.opening} home={start.info?.home ?? ""} onAnswer={session.trustAsk.answer} />
 {/if}
 {#if picker?.kind === "commands"}
   <CommandPalette
