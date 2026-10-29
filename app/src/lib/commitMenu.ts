@@ -15,7 +15,7 @@ import { addToCommitRequest, dropCommitRequest, rewordRequest, squashRequest } f
 import { bisectMarkRequest, bisectResetRequest, bisectStartRequest } from "./bisect";
 import { keys } from "./keys";
 import { github } from "./github.svelte";
-import { branchMergeRequest, gitlabOf } from "./mergeRequest";
+import { branchMergeRequest, gitlabOf, signedInTo } from "./mergeRequest";
 import { dropsPushed, lockedCommit, lockedNote, protectedHead } from "./protect";
 
 /** What the menu needs from the window: the repository as shown, and what its items do. */
@@ -131,7 +131,7 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
     const project = gitlabOf(history, github.gitlab, ref);
     const mr = project ? github.mergeRequestOf(ref.name) : null;
     if (mr) reviewing.push(item(`Merge Request !${mr.number} of ${ref.name}`, menuIcons.pull, () => app.openPull(ref.name, null, "gitlab")));
-    else if (project) reviewing.push(item(`Create Merge Request for ${ref.name}…`, menuIcons.pull, () => run(branchMergeRequest(ctx, ref, project))));
+    else if (project) reviewing.push(item(`Create Merge Request for ${ref.name}…`, menuIcons.pull, () => (signedInTo(project) ? app.openPull(ref.name, null, "gitlab") : run(branchMergeRequest(ctx, ref, project)))));
   }
   // A branch only a GitLab remote has, e.g. a teammate's: its New merge request page.
   const locals = new Set(history.refs.filter((r) => r.kind === "local").map((r) => r.name));

@@ -543,7 +543,7 @@
       steps: trailPath.length > 0,
       conflicts: showConflicts && operation ? { kind: operation.kind, noun: describe(operation).noun, conflicted: operation.conflicted } : null,
       file: nav.file ? { path: nav.file.path, line } : null,
-      github: { place: github.repo ? `${github.repo.owner}/${github.repo.name}` : null, open: github.pulls.filter((p) => p.state === "open").length },
+      github: { place: github.repo ? `${github.repo.owner}/${github.repo.name}` : (github.mrProject?.path ?? null), open: github.listOf(github.forge).filter((p) => p.state === "open").length },
       pull: pullBranch ? { branch: pullBranch, pr: shownPull?.number ?? null, byNumber: !!pullNumber, gitlab: pullForge === "gitlab" } : null,
       series: seriesQuery,
       compare: comparing,
@@ -2540,7 +2540,7 @@
         {/key}
       {:else if view === "reviews" && branchCtx}
         {#key repo.path}
-          <ReviewsView.component ctx={branchCtx} {colorOf} {run} onOpen={(pull) => openPull(pull.head, pull.number)} />
+          <ReviewsView.component ctx={branchCtx} {colorOf} {run} onOpen={(pull, forge) => openPull(pull.head, pull.number, forge)} />
         {/key}
       {:else if view === "pull" && pullBranch && branchCtx}
         {#key repo.path}

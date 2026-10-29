@@ -12,9 +12,12 @@
   import { wordsOf, type ForgeKind } from "./forge";
   import type { Request } from "./confirm.svelte";
   import type { BranchContext } from "./branches";
-  import type { Action, History, MergeMethodName, Landing, PullCheck, PullEntry, PullRequest, PullSummary, Restack, RestackState, ReviewState, Rewrite, Stack, StackPreview } from "./types";
+  import type { Action, GitLabCreateFacts, GitLabUser, History, MergeMethodName, Landing, PullCheck, PullEntry, PullRequest, PullSummary, Restack, RestackState, ReviewState, Rewrite, Stack, StackPreview } from "./types";
   import type { SeriesQuery } from "./series";
   import { lane, person, plate, relativeTime, shortId, splitPath, tint } from "./format";
+  import PickChips, { type Pick } from "./PickChips.svelte";
+  import { defaultTemplate, exactPerson, matchLabels, squashChosen, squashStarts } from "./mrForm";
+  import { branchMergeRequest } from "./mergeRequest";
   import { kept } from "./kept";
   import PullFiles from "./PullFiles.svelte";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
@@ -39,7 +42,6 @@
     METHODS,
     methodsOf,
     targetRequest,
-    NEW_NUMBER,
     readBody,
     readyRequest,
     restackPushRequest,
@@ -190,7 +192,7 @@
 
   // Coming to another branch starts on its conversation, or as it was left there.
   $effect(() => {
-    const left = kept.get<Left>(`pull\0${branch}`);
+    const left = kept.get<Left>(`pull\0${forge}\0${branch}`);
     tab = left?.tab ?? "conversation";
     method = left?.method ?? null;
     deleteBranch = left?.deleteBranch ?? true;
@@ -200,7 +202,7 @@
 
   // How the screen is left, for coming back to it.
   $effect(() => {
-    kept.set(`pull\0${branch}`, { tab, method, deleteBranch, form: $state.snapshot(form) } satisfies Left);
+    kept.set(`pull\0${forge}\0${branch}`, { tab, method, deleteBranch, form: $state.snapshot(form) } satisfies Left);
   });
 
   async function reload() {
@@ -371,8 +373,7 @@
    *  branches that has no local copy yet but is the one this screen is about. */
   const worktreeLabel = $derived.by(() => {
     if (!pr || !place) return null;
-    // A fork's merge request is fetched by GitLab's own refs, which comes with reviewing it.
-    if (fork) return lab ? null : "Check Out in Worktree";
+    if (fork) return "Check Out in Worktree";
     if (history.head.branch === pr.head) return null;
     return worktreeOf(history, pr.head) ? "Open Its Worktree" : "Check Out in Worktree";
   });
@@ -385,7 +386,7 @@
       return;
     }
     const here = history.worktrees.find((t) => t.current)?.path ?? "";
-    act(pullWorktreeRequest(ctx, here, pr, place.remote, fork));
+    act(pullWorktreeRequest(ctx, here, pr, place.remote, fork, lab));
   }
 
   // --- Merging ---
@@ -576,6 +577,17 @@
     if (pr && login) act(reviewersRequest(pr, [login]));
   }
 
+  /** The box that asks someone on GitLab, picked from the people found. */
+  let askBox = $state<HTMLElement | null>(null);
+  const askedIds: Record<string, number> = {};
+
+  async function askGitLab(username: string) {
+    if (!pr) return;
+    let id: number | undefined = askedIds[username] ?? form?.known?.[username];
+    if (!id) id = exactPerson(await api.gitlabPeople(username).catch(() => []), username)?.id;
+    if (id) act(reviewersRequest(pr, [username], [id]));
+  }
+
   /** The button of the next step, when it has one. */
   const nextAction = $derived.by((): { label: string; go: () => void } | null => {
     if (!pr || !next || !place) return null;
@@ -604,7 +616,7 @@
       case "threads":
         return tab !== "conversation" ? { label: "Show Conversation", go: () => (tab = "conversation") } : null;
       case "review":
-        return p.settings.canPush && !lab && !p.requested.length ? { label: "Ask for Review…", go: () => reviewerBox?.focus() } : null;
+        return p.settings.canPush && !p.requested.length ? { label: "Ask for Review…", go: () => (lab ? askBox?.querySelector("input")?.focus() : reviewerBox?.focus()) } : null;
       default:
         return null;
     }
@@ -612,7 +624,26 @@
 
   // --- A new pull request ---
 
-  let form = $state<{ branch: string; title: string; body: string; base: string; draft: boolean; reviewers: string[]; adding: string; suggested: string[] } | null>(null);
+  let form = $state<{
+    branch: string;
+    title: string;
+    body: string;
+    base: string;
+    draft: boolean;
+    reviewers: string[];
+    adding: string;
+    suggested: string[];
+    /** GitLab: what else it opens with, and the account ids of the usernames picked. */
+    assignee?: string | null;
+    labels?: string[];
+    removeSource?: boolean;
+    squash?: boolean;
+    template?: string | null;
+    known?: Record<string, number>;
+  } | null>(null);
+  /** GitLab's labels and settings for the form, and the templates on the trunk. */
+  let labFacts = $state<GitLabCreateFacts | null>(null);
+  let labFactsError = $state<string | null>(null);
 
   /** The branch under this one in the stack, the natural base. */
   const below = $derived.by(() => {
@@ -642,24 +673,91 @@
 
   // The form starts from the branch's own commits.
   $effect(() => {
-    if (lab || summary || !stack || form?.branch === branch) return;
+    if (summary || !stack || form?.branch === branch) return;
     const base = below ?? trunk;
     const own = stack.commits.filter((c) => c.branch === branch);
     // The newest commit says best where the branch ended up.
     const title = own[0]?.summary ?? branch;
     const text = own.length === 1 ? own[0].message.split("\n").slice(1).join("\n").trim() : "";
     form = { branch, title, body: text, base, draft: true, reviewers: [], adding: "", suggested: [] };
+    if (lab) {
+      form = { ...form, assignee: null, labels: [], removeSource: true, squash: false, template: null, known: {} };
+      const facts = untrack(() => labFacts);
+      if (facts) startFrom(facts);
+      else fresh = true;
+    }
     suggest(base);
   });
+
+  /** A new form waits for GitLab's facts to take its defaults from. */
+  let fresh = false;
+  let factsAsked = false;
+  $effect(() => {
+    if (!lab || !form || !stack || labFacts || labFactsError || factsAsked) return;
+    const rev = stack.trunk;
+    untrack(() => loadLabFacts(rev));
+  });
+
+  async function loadLabFacts(rev: string) {
+    factsAsked = true;
+    try {
+      labFacts = await api.gitlabCreateFacts(rev);
+      if (fresh && form) startFrom(labFacts);
+      fresh = false;
+    } catch (err) {
+      labFactsError = String(err);
+    } finally {
+      factsAsked = false;
+    }
+  }
+
+  /** The defaults GitLab gives a new merge request: the project's way with merged branches and
+   *  squashing, and the Default template for the description. */
+  function startFrom(facts: GitLabCreateFacts) {
+    if (!form) return;
+    form.removeSource = facts.removeSourceBranch;
+    form.squash = squashStarts(facts.squashOption);
+    const start = defaultTemplate(facts.templates);
+    if (start) {
+      form.template = start.name;
+      form.body = start.text;
+    }
+  }
+
+  function pickTemplate(name: string | null) {
+    if (!form || !labFacts) return;
+    form.template = name;
+    form.body = labFacts.templates.find((t) => t.name === name)?.text ?? "";
+  }
 
   async function suggest(base: string) {
     const name = branch;
     const ref = base === below ? base : (stack?.trunk ?? base);
+    if (lab) {
+      const owners = await api.gitlabCodeOwners(ref, name).catch(() => [] as GitLabUser[]);
+      if (!form || form.branch !== name) return;
+      const others = owners.filter((o) => o.username !== github.mrMe);
+      form.known = { ...form.known, ...Object.fromEntries(others.map((o) => [o.username, o.id])) };
+      form.suggested = others.map((o) => o.username);
+      form.reviewers = [...form.suggested];
+      return;
+    }
     const owners = await api.codeOwners(ref, name).catch(() => [] as string[]);
     if (!form || form.branch !== name) return;
     form.suggested = owners.filter((o) => o !== me);
     form.reviewers = [...form.suggested];
   }
+
+  /** GitLab's people for a box of the form: name, username and their id kept for sending. */
+  async function findPeople(text: string): Promise<Pick[]> {
+    if (!text.trim()) return [];
+    const people = await api.gitlabPeople(text);
+    for (const p of people) askedIds[p.username] = p.id;
+    if (form) form.known = { ...form.known, ...Object.fromEntries(people.map((p) => [p.username, p.id])) };
+    return people.map((p) => ({ key: p.username, label: p.username, sub: p.name }));
+  }
+
+  const labelPicks = (names: string[]): Pick[] => names.map((name) => ({ key: name, label: name, color: labFacts?.labels.find((l) => l.name === name)?.color }));
 
   function pickBase(base: string) {
     if (!form || form.base === base) return;
@@ -677,19 +775,38 @@
   const stackLines = $derived.by((): StackLine[] | null => {
     if (!stack || stack.branches.length < 2) return null;
     const lines = [...stack.branches].reverse().map((b) => {
-      const p = github.pullOf(b.name);
-      return { branch: b.name, number: b.name === branch ? NEW_NUMBER : p ? `#${p.number}` : null, merged: p?.state === "merged" };
+      const p = github.pullOf(b.name, forge);
+      return { branch: b.name, number: b.name === branch ? `${w.mark}$NUMBER` : p ? `${w.mark}${p.number}` : null, merged: p?.state === "merged" };
     });
     return lines.some((l) => l.branch !== branch && l.number) ? lines : null;
   });
   /** The stack's other open pull requests, oldest first. */
-  const others = $derived(stack ? [...stack.branches].reverse().map((b) => github.openPullOf(b.name)).filter((p): p is PullSummary => !!p && p.head !== branch) : []);
+  const others = $derived(stack ? [...stack.branches].reverse().map((b) => github.openPullOf(b.name, forge)).filter((p): p is PullSummary => !!p && p.head !== branch) : []);
 
   const newPull = $derived.by((): NewPull | null => {
-    if (!form || !gh) return null;
+    if (!form || !place) return null;
     const t = localRef?.tracking;
-    const remote = t && !t.gone ? t.remote : gh.remote;
+    const remote = t && !t.gone ? t.remote : place.remote;
     const needsPush = !t || t.gone || t.ahead > 0;
+    const known = form.known ?? {};
+    const project = github.mrProject;
+    const ref = localRef;
+    const gitlab =
+      lab && project && ref
+        ? {
+            create: {
+              reviewerIds: form.reviewers.flatMap((r) => (known[r] ? [known[r]] : [])),
+              assigneeIds: form.assignee && known[form.assignee] ? [known[form.assignee]] : [],
+              labels: form.labels ?? [],
+              removeSourceBranch: !!form.removeSource,
+              squash: !!form.squash,
+            },
+            assignee: form.assignee ?? null,
+            fallback: () => branchMergeRequest(ctx, ref, project),
+          }
+        : null;
+    // A merge request needs its local branch: that's what goes up, and what the push path asks for.
+    if (lab && !gitlab) return null;
     return {
       branch,
       base: form.base,
@@ -701,6 +818,7 @@
       stack: stackLines,
       others,
       commits: commitsOver(form.base),
+      gitlab,
     };
   });
 
@@ -939,11 +1057,11 @@
         {/if}
       </div>
       {/if}
-    {:else if form && gh && !lab}
+    {:else if form && place}
       <div class="title-block">
-        <h1>New pull request</h1>
+        <h1>New {w.noun}</h1>
         <span class="muted small-text">
-          {#if toPush}{branch} has {plural(toPush, "commit")} that {toPush === 1 ? "is" : "are"} not on GitHub yet.{:else}{branch} is on GitHub; this opens a pull request for it.{/if}
+          {#if toPush}{branch} has {plural(toPush, "commit")} that {toPush === 1 ? "is" : "are"} not on {w.name} yet.{:else}{branch} is on {w.name}; this opens a {w.noun} for it.{/if}
         </span>
       </div>
       <div class="form">
@@ -952,7 +1070,7 @@
           <input class="field" bind:value={form.title} placeholder="What it does" />
         </label>
         <div class="form-row">
-          <span class="form-label">Base</span>
+          <span class="form-label">{lab ? "Target" : "Base"}</span>
           <span class="chips">
             {#each bases as b (b)}
               <button class="chip" class:on={form.base === b} style:background={form.base === b ? tint(colorOf(b), "label") : undefined} style:color={form.base === b ? plate(colorOf(b)) : undefined} onclick={() => pickBase(b)}>{b}</button>
@@ -960,9 +1078,21 @@
             {#if below && form.base === below}<span class="note">Picked from the stack: {branch} is built on {below}</span>{/if}
           </span>
         </div>
+        {#if lab && labFacts?.templates.length}
+          <div class="form-row">
+            <span class="form-label">Template</span>
+            <span class="chips">
+              {#each labFacts.templates as t (t.name)}
+                <button class="chip" class:on={form.template === t.name} onclick={() => pickTemplate(t.name)}>{t.name}</button>
+              {/each}
+              <button class="chip" class:on={!form.template} onclick={() => pickTemplate(null)}>None</button>
+              <span class="note">From .gitlab/merge_request_templates on {trunk}</span>
+            </span>
+          </div>
+        {/if}
         <label class="form-row">
           <span class="form-label">Description</span>
-          <textarea class="field" rows="5" bind:value={form.body} placeholder="Optional"></textarea>
+          <textarea class="field" rows={lab && form.template ? 8 : 5} bind:value={form.body} placeholder="Optional"></textarea>
         </label>
         {#if stackLines}
           <div class="form-row">
@@ -972,6 +1102,17 @@
         {/if}
         <div class="form-row">
           <span class="form-label">Reviewers</span>
+          {#if lab}
+            <PickChips
+              label="Add a reviewer"
+              people
+              chosen={form.reviewers.map((r) => ({ key: r, label: r }))}
+              find={findPeople}
+              onPick={(p) => form && !form.reviewers.includes(p.key) && (form.reviewers = [...form.reviewers, p.key])}
+              onRemove={(key) => form && (form.reviewers = form.reviewers.filter((x) => x !== key))}
+            />
+            {#if form.suggested.length}<span class="note side">Suggested from CODEOWNERS</span>{/if}
+          {:else}
           <span class="chips">
             {#each form.reviewers as r (r)}
               <span class="chip on person">
@@ -993,7 +1134,41 @@
             />
             {#if form.suggested.length}<span class="note">Suggested from CODEOWNERS</span>{/if}
           </span>
+          {/if}
         </div>
+        {#if lab}
+          <div class="form-row">
+            <span class="form-label">Assignee</span>
+            <PickChips
+              label="Assign it"
+              people
+              single
+              placeholder="+ Assign"
+              chosen={form.assignee ? [{ key: form.assignee, label: form.assignee }] : []}
+              find={findPeople}
+              onPick={(p) => form && (form.assignee = p.key)}
+              onRemove={() => form && (form.assignee = null)}
+            />
+            {#if !form.assignee && labFacts?.me}
+              {@const self = labFacts.me}
+              <button class="capsule side" onclick={() => form && ((form.known = { ...form.known, [self.username]: self.id }), (form.assignee = self.username))}>Assign to Me</button>
+            {/if}
+          </div>
+          <div class="form-row">
+            <span class="form-label">Labels</span>
+            <PickChips
+              label="Add a label"
+              placeholder={labFacts && !labFacts.labels.length ? "No labels in this project" : "+ Add"}
+              chosen={labelPicks(form.labels ?? [])}
+              find={(text) => matchLabels(labFacts?.labels ?? [], form?.labels ?? [], text).map((l) => ({ key: l.name, label: l.name, color: l.color }))}
+              onPick={(p) => form && (form.labels = [...(form.labels ?? []), p.key])}
+              onRemove={(key) => form && (form.labels = (form.labels ?? []).filter((l) => l !== key))}
+            />
+          </div>
+          {#if labFactsError}
+            <div class="form-row"><span class="form-label"></span><span class="note">{labFactsError}</span></div>
+          {/if}
+        {/if}
       </div>
     {:else}
       <div class="empty">{loading ? "Loading…" : ""}</div>
@@ -1067,7 +1242,11 @@
         {:else}
           <span class="muted small-text">Nobody is asked to review it yet.</span>
         {/each}
-        {#if pr.settings.canPush && !lab}
+        {#if pr.settings.canPush && lab}
+          <span class="ask-box" bind:this={askBox}>
+            <PickChips label="Ask someone to review it" people placeholder="+ Ask someone" chosen={[]} find={findPeople} onPick={(p) => askGitLab(p.key)} onRemove={() => {}} />
+          </span>
+        {:else if pr.settings.canPush}
           <input
             class="add-reviewer ask"
             placeholder="+ Ask someone"
@@ -1180,15 +1359,21 @@
       {/if}
       <span class="step"
         ><span class="num">{newPull.push ? 2 : 1}</span><span
-          >Open a pull request into {form.base}{form.base === below ? `, so reviewers see only these ${plural(newPull.commits, "commit")}` : ""}</span
+          >Open a {w.noun} into {form.base}{form.base === below ? `, so reviewers see only these ${plural(newPull.commits, "commit")}` : ""}</span
         ></span
       >
       {#if newPull.stack && others.length}
-        <span class="step"><span class="num">{newPull.push ? 3 : 2}</span><span>Add the stack list to {others.map((o) => `#${o.number}`).join(", ")} and the new pull request</span></span>
+        <span class="step"><span class="num">{newPull.push ? 3 : 2}</span><span>Add the stack list to {others.map((o) => `${w.mark}${o.number}`).join(", ")} and the new {w.noun}</span></span>
       {/if}
       <div class="sep"></div>
-      {@render toggle(form.draft, "Create as draft", "Reviewers hear about it when you mark it ready", false, () => form && (form.draft = !form.draft))}
-      <button class="button primary merge" disabled={!form.title.trim()} onclick={create}>{newPull.push ? "Push and Create" : "Create Pull Request"}</button>
+      {@render toggle(form.draft, "Create as draft", lab ? "GitLab puts Draft: before its title; it can’t merge until marked ready" : "Reviewers hear about it when you mark it ready", false, () => form && (form.draft = !form.draft))}
+      {#if lab}
+        {@render toggle(!!form.removeSource, "Delete the source branch when merged", `GitLab deletes ${branch} there once it is in ${form.base}`, false, () => form && (form.removeSource = !form.removeSource))}
+        {#if labFacts && labFacts.squashOption !== "never"}
+          {@render toggle(!!form.squash, "Squash commits when merged", squashChosen(labFacts.squashOption) ? "One commit on the target for the whole merge request" : "The project always squashes", !squashChosen(labFacts.squashOption), () => form && (form.squash = !form.squash))}
+        {/if}
+      {/if}
+      <button class="button primary merge" disabled={!form.title.trim()} onclick={create}>{newPull.push ? "Push and Create" : lab ? "Create Merge Request" : "Create Pull Request"}</button>
     {/if}
   </aside>
 </div>
@@ -1750,6 +1935,13 @@
   }
   .note.center {
     text-align: center;
+  }
+  .side {
+    flex-shrink: 0;
+    align-self: center;
+  }
+  .ask-box {
+    display: flex;
   }
 
   /* The box on the right */

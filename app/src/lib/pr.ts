@@ -8,7 +8,8 @@ import type { Part, Request } from "./confirm.svelte";
 import type { BranchContext } from "./branches";
 import { shortId } from "./format";
 import { GITHUB, GITLAB, type Words } from "./forge";
-import type { Action, Failure, MergeMethodName, Plan, PullCall, PullRequest, PullSummary } from "./types";
+import { glabCreate } from "./mrForm";
+import type { Action, Failure, GitLabCreate, MergeMethodName, Plan, PullCall, PullRequest, PullSummary } from "./types";
 
 /** "Squash and Merge" as the start of a sentence: "Squash and merge". */
 const sentence = (label: string) => label.charAt(0) + label.slice(1).toLowerCase();
@@ -45,9 +46,9 @@ export interface StackLine {
 }
 
 /** The list as it goes into the description of `current`'s pull request. */
-export function stackSection(lines: StackLine[], current: string): string {
+export function stackSection(lines: StackLine[], current: string, noun = "pull request"): string {
   const rows = lines.map((line) => {
-    const name = line.number ?? `\`${line.branch}\` (no pull request yet)`;
+    const name = line.number ?? `\`${line.branch}\` (no ${noun} yet)`;
     return `- ${name}${line.merged ? " · merged" : ""}${line.branch === current ? " ← this one" : ""}`;
   });
   return [STACK_START, "**Stack** · kept up to date by Oxbow", "", ...rows, STACK_END].join("\n");
@@ -353,6 +354,7 @@ export interface NewPull {
   /** The description as typed; the stack list goes in on its own. */
   body: string;
   draft: boolean;
+  /** Logins on GitHub; usernames on GitLab, whose ids go in `gitlab`. */
   reviewers: string[];
   /** The push that has to come first, when GitHub doesn't have the commits yet. */
   push: (Action & { kind: "push" }) | null;
@@ -362,61 +364,98 @@ export interface NewPull {
   others: PullSummary[];
   /** Commits it brings, for the sheet. */
   commits: number;
+  /** A merge request on GitLab: what it is opened with besides, and the push that asks GitLab
+   *  for it without the sign-in, for when GitLab refuses the token. */
+  gitlab?: { create: GitLabCreate; assignee: string | null; fallback: () => Request } | null;
 }
 
 /** The description the new pull request gets. */
 export function newBody(pull: NewPull): string {
-  return pull.stack ? withStack(pull.body, stackSection(pull.stack, pull.branch)) : pull.body;
+  return pull.stack ? withStack(pull.body, stackSection(pull.stack, pull.branch, pull.gitlab ? GITLAB.noun : GITHUB.noun)) : pull.body;
 }
 
 /** Each other stack pull request's description with the new one in its list. */
 function stackUpdates(pull: NewPull, number: string): PullCall[] {
   if (!pull.stack) return [];
   const lines = pull.stack.map((line) => (line.branch === pull.branch ? { ...line, number } : line));
-  return pull.others.map((other) => ({ kind: "update", number: other.number, body: withStack(other.body, stackSection(lines, other.head)) }));
+  return pull.others.map((other) => ({ kind: "update", number: other.number, body: withStack(other.body, stackSection(lines, other.head, pull.gitlab ? GITLAB.noun : GITHUB.noun)) }));
 }
 
+/** Whether GitLab's answer says the sign-in can't open it: the token is refused, or may not. */
+export const tokenRefused = (output: string) => /didn't accept the token|may not do this|Not signed in to/.test(output);
+
 export async function createRequest(ctx: BranchContext, pull: NewPull): Promise<Request> {
-  const create: PullCall = { kind: "create", head: pull.branch, base: pull.base, title: pull.title.trim(), body: newBody(pull), draft: pull.draft };
-  const reviewers: PullCall[] = pull.reviewers.length ? [{ kind: "requestReviewers", number: 0, reviewers: pull.reviewers }] : [];
-  const later = stackUpdates(pull, NEW_NUMBER);
-  const [curls, plan] = await Promise.all([api.githubCallsPreview([create, ...reviewers, ...later]), pull.push ? api.planAction(pull.push) : Promise.resolve(null)]);
+  const lab = !!pull.gitlab;
+  const w = lab ? GITLAB : GITHUB;
+  const create: PullCall = { kind: "create", head: pull.branch, base: pull.base, title: pull.title.trim(), body: newBody(pull), draft: pull.draft, gitlab: pull.gitlab?.create ?? null };
+  // GitLab takes the reviewers with the merge request itself.
+  const reviewers: PullCall[] = pull.reviewers.length && !lab ? [{ kind: "requestReviewers", number: 0, reviewers: pull.reviewers }] : [];
+  const later = stackUpdates(pull, `${w.mark}$NUMBER`);
+  const [curls, plan] = await Promise.all([preview(w, [create, ...reviewers, ...later]), pull.push ? api.planAction(pull.push) : Promise.resolve(null)]);
   const pushed = plan?.commands ?? [];
   const body: Part[] = [];
   if (pull.push) body.push("Pushes ", chip(ctx, pull.branch), ` to ${pull.push.remote}, then opens`);
   else body.push("Opens");
-  body.push(` a ${pull.draft ? "draft " : ""}pull request of ${plural(pull.commits, "commit")} into `, chip(ctx, pull.base), ".");
+  body.push(` a ${pull.draft ? "draft " : ""}${w.noun} of ${plural(pull.commits, "commit")} into `, chip(ctx, pull.base), ".");
   if (pull.reviewers.length) body.push(` Asks ${pull.reviewers.join(", ")} to review it.`);
-  if (pull.others.length) body.push(` Adds it to the stack list of ${pull.others.map((o) => `#${o.number}`).join(", ")}.`);
+  if (pull.gitlab?.assignee) body.push(` Assigns it to ${pull.gitlab.assignee}.`);
+  if (pull.others.length) body.push(` Adds it to the stack list of ${pull.others.map((o) => `${w.mark}${o.number}`).join(", ")}.`);
   const flags = [`--base ${pull.base}`, pull.draft ? "--draft" : "", ...pull.reviewers.map((r) => `--reviewer ${r}`)].filter(Boolean).join(" ");
+  const button = pull.push ? "Push and Create" : lab ? "Create Merge Request" : "Create Pull Request";
   return {
-    title: `Open a pull request for ${pull.branch}?`,
+    title: `Open a ${w.noun} for ${pull.branch}?`,
     body,
     icon: "push",
-    button: pull.push ? "Push and Create" : "Create Pull Request",
-    status: pull.push ? `Pushing ${pull.branch}…` : "Opening the pull request…",
+    button,
+    status: pull.push ? `Pushing ${pull.branch}…` : `Opening the ${w.noun}…`,
     invalid: pull.title.trim() ? null : "Give it a title",
     local: {
       commands: [...pushed.map((c) => c.display), ...curls],
       comments: [
         ...pushed.map((c) => c.comment),
-        `gh pr create ${flags} does the same`,
+        `${
+          lab
+            ? glabCreate({
+                branch: pull.branch,
+                base: pull.base,
+                draft: pull.draft,
+                reviewers: pull.reviewers,
+                assignee: pull.gitlab?.assignee ?? null,
+                labels: pull.gitlab?.create.labels ?? [],
+                removeSourceBranch: !!pull.gitlab?.create.removeSourceBranch,
+                squash: !!pull.gitlab?.create.squash,
+              })
+            : `gh pr create ${flags}`
+        } does the same`,
         ...reviewers.map(() => "$NUMBER is the new pull request’s"),
-        ...later.map(() => "its stack list gets the new pull request"),
+        ...later.map(() => `its stack list gets the new ${w.noun}`),
       ],
       run: async () => {
         if (pull.push) await perform(pull.push);
-        const made = await api.githubRun([create, ...reviewers]);
-        const number = made?.number;
+        const made = (await send(w, [create, ...reviewers])) as { number?: number; iid?: number } | null;
+        const number = lab ? made?.iid : made?.number;
         if (number && pull.stack) {
           const own = stackSection(
-            pull.stack.map((line) => (line.branch === pull.branch ? { ...line, number: `#${number}` } : line)),
+            pull.stack.map((line) => (line.branch === pull.branch ? { ...line, number: `${w.mark}${number}` } : line)),
             pull.branch,
+            w.noun,
           );
-          await api.githubRun([{ kind: "update", number, body: withStack(create.body, own) }, ...stackUpdates(pull, `#${number}`)]);
+          await send(w, [{ kind: "update", number, body: withStack(create.body, own) }, ...stackUpdates(pull, `${w.mark}${number}`)]);
         }
-        return number ? `Opened #${number}.` : "Opened the pull request.";
+        return number ? `Opened ${w.mark}${number}.` : `Opened the ${w.noun}.`;
       },
+    },
+    recover: (failure) => {
+      const g = pull.gitlab;
+      if (!g || !tokenRefused(failure.output)) return null;
+      return {
+        title: "GitLab didn’t let the sign-in open it",
+        body: [failure.output.trim(), " Create Merge Request still works through the push, without the sign-in."],
+        icon: "warn",
+        tone: "err",
+        alt: { label: "Create Through the Push…", request: g.fallback },
+        close: "Close",
+      };
     },
   };
 }
@@ -517,22 +556,27 @@ export async function updateBranchRequest(ctx: BranchContext, pr: PullRequest): 
   };
 }
 
-/** Ask `logins` to review it. */
-export async function reviewersRequest(pr: PullRequest, logins: string[]): Promise<Request> {
-  const calls: PullCall[] = [{ kind: "requestReviewers", number: pr.number, reviewers: logins }];
-  const [curl] = await api.githubCallsPreview(calls);
+/** Ask `logins` to review it; on GitLab by their account `ids`, which go with the ones it asks
+ *  already. */
+export async function reviewersRequest(pr: PullRequest, logins: string[], ids: number[] = []): Promise<Request> {
+  const w = wordsOfPull(pr);
+  const lab = w.kind === "gitlab";
+  const all = lab ? [...new Set([...(pr.gitlab?.reviewerIds ?? []), ...ids])] : [];
+  const calls: PullCall[] = [{ kind: "requestReviewers", number: pr.number, reviewers: logins, ids: all }];
+  const [curl] = await preview(w, calls);
+  const n = `${w.mark}${pr.number}`;
   return {
-    title: `Ask ${logins.join(", ")} to review #${pr.number}?`,
-    body: [`GitHub tells ${logins.length === 1 ? "them" : "each of them"} about it.`],
+    title: `Ask ${logins.join(", ")} to review ${n}?`,
+    body: [`${w.name} tells ${logins.length === 1 ? "them" : "each of them"} about it.${lab && pr.requested.length ? ` ${pr.requested.join(", ")} ${pr.requested.length === 1 ? "stays" : "stay"} among its reviewers.` : ""}`],
     icon: "push",
     button: "Ask for Review",
     status: "Asking for a review…",
     local: {
       commands: [curl],
-      comment: `gh pr edit ${pr.number} ${logins.map((l) => `--add-reviewer ${l}`).join(" ")} does the same`,
+      comment: lab ? `glab mr update ${pr.number} --reviewer +${logins.join(",+")} does the same` : `gh pr edit ${pr.number} ${logins.map((l) => `--add-reviewer ${l}`).join(" ")} does the same`,
       run: async () => {
-        await api.githubRun(calls);
-        return `Asked ${logins.join(", ")} to review #${pr.number}.`;
+        await send(w, calls);
+        return `Asked ${logins.join(", ")} to review ${n}.`;
       },
     },
   };

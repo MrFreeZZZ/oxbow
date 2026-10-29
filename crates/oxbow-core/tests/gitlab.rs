@@ -323,3 +323,198 @@ fn a_merge_request_in_full_comes_as_a_pull_request() {
         ]
     );
 }
+
+fn team_app() -> oxbow_core::GitLabProject {
+    oxbow_core::GitLabProject {
+        remote: "origin".into(),
+        host: "git.corp".into(),
+        path: "team/app".into(),
+        web_url: "https://git.corp/team/app".into(),
+    }
+}
+
+#[test]
+fn opening_a_merge_request_sends_its_people_labels_and_choices() {
+    use oxbow_core::pulls::{Call, GitLabCreate};
+    let (address, seen) = stand_in(vec![(
+        "/api/v4/projects/team%2Fapp/merge_requests",
+        r#"201 {"iid":13,"web_url":"https://git.corp/team/app/-/merge_requests/13"}"#,
+    )]);
+    let create = Call::Create {
+        head: "csv".into(),
+        base: "main".into(),
+        title: "Export CSV".into(),
+        body: "Adds an export.".into(),
+        draft: true,
+        gitlab: Some(GitLabCreate {
+            reviewer_ids: vec![8, 9],
+            assignee_ids: vec![7],
+            labels: vec!["backend".into(), "ui".into()],
+            remove_source_branch: true,
+            squash: false,
+        }),
+    };
+    let made = client(&address).perform(&team_app(), &create).unwrap();
+    assert_eq!(made["iid"], 13);
+    let (path, body) = seen.lock().unwrap()[0].clone();
+    assert_eq!(path, "/api/v4/projects/team%2Fapp/merge_requests");
+    let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "source_branch": "csv", "target_branch": "main", "title": "Draft: Export CSV",
+            "description": "Adds an export.", "reviewer_ids": [8, 9], "assignee_ids": [7],
+            "labels": "backend,ui", "remove_source_branch": true
+        })
+    );
+    let ask = Call::RequestReviewers {
+        number: 13,
+        reviewers: vec!["boris".into()],
+        ids: vec![8, 10],
+    };
+    let shown = client(&address).call_request(&team_app(), &ask).unwrap().display();
+    assert!(
+        shown.ends_with(r#"/projects/team%2Fapp/merge_requests/13 -d '{"reviewer_ids":[8,10]}'"#),
+        "{shown}"
+    );
+}
+
+#[test]
+fn the_form_reads_labels_settings_people_and_owners() {
+    let (address, seen) = stand_in(vec![
+        (
+            "/api/v4/projects/team%2Fapp/labels",
+            r##"[{"name":"backend","color":"#5843AD"},{"name":"ui","color":"#428BCA"}]"##,
+        ),
+        (
+            "/api/v4/projects/team%2Fapp/users",
+            r#"[{"id":8,"username":"boris","name":"Boris Lind"}]"#,
+        ),
+        (
+            "/api/v4/projects/team%2Fapp",
+            r#"{"squash_option":"default_on","remove_source_branch_after_merge":false,"default_branch":"main"}"#,
+        ),
+        (
+            "/api/v4/users?username=boris",
+            r#"[{"id":8,"username":"boris","name":"Boris Lind"}]"#,
+        ),
+        ("/api/v4/users?username=", "[]"),
+        ("/api/v4/user", USER),
+    ]);
+    let client = client(&address);
+    let facts = client.create_facts(&team_app()).unwrap();
+    assert_eq!(
+        facts
+            .labels
+            .iter()
+            .map(|l| (l.name.as_str(), l.color.as_str()))
+            .collect::<Vec<_>>(),
+        [("backend", "#5843AD"), ("ui", "#428BCA")]
+    );
+    assert_eq!(
+        (facts.squash_option.as_str(), facts.remove_source_branch),
+        ("default_on", false)
+    );
+    assert_eq!(facts.me.map(|m| (m.id, m.username)), Some((7, "anna".to_owned())));
+
+    let people = client.people(&team_app(), "bo ris").unwrap();
+    assert_eq!(people[0].name, "Boris Lind");
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .any(|(path, _)| path == "/api/v4/projects/team%2Fapp/users?search=bo+ris&per_page=20")
+    );
+    // A group named in CODEOWNERS is no account: left out.
+    let named = client.users_named(&["boris".into(), "frontend-team".into()]);
+    assert_eq!(named.iter().map(|u| u.id).collect::<Vec<_>>(), [8]);
+}
+
+#[test]
+fn reviews_hear_approvals_changes_asked_and_the_pipeline() {
+    let (address, _) = stand_in(vec![
+        (
+            "/api/v4/projects/team%2Fapp/merge_requests/12/approvals",
+            r#"{"approvals_required":0,"approvals_left":0,"approved_by":[{"user":{"username":"boris"}}]}"#,
+        ),
+        ("/api/v4/projects/team%2Fapp/merge_requests/12/reviewers", "[]"),
+        (
+            "/api/v4/projects/team%2Fapp/merge_requests/12/pipelines",
+            r#"[{"id":5,"status":"running"}]"#,
+        ),
+        (
+            "/api/v4/projects/team%2Fapp/merge_requests/13/approvals",
+            r#"{"approvals_required":1,"approvals_left":0,"approved_by":[{"user":{"username":"boris"}}]}"#,
+        ),
+        (
+            "/api/v4/projects/team%2Fapp/merge_requests/13/reviewers",
+            r#"[{"user":{"username":"carla"},"state":"requested_changes"}]"#,
+        ),
+        (
+            "/api/v4/projects/team%2Fapp/merge_requests/13/pipelines",
+            r#"[{"id":6,"status":"failed"}]"#,
+        ),
+        (
+            "/api/v4/projects/team%2Fapp/merge_requests/14/approvals",
+            r#"{"approvals_required":2,"approvals_left":1,"approved_by":[{"user":{"username":"boris"}}]}"#,
+        ),
+        ("/api/v4/projects/team%2Fapp/merge_requests/14/reviewers", "[]"),
+        ("/api/v4/projects/team%2Fapp/merge_requests/14/pipelines", "[]"),
+        ("/api/v4/projects/team%2Fapp/merge_requests/15/", "[]"),
+    ]);
+    let mut statuses = client(&address).statuses(&team_app(), &[12, 13, 14, 15]);
+    statuses.sort_by_key(|s| s.number);
+    let said: Vec<(u64, Option<&str>, Option<&str>)> = statuses
+        .iter()
+        .map(|s| (s.number, s.decision.as_deref(), s.checks.as_deref()))
+        .collect();
+    assert_eq!(
+        said,
+        [
+            (12, Some("approved"), Some("pending")),
+            (13, Some("changesRequested"), Some("failure")),
+            (14, Some("reviewRequired"), None),
+            (15, None, None),
+        ]
+    );
+}
+
+#[test]
+fn gitlab_code_owners_ask_each_section() {
+    let mut fixture = Fixture::new();
+    fixture.write(
+        ".gitlab/CODEOWNERS",
+        "* @lead\n\n[Backend][2] @boris\nsrc/api/\n/src/api/admin/ @carla\n\n^[Docs] @dora\ndocs/\n\n[Frontend]\nsrc/ui/ @frontend-team\n",
+    );
+    fixture.commit("README.md", "hi\n", "Root");
+    fixture.git(&["switch", "-q", "-c", "feature"]);
+    fixture.commit("src/api/admin/users.rs", "fn ban() {}\n", "Ban");
+    fixture.commit("src/api/sessions.rs", "fn revoke() {}\n", "Revoke");
+    fixture.commit("docs/api.md", "# API\n", "Docs");
+    let repo = Repo::open(fixture.path()).unwrap();
+    // The optional Docs section asks nobody; a section's line without owners takes its own.
+    assert_eq!(repo.code_owners("main", "feature", true), ["lead", "carla", "boris"]);
+    // GitHub doesn't read .gitlab/.
+    assert!(repo.code_owners("main", "feature", false).is_empty());
+}
+
+#[test]
+fn merge_request_templates_come_from_the_branch_default_first() {
+    let mut fixture = Fixture::new();
+    fixture.write(".gitlab/merge_request_templates/Bug.md", "## Bug\n");
+    fixture.write(".gitlab/merge_request_templates/notes.txt", "not a template\n");
+    fixture.commit(
+        ".gitlab/merge_request_templates/Default.md",
+        "## What\n\n## Why\n",
+        "Templates",
+    );
+    let repo = Repo::open(fixture.path()).unwrap();
+    assert_eq!(
+        repo.merge_request_templates("main"),
+        [
+            ("Default".to_owned(), "## What\n\n## Why\n".to_owned()),
+            ("Bug".to_owned(), "## Bug\n".to_owned())
+        ]
+    );
+    assert!(repo.merge_request_templates("no-such-branch").is_empty());
+}

@@ -136,15 +136,19 @@ impl Repo {
     }
 
     /// Who CODEOWNERS asks to review what `branch` changes against `base`: logins, and teams as
-    /// `org/team`, in the order of the files they own.
-    pub fn code_owners(&self, base: &str, branch: &str) -> Vec<String> {
-        let file = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"]
-            .iter()
-            .find_map(|path| {
-                self.run(&GitCommand::new(["show".to_owned(), format!("{branch}:{path}")]))
-                    .ok()
-                    .map(|out| out.stdout)
-            });
+    /// `org/team`, in the order of the files they own. `gitlab` reads the file where GitLab
+    /// looks for it, with its sections.
+    pub fn code_owners(&self, base: &str, branch: &str, gitlab: bool) -> Vec<String> {
+        let places: &[&str] = if gitlab {
+            &["CODEOWNERS", "docs/CODEOWNERS", ".gitlab/CODEOWNERS"]
+        } else {
+            &[".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"]
+        };
+        let file = places.iter().find_map(|path| {
+            self.run(&GitCommand::new(["show".to_owned(), format!("{branch}:{path}")]))
+                .ok()
+                .map(|out| out.stdout)
+        });
         let Some(file) = file else { return Vec::new() };
         let Ok(changed) = self.run(&GitCommand::new([
             "diff".to_owned(),
@@ -153,23 +157,60 @@ impl Repo {
         ])) else {
             return Vec::new();
         };
-        let rules = parse_code_owners(&file);
+        let sections = if gitlab {
+            parse_gitlab_owners(&file)
+        } else {
+            vec![parse_code_owners(&file)]
+        };
         let mut owners: Vec<String> = Vec::new();
         for path in changed.stdout.lines().filter(|p| !p.is_empty()) {
-            // The last rule that matches wins.
-            if let Some((_, names)) = rules
-                .iter()
-                .rev()
-                .find(|(pattern, _)| owner_pattern_matches(pattern, path))
-            {
-                for name in names {
-                    if !owners.contains(name) {
-                        owners.push(name.clone());
+            // The last rule that matches wins, in each section.
+            for rules in &sections {
+                if let Some((_, names)) = rules
+                    .iter()
+                    .rev()
+                    .find(|(pattern, _)| owner_pattern_matches(pattern, path))
+                {
+                    for name in names {
+                        if !owners.contains(name) {
+                            owners.push(name.clone());
+                        }
                     }
                 }
             }
         }
         owners
+    }
+
+    /// GitLab's merge request templates on `rev`, `.gitlab/merge_request_templates/*.md`, by
+    /// name without `.md`: `Default` first, then by name.
+    pub fn merge_request_templates(&self, rev: &str) -> Vec<(String, String)> {
+        const FOLDER: &str = ".gitlab/merge_request_templates/";
+        let Ok(list) = self.run(&GitCommand::new([
+            "ls-tree".to_owned(),
+            "--name-only".to_owned(),
+            "-z".to_owned(),
+            rev.to_owned(),
+            "--".to_owned(),
+            FOLDER.to_owned(),
+        ])) else {
+            return Vec::new();
+        };
+        let mut templates: Vec<(String, String)> = list
+            .stdout
+            .split('\0')
+            .filter_map(|path| {
+                let name = path.strip_prefix(FOLDER)?;
+                let name = name.strip_suffix(".md").or_else(|| name.strip_suffix(".MD"))?;
+                let text = self
+                    .run(&GitCommand::new(["show".to_owned(), format!("{rev}:{path}")]))
+                    .ok()?
+                    .stdout;
+                Some((name.to_owned(), text))
+            })
+            .collect();
+        templates.sort_by_key(|(name, _)| (!name.eq_ignore_ascii_case("default"), name.to_lowercase()));
+        templates
     }
 }
 
@@ -325,6 +366,52 @@ fn parse_code_owners(text: &str) -> Vec<(String, Vec<String>)> {
             Some((pattern, owners))
         })
         .collect()
+}
+
+/// GitLab's CODEOWNERS as sections of rules: a line `[Section]` starts one, maybe with a count
+/// of approvals (`[Section][2]`) and owners for its lines that name none; `^[Section]` is an
+/// optional one GitLab doesn't ask, so it is left out. Lines before any section are a section
+/// of their own.
+fn parse_gitlab_owners(text: &str) -> Vec<Vec<(String, Vec<String>)>> {
+    let mut sections: Vec<Vec<(String, Vec<String>)>> = vec![Vec::new()];
+    let mut defaults: Vec<String> = Vec::new();
+    let mut optional = false;
+    for line in text.lines().map(|line| line.split('#').next().unwrap_or("").trim()) {
+        if line.is_empty() {
+            continue;
+        }
+        let header = line.strip_prefix('^').unwrap_or(line);
+        if let Some(rest) = header.strip_prefix('[')
+            && let Some((_, after)) = rest.split_once(']')
+        {
+            optional = line.starts_with('^');
+            // `[2]`, the approvals it needs, comes right after the name.
+            let after = after.trim_start();
+            let after = match after.strip_prefix('[').and_then(|a| a.split_once(']')) {
+                Some((count, rest)) if count.chars().all(|c| c.is_ascii_digit()) => rest,
+                _ => after,
+            };
+            defaults = after
+                .split_whitespace()
+                .filter_map(|w| w.strip_prefix('@'))
+                .map(str::to_owned)
+                .collect();
+            sections.push(Vec::new());
+            continue;
+        }
+        if optional {
+            continue;
+        }
+        let mut words = line.split_whitespace();
+        let Some(pattern) = words.next() else { continue };
+        let named: Vec<String> = words.filter_map(|w| w.strip_prefix('@')).map(str::to_owned).collect();
+        let owners = if named.is_empty() { defaults.clone() } else { named };
+        if let Some(rules) = sections.last_mut() {
+            rules.push((pattern.to_owned(), owners));
+        }
+    }
+    sections.retain(|rules| !rules.is_empty());
+    sections
 }
 
 /// Whether a CODEOWNERS pattern (gitignore rules) covers `path`.
@@ -668,6 +755,25 @@ pub struct Spot {
     pub start_line: Option<u32>,
 }
 
+/// What a merge request on GitLab is opened with besides a pull request's fields: people by
+/// their account ids, labels by name.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLabCreate {
+    #[serde(default)]
+    pub reviewer_ids: Vec<u64>,
+    #[serde(default)]
+    pub assignee_ids: Vec<u64>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    /// GitLab deletes the source branch once it is merged.
+    #[serde(default)]
+    pub remove_source_branch: bool,
+    /// It is squashed into one commit when merged.
+    #[serde(default)]
+    pub squash: bool,
+}
+
 /// A change to a pull request, shown as its request before it is sent. `number` 0 means the
 /// pull request a `Create` earlier in the same run made, a `review` of `None` the review a
 /// `StartReview` earlier in the run started.
@@ -693,10 +799,16 @@ pub enum Call {
         title: String,
         body: String,
         draft: bool,
+        /// What only a merge request on GitLab is opened with.
+        #[serde(default)]
+        gitlab: Option<GitLabCreate>,
     },
     RequestReviewers {
         number: u64,
         reviewers: Vec<String>,
+        /// GitLab: every reviewer it is to have, by account id, the ones it has included.
+        #[serde(default)]
+        ids: Vec<u64>,
     },
     Update {
         number: u64,
@@ -720,16 +832,10 @@ pub enum Call {
         title: Option<String>,
     },
     /// Close it, or open it again.
-    SetState {
-        number: u64,
-        open: bool,
-    },
+    SetState { number: u64, open: bool },
     /// Merge the base into the head on GitHub, like its Update branch button, if the head is
     /// still this commit.
-    UpdateBranch {
-        number: u64,
-        sha: String,
-    },
+    UpdateBranch { number: u64, sha: String },
     /// Turn auto-merge on with `method`, or off without one.
     AutoMerge {
         number: u64,
@@ -738,11 +844,7 @@ pub enum Call {
         method: Option<Method>,
     },
     /// Tick or untick a file's Viewed box, as on GitHub.
-    Viewed {
-        id: String,
-        path: String,
-        viewed: bool,
-    },
+    Viewed { id: String, path: String, viewed: bool },
     /// A comment on lines of `commit`, sent at once rather than in a review.
     Comment {
         number: u64,
@@ -751,21 +853,11 @@ pub enum Call {
         body: String,
     },
     /// A reply, sent at once, to the thread comment `to` starts.
-    Reply {
-        number: u64,
-        to: u64,
-        body: String,
-    },
+    Reply { number: u64, to: u64, body: String },
     /// Resolve the thread with GraphQL id `thread`, or open it again.
-    Resolve {
-        thread: String,
-        resolved: bool,
-    },
+    Resolve { thread: String, resolved: bool },
     /// Start a review of `commit`, pending until it is submitted.
-    StartReview {
-        id: String,
-        commit: String,
-    },
+    StartReview { id: String, commit: String },
     /// A comment in a pending review.
     ReviewComment {
         #[serde(default)]
@@ -887,12 +979,15 @@ impl Client {
                 title,
                 body,
                 draft,
+                ..
             } => self.api_request(
                 "POST",
                 &repo.path("/pulls"),
                 Some(json!({ "title": title, "head": head, "base": base, "body": body, "draft": draft })),
             ),
-            Call::RequestReviewers { number: n, reviewers } => {
+            Call::RequestReviewers {
+                number: n, reviewers, ..
+            } => {
                 let (teams, users): (Vec<&String>, Vec<&String>) = reviewers.iter().partition(|r| r.contains('/'));
                 let mut body = json!({ "reviewers": users });
                 if !teams.is_empty() {
@@ -1754,6 +1849,7 @@ mod tests {
         let reviewers = Call::RequestReviewers {
             number: 0,
             reviewers: vec!["maria".into(), "acme/core".into()],
+            ids: vec![],
         };
         assert_eq!(
             client.call_request(&repo, &reviewers, None).display(),

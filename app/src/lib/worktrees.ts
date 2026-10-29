@@ -111,20 +111,20 @@ export async function newWorktreeRequest(ctx: BranchContext, repoPath: string, b
 
 /** New Worktree for a pull request: its branch here when there is one, else a new branch at
  *  its head, which follows the branch on `remote` when it is one of this repository. */
-export async function pullWorktreeRequest(ctx: BranchContext, repoPath: string, pull: PullSummary, remote: string, fork: boolean): Promise<Request> {
+export async function pullWorktreeRequest(ctx: BranchContext, repoPath: string, pull: PullSummary, remote: string, fork: boolean, gitlab = false): Promise<Request> {
   const { history } = ctx;
   const local = history.refs.some((r) => r.kind === "local" && r.name === pull.head);
   if (local && !fork) return newWorktreeRequest(ctx, repoPath, pull.head);
-  await api.pullFetch(pull.number, pull.base);
+  await (gitlab ? api.gitlabFetch(pull.number, pull.base) : api.pullFetch(pull.number, pull.base));
   const tracked = `${remote}/${pull.head}`;
   const follows = !fork && history.refs.some((r) => r.kind === "remote" && r.name === tracked);
-  const name = fork || local ? `pr/${pull.number}` : pull.head;
+  const name = fork || local ? `${gitlab ? "mr" : "pr"}/${pull.number}` : pull.head;
   const free = freeBranches(history);
   const state: NewWorktree = {
     branch: name,
     create: true,
-    from: follows ? tracked : `refs/oxbow/pull/${pull.number}/head`,
-    fromLabel: follows ? tracked : `pull request #${pull.number}`,
+    from: follows ? tracked : `refs/oxbow/${gitlab ? "mr" : "pull"}/${pull.number}/head`,
+    fromLabel: follows ? tracked : gitlab ? `merge request !${pull.number}` : `pull request #${pull.number}`,
     folder: tilde(await freeFolder(history, repoPath, name)),
     edited: false,
     open: true,
