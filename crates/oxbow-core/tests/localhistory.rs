@@ -86,7 +86,7 @@ fn saves_soon_after_each_other_are_one_version_and_the_same_bytes_none() {
 }
 
 #[test]
-fn what_git_stages_isnt_kept_and_what_git_has_costs_no_blob() {
+fn what_git_stages_isnt_kept_and_what_git_has_elsewhere_is_kept_anyway() {
     let mut fx = base();
     let first = fx.git(&["rev-parse", "HEAD:a.txt"]);
     fx.commit("a.txt", "changed\n", "Second");
@@ -95,11 +95,12 @@ fn what_git_stages_isnt_kept_and_what_git_has_costs_no_blob() {
     let t = now() - DAY;
     // A checkout writes what the index then stages.
     assert_eq!(history.keep(&repo, &paths(&["a.txt"]), t), 0);
-    // The first commit's bytes, back by hand: noted, but git has the blob.
+    // The first commit's bytes, back by hand: git has the blob, and Local History a copy, as
+    // git may drop it.
     fx.write("a.txt", "one\ntwo\nthree\n");
     assert_eq!(history.keep(&repo, &paths(&["a.txt"]), t + GROUP), 1);
     assert_eq!(repo.local_history("a.txt").unwrap()[0].id, first);
-    assert_eq!(blobs(&fx), 0);
+    assert_eq!(blobs(&fx), 1);
     // Taken back to what is staged, then saved as before: the second save is a version again.
     fx.write("a.txt", "changed\n");
     assert_eq!(history.keep(&repo, &paths(&["a.txt"]), t + 2 * GROUP), 0);
@@ -414,4 +415,95 @@ fn a_file_in_folders_is_compared_and_restored_at_its_path() {
         std::fs::read_to_string(fx.path().join("src/deep/b.rs")).unwrap(),
         "fn b() { 1 }\n"
     );
+}
+
+/// Audit F04: a blob git has but nothing reaches (staged, then unstaged) goes with
+/// `git prune`; the version stays.
+#[test]
+fn a_version_git_has_a_blob_of_stays_after_git_prunes_it() {
+    let mut fx = base();
+    fx.write("a.txt", "unique draft\n");
+    fx.git(&["add", "a.txt"]);
+    fx.git(&["reset", "-q", "HEAD", "--", "a.txt"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let mut history = LocalHistory::open(&repo);
+    assert_eq!(history.keep(&repo, &paths(&["a.txt"]), now()), 1);
+    fx.git(&["prune", "--expire=now"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let version = &repo.local_history("a.txt").unwrap()[0];
+    assert!(version.kept);
+    let to = fx.path().join("saved.txt");
+    repo.save_local_version(&version.id, &to).unwrap();
+    assert_eq!(std::fs::read_to_string(to).unwrap(), "unique draft\n");
+}
+
+/// Audit F05: a version whose line can't be written isn't counted, says why, and is written
+/// once it can be, also when the file isn't saved again.
+#[test]
+fn a_version_that_cant_be_written_waits_and_is_written_when_it_can() {
+    let fx = base();
+    fx.write("a.txt", "draft\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    let t = now();
+    let list = fx.path().join(format!(".git/oxbow/local-history/{}.jsonl", t / DAY));
+    // A folder where the day's list goes: it can't be appended to.
+    std::fs::create_dir_all(&list).unwrap();
+    let mut history = LocalHistory::open(&repo);
+    assert_eq!(history.keep(&repo, &paths(&["a.txt"]), t), 0);
+    assert!(repo.local_history("a.txt").unwrap().is_empty());
+    let problem = history.problem().unwrap().clone();
+    assert_eq!((problem.since, problem.waiting), (t, 1));
+    assert!(
+        problem.error.starts_with("Couldn’t write the list of versions: "),
+        "{}",
+        problem.error
+    );
+    // The same bytes saved again still wait for the one version.
+    assert_eq!(history.keep(&repo, &paths(&["a.txt"]), t + 1000), 0);
+    assert_eq!(history.problem().unwrap().waiting, 1);
+
+    std::fs::remove_dir(&list).unwrap();
+    // Tried again with no save: written as it was then.
+    assert_eq!(history.keep(&repo, &[], t + 2000), 1);
+    assert!(history.problem().is_none());
+    let versions = repo.local_history("a.txt").unwrap();
+    assert_eq!(versions.len(), 1);
+    assert_eq!(versions[0].at, t);
+    assert!(versions[0].kept);
+    // Written once: the same bytes again are no new version.
+    assert_eq!(history.keep(&repo, &paths(&["a.txt"]), t + 3000), 0);
+    assert_eq!(repo.local_history("a.txt").unwrap().len(), 1);
+}
+
+/// A blob that can't be written keeps nothing of the save: the file is read again when tried
+/// again.
+#[cfg(unix)]
+#[test]
+fn a_blob_that_cant_be_written_is_read_again_later() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = base();
+    fx.write("a.txt", "draft\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    let objects = fx.path().join(".git/oxbow/local-history/objects");
+    std::fs::create_dir_all(&objects).unwrap();
+    std::fs::set_permissions(&objects, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let mut history = LocalHistory::open(&repo);
+    let t = now();
+    let kept = history.keep(&repo, &paths(&["a.txt"]), t);
+    let problem = history.problem().cloned();
+    std::fs::set_permissions(&objects, std::fs::Permissions::from_mode(0o700)).unwrap();
+    // Root writes anyway; the rest of the test needs a folder that refuses.
+    if kept == 1 {
+        return;
+    }
+    assert_eq!(kept, 0);
+    let problem = problem.unwrap();
+    assert!(
+        problem.error.contains("Couldn’t keep a version of a.txt"),
+        "{}",
+        problem.error
+    );
+    assert_eq!(history.keep(&repo, &[], t + 1000), 1);
+    assert!(history.problem().is_none());
+    assert_eq!(repo.local_history("a.txt").unwrap().len(), 1);
 }

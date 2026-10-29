@@ -79,7 +79,7 @@ pub use history::{
     WorktreeSummary,
 };
 pub use lfs::{LfsChange, LfsPattern, LfsPointer, LfsStatus};
-pub use localhistory::{LocalHistory, LocalVersion};
+pub use localhistory::{LocalHistory, LocalHistoryProblem, LocalVersion};
 pub use notkept::{NotKept, PushedCommit, SizedFile};
 pub use operation::{
     Chunk, ConflictFile, ConflictSide, MergeMethod, MergePreview, MergeTool, Operation, OperationKind, Pick, Renamed,

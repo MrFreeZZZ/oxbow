@@ -348,6 +348,17 @@ export interface FileHistory {
   more: boolean;
 }
 
+/** Versions Local History couldn't write (the disk full, the folder not writable): they wait and
+ *  are tried again with the next save or within a minute. */
+export interface LocalHistoryProblem {
+  /** What went wrong the last time, in the system's words. */
+  error: string;
+  /** When the first of the versions waiting was saved, in milliseconds since 1970. */
+  since: number;
+  /** Versions waiting. */
+  waiting: number;
+}
+
 /** A version of a file Local History kept: the file as it was saved, between commits. */
 export interface LocalVersion {
   path: string;

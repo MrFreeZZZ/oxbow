@@ -17,6 +17,7 @@ import type {
   Source,
   SourceLines,
   FileHistory,
+  LocalHistoryProblem,
   LocalVersion,
   CompareMode,
   Comparison,
@@ -178,6 +179,8 @@ export const api = {
   localHistory: (path: string) => invoke<LocalVersion[]>("local_history", { path }),
   /** Local History of every file, newest first. */
   localHistoryAll: () => invoke<LocalVersion[]>("local_history_all"),
+  /** What Local History couldn't write lately, while some of it waits; null when all was written. */
+  localHistoryProblem: () => invoke<LocalHistoryProblem | null>("local_history_problem"),
   /** What version `id` of `path` changed since `base`, or with `againstDisk` how the file on disk differs from it. */
   localVersionDiff: (path: string, id: string, base: string | null, againstDisk: boolean, wholeFile: boolean, full = false, lane: string | null = null) =>
     invoke<FileDiff[]>("local_version_diff", { path, id, base, againstDisk, wholeFile, full, lane }),
