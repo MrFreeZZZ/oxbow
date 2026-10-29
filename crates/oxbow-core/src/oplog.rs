@@ -681,7 +681,9 @@ impl Repo {
         let file = scratch.to_string_lossy().into_owned();
         let with_scratch = |cmd: GitCommand| cmd.env("GIT_INDEX_FILE", file.clone());
         let result = (|| {
-            self.run(&with_scratch(GitCommand::new(["add", "-u", "--", ":/"])))?;
+            // No pathspec: the whole tree, and no error when nothing is tracked yet (newer git
+            // refuses `:/` then, as a pathspec that matches no file).
+            self.run(&with_scratch(GitCommand::new(["add", "-u"])))?;
             let untracked: Vec<String> = self
                 .run(&GitCommand::new(["ls-files", "-z", "-o", "--exclude-standard"]))?
                 .stdout
