@@ -6,6 +6,7 @@
 
 pub mod action;
 pub mod bisect;
+pub mod browse;
 pub mod checks;
 pub mod cli;
 pub mod commit;

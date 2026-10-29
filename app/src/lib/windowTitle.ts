@@ -1,6 +1,6 @@
 // The title of a repository window: the name of what it shows, and the line under it.
 
-export type Screen = "history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull" | "series" | "reviews";
+export type Screen = "history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull" | "series" | "reviews" | "browse";
 
 export interface Shown {
   screen: Screen;
@@ -16,6 +16,8 @@ export interface Shown {
   pull: { branch: string; pr: number | null; byNumber: boolean; gitlab?: boolean } | null;
   series: { branch: string; from: string } | null;
   compare: { base: string; target: string };
+  /** Browse Files: the commit, the branch or tag it was opened from, and its summary. */
+  browse?: { rev: string; label: string | null; summary: string | null } | null;
   head: string | null;
   /** The History screen's line: what runs, a fetch that failed, or the branches and the state of HEAD. */
   running: { title: string; percent: number | null } | null;
@@ -60,6 +62,12 @@ export function windowTitle(s: Shown): Title {
   }
   if (s.screen === "stack") return here("Edit Stack", `Interactive rebase${s.steps ? "" : ` · ${s.repo}`}`);
   if (s.screen === "series" && s.series) return here("Compare Series", `${s.series.branch} · ${s.series.from}`);
+  if (s.screen === "browse" && s.browse) {
+    const { rev, label, summary } = s.browse;
+    const sha = rev.slice(0, 7);
+    const sub = [label ? sha : null, summary].filter(Boolean).join(" · ");
+    return here(label ? `Files of ${label}` : `Files at ${sha}`, `${inRepo}${sub || "every file as the commit has it"}`);
+  }
   if (s.screen === "compare") return here("Compare", `${s.compare.target} with ${s.compare.base}`);
   if (s.screen === "stashes") return here("Stashes", `${inRepo}on ${s.head ?? "detached HEAD"}`);
   if (s.screen === "oplog") return here("Operation Log", `${inRepo}every step, to undo or restore`);

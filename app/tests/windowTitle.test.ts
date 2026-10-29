@@ -71,3 +71,11 @@ const shown = (over: Partial<Shown> = {}): Shown => ({
   assert.equal(windowTitle(shown({ screen: "stashes", head: null })).sub, "oxbow · on detached HEAD");
   assert.equal(windowTitle(shown({ screen: "oplog", steps: true })).sub, "every step, to undo or restore");
 }
+
+// Browse Files: by the branch or tag it was opened from, else the commit.
+{
+  const browse = (label: string | null, summary: string | null, steps = false) => windowTitle(shown({ screen: "browse", steps, browse: { rev: "a1b2c3d4e5", label, summary } }));
+  assert.deepEqual([browse("main", "Fix login").name, browse("main", "Fix login").sub], ["Files of main", "oxbow · a1b2c3d · Fix login"]);
+  assert.deepEqual([browse(null, "Fix login", true).name, browse(null, "Fix login", true).sub], ["Files at a1b2c3d", "Fix login"]);
+  assert.equal(browse(null, null, true).sub, "every file as the commit has it");
+}

@@ -89,6 +89,7 @@
   // Screens and sheets a window seldom shows load the first time they are (lazyScreen.svelte.ts).
   const ConflictsView = new Lazy(() => import("./lib/ConflictsView.svelte"));
   const FileHistoryView = new Lazy(() => import("./lib/FileHistoryView.svelte"));
+  const BrowseView = new Lazy(() => import("./lib/BrowseView.svelte"));
   const CompareView = new Lazy(() => import("./lib/CompareView.svelte"));
   const SeriesView = new Lazy(() => import("./lib/SeriesView.svelte"));
   const PullRequestView = new Lazy(() => import("./lib/PullRequestView.svelte"));
@@ -224,7 +225,7 @@
   /** New Branch, Console and Settings, which a narrow window's toolbar has no room for. */
   function moreEntries(): MenuEntry[] {
     const entries: MenuEntry[] = [];
-    if (view !== "file" || showConflicts) entries.push({ kind: "item", label: history?.head.branch ? "New Branch…" : "Create a Branch at HEAD…", icon: NEW_BRANCH_ICON, run: newBranch });
+    if ((view !== "file" && view !== "browse") || showConflicts) entries.push({ kind: "item", label: history?.head.branch ? "New Branch…" : "Create a Branch at HEAD…", icon: NEW_BRANCH_ICON, run: newBranch });
     entries.push({ kind: "item", label: "Console", icon: CONSOLE_ICON, keys: shortcut("console") || undefined, run: () => api.openConsole() });
     entries.push({ kind: "item", label: "Settings…", icon: SETTINGS_ICON, keys: shortcut("settings") || undefined, run: () => api.openSettings() });
     return entries;
@@ -274,7 +275,7 @@
     panelWidth === null ? panelMax : Math.min(Math.max(panelWidth + panelBonus, PANEL_MIN), panelMax),
   );
   /** The screen next to the sidebar. */
-  let view = $state<"history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull" | "series" | "reviews">("history");
+  let view = $state<"history" | "stashes" | "oplog" | "compare" | "file" | "stack" | "pull" | "series" | "reviews" | "browse">("history");
   /** The branch whose stack Edit Stack shows; the checked-out one when null. */
   let stackBranch = $state<string | null>(null);
 
@@ -314,6 +315,18 @@
       // Coming from another screen starts without a find.
       if (view !== "file") nav.find = { ...nav.find, text: "" };
       view = "file";
+      resolving = false;
+    });
+  });
+  /** What Browse Files shows: the commit, the branch or tag it was opened from, the file picked. */
+  let browsing = $state<{ rev: string; label: string | null; path: string | null } | null>(null);
+  // Browse Files at This Commit, from a menu anywhere, opens the screen.
+  $effect(() => {
+    const ask = nav.browse;
+    if (!ask) return;
+    untrack(() => {
+      browsing = { rev: ask.rev, label: ask.label, path: ask.path };
+      view = "browse";
       resolving = false;
     });
   });
@@ -389,6 +402,8 @@
         return { view };
       case "stack":
         return { view, branch: stackBranch };
+      case "browse":
+        return browsing ? { view, ...browsing } : null;
     }
   });
 
@@ -424,6 +439,7 @@
     pull: menuIcons.merge,
     stack: menuIcons.rebase,
     reviews: menuIcons.merge,
+    browse: menuIcons.folder,
   };
 
   const stepBack = $derived(canBack(trail) ? placeName(trail.places[trail.at - 1]) : null);
@@ -484,6 +500,10 @@
         break;
       case "stack":
         openStack(p.branch);
+        break;
+      case "browse":
+        browsing = { rev: p.rev, label: p.label, path: p.path };
+        view = "browse";
         break;
     }
   }
@@ -547,6 +567,7 @@
       pull: pullBranch ? { branch: pullBranch, pr: shownPull?.number ?? null, byNumber: !!pullNumber, gitlab: pullForge === "gitlab" } : null,
       series: seriesQuery,
       compare: comparing,
+      browse: browsing ? { ...browsing, summary: rowsById.get(browsing.rev)?.summary ?? null } : null,
       head: history.head.branch,
       running: activity.running ? { title: activity.running.title, percent: activity.percent } : null,
       failed: activity.problem?.failure ? failureShort(activity.problem.failure) : null,
@@ -711,7 +732,7 @@
     lfs.forget();
     activity.reset();
     stopPaging();
-    if (view === "compare" || view === "file" || view === "stack" || view === "pull" || view === "series" || view === "reviews") view = "history";
+    if (view === "compare" || view === "file" || view === "stack" || view === "pull" || view === "series" || view === "reviews" || view === "browse") view = "history";
     // The Conflicts screen goes too, before the other repository opens: it saves its draft for
     // its own folder, and reads nothing of the new one.
     resolving = false;
@@ -1112,7 +1133,7 @@
 
   /** Activity, under Fetch: what runs in the background, what failed, and Reload. */
   function showActivity() {
-    view = view === "file" ? "history" : view;
+    view = view === "file" || view === "browse" ? "history" : view;
     resolving = false;
     activity.open = true;
   }
@@ -1142,6 +1163,9 @@
     add("goToBranch", () => openObjects("branches"));
     if (h.refs.some((r) => r.kind === "tag")) add("goToTag", () => openObjects("tags"));
     if (h.stashes.length) add("goToStash", () => openObjects("stashes"));
+    // The commit picked in History, or the one HEAD is on.
+    const browseRow = selectedRow && !selectedRow.worktree ? selectedRow : headRow;
+    if (browseRow && !browseRow.worktree) add("browseFiles", () => nav.openBrowse(browseRow.id, browseRow.labels.find((l) => l.kind === "local" || l.kind === "tag")?.name ?? null));
     if (h.worktrees.length > 1) add("openWorktree", () => openObjects("worktrees"));
     if (h.submodules.length) add("openSubmodule", () => openObjects("submodules"));
     add("find", () => findInHistory());
@@ -1192,7 +1216,7 @@
     }
     if (!busy) {
       add("checkout", () => {
-        view = view === "file" ? "history" : view;
+        view = view === "file" || view === "browse" ? "history" : view;
         resolving = false;
         requestAnimationFrame(() => branchPicker?.show());
       });
@@ -1477,7 +1501,7 @@
 
   /** The right-click menu of a commit in the graph (commitMenu.ts). */
   function commitMenu(row: HistoryRow): MenuEntry[] {
-    return commitMenuOf(row, { history, ctx: branchCtx, headStack, run, copyText, copyMessage, openStack, openSplit, openFixes, openCompare, patchTarget, openPull });
+    return commitMenuOf(row, { history, ctx: branchCtx, headStack, run, copyText, copyMessage, openStack, openSplit, openFixes, openCompare, openBrowse: (rev, label) => nav.openBrowse(rev, label), patchTarget, openPull });
   }
 
   /** G, B or S while bisecting: the answer for the commit under test. */
@@ -2354,8 +2378,8 @@
           {#if repo.restricted.length}
             <RestrictedBadge findings={repo.restricted} onTrust={trustOpen} />
           {/if}
-          <!-- File History is about one file: a plain back arrow and no branch picker, as in the design, leave room for Find in file. -->
-          {#if view !== "file" || showConflicts}
+          <!-- File History is about one file, Browse Files about one commit: a plain back arrow and no branch picker, as in the design, leave room for Find in file. -->
+          {#if (view !== "file" && view !== "browse") || showConflicts}
             <!-- The branch and a new one beside it: one control, as Fetch, Pull and Push are. -->
             <div class="joined branch" role="group" aria-label="Branch">
               <BranchPicker bind:this={branchPicker} {history} {colorOf} onPick={(name) => branchCtx && run(switchRequest(branchCtx, name))} />
@@ -2450,7 +2474,7 @@
               aria-label="More"
               aria-haspopup="menu"
               aria-expanded={!!moreMenu}
-              title={view !== "file" || showConflicts ? "New Branch, Console, Settings" : "Console, Settings"}
+              title={(view !== "file" && view !== "browse") || showConflicts ? "New Branch, Console, Settings" : "Console, Settings"}
             >
               <svg class="icon" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6" /><circle cx="8" cy="8" r=".6" /><circle cx="12.5" cy="8" r=".6" /></svg>
             </button>
@@ -2534,6 +2558,17 @@
       {:else if view === "file" && nav.file}
         {#key repo.path + nav.file.path}
           <FileHistoryView.component {history} path={nav.file.path} start={nav.file.commit} lookup={(id) => rowsById.get(id)} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "the command" : text}.`)} {version} />
+        {/key}
+      {:else if view === "browse" && browsing}
+        {#key repo.path}
+          <BrowseView.component
+            rev={browsing.rev}
+            label={browsing.label}
+            path={browsing.path}
+            lookup={(id) => rowsById.get(id)}
+            copy={copyText}
+            onPath={(path) => browsing && (browsing = { ...browsing, path })}
+          />
         {/key}
       {:else if view === "compare"}
         {#key repo.path}

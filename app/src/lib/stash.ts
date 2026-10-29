@@ -7,6 +7,7 @@ import type { BranchContext } from "./branches";
 import { nameProblem } from "./branches";
 import { stoppedOnConflicts } from "./merge";
 import { menuIcons, type MenuEntry } from "./Menu.svelte";
+import { nav } from "./nav.svelte";
 import type { StashCheck, StashInfo } from "./types";
 import { shortId } from "./format";
 import { stashStagedRequest } from "./stashLines";
@@ -212,6 +213,8 @@ export function stashMenu(ctx: BranchContext, stash: StashInfo, run: (request: R
   }
   entries.push(
     { kind: "sep" },
+    // The files as the stash keeps them: the working copy when it was made.
+    { kind: "item", label: "Browse Files", icon: menuIcons.folder, run: () => nav.openBrowse(stash.id, stashName(stash)) },
     {
       kind: "sub",
       label: "Copy",

@@ -19,7 +19,9 @@ export type Place =
    *  `forge` "gitlab": the branch's merge request. */
   | { view: "pull"; branch: string; number?: number | null; forge?: "github" | "gitlab" }
   | { view: "reviews" }
-  | { view: "stack"; branch: string | null };
+  | { view: "stack"; branch: string | null }
+  /** Browse Files at This Commit: the commit, the branch or tag it was opened from, the file shown. */
+  | { view: "browse"; rev: string; label: string | null; path: string | null };
 
 export type Trail = { places: Place[]; at: number };
 
@@ -42,6 +44,8 @@ export function placeKey(p: Place): string {
       return `pull\0${p.number ?? p.branch}`;
     case "stack":
       return `stack\0${p.branch ?? ""}`;
+    case "browse":
+      return `browse\0${p.rev}`;
     default:
       return p.view;
   }
@@ -126,6 +130,8 @@ export function nameOfPlace(p: Place, pullOf: (branch: string, number: number | 
       return "Reviews";
     case "stack":
       return "Edit Stack";
+    case "browse":
+      return p.label ? `Files of ${p.label}` : `Files at ${p.rev.slice(0, 7)}`;
   }
 }
 
@@ -151,6 +157,8 @@ export function detailOfPlace(
       return p.branch;
     case "stack":
       return p.branch ?? headBranch ?? undefined;
+    case "browse":
+      return p.path ?? rowOf(p.rev)?.summary;
     default:
       return undefined;
   }

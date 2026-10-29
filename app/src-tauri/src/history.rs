@@ -383,6 +383,54 @@ pub(crate) async fn files(window: tauri::WebviewWindow, session: State<'_, Sessi
 }
 
 #[tauri::command]
+pub(crate) async fn tree_at(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    rev: String,
+    dir: String,
+) -> CommandResult<Vec<oxbow_core::browse::TreeItem>> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "Read a folder of a commit", move || repo.tree_at(&rev, &dir)).await
+}
+
+#[tauri::command]
+pub(crate) async fn files_at(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    rev: String,
+) -> CommandResult<Vec<String>> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "List the files of a commit", move || repo.files_at(&rev)).await
+}
+
+#[tauri::command]
+pub(crate) async fn file_at(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    rev: String,
+    path: String,
+) -> CommandResult<oxbow_core::browse::FileAt> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "Read a file of a commit", move || repo.file_at(&rev, &path)).await
+}
+
+/// Save As: a file as a commit has it, written where the user chose.
+#[tauri::command]
+pub(crate) async fn save_file_at(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    rev: String,
+    path: String,
+    to: String,
+) -> CommandResult<()> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "Save a file of a commit", move || {
+        repo.save_file_at(&rev, &path, std::path::Path::new(&to))
+    })
+    .await
+}
+
+#[tauri::command]
 pub(crate) async fn file_pickaxe(
     window: tauri::WebviewWindow,
     session: State<'_, Session>,

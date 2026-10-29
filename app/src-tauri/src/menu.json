@@ -276,6 +276,12 @@
     "accelerator": null
    },
    {
+    "id": "browseFiles",
+    "title": "Browse Files at This Commit",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
     "id": "-",
     "title": "",
     "enabled": true,

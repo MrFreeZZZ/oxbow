@@ -1987,3 +1987,24 @@ export interface Rewrite {
   time: number | null;
   rewritten: string[];
 }
+
+/** An entry of a folder of a commit, for Browse Files at This Commit. */
+export interface TreeItem {
+  name: string;
+  path: string;
+  kind: "folder" | "file" | "executable" | "link" | "submodule";
+  /** Bytes of a file; 0 for the others. */
+  size: number;
+}
+
+/** A file as a commit has it: its text, unless it is binary or too big to show. */
+export interface FileAt {
+  path: string;
+  /** Its blob, for drawing a picture from its bytes. */
+  id: string;
+  size: number;
+  text: string | null;
+  binary: boolean;
+  /** A Git LFS pointer: the file itself is on the LFS server. */
+  lfs: boolean;
+}

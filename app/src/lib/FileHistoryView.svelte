@@ -302,6 +302,7 @@
     event.preventDefault();
     const entries: MenuEntry[] = [{ kind: "header", label: `${splitPath(c.path).name} in ${shortId(c.id)}` }];
     entries.push(...commitFileEntries(c, c.id, { summary: c.summary, inHead: !onOther(c), compare: () => (select(c.id), (comparing = c)) }));
+    if (c.status !== "deleted") entries.push({ kind: "item", label: "Browse Files at This Commit", icon: menuIcons.folder, run: () => nav.openBrowse(c.id, null, c.path) });
     entries.push({ kind: "sep" }, { kind: "item", label: "Copy SHA", icon: menuIcons.copy, run: () => copy(c.id) });
     const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
     menu = { x: event.type === "contextmenu" ? event.clientX : box.left, y: event.type === "contextmenu" ? event.clientY : box.bottom + 4, entries };
