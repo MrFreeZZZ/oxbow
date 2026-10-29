@@ -351,7 +351,8 @@ impl Repo {
         if store.lists.is_empty() {
             return Ok(Changelists::default());
         }
-        if take_new_files(&mut store, tree) {
+        // Two steps, so both run: `|` and not `||`.
+        if drop_unchanged(&mut store, tree) | take_new_files(&mut store, tree) {
             self.write_store(&store)?;
         }
         Ok(self.resolve(&store, tree))
@@ -576,6 +577,21 @@ impl Repo {
     /// staging area of the list's own.
     pub(crate) fn plan_changelist_commit(&self, id: &str, commit: GitCommand) -> Result<Vec<GitCommand>> {
         let name = self.changelist_name(id)?;
+        // Its own commit would finish a merge, a cherry-pick or a rebase without what they bring.
+        if let Some(op) = self.operation()?
+            && op.kind != crate::operation::OperationKind::StashApply
+        {
+            let what = match op.kind {
+                crate::operation::OperationKind::Merge | crate::operation::OperationKind::Squash => "a merge",
+                crate::operation::OperationKind::Rebase => "a rebase",
+                crate::operation::OperationKind::CherryPick => "a cherry-pick",
+                crate::operation::OperationKind::Revert => "a revert",
+                _ => "applying patches",
+            };
+            return Err(Error::Git(format!(
+                "“{name}” can’t be committed in the middle of {what}: finish or abort it first, or commit the staged changes"
+            )));
+        }
         let part = self.list_part(Some(id), None, true)?;
         if part.is_empty() {
             return Err(Error::Git(format!("“{name}” has no changes to commit")));
@@ -775,6 +791,27 @@ impl Repo {
         }
         self.write_store(&store)
     }
+}
+
+/// Files that have no changes any more leave their lists, and runs whose file has no unstaged
+/// changes go, as when a file is committed without its list: changed again, it is new. Whether
+/// anything changed.
+fn drop_unchanged(store: &mut Store, tree: &WorkingTree) -> bool {
+    let changed: HashSet<&str> = tree
+        .staged
+        .iter()
+        .chain(&tree.unstaged)
+        .chain(&tree.conflicted)
+        .map(|f| f.path.as_str())
+        .collect();
+    let unstaged: HashSet<&str> = listable(tree).map(|f| f.path.as_str()).collect();
+    let held = |store: &Store| store.lists.iter().map(|l| l.files.len()).sum::<usize>() + store.runs.len();
+    let before = held(store);
+    for list in &mut store.lists {
+        list.files.retain(|f| changed.contains(f.as_str()));
+    }
+    store.runs.retain(|r| unstaged.contains(r.path.as_str()));
+    held(store) != before
 }
 
 /// With a list active, the files that started changing since the last reading go to it.

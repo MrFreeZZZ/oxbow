@@ -283,7 +283,12 @@ fn suggest(commit: &str, start: u32, end: u32, lines: &str) -> Action {
         path: "a.txt".into(),
         start,
         end,
-        lines: lines.into(),
+        // Written out as a block would be: none for "".
+        lines: if lines.is_empty() {
+            Vec::new()
+        } else {
+            lines.split('\n').map(str::to_owned).collect()
+        },
     }
 }
 

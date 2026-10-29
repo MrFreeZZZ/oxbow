@@ -599,3 +599,44 @@ fn runs_of_one_hunk_go_to_different_lists() {
     assert_eq!(view.lists[0].name, "Logging");
     assert_eq!(view.lists[0].paths, ["a.txt"]);
 }
+
+#[test]
+fn a_file_committed_without_its_list_leaves_it() {
+    let (mut fx, repo) = setup();
+    fx.write("b.txt", "b2\n");
+    let login = create(&repo, "Login", &["b.txt"]);
+    let other = create(&repo, "Other", &[]);
+    edit(
+        &repo,
+        ChangelistEdit::Activate {
+            id: Some(other.clone()),
+        },
+    );
+    // Committed the usual way, staged and committed, b.txt has no changes left.
+    fx.git(&["add", "b.txt"]);
+    fx.git(&["commit", "-q", "-m", "B"]);
+    assert!(paths_of(&read(&repo), &login).is_empty());
+    // Changed again, it is new: it goes to the active list, not back to Login.
+    fx.write("b.txt", "b3\n");
+    let view = read(&repo);
+    assert!(paths_of(&view, &login).is_empty());
+    assert_eq!(paths_of(&view, &other), ["b.txt"]);
+}
+
+#[test]
+fn a_list_is_not_committed_in_the_middle_of_a_merge() {
+    let (mut fx, repo) = setup();
+    fx.git(&["checkout", "-q", "-b", "side"]);
+    fx.write("c.txt", "c from side\n");
+    fx.git(&["commit", "-q", "-am", "Side"]);
+    fx.git(&["checkout", "-q", "-"]);
+    fx.git(&["merge", "-q", "--no-commit", "--no-ff", "side"]);
+    fx.write("b.txt", "b2\n");
+    let id = create(&repo, "Login", &["b.txt"]);
+    // Its commit would finish the merge without what the merge brings.
+    let err = repo.plan(&commit_list(&id, "Login")).unwrap_err().to_string();
+    assert!(err.contains("merge"), "{err}");
+    assert!(repo.perform(&commit_list(&id, "Login")).is_err());
+    assert!(fx.path().join(".git/MERGE_HEAD").exists());
+    assert_eq!(fx.git(&["rev-list", "--count", "HEAD"]).trim(), "1");
+}

@@ -104,6 +104,6 @@ export function applyRequest(path: string, commit: string, range: { start: numbe
     note: "Undo takes it back out, from the toast or the Operation Log.",
     status: `Applying the suggestion to ${name}…`,
     done: `Applied the suggestion to ${name}. Review it in Changes, then commit and push.`,
-    action: { kind: "applySuggestion", commit, path, start: range.start, end: range.end, lines: lines.join("\n") },
+    action: { kind: "applySuggestion", commit, path, start: range.start, end: range.end, lines },
   };
 }

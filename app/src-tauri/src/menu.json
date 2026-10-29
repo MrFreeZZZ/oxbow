@@ -371,6 +371,12 @@
     "accelerator": null
    },
    {
+    "id": "publishGitLab",
+    "title": "Publish to GitLab…",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
     "id": "-",
     "title": "",
     "enabled": true,
@@ -385,6 +391,12 @@
    {
     "id": "newChangelist",
     "title": "New Changelist…",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "commitChangelist",
+    "title": "Commit Changelist…",
     "enabled": false,
     "accelerator": null
    },

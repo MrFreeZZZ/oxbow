@@ -19,7 +19,7 @@ export const MENUS: { title: string; items: Entry[] }[] = [
   { title: "Go", items: ["back", "forward", "-", "quickOpen", "goToBranch", "goToTag", "goToStash", "browseFiles", "-", "nextChange", "previousChange", "-", "nextTab", "previousTab"] },
   {
     title: "Repository",
-    items: ["fetch", "pull", "pullRebase", "pullMerge", "push", "publish", "publishGitHub", "-", "commit", "newChangelist", "stash", "stashStaged", "-", "branch", "checkout", "newWorktree", "editStack", "splitCommit", "resolve", "applyNonConflicting", "-", "savePatches", "applyPatches", "-", "fixMistake"],
+    items: ["fetch", "pull", "pullRebase", "pullMerge", "push", "publish", "publishGitHub", "publishGitLab", "-", "commit", "newChangelist", "commitChangelist", "stash", "stashStaged", "-", "branch", "checkout", "newWorktree", "editStack", "splitCommit", "resolve", "applyNonConflicting", "-", "savePatches", "applyPatches", "-", "fixMistake"],
   },
 ];
 

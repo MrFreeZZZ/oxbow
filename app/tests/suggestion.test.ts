@@ -78,7 +78,11 @@ test("the lines a suggestion starts from come from the diff or the thread", () =
 test("Apply Suggestion puts the lines on disk, uncommitted", () => {
   const request = applyRequest("src/limits.ts", "abc1234", { start: 12, end: 14 }, ["const LIMIT = 10;"], "maria");
   assert.equal(request.title, "Apply maria’s suggestion to limits.ts?");
-  assert.deepEqual(request.action, { kind: "applySuggestion", commit: "abc1234", path: "src/limits.ts", start: 12, end: 14, lines: "const LIMIT = 10;" });
+  assert.deepEqual(request.action, { kind: "applySuggestion", commit: "abc1234", path: "src/limits.ts", start: 12, end: 14, lines: ["const LIMIT = 10;"] });
   assert.ok(request.body.includes("lines 12–14"));
   assert.ok(applyRequest("a", "c", { start: 3, end: 3 }, [], "me").body.includes("line 3"));
+  // No lines take them out; one empty line leaves a blank one: the two stay apart.
+  const lines = (l: string[]) => (applyRequest("a", "c", { start: 3, end: 3 }, l, "me").action as { lines: string[] }).lines;
+  assert.deepEqual(lines([]), []);
+  assert.deepEqual(lines([""]), [""]);
 });
