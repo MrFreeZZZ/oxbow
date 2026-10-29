@@ -83,3 +83,22 @@ export function nextAfter(order: string[], path: string): string | null {
   if (at < 0) return order[0] ?? null;
   return order[at + 1] ?? order[at - 1] ?? null;
 }
+
+/** `file` as its row shows its changed lines. The history lists the files before their lines are
+ *  counted (`counted` false): then the file's diff on screen, by "side:path" in `shown`, has
+ *  them, and a file without one gives null until the counts come. A conflicted file or a
+ *  submodule has no counts to wait for. */
+export function countedFile(file: FileChange, counted: boolean, shown: Map<string, FileChange>, side: Side): FileChange | null {
+  if (counted || file.status === "conflicted" || file.submodule) return file;
+  return shown.get(`${side}:${file.path}`) ?? null;
+}
+
+/** Changed lines, "+12 −3", or what the change is when it has none; "…" while not counted
+ *  (null), never "no lines". */
+export function lineCounts(file: FileChange | null): string {
+  if (!file) return "…";
+  if (file.binary) return "binary";
+  if (file.uncounted) return "new";
+  const parts = [file.additions ? `+${file.additions}` : "", file.deletions ? `−${file.deletions}` : ""].filter(Boolean);
+  return parts.length ? parts.join(" ") : "no lines";
+}

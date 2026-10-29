@@ -160,12 +160,12 @@ export function reloadNews(before: History, after: History): { text: string; par
   return { text: parts.length ? parts.join(" · ") : "Nothing new", partial: unread.length > 0 };
 }
 
-/** Which files are changed, staged or not, and by how many lines: staging part of a file
- *  changes it, which the files on disk don't show. */
+/** Which files are changed, staged or not. Staging part of a file changes no file and no list:
+ *  `changesStamp` has what is staged. Not the line counts, which come after the list. */
 function changesKey(h: History): string {
   const c = h.changes;
   if (!c) return "";
-  const side = (name: string, files: FileChange[]) => files.map((f) => `${name} ${f.status} ${f.path} ${f.additions} ${f.deletions}`);
+  const side = (name: string, files: FileChange[]) => files.map((f) => `${name} ${f.status} ${f.path}`);
   return [...side("s", c.staged), ...side("u", c.unstaged), ...side("c", c.conflicted)].join("\n");
 }
 

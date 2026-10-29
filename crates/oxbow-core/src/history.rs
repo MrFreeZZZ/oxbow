@@ -127,8 +127,9 @@ pub struct History {
     /// list them, and `problems` says why: the row is still there, with no counts. The Changes
     /// panel shows these, so a reload asks git for them once.
     pub changes: Option<WorkingTree>,
-    /// Stands for the files on disk of `changes`, by size and modification time: an edit that
-    /// keeps the line counts still changes it. For Reload to tell whether anything changed.
+    /// Stands for the files on disk of `changes`, by size and modification time, and what is
+    /// staged: an edit that keeps the line counts, or a part of a file staged, still changes it.
+    /// For Reload to tell whether anything changed.
     pub changes_stamp: String,
     /// Which reading of `changes` this is, for diffs of the same files: set by the app, 0 here.
     pub snapshot: u64,
@@ -318,6 +319,30 @@ impl HistoryCache {
     pub fn is_empty(&self) -> bool {
         self.last.is_none()
     }
+
+    /// `counted`, the files of the last read with their lines counted, for the next read to
+    /// take while nothing changes, unless that read already lists other files.
+    pub fn keep_counts(&mut self, counted: &WorkingTree) {
+        if let Some((_, tree)) = &mut self.asked.changes
+            && same_files(tree, counted)
+        {
+            *tree = counted.clone();
+        }
+    }
+}
+
+/// Whether `a` and `b` list the same files with the same statuses.
+fn same_files(a: &WorkingTree, b: &WorkingTree) -> bool {
+    let sides = |t: &WorkingTree| [t.staged.len(), t.unstaged.len(), t.conflicted.len()];
+    let files = |t: &WorkingTree| {
+        t.staged
+            .iter()
+            .chain(&t.unstaged)
+            .chain(&t.conflicted)
+            .map(|f| (f.path.clone(), f.status))
+            .collect::<Vec<_>>()
+    };
+    sides(a) == sides(b) && files(a) == files(b)
 }
 
 /// The part of [`History`] that comes from walking the commits.
@@ -427,10 +452,13 @@ fn fill_worktree_row(
 }
 
 impl Repo {
-    /// A hash of the size and modification time of each changed file on disk.
-    fn files_stamp(&self, tree: &WorkingTree) -> String {
+    /// A hash of the size and modification time of each changed file on disk, and of what the
+    /// index stages.
+    fn files_stamp(&self, tree: &WorkingTree, staged: Option<u64>) -> String {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        // Staging part of a file changes no file on disk, nor the list of files.
+        staged.hash(&mut hasher);
         for file in tree.staged.iter().chain(&tree.unstaged).chain(&tree.conflicted) {
             let meta = std::fs::symlink_metadata(self.workdir().join(&file.path)).ok();
             (&file.path, meta.as_ref().map(|m| (m.len(), m.modified().ok()))).hash(&mut hasher);
@@ -640,7 +668,8 @@ impl Repo {
                 taken += 1;
                 Ok(tree.clone())
             }
-            _ => self.working_tree(),
+            // The files alone: their lines are counted after, see `Repo::count_lines`.
+            _ => self.working_files(),
         };
         if let (Ok(tree), Some(key)) = (&changes, changes_key) {
             asked.changes = Some((key, tree.clone()));
@@ -765,7 +794,9 @@ impl Repo {
             truncated: built.truncated,
             loaded: built.loaded,
             shallow,
-            changes_stamp: changes.as_ref().map_or_else(String::new, |tree| self.files_stamp(tree)),
+            changes_stamp: changes
+                .as_ref()
+                .map_or_else(String::new, |tree| self.files_stamp(tree, staged)),
             changes,
             snapshot: 0,
             key: key_text,

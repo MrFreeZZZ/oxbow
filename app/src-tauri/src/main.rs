@@ -140,6 +140,7 @@ fn main() {
             history::file_at,
             history::save_file_at,
             working::working_tree,
+            working::working_counts,
             working::recent_messages,
             working::working_diff,
             working::working_diff_page,

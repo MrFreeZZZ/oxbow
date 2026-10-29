@@ -92,6 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         oxbow_core::config::set_git_program(None);
         for &n in &at_once {
             let (mut shown, mut all, mut again, mut afresh) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+            let mut counted = Vec::new();
             let mut size = 0;
             for _ in 0..runs {
                 let repo = Repo::open(path)?;
@@ -101,6 +102,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 shown.push(first.shown);
                 all.push(first.all);
                 size = serde_json::to_vec(&first.history)?.len();
+                // The changed lines, which the window asks for once the history shows.
+                if let Some(mut tree) = first.history.changes.clone().filter(|t| !t.counted) {
+                    let start = Instant::now();
+                    repo.count_lines(&mut tree)?;
+                    counted.push(start.elapsed());
+                }
                 let key = first.history.key.clone();
                 again.push(load(&repo, &watch, &mut cache, &folders, Some(&key), None, n)?.all);
                 // The window came back to the front: every folder is read again.
@@ -124,6 +131,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             line(&format!("History shown{at}"), &shown);
             line(&format!("All statuses in{at}"), &all);
+            if !counted.is_empty() {
+                line(&format!("Changed lines counted after{at}"), &counted);
+            }
             line(&format!("Refresh, nothing changed{at}"), &again);
             line(&format!("Refresh, back to front{at}"), &afresh);
             if n == at_once[0] {

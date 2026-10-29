@@ -5,6 +5,7 @@
 //! exactly the hunk `git apply` gets when it is staged. Staging, committing and every other
 //! change is a [`crate::Action`]: see action.rs, plan.rs and perform.rs.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -58,6 +59,10 @@ pub struct WorkingTree {
     pub unstaged: Vec<FileChange>,
     /// Files with unresolved conflicts.
     pub conflicted: Vec<FileChange>,
+    /// The changed lines of the files are counted, and which are binary or in LFS is known. A
+    /// reading with the history lists the files first and counts them after: until then every
+    /// file shows 0 lines, which is not what it has.
+    pub counted: bool,
 }
 
 impl WorkingTree {
@@ -91,31 +96,70 @@ pub enum Side {
 }
 
 impl Repo {
-    /// Staged, unstaged, untracked and conflicted files.
+    /// Staged, unstaged, untracked and conflicted files, with their changed lines counted.
     pub fn working_tree(&self) -> Result<WorkingTree> {
+        let mut tree = self.working_files()?;
+        self.count_lines(&mut tree)?;
+        Ok(tree)
+    }
+
+    /// The files of [`Repo::working_tree`] and their statuses alone, from `git status`: with
+    /// thousands of edited files, counting their lines takes ten times as long as listing them.
+    /// [`Repo::count_lines`] counts them after.
+    pub fn working_files(&self) -> Result<WorkingTree> {
         let out = self.run(&GitCommand::new([
             "status",
             "--porcelain=v2",
             "-z",
             "--untracked-files=all",
         ]))?;
-        let mut tree = parse_status(&out.stdout);
+        Ok(parse_status(&out.stdout))
+    }
 
-        let staged_stats = self.numstat(Side::Staged)?;
-        let unstaged_stats = self.numstat(Side::Unstaged)?;
-        for (files, stats) in [(&mut tree.staged, &staged_stats), (&mut tree.unstaged, &unstaged_stats)] {
-            for file in files.iter_mut() {
-                if let Some(&(add, del, binary)) = stats.get(&file.path) {
-                    file.additions = add;
-                    file.deletions = del;
-                    file.binary = binary;
-                }
-            }
+    /// Count the changed lines of every file of `tree`, a reading of [`Repo::working_files`],
+    /// and tell binary, LFS and big files.
+    pub fn count_lines(&self, tree: &mut WorkingTree) -> Result<()> {
+        let staged = self.numstat(Side::Staged, &[])?;
+        let unstaged = self.numstat(Side::Unstaged, &[])?;
+        apply_stats(tree.staged.iter_mut(), &staged);
+        apply_stats(tree.unstaged.iter_mut(), &unstaged);
+        self.count_new_files(tree.unstaged.iter_mut(), true);
+        self.mark_lfs_and_sizes(tree.staged.iter_mut().chain(tree.unstaged.iter_mut()));
+        tree.counted = true;
+        Ok(())
+    }
+
+    /// [`Repo::count_lines`] of a few `files` of one side, a page of diffs or a file shown, while
+    /// the rest of the files are not counted yet: the paths go on the command line.
+    pub(crate) fn count_some(&self, files: &mut [FileChange], side: Side) -> Result<()> {
+        let paths: Vec<String> = files
+            .iter()
+            .filter(|f| !matches!(f.status, FileStatus::Untracked | FileStatus::Conflicted))
+            .map(|f| literal(&f.path))
+            .collect();
+        if !paths.is_empty() {
+            let stats = self.numstat(side, &paths)?;
+            apply_stats(files.iter_mut(), &stats);
         }
-        let known = std::mem::take(&mut *self.untracked.0.lock().expect("counts lock"));
+        if side == Side::Unstaged {
+            self.count_new_files(files.iter_mut(), false);
+        }
+        self.mark_lfs_and_sizes(files.iter_mut());
+        Ok(())
+    }
+
+    /// Count the lines of the new files among `files`, reading each file unless it kept the size
+    /// and time of change it was counted with. `all`: these are every new file, so the counts of
+    /// files no longer there are let go.
+    fn count_new_files<'a>(&self, files: impl Iterator<Item = &'a mut FileChange>, all: bool) {
+        let known = if all {
+            std::mem::take(&mut *self.untracked.0.lock().expect("counts lock"))
+        } else {
+            self.untracked.0.lock().expect("counts lock").clone()
+        };
         let mut kept = HashMap::new();
         let mut budget = MAX_FRESH_BYTES;
-        for file in tree.unstaged.iter_mut().filter(|f| f.status == FileStatus::Untracked) {
+        for file in files.filter(|f| f.status == FileStatus::Untracked) {
             let path = self.workdir().join(&file.path);
             // A symlink counts as one, as for git: what it points at may never end (/dev/zero).
             let Some(meta) = std::fs::symlink_metadata(&path).ok().filter(|m| m.is_file()) else {
@@ -162,23 +206,25 @@ impl Repo {
                 kept.insert(file.path.clone(), counted);
             }
         }
-        *self.untracked.0.lock().expect("counts lock") = kept;
-        self.mark_lfs_and_sizes(&mut tree);
-        Ok(tree)
+        let mut counts = self.untracked.0.lock().expect("counts lock");
+        if all {
+            *counts = kept;
+        } else {
+            counts.extend(kept);
+        }
     }
 
     /// Mark files `.gitattributes` sends to LFS, and give binary, LFS and big files their size in
     /// the working copy, for the badge in the file list and the note on a file too big for git.
-    fn mark_lfs_and_sizes(&self, tree: &mut WorkingTree) {
-        let paths: Vec<&str> = tree
-            .staged
+    fn mark_lfs_and_sizes<'a>(&self, files: impl Iterator<Item = &'a mut FileChange>) {
+        let mut files: Vec<&mut FileChange> = files.filter(|f| f.status != FileStatus::Conflicted).collect();
+        let paths: Vec<&str> = files
             .iter()
-            .chain(&tree.unstaged)
             .filter(|f| f.status != FileStatus::Deleted)
             .map(|f| f.path.as_str())
             .collect();
         let lfs = self.lfs_paths(&paths);
-        for file in tree.staged.iter_mut().chain(tree.unstaged.iter_mut()) {
+        for file in files.iter_mut() {
             if file.status == FileStatus::Deleted {
                 continue;
             }
@@ -234,7 +280,7 @@ impl Repo {
 
     /// The diff of one file on one side of the working copy.
     pub fn working_diff(&self, path: &str, side: Side, whole_file: bool) -> Result<FileDiff> {
-        let tree = self.working_tree()?;
+        let tree = self.working_files()?;
         let list = match side {
             Side::Staged => &tree.staged,
             Side::Unstaged => &tree.unstaged,
@@ -245,6 +291,10 @@ impl Repo {
             .find(|f| f.path == path)
             .cloned()
             .ok_or_else(|| Error::Git(format!("{path} has no {} changes", side.word())))?;
+        // Only this file's lines are counted.
+        let mut file = [file];
+        self.count_some(&mut file, side)?;
+        let [file] = file;
         self.diff_of(file, side, whole_file, &AtomicBool::new(false))
     }
 
@@ -298,7 +348,21 @@ impl Repo {
         // A path in both lists is the side's own change.
         let mut by_path: HashMap<&str, &FileChange> = tree.conflicted.iter().map(|f| (f.path.as_str(), f)).collect();
         by_path.extend(list.iter().map(|f| (f.path.as_str(), f)));
-        let files: Vec<&FileChange> = paths.iter().filter_map(|p| by_path.get(p.as_str()).copied()).collect();
+        let mut files: Vec<Cow<FileChange>> = paths
+            .iter()
+            .filter_map(|p| by_path.get(p.as_str()).map(|f| Cow::Borrowed(*f)))
+            .collect();
+        // Lines not counted yet: the files this page can take are counted first, as their
+        // counts say which patches are too long to read.
+        if !tree.counted {
+            let start = from.min(files.len());
+            let end = (start + PAGE_FILES).min(files.len());
+            let mut part: Vec<FileChange> = files[start..end].iter().map(|f| f.clone().into_owned()).collect();
+            self.count_some(&mut part, side)?;
+            for (at, file) in part.into_iter().enumerate() {
+                files[start + at] = Cow::Owned(file);
+            }
+        }
         let max_lines = self.diff_options().max_lines;
         let context = self.diff_options().context_lines as usize;
         // The files of one batch are guessed from their counts beforehand; the page itself stops
@@ -320,7 +384,7 @@ impl Repo {
         let mut end = from.min(files.len());
         let mut guessed = 0usize;
         while end < files.len() && (end == from || (guessed < budget && end - from < PAGE_FILES)) {
-            guessed = guessed.saturating_add(guess(files[end]));
+            guessed = guessed.saturating_add(guess(&files[end]));
             end += 1;
         }
         let page = &files[from.min(end)..end];
@@ -344,7 +408,7 @@ impl Repo {
         }
         let fresh: Vec<&FileChange> = page
             .iter()
-            .copied()
+            .map(|f| &**f)
             .filter(|f| f.status == FileStatus::Untracked && !self.needs_no_patch(f, max_lines))
             .collect();
         if !fresh.is_empty() {
@@ -365,7 +429,7 @@ impl Repo {
             if stopped() {
                 return Err(Error::Cancelled);
             }
-            let file = (*file).clone();
+            let file = file.clone().into_owned();
             let diff = match patches.remove(&file.path) {
                 Some(patch) => self.diff_from_patch(file, side, &patch, false),
                 // Files outside the batch, or whose part of it git did not print as expected,
@@ -654,7 +718,7 @@ impl Repo {
         lines: Option<&[usize]>,
         forward: bool,
     ) -> Result<String> {
-        let tree = self.working_tree()?;
+        let tree = self.working_files()?;
         let list = match side {
             Side::Staged => &tree.staged,
             Side::Unstaged => &tree.unstaged,
@@ -763,19 +827,25 @@ impl Repo {
         Ok((fields.next().map(str::to_owned), fields.next().map(str::to_owned)))
     }
 
-    /// Added and deleted lines per path (`None` counts for binary files).
-    fn numstat(&self, side: Side) -> Result<std::collections::HashMap<String, (u32, u32, bool)>> {
-        let mut args = vec!["diff", "--numstat", "-z", "--no-renames", "--no-textconv"];
+    /// Added and deleted lines per path, and whether the file is binary: of every file on
+    /// `side`, or of `paths` (pathspecs) alone.
+    fn numstat(&self, side: Side, paths: &[String]) -> Result<Stats> {
+        let mut args: Vec<String> = ["diff", "--numstat", "-z", "--no-renames", "--no-textconv"]
+            .map(str::to_owned)
+            .to_vec();
         if side == Side::Staged {
+            args.push("--cached".into());
             if self.head()?.commit.is_none() {
                 // Nothing committed yet: compare the index with the empty tree.
-                args.extend(["--cached", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]);
-            } else {
-                args.push("--cached");
+                args.push("4b825dc642cb6eb9a060e54bf8d69288fbee4904".into());
             }
         }
+        if !paths.is_empty() {
+            args.push("--".into());
+            args.extend(paths.iter().cloned());
+        }
         let out = self.run(&GitCommand::new(args))?;
-        let mut stats = std::collections::HashMap::new();
+        let mut stats = HashMap::new();
         for record in out.stdout.split('\0').filter(|r| !r.is_empty()) {
             let mut parts = record.splitn(3, '\t');
             let (Some(add), Some(del), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
@@ -788,6 +858,20 @@ impl Repo {
             );
         }
         Ok(stats)
+    }
+}
+
+/// What `git diff --numstat` says of each path: added and deleted lines, and whether it is binary.
+type Stats = HashMap<String, (u32, u32, bool)>;
+
+/// Give `files` their counts from `stats`; a file it leaves out keeps what it has.
+fn apply_stats<'a>(files: impl Iterator<Item = &'a mut FileChange>, stats: &Stats) {
+    for file in files {
+        if let Some(&(add, del, binary)) = stats.get(&file.path) {
+            file.additions = add;
+            file.deletions = del;
+            file.binary = binary;
+        }
     }
 }
 

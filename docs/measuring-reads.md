@@ -20,6 +20,7 @@ About three minutes; it needs about 1 GB. It makes:
 | `worktrees-50/main` | the same with 50 worktrees |
 | `submodules-20` | 20 submodules: clean, changed inside, behind, ahead, two not cloned |
 | `conflicts` | a merge stopped on 4 files of 10,000 and 100,000 lines, with 100 and 1,000 conflicts each, for the Conflicts screen |
+| `changes-10k` | 10,000 files of 200 lines, each with two lines edited and the first 1,000 staged, for the Changes list |
 
 ## On a Mac, with a release build
 

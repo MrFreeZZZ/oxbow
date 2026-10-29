@@ -6,13 +6,14 @@
 #   worktrees-50    the same with 50
 #   submodules-20   20 submodules: clean, changed, behind, ahead, on a branch, not cloned
 #   conflicts       a merge stopped on 4 files: 10k and 100k lines, with 100 and 1,000 conflicts
-# Usage: scripts/make-perf-fixtures.sh <folder> [history|worktrees|submodules|conflicts ...]
+#   changes-10k     10,000 files of 200 lines, each with two lines edited, 1,000 of them staged
+# Usage: scripts/make-perf-fixtures.sh <folder> [history|worktrees|submodules|conflicts|changes ...]
 set -euo pipefail
 
-dest=${1:?usage: make-perf-fixtures.sh <folder> [history|worktrees|submodules|conflicts ...]}
+dest=${1:?usage: make-perf-fixtures.sh <folder> [history|worktrees|submodules|conflicts|changes ...]}
 shift
 parts=("$@")
-[ ${#parts[@]} -gt 0 ] || parts=(history worktrees submodules conflicts)
+[ ${#parts[@]} -gt 0 ] || parts=(history worktrees submodules conflicts changes)
 mkdir -p "$dest"
 dest=$(cd "$dest" && pwd)
 
@@ -191,9 +192,30 @@ conflicts() {
   echo "conflicts: $(git -C "$repo" diff --name-only --diff-filter=U | wc -l) conflicted files"
 }
 
+changes() {
+  local repo=$dest/changes-10k i
+  rm -rf "$repo"
+  git init -q -b main "$repo"
+  awk 'BEGIN {
+    for (i = 0; i < 10000; i++) {
+      dir = "'"$repo"'/src/m" (i % 40); file = dir "/f" i ".rs"
+      if (i < 40) system("mkdir -p " dir)
+      for (j = 0; j < 200; j++) print "line " j " of file " i > file
+      close(file)
+    }
+  }'
+  git -C "$repo" add -A
+  git -C "$repo" commit -q -m "10,000 files"
+  # Two lines edited in each file; the first 1,000 files staged.
+  find "$repo/src" -name '*.rs' -exec sed -i.bak -e '51s/^/edited /' -e '151s/^/edited /' {} +
+  find "$repo/src" -name '*.bak' -delete
+  git -C "$repo" ls-files | awk 'NR <= 1000' | (cd "$repo" && xargs git add)
+  echo "changes-10k: $(git -C "$repo" status --porcelain | wc -l) changed files"
+}
+
 for part in "${parts[@]}"; do
   case $part in
-    history | worktrees | submodules | conflicts) "$part" ;;
-    *) echo "make-perf-fixtures: unknown part '$part' (history, worktrees, submodules, conflicts)" >&2; exit 2 ;;
+    history | worktrees | submodules | conflicts | changes) "$part" ;;
+    *) echo "make-perf-fixtures: unknown part '$part' (history, worktrees, submodules, conflicts, changes)" >&2; exit 2 ;;
   esac
 done

@@ -23,7 +23,7 @@
   import { discardRequest, stageRequest, stashFilesRequest, unstageRequest } from "./changes";
   import { discardPartRequest, groupFiles, hunkLists, idOf, keyOf, listName, nameRequest, runList, runsOfLines, shareOf, stagePartRequest, type ListKey } from "./changelists";
   import type { Changelist } from "./types";
-  import { keepShown, nextAfter, pickRange, sameShown, stepShown, type Shown } from "./changesView";
+  import { countedFile, keepShown, lineCounts, nextAfter, pickRange, sameShown, stepShown, type Shown } from "./changesView";
   import { draftFor, saveDraft } from "./commitDrafts.svelte";
   import { byFolder, filesWidth, listView, resizeFiles, setFolders } from "./listView.svelte";
 
@@ -112,13 +112,13 @@
   /** Lines of diff a page of every file of a side brings, about what the diff shows at first. */
   const PAGE_LINES = 4000;
   /** Lanes of the diff reads of each side: a newer read in a lane stops the older one. */
-  const LANES: Record<Side, string> = { unstaged: "changes-unstaged", staged: "changes-staged" };
+  const LANES: Record<Side | "counts", string> = { unstaged: "changes-unstaged", staged: "changes-staged", counts: "changes-counts" };
   /** Where the next page of diffs starts (null once all are loaded), and how many files are still to come. */
   let more = $state<number | null>(null);
   let pending = $state(0);
   let loadingMore = false;
   /** What the diffs shown were asked for: later pages must be of the same. */
-  let asked: { side: Side; paths: string[]; whole: boolean; reading: number | null } | null = null;
+  let asked: { side: Side; paths: string[]; whole: boolean; reading: number | null; settings: string; round: number; target: Shown } | null = null;
 
   const draft = $derived(draftFor(repo));
 
@@ -172,8 +172,10 @@
   async function load() {
     try {
       const given = changes;
-      const next = given ?? (await api.workingTree());
       const read = given ? snapshot : null;
+      // The same reading again, counted here already: its counts stay.
+      const kept = given && !given.counted && read === reading && tree?.counted ? tree : null;
+      const next = kept ?? given ?? (await api.workingTree());
       let listsError: string | null = null;
       const found = await api.changelists(read).catch((err) => ((listsError = String(err)), null));
       reading = read;
@@ -185,10 +187,25 @@
       // Ticks go with the files that left their list.
       pruneTicks();
       loads++;
+      if (!next.counted && read !== null) countLines(read);
     } catch (err) {
       error = String(err);
     }
   }
+
+  /** The changed lines of the files of reading `read`, which the history lists before they are
+   *  counted: the list shows at once, and the counts come after. */
+  async function countLines(read: number) {
+    const counted = await api.workingCounts(read, LANES.counts).catch(() => null);
+    // A newer reading has counts of its own coming.
+    if (counted && reading === read) tree = counted;
+  }
+
+  /** The files of the diffs on screen by "side:path": their rows take the counts from them
+   *  while the list is not counted yet, so the file open shows its counts first. */
+  const diffFiles = $derived(new Map(diffsOf ? diffs.map((d) => [`${diffsOf!.side}:${d.file.path}`, d.file]) : []));
+  /** `file` of a list with its changed lines, or null while they are being counted. */
+  const lined = (file: FileChange, side: Side) => countedFile(file, tree?.counted !== false, diffFiles, side);
 
   /** All the files of a list, the filter aside. */
   function filesOf(group: List | "conflicted"): FileChange[] {
@@ -244,8 +261,8 @@
   $effect(() => {
     const target = shown;
     const wholeFile = whole;
-    diffSettings();
-    loads;
+    const settings = diffSettings();
+    const round = loads;
     const t = tree;
     const g = grouped;
     if (!t || !target) {
@@ -269,7 +286,9 @@
     const paths = pool
       .filter((f) => (target.kind === "file" ? f.path === target.path : chosen ? chosen.has(f.path) : !n || f.path.toLowerCase().includes(n) || !!f.oldPath?.toLowerCase().includes(n)))
       .map((f) => f.path);
-    const ask = { side: target.side, paths, whole: wholeFile, reading };
+    const ask = { side: target.side, paths, whole: wholeFile, reading, settings, round, target };
+    // The counts of the same reading came in: the diffs shown or on their way are still the ones asked for.
+    if (asked && sameAsk(asked, ask)) return;
     asked = ask;
     const first = paths.length ? api.workingDiffPage(paths, target.side, wholeFile, reading, 0, PAGE_LINES, LANES[target.side]) : Promise.resolve({ diffs: [], next: null, files: 0 });
     first.then(
@@ -292,6 +311,10 @@
   $effect(() => () => {
     api.stopReads(Object.values(LANES)).catch(() => {});
   });
+
+  function sameAsk(a: NonNullable<typeof asked>, b: NonNullable<typeof asked>) {
+    return sameShown(a.target, b.target) && a.side === b.side && a.whole === b.whole && a.reading === b.reading && a.settings === b.settings && a.round === b.round && a.paths.length === b.paths.length && a.paths.every((p, i) => p === b.paths[i]);
+  }
 
   /** The next page of the diffs of every file of a side. */
   function loadMore() {
@@ -648,13 +671,8 @@
   const pickedStaged = $derived(pickedFiles("staged"));
   /** The heading's button for the selected files of its list. */
 
-  /** Changed lines, "+12 −3", or what the change is when it has none. */
-  function counts(file: FileChange): string {
-    if (file.binary) return "binary";
-    if (file.uncounted) return "new";
-    const parts = [file.additions ? `+${file.additions}` : "", file.deletions ? `−${file.deletions}` : ""].filter(Boolean);
-    return parts.length ? parts.join(" ") : "no lines";
-  }
+  /** Changed lines of `file` on `side`, "+12 −3", or what the change is when it has none. */
+  const counts = (file: FileChange, side: Side): string => lineCounts(lined(file, side));
 
   async function act(request: Request): Promise<boolean> {
     const done = await confirm.run(request);
@@ -1003,6 +1021,8 @@
   {@const other = group === "staged" ? unstagedByPath.get(file.path) : unstagedList(group) ? stagedByPath.get(file.path) : undefined}
   <!-- What the list holds of a file it shares with another. -->
   {@const share = unstagedList(group) ? shareOf(lists, file.path, idOf(group)) : null}
+  <!-- Its changed lines, null while they are being counted. -->
+  {@const c = lined(file, sideOf(group))}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="file"
@@ -1046,18 +1066,20 @@
         </span>
       {/if}
       {#if other}
-        <span class="note partial" title={group === "staged" ? `Staged in part: ${counts(file)} go into the commit, ${counts(other)} stay out` : `Staged in part: ${counts(other)} go into the commit, ${counts(file)} stay out`}>
+        <span class="note partial" title={group === "staged" ? `Staged in part: ${counts(file, "staged")} go into the commit, ${counts(other, "unstaged")} stay out` : `Staged in part: ${counts(other, "staged")} go into the commit, ${counts(file, "unstaged")} stay out`}>
           <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" /><path class="fill" d="M8 2.5a5.5 5.5 0 0 0 0 11z" /></svg>Partial
         </span>
       {/if}
       {#if file.submodule}
         <span class="note" title="Another repository in a folder here">Submodule{file.submodule.changed && !file.submodule.moved ? " · changed inside" : ""}</span>
-      {:else if file.lfs}
-        <span class="note" title="Kept in Git LFS: git stores a small pointer">LFS{file.newSize !== undefined ? ` · ${bytes(file.newSize)}` : ""}</span>
-      {:else if (file.newSize ?? 0) >= BIG_FILE}
-        <span class="note warn" title="Too big for a git repository: GitHub refuses files over 100 MB">{bytes(file.newSize!)}</span>
-      {:else if !file.binary && !file.uncounted && file.status !== "conflicted"}
-        <span class="counts mono"><span class="add">+{file.additions}</span> <span class="del">−{file.deletions}</span></span>
+      {:else if !c}
+        <span class="counts mono" title="Counting the changed lines…">…</span>
+      {:else if c.lfs}
+        <span class="note" title="Kept in Git LFS: git stores a small pointer">LFS{c.newSize !== undefined ? ` · ${bytes(c.newSize)}` : ""}</span>
+      {:else if (c.newSize ?? 0) >= BIG_FILE}
+        <span class="note warn" title="Too big for a git repository: GitHub refuses files over 100 MB">{bytes(c.newSize!)}</span>
+      {:else if !c.binary && !c.uncounted && file.status !== "conflicted"}
+        <span class="counts mono"><span class="add">+{c.additions}</span> <span class="del">−{c.deletions}</span></span>
       {/if}
     </button>
     {#if unstagedList(group)}
@@ -1367,6 +1389,7 @@
         {openUnstaged}
         {openStaged}
         {sideFiles}
+        counted={tree?.counted !== false}
         {staged}
         {tracked}
         {untracked}
