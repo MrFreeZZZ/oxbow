@@ -43,6 +43,8 @@ crates/oxbow-core/          UI-free core library (all Git logic lives here)
   src/review.rs             reviewing a pull request: statuses, Viewed, fetch into refs/oxbow/pull/N,
                             the draft review kept in .git/oxbow/reviews; suggestion.rs = Apply Suggestion
   src/config.rs setup.rs    git settings; clone/init;  console.rs = Console process log
+  src/repofiles.rs          Settings › Repository Files: the shared committed files (.gitignore, .mailmap,
+                            CODEOWNERS…) read, checked as they are typed (errors keep Save off), written
   src/trust.rs              settings of a repository that run programs (hooks, fsmonitor, filters…),
                             found before opening it; Restricted runs git with them off
   tests/<area>.rs           integration tests, one file per area; tests/support/mod.rs = Fixture
@@ -53,7 +55,7 @@ app/src-tauri/              Tauri shell (crate oxbow-app)
   src/main.rs               the app's setup and the generate_handler! list of every command
   src/session.rs            each window's repository and Stop buttons; current(), read(), logged()
   src/<area>.rs             the #[tauri::command]s by area: repos recent setup history working
-                            conflicts actions git_config preferences outside windows
+                            conflicts actions git_config repo_files preferences outside windows
   src/accounts.rs pulls.rs open_in.rs console_window.rs
   src/trusted.rs            trusted-repositories.json: which repositories may run their own programs
   src/settings.rs           settings.json: read (never written over when broken), atomic write
@@ -71,6 +73,8 @@ app/src/                    Svelte front end
   lib/ChangesPanel.svelte   Changes: the lists of files; CommitForm, ChangesDiff (the diff column), changesMenu.ts,
                             commitDrafts.svelte.ts (the message kept per folder), changes.ts (its requests),
                             changelists.ts (which list holds what, their requests)
+  lib/RepoFileEditor.svelte Repository Files: one file's editor; repoFiles.ts its pure logic,
+                            repoFileState.svelte.ts the list and its Settings section
   lib/BrowseView.svelte     Browse Files at This Commit (browseTree.ts: the tree's rows, Find a file)
   lib/LocalHistoryView.svelte   Local History screen; LocalVersionView = one version (also in File
                             History); localHistory.ts its pure logic, localHistoryMenu.ts its menu

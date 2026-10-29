@@ -868,6 +868,7 @@ impl Repo {
             Action::UnstageHunk { path, lines, .. } => ("unstage", format!("Unstage {}", hunk(lines, path))),
             Action::DiscardHunk { path, lines, .. } => ("discard", format!("Discard {}", hunk(lines, path))),
             Action::Ignore { pattern, .. } => ("ignore", format!("Ignore {pattern}")),
+            Action::Untrack { paths } => ("ignore", format!("Stop tracking {}", files(paths))),
             Action::Commit { amend: true, .. } => ("commit", format!("Amend the last commit on {here}")),
             Action::Commit {
                 changelist: Some(id), ..

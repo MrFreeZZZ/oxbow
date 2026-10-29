@@ -77,6 +77,10 @@ pub enum Action {
         #[serde(default)]
         untrack: Option<String>,
     },
+    /// Stop tracking `paths`: they leave the index and stay on disk (Repository Files).
+    Untrack {
+        paths: Vec<String>,
+    },
     Commit {
         message: String,
         amend: bool,

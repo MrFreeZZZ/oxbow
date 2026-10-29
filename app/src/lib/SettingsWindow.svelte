@@ -7,6 +7,7 @@
   // SettingsRow.svelte.
 
   import { listen } from "@tauri-apps/api/event";
+  import { untrack } from "svelte";
   import { api } from "./api";
   import ConfirmSheet from "./ConfirmSheet.svelte";
   import { confirm } from "./confirm.svelte";
@@ -20,6 +21,8 @@
   import SettingsJson from "./SettingsJson.svelte";
   import { keysSection } from "./settingsKeys.svelte";
   import { config, copy, load, model } from "./settingsModel.svelte";
+  import RepoFileEditor from "./RepoFileEditor.svelte";
+  import { closeRepoFile, forgetRepoFiles, loadRepoFiles, repoFiles, repoFilesSection } from "./repoFileState.svelte";
   import SettingsRow from "./SettingsRow.svelte";
   import { text, type Group, type Row, type Section } from "./settingsRows";
   import { diffSection, generalSection, integrationsSection, themeSection } from "./settingsSections";
@@ -34,9 +37,9 @@
   listen("account-changed", () => load()).catch(() => {});
   listen("trust-changed", () => load()).catch(() => {});
 
-  const sections: Section[] = [generalSection, themeSection, accountsSection, gitSection, diffSection, keysSection, integrationsSection, repoSection];
+  const sections: Section[] = [generalSection, themeSection, accountsSection, gitSection, diffSection, keysSection, integrationsSection, repoSection, repoFilesSection];
 
-  const shownSections = $derived(sections.filter((s) => s.id !== "repo" || model.repo));
+  const shownSections = $derived(sections.filter((s) => (s.id !== "repo" && s.id !== "repoFiles") || model.repo));
   const labelOf = (section: Section) => (section.id === "repo" ? (model.repo?.name ?? "") : section.label);
 
   const mac = navigator.platform.startsWith("Mac");
@@ -46,16 +49,19 @@
   let at = $state(0);
   const current = $derived(shownSections.find((s) => s.id === visited[at]) ?? shownSections[0]);
 
-  function go(id: string) {
+  function go(id: string, keepFile = false) {
     model.query = "";
     json = false;
     shortcutEdit.cancel();
+    if (repoFiles.open && !keepFile) closeRepoFile();
+    if (id === "repoFiles") loadRepoFiles();
     if (id === visited[at]) return;
     visited = [...visited.slice(0, at + 1), id];
     at = visited.length - 1;
   }
 
   const needle = $derived(model.query.trim().toLowerCase());
+
 
   function matches(section: Section, group: Group, row: Row): boolean {
     const words = [labelOf(section), group.title ?? "", text(row.label), text(row.sub), row.id];
@@ -136,6 +142,33 @@
   let jsonText = $state("");
   let jsonSaved = $state("");
 
+  // Repository Files: the file open in its editor, and the list read afresh for another
+  // repository, whose drafts don't carry over.
+  const fileOpen = $derived(!needle && !json && current.id === "repoFiles" ? repoFiles.open : null);
+  const openFile = $derived(fileOpen ? repoFiles.list?.files.find((f) => f.kind === fileOpen) : undefined);
+  let filesFor: string | null = null;
+  $effect(() => {
+    const path = model.repo?.path ?? null;
+    untrack(() => {
+      if (path === filesFor) return;
+      filesFor = path;
+      forgetRepoFiles();
+      if (path) loadRepoFiles();
+    });
+  });
+  // Edit in a row found by the search opens the section too.
+  $effect(() => {
+    const open = repoFiles.open;
+    untrack(() => {
+      if (open && (current.id !== "repoFiles" || needle)) go("repoFiles", true);
+    });
+  });
+
+  function back() {
+    if (fileOpen) closeRepoFile();
+    else at -= 1;
+  }
+
   async function openJson() {
     menu = null;
     jsonText = jsonSaved = await api.settingsText().catch(() => "{}\n");
@@ -210,7 +243,12 @@
   }
 </script>
 
-<svelte:window onfocus={load} />
+<svelte:window
+  onfocus={() => {
+    load();
+    if (model.repo && !repoFiles.open) loadRepoFiles();
+  }}
+/>
 
 <div class="settings" class:mac>
   <nav aria-label="Settings sections">
@@ -224,6 +262,7 @@
       {#if section.head}<div class="head">{section.head}</div>{/if}
       <button
         class="section"
+        class:child={section.child}
         class:current={!needle && !json && section.id === current.id}
         class:miss={needle && !hits.has(section.id)}
         aria-current={!needle && section.id === current.id ? "page" : undefined}
@@ -240,43 +279,61 @@
   <div class="content">
     <header data-tauri-drag-region>
       <div class="nav-buttons">
-        <button aria-label="Back" disabled={at === 0 || !!needle || json} onclick={() => (at -= 1)}>
+        <button aria-label="Back" disabled={(at === 0 && !fileOpen) || !!needle || json} onclick={back}>
           <svg class="icon small" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>
         </button>
         <button aria-label="Forward" disabled={at === visited.length - 1 || !!needle || json} onclick={() => (at += 1)}>
           <svg class="icon small" viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
         </button>
       </div>
-      <h1 data-tauri-drag-region>{json ? "settings.json" : needle ? "Search" : labelOf(current)}</h1>
+      {#if fileOpen}
+        <h1 data-tauri-drag-region>
+          <button class="crumb" onclick={closeRepoFile}>Repository Files</button> › <span class="path">{openFile?.path ?? ""}</span>
+        </h1>
+        {#if openFile?.exists}
+          <button class="folder" onclick={() => api.revealFile(openFile.path).catch((err) => confirm.fail(err))} title={revealLabel} aria-label={revealLabel}>
+            <svg class="icon small" viewBox="0 0 16 16"><path d={menuIcons.reveal} /></svg>
+          </button>
+        {/if}
+      {:else}
+        <h1 data-tauri-drag-region>{json ? "settings.json" : needle ? "Search" : labelOf(current)}</h1>
+      {/if}
       {#if json}
         <button class="folder" onclick={reveal} title={revealLabel} aria-label={revealLabel}>
           <svg class="icon small" viewBox="0 0 16 16"><path d={menuIcons.reveal} /></svg>
         </button>
       {/if}
       <span class="spacer" data-tauri-drag-region></span>
-      <button class="button pill" onclick={restoreDefaults} disabled={!customized} title={customized ? "Put every Oxbow setting back to its default. Git’s own settings stay as they are" : "Every Oxbow setting is at its default"}>
-        <svg class="icon small" viewBox="0 0 16 16"><path d={menuIcons.reset} /></svg>Restore defaults
-      </button>
-      {#if json}
-        <button class="button pill" onclick={() => (json = false)} title="Back to the Settings window">
-          <svg class="icon small" viewBox="0 0 16 16"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" /></svg>Open Settings UI
+      {#if !fileOpen}
+        <button class="button pill" onclick={restoreDefaults} disabled={!customized} title={customized ? "Put every Oxbow setting back to its default. Git’s own settings stay as they are" : "Every Oxbow setting is at its default"}>
+          <svg class="icon small" viewBox="0 0 16 16"><path d={menuIcons.reset} /></svg>Restore defaults
         </button>
-      {:else}
-        <button class="button pill" onclick={openJson} title="The same settings as a JSON file">
-          <svg class="icon small" viewBox="0 0 16 16"
-            ><path
-              d="M5.5 2.5c-1.6 0-2 .7-2 2v1.6c0 .9-.5 1.5-1.5 1.9 1 .4 1.5 1 1.5 1.9v1.6c0 1.3.4 2 2 2M10.5 2.5c1.6 0 2 .7 2 2v1.6c0 .9.5 1.5 1.5 1.9-1 .4-1.5 1-1.5 1.9v1.6c0 1.3-.4 2-2 2"
-            /></svg
-          >Edit in settings.json
-        </button>
+        {#if json}
+          <button class="button pill" onclick={() => (json = false)} title="Back to the Settings window">
+            <svg class="icon small" viewBox="0 0 16 16"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" /></svg>Open Settings UI
+          </button>
+        {:else}
+          <button class="button pill" onclick={openJson} title="The same settings as a JSON file">
+            <svg class="icon small" viewBox="0 0 16 16"
+              ><path
+                d="M5.5 2.5c-1.6 0-2 .7-2 2v1.6c0 .9-.5 1.5-1.5 1.9 1 .4 1.5 1 1.5 1.9v1.6c0 1.3.4 2 2 2M10.5 2.5c1.6 0 2 .7 2 2v1.6c0 .9.5 1.5 1.5 1.9-1 .4-1.5 1-1.5 1.9v1.6c0 1.3-.4 2-2 2"
+              /></svg
+            >Edit in settings.json
+          </button>
+        {/if}
       {/if}
     </header>
 
     {#if json}
       <SettingsJson bind:text={jsonText} bind:saved={jsonSaved} />
+    {:else if fileOpen}
+      {#key fileOpen}
+        <RepoFileEditor kind={fileOpen} gitlab={repoFiles.list?.gitlab ?? false} />
+      {/key}
     {:else}
       <div class="scroll">
         {#if model.problem}<p class="problem" role="alert">{model.problem}</p>{/if}
+        {#if !needle && current.id === "repoFiles" && repoFiles.problem}<p class="problem" role="alert">{repoFiles.problem}</p>{/if}
         {#if prefs.failure}
           <p class="problem with-actions" role="alert">
             <span class="grow">Couldn’t save {failedLabel ? `“${failedLabel}”` : prefs.failure.key}, so it is back to how it was. {prefs.failure.error}</span>
@@ -468,6 +525,10 @@
     flex-shrink: 0;
   }
 
+  .section.child {
+    margin-left: 26px;
+  }
+
   .section.current {
     background: var(--side-sel);
     font-weight: 600;
@@ -560,6 +621,16 @@
     font-size: var(--text-heading);
     font-weight: 700;
     white-space: nowrap;
+  }
+
+  h1 .crumb {
+    font-weight: 500;
+    color: var(--text2);
+  }
+
+  h1 .path {
+    font-family: var(--mono);
+    font-weight: 600;
   }
 
   .scroll {

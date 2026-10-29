@@ -170,6 +170,10 @@ impl Repo {
             }
             Action::StageChangelist { list, paths } => self.plan_list_part(list.as_deref(), paths, false)?,
             Action::DiscardChangelist { list, paths } => self.plan_list_part(list.as_deref(), paths, true)?,
+            Action::Untrack { paths: p } => vec![
+                paths(&["rm", "-r", "--cached", "--quiet"], p)
+                    .comment("stop tracking them: they stay on disk, and leave the repository with the next commit"),
+            ],
             Action::Ignore { pattern, untrack } => {
                 let mut commands = Vec::new();
                 if let Some(path) = untrack {

@@ -2,6 +2,10 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type { MenuPart } from "./appMenu";
 import type {
   AllSettings,
+  FileCheck,
+  RepoFileKind,
+  RepoFileText,
+  RepoFiles,
   SubmoduleMove,
   UnpushedSubmodule,
   Submodule,
@@ -256,6 +260,12 @@ export const api = {
     invoke<void>("set_git_config", { scope, key, value }),
   /** The open repository's checks before commit, written whole in this order. */
   setCommitChecks: (checks: CommitCheck[]) => invoke<void>("set_commit_checks", { checks }),
+  repoFiles: () => invoke<RepoFiles>("repo_files"),
+  repoFileText: (kind: RepoFileKind, gitlab: boolean) => invoke<RepoFileText>("repo_file_text", { kind, gitlab }),
+  /** `fresh` reads the working copy and the history again. */
+  checkRepoFile: (kind: RepoFileKind, gitlab: boolean, text: string, fresh: boolean) => invoke<FileCheck>("check_repo_file", { kind, gitlab, text, fresh }),
+  /** Writes the file, unless it has errors; nothing is staged. Resolves to its path. */
+  saveRepoFile: (kind: RepoFileKind, gitlab: boolean, text: string) => invoke<string>("save_repo_file", { kind, gitlab, text }),
   /** Sends `fetch-event`s marked with `fetch`, Activity's number for it, while it runs; rejects
    *  with a `Failure`. Without a number, Stop doesn't reach it. */
   fetchInBackground: (remote: string | null, fetch: number | null = null, auto = false) =>
