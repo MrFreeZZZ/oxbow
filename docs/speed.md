@@ -137,6 +137,28 @@ for it: the list shows with "…" for each file's lines, the file open counts it
 its diff, and the rest come in one answer after. Running the two `numstat` side by side would
 save at most the 50 ms of the staged one, so they still run one after the other.
 
+## Older pages of History (29 October)
+
+`cargo run --release -p oxbow-core --example pages -- ~/oxbow-perf/history-100k-clone` scrolls
+History down as the window does (2,000 commits, then twice as many, at most 50,000 more at a
+time) and jumps to the oldest commit from a window just opened (cloud, Xeon, 4 cores; median of 3).
+
+| Page | Before (ce060d2) | After | Per 1,000 commits after |
+|---|---|---|---|
+| 1–2,000 | 55 ms | 35 ms | 18 ms |
+| 2,001–4,000 | 50 ms | 34 ms | 17 ms |
+| 8,001–16,000 | 138 ms | 94 ms | 12 ms |
+| 32,001–64,000 | 682 ms | 447 ms | 14 ms |
+| 64,001–100,100 | 1.1 s | 630 ms | 17 ms |
+| Jump to the oldest commit | 1.1 s | 1.0 s | |
+
+Each page walked every commit from the tips again; now the walk goes on from where the last page
+stopped, so a page walks only its own commits. What still grows with the commits loaded is the
+work on all rows: their order, the graph's layout, the rows themselves and comparing them with
+the rows the window has, about 250 ms at 100,000. Every row already shown comes back the same
+(64,000 of 64,000 on the last page), so the graph doesn't move as older commits come in. A jump
+straight to an old commit still walks everything above it once.
+
 ## Oxbow's window
 
 ```sh

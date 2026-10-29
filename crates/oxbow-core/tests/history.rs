@@ -1103,3 +1103,62 @@ fn the_changes_come_with_the_history_before_their_lines_are_counted() {
     );
     assert_ne!(one.changes_stamp, other.changes_stamp);
 }
+
+#[test]
+fn older_pages_go_on_from_where_the_last_page_stopped() {
+    let mut fx = Fixture::new();
+    for i in 0..4 {
+        fx.commit("a.txt", &format!("{i}\n"), &format!("Main {i}"));
+    }
+    fx.git(&["checkout", "-q", "-b", "side"]);
+    for i in 0..3 {
+        fx.commit("b.txt", &format!("{i}\n"), &format!("Side {i}"));
+    }
+    fx.git(&["checkout", "-q", "main"]);
+    fx.commit("a.txt", "4\n", "Main 4");
+    fx.git(&["merge", "-q", "--no-ff", "-m", "Merge side", "side"]);
+    // A commit dated before its parent: the walk can reach what comes after it twice.
+    let parent = fx.git(&["rev-parse", "HEAD"]);
+    let tree = fx.git(&["rev-parse", "HEAD^{tree}"]);
+    fx.write(
+        "skewed.txt",
+        &format!(
+            "tree {tree}\nparent {parent}\nauthor A <a@example.com> 1600000000 +0000\ncommitter A <a@example.com> 1600000000 +0000\n\nDated too early\n"
+        ),
+    );
+    let skewed = fx.git(&["hash-object", "-t", "commit", "-w", "skewed.txt"]);
+    std::fs::remove_file(fx.path().join("skewed.txt")).unwrap();
+    fx.git(&["update-ref", "refs/heads/main", &skewed]);
+    for i in 5..9 {
+        fx.commit("a.txt", &format!("{i}\n"), &format!("Main {i}"));
+    }
+    let repo = Repo::open(fx.path()).unwrap();
+    let rows = |h: &History| serde_json::to_value(&h.rows).unwrap();
+    let mut cache = oxbow_core::HistoryCache::default();
+    let page = |cache: &mut oxbow_core::HistoryCache, limit: usize| {
+        let options = HistoryOptions {
+            limit,
+            ..Default::default()
+        };
+        let resumed = repo.history_with(&options, cache, None).unwrap();
+        let fresh = repo.history(&options).unwrap();
+        assert_eq!(rows(&resumed), rows(&fresh), "{limit} commits");
+        assert_eq!(resumed.truncated, fresh.truncated);
+        resumed
+    };
+    // Each page goes on from the commits the last one walked, and gives what a walk from the
+    // start gives; back to fewer, the same.
+    for limit in [3, 5, 8, 12, 100, 4] {
+        page(&mut cache, limit);
+    }
+    let all = page(&mut cache, 100);
+    assert_eq!(all.loaded, 14);
+    assert!(all.rows.iter().any(|r| r.summary == "Dated too early"));
+
+    // A new commit moves a tip: the walk starts again from the tips.
+    fx.commit("a.txt", "new\n", "Newest");
+    for limit in [2, 6, 100] {
+        let h = page(&mut cache, limit);
+        assert_eq!(h.rows[0].summary, "Newest");
+    }
+}

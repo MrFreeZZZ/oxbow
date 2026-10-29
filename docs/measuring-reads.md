@@ -38,7 +38,10 @@ About three minutes; it needs about 1 GB. It makes:
    ```sh
    RUNS=30 SLOW=2 cargo run --release -p oxbow-core --example reads -- \
      ~/oxbow-perf/history-100k ~/oxbow-perf/history-100k-clone ~/oxbow-perf/worktrees-20/main \
-     ~/oxbow-perf/worktrees-50/main ~/oxbow-perf/submodules-20 | tee ~/oxbow-perf/warm.txt
+     ~/oxbow-perf/worktrees-50/main ~/oxbow-perf/submodules-20 ~/oxbow-perf/changes-10k \
+     | tee ~/oxbow-perf/warm.txt
+   cargo run --release -p oxbow-core --example pages -- ~/oxbow-perf/history-100k-clone \
+     | tee -a ~/oxbow-perf/warm.txt
    ```
 
 4. Cold, with the disk cache emptied first (asks for your password):

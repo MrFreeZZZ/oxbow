@@ -283,10 +283,136 @@ pub struct Label {
     pub head: bool,
 }
 
+#[derive(Debug, Clone)]
 struct Node {
     id: ObjectId,
     parents: Vec<ObjectId>,
     time: i64,
+}
+
+/// The commits the last histories walked, newest first as the walk found them, so that the next
+/// page of older commits goes on from where the walk stopped instead of walking them all again.
+/// Kept while the tips of the walk and where a shallow history stops stay the same.
+#[derive(Debug, Default, Clone)]
+struct Walked {
+    /// The tips and where the history stops.
+    key: u64,
+    /// In pieces, one for each time the walk went on, so that a copy of the cache costs little.
+    pieces: Vec<Arc<Vec<Node>>>,
+    /// Where the walk goes on from: the parents of the commits walked that are not walked yet.
+    next: Vec<ObjectId>,
+    /// The walk reached the first commits: there is nothing more.
+    ended: bool,
+}
+
+/// Commits newest first from the tips of `walked`: the ones it has, then on from where it
+/// stopped. [`Resumed::keep`] keeps what was walked for the next page.
+struct Resumed<'repo> {
+    repo: &'repo gix::Repository,
+    walked: Walked,
+    /// Commits taken from `walked`, as (piece, position).
+    at: (usize, usize),
+    /// The commits walked now, past those of `walked`.
+    fresh: Vec<Node>,
+    walk: Option<gix::revision::Walk<'repo>>,
+}
+
+impl<'repo> Resumed<'repo> {
+    /// The walk from `tips`, going on from `walked` when it is of the same `key`.
+    fn new(repo: &'repo gix::Repository, walked: Walked, key: u64, tips: &[ObjectId]) -> Self {
+        let walked = if walked.key == key && !walked.pieces.is_empty() {
+            walked
+        } else {
+            Walked {
+                key,
+                pieces: Vec::new(),
+                next: tips.to_vec(),
+                ended: tips.is_empty(),
+            }
+        };
+        Resumed {
+            repo,
+            walked,
+            at: (0, 0),
+            fresh: Vec::new(),
+            walk: None,
+        }
+    }
+
+    fn next(&mut self) -> Result<Option<Node>> {
+        while let Some(piece) = self.walked.pieces.get(self.at.0) {
+            if let Some(node) = piece.get(self.at.1) {
+                self.at.1 += 1;
+                return Ok(Some(node.clone()));
+            }
+            self.at = (self.at.0 + 1, 0);
+        }
+        if self.walked.ended {
+            return Ok(None);
+        }
+        if self.walk.is_none() {
+            // Commits walked already are left out, with what only they lead to: a commit dated
+            // before its parent can be reached again.
+            let seen: HashSet<ObjectId> = self.walked.pieces.iter().flat_map(|p| p.iter().map(|n| n.id)).collect();
+            let walk = self
+                .repo
+                .rev_walk(self.walked.next.iter().copied())
+                .sorting(Sorting::ByCommitTime(CommitTimeOrder::NewestFirst))
+                .selected(move |id| !seen.contains(id))
+                .map_err(Error::git)?;
+            self.walk = Some(walk);
+        }
+        let walk = self.walk.as_mut().expect("walk started");
+        match walk.next() {
+            Some(info) => {
+                let info = info.map_err(Error::git)?;
+                let node = Node {
+                    id: info.id,
+                    parents: info.parent_ids.iter().copied().collect(),
+                    time: info.commit_time.unwrap_or_default(),
+                };
+                self.fresh.push(node.clone());
+                Ok(Some(node))
+            }
+            None => {
+                self.walked.ended = true;
+                Ok(None)
+            }
+        }
+    }
+
+    /// What was walked, for the next page: the commits of the last walks and of this one, and
+    /// where to go on from.
+    fn keep(mut self) -> Walked {
+        if self.fresh.is_empty() {
+            return self.walked;
+        }
+        if self.walked.ended {
+            self.walked.next.clear();
+        } else {
+            let seen: HashSet<ObjectId> = self
+                .walked
+                .pieces
+                .iter()
+                .flat_map(|p| p.iter())
+                .chain(&self.fresh)
+                .map(|n| n.id)
+                .collect();
+            let mut next: Vec<ObjectId> = self
+                .walked
+                .next
+                .iter()
+                .chain(self.fresh.iter().flat_map(|n| &n.parents))
+                .copied()
+                .filter(|id| !seen.contains(id))
+                .collect();
+            next.sort_unstable();
+            next.dedup();
+            self.walked.next = next;
+        }
+        self.walked.pieces.push(Arc::new(self.fresh));
+        self.walked
+    }
 }
 
 /// The commit rows of the last history built, to build the next one without walking the commits
@@ -296,6 +422,7 @@ struct Node {
 pub struct HistoryCache {
     last: Option<(u64, Arc<Rows>)>,
     asked: Asked,
+    walked: Walked,
 }
 
 /// What the last read asked git, each with a key for what the answer depends on: the next read
@@ -710,6 +837,7 @@ impl Repo {
                     dirty,
                     production.as_deref(),
                     previous.as_deref(),
+                    (&mut cache.walked, boundary),
                 )?);
                 if let Some((last, rows)) = last
                     && known == Some(format!("{last:016x}").as_str())
@@ -823,6 +951,7 @@ impl Repo {
         dirty: bool,
         production: Option<&str>,
         previous: Option<&Rows>,
+        (walked, boundary): (&mut Walked, u64),
     ) -> Result<Rows> {
         let mut tips: Vec<ObjectId> = refs
             .iter()
@@ -841,18 +970,14 @@ impl Repo {
         let mut nodes = Vec::new();
         let mut truncated = false;
         if !tips.is_empty() {
-            let walk = repo
-                .rev_walk(tips.iter().copied())
-                .sorting(Sorting::ByCommitTime(CommitTimeOrder::NewestFirst))
-                .all()
-                .map_err(Error::git)?;
+            // The commits a page before walked are taken again, and the walk goes on from them.
+            let mut walk = Resumed::new(repo, std::mem::take(walked), keyed(&(&tips, boundary)), &tips);
             let mut until = options
                 .until
                 .as_deref()
                 .and_then(|id| ObjectId::from_hex(id.as_bytes()).ok());
             let mut limit = options.limit.max(1);
-            for info in walk {
-                let info = info.map_err(Error::git)?;
+            loop {
                 if nodes.len() % 1024 == 0 {
                     crate::cli::check_stop()?;
                 }
@@ -864,15 +989,15 @@ impl Repo {
                     // Still looking for `until`: one more page.
                     limit += PAGE;
                 }
-                if until == Some(info.id) {
+                let Some(node) = walk.next()? else {
+                    break;
+                };
+                if until == Some(node.id) {
                     until = None;
                 }
-                nodes.push(Node {
-                    id: info.id,
-                    parents: info.parent_ids.iter().copied().collect(),
-                    time: info.commit_time.unwrap_or_default(),
-                });
+                nodes.push(node);
             }
+            *walked = walk.keep();
             // No branch or tag reaches `until`: back to the history asked for.
             if until.is_some() && nodes.len() > options.limit {
                 nodes.truncate(options.limit.max(1));
@@ -1220,19 +1345,30 @@ fn focus_input(all: &[GraphCommit], shown: &[usize], head_row: Option<usize>) ->
 /// back in order. A row is the caller's when its commit has a row there that is the same in
 /// every way; the row of uncommitted changes always comes anew.
 fn pieced(before: &[HistoryRow], rows: &[HistoryRow]) -> (Vec<HistoryRow>, Vec<Piece>) {
-    let at: HashMap<&str, usize> = before
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| r.worktree.is_none())
-        .map(|(i, r)| (r.id.as_str(), i))
-        .collect();
+    // Rows by commit, made only when a row isn't where the last one leads: a page of older
+    // commits keeps the rows before it in order.
+    let mut at: Option<HashMap<&str, usize>> = None;
     let mut fresh = Vec::new();
     let mut pieces: Vec<Piece> = Vec::new();
     for row in rows {
-        let known = at
-            .get(row.id.as_str())
-            .copied()
-            .filter(|&i| row.worktree.is_none() && before[i] == *row);
+        let next = match pieces.last() {
+            Some(Piece { known: Some(from), len }) => from + len,
+            _ => usize::MAX,
+        };
+        let place = if before.get(next).is_some_and(|r| r.id == row.id) {
+            Some(next)
+        } else {
+            let at = at.get_or_insert_with(|| {
+                before
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| r.worktree.is_none())
+                    .map(|(i, r)| (r.id.as_str(), i))
+                    .collect()
+            });
+            at.get(row.id.as_str()).copied()
+        };
+        let known = place.filter(|&i| row.worktree.is_none() && before[i] == *row);
         match (pieces.last_mut(), known) {
             (Some(Piece { known: Some(from), len }), Some(i)) if *from + *len == i => *len += 1,
             (Some(Piece { known: None, len }), None) => *len += 1,
