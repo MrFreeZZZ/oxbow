@@ -7,7 +7,7 @@
 //! them: how many of each kind and how long they ran. The snapshot before the action reads the
 //! files on one thread and the rest beside it, so the parts add up to more than the whole. It is
 //! timed three ways: without a watch, with one that saw the file change just before, and
-//! staging files changed earlier one after another, when the last step's snapshot still holds.
+//! staging files changed earlier one after another.
 
 use std::collections::BTreeMap;
 use std::path::Path;

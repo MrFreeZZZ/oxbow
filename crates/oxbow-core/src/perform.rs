@@ -65,10 +65,6 @@ impl Repo {
         cancel: &Arc<AtomicBool>,
         without_undo: bool,
     ) -> Result<String> {
-        // Whatever else runs may change files or branches: the next step takes a new snapshot.
-        if !crate::oplog::stages_only(action) {
-            self.keep_snapshot(None);
-        }
         // Nothing force pushes a protected branch or rewrites its pushed commits.
         self.check_protected(action)?;
         // A fix planned for another state never starts: the sheet shows the new plan.
@@ -147,11 +143,11 @@ impl Repo {
         // The state before, for Undo, saved before anything is written: without it the step
         // can't be undone, which is asked about first rather than found out after. A fetch
         // mostly moves branches on remotes, which Undo leaves alone anyway: it never waits.
-        // Stop while it is saved ends the step here: nothing has been written yet.
+        // Stop while it is saved ends the step here: nothing has been written yet. Always read
+        // whole, staging too: the watch hears of a file saved a moment ago only later, so no
+        // count of what it heard says the files are still as a step before had them.
         let required = !without_undo && !matches!(action, Action::Fetch { .. });
-        let before = match crate::console::role(UNDO_SNAPSHOT, || {
-            crate::cli::stoppable(cancel, || self.snapshot_before(action))
-        }) {
+        let before = match crate::console::role(UNDO_SNAPSHOT, || crate::cli::stoppable(cancel, || self.snapshot())) {
             Ok(before) => Some(before),
             Err(Error::Cancelled) => return Err(Error::Cancelled),
             Err(err) if required => return Err(Error::NoUndo(err.to_string())),
@@ -220,10 +216,7 @@ impl Repo {
                     } else {
                         self.snapshot()?
                     };
-                    let recorded = self.record(action, &before, &after, result.is_err());
-                    // The next step reuses it while nothing changes: kept once it is written down.
-                    self.keep_snapshot(recorded.is_ok().then_some(&after));
-                    recorded
+                    self.record(action, &before, &after, result.is_err())
                 })
             })
             .map(|_| ()),

@@ -46,7 +46,6 @@ the folder stays the same; the window's (`session.rs`) go when it opens another 
 | `LINES_KEPT` (commit.rs) | the lines of blobs and working files asked for last, for the lines between hunks a page at a time | a blob by its id; a file by path, size, time of change and inode (`file_stamp`), kept only 2 s after its last change | the oldest past the budget; the watch seeing the file change (`forget_file_lines`) | 64 MB, none bigger than half of it; no lines of a side over 32 MB | no |
 | `UntrackedCounts` (worktree.rs) | the lines counted in new files | the path, while the file keeps its size and time of change | files no longer new, when all new files are counted | the new files | no |
 | `Repo.git_paths` (repo.rs) | `git rev-parse --git-path` answers | the name asked | never: `reopen` keeps them while `.git` is the same | a handful of paths | no: they never change for a repository |
-| `KeptSnapshot` (oplog.rs) | the last Undo snapshot and the watch's count of changes | the watch's count | anything the watch notices; a step that changes more than what is staged; no watch | one snapshot | no: without a watch nothing is reused |
 | `read_log` `LAST` (oplog.rs) | the steps of the Operation Log | the log file, its time of change and length | the file changing; the oldest past the budget | 8 logs | no |
 | `CACHE` in repofiles.rs | each repository's working copy (files and folders, what the index tracks) and the people of its history, for the checks of Repository Files | the repository's folder; `fresh` when a file is opened | after 10 minutes; a saved file; the oldest past the budget | 8 repositories, 600,000 files of working copies | yes, up to 10 minutes: only for warnings and notes, never for errors |
 | `FolderCache` (folders.rs, one per window) | what the other worktrees' and the submodules' folders had: their changes and checkout | the folder, with its `HEAD`, index and `logs/HEAD` (`stamp`) | after 5 minutes; a reading asked since the window came back to the front or Reload (`since`); another repository | the folders the history lists | yes, up to 5 minutes: files edited there with nothing in git showing it |
@@ -94,5 +93,6 @@ To measure how fast a repository's history loads, see [measuring-reads.md](measu
 
 Build an installable app with `cd app && npm run tauri build`. CI runs `scripts/check.sh all` on
 Linux for every pull request, and builds an unsigned macOS app on every merge to `main`, with the
-tests of the core and the shell run on macOS beside it; you can download the app from the workflow run's artifacts. Because it is
+tests of the core and the shell run on macOS beside it; you can download the app from the workflow run's artifacts. The build
+doesn't wait for the checks, so it counts as checked only when the run's other jobs are green too. Because it is
 unsigned, run `xattr -cr Oxbow.app` once before opening it.

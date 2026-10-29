@@ -13,8 +13,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -149,24 +149,6 @@ pub struct Snapshot {
     refs: BTreeMap<String, String>,
     stash: Vec<StashRecord>,
     trees: Trees,
-    /// The watch's count of changes from just before it was taken ([`crate::Watch::seen`]):
-    /// while the count stays the same, the files, branches and stashes are still as it has them.
-    seen: Option<u64>,
-    /// What the index staged, without the files' times ([`crate::watch::staged`]): while it
-    /// stages the same, its tree is the same.
-    staged: Option<u64>,
-}
-
-/// The last snapshot of a repository and the watch's count of changes, for the next step to
-/// reuse what nothing changed since: see [`Repo::snapshot_before`]. Shared by every clone.
-#[derive(Clone, Default)]
-pub(crate) struct KeptSnapshot(Arc<Mutex<Kept>>);
-
-#[derive(Default)]
-struct Kept {
-    /// The watch's count, while the watch is there: it holds the other end of the `Weak`.
-    watch: Option<(Weak<()>, Arc<AtomicU64>)>,
-    last: Option<Snapshot>,
 }
 
 /// Steps that change only what is staged: the files, branches and stashes stay as they were.
@@ -182,55 +164,8 @@ pub(crate) fn stages_only(action: &Action) -> bool {
 }
 
 impl Repo {
-    /// Count what `watch` notices (see [`crate::Watch::seen`]) for the snapshots, until `alive`
-    /// is dropped with the watch.
-    pub(crate) fn follow_watch(&self, alive: Weak<()>, seen: Arc<AtomicU64>) {
-        if let Ok(mut kept) = self.kept.0.lock() {
-            kept.watch = Some((alive, seen));
-            kept.last = None;
-        }
-    }
-
-    /// The watch's count of changes now; `None` without a watch of the files.
-    fn watch_count(&self) -> Option<u64> {
-        let kept = self.kept.0.lock().ok()?;
-        let (alive, seen) = kept.watch.as_ref()?;
-        alive.upgrade().map(|_| seen.load(Ordering::SeqCst))
-    }
-
-    /// Keep `snapshot` for the next step to reuse; `None`: the next step takes a new one.
-    pub(crate) fn keep_snapshot(&self, snapshot: Option<&Snapshot>) {
-        if let Ok(mut kept) = self.kept.0.lock() {
-            kept.last = snapshot.filter(|s| s.seen.is_some()).cloned();
-        }
-    }
-
-    /// What the repository is like before `action`. A step that changes only what is staged
-    /// reuses the last snapshot while the watch has noticed nothing since: the files, branches
-    /// and stashes are as it has them, and the index is written as a tree again only when it
-    /// stages something else. Every other step, or without a watch, takes a new snapshot.
-    pub(crate) fn snapshot_before(&self, action: &Action) -> Result<Snapshot> {
-        if !stages_only(action) {
-            return self.snapshot();
-        }
-        let last = self.kept.0.lock().ok().and_then(|kept| kept.last.clone());
-        match last {
-            Some(last) if last.seen.is_some() && last.seen == self.watch_count() => {
-                let staged = crate::watch::staged(&self.git_path("index")?, self.local().object_hash());
-                if staged.is_some() && staged == last.staged {
-                    Ok(last)
-                } else {
-                    self.snapshot_of_index(&last)
-                }
-            }
-            _ => self.snapshot(),
-        }
-    }
-
     /// What the repository is like now.
     pub fn snapshot(&self) -> Result<Snapshot> {
-        // Read first: whatever changes while the snapshot is taken counts as a change after it.
-        let seen = self.watch_count();
         // The files take the longest; their untracked ones are found beside them, and then the
         // index, HEAD, the refs and the stash are read.
         let helpers = crate::console::Helpers::here();
@@ -259,14 +194,12 @@ impl Repo {
         });
         helpers.join();
         let worktree = worktree.map_err(|_| Error::Git("the snapshot of the files failed".into()))??;
-        let ((index, staged), head, refs, stash) = rest?;
+        let (index, head, refs, stash) = rest?;
         Ok(Snapshot {
             head,
             refs,
             stash,
             trees: Trees { worktree, index },
-            seen,
-            staged,
         })
     }
 
@@ -274,13 +207,11 @@ impl Repo {
     /// with the index as it is now. Files, branches and stashes are as they were, so the files
     /// aren't read again: that is most of a snapshot's cost.
     pub(crate) fn snapshot_of_index(&self, before: &Snapshot) -> Result<Snapshot> {
-        let (index, staged) = self.index_tree()?;
         Ok(Snapshot {
             trees: Trees {
                 worktree: before.trees.worktree.clone(),
-                index,
+                index: self.index_tree()?,
             },
-            staged,
             ..before.clone()
         })
     }
@@ -773,10 +704,8 @@ impl Repo {
     /// What the index stages, as a tree; `None` while it has conflicts, as in a merge or rebase
     /// that stopped. Written from a copy: `write-tree` on the real index may take `index.lock`
     /// and fail while anything else holds it, which is no reason for a snapshot without it.
-    /// With what the copy staged ([`crate::watch::staged`]), to know the tree again by.
-    fn index_tree(&self) -> Result<(Option<String>, Option<u64>)> {
+    fn index_tree(&self) -> Result<Option<String>> {
         let scratch = self.scratch_index()?;
-        let staged = crate::watch::staged(&scratch, self.local().object_hash());
         let with_scratch = |cmd: GitCommand| cmd.env("GIT_INDEX_FILE", scratch.to_string_lossy().into_owned());
         // write-tree refuses an index with conflicts: only then are they looked for.
         let result = self
@@ -792,7 +721,7 @@ impl Repo {
             });
         // A scratch index left behind only takes space; the next one has another name.
         let _ = std::fs::remove_file(&scratch);
-        result.map(|tree| (tree, staged))
+        result
     }
 
     /// The working copy as a tree: tracked files as they are on disk, and untracked ones that

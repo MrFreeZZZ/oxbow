@@ -522,16 +522,6 @@ fn a_repository_opened_again_still_knows_where_git_keeps_its_files() {
     assert_eq!(repo.operation_log().unwrap().len(), 2);
 }
 
-/// The commands of the Console entries named `title` of the repository at `fx`.
-fn ran(fx: &Fixture, title: &str) -> Vec<String> {
-    oxbow_core::console::entries(Some(fx.path()))
-        .into_iter()
-        .filter(|entry| entry.title == title)
-        .flat_map(|entry| entry.commands)
-        .map(|ran| ran.display)
-        .collect()
-}
-
 /// Run `action` in a Console entry named `title`.
 fn perform_as(repo: &Repo, fx: &Fixture, title: &str, action: Action) {
     oxbow_core::console::scope(Some(fx.path()), oxbow_core::console::EntryKind::Action, title, || {
@@ -560,8 +550,9 @@ fn staged(fx: &mut Fixture) -> String {
     fx.git(&["diff", "--cached", "--name-only"])
 }
 
-#[test]
-fn staging_one_file_after_another_reuses_the_snapshot_until_a_file_changes() {
+/// A repository with `a.txt` and `b.txt` committed, watched as the window watches it, with
+/// `a.txt` saved and staged once and the watch caught up: the next save is the one that must stay.
+fn watched_after_a_stage() -> (Fixture, Repo, oxbow_core::Watch) {
     let mut fx = Fixture::new();
     fx.write("a.txt", "a1\n");
     fx.commit("b.txt", "b1\n", "Root");
@@ -569,37 +560,63 @@ fn staging_one_file_after_another_reuses_the_snapshot_until_a_file_changes() {
     let watch = repo.watch(|_| {}).unwrap();
     assert!(watch.files);
     let from = watch.seen().unwrap();
-    fx.write("a.txt", "a2\n");
-    fx.write("b.txt", "b2\n");
+    fx.write("a.txt", "first edit\n");
     settled(&watch, from);
+    repo.perform(&stage("a.txt")).unwrap();
+    (fx, repo, watch)
+}
 
-    let stage = |path: &str| Action::Stage {
+fn stage(path: &str) -> Action {
+    Action::Stage {
         paths: vec![path.into()],
-    };
-    perform_as(&repo, &fx, "Stage a", stage("a.txt"));
-    assert!(ran(&fx, "Stage a").iter().any(|r| r == "git add -u"));
-    // Nothing changed since: the files aren't read again, as the history's refresh would leave it.
-    let repo = repo.reopen().unwrap();
-    perform_as(&repo, &fx, "Stage b", stage("b.txt"));
-    let b = ran(&fx, "Stage b");
-    assert!(
-        !b.iter().any(|r| r == "git add -u" || r.starts_with("git for-each-ref")),
-        "{b:?}"
-    );
-    assert_eq!(staged(&mut fx), "a.txt\nb.txt");
-    undo_last(&repo);
-    assert_eq!(staged(&mut fx), "a.txt");
-    assert_eq!(read(&fx, "b.txt").as_deref(), Some("b2\n"));
+    }
+}
 
-    // A file saved outside between two steps is read again: Undo leaves it as saved.
-    let from = watch.seen().unwrap();
-    fx.write("a.txt", "a3\n");
-    settled(&watch, from);
-    perform_as(&repo, &fx, "Stage a again", stage("a.txt"));
-    assert!(ran(&fx, "Stage a again").iter().any(|r| r == "git add -u"));
+// The watch hears of a save only a moment later: none of these waits for it before the step.
+
+#[test]
+fn undo_of_a_stage_keeps_the_file_as_saved_just_before_it() {
+    let (mut fx, repo, _watch) = watched_after_a_stage();
+    fx.write("a.txt", "second edit\n");
+    repo.perform(&stage("a.txt")).unwrap();
     undo_last(&repo);
-    assert_eq!(read(&fx, "a.txt").as_deref(), Some("a3\n"));
-    assert_eq!(fx.git(&["show", ":a.txt"]), "a2");
+    assert_eq!(read(&fx, "a.txt").as_deref(), Some("second edit\n"));
+    assert_eq!(fx.git(&["show", ":a.txt"]), "first edit");
+}
+
+#[test]
+fn undo_of_a_stage_keeps_another_file_saved_just_before_it() {
+    let (fx, repo, _watch) = watched_after_a_stage();
+    fx.write("b.txt", "b2\n");
+    fx.write("a.txt", "second edit\n");
+    repo.perform(&stage("a.txt")).unwrap();
+    undo_last(&repo);
+    assert_eq!(read(&fx, "b.txt").as_deref(), Some("b2\n"));
+    assert_eq!(read(&fx, "a.txt").as_deref(), Some("second edit\n"));
+}
+
+#[test]
+fn undo_of_a_stage_keeps_a_new_file_made_just_before_it() {
+    let (mut fx, repo, _watch) = watched_after_a_stage();
+    fx.write("new.txt", "new\n");
+    repo.perform(&stage("new.txt")).unwrap();
+    undo_last(&repo);
+    assert_eq!(read(&fx, "new.txt").as_deref(), Some("new\n"));
+    assert_eq!(fx.git(&["status", "--porcelain", "--", "new.txt"]), "?? new.txt");
+}
+
+#[test]
+fn saving_staging_and_undoing_in_quick_turns_loses_no_save() {
+    let (mut fx, repo, _watch) = watched_after_a_stage();
+    for turn in 0..5 {
+        let text = format!("turn {turn}\n");
+        fx.write("a.txt", &text);
+        repo.perform(&stage("a.txt")).unwrap();
+        undo_last(&repo);
+        assert_eq!(read(&fx, "a.txt").as_deref(), Some(text.as_str()), "turn {turn}");
+        // Unstaged again: the index is as before this turn's step.
+        assert_eq!(fx.git(&["show", ":a.txt"]), "first edit", "turn {turn}");
+    }
 }
 
 #[test]
