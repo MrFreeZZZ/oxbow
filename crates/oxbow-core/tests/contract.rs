@@ -71,6 +71,30 @@ fn shapes() -> BTreeMap<&'static str, Vec<String>> {
     BTreeMap::from([
         ("UserCommand", fields(&command)),
         (
+            "ReviewPlace",
+            fields(&json(oxbow_core::review::Reviewed::github(
+                &oxbow_core::pulls::GitHubRepo {
+                    owner: "acme".into(),
+                    name: "api".into(),
+                    remote: "origin".into(),
+                },
+            ))),
+        ),
+        (
+            "ReviewDraftState",
+            fields(&json(
+                repo.review_draft_state(
+                    &oxbow_core::review::Reviewed::github(&oxbow_core::pulls::GitHubRepo {
+                        owner: "acme".into(),
+                        name: "api".into(),
+                        remote: "origin".into(),
+                    }),
+                    1,
+                )
+                .unwrap(),
+            )),
+        ),
+        (
             "RepoOverview",
             fields(&json(
                 oxbow_core::overview::read(fx.path(), &std::sync::atomic::AtomicBool::new(false)).unwrap(),

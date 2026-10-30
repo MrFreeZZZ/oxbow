@@ -5,7 +5,7 @@ mod support;
 
 use oxbow_core::github::Client;
 use oxbow_core::pulls::{Call, GitHubRepo, Spot, Verdict, started_review};
-use oxbow_core::review::{DraftComment, DraftReply, ReviewDraft, Reviewed, pull_ref};
+use oxbow_core::review::{DraftComment, DraftReply, ReviewDraft, Reviewed};
 use oxbow_core::{Action, Repo};
 use support::{Fixture, stand_in};
 
@@ -161,14 +161,18 @@ fn a_pull_request_is_fetched_out_of_the_branch_lists() {
     let mut me = Fixture::new();
     me.git(&["remote", "add", "origin", &url]);
     let repo = Repo::open(me.path()).unwrap();
-    repo.run(&repo.pull_fetch_command("origin", 421, "main")).unwrap();
-    assert_eq!(me.git(&["rev-parse", &pull_ref(421, "head")]), head);
+    repo.run(&repo.pull_fetch_command(&Reviewed::github(&acme()), "origin", 421, "main"))
+        .unwrap();
+    assert_eq!(
+        me.git(&["rev-parse", &Reviewed::github(&acme()).reference(421, "head")]),
+        head
+    );
     // Only the base shows, as its remote branch: git updates that one too.
     assert_eq!(me.git(&["branch", "-a"]), "remotes/origin/main");
     let compared = repo
         .compare(
-            &pull_ref(421, "base"),
-            &pull_ref(421, "head"),
+            &Reviewed::github(&acme()).reference(421, "base"),
+            &Reviewed::github(&acme()).reference(421, "head"),
             oxbow_core::CompareMode::Split,
         )
         .unwrap();
@@ -209,7 +213,10 @@ fn a_draft_lasts_until_it_is_put_away() {
         Some(&draft)
     );
     assert_eq!(again.review_drafts(&Reviewed::github(&acme())).len(), 1);
-    assert_eq!(me.git(&["rev-parse", &pull_ref(421, "reviewed")]), head);
+    assert_eq!(
+        me.git(&["rev-parse", &Reviewed::github(&acme()).reference(421, "reviewed")]),
+        head
+    );
 
     again.drop_review_draft(&Reviewed::github(&acme()), 421).unwrap();
     assert_eq!(again.review_draft(&Reviewed::github(&acme()), 421).unwrap(), None);
@@ -234,7 +241,11 @@ fn a_merge_requests_draft_and_viewed_ticks_stay_here() {
     let head = me.commit("a.txt", "one\n", "Root");
     me.commit("b.txt", "two\n", "Second");
     let head2 = me.git(&["rev-parse", "HEAD"]);
-    me.git(&["update-ref", "refs/oxbow/mr/7/head", &head2]);
+    me.git(&[
+        "update-ref",
+        &Reviewed::gitlab(&team_app()).reference(7, "head"),
+        &head2,
+    ]);
     let repo = Repo::open(me.path()).unwrap();
     let lab = Reviewed::gitlab(&team_app());
 
@@ -246,8 +257,11 @@ fn a_merge_requests_draft_and_viewed_ticks_stay_here() {
         replies: Vec::new(),
     };
     repo.save_review_draft(&lab, 7, &draft).unwrap();
-    assert!(me.path().join(".git/oxbow/reviews/gitlab-team-app-7.json").exists());
-    assert_eq!(me.git(&["rev-parse", "refs/oxbow/mr/7/reviewed"]), head);
+    assert!(me.path().join(".git/oxbow/reviews").join(lab.draft_name(7)).exists());
+    assert_eq!(
+        me.git(&["rev-parse", &Reviewed::gitlab(&team_app()).reference(7, "reviewed")]),
+        head
+    );
     assert_eq!(repo.review_drafts(&lab).len(), 1);
     // A pull request of the same number on GitHub has a draft of its own.
     assert!(repo.review_drafts(&Reviewed::github(&acme())).is_empty());
@@ -264,7 +278,11 @@ fn a_merge_requests_draft_and_viewed_ticks_stay_here() {
     // The author pushes a change to b.txt and deletes nothing: b.txt is unticked, as changed.
     me.commit("b.txt", "two, changed\n", "Third");
     let head3 = me.git(&["rev-parse", "HEAD"]);
-    me.git(&["update-ref", "refs/oxbow/mr/7/head", &head3]);
+    me.git(&[
+        "update-ref",
+        &Reviewed::gitlab(&team_app()).reference(7, "head"),
+        &head3,
+    ]);
     let v = repo.viewed_here(&lab, 7);
     assert_eq!(v.viewed, ["a.txt", "gone.txt"]);
     assert_eq!(v.dismissed, ["b.txt"]);
@@ -370,4 +388,144 @@ fn a_suggestion_on_lines_the_file_has_not_got_says_so() {
         .unwrap_err()
         .to_string();
     assert!(err.contains("fetch the pull request first"), "{err}");
+}
+
+fn local_draft(commit: &str, body: &str) -> ReviewDraft {
+    ReviewDraft {
+        commit: commit.into(),
+        body: body.into(),
+        verdict: None,
+        comments: vec![],
+        replies: vec![],
+    }
+}
+
+#[test]
+fn review_projects_with_ambiguous_old_names_have_independent_files_and_refs() {
+    let mut fx = Fixture::new();
+    let head = fx.commit("a.txt", "one\n", "Root");
+    let repo = Repo::open(fx.path()).unwrap();
+    let mut one = team_app();
+    one.path = "a-b/c".into();
+    let mut two = one.clone();
+    two.path = "a/b-c".into();
+    let mut three = one.clone();
+    three.host = "other.example".into();
+    let places = [
+        Reviewed::gitlab(&one),
+        Reviewed::gitlab(&two),
+        Reviewed::gitlab(&three),
+        Reviewed::github(&GitHubRepo {
+            owner: "a-b".into(),
+            name: "c".into(),
+            remote: "origin".into(),
+        }),
+        Reviewed::github(&GitHubRepo {
+            owner: "a".into(),
+            name: "b-c".into(),
+            remote: "origin".into(),
+        }),
+    ];
+    for (i, place) in places.iter().enumerate() {
+        repo.save_review_draft(place, 7, &local_draft(&head, &i.to_string()))
+            .unwrap();
+    }
+    for (i, place) in places.iter().enumerate() {
+        assert_eq!(repo.review_draft(place, 7).unwrap().unwrap().body, i.to_string());
+        assert_eq!(repo.review_drafts(place).len(), 1);
+        for other in places.iter().skip(i + 1) {
+            assert_ne!(place.draft_name(7), other.draft_name(7));
+            assert_ne!(place.reference(7, "head"), other.reference(7, "head"));
+        }
+    }
+}
+
+#[test]
+fn concurrent_writers_replace_only_the_revision_they_read() {
+    let mut fx = Fixture::new();
+    let head = fx.commit("a.txt", "one\n", "Root");
+    let repo = Repo::open(fx.path()).unwrap();
+    let place = Reviewed::github(&acme());
+    let initial = repo.review_draft_state(&place, 7).unwrap().revision;
+    let barrier = std::sync::Barrier::new(8);
+    let successes = std::thread::scope(|scope| {
+        let tasks: Vec<_> = (0..8)
+            .map(|n| {
+                let (repo, place, initial, head, barrier) = (&repo, &place, &initial, &head, &barrier);
+                scope.spawn(move || {
+                    let draft = local_draft(head, &n.to_string().repeat(100_000));
+                    barrier.wait();
+                    repo.update_review_draft(place, 7, Some(&draft), initial).is_ok()
+                })
+            })
+            .collect();
+        tasks
+            .into_iter()
+            .map(|task| usize::from(task.join().unwrap()))
+            .sum::<usize>()
+    });
+    assert_eq!(successes, 1);
+    assert!(repo.review_draft(&place, 7).unwrap().is_some());
+    // The deletion revision survives: neither an old existing draft nor a missing one revives it.
+    let written = repo.review_draft_state(&place, 7).unwrap().revision;
+    let deleted = repo.update_review_draft(&place, 7, None, &written).unwrap();
+    for stale in [&initial, &written] {
+        assert!(
+            repo.update_review_draft(&place, 7, Some(&local_draft(&head, "stale")), stale)
+                .is_err()
+        );
+    }
+    assert!(repo.review_draft(&place, 7).unwrap().is_none());
+    repo.update_review_draft(&place, 7, Some(&local_draft(&head, "new editor")), &deleted)
+        .unwrap();
+}
+
+#[test]
+fn parallel_unchecked_saves_use_separate_temporary_files() {
+    let mut fx = Fixture::new();
+    let head = fx.commit("a.txt", "one\n", "Root");
+    let repo = Repo::open(fx.path()).unwrap();
+    let place = Reviewed::github(&acme());
+    let barrier = std::sync::Barrier::new(8);
+    std::thread::scope(|scope| {
+        let tasks: Vec<_> = (0..8)
+            .map(|n| {
+                let (repo, place, head, barrier) = (&repo, &place, &head, &barrier);
+                scope.spawn(move || {
+                    barrier.wait();
+                    repo.save_review_draft(place, 7, &local_draft(head, &n.to_string().repeat(100_000)))
+                        .unwrap();
+                })
+            })
+            .collect();
+        for task in tasks {
+            task.join().unwrap();
+        }
+    });
+    assert_eq!(repo.review_draft(&place, 7).unwrap().unwrap().body.len(), 100_000);
+}
+
+#[test]
+fn an_unattributed_legacy_draft_is_preserved_and_never_assigned_by_guessing() {
+    let mut fx = Fixture::new();
+    let head = fx.commit("a.txt", "one\n", "Root");
+    let repo = Repo::open(fx.path()).unwrap();
+    let place = Reviewed::gitlab(&team_app());
+    let folder = fx.path().join(".git/oxbow/reviews");
+    std::fs::create_dir_all(&folder).unwrap();
+    let old = folder.join("gitlab-team-app-7.json");
+    let bytes = serde_json::to_vec(&local_draft(&head, "keep this draft")).unwrap();
+    std::fs::write(&old, &bytes).unwrap();
+    let err = repo.review_draft_state(&place, 7).unwrap_err().to_string();
+    assert!(err.contains("project was not recorded"), "{err}");
+    assert_eq!(std::fs::read(&old).unwrap(), bytes);
+    let attributed = folder.join(place.draft_name(7));
+    assert!(!attributed.exists());
+    // Explicit attribution preserves the old plain JSON; the next save upgrades its envelope.
+    std::fs::rename(&old, &attributed).unwrap();
+    let imported = repo.review_draft_state(&place, 7).unwrap();
+    assert_eq!(imported.draft.as_ref().unwrap().body, "keep this draft");
+    repo.update_review_draft(&place, 7, imported.draft.as_ref(), &imported.revision)
+        .unwrap();
+    assert_ne!(repo.review_draft_state(&place, 7).unwrap().revision, imported.revision);
 }

@@ -670,3 +670,33 @@ fn a_longer_expiry_of_the_logs_own_ref_counts() {
     let log = repo.operation_log().unwrap();
     assert_eq!(log[0].expires, log[0].time + 5 * 86_400);
 }
+
+#[test]
+fn undo_switch_refuses_a_branch_taken_by_another_worktree() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "root\n", "Root");
+    fx.git(&["switch", "-qc", "topic"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&Action::Switch {
+        branch: "main".into(),
+        stash: false,
+        keep: None,
+    })
+    .unwrap();
+    let action = Action::Restore {
+        id: repo.operation_log().unwrap()[0].id.clone(),
+        after: false,
+    };
+    // Planning before the other checkout succeeds; execution must check again.
+    repo.plan(&action).unwrap();
+    let other = fx.path().parent().unwrap().join("other");
+    fx.git(&["worktree", "add", other.to_str().unwrap(), "topic"]);
+    let before = fx.git(&["status", "--porcelain=v2", "--branch"]);
+    assert!(repo.plan(&action).unwrap_err().to_string().contains("checked out"));
+    assert!(repo.perform(&action).unwrap_err().to_string().contains("checked out"));
+    assert_eq!(fx.git(&["status", "--porcelain=v2", "--branch"]), before);
+    assert_eq!(repo.head().unwrap().branch.as_deref(), Some("main"));
+    fx.git(&["-C", other.to_str().unwrap(), "switch", "--detach"]);
+    repo.perform(&action).unwrap();
+    assert_eq!(repo.head().unwrap().branch.as_deref(), Some("topic"));
+}

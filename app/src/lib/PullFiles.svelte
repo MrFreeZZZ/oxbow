@@ -63,9 +63,8 @@
   /** Files the author changed since the review started; null while unknown. */
   let changed = $state.raw<Set<string> | null>(null);
 
-  const refs = $derived(session.lab ? "mr" : "pull");
-  const head = $derived(`refs/oxbow/${refs}/${pr.number}/head`);
-  const base = $derived(`refs/oxbow/${refs}/${pr.number}/base`);
+  let head = $state("");
+  let base = $state("");
   /** The commit the draft's comments are on, when the pull request moved on from it. */
   const reviewed = $derived(session.draft && session.draft.commit !== pr.headSha ? session.draft.commit : null);
 
@@ -100,10 +99,17 @@
   });
 
   async function load(number: number, sha: string, onto: string) {
-    const still = () => pr.number === number && pr.headSha === sha;
+    const editor = session;
+    const still = () => session === editor && pr.number === number && pr.headSha === sha;
     loading = !comparison;
     error = null;
-    stale = await (session.lab ? api.gitlabFetch(number, onto) : api.pullFetch(number, onto)).then(
+    try {
+      await session.saves.ready();
+      if (!still()) return;
+      head = session.saves.state!.headRef;
+      base = session.saves.state!.baseRef;
+    } catch (err) { if (still()) { error = String(err); loading = false; } return; }
+    stale = await (session.lab ? api.gitlabFetch(number, onto, session.saves.target) : api.pullFetch(number, onto, session.saves.target)).then(
       () => null,
       (err) => String(err),
     );

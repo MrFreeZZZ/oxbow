@@ -654,3 +654,52 @@ fn choices_made_for_other_versions_are_refused() {
     .unwrap();
     assert_eq!(read(&fx, "a.txt"), "one\nNEW main value\nthree\n");
 }
+
+#[test]
+fn decisions_and_drafts_go_stale_when_only_the_working_file_changes() {
+    for text in [None, Some("Oxbow draft\n".to_owned())] {
+        let fx = diverged();
+        let repo = Repo::open(fx.path()).unwrap();
+        repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+        let shown = repo.conflict_file("a.txt").unwrap();
+        fx.write("a.txt", "externally resolved\n");
+        let next = repo.conflict_file("a.txt").unwrap();
+        assert_ne!(shown.stages, next.stages, "old drafts must stop fitting too");
+        let action = Action::Resolve {
+            path: "a.txt".into(),
+            picks: if text.is_none() {
+                vec![Pick::Ours.into()]
+            } else {
+                vec![]
+            },
+            text,
+            stages: Some(shown.stages),
+        };
+        assert!(
+            repo.perform(&action)
+                .unwrap_err()
+                .to_string()
+                .contains("changed since it was shown")
+        );
+        assert_eq!(read(&fx, "a.txt"), "externally resolved\n");
+        assert_eq!(repo.operation().unwrap().unwrap().conflicted, 1);
+    }
+}
+
+#[test]
+fn a_same_size_working_edit_changes_the_conflict_version() {
+    let fx = diverged();
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+    fx.write("a.txt", "first\n");
+    let time = std::fs::metadata(fx.path().join("a.txt")).unwrap().modified().unwrap();
+    let first = repo.conflict_file("a.txt").unwrap();
+    fx.write("a.txt", "other\n");
+    std::fs::File::options()
+        .write(true)
+        .open(fx.path().join("a.txt"))
+        .unwrap()
+        .set_modified(time)
+        .unwrap();
+    assert_ne!(first.stages, repo.conflict_file("a.txt").unwrap().stages);
+}

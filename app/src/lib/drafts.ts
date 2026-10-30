@@ -1,7 +1,7 @@
 // The Conflicts screen's draft on disk, apart from the page so it can be tested: the sides
 // picked and the text typed in each conflicted file, saved as the user goes, so quitting Oxbow in
 // the middle of a merge keeps them. A file's draft comes back by itself only for the same step of
-// the same operation and the same versions of the file in the index; any other draft is kept as
+// the same operation and the same index sides and working file; any other draft is kept as
 // text, to compare with the file as it is now.
 
 import type { Decision } from "./conflicts";
@@ -15,7 +15,7 @@ export type DraftText = { text: string; start: string; stray: number };
 /** What the screen had going for one file. */
 export interface DraftFile {
   path: string;
-  /** The versions of the file in the index that the decisions were made for. */
+  /** The index sides and working file that the decisions were made for. */
   stages: string;
   choices: Decision[];
   text: DraftText | null;

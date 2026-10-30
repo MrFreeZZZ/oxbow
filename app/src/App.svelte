@@ -21,6 +21,7 @@
   import DetachedBanner from "./lib/DetachedBanner.svelte";
   import OperationBanner from "./lib/OperationBanner.svelte";
   import { draftSaves } from "./lib/conflictDrafts";
+  import { settleReviewSaves } from "./lib/reviewSaves";
   import { abortRequest, continueRequest, describe, skipRequest } from "./lib/merge";
   import { applyPatchesRequest, choosePatchFiles, savePatchesRequest, type PatchTarget } from "./lib/patches";
   import { stashRequest } from "./lib/stash";
@@ -1605,12 +1606,13 @@
     if (askingToClose) return event.preventDefault();
     // A save that failed earlier gets another go first: what stopped it may be over.
     draftSaves.retry();
-    const why = await draftSaves.settle(3000);
+    const [conflictWhy, reviewWhy] = await Promise.all([draftSaves.settle(3000), settleReviewSaves(3000)]);
+    const why = conflictWhy ?? reviewWhy;
     if (why === null) return;
     event.preventDefault();
     askingToClose = true;
-    const answer = await message(`Oxbow couldn’t save your draft of the conflicts: ${why.replace(/\.$/, "")}. Do you really want to close without it?`, {
-      title: "Your conflict draft isn’t saved",
+    const answer = await message(`Oxbow couldn’t save your ${conflictWhy ? "conflict" : "review"} draft: ${why.replace(/\.$/, "")}. Do you really want to close without it?`, {
+      title: `Your ${conflictWhy ? "conflict" : "review"} draft isn’t saved`,
       kind: "warning",
       buttons: { yes: "Try Again", no: "Close Without Saving", cancel: "Cancel" },
     }).catch(() => "Cancel");

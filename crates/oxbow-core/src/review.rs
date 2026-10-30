@@ -8,7 +8,9 @@
 //! replies, then the verdict.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -150,49 +152,135 @@ fn camel(text: &str) -> String {
     out
 }
 
-/// Where a pull request's commits are kept here: `refs/oxbow/pull/<number>/head` and `/base`,
-/// out of every list, and `/reviewed` for the commit a draft review is on.
-pub fn pull_ref(number: u64, part: &str) -> String {
-    format!("refs/oxbow/pull/{number}/{part}")
-}
-
-/// Where a GitLab merge request's commits are kept here, as [`pull_ref`] keeps a pull request's:
-/// `refs/oxbow/mr/<iid>/head`, `/base` and `/reviewed`.
-pub fn mr_ref(number: u64, part: &str) -> String {
-    format!("refs/oxbow/mr/{number}/{part}")
-}
-
-/// Where the reviews of one repository's pull requests are kept here: files named from the
-/// repository on GitHub or the project on GitLab, commits under [`pull_ref`] or [`mr_ref`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The full forge identity. A delimiter in a name must never join two projects' drafts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Reviewed {
-    prefix: String,
-    gitlab: bool,
+    pub gitlab: bool,
+    pub host: String,
+    pub project: String,
 }
 
 impl Reviewed {
     pub fn github(repo: &GitHubRepo) -> Self {
-        Reviewed {
-            prefix: format!("{}-{}-", repo.owner, repo.name),
+        Self {
             gitlab: false,
+            host: "github.com".into(),
+            project: repo.full_name().to_lowercase(),
         }
     }
 
     pub fn gitlab(project: &GitLabProject) -> Self {
-        Reviewed {
-            prefix: format!("gitlab-{}-", project.path.replace('/', "-")),
+        Self {
             gitlab: true,
+            host: project.host.to_lowercase(),
+            project: project.path.clone(),
         }
     }
 
-    /// Where pull request (or merge request) `number`'s commit `part` is kept.
-    pub fn reference(&self, number: u64, part: &str) -> String {
-        if self.gitlab {
-            mr_ref(number, part)
-        } else {
-            pull_ref(number, part)
+    pub fn validate(&self) -> Result<()> {
+        if self.host.is_empty()
+            || self.host.contains(['/', '\\', '\0'])
+            || (!self.gitlab && self.host != "github.com")
+            || self.project.split('/').count() < 2
+            || self
+                .project
+                .split('/')
+                .any(|part| part.is_empty() || part == "." || part == "..")
+            || self.project.contains(['\\', '\0'])
+        {
+            return Err(Error::Git("Invalid review project.".into()));
         }
+        Ok(())
     }
+
+    fn prefix(&self) -> String {
+        let identity = serde_json::to_vec(self).expect("review identity serializes");
+        let mut hash = gix::hash::hasher(gix::hash::Kind::Sha1);
+        hash.update(&identity);
+        format!("v2-{}-", hash.try_finalize().expect("SHA-1 is available").to_hex())
+    }
+
+    pub fn draft_name(&self, number: u64) -> String {
+        format!("{}{number}.json", self.prefix())
+    }
+
+    /// Project-scoped refs, shared by its drafts and fetched diffs.
+    pub fn reference(&self, number: u64, part: &str) -> String {
+        format!("refs/oxbow/reviews/{}{number}/{part}", self.prefix())
+    }
+
+    fn legacy_name(&self, number: u64) -> String {
+        let prefix = if self.gitlab {
+            format!("gitlab-{}", self.project.replace('/', "-"))
+        } else {
+            self.project.replace('/', "-")
+        };
+        format!("{prefix}-{number}.json")
+    }
+}
+
+// A worktree's reviews live in the common directory. Serialize read/check/write and removal
+// across windows, without holding an unrelated repository's saves up.
+type FileLocks = HashMap<PathBuf, Weak<Mutex<()>>>;
+static FILE_LOCKS: LazyLock<Mutex<FileLocks>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+fn file_lock(path: &Path) -> Arc<Mutex<()>> {
+    let mut locks = FILE_LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    let key = path
+        .parent()
+        .and_then(|p| p.canonicalize().ok())
+        .map_or_else(|| path.to_path_buf(), |p| p.join(path.file_name().unwrap_or_default()));
+    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(key, Arc::downgrade(&lock));
+    lock
+}
+
+fn atomic_json(file: &Path, value: &impl Serialize) -> Result<()> {
+    let io = |err: std::io::Error| Error::Git(err.to_string());
+    let dir = file
+        .parent()
+        .ok_or_else(|| Error::Git("Review folder is missing.".into()))?;
+    std::fs::create_dir_all(dir).map_err(io)?;
+    let mut new = tempfile::NamedTempFile::new_in(dir).map_err(io)?;
+    serde_json::to_writer_pretty(&mut new, value).map_err(Error::git)?;
+    new.flush().map_err(io)?;
+    new.persist(file).map_err(|err| io(err.error))?;
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize)]
+struct ReviewRecord {
+    revision: String,
+    draft: Option<ReviewDraft>,
+}
+
+fn next_revision() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!(
+        "{nanos}-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// Read with the draft: the next write must still replace this version.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewDraftState {
+    pub draft: Option<ReviewDraft>,
+    pub revision: String,
+    pub head_ref: String,
+    pub base_ref: String,
+    pub file: String,
 }
 
 // --- The draft -----------------------------------------------------------------------------------
@@ -238,16 +326,16 @@ pub struct ReviewDraft {
 }
 
 impl Repo {
-    /// `git fetch` of a pull request's head and base into [`pull_ref`]s, so its changes can be
+    /// `git fetch` of a pull request's head and base into its project refs, so its changes can be
     /// read here; a pull request from a fork included.
-    pub fn pull_fetch_command(&self, remote: &str, number: u64, base: &str) -> GitCommand {
+    pub fn pull_fetch_command(&self, place: &Reviewed, remote: &str, number: u64, base: &str) -> GitCommand {
         GitCommand::new([
             "fetch".to_owned(),
             "--no-tags".to_owned(),
             "--no-write-fetch-head".to_owned(),
             remote.to_owned(),
-            format!("+refs/pull/{number}/head:{}", pull_ref(number, "head")),
-            format!("+refs/heads/{base}:{}", pull_ref(number, "base")),
+            format!("+refs/pull/{number}/head:{}", place.reference(number, "head")),
+            format!("+refs/heads/{base}:{}", place.reference(number, "base")),
         ])
         .comment(format!(
             "pull request #{number} and {base}, kept out of the branch lists"
@@ -255,15 +343,15 @@ impl Repo {
     }
 
     /// `git fetch` of a GitLab merge request's head (GitLab keeps it as
-    /// `refs/merge-requests/<iid>/head`, a fork's too) and its target into [`mr_ref`]s.
-    pub fn merge_request_fetch_command(&self, remote: &str, number: u64, base: &str) -> GitCommand {
+    /// `refs/merge-requests/<iid>/head`, a fork's too) and its target into project refs.
+    pub fn merge_request_fetch_command(&self, place: &Reviewed, remote: &str, number: u64, base: &str) -> GitCommand {
         GitCommand::new([
             "fetch".to_owned(),
             "--no-tags".to_owned(),
             "--no-write-fetch-head".to_owned(),
             remote.to_owned(),
-            format!("+refs/merge-requests/{number}/head:{}", mr_ref(number, "head")),
-            format!("+refs/heads/{base}:{}", mr_ref(number, "base")),
+            format!("+refs/merge-requests/{number}/head:{}", place.reference(number, "head")),
+            format!("+refs/heads/{base}:{}", place.reference(number, "base")),
         ])
         .comment(format!(
             "merge request !{number} and {base}, kept out of the branch lists"
@@ -272,15 +360,59 @@ impl Repo {
 
     fn draft_file(&self, place: &Reviewed, number: u64) -> PathBuf {
         self.common_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| self.common_dir())
             .join("oxbow")
             .join("reviews")
-            .join(format!("{}{number}.json", place.prefix))
+            .join(place.draft_name(number))
     }
 
     /// The draft review of pull request `number`, if one was started here.
     pub fn review_draft(&self, place: &Reviewed, number: u64) -> Result<Option<ReviewDraft>> {
+        Ok(self.review_draft_state(place, number)?.draft)
+    }
+
+    fn read_draft(&self, place: &Reviewed, number: u64) -> Result<Option<ReviewRecord>> {
+        let file = self.draft_file(place, number);
+        if !file.exists() {
+            let old_name = place.legacy_name(number);
+            let legacy = std::fs::read_dir(file.parent().unwrap_or(Path::new("")))
+                .ok()
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|entry| entry.path())
+                .find(|path| {
+                    path.file_name().is_some_and(|name| {
+                        let name = name.to_string_lossy();
+                        if place.gitlab {
+                            name == old_name
+                        } else {
+                            name.eq_ignore_ascii_case(&old_name)
+                        }
+                    })
+                });
+            if let Some(legacy) = legacy {
+                return Err(Error::Changed(format!(
+                    "An older review draft is preserved at {}. Its project was not recorded; move it to {} only after checking which project it belongs to.",
+                    legacy.display(),
+                    file.display()
+                )));
+            }
+        }
         match std::fs::read_to_string(self.draft_file(place, number)) {
-            Ok(text) => serde_json::from_str(&text)
+            Ok(text) => serde_json::from_str::<ReviewRecord>(&text)
+                // A legacy file moved here explicitly by its owner gains a revision on save.
+                .or_else(|_| {
+                    serde_json::from_str::<ReviewDraft>(&text).map(|draft| ReviewRecord {
+                        revision: format!(
+                            "imported:{}",
+                            gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::object::Kind::Blob, text.as_bytes())
+                                .expect("SHA-1 is available")
+                        ),
+                        draft: Some(draft),
+                    })
+                })
                 .map(Some)
                 .map_err(|err| Error::Git(format!("The draft review of #{number} can't be read: {err}"))),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -288,21 +420,63 @@ impl Repo {
         }
     }
 
-    /// Keep `draft`, written whole to a new file that then takes the old one's place. Its commit
-    /// gets a ref, so it stays here after the pull request moves on.
-    pub fn save_review_draft(&self, place: &Reviewed, number: u64, draft: &ReviewDraft) -> Result<()> {
-        let io = |err: std::io::Error| Error::Git(err.to_string());
-        let file = self.draft_file(place, number);
-        if let Some(dir) = file.parent() {
-            std::fs::create_dir_all(dir).map_err(io)?;
+    pub fn review_draft_state(&self, place: &Reviewed, number: u64) -> Result<ReviewDraftState> {
+        place.validate()?;
+        let lock = file_lock(&self.draft_file(place, number));
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.read_draft_state(place, number)
+    }
+
+    fn read_draft_state(&self, place: &Reviewed, number: u64) -> Result<ReviewDraftState> {
+        let record = self.read_draft(place, number)?;
+        let (draft, revision) = record.map_or((None, "missing".into()), |r| (r.draft, r.revision));
+        Ok(ReviewDraftState {
+            revision,
+            draft,
+            head_ref: place.reference(number, "head"),
+            base_ref: place.reference(number, "base"),
+            file: place.draft_name(number),
+        })
+    }
+
+    /// A checked save also serializes deletion: a late old editor must not revive a sent draft.
+    pub fn update_review_draft(
+        &self,
+        place: &Reviewed,
+        number: u64,
+        draft: Option<&ReviewDraft>,
+        expected: &str,
+    ) -> Result<String> {
+        place.validate()?;
+        let lock = file_lock(&self.draft_file(place, number));
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        if self.read_draft_state(place, number)?.revision != expected {
+            return Err(Error::Changed("This review draft changed in another window. Reopen the review before saving again; your text is kept in this window.".into()));
         }
-        let text = serde_json::to_string_pretty(draft).map_err(|err| Error::Git(err.to_string()))?;
-        let new = file.with_extension(format!("json.{}", std::process::id()));
-        std::fs::write(&new, text).map_err(io)?;
-        std::fs::rename(&new, &file).map_err(io)?;
+        match draft {
+            Some(draft) => self.write_draft(place, number, draft)?,
+            None => self.remove_draft(place, number)?,
+        }
+        Ok(self.read_draft_state(place, number)?.revision)
+    }
+
+    pub fn save_review_draft(&self, place: &Reviewed, number: u64, draft: &ReviewDraft) -> Result<()> {
+        place.validate()?;
+        let lock = file_lock(&self.draft_file(place, number));
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.write_draft(place, number, draft)
+    }
+
+    fn write_draft(&self, place: &Reviewed, number: u64, draft: &ReviewDraft) -> Result<()> {
+        atomic_json(
+            &self.draft_file(place, number),
+            &ReviewRecord {
+                revision: next_revision(),
+                draft: Some(draft.clone()),
+            },
+        )?;
         let reviewed = place.reference(number, "reviewed");
         if self.commit_id(&reviewed).ok().as_deref() != Some(draft.commit.as_str()) {
-            // Without the commit here (not fetched yet) there's nothing to keep.
             let _ = self.run(&GitCommand::new(["update-ref", &reviewed, &draft.commit]));
         }
         Ok(())
@@ -311,8 +485,18 @@ impl Repo {
     /// Put the draft away once it is sent, or thrown away: a copy goes to `.git/oxbow/removed`
     /// for 30 days.
     pub fn drop_review_draft(&self, place: &Reviewed, number: u64) -> Result<()> {
+        place.validate()?;
+        let lock = file_lock(&self.draft_file(place, number));
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.remove_draft(place, number)
+    }
+
+    fn remove_draft(&self, place: &Reviewed, number: u64) -> Result<()> {
         let file = self.draft_file(place, number);
-        if file.exists() {
+        if self
+            .read_draft(place, number)?
+            .is_some_and(|record| record.draft.is_some())
+        {
             let io = |err: std::io::Error| Error::Git(err.to_string());
             let root = self.common_dir().join("oxbow").join("removed");
             let now = std::time::SystemTime::now()
@@ -320,10 +504,22 @@ impl Repo {
                 .map(|d| d.as_secs())
                 .unwrap_or_default();
             crate::stash::prune_removed(&root, now);
-            let folder = root.join(format!("{now}-review-{number}-{}", std::process::id()));
-            std::fs::create_dir_all(&folder).map_err(io)?;
-            std::fs::rename(&file, folder.join(file.file_name().unwrap_or_default())).map_err(io)?;
+            std::fs::create_dir_all(&root).map_err(io)?;
+            let folder = tempfile::Builder::new()
+                .prefix(&format!("{now}-review-{number}-"))
+                .tempdir_in(&root)
+                .map_err(io)?
+                .keep();
+            std::fs::copy(&file, folder.join(file.file_name().unwrap_or_default())).map_err(io)?;
         }
+        // Keep a tombstone revision so an editor opened before send/discard cannot revive it.
+        atomic_json(
+            &file,
+            &ReviewRecord {
+                revision: next_revision(),
+                draft: None,
+            },
+        )?;
         let _ = self.run(&GitCommand::new([
             "update-ref",
             "-d",
@@ -334,7 +530,7 @@ impl Repo {
 
     /// The draft reviews kept here, by pull request number, for the Reviews screen.
     pub fn review_drafts(&self, place: &Reviewed) -> HashMap<u64, ReviewDraft> {
-        let prefix = &place.prefix;
+        let prefix = place.prefix();
         let dir = self.common_dir().join("oxbow").join("reviews");
         let Ok(entries) = std::fs::read_dir(dir) else {
             return HashMap::new();
@@ -343,7 +539,7 @@ impl Repo {
             .flatten()
             .filter_map(|entry| {
                 let name = entry.file_name().to_string_lossy().into_owned();
-                let number = name.strip_prefix(prefix)?.strip_suffix(".json")?.parse::<u64>().ok()?;
+                let number = name.strip_prefix(&prefix)?.strip_suffix(".json")?.parse::<u64>().ok()?;
                 let draft = self.review_draft(place, number).ok().flatten()?;
                 Some((number, draft))
             })
@@ -354,9 +550,11 @@ impl Repo {
 impl Repo {
     fn viewed_file(&self, place: &Reviewed, number: u64) -> PathBuf {
         self.common_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| self.common_dir())
             .join("oxbow")
             .join("reviews")
-            .join(format!("{}{number}.viewed.json", place.prefix))
+            .join(format!("{}{number}.viewed.json", place.prefix()))
     }
 
     /// The files of merge request `number` ticked Viewed here, for a server that keeps no ticks
@@ -384,8 +582,10 @@ impl Repo {
     /// Tick or untick `path` of merge request `number` Viewed here, at its content on the
     /// fetched head.
     pub fn set_viewed_here(&self, place: &Reviewed, number: u64, path: &str, viewed: bool) -> Result<()> {
-        let io = |err: std::io::Error| Error::Git(err.to_string());
+        place.validate()?;
         let file = self.viewed_file(place, number);
+        let lock = file_lock(&file);
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         let mut kept: HashMap<String, String> = std::fs::read_to_string(&file)
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
@@ -397,13 +597,7 @@ impl Repo {
         } else {
             kept.remove(path);
         }
-        if let Some(dir) = file.parent() {
-            std::fs::create_dir_all(dir).map_err(io)?;
-        }
-        let text = serde_json::to_string_pretty(&kept).map_err(|err| Error::Git(err.to_string()))?;
-        let new = file.with_extension(format!("json.{}", std::process::id()));
-        std::fs::write(&new, text).map_err(io)?;
-        std::fs::rename(&new, &file).map_err(io)
+        atomic_json(&file, &kept)
     }
 
     /// The blob of each of `paths` at `rev`, `None` where it has none (deleted there).

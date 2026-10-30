@@ -1010,7 +1010,7 @@ export interface ConflictFile {
   chunks: Chunk[];
   /** No line break at the end of the file. */
   openEnd: boolean;
-  /** Which versions the index holds, by blob id: decisions made for others are stale. */
+  /** Opaque version of the index sides and working file: decisions go stale if either changes. */
   stages: string;
 }
 
@@ -2174,4 +2174,24 @@ export interface OverviewRow {
   summary: RepoOverview | null;
   error: string | null;
   checkedAt: number;
+}
+
+/** The exact working folder and forge project a review editor was opened for. */
+export interface ReviewTarget {
+  workdir: string;
+  place: ReviewPlace;
+}
+
+export interface ReviewDraftState {
+  draft: ReviewDraft | null;
+  revision: string;
+  headRef: string;
+  baseRef: string;
+  file: string;
+}
+
+export interface ReviewPlace {
+  gitlab: boolean;
+  host: string;
+  project: string;
 }

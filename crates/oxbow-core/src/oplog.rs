@@ -438,6 +438,18 @@ impl Repo {
         if self.bisect()?.is_some() {
             return Err(Error::Git("A bisect is in progress: stop or finish it first".into()));
         }
+        // symbolic-ref bypasses switch's check, even when the undo moves no branch ref.
+        if let Some(branch) = &head.branch
+            && let Some(other) = self
+                .worktree_list()?
+                .into_iter()
+                .find(|tree| !tree.current && tree.branch.as_ref() == Some(branch))
+        {
+            return Err(Error::Git(format!(
+                "{branch} is checked out in {}. Switch that worktree to another branch before restoring this step.",
+                other.path
+            )));
+        }
 
         let now = self.all_refs()?;
         let mut commands = Vec::new();

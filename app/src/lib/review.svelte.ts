@@ -6,9 +6,10 @@
 import { api } from "./api";
 import { github } from "./github.svelte";
 import { confirm, type Request } from "./confirm.svelte";
-import type { PullCall, PullRequest, ReviewDraft, Spot, Verdict, Viewing } from "./types";
+import type { PullCall, PullRequest, ReviewDraft, ReviewTarget, Spot, Verdict, Viewing } from "./types";
 import { addProblem, approvedBy, commentCall, countWords, emptyDraft, isEmpty, spotLabel, submitCalls, withComment, withEdit, withReply, type Thread, type Writing } from "./reviewDraft";
 import { wordsOf, type ForgeKind, type Words } from "./forge";
+import { ReviewSaves } from "./reviewSaves";
 import { applyRequest, suggestedRange, type BodyPart } from "./suggestion";
 
 /** The comment being written: a new one on lines, a reply to a thread, or one of the draft's again. */
@@ -41,9 +42,13 @@ export class ReviewSession {
   onBranch = $state(false);
   #run: (request: Request | Promise<Request>) => Promise<boolean>;
   #changed: () => void;
-  #timer: ReturnType<typeof setTimeout> | undefined;
+  readonly saves: ReviewSaves;
+  #viewing = 0;
+  #viewedVersion = 0;
+  #viewedPaths = new Map<string, { version: number; confirmed: { viewed: boolean; dismissed: boolean }; pending: number; queue: Promise<void> }>();
+  #disposed = false;
 
-  constructor(pr: PullRequest, run: (request: Request | Promise<Request>) => Promise<boolean>, changed: () => void, forge: ForgeKind = "github") {
+  constructor(pr: PullRequest, run: (request: Request | Promise<Request>) => Promise<boolean>, changed: () => void, target: ReviewTarget, forge: ForgeKind = "github") {
     this.number = pr.number;
     this.lab = forge === "gitlab";
     this.words = wordsOf(forge);
@@ -51,11 +56,8 @@ export class ReviewSession {
     this.files = pr.changedFiles;
     this.#run = run;
     this.#changed = changed;
+    this.saves = new ReviewSaves(api, target, pr.number, draft => { this.draft = draft; }, err => confirm.fail(err));
     this.loadViewing().catch(() => {});
-    api.reviewDraft(pr.number, this.lab).then(
-      (d) => (this.draft = d),
-      (err) => confirm.fail(err),
-    );
   }
 
   /** Comments and replies of the draft, for the button that finishes it. */
@@ -65,87 +67,124 @@ export class ReviewSession {
 
   /** Viewed ticks and a review started on GitHub, read again. */
   async loadViewing() {
-    const v = await (this.lab ? api.gitlabViewing(this.number) : api.githubViewing(this.number));
-    this.viewed = new Set(v.viewed);
-    this.dismissed = new Set(v.dismissed);
+    const mine = ++this.#viewing;
+    const version = this.#viewedVersion;
+    const v = await (this.lab ? api.gitlabViewing(this.number, this.saves.target) : api.githubViewing(this.number, this.saves.target));
+    if (this.#disposed || mine !== this.#viewing) return;
+    const viewed = new Set(v.viewed), dismissed = new Set(v.dismissed);
+    for (const [path, state] of this.#viewedPaths) {
+      if (state.version > version || state.pending) {
+        this.#put(viewed, path, this.viewed.has(path));
+        this.#put(dismissed, path, this.dismissed.has(path));
+      } else state.confirmed = { viewed: viewed.has(path), dismissed: dismissed.has(path) };
+    }
+    this.viewed = viewed;
+    this.dismissed = dismissed;
     this.pending = v.pending;
   }
 
-  /** Tick or untick a file's Viewed box, here at once and then on GitHub (GitLab's stay here). */
+  #put(set: Set<string>, path: string, on: boolean) { if (on) set.add(path); else set.delete(path); }
+
+  /** Requests of one path are ordered; failure rolls back only that path to its last success. */
   setViewed(path: string, on: boolean, failed: (err: unknown) => void) {
-    const before = { viewed: this.viewed, dismissed: this.dismissed };
-    const v = new Set(this.viewed);
-    const d = new Set(this.dismissed);
-    if (on) v.add(path);
-    else v.delete(path);
-    d.delete(path);
-    this.viewed = v;
-    this.dismissed = d;
-    const sent = this.lab ? api.gitlabSetViewed(this.number, path, on) : api.githubSend({ kind: "viewed", id: this.pr.nodeId, path, viewed: on });
-    sent.catch((err) => {
-      this.viewed = before.viewed;
-      this.dismissed = before.dismissed;
-      failed(err);
+    const state = this.#viewedPaths.get(path) ?? {
+      version: 0, confirmed: { viewed: this.viewed.has(path), dismissed: this.dismissed.has(path) }, pending: 0, queue: Promise.resolve(),
+    };
+    const version = state.version = ++this.#viewedVersion;
+    state.pending++;
+    this.#viewedPaths.set(path, state);
+    const viewed = new Set(this.viewed), dismissed = new Set(this.dismissed);
+    this.#put(viewed, path, on);
+    dismissed.delete(path);
+    this.viewed = viewed;
+    this.dismissed = dismissed;
+    state.queue = state.queue.then(async () => {
+      try {
+        if (this.lab) await api.gitlabSetViewed(this.number, path, on, this.saves.target);
+        else await api.githubSend({ kind: "viewed", id: this.pr.nodeId, path, viewed: on }, this.saves.target);
+        state.confirmed = { viewed: on, dismissed: false };
+      } catch (err) {
+        if (!this.#disposed && state.version === version) {
+          const viewed = new Set(this.viewed), dismissed = new Set(this.dismissed);
+          this.#put(viewed, path, state.confirmed.viewed);
+          this.#put(dismissed, path, state.confirmed.dismissed);
+          this.viewed = viewed;
+          this.dismissed = dismissed;
+        }
+        failed(err);
+      } finally { state.pending--; }
     });
   }
 
-  /** Keep `draft`, or put it away when it holds nothing. */
-  #keep(draft: ReviewDraft | null) {
-    clearTimeout(this.#timer);
-    const kept = draft && !isEmpty(draft) ? draft : null;
-    this.draft = kept;
-    api.saveReviewDraft(this.number, kept, this.lab).catch((err) => confirm.fail(err));
+  #keep(change: (draft: ReviewDraft | null) => ReviewDraft | null, pause = 0) {
+    this.saves.edit(draft => {
+      const next = change(draft);
+      return next && !isEmpty(next) ? next : null;
+    }, pause);
+  }
+
+  dispose() {
+    this.#disposed = true;
+    this.#viewing++;
+    this.saves.dispose();
   }
 
   #preview(calls: PullCall[]): Promise<string[]> {
-    return this.lab ? api.gitlabCallsPreview(calls) : api.githubCallsPreview(calls);
+    return this.lab ? api.gitlabCallsPreview(calls, this.saves.target) : api.githubCallsPreview(calls, this.saves.target);
   }
 
   #sendCalls(calls: PullCall[]): Promise<unknown> {
-    return this.lab ? api.gitlabRun(calls) : api.githubRun(calls);
+    return this.lab ? api.gitlabRun(calls, this.saves.target) : api.githubRun(calls, this.saves.target);
   }
 
   /** How the draft's file is named in `.git/oxbow/reviews`. */
-  #filePrefix(): string {
-    if (this.lab) return github.mrProject ? `gitlab-${github.mrProject.path.replaceAll("/", "-")}-` : "";
-    return github.repo ? `${github.repo.owner}-${github.repo.name}-` : "";
-  }
-
-  #started(): ReviewDraft {
-    return this.draft ?? emptyDraft(this.shown ?? this.pr.headSha);
+  #draftFile(): string {
+    return this.saves.state?.file ?? "review.json";
   }
 
   addComment(writing: Writing) {
+    // Its commit must be checked against the saved review before a comment is attached to it.
+    if (!this.saves.state) {
+      void this.saves.ready().then(() => { if (!this.#disposed) this.addComment(writing); }, err => confirm.fail(err));
+      return;
+    }
     // Whether its file is the same on the newest commit is for the Files tab to say, before Add
     // is offered; a comment on an older commit than the review's never goes in.
     if (addProblem(this.draft, writing, this.pr.headSha, true)) return;
     // A review not started yet starts on the commit the comment was written on.
-    const draft = this.draft ?? emptyDraft(writing.commit);
-    this.#keep(withComment(draft, writing.spot, writing.body.trim(), Math.floor(Date.now() / 1000)));
+    const comment = withComment(emptyDraft(writing.commit), writing.spot, writing.body.trim(), Math.floor(Date.now() / 1000)).comments[0];
+    this.#keep(current => {
+      const draft = current ?? emptyDraft(writing.commit);
+      return { ...draft, comments: [...draft.comments, comment] };
+    });
     this.editing = null;
   }
 
   addReply(thread: Thread, body: string) {
-    this.#keep(withReply(this.#started(), thread, body.trim(), Math.floor(Date.now() / 1000)));
+    const start = emptyDraft(this.shown ?? this.pr.headSha);
+    const reply = withReply(start, thread, body.trim(), Math.floor(Date.now() / 1000)).replies[0];
+    this.#keep(current => {
+      const draft = current ?? start;
+      return { ...draft, replies: [...draft.replies, reply] };
+    });
     this.editing = null;
   }
 
   /** A comment or reply of the draft written anew, or left out with null. */
   edit(id: string, body: string | null) {
-    if (this.draft) this.#keep(withEdit(this.draft, id, body === null ? null : body.trim()));
+    this.#keep(current => current ? withEdit(current, id, body === null ? null : body.trim()) : null);
     this.editing = null;
   }
 
   /** The review's summary as it is typed, kept a moment later. */
   setBody(body: string) {
-    const draft = { ...this.#started(), body };
-    this.draft = draft;
-    clearTimeout(this.#timer);
-    this.#timer = setTimeout(() => this.#keep(draft), KEEP_AFTER);
+    const start = emptyDraft(this.shown ?? this.pr.headSha);
+    this.#keep(current => ({ ...(current ?? start), body }), KEEP_AFTER);
   }
 
   setVerdict(verdict: Verdict) {
-    this.#keep({ ...this.#started(), verdict });
+    const start = emptyDraft(this.shown ?? this.pr.headSha);
+    this.#keep(current => ({ ...(current ?? start), verdict }));
   }
 
   /** Send one call at once, as the request the sheet or Activity shows. */
@@ -202,12 +241,13 @@ export class ReviewSession {
     const range = suggestedRange(part, thread, this.lab);
     if (!range || !thread.path) return;
     const commit = thread.commit || this.pr.headSha;
-    await (this.lab ? api.gitlabFetch(this.number, this.pr.base) : api.pullFetch(this.number, this.pr.base)).catch(() => {});
+    await (this.lab ? api.gitlabFetch(this.number, this.pr.base, this.saves.target) : api.pullFetch(this.number, this.pr.base, this.saves.target)).catch(() => {});
     await this.#run(applyRequest(thread.path, commit, range, part.lines, who));
   }
 
   /** Send the review with its comments and replies, then put the draft away. */
   async submit(verdict: Verdict, body: string) {
+    await this.saves.flush();
     const draft = this.draft;
     const revoke = this.lab && approvedBy(this.pr, github.mrMe);
     const calls = submitCalls(this.pr, draft, verdict, body, this.shown, this.lab ? { revoke } : null);
@@ -231,7 +271,7 @@ export class ReviewSession {
           : "a pending review, its comments and replies, then the verdict; if one fails, the pending review is deleted",
         run: async () => {
           await this.#sendCalls(calls);
-          await api.saveReviewDraft(this.number, null, this.lab);
+          await this.saves.clear();
           return `${said} ${mark}${this.number}.`;
         },
       },
@@ -244,6 +284,7 @@ export class ReviewSession {
 
   /** Throw the draft away; a copy stays in `.git/oxbow/removed` for 30 days. */
   async discard() {
+    await this.saves.flush();
     const draft = this.draft;
     if (!draft) return;
     const what = countWords(draft.comments.length, draft.replies.length);
@@ -255,15 +296,14 @@ export class ReviewSession {
       button: "Discard Review",
       past: `Discarded the review of ${this.words.mark}${this.number}`,
       local: {
-        commands: [`mv .git/oxbow/reviews/${this.#filePrefix()}${this.number}.json .git/oxbow/removed/`],
+        commands: [`mv .git/oxbow/reviews/${this.#draftFile()} .git/oxbow/removed/`],
         run: async () => {
-          await api.saveReviewDraft(this.number, null, this.lab);
+          await this.saves.clear();
           return "The review is discarded.";
         },
       },
     });
     if (!ok) return;
-    clearTimeout(this.#timer);
     this.draft = null;
     this.finishing = false;
   }

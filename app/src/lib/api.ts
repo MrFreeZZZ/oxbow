@@ -86,6 +86,8 @@ import type {
   PullRequest,
   PullStatus,
   ReviewDraft,
+  ReviewTarget,
+  ReviewDraftState,
   Viewing,
   PullSummary,
   LfsStatus,
@@ -365,9 +367,9 @@ export const api = {
   /** Merge request `!number` in full, in the shape of a pull request. */
   gitlabMergeRequest: (number: number) => invoke<PullRequest>("gitlab_merge_request", { number }),
   /** The requests `calls` send to GitLab, as curl. */
-  gitlabCallsPreview: (calls: PullCall[]) => invoke<string[]>("gitlab_calls_preview", { calls }),
+  gitlabCallsPreview: (calls: PullCall[], target?: ReviewTarget) => invoke<string[]>("gitlab_calls_preview", { calls, target }),
   /** Sends them in order, each shown in the sheet; answers with the merge request as it is now. */
-  gitlabRun: (calls: PullCall[]) => invoke<unknown>("gitlab_run", { calls }),
+  gitlabRun: (calls: PullCall[], target?: ReviewTarget) => invoke<unknown>("gitlab_run", { calls, target }),
   /** Opens a merge request, pipeline or job page of one of them in the browser. */
   openGitLab: (url: string) => invoke<void>("open_gitlab", { url }),
   /** Labels, settings and templates (on `rev`) for the form that opens a merge request. */
@@ -375,29 +377,29 @@ export const api = {
   /** Who GitLab's CODEOWNERS asks to review what `branch` changes against `base`. */
   gitlabCodeOwners: (base: string, branch: string) => invoke<GitLabUser[]>("gitlab_code_owners", { base, branch }),
   gitlabPeople: (search: string) => invoke<GitLabUser[]>("gitlab_people", { search }),
-  /** Fetch merge request `!number` and its target here, into refs/oxbow/mr/<number>/. */
-  gitlabFetch: (number: number, base: string) => invoke<void>("gitlab_fetch", { number, base }),
+  /** Fetch merge request `!number` and its target here, into project-scoped review refs. */
+  gitlabFetch: (number: number, base: string, target?: ReviewTarget) => invoke<void>("gitlab_fetch", { number, base, target }),
   gitlabStatuses: (numbers: number[]) => invoke<PullStatus[]>("gitlab_statuses", { numbers }),
   /** Open and recently closed, the latest updated first. */
   githubPulls: () => invoke<PullSummary[]>("github_pulls"),
   githubPull: (number: number) => invoke<PullRequest>("github_pull", { number }),
   /** The requests as curl, for the sheet. */
-  githubCallsPreview: (calls: PullCall[]) => invoke<string[]>("github_calls_preview", { calls }),
+  githubCallsPreview: (calls: PullCall[], target?: ReviewTarget) => invoke<string[]>("github_calls_preview", { calls, target }),
   /** Sends `action-event`s while it runs; resolves to what the last call (or a create) answered. */
-  githubRun: (calls: PullCall[]) => invoke<{ number?: number; html_url?: string; sha?: string } | null>("github_run", { calls }),
+  githubRun: (calls: PullCall[], target?: ReviewTarget) => invoke<{ number?: number; html_url?: string; sha?: string } | null>("github_run", { calls, target }),
   codeOwners: (base: string, branch: string) => invoke<string[]>("code_owners", { base, branch }),
   githubPullStatuses: () => invoke<PullStatus[]>("github_pull_statuses"),
-  /** Fetches the pull request's head and base into refs/oxbow/pull/<number>/, quietly. */
-  pullFetch: (number: number, base: string) => invoke<void>("pull_fetch", { number, base }),
-  githubViewing: (number: number) => invoke<Viewing>("github_viewing", { number }),
+  /** Fetches the pull request's head and base into project-scoped review refs, quietly. */
+  pullFetch: (number: number, base: string, target?: ReviewTarget) => invoke<void>("pull_fetch", { number, base, target }),
+  githubViewing: (number: number, target?: ReviewTarget) => invoke<Viewing>("github_viewing", { number, target }),
   /** One small call, sent quietly: no sheet, no Activity. */
-  githubSend: (call: PullCall) => invoke<unknown>("github_send", { call }),
-  reviewDraft: (number: number, gitlab = false) => invoke<ReviewDraft | null>("review_draft", { number, gitlab }),
+  githubSend: (call: PullCall, target?: ReviewTarget) => invoke<unknown>("github_send", { call, target }),
+  reviewDraft: (target: ReviewTarget, number: number) => invoke<ReviewDraftState>("review_draft", { target, number }),
   reviewDrafts: (gitlab = false) => invoke<Record<string, ReviewDraft>>("review_drafts", { gitlab }),
   /** Keeps the draft; null puts it away, a copy kept for 30 days. */
-  saveReviewDraft: (number: number, draft: ReviewDraft | null, gitlab = false) => invoke<void>("save_review_draft", { number, draft, gitlab }),
-  gitlabViewing: (number: number) => invoke<Viewing>("gitlab_viewing", { number }),
-  gitlabSetViewed: (number: number, path: string, viewed: boolean) => invoke<void>("gitlab_set_viewed", { number, path, viewed }),
+  saveReviewDraft: (target: ReviewTarget, number: number, draft: ReviewDraft | null, expected: string) => invoke<string>("save_review_draft", { target, number, draft, expected }),
+  gitlabViewing: (number: number, target: ReviewTarget) => invoke<Viewing>("gitlab_viewing", { number, target }),
+  gitlabSetViewed: (number: number, path: string, viewed: boolean, target: ReviewTarget) => invoke<void>("gitlab_set_viewed", { number, path, viewed, target }),
 };
 
 /** Keys of `settings.json`. */

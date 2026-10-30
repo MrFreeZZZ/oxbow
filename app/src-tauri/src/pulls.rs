@@ -10,7 +10,7 @@ use oxbow_core::console::EntryKind;
 use oxbow_core::github::Client;
 use oxbow_core::gitlab_api::{GitLabUser, Step};
 use oxbow_core::pulls::{Call, GitHubRepo, PullRequest, PullSummary, started_review};
-use oxbow_core::review::{PullStatus, ReviewDraft, Reviewed, Viewing};
+use oxbow_core::review::{PullStatus, ReviewDraft, ReviewDraftState, Reviewed, Viewing};
 use oxbow_core::{ActionEvent, GitLabProject, OutputLine};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -18,6 +18,32 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::CommandResult;
 use crate::accounts::Accounts;
 use crate::session::{Session, at, blocking, current, logged, read};
+
+/// Captured by the editor, never inferred from whichever repository the window opens next.
+#[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewTarget {
+    workdir: String,
+    place: Reviewed,
+}
+
+fn review_repo(target: &ReviewTarget) -> CommandResult<oxbow_core::Repo> {
+    target.place.validate().map_err(|err| err.to_string())?;
+    let repo = oxbow_core::Repo::open(&target.workdir).map_err(|err| err.to_string())?;
+    if repo.workdir() != std::path::Path::new(&target.workdir) {
+        return Err("The review's working folder moved. Reopen the repository before saving.".into());
+    }
+    Ok(repo)
+}
+
+fn check_review_target(repo: &oxbow_core::Repo, place: &Reviewed, target: Option<&ReviewTarget>) -> CommandResult<()> {
+    if let Some(target) = target
+        && (repo.workdir() != std::path::Path::new(&target.workdir) || place != &target.place)
+    {
+        return Err("The review's repository or project changed. Reopen the review.".into());
+    }
+    Ok(())
+}
 
 fn github_repo_of(
     session: &State<'_, Session>,
@@ -138,16 +164,19 @@ pub async fn gitlab_fetch(
     tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
     number: u64,
     base: String,
+    target: Option<ReviewTarget>,
 ) -> CommandResult<()> {
     let (repo, project, _) = signed_in_project(&app, &window, &session, &tokens)
         .await?
         .ok_or_else(|| "Sign in to this repository’s GitLab in Settings › Accounts".to_owned())?;
+    let place = Reviewed::gitlab(&project);
+    check_review_target(&repo, &place, target.as_ref())?;
     logged(
         Some(at(&repo)),
         EntryKind::Background,
         format!("Fetch merge request !{number}"),
         move || {
-            repo.run(&repo.merge_request_fetch_command(&project.remote, number, &base))
+            repo.run(&repo.merge_request_fetch_command(&place, &project.remote, number, &base))
                 .map(|_| ())
         },
     )
@@ -162,10 +191,12 @@ pub async fn gitlab_calls_preview(
     session: State<'_, Session>,
     tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
     calls: Vec<Call>,
+    target: Option<ReviewTarget>,
 ) -> CommandResult<Vec<String>> {
-    let (_, project, client) = signed_in_project(&app, &window, &session, &tokens)
+    let (repo, project, client) = signed_in_project(&app, &window, &session, &tokens)
         .await?
         .ok_or_else(|| "Sign in to this repository’s GitLab in Settings › Accounts".to_owned())?;
+    check_review_target(&repo, &Reviewed::gitlab(&project), target.as_ref())?;
     client.preview(&project, &calls)
 }
 
@@ -178,10 +209,12 @@ pub async fn gitlab_run(
     session: State<'_, Session>,
     tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
     calls: Vec<Call>,
+    target: Option<ReviewTarget>,
 ) -> CommandResult<Value> {
-    let (_, project, client) = signed_in_project(&app, &window, &session, &tokens)
+    let (repo, project, client) = signed_in_project(&app, &window, &session, &tokens)
         .await?
         .ok_or_else(|| "Sign in to this repository’s GitLab in Settings › Accounts".to_owned())?;
+    check_review_target(&repo, &Reviewed::gitlab(&project), target.as_ref())?;
     let label = window.label().to_owned();
     // Dropped once the run is over: Stop no longer reaches it.
     let stop = app.state::<Session>().new_stop(&window);
@@ -371,8 +404,10 @@ pub async fn github_calls_preview(
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
     calls: Vec<Call>,
+    target: Option<ReviewTarget>,
 ) -> CommandResult<Vec<String>> {
-    let (_, github) = github_repo_of(&session, &window)?;
+    let (repo, github) = github_repo_of(&session, &window)?;
+    check_review_target(&repo, &Reviewed::github(&github), target.as_ref())?;
     let client = Client::default();
     Ok(calls
         .iter()
@@ -389,8 +424,10 @@ pub async fn github_run(
     session: State<'_, Session>,
     accounts: State<'_, Accounts>,
     calls: Vec<Call>,
+    target: Option<ReviewTarget>,
 ) -> CommandResult<Value> {
-    let (_, github) = github_repo_of(&session, &window)?;
+    let (repo, github) = github_repo_of(&session, &window)?;
+    check_review_target(&repo, &Reviewed::github(&github), target.as_ref())?;
     let client = accounts.client(&app)?;
     let label = window.label().to_owned();
     // Dropped once the run is over: Stop no longer reaches it.
@@ -501,14 +538,17 @@ pub async fn pull_fetch(
     session: State<'_, Session>,
     number: u64,
     base: String,
+    target: Option<ReviewTarget>,
 ) -> CommandResult<()> {
     let (repo, github) = github_repo_of(&session, &window)?;
+    let place = Reviewed::github(&github);
+    check_review_target(&repo, &place, target.as_ref())?;
     logged(
         Some(at(&repo)),
         EntryKind::Background,
         format!("Fetch pull request #{number}"),
         move || {
-            repo.run(&repo.pull_fetch_command(&github.remote, number, &base))
+            repo.run(&repo.pull_fetch_command(&place, &github.remote, number, &base))
                 .map(|_| ())
         },
     )
@@ -523,8 +563,10 @@ pub async fn github_viewing(
     session: State<'_, Session>,
     accounts: State<'_, Accounts>,
     number: u64,
+    target: Option<ReviewTarget>,
 ) -> CommandResult<Viewing> {
-    let (_, github) = github_repo_of(&session, &window)?;
+    let (repo, github) = github_repo_of(&session, &window)?;
+    check_review_target(&repo, &Reviewed::github(&github), target.as_ref())?;
     let client = accounts.client(&app)?;
     blocking(move || client.viewing(&github, number)).await
 }
@@ -537,8 +579,10 @@ pub async fn github_send(
     session: State<'_, Session>,
     accounts: State<'_, Accounts>,
     call: Call,
+    target: Option<ReviewTarget>,
 ) -> CommandResult<Value> {
-    let (_, github) = github_repo_of(&session, &window)?;
+    let (repo, github) = github_repo_of(&session, &window)?;
+    check_review_target(&repo, &Reviewed::github(&github), target.as_ref())?;
     let client = accounts.client(&app)?;
     blocking(move || client.perform(&github, &call, None)).await
 }
@@ -564,16 +608,12 @@ async fn reviewed_place(
 
 /// The draft review of pull request `number` kept here, if any.
 #[tauri::command]
-pub async fn review_draft(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
-    session: State<'_, Session>,
-    tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
-    number: u64,
-    gitlab: Option<bool>,
-) -> CommandResult<Option<ReviewDraft>> {
-    let (repo, place) = reviewed_place(&app, &window, &session, &tokens, gitlab.unwrap_or(false)).await?;
-    blocking(move || repo.review_draft(&place, number)).await
+pub async fn review_draft(target: ReviewTarget, number: u64) -> CommandResult<ReviewDraftState> {
+    blocking(move || {
+        let repo = review_repo(&target).map_err(oxbow_core::Error::Git)?;
+        repo.review_draft_state(&target.place, number)
+    })
+    .await
 }
 
 /// Every draft review kept here, by pull request number.
@@ -592,18 +632,14 @@ pub async fn review_drafts(
 /// Keep the draft review of pull request `number`; with none, put it away (sent or thrown away).
 #[tauri::command]
 pub async fn save_review_draft(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
-    session: State<'_, Session>,
-    tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
+    target: ReviewTarget,
     number: u64,
     draft: Option<ReviewDraft>,
-    gitlab: Option<bool>,
-) -> CommandResult<()> {
-    let (repo, place) = reviewed_place(&app, &window, &session, &tokens, gitlab.unwrap_or(false)).await?;
-    blocking(move || match draft {
-        Some(draft) => repo.save_review_draft(&place, number, &draft),
-        None => repo.drop_review_draft(&place, number),
+    expected: String,
+) -> CommandResult<String> {
+    blocking(move || {
+        let repo = review_repo(&target).map_err(oxbow_core::Error::Git)?;
+        repo.update_review_draft(&target.place, number, draft.as_ref(), &expected)
     })
     .await
 }
@@ -611,28 +647,63 @@ pub async fn save_review_draft(
 /// The files of merge request `number` ticked Viewed: GitLab keeps no ticks, so they are kept
 /// here.
 #[tauri::command]
-pub async fn gitlab_viewing(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
-    session: State<'_, Session>,
-    tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
-    number: u64,
-) -> CommandResult<Viewing> {
-    let (repo, place) = reviewed_place(&app, &window, &session, &tokens, true).await?;
-    blocking(move || Ok(repo.viewed_here(&place, number))).await
+pub async fn gitlab_viewing(target: ReviewTarget, number: u64) -> CommandResult<Viewing> {
+    blocking(move || {
+        let repo = review_repo(&target).map_err(oxbow_core::Error::Git)?;
+        Ok(repo.viewed_here(&target.place, number))
+    })
+    .await
 }
 
 /// Tick or untick a file of merge request `number` Viewed, here.
 #[tauri::command]
-pub async fn gitlab_set_viewed(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
-    session: State<'_, Session>,
-    tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
-    number: u64,
-    path: String,
-    viewed: bool,
-) -> CommandResult<()> {
-    let (repo, place) = reviewed_place(&app, &window, &session, &tokens, true).await?;
-    blocking(move || repo.set_viewed_here(&place, number, &path, viewed)).await
+pub async fn gitlab_set_viewed(target: ReviewTarget, number: u64, path: String, viewed: bool) -> CommandResult<()> {
+    blocking(move || {
+        let repo = review_repo(&target).map_err(oxbow_core::Error::Git)?;
+        repo.set_viewed_here(&target.place, number, &path, viewed)
+    })
+    .await
+}
+
+#[cfg(test)]
+mod review_target_tests {
+    use super::*;
+
+    #[test]
+    fn a_review_keeps_its_working_folder_and_project_when_the_window_switches() {
+        let dir = oxbow_core::cli::private_temp_folder("oxbow-review-target-").unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        for path in [&a, &b] {
+            std::fs::create_dir(path).unwrap();
+            assert!(
+                std::process::Command::new("git")
+                    .args(["init", "-q"])
+                    .arg(path)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let first = oxbow_core::Repo::open(&a).unwrap();
+        let other = oxbow_core::Repo::open(&b).unwrap();
+        let place = Reviewed::github(&GitHubRepo {
+            owner: "acme".into(),
+            name: "api".into(),
+            remote: "origin".into(),
+        });
+        let target = ReviewTarget {
+            workdir: first.workdir().display().to_string(),
+            place: place.clone(),
+        };
+        assert_eq!(review_repo(&target).unwrap().workdir(), first.workdir());
+        assert!(check_review_target(&other, &place, Some(&target)).is_err());
+        let different = Reviewed::github(&GitHubRepo {
+            owner: "other".into(),
+            name: "api".into(),
+            remote: "origin".into(),
+        });
+        assert!(check_review_target(&first, &different, Some(&target)).is_err());
+        assert!(check_review_target(&first, &place, Some(&target)).is_ok());
+    }
 }

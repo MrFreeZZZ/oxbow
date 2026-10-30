@@ -6,8 +6,9 @@
   // opens it. After the base of a stack merged, the rest of the stack can be restacked onto the
   // trunk from here, in three steps kept between runs: a push that fails goes on later. A merge
   // request on GitLab shows here the same way, in GitLab's words.
-  import { untrack } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { api } from "./api";
+  import { nav } from "./nav.svelte";
   import { github } from "./github.svelte";
   import { wordsOf, type ForgeKind } from "./forge";
   import type { Request } from "./confirm.svelte";
@@ -147,12 +148,19 @@
   let review = $state<ReviewSession | null>(null);
   $effect(() => {
     const p = pr;
+    const workdir = nav.repo;
+    const project = p?.gitlab ? github.mrProject : github.repo;
     untrack(() => {
-      if (!p) review = null;
-      else if (review?.number === p.number && review.lab === !!p.gitlab) review.pr = p;
-      else review = new ReviewSession(p, run, () => load(p.number), p.gitlab ? "gitlab" : "github");
+      if (!p || !project || !workdir) { review?.dispose(); review = null; return; }
+      const place = p.gitlab
+        ? { gitlab: true, host: github.mrProject!.host.toLowerCase(), project: github.mrProject!.path }
+        : { gitlab: false, host: "github.com", project: `${github.repo!.owner}/${github.repo!.name}`.toLowerCase() };
+      const same = review?.number === p.number && review.saves.target.workdir === workdir && JSON.stringify(review.saves.target.place) === JSON.stringify(place);
+      if (same) review!.pr = p;
+      else { review?.dispose(); review = new ReviewSession(p, run, () => load(p.number), { workdir, place }, p.gitlab ? "gitlab" : "github"); }
     });
   });
+  onDestroy(() => review?.dispose());
   // A suggestion goes into the files only while its branch is the one checked out.
   $effect(() => {
     const on = !!pr && history.head.branch === pr.head;

@@ -243,7 +243,7 @@ pub enum Action {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         text: Option<String>,
         /// The versions the choices were made for (`ConflictFile::stages`): refused when the
-        /// index holds others by now.
+        /// index or working file has changed by now.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stages: Option<String>,
     },

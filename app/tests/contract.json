@@ -213,6 +213,18 @@
     "stashes",
     "upstream"
   ],
+  "ReviewDraftState": [
+    "baseRef",
+    "draft",
+    "file",
+    "headRef",
+    "revision"
+  ],
+  "ReviewPlace": [
+    "gitlab",
+    "host",
+    "project"
+  ],
   "StashInfo": [
     "base",
     "branch",

@@ -130,8 +130,7 @@ pub struct ConflictFile {
     pub chunks: Vec<Chunk>,
     /// The file has no line break at its end, so the text to edit has none either.
     pub open_end: bool,
-    /// Which versions of the file the index holds, by blob id: what the user decided belongs
-    /// to these, and goes stale when another operation brings other versions.
+    /// The index versions and the file on disk: decisions go stale when either changes.
     pub stages: String,
 }
 
@@ -542,6 +541,7 @@ impl Repo {
 
     /// Both sides of a conflicted file and the conflicts between them.
     pub fn conflict_file(&self, path: &str) -> Result<ConflictFile> {
+        let version = self.conflict_version(path)?;
         let ([base, ours, theirs], link) = self.stages(path)?;
         if ours.is_none() && theirs.is_none() && base.is_none() {
             return Err(Error::Git(format!("{path} has no conflicts")));
@@ -571,6 +571,9 @@ impl Repo {
                 },
             })
             .collect();
+        if self.conflict_version(path)? != version {
+            return Err(Error::Git(format!("{path} changed while it was read; open it again")));
+        }
         Ok(ConflictFile {
             path: path.to_owned(),
             base: base.is_some(),
@@ -582,7 +585,7 @@ impl Repo {
             renamed: self.renamed_into(path),
             chunks,
             open_end,
-            stages: self.stage_ids(path)?,
+            stages: version,
         })
     }
 
@@ -804,7 +807,13 @@ impl Repo {
     }
 
     /// Write the file with the picks, before `git add` marks it resolved.
-    pub(crate) fn write_resolution(&self, path: &str, picks: &[Resolution], text: Option<&str>) -> Result<()> {
+    pub(crate) fn write_resolution(
+        &self,
+        path: &str,
+        picks: &[Resolution],
+        text: Option<&str>,
+        expected: Option<&str>,
+    ) -> Result<()> {
         let text = self.resolved_text(path, picks, text)?;
         let file = self.workdir().join(path);
         if let Some(parent) = file.parent() {
@@ -815,6 +824,11 @@ impl Repo {
             return Err(Error::Git(format!(
                 "{path} is not a plain file; take it whole from one side"
             )));
+        }
+        if let Some(expected) = expected
+            && self.conflict_version(path)? != expected
+        {
+            return Err(Error::Git(format!("{path} changed since it was shown; open it again")));
         }
         std::fs::write(&file, text).map_err(|err| Error::Git(format!("could not write {path}: {err}")))
     }
@@ -1042,6 +1056,47 @@ impl Repo {
             .map(|entry| format!("{}:{:o}:{}", entry.stage_raw(), entry.mode.bits(), entry.id))
             .collect();
         Ok(ids.join(" "))
+    }
+
+    /// An opaque version kept with decisions and drafts. Metadata alone misses same-size edits.
+    pub(crate) fn conflict_version(&self, path: &str) -> Result<String> {
+        let file = self.workdir().join(path);
+        let disk = match std::fs::symlink_metadata(&file) {
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => "missing".to_owned(),
+            Err(err) => return Err(Error::Git(format!("could not read {path}: {err}"))),
+            Ok(meta) if meta.is_file() => {
+                use std::io::Read;
+                let mut opened = std::fs::File::open(&file).map_err(Error::git)?;
+                let before = opened.metadata().map_err(Error::git)?;
+                if !before.is_file() {
+                    return Err(Error::Git(format!("{path} changed while it was read")));
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    if (meta.dev(), meta.ino()) != (before.dev(), before.ino()) {
+                        return Err(Error::Git(format!("{path} changed while it was read")));
+                    }
+                }
+                let mut hash = gix::hash::hasher(self.local().object_hash());
+                let mut buffer = [0; 64 * 1024];
+                loop {
+                    let n = opened.read(&mut buffer).map_err(Error::git)?;
+                    if n == 0 {
+                        break;
+                    }
+                    hash.update(&buffer[..n]);
+                }
+                let after = opened.metadata().map_err(Error::git)?;
+                if (before.len(), before.modified().ok()) != (after.len(), after.modified().ok()) {
+                    return Err(Error::Git(format!("{path} changed while it was read")));
+                }
+                hash.try_finalize().map_err(Error::git)?.to_hex().to_string()
+            }
+            Ok(meta) if meta.is_symlink() => format!("link:{:?}", std::fs::read_link(&file).map_err(Error::git)?),
+            Ok(_) => "not-file".to_owned(),
+        };
+        Ok(format!("{}\nworktree:{disk}", self.stage_ids(path)?))
     }
 
     /// Merge three versions with `git merge-file`, the way git marks conflicts in the file.
