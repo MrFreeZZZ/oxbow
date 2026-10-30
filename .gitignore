@@ -6,3 +6,5 @@ node_modules/
 __pycache__/
 /AGENTS.md
 /docs/project-context.md
+/design-qa.md
+/docs/settings-audit.md
