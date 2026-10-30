@@ -14,6 +14,7 @@ const KEY_GROUPS: { title: string; categories: string[]; foot?: string }[] = [
   { title: "Go", categories: ["Go"] },
   { title: "Search", categories: ["Search"] },
   { title: "View", categories: ["View"] },
+  { title: "Custom Commands", categories: ["Custom"] },
   { title: "Git", categories: ["Git"] },
   { title: "Changes", categories: ["Changes"], foot: "In the commit message of the Changes panel." },
   { title: "Edit Stack", categories: ["Edit Stack"], foot: "On the Edit Stack screen. A key alone works while no text field has the cursor." },
@@ -75,7 +76,7 @@ export const keysSection: Section = {
   icon: KEYBOARD,
   groups: () => {
     const { query, stroke, changedOnly } = keySearch;
-    const shown = commandIds.filter((id) => model.query.trim() || (fits(id, query, mac) && (!stroke || bindingsOf(id).some((c) => startsWith(c, stroke))) && (!changedOnly || changedKeys(id))));
+    const shown = commandIds().filter((id) => model.query.trim() || (fits(id, query, mac) && (!stroke || bindingsOf(id).some((c) => startsWith(c, stroke))) && (!changedOnly || changedKeys(id))));
     return KEY_GROUPS.flatMap(({ title, categories, foot }) => {
       const ids = shown.filter((id) => categories.includes(commandOf(id).category));
       return ids.length ? [{ title, foot, rows: ids.map(keyRow) }] : [];

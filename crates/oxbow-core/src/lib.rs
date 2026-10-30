@@ -52,6 +52,7 @@ pub mod submodules;
 pub mod suggestion;
 pub mod tags;
 pub mod trust;
+pub mod user_commands;
 pub mod watch;
 pub mod worktree;
 pub mod worktrees;

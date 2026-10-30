@@ -22,6 +22,7 @@ mod settings;
 mod setup;
 mod trusted;
 mod turns;
+mod user_commands;
 mod windows;
 mod working;
 
@@ -182,6 +183,7 @@ fn main() {
             git_config::repo_settings,
             git_config::set_git_config,
             git_config::set_commit_checks,
+            user_commands::run_user_command,
             repo_files::repo_files,
             repo_files::repo_file_text,
             repo_files::check_repo_file,

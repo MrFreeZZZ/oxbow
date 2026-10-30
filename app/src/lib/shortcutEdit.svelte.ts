@@ -113,12 +113,12 @@ class ShortcutEdit {
 export const shortcutEdit = new ShortcutEdit();
 
 /** Whether you changed any command's keys. */
-export const anyChanged = () => commandIds.some((id) => changedKeys(id));
+export const anyChanged = () => commandIds().some((id) => changedKeys(id));
 
 /** Every command back to VS Code's keys, with Undo. */
 export function resetAllRequest(): Request {
   const before = mine();
-  const count = commandIds.filter((id) => changedKeys(id, before)).length;
+  const count = commandIds().filter((id) => changedKeys(id, before)).length;
   return {
     title: "Reset every keyboard shortcut?",
     body: [`The ${count === 1 ? "command you gave your own keys goes" : `${count} commands you gave your own keys go`} back to the keys they came with, as in VS Code.`],

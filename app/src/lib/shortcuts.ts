@@ -27,6 +27,7 @@ export const COMMANDS = {
   // Show All Commands.
   palette: { category: "View", title: "Show All Commands", mac: ["Mod+Shift+P", "F1"], other: ["Mod+Shift+P", "F1"] },
   // Open Settings.
+  userCommands: { category: "Custom", title: "Manage Commands…" },
   settings: { category: "Preferences", title: "Open Settings", mac: ["Mod+,"], other: ["Mod+,"] },
   // Open Folder, Open Recent, Close Folder; Reload Window: ⌘R as in Safari, F5 elsewhere, where
   // VS Code's Ctrl+R opens recent folders.
@@ -143,11 +144,15 @@ export const COMMANDS = {
   bisectSkip: { category: "Bisect", title: "Skip", mac: ["S"], other: ["S"], scope: "bisect" },
 } satisfies Record<string, Command>;
 
-export type ShortcutId = keyof typeof COMMANDS;
+export type ShortcutId = keyof typeof COMMANDS | `custom:${string}`;
+let userCommands: () => { id: string; name: string }[] = () => [];
+export function useUserCommands(read: typeof userCommands) { userCommands = read; }
 
-export const commandIds = Object.keys(COMMANDS) as ShortcutId[];
-export const commandOf = (id: ShortcutId): Command => COMMANDS[id];
-export const isCommand = (id: string): id is ShortcutId => Object.hasOwn(COMMANDS, id);
+export const commandIds = (): ShortcutId[] => [...Object.keys(COMMANDS) as (keyof typeof COMMANDS)[], ...userCommands().map((c): ShortcutId => `custom:${c.id}`)];
+export const commandOf = (id: ShortcutId): Command => id.startsWith("custom:")
+  ? { category: "Custom", title: userCommands().find((c) => `custom:${c.id}` === id)?.name ?? "Deleted command" }
+  : COMMANDS[id as keyof typeof COMMANDS];
+export const isCommand = (id: string): id is ShortcutId => (Object.hasOwn(COMMANDS, id) || /^custom:[a-zA-Z0-9-]+$/.test(id));
 export const scopeOf = (id: ShortcutId): Scope => commandOf(id).scope ?? "window";
 
 /** Your own keys by command, over the defaults: `[]` takes a command's keys away. */
@@ -259,7 +264,7 @@ export type Hit = { id: ShortcutId } | { chord: string } | { missed: string } | 
 export class Keymap {
   readonly onMac: boolean;
   #mine: () => Custom;
-  #built: { from: Custom; strokes: { id: ShortcutId; strokes: string[] }[] } | null = null;
+  #built: { from: Custom; commands: string; strokes: { id: ShortcutId; strokes: string[] }[] } | null = null;
   #pending: { stroke: string; at: number } | null = null;
 
   constructor(onMac = mac, mine: () => Custom = () => custom()) {
@@ -270,11 +275,12 @@ export class Keymap {
   /** Built again whenever your keys change. */
   get #strokes() {
     const mine = this.#mine();
-    if (this.#built?.from !== mine) {
-      const strokes = commandIds
+    const commands = JSON.stringify(userCommands());
+    if (this.#built?.from !== mine || this.#built?.commands !== commands) {
+      const strokes = commandIds()
         .filter((id) => scopeOf(id) === "window")
         .flatMap((id) => bindingsOf(id, mine, this.onMac).map((c) => ({ id, strokes: strokesOf(c, this.onMac) })));
-      this.#built = { from: mine, strokes };
+      this.#built = { from: mine, commands, strokes };
     }
     return this.#built.strokes;
   }
@@ -356,7 +362,7 @@ function clash(a: string, b: string, onMac: boolean): boolean {
 
 /** The other commands a combo would take a key from, with the key each loses. */
 export function conflicts(id: ShortcutId, combo: string, mine: Custom = custom(), onMac = mac): { id: ShortcutId; combo: string }[] {
-  return commandIds.flatMap((other) =>
+  return commandIds().flatMap((other) =>
     other === id || !meet(id, other)
       ? []
       : bindingsOf(other, mine, onMac)

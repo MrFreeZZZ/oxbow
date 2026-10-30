@@ -29,6 +29,7 @@
   import { diffSection, generalSection, integrationsSection, themeSection } from "./settingsSections";
   import ShortcutSearch from "./ShortcutSearch.svelte";
   import { shortcutEdit } from "./shortcutEdit.svelte";
+  import UserCommands from "./UserCommands.svelte";
   import ThemeCards from "./ThemeCards.svelte";
   import ThemeSample from "./ThemeSample.svelte";
 
@@ -42,7 +43,7 @@
   listen("account-changed", () => load()).catch(() => {});
   listen("trust-changed", () => load()).catch(() => {});
 
-  const sections: Section[] = [generalSection, themeSection, accountsSection, gitSection, branchesSection, diffSection, safetySection, keysSection, integrationsSection, repoSection, repoFilesSection];
+  const sections: Section[] = [generalSection, { id: "commands", label: "Custom Commands", color: "var(--section-grey)", icon: "M3 4l4 4-4 4M9 12h4", groups: () => [] }, themeSection, accountsSection, gitSection, branchesSection, diffSection, safetySection, keysSection, integrationsSection, repoSection, repoFilesSection];
 
   const shownSections = $derived(sections.filter((s) => (s.id !== "repo" && s.id !== "repoFiles") || model.repo));
   const labelOf = (section: Section) => (section.id === "repo" ? (model.repo?.name ?? "") : section.label);
@@ -354,6 +355,7 @@
           </p>
         {/if}
 
+        {#if !needle && current.id === "commands"}<UserCommands />{/if}
         {#if !needle && current.id === "keys"}
           <ShortcutSearch empty={!shown.length} />
         {/if}

@@ -1,3 +1,4 @@
+import { commandsProblem, type UserCommand } from "./userCommands";
 // The user's settings, shared by every window: loaded from settings.json once, then kept in
 // step through the backend's "settings-changed" event. The file holds only values that differ
 // from the defaults below. A setting shows its new value at once; if settings.json doesn't take
@@ -8,10 +9,11 @@ import { api } from "./api";
 import { BRANCH_PALETTES, branchPaletteById, branchVariables, type BranchPaletteId } from "./branchPalettes";
 import { BRANCH_PREFIXES, prefixesProblem, type BranchPrefix } from "./branchPrefixes";
 import { isNewer, loadedOver, SaveQueue } from "./settingSaves";
-import { isCommand, useCustom, validCombo, type Custom } from "./shortcuts";
+import { isCommand, useCustom, useUserCommands, validCombo, type Custom } from "./shortcuts";
 import { paletteOf, THEMES, themeById, themeVariables } from "./themes";
 
 export const defaults = {
+  "oxbow.commands": [] as UserCommand[],
   "oxbow.appearance": "system" as "system" | "light" | "dark",
   "oxbow.history.rowStyle": "twoLines" as "twoLines" | "compact",
   "oxbow.startup.reopenRepository": true,
@@ -158,6 +160,7 @@ export function problemOf(key: string, value: unknown): string | null {
   if (!expected) return `Oxbow has no setting “${key}”`;
   const actual = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
   if (actual !== expected) return `Expected ${named(expected)}, not ${named(actual)}`;
+  if (key === "oxbow.commands") return commandsProblem(value as unknown[]);
   if (key === "oxbow.secrets.patterns") return patternsProblem(value as unknown[]);
   if (key === "oxbow.branch.prefixes") return prefixesProblem(value as unknown[]);
   if (key === "oxbow.keyboard.shortcuts") return shortcutsProblem(value as Record<string, unknown>);
@@ -443,3 +446,5 @@ export function followDisplay() {
   apply();
   ask();
 }
+
+useUserCommands(() => prefs.get("oxbow.commands"));

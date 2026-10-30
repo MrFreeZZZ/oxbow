@@ -72,7 +72,7 @@ const id = (hit: ReturnType<Keymap["match"]>) => (hit && "id" in hit ? hit.id : 
 
 // No two commands that can meet share a combo: the window's with any, a screen's with its own.
 for (const onMac of [true, false]) {
-  for (const a of commandIds) {
+  for (const a of commandIds()) {
     for (const c of defaultsOf(a, onMac)) {
       assert.ok(validCombo(c), `${a}: ${c}`);
       const others = conflicts(a, c, {}, onMac);

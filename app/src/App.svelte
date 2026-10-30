@@ -43,6 +43,8 @@
   import CommandPalette from "./lib/CommandPalette.svelte";
   import ObjectPicker from "./lib/ObjectPicker.svelte";
   import { namedLike, notInHistory, objectsOf, type ObjectAction, type ObjectItem, type ObjectKind } from "./lib/objects";
+  import UserCommandSheet from "./lib/UserCommandSheet.svelte";
+  import { commandsFor, commandId, type UserCommand } from "./lib/userCommands";
   import type { PaletteItem } from "./lib/palette";
   import { Keymap, accelerator, bindingsOf, combo, commandOf, pressed, type ShortcutId } from "./lib/shortcuts";
   import { menuBar, type Available } from "./lib/appMenu";
@@ -239,6 +241,10 @@
   function moreEntries(): MenuEntry[] {
     const entries: MenuEntry[] = [];
     if ((view !== "file" && view !== "browse") || showConflicts) entries.push({ kind: "item", label: history?.head.branch ? "New Branch…" : "Create a Branch at HEAD…", icon: NEW_BRANCH_ICON, run: newBranch });
+    entries.push({ kind: "item", label: "Custom Commands…", icon: CONSOLE_ICON, run: manageCommands });
+    for (const command of commandsFor(prefs.get("oxbow.commands"), repo?.path ?? "")) {
+      entries.push({ kind: "item", label: command.name, icon: CONSOLE_ICON, run: () => void runCustom(command) });
+    }
     entries.push({ kind: "item", label: "Console", icon: CONSOLE_ICON, keys: shortcut("console") || undefined, run: () => api.openConsole() });
     entries.push({ kind: "item", label: "Settings…", icon: SETTINGS_ICON, keys: shortcut("settings") || undefined, run: () => api.openSettings() });
     return entries;
@@ -1008,12 +1014,33 @@
     activity.open = true;
   }
 
+  let commandSheet = $state<{ title: string; running: boolean; result: string; context: string; manage: boolean } | null>(null);
+  function manageCommands() {
+    if (!commandSheet?.running) commandSheet = { title: "Custom Commands", running: false, result: "", context: "", manage: true };
+  }
+  async function runCustom(command: UserCommand) {
+    if (!repo || commandSheet?.running) return;
+    const path = repo.path;
+    const row = selectedRow && !selectedRow.worktree ? selectedRow : headRow;
+    const branch = row?.labels.find((l) => l.kind === "local")?.name ?? history?.head.branch ?? "";
+    const commit = row && !row.worktree ? row.id : "";
+    const context = [path, branch ? `Branch: ${branch}` : "Detached HEAD", commit ? `Commit: ${commit}` : "No commit"].join("\n");
+    commandSheet = { title: command.name, running: true, result: "", context, manage: false };
+    try {
+      await api.runUserCommand(command.id, path, branch, commit);
+      commandSheet = { title: command.name, running: false, result: "Completed. See Console for output and exit code.", context, manage: false };
+    } catch (err) {
+      commandSheet = { title: command.name, running: false, result: String(err), context, manage: false };
+    }
+  }
+
   /** Every command there is here and now, for the Command Palette. */
   function paletteCommands(): PaletteItem[] {
     const out: PaletteItem[] = [];
     // Each command as the registry names it, unless its title says what it does now ("Hide
     // Sidebar"), with its own key, or another's.
     const add = (id: ShortcutId, run: () => void, title?: string, keys: ShortcutId = id) => out.push({ id, category: commandOf(id).category, title: title ?? commandOf(id).title, run, keys });
+    add("userCommands", manageCommands);
     add("settings", () => api.openSettings());
     add("console", () => api.openConsole());
     add("open", chooseRepo);
@@ -1024,6 +1051,9 @@
     add("zoomOut", () => zoom(zoomLevel - 1));
     add("zoomReset", () => zoom(0));
     if (!repo || !history || !branchCtx) return out;
+    if (!commandSheet?.running) for (const command of commandsFor(prefs.get("oxbow.commands"), repo.path)) {
+      add(commandId(command.id), () => void runCustom(command));
+    }
     const h = history;
     const t = h.tracking;
     const busy = !!h.operation || !!h.bisect;
@@ -1120,6 +1150,10 @@
     const free = !confirm.request && !start.sheet && !document.querySelector('[aria-modal="true"]');
     const inRepo = !!history && free;
     switch (id) {
+      case "userCommands":
+        if (!free) return false;
+        manageCommands();
+        return true;
       case "settings":
         api.openSettings();
         return true;
@@ -2081,6 +2115,7 @@
               <svg class="icon" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6" /><circle cx="8" cy="8" r=".6" /><circle cx="12.5" cy="8" r=".6" /></svg>
             </button>
           {:else}
+            <button class="capsule" onclick={() => { nav.quickOpen = false; picker = { kind: "commands", initial: "Custom:" }; }} title="Run or manage custom commands">Commands</button>
             <button class="capsule" onclick={() => api.openConsole()} aria-label="Console" title={withKeys("Console", combo("console"))}>
               <svg class="icon" viewBox="0 0 16 16"><path d={CONSOLE_ICON} /></svg>
             </button>
@@ -2466,6 +2501,10 @@
   <CloneSheet.component url={start.sheet.url} onDone={started} onClose={() => (start.sheet = null)} />
 {:else if start.sheet?.kind === "new"}
   <NewRepoSheet.component folder={start.sheet.folder} onDone={started} onClose={() => (start.sheet = null)} />
+{/if}
+
+{#if commandSheet}
+  <UserCommandSheet {...commandSheet} onClose={() => commandSheet = null} />
 {/if}
 
 <style>

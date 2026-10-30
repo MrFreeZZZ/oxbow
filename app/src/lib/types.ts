@@ -2159,3 +2159,10 @@ export interface FileAt {
   /** A Git LFS pointer: the file itself is on the LFS server. */
   lfs: boolean;
 }
+
+export interface UserCommand {
+  id: string;
+  name: string;
+  script: string;
+  repository: string;
+}

@@ -62,7 +62,14 @@ fn shapes() -> BTreeMap<&'static str, Vec<String>> {
     let operations = json(repo.operation_log().unwrap());
     let versions = json(repo.local_history_all().unwrap());
 
+    let command = json(oxbow_core::user_commands::UserCommand {
+        id: "tests".into(),
+        name: "Tests".into(),
+        script: "cargo test".into(),
+        repository: String::new(),
+    });
     BTreeMap::from([
+        ("UserCommand", fields(&command)),
         ("History", fields(&history)),
         ("HeadInfo", fields(at(&history, "/head"))),
         ("HistoryRow", fields(at(&history, "/rows/0"))),

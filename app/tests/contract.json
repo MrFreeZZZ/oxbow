@@ -209,6 +209,12 @@
     "title",
     "untracked"
   ],
+  "UserCommand": [
+    "id",
+    "name",
+    "repository",
+    "script"
+  ],
   "WorkingTree": [
     "conflicted",
     "counted",
