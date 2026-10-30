@@ -4,3 +4,5 @@ node_modules/
 /app/src-tauri/gen/schemas
 .DS_Store
 __pycache__/
+/AGENTS.md
+/docs/project-context.md
