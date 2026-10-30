@@ -1,74 +1,88 @@
 <script lang="ts">
-  import { shortcut } from "./keys";
-  import type { Snippet } from "svelte";
-  // The Welcome window: clone, open or start a repository on the left with this computer's Git
-  // setup under them; repositories opened before on the right, each with where it stands.
-
+  import { onMount, onDestroy, untrack, type Snippet } from "svelte";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { api } from "./api";
-  import { plate, relativeTime, tint } from "./format";
-  import Menu, { type MenuEntry, menuIcons } from "./Menu.svelte";
+  import Menu, { type MenuEntry } from "./Menu.svelte";
   import { prefs } from "./prefs.svelte";
   import { looksLikeUrl, start } from "./start.svelte";
+  import { shortcut } from "./keys";
   import { tilde } from "./term";
-  import type { OperationKind, RecentRepo, RepoGlance } from "./types";
+  import { api } from "./api";
+  import { OverviewReader, overviewFacts, selectedOverview, trackingNote, overviewStatus } from "./overview";
+  import { actionIcons } from "./icons";
+  import { menuIcons } from "./Menu.svelte";
+  import { plate, tint, relativeTime } from "./format";
+  import SettingsRow from "./SettingsRow.svelte";
+  import type { OverviewRow, RepoOverview } from "./types";
 
-  let {
-    loading,
-    error,
-    onOpen,
-    onOpenPath,
-    onLocate,
-    gone,
-  }: {
+  let { onBack, onOpen, onOpenPath, onLocate, currentPath = null, loading, error: sessionError, gone }: {
+    onBack?: () => void;
     loading: boolean;
     error: string | null;
-    /** Choose a folder and open it. */
+    gone?: Snippet;
     onOpen: () => void;
     onOpenPath: (path: string) => void;
-    /** Choose where the repository that was at the path is now, and open it there. */
     onLocate: (path: string) => void;
-    /** The screen of a folder that isn't there any more, in place of Recent Repositories. */
-    gone?: Snippet;
+    currentPath?: string | null;
   } = $props();
-
-
+  let rows = $state<OverviewRow[] | null>(null);
+  let busy = $state(false);
+  let error = $state<string | null>(null);
   let filter = $state("");
-  let selected = $state<string | null>(null);
-  let menu = $state<{ x: number; y: number; label: string; entries: MenuEntry[] } | null>(null);
+  let selectedPath = $state<string | null>(null);
   let list = $state<HTMLDivElement>();
-  let name = $state("");
-  let email = $state("");
-  let savingIdentity = $state(false);
-  let identityError = $state<string | null>(null);
+  const reader = new OverviewReader(api.repositoryOverview, api.cancelRepositoryOverview);
+  const shown = $derived((rows ?? []).filter(({ repository: r }) =>
+    `${r.name} ${r.path}`.toLowerCase().includes(filter.trim().toLowerCase())));
+  const selected = $derived(selectedOverview(shown, selectedPath, currentPath));
 
+  function refresh() {
+    busy = true;
+    error = null;
+    void reader.refresh((next, problem) => {
+      if (next) rows = next;
+      error = problem;
+      busy = false;
+    });
+  }
+  function activate(row: OverviewRow) {
+    if (loading) return;
+    if (row.repository.missing) onLocate(row.repository.path);
+    else onOpenPath(row.repository.path);
+  }
+  function listKey(event: KeyboardEvent) {
+    if (event.key === "Enter" && selected) {
+      event.preventDefault();
+      activate(selected);
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const at = shown.findIndex(r => r.repository.path === selected?.repository.path);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? shown.length - 1 :
+      Math.max(0, Math.min(shown.length - 1, at + (event.key === "ArrowDown" ? 1 : -1)));
+    const row = shown[next];
+    if (row) {
+      selectedPath = row.repository.path;
+      list?.querySelector<HTMLElement>(`[data-path="${CSS.escape(row.repository.path)}"]`)?.focus();
+    }
+  }
+  const status = (row: OverviewRow) => overviewStatus(row.repository, row.summary);
+  const checked = (at: number) => new Date(at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  onMount(() => { void start.loadInfo(); });
   $effect(() => {
-    start.loadInfo();
-    // The newest repository is selected once the list is read again.
-    start.loadRecent().then(() => (selected = start.recent?.[0]?.path ?? null));
+    if (!gone) untrack(refresh);
+    return () => reader.stop();
   });
+  onDestroy(() => reader.stop());
 
   const info = $derived(start.info);
   const home = $derived(info?.home ?? "");
   const needsIdentity = $derived(!!info && (!info.name || !info.email));
-
-  const shown = $derived.by(() => {
-    const q = filter.trim().toLowerCase();
-    const all = start.recent ?? [];
-    return q ? all.filter((r) => r.name.toLowerCase().includes(q) || r.path.toLowerCase().includes(q)) : all;
-  });
-
-  // The first repository is selected, and a filter that hides the selected one moves it.
-  $effect(() => {
-    if (shown.length && !shown.some((r) => r.path === selected)) selected = shown[0].path;
-  });
-
-  const actions = [
-    { label: "Clone Repository…", keys: shortcut("clone"), icon: "M8 2.5v8M5 7.5l3 3 3-3M3 13.5h10", run: () => start.clone() },
-    { label: "Open Local Repository…", keys: shortcut("open"), icon: "M1.5 4.5a1 1 0 0 1 1-1H6l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z", run: () => onOpen() },
-    { label: "New Repository…", keys: shortcut("newRepo"), icon: "M8 3v10M3 8h10", run: () => start.newRepo() },
-  ];
-
+  let name = $state("");
+  let email = $state("");
+  let savingIdentity = $state(false);
+  let identityError = $state<string | null>(null);
+  let menu = $state<{ x: number; y: number; label: string; entries: MenuEntry[] } | null>(null);
   const env = $derived.by(() => {
     if (!info) return [];
     const rows: { ok: boolean; text: string; action?: { label: string; run: () => void } }[] = [];
@@ -86,84 +100,23 @@
     return rows;
   });
 
-  const OPERATION: Record<OperationKind, string> = {
-    merge: "Merge paused",
-    squash: "Squash waiting to be committed",
-    rebase: "Rebase paused",
-    cherryPick: "Cherry-pick paused",
-    revert: "Revert paused",
-    stashApply: "Stash apply paused",
-    am: "Applying patches paused",
-  };
-
-  /** The second line on the right of a row: where the repository stands. */
-  function status(repo: RecentRepo, glance: RepoGlance | null | undefined): { text: string; warn?: boolean } {
-    if (repo.missing) {
-      const why = repo.gone?.why;
-      if (why === "disk") return { text: `Disk “${repo.gone?.disk}” not connected` };
-      if (why === "trash") return { text: "In the Trash" };
-      if (why === "moved") return { text: "Moved" };
-      if (why === "noAccess") return { text: "Can’t read it" };
-      return { text: "Folder not found" };
-    }
-    if (glance === undefined) return { text: "" };
-    if (glance === null) return { text: "Can't read it" };
-    if (glance.operation) {
-      const n = glance.conflicts;
-      return { text: OPERATION[glance.operation] + (n ? ` · ${n} conflict${n === 1 ? "" : "s"}` : ""), warn: true };
-    }
-    const parts: string[] = [];
-    if (glance.ahead) parts.push(`↑${glance.ahead}`);
-    if (glance.behind) parts.push(glance.ahead || glance.changed ? `↓${glance.behind}` : `↓${glance.behind} behind ${glance.remote ?? "upstream"}`);
-    if (glance.changed) parts.push(`${glance.changed} changed`);
-    if (glance.stashes) parts.push(`${glance.stashes} stash${glance.stashes === 1 ? "" : "es"}`);
-    if (parts.length) return { text: parts.join(" · ") };
-    return { text: glance.upstream ? "Up to date" : glance.branch ? "Not published" : "Detached HEAD" };
+  async function forget(path: string) {
+    try {
+      await api.forgetRepo(path);
+      rows = (rows ?? []).filter(row => row.repository.path !== path);
+      refresh();
+    } catch (problem) { error = String(problem); }
   }
-
-  function locate(repo: RecentRepo) {
-    onLocate(repo.path);
-  }
-
-  /** A missing one opens the screen that says why it is gone and the ways out. */
-  function activate(repo: RecentRepo) {
-    onOpenPath(repo.path);
-  }
-
-  async function forget(repo: RecentRepo) {
-    await api.forgetRepo(repo.path).catch(() => {});
-    start.recent = (start.recent ?? []).filter((r) => r.path !== repo.path);
-  }
-
-  function rowMenu(event: MouseEvent, repo: RecentRepo) {
+  function rowMenu(event: MouseEvent, row: OverviewRow) {
     event.preventDefault();
-    selected = repo.path;
-    const entries: MenuEntry[] = [
-      repo.missing
-        ? { kind: "item", label: "Locate…", icon: menuIcons.checkout, run: () => locate(repo) }
-        : { kind: "item", label: "Open", icon: menuIcons.checkout, run: () => onOpenPath(repo.path) },
-      { kind: "item", label: "Copy Path", icon: menuIcons.copy, run: () => navigator.clipboard.writeText(repo.path).catch(() => {}) },
+    selectedPath = row.repository.path;
+    menu = { x: event.clientX, y: event.clientY, label: row.repository.name, entries: [
+      { kind: "item", label: row.repository.missing ? "Locate…" : "Open", icon: menuIcons.folder, run: () => activate(row) },
+      { kind: "item", label: "Copy Path", icon: menuIcons.copy, run: () => { void navigator.clipboard.writeText(row.repository.path).catch(() => {}); } },
       { kind: "sep" },
-      { kind: "item", label: "Remove from Recent", icon: menuIcons.drop, run: () => forget(repo) },
-    ];
-    menu = { x: event.clientX, y: event.clientY, label: repo.name, entries };
+      { kind: "item", label: "Remove from Recent", icon: menuIcons.drop, run: () => { void forget(row.repository.path); } },
+    ] };
   }
-
-  function onListKey(event: KeyboardEvent) {
-    const at = shown.findIndex((r) => r.path === selected);
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      const next = shown[Math.max(0, Math.min(shown.length - 1, at + (event.key === "ArrowDown" ? 1 : -1)))];
-      if (next) {
-        selected = next.path;
-        list?.querySelector<HTMLElement>(`[data-path="${CSS.escape(next.path)}"]`)?.focus();
-      }
-    } else if (event.key === "Enter" && at >= 0) {
-      event.preventDefault();
-      activate(shown[at]);
-    }
-  }
-
   async function saveIdentity() {
     savingIdentity = true;
     identityError = null;
@@ -189,13 +142,14 @@
 
   $effect(() => {
     let stop: (() => void) | undefined;
+    let disposed = false;
     getCurrentWebview()
       .onDragDropEvent((event) => {
         if (event.payload.type === "drop" && event.payload.paths[0] && !start.sheet) dropFolder(event.payload.paths[0]);
       })
-      .then((unlisten) => (stop = unlisten))
+      .then((unlisten) => { if (disposed) unlisten(); else stop = unlisten; })
       .catch(() => {});
-    return () => stop?.();
+    return () => { disposed = true; stop?.(); };
   });
 
   function onDrop(event: DragEvent) {
@@ -214,14 +168,19 @@
       start.clone(text.trim());
     }
   }
+
+  const actions = [
+    { label: "Clone Repository…", keys: shortcut("clone"), icon: "M8 2.5v8M5 7.5l3 3 3-3M3 13.5h10", run: () => start.clone() },
+    { label: "Open Local Repository…", keys: shortcut("open"), icon: "M1.5 4.5a1 1 0 0 1 1-1H6l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z", run: () => onOpen() },
+    { label: "New Repository…", keys: shortcut("newRepo"), icon: "M8 3v10M3 8h10", run: () => start.newRepo() },
+  ];
 </script>
-
 <svelte:window onpaste={onPaste} />
-
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="welcome" ondragover={(e) => e.preventDefault()} ondrop={onDrop}>
+<div class="welcome" ondragover={(event) => event.preventDefault()} ondrop={onDrop}>
   <section class="start" aria-label="Start">
     <div class="drag" data-tauri-drag-region></div>
+    {#if onBack}<button class="button small back" onclick={onBack}>Back to repository</button>{/if}
     <img class="app-icon" src="/app-icon.png" alt="Oxbow app icon" width="96" height="96" />
     <div class="app-name">Oxbow</div>
     <div class="version">{info ? `Version ${info.version}` : ""}</div>
@@ -237,7 +196,7 @@
     </div>
 
     {#if loading}<p class="opening">Opening…</p>{/if}
-    {#if error}<p class="error" role="alert">{error}</p>{/if}
+    {#if error || sessionError}<p class="error" role="alert">{error ?? sessionError}</p>{/if}
 
     <span class="grow"></span>
     {#if env.length}
@@ -266,78 +225,96 @@
 
   <section class="repos" aria-label="Repositories">
     <div class="drag top-drag" data-tauri-drag-region></div>
-    {#if gone}
-      {@render gone()}
-    {:else if start.recent && start.recent.length}
+    {#if gone}{@render gone()}{:else}
       <div class="head">
         <span class="title">Recent Repositories</span>
         <label class="filter">
           <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
           <input bind:value={filter} placeholder="Filter" aria-label="Filter repositories" spellcheck="false" autocomplete="off" />
         </label>
+        <button class="button icon-only small" onclick={refresh} disabled={busy || loading} aria-label="Refresh repositories" title={busy ? "Refreshing…" : "Refresh local snapshots"}>
+          <svg class="icon" viewBox="0 0 16 16"><path d={actionIcons.fetch} /></svg>
+        </button>
       </div>
       <!-- svelte-ignore a11y_interactive_supports_focus -->
-      <div class="list" role="listbox" aria-label="Recent repositories" bind:this={list} onkeydown={onListKey}>
-        {#each shown as repo (repo.path)}
-          {@const glance = start.glances[repo.path]}
-          {@const color = glance?.color ?? 0}
-          {@const state = status(repo, glance)}
-          <button
-            class="row"
-            class:on={repo.path === selected}
-            class:missing={repo.missing}
-            role="option"
-            aria-selected={repo.path === selected}
-            data-path={repo.path}
-            onclick={() => (selected = repo.path)}
-            ondblclick={() => activate(repo)}
-            oncontextmenu={(e) => rowMenu(e, repo)}
-          >
-            <span
-              class="folder"
-              style:background={repo.missing || !glance ? "var(--field)" : tint(color, "label")}
-              style:color={repo.missing || !glance ? "var(--text2)" : plate(color)}
-            >
-              <svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5a1 1 0 0 1 1-1H6l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" /></svg>
+      <div class="list" role="listbox" aria-label="Recent repositories" aria-busy={busy} bind:this={list} onkeydown={listKey}>
+        {#each shown as row (row.repository.path)}
+          {@const r = row.repository}
+          {@const s = row.summary}
+          {@const state = status(row)}
+          <button class="row" class:on={selected?.repository.path === r.path} class:missing={r.missing}
+            role="option" aria-selected={selected?.repository.path === r.path} data-path={r.path} disabled={loading}
+            tabindex={selected?.repository.path === r.path ? 0 : -1} onclick={() => (selectedPath = r.path)}
+            ondblclick={() => activate(row)} oncontextmenu={(event) => rowMenu(event, row)}>
+            <span class="folder" style:background={r.missing || !s ? "var(--field)" : tint(s.color, "label")} style:color={r.missing || !s ? "var(--text2)" : plate(s.color)}>
+              <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.folder} /></svg>
             </span>
-            <span class="words">
-              <span class="name">{repo.name}</span>
-              <span class="where">{tilde(repo.path, home)} · {relativeTime(repo.opened)}</span>
-            </span>
+            <span class="words"><span class="name">{r.name}</span><span class="where" title={r.path}>{tilde(r.path, home)} · {relativeTime(r.opened)}</span></span>
             <span class="side">
-              {#if glance?.branch}
-                <span class="branch" style:background={tint(color, "label")} style:color={plate(color)}>{glance.branch}</span>
-              {/if}
-              <span class="status" class:warn={state.warn}>
-                {#if state.warn}<svg viewBox="0 0 16 16"><path d="M8 2.5 14 13H2zM8 6.5v3M8 11.5v.1" /></svg>{/if}
-                {state.text}
-                {#if repo.missing}
+              {#if s}<span class="branch" style:background={tint(s.color, "label")} style:color={plate(s.color)} title={s.branch ?? s.commit ?? "No commits"}>{s.branch ?? (s.commit ? "Detached HEAD" : "No commits")}</span>{/if}
+              <span class="status" class:warn={state.warn} title={state.text}>{#if state.warn}<svg viewBox="0 0 16 16"><path d={actionIcons.warn} /></svg>{/if}{state.text}
+                {#if r.missing}
                   <!-- svelte-ignore a11y_click_events_have_key_events -->
-                  <span class="locate" role="button" tabindex="-1" onclick={(e) => (e.stopPropagation(), locate(repo))}>Locate…</span>
+                  <span class="locate" role="button" tabindex="-1" onclick={(event) => { event.stopPropagation(); selectedPath = r.path; onLocate(r.path); }}>Locate…</span>
                 {/if}
               </span>
             </span>
           </button>
-        {:else}
-          <p class="none">No repository matches “{filter}”.</p>
         {/each}
-      </div>
-      {#if needsIdentity}{@render identity()}{/if}
-      <div class="foot">
-        <svg class="icon" viewBox="0 0 16 16"><path d="M8 2.5v8M5 7.5l3 3 3-3M3 13.5h10" /></svg>
-        Double-click to open · drop a folder or a Git URL anywhere in this window
-      </div>
-    {:else if start.recent}
+        {#if !rows && busy}<p class="none" role="status">Reading repositories…</p>
+        {:else if rows && !shown.length}
+          {#if rows.length}<p class="none">No repository matches your filter.</p>{:else}
       <div class="empty">
         <span class="empty-icon"><svg viewBox="0 0 16 16"><path d="M1.5 4.5a1 1 0 0 1 1-1H6l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" /></svg></span>
         <div class="empty-title">No repositories yet</div>
         <div class="empty-sub">Clone one, open a folder that already has Git, or drop it onto this window.</div>
       </div>
+          {/if}
+        {/if}
+      </div>
       {#if needsIdentity}{@render identity()}{/if}
+      <div class="foot"><svg class="icon" viewBox="0 0 16 16"><path d="M8 2.5v8M5 7.5l3 3 3-3M3 13.5h10" /></svg>Double-click to open · drop a folder or a Git URL anywhere in this window</div>
     {/if}
   </section>
-</div>
-
+{#if !gone}    <aside aria-label="Selected repository">
+      {#if selected}
+        {@const r = selected.repository}
+        {@const s = selected.summary}
+        <div class="inspector">
+          <div class="repo-identity">
+            <div><h2>{r.name}</h2><p class="full-path">{tilde(r.path, home)}</p></div>
+          </div>
+          {#if s}
+            <div class="branch-line">{@render branch(s)}
+              {#if !s.branch || !s.commit || !s.upstream || s.ahead === null || s.behind === null}
+                <span class="note">{trackingNote(s)}</span>
+              {/if}
+            </div>
+            {#if s.operation}<p class="warn">{s.operation}</p>{/if}
+            {#if s.conflicts}<p class="warn conflicts"><svg class="icon" viewBox="0 0 16 16"><path d={actionIcons.warn} /></svg>{s.conflicts} conflict{s.conflicts === 1 ? "" : "s"} to resolve</p>{/if}
+            <div class="facts" title={s.upstream ?? "No upstream"}>
+              {#each overviewFacts(s) as row (row.id)}
+                <SettingsRow {row} menuOn={false} onMenu={() => {}} editing={null} />
+              {/each}
+            </div>
+            <details class="snapshot">
+              <summary title={`Local read completed ${new Date(selected.checkedAt * 1000).toLocaleString()}`}>Local refs · Checked {checked(selected.checkedAt)}</summary>
+              <p>Refresh reads local changes. Open the repository to fetch and check the server.</p>
+              <p>Submodule contents and Git filters are excluded from this overview.</p>
+              {#if s.fetchedAt}<p>FETCH_HEAD recorded {new Date(s.fetchedAt * 1000).toLocaleString()}; it may cover only some remotes.</p>{/if}
+            </details>
+            {#if s.filtersDisabled}<p class="note">Filters disabled for this snapshot.</p>{/if}
+          {:else}
+            <div class="problem"><p class="error">{r.missing ? "Folder not found" : "Unable to read repository"}</p>
+              {#if selected.error}<p class="note">{selected.error}</p>{/if}
+            </div>
+          {/if}
+          <button class="button primary open-selected" disabled={loading} onclick={() => activate(selected!)}>
+{r.missing ? "Locate Repository…" : "Open Repository"}
+          </button>
+        </div>
+      {:else}<p class="empty">{busy ? "Reading repositories…" : "Select a repository to see its details."}</p>{/if}
+    </aside>{/if}</div>
 {#snippet identity()}
   <div class="identity" aria-label="Commit identity">
     <div class="identity-head">
@@ -361,10 +338,12 @@
   </div>
 {/snippet}
 
-{#if menu}
-  <Menu x={menu.x} y={menu.y} label={menu.label} entries={menu.entries} onClose={() => (menu = null)} />
-{/if}
 
+{#snippet branch(s: RepoOverview)}
+  <span class="branch" style:background={tint(s.color, "label")} style:color={plate(s.color)} title={s.branch ?? s.commit ?? "No commits"}>{s.branch ?? (s.commit ? "Detached HEAD" : "No commits")}</span>
+{/snippet}
+
+{#if menu}<Menu x={menu.x} y={menu.y} label={menu.label} entries={menu.entries} onClose={() => (menu = null)} />{/if}
 <style>
   .welcome {
     height: 100%;
@@ -845,4 +824,33 @@
   .save:disabled {
     opacity: 0.5;
   }
+
+  .back { position: absolute; top: 14px; right: 16px; }
+  .head .filter { width: 180px; min-width: 80px; }
+  .head .filter input { width: 100%; }
+  .head .title { white-space: nowrap; }
+  .side { min-width: 0; }
+  .status { max-width: 100%; overflow: hidden; text-overflow: ellipsis; display: block; }
+  .status svg { vertical-align: -1px; margin-right: 4px; }
+  .foot { text-align: center; padding: 0 8px; font-size: var(--text-caption); }
+  aside { width: clamp(300px, 28vw, 380px); flex-shrink: 0; border-left: 0.5px solid var(--sep); background: var(--win); overflow: auto; }
+  .inspector { padding: 32px 28px; }
+  h2 { font-size: var(--text-large); font-weight: 600; margin: 0 0 8px; overflow-wrap: anywhere; }
+  .full-path { margin: 0; color: var(--text2); font-size: var(--text-small); overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+  .branch-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 16px; }
+  .inspector .branch { max-width: 100%; }
+  .inspector > .warn { color: var(--orange); margin: 12px 0 0; font-size: var(--text-small); }
+  .conflicts { display: flex; align-items: center; gap: 8px; }
+  .conflicts .icon { width: 14px; height: 14px; flex-shrink: 0; }
+  .facts { margin-top: 24px; border-radius: var(--radius-l); background: var(--panel); border: 0.5px solid var(--panel-border); }
+  .snapshot { margin-top: 16px; color: var(--text2); font-size: var(--text-caption); line-height: 1.5; }
+  .snapshot summary { cursor: pointer; }
+  .snapshot p { margin: 8px 0 0; }
+  .note { margin: 0; color: var(--text2); font-size: var(--text-small); line-height: 1.5; overflow-wrap: anywhere; }
+  .inspector > .note { margin-top: 8px; }
+  .open-selected { margin-top: 24px; }
+  .problem { margin-top: 24px; }
+  .problem .error { margin: 0 0 8px; }
+  .empty { padding: 48px 24px; color: var(--text2); font-size: var(--text-small); }
+  @media (max-width: 1150px) { .start { width: 290px; padding-left: 20px; padding-right: 20px; } .inspector { padding: 24px 16px; } .head { gap: 8px; } .head .filter { width: 120px; } }
 </style>

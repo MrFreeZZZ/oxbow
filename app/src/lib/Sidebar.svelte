@@ -87,7 +87,7 @@
     ctx: BranchContext;
     onOpen: () => void;
     onOpenPath: (path: string) => void;
-    /** Close the repository and show the Welcome window. */
+    /** Show Welcome while keeping the current repository session. */
     onWelcome: () => void;
     /** Select a commit in History, loading older commits down to it; `missing` says why it
      *  can't be shown when no branch or tag reaches it. */

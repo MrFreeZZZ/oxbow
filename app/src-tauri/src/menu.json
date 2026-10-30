@@ -109,6 +109,12 @@
     "accelerator": "CmdOrCtrl+Shift+P"
    },
    {
+    "id": "repositories",
+    "title": "Show Welcome",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
     "id": "-",
     "title": "",
     "enabled": true,

@@ -12,6 +12,7 @@ mod history;
 mod menu;
 mod open_in;
 mod outside;
+mod overview;
 mod preferences;
 mod pulls;
 mod recent;
@@ -43,6 +44,7 @@ fn main() {
         // Restores the window's size and position from the last session.
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(Session::default())
+        .manage(overview::OverviewRuns::default())
         .manage(menu::MenuState::default())
         .manage(accounts::Accounts::default())
         .manage(gitlab_accounts::GitLabTokens::default())
@@ -59,6 +61,7 @@ fn main() {
                     }
                 }
                 tauri::WindowEvent::Destroyed => {
+                    window.state::<overview::OverviewRuns>().stop(&label, None);
                     // Its reads stop with it.
                     if let Some(mut slot) = session.windows.lock().expect("session lock").remove(&label) {
                         slot.stop_reads();
@@ -103,11 +106,12 @@ fn main() {
             trusted::untrust_repo,
             repos::initial_repo,
             recent::recent_repos,
+            overview::repository_overview,
+            overview::cancel_repository_overview,
             recent::forget_repo,
             repos::gone_folder,
             repos::reconnect_folder,
             recent::clear_recent,
-            repos::repo_glance,
             setup::welcome_info,
             setup::folder_state,
             setup::probe_remote,

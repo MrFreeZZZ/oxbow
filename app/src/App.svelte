@@ -33,6 +33,8 @@
   import { fetchRequest, pullRequest, pushRequest, syncBlock, unshallowRequest, type RemoteContext, type SyncFix } from "./lib/remote";
   import SyncButtons from "./lib/SyncButtons.svelte";
   import Welcome from "./lib/Welcome.svelte";
+  let overviewShown = $state(false);
+  const showRepositories = () => { closePickers(); overviewShown = true; };
   import { prefs } from "./lib/prefs.svelte";
   import SearchField from "./lib/SearchField.svelte";
   import SearchBar from "./lib/SearchBar.svelte";
@@ -149,7 +151,7 @@
   const focusOnly = $derived(loader.focusOnly);
   /** Goes up on every reload of the history, so the views showing it reload too. */
   const version = $derived(loader.version);
-  const load = (path: string) => session.load(path);
+  const load = (path: string) => { overviewShown = false; return session.load(path); };
   const refresh = () => loader.refresh();
   const refreshQuietly = () => loader.refreshQuietly();
   const reload = () => loader.reload();
@@ -1045,12 +1047,13 @@
     add("console", () => api.openConsole());
     add("open", chooseRepo);
     add("openRecent", () => void openRecent());
+    add("repositories", showRepositories);
     add("clone", () => start.clone());
     add("newRepo", () => start.newRepo());
     add("zoomIn", () => zoom(zoomLevel + 1));
     add("zoomOut", () => zoom(zoomLevel - 1));
     add("zoomReset", () => zoom(0));
-    if (!repo || !history || !branchCtx) return out;
+    if (overviewShown || !repo || !history || !branchCtx) return out;
     if (!commandSheet?.running) for (const command of commandsFor(prefs.get("oxbow.commands"), repo.path)) {
       add(commandId(command.id), () => void runCustom(command));
     }
@@ -1148,8 +1151,12 @@
     // A sheet keeps the keyboard: the window's commands wait until it closes, but for those
     // that open another window or zoom.
     const free = !confirm.request && !start.sheet && !document.querySelector('[aria-modal="true"]');
-    const inRepo = !!history && free;
+    const inRepo = !!history && free && !overviewShown;
     switch (id) {
+      case "repositories":
+        if (!free || loading) return false;
+        showRepositories();
+        return true;
       case "userCommands":
         if (!free) return false;
         manageCommands();
@@ -1192,7 +1199,7 @@
         zoom(id === "zoomReset" ? 0 : zoomLevel + (id === "zoomIn" ? 1 : -1));
         return true;
     }
-    if (!history || !free) return false;
+    if (!history || !free || overviewShown) return false;
     // The palette and Quick Open keep the keyboard too: what's typed stays in them. Only Quick
     // Open's own key passes, to switch over from the palette or close it.
     if ((picker || nav.quickOpen) && id !== "quickOpen" && id !== "goToBranch") return false;
@@ -1618,7 +1625,7 @@
   // Fetch, and Activity says what is wrong.
   const hasRemotes = $derived(!!history?.remotes.length);
   $effect(() => {
-    if (!repo || !hasRemotes || !prefs.get("oxbow.fetch.auto")) return;
+    if (overviewShown || !repo || !hasRemotes || !prefs.get("oxbow.fetch.auto")) return;
     const fetchNow = () => {
       if (confirm.request || document.hidden || loading || activity.running) return;
       backgroundFetch(true);
@@ -1771,7 +1778,7 @@
   let launched = $state(false);
   // Welcome is a compact window; a repository gets the repository window's size back.
   $effect(() => {
-    const welcome = !repo || !history;
+    const welcome = overviewShown || !repo || !history;
     if (launched && !(welcome && loading)) fitWindow(welcome);
   });
 
@@ -1902,7 +1909,7 @@
   onfocus={() => loader.cameBack()}
   onmouseup={(event) => {
     // A mouse's own Back and Forward buttons.
-    if ((event.button !== 3 && event.button !== 4) || !history || confirm.request || start.sheet) return;
+    if ((event.button !== 3 && event.button !== 4) || !history || overviewShown || confirm.request || start.sheet) return;
     event.preventDefault();
     if (event.button === 3) goBack();
     else goForward();
@@ -1922,6 +1929,11 @@
       confirm.say(`The key combination (${keys(hit.missed).replace(" ", ", ")}) is not a command.`);
     } else if (hit && "id" in hit && shortcutKey(hit.id, event)) {
       event.preventDefault();
+    } else if (overviewShown) {
+      if (event.key === "Escape" && !event.defaultPrevented && !confirm.request && !start.sheet && !picker && !document.querySelector('[role="menu"]')) {
+        event.preventDefault();
+        overviewShown = false;
+      }
     } else if (history?.bisect && bisectPressed(event) && view === "history" && !showConflicts && !confirm.request && !start.sheet && !nav.quickOpen && !picker && !typing(event)) {
       // Bisecting: G, B and S answer for the commit under test, as the banner's tooltips say.
       event.preventDefault();
@@ -1941,8 +1953,10 @@
   }}
 />
 
-{#if !repo || !history}
-  <Welcome {loading} error={session.gone ? null : (error ?? settingsNote?.text ?? null)} onOpen={chooseRepo} onOpenPath={load} onLocate={findFolder} gone={session.gone ? goneAside : undefined} />
+{#if overviewShown || !repo || !history}
+  <Welcome currentPath={repo?.path ?? null} onBack={repo && history ? () => (overviewShown = false) : undefined}
+    {loading} error={session.gone ? null : (error ?? settingsNote?.text ?? null)} onOpen={chooseRepo} onOpenPath={load}
+    onLocate={(path) => { void session.findFolder(path, () => (overviewShown = false)); }} gone={session.gone ? goneAside : undefined} />
   {#snippet goneAside()}
     {#if session.gone && goneShown}
       <FolderGone
@@ -1980,7 +1994,7 @@
       <div class="side-catcher" onclick={() => (sideShown = false)}></div>
     {/if}
     <!-- Over a narrow window the sidebar steps aside again once something in it is picked. -->
-    <Sidebar {repo} {history} {reads} onRetry={retryRead} {selectedRow} ctx={branchCtx!} onOpen={chooseRepo} onOpenPath={load} onWelcome={closeRepo}
+    <Sidebar {repo} {history} {reads} onRetry={retryRead} {selectedRow} ctx={branchCtx!} onOpen={chooseRepo} onOpenPath={load} onWelcome={showRepositories}
       onPick={aside((id: string, missing?: string) => ((commitExpanded = false), pick(id, missing), requestAnimationFrame(() => list?.focus())))}
       {run}
       view={view === "series" ? seriesBack : reviewing ? "reviews" : view}

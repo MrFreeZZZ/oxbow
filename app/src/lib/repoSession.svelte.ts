@@ -183,11 +183,12 @@ export class RepoSession {
   /** Find Folder… and Locate…: choose where the folder that was at `old` is now, point git at it
    *  there and open it. It is the same folder, so its commit message and Conflicts draft go
    *  along, and the toast says they did. */
-  async findFolder(old: string) {
+  async findFolder(old: string, onPicked?: () => void) {
     const name = old.split(/[/\\]/).filter(Boolean).pop() ?? old;
     const near = this.gone?.path === old ? this.gone.found : null;
     const picked = await open({ directory: true, multiple: false, title: `Find ${name}`, defaultPath: near ?? old.replace(/[/\\][^/\\]*[/\\]?$/, "") });
     if (typeof picked !== "string") return;
+    onPicked?.();
     this.reconnecting = true;
     this.goneNote = null;
     this.error = null;

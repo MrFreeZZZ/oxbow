@@ -1,9 +1,8 @@
-// The Welcome window is compact, like Xcode's: a repository opens in a window of the size the
-// repository windows had last time.
+// Welcome is the repository overview. Going back restores the working window's size.
 
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 
-const WELCOME = { width: 860, height: 580, minWidth: 720, minHeight: 540 };
+const WELCOME = { width: 1360, height: 800, minWidth: 1100, minHeight: 560 };
 const REPO = { width: 1360, height: 860, minWidth: 900, minHeight: 560 };
 /** The size of a repository window when it last showed Welcome, to open the next repository in. */
 const KEY = "oxbow.repoWindowSize";
@@ -46,8 +45,8 @@ export async function fitWindow(welcome: boolean) {
       await win.setSize(new LogicalSize(WELCOME.width, WELCOME.height));
     } else {
       const size = saved();
-      await win.setSize(new LogicalSize(size.width, size.height));
       await win.setMinSize(new LogicalSize(REPO.minWidth, REPO.minHeight));
+      await win.setSize(new LogicalSize(size.width, size.height));
     }
     await win.center();
   } catch {

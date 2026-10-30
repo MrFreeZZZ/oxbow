@@ -65,7 +65,9 @@
     {#if text(row.sub)}<span class="sub {row.subTone?.() ?? ''}">{text(row.sub)}</span>{/if}
   </span>
   {#if badge}<span class="chip">{badge}</span>{/if}
-  {#if control?.type === "seg"}
+  {#if control?.type === "value"}
+    <span class="value" class:off>{text(control.text)}</span>
+  {:else if control?.type === "seg"}
     <span class="seg" class:off role="radiogroup" aria-label={text(row.label)}>
       {#each control.options() as option (option.value)}
         <button role="radio" aria-checked={control.get() === option.value} disabled={off} onclick={() => control.set(option.value)}>{option.label}</button>

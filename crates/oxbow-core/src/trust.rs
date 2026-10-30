@@ -137,6 +137,43 @@ pub fn scan(dir: &Path) -> Result<Vec<TrustFinding>> {
     Ok(found)
 }
 
+/// A status for a multi-repository overview runs no helpers, even in trusted repositories.
+/// Per-command overrides never change the restrictions of an already open window.
+pub(crate) fn passive_status(dir: &Path) -> Result<(GitCommand, bool)> {
+    let all = entries(dir, &["system", "global", "local", "worktree", "command"])?;
+    let mut args = vec![
+        "-c".to_owned(),
+        "core.fsmonitor=false".to_owned(),
+        "-c".to_owned(),
+        format!("core.hooksPath={}", no_hooks_folder()?.display()),
+    ];
+    let mut filters = false;
+    for entry in all
+        .iter()
+        .filter(|e| kind_of(&e.key, &e.value) == Some(TrustKind::Filter))
+    {
+        filters = true;
+        args.extend(["-c".to_owned(), format!("{}=", entry.key)]);
+        if let Some((driver, _)) = entry.key.rsplit_once('.') {
+            args.extend(["-c".to_owned(), format!("{driver}.required=false")]);
+        }
+    }
+    args.extend(
+        [
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v2",
+            "-z",
+            "--branch",
+            "--untracked-files=all",
+            "--ignore-submodules=all",
+            "--no-renames",
+        ]
+        .map(str::to_owned),
+    );
+    Ok((GitCommand::new(args).env("GIT_NO_LAZY_FETCH", "1"), filters))
+}
+
 /// What a setting makes git run, if anything.
 fn kind_of(key: &str, value: &str) -> Option<TrustKind> {
     let (section, rest) = key.split_once('.')?;

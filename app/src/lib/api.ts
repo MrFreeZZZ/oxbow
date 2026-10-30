@@ -50,7 +50,7 @@ import type {
   RecentRepo,
   TrustedRepo,
   Gone,
-  RepoGlance,
+  OverviewRow,
   WelcomeInfo,
   RemoteProbe,
   CloneOptions,
@@ -112,6 +112,8 @@ export const api = {
   trustRepo: (path: string) => invoke<void>("trust_repo", { path }),
   trustedRepos: () => invoke<TrustedRepo[]>("trusted_repos"),
   untrustRepo: (path: string) => invoke<void>("untrust_repo", { path }),
+  repositoryOverview: (id: string) => invoke<OverviewRow[]>("repository_overview", { id }),
+  cancelRepositoryOverview: (id: string) => invoke<void>("cancel_repository_overview", { id }),
   recentRepos: () => invoke<RecentRepo[]>("recent_repos"),
   /** With `to`, the repository moved there. */
   forgetRepo: (path: string, to: string | null = null) => invoke<void>("forget_repo", { path, to }),
@@ -119,7 +121,6 @@ export const api = {
   reconnectFolder: (old: string, path: string) => invoke<{ path: string; conflictDraft: boolean }>("reconnect_folder", { old, new: path }),
   /** Empty Recent Repositories but for `keep`. */
   clearRecent: (keep: string[]) => invoke<void>("clear_recent", { keep }),
-  repoGlance: (path: string) => invoke<RepoGlance>("repo_glance", { path }),
   welcomeInfo: () => invoke<WelcomeInfo>("welcome_info"),
   folderState: (path: string) => invoke<"missing" | "empty" | "files" | "file">("folder_state", { path }),
   probeRemote: (url: string) => invoke<RemoteProbe>("probe_remote", { url }),

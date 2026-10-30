@@ -70,6 +70,12 @@ fn shapes() -> BTreeMap<&'static str, Vec<String>> {
     });
     BTreeMap::from([
         ("UserCommand", fields(&command)),
+        (
+            "RepoOverview",
+            fields(&json(
+                oxbow_core::overview::read(fx.path(), &std::sync::atomic::AtomicBool::new(false)).unwrap(),
+            )),
+        ),
         ("History", fields(&history)),
         ("HeadInfo", fields(at(&history, "/head"))),
         ("HistoryRow", fields(at(&history, "/rows/0"))),

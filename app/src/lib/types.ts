@@ -1480,20 +1480,6 @@ export interface Gone extends GoneFolder {
   conflictDraft: boolean;
 }
 
-/** Where a recent repository stands. */
-export interface RepoGlance {
-  branch: string | null;
-  color: number;
-  ahead: number;
-  behind: number;
-  upstream: boolean;
-  remote: string | null;
-  changed: number;
-  stashes: number;
-  operation: OperationKind | null;
-  conflicts: number;
-}
-
 /** What the Welcome window says about this computer's Git setup. */
 export interface WelcomeInfo {
   version: string;
@@ -2165,4 +2151,27 @@ export interface UserCommand {
   name: string;
   script: string;
   repository: string;
+}
+
+/** Passive local read: no fetch, helpers, diffs, or history loaded. */
+export interface RepoOverview {
+  color: number;
+  stashes: number | null;
+  operation: string | null;
+  branch: string | null;
+  commit: string | null;
+  changed: number;
+  conflicts: number;
+  upstream: string | null;
+  ahead: number | null;
+  behind: number | null;
+  fetchedAt: number | null;
+  filtersDisabled: boolean;
+}
+
+export interface OverviewRow {
+  repository: RecentRepo;
+  summary: RepoOverview | null;
+  error: string | null;
+  checkedAt: number;
 }

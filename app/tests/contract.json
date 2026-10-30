@@ -199,6 +199,20 @@
     "rules",
     "uncommitted"
   ],
+  "RepoOverview": [
+    "ahead",
+    "behind",
+    "branch",
+    "changed",
+    "color",
+    "commit",
+    "conflicts",
+    "fetchedAt",
+    "filtersDisabled",
+    "operation",
+    "stashes",
+    "upstream"
+  ],
   "StashInfo": [
     "base",
     "branch",

@@ -14,7 +14,7 @@ export const MENUS: { title: string; items: Entry[] }[] = [
   { title: "Edit", items: ["find", "findCode", "findNext", "findPrevious"] },
   {
     title: "View",
-    items: ["palette", "-", "sidebar", "details", "expand", "focusOnly", "-", "history", "changes", "stashes", "oplog", "localHistory", "activity", "console", "-", "diffLayout", "wrap", "whitespace", "-", "zoomIn", "zoomOut", "zoomReset"],
+    items: ["palette", "repositories", "-", "sidebar", "details", "expand", "focusOnly", "-", "history", "changes", "stashes", "oplog", "localHistory", "activity", "console", "-", "diffLayout", "wrap", "whitespace", "-", "zoomIn", "zoomOut", "zoomReset"],
   },
   { title: "Go", items: ["back", "forward", "-", "quickOpen", "goToBranch", "goToTag", "goToStash", "browseFiles", "-", "nextChange", "previousChange", "-", "nextTab", "previousTab"] },
   {

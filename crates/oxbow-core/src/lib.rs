@@ -30,6 +30,7 @@ pub mod localhistory;
 pub mod notkept;
 pub mod operation;
 pub mod oplog;
+pub mod overview;
 pub mod patches;
 pub mod perform;
 pub mod plan;

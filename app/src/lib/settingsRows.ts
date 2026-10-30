@@ -19,6 +19,7 @@ export type Setting =
   | { kind: "git"; scope: ConfigScope; keys: string[]; commands: () => string[]; reset: () => Promise<void> };
 
 export type Control =
+  | { type: "value"; text: Text }
   | { type: "seg" | "popup"; options: () => Option[]; get: () => Value; set: (value: Value) => void }
   | { type: "switch"; get: () => boolean; set: (on: boolean) => void }
   /** A value with Edit, which turns it into a text box. */

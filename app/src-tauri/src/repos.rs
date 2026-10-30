@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::preferences::read_settings;
 use crate::recent::{drafts_dir, forget_repo, known_repos, remember_repo};
-use crate::session::{Session, blocking, logged, read};
+use crate::session::{Session, blocking, logged};
 use crate::{CommandResult, drafts, trusted, turns};
 
 #[derive(Serialize)]
@@ -303,18 +303,4 @@ pub(crate) async fn reconnect_folder(
     let path = path.display().to_string();
     forget_repo(app, old, Some(path.clone()));
     Ok(Reconnected { path, conflict_draft })
-}
-
-/// Where a recent repository stands, for its row.
-#[tauri::command]
-pub(crate) async fn repo_glance(app: AppHandle, path: String) -> CommandResult<oxbow_core::RepoGlance> {
-    read(PathBuf::from(&path), "Look at a repository", move || {
-        let repo = Repo::open(&path)?;
-        // Not trusted yet: `git status` runs restricted, as the window would until asked.
-        if let (found, false) = trusted::check(&app, &repo) {
-            oxbow_core::trust::restrict(repo.workdir(), &found)?;
-        }
-        oxbow_core::setup::glance(Path::new(&path))
-    })
-    .await
 }

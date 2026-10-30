@@ -32,6 +32,7 @@ export const COMMANDS = {
   // Open Folder, Open Recent, Close Folder; Reload Window: ⌘R as in Safari, F5 elsewhere, where
   // VS Code's Ctrl+R opens recent folders.
   open: { category: "File", title: "Open Repository…", mac: ["Mod+O"], other: ["Mod+O"] },
+  repositories: { category: "View", title: "Show Welcome" },
   openRecent: { category: "File", title: "Open Recent…", mac: ["Ctrl+R"], other: ["Mod+R"] },
   closeRepo: { category: "File", title: "Close Repository", mac: ["Mod+K F"], other: ["Mod+K F"] },
   reload: { category: "File", title: "Reload Repository", mac: ["Mod+R"], other: ["F5"] },
