@@ -51,7 +51,7 @@ export const THEMES: Theme[] = [
     dark: p("#1E1E21", "#E6EDF3", "#C4A0DE", "#8FCB9F", "#E0B184", "#94B8E0", "#E69AB8", "#8B8B92", "#3FB950", "#F85149"),
   },
   // Estuary: Light was picked by eye from screenshots of a diff tool we like; Dark is the
-  // Oceanic Next palette by Dmitri Voronianski (MIT, credited in THIRD-PARTY-NOTICES.md).
+  // Oceanic Next palette by Dmitri Voronianski (MIT, credited in THIRD-PARTY-NOTICES.txt).
   // One color for functions, called or declared.
   {
     id: "estuary", name: "Estuary", rank: null, installs: null,

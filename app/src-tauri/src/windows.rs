@@ -81,7 +81,7 @@ pub(crate) fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri
             short_version: Some(env!("OXBOW_COMMIT").to_owned()),
             copyright: Some(format!("Built {}", env!("OXBOW_BUILT"))),
             // No credits: macOS draws them larger than the version. Third-party notices ship in
-            // the bundle's Resources (THIRD-PARTY-NOTICES.md).
+            // the bundle's Resources (THIRD-PARTY-NOTICES.txt).
             ..Default::default()
         };
         app_menu.remove_at(0)?;
