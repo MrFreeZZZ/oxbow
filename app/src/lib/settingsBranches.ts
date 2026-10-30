@@ -111,12 +111,11 @@ export const branchesSection: Section = {
   child: true,
   groups: () => [
     {
-      title: "Git",
-      foot: "Saved in ~/.gitconfig. The production branch and protected branches are set for each repository in This Repository; branch colors in Themes.",
+      title: "Branch behavior",
+      foot: "Saved in ~/.gitconfig. The production branch and protected branches are set for each repository in This Repository; branch colors in Appearance.",
       rows: [
         gitEdit("global", "init.defaultBranch", "Default branch for new repositories", { mono: false, shown: () => config("global", "init.defaultBranch") ?? "master (Git’s default)", placeholder: "main" }),
         gitSwitch("global", "rebase.updateRefs", "Move stacked branches along when rebasing", true, { sub: "git rebase --update-refs: branches built on the rebased one follow it" }),
-        gitSwitch("global", "fetch.prune", "Remove branches deleted on the remote when fetching", true),
       ],
     },
     {

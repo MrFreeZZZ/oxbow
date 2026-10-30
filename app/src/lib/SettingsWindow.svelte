@@ -17,7 +17,7 @@
   import GitLabSignIn from "./GitLabSignIn.svelte";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import { defaults, prefs, type PrefKey } from "./prefs.svelte";
-  import { accountsSection, gitSection, repoSection } from "./settingsGit";
+  import { accountsSection, gitSection, repoSection, safetySection } from "./settingsGit";
   import { branchesSection } from "./settingsBranches";
   import SettingsJson from "./SettingsJson.svelte";
   import { keysSection } from "./settingsKeys.svelte";
@@ -38,7 +38,7 @@
   listen("account-changed", () => load()).catch(() => {});
   listen("trust-changed", () => load()).catch(() => {});
 
-  const sections: Section[] = [generalSection, themeSection, accountsSection, gitSection, branchesSection, diffSection, keysSection, integrationsSection, repoSection, repoFilesSection];
+  const sections: Section[] = [generalSection, themeSection, accountsSection, gitSection, branchesSection, diffSection, safetySection, keysSection, integrationsSection, repoSection, repoFilesSection];
 
   const shownSections = $derived(sections.filter((s) => (s.id !== "repo" && s.id !== "repoFiles") || model.repo));
   const labelOf = (section: Section) => (section.id === "repo" ? (model.repo?.name ?? "") : section.label);
@@ -353,47 +353,34 @@
         {#if !needle && current.id === "keys"}
           <ShortcutSearch empty={!shown.length} />
         {/if}
+        {#if !needle && current.id === "repoFiles"}
+          <p class="section-note">These files are committed, so everyone who clones the repository gets them. Save only writes the file: it shows up in Changes, and you commit it yourself.</p>
+        {/if}
         {#each shown as group (group.key)}
           <section>
             {#if group.title}<h2>{group.title}</h2>{/if}
-            {#if !needle && group.key === "theme:0"}
-              <ThemeSample />
-            {:else if !needle && group.key === "theme:1"}
-              <BranchPreview />
-            {/if}
             <div class="panel">
               {#each group.rows as row (row.id)}
                 <SettingsRow {row} menuOn={menu?.row.id === row.id} onMenu={(x, y) => openMenu(row, x, y)} bind:editing />
               {/each}
             </div>
-            {#if text(group.foot)}<p class="foot">{text(group.foot)}</p>{/if}
-          </section>
-          {#if !needle && group.key === "diff:1"}
-            <section>
-              <h2>Preview</h2>
+            {#if !needle && group.preview === "theme"}
+              <div class="theme-choices"><ThemeCards /></div>
+              <p class="foot">Themes color code: diffs, conflicts and stashes. The window keeps its own look.</p>
+              <ThemeSample />
+            {:else if !needle && group.preview === "branches"}
+              <BranchPreview />
+            {:else if !needle && group.preview === "diff"}
               <DiffPreview />
-            </section>
-          {/if}
-          {#if !needle && group.key === "diff:2"}
-            <section>
-              <h2>Preview</h2>
+            {:else if !needle && group.preview === "console"}
               <div class="term-preview" aria-label="Git commands">
                 <div><span class="dim">%</span> <span class="git">git</span> push origin main</div>
                 <div class="dim">To github.com:acme/api.git</div>
                 <div class="dim">{"   3f2a1c9..7c1e9a2  main -> main"}</div>
               </div>
-            </section>
-          {/if}
-          {#if !needle && group.key === "theme:0"}
-            <section>
-              <div class="title-line">
-                <h2>Popular themes</h2>
-                <span class="sub">by VS Code Marketplace installs</span>
-              </div>
-              <ThemeCards />
-              <p class="foot">Themes color code: diffs, conflicts and stashes. The window keeps its own look.</p>
-            </section>
-          {/if}
+            {/if}
+            {#if text(group.foot)}<p class="foot">{text(group.foot)}</p>{/if}
+          </section>
         {:else}
           {#if needle}<p class="empty">No settings match “{model.query.trim()}”.</p>{/if}
         {/each}
@@ -655,32 +642,22 @@
     font-weight: 600;
   }
 
-  .title-line {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
+  .theme-choices {
+    padding: 8px 2px 2px;
   }
 
-  .title-line h2 {
-    flex-grow: 1;
-  }
-
-  .title-line .sub {
-    padding-right: 12px;
+  .section-note {
+    margin: 0;
+    padding: 6px 12px;
+    font-size: var(--text-body);
+    line-height: 1.5;
+    color: var(--text);
   }
 
   .panel {
     border-radius: var(--radius-l);
     background: var(--panel);
     border: 0.5px solid var(--panel-border);
-  }
-
-  .sub {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    font-size: var(--text-caption);
-    color: var(--text2);
   }
 
   .button.small {

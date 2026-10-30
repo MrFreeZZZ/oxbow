@@ -110,7 +110,7 @@
       {:else if versions && !versions.length}
         <p class="hint">
           {off
-            ? "Local History is off: turn it on in Settings › General › Safety to keep each version of a file you save."
+            ? "Local History is off: turn it on in Settings › Safety & Recovery › Local History to keep each version of a file you save."
             : "No file was saved here yet. Each time an editor saves a file of this repository while Oxbow has it open, the version is kept here for a few days."}
         </p>
       {:else if versions && !shown.length}

@@ -1,11 +1,11 @@
 // The Settings window's sections for Oxbow's own settings, which save at once to settings.json
-// and reach the main window through prefs: General, Themes, Diff & Text and Integrations.
+// and reach the main window through prefs: General, Appearance, Diff & Text and External Tools.
 
 import { BRANCH_PALETTES, branchPaletteById } from "./branchPalettes";
 import { shortcut } from "./keys";
 import { prefs } from "./prefs.svelte";
 import { model, prefRow } from "./settingsModel.svelte";
-import { GEAR, opts, type Option, type Section } from "./settingsRows";
+import { GEAR, opts, type Group, type Option, type Section } from "./settingsRows";
 import { themeById } from "./themes";
 import { tips, TIP_COUNT } from "./tips.svelte";
 import type { OpenApp } from "./types";
@@ -22,69 +22,8 @@ export const generalSection: Section = {
   icon: GEAR,
   groups: () => [
     {
-      title: "Language",
-      rows: [
-        prefRow("oxbow.git.englishOutput", "Show git output in English", "switch", {
-          sub: () =>
-            prefs.get("oxbow.git.englishOutput")
-              ? "Git errors are easier to look up in English. Commands are never translated."
-              : "Terminal blocks show git’s own translation, in your system’s language",
-        }),
-      ],
-    },
-    {
-      title: "Appearance",
-      rows: [
-        prefRow("oxbow.appearance", "Appearance", "seg", {
-          options: () => [
-            { value: "system", label: "System" },
-            { value: "light", label: "Light" },
-            { value: "dark", label: "Dark" },
-          ],
-        }),
-        prefRow("oxbow.history.rowStyle", "History rows", "seg", {
-          sub: "Two lines show branch labels, author and time under the message",
-          options: () => [
-            { value: "twoLines", label: "Two lines" },
-            { value: "compact", label: "Compact" },
-          ],
-        }),
-      ],
-    },
-    {
       title: "Startup",
       rows: [prefRow("oxbow.startup.reopenRepository", "Reopen the repository from the last session", "switch", { sub: "Otherwise Oxbow starts on the Welcome window" })],
-    },
-    {
-      title: "Background",
-      rows: [
-        prefRow("oxbow.fetch.auto", "Fetch remotes automatically", "switch", { sub: "Keeps ahead and behind counts current. It never changes your branches." }),
-        prefRow("oxbow.fetch.interval", "Fetch every", "popup", {
-          off: () => !prefs.get("oxbow.fetch.auto"),
-          options: () => [
-            { value: 5, label: "5 minutes" },
-            { value: 15, label: "15 minutes" },
-            { value: 30, label: "30 minutes" },
-            { value: 60, label: "hour" },
-          ],
-        }),
-      ],
-    },
-    {
-      title: "Confirmations",
-      foot: "With Risky only, the rest runs at once, and Activity (right-click Fetch) lists its git commands. Background fetch and read-only actions such as Copy never ask.",
-      rows: [
-        prefRow("oxbow.confirm.enabled", "Confirm actions before running them", "switch", { sub: "Describes the action with branch and commit names before anything changes" }),
-        prefRow("oxbow.confirm.scope", "Ask for", "seg", {
-          sub: "Risky: discard, reset, delete, abort, rewriting commits, push",
-          off: confirmOff,
-          options: () => [
-            { value: "all", label: "All actions" },
-            { value: "risky", label: "Risky only" },
-          ],
-        }),
-        prefRow("oxbow.confirm.showCommand", "Show the git command", "switch", { sub: "A terminal block with the exact commands, to learn git as you go", off: confirmOff }),
-      ],
     },
     {
       title: "Learning",
@@ -100,44 +39,90 @@ export const generalSection: Section = {
         },
       ],
     },
-    {
-      title: "Safety",
-      rows: [
-        prefRow("oxbow.undo.keepDays", "Keep undo history for", "seg", {
-          sub: "Every action in the Operation Log can be undone",
-          options: () => [
-            { value: 7, label: "7 days" },
-            { value: 30, label: "30 days" },
-            { value: 90, label: "90 days" },
-          ],
-        }),
-        prefRow("oxbow.localHistory.keepDays", "Keep local history for", "seg", {
-          sub: "Each version of a file saved between commits, by any editor, to compare or restore; up to 256 MB a repository",
-          options: () => [
-            { value: 0, label: "Off" },
-            { value: 3, label: "3 days" },
-            { value: 7, label: "7 days" },
-          ],
-        }),
-        prefRow("oxbow.push.confirmForce", "Ask before force pushing", "switch", { sub: "Oxbow always force pushes with --force-with-lease" }),
-      ],
-    },
   ],
 };
 
+/** Shared safety groups; secrets and repository trust live with their existing handlers. */
+export const confirmationGroup = (): Group => ({
+  title: "Confirmations",
+  foot: "With Risky only, the rest runs at once, and Activity (right-click Fetch) lists its git commands. Background fetch and read-only actions such as Copy never ask.",
+  rows: [
+    prefRow("oxbow.confirm.enabled", "Confirm actions before running them", "switch", { sub: "Describes the action with branch and commit names before anything changes" }),
+    prefRow("oxbow.confirm.scope", "Ask for", "seg", {
+      sub: "Risky: discard, reset, delete, abort, rewriting commits, push",
+      off: confirmOff,
+      options: () => [
+        { value: "all", label: "All actions" },
+        { value: "risky", label: "Risky only" },
+      ],
+    }),
+    prefRow("oxbow.confirm.showCommand", "Show the git command", "switch", { sub: "A terminal block with the exact commands, to learn git as you go", off: confirmOff }),
+    prefRow("oxbow.push.confirmForce", "Ask before force pushing", "switch", { sub: "Oxbow always force pushes with --force-with-lease" }),
+  ],
+});
+
+export const recoveryGroups = (): Group[] => [
+  {
+    title: "Undo history",
+    rows: [
+      prefRow("oxbow.undo.keepDays", "Keep undo history for", "seg", {
+        sub: "Snapshots kept for undoable actions in the Operation Log",
+        options: () => [
+          { value: 7, label: "7 days" },
+          { value: 30, label: "30 days" },
+          { value: 90, label: "90 days" },
+        ],
+      }),
+    ],
+  },
+  {
+    title: "Local History",
+    rows: [
+      prefRow("oxbow.localHistory.keepDays", "Keep local history for", "seg", {
+        sub: "Each version of a file saved between commits, by any editor, to compare or restore; up to 256 MB a repository",
+        options: () => [
+          { value: 0, label: "Off" },
+          { value: 3, label: "3 days" },
+          { value: 7, label: "7 days" },
+        ],
+      }),
+    ],
+  },
+];
+
 export const themeSection: Section = {
   id: "theme",
-  label: "Themes",
+  label: "Appearance",
   color: "var(--section-pink)",
   icon: "M8 1.8a6.2 6.2 0 1 0 0 12.4c1 0 1.4-.6 1.4-1.3 0-.9-.8-1.2-.8-2s.7-1.3 1.6-1.3h1.4a2.6 2.6 0 0 0 2.6-2.6C14.2 4.2 11.4 1.8 8 1.8M4.9 7.3v.1M6.9 4.7v.1M9.9 4.7v.1",
   groups: () => {
     const theme = themeById(prefs.get("oxbow.theme"));
     return [
       {
-        title: "Code",
+        title: "Interface",
+        rows: [
+          prefRow("oxbow.appearance", "Appearance", "seg", {
+            options: () => [
+              { value: "system", label: "System" },
+              { value: "light", label: "Light" },
+              { value: "dark", label: "Dark" },
+            ],
+          }),
+          prefRow("oxbow.history.rowStyle", "History rows", "seg", {
+            sub: "Two lines show branch labels, author and time under the message",
+            options: () => [
+              { value: "twoLines", label: "Two lines" },
+              { value: "compact", label: "Compact" },
+            ],
+          }),
+        ],
+      },
+      {
+        title: "Code theme",
+        preview: "theme",
         rows: [
           prefRow("oxbow.theme.variant", "Variant", "seg", {
-            sub: () => (theme.light && theme.dark ? "Auto follows Appearance in General" : `${theme.name} has only a ${theme.dark ? "dark" : "light"} version, so it is used in both`),
+            sub: () => (theme.light && theme.dark ? "Auto follows Appearance above" : `${theme.name} has only a ${theme.dark ? "dark" : "light"} version, so it is used in both`),
             off: () => !(theme.light && theme.dark),
             options: () => [
               { value: "auto", label: "Auto" },
@@ -149,7 +134,8 @@ export const themeSection: Section = {
       },
       {
         title: "Branches & graph",
-        foot: "Light and dark follow Appearance in General. Branch names pick their color; the production branch is set per repository in This Repository.",
+        preview: "branches",
+        foot: "Light and dark follow Appearance above. Branch names pick their color; the production branch is set per repository in This Repository.",
         rows: [
           prefRow("oxbow.branchPalette", "Branch palette", "seg", {
             sub: () => branchPaletteById(prefs.get("oxbow.branchPalette")).note,
@@ -168,7 +154,7 @@ export const diffSection: Section = {
   icon: "M4.5 2.5v5M2 5h5M9 11.5h5M2.5 13.5 13.5 2.5",
   groups: () => [
     {
-      title: "Diff",
+      title: "Diff display",
       rows: [
         prefRow("oxbow.diff.view", "Show", "seg", {
           sub: "The default for History, Changes and Stashes",
@@ -190,6 +176,11 @@ export const diffSection: Section = {
         prefRow("oxbow.diff.ignoreWhitespace", "Ignore whitespace changes", "switch", {
           sub: "In commits and stashes. Changes stays exact, so staging matches what you see",
         }),
+      ],
+    },
+    {
+      title: "File folding & large diffs",
+      rows: [
         prefRow("oxbow.diff.files", "Files of a commit", "seg", {
           sub: "Smart folds long, generated, deleted and binary files",
           options: () => [
@@ -223,7 +214,8 @@ export const diffSection: Section = {
       ],
     },
     {
-      title: "Text",
+      title: "Code text",
+      preview: "diff",
       rows: [
         prefRow("oxbow.text.font", "Font", "popup", {
           sub: "Monospaced fonts installed on this computer",
@@ -239,10 +231,11 @@ export const diffSection: Section = {
     },
     {
       title: "Console & Activity",
+      preview: "console",
       rows: [
         prefRow("oxbow.console.font", "Font", "popup", {
           sub: "Of git commands and their output, also in the sheets",
-          options: () => [{ value: "", label: "Same as Text" }, ...opts(...new Set(["SF Mono", ...model.fonts]))],
+          options: () => [{ value: "", label: "Same as Code text" }, ...opts(...new Set(["SF Mono", ...model.fonts]))],
         }),
         prefRow("oxbow.console.fontSize", "Size", "popup", { options: () => opts(10, 11, 12, 13, 14, 15, 16, 17, 18) }),
         prefRow("oxbow.console.lineHeight", "Line height", "popup", {
@@ -256,7 +249,7 @@ export const diffSection: Section = {
 
 export const integrationsSection: Section = {
   id: "integrations",
-  label: "Integrations",
+  label: "External Tools",
   color: "var(--section-purple)",
   icon: "M6.5 9.5l3-3M7 4.5l1-1a2.5 2.5 0 0 1 3.5 3.5l-1 1M9 11.5l-1 1a2.5 2.5 0 0 1-3.5-3.5l1-1",
   groups: () => [

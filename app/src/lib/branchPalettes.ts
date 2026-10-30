@@ -1,4 +1,4 @@
-// Branch palettes (Settings › Themes › Branches & graph). A palette colors branches everywhere:
+// Branch palettes (Settings › Appearance › Branches & graph). A palette colors branches everywhere:
 // the graph, the sidebar, capsules, stacks and selection. Color 0 is the production branch (the
 // trunk), the seven others are what branch names hash into (graph::BRANCH_COLORS in the core).
 // Mineral is from the Branch palettes v2 spec, its B7 is Clay. Each palette has a character of

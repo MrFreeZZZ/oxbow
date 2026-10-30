@@ -87,7 +87,7 @@
     hunkBar?: Snippet<[FileDiff, Hunk]>;
     /** Actions for the whole file on its header bar, for the working copy. */
     fileActions?: Snippet<[FileDiff]>;
-    /** Offer to open the file in the editor from Settings › Integrations. */
+    /** Offer to open the file in the editor from Settings › External Tools. */
     openable?: boolean;
     /** Code being searched for in History: marked wherever it appears. */
     find?: string | null;

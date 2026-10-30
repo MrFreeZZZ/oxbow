@@ -19,7 +19,7 @@ export interface ActivityItem {
   state: "running" | "queued" | "done" | "failed" | "stopped";
   /** Milliseconds since the epoch. */
   time: number;
-  /** Started by the timer of Settings › General, not by a click. */
+  /** Started by the timer of Settings › Git › Fetch, not by a click. */
   auto?: boolean;
   /** The remote it fetched, null for every remote. */
   remote?: string | null;

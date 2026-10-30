@@ -118,7 +118,6 @@ export const repoFilesSection: Section = {
     },
     {
       title: repoFiles.list?.gitlab ? "GitLab and editors" : "GitHub and editors",
-      foot: "These files are committed, so everyone who clones the repository gets them. Save only writes the file: it shows up in Changes, and you commit it yourself.",
       rows: (["codeowners", "editorconfig"] as RepoFileKind[]).map(fileRow),
     },
   ],

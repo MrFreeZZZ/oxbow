@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Settings › Themes: a card for each popular theme, a few lines of code in its colors.
+  // Settings › Appearance: a card for each popular theme, a few lines of code in its colors.
 
   import { effectiveLook, prefs } from "./prefs.svelte";
   import { paletteOf, THEMES, type Palette } from "./themes";
@@ -43,7 +43,7 @@
 <style>
   .cards {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
     gap: 10px 12px;
   }
 

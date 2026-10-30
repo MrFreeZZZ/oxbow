@@ -1579,7 +1579,7 @@
     api.cancelQuit().catch(() => {});
   }
 
-  // Background fetch, from Settings › General: keeps ahead/behind counts current. It skips a
+  // Background fetch, from Settings › Git › Fetch: keeps ahead/behind counts current. It skips a
   // turn while a sheet is open or the window is hidden; a failure only puts the amber dot on
   // Fetch, and Activity says what is wrong.
   const hasRemotes = $derived(!!history?.remotes.length);

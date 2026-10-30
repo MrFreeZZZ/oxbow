@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Settings › Themes › Branches & graph: a small history in the chosen branch palette, drawn with
+  // Settings › Appearance › Branches & graph: a small history in the chosen branch palette, drawn with
   // the same tokens as the real graph (they are set on the window's root by followLook).
   import { lane, plate, tint } from "./format";
 

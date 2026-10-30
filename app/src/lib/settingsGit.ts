@@ -1,14 +1,16 @@
 // The Settings window's sections that write Git's own settings with `git config`, so a terminal
-// sees the same: Accounts, Git and This Repository, with the GitHub sign-in, the secrets check's
-// own patterns and the trusted repositories.
+// sees the same: Accounts, Git and This Repository. Safety & Recovery also keeps the secrets
+// check’s patterns and the trusted repositories with their existing confirmation handlers.
 
 import { open as openFile } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
+import { actionIcons } from "./icons";
 import { confirm, type Request } from "./confirm.svelte";
 import { menuIcons, type MenuEntry } from "./Menu.svelte";
 import { prefs, type SecretPattern } from "./prefs.svelte";
 import { addRemoteRequest, optimizeRequest, removeRemoteRequest, setUrlRequest } from "./repoSettings";
 import { config, copy, gitEdit, gitSetting, gitSwitch, load, model, prefRow, truthy, writeGit } from "./settingsModel.svelte";
+import { confirmationGroup, recoveryGroups } from "./settingsSections";
 import type { Row, Section, Value } from "./settingsRows";
 import { tokenExpiry } from "./gitlab";
 import { settingsTag } from "./trust";
@@ -106,7 +108,7 @@ function setSigning(on: boolean) {
 
 // This repository's own identity: on while its .git/config names an author.
 const ownIdentity = () => config("local", "user.name") !== undefined || config("local", "user.email") !== undefined;
-const who = () => [config("global", "user.name"), config("global", "user.email")].filter(Boolean).join(" · ") || "nobody yet: set a name in Accounts";
+const who = () => [config("global", "user.name"), config("global", "user.email")].filter(Boolean).join(" · ") || "nobody yet: set a name in Git";
 
 async function chooseGit() {
   const path = await openFile({ multiple: false, directory: false, title: "Choose the git to run" });
@@ -236,9 +238,9 @@ function protectedRows(protect: { branches: string[]; default: boolean }): Row[]
     id: `protected:${name}`,
     label: name,
     mono: true,
-    sub: () => matchNote(name),
+    sub: () => `Protected branch · ${matchNote(name)}`,
     badge: () => (protect.default ? "default" : null),
-    control: { type: "button", label: "Remove", run: () => saveProtected(protect.branches.filter((_, j) => j !== i)) },
+    control: { type: "button", label: "Unprotect", run: () => saveProtected(protect.branches.filter((_, j) => j !== i)) },
   }));
   rows.push({
     id: "protected:add",
@@ -430,15 +432,7 @@ export const accountsSection: Section = {
       ],
     },
     {
-      title: "Commit identity",
-      foot: () => `Saved in ~/.gitconfig.${model.repo ? ` A repository can use its own identity, see ${model.repo.name} in the sidebar.` : ""}`,
-      rows: [
-        gitEdit("global", "user.name", "Name", { shown: () => config("global", "user.name") ?? "Not set", placeholder: "Your Name" }),
-        gitEdit("global", "user.email", "Email", { shown: () => config("global", "user.email") ?? "Not set", placeholder: "you@example.com" }),
-      ],
-    },
-    {
-      title: "SSH",
+      title: "SSH keys",
       foot: "Add the public key to GitHub or GitLab to fetch and push over SSH.",
       rows: model.git?.sshKeys.length
         ? model.git.sshKeys.map((key) => ({
@@ -451,8 +445,26 @@ export const accountsSection: Section = {
           }))
         : [{ id: "ssh:none", label: "No SSH keys in ~/.ssh", sub: "Create one in Terminal with ssh-keygen -t ed25519" }],
     },
+  ],
+};
+
+export const gitSection: Section = {
+  id: "git",
+  label: "Git",
+  color: "var(--section-orange)",
+  icon: "M4.5 2v12M4.5 11c0-3 7-2 7-5.5M11.5 5.5a1.6 1.6 0 1 0 0-.1",
+  groups: () => [
+    {
+      title: "Commit identity",
+      foot: () => `Saved in ~/.gitconfig.${model.repo ? ` A repository can use its own identity, see ${model.repo.name} in the sidebar.` : ""}`,
+      rows: [
+        gitEdit("global", "user.name", "Name", { shown: () => config("global", "user.name") ?? "Not set", placeholder: "Your Name" }),
+        gitEdit("global", "user.email", "Email", { shown: () => config("global", "user.email") ?? "Not set", placeholder: "you@example.com" }),
+      ],
+    },
     {
       title: "Signing",
+      foot: "Signing keys are listed in Accounts › SSH keys. Git’s own settings are saved in ~/.gitconfig and also apply in Terminal.",
       rows: [
         {
           ...gitSwitch("global", "commit.gpgsign", "Sign commits", false),
@@ -482,27 +494,20 @@ export const accountsSection: Section = {
           : []),
       ],
     },
-  ],
-};
-
-export const gitSection: Section = {
-  id: "git",
-  label: "Git",
-  color: "var(--section-orange)",
-  icon: "M4.5 2v12M4.5 11c0-3 7-2 7-5.5M11.5 5.5a1.6 1.6 0 1 0 0-.1",
-  groups: () => [
     {
-      title: "Git",
-      foot: "Oxbow reads history, graphs and diffs with its built-in engine and calls your Git for everything that changes the repository, so hooks and credentials behave as in Terminal.",
+      title: "Fetch",
       rows: [
-        {
-          id: "oxbow.git.path",
-          label: () => model.git?.git.path ?? "git",
-          mono: true,
-          sub: () => (!model.git ? "Looking…" : model.git.git.version ? `git ${model.git.git.version} · commit, rebase, push, hooks` : "This git does not run. Choose another one."),
-          setting: { kind: "pref", key: "oxbow.git.path" },
-          control: { type: "button", label: "Change…", run: chooseGit },
-        },
+        prefRow("oxbow.fetch.auto", "Fetch remotes automatically", "switch", { sub: "Keeps ahead and behind counts current. It never changes your branches." }),
+        prefRow("oxbow.fetch.interval", "Fetch every", "popup", {
+          off: () => !prefs.get("oxbow.fetch.auto"),
+          options: () => [
+            { value: 5, label: "5 minutes" },
+            { value: 15, label: "15 minutes" },
+            { value: 30, label: "30 minutes" },
+            { value: 60, label: "hour" },
+          ],
+        }),
+        gitSwitch("global", "fetch.prune", "Remove branches deleted on the remote when fetching", true),
       ],
     },
     {
@@ -552,7 +557,37 @@ export const gitSection: Section = {
       ],
     },
     {
-      title: "Security",
+      title: "Git executable & output",
+      foot: "Oxbow reads history, graphs and diffs with its built-in engine and calls your Git for everything that changes the repository, so hooks and credentials behave as in Terminal.",
+      rows: [
+        {
+          id: "oxbow.git.path",
+          label: () => model.git?.git.path ?? "git",
+          mono: true,
+          sub: () => (!model.git ? "Looking…" : model.git.git.version ? `git ${model.git.git.version} · commit, rebase, push, hooks` : "This git does not run. Choose another one."),
+          setting: { kind: "pref", key: "oxbow.git.path" },
+          control: { type: "button", label: "Change…", run: chooseGit },
+        },
+        prefRow("oxbow.git.englishOutput", "Show git output in English", "switch", {
+          sub: () =>
+            prefs.get("oxbow.git.englishOutput")
+              ? "Git errors are easier to look up in English. Commands are never translated."
+              : "Terminal blocks show git’s own translation, in your system’s language",
+        }),
+      ],
+    },
+  ],
+};
+
+export const safetySection: Section = {
+  id: "safety",
+  label: "Safety & Recovery",
+  color: "var(--section-blue)",
+  icon: actionIcons.key,
+  groups: () => [
+    confirmationGroup(),
+    {
+      title: "Secrets check",
       foot: "Your patterns are checked together with the built-in set: keys of AWS, GitHub, GitLab, Slack, Stripe, Google and OpenAI, private keys, and names like *API_KEY*, *SECRET*, *TOKEN*, *PASSWORD* that get a value.",
       rows: [
         {
@@ -598,6 +633,7 @@ export const gitSection: Section = {
         ...(model.trusted.length ? [] : [{ id: "trusted:none", label: "No trusted repositories with such settings yet" } as Row]),
       ],
     },
+    ...recoveryGroups(),
   ],
 };
 
@@ -613,34 +649,6 @@ export const repoSection: Section = {
     const production = r.production;
     const short = (ref: string) => ref.replace(/^refs\/(heads|remotes)\//, "");
     return [
-      {
-        title: "Graph",
-        rows: [
-          {
-            id: "git:local:oxbow.productionBranch",
-            label: "Production branch",
-            sub: () =>
-              production.chosen && !production.found
-                ? `${short(production.chosen)} is not here anymore, so no branch is drawn as production. Choose Auto or another branch.`
-                : production.chosen
-                  ? "Drawn in the production color and on the thick line"
-                  : production.auto
-                    ? `Auto picks ${short(production.auto)}: main or master, local first`
-                    : "Auto finds no main or master, so no branch is drawn as production",
-            control: {
-              type: "popup",
-              options: () => [
-                { value: "", label: production.auto ? `Auto (${short(production.auto)})` : "Auto (main/master)" },
-                ...(production.chosen && !production.found ? [{ value: production.chosen, label: `${short(production.chosen)} (not found)` }] : []),
-                ...production.branches.map((ref) => ({ value: ref, label: short(ref) })),
-              ],
-              get: () => production.chosen ?? "",
-              set: (value) => writeGit("local", [["oxbow.productionBranch", String(value) || null]]),
-            },
-            setting: gitSetting("local", () => [["oxbow.productionBranch", production.chosen]], ["oxbow.productionBranch"]),
-          },
-        ],
-      },
       {
         title: "Identity",
         rows: [
@@ -679,16 +687,6 @@ export const repoSection: Section = {
         ],
       },
       {
-        title: "Protected Branches",
-        foot: `Oxbow doesn’t force push them or rewrite their commits that are already pushed: no Amend, Edit Message, Drop, Squash, Split, Edit Stack, Reset or rebase of those. Revert undoes such a commit. Commits not pushed yet stay editable. Kept as ${PROTECTED_KEY} in .git/config.`,
-        rows: protectedRows(r.protected ?? { branches: [], default: true }),
-      },
-      {
-        title: "Checks Before Commit",
-        foot: "Kept as oxbow.check in .git/config, in the order they run. They run after the secrets check, also for Amend, Add to Commit and Fix a Mistake; their output goes to the Console. In a Restricted repository none runs.",
-        rows: checkRows(r.checks ?? [], r.restricted),
-      },
-      {
         title: "Remotes",
         rows: [
           ...r.remotes.map(
@@ -713,6 +711,41 @@ export const repoSection: Section = {
             control: { type: "button", label: "Add…", run: () => runRepo(addRemoteRequest(r.remotes.map((x) => x.name))) },
           },
         ],
+      },
+      {
+        title: "Branches",
+        foot: `Oxbow doesn’t force push protected branches or rewrite their commits that are already pushed: no Amend, Edit Message, Drop, Squash, Split, Edit Stack, Reset or rebase of those. Revert undoes such a commit. Commits not pushed yet stay editable. Kept as ${PROTECTED_KEY} in .git/config. The production branch sets the graph’s main line and the starting point for prefixes configured in Git › Branches.`,
+        rows: [
+          {
+            id: "git:local:oxbow.productionBranch",
+            label: "Production branch",
+            sub: () =>
+              production.chosen && !production.found
+                ? `${short(production.chosen)} is not here anymore, so no branch is drawn as production. Choose Auto or another branch.`
+                : production.chosen
+                  ? "Drawn in the production color and on the thick line"
+                  : production.auto
+                    ? `Auto picks ${short(production.auto)}: main or master, local first`
+                    : "Auto finds no main or master, so no branch is drawn as production",
+            control: {
+              type: "popup",
+              options: () => [
+                { value: "", label: production.auto ? `Auto (${short(production.auto)})` : "Auto (main/master)" },
+                ...(production.chosen && !production.found ? [{ value: production.chosen, label: `${short(production.chosen)} (not found)` }] : []),
+                ...production.branches.map((ref) => ({ value: ref, label: short(ref) })),
+              ],
+              get: () => production.chosen ?? "",
+              set: (value) => writeGit("local", [["oxbow.productionBranch", String(value) || null]]),
+            },
+            setting: gitSetting("local", () => [["oxbow.productionBranch", production.chosen]], ["oxbow.productionBranch"]),
+          },
+          ...protectedRows(r.protected ?? { branches: [], default: true }),
+        ],
+      },
+      {
+        title: "Checks Before Commit",
+        foot: "Kept as oxbow.check in .git/config, in the order they run. They run after the secrets check, also for Amend, Add to Commit and Fix a Mistake; their output goes to the Console. In a Restricted repository none runs.",
+        rows: checkRows(r.checks ?? [], r.restricted),
       },
       {
         title: "Storage",

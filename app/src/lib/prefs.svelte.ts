@@ -349,7 +349,7 @@ export function followLook() {
       const appearance = prefs.get("oxbow.appearance");
       root.dataset.theme = appearance === "system" ? (system ? "dark" : "light") : appearance;
     });
-    // The code theme, from Settings › Themes.
+    // The code theme, from Settings › Appearance.
     $effect(() => {
       const appearance = prefs.get("oxbow.appearance");
       const look = appearance === "system" ? (system ? "dark" : "light") : appearance;
@@ -360,7 +360,7 @@ export function followLook() {
         else root.style.removeProperty(name);
       }
     });
-    // Branch colors, from Settings › Themes › Branches & graph. They follow the window's look.
+    // Branch colors, from Settings › Appearance › Branches & graph. They follow the window's look.
     $effect(() => {
       const appearance = prefs.get("oxbow.appearance");
       const look = appearance === "system" ? (system ? "dark" : "light") : appearance;
