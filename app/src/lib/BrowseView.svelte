@@ -15,7 +15,7 @@
   import { bytes, imageType } from "./unusual";
   import Lazy, { BLOCK } from "./Lazy.svelte";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
-  import { findFiles, foldersOf, leftOf, linesOf, stepRow, treeRows } from "./browseTree";
+  import { foldersOf, leftOf, linesOf, stepRow, treeRows } from "./browseTree";
   import { NEWEST_SAVED } from "./localHistory";
   import { takeVersionRequest, type CommitFile } from "./commitFiles";
   import WorkingCopyPanel from "./WorkingCopyPanel.svelte";
@@ -158,7 +158,27 @@
   }
 
   const rows = $derived(treeRows(folders, open));
-  const found = $derived(query.trim() && all ? findFiles(all, query) : null);
+  let found = $state.raw<string[] | null>(null);
+  let searchWorker: Worker | null = null;
+  let searchId = 0;
+  $effect(() => {
+    const paths = all;
+    if (!paths) return;
+    const worker = new Worker(new URL("./fileSearch.worker.ts", import.meta.url), { type: "module" });
+    searchWorker = worker;
+    worker.onmessage = (event: MessageEvent<{ id: number; hits: string[] }>) => {
+      if (event.data.id === searchId) found = event.data.hits;
+    };
+    worker.postMessage({ paths, query: untrack(() => query), id: ++searchId });
+    return () => { worker.terminate(); searchWorker = null; };
+  });
+  $effect(() => {
+    const text = query;
+    all;
+    found = text.trim() ? [] : null;
+    const id = ++searchId;
+    if (text.trim()) searchWorker?.postMessage({ query: text, id });
+  });
   /** The rows the arrows go through: the files found, or the tree. */
   const order = $derived(found ?? rows.map((r) => r.item.path));
 

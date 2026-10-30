@@ -102,6 +102,7 @@ export const api = {
   /** Reduce Transparency and Increase Contrast from the system (always off outside macOS). */
   displayOptions: () => invoke<{ reduceTransparency: boolean; increaseContrast: boolean }>("display_options"),
   initialRepo: () => invoke<string | null>("initial_repo"),
+  closeRepo: () => invoke<void>("close_repo"),
   /** A repository whose settings run programs comes back `untrusted`, unopened, unless it is
    *  trusted or Settings says not to ask; `answer` is the user's reply to that. */
   openRepo: (path: string, answer: "trust" | "restricted" | null = null) => invoke<RepoSummary>("open_repo", { path, answer }),
@@ -264,9 +265,11 @@ export const api = {
   repoSettings: () => invoke<RepoSettings | null>("repo_settings"),
   /** `null` removes the value. */
   setGitConfig: (scope: ConfigScope, key: string, value: string | null) =>
-    invoke<void>("set_git_config", { scope, key, value }),
+    invoke<void>("set_git_config", { scope, values: [[key, value]], expectedRepo: null }),
+  setGitConfigs: (scope: ConfigScope, values: [string, string | null][], expectedRepo: string | null) =>
+    invoke<void>("set_git_config", { scope, values, expectedRepo }),
   /** The open repository's checks before commit, written whole in this order. */
-  setCommitChecks: (checks: CommitCheck[]) => invoke<void>("set_commit_checks", { checks }),
+  setCommitChecks: (checks: CommitCheck[], expectedRepo: string) => invoke<void>("set_commit_checks", { checks, expectedRepo }),
   repoFiles: () => invoke<RepoFiles>("repo_files"),
   repoFileText: (kind: RepoFileKind, gitlab: boolean) => invoke<RepoFileText>("repo_file_text", { kind, gitlab }),
   /** `fresh` reads the working copy and the history again. */
@@ -277,8 +280,8 @@ export const api = {
     invoke<FileCheck>("check_repo_file", { kind, gitlab, text, fresh, wait, lane }),
   /** Writes the file, unless it has errors or is no longer `over`, the text it was typed over
    *  (null for a new file); nothing is staged. */
-  saveRepoFile: (kind: RepoFileKind, gitlab: boolean, text: string, over: string | null) =>
-    invoke<RepoFileSaved>("save_repo_file", { kind, gitlab, text, over }),
+  saveRepoFile: (kind: RepoFileKind, gitlab: boolean, text: string, over: string | null, expectedRepo: string) =>
+    invoke<RepoFileSaved>("save_repo_file", { kind, gitlab, text, over, expectedRepo }),
   /** Sends `fetch-event`s marked with `fetch`, Activity's number for it, while it runs; rejects
    *  with a `Failure`. Without a number, Stop doesn't reach it. One of the timer (`auto`) stops
    *  for an action and comes back with `gaveWay`. */

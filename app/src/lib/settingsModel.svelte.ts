@@ -2,6 +2,7 @@
 // --list` (whose keys are lower case), this repository's, the GitHub and GitLab accounts and the
 // trusted repositories, with the rows that show and write them.
 
+import { Latest } from "./latest";
 import { api } from "./api";
 import { prefs, type PrefKey } from "./prefs.svelte";
 import type { Option, Row, Setting, Text, Value } from "./settingsRows";
@@ -10,6 +11,7 @@ import type { ConfigScope, GitHubAccount, GitLabAccount, GitSettings, RepoSettin
 export const model = $state({
   /** The window's search, over every section. */
   query: "",
+  loading: false,
   git: null as GitSettings | null,
   repo: null as RepoSettings | null,
   /** Who is signed in to GitHub. */
@@ -30,7 +32,11 @@ export const model = $state({
   gitlabSignIn: null as { server: string } | null,
 });
 
+const loads = new Latest();
+
 export async function load() {
+  const current = loads.begin();
+  model.loading = true;
   const [g, r, a, l, t] = await Promise.all([
     api.gitSettings().catch(() => null),
     api.repoSettings().catch(() => null),
@@ -38,6 +44,8 @@ export async function load() {
     api.gitlabAccounts().catch(() => []),
     api.trustedRepos().catch(() => []),
   ]);
+  if (!current()) return;
+  model.loading = false;
   model.git = g;
   model.repo = r;
   model.account = a;
@@ -74,21 +82,16 @@ export const truthy = (value: string | undefined) => value !== undefined && !["f
 
 /** Write Git settings in order; `null` removes a value. */
 export async function writeGit(scope: ConfigScope, values: [string, string | null][]) {
+  if (model.loading && scope === "local") return;
   model.problem = null;
-  const map = scope === "global" ? model.git?.global : model.repo?.local;
-  for (const [key, value] of values) {
-    try {
-      await api.setGitConfig(scope, key, value);
-      if (map) {
-        if (value === null) delete map[key.toLowerCase()];
-        else map[key.toLowerCase()] = value;
-      }
-    } catch (err) {
-      model.problem = String(err);
-      break;
-    }
+  const expectedRepo = model.repo?.path ?? null;
+  if (scope === "local" && !expectedRepo) return;
+  try {
+    await api.setGitConfigs(scope, values, expectedRepo);
+  } catch (err) {
+    model.problem = String(err);
   }
-  load();
+  await load();
 }
 
 const flag = (scope: ConfigScope) => (scope === "global" ? "--global" : "--local");

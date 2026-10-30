@@ -13,6 +13,7 @@
 
   let { kind, gitlab }: { kind: RepoFileKind; gitlab: boolean } = $props();
 
+  const expectedRepo = repoFiles.repo;
   let file = $state<RepoFileText | null>(null);
   let text = $state("");
   /** What is on disk; nothing for a new file. */
@@ -185,7 +186,7 @@
    *  written stays not saved, and a Save asked meanwhile comes after this one. `anyway` writes
    *  over what something else saved since the file was opened. */
   async function save(anyway = false) {
-    if (errors || readOnly || !dirty || (changed && !anyway)) return;
+    if (!expectedRepo || errors || readOnly || !dirty || (changed && !anyway)) return;
     if (saving) {
       again = true;
       return;
@@ -194,7 +195,7 @@
     const sent = text;
     const over = anyway && changed ? changed.text : exists ? saved : null;
     try {
-      const answer = await api.saveRepoFile(kind, gitlab, sent, over);
+      const answer = await api.saveRepoFile(kind, gitlab, sent, over, expectedRepo);
       if (gone) return;
       if (answer.kind === "changed") {
         changed = { text: answer.text };

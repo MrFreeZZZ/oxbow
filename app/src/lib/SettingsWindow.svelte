@@ -34,7 +34,11 @@
 
   api.monospaceFonts().then((list) => (model.fonts = list), () => {});
   load();
-  listen("repo-changed", () => load()).catch(() => {});
+  listen("repo-changed", () => {
+    confirm.cancel();
+    editing = null;
+    load();
+  }).catch(() => {});
   listen("account-changed", () => load()).catch(() => {});
   listen("trust-changed", () => load()).catch(() => {});
 

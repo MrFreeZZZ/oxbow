@@ -2,6 +2,7 @@
   // One row of the Settings window: its label and sub line, the gear with its menu, and its
   // control (segments, popup, switch, a value with Edit, a button or a command's keys).
 
+  import { model } from "./settingsModel.svelte";
   import ShortcutKeys from "./ShortcutKeys.svelte";
   import { GEAR, text, withCurrent, type Row } from "./settingsRows";
 
@@ -19,7 +20,7 @@
     editing: { id: string; value: string } | null;
   } = $props();
 
-  const off = $derived(row.off?.());
+  const off = $derived(row.off?.() || (model.loading && row.setting?.kind === "git" && row.setting.scope === "local"));
   const control = $derived(row.control);
   const badge = $derived(row.badge?.());
 

@@ -127,30 +127,51 @@ pub(crate) async fn set_git_config(
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
     scope: ConfigScope,
-    key: String,
-    value: Option<String>,
+    values: Vec<(String, Option<String>)>,
+    expected_repo: Option<String>,
 ) -> CommandResult<()> {
     let repo = match scope {
-        ConfigScope::Local => Some(current(&session, &window)?),
+        ConfigScope::Local => Some(crate::session::expected(
+            current(&session, &window)?,
+            expected_repo.as_deref(),
+        )?),
         ConfigScope::Global => None,
     };
-    // The production branch changes how the main window draws the graph, and both it and the
-    // protected branches what its menus offer.
-    let redraw = key.eq_ignore_ascii_case(oxbow_core::history::PRODUCTION_KEY)
-        || key.eq_ignore_ascii_case(oxbow_core::protect::PROTECTED_KEY);
     let dir = repo.as_ref().map(at);
-    let title = match value {
-        Some(_) => format!("Set {key}"),
-        None => format!("Unset {key}"),
-    };
-    logged(dir, console::EntryKind::Action, title, move || match repo {
-        Some(repo) => repo.set_local_config(&key, value.as_deref()),
-        None => config::set_global_config(&key, value.as_deref()),
+    let turns = session.turns.clone();
+    let label = session.label(&window);
+    let turn_label = label.clone();
+    let stop = session.new_stop(&window);
+    let events = app.clone();
+    logged(dir, console::EntryKind::Action, "Write Git settings", move || {
+        let _turn = if let Some(repo) = &repo {
+            Some(
+                turns
+                    .take(
+                        &repo.common_dir(),
+                        crate::turns::Running::new(&turn_label, repo.name(), "Write Git settings".into()),
+                        &stop.cancel,
+                        |_| {},
+                    )
+                    .ok_or(oxbow_core::Error::Cancelled)?,
+            )
+        } else {
+            None
+        };
+        for (key, value) in &values {
+            match &repo {
+                Some(repo) => repo.set_local_config(key, value.as_deref())?,
+                None => config::set_global_config(key, value.as_deref())?,
+            }
+        }
+        if let Some(repo) = &repo {
+            use tauri::Manager;
+            crate::repos::tell_others(&events, &events.state::<Session>(), repo, &turn_label);
+        }
+        Ok(())
     })
     .await?;
-    if redraw {
-        let _ = app.emit_to(session.label(&window).as_str(), "repo-touched", ());
-    }
+    let _ = app.emit_to(label.as_str(), "repo-touched", ());
     Ok(())
 }
 
@@ -162,8 +183,9 @@ pub(crate) async fn set_commit_checks(
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
     checks: Vec<oxbow_core::CommitCheck>,
+    expected_repo: String,
 ) -> CommandResult<()> {
-    let repo = current(&session, &window)?;
+    let repo = crate::session::expected(current(&session, &window)?, Some(&expected_repo))?;
     logged(
         Some(at(&repo)),
         console::EntryKind::Action,

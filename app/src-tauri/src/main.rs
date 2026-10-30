@@ -96,6 +96,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             preferences::display_options,
             repos::open_repo,
+            repos::close_repo,
             repos::trust_repo,
             trusted::trusted_repos,
             trusted::untrust_repo,

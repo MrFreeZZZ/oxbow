@@ -108,6 +108,10 @@ impl Turns {
                 let mut running = self.running.lock().expect("turns lock");
                 let list = running.entry(common.clone()).or_default();
                 if list.is_empty() {
+                    if cancel.load(Ordering::Relaxed) {
+                        running.remove(&common);
+                        return None;
+                    }
                     let id = self.next.fetch_add(1, Ordering::Relaxed);
                     change.id = id;
                     list.push(change);
@@ -252,5 +256,20 @@ mod tests {
         assert!(way.gave_way(), "Stop, not giving way");
         drop(fetch);
         assert!(action.join().unwrap());
+    }
+    #[test]
+    fn a_cancelled_change_never_takes_a_free_turn() {
+        let turns = Arc::new(Turns::default());
+        assert!(
+            turns
+                .take(
+                    Path::new("/nowhere/cancelled/.git"),
+                    change("main", "Save"),
+                    &AtomicBool::new(true),
+                    |_| {}
+                )
+                .is_none()
+        );
+        assert!(turns.running.lock().unwrap().is_empty());
     }
 }

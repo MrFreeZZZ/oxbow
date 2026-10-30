@@ -624,6 +624,52 @@ impl Context {
     }
 }
 
+/// Small LRU caches also bound intermediate rules typed during a long editing session.
+struct Memo<T> {
+    entries: std::collections::VecDeque<(String, T, usize)>,
+    bytes: usize,
+}
+
+impl<T> Default for Memo<T> {
+    fn default() -> Self {
+        Self {
+            entries: Default::default(),
+            bytes: 0,
+        }
+    }
+}
+
+impl<T: Clone> Memo<T> {
+    const LIMIT: usize = 2 * 1024 * 1024;
+    const COUNT: usize = 128;
+
+    fn get(&mut self, key: &str) -> Option<T> {
+        let at = self.entries.iter().position(|(k, ..)| k == key)?;
+        let entry = self.entries.remove(at)?;
+        let value = entry.1.clone();
+        self.entries.push_back(entry);
+        Some(value)
+    }
+
+    fn insert(&mut self, key: String, value: T, size: usize) {
+        let size = size + key.capacity() + std::mem::size_of::<(String, T, usize)>();
+        if size > Self::LIMIT {
+            return;
+        }
+        if let Some(at) = self.entries.iter().position(|(k, ..)| k == &key) {
+            self.bytes -= self.entries.remove(at).expect("entry exists").2;
+        }
+        while self.entries.len() >= Self::COUNT || self.bytes + size > Self::LIMIT {
+            let Some((.., old)) = self.entries.pop_front() else {
+                break;
+            };
+            self.bytes -= old;
+        }
+        self.entries.push_back((key, value, size));
+        self.bytes += size;
+    }
+}
+
 /// The working copy's files and folders, ignored ones too, with what the index tracks.
 struct Tree {
     /// Depth first, a folder before what is in it.
@@ -636,9 +682,9 @@ struct Tree {
     fold: bool,
     /// What each .gitignore line matched, by its text: a check as each key is typed counts
     /// only the line that changed.
-    matched: Mutex<HashMap<String, Arc<Matched>>>,
+    matched: Mutex<Memo<Arc<Matched>>>,
     /// Files each pattern of the other files covers, by kind and text.
-    counted: Mutex<HashMap<String, usize>>,
+    counted: Mutex<Memo<usize>>,
 }
 
 struct Entry {
@@ -741,12 +787,16 @@ impl Tree {
 
     /// What the .gitignore line `rule` matches, remembered.
     fn ignore_matches(&self, rule: &str, pattern: &gix::glob::Pattern) -> Arc<Matched> {
-        if let Some(known) = self.matched.lock().ok().and_then(|m| m.get(rule).cloned()) {
+        if let Some(known) = self.matched.lock().ok().and_then(|mut m| m.get(rule)) {
             return known;
         }
         let matched = Arc::new(self.ignore_walk(pattern));
         if let Ok(mut memo) = self.matched.lock() {
-            memo.insert(rule.to_owned(), matched.clone());
+            memo.insert(
+                rule.to_owned(),
+                matched.clone(),
+                std::mem::size_of::<Matched>() + matched.within.capacity() * std::mem::size_of::<(usize, usize)>(),
+            );
         }
         matched
     }
@@ -792,12 +842,12 @@ impl Tree {
 
     /// Files (not folders) that `matches` takes, remembered by `key`.
     fn count_files(&self, key: String, matches: impl Fn(&str) -> bool) -> usize {
-        if let Some(known) = self.counted.lock().ok().and_then(|m| m.get(&key).copied()) {
+        if let Some(known) = self.counted.lock().ok().and_then(|mut m| m.get(&key)) {
             return known;
         }
         let count = self.entries.iter().filter(|e| !e.dir && matches(&e.path)).count();
         if let Ok(mut memo) = self.counted.lock() {
-            memo.insert(key, count);
+            memo.insert(key, count, 0);
         }
         count
     }
@@ -2537,5 +2587,25 @@ mod tests {
         assert!(owner_ok("@octocat", false) && owner_ok("@acme/core", false) && owner_ok("dev@acme.io", false));
         assert!(!owner_ok("octocat", false) && !owner_ok("@a/b/c", false));
         assert!(owner_ok("@group/sub/team", true) && owner_ok("@@developer", true));
+    }
+    #[test]
+    fn rule_memo_bounds_bytes_and_keeps_recent_rules() {
+        let mut memo = Memo::<usize>::default();
+        for n in 0..200 {
+            memo.insert(n.to_string(), n, 0);
+        }
+        assert_eq!(memo.entries.len(), Memo::<usize>::COUNT);
+        assert!(memo.get("0").is_none());
+        assert_eq!(memo.get("72"), Some(72));
+        memo.insert("next".into(), 201, 0);
+        assert_eq!(memo.get("72"), Some(72));
+        assert!(memo.get("73").is_none());
+        memo.insert("large".into(), 300, Memo::<usize>::LIMIT / 2);
+        memo.insert("large2".into(), 301, Memo::<usize>::LIMIT / 2);
+        assert!(memo.bytes <= Memo::<usize>::LIMIT);
+        assert!(memo.get("large").is_none());
+        memo.insert("oversize".into(), 0, Memo::<usize>::LIMIT);
+        assert!(memo.get("oversize").is_none());
+        assert_eq!(memo.get("large2"), Some(301));
     }
 }

@@ -24,26 +24,44 @@ export function foldersOf(path: string): string[] {
 
 /** The files whose path has every word of `query`, in that order, case aside: the ones whose
  *  name has the last word first, then by path; at most `limit`. */
-export function findFiles(paths: string[], query: string, limit = 200): string[] {
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  if (!words.length) return [];
-  const hits: { path: string; named: boolean }[] = [];
-  for (const path of paths) {
-    const lower = path.toLowerCase();
-    let at = 0;
-    let ok = true;
-    for (const word of words) {
-      const found = lower.indexOf(word, at);
-      if (found < 0) {
-        ok = false;
-        break;
-      }
-      at = found + word.length;
-    }
-    if (ok) hits.push({ path, named: lower.slice(lower.lastIndexOf("/") + 1).includes(words[words.length - 1]) });
+export class FileSearch {
+  #paths: { path: string; lower: string; name: string }[];
+
+  constructor(paths: string[]) {
+    this.#paths = paths.map((path) => {
+      const lower = path.toLowerCase();
+      return { path, lower, name: lower.slice(lower.lastIndexOf("/") + 1) };
+    }).sort((a, b) => a.path.localeCompare(b.path));
   }
-  hits.sort((a, b) => Number(b.named) - Number(a.named) || a.path.localeCompare(b.path));
-  return hits.slice(0, limit).map((h) => h.path);
+
+  find(query: string, limit = 200): string[] {
+    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length || limit <= 0) return [];
+    const hits: string[] = [];
+    // Paths are sorted once. Two bounded passes keep the same name-first order without
+    // allocating or sorting every match of a broad query.
+    for (const named of [true, false]) {
+      for (const entry of this.#paths) {
+        if (entry.name.includes(words[words.length - 1]) !== named) continue;
+        let at = 0;
+        let ok = true;
+        for (const word of words) {
+          const found = entry.lower.indexOf(word, at);
+          if (found < 0) { ok = false; break; }
+          at = found + word.length;
+        }
+        if (ok) {
+          hits.push(entry.path);
+          if (hits.length >= limit) return hits;
+        }
+      }
+    }
+    return hits;
+  }
+}
+
+export function findFiles(paths: string[], query: string, limit = 200): string[] {
+  return new FileSearch(paths).find(query, limit);
 }
 
 /** Where ↑ and ↓ go from the row of `path` (`by` -1 or 1), staying in the list. */

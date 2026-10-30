@@ -59,3 +59,25 @@ test("a file's lines leave out the end of the last one", () => {
   assert.deepEqual(linesOf("a\r\nb"), ["a", "b"]);
   assert.deepEqual(linesOf(""), [""]);
 });
+
+// A broad query keeps the exact name-first and locale order, including ties, while the
+// bounded result omits thousands of additional matches. The same index serves later queries.
+{
+  const { FileSearch } = await import("../src/lib/browseTree.ts");
+  const paths = Array.from({ length: 4000 }, (_, i) => `module-${4000 - i}/file-${i}.ts`);
+  paths.push("file/other.ts", "FILE.ts", "file.ts", "special/a.ts");
+  const index = new FileSearch(paths);
+  const reference = (query: string, limit: number) => {
+    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+    return paths.map((path) => ({ path, lower: path.toLowerCase() })).filter(({ lower }) => {
+      let at = 0;
+      return words.every((word) => { const found = lower.indexOf(word, at); at = found + word.length; return found >= 0; });
+    }).sort((a, b) => Number(b.lower.split("/").pop()!.includes(words.at(-1)!)) - Number(a.lower.split("/").pop()!.includes(words.at(-1)!)) || a.path.localeCompare(b.path))
+      .slice(0, limit).map((e) => e.path);
+  };
+  for (const query of ["file", "module ts", "SPECIAL", "no-match"]) {
+    assert.deepEqual(index.find(query, 200), reference(query, 200));
+  }
+  assert.deepEqual(index.find("file", 0), []);
+  assert.deepEqual(index.find("  "), []);
+}

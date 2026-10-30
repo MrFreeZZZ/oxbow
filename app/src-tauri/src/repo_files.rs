@@ -4,7 +4,7 @@
 use oxbow_core::console;
 use oxbow_core::repofiles::{FileCheck, RepoFile, RepoFileKind, RepoFileText, Saved};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::CommandResult;
 use crate::session::{Session, at, current, logged, read};
@@ -82,6 +82,7 @@ pub(crate) async fn check_repo_file(
 
 /// Write the file, unless something else changed it since it was opened; nothing is staged.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn save_repo_file(
     app: AppHandle,
     window: tauri::WebviewWindow,
@@ -90,18 +91,37 @@ pub(crate) async fn save_repo_file(
     gitlab: bool,
     text: String,
     over: Option<String>,
+    expected_repo: String,
 ) -> CommandResult<Saved> {
-    let repo = current(&session, &window)?;
+    let repo = crate::session::expected(current(&session, &window)?, Some(&expected_repo))?;
+    let turns = session.turns.clone();
+    let label = session.label(&window);
+    let turn_label = label.clone();
+    let stop = session.new_stop(&window);
+    let events = app.clone();
     let saved = logged(
         Some(at(&repo)),
         console::EntryKind::Action,
         "Save a repository file",
-        move || repo.save_repo_file(kind, gitlab, &text, over.as_deref()),
+        move || {
+            let _turn = turns
+                .take(
+                    &repo.common_dir(),
+                    crate::turns::Running::new(&turn_label, repo.name(), "Save a repository file".into()),
+                    &stop.cancel,
+                    |_| {},
+                )
+                .ok_or(oxbow_core::Error::Cancelled)?;
+            let saved = repo.save_repo_file(kind, gitlab, &text, over.as_deref())?;
+            if matches!(saved, Saved::Written { .. }) {
+                crate::repos::tell_others(&events, &events.state::<Session>(), &repo, &turn_label);
+            }
+            Ok(saved)
+        },
     )
     .await?;
-    // Changes shows the file at once.
     if matches!(saved, Saved::Written { .. }) {
-        let _ = app.emit_to(session.label(&window).as_str(), "repo-touched", ());
+        let _ = app.emit_to(label.as_str(), "repo-touched", ());
     }
     Ok(saved)
 }

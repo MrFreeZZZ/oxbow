@@ -136,8 +136,10 @@ async function runRepo(request: Parameters<typeof confirm.run>[0]) {
 /** Write the repository's checks before commit whole, then read Settings again. */
 async function saveChecks(list: CommitCheck[]) {
   model.problem = null;
+  const expectedRepo = model.repo?.path;
+  if (model.loading || !expectedRepo) return;
   try {
-    await api.setCommitChecks(list);
+    await api.setCommitChecks(list, expectedRepo);
   } catch (err) {
     model.problem = String(err);
   }

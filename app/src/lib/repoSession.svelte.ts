@@ -64,6 +64,7 @@ export class RepoSession {
   load(path: string): Promise<void> {
     // Opening a repository switches the one the backend answers for: answers to anything asked
     // before are dropped from here on.
+    this.trustAsk?.answer(null);
     const mine = this.tickets.switch();
     this.#opening = this.#opening.then(() => this.#loadNow(path, mine));
     return this.#opening;
@@ -78,14 +79,20 @@ export class RepoSession {
     lfs.forget();
     activity.reset();
     this.loader.stopPaging();
+    this.repo = null;
+    this.loader.clear();
+    nav.repo = "";
     try {
+      await api.closeRepo();
       this.loader.reset();
       let summary = await api.openRepo(path);
+      if (!this.tickets.current(mine)) return;
       if (summary.untrusted) {
         const answer = await this.askTrust(summary.name, summary.untrusted, true);
         if (!this.tickets.current(mine) || !answer) return;
         summary = await api.openRepo(path, answer);
       }
+      if (!this.tickets.current(mine)) return;
       const next = await this.loader.first();
       if (!this.tickets.current(mine)) return;
       this.gone = null;
@@ -96,7 +103,10 @@ export class RepoSession {
       this.loader.opened(next);
       this.#hooks.opened(next);
     } catch (err) {
-      if (this.tickets.current(mine)) await this.failed(path, err, mine);
+      if (this.tickets.current(mine)) {
+        await api.closeRepo();
+        await this.failed(path, err, mine);
+      }
     } finally {
       if (this.tickets.current(mine)) this.phase = this.repo ? "ready" : this.error || this.gone ? "failed" : "idle";
     }
@@ -201,14 +211,19 @@ export class RepoSession {
 
   /** Back to the Welcome window; the repository stays in Recent Repositories. */
   close() {
+    this.trustAsk?.answer(null);
     this.tickets.switch();
+    this.#opening = this.#opening.then(() => api.closeRepo()).catch((err) => { this.error = String(err); });
     this.loader.stopPaging();
     activity.reset();
     oplog.forget();
     this.repo = null;
+    nav.repo = "";
+    lfs.forget();
     this.loader.clear();
     this.error = null;
     this.phase = "idle";
     this.#hooks.closed();
+    return this.#opening;
   }
 }

@@ -118,15 +118,20 @@ pub(crate) struct Slot {
 impl Slot {
     /// Open `repo` in this window: what was read of the repository open before goes.
     pub(crate) fn open(&mut self, repo: Repo) {
-        // What runs for the repository open before is no longer wanted.
-        self.stop_reads();
+        self.close();
         self.repo = Some(repo);
+    }
+
+    /// Forget the repository, including late reads and its background fetch.
+    pub(crate) fn close(&mut self) {
+        self.stop_reads();
+        self.fetch_cancel.store(true, Ordering::Relaxed);
+        self.repo = None;
         self.history = HistoryCache::default();
         self.changes = None;
         self.folders = Arc::default();
         self.folder_cache = FolderCache::default();
         self.watch = None;
-        // A read of the repository before may still finish: what it found is not kept.
         self.history_reads += 1;
         self.history_kept = self.history_reads;
     }
@@ -335,6 +340,14 @@ pub(crate) async fn blocking<T: Send + 'static>(
         .map_err(|err| err.to_string())
 }
 
+/// A write must still target the repository whose controls the user saw.
+pub(crate) fn expected(repo: Repo, path: Option<&str>) -> CommandResult<Repo> {
+    if path != Some(repo.workdir().to_string_lossy().as_ref()) {
+        return Err("The repository changed. Reload Settings and try again.".to_owned());
+    }
+    Ok(repo)
+}
+
 /// The working tree of `repo`, for the Console entry of work on it.
 pub(crate) fn at(repo: &Repo) -> PathBuf {
     repo.workdir().to_path_buf()
@@ -485,5 +498,23 @@ mod tests {
         read_history(&mut slot, |slot| slot.open(a.clone()));
         assert!(slot.history.is_empty() && slot.changes.is_none());
         std::fs::remove_dir_all(a.workdir()).unwrap();
+    }
+    #[test]
+    fn closing_forgets_the_repository_and_rejects_late_history() {
+        let repo = repo("closed");
+        let mut slot = Slot::default();
+        slot.open(repo.clone());
+        let fetch = slot.fetch_cancel.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        slot.lanes.insert("search".into(), cancel.clone());
+        read_history(&mut slot, |slot| slot.close());
+        assert!(slot.repo.is_none() && slot.watch.is_none());
+        assert!(slot.history.is_empty() && slot.changes.is_none());
+        assert!(slot.folders.0.is_empty() && slot.folders.1.is_empty());
+        assert!(fetch.load(Ordering::Relaxed) && cancel.load(Ordering::Relaxed));
+        assert!(expected(repo.clone(), Some("/another/repository")).is_err());
+        assert!(expected(repo.clone(), None).is_err());
+        assert!(expected(repo.clone(), Some(&repo.workdir().to_string_lossy())).is_ok());
+        std::fs::remove_dir_all(repo.workdir()).unwrap();
     }
 }

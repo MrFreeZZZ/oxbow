@@ -102,6 +102,13 @@ pub(crate) async fn open_repo(
     Ok(summary)
 }
 
+/// Close the repository while keeping the window on Welcome.
+#[tauri::command]
+pub(crate) fn close_repo(app: AppHandle, window: tauri::WebviewWindow, session: State<'_, Session>) {
+    session.slot(&window, |slot| slot.close());
+    let _ = app.emit("repo-changed", ());
+}
+
 /// Trust This Repository…: git runs its settings from now on, in every window that has it open.
 #[tauri::command]
 pub(crate) async fn trust_repo(app: AppHandle, path: String) -> CommandResult<()> {
