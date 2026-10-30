@@ -202,16 +202,28 @@ pub(crate) fn appearance(settings: &serde_json::Map<String, Value>) -> Option<Th
 /// Open the Settings window. Async, because making a window in a synchronous command
 /// deadlocks on Windows.
 #[tauri::command]
-pub(crate) async fn open_settings(app: AppHandle) -> CommandResult<()> {
-    show_settings(&app)
+pub(crate) async fn open_settings(app: AppHandle, section: Option<String>) -> CommandResult<()> {
+    show_settings_at(&app, section.as_deref() == Some("commands"))
 }
 
 /// Open the Settings window, or bring it to the front.
 pub(crate) fn show_settings(app: &AppHandle) -> CommandResult<()> {
+    show_settings_at(app, false)
+}
+
+fn show_settings_at(app: &AppHandle, commands: bool) -> CommandResult<()> {
     if let Some(window) = app.get_webview_window("settings") {
+        if commands {
+            let _ = window.emit("settings-section", "commands");
+        }
         return window.set_focus().map_err(|err| err.to_string());
     }
-    let builder = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html#settings".into()))
+    let url = if commands {
+        "index.html#settings/commands"
+    } else {
+        "index.html#settings"
+    };
+    let builder = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(url.into()))
         .title("Settings")
         .inner_size(940.0, 720.0)
         .min_inner_size(760.0, 520.0)

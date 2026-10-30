@@ -252,7 +252,7 @@ export const api = {
   stopAction: () => invoke<void>("stop_action"),
   getSetting: <T>(key: string) => invoke<T | null>("get_setting", { key }),
   allSettings: () => invoke<AllSettings>("all_settings"),
-  openSettings: () => invoke<void>("open_settings"),
+  openSettings: (section?: "commands") => invoke<void>("open_settings", { section }),
   /** The key of the app menu's Settings…, "CmdOrCtrl+,", or null for none (macOS). */
   setSettingsKey: (accelerator: string | null) => invoke<void>("set_settings_key", { accelerator }),
   setMenu: (menus: MenuPart[]) => invoke<void>("set_menu", { menus }),

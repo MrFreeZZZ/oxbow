@@ -1014,9 +1014,9 @@
     activity.open = true;
   }
 
-  let commandSheet = $state<{ title: string; running: boolean; result: string; context: string; manage: boolean } | null>(null);
+  let commandSheet = $state<{ title: string; running: boolean; result: string; context: string } | null>(null);
   function manageCommands() {
-    if (!commandSheet?.running) commandSheet = { title: "Custom Commands", running: false, result: "", context: "", manage: true };
+    if (!commandSheet?.running) void api.openSettings("commands");
   }
   async function runCustom(command: UserCommand) {
     if (!repo || commandSheet?.running) return;
@@ -1025,12 +1025,12 @@
     const branch = row?.labels.find((l) => l.kind === "local")?.name ?? history?.head.branch ?? "";
     const commit = row && !row.worktree ? row.id : "";
     const context = [path, branch ? `Branch: ${branch}` : "Detached HEAD", commit ? `Commit: ${commit}` : "No commit"].join("\n");
-    commandSheet = { title: command.name, running: true, result: "", context, manage: false };
+    commandSheet = { title: command.name, running: true, result: "", context };
     try {
       await api.runUserCommand(command.id, path, branch, commit);
-      commandSheet = { title: command.name, running: false, result: "Completed. See Console for output and exit code.", context, manage: false };
+      commandSheet = { title: command.name, running: false, result: "Completed. See Console for output and exit code.", context };
     } catch (err) {
-      commandSheet = { title: command.name, running: false, result: String(err), context, manage: false };
+      commandSheet = { title: command.name, running: false, result: String(err), context };
     }
   }
 

@@ -17,7 +17,7 @@ windowState();
 // The Settings window loads the same page with #settings, the Console with #console. Only the
 // main window's code is read up front: the other two load theirs.
 const target = document.getElementById("app")!;
-if (location.hash === "#settings") void import("./lib/SettingsWindow.svelte").then((m) => mount(m.default, { target }));
+if (location.hash === "#settings" || location.hash === "#settings/commands") void import("./lib/SettingsWindow.svelte").then((m) => mount(m.default, { target }));
 else if (location.hash === "#console") void import("./lib/ConsoleWindow.svelte").then((m) => mount(m.default, { target }));
 else mount(App, { target });
 // What a word of a git command means, over every window's sheets.
