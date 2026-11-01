@@ -39,6 +39,18 @@ export interface ConsoleEntry {
   running?: boolean;
 }
 
+/** Captured output and context of one native command window. Revisions reject late reads. */
+export interface CommandWindowState {
+  revision: number;
+  title: string;
+  path: string;
+  branch: string;
+  commit: string;
+  running: boolean;
+  result: string;
+  entry: ConsoleEntry | null;
+}
+
 export interface ConsoleRepo {
   name: string;
   /** null: what ran outside any repository. */

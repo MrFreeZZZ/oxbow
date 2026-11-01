@@ -831,6 +831,8 @@ pub fn run_streaming_in(
     let (send, receive) = mpsc::sync_channel(QUEUED_LINES);
     // What the Console shows: the lines in the order they came, without progress.
     let mut logged = log.output();
+    let mut published = Instant::now() - Duration::from_millis(100);
+    let mut dirty = false;
     read_lines(child.stdout.take().expect("stdout is piped"), false, send.clone());
     read_lines(child.stderr.take().expect("stderr is piped"), true, send);
     let mut output = CommandOutput::default();
@@ -875,6 +877,7 @@ pub fn run_streaming_in(
                     all.push('\n');
                     keep_tail(all, MAX_KEPT_BYTES);
                     logged.push(&line.text, line.stderr);
+                    dirty = true;
                 }
                 on_line(line);
             }
@@ -914,6 +917,11 @@ pub fn run_streaming_in(
                 Some((status, _)) => break status,
                 None => closed = Some(Instant::now()),
             },
+        }
+        if dirty && published.elapsed() >= Duration::from_millis(100) {
+            log.update(&logged);
+            published = Instant::now();
+            dirty = false;
         }
     };
     log.done_lines(status.code(), logged);

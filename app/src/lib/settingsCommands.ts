@@ -82,6 +82,6 @@ export const commandsSection: Section = {
   groups: () => [{
     title: "Commands",
     rows: commandRows(),
-    foot: "Run commands from Commands in the repository toolbar or the Command Palette. Assign keys in Keyboard Shortcuts. Output appears in Console; avoid secrets in scripts or output.",
+    foot: "Run commands from the repository toolbar or the Command Palette. Assign keys in Keyboard Shortcuts. Output appears in the command window and Console; avoid secrets in scripts or output.",
   }],
 };

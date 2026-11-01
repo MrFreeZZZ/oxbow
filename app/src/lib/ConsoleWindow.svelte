@@ -8,7 +8,7 @@
   import { tick } from "svelte";
   import { api } from "./api";
   import CommandWords from "./CommandWords.svelte";
-  import { lineKind } from "./confirm.svelte";
+  import ConsoleOutput from "./ConsoleOutput.svelte";
   import {
     CONSOLE_KEEP,
     afterClear,
@@ -42,7 +42,6 @@
   /** This Repository follows the window used last; a picked one stays. */
   type Source = { kind: "current" } | { kind: "repo"; path: string | null } | { kind: "all" };
 
-  const MASK = "••••••";
   const CLOCK = "M8 2.5a5.5 5.5 0 1 0 0 11a5.5 5.5 0 1 0 0-11M8 5v3l2 1.5";
   const CHECK = "M3.5 8.5 6.5 11.5 12.5 4.5";
   const TRASH = "M2.5 4.5h11M6 4.5V3a.8.8 0 0 1 .8-.8h2.4A.8.8 0 0 1 10 3v1.5M4 4.5l.7 8.6a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.7-8.6";
@@ -264,17 +263,6 @@
     void copy(picks.map((e) => entryText(e, source.kind === "all" ? nameOf(e.repo) : undefined)).join("\n\n") + "\n");
   }
 
-  /** Parts of an output line: masked secrets and commit ids get their own color. */
-  function parts(text: string): { text: string; kind: "text" | "mask" | "sha" }[] {
-    const out: { text: string; kind: "text" | "mask" | "sha" }[] = [];
-    // A commit id stands alone, as in `7a6ce6d..d7855a5`; hex in a path or a word stays text.
-    for (const piece of text.split(/(••••••|(?<![\w/-])[0-9a-f]{7,40}(?![\w/-]))/)) {
-      if (!piece) continue;
-      out.push({ text: piece, kind: piece === MASK ? "mask" : /^[0-9a-f]{7,40}$/.test(piece) && /\d/.test(piece) ? "sha" : "text" });
-    }
-    return out;
-  }
-
   const plural = (n: number, word: string) => `${n.toLocaleString("en-US")} ${word}${n === 1 ? "" : "s"}`;
   const entryCount = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "entry" : "entries"}`;
   const keyed = (event: KeyboardEvent | MouseEvent) => event.metaKey || event.ctrlKey;
@@ -305,14 +293,7 @@
 />
 
 {#snippet output(lines: ConsoleLine[])}
-  <div class="out mono selectable">
-    {#each lines as line, i (i)}
-      {@const kind = lineKind(line.t, !!line.e)}
-      <div class="line" class:hint={kind === "hint"} class:cut={/^⋯ \d+ more lines ⋯$/.test(line.t)}>
-        {#each parts(line.t) as part, k (k)}<span class={part.kind}>{part.text}</span>{/each}
-      </div>
-    {/each}
-  </div>
+  <ConsoleOutput {lines} />
 {/snippet}
 
 {#snippet command(ran: ConsoleRan)}
@@ -781,29 +762,6 @@
   .quiet .cmd :global(span),
   .quiet .cmd :global(button) {
     color: var(--term-dim) !important;
-  }
-  .out {
-    margin: 4px 0 2px;
-    padding-left: 14px;
-    border-left: 2px solid var(--term-border);
-    color: var(--term-out);
-    font-size: var(--term-size);
-    line-height: var(--term-line);
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-  .out .hint {
-    color: var(--term-hint);
-  }
-  .out .cut {
-    color: var(--term-dim);
-    font-style: italic;
-  }
-  .out .mask {
-    color: var(--term-dim);
-  }
-  .out .sha {
-    color: var(--term-sha);
   }
   .more {
     margin-top: 3px;

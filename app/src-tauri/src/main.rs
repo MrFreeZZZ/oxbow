@@ -23,6 +23,7 @@ mod settings;
 mod setup;
 mod trusted;
 mod turns;
+mod user_command_window;
 mod user_commands;
 mod windows;
 mod working;
@@ -44,6 +45,7 @@ fn main() {
         // Restores the window's size and position from the last session.
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(Session::default())
+        .manage(user_command_window::CommandWindows::default())
         .manage(overview::OverviewRuns::default())
         .manage(menu::MenuState::default())
         .manage(accounts::Accounts::default())
@@ -53,7 +55,9 @@ fn main() {
             let label = window.label().to_owned();
             match event {
                 // Settings shows and changes the repository of the window used last.
-                tauri::WindowEvent::Focused(true) if label != "settings" && label != "console" => {
+                tauri::WindowEvent::Focused(true)
+                    if label != "settings" && label != "console" && !user_command_window::is_command_window(&label) =>
+                {
                     let changed = session.focused.lock().expect("session lock").replace(label.clone()) != Some(label);
                     if changed {
                         let _ = window.emit_to("settings", "repo-changed", ());
@@ -61,6 +65,9 @@ fn main() {
                     }
                 }
                 tauri::WindowEvent::Destroyed => {
+                    if user_command_window::is_command_window(&label) {
+                        session.stops.stop(&label);
+                    }
                     window.state::<overview::OverviewRuns>().stop(&label, None);
                     // Its reads stop with it.
                     if let Some(mut slot) = session.windows.lock().expect("session lock").remove(&label) {
@@ -188,6 +195,7 @@ fn main() {
             git_config::set_git_config,
             git_config::set_commit_checks,
             user_commands::run_user_command,
+            user_command_window::user_command_state,
             repo_files::repo_files,
             repo_files::repo_file_text,
             repo_files::check_repo_file,

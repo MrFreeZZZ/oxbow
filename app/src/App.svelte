@@ -46,7 +46,6 @@
   import CommandPalette from "./lib/CommandPalette.svelte";
   import ObjectPicker from "./lib/ObjectPicker.svelte";
   import { namedLike, notInHistory, objectsOf, type ObjectAction, type ObjectItem, type ObjectKind } from "./lib/objects";
-  import UserCommandSheet from "./lib/UserCommandSheet.svelte";
   import { commandsFor, commandId, type UserCommand } from "./lib/userCommands";
   import type { PaletteItem } from "./lib/palette";
   import { Keymap, accelerator, bindingsOf, combo, commandOf, pressed, type ShortcutId } from "./lib/shortcuts";
@@ -1018,23 +1017,23 @@
     activity.open = true;
   }
 
-  let commandSheet = $state<{ title: string; running: boolean; result: string; context: string } | null>(null);
+  let commandRunning = $state(false);
   function manageCommands() {
-    if (!commandSheet?.running) void api.openSettings("commands");
+    if (!commandRunning) void api.openSettings("commands");
   }
   async function runCustom(command: UserCommand) {
-    if (!repo || commandSheet?.running) return;
+    if (!repo || commandRunning) return;
     const path = repo.path;
     const row = selectedRow && !selectedRow.worktree ? selectedRow : headRow;
     const branch = row?.labels.find((l) => l.kind === "local")?.name ?? history?.head.branch ?? "";
     const commit = row && !row.worktree ? row.id : "";
-    const context = [path, branch ? `Branch: ${branch}` : "Detached HEAD", commit ? `Commit: ${commit}` : "No commit"].join("\n");
-    commandSheet = { title: command.name, running: true, result: "", context };
+    commandRunning = true;
     try {
       await api.runUserCommand(command.id, path, branch, commit);
-      commandSheet = { title: command.name, running: false, result: "Completed. See Console for output and exit code.", context };
     } catch (err) {
-      commandSheet = { title: command.name, running: false, result: String(err), context };
+      confirm.fail(err);
+    } finally {
+      commandRunning = false;
     }
   }
 
@@ -1056,7 +1055,7 @@
     add("zoomOut", () => zoom(zoomLevel - 1));
     add("zoomReset", () => zoom(0));
     if (overviewShown || !repo || !history || !branchCtx) return out;
-    if (!commandSheet?.running) for (const command of commandsFor(prefs.get("oxbow.commands"), repo.path)) {
+    if (!commandRunning) for (const command of commandsFor(prefs.get("oxbow.commands"), repo.path)) {
       add(commandId(command.id), () => void runCustom(command));
     }
     const h = history;
@@ -2525,9 +2524,6 @@
   <NewRepoSheet.component folder={start.sheet.folder} onDone={started} onClose={() => (start.sheet = null)} />
 {/if}
 
-{#if commandSheet}
-  <UserCommandSheet {...commandSheet} onClose={() => commandSheet = null} />
-{/if}
 
 <style>
   .window {

@@ -19,6 +19,7 @@ windowState();
 const target = document.getElementById("app")!;
 if (location.hash === "#settings" || location.hash === "#settings/commands") void import("./lib/SettingsWindow.svelte").then((m) => mount(m.default, { target }));
 else if (location.hash === "#console") void import("./lib/ConsoleWindow.svelte").then((m) => mount(m.default, { target }));
+else if (location.hash === "#command") void import("./lib/UserCommandWindow.svelte").then((m) => mount(m.default, { target }));
 else mount(App, { target });
 // What a word of a git command means, over every window's sheets.
 mount(WordPopover, { target: document.body });

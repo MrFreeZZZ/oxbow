@@ -115,7 +115,9 @@ static QUITTING: AtomicBool = AtomicBool::new(false);
 /// first, and stays open on Cancel.
 #[cfg(target_os = "macos")]
 pub(crate) fn quit(app: &AppHandle) {
-    let repo_window = |label: &str| label != "settings" && label != "console";
+    let repo_window = |label: &str| {
+        label != "settings" && label != "console" && !crate::user_command_window::is_command_window(label)
+    };
     let already = QUITTING.swap(true, Ordering::SeqCst);
     for (label, window) in app.webview_windows() {
         if repo_window(&label) {

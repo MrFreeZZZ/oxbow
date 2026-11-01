@@ -127,6 +127,22 @@ thread_local! {
     static UNKEPT: Cell<bool> = const { Cell::new(false) };
     /// The entry this thread runs commands for, open on another thread: see [`Helpers`].
     static HELPING: RefCell<Option<Helpers>> = const { RefCell::new(None) };
+    static OBSERVER: RefCell<Option<EntryObserver>> = const { RefCell::new(None) };
+}
+
+type EntryObserver = Box<dyn Fn(&Entry)>;
+
+/// Follow entries produced by this work, including their bounded, masked live output.
+/// The observer belongs to this thread and is restored even if the work panics.
+pub fn observe<T>(observer: impl Fn(&Entry) + 'static, work: impl FnOnce() -> T) -> T {
+    struct Restore(Option<EntryObserver>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            OBSERVER.with(|slot| *slot.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(OBSERVER.with(|slot| slot.borrow_mut().replace(Box::new(observer))));
+    work()
 }
 
 /// The commands threads run for the entry open on another one, e.g. `git status` in several
@@ -349,6 +365,26 @@ pub(crate) fn started(dir: &Path, display: &str) -> Started {
 }
 
 impl Started {
+    /// Publish a snapshot only when this work has a live observer. Ordinary reads keep
+    /// their existing cost; snapshots have the same masking and limits as the saved log.
+    pub(crate) fn update(&self, output: &Output) {
+        if !OBSERVER.with(|slot| slot.borrow().is_some()) {
+            return;
+        }
+        let live = OPEN.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            let open = slot.as_mut()?;
+            let last = open.entry.commands.last_mut().filter(|ran| ran.running)?;
+            let mut ran = self.ran(None, false, output.clone());
+            ran.running = true;
+            *last = ran;
+            Some((open.repo.clone(), open.log.clone(), open.entry.clone()))
+        });
+        if let Some((repo, log, entry)) = live {
+            tell_running(repo.as_deref(), log, &entry);
+        }
+    }
+
     /// It exited with `code` (none: killed by a signal), printing `stdout` and `stderr`.
     pub(crate) fn done(self, code: Option<i32>, stdout: &[u8], stderr: &[u8]) {
         let mut output = self.output();
@@ -495,6 +531,11 @@ pub fn running(dir: Option<&Path>) -> Vec<Entry> {
 }
 
 fn tell(repo: Option<&Path>, entry: &Entry) {
+    OBSERVER.with(|slot| {
+        if let Some(observer) = slot.borrow().as_ref() {
+            observer(entry);
+        }
+    });
     if let Some(listener) = LISTENER.read().expect("console listener lock").as_ref() {
         listener(repo, entry);
     }
@@ -640,6 +681,7 @@ pub fn clear(dir: Option<&Path>) -> std::io::Result<()> {
 /// What a process printed, as much of it as its log keeps: the first lines masked as they come,
 /// the last ones held until it is over, the ones between only counted. A read of a long diff
 /// prints thousands of lines, and masking them all would take longer than the read.
+#[derive(Clone)]
 pub(crate) struct Output {
     max: usize,
     head: Vec<Line>,

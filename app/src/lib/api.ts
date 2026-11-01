@@ -102,6 +102,7 @@ export const stopped = (err: unknown) => String(err) === "stopped";
 
 export const api = {
   runUserCommand: (id: string, repository: string, branch: string, commit: string) => invoke<void>("run_user_command", { id, repository, branch, commit }),
+  userCommandState: () => invoke<import("./console").CommandWindowState>("user_command_state"),
 
   /** Reduce Transparency and Increase Contrast from the system (always off outside macOS). */
   displayOptions: () => invoke<{ reduceTransparency: boolean; increaseContrast: boolean }>("display_options"),

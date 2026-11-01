@@ -1,8 +1,9 @@
 //! Personal commands are resolved from settings at invocation, then bound to this repository.
 use crate::{
     CommandResult, preferences,
-    session::{Session, at, current, expected, logged},
+    session::{Session, at, blocking, current, expected},
     turns::Running,
+    user_command_window::{self, CommandView},
 };
 use oxbow_core::{Error, console, user_commands::UserCommand};
 use tauri::{AppHandle, State};
@@ -28,29 +29,58 @@ pub(crate) async fn run_user_command(
         .into_iter()
         .find(|c| c.id == id)
         .ok_or("This command no longer exists.")?;
-    let stop = session.new_stop(&window);
+    let label = user_command_window::open(
+        &app,
+        window.label(),
+        CommandView {
+            revision: 0,
+            title: command.name.clone(),
+            path: repository.clone(),
+            branch: branch.clone(),
+            commit: commit.clone(),
+            running: true,
+            result: String::new(),
+            entry: None,
+        },
+    )?;
+    let stop = session.stops.start(&label);
     let turns = session.turns.clone();
     let change = Running::new(window.label(), repository, command.name.clone());
-    logged(
-        Some(at(&repo)),
-        console::EntryKind::Action,
-        format!("Custom: {}", console::mask(&command.name)),
-        move || {
-            let _turn = turns
-                .take(&repo.common_dir(), change, &stop.cancel, |_| {})
-                .ok_or(Error::Cancelled)?;
-            repo.run_user_command(&command, &branch, &commit, &stop.cancel)
-                .map_err(|err| match err {
-                    Error::Command { code, .. } => Error::Git(format!(
-                        "Command exited with {}. See Console for output.",
-                        code.map_or("no exit code".into(), |c| format!("code {c}"))
-                    )),
-                    other => other,
+    let dir = at(&repo);
+    let title = format!("Custom: {}", console::mask(&command.name));
+    let handle = app.clone();
+    let output_label = label.clone();
+    let result = blocking(move || {
+        console::observe(
+            move |entry| {
+                user_command_window::update(&handle, &output_label, |view| view.entry = Some(entry.clone()));
+            },
+            || {
+                console::scope(Some(&dir), console::EntryKind::Action, title, || {
+                    let _turn = turns
+                        .take(&repo.common_dir(), change, &stop.cancel, |_| {})
+                        .ok_or(Error::Cancelled)?;
+                    repo.run_user_command(&command, &branch, &commit, &stop.cancel)
+                        .map_err(|err| match err {
+                            Error::Command { code, .. } => Error::Git(format!(
+                                "Command exited with {}. See Console for output.",
+                                code.map_or("no exit code".into(), |c| format!("code {c}"))
+                            )),
+                            other => other,
+                        })
                 })
-        },
-    )
+            },
+        )
+    })
     .await
-    .map_err(|e| console::mask(&e))
+    .map_err(|e| console::mask(&e));
+    user_command_window::update(&app, &label, |view| {
+        view.running = false;
+        view.result = result.as_ref().map_or_else(|err| err.clone(), |_| "Completed".into());
+    });
+    // Execution errors are shown in the output window. Only failures before it opens
+    // are returned to the repository window that requested the command.
+    Ok(())
 }
 
 #[cfg(test)]

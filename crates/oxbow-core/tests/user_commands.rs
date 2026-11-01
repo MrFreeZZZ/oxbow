@@ -78,6 +78,48 @@ fn console_keeps_exit_code_and_masks_script_and_output() {
 }
 
 #[test]
+fn live_output_is_masked_bound_to_one_run_and_finishes_like_the_console() {
+    let fx = Fixture::new();
+    let repo = Repo::open(fx.path()).unwrap();
+    let updates = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let received = updates.clone();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let signal = cancel.clone();
+    let result = console::observe(
+        move |entry| {
+            // Stop only after output has arrived while the process is still running.
+            if entry.running && entry.commands.iter().any(|c| !c.output.is_empty()) {
+                signal.store(true, Ordering::Relaxed);
+            }
+            received.borrow_mut().push(entry.clone());
+        },
+        || {
+            console::scope(Some(fx.path()), console::EntryKind::Action, "Custom: live", || {
+                repo.run_user_command(&command("printf 'password=hunter2\\n'; sleep 30"), "", "", &cancel)
+            })
+        },
+    );
+    assert!(matches!(result, Err(Error::Cancelled)));
+    let observations = updates.borrow();
+    assert!(
+        observations
+            .iter()
+            .any(|e| e.running && !e.commands[0].output.is_empty())
+    );
+    let last = observations.last().unwrap();
+    assert!(!last.running && last.stopped && !last.failed);
+    assert!(observations.iter().all(|e| e.id == last.id));
+    assert!(!serde_json::to_string(&*observations).unwrap().contains("hunter2"));
+    assert_eq!(console::entries(Some(fx.path())).last(), Some(last));
+    let count = observations.len();
+    drop(observations);
+    // The observer has been removed: later work cannot update the closed command window.
+    repo.run_user_command(&command("printf 'another run\\n'"), "", "", &AtomicBool::new(false))
+        .unwrap();
+    assert_eq!(updates.borrow().len(), count);
+}
+
+#[test]
 fn stop_ends_a_quiet_process_and_its_children() {
     let fx = Fixture::new();
     let repo = Repo::open(fx.path()).unwrap();
