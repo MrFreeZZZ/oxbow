@@ -5,6 +5,7 @@ node_modules/
 .DS_Store
 __pycache__/
 *.[mM][dD]
+!/README.md
 /AGENTS.md
 /docs/project-context.md
 /design-qa.md
