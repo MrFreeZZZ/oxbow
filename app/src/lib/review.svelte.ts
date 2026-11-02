@@ -189,20 +189,25 @@ export class ReviewSession {
 
   /** Send one call at once, as the request the sheet or Activity shows. */
   async #send(call: PullCall, request: Omit<Request, "local" | "icon"> & { icon?: Request["icon"] }, done: string): Promise<boolean> {
-    const [curl] = await this.#preview([call]);
-    const ok = await this.#run({
-      icon: "edit",
-      ...request,
-      local: {
-        commands: [curl],
-        run: async () => {
-          await this.#sendCalls([call]);
-          return done;
+    try {
+      const [curl] = await this.#preview([call]);
+      const ok = await this.#run({
+        icon: "edit",
+        ...request,
+        local: {
+          commands: [curl],
+          run: async () => {
+            await this.#sendCalls([call]);
+            return done;
+          },
         },
-      },
-    });
-    if (ok) this.#changed();
-    return ok;
+      });
+      if (ok) this.#changed();
+      return ok;
+    } catch (err) {
+      confirm.fail(err);
+      return false;
+    }
   }
 
   async commentNow(writing: Writing) {

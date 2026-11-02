@@ -114,6 +114,53 @@ for (const forge of ["github", "gitlab"] as const) {
   }
 }
 
+// Immediate comments, replies and thread toggles report a failed preview and stay retryable.
+for (const forge of ["github", "gitlab"] as const) {
+  for (const action of ["comment", "reply", "resolve", "unresolve"] as const) {
+    const s = session(forge);
+    const draft = { ...drafts.emptyDraft("head"), body: "unsent review" };
+    s.read.resolve(state(draft)); await s.editor.saves.ready();
+    const writing = { commit: "head", spot: { path: "file.rs", side: "RIGHT", line: 1, startLine: null }, body: "keep my comment" };
+    const thread = { id: 1, node: "thread-1", path: "file.rs", resolved: action === "unresolve" };
+    const editing = action === "reply" ? { kind: "reply", thread: 1, body: writing.body } : { kind: "comment", ...writing };
+    s.editor.editing = editing;
+    const key = forge === "gitlab" ? "gitlabCallsPreview" : "githubCallsPreview";
+    const preview = s.api[key];
+    const error = new Error("not signed in or repository changed");
+    s.api[key] = async () => { throw error; };
+    const click = async () => {
+      if (action === "comment") await s.editor.commentNow(writing);
+      else if (action === "reply") await s.editor.replyNow(thread, writing.body);
+      else s.editor.resolve(thread);
+      await turn(); // Resolve intentionally returns void, just as its button handler does.
+    };
+    await click();
+    assert.deepEqual(s.errors, [error]);
+    assert.equal(s.editor.editing, editing);
+    assert.equal(s.editor.draft, draft);
+    assert.equal(s.requests.length, 0);
+    assert.equal(s.reviews.length, 0);
+    assert.equal(s.changed, 0);
+    s.api[key] = preview;
+    await click();
+    assert.deepEqual(s.errors, [error]);
+    assert.equal(s.requests.length, 1);
+    assert.equal(s.reviews.length, 1);
+    assert.deepEqual(s.reviews[0], s.previews[0]);
+    const call = s.reviews[0][0];
+    if (action === "comment" || action === "reply") {
+      assert.equal(call.body, writing.body);
+      assert.equal(s.editor.editing, null);
+    } else {
+      assert.equal(call.kind, "resolve");
+      assert.equal(call.resolved, action === "resolve");
+    }
+    assert.equal(s.editor.draft, draft);
+    assert.equal(s.writes.length, 0);
+    assert.equal(s.changed, 1);
+  }
+}
+
 // Switching the window, or changing the source address object, cannot redirect its delayed save.
 {
   const s = session();
