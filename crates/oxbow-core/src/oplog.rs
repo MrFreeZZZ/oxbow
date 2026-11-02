@@ -438,17 +438,22 @@ impl Repo {
         if self.bisect()?.is_some() {
             return Err(Error::Git("A bisect is in progress: stop or finish it first".into()));
         }
+        let worktrees = self.worktree_list()?;
+        let check_branch = |branch: &str| -> Result<()> {
+            if let Some(other) = worktrees
+                .iter()
+                .find(|tree| !tree.current && tree.branch.as_deref() == Some(branch))
+            {
+                return Err(Error::Git(format!(
+                    "{branch} is checked out in {}. Switch that worktree to another branch before restoring this step.",
+                    other.path
+                )));
+            }
+            Ok(())
+        };
         // symbolic-ref bypasses switch's check, even when the undo moves no branch ref.
-        if let Some(branch) = &head.branch
-            && let Some(other) = self
-                .worktree_list()?
-                .into_iter()
-                .find(|tree| !tree.current && tree.branch.as_ref() == Some(branch))
-        {
-            return Err(Error::Git(format!(
-                "{branch} is checked out in {}. Switch that worktree to another branch before restoring this step.",
-                other.path
-            )));
+        if let Some(branch) = &head.branch {
+            check_branch(branch)?;
         }
 
         let now = self.all_refs()?;
@@ -457,6 +462,10 @@ impl Repo {
             let (name, target) = (name.as_str(), target.as_ref());
             if now.get(name) == target {
                 continue;
+            }
+            // update-ref also bypasses Git's worktree protection, for moves and deletions.
+            if let Some(branch) = name.strip_prefix("refs/heads/") {
+                check_branch(branch)?;
             }
             let short = short_ref(name);
             commands.push(match target {

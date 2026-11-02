@@ -700,3 +700,81 @@ fn undo_switch_refuses_a_branch_taken_by_another_worktree() {
     repo.perform(&action).unwrap();
     assert_eq!(repo.head().unwrap().branch.as_deref(), Some("topic"));
 }
+
+fn restore_refuses_a_ref_taken_by_another_worktree(created: bool) {
+    for after in [false, true] {
+        let mut fx = Fixture::new();
+        fx.commit("a.txt", "root\n", "Root");
+        let root = fx.git(&["rev-parse", "HEAD"]);
+        fx.commit("a.txt", "next\n", "Next");
+        if !created {
+            fx.git(&["branch", "topic", &root]);
+        }
+        let repo = Repo::open(fx.path()).unwrap();
+        // Restore to Here on this step must also check refs changed by newer steps.
+        fx.write("notes.txt", "notes\n");
+        repo.perform(&Action::Stage {
+            paths: vec!["notes.txt".into()],
+        })
+        .unwrap();
+        let earlier = repo.operation_log().unwrap()[0].id.clone();
+        let before = repo.snapshot().unwrap();
+        fx.git(&["branch", "-f", "topic", "HEAD"]);
+        let later = repo.snapshot().unwrap();
+        let entry = repo
+            .record(
+                &Action::CreateBranch {
+                    name: "topic".into(),
+                    start: None,
+                    switch: false,
+                    publish: None,
+                    fetch: None,
+                    stash: false,
+                },
+                &before,
+                &later,
+                false,
+            )
+            .unwrap()
+            .unwrap();
+        let action = Action::Restore {
+            id: if after { earlier } else { entry.id },
+            after,
+        };
+        repo.plan(&action).unwrap();
+        let other = fx.path().parent().unwrap().join("other");
+        let path = other.to_str().unwrap();
+        fx.git(&["worktree", "add", path, "topic"]);
+        std::fs::write(other.join("a.txt"), "external work\n").unwrap();
+        let tip = fx.git(&["rev-parse", "topic"]);
+        let status = fx.git(&["status", "--porcelain=v2", "--branch"]);
+        let other_status = fx.git(&["-C", path, "status", "--porcelain=v2", "--branch"]);
+        for err in [repo.plan(&action).unwrap_err(), repo.perform(&action).unwrap_err()] {
+            let message = err.to_string();
+            assert!(message.contains("topic") && message.contains(path), "{message}");
+        }
+        assert_eq!(fx.git(&["rev-parse", "topic"]), tip);
+        assert_eq!(fx.git(&["status", "--porcelain=v2", "--branch"]), status);
+        assert_eq!(
+            fx.git(&["-C", path, "status", "--porcelain=v2", "--branch"]),
+            other_status
+        );
+        assert_eq!(std::fs::read_to_string(other.join("a.txt")).unwrap(), "external work\n");
+        fx.git(&["-C", path, "switch", "--detach"]);
+        repo.perform(&action).unwrap();
+        assert_eq!(fx.git(&["branch", "--list", "topic"]).is_empty(), created);
+        if !created {
+            assert_eq!(fx.git(&["rev-parse", "topic"]), root);
+        }
+    }
+}
+
+#[test]
+fn restore_refuses_to_move_a_branch_in_another_worktree() {
+    restore_refuses_a_ref_taken_by_another_worktree(false);
+}
+
+#[test]
+fn restore_refuses_to_delete_a_branch_in_another_worktree() {
+    restore_refuses_a_ref_taken_by_another_worktree(true);
+}
