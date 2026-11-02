@@ -917,3 +917,28 @@ fn restore_accepts_contiguous_stash_steps_and_an_already_restored_list() {
         assert_eq!(read(&fx, "a.txt").unwrap(), "first");
     }
 }
+
+#[test]
+fn checking_out_unicode_tags_keeps_their_names_in_the_log_and_can_be_undone() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "root\n", "Root");
+    let root = fx.git(&["rev-parse", "HEAD"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    for tag in ["123456ä", "123456😀", "ветка-длинная", "release-2026.11"] {
+        fx.git(&["tag", tag]);
+        let action = Action::Detach {
+            commit: tag.into(),
+            stash: false,
+        };
+        let title = format!("Check out {tag}");
+        assert_eq!(repo.action_title(&action), title);
+        let plan = repo.plan(&action).unwrap();
+        assert!(plan.commands.iter().any(|c| c.args.iter().any(|arg| arg == tag)));
+        repo.perform(&action).unwrap();
+        assert!(repo.head().unwrap().branch.is_none());
+        assert_eq!(fx.git(&["rev-parse", "HEAD"]), root);
+        assert_eq!(repo.operation_log().unwrap()[0].title, title);
+        undo_last(&repo);
+        assert_eq!(repo.head().unwrap().branch.as_deref(), Some("main"));
+    }
+}

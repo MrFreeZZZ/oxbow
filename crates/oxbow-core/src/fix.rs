@@ -24,6 +24,7 @@ use crate::config;
 use crate::edit::{ResetMode, plan_reset};
 use crate::error::{Error, Result};
 use crate::operation::OperationKind;
+use crate::oplog::short_id as short;
 use crate::reflog::ReflogEntry;
 use crate::repo::Repo;
 
@@ -696,11 +697,6 @@ fn fingerprint(value: impl Hash) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     value.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
-}
-
-/// A full sha reads better short, in comments and messages; commands take it whole.
-fn short(commit: &str) -> String {
-    commit[..commit.len().min(7)].to_owned()
 }
 
 /// Where the steps left of a fix that stopped on conflicts are written down.

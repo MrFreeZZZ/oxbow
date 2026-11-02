@@ -15,6 +15,7 @@ use crate::config;
 use crate::edit::plan_reset;
 use crate::error::{Error, Result};
 use crate::lfs;
+use crate::oplog::short_id;
 use crate::repo::Repo;
 use crate::tags;
 use crate::worktree::Side;
@@ -293,7 +294,7 @@ impl Repo {
                         args.push(format!("--force-with-lease={upstream}:{lease}"));
                         notes.push(format!(
                             "--force-with-lease: overwrite only if {remote}/{upstream} is still {}",
-                            &lease[..lease.len().min(7)]
+                            short_id(lease)
                         ));
                     }
                     (true, None) => {
@@ -846,7 +847,7 @@ impl Repo {
             GitCommand::new(push)
                 .comment(format!(
                     "--force-with-lease: replace the old versions only if {remote}/{upstream} is still {}",
-                    &lease[..lease.len().min(7)]
+                    short_id(lease)
                 ))
                 .with_progress(),
         );

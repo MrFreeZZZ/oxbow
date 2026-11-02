@@ -1086,7 +1086,7 @@ impl Repo {
             }
             Action::ClearOperationLog => ("drop", "Clear the Operation Log".to_owned()),
             Action::EditStack { plan } if !plan.splits.is_empty() => {
-                let split: Vec<&str> = plan.splits.iter().map(|s| &s.id[..s.id.len().min(7)]).collect();
+                let split: Vec<String> = plan.splits.iter().map(|s| short_id(&s.id)).collect();
                 ("rebase", format!("Edit stack {}: split {}", plan.top, split.join(", ")))
             }
             Action::EditStack { plan } => ("rebase", format!("Edit stack {}", plan.top)),
@@ -1151,10 +1151,7 @@ impl Repo {
             Action::PushBranches { remote, branches } => {
                 ("push", format!("Push {} branches to {remote}", branches.len()))
             }
-            Action::AddToCommit { commit, .. } => (
-                "commit",
-                format!("Add staged changes to {}", &commit[..commit.len().min(7)]),
-            ),
+            Action::AddToCommit { commit, .. } => ("commit", format!("Add staged changes to {}", short_id(commit))),
             Action::Fix { fix, .. } => match fix {
                 Fix::MoveCommits { count: 1, to, .. } => ("branch", format!("Move 1 commit from {here} to {to}")),
                 Fix::MoveCommits { count, to, .. } => ("branch", format!("Move {count} commits from {here} to {to}")),
@@ -1291,8 +1288,10 @@ pub(crate) fn expiry_days(value: &str) -> Option<u32> {
     })
 }
 
+/// Shorten full object IDs for display; keep ref names and revision expressions intact.
 pub(crate) fn short_id(id: &str) -> String {
-    id[..id.len().min(7)].to_owned()
+    let full = id.len() == 40 && id.bytes().all(|b| b.is_ascii_hexdigit());
+    if full { id[..7].to_owned() } else { id.to_owned() }
 }
 
 /// `main` for `refs/heads/main`, `tag v1.0` for `refs/tags/v1.0`.
@@ -1376,7 +1375,25 @@ fn make_folder(dir: &std::path::Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::expiry_days;
+    use super::{expiry_days, short_id};
+
+    #[test]
+    fn only_full_object_ids_are_shortened() {
+        assert_eq!(short_id("abcdef0123456789abcdef0123456789abcdef01"), "abcdef0");
+        for name in [
+            "",
+            "abcdef01",
+            "release-2026.11",
+            "123456ä",
+            "123456😀",
+            "ветка-длинная",
+            "HEAD~12",
+        ] {
+            assert_eq!(short_id(name), name);
+        }
+        let non_hex = "z".repeat(40);
+        assert_eq!(short_id(&non_hex), non_hex);
+    }
 
     #[test]
     fn git_expiries_read_as_days() {
