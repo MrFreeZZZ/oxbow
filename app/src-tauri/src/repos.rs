@@ -307,6 +307,6 @@ pub(crate) async fn reconnect_folder(
     // A draft that couldn't move stays where it was, for the old place.
     let conflict_draft = drafts::moved(&drafts_dir(&app)?, Path::new(&old), &path).unwrap_or(false);
     let path = path.display().to_string();
-    forget_repo(app, old, Some(path.clone()));
+    forget_repo(app, old, Some(path.clone()))?;
     Ok(Reconnected { path, conflict_draft })
 }

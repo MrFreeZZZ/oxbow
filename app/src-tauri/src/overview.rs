@@ -53,16 +53,18 @@ pub(crate) async fn repository_overview(
             previous.store(true, Ordering::Relaxed);
         }
     }
-    let answer = crate::session::blocking(move || {
+    let answer = tauri::async_runtime::spawn_blocking(move || {
         let _batch = BATCH.lock().expect("overview batch lock");
         let repositories = if cancel.load(Ordering::Relaxed) {
             Vec::new()
         } else {
-            recent::recent_repos(app)
+            recent::recent_repos(app)?
         };
         Ok(read_rows(repositories, &cancel))
     })
-    .await;
+    .await
+    .map_err(|err| err.to_string())
+    .and_then(|answer| answer);
     runs.stop(window.label(), Some(&id));
     answer
 }

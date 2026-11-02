@@ -112,7 +112,7 @@ pub async fn console_repos(app: AppHandle, session: State<'_, Session>) -> Comma
             .collect();
         (current, open)
     };
-    let recent: Vec<String> = crate::recent::recent_repos(app).into_iter().map(|r| r.path).collect();
+    let recent: Vec<String> = crate::recent::read_recent(&app).into_iter().map(|r| r.path).collect();
     tauri::async_runtime::spawn_blocking(move || {
         let mut seen = HashSet::new();
         let mut repos = Vec::new();
