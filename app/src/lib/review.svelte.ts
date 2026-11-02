@@ -247,64 +247,72 @@ export class ReviewSession {
 
   /** Send the review with its comments and replies, then put the draft away. */
   async submit(verdict: Verdict, body: string) {
-    await this.saves.flush();
-    const draft = this.draft;
-    const revoke = this.lab && approvedBy(this.pr, github.mrMe);
-    const calls = submitCalls(this.pr, draft, verdict, body, this.shown, this.lab ? { revoke } : null);
-    const curls = await this.#preview(calls);
-    const what = countWords(draft?.comments.length ?? 0, draft?.replies.length ?? 0);
-    const said = verdict === "approve" ? "Approved" : verdict === "requestChanges" ? "Asked for changes on" : "Reviewed";
-    const { mark, noun } = this.words;
-    const ok = await this.#run({
-      title: `Send your review of ${mark}${this.number}?`,
-      body: [
-        `${verdict === "approve" ? `It approves the ${noun}` : verdict === "requestChanges" ? "It asks for changes" : "It comments, without a verdict"}${what ? `, with ${what}` : ""}.`,
-        ...(revoke && verdict === "requestChanges" ? [" It takes back your approval."] : []),
-      ],
-      icon: "edit",
-      button: "Submit Review",
-      status: "Sending the review…",
-      local: {
-        commands: curls,
-        comment: this.lab
-          ? "draft comments and replies, then publishing them with the verdict; if one fails, the drafts sent are deleted"
-          : "a pending review, its comments and replies, then the verdict; if one fails, the pending review is deleted",
-        run: async () => {
-          await this.#sendCalls(calls);
-          await this.saves.clear();
-          return `${said} ${mark}${this.number}.`;
+    try {
+      await this.saves.flush();
+      const draft = this.draft;
+      const revoke = this.lab && approvedBy(this.pr, github.mrMe);
+      const calls = submitCalls(this.pr, draft, verdict, body, this.shown, this.lab ? { revoke } : null);
+      const curls = await this.#preview(calls);
+      const what = countWords(draft?.comments.length ?? 0, draft?.replies.length ?? 0);
+      const said = verdict === "approve" ? "Approved" : verdict === "requestChanges" ? "Asked for changes on" : "Reviewed";
+      const { mark, noun } = this.words;
+      const ok = await this.#run({
+        title: `Send your review of ${mark}${this.number}?`,
+        body: [
+          `${verdict === "approve" ? `It approves the ${noun}` : verdict === "requestChanges" ? "It asks for changes" : "It comments, without a verdict"}${what ? `, with ${what}` : ""}.`,
+          ...(revoke && verdict === "requestChanges" ? [" It takes back your approval."] : []),
+        ],
+        icon: "edit",
+        button: "Submit Review",
+        status: "Sending the review…",
+        local: {
+          commands: curls,
+          comment: this.lab
+            ? "draft comments and replies, then publishing them with the verdict; if one fails, the drafts sent are deleted"
+            : "a pending review, its comments and replies, then the verdict; if one fails, the pending review is deleted",
+          run: async () => {
+            await this.#sendCalls(calls);
+            await this.saves.clear();
+            return `${said} ${mark}${this.number}.`;
+          },
         },
-      },
-    });
-    if (!ok) return;
-    this.draft = null;
-    this.finishing = false;
-    this.#changed();
+      });
+      if (!ok) return;
+      this.draft = null;
+      this.finishing = false;
+      this.#changed();
+    } catch (err) {
+      confirm.fail(err);
+    }
   }
 
   /** Throw the draft away; a copy stays in `.git/oxbow/removed` for 30 days. */
   async discard() {
-    await this.saves.flush();
-    const draft = this.draft;
-    if (!draft) return;
-    const what = countWords(draft.comments.length, draft.replies.length);
-    const ok = await this.#run({
-      title: `Do you really want to discard your review of ${this.words.mark}${this.number}?`,
-      body: [`${what ? `Its ${what} aren’t sent` : "Nothing of it was sent"}. A copy stays in .git/oxbow/removed for 30 days.`],
-      icon: "discard",
-      danger: true,
-      button: "Discard Review",
-      past: `Discarded the review of ${this.words.mark}${this.number}`,
-      local: {
-        commands: [`mv .git/oxbow/reviews/${this.#draftFile()} .git/oxbow/removed/`],
-        run: async () => {
-          await this.saves.clear();
-          return "The review is discarded.";
+    try {
+      await this.saves.flush();
+      const draft = this.draft;
+      if (!draft) return;
+      const what = countWords(draft.comments.length, draft.replies.length);
+      const ok = await this.#run({
+        title: `Do you really want to discard your review of ${this.words.mark}${this.number}?`,
+        body: [`${what ? `Its ${what} aren’t sent` : "Nothing of it was sent"}. A copy stays in .git/oxbow/removed for 30 days.`],
+        icon: "discard",
+        danger: true,
+        button: "Discard Review",
+        past: `Discarded the review of ${this.words.mark}${this.number}`,
+        local: {
+          commands: [`mv .git/oxbow/reviews/${this.#draftFile()} .git/oxbow/removed/`],
+          run: async () => {
+            await this.saves.clear();
+            return "The review is discarded.";
+          },
         },
-      },
-    });
-    if (!ok) return;
-    this.draft = null;
-    this.finishing = false;
+      });
+      if (!ok) return;
+      this.draft = null;
+      this.finishing = false;
+    } catch (err) {
+      confirm.fail(err);
+    }
   }
 }

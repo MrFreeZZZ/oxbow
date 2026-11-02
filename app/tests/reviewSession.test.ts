@@ -14,18 +14,27 @@ const target = (): ReviewTarget => ({ workdir: "/repo/A", place: { gitlab: false
 const state = (draft: ReviewDraft | null = null): ReviewDraftState => ({ draft, revision: "r0", headRef: "scoped/head", baseRef: "scoped/base", file: "scoped-7.json" });
 const turn = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 
-function session() {
+function session(forge: "github" | "gitlab" = "github") {
   const read = deferred<ReviewDraftState>();
   const viewing = deferred<{ viewed: string[]; dismissed: string[]; pending: null }>();
   const writes: { target: ReviewTarget; number: number; draft: ReviewDraft | null; expected: string }[] = [];
   const sent: { call: any; answer: ReturnType<typeof deferred<unknown>> }[] = [];
   const errors: unknown[] = [];
+  const requests: any[] = [], previews: any[] = [], reviews: any[] = [];
+  let changed = 0;
+  const preview = async (calls: any) => { previews.push(calls); return ["curl review"]; };
+  const run = async (calls: any) => { reviews.push(calls); };
   const api = {
     reviewDraft: () => read.promise,
     saveReviewDraft: async (target: ReviewTarget, number: number, draft: ReviewDraft | null, expected: string) => {
       writes.push({ target, number, draft, expected }); return `r${writes.length}`;
     },
     githubViewing: () => viewing.promise,
+    gitlabViewing: () => viewing.promise,
+    githubCallsPreview: preview,
+    gitlabCallsPreview: preview,
+    githubRun: run,
+    gitlabRun: run,
     githubSend: (call: any) => { const answer = deferred<unknown>(); sent.push({ call, answer }); return answer.promise; },
   };
   const source = fs.readFileSync(new URL("../src/lib/review.svelte.ts", import.meta.url), "utf8")
@@ -36,8 +45,73 @@ function session() {
     confirm: { fail: (err: unknown) => errors.push(err) }, github: {}, wordsOf: () => ({}) };
   const C = Function(...Object.keys(globals), `${js}; return ReviewSession;`)(...Object.values(globals));
   const address = target();
-  const editor = new C({ number: 7, headSha: "head", changedFiles: 2 }, async () => true, () => {}, address);
-  return { editor, address, read, viewing, writes, sent, errors, api };
+  const editor = new C({ number: 7, nodeId: "pr-7", headSha: "head", changedFiles: 2, reviews: [] }, async (request: any) => {
+    requests.push(request);
+    await request.local.run();
+    return true;
+  }, () => { changed++; }, address, forge);
+  return { editor, address, read, viewing, writes, sent, errors, api, requests, previews, reviews, get changed() { return changed; } };
+}
+
+// Finish Review reports preparation failures, preserves the draft, and can be retried.
+for (const forge of ["github", "gitlab"] as const) {
+  for (const action of ["submit", "discard"] as const) {
+    for (const message of ["disk full", "another window changed it"]) {
+      const s = session(forge);
+      s.read.resolve(state()); await s.editor.saves.ready();
+      s.editor.setBody("keep my review");
+      s.editor.finishing = true;
+      const draft = s.editor.draft;
+      const save = s.api.saveReviewDraft;
+      const error = new Error(message);
+      s.api.saveReviewDraft = async () => { throw error; };
+      await s.editor[action]("comment", "keep my review");
+      assert.deepEqual(s.errors, [error]);
+      assert.equal(s.editor.draft, draft);
+      assert.equal(s.editor.finishing, true);
+      assert.equal(s.requests.length, 0);
+      assert.equal(s.previews.length, 0);
+      assert.equal(s.reviews.length, 0);
+      assert.equal(s.changed, 0);
+      s.api.saveReviewDraft = save;
+      await s.editor[action]("comment", "keep my review");
+      assert.equal(s.requests.length, 1);
+      assert.equal(s.reviews.length, action === "submit" ? 1 : 0);
+      assert.equal(s.writes.at(-1)?.draft, null);
+      assert.equal(s.editor.draft, null);
+      assert.equal(s.editor.finishing, false);
+      assert.equal(s.changed, action === "submit" ? 1 : 0);
+    }
+  }
+  {
+    const s = session(forge);
+    s.read.resolve(state()); await s.editor.saves.ready();
+    s.editor.setBody("keep my review");
+    s.editor.finishing = true;
+    const draft = s.editor.draft;
+    const key = forge === "gitlab" ? "gitlabCallsPreview" : "githubCallsPreview";
+    const preview = s.api[key];
+    const error = new Error("repository or forge changed");
+    s.api[key] = async () => { throw error; };
+    await s.editor.submit("comment", "keep my review");
+    assert.deepEqual(s.errors, [error]);
+    assert.equal(s.editor.draft, draft);
+    assert.equal(s.editor.finishing, true);
+    assert.equal(s.requests.length, 0);
+    assert.equal(s.reviews.length, 0);
+    assert.equal(s.writes.length, 1);
+    assert.equal(s.writes[0].draft, draft);
+    assert.equal(s.changed, 0);
+    s.api[key] = preview;
+    await s.editor.submit("comment", "keep my review");
+    assert.equal(s.requests.length, 1);
+    assert.equal(s.reviews.length, 1);
+    assert.deepEqual(s.reviews[0], s.previews[0]);
+    assert.equal(s.writes.at(-1)?.draft, null);
+    assert.equal(s.editor.draft, null);
+    assert.equal(s.editor.finishing, false);
+    assert.equal(s.changed, 1);
+  }
 }
 
 // Switching the window, or changing the source address object, cannot redirect its delayed save.
