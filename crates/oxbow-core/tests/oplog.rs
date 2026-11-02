@@ -778,3 +778,142 @@ fn restore_refuses_to_move_a_branch_in_another_worktree() {
 fn restore_refuses_to_delete_a_branch_in_another_worktree() {
     restore_refuses_a_ref_taken_by_another_worktree(true);
 }
+
+#[test]
+fn restore_keeps_stashes_created_outside_this_worktrees_log() {
+    for linked in [false, true] {
+        for after in [false, true] {
+            let mut fx = Fixture::new();
+            fx.commit("a.txt", "root\n", "Root");
+            let repo = Repo::open(fx.path()).unwrap();
+            fx.write("a.txt", "staged\n");
+            repo.perform(&Action::Stage {
+                paths: vec!["a.txt".into()],
+            })
+            .unwrap();
+            let earlier = repo.operation_log().unwrap()[0].id.clone();
+            fx.git(&["stash", "push", "-m", "original"]);
+            let original = repo.stashes().unwrap()[0].id.clone();
+            repo.perform(&Action::StashDrop { index: 0, id: original }).unwrap();
+            let action = Action::Restore {
+                id: if after {
+                    earlier
+                } else {
+                    repo.operation_log().unwrap()[0].id.clone()
+                },
+                after,
+            };
+            repo.plan(&action).unwrap();
+            let folder = if linked {
+                let other = fx.path().parent().unwrap().join("other");
+                fx.git(&["worktree", "add", "-b", "topic", other.to_str().unwrap()]);
+                other
+            } else {
+                fx.path().to_path_buf()
+            };
+            std::fs::write(folder.join("external.txt"), "irreplaceable work\n").unwrap();
+            if linked {
+                Repo::open(&folder)
+                    .unwrap()
+                    .perform(&Action::StashPush {
+                        message: Some("external".into()),
+                        untracked: true,
+                        paths: vec![],
+                        staged: false,
+                    })
+                    .unwrap();
+            } else {
+                fx.git(&["stash", "push", "--include-untracked", "-m", "external"]);
+            }
+            let list = fx.git(&["stash", "list", "--format=%H %gs"]);
+            let reflog = fx.git(&["reflog", "show", "--format=%H %gs", "refs/stash"]);
+            let status = fx.git(&["status", "--porcelain=v2", "--branch"]);
+            for err in [repo.plan(&action).unwrap_err(), repo.perform(&action).unwrap_err()] {
+                assert!(matches!(err, oxbow_core::Error::Changed(_)), "{err}");
+                assert!(err.to_string().contains("stash list changed"), "{err}");
+            }
+            assert_eq!(fx.git(&["stash", "list", "--format=%H %gs"]), list);
+            assert_eq!(fx.git(&["reflog", "show", "--format=%H %gs", "refs/stash"]), reflog);
+            assert_eq!(fx.git(&["show", "stash@{0}^3:external.txt"]), "irreplaceable work");
+            assert_eq!(fx.git(&["status", "--porcelain=v2", "--branch"]), status);
+        }
+    }
+}
+
+#[test]
+fn restore_checks_external_stash_changes_between_logged_steps() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "root\n", "Root");
+    let repo = Repo::open(fx.path()).unwrap();
+    fx.write("a.txt", "first\n");
+    repo.perform(&Action::StashPush {
+        message: Some("first".into()),
+        untracked: true,
+        paths: vec![],
+        staged: false,
+    })
+    .unwrap();
+    let first = repo.operation_log().unwrap()[0].id.clone();
+    fx.write("external.txt", "external\n");
+    fx.git(&["stash", "push", "--include-untracked", "-m", "external"]);
+    fx.write("a.txt", "last\n");
+    repo.perform(&Action::StashPush {
+        message: Some("last".into()),
+        untracked: true,
+        paths: vec![],
+        staged: false,
+    })
+    .unwrap();
+    let list = fx.git(&["stash", "list", "--format=%H %gs"]);
+    let action = Action::Restore {
+        id: first,
+        after: false,
+    };
+    assert!(
+        repo.plan(&action)
+            .unwrap_err()
+            .to_string()
+            .contains("stash list changed")
+    );
+    assert!(
+        repo.perform(&action)
+            .unwrap_err()
+            .to_string()
+            .contains("stash list changed")
+    );
+    assert_eq!(fx.git(&["stash", "list", "--format=%H %gs"]), list);
+    assert_eq!(fx.git(&["show", "stash@{1}^3:external.txt"]), "external");
+    // Each contiguous part can still be undone safely on its own.
+    undo_last(&repo);
+    assert_eq!(repo.stashes().unwrap().len(), 2);
+}
+
+#[test]
+fn restore_accepts_contiguous_stash_steps_and_an_already_restored_list() {
+    for already in [false, true] {
+        let mut fx = Fixture::new();
+        fx.commit("a.txt", "root\n", "Root");
+        let repo = Repo::open(fx.path()).unwrap();
+        for message in ["first", "last"] {
+            fx.write("a.txt", message);
+            repo.perform(&Action::StashPush {
+                message: Some(message.into()),
+                untracked: true,
+                paths: vec![],
+                staged: false,
+            })
+            .unwrap();
+        }
+        let log = repo.operation_log().unwrap();
+        let action = Action::Restore {
+            id: log[1].id.clone(),
+            after: false,
+        };
+        if already {
+            fx.git(&["stash", "clear"]);
+        }
+        repo.perform(&action).unwrap();
+        assert!(repo.stashes().unwrap().is_empty());
+        assert_eq!(read(&fx, "a.txt").unwrap(), "first");
+    }
+}

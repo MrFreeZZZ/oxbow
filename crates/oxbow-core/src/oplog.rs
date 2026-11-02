@@ -494,13 +494,26 @@ impl Repo {
             });
         }
 
-        if let Some(stash) = undone.iter().rev().find_map(|step| step.stash.as_ref())
-            && self.stash_records()? != stash.before
-        {
-            commands
-                .push(GitCommand::new(["update-ref", "-d", "refs/stash"]).comment("the stash list is written again"));
-            for record in stash.before.iter().rev() {
-                commands.push(GitCommand::new(["stash", "store", "-m", &record.message, &record.id]));
+        if let Some(stash) = undone.iter().rev().find_map(|step| step.stash.as_ref()) {
+            let current = self.stash_records()?;
+            if current != stash.before {
+                // Stashes are shared by worktrees, whose logs are separate. Only replace a
+                // list fully accounted for by these steps, including the gaps between them.
+                let mut expected = &current;
+                for changed in undone.iter().filter_map(|step| step.stash.as_ref()) {
+                    if expected != &changed.after {
+                        return Err(Error::Changed(
+                            "The stash list changed outside these steps. Undo/Restore cannot replace it safely; your stashes have been kept.".into(),
+                        ));
+                    }
+                    expected = &changed.before;
+                }
+                commands.push(
+                    GitCommand::new(["update-ref", "-d", "refs/stash"]).comment("the stash list is written again"),
+                );
+                for record in stash.before.iter().rev() {
+                    commands.push(GitCommand::new(["stash", "store", "-m", &record.message, &record.id]));
+                }
             }
         }
 
