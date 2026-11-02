@@ -48,6 +48,7 @@ fn a_cherry_pick_that_conflicts_is_resolved_and_continued() {
     repo.perform(&Action::TakeFile {
         path: "a.txt".into(),
         side: ConflictSide::Theirs,
+        stages: repo.conflict_file("a.txt").unwrap().stages,
     })
     .unwrap();
     repo.perform(&Action::Continue { message: None }).unwrap();

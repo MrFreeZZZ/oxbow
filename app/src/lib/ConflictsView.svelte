@@ -647,7 +647,7 @@
       button: exists ? `Use ${label}’s Version` : "Delete File",
       status: `Resolving ${name}…`,
       done: `${name} is resolved.`,
-      action: { kind: "takeFile", path: current, side },
+      action: { kind: "takeFile", path: current, side, stages: file.stages },
     });
   }
 

@@ -669,7 +669,7 @@ export type Action =
   | { kind: "abort" }
   | { kind: "skip" }
   | { kind: "resolve"; path: string; picks: Resolution[]; text?: string; stages?: string }
-  | { kind: "takeFile"; path: string; side: ConflictSide }
+  | { kind: "takeFile"; path: string; side: ConflictSide; stages: string }
   | { kind: "cherryPick"; commit: string }
   /** Commits of `to` that `since` doesn't have, or the newest `count` up to `to`, as patch
    *  files: a file each in the folder `into`, or with `oneFile` all in the file `into`. */

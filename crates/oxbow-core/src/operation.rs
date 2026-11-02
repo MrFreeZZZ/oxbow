@@ -1003,7 +1003,10 @@ impl Repo {
         Ok(commands)
     }
 
-    pub(crate) fn plan_take_file(&self, path: &str, side: ConflictSide) -> Result<Vec<GitCommand>> {
+    pub(crate) fn plan_take_file(&self, path: &str, side: ConflictSide, expected: &str) -> Result<Vec<GitCommand>> {
+        if self.conflict_version(path)? != expected {
+            return Err(Error::Git(format!("{path} changed since it was shown; open it again")));
+        }
         let op = self.current_operation()?;
         let ([_, ours, theirs], _) = self.stages(path)?;
         let (exists, flag, label) = match side {

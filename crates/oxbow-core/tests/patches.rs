@@ -138,6 +138,7 @@ fn patches_that_conflict_stop_and_are_resolved_and_continued() {
     repo.perform(&Action::TakeFile {
         path: "a.txt".into(),
         side: ConflictSide::Theirs,
+        stages: repo.conflict_file("a.txt").unwrap().stages,
     })
     .unwrap();
     repo.perform(&Action::Continue { message: None }).unwrap();

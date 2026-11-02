@@ -251,6 +251,8 @@ pub enum Action {
     TakeFile {
         path: String,
         side: ConflictSide,
+        /// The index and working file shown in `ConflictFile::stages`.
+        stages: String,
     },
     /// Copy `commit` onto the checked-out branch as a new commit.
     CherryPick {

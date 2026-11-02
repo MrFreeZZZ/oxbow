@@ -261,6 +261,7 @@ fn a_rebase_that_conflicts_names_the_sides_and_continues() {
     repo.perform(&Action::TakeFile {
         path: "a.txt".into(),
         side: ConflictSide::Theirs,
+        stages: repo.conflict_file("a.txt").unwrap().stages,
     })
     .unwrap();
     assert_eq!(read(&fx, "a.txt"), "one\nTWO on feature\nthree\n");
@@ -293,6 +294,7 @@ fn a_squash_that_conflicts_keeps_the_chosen_message() {
     repo.perform(&Action::TakeFile {
         path: "a.txt".into(),
         side: ConflictSide::Ours,
+        stages: repo.conflict_file("a.txt").unwrap().stages,
     })
     .unwrap();
     let message = op.message.clone();
@@ -320,12 +322,20 @@ fn a_file_deleted_on_one_side_is_kept_or_deleted_whole() {
     let take = Action::TakeFile {
         path: "a.txt".into(),
         side: ConflictSide::Theirs,
+        stages: repo.conflict_file("a.txt").unwrap().stages,
     };
     assert_eq!(
         repo.plan(&take).unwrap().commands[0].display(),
         "git rm --quiet -- a.txt"
     );
-    repo.perform(&take).unwrap();
+    fx.write("a.txt", "resolved externally\n");
+    assert_stale_take_keeps_file_and_index(&repo, &mut fx, "a.txt", &take);
+    repo.perform(&Action::TakeFile {
+        path: "a.txt".into(),
+        side: ConflictSide::Theirs,
+        stages: repo.conflict_file("a.txt").unwrap().stages,
+    })
+    .unwrap();
     assert!(!fx.path().join("a.txt").exists());
     assert_eq!(repo.operation().unwrap().unwrap().conflicted, 0);
 }
@@ -379,9 +389,19 @@ fn a_conflicted_symlink_is_taken_whole_and_its_target_left_alone() {
     assert!(err.to_string().contains("whole"), "{err}");
     assert_eq!(read(&fx, "ours.txt"), "ours.txt content\n");
 
+    let stale = Action::TakeFile {
+        path: "link".into(),
+        side: ConflictSide::Theirs,
+        stages: file.stages,
+    };
+    repo.plan(&stale).unwrap();
+    std::fs::remove_file(fx.path().join("link")).unwrap();
+    symlink("base.txt", fx.path().join("link")).unwrap();
+    assert_stale_take_keeps_file_and_index(&repo, &mut fx, "link", &stale);
     repo.perform(&Action::TakeFile {
         path: "link".into(),
         side: ConflictSide::Theirs,
+        stages: repo.conflict_file("link").unwrap().stages,
     })
     .unwrap();
     let target = std::fs::read_link(fx.path().join("link")).unwrap();
@@ -702,4 +722,77 @@ fn a_same_size_working_edit_changes_the_conflict_version() {
         .set_modified(time)
         .unwrap();
     assert_ne!(first.stages, repo.conflict_file("a.txt").unwrap().stages);
+}
+
+fn assert_stale_take_keeps_file_and_index(repo: &Repo, fx: &mut Fixture, path: &str, action: &Action) {
+    let bytes = std::fs::read(fx.path().join(path)).unwrap();
+    let link = std::fs::read_link(fx.path().join(path)).ok();
+    let index = fx.git(&["ls-files", "--stage"]);
+    let logged = repo.operation_log().unwrap().len();
+    for err in [repo.plan(action).unwrap_err(), repo.perform(action).unwrap_err()] {
+        assert!(
+            err.to_string().contains("changed since it was shown; open it again"),
+            "{err}"
+        );
+    }
+    assert_eq!(std::fs::read(fx.path().join(path)).unwrap(), bytes);
+    assert_eq!(std::fs::read_link(fx.path().join(path)).ok(), link);
+    assert_eq!(fx.git(&["ls-files", "--stage"]), index);
+    assert_eq!(repo.operation_log().unwrap().len(), logged);
+}
+
+#[test]
+fn taking_a_binary_side_refuses_external_edits_until_reopened() {
+    for side in [ConflictSide::Ours, ConflictSide::Theirs] {
+        let mut fx = Fixture::new();
+        fx.commit("a.bin", "\0base", "Root");
+        fx.git(&["switch", "-qc", "feature"]);
+        fx.commit("a.bin", "\0them", "Theirs");
+        fx.git(&["switch", "-q", "main"]);
+        fx.commit("a.bin", "\0ours", "Ours");
+        let repo = Repo::open(fx.path()).unwrap();
+        repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+        let file = repo.conflict_file("a.bin").unwrap();
+        assert!(file.binary);
+        let action = Action::TakeFile {
+            path: "a.bin".into(),
+            side,
+            stages: file.stages,
+        };
+        repo.plan(&action).unwrap();
+        // Same size, but different content; metadata alone cannot protect this edit.
+        fx.write("a.bin", "\0edit");
+        assert_stale_take_keeps_file_and_index(&repo, &mut fx, "a.bin", &action);
+        repo.perform(&Action::TakeFile {
+            path: "a.bin".into(),
+            side,
+            stages: repo.conflict_file("a.bin").unwrap().stages,
+        })
+        .unwrap();
+        assert_eq!(
+            std::fs::read(fx.path().join("a.bin")).unwrap(),
+            if side == ConflictSide::Ours {
+                b"\0ours"
+            } else {
+                b"\0them"
+            }
+        );
+        assert_eq!(repo.operation().unwrap().unwrap().conflicted, 0);
+    }
+}
+
+#[test]
+fn taking_a_side_refuses_an_external_index_resolution() {
+    let mut fx = diverged();
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+    let action = Action::TakeFile {
+        path: "a.txt".into(),
+        side: ConflictSide::Ours,
+        stages: repo.conflict_file("a.txt").unwrap().stages,
+    };
+    repo.plan(&action).unwrap();
+    // Only the index changes; the working file remains exactly as it was shown.
+    fx.git(&["add", "a.txt"]);
+    assert_stale_take_keeps_file_and_index(&repo, &mut fx, "a.txt", &action);
 }

@@ -521,7 +521,7 @@ impl Repo {
             Action::Resolve { path, .. } => vec![GitCommand::new(["add", "--", &literal(path)]).comment(format!(
                 "Oxbow writes your choices into {path} first; add marks it resolved"
             ))],
-            Action::TakeFile { path, side } => self.plan_take_file(path, *side)?,
+            Action::TakeFile { path, side, stages } => self.plan_take_file(path, *side, stages)?,
             Action::CherryPick { commit } => self.plan_cherry_pick(commit)?,
             Action::SavePatches {
                 to,

@@ -156,6 +156,7 @@ fn a_pop_that_conflicts_is_resolved_and_finished() {
     repo.perform(&Action::TakeFile {
         path: "a.txt".into(),
         side: ConflictSide::Theirs,
+        stages: repo.conflict_file("a.txt").unwrap().stages,
     })
     .unwrap();
     let finish = repo.plan(&Action::Continue { message: None }).unwrap();
