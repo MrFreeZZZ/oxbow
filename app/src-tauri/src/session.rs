@@ -23,8 +23,6 @@ pub(crate) struct Session {
     pub(crate) diff: Mutex<DiffOptions>,
     /// The repository window used last: the one Settings shows and changes.
     pub(crate) focused: Mutex<Option<String>>,
-    /// The folder a new window opens, until it asks for it.
-    pub(crate) pending: Mutex<HashMap<String, String>>,
     /// Number of the next new window.
     pub(crate) next: AtomicUsize,
     /// Number of the last reading of the working tree handed out with a history.
@@ -93,6 +91,8 @@ impl Drop for RunStop {
 #[derive(Default)]
 pub(crate) struct Slot {
     pub(crate) repo: Option<Repo>,
+    /// The folder reserved for a new window, kept through startup until a repository opens.
+    pub(crate) pending: Option<PathBuf>,
     /// Stop of the fetch running in the background, apart from actions in the sheet.
     pub(crate) fetch_cancel: Arc<AtomicBool>,
     /// The commit rows of the last history, for the next reload to reuse.
@@ -119,6 +119,7 @@ impl Slot {
     /// Open `repo` in this window: what was read of the repository open before goes.
     pub(crate) fn open(&mut self, repo: Repo) {
         self.close();
+        self.pending = None;
         self.repo = Some(repo);
     }
 
@@ -288,20 +289,48 @@ impl Session {
         cancel
     }
 
-    /// The window that has the repository at `path` open, if any.
-    pub(crate) fn window_of(&self, path: &Path) -> Option<String> {
-        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        self.windows
-            .lock()
-            .expect("session lock")
-            .iter()
-            .find(|(_, slot)| {
-                slot.repo
-                    .as_ref()
-                    .is_some_and(|r| r.workdir().canonicalize().unwrap_or_else(|_| r.workdir().to_path_buf()) == path)
-            })
-            .map(|(label, _)| label.clone())
+    /// Find or reserve a repository window in one step, including windows still being built.
+    pub(crate) fn reserve_window(&self, path: &Path) -> WindowTarget {
+        let mut windows = self.windows.lock().expect("session lock");
+        if let Some(label) = window_of(&windows, path) {
+            return WindowTarget::Existing(label);
+        }
+        let label = format!("repo-{}", self.next.fetch_add(1, Ordering::Relaxed) + 1);
+        windows.insert(
+            label.clone(),
+            Slot {
+                pending: Some(path.to_path_buf()),
+                ..Slot::default()
+            },
+        );
+        WindowTarget::New(label)
     }
+
+    /// The window that has the repository at `path` open or reserved, if any.
+    pub(crate) fn window_of(&self, path: &Path) -> Option<String> {
+        window_of(&self.windows.lock().expect("session lock"), path)
+    }
+}
+
+/// Whether Open in New Window should create a window or bring one forward.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum WindowTarget {
+    Existing(String),
+    New(String),
+}
+
+fn window_of(windows: &HashMap<String, Slot>, path: &Path) -> Option<String> {
+    let path = turns::canonical(path);
+    windows
+        .iter()
+        .find(|(_, slot)| {
+            slot.repo
+                .as_ref()
+                .map(|repo| repo.workdir())
+                .or(slot.pending.as_deref())
+                .is_some_and(|folder| turns::canonical(folder) == path)
+        })
+        .map(|(label, _)| label.clone())
 }
 
 /// The repository, set to show a diff in full however many lines it has when `full` is set
@@ -434,6 +463,87 @@ mod tests {
         let changes = history.changes.clone().map(|tree| (number, Arc::new(tree)));
         let folders = Arc::new((history.worktrees.clone(), history.submodules.clone()));
         slot.keep_history(number, cache, changes, folders);
+    }
+
+    #[test]
+    fn a_new_window_stays_reserved_through_startup() {
+        let repo = repo("window-startup");
+        let session = Session::default();
+        let WindowTarget::New(label) = session.reserve_window(repo.workdir()) else {
+            panic!("first invocation must create a window");
+        };
+        // initial_repo reads the folder; close_repo then clears the empty slot before open_repo.
+        {
+            let mut windows = session.windows.lock().unwrap();
+            let slot = windows.get_mut(&label).unwrap();
+            assert_eq!(slot.pending.as_deref(), Some(repo.workdir()));
+            slot.close();
+        }
+        let alias = repo.workdir().join(".");
+        assert_eq!(session.window_of(&alias), Some(label.clone()));
+        assert_eq!(session.reserve_window(&alias), WindowTarget::Existing(label.clone()));
+        session
+            .windows
+            .lock()
+            .unwrap()
+            .get_mut(&label)
+            .unwrap()
+            .open(repo.clone());
+        assert!(session.windows.lock().unwrap()[&label].pending.is_none());
+        assert_eq!(session.reserve_window(&alias), WindowTarget::Existing(label.clone()));
+        // A different repository replaces the reservation, and closing releases its path.
+        let other = self::repo("window-other");
+        session
+            .windows
+            .lock()
+            .unwrap()
+            .get_mut(&label)
+            .unwrap()
+            .open(other.clone());
+        assert_eq!(session.window_of(repo.workdir()), None);
+        assert_eq!(session.window_of(other.workdir()), Some(label.clone()));
+        session.windows.lock().unwrap().get_mut(&label).unwrap().close();
+        assert_eq!(session.window_of(other.workdir()), None);
+        for repo in [repo, other] {
+            std::fs::remove_dir_all(repo.workdir()).unwrap();
+        }
+    }
+
+    #[test]
+    fn simultaneous_window_requests_reserve_only_one_window() {
+        let repo = repo("window-concurrent");
+        let session = Session::default();
+        let barrier = std::sync::Barrier::new(8);
+        let targets = std::thread::scope(|scope| {
+            let requests: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        session.reserve_window(repo.workdir())
+                    })
+                })
+                .collect();
+            requests
+                .into_iter()
+                .map(|request| request.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            targets
+                .iter()
+                .filter(|target| matches!(target, WindowTarget::New(_)))
+                .count(),
+            1
+        );
+        let label = session.window_of(repo.workdir()).unwrap();
+        assert!(targets.iter().all(|target| match target {
+            WindowTarget::New(found) | WindowTarget::Existing(found) => found == &label,
+        }));
+        assert_eq!(session.windows.lock().unwrap().len(), 1);
+        // Failed creation or a destroyed window releases the reservation for a later retry.
+        session.windows.lock().unwrap().remove(&label);
+        assert!(matches!(session.reserve_window(repo.workdir()), WindowTarget::New(_)));
+        std::fs::remove_dir_all(repo.workdir()).unwrap();
     }
 
     #[test]

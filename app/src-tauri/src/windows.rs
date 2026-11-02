@@ -8,7 +8,7 @@ use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use crate::CommandResult;
 use crate::outside::worktree_folder;
 use crate::preferences::{appearance, read_settings};
-use crate::session::{Session, current};
+use crate::session::{Session, WindowTarget, current};
 
 /// Open the worktree at `path` in a window of its own, or bring forward the window that has it.
 /// Async, because making a window in a synchronous command deadlocks on Windows.
@@ -21,19 +21,17 @@ pub(crate) async fn open_window(
 ) -> CommandResult<()> {
     let repo = current(&session, &window)?;
     let folder = worktree_folder(&repo, &path)?;
-    if let Some(open) = session
-        .window_of(&folder)
-        .and_then(|label| app.get_webview_window(&label))
-    {
-        let _ = open.unminimize();
-        return open.set_focus().map_err(|err| err.to_string());
-    }
-    let label = format!("repo-{}", session.next.fetch_add(1, Ordering::Relaxed) + 1);
-    session
-        .pending
-        .lock()
-        .expect("session lock")
-        .insert(label.clone(), folder.display().to_string());
+    let label = match session.reserve_window(&folder) {
+        WindowTarget::Existing(label) => {
+            // The reservation can precede the native window: its first invocation builds it.
+            if let Some(open) = app.get_webview_window(&label) {
+                let _ = open.unminimize();
+                open.set_focus().map_err(|err| err.to_string())?;
+            }
+            return Ok(());
+        }
+        WindowTarget::New(label) => label,
+    };
     // Named after the folder, so the Window menu and Mission Control tell the windows apart.
     let title = folder
         .file_name()
@@ -53,7 +51,11 @@ pub(crate) async fn open_window(
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true)
         .traffic_light_position(tauri::LogicalPosition::new(22.0, 30.0));
-    builder.build().map(|_| ()).map_err(|err| err.to_string())
+    if let Err(err) = builder.build() {
+        session.windows.lock().expect("session lock").remove(&label);
+        return Err(err.to_string());
+    }
+    Ok(())
 }
 
 /// Close the window of the worktree that was at `path`, after it was removed.

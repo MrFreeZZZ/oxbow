@@ -219,7 +219,13 @@ pub(crate) fn initial_repo(
     session: State<'_, Session>,
 ) -> Option<String> {
     if window.label() != "main" {
-        return session.pending.lock().expect("session lock").remove(window.label());
+        return session
+            .windows
+            .lock()
+            .expect("session lock")
+            .get(window.label())
+            .and_then(|slot| slot.pending.as_ref())
+            .map(|path| path.display().to_string());
     }
     let reopen = read_settings(&app)
         .get("oxbow.startup.reopenRepository")

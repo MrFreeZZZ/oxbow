@@ -73,7 +73,6 @@ fn main() {
                     if let Some(mut slot) = session.windows.lock().expect("session lock").remove(&label) {
                         slot.stop_reads();
                     }
-                    session.pending.lock().expect("session lock").remove(&label);
                     let mut focused = session.focused.lock().expect("session lock");
                     if focused.as_deref() == Some(label.as_str()) {
                         *focused = None;
