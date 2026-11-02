@@ -69,10 +69,7 @@ fn main() {
                         session.stops.stop(&label);
                     }
                     window.state::<overview::OverviewRuns>().stop(&label, None);
-                    // Its reads stop with it.
-                    if let Some(mut slot) = session.windows.lock().expect("session lock").remove(&label) {
-                        slot.stop_reads();
-                    }
+                    session.remove_window(&label);
                     let mut focused = session.focused.lock().expect("session lock");
                     if focused.as_deref() == Some(label.as_str()) {
                         *focused = None;

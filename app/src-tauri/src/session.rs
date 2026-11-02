@@ -289,6 +289,13 @@ impl Session {
         cancel
     }
 
+    /// A destroyed window stops its reads and fetch before its slot is forgotten.
+    pub(crate) fn remove_window(&self, label: &str) {
+        if let Some(mut slot) = self.windows.lock().expect("session lock").remove(label) {
+            slot.close();
+        }
+    }
+
     /// Find or reserve a repository window in one step, including windows still being built.
     pub(crate) fn reserve_window(&self, path: &Path) -> WindowTarget {
         let mut windows = self.windows.lock().expect("session lock");
@@ -544,6 +551,64 @@ mod tests {
         session.windows.lock().unwrap().remove(&label);
         assert!(matches!(session.reserve_window(repo.workdir()), WindowTarget::New(_)));
         std::fs::remove_dir_all(repo.workdir()).unwrap();
+    }
+
+    #[test]
+    fn destroying_a_window_cancels_its_fetch_and_releases_the_repository_turn() {
+        let session = Session::default();
+        let fetch_cancel = Arc::new(AtomicBool::new(false));
+        let read_cancel = Arc::new(AtomicBool::new(false));
+        let other_cancel = Arc::new(AtomicBool::new(false));
+        let mut slot = Slot {
+            fetch_cancel: fetch_cancel.clone(),
+            ..Slot::default()
+        };
+        slot.lanes.insert("history".into(), read_cancel.clone());
+        {
+            let mut windows = session.windows.lock().unwrap();
+            windows.insert("repo-1".into(), slot);
+            windows.insert(
+                "repo-2".into(),
+                Slot {
+                    fetch_cancel: other_cancel.clone(),
+                    ..Slot::default()
+                },
+            );
+        }
+        let common = Path::new("/nowhere/destroyed-window/.git");
+        // A user fetch holds its turn and does not give way to another window's action.
+        let turn = session
+            .turns
+            .take(
+                common,
+                turns::Running::new("repo-1", "repo".into(), "Fetch".into()),
+                &fetch_cancel,
+                |_| panic!("unexpected wait"),
+            )
+            .unwrap();
+        let fetch = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while !fetch_cancel.load(Ordering::Relaxed) {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "destroyed window's fetch was not cancelled"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            drop(turn);
+        });
+        session.remove_window("repo-1");
+        fetch.join().unwrap();
+        assert!(read_cancel.load(Ordering::Relaxed));
+        assert!(!other_cancel.load(Ordering::Relaxed));
+        assert!(!session.windows.lock().unwrap().contains_key("repo-1"));
+        let next = session.turns.take(
+            common,
+            turns::Running::new("repo-2", "repo".into(), "Commit".into()),
+            &other_cancel,
+            |_| panic!("still waiting for the destroyed window"),
+        );
+        assert!(next.is_some());
     }
 
     #[test]
