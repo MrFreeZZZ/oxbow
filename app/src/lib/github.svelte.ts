@@ -3,9 +3,10 @@
 // requests once signed in there. The lists are asked for at most once a minute unless something
 // changed them.
 
+import { keepList } from "./reviewLoads";
 import { api } from "./api";
 import type { ForgeKind } from "./forge";
-import type { GitHubRepo, GitLabProject, PullStatus, PullSummary } from "./types";
+import type { GitHubRepo, GitLabProject, PullStatus, PullSummary, LoadIssue } from "./types";
 
 const FRESH_FOR = 60_000;
 
@@ -28,6 +29,10 @@ class GitHubState {
   mrStatuses = $state<Record<number, PullStatus>>({});
   /** Open and recently closed pull requests, the latest updated first. */
   pulls = $state<PullSummary[]>([]);
+  issues = $state<LoadIssue[]>([]);
+  mrIssues = $state<LoadIssue[]>([]);
+  loading = $state(false);
+  mrLoading = $state(false);
   /** GitHub's verdict and checks of the open ones, by number. */
   statuses = $state<Record<number, PullStatus>>({});
   /** The account signed in, by its login. */
@@ -49,14 +54,16 @@ class GitHubState {
     if (!force && Date.now() - this.#loadedAt < FRESH_FOR) return;
     this.#loadedAt = Date.now();
     const load = ++this.#load;
+    this.loading = true;
     const [repo, gitlab] = await Promise.all([api.githubRepo().catch(() => null), api.gitlabProjects().catch(() => [])]);
     if (load !== this.#load) return;
     this.repo = repo;
     this.gitlab = gitlab;
-    if (gitlab.length) this.#loadMergeRequests(load);
+    if (gitlab.length) void this.#loadMergeRequests(load);
     else this.mrProject = null;
     if (!repo) {
       this.pulls = [];
+      this.loading = false;
       return;
     }
     try {
@@ -67,16 +74,20 @@ class GitHubState {
         api.githubAccount().catch(() => null),
       ]);
       if (load !== this.#load) return;
-      this.pulls = pulls;
+      this.pulls = keepList(this.pulls, pulls);
+      this.issues = pulls.issues;
       this.statuses = Object.fromEntries(statuses.map((s) => [s.number, s]));
       this.me = account?.login ?? null;
       this.problem = null;
     } catch (err) {
       if (load === this.#load) this.problem = String(err);
+    } finally {
+      if (load === this.#load) this.loading = false;
     }
   }
 
   async #loadMergeRequests(load: number) {
+    this.mrLoading = true;
     try {
       const [list, accounts] = await Promise.all([api.gitlabMergeRequests(), api.gitlabAccounts().catch(() => [])]);
       if (load !== this.#load) return;
@@ -84,11 +95,14 @@ class GitHubState {
       const account = accounts.find((a) => a.host === list?.project.host);
       this.mrMe = account?.username ?? null;
       this.mrVersion = account?.version ?? null;
-      this.mergeRequests = list?.mergeRequests ?? [];
+      this.mergeRequests = list ? keepList(this.mergeRequests, list.mergeRequests) : [];
+      this.mrIssues = list?.mergeRequests.issues ?? [];
       this.mrProblem = null;
     } catch (err) {
       if (load === this.#load) this.mrProblem = String(err);
       return;
+    } finally {
+      if (load === this.#load) this.mrLoading = false;
     }
     // Approvals and pipelines are a nicety, as on GitHub: the list stays without them.
     const open = this.mergeRequests.filter((p) => p.state === "open").map((p) => p.number);
@@ -113,6 +127,10 @@ class GitHubState {
     this.mrVersion = null;
     this.mrStatuses = {};
     this.pulls = [];
+    this.issues = [];
+    this.mrIssues = [];
+    this.loading = false;
+    this.mrLoading = false;
     this.statuses = {};
     this.me = null;
     this.problem = null;

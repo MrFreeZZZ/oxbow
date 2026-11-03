@@ -71,6 +71,21 @@ fn shapes() -> BTreeMap<&'static str, Vec<String>> {
     BTreeMap::from([
         ("UserCommand", fields(&command)),
         (
+            "LoadIssue",
+            fields(&json(oxbow_core::pulls::LoadIssue {
+                section: "Threads".into(),
+                state: "partial".into(),
+                message: "Continue on GitHub".into(),
+            })),
+        ),
+        (
+            "PullList",
+            fields(&json(oxbow_core::pulls::PullList {
+                items: Vec::new(),
+                issues: Vec::new(),
+            })),
+        ),
+        (
             "ReviewPlace",
             fields(&json(oxbow_core::review::Reviewed::github(
                 &oxbow_core::pulls::GitHubRepo {

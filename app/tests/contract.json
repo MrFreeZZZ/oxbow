@@ -149,6 +149,11 @@
     "line",
     "text"
   ],
+  "LoadIssue": [
+    "message",
+    "section",
+    "state"
+  ],
   "LocalVersion": [
     "additions",
     "at",
@@ -183,6 +188,10 @@
     "name",
     "offset",
     "time"
+  ],
+  "PullList": [
+    "issues",
+    "items"
   ],
   "RefInfo": [
     "kind",

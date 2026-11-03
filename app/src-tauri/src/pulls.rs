@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use oxbow_core::console::EntryKind;
 use oxbow_core::github::Client;
 use oxbow_core::gitlab_api::{GitLabUser, Step};
-use oxbow_core::pulls::{Call, GitHubRepo, PullRequest, PullSummary, started_review};
+use oxbow_core::pulls::{Call, GitHubRepo, PullRequest, started_review};
 use oxbow_core::review::{PullStatus, ReviewDraft, ReviewDraftState, Reviewed, Viewing};
 use oxbow_core::{ActionEvent, GitLabProject, OutputLine};
 use serde_json::Value;
@@ -86,7 +86,7 @@ pub async fn gitlab_projects(
 #[serde(rename_all = "camelCase")]
 pub struct GitLabList {
     project: GitLabProject,
-    merge_requests: Vec<PullSummary>,
+    merge_requests: oxbow_core::pulls::PullList,
 }
 
 /// The repository's GitLab project on a server Oxbow is signed in to (the default remote's
@@ -121,9 +121,11 @@ pub async fn gitlab_merge_requests(
     session: State<'_, Session>,
     tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
 ) -> CommandResult<Option<GitLabList>> {
+    let cancel = session.lane(&window, Some("gitlab-merge-requests".into()));
     let Some((_, project, client)) = signed_in_project(&app, &window, &session, &tokens).await? else {
         return Ok(None);
     };
+    let client = client.with_cancel(cancel);
     blocking(move || {
         let merge_requests = client.merge_requests(&project)?;
         Ok(Some(GitLabList {
@@ -144,9 +146,11 @@ pub async fn gitlab_merge_request(
     tokens: State<'_, crate::gitlab_accounts::GitLabTokens>,
     number: u64,
 ) -> CommandResult<PullRequest> {
+    let cancel = session.lane(&window, Some("gitlab-merge-request".into()));
     let (repo, project, client) = signed_in_project(&app, &window, &session, &tokens)
         .await?
         .ok_or_else(|| "Sign in to this repository’s GitLab in Settings › Accounts".to_owned())?;
+    let client = client.with_cancel(cancel);
     blocking(move || {
         let mut mr = client.merge_request(&project, number)?;
         repo.merge_request_here(&mut mr);
@@ -348,9 +352,9 @@ pub async fn open_gitlab(
     .await?;
     let pages = ["merge_requests", "pipelines", "jobs"];
     if !projects.iter().any(|p| {
-        pages
-            .iter()
-            .any(|page| url.starts_with(&format!("{}/-/{page}/", p.web_url)))
+        pages.iter().any(|page| {
+            url == format!("{}/-/{page}", p.web_url) || url.starts_with(&format!("{}/-/{page}/", p.web_url))
+        })
     }) {
         return Err(
             "Only merge request, pipeline and job pages of this repository's GitLab projects open from here".into(),
@@ -366,9 +370,10 @@ pub async fn github_pulls(
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
     accounts: State<'_, Accounts>,
-) -> CommandResult<Vec<PullSummary>> {
+) -> CommandResult<oxbow_core::pulls::PullList> {
     let (_, github) = github_repo_of(&session, &window)?;
     let client = accounts.client(&app)?;
+    let client = client.with_cancel(session.lane(&window, Some("github-pulls".into())));
     blocking(move || client.pulls(&github)).await
 }
 
@@ -383,6 +388,7 @@ pub async fn github_pull(
 ) -> CommandResult<PullRequest> {
     let (repo, github) = github_repo_of(&session, &window)?;
     let client = accounts.client(&app)?;
+    let client = client.with_cancel(session.lane(&window, Some("github-pull".into())));
     blocking(move || {
         let mut pull = client.pull_request(&github, number)?;
         let shas: Vec<String> = pull.commits.iter().map(|c| c.sha.clone()).collect();

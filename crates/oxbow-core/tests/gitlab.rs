@@ -117,29 +117,30 @@ fn a_signed_in_server_is_gitlab_whatever_its_name() {
 
 #[test]
 fn merge_requests_come_as_pull_requests() {
-    let (address, seen) = stand_in(vec![(
-        "/api/v4/projects/team%2Fapp/merge_requests",
-        r#"[
-          {"id":9101,"iid":12,"title":"Export CSV","state":"opened","draft":true,"source_branch":"csv","target_branch":"main",
-           "sha":"abc123","source_project_id":5,"target_project_id":5,"web_url":"https://git.corp/team/app/-/merge_requests/12",
-           "description":null,"author":{"username":"anna"},"created_at":"2026-10-20T10:00:00.000Z","updated_at":"2026-10-28T09:30:15.512Z",
-           "reviewers":[{"username":"boris"}]},
-          {"id":9100,"iid":11,"title":"Fix login","state":"merged","draft":false,"source_branch":"login","target_branch":"main",
-           "sha":"def456","source_project_id":8,"target_project_id":5,"web_url":"https://git.corp/team/app/-/merge_requests/11",
-           "description":"Closes #3","author":{"username":"boris"},"created_at":"2026-10-01T10:00:00Z","updated_at":"2026-10-02T10:00:00Z",
-           "reviewers":[]}
-        ]"#,
-    )]);
+    let (address, seen) = stand_in(vec![
+        (
+            "/api/v4/projects/team%2Fapp/merge_requests?scope=all&state=opened",
+            r#"[{"id": 9101, "iid": 12, "title": "Export CSV", "state": "opened", "draft": true, "source_branch": "csv", "target_branch": "main", "sha": "abc123", "source_project_id": 5, "target_project_id": 5, "web_url": "https://git.corp/team/app/-/merge_requests/12", "description": null, "author": {"username": "anna"}, "created_at": "2026-10-20T10:00:00.000Z", "updated_at": "2026-10-28T09:30:15.512Z", "reviewers": [{"username": "boris"}]}]"#,
+        ),
+        (
+            "/api/v4/projects/team%2Fapp/merge_requests?scope=all&state=closed",
+            r#"[]"#,
+        ),
+        (
+            "/api/v4/projects/team%2Fapp/merge_requests?scope=all&state=merged",
+            r#"[{"id": 9100, "iid": 11, "title": "Fix login", "state": "merged", "draft": false, "source_branch": "login", "target_branch": "main", "sha": "def456", "source_project_id": 8, "target_project_id": 5, "web_url": "https://git.corp/team/app/-/merge_requests/11", "description": "Closes #3", "author": {"username": "boris"}, "created_at": "2026-10-01T10:00:00Z", "updated_at": "2026-10-02T10:00:00Z", "reviewers": []}]"#,
+        ),
+    ]);
     let project = oxbow_core::GitLabProject {
         remote: "origin".into(),
         host: "git.corp".into(),
         path: "team/app".into(),
         web_url: "https://git.corp/team/app".into(),
     };
-    let list = client(&address).merge_requests(&project).unwrap();
+    let list = client(&address).merge_requests(&project).unwrap().items;
     assert_eq!(
         seen.lock().unwrap()[0].0,
-        "/api/v4/projects/team%2Fapp/merge_requests?state=all&order_by=updated_at&sort=desc&per_page=100"
+        "/api/v4/projects/team%2Fapp/merge_requests?scope=all&state=opened&order_by=updated_at&sort=desc&per_page=100&page=1"
     );
     let first = &list[0];
     assert_eq!(
@@ -168,7 +169,9 @@ fn merge_requests_come_as_pull_requests() {
     );
 
     let (address, _) = stand_in(vec![("/api/v4/projects", r#"404 {"message":"404 Project Not Found"}"#)]);
-    let message = client(&address).merge_requests(&project).unwrap_err().to_string();
+    let message = client(&address).merge_requests(&project).unwrap().issues[0]
+        .message
+        .clone();
     assert!(message.contains("doesn't know this project"), "{message}");
 }
 
@@ -837,4 +840,142 @@ fn publishing_makes_a_project_in_a_namespace_then_pushes_there() {
         "git remote add origin https://git.corp/acme/platform/billing.git"
     );
     assert!(shown[1].ends_with("-u origin main"), "{}", shown[1]);
+}
+
+fn leak_review(text: String) -> &'static str {
+    Box::leak(text.into_boxed_str())
+}
+fn review_project() -> oxbow_core::GitLabProject {
+    oxbow_core::GitLabProject {
+        remote: "origin".into(),
+        host: "git.corp".into(),
+        path: "team/app".into(),
+        web_url: "https://git.corp/team/app".into(),
+    }
+}
+
+#[test]
+fn open_merge_requests_are_paged_independently_from_closed_and_merged_history() {
+    let page = leak_review(
+        serde_json::to_string(
+            &(1..=100)
+                .map(|iid| serde_json::json!({"iid":iid,"state":"opened"}))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap(),
+    );
+    for (next, expected, state) in [
+        (r#"[{"iid":101,"state":"opened"}]"#, 101, None),
+        ("[]", 100, None),
+        (r#"429 {"message":"Rate limited"}"#, 100, Some("partial")),
+    ] {
+        let (address, seen) = stand_in(vec![
+            (
+                "/api/v4/projects/team%2Fapp/merge_requests?scope=all&state=opened&order_by=updated_at&sort=desc&per_page=100&page=1",
+                page,
+            ),
+            (
+                "/api/v4/projects/team%2Fapp/merge_requests?scope=all&state=opened&order_by=updated_at&sort=desc&per_page=100&page=2",
+                next,
+            ),
+            (
+                "/api/v4/projects/team%2Fapp/merge_requests?scope=all&state=closed",
+                "[]",
+            ),
+            (
+                "/api/v4/projects/team%2Fapp/merge_requests?scope=all&state=merged",
+                r#"[{"iid":200,"state":"merged"}]"#,
+            ),
+        ]);
+        let list = client(&address).merge_requests(&review_project()).unwrap();
+        assert_eq!(
+            list.items
+                .iter()
+                .filter(|p| p.state == oxbow_core::pulls::PullState::Open)
+                .count(),
+            expected
+        );
+        assert_eq!(list.issues.first().map(|i| i.state.as_str()), state);
+        assert!(list.items.iter().any(|p| p.number == 200));
+        assert!(seen.lock().unwrap().iter().all(|(p, _)| !p.contains("state=all")));
+    }
+}
+
+#[test]
+fn bounded_discussions_jobs_and_failed_approvals_are_not_empty_successes() {
+    let discussions = leak_review(serde_json::to_string(&(1..=100).map(|i| serde_json::json!({"id": format!("d{i}"),"notes":[{"id":i,"body":"kept","system":false,"created_at":"2026-10-20T10:00:00Z","author":{"username":"anna"}}]})).collect::<Vec<_>>()).unwrap());
+    let jobs = leak_review(
+        serde_json::to_string(
+            &(1..=100)
+                .map(|i| serde_json::json!({"id":i,"name": format!("job{i}"),"status":"success"}))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap(),
+    );
+    for discussion_answer in [discussions, r#"503 {"message":"Unavailable"}"#, "later failure"] {
+        let (address, _) = stand_in(vec![
+            ("/api/v4/projects/team%2Fapp/merge_requests/12/commits", "[]"),
+            (
+                "/api/v4/projects/team%2Fapp/merge_requests/12/discussions?per_page=100&page=2",
+                if discussion_answer == "later failure" {
+                    r#"503 {"message":"Unavailable"}"#
+                } else {
+                    discussion_answer
+                },
+            ),
+            (
+                "/api/v4/projects/team%2Fapp/merge_requests/12/discussions",
+                if discussion_answer == "later failure" {
+                    discussions
+                } else {
+                    discussion_answer
+                },
+            ),
+            (
+                "/api/v4/projects/team%2Fapp/merge_requests/12/approvals",
+                r#"403 {"message":"Forbidden"}"#,
+            ),
+            ("/api/v4/projects/team%2Fapp/merge_requests/12/reviewers", "[]"),
+            (
+                "/api/v4/projects/team%2Fapp/merge_requests/12",
+                r#"{"iid":12,"state":"opened","detailed_merge_status":"mergeable","head_pipeline":{"id":77,"status":"success"}}"#,
+            ),
+            ("/api/v4/projects/team%2Fapp/pipelines/77/jobs", jobs),
+            ("/api/v4/projects/team%2Fapp", "{}"),
+        ]);
+        let mr = client(&address).merge_request(&review_project(), 12).unwrap();
+        assert_eq!(mr.checks.len(), 300);
+        assert!(
+            mr.load_issues
+                .iter()
+                .any(|i| i.section == "Checks" && i.state == "partial")
+        );
+        assert!(
+            mr.load_issues
+                .iter()
+                .any(|i| i.section == "Approvals" && i.state == "unavailable")
+        );
+        if discussion_answer == discussions {
+            assert_eq!(mr.timeline.len(), 1000);
+            assert!(
+                mr.load_issues
+                    .iter()
+                    .any(|i| i.section == "Discussions" && i.state == "partial")
+            );
+        } else if discussion_answer == "later failure" {
+            assert_eq!(mr.timeline.len(), 100);
+            assert!(
+                mr.load_issues
+                    .iter()
+                    .any(|i| i.section == "Discussions" && i.state == "partial")
+            );
+        } else {
+            assert!(mr.timeline.is_empty());
+            assert!(
+                mr.load_issues
+                    .iter()
+                    .any(|i| i.section == "Discussions" && i.state == "unavailable")
+            );
+        }
+    }
 }

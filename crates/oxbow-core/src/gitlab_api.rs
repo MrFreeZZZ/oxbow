@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 use crate::error::{Error, Result};
 use crate::gitlab::GitLabProject;
 use crate::pulls::{
-    Call, Check, Comment, Entry, HunkLine, Method, Person, PullCommit, PullRequest, PullState, PullSummary,
-    RepoSettings, Review, Verdict, parse_time, text,
+    Call, Check, Comment, Entry, HunkLine, Loaded, Method, Person, PullCommit, PullList, PullRequest, PullState,
+    PullSummary, RepoSettings, Review, Verdict, loaded_read, optional_read, parse_time, read_pages, text,
 };
 use crate::repo::Repo;
 use crate::review::PullStatus;
@@ -168,6 +168,7 @@ pub struct Client {
     api: String,
     token: Option<String>,
     agent: ureq::Agent,
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl std::fmt::Debug for Client {
@@ -185,8 +186,15 @@ impl Client {
             api: format!("{}/api/v4", server.web),
             server,
             token: None,
+            cancel: None,
             agent: crate::github::agent(),
         }
+    }
+
+    /// Stop further pages when the window changes repository or starts a newer read.
+    pub fn with_cancel(mut self, cancel: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.cancel = Some(cancel);
+        self
     }
 
     pub fn with_token(mut self, token: impl Into<String>) -> Self {
@@ -210,17 +218,6 @@ impl Client {
 
     pub fn version_request(&self) -> Request {
         self.api_request("GET", "/version", None)
-    }
-
-    pub fn merge_requests_request(&self, project: &GitLabProject) -> Request {
-        self.api_request(
-            "GET",
-            &format!(
-                "/projects/{}/merge_requests?state=all&order_by=updated_at&sort=desc&per_page=100",
-                project_id(project)
-            ),
-            None,
-        )
     }
 
     /// The request `call` sends to merge request `!number`. Reviewing, which can take several
@@ -628,12 +625,36 @@ impl Client {
 
     /// The project's merge requests, open and recently closed, the latest updated first, in
     /// the shape of GitHub's pull requests: `number` is GitLab's `!12`.
-    pub fn merge_requests(&self, project: &GitLabProject) -> Result<Vec<PullSummary>> {
-        let body = self.call(&self.merge_requests_request(project))?;
-        Ok(body
-            .as_array()
-            .map(|list| list.iter().map(summary).collect())
-            .unwrap_or_default())
+    pub fn merge_requests(&self, project: &GitLabProject) -> Result<PullList> {
+        let mut items = Vec::new();
+        let mut issues = Vec::new();
+        // GitLab separates closed and merged history. Each state is read independently.
+        for (state, section, most) in [("opened", "Open", 10), ("closed", "Closed", 1), ("merged", "Merged", 1)] {
+            let loaded = self.read_list(
+                &format!(
+                    "/projects/{}/merge_requests?scope=all&state={state}&order_by=updated_at&sort=desc",
+                    project_id(project)
+                ),
+                most,
+                section,
+            );
+            items.extend(
+                loaded
+                    .items
+                    .iter()
+                    .map(summary)
+                    .filter(|p| section == "Open" || p.state != PullState::Open),
+            );
+            issues.extend(loaded.issue);
+        }
+        Ok(PullList { items, issues })
+    }
+
+    fn read_list(&self, path: &str, most: u32, section: &str) -> Loaded {
+        let join = if path.contains('?') { '&' } else { '?' };
+        read_pages(section, most, |page| {
+            self.call(&self.api_request("GET", &format!("{path}{join}per_page=100&page={page}"), None))
+        })
     }
 
     /// Every item of a list GitLab hands out 100 at a time, from at most `most` pages, and
@@ -658,7 +679,7 @@ impl Client {
 
     /// Everything the screen shows about merge request `!iid`, in the shape of a GitHub pull
     /// request, with what only GitLab has in [`PullRequest::gitlab`]. Parts this account may not
-    /// read are left empty; the line counts and the code under comments come from here
+    /// read have explicit load issues; the line counts and the code under comments come from here
     /// ([`Repo::merge_request_here`]).
     pub fn merge_request(&self, project: &GitLabProject, iid: u64) -> Result<PullRequest> {
         let at = format!("/projects/{}", project_id(project));
@@ -669,8 +690,8 @@ impl Client {
         };
         let (detail, commits, discussions, approvals, reviewers, settings) = std::thread::scope(|s| {
             let detail = s.spawn(get(format!("{mr}?include_diverged_commits_count=true")));
-            let commits = s.spawn(|| self.pages(&format!("{mr}/commits"), 5));
-            let discussions = s.spawn(|| self.pages(&format!("{mr}/discussions"), 10));
+            let commits = s.spawn(|| self.read_list(&format!("{mr}/commits"), 5, "Commits"));
+            let discussions = s.spawn(|| self.read_list(&format!("{mr}/discussions"), 10, "Discussions"));
             let approvals = s.spawn(get(format!("{mr}/approvals")));
             let reviewers = s.spawn(get(format!("{mr}/reviewers")));
             let settings = s.spawn(get(at.clone()));
@@ -683,25 +704,28 @@ impl Client {
                 settings.join(),
             )
         });
-        let joined = |r: std::thread::Result<Result<Value>>| r.unwrap_or(Ok(Value::Null));
-        let optional = |r: std::thread::Result<Result<Value>>| joined(r).unwrap_or(Value::Null);
+        let joined = |r: std::thread::Result<Result<Value>>| {
+            r.unwrap_or_else(|_| Err(Error::Git("The request worker stopped unexpectedly.".into())))
+        };
+        let mut load_issues = Vec::new();
         let detail = joined(detail)?;
         let settings = joined(settings)?;
-        let (commits, complete) = commits.unwrap_or(Ok((Vec::new(), true)))?;
-        let discussions = discussions
-            .unwrap_or(Ok((Vec::new(), true)))
-            .map_or_else(|_| Vec::new(), |(d, _)| d);
-        let approvals = optional(approvals);
-        let reviewers = optional(reviewers);
+        let commits = loaded_read("Commits", commits, &mut load_issues);
+        let complete = !load_issues.iter().any(|i| i.section == "Commits");
+        let discussions = loaded_read("Discussions", discussions, &mut load_issues);
+        let approvals = optional_read("Approvals", approvals, &mut load_issues);
+        let reviewers = optional_read("Reviewers", reviewers, &mut load_issues);
         let pipeline = detail.get("head_pipeline").filter(|p| !p.is_null()).map(|p| Pipeline {
             id: p.get("id").and_then(Value::as_u64).unwrap_or(0),
             status: text(p, "status"),
             url: text(p, "web_url"),
         });
         let jobs = match &pipeline {
-            Some(p) if p.id > 0 => self
-                .pages(&format!("{at}/pipelines/{}/jobs", p.id), 3)
-                .map_or_else(|_| Vec::new(), |(jobs, _)| jobs),
+            Some(p) if p.id > 0 => {
+                let loaded = self.read_list(&format!("{at}/pipelines/{}/jobs", p.id), 3, "Checks");
+                load_issues.extend(loaded.issue);
+                loaded.items
+            }
             _ => Vec::new(),
         };
 
@@ -759,6 +783,7 @@ impl Client {
                 .collect(),
         };
         Ok(PullRequest {
+            load_issues,
             additions: 0,
             deletions: 0,
             changed_files: digits.parse().unwrap_or(0),
@@ -930,6 +955,13 @@ impl Client {
 
     /// Send an API request; an error status comes back in words for people.
     pub(crate) fn call(&self, request: &Request) -> Result<Value> {
+        if self
+            .cancel
+            .as_ref()
+            .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            return Err(Error::Git("Loading stopped. Retry to load the remaining data.".into()));
+        }
         let token = self
             .token
             .as_deref()

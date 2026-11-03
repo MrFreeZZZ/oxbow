@@ -7,6 +7,9 @@
   // trunk from here, in three steps kept between runs: a push that fails goes on later. A merge
   // request on GitLab shows here the same way, in GitLab's words.
   import { onDestroy, untrack } from "svelte";
+  import { keepDetails } from "./reviewLoads";
+  import ReviewLoadNotice from "./ReviewLoadNotice.svelte";
+  import { confirm } from "./confirm.svelte";
   import { api } from "./api";
   import { nav } from "./nav.svelte";
   import { github } from "./github.svelte";
@@ -89,6 +92,14 @@
   /** Where it lives: the remote, and the account that owns the repository on GitHub. */
   const place = $derived(lab ? (github.mrProject ? { remote: github.mrProject.remote, owner: null as string | null } : null) : gh ? { remote: gh.remote, owner: gh.owner as string | null } : null);
   const pulls = $derived(github.listOf(forge));
+  const listIssues = $derived([
+    ...(lab ? github.mrIssues : github.issues).filter((i) => number || i.section === "Open"),
+    ...((lab ? github.mrProblem : github.problem) ? [{ section: "List", state: "unavailable" as const, message: (lab ? github.mrProblem : github.problem)! }] : []),
+  ]);
+  function openProviderList() {
+    const url = lab ? `${github.mrProject?.webUrl}/-/merge_requests` : `https://github.com/${gh?.owner}/${gh?.name}/pulls`;
+    (lab ? api.openGitLab(url) : api.openGitHub(url)).catch((err) => confirm.fail(err));
+  }
   const summary = $derived(number ? github.byNumber(number, forge) : github.pullOf(branch, forge));
   const signedIn = $derived(lab ? github.mrMe : github.me);
   let pr = $state<PullRequest | null>(null);
@@ -133,10 +144,17 @@
 
   // The pull request, again after every change; GitHub works out mergeability a moment later.
   let checksAgain = 0;
+  let loadId = 0;
+  let shownKey = "";
   $effect(() => {
     const number = summary?.number;
     void version;
+    void forge;
+    const key = JSON.stringify([nav.repo, forge, lab ? github.mrProject : github.repo, number]);
+    untrack(() => { if (shownKey !== key) { shownKey = key; pr = null; error = null; checksAgain = 0; } });
+    ++loadId;
     if (!number) {
+      api.stopReads(["github-pull", "gitlab-merge-request"]).catch(() => {});
       pr = null;
       return;
     }
@@ -160,7 +178,7 @@
       else { review?.dispose(); review = new ReviewSession(p, run, () => load(p.number), { workdir, place }, p.gitlab ? "gitlab" : "github"); }
     });
   });
-  onDestroy(() => review?.dispose());
+  onDestroy(() => { ++loadId; review?.dispose(); api.stopReads(["github-pull", "gitlab-merge-request"]).catch(() => {}); });
   // A suggestion goes into the files only while its branch is the one checked out.
   $effect(() => {
     const on = !!pr && history.head.branch === pr.head;
@@ -172,20 +190,26 @@
   const reviewable = $derived(!!review && !!signedIn && pr?.state === "open" && (!mine || review.count > 0));
 
   async function load(number: number) {
-    loading = !pr || pr.number !== number;
+    const id = ++loadId;
+    const of = forge;
+    const workdir = nav.repo;
+    const current = () => id === loadId && of === forge && workdir === nav.repo && summary?.number === number;
+    loading = true;
     try {
+      await api.stopReads(["github-pull", "gitlab-merge-request"]);
+      if (!current()) return;
       const fresh = await (lab ? api.gitlabMergeRequest(number) : api.githubPull(number));
-      if (summary?.number !== number) return;
-      pr = fresh;
+      if (!current()) return;
+      pr = keepDetails(pr, fresh);
       error = null;
       if (fresh.state === "open" && fresh.mergeableState === "unknown" && checksAgain < 3) {
         checksAgain++;
-        setTimeout(() => summary?.number === number && load(number), 2500);
+        setTimeout(() => current() && load(number), 2500);
       } else checksAgain = 0;
     } catch (err) {
-      error = String(err);
+      if (current()) error = String(err);
     } finally {
-      loading = false;
+      if (current()) loading = false;
     }
   }
 
@@ -295,11 +319,11 @@
       : null,
   );
   /** What keeps it from merging, the first one first. */
-  const blocked = $derived(facts ? blockers(facts) : []);
+  const blocked = $derived(facts ? blockers(error ? { ...facts, pr: { ...facts.pr, loadIssues: [...(facts.pr.loadIssues ?? []), { section: "Details refresh", state: "unavailable", message: error }] } } : facts) : []);
   const next = $derived(facts ? nextStep(facts, blocked) : null);
   const also = $derived(blocked.slice(1).flatMap((b) => (b.short ? [b.short] : [])));
   const checking = $derived(!!pr && pr.state === "open" && pr.mergeableState === "unknown");
-  const canMerge = $derived(!!pr && pr.state === "open" && !blocked.length && !checking && pr.mergeable !== false);
+  const canMerge = $derived(!!pr && pr.state === "open" && !error && !blocked.length && !checking && pr.mergeable !== false);
 
   const methods = $derived(pr ? methodsOf(pr) : []);
   const chosen = $derived(method && methods.some((m) => m.id === method) ? method : pr ? defaultMethod(pr, methods) : "merge");
@@ -327,6 +351,7 @@
 
   const checksSummary = $derived.by(() => {
     if (!pr) return { text: "", tone: "" };
+    if (pr.loadIssues?.some((i) => ["Checks", "Statuses"].includes(i.section))) return { text: "Incomplete", tone: "warn" };
     if (failing.length) return { text: `${failing.length} failing`, tone: "bad" };
     if (running.length) return { text: `${running.length} running`, tone: "warn" };
     return { text: `${pr.checks.filter((c) => c.state === "ok").length} passed`, tone: "ok" };
@@ -757,10 +782,19 @@
     {:else if (lab ? github.mrProblem : github.problem) && !pulls.length}
       <div class="empty">
         <span>{lab ? github.mrProblem : github.problem}</span>
+        <button class="button" onclick={() => github.refresh()}>Retry</button>
         <button class="capsule" onclick={() => api.openSettings()}>Open Settings</button>
       </div>
+    {:else if !summary && (lab ? github.mrLoading : github.loading)}
+      <div class="empty">Loading {w.noun}s…</div>
+    {:else if !summary && listIssues.length}
+      <ReviewLoadNotice issues={listIssues} provider={w.name} retry={() => github.refresh()} open={openProviderList} />
+      <div class="empty">The list is incomplete. Retry or continue on {w.name} to find this branch’s {w.noun}.</div>
     {:else if summary && !pr}
-      <div class="empty">{error ?? (loading ? `Loading ${w.mark}${summary.number}…` : "")}</div>
+      <div class="empty">
+        <span>{error ?? (loading ? `Loading ${w.mark}${summary.number}…` : "")}</span>
+        {#if error}<button class="button" onclick={() => summary && load(summary.number)}>Retry</button>{/if}
+      </div>
     {:else if pr}
       <div class="title-block">
         <div class="title-row">
@@ -814,6 +848,11 @@
         {/if}
       </div>
 
+      <ReviewLoadNotice
+        issues={[...(pr.loadIssues ?? []), ...(error ? [{ section: "Details refresh", state: "unavailable" as const, message: error }] : [])]}
+        busy={loading} provider={w.name} retry={() => pr && load(pr.number)}
+        open={() => pr && (lab ? api.openGitLab(pr.htmlUrl) : api.openGitHub(pr.htmlUrl)).catch((err) => confirm.fail(err))}
+      />
       {#if tab === "files"}
         {#if review}<PullFiles session={review} me={signedIn} color={colorOf(pr.head)} {version} />{/if}
       {:else}

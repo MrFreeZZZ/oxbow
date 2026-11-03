@@ -53,11 +53,11 @@ const RUNS: &str = r#"{"check_runs":[
  {"name":"test","status":"completed","conclusion":"success","started_at":"2026-10-08T09:20:00Z","completed_at":"2026-10-08T09:21:00Z"},
  {"name":"build","status":"in_progress","conclusion":null,"started_at":"2026-10-08T09:31:00Z","completed_at":null}]}"#;
 
-const STATUS: &str = r#"{"statuses":[{"context":"ci/lint","state":"success","description":"No problems"}]}"#;
+const STATUS: &str = r#"[{"context":"ci/lint","state":"success","description":"No problems"}]"#;
 
 const RULES: &str = r#"[{"type":"pull_request","parameters":{"required_approving_review_count":1}}]"#;
 
-const THREADS: &str = r#"{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false,"comments":{"nodes":[{"databaseId":11}]}}]}}}}}"#;
+const THREADS: &str = r#"{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"isResolved":false,"comments":{"nodes":[{"databaseId":11}]}}]}}}}}"#;
 
 #[test]
 fn a_pull_request_is_read_in_full() {
@@ -67,7 +67,7 @@ fn a_pull_request_is_read_in_full() {
         ("/repos/acme/api/pulls/419", PULL),
         ("/repos/acme/api/issues/419/timeline", TIMELINE),
         ("/repos/acme/api/commits/e17a5c9aaaa/check-runs", RUNS),
-        ("/repos/acme/api/commits/e17a5c9aaaa/status", STATUS),
+        ("/repos/acme/api/commits/e17a5c9aaaa/statuses", STATUS),
         ("/repos/acme/api/rules/branches/auth/1-models", RULES),
         ("/graphql", THREADS),
         ("/repos/acme/api", REPO),
@@ -554,4 +554,213 @@ fn more_commits_than_github_lists_are_marked() {
     let pr = client.pull_request(&acme(), 419).unwrap();
     assert_eq!(pr.commits.len(), 300);
     assert!(!pr.commits_complete);
+}
+
+fn leaked(value: String) -> &'static str {
+    Box::leak(value.into_boxed_str())
+}
+
+#[test]
+fn old_open_requests_survive_busy_closed_history_and_open_pages_are_followed() {
+    let first = serde_json::to_string(&vec![serde_json::from_str::<serde_json::Value>(PULL).unwrap(); 100]).unwrap();
+    let closed = first.replace("\"state\":\"open\"", "\"state\":\"closed\"");
+    let old = PULL.replace("419", "1");
+    let address = server(vec![
+        (
+            "/repos/acme/api/pulls?state=open&sort=updated&direction=desc&per_page=100&page=1",
+            leaked(first),
+        ),
+        (
+            "/repos/acme/api/pulls?state=open&sort=updated&direction=desc&per_page=100&page=2",
+            leaked(format!("[{old}]")),
+        ),
+        ("/repos/acme/api/pulls?state=closed", leaked(closed)),
+    ]);
+    let list = Client::new(&address, &address).with_token("t").pulls(&acme()).unwrap();
+    assert!(list.items.iter().any(|p| p.number == 1 && p.state == PullState::Open));
+    assert_eq!(list.items.iter().filter(|p| p.state == PullState::Open).count(), 101);
+    assert_eq!(list.issues.len(), 1);
+    assert_eq!(list.issues[0].section, "Closed");
+    assert_eq!(list.issues[0].state, "partial");
+}
+
+#[test]
+fn empty_complete_lists_differ_from_auth_failures_and_failed_later_pages() {
+    let first =
+        leaked(serde_json::to_string(&vec![serde_json::from_str::<serde_json::Value>(PULL).unwrap(); 100]).unwrap());
+    for (open, second, expected, state) in [
+        ("[]", "[]", 0, None),
+        (first, "[]", 100, None),
+        (first, "429 {\"message\":\"rate limit exceeded\"}", 100, Some("partial")),
+        ("401 {\"message\":\"Bad credentials\"}", "[]", 0, Some("unavailable")),
+    ] {
+        let address = support::stand_in(vec![
+            (
+                "/repos/acme/api/pulls?state=open&sort=updated&direction=desc&per_page=100&page=1",
+                open,
+            ),
+            (
+                "/repos/acme/api/pulls?state=open&sort=updated&direction=desc&per_page=100&page=2",
+                second,
+            ),
+            ("/repos/acme/api/pulls?state=closed", "[]"),
+        ])
+        .0;
+        let list = Client::new(&address, &address).with_token("t").pulls(&acme()).unwrap();
+        assert_eq!(list.items.len(), expected);
+        assert_eq!(list.issues.first().map(|i| i.state.as_str()), state);
+        // Retry uses the same algorithm and can complete after the failure.
+        let retry = server(vec![("/repos/acme/api/pulls", "[]")]);
+        assert!(
+            Client::new(&retry, &retry)
+                .with_token("t")
+                .pulls(&acme())
+                .unwrap()
+                .issues
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn optional_details_failures_are_visible_and_successful_comments_remain() {
+    let address = support::stand_in(vec![
+        ("/repos/acme/api/pulls/419/comments", COMMENTS),
+        ("/repos/acme/api/pulls/419/commits", COMMITS),
+        ("/repos/acme/api/pulls/419", PULL),
+        ("/repos/acme/api/issues/419/timeline", TIMELINE),
+        (
+            "/repos/acme/api/commits/e17a5c9aaaa/check-runs",
+            "403 {\"message\":\"Forbidden\"}",
+        ),
+        ("/repos/acme/api/commits/e17a5c9aaaa/statuses", STATUS),
+        ("/repos/acme/api/rules/branches/", RULES),
+        (
+            "/graphql",
+            "{\"errors\":[{\"message\":\"Threads forbidden\"}],\"data\":null}",
+        ),
+        ("/repos/acme/api", REPO),
+    ])
+    .0;
+    let pr = Client::new(&address, &address)
+        .with_token("t")
+        .pull_request(&acme(), 419)
+        .unwrap();
+    assert!(pr.timeline.iter().any(|e| matches!(e, Entry::Thread { .. })));
+    assert_eq!(pr.checks.len(), 1, "the successful commit statuses remain");
+    assert!(
+        pr.load_issues
+            .iter()
+            .any(|i| i.section == "Threads" && i.state == "unavailable")
+    );
+    assert!(
+        pr.load_issues
+            .iter()
+            .any(|i| i.section == "Checks" && i.state == "unavailable")
+    );
+}
+
+#[test]
+fn superseded_reads_stop_before_contacting_the_provider() {
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let client = Client::new("http://127.0.0.1:1", "http://127.0.0.1:1")
+        .with_token("t")
+        .with_cancel(cancel);
+    let list = client.pulls(&acme()).unwrap();
+    assert!(list.items.is_empty());
+    assert!(list.issues.iter().all(|i| i.message.contains("Loading stopped")));
+}
+
+#[test]
+fn thread_cursors_are_followed_and_later_failures_keep_earlier_threads() {
+    let page = r#"{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":true,"endCursor":"next"},"nodes":[{"id":"T1","isResolved":true,"comments":{"nodes":[{"databaseId":11}]}}]}}}}}"#;
+    for second in [THREADS, r#"{"errors":[{"message":"Rate limited"}]}"#] {
+        let (address, seen) = support::stand_in(vec![
+            ("/repos/acme/api/pulls/419/comments", COMMENTS),
+            ("/repos/acme/api/pulls/419/commits", COMMITS),
+            ("/repos/acme/api/pulls/419", PULL),
+            ("/repos/acme/api/issues/419/timeline", TIMELINE),
+            ("/repos/acme/api/commits/e17a5c9aaaa/check-runs", RUNS),
+            ("/repos/acme/api/commits/e17a5c9aaaa/statuses", STATUS),
+            ("/repos/acme/api/rules/branches/", RULES),
+            ("/graphql \"cursor\":null", page),
+            ("/graphql \"cursor\":\"next\"", second),
+            ("/repos/acme/api", REPO),
+        ]);
+        let pr = Client::new(&address, &address)
+            .with_token("t")
+            .pull_request(&acme(), 419)
+            .unwrap();
+        assert_eq!(seen.lock().unwrap().iter().filter(|(p, _)| p == "/graphql").count(), 2);
+        if second == THREADS {
+            assert!(!pr.load_issues.iter().any(|i| i.section == "Threads"));
+        } else {
+            assert!(
+                pr.load_issues
+                    .iter()
+                    .any(|i| i.section == "Threads" && i.state == "partial")
+            );
+            assert!(pr.timeline.iter().any(|e| matches!(
+                e,
+                Entry::Thread {
+                    resolved: Some(true),
+                    ..
+                }
+            )));
+        }
+    }
+}
+
+#[test]
+fn checks_after_first_page_are_visible_and_comment_limits_are_reported() {
+    let runs = leaked(serde_json::json!({"check_runs": (0..100).map(|n| serde_json::json!({"name":format!("test{n}"),"status":"completed","conclusion":"success"})).collect::<Vec<_>>()}).to_string());
+    let comments = leaked(
+        serde_json::json!(
+            (0..100)
+                .map(|n| serde_json::json!({"id":n,"path":"api.rs","body":"kept","line":1,"user":{"login":"anna"}}))
+                .collect::<Vec<_>>()
+        )
+        .to_string(),
+    );
+    let (address, seen) = support::stand_in(vec![
+        ("/repos/acme/api/pulls/419/comments", comments),
+        ("/repos/acme/api/pulls/419/commits", COMMITS),
+        ("/repos/acme/api/pulls/419", PULL),
+        ("/repos/acme/api/issues/419/timeline", "[]"),
+        (
+            "/repos/acme/api/commits/e17a5c9aaaa/check-runs?per_page=100&page=1",
+            runs,
+        ),
+        (
+            "/repos/acme/api/commits/e17a5c9aaaa/check-runs?per_page=100&page=2",
+            r#"{"check_runs":[{"name":"required-security","status":"completed","conclusion":"failure"}]}"#,
+        ),
+        ("/repos/acme/api/commits/e17a5c9aaaa/statuses", "[]"),
+        ("/repos/acme/api/rules/branches/", RULES),
+        ("/graphql", THREADS),
+        ("/repos/acme/api", REPO),
+    ]);
+    let pr = Client::new(&address, &address)
+        .with_token("t")
+        .pull_request(&acme(), 419)
+        .unwrap();
+    assert_eq!(pr.checks.len(), 101);
+    assert!(
+        pr.checks
+            .iter()
+            .any(|c| c.name == "required-security" && c.state == "fail")
+    );
+    assert!(
+        pr.load_issues
+            .iter()
+            .any(|i| i.section == "Comments" && i.state == "partial")
+    );
+    assert_eq!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter(|(p, _)| p.contains("/comments?"))
+            .count(),
+        10
+    );
 }

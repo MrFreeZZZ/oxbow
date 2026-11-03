@@ -180,6 +180,7 @@ pub struct Client {
     web: String,
     token: Option<String>,
     agent: ureq::Agent,
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl std::fmt::Debug for Client {
@@ -208,8 +209,15 @@ impl Client {
             api: api.trim_end_matches('/').to_owned(),
             web: web.trim_end_matches('/').to_owned(),
             token: None,
+            cancel: None,
             agent: agent(),
         }
+    }
+
+    /// Stop further pages when the window changes repository or starts a newer read.
+    pub fn with_cancel(mut self, cancel: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.cancel = Some(cancel);
+        self
     }
 
     pub fn with_token(mut self, token: impl Into<String>) -> Self {
@@ -356,6 +364,13 @@ impl Client {
 
     /// Send an API request; an error status comes back as GitHub's own message.
     pub(crate) fn call(&self, request: &Request) -> Result<Response> {
+        if self
+            .cancel
+            .as_ref()
+            .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            return Err(Error::Git("Loading stopped. Retry to load the remaining data.".into()));
+        }
         let response = self.send(request)?;
         if response.status >= 400 {
             return Err(github(

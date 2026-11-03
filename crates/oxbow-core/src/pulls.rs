@@ -538,6 +538,7 @@ pub struct PullSummary {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullRequest {
+    pub load_issues: Vec<LoadIssue>,
     #[serde(flatten)]
     pub summary: PullSummary,
     pub additions: u32,
@@ -568,6 +569,107 @@ pub struct PullRequest {
     pub settings: RepoSettings,
     /// What only a merge request on GitLab has; `None` on GitHub.
     pub gitlab: Option<crate::gitlab_api::GitLabFacts>,
+}
+
+/// An absent issue means a complete result, including a genuinely empty one.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadIssue {
+    pub section: String,
+    pub state: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullList {
+    pub items: Vec<PullSummary>,
+    pub issues: Vec<LoadIssue>,
+}
+
+pub(crate) struct Loaded {
+    pub items: Vec<Value>,
+    pub issue: Option<LoadIssue>,
+}
+
+/// Sequential, bounded reads keep successful pages if a later page fails. Exact multiples
+/// need an extra empty page; reaching the bound is conservatively reported as partial.
+pub(crate) fn read_pages(section: &str, most: u32, mut fetch: impl FnMut(u32) -> Result<Value>) -> Loaded {
+    let mut items = Vec::new();
+    for page in 1..=most {
+        match fetch(page) {
+            Ok(Value::Array(list)) => {
+                let last = list.len() < 100;
+                items.extend(list);
+                if last {
+                    return Loaded { items, issue: None };
+                }
+            }
+            result => {
+                let message = match result {
+                    Err(err) => err.to_string(),
+                    _ => "The provider returned an unexpected list response.".to_owned(),
+                };
+                let state = if page == 1 { "unavailable" } else { "partial" };
+                return Loaded {
+                    items,
+                    issue: Some(LoadIssue {
+                        section: section.into(),
+                        state: state.into(),
+                        message,
+                    }),
+                };
+            }
+        }
+    }
+    let message = format!(
+        "Showing the first {} results. Continue on the provider’s website.",
+        items.len()
+    );
+    Loaded {
+        items,
+        issue: Some(LoadIssue {
+            section: section.into(),
+            state: "partial".into(),
+            message,
+        }),
+    }
+}
+
+pub(crate) fn optional_read(
+    section: &str,
+    result: std::thread::Result<Result<Value>>,
+    issues: &mut Vec<LoadIssue>,
+) -> Value {
+    let result = result.unwrap_or_else(|_| Err(Error::Git("The request worker stopped unexpectedly.".into())));
+    match result {
+        Ok(value) => value,
+        Err(err) => {
+            issues.push(LoadIssue {
+                section: section.into(),
+                state: "unavailable".into(),
+                message: err.to_string(),
+            });
+            Value::Null
+        }
+    }
+}
+
+pub(crate) fn loaded_read(
+    section: &str,
+    result: std::thread::Result<Loaded>,
+    issues: &mut Vec<LoadIssue>,
+) -> Vec<Value> {
+    match result {
+        Ok(loaded) => {
+            issues.extend(loaded.issue);
+            loaded.items
+        }
+        Err(_) => {
+            optional_read(section, Err(Box::new(())), issues);
+            Vec::new()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -964,18 +1066,10 @@ const REVIEW_REPLY: &str = "mutation($review: ID!, $thread: ID!, $body: String!)
 const SUBMIT_REVIEW: &str = "mutation($review: ID!, $event: PullRequestReviewEvent!, $body: String) { submitPullRequestReview(input: {pullRequestReviewId: $review, event: $event, body: $body}) { pullRequestReview { url } } }";
 const DELETE_REVIEW: &str =
     "mutation($review: ID!) { deletePullRequestReview(input: {pullRequestReviewId: $review}) { clientMutationId } }";
-const THREADS: &str = "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes { id isResolved comments(first: 1) { nodes { databaseId } } } } } } }";
+const THREADS: &str = "query($owner: String!, $name: String!, $number: Int!, $cursor: String) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { id isResolved comments(first: 1) { nodes { databaseId } } } } } } }";
 
 impl Client {
     // Requests, to show and then send.
-
-    pub fn pulls_request(&self, repo: &GitHubRepo) -> Request {
-        self.api_request(
-            "GET",
-            &repo.path("/pulls?state=all&sort=updated&direction=desc&per_page=100"),
-            None,
-        )
-    }
 
     pub fn pull_request_request(&self, repo: &GitHubRepo, number: u64) -> Request {
         self.api_request("GET", &repo.path(&format!("/pulls/{number}")), None)
@@ -1146,48 +1240,119 @@ impl Client {
 
     // Reading.
 
-    /// The repository's pull requests, open and recently closed, the latest updated first.
-    pub fn pulls(&self, repo: &GitHubRepo) -> Result<Vec<PullSummary>> {
-        let body = self.call(&self.pulls_request(repo))?.body;
-        Ok(body
-            .as_array()
-            .map(|list| list.iter().map(summary).collect())
-            .unwrap_or_default())
+    /// Open requests are independent of recently closed history: old open requests cannot
+    /// be displaced by a busy closed history. Reads are bounded to avoid monopolizing quota.
+    pub fn pulls(&self, repo: &GitHubRepo) -> Result<PullList> {
+        let mut items = Vec::new();
+        let mut issues = Vec::new();
+        for (state, section, most) in [("open", "Open", 10), ("closed", "Closed", 1)] {
+            let loaded = self.pages(
+                repo,
+                &format!("/pulls?state={state}&sort=updated&direction=desc"),
+                most,
+                section,
+                None,
+            );
+            items.extend(loaded.items.iter().map(summary));
+            issues.extend(loaded.issue);
+        }
+        Ok(PullList { items, issues })
     }
 
-    /// Every item of a list GitHub hands out 100 at a time, from at most `most` pages: a page
-    /// with fewer is the last one.
-    fn pages(&self, repo: &GitHubRepo, path: &str, most: u32) -> Result<Value> {
-        let mut items = Vec::new();
-        for page in 1..=most {
-            let request = self.api_request("GET", &repo.path(&format!("{path}?per_page=100&page={page}")), None);
+    fn pages(&self, repo: &GitHubRepo, path: &str, most: u32, section: &str, key: Option<&str>) -> Loaded {
+        let join = if path.contains('?') { '&' } else { '?' };
+        read_pages(section, most, |page| {
+            let request = self.api_request(
+                "GET",
+                &repo.path(&format!("{path}{join}per_page=100&page={page}")),
+                None,
+            );
             let body = self.call(&request)?.body;
-            let list = match body {
-                Value::Array(list) => list,
-                _ => break,
-            };
-            let last = list.len() < 100;
-            items.extend(list);
-            if last {
-                break;
+            Ok(match key {
+                Some(key) => body.get(key).cloned().unwrap_or(Value::Null),
+                None => body,
+            })
+        })
+    }
+
+    fn threads(&self, repo: &GitHubRepo, number: u64) -> Loaded {
+        let mut cursor = Value::Null;
+        let mut items = Vec::new();
+        for _ in 0..10 {
+            let page = (|| -> Result<(Vec<Value>, bool, Value)> {
+                let request = self.graphql_request(
+                    THREADS,
+                    json!({ "owner": repo.owner, "name": repo.name, "number": number, "cursor": cursor }),
+                );
+                let body = self.call(&request)?.body;
+                if let Some(message) = graphql_error(&body) {
+                    return Err(Error::Git(message));
+                }
+                let connection = body
+                    .pointer("/data/repository/pullRequest/reviewThreads")
+                    .ok_or_else(|| Error::Git("Threads were not returned.".into()))?;
+                let nodes = connection
+                    .get("nodes")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .ok_or_else(|| Error::Git("Threads were not returned.".into()))?;
+                let more = connection
+                    .pointer("/pageInfo/hasNextPage")
+                    .and_then(Value::as_bool)
+                    .ok_or_else(|| Error::Git("Thread pagination was not returned.".into()))?;
+                let next = connection
+                    .pointer("/pageInfo/endCursor")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                if more && (!next.is_string() || next == cursor) {
+                    return Err(Error::Git("Thread pagination could not continue.".into()));
+                }
+                Ok((nodes, more, next))
+            })();
+            match page {
+                Ok((nodes, more, next)) => {
+                    items.extend(nodes);
+                    if !more {
+                        return Loaded { items, issue: None };
+                    }
+                    cursor = next;
+                }
+                Err(err) => {
+                    let state = if items.is_empty() { "unavailable" } else { "partial" };
+                    return Loaded {
+                        items,
+                        issue: Some(LoadIssue {
+                            section: "Threads".into(),
+                            state: state.into(),
+                            message: err.to_string(),
+                        }),
+                    };
+                }
             }
         }
-        Ok(Value::Array(items))
+        Loaded {
+            items,
+            issue: Some(LoadIssue {
+                section: "Threads".into(),
+                state: "partial".into(),
+                message: "Showing the first 10 pages. Continue on the provider’s website.".into(),
+            }),
+        }
     }
 
-    /// Everything about pull request `number`. Parts this account may not read are left empty.
+    /// Details and successful pages, with explicit issues for unreadable or bounded sections.
     pub fn pull_request(&self, repo: &GitHubRepo, number: u64) -> Result<PullRequest> {
         let get = |path: String| {
             let request = self.api_request("GET", &repo.path(&path), None);
             move || self.call(&request).map(|r| r.body)
         };
-        let all = |path: String, most: u32| move || self.pages(repo, &path, most);
+        let all = |path: String, most: u32, section: &'static str| move || self.pages(repo, &path, most, section, None);
         let (pull, commits, comments, timeline, settings) = std::thread::scope(|s| {
             let pull = s.spawn(get(format!("/pulls/{number}")));
             // GitHub lists at most 250 commits of a pull request, however many pages are asked for.
-            let commits = s.spawn(all(format!("/pulls/{number}/commits"), 3));
-            let comments = s.spawn(all(format!("/pulls/{number}/comments"), 10));
-            let timeline = s.spawn(all(format!("/issues/{number}/timeline"), 10));
+            let commits = s.spawn(all(format!("/pulls/{number}/commits"), 3, "Commits"));
+            let comments = s.spawn(all(format!("/pulls/{number}/comments"), 10, "Comments"));
+            let timeline = s.spawn(all(format!("/issues/{number}/timeline"), 10, "Timeline"));
             let settings = s.spawn(get(String::new()));
             (
                 pull.join(),
@@ -1197,45 +1362,63 @@ impl Client {
                 settings.join(),
             )
         });
-        let joined = |r: std::thread::Result<Result<Value>>| r.unwrap_or(Ok(Value::Null));
+        let joined = |r: std::thread::Result<Result<Value>>| {
+            r.unwrap_or_else(|_| Err(Error::Git("The request worker stopped unexpectedly.".into())))
+        };
         let pull = joined(pull)?;
         let summary = summary(&pull);
         let sha = summary.head_sha.clone();
         let base = summary.base.clone();
         let (runs, statuses, rules, threads) = std::thread::scope(|s| {
-            let runs = s.spawn(get(format!("/commits/{sha}/check-runs?per_page=100")));
-            let statuses = s.spawn(get(format!("/commits/{sha}/status")));
-            let rules = s.spawn(get(format!("/rules/branches/{}", path_part(&base))));
-            let threads = s.spawn(|| {
-                let request = self.graphql_request(
-                    THREADS,
-                    json!({ "owner": repo.owner, "name": repo.name, "number": number }),
-                );
-                self.call(&request).map(|r| r.body)
+            let runs = s.spawn(|| {
+                self.pages(
+                    repo,
+                    &format!("/commits/{sha}/check-runs"),
+                    10,
+                    "Checks",
+                    Some("check_runs"),
+                )
             });
+            let statuses = s.spawn(|| self.pages(repo, &format!("/commits/{sha}/statuses"), 10, "Statuses", None));
+            let rules = s.spawn(get(format!("/rules/branches/{}", path_part(&base))));
+            let threads = s.spawn(|| self.threads(repo, number));
             (runs.join(), statuses.join(), rules.join(), threads.join())
         });
-        let optional = |r: std::thread::Result<Result<Value>>| joined(r).unwrap_or(Value::Null);
+        let mut load_issues = Vec::new();
         let settings = repo_settings(&joined(settings)?);
-        let commits = joined(commits)?;
-        let comments = optional(comments);
-        let timeline = optional(timeline);
-        let resolved = resolved_threads(&optional(threads));
+        let commits = Value::Array(loaded_read("Commits", commits, &mut load_issues));
+        let comments = Value::Array(loaded_read("Comments", comments, &mut load_issues));
+        let timeline = Value::Array(loaded_read("Timeline", timeline, &mut load_issues));
+        let threads = loaded_read("Threads", threads, &mut load_issues);
+        let resolved = resolved_threads(
+            &json!({ "data": { "repository": { "pullRequest": { "reviewThreads": { "nodes": threads } } } } }),
+        );
+        let runs = loaded_read("Checks", runs, &mut load_issues);
+        let statuses = loaded_read("Statuses", statuses, &mut load_issues);
+        let rules = optional_read("Merge rules", rules, &mut load_issues);
 
         let commits: Vec<PullCommit> = commits
             .as_array()
             .map(|c| c.iter().map(pull_commit).collect())
             .unwrap_or_default();
         let commit_count = pull.get("commits").and_then(Value::as_u64).unwrap_or(0);
+        if (commits.len() as u64) < commit_count && !load_issues.iter().any(|i| i.section == "Commits") {
+            load_issues.push(LoadIssue {
+                section: "Commits".into(),
+                state: "partial".into(),
+                message: "GitHub does not expose every commit here. Continue on GitHub.".into(),
+            });
+        }
         let mut entries = conversation(&timeline, &comments, &resolved);
         entries.sort_by_key(Entry::time);
         let reviews = latest_reviews(&timeline);
-        let checks = checks(&optional(runs), &optional(statuses));
-        let required_approvals = required_approvals(&optional(rules));
+        let checks = checks(&json!({"check_runs": runs}), &json!({"statuses": statuses}));
+        let required_approvals = required_approvals(&rules);
 
         let number_field = |key: &str| pull.get(key).and_then(Value::as_u64).unwrap_or(0) as u32;
         let summary_state = summary.state;
         Ok(PullRequest {
+            load_issues,
             additions: number_field("additions"),
             deletions: number_field("deletions"),
             changed_files: number_field("changed_files"),

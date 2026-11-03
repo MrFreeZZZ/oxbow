@@ -4,6 +4,8 @@
   // checks the pull request out in a worktree of its own. Merge requests on GitLab show the same
   // way once signed in there; a repository on both picks one at the top.
   import { untrack } from "svelte";
+  import ReviewLoadNotice from "./ReviewLoadNotice.svelte";
+  import { confirm } from "./confirm.svelte";
   import { api } from "./api";
   import { github } from "./github.svelte";
   import type { Request } from "./confirm.svelte";
@@ -52,6 +54,14 @@
   const me = $derived(github.meOf(forge));
   const statuses = $derived(github.statusesOf(forge));
   const problem = $derived(lab ? github.mrProblem : github.problem);
+  const issues = $derived([
+    ...(lab ? github.mrIssues : github.issues).filter((i) => closed ? i.section !== "Open" : i.section === "Open"),
+    ...(problem ? [{ section: "List refresh", state: "unavailable" as const, message: problem }] : []),
+  ]);
+  function openProvider() {
+    const url = lab ? `${github.mrProject?.webUrl}/-/merge_requests` : `https://github.com/${gh?.owner}/${gh?.name}/pulls`;
+    (lab ? api.openGitLab(url) : api.openGitHub(url)).catch((err) => confirm.fail(err));
+  }
   const list = $derived(github.listOf(forge));
   const sections = $derived(listFor(list, me, closed));
   const repoPath = $derived(ctx.history.worktrees.find((t) => t.current)?.path ?? "");
@@ -180,7 +190,10 @@
       <button role="radio" aria-checked={closed} class:on={closed} onclick={() => (closed = true)}>Closed</button>
     </span>
   </div>
-  {#if !place}
+  <ReviewLoadNotice {issues} busy={lab ? github.mrLoading : github.loading} provider={w.name} retry={() => github.refresh()} open={openProvider} />
+  {#if !place && (github.loading || github.mrLoading)}
+    <div class="empty">Loading…</div>
+  {:else if !place}
     <div class="empty">This repository has no remote on github.com, nor a GitLab project on a server you are signed in to.</div>
   {:else if problem && !list.length}
     <div class="empty">
@@ -188,7 +201,7 @@
       <button class="button" onclick={() => api.openSettings()}>Open Settings</button>
     </div>
   {:else if !sections.some((s) => s.pulls.length)}
-    <div class="empty">{closed ? `No ${w.noun} was closed lately.` : `No open ${w.noun}s.`}</div>
+    <div class="empty">{(lab ? github.mrLoading : github.loading) ? "Loading…" : issues.length ? "No matching requests have been loaded." : closed ? `No ${w.noun} was closed lately.` : `No open ${w.noun}s.`}</div>
   {:else}
     <div class="scroll">
       {#each sections as s (s.title)}

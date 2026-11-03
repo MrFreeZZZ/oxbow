@@ -1900,7 +1900,19 @@ export interface MergeSettings {
   canPush: boolean;
 }
 
+export interface LoadIssue {
+  section: string;
+  state: "partial" | "unavailable";
+  message: string;
+}
+
+export interface PullList {
+  items: PullSummary[];
+  issues: LoadIssue[];
+}
+
 export interface PullRequest extends PullSummary {
+  loadIssues: LoadIssue[];
   additions: number;
   deletions: number;
   changedFiles: number;

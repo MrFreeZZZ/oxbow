@@ -141,6 +141,7 @@ export function blockers(f: NextFacts): Blocker[] {
   const n = (number: number) => `${w.mark}${number}`;
   if (pr.state !== "open") return [];
   const out: Blocker[] = [];
+  if (pr.loadIssues?.length) out.push({ kind: "checking", title: "Load review details", text: "Review and merge readiness cannot be confirmed. Retry loading the missing details or continue on the provider’s website.", short: "Review details incomplete" });
   const status = pr.gitlab?.mergeStatus ?? null;
   // GitLab waits for the pipeline only when the project asks it to.
   const strict = status !== null ? status === "ci_must_pass" || status === "ci_still_running" : pr.mergeableState === "blocked";

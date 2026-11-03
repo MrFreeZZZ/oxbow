@@ -84,6 +84,7 @@ import type {
   GitLabUser,
   PullCall,
   PullRequest,
+  PullList,
   PullStatus,
   ReviewDraft,
   ReviewTarget,
@@ -364,7 +365,7 @@ export const api = {
   githubRepo: () => invoke<GitHubRepo | null>("github_repo"),
   /** The GitLab projects the remotes point at, the default remote's first. */
   gitlabProjects: () => invoke<GitLabProject[]>("gitlab_projects"),
-  gitlabMergeRequests: () => invoke<{ project: GitLabProject; mergeRequests: PullSummary[] } | null>("gitlab_merge_requests"),
+  gitlabMergeRequests: () => invoke<{ project: GitLabProject; mergeRequests: PullList } | null>("gitlab_merge_requests"),
   /** Merge request `!number` in full, in the shape of a pull request. */
   gitlabMergeRequest: (number: number) => invoke<PullRequest>("gitlab_merge_request", { number }),
   /** The requests `calls` send to GitLab, as curl. */
@@ -382,7 +383,7 @@ export const api = {
   gitlabFetch: (number: number, base: string, target?: ReviewTarget) => invoke<void>("gitlab_fetch", { number, base, target }),
   gitlabStatuses: (numbers: number[]) => invoke<PullStatus[]>("gitlab_statuses", { numbers }),
   /** Open and recently closed, the latest updated first. */
-  githubPulls: () => invoke<PullSummary[]>("github_pulls"),
+  githubPulls: () => invoke<PullList>("github_pulls"),
   githubPull: (number: number) => invoke<PullRequest>("github_pull", { number }),
   /** The requests as curl, for the sheet. */
   githubCallsPreview: (calls: PullCall[], target?: ReviewTarget) => invoke<string[]>("github_calls_preview", { calls, target }),
