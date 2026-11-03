@@ -106,6 +106,34 @@ struct Entry {
 /// The settings of the repository at `dir` that make git run a program, and its hooks. Reading
 /// them runs nothing of the repository's: `git config` reads no index and runs no hook.
 pub fn scan(dir: &Path) -> Result<Vec<TrustFinding>> {
+    // Git status of a superproject also runs status inside its initialized submodules.
+    // Their programs must be shown and disabled before that first read too.
+    let mut folders = vec![dir.to_path_buf()];
+    let mut visited = std::collections::HashSet::new();
+    let mut found = Vec::new();
+    while let Some(folder) = folders.pop() {
+        if !visited.insert(real(&folder)) {
+            continue;
+        }
+        crate::cli::check_stop()?;
+        let mut own = scan_one(&folder)?;
+        if folder != dir {
+            for finding in &mut own {
+                if !Path::new(&finding.origin).is_absolute() {
+                    finding.origin = folder.join(&finding.origin).display().to_string();
+                }
+            }
+        }
+        found.extend(own);
+        let repo = crate::Repo::open(&folder)?;
+        for sub in repo.submodule_list()?.into_iter().filter(|s| s.cloned) {
+            folders.push(folder.join(sub.path));
+        }
+    }
+    Ok(found)
+}
+
+fn scan_one(dir: &Path) -> Result<Vec<TrustFinding>> {
     let own = entries(dir, &["local", "worktree"])?;
     let mut found: Vec<TrustFinding> = own
         .iter()

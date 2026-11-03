@@ -53,7 +53,7 @@
       </div>
     </div>
     <div class="found">
-      {#each findings as f (f.key)}
+      {#each findings as f, i (i)}
         <div class="row">
           <div class="key"><b>{f.kind === "hook" && f.key.startsWith("hooks/") ? `Hook ${f.key.slice(6)}` : f.key}</b><span class="origin">{tilde(f.origin, home)}</span></div>
           <div class="why">{trustWhy(f)}</div>

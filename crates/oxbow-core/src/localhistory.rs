@@ -42,7 +42,7 @@ use gix::objs::Write as _;
 use serde::{Deserialize, Serialize};
 
 use crate::FileDiff;
-use crate::cli::{GitCommand, literal};
+use crate::cli::GitCommand;
 use crate::commit::DiffContext;
 use crate::error::{Error, Result};
 use crate::repo::Repo;
@@ -770,23 +770,15 @@ impl Repo {
         std::fs::write(to, data).map_err(|err| Error::Git(format!("Couldn’t write {}: {err}", to.display())))
     }
 
-    /// Restore a version from Local History: `git restore` from a tree that has only the file, as
-    /// it was saved, so only the file on disk changes, and Undo brings back what it replaced.
+    /// Restore the saved bytes directly: they have already been smudged by the editor's
+    /// checkout. Running them through checkout again would transform them a second time.
     pub(crate) fn plan_restore_local(&self, path: &str, id: &str) -> Result<Vec<GitCommand>> {
         let local = self.local();
         let id = self.local_into_git(&local, id)?;
-        let tree = one_file_tree(&local, path, Some(id), is_executable(&self.workdir().join(path)))?;
         Ok(vec![
-            GitCommand::new([
-                "restore".to_owned(),
-                format!("--source={tree}"),
-                "--worktree".to_owned(),
-                "--".to_owned(),
-                literal(path),
-            ])
-            .comment(format!(
-                "--source: a tree with only {path}, as Local History kept it; only the file on disk changes, nothing is staged"
-            )),
+            GitCommand::new(["cat-file", "blob", &id.to_string()])
+                .write_to(path)
+                .comment("write the saved bytes unchanged; nothing is staged"),
         ])
     }
 }

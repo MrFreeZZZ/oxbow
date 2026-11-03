@@ -76,41 +76,59 @@ fn saved_in(file: &Path) -> Option<Account> {
     serde_json::from_value(read_all(file).remove("github.com")?).ok()
 }
 
-fn save(app: &AppHandle, account: Option<&Account>) -> CommandResult<()> {
-    save_in(&accounts_file(app)?, account)
-}
-
+#[cfg(test)]
 fn save_in(file: &Path, account: Option<&Account>) -> CommandResult<()> {
-    let account = account
+    let value = account
         .map(serde_json::to_value)
         .transpose()
         .map_err(|err| err.to_string())?;
-    write_entry(file, "github.com", account)
+    write_entry(file, "github.com", value)
 }
 
 /// Every entry of the accounts file: `github.com`, and `gitlab` with the GitLab accounts.
 pub(crate) fn read_all(file: &Path) -> serde_json::Map<String, Value> {
-    std::fs::read_to_string(file)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
+    read_checked(file).unwrap_or_else(|err| {
+        eprintln!("{err}");
+        serde_json::Map::new()
+    })
 }
 
-/// Write one entry of the accounts file, or take it out with `None`, keeping the others.
-pub(crate) fn write_entry(file: &Path, key: &str, value: Option<Value>) -> CommandResult<()> {
-    std::fs::create_dir_all(file.parent().expect("accounts file has a parent")).map_err(|err| err.to_string())?;
-    let mut all = read_all(file);
-    match value {
-        Some(value) => all.insert(key.to_owned(), value),
-        None => all.remove(key),
-    };
+fn read_checked(file: &Path) -> CommandResult<serde_json::Map<String, Value>> {
+    match std::fs::read_to_string(file) {
+        Ok(text) => serde_json::from_str(&text).map_err(|err| format!("Can’t read accounts.json: {err}")),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::Map::new()),
+        Err(err) => Err(format!("Can’t read accounts.json: {err}")),
+    }
+}
+
+static FILE_LOCK: Mutex<()> = Mutex::new(());
+
+/// Serialize the entire update across GitHub and every GitLab server. Never replace a file
+/// that cannot be read; readers see either the old complete JSON or the new one.
+pub(crate) fn update_all<T>(
+    file: &Path,
+    change: impl FnOnce(&mut serde_json::Map<String, Value>) -> CommandResult<T>,
+) -> CommandResult<T> {
+    let _guard = FILE_LOCK.lock().expect("accounts file lock");
+    let mut all = read_checked(file)?;
+    let result = change(&mut all)?;
     let text = serde_json::to_string_pretty(&all).map_err(|err| err.to_string())?;
-    // Written whole or not at all: a half-written file would forget who is signed in.
-    let part = file.with_extension("json.part");
-    std::fs::write(&part, text + "\n").map_err(|err| err.to_string())?;
-    std::fs::rename(&part, file).map_err(|err| {
-        let _ = std::fs::remove_file(&part);
-        err.to_string()
+    crate::settings::replace(file, &(text + "\n")).map_err(|err| format!("Can’t save accounts.json: {err}"))?;
+    Ok(result)
+}
+
+#[cfg(test)]
+pub(crate) fn write_entry(file: &Path, key: &str, value: Option<Value>) -> CommandResult<()> {
+    update_all(file, |all| {
+        match value {
+            Some(value) => {
+                all.insert(key.to_owned(), value);
+            }
+            None => {
+                all.remove(key);
+            }
+        }
+        Ok(())
     })
 }
 
@@ -155,7 +173,6 @@ fn switch_to(
     token: &str,
     stopped: &dyn Fn() -> bool,
 ) -> CommandResult<Account> {
-    let old = saved_in(file);
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     // GitHub logins have no `#`.
     let item = format!("{}#{stamp}", account.login);
@@ -165,10 +182,25 @@ fn switch_to(
         return Err("stopped".into());
     }
     account.item = Some(item.clone());
-    if let Err(err) = save_in(file, Some(&account)) {
-        let _ = store.delete(&item);
-        return Err(err);
-    }
+    let old = match update_all(file, |all| {
+        let old = all
+            .get("github.com")
+            .cloned()
+            .map(serde_json::from_value::<Account>)
+            .transpose()
+            .map_err(|err| format!("Can’t read the GitHub account: {err}"))?;
+        all.insert(
+            "github.com".into(),
+            serde_json::to_value(&account).map_err(|err| err.to_string())?,
+        );
+        Ok(old)
+    }) {
+        Ok(old) => old,
+        Err(err) => {
+            let _ = store.delete(&item);
+            return Err(err);
+        }
+    };
     if let Some(old) = old
         && old.item() != item
     {
@@ -410,10 +442,18 @@ async fn finish(
 /// until it is revoked there.
 #[tauri::command]
 pub fn github_sign_out(app: AppHandle, accounts: State<'_, Accounts>) -> CommandResult<()> {
-    if let Some(account) = saved(&app) {
-        Keyring(SERVICE).delete(account.item())?;
+    let old = update_all(&accounts_file(&app)?, |all| {
+        all.remove("github.com")
+            .map(serde_json::from_value::<Account>)
+            .transpose()
+            .map_err(|err| err.to_string())
+    })?;
+    if let Some(account) = old {
+        // It is no longer in use; failure to clean up must not revive a signed-out account.
+        if let Err(err) = Keyring(SERVICE).delete(account.item()) {
+            eprintln!("{err}");
+        }
     }
-    save(&app, None)?;
     *accounts.token.lock().expect("token lock") = None;
     let _ = app.emit("account-changed", ());
     Ok(())
@@ -603,10 +643,67 @@ mod tests {
         let store = Memory::default();
         let (dir, file) = signed_in(&store);
         // A folder where the new file would go makes the rename fail.
-        std::fs::create_dir_all(dir.join("accounts.json.part")).unwrap();
+        std::fs::create_dir_all(dir.join("accounts.json.new")).unwrap();
         switch_to(&store, &file, account("maria"), "new", &|| false).unwrap_err();
         assert_eq!(token_in_use(&store, &file).as_deref(), Some("old"));
         assert_eq!(store.items.borrow().len(), 1, "the new item is taken out again");
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod file_tests {
+    use super::*;
+
+    #[test]
+    fn concurrent_account_updates_keep_every_change_and_read_whole_json() {
+        let dir = oxbow_core::cli::private_temp_folder("oxbow-accounts-test-").unwrap();
+        let file = dir.path().join("accounts.json");
+        std::thread::scope(|scope| {
+            for i in 0..8 {
+                let file = &file;
+                scope.spawn(move || {
+                    for _ in 0..20 {
+                        update_all(file, |all| {
+                            let key = format!("account-{i}");
+                            let count = all.get(&key).and_then(Value::as_u64).unwrap_or(0);
+                            all.insert(key, (count + 1).into());
+                            Ok(())
+                        })
+                        .unwrap();
+                        assert!(!read_checked(file).unwrap().is_empty());
+                    }
+                });
+            }
+        });
+        let all = read_checked(&file).unwrap();
+        assert_eq!(all.len(), 8);
+        assert!(all.values().all(|value| value.as_u64() == Some(20)));
+    }
+
+    #[test]
+    fn unreadable_accounts_are_never_overwritten() {
+        let dir = oxbow_core::cli::private_temp_folder("oxbow-accounts-test-").unwrap();
+        let file = dir.path().join("accounts.json");
+        for broken in ["{ \"gitlab\": ", "[]", ""] {
+            std::fs::write(&file, broken).unwrap();
+            assert!(write_entry(&file, "github.com", Some(serde_json::json!({"login":"alex"}))).is_err());
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), broken);
+        }
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir(&file).unwrap();
+        assert!(write_entry(&file, "github.com", None).is_err());
+        assert!(file.is_dir());
+    }
+
+    #[test]
+    fn failed_account_write_leaves_the_original_bytes() {
+        let dir = oxbow_core::cli::private_temp_folder("oxbow-accounts-test-").unwrap();
+        let file = dir.path().join("accounts.json");
+        let before = "{\"gitlab\": []}";
+        std::fs::write(&file, before).unwrap();
+        std::fs::create_dir(file.with_extension("json.new")).unwrap();
+        assert!(write_entry(&file, "github.com", Some(Value::Null)).is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
     }
 }

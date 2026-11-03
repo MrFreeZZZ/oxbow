@@ -535,20 +535,25 @@ fn parse_list(text: &str) -> Vec<Worktree> {
 pub(crate) fn changed_files(path: &Path) -> Result<usize> {
     // --no-optional-locks: git doesn't write that folder's index while it looks, so a commit
     // made there meanwhile doesn't find it locked, and the index stays as its owner left it.
-    let out = crate::cli::run_in(
-        path,
-        &GitCommand::new([
+    let restricted = crate::trust::is_restricted(path);
+    let command = if restricted {
+        crate::trust::passive_status(path)?.0
+    } else {
+        GitCommand::new([
             "--no-optional-locks",
             "status",
             "--porcelain",
             "-z",
             "--untracked-files=all",
-        ]),
-        None,
-    )?;
+        ])
+    };
+    let out = crate::cli::run_in(path, &command, None)?;
     let mut count = 0;
     let mut entries = out.stdout.split('\0').filter(|e| !e.is_empty());
     while let Some(entry) = entries.next() {
+        if restricted && entry.starts_with("# ") {
+            continue;
+        }
         count += 1;
         // A rename or copy is followed by its old path.
         if entry.starts_with(['R', 'C']) || entry.get(1..2).is_some_and(|y| y == "R" || y == "C") {

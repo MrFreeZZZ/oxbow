@@ -942,3 +942,86 @@ fn checking_out_unicode_tags_keeps_their_names_in_the_log_and_can_be_undone() {
         assert_eq!(repo.head().unwrap().branch.as_deref(), Some("main"));
     }
 }
+
+#[test]
+fn undo_keeps_edits_hidden_by_index_flags() {
+    for flag in ["--assume-unchanged", "--skip-worktree"] {
+        let mut fx = Fixture::new();
+        fx.commit("hidden.txt", "original\n", "Base");
+        fx.commit("visible.txt", "old\n", "Other");
+        fx.git(&["update-index", flag, "hidden.txt"]);
+        let flags = fx.git(&["ls-files", "-v", "hidden.txt"]);
+        fx.write("hidden.txt", "precious local edit\n");
+        fx.write("visible.txt", "visible edit\n");
+        let repo = Repo::open(fx.path()).unwrap();
+        repo.perform(&Action::Stage {
+            paths: vec!["visible.txt".into()],
+        })
+        .unwrap();
+        assert_eq!(
+            fx.git(&["ls-files", "-v", "hidden.txt"]),
+            flags,
+            "snapshot changed the real index"
+        );
+        let log = repo.operation_log().unwrap();
+        assert_eq!(
+            fx.git(&["show", &format!("{}:hidden.txt", log[0].before.worktree)]),
+            "precious local edit",
+            "{flag}"
+        );
+        undo_last(&repo);
+        assert_eq!(read(&fx, "hidden.txt").unwrap(), "precious local edit\n", "{flag}");
+        assert_eq!(
+            fx.git(&["ls-files", "-v", "hidden.txt"]),
+            flags,
+            "Undo changed the index flags"
+        );
+    }
+}
+
+#[test]
+fn a_snapshot_keeps_absent_sparse_files_and_edits_outside_the_cone() {
+    for (sparse_index, outside) in [(false, true), (true, true), (true, false)] {
+        let mut fx = Fixture::new();
+        fx.commit("keep/a.txt", "kept\n", "Base");
+        fx.commit("omit/b.txt", "omitted\n", "Outside");
+        fx.commit("omit/c.txt", "other omitted\n", "More");
+        if sparse_index {
+            fx.git(&["sparse-checkout", "init", "--cone", "--sparse-index"]);
+        } else {
+            fx.git(&["sparse-checkout", "init", "--cone"]);
+        }
+        fx.git(&["sparse-checkout", "set", "keep"]);
+        assert!(!fx.path().join("omit/b.txt").exists());
+        if outside {
+            fx.write("omit/c.txt", "edited outside cone\n");
+        }
+        fx.write("keep/a.txt", "changed\n");
+        let repo = Repo::open(fx.path()).unwrap();
+        repo.perform(&Action::Stage {
+            paths: vec!["keep/a.txt".into()],
+        })
+        .unwrap();
+        let step = &repo.operation_log().unwrap()[0];
+        assert_eq!(
+            fx.git(&["show", &format!("{}:omit/b.txt", step.before.worktree)]),
+            "omitted"
+        );
+        assert_eq!(
+            fx.git(&["show", &format!("{}:omit/c.txt", step.before.worktree)]),
+            if outside {
+                "edited outside cone"
+            } else {
+                "other omitted"
+            }
+        );
+        assert!(!fx.path().join("omit/b.txt").exists());
+        undo_last(&repo);
+        assert!(!fx.path().join("omit/b.txt").exists());
+        if outside {
+            assert_eq!(read(&fx, "omit/c.txt").unwrap(), "edited outside cone\n");
+        } else {
+            assert!(!fx.path().join("omit/c.txt").exists());
+        }
+    }
+}

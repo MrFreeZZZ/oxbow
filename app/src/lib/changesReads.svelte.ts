@@ -43,6 +43,7 @@ export class ChangesReads {
 
   /** Which reading of the files `tree` is, for diffs of the same one; null for one of its own. */
   #reading: number | null = null;
+  #load = 0;
   #asked: Ask | null = null;
   #loadingMore = false;
   #listed: (next: WorkingTree) => void;
@@ -57,31 +58,34 @@ export class ChangesReads {
 
   /** Show the files of the reload, `given` as reading `snapshot`, or read them when it has none. */
   async load(given: WorkingTree | null, snapshot: number) {
+    const mine = ++this.#load;
     try {
       const read = given ? snapshot : null;
       // The same reading again, counted here already: its counts stay.
       const kept = given && !given.counted && read === this.#reading && this.tree?.counted ? this.tree : null;
       const next = kept ?? given ?? (await api.workingTree());
+      if (mine !== this.#load) return;
       let listsError: string | null = null;
       const found = await api.changelists(read).catch((err) => ((listsError = String(err)), null));
+      if (mine !== this.#load) return;
       this.#reading = read;
       this.tree = next;
       this.lists = found;
       this.error = listsError;
       this.#listed(next);
       this.loads++;
-      if (!next.counted && read !== null) this.#countLines(read);
+      if (!next.counted && read !== null) this.#countLines(read, mine);
     } catch (err) {
-      this.error = String(err);
+      if (mine === this.#load) this.error = String(err);
     }
   }
 
   /** The changed lines of the files of reading `read`, which the history lists before they are
    *  counted: the list shows at once, and the counts come after. */
-  async #countLines(read: number) {
+  async #countLines(read: number, mine: number) {
     const counted = await api.workingCounts(read, LANES.counts).catch(() => null);
     // A newer reading has counts of its own coming.
-    if (counted && this.#reading === read) this.tree = counted;
+    if (counted && mine === this.#load && this.#reading === read) this.tree = counted;
   }
 
   /** Read the diffs of `target` for the diff column; `needle` filters every file of a side. Runs
@@ -154,6 +158,8 @@ export class ChangesReads {
 
   /** The panel closes: its reads stop, their answers would go nowhere. */
   stop() {
+    this.#load++;
+    this.#asked = null;
     api.stopReads(Object.values(LANES)).catch(() => {});
   }
 }

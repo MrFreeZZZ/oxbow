@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::CommandResult;
-use crate::accounts::{Accounts, Keyring, Store, accounts_file, read_all, store_name, write_entry};
+use crate::accounts::{Accounts, Keyring, Store, accounts_file, read_all, store_name, update_all};
 
 const SERVICE: &str = "Oxbow GitLab";
 
@@ -103,13 +103,26 @@ fn saved_in(file: &Path) -> Vec<GitLabAccount> {
         .unwrap_or_default()
 }
 
-fn save_in(file: &Path, accounts: &[GitLabAccount]) -> CommandResult<()> {
-    let value = if accounts.is_empty() {
-        None
-    } else {
-        Some(serde_json::to_value(accounts).map_err(|err| err.to_string())?)
-    };
-    write_entry(file, "gitlab", value)
+fn update_in<T>(file: &Path, change: impl FnOnce(&mut Vec<GitLabAccount>) -> CommandResult<T>) -> CommandResult<T> {
+    update_all(file, |all| {
+        let mut accounts: Vec<GitLabAccount> = all
+            .get("gitlab")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|err| format!("Can’t read the GitLab accounts: {err}"))?
+            .unwrap_or_default();
+        let result = change(&mut accounts)?;
+        if accounts.is_empty() {
+            all.remove("gitlab");
+        } else {
+            all.insert(
+                "gitlab".into(),
+                serde_json::to_value(accounts).map_err(|err| err.to_string())?,
+            );
+        }
+        Ok(result)
+    })
 }
 
 /// The servers signed in to, for knowing a remote on one as GitLab whatever it is called.
@@ -207,7 +220,6 @@ fn switch_to(
     token: &str,
     stopped: &dyn Fn() -> bool,
 ) -> CommandResult<GitLabAccount> {
-    let mut all = saved_in(file);
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     let item = format!("{}/{}#{stamp}", account.host, account.username);
     store.set(&item, token)?;
@@ -216,12 +228,17 @@ fn switch_to(
         return Err("stopped".into());
     }
     account.item = item.clone();
-    let old = all.iter().position(|a| a.host == account.host).map(|i| all.remove(i));
-    all.push(account.clone());
-    if let Err(err) = save_in(file, &all) {
-        let _ = store.delete(&item);
-        return Err(err);
-    }
+    let old = match update_in(file, |all| {
+        let old = all.iter().position(|a| a.host == account.host).map(|i| all.remove(i));
+        all.push(account.clone());
+        Ok(old)
+    }) {
+        Ok(old) => old,
+        Err(err) => {
+            let _ = store.delete(&item);
+            return Err(err);
+        }
+    };
     if let Some(old) = old {
         let _ = store.delete(&old.item);
     }
@@ -348,11 +365,13 @@ pub fn gitlab_sign_in_stop(accounts: State<'_, Accounts>) {
 #[tauri::command]
 pub fn gitlab_sign_out(app: AppHandle, tokens: State<'_, GitLabTokens>, host: String) -> CommandResult<()> {
     let file = accounts_file(&app)?;
-    let mut all = saved_in(&file);
-    if let Some(i) = all.iter().position(|a| a.host == host) {
-        let account = all.remove(i);
-        Keyring(SERVICE).delete(&account.item)?;
-        save_in(&file, &all)?;
+    let old = update_in(&file, |all| {
+        Ok(all.iter().position(|a| a.host == host).map(|i| all.remove(i)))
+    })?;
+    if let Some(account) = old
+        && let Err(err) = Keyring(SERVICE).delete(&account.item)
+    {
+        eprintln!("{err}");
     }
     tokens.forget(&host);
     let _ = app.emit("account-changed", ());
@@ -366,6 +385,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::accounts::write_entry;
 
     #[derive(Default)]
     struct Memory(RefCell<BTreeMap<String, String>>);
@@ -405,6 +425,31 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         (dir.clone(), dir.join("accounts.json"))
+    }
+
+    #[test]
+    fn concurrent_servers_keep_each_other_and_the_github_account() {
+        let dir = oxbow_core::cli::private_temp_folder("oxbow-gitlab-parallel-").unwrap();
+        let file = dir.path().join("accounts.json");
+        write_entry(&file, "github.com", Some(serde_json::json!({"login":"maria"}))).unwrap();
+        std::thread::scope(|scope| {
+            for i in 0..8 {
+                let file = &file;
+                scope.spawn(move || {
+                    let store = Memory::default();
+                    switch_to(
+                        &store,
+                        file,
+                        account(&format!("git{i}.example.com"), "anna"),
+                        "token",
+                        &|| false,
+                    )
+                    .unwrap();
+                });
+            }
+        });
+        assert_eq!(saved_in(&file).len(), 8);
+        assert!(read_all(&file).contains_key("github.com"));
     }
 
     #[test]

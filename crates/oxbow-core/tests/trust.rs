@@ -115,3 +115,41 @@ fn settings_from_an_included_file_are_found_with_where_they_are() {
     assert_eq!(found[0].key, "merge.ours.driver");
     assert_eq!(found[0].origin, included.display().to_string());
 }
+
+#[test]
+fn restricted_submodule_status_runs_no_helpers() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "base\n", "base");
+    let mut sub = Fixture::new();
+    sub.commit("a.txt", "base\n", "base");
+    fx.git(&[
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "-q",
+        sub.path().to_str().unwrap(),
+        "sub",
+    ]);
+    fx.git(&["commit", "-qm", "submodule"]);
+    let marker = fx.path().join("filter-executed");
+    fx.git(&[
+        "-C",
+        "sub",
+        "config",
+        "filter.demo.clean",
+        &format!("touch '{}'; cat", marker.display()),
+    ]);
+    std::fs::write(fx.path().join("sub/.gitattributes"), "a.txt filter=demo\n").unwrap();
+    std::fs::write(fx.path().join("sub/a.txt"), "edit\n").unwrap();
+    fx.git(&["config", "core.hooksPath", "./untrusted-hooks"]);
+    let found = trust::scan(fx.path()).unwrap();
+    assert!(!found.is_empty());
+    trust::restrict(fx.path(), &found).unwrap();
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.read_submodules().unwrap();
+    assert!(!marker.exists(), "submodule status ran its clean filter");
+    repo.working_tree().unwrap();
+    assert!(!marker.exists(), "superproject status ran its submodule clean filter");
+    trust::lift(fx.path());
+}

@@ -102,24 +102,24 @@ pub fn note(app: &AppHandle, path: &Path, found: &[TrustFinding]) {
 /// The settings of `repo` that run programs, and whether git may run them: the user trusts it,
 /// or the main worktree it belongs to, or doesn't want to be asked. A trusted one's are noted for
 /// Settings.
-pub fn check(app: &AppHandle, repo: &Repo) -> (Vec<TrustFinding>, bool) {
+pub fn check(app: &AppHandle, repo: &Repo) -> crate::CommandResult<(Vec<TrustFinding>, bool)> {
     let workdir = repo.workdir();
-    let found = oxbow_core::trust::scan(workdir).unwrap_or_default();
+    let found = oxbow_core::trust::scan(workdir).map_err(|err| err.to_string())?;
     if found.is_empty() {
-        return (found, true);
+        return Ok((found, true));
     }
     // A linked worktree shares the main one's settings, and its trust.
     let common = repo.common_dir();
     let main = common.parent().filter(|_| common.ends_with(".git"));
     if is_trusted(app, workdir) || main.is_some_and(|main| is_trusted(app, main)) {
         note(app, workdir, &found);
-        return (found, true);
+        return Ok((found, true));
     }
     let asks = crate::preferences::read_settings(app)
         .get("oxbow.git.askTrust")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(true);
-    (found, !asks)
+    Ok((found, !asks))
 }
 
 #[tauri::command]

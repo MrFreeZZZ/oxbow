@@ -344,8 +344,8 @@ fn restore_puts_the_version_on_disk_stages_nothing_and_undo_takes_it_back() {
         id: id.clone(),
     };
     let shown = repo.plan(&action).unwrap().commands[0].display();
-    assert!(shown.starts_with("git restore --source="), "{shown}");
-    assert!(shown.contains(" --worktree -- ") && shown.ends_with("a.txt"), "{shown}");
+    assert!(shown.starts_with("git cat-file blob "), "{shown}");
+    assert!(shown.ends_with(" > a.txt"), "{shown}");
     repo.perform(&action).unwrap();
     assert_eq!(
         std::fs::read_to_string(fx.path().join("a.txt")).unwrap(),
@@ -570,4 +570,78 @@ fn a_blob_that_cant_be_written_is_read_again_later() {
     assert_eq!(history.keep(&repo, &[], t + 1000), 1);
     assert!(history.problem().is_none());
     assert_eq!(repo.local_history("a.txt").unwrap().len(), 1);
+}
+
+#[test]
+fn restore_returns_saved_bytes_without_filters_or_line_ending_conversions() {
+    let mut fx = base();
+    fx.commit(
+        ".gitattributes",
+        "a.txt text eol=crlf ident filter=demo\n",
+        "Attributes",
+    );
+    fx.git(&["config", "filter.demo.clean", "cat"]);
+    fx.git(&["config", "filter.demo.smudge", "sed s/RAW/TRANSFORMED/g"]);
+    fx.git(&["config", "core.autocrlf", "true"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let mut history = LocalHistory::open(&repo);
+    let saved = "RAW\n$Id$\nlast line";
+    fx.write("a.txt", saved);
+    assert_eq!(history.keep(&repo, &paths(&["a.txt"]), now() - DAY), 1);
+    let id = repo.local_history("a.txt").unwrap()[0].id.clone();
+    fx.write("a.txt", "another\n");
+    repo.perform(&Action::RestoreLocalVersion {
+        path: "a.txt".into(),
+        id,
+    })
+    .unwrap();
+    assert_eq!(std::fs::read(fx.path().join("a.txt")).unwrap(), saved.as_bytes());
+    assert_eq!(fx.git(&["diff", "--cached", "--name-only"]), "");
+}
+
+#[test]
+fn a_binary_local_version_is_restored_exactly_including_nuls() {
+    let fx = base();
+    let repo = Repo::open(fx.path()).unwrap();
+    let mut history = LocalHistory::open(&repo);
+    let saved = b"\xff\0\r\nRAW\x80";
+    std::fs::write(fx.path().join("binary.bin"), saved).unwrap();
+    history.keep(&repo, &paths(&["binary.bin"]), now() - DAY);
+    let id = repo.local_history("binary.bin").unwrap()[0].id.clone();
+    std::fs::remove_file(fx.path().join("binary.bin")).unwrap();
+    repo.perform(&Action::RestoreLocalVersion {
+        path: "binary.bin".into(),
+        id,
+    })
+    .unwrap();
+    assert_eq!(std::fs::read(fx.path().join("binary.bin")).unwrap(), saved);
+}
+
+#[cfg(unix)]
+#[test]
+fn restoring_a_local_version_refuses_links_outside_the_repository() {
+    use std::os::unix::fs::symlink;
+    let fx = base();
+    let repo = Repo::open(fx.path()).unwrap();
+    let mut history = LocalHistory::open(&repo);
+    fx.write("a.txt", "saved\n");
+    history.keep(&repo, &paths(&["a.txt"]), now() - DAY);
+    let id = repo.local_history("a.txt").unwrap()[0].id.clone();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("a.txt"), "outside\n").unwrap();
+    symlink(outside.path(), fx.path().join("linked")).unwrap();
+    let action = Action::RestoreLocalVersion {
+        path: "linked/a.txt".into(),
+        id: id.clone(),
+    };
+    assert!(repo.perform(&action).is_err());
+    assert_eq!(
+        std::fs::read_to_string(outside.path().join("a.txt")).unwrap(),
+        "outside\n"
+    );
+    let action = Action::RestoreLocalVersion {
+        path: "../outside.txt".into(),
+        id,
+    };
+    assert!(repo.perform(&action).is_err());
 }

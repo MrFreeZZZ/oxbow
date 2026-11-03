@@ -107,7 +107,7 @@ impl Repo {
     pub fn not_kept(&self, action: &Action) -> Result<Vec<NotKept>> {
         let mut out = Vec::new();
         match action {
-            Action::Discard { paths } => {
+            Action::Discard { paths } | Action::DiscardChangelist { paths, .. } => {
                 let untracked = self.untracked()?;
                 let big: Vec<&String> = paths.iter().filter(|p| untracked.contains(*p)).collect();
                 out.extend(self.big_files(big));

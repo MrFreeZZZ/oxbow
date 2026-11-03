@@ -53,7 +53,7 @@ pub(crate) async fn open_repo(
         let (app, repo) = (app.clone(), repo.clone());
         tauri::async_runtime::spawn_blocking(move || trusted::check(&app, &repo))
             .await
-            .map_err(|err| err.to_string())?
+            .map_err(|err| err.to_string())??
     };
     let restricted = match answer {
         Some(TrustAnswer::Trust) => {
@@ -115,9 +115,7 @@ pub(crate) async fn trust_repo(app: AppHandle, path: String) -> CommandResult<()
     let dir = PathBuf::from(&path);
     let found = {
         let dir = dir.clone();
-        blocking(move || oxbow_core::trust::scan(&dir))
-            .await
-            .unwrap_or_default()
+        blocking(move || oxbow_core::trust::scan(&dir)).await?
     };
     trusted::add(&app, &dir, &found);
     oxbow_core::trust::lift(&dir);

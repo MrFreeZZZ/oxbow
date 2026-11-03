@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+use gix::bstr::ByteSlice;
 use serde::{Deserialize, Serialize};
 
 use crate::action::Action;
@@ -537,6 +538,56 @@ impl Repo {
                 .comment(note),
             );
         }
+        let local = self.local();
+        let mut skipped_present = Vec::new();
+        let mut skipped = String::new();
+        let mut assumed = String::new();
+        if local.index_path().exists() {
+            let target_files = local
+                .find_tree(gix::ObjectId::from_hex(trees.worktree.as_bytes()).map_err(Error::git)?)
+                .map_err(Error::git)?;
+            let target_index = local
+                .find_tree(gix::ObjectId::from_hex(index.as_bytes()).map_err(Error::git)?)
+                .map_err(Error::git)?;
+            for (path, flags) in self.hidden_index_files(&local.index_path())? {
+                use gix::index::entry::Flags;
+                let tracked = target_index.lookup_entry_by_path(&path).map_err(Error::git)?.is_some();
+                if tracked && flags.contains(Flags::ASSUME_VALID) {
+                    assumed.push_str(&path);
+                    assumed.push('\0');
+                }
+                if !flags.contains(Flags::SKIP_WORKTREE) {
+                    continue;
+                }
+                if tracked {
+                    skipped.push_str(&path);
+                    skipped.push('\0');
+                }
+                if self.workdir().join(&path).symlink_metadata().is_ok()
+                    && (tracked || target_files.lookup_entry_by_path(&path).map_err(Error::git)?.is_some())
+                {
+                    skipped_present.push(path.to_owned());
+                }
+            }
+        }
+        // read-tree recreates entries without their flags. Put the current flags back only
+        // on paths the restored index still tracks, before restoring the working files.
+        let mut flags_at = commands
+            .iter()
+            .position(|c| c.args.first().is_some_and(|a| a == "read-tree"))
+            .expect("restore reads the index")
+            + 1;
+        for (flag, paths) in [("--skip-worktree", skipped), ("--assume-unchanged", assumed)] {
+            if !paths.is_empty() {
+                commands.insert(
+                    flags_at,
+                    GitCommand::new(["update-index", flag, "-z", "--stdin"])
+                        .input(paths)
+                        .comment("keep the current index flags"),
+                );
+                flags_at += 1;
+            }
+        }
         commands.push(
             GitCommand::new([
                 "restore",
@@ -547,6 +598,22 @@ impl Repo {
             ])
             .comment("your files as they were"),
         );
+        if !skipped_present.is_empty() {
+            commands.push(
+                GitCommand::new(
+                    [
+                        "restore".to_owned(),
+                        format!("--source={}", trees.worktree),
+                        "--worktree".to_owned(),
+                        "--ignore-skip-worktree-bits".to_owned(),
+                        "--".to_owned(),
+                    ]
+                    .into_iter()
+                    .chain(skipped_present.iter().map(|p| literal(p))),
+                )
+                .comment("restore files present outside sparse checkout too"),
+            );
+        }
         Ok(commands)
     }
 
@@ -735,6 +802,47 @@ impl Repo {
         Ok(scratch)
     }
 
+    /// Hidden files, expanding sparse-directory entries through Git when necessary. The
+    /// common full-index case is read in-process and adds no Git process to a snapshot.
+    fn hidden_index_files(&self, path: &std::path::Path) -> Result<Vec<(String, gix::index::entry::Flags)>> {
+        use gix::index::entry::{Flags, Mode};
+        let index =
+            gix::index::File::at(path, self.local().object_hash(), true, Default::default()).map_err(Error::git)?;
+        if index.entries().iter().any(|e| e.mode == Mode::DIR) {
+            let sparse: Vec<&str> = index
+                .entries()
+                .iter()
+                .filter(|e| e.mode == Mode::DIR)
+                .map(|e| e.path(&index).to_str().map_err(Error::git))
+                .collect::<Result<_>>()?;
+            let out = self.run(
+                &GitCommand::new(["ls-files", "-v", "-z"]).env("GIT_INDEX_FILE", path.to_string_lossy().into_owned()),
+            )?;
+            return Ok(out
+                .stdout
+                .split('\0')
+                .filter_map(|entry| {
+                    let tag = *entry.as_bytes().first()?;
+                    let name = entry.get(2..)?;
+                    let mut flags = Flags::empty();
+                    if tag.is_ascii_lowercase() {
+                        flags |= Flags::ASSUME_VALID;
+                    }
+                    if tag.eq_ignore_ascii_case(&b'S') || sparse.iter().any(|prefix| name.starts_with(prefix)) {
+                        flags |= Flags::SKIP_WORKTREE;
+                    }
+                    (!flags.is_empty()).then(|| (name.to_owned(), flags))
+                })
+                .collect());
+        }
+        index
+            .entries()
+            .iter()
+            .filter(|e| e.flags.intersects(Flags::SKIP_WORKTREE | Flags::ASSUME_VALID))
+            .map(|e| Ok((e.path(&index).to_str().map_err(Error::git)?.to_owned(), e.flags)))
+            .collect()
+    }
+
     /// What the index stages, as a tree; `None` while it has conflicts, as in a merge or rebase
     /// that stopped. Written from a copy: `write-tree` on the real index may take `index.lock`
     /// and fail while anything else holds it, which is no reason for a snapshot without it.
@@ -784,7 +892,37 @@ impl Repo {
         let result = (|| {
             // No pathspec: the whole tree, and no error when nothing is tracked yet (newer git
             // refuses `:/` then, as a pathspec that matches no file).
-            self.run(&with_scratch(GitCommand::new(["add", "-u"])))?;
+            // Hidden tracked edits still belong to Undo. Clear the flags only in this
+            // scratch index; absent sparse-checkout files keep their recorded contents.
+            let mut reveal = Vec::new();
+            if scratch.exists() {
+                for (path, flags) in self.hidden_index_files(&scratch)? {
+                    if flags.contains(gix::index::entry::Flags::SKIP_WORKTREE) {
+                        match self.workdir().join(&path).symlink_metadata() {
+                            Ok(_) => {}
+                            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                            Err(err) => return Err(io(err)),
+                        }
+                    }
+                    reveal.extend_from_slice(path.as_bytes());
+                    reveal.push(0);
+                }
+            }
+            if !reveal.is_empty() {
+                // update-index treats these switches as separate modes, so run each one.
+                for flag in ["--no-assume-unchanged", "--no-skip-worktree"] {
+                    self.run_with_input(
+                        &with_scratch(GitCommand::new(["update-index", flag, "-z", "--stdin"])),
+                        Some(&reveal),
+                    )?;
+                }
+            }
+            let add = if reveal.is_empty() {
+                GitCommand::new(["add", "-u"])
+            } else {
+                GitCommand::new(["add", "--sparse", "-u"])
+            };
+            self.run(&with_scratch(add))?;
             let untracked = untracked()?;
             if !untracked.is_empty() {
                 let list = untracked.iter().map(|p| literal(p)).collect::<Vec<_>>().join("\0");

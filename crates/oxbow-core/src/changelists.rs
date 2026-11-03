@@ -171,6 +171,46 @@ impl Store {
     }
 }
 
+/// Read-only lookup tables for a single reading. Mutations keep the stored ordering; these
+/// tables avoid scanning every list's paths again for each changed file.
+struct StoreIndex<'a> {
+    owners: HashMap<&'a str, &'a str>,
+    runs: HashMap<&'a str, HashMap<&'a str, Option<&'a str>>>,
+}
+
+impl<'a> StoreIndex<'a> {
+    fn new(store: &'a Store) -> Self {
+        let mut owners = HashMap::new();
+        for list in &store.lists {
+            for path in &list.files {
+                owners.entry(path.as_str()).or_insert(list.id.as_str());
+            }
+        }
+        let mut runs: HashMap<&str, HashMap<&str, Option<&str>>> = HashMap::new();
+        for run in &store.runs {
+            runs.entry(&run.path)
+                .or_default()
+                .entry(&run.key)
+                .or_insert(run.list.as_deref());
+        }
+        Self { owners, runs }
+    }
+
+    fn owner(&self, path: &str) -> Option<&'a str> {
+        self.owners.get(path).copied()
+    }
+    fn keyed(&self, path: &str) -> bool {
+        self.runs.contains_key(path)
+    }
+    fn run_list(&self, path: &str, key: &str) -> Option<&'a str> {
+        self.runs
+            .get(path)
+            .and_then(|runs| runs.get(key))
+            .copied()
+            .unwrap_or_else(|| self.owner(path))
+    }
+}
+
 fn gone() -> Error {
     Error::Git("That changelist is gone: another window may have deleted it".into())
 }
@@ -358,8 +398,9 @@ impl Repo {
             tree
         } else {
             copy = tree.clone();
+            let index = StoreIndex::new(&store);
             let at: Vec<usize> = (0..copy.unstaged.len())
-                .filter(|&i| store.keyed(&copy.unstaged[i].path))
+                .filter(|&i| index.keyed(&copy.unstaged[i].path))
                 .collect();
             let mut keyed: Vec<FileChange> = at.iter().map(|&i| copy.unstaged[i].clone()).collect();
             self.count_some(&mut keyed, Side::Unstaged)?;
@@ -461,6 +502,11 @@ impl Repo {
 
     /// Which list holds what of each unstaged file.
     fn resolve(&self, store: &Store, tree: &WorkingTree) -> Changelists {
+        let index = StoreIndex::new(store);
+        let mut positions = HashMap::new();
+        for (at, list) in store.lists.iter().enumerate() {
+            positions.entry(list.id.as_str()).or_insert(at);
+        }
         let mut lists: Vec<Changelist> = store
             .lists
             .iter()
@@ -471,20 +517,20 @@ impl Repo {
             })
             .collect();
         let mut add = |list: Option<&str>, path: &str| {
-            if let Some(entry) = list.and_then(|id| lists.iter_mut().find(|l| l.id == id)) {
+            if let Some(entry) = list.and_then(|id| positions.get(id)).and_then(|&at| lists.get_mut(at)) {
                 entry.paths.push(path.to_owned());
             }
         };
         let mut split = Vec::new();
         for file in listable(tree) {
-            let owner = store.owner(&file.path);
-            if !store.keyed(&file.path) {
+            let owner = index.owner(&file.path);
+            if !index.keyed(&file.path) {
                 add(owner, &file.path);
                 continue;
             }
             let mut parts: Vec<FilePart> = Vec::new();
             for run in self.file_runs(file).1.into_iter().flat_map(|(_, runs)| runs) {
-                let list = store.run_list(&file.path, &run.key).map(str::to_owned);
+                let list = index.run_list(&file.path, &run.key).map(str::to_owned);
                 let part = match parts.iter_mut().position(|p| p.list == list) {
                     Some(at) => &mut parts[at],
                     None => {
@@ -531,13 +577,15 @@ impl Repo {
             return Err(gone());
         }
         let tree = self.working_tree()?;
+        let index = StoreIndex::new(&store);
+        let only = only.map(|paths| paths.iter().map(String::as_str).collect::<HashSet<_>>());
         let mut part = ListPart::default();
         for file in listable(&tree) {
-            if only.is_some_and(|only| !only.contains(&file.path)) {
+            if only.as_ref().is_some_and(|only| !only.contains(file.path.as_str())) {
                 continue;
             }
-            let owner = store.owner(&file.path);
-            let (header, hunks) = if store.keyed(&file.path) {
+            let owner = index.owner(&file.path);
+            let (header, hunks) = if index.keyed(&file.path) {
                 self.file_runs(file)
             } else {
                 (String::new(), Vec::new())
@@ -553,13 +601,13 @@ impl Repo {
             for (text, runs) in &hunks {
                 let picked: Vec<usize> = runs
                     .iter()
-                    .filter(|r| store.run_list(&file.path, &r.key) == list)
+                    .filter(|r| index.run_list(&file.path, &r.key) == list)
                     .flat_map(|r| r.lines.iter().copied())
                     .collect();
                 all += runs.len();
                 mine += runs
                     .iter()
-                    .filter(|r| store.run_list(&file.path, &r.key) == list)
+                    .filter(|r| index.run_list(&file.path, &r.key) == list)
                     .count();
                 if let Some(hunk) = partial_hunk(text, &picked, forward) {
                     patch.push_str(&hunk);
@@ -838,9 +886,10 @@ fn take_new_files(store: &mut Store, tree: &WorkingTree) -> bool {
         return false;
     };
     let seen: HashSet<&str> = store.seen.iter().map(String::as_str).collect();
+    let index = StoreIndex::new(store);
     let fresh: Vec<String> = listable(tree)
         .map(|f| f.path.clone())
-        .filter(|p| !seen.contains(p.as_str()) && store.owner(p).is_none() && !store.keyed(p))
+        .filter(|p| !seen.contains(p.as_str()) && index.owner(p).is_none() && !index.keyed(p))
         .collect();
     let mut now: Vec<String> = tree
         .staged

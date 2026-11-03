@@ -76,6 +76,8 @@ pub struct GitCommand {
     /// What Oxbow feeds the command on standard input, shown so it can be checked, e.g. the
     /// patch of a few lines for `git apply`.
     pub input: Option<String>,
+    /// Keep raw stdout as a working file, without Git checkout conversions.
+    pub(crate) stdout_file: Option<String>,
     /// A step Oxbow does itself before the command, as it would be typed in a shell, e.g.
     /// adding a line to `.gitignore`.
     pub before: Option<String>,
@@ -111,6 +113,7 @@ impl GitCommand {
             comment: None,
             progress: false,
             input: None,
+            stdout_file: None,
             before: None,
             env: Vec::new(),
             todo: None,
@@ -139,6 +142,11 @@ impl GitCommand {
 
     pub fn input(mut self, input: impl Into<String>) -> Self {
         self.input = Some(input.into());
+        self
+    }
+
+    pub(crate) fn write_to(mut self, path: &str) -> Self {
+        self.stdout_file = Some(path.to_owned());
         self
     }
 
@@ -188,10 +196,14 @@ impl GitCommand {
 
     /// The command as it would be typed in a shell, with arguments quoted where needed.
     pub fn display(&self) -> String {
-        std::iter::once(self.program.clone().unwrap_or_else(|| "git".to_owned()))
+        let shown = std::iter::once(self.program.clone().unwrap_or_else(|| "git".to_owned()))
             .chain(self.args.iter().map(|a| shell_quote(a)))
             .collect::<Vec<_>>()
-            .join(" ")
+            .join(" ");
+        match &self.stdout_file {
+            Some(path) => format!("{shown} > {}", shell_quote(path)),
+            None => shown,
+        }
     }
 }
 
@@ -459,6 +471,13 @@ pub fn run_in(dir: &Path, command: &GitCommand, input: Option<&[u8]>) -> Result<
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     if output.status.success() {
+        if let Some(path) = &command.stdout_file {
+            save_stdout(dir, path, &output.stdout, current_stop().as_deref())?;
+            return Ok(CommandOutput {
+                stdout: String::new(),
+                stderr,
+            });
+        }
         Ok(CommandOutput { stdout, stderr })
     } else {
         Err(Error::Command {
@@ -467,6 +486,55 @@ pub fn run_in(dir: &Path, command: &GitCommand, input: Option<&[u8]>) -> Result<
             output: if stderr.trim().is_empty() { stdout } else { stderr },
         })
     }
+}
+
+/// Write beside the target first: failure or Stop leaves the previous file intact. No
+/// checkout filters, encoding conversions, or following links outside the working copy.
+fn save_stdout(dir: &Path, path: &str, bytes: &[u8], cancel: Option<&AtomicBool>) -> Result<()> {
+    let relative = Path::new(path);
+    if relative.as_os_str().is_empty() || relative.components().any(|part| {
+        !matches!(part, std::path::Component::Normal(name) if !name.as_encoded_bytes().eq_ignore_ascii_case(b".git"))
+    }) {
+        return Err(Error::Git("The destination must be a file inside the working copy".into()));
+    }
+    let io = |err: std::io::Error| Error::Git(format!("Couldn’t restore {path}: {err}"));
+    let mut folder = dir.to_path_buf();
+    if let Some(parent) = relative.parent() {
+        for part in parent.components() {
+            folder.push(part);
+            match folder.symlink_metadata() {
+                Ok(meta) if meta.is_dir() && !meta.is_symlink() => {}
+                Ok(_) => return Err(Error::Git(format!("{path} is in a linked or non-directory folder"))),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => std::fs::create_dir(&folder).map_err(io)?,
+                Err(err) => return Err(io(err)),
+            }
+        }
+    }
+    let target = dir.join(relative);
+    let metadata = match target.symlink_metadata() {
+        Ok(meta) if meta.is_file() => Some(meta),
+        Ok(_) => return Err(Error::Git(format!("{path} is not a plain file"))),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => return Err(io(err)),
+    };
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".oxbow-restore-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(
+            metadata.as_ref().map_or(0o666, |m| m.permissions().mode() & 0o7777),
+        ));
+    }
+    #[cfg(not(unix))]
+    let _ = metadata;
+    let mut temp = builder.tempfile_in(&folder).map_err(io)?;
+    temp.write_all(bytes).map_err(io)?;
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(Error::Cancelled);
+    }
+    temp.persist(&target).map_err(|err| io(err.error))?;
+    Ok(())
 }
 
 fn spawn_in(dir: &Path, command: &GitCommand, input: Option<&[u8]>) -> Result<std::process::Output> {
@@ -826,6 +894,27 @@ pub fn run_streaming_in(
     on_line: &mut dyn FnMut(OutputLine),
     cancel: &AtomicBool,
 ) -> Result<CommandOutput> {
+    if let Some(path) = &command.stdout_file {
+        let log = console::started(dir, &command.display());
+        let (mut child, log) = start(command_in(dir, command), false, log)?;
+        let out = wait_for(
+            &mut child,
+            command,
+            log,
+            None,
+            Some(cancel),
+            Keep::All(MAX_OUTPUT_BYTES),
+        )?;
+        if !out.status.success() {
+            return Err(Error::Command {
+                command: command.display(),
+                code: out.status.code(),
+                output: String::from_utf8_lossy(&out.stderr).into_owned(),
+            });
+        }
+        save_stdout(dir, path, &out.stdout, Some(cancel))?;
+        return Ok(CommandOutput::default());
+    }
     let log = console::started(dir, &command.display());
     let (mut child, log) = start(command_in(dir, command), false, log)?;
     let (send, receive) = mpsc::sync_channel(QUEUED_LINES);
@@ -1025,6 +1114,42 @@ pub(crate) fn shell_quote(arg: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_output_keeps_binary_bytes_and_never_replaces_a_file_on_failure_or_stop() {
+        let dir = private_temp_folder("oxbow-raw-output-").unwrap();
+        run_in(dir.path(), &GitCommand::new(["init", "-q"]), None).unwrap();
+        let bytes = b"\xff\0\r\n$Id$\nno final newline";
+        let id = run_in(
+            dir.path(),
+            &GitCommand::new(["hash-object", "-w", "--stdin"]),
+            Some(bytes),
+        )
+        .unwrap()
+        .stdout;
+        let path = "file's bytes.bin";
+        let cmd = GitCommand::new(["cat-file", "blob", id.trim()]).write_to(path);
+        assert!(cmd.display().contains(" > 'file"));
+        run_in(dir.path(), &cmd, None).unwrap();
+        assert_eq!(std::fs::read(dir.path().join(path)).unwrap(), bytes);
+        std::fs::write(dir.path().join(path), "keep").unwrap();
+        assert!(run_streaming_in(dir.path(), &cmd, &mut |_| {}, &AtomicBool::new(true)).is_err());
+        assert_eq!(std::fs::read(dir.path().join(path)).unwrap(), b"keep");
+        let bad = GitCommand::new(["cat-file", "blob", "missing"]).write_to(path);
+        assert!(run_in(dir.path(), &bad, None).is_err());
+        assert_eq!(std::fs::read(dir.path().join(path)).unwrap(), b"keep");
+        std::fs::create_dir(dir.path().join("folder")).unwrap();
+        assert!(run_in(dir.path(), &cmd.clone().write_to("folder"), None).is_err());
+        assert!(dir.path().join("folder").is_dir());
+        assert_eq!(
+            std::fs::read_dir(dir.path())
+                .unwrap()
+                .flatten()
+                .filter(|e| e.file_name().to_string_lossy().starts_with(".oxbow-restore-"))
+                .count(),
+            0
+        );
+    }
 
     #[test]
     fn kept_output_loses_its_oldest_lines() {

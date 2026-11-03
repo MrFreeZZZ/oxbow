@@ -640,3 +640,68 @@ fn a_list_is_not_committed_in_the_middle_of_a_merge() {
     assert!(fx.path().join(".git/MERGE_HEAD").exists());
     assert_eq!(fx.git(&["rev-list", "--count", "HEAD"]).trim(), "1");
 }
+
+#[test]
+fn discarding_a_mixed_list_warns_about_large_untracked_files() {
+    use oxbow_core::changelists::{ChangelistEdit, Moving};
+    let mut fx = Fixture::new();
+    let base: String = (1..=20).map(|n| format!("line {n}\n")).collect();
+    fx.commit("a.txt", &base, "base");
+    fx.write(
+        "a.txt",
+        &base
+            .replace("line 2\n", "top edit\n")
+            .replace("line 18\n", "bottom edit\n"),
+    );
+    let big = fx.path().join("big.bin");
+    std::fs::File::create(&big)
+        .unwrap()
+        .set_len(oxbow_core::oplog::MAX_UNTRACKED + 1)
+        .unwrap();
+    let repo = Repo::open(fx.path()).unwrap();
+    let paths = vec!["a.txt".into(), "big.bin".into()];
+    let lists = repo
+        .edit_changelists(&ChangelistEdit::Create {
+            name: "Mixed".into(),
+            moving: Some(Moving::Files { paths: paths.clone() }),
+        })
+        .unwrap();
+    let list = lists.lists[0].id.clone();
+    let diff = repo.working_diff("a.txt", oxbow_core::Side::Unstaged, false).unwrap();
+    let keys: Vec<String> = diff.hunks.iter().flat_map(|h| h.runs.clone()).collect();
+    repo.edit_changelists(&ChangelistEdit::Move {
+        moving: Moving::Runs {
+            path: "a.txt".into(),
+            keys: vec![keys[1].clone()],
+        },
+        to: None,
+    })
+    .unwrap();
+    let act = Action::DiscardChangelist {
+        list: Some(list),
+        paths,
+    };
+    assert_eq!(
+        repo.not_kept(&act).unwrap(),
+        repo.not_kept(&Action::Discard {
+            paths: vec!["big.bin".into()]
+        })
+        .unwrap()
+    );
+    repo.perform(&act).unwrap();
+    let log = repo.operation_log().unwrap();
+    repo.perform(&Action::Restore {
+        id: log[0].id.clone(),
+        after: false,
+    })
+    .unwrap();
+    assert!(
+        !big.exists(),
+        "large files explicitly warned about remain outside snapshots"
+    );
+    assert!(
+        std::fs::read_to_string(fx.path().join("a.txt"))
+            .unwrap()
+            .contains("top edit")
+    );
+}
