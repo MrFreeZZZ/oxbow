@@ -31,7 +31,7 @@ for (const gitlab of [null, { mergeStatus: "mergeable" }]) {
 
 function deferred<T>() { let resolve!: (v: T) => void, reject!: (e: unknown) => void; const promise = new Promise<T>((r, no) => { resolve = r; reject = no; }); return { promise, resolve, reject }; }
 const turn = () => new Promise((r) => setTimeout(r, 0));
-function state() {
+function state(now = Date.now) {
   const gh: ReturnType<typeof deferred<PullList>>[] = [], gl: ReturnType<typeof deferred<any>>[] = [];
   const api = {
     githubRepo: async () => ({ owner: "acme", name: "api" }),
@@ -43,8 +43,8 @@ function state() {
   };
   const source = fs.readFileSync(new URL("../src/lib/github.svelte.ts", import.meta.url), "utf8").replace(/^import .*;\n/gm, "").replace(/export /g, "");
   const js = ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
-  const value = Function("api", "$state", "keepList", `${js}; return github;`)(api, (v: unknown) => v, keepList);
-  return { value, gh, gl };
+  const value = Function("api", "$state", "keepList", "Date", `${js}; return github;`)(api, (v: unknown) => v, keepList, { now });
+  return { value, gh, gl, api };
 }
 // Repositories, account changes and refreshes can resolve in reverse order on both providers.
 for (const change of ["repository", "account", "refresh"]) {
@@ -63,6 +63,36 @@ for (const change of ["repository", "account", "refresh"]) {
   assert.deepEqual(s.value.issues, []);
   assert.deepEqual(s.value.mrIssues, []);
   assert.equal(s.value.mrProject.host, "gitlab.com");
+}
+
+// An ordinary reload after the cache expires can lose its GitLab projects while an older
+// MR request is still pending. Neither that request's answer nor its finally owns the state.
+for (const projects of ["empty", "failed"]) {
+  for (const older of ["success", "failure"]) {
+    let now = 100_000;
+    const s = state(() => now);
+    s.api.githubRepo = async () => null;
+    const first = s.value.load("A"); await turn();
+    await first;
+    assert.equal(s.value.mrLoading, true);
+    s.api.gitlabProjects = async () => {
+      if (projects === "failed") throw new Error("project discovery failed");
+      return [];
+    };
+    now += 60_001;
+    await s.value.load("A");
+    assert.equal(s.value.mrProject, null);
+    assert.equal(s.value.loading, false);
+    assert.equal(s.value.mrLoading, false, `${projects}: no MR request means loading has finished`);
+    assert.equal(s.gl.length, 1, "no new MR request without projects");
+    if (older === "failure") s.gl[0].reject(new Error("old MR request failed"));
+    else s.gl[0].resolve({ project: { host: "old" }, mergeRequests: { items: [pull(10)], issues: [] } });
+    await turn();
+    assert.equal(s.value.mrLoading, false);
+    assert.equal(s.value.mrProject, null);
+    assert.equal(s.value.mrProblem, null);
+    assert.deepEqual(s.value.mergeRequests, []);
+  }
 }
 
 // Exercise the actual component loader, including catch/finally and delayed response guards.

@@ -60,7 +60,10 @@ class GitHubState {
     this.repo = repo;
     this.gitlab = gitlab;
     if (gitlab.length) void this.#loadMergeRequests(load);
-    else this.mrProject = null;
+    else {
+      this.mrProject = null;
+      this.mrLoading = false;
+    }
     if (!repo) {
       this.pulls = [];
       this.loading = false;
