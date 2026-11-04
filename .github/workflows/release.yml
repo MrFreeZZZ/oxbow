@@ -1,0 +1,218 @@
+name: Release
+
+on:
+  push:
+    tags: ['v0.1.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag (for example, v0.1.546)
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
+      - run: npm ci
+        working-directory: app
+      - run: npm run build
+        working-directory: app
+      - run: scripts/check.sh all
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit
+      - run: npm audit --audit-level=moderate
+        working-directory: app
+
+  macos-tests:
+    name: Tests (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: tests
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+        working-directory: app
+      - run: npm run build
+        working-directory: app
+      - run: cargo test -p oxbow-core -p oxbow-app
+
+  build:
+    name: ${{ matrix.name }}
+    needs: [checks, macos-tests]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Apple Silicon
+            os: macos-latest
+            target: aarch64-apple-darwin
+            bundles: app
+          - name: macOS Intel
+            os: macos-latest
+            target: x86_64-apple-darwin
+            bundles: app
+          - name: Linux x64
+            os: ubuntu-22.04
+            target: ''
+            bundles: deb,appimage
+          - name: Windows x64
+            os: windows-latest
+            target: ''
+            bundles: nsis
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - name: Verify the tag matches the app version
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          version="0.1.$(git rev-list --count HEAD)"
+          if [[ "$RELEASE_TAG" != "v$version" ]]; then
+            echo "Expected tag v$version for this commit, got $RELEASE_TAG" >&2
+            exit 1
+          fi
+          echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf libfuse2
+      - run: npm ci
+        working-directory: app
+      - name: Build application
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
+        run: |
+          args=(--ci --bundles "${{ matrix.bundles }}" --config "{\"version\":\"$RELEASE_VERSION\"}")
+          if [[ -n '${{ matrix.target }}' ]]; then
+            args+=(--target '${{ matrix.target }}')
+          fi
+          npx tauri build "${args[@]}"
+        working-directory: app
+      - name: Package macOS app
+        if: runner.os == 'macOS'
+        run: |
+          app="target/${{ matrix.target }}/release/bundle/macos/Oxbow.app"
+          test -d "$app"
+          mkdir -p release-assets
+          ditto -c -k --sequesterRsrc --keepParent "$app" "release-assets/Oxbow_${RELEASE_VERSION}_${{ matrix.target }}.zip"
+      - name: Package Linux bundles
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p release-assets
+          cp target/release/bundle/deb/*.deb release-assets/
+          appimage=(target/release/bundle/appimage/*.AppImage)
+          test -f "${appimage[0]}"
+          zip -j "release-assets/Oxbow_${RELEASE_VERSION}_amd64.AppImage.zip" "${appimage[0]}"
+      - name: Package Windows installer
+        if: runner.os == 'Windows'
+        run: |
+          mkdir -p release-assets
+          cp target/release/bundle/nsis/*-setup.exe release-assets/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os }}-${{ matrix.target || 'x64' }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  draft:
+    name: Create draft prerelease
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+      - name: Create GitHub draft with all builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          test "$(find release-assets -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 5
+          cat > release-notes.md <<'EOF'
+          ## Oxbow Beta
+
+          Oxbow is a desktop Git client for exploring history, reviewing changes, and carrying out Git operations with clear confirmations and recovery options.
+
+          This beta includes downloads for macOS (Apple Silicon and Intel), Linux x64 (Debian package and AppImage), and Windows x64 (installer). Choose the build for your operating system from the assets below.
+
+          ### macOS installation
+
+          The macOS build is not notarized. After extracting the app, open Terminal in the directory containing `Oxbow.app` and run:
+
+          ```sh
+          xattr -cr Oxbow.app
+          ```
+
+          Then move Oxbow to Applications if you wish and launch it.
+
+          ### What you can do
+
+          - Explore commit history, branches, diffs, file history, and blame.
+          - Stage changes by file, hunk, or line, and keep separate work in changelists.
+          - Review GitHub pull requests and GitLab merge requests.
+          - Inspect Git commands before risky operations and recover from supported local mistakes.
+
+          Oxbow is in active development. Undo does not cover every operation or remote change. Please report issues with your operating system, build name, and steps to reproduce.
+          EOF
+          if gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft >/tmp/release-is-draft 2>/dev/null; then
+            test "$(cat /tmp/release-is-draft)" = true
+            gh release edit "$RELEASE_TAG" --draft --prerelease --title "Oxbow ${RELEASE_TAG#v} — Beta" --notes-file release-notes.md
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          else
+            gh release create "$RELEASE_TAG" release-assets/* --draft --prerelease --verify-tag --title "Oxbow ${RELEASE_TAG#v} — Beta" --notes-file release-notes.md
+          fi
