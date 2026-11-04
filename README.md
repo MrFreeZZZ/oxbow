@@ -13,93 +13,92 @@
 </p>
 
 <p align="center">
-  A calm desktop Git client with a clear history, transparent commands<br>
-  and recovery tools for everyday work.
+  A desktop Git client that makes history clear and risky steps easier to understand.<br>
+  Explore your work, see the Git commands before they run, and recover from supported mistakes.
 </p>
 
-<p align="center">
-  <sub>macOS first. Windows and Linux builds are not ready for release.</sub>
-</p>
+<p align="center"><sub>Built for macOS first · In active development</sub></p>
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/history-dark.png">
-    <img src="docs/images/history-light.png" alt="Oxbow: the commit graph of a repository with several stacked branches, and the diff of the selected commit">
+    <img src="docs/images/history-light.png" width="100%" alt="Oxbow showing a colored commit graph, branches, commit details and a code diff in one window">
   </picture>
 </p>
 
-## Why Oxbow
+<p align="center"><sub>Follow branches through the commit graph and inspect a change without leaving History.</sub></p>
 
-**Recover from mistakes.** The Operation Log records supported repository changes with their
-before and after state. Undo (⌘Z on macOS) can restore local work after a commit, rebase, merge,
-deleted branch, dropped stash, hard reset or discard. Confirmations explain what cannot be
-recovered. Remote changes and arbitrary custom scripts are not covered by Undo.
-Resolving a conflict does not support Undo: snapshots do not keep unmerged index stages,
-operation metadata or rerere records. Resolve asks first, including staging an externally resolved binary file or deletion. Its file snapshots remain available
-in Operation Log → Compare with Now → Browse Saved Files → Save As. Save a copy before replacing
-current files; this does not reopen the conflict. Local History can also restore versions it
-has kept. Undo/Restore is blocked while an operation is in progress. Rerere's cache is shared
-Git state and is never reset by this recovery path.
+## What Oxbow helps you do
 
-**Transparent commands.** Risky actions ask first and show the planned git commands. Simple
-actions run at once and appear in Activity. The Console shows command output for troubleshooting.
+**See how your work fits together.** Explore the commit graph, compare branches and commits,
+search history and code, and inspect a file's history or blame. Staging works by file, hunk or
+line; changelists let you commit separate pieces of work independently.
 
-**Real git underneath.** History, the graph and diffs are read with
-[gitoxide](https://github.com/GitoxideLabs/gitoxide), so even big repositories open quickly.
-Every change runs your own `git`, so hooks, credentials and SSH behave exactly as in a terminal.
+**Know what will happen.** Confirmations for risky actions explain the effect and show the exact
+Git commands. Oxbow uses your system `git` for repository changes, including your hooks, SSH
+and credential setup. The Console and Activity show what ran and what happened.
 
-**More ways back.** Dropped stashes and aborted operations keep a copy for 30 days. Lost Work
-finds commits from the reflog, and Fix a Mistake plans the way out of a commit on the wrong
-branch, a forgotten file or a push you want to take back. While a repository is open, Local
-History captures saved changes from any editor for comparison or restore. It keeps eligible
-files up to 1 MB for seven days by default, groups nearby saves and has a 256 MB storage limit
-per worktree. The retention period is configurable.
+**Find a way back.** The Operation Log records supported local actions and can undo many of them,
+including commits, rebases, merges, deleted branches, dropped stashes, hard resets and discards.
+Lost Work finds commits in the reflog; Fix a Mistake helps choose a recovery path. Local History
+captures eligible files saved while a repository is open, even when they were edited elsewhere.
 
-**Stacked branches.** Edit Stack rewrites a chain of branches in one go. Pull requests keep their
-stack list up to date and the rest of a stack is restacked when its base is merged.
+**Keep a complex workflow in one place.** Work with stashes, worktrees, tags, submodules, Git LFS
+and stacked branches. Review pull requests on GitHub and merge requests on GitLab, including
+comments, suggestions and CI status. Run your own commands with live output and a Stop button.
 
-**Secrets stay out.** Before each commit the staged lines are checked for passwords, tokens and
-private keys, with your own patterns on top.
+## Recovery, with the details visible
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/confirm-dark.png">
-    <img src="docs/images/confirm-light.png" width="49%" alt="A hard reset shows the exact git command before it runs">
-  </picture>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/undo-dark.png">
-    <img src="docs/images/undo-light.png" width="49%" alt="Undo puts the repository back as it was before the reset">
+    <img src="docs/images/confirm-light.png" width="720" alt="Oxbow explaining a hard reset and showing the exact Git command before confirmation">
   </picture>
 </p>
 
-## Everything you use every day
+<p align="center"><sub>Before a hard reset, Oxbow shows what will be discarded and the command it plans to run.</sub></p>
 
-- Staging by file, hunk or line; changelists, each committed on its own; amend, reword, fixup
-- Branches, tags, stashes, worktrees, submodules, Git LFS
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/undo-dark.png">
+    <img src="docs/images/undo-light.png" width="720" alt="Oxbow explaining how it will undo a supported hard reset and showing the restore commands">
+  </picture>
+</p>
+
+<p align="center"><sub>For a supported action, Undo shows how the local repository will be restored.</sub></p>
+
+Undo covers supported local actions, not remote changes or arbitrary custom scripts. Conflict
+resolution cannot be undone as a conflict: snapshots do not preserve unmerged index stages,
+operation metadata or Git's shared rerere cache. The Operation Log can still expose saved file
+copies through **Compare with Now → Browse Saved Files → Save As**. Save a copy before replacing
+current files. Undo and Restore are unavailable while a Git operation is in progress.
+
+Dropped stashes and aborted operations keep a copy for 30 days. Local History keeps eligible
+files up to 1 MB for seven days by default, with a 256 MB limit per worktree; its retention period
+is configurable. It captures saves only while the repository is open.
+
+## More in the app
+
 - Merge, rebase, cherry-pick and revert with a three-way conflict editor
-- Push, pull and fetch with clear messages when a remote refuses
-- Compare branches and commits, search history and code, file history and blame
-- Bisect, with a test command if you have one
-- GitHub: sign in, publish a repository, open, review and merge pull requests
-- GitLab: connect with a personal access token, create, review and merge merge requests
-- Review comments, suggested changes and CI status for pull and merge requests
-- Custom commands with repository, branch and commit context, live output and a Stop button
-- Welcome screen with local summaries of recent repositories, refreshed on demand without fetching
-- Repository trust controls, protected branches and configurable checks before committing
-- Import and export patches; edit shared repository files from Settings
-- Command Palette and VS Code's keyboard shortcuts, light and dark themes
+- Pull, push and fetch with explanations when a remote refuses an operation
+- Stacked branch editing and restacking after a base branch is merged
+- GitHub sign-in and repository publishing; GitLab connection with a personal access token
+- A staged-line secrets check before commits, with custom patterns
+- Repository trust controls, protected branches and configurable pre-commit checks
+- Patch import and export, shared repository file editing, and a local recent-repositories view
+- Command Palette, configurable keyboard shortcuts, and light and dark themes
 
 ## Project status
 
-Oxbow is under active development. macOS is the primary build and testing target; Windows and
-Linux release builds, Developer ID signing and macOS notarization remain pending. GitLab
-integration has automated coverage against a test server; validation against a live GitLab
-service is still pending.
+Oxbow is under active development. macOS is the primary build and testing target. Windows and
+Linux release builds, Developer ID signing and macOS notarization are pending. GitLab integration
+has automated tests against a test server; it has not yet been validated against a live GitLab
+service.
 
 CI checks pull requests on Linux. Pushes to `main` also build a macOS app and run Rust tests on
-macOS. A build artifact counts as checked only when all jobs in that run pass.
+macOS. A macOS build artifact counts as checked only when every job in that run passes.
 
-## Building from source
+## Build from source
 
 You need Rust stable (1.88 or newer), Node.js 22.12 or newer, a system `git` and the
 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your system.
@@ -110,14 +109,12 @@ npm ci
 npm run tauri dev -- -- /path/to/repo   # omit the path to use the saved startup preference
 ```
 
-From `app/`, run `npm run tauri build` to build the application bundle.
-
-From the repository root:
+From `app/`, run `npm run tauri build` to build the application bundle. From the repository root:
 
 ```sh
-scripts/make-demo-repo.sh /tmp/acme-api  # create a repository to explore
-scripts/check.sh                       # checks for changed app/core files
-scripts/check.sh all                   # all formatting, lint, type and unit checks
+scripts/make-demo-repo.sh /tmp/oxbow-demo  # replaces this path with a demo repository
+scripts/check.sh                            # checks changed app/core files
+scripts/check.sh all                        # all formatting, lint, type and unit checks
 ```
 
 ## Architecture
@@ -127,8 +124,8 @@ scripts/check.sh all                   # all formatting, lint, type and unit che
 - `app/src/` — Svelte 5 and TypeScript interface
 - `app/tests/` and `app/e2e/` — frontend unit tests and application acceptance scenarios
 
-History and diffs use gitoxide; repository changes run the system git CLI. Personal commands
-are stored in application settings and run only when explicitly invoked. They show live output
-in a resizable native window that remembers its size and position.
+History and diffs use [gitoxide](https://github.com/GitoxideLabs/gitoxide); repository changes
+run the system Git CLI. Personal commands run only when invoked and show live output in a
+resizable native window that remembers its size and position.
 
 Third-party credits are in [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).
