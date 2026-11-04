@@ -1,8 +1,9 @@
 <script lang="ts">
   // The Conflicts screen: conflicted files on the left; for the open file, both sides on top
   // (named by branch, never "ours" and "theirs"), with the version they started from when asked,
-  // and the result underneath, where each conflict gets a side, both, or lines typed by hand,
-  // or the whole file is written as text, before the file is marked resolved. A conflict whose
+  // and the actual working result underneath, including rerere and partial external edits.
+  // The user can instead choose index sides, both, or lines typed by hand, or edit the whole
+  // result as text, before marking it resolved. A conflict whose
   // sides changed different lines merges with one click, and Apply Non-Conflicting Changes merges
   // every such conflict of a file or of all files; what Oxbow merged stays marked until the step
   // is over. All of it is saved
@@ -43,6 +44,7 @@
     stepIndex,
     strayMarkers,
     toResolution,
+    workingText,
     type Choice,
     type Decision,
     type SideItem,
@@ -121,8 +123,6 @@
   const home = untrack(() => folder);
   /** The operation, its commit, and the commit checked out, that the decisions belong to. */
   let step = $state("");
-  /** The step whose draft is being read from disk. */
-  let reading = "";
   /** The conflict last stepped to in the open file; -1 before the first step. */
   let at = $state(-1);
   /** The conflict stepped to, drawn in every pane however far it is from the screen. */
@@ -135,6 +135,8 @@
   let tool = $state<MergeTool | null | undefined>(undefined);
   /** The file open in the merge tool. */
   let waiting = $state<string | null>(null);
+  let reloadTicket = 0;
+  let openTicket = 0;
   let work = $state<HTMLElement>();
   let textBox = $state<ReturnType<typeof EditBox>>();
 
@@ -178,21 +180,21 @@
   const automatic = $derived((tree?.staged ?? []).map((f) => f.path).filter((p) => !seen.includes(p)));
 
   async function reload() {
+    const ticket = ++reloadTicket;
+    textBox?.flush();
     try {
       const next = await api.workingTree();
+      if (ticket !== reloadTicket) return;
       tree = next;
       error = null;
       const key = `${op.kind}:${op.commit?.id ?? ""}:${history.head.commit ?? ""}`;
       const paths = next.conflicted.map((f) => f.path);
       if (key !== step) {
-        if (key === reading) return;
-        reading = key;
         // Back on the screen in the same step: the decisions are still there. Otherwise they
         // come from the draft on disk, as after Oxbow was quit.
         const saved = kept.get<Saved>(KEPT_CONFLICTS);
         const draft = saved?.step === key ? null : await loadDraft();
-        if (reading !== key) return;
-        reading = "";
+        if (ticket !== reloadTicket) return;
         const state = saved?.step === key ? { ...saved, seen: [...saved.seen, ...paths.filter((p) => !saved.seen.includes(p))] } : takeDraft(draft, key, paths);
         choices = state.choices;
         texts = state.texts;
@@ -210,7 +212,7 @@
       if (!current || !paths.includes(current)) current = paths[0] ?? null;
       await open(current, true);
     } catch (err) {
-      error = String(err);
+      if (ticket === reloadTicket) error = String(err);
     }
   }
 
@@ -238,6 +240,9 @@
   const conflictedNow = () => tree?.conflicted.map((f) => f.path) ?? [];
 
   async function open(path: string | null, again = false) {
+    textBox?.flush();
+    writeResult();
+    const ticket = ++openTicket;
     if (!again || path !== current) {
       at = -1;
       reach = null;
@@ -246,13 +251,15 @@
       comparing = false;
     }
     current = path;
+    if (file?.path !== path) file = null;
+    error = null;
     if (!path) {
       file = null;
       return;
     }
     try {
       const next = await api.conflictFile(path);
-      if (current !== path) return;
+      if (current !== path || ticket !== openTicket) return;
       // Decisions made for other versions of the file, as after an abort and a new merge, start
       // over: the same number of conflicts is no sign they still fit. What they made is kept,
       // to compare.
@@ -271,11 +278,16 @@
           texts.delete(path);
         }
       }
+      // A fitting draft wins; a newer working result wins over a stale draft. Import all
+      // markers and partial edits verbatim, rather than guessing that marker-free means correct.
+      if (!hasWork(choices.get(path), texts.get(path)) && next.worktree != null && next.chunks.length) {
+        texts = new Map(texts).set(path, workingText(next)!);
+      }
       file = next;
       const count = next.chunks.filter((c) => c.kind === "conflict").length;
       if (choices.get(path)?.length !== count) choices = new Map(choices).set(path, Array(count).fill(null));
     } catch (err) {
-      error = String(err);
+      if (ticket === openTicket) error = String(err);
     }
   }
 
@@ -318,6 +330,8 @@
     conflictSteps.applyAll = applyAll;
     window.addEventListener("beforeunload", flush);
     return () => {
+      reloadTicket++;
+      openTicket++;
       if (conflictSteps.step === stepConflict) conflictSteps.step = null;
       if (conflictSteps.applyAll === applyAll) conflictSteps.applyAll = null;
       window.removeEventListener("beforeunload", flush);
@@ -385,6 +399,9 @@
         // Decisions made for other versions of the file are the file's own to sort out on opening.
         const was = stages.get(path);
         if (was !== undefined && was !== f.stages) continue;
+        // An unopened working result may already hold external edits or rerere's resolution.
+        // Only replace it once the user explicitly chose to work from the index sides.
+        if (was === undefined && f.worktree != null) continue;
         const count_ = f.chunks.filter((c) => c.kind === "conflict").length;
         if (!count_) continue;
         stages.set(path, f.stages);
@@ -398,7 +415,7 @@
         if (decisions.every((d) => d !== null)) ready++;
       }
       choices = next;
-      if (!count) confirm.say("No conflict left can be merged by itself: in each, both sides changed the same lines.", "info");
+      if (!count) confirm.say("No selected conflict can be merged automatically. Working results are kept; choose Choose from Sides in a file to work from its index versions.", "info");
       else
         confirm.say(
           `Merged ${count} ${count === 1 ? "conflict" : "conflicts"} in ${files} ${files === 1 ? "file" : "files"}, where the sides changed different lines.${ready ? ` ${ready} ${ready === 1 ? "file is" : "files are"} ready to mark resolved.` : ""}`,
@@ -439,7 +456,7 @@
 
   function stopText() {
     if (!asText) return;
-    if (asText.text !== asText.start && !leaving) {
+    if (!leaving && (asText.text !== asText.start || asText.text === file?.worktree)) {
       leaving = true;
       return;
     }
@@ -448,6 +465,7 @@
 
   function dropText() {
     if (!current) return;
+    if (asText) old = new Map(old).set(current, { path: current, result: asText.text, savedAt: Date.now() });
     const next = new Map(texts);
     next.delete(current);
     texts = next;
@@ -579,7 +597,8 @@
   };
 
   function markResolved() {
-    if (!current || !file || open_) return;
+    textBox?.flush();
+    if (!current || !file || open_ || waiting) return;
     const name = splitPath(current).name;
     const request = {
       title: `Mark ${name} as resolved?`,
@@ -588,6 +607,10 @@
       status: `Resolving ${name}…`,
       done: `${name} is resolved.`,
     } as const;
+    if (asText?.text === file.worktree && !stray) {
+      markWorking();
+      return;
+    }
     if (asText) {
       run({
         ...request,
@@ -631,9 +654,24 @@
     });
   }
 
+  /** Git stages an external result verbatim, including binary files and deletions. */
+  function markWorking() {
+    if (!current || !file || file.link || waiting) return;
+    const name = splitPath(current).name;
+    run({
+      title: `Mark ${name} as resolved?`,
+      body: ["Review the working result of ", { code: current }, ". Git stages the current file or its deletion without rewriting it. The absence of conflict markers does not prove the result is correct."],
+      icon: "stage",
+      button: "Mark Resolved",
+      status: `Resolving ${name}…`,
+      done: `${name} is resolved.`,
+      action: { kind: "resolveWorking", path: current, stages: file.stages },
+    });
+  }
+
   /** One side's whole file, for files that can't be merged line by line. */
   function takeFile(side: ConflictSide) {
-    if (!current || !file) return;
+    if (!current || !file || waiting) return;
     const name = splitPath(current).name;
     const label = labelOf(side);
     const exists = side === "ours" ? file.ours : file.theirs;
@@ -654,14 +692,14 @@
   /** Why the open file can't be merged line by line. */
   const wholeOnly = $derived.by(() => {
     if (!file || lineByLine) return null;
-    if (file.binary) return "This is a binary file, so it can’t be merged line by line. Pick one side’s version.";
+    if (file.binary) return "This is a binary file. Review the working result in your editor and mark it resolved, or use a side’s version.";
     if (file.link) return "This is a symbolic link or a submodule, so it can’t be merged line by line. Pick one side’s version.";
     if (!file.ours || !file.theirs) {
       const gone = !file.ours ? labelOf("ours") : labelOf("theirs");
       const kept = !file.ours ? labelOf("theirs") : labelOf("ours");
-      return `${gone} deleted this file, while ${kept} changed it. Keep ${kept}’s version, or delete it.`;
+      return `${gone} deleted this file, while ${kept} changed it. Review and stage the working result, use ${kept}’s version, or delete it.`;
     }
-    return "Both sides changed this file in a way git can’t show line by line. Pick one side’s version.";
+    return "Git can’t show this conflict line by line. Review and stage the working result, or use a side’s version.";
   });
 
   /** Why the merge tool can't open the file, or null when it can. */
@@ -678,11 +716,14 @@
   /** Open the file in the merge tool; git waits for it to quit, then the screen reloads. */
   async function openTool() {
     if (!current || !tool || toolWhy || waiting) return;
+    textBox?.flush();
     const path = current;
+    const expected = file!.stages;
     const name = splitPath(path).name;
     waiting = path;
     try {
-      const done = await api.openMergeTool(path);
+      await draftSaves.flush();
+      const done = await api.openMergeTool(path, expected);
       confirm.say(done ? `${name} is resolved in ${tool.label}.` : `${tool.label} closed. ${name} still has conflicts.`, done ? "done" : "info");
     } catch (err) {
       confirm.fail(err);
@@ -895,9 +936,9 @@
       {:else if op.kind === "am"}
         Nothing here is final until you continue. Abort takes back every patch of this run: {op.branch ?? "HEAD"} goes back to before them.
       {:else}
-        Nothing here is final until you {op.kind === "merge" || op.kind === "squash" ? "commit" : "continue"}. Abort puts everything back as it was before the {op.kind === "cherryPick" ? "cherry-pick" : op.kind}.
+        {op.kind === "merge" || op.kind === "squash" ? "Commit" : "Continue"} to finish the operation. Abort abandons the {op.kind === "cherryPick" ? "cherry-pick" : op.kind}.
       {/if}
-      Your choices are kept as a draft until then, even if Oxbow quits.
+      Your choices are kept as a draft until then, even if Oxbow quits. Git’s rerere records are not rewound.
     </p>
   </aside>
 
@@ -933,20 +974,24 @@
             Common Ancestor
           </button>
         {/if}
-        <button class="button small" disabled={!!toolWhy || !!waiting} title={toolWhy ?? `Git writes the file with conflict markers, opens it in ${toolLabel}, and stages it once you save and quit`} onclick={openTool}>
+        <button class="button small" disabled={!!toolWhy || !!waiting} title={toolWhy ?? `Open the working file in ${toolLabel}; git stages it if the tool reports success`} onclick={openTool}>
           {waiting === current ? `Waiting for ${toolLabel}…` : `Open in ${toolLabel}`}
         </button>
       </div>
+      {#if tool && !toolWhy}
+        <div class="olddraft">Git stages the file if the tool reports success. Git controls this file until the tool exits. If it fails or cancels, Git restores the prelaunch file; save a separate copy in the tool to keep unfinished edits. Undo does not restore conflict stages or rerere records.</div>
+      {/if}
       {#if wholeOnly}
         <div class="empty">
           <span class="explain">{wholeOnly}</span>
           <div class="buttons">
+            {#if !file.link}<button class="button primary" disabled={!!waiting} onclick={markWorking}>Mark Working File Resolved</button>{/if}
             <button class="button" onclick={() => takeFile(leftSide)}>{(leftSide === "ours" ? file.ours : file.theirs) ? `Use ${leftLabel}’s Version` : `Delete, as on ${leftLabel}`}</button>
             <button class="button" onclick={() => takeFile(rightSide)}>{(rightSide === "ours" ? file.ours : file.theirs) ? `Use ${rightLabel}’s Version` : `Delete, as on ${rightLabel}`}</button>
           </div>
         </div>
       {:else}
-        {#key current}
+        {#key `${current}:${file.stages}`}
           <div class="sides">
             {#if showBase}
               {@render sidePane(baseItems, baseBlocks, "Common ancestor", "Before both changes", NO_BRANCH_COLOR, null)}
@@ -957,6 +1002,7 @@
           <section class="pane result" aria-label="Result">
             <header class="pane-head">
               <b>Result</b>
+              {#if asText && asText.text === file.worktree}<span class="small note">· Working file</span>{/if}
               <span class="stepper">
                 <button class="step" aria-label="Previous conflict" title="Previous conflict (⇧⌥F5)" disabled={!stepCount} onclick={() => stepConflict(-1)}>
                   <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>
@@ -972,6 +1018,8 @@
                 <span class="orange small">· {open_} left</span>
               {:else if stray}
                 <span class="orange small" title="Lines that look like conflict markers, without the rest of their block">· {stray} stray {stray === 1 ? "marker" : "markers"}</span>
+              {:else if asText?.text === file.worktree}
+                <span class="small note">· Review before staging</span>
               {:else}
                 <span class="green small">· All decided</span>
               {/if}
@@ -986,10 +1034,10 @@
                 class:on={!!asText}
                 aria-pressed={!!asText}
                 disabled={!!textWhy}
-                title={textWhy ?? (asText ? "Back to picking sides; text you typed is dropped" : "Type the whole file, with git’s markers around the conflicts still open")}
+                title={textWhy ?? (asText ? "Start from the index sides; the current text stays available as an old draft" : "Type the whole file, with git’s markers around the conflicts still open")}
                 onclick={() => (asText ? stopText() : startText())}
               >
-                Edit as Text
+                {asText ? "Choose from Sides" : "Edit as Text"}
               </button>
               {#if !asText && simpleOpen}
                 <button class="button small" onclick={applySimple} title="Merge the {simpleOpen} {simpleOpen === 1 ? 'conflict' : 'conflicts'} of this file where the sides changed different lines; the others stay for you">Apply Non-Conflicting Changes</button>
@@ -1000,7 +1048,7 @@
               {/if}
               <button
                 class="button primary small"
-                disabled={open_ > 0}
+                disabled={open_ > 0 || !!waiting}
                 title={open_ ? (asText ? "Remove every conflict marker first" : "Decide every conflict first") : undefined}
                 onclick={markResolved}
               >
@@ -1025,11 +1073,14 @@
             {/if}
             {#if leaving}
               <div class="leaving">
-                <span>Go back to picking sides? The text you typed in {p.name} is dropped.</span>
+                <span>Start from the index sides? The current result is kept as an old draft for comparison.</span>
                 <span class="spacer"></span>
                 <button class="button small" onclick={() => (leaving = false)}>Keep Editing</button>
-                <button class="button small" onclick={dropText}>Drop Text</button>
+                <button class="button small" onclick={dropText}>Choose from Sides</button>
               </div>
+            {/if}
+            {#if asText && asText.text === file.worktree}
+              <div class="olddraft">Review this working result before staging. No markers does not prove it is correct.</div>
             {/if}
             <div class="code mono selectable">
               {#if oldDraft && comparing}
@@ -1247,6 +1298,12 @@
     border-bottom: 1px solid var(--sep);
     font-size: var(--text-small);
   }
+  .result > .pane-head {
+    height: auto;
+    min-height: 38px;
+    flex-wrap: wrap;
+    padding: 6px 10px;
+  }
   .cap {
     padding: 1px 8px;
     border-radius: var(--radius-m);
@@ -1381,9 +1438,10 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    height: 40px;
+    min-height: 40px;
+    flex-wrap: wrap;
     flex-shrink: 0;
-    padding: 0 10px 0 14px;
+    padding: 6px 10px 6px 14px;
     border-bottom: 1px solid var(--sep);
     background: var(--win);
     font-size: var(--text-small);
@@ -1452,6 +1510,7 @@
   }
   .leaving {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
     flex-shrink: 0;
@@ -1466,6 +1525,7 @@
   /* A draft that no longer fits the file: a quiet note, not a warning. */
   .olddraft {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
     flex-shrink: 0;
@@ -1518,6 +1578,8 @@
   }
   .buttons {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 8px;
     margin-top: 8px;
   }

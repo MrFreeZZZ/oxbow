@@ -68,7 +68,33 @@ fn shapes() -> BTreeMap<&'static str, Vec<String>> {
         script: "cargo test".into(),
         repository: String::new(),
     });
+    // A real conflicted index and working result exercise the handoff to the editor.
+    fx.git(&["add", "-A"]);
+    fx.git(&["commit", "-qm", "Save changes"]);
+    fx.git(&["switch", "-qc", "conflict"]);
+    fx.commit("a.txt", "incoming\n", "Incoming");
+    fx.git(&["switch", "-q", "main"]);
+    fx.commit("a.txt", "ours\n", "Ours");
+    let _ = std::process::Command::new("git")
+        .args(["merge", "conflict"])
+        .current_dir(fx.path())
+        .output()
+        .unwrap();
+    let conflict = json(repo.conflict_file("a.txt").unwrap());
+    assert_eq!(
+        json(Action::ResolveWorking {
+            path: "a.bin".into(),
+            stages: "version".into()
+        }),
+        serde_json::json!({ "kind": "resolveWorking", "path": "a.bin", "stages": "version" })
+    );
+    assert_eq!(
+        json(oxbow_core::NotKept::ConflictState),
+        serde_json::json!({ "kind": "conflictState" })
+    );
     BTreeMap::from([
+        ("ConflictFile", fields(&conflict)),
+        ("Trees", fields(at(&operations, "/0/before"))),
         ("UserCommand", fields(&command)),
         (
             "LoadIssue",

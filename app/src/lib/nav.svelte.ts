@@ -37,10 +37,10 @@ class Nav {
 
   /** Browse Files at This Commit: the commit, the branch or tag it was opened from, and the file
    *  to show; null until it is asked for. `seq` tells each request from the one before. */
-  browse = $state<{ rev: string; label: string | null; path: string | null; seq: number } | null>(null);
+  browse = $state<{ rev: string; label: string | null; path: string | null; snapshot?: boolean; seq: number } | null>(null);
 
-  openBrowse(rev: string, label: string | null = null, path: string | null = null) {
-    this.browse = { rev, label, path, seq: this.nextFile() };
+  openBrowse(rev: string, label: string | null = null, path: string | null = null, snapshot = false) {
+    this.browse = { rev, label, path, ...(snapshot ? { snapshot: true } : {}), seq: this.nextFile() };
   }
 
   /** Quick Open (⌘P): pick a file to open File History on. */

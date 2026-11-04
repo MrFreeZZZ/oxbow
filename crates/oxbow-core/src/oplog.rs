@@ -1,5 +1,7 @@
 //! The Operation Log: every action Oxbow runs is recorded with the state of the repository
-//! before and after it, so any step can be undone, even a hard reset or a discard.
+//! before and after it, so supported steps can be undone, even a hard reset or a discard.
+//! Snapshots taken during a Git operation keep file copies for browsing, but cannot restore
+//! its conflict stages, operation metadata or rerere records.
 //!
 //! A snapshot is a few git objects: the staging area as a tree (`git write-tree`), the working
 //! copy as a tree (tracked and untracked files, written through a scratch index), `HEAD`, the
@@ -85,6 +87,9 @@ pub struct StashMove {
 pub struct Trees {
     pub worktree: String,
     pub index: Option<String>,
+    /// The operation's metadata is not part of a snapshot, even once its index is resolved.
+    #[serde(default)]
+    pub operation: bool,
 }
 
 /// One step of the log.
@@ -200,7 +205,11 @@ impl Repo {
             head,
             refs,
             stash,
-            trees: Trees { worktree, index },
+            trees: Trees {
+                worktree,
+                index,
+                operation: self.operation()?.is_some(),
+            },
         })
     }
 
@@ -212,6 +221,7 @@ impl Repo {
             trees: Trees {
                 worktree: before.trees.worktree.clone(),
                 index: self.index_tree()?,
+                operation: before.trees.operation,
             },
             ..before.clone()
         })
@@ -227,6 +237,18 @@ impl Repo {
         let mut entries: Vec<OpEntry> = all.iter().filter(|entry| entry.time >= oldest).cloned().collect();
         let days = self.snapshot_days();
         for entry in &mut entries {
+            // Resolve entries from older logs also lack the operation metadata, even when
+            // the last file had already been staged. Their titles are written by Oxbow.
+            if entry.title.starts_with("Resolve ") {
+                entry.before.operation = true;
+                entry.after.operation = true;
+            }
+            if matches!(
+                entry.title.as_str(),
+                "Continue after conflicts" | "Abort the operation" | "Skip a commit"
+            ) {
+                entry.before.operation = true;
+            }
             entry.expires = entry.time + i64::from(days) * 86_400;
             if entry.rewrites.is_none() {
                 // Older entries: only the kinds of step that rewrite are worth asking git about.
@@ -272,7 +294,15 @@ impl Repo {
         // A fetch or push only moves branches on remotes, which an undo can't take back: they
         // show what the remote has.
         let local = refs.iter().any(|m| !m.name.starts_with("refs/remotes/"));
-        if !local && stash.is_none() && before.head == after.head && before.trees == after.trees {
+        // Staging one of several conflicts may leave both tree snapshots identical: neither
+        // unmerged index can be represented as a tree. Still retain the file snapshots and
+        // the resolution event, without presenting it as undoable.
+        let resolved = !failed
+            && matches!(
+                action,
+                Action::Resolve { .. } | Action::ResolveWorking { .. } | Action::TakeFile { .. }
+            );
+        if !resolved && !local && stash.is_none() && before.head == after.head && before.trees == after.trees {
             return Ok(None);
         }
         let (kind, title) = self.describe(action, &before.head);
@@ -422,9 +452,12 @@ impl Repo {
         let (head, trees, undone) = (&point.head, &point.trees, &point.undone);
         let index = trees.index.as_deref().ok_or_else(|| {
             Error::Git(
-                "the repository was in the middle of a merge or rebase then; pick the step before or after".into(),
+                "this snapshot has no conflict stages; Undo cannot reopen the conflict or restore rerere records. Use Compare with Now to recover individual files".into(),
             )
         })?;
+        if trees.operation {
+            return Err(Error::Git("this snapshot was taken during a Git operation; its metadata and rerere records are not restored. Use Compare with Now → Browse Saved Files → Save As to recover file copies".into()));
+        }
         if let Some(op) = self.operation()? {
             let what = match op.kind {
                 OperationKind::Merge | OperationKind::Squash => "A merge",
@@ -1146,7 +1179,9 @@ impl Repo {
             Action::Continue { .. } => ("merge", "Continue after conflicts".to_owned()),
             Action::Abort => ("undo", "Abort the operation".to_owned()),
             Action::Skip => ("rebase", "Skip a commit".to_owned()),
-            Action::Resolve { path, .. } | Action::TakeFile { path, .. } => ("merge", format!("Resolve {path}")),
+            Action::Resolve { path, .. } | Action::ResolveWorking { path, .. } | Action::TakeFile { path, .. } => {
+                ("merge", format!("Resolve {path}"))
+            }
             Action::CherryPick { commit } => ("cherry", format!("Cherry-pick {} onto {here}", short_id(commit))),
             Action::SavePatches { .. } => ("commit", "Save commits as patches".to_owned()),
             Action::ApplyPatches { paths } => (

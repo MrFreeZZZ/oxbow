@@ -22,7 +22,7 @@ export type Place =
   | { view: "reviews" }
   | { view: "stack"; branch: string | null }
   /** Browse Files at This Commit: the commit, the branch or tag it was opened from, the file shown. */
-  | { view: "browse"; rev: string; label: string | null; path: string | null };
+  | { view: "browse"; rev: string; label: string | null; path: string | null; snapshot?: boolean };
 
 export type Trail = { places: Place[]; at: number };
 

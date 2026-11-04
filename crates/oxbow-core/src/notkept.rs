@@ -48,6 +48,8 @@ pub struct PushedCommit {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum NotKept {
+    /// Conflict stages, operation metadata and rerere's shared cache aren't snapshotted.
+    ConflictState,
     /// Untracked files too big for a snapshot that the action deletes or writes over.
     BigFiles {
         files: Vec<SizedFile>,
@@ -107,6 +109,14 @@ impl Repo {
     pub fn not_kept(&self, action: &Action) -> Result<Vec<NotKept>> {
         let mut out = Vec::new();
         match action {
+            Action::Resolve { .. }
+            | Action::ResolveWorking { .. }
+            | Action::TakeFile { .. }
+            | Action::Continue { .. }
+            | Action::Abort
+            | Action::Skip => {
+                out.push(NotKept::ConflictState);
+            }
             Action::Discard { paths } | Action::DiscardChangelist { paths, .. } => {
                 let untracked = self.untracked()?;
                 let big: Vec<&String> = paths.iter().filter(|p| untracked.contains(*p)).collect();

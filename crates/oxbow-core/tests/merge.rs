@@ -25,6 +25,55 @@ fn merge(branch: &str, method: MergeMethod, message: Option<&str>) -> Action {
     }
 }
 
+fn stored_files(root: &std::path::Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    fn collect(
+        root: &std::path::Path,
+        path: &std::path::Path,
+        out: &mut std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>,
+    ) {
+        if path.is_file() {
+            out.insert(
+                path.strip_prefix(root).unwrap().to_owned(),
+                std::fs::read(path).unwrap(),
+            );
+        } else if path.is_dir() {
+            for entry in std::fs::read_dir(path).unwrap() {
+                collect(root, &entry.unwrap().path(), out);
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    collect(root, root, &mut out);
+    out
+}
+
+fn operation_files(fx: &Fixture) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    let mut out = std::collections::BTreeMap::new();
+    for name in [
+        "MERGE_HEAD",
+        "MERGE_MSG",
+        "MERGE_MODE",
+        "MERGE_RR",
+        "ORIG_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REBASE_HEAD",
+        "REVERT_HEAD",
+        "rebase-merge",
+        "rebase-apply",
+        "sequencer",
+    ] {
+        let path = fx.path().join(".git").join(name);
+        if path.is_file() {
+            out.insert(name.into(), std::fs::read(path).unwrap());
+        } else {
+            for (file, bytes) in stored_files(&path) {
+                out.insert(std::path::Path::new(name).join(file), bytes);
+            }
+        }
+    }
+    out
+}
+
 fn read(fx: &Fixture, file: &str) -> String {
     std::fs::read_to_string(fx.path().join(file)).unwrap()
 }
@@ -795,4 +844,338 @@ fn taking_a_side_refuses_an_external_index_resolution() {
     // Only the index changes; the working file remains exactly as it was shown.
     fx.git(&["add", "a.txt"]);
     assert_stale_take_keeps_file_and_index(&repo, &mut fx, "a.txt", &action);
+}
+
+#[test]
+fn reviewing_a_working_resolution_preserves_exact_bytes() {
+    for result in ["one\r\nmanual\nthree\r\n", "", "manual without newline"] {
+        let fx = diverged();
+        let repo = Repo::open(fx.path()).unwrap();
+        repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+        fx.write("a.txt", result);
+        let shown = repo.conflict_file("a.txt").unwrap();
+        assert_eq!(shown.worktree.as_deref(), Some(result));
+        repo.perform(&Action::Resolve {
+            path: "a.txt".into(),
+            picks: vec![],
+            text: shown.worktree,
+            stages: Some(shown.stages),
+        })
+        .unwrap();
+        assert_eq!(std::fs::read(fx.path().join("a.txt")).unwrap(), result.as_bytes());
+        let mut fx = fx;
+        assert!(fx.git(&["ls-files", "-u"]).is_empty());
+    }
+}
+
+#[test]
+fn editing_an_external_result_follows_its_working_line_endings() {
+    for (working, written) in [("external\r\n", "edited\r\n"), ("external\n", "edited\n")] {
+        let fx = diverged();
+        let repo = Repo::open(fx.path()).unwrap();
+        repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+        fx.write("a.txt", working);
+        let shown = repo.conflict_file("a.txt").unwrap();
+        repo.perform(&Action::Resolve {
+            path: "a.txt".into(),
+            picks: vec![],
+            text: Some("edited\n".into()),
+            stages: Some(shown.stages),
+        })
+        .unwrap();
+        assert_eq!(read(&fx, "a.txt"), written);
+    }
+}
+
+#[test]
+fn partial_external_text_and_custom_markers_are_read_verbatim() {
+    let mut fx = diverged();
+    fx.git(&["config", "merge.conflictStyle", "zdiff3"]);
+    fx.write(".gitattributes", "a.txt conflict-marker-size=12\n");
+    fx.git(&["add", ".gitattributes"]);
+    fx.git(&["commit", "-qm", "Set markers"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+    let original = read(&fx, "a.txt");
+    assert!(original.contains("<<<<<<<<<<<<"));
+    let partial = original.replace("one\n", "manual edit\r\n");
+    fx.write("a.txt", &partial);
+    let file = repo.conflict_file("a.txt").unwrap();
+    assert_eq!(file.worktree.as_deref(), Some(partial.as_str()));
+    assert_eq!(read(&fx, "a.txt"), partial);
+}
+
+#[test]
+fn rerere_reuse_is_reviewed_without_recreating_the_conflict() {
+    for autoupdate in ["false", "true"] {
+        let mut fx = diverged();
+        fx.git(&["config", "rerere.enabled", "true"]);
+        fx.git(&["config", "rerere.autoupdate", autoupdate]);
+        let repo = Repo::open(fx.path()).unwrap();
+        repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+        fx.write("a.txt", "one\nrecorded resolution\nthree\n");
+        fx.git(&["rerere"]);
+        fx.git(&["merge", "--abort"]);
+        // An unrelated rerere entry must survive resolving this file and refused Undo.
+        fx.write(".git/rr-cache/unrelated/sentinel", "keep this record\n");
+        repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+        let result = read(&fx, "a.txt");
+        let cache = stored_files(&fx.path().join(".git/rr-cache"));
+        assert_eq!(result, "one\nrecorded resolution\nthree\n");
+        if autoupdate == "false" {
+            assert!(!fx.git(&["ls-files", "-u"]).is_empty());
+            let file = repo.conflict_file("a.txt").unwrap();
+            assert_eq!(file.worktree.as_deref(), Some(result.as_str()));
+            repo.perform(&Action::Resolve {
+                path: "a.txt".into(),
+                picks: vec![],
+                text: file.worktree,
+                stages: Some(file.stages),
+            })
+            .unwrap();
+            let entry = &repo.operation_log().unwrap()[0];
+            assert!(entry.before.index.is_none());
+            assert!(
+                repo.plan_restore(&entry.id, false)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("conflict stages")
+            );
+        } else {
+            assert!(fx.git(&["ls-files", "-u"]).is_empty());
+            assert!(repo.conflict_file("a.txt").is_err());
+        }
+        assert_eq!(read(&fx, "a.txt"), result);
+        assert_eq!(stored_files(&fx.path().join(".git/rr-cache")), cache);
+        assert_eq!(read(&fx, ".git/rr-cache/unrelated/sentinel"), "keep this record\n");
+    }
+}
+
+#[test]
+fn resolve_undo_is_refused_for_merge_rebase_and_cherry_pick_without_changing_anything() {
+    for kind in ["merge", "rebase", "cherry-pick"] {
+        let mut fx = diverged();
+        let incoming = fx.git(&["rev-parse", "feature~1"]);
+        let args = match kind {
+            "merge" => vec!["merge", "feature"],
+            "rebase" => vec!["rebase", "feature"],
+            _ => vec!["cherry-pick", incoming.as_str()],
+        };
+        assert!(
+            !std::process::Command::new("git")
+                .args(args)
+                .current_dir(fx.path())
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        fx.write(".git/rr-cache/unrelated/sentinel", "untouched\n");
+        fx.write("local.txt", "unrelated unstaged\n");
+        fx.write("staged.txt", "unrelated staged\n");
+        fx.git(&["add", "staged.txt"]);
+        let repo = Repo::open(fx.path()).unwrap();
+        let file = repo.conflict_file("a.txt").unwrap();
+        let metadata = repo.operation().unwrap();
+        let metadata_bytes = operation_files(&fx);
+        let cache = stored_files(&fx.path().join(".git/rr-cache"));
+        let action = Action::Resolve {
+            path: "a.txt".into(),
+            picks: vec![],
+            text: Some("resolved\n".into()),
+            stages: Some(file.stages),
+        };
+        assert!(matches!(
+            repo.not_kept(&action).unwrap()[0],
+            oxbow_core::NotKept::ConflictState
+        ));
+        repo.perform(&action).unwrap();
+        let entry = &repo.operation_log().unwrap()[0];
+        assert!(entry.before.index.is_none());
+        assert!(entry.before.operation && entry.after.operation);
+        assert!(entry.after.index.is_some());
+        let index = fx.git(&["ls-files", "--stage"]);
+        let restore = Action::Restore {
+            id: entry.id.clone(),
+            after: false,
+        };
+        assert!(repo.perform(&restore).is_err());
+        assert_eq!(fx.git(&["ls-files", "--stage"]), index);
+        assert!(fx.git(&["ls-files", "-u"]).is_empty());
+        assert_eq!(read(&fx, "a.txt"), "resolved\n");
+        assert_eq!(read(&fx, "local.txt"), "unrelated unstaged\n");
+        assert_eq!(read(&fx, "staged.txt"), "unrelated staged\n");
+        assert_eq!(read(&fx, ".git/rr-cache/unrelated/sentinel"), "untouched\n");
+        assert_eq!(repo.operation().unwrap().unwrap().kind, metadata.unwrap().kind);
+        assert_eq!(operation_files(&fx), metadata_bytes);
+        assert_eq!(stored_files(&fx.path().join(".git/rr-cache")), cache);
+        assert!(repo.compare_snapshot(&entry.id, false).is_ok());
+        let saved = fx.path().join("recovered-copy.txt");
+        repo.save_file_at(&entry.before.worktree, "a.txt", &saved).unwrap();
+        assert!(!std::fs::read(saved).unwrap().is_empty());
+        assert_eq!(read(&fx, "a.txt"), "resolved\n");
+        assert_eq!(fx.git(&["ls-files", "--stage"]), index);
+    }
+}
+
+#[test]
+fn external_git_add_invalidates_resolve_and_mergetool_requests() {
+    let mut fx = diverged();
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+    let file = repo.conflict_file("a.txt").unwrap();
+    fx.write("a.txt", "external result\n");
+    fx.git(&["add", "a.txt"]);
+    let action = Action::Resolve {
+        path: "a.txt".into(),
+        picks: vec![],
+        text: Some("old draft\n".into()),
+        stages: Some(file.stages.clone()),
+    };
+    assert!(repo.perform(&action).is_err());
+    assert!(repo.open_merge_tool_checked("a.txt", &file.stages).is_err());
+    assert_eq!(read(&fx, "a.txt"), "external result\n");
+    assert!(fx.git(&["ls-files", "-u"]).is_empty());
+}
+
+#[test]
+fn failed_mergetool_restores_the_prelaunch_file_and_a_stale_request_never_launches() {
+    let mut fx = diverged();
+    fx.git(&["config", "merge.tool", "partial"]);
+    fx.git(&[
+        "config",
+        "mergetool.partial.cmd",
+        "printf 'partial result\\n' > \"$MERGED\"; exit 1",
+    ]);
+    fx.git(&["config", "mergetool.partial.trustExitCode", "true"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+    fx.write("a.txt", "prelaunch partial result\n");
+    let before = repo.conflict_file("a.txt").unwrap();
+    assert!(!repo.open_merge_tool_checked("a.txt", &before.stages).unwrap());
+    let file = repo.conflict_file("a.txt").unwrap();
+    assert_eq!(file.worktree.as_deref(), Some("prelaunch partial result\n"));
+    fx.write("a.txt", "external edit\n");
+    assert!(repo.open_merge_tool_checked("a.txt", &file.stages).is_err());
+    assert_eq!(read(&fx, "a.txt"), "external edit\n");
+}
+
+#[test]
+fn finishing_the_merge_does_not_make_resolved_operation_snapshots_restorable() {
+    let fx = diverged();
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+    let file = repo.conflict_file("a.txt").unwrap();
+    repo.perform(&Action::Resolve {
+        path: "a.txt".into(),
+        picks: vec![],
+        text: Some("resolved\n".into()),
+        stages: Some(file.stages),
+    })
+    .unwrap();
+    let resolve = repo.operation_log().unwrap()[0].clone();
+    repo.perform(&Action::Continue { message: None }).unwrap();
+    assert!(repo.operation().unwrap().is_none());
+    let finish = repo.operation_log().unwrap()[0].clone();
+    let head = repo.head().unwrap().commit;
+    for (entry, after) in [(&resolve, false), (&resolve, true), (&finish, false)] {
+        assert!(repo.plan_restore(&entry.id, after).is_err());
+        assert!(
+            repo.perform(&Action::Restore {
+                id: entry.id.clone(),
+                after
+            })
+            .is_err()
+        );
+        assert_eq!(repo.head().unwrap().commit, head);
+        assert_eq!(read(&fx, "a.txt"), "resolved\n");
+        assert!(repo.compare_snapshot(&entry.id, after).is_ok());
+    }
+}
+
+#[test]
+fn working_resolution_uses_literal_paths_and_keeps_other_conflicts_and_edits() {
+    let mut fx = Fixture::new();
+    let path = ":(glob)*?[name].txt";
+    fx.commit(path, "base\n", "Root");
+    fx.commit("other.txt", "base\n", "Other root");
+    fx.commit("unrelated.txt", "base\n", "Unrelated root");
+    fx.git(&["switch", "-qc", "feature"]);
+    fx.commit(path, "theirs\n", "Theirs");
+    fx.commit("other.txt", "theirs\n", "Other theirs");
+    fx.git(&["switch", "-q", "main"]);
+    fx.commit(path, "ours\n", "Ours");
+    fx.commit("other.txt", "ours\n", "Other ours");
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+    fx.write("unrelated.txt", "staged unrelated\n");
+    fx.git(&["add", "unrelated.txt"]);
+    fx.write("unrelated.txt", "unstaged unrelated\n");
+    fx.write(path, "working result\r\n");
+    let before = fx.git(&["ls-files", "-u", "--", "other.txt"]);
+    let unrelated = fx.git(&["show", ":0:unrelated.txt"]);
+    let file = repo.conflict_file(path).unwrap();
+    repo.perform(&Action::Resolve {
+        path: path.into(),
+        picks: vec![],
+        text: file.worktree,
+        stages: Some(file.stages),
+    })
+    .unwrap();
+    let entries = repo.operation_log().unwrap();
+    assert_eq!(entries[0].title, format!("Resolve {path}"));
+    assert!(entries[0].before.index.is_none() && entries[0].after.index.is_none());
+    assert!(repo.plan_restore(&entries[0].id, false).is_err());
+    assert_eq!(read(&fx, path), "working result\r\n");
+    assert_eq!(fx.git(&["ls-files", "-u", "--", "other.txt"]), before);
+    assert_eq!(fx.git(&["show", ":0:unrelated.txt"]), unrelated);
+    assert_eq!(read(&fx, "unrelated.txt"), "unstaged unrelated\n");
+}
+
+#[test]
+fn external_binary_results_and_deletions_are_staged_without_overwriting_and_go_stale() {
+    for delete in [false, true] {
+        let mut fx = Fixture::new();
+        fx.commit("a.bin", "\0base", "Root");
+        fx.git(&["switch", "-qc", "feature"]);
+        fx.commit("a.bin", "\0theirs", "Theirs");
+        fx.git(&["switch", "-q", "main"]);
+        fx.commit("a.bin", "\0ours", "Ours");
+        let repo = Repo::open(fx.path()).unwrap();
+        repo.perform(&merge("feature", MergeMethod::Merge, None)).unwrap_err();
+        let stale = Action::ResolveWorking {
+            path: "a.bin".into(),
+            stages: repo.conflict_file("a.bin").unwrap().stages,
+        };
+        if delete {
+            std::fs::remove_file(fx.path().join("a.bin")).unwrap();
+        } else {
+            fx.write("a.bin", "\0external\r\nexact\n");
+        }
+        let index = fx.git(&["ls-files", "--stage"]);
+        assert!(repo.plan(&stale).is_err());
+        assert!(repo.perform(&stale).is_err());
+        assert_eq!(fx.git(&["ls-files", "--stage"]), index);
+        let shown = repo.conflict_file("a.bin").unwrap();
+        assert!(shown.worktree.is_none());
+        let action = Action::ResolveWorking {
+            path: "a.bin".into(),
+            stages: shown.stages,
+        };
+        assert!(matches!(
+            repo.not_kept(&action).unwrap()[0],
+            oxbow_core::NotKept::ConflictState
+        ));
+        repo.perform(&action).unwrap();
+        assert!(fx.git(&["ls-files", "-u"]).is_empty());
+        if delete {
+            assert!(!fx.path().join("a.bin").exists());
+        } else {
+            assert_eq!(
+                std::fs::read(fx.path().join("a.bin")).unwrap(),
+                b"\0external\r\nexact\n"
+            );
+        }
+        assert!(repo.plan_restore(&repo.operation_log().unwrap()[0].id, false).is_err());
+    }
 }

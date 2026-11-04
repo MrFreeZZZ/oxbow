@@ -234,7 +234,7 @@ export const api = {
   conflictFile: (path: string) => invoke<ConflictFile>("conflict_file", { path }),
   mergeTool: () => invoke<MergeTool | null>("merge_tool"),
   /** Waits until the tool quits; true when git staged the file. */
-  openMergeTool: (path: string) => invoke<boolean>("open_merge_tool", { path }),
+  openMergeTool: (path: string, stages: string) => invoke<boolean>("open_merge_tool", { path, stages }),
   /** The Conflicts screen's draft saved for the working folder `workdir`, as lib/drafts.ts
    *  writes it. The folder is named, not taken from the window: a save can come after the
    *  window opened another repository. */

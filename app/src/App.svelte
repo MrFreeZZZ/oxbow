@@ -60,7 +60,7 @@
   import { start } from "./lib/start.svelte";
   import OperationLog from "./lib/OperationLog.svelte";
   import { shortcut, withKeys } from "./lib/keys";
-  import { isRedo, lostRow, oplog, undoRequest } from "./lib/oplog.svelte";
+  import { cannotRestore, isRedo, lostRow, oplog, undoRequest } from "./lib/oplog.svelte";
   import { amend, canBack, canForward, crumbs, detailOfPlace, emptyTrail, go, nameOfPlace, visit, type Place, type Trail } from "./lib/backStack";
   import { kept } from "./lib/kept";
   import { stepQuery, type SeriesQuery } from "./lib/series";
@@ -341,13 +341,13 @@
     });
   });
   /** What Browse Files shows: the commit, the branch or tag it was opened from, the file picked. */
-  let browsing = $state<{ rev: string; label: string | null; path: string | null } | null>(null);
+  let browsing = $state<{ rev: string; label: string | null; path: string | null; snapshot?: boolean } | null>(null);
   // Browse Files at This Commit, from a menu anywhere, opens the screen.
   $effect(() => {
     const ask = nav.browse;
     if (!ask) return;
     untrack(() => {
-      browsing = { rev: ask.rev, label: ask.label, path: ask.path };
+      browsing = { rev: ask.rev, label: ask.label, path: ask.path, snapshot: ask.snapshot };
       view = "browse";
       resolving = false;
     });
@@ -529,7 +529,7 @@
         openStack(p.branch);
         break;
       case "browse":
-        browsing = { rev: p.rev, label: p.label, path: p.path };
+        browsing = { rev: p.rev, label: p.label, path: p.path, snapshot: p.snapshot };
         view = "browse";
         break;
     }
@@ -801,6 +801,7 @@
     oplog.open = false;
     const latest = await oplog.newest();
     if (latest instanceof Error) confirm.say(`${latest.message} Nothing was undone.`, "error");
+    else if (latest && cannotRestore(latest, false)) confirm.say(cannotRestore(latest, false)!, "warn");
     else if (latest) run(undoRequest(latest));
     else confirm.say("Nothing to undo yet.");
   }
@@ -810,6 +811,7 @@
     oplog.open = false;
     const latest = await oplog.newest();
     if (latest instanceof Error) confirm.say(`${latest.message} Nothing was redone.`, "error");
+    else if (latest && isRedo(latest) && cannotRestore(latest, false)) confirm.say(cannotRestore(latest, false)!, "warn");
     else if (latest && isRedo(latest)) run(undoRequest(latest));
     else confirm.say("Nothing to redo: the newest step isn’t an undo.");
   }
@@ -2221,6 +2223,7 @@
         {#key repo.path}
           <BrowseView.component
             rev={browsing.rev}
+            snapshot={browsing.snapshot}
             label={browsing.label}
             path={browsing.path}
             lookup={(id) => rowsById.get(id)}

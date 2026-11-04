@@ -669,6 +669,7 @@ export type Action =
   | { kind: "abort" }
   | { kind: "skip" }
   | { kind: "resolve"; path: string; picks: Resolution[]; text?: string; stages?: string }
+  | { kind: "resolveWorking"; path: string; stages: string }
   | { kind: "takeFile"; path: string; side: ConflictSide; stages: string }
   | { kind: "cherryPick"; commit: string }
   /** Commits of `to` that `since` doesn't have, or the newest `count` up to `to`, as patch
@@ -1012,6 +1013,8 @@ export interface ConflictFile {
   openEnd: boolean;
   /** Opaque version of the index sides and working file: decisions go stale if either changes. */
   stages: string;
+  /** Exact working text, for review before staging. */
+  worktree?: string | null;
 }
 
 /** The merge tool git opens, from merge.guitool or merge.tool. */
@@ -1167,6 +1170,7 @@ export interface SizedFile {
 
 /** Something an action changes that Undo can't bring back. */
 export type NotKept =
+  | { kind: "conflictState" }
   | { kind: "bigFiles"; files: SizedFile[]; more: number; limit: number }
   | { kind: "ignoredInTheWay"; files: SizedFile[]; more: number; bytes: number }
   | { kind: "unchecked"; folders: string[]; more: number; limit: number }
@@ -1560,6 +1564,8 @@ export interface StashRecord {
 export interface Trees {
   worktree: string;
   index: string | null;
+  /** Git operation metadata is not included in snapshots. */
+  operation?: boolean;
 }
 
 /** One step of the Operation Log. */

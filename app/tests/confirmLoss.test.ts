@@ -27,3 +27,35 @@ for (const kind of ["discardChangelist", "takeVersion", "restoreLocalVersion"]) 
   state.cancel();
   assert.equal(await done, false);
 }
+
+// Resolve and taking a side must explain the missing conflict-state snapshot even when
+// ordinary confirmations are disabled. No misleading Undo toast is offered afterwards.
+for (const kind of ["resolve", "resolveWorking", "takeFile"]) {
+  let performed = 0;
+  const entry = { time: Math.floor(Date.now() / 1000) + 1, failed: false, before: { index: null } };
+  const gap = { kind: "conflictState" };
+  const globals = {
+    $state: (x: unknown) => x,
+    getCurrentWindow: () => ({ listen: async () => () => {} }),
+    prefs: { get: () => false },
+    cannotRestore: (value: typeof entry) => value.before.index === null ? "No conflict stages" : null,
+    oplog: { newest: async () => entry },
+    activity: { start: () => 1, finish: () => {}, event: () => {} },
+    api: {
+      planAction: async () => ({ commands: [], notKept: [gap] }),
+      performAction: async () => { performed++; return ""; },
+    },
+  };
+  const state = Function(...Object.keys(globals), `${js}; return confirm;`)(...Object.values(globals));
+  const done = state.run({ title: "Resolve?", action: { kind }, done: "Resolved." });
+  await new Promise<void>(resolve => setTimeout(resolve, 0));
+  assert.equal(performed, 0);
+  assert.equal(state.phase, "ask");
+  assert.deepEqual(state.notKept, [gap]);
+  state.go();
+  assert.equal(await done, true);
+  await new Promise<void>(resolve => setTimeout(resolve, 0));
+  assert.equal(performed, 1);
+  assert.equal(state.toastUndo, null);
+  state.dismiss();
+}

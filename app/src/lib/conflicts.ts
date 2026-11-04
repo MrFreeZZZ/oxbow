@@ -217,7 +217,11 @@ export function resultBlocks(chunks: Chunk[], size: number): ResultBlock[] {
   return blocks;
 }
 
-const marker = (line: string, m: string) => line === m || line.startsWith(`${m} `);
+const marker = (line: string, m: string) => {
+  const value = line.replace(/\r$/, "");
+  const run = value.match(/^(<{7,}|\|{7,}|={7,}|>{7,})(.*)$/);
+  return !!run && run[1][0] === m[0] && (run[2] === "" || (m !== MIDDLE && run[2].startsWith(" ")));
+};
 
 /** What each line of marked text is: a marker, a line of one side or of the base, or plain. */
 export type Role = "marker" | "left" | "base" | "right" | null;
@@ -256,7 +260,7 @@ function scan(text: string): Scan {
     } else if (state === "left" && marker(line, BASE)) {
       roles.push("marker");
       state = "base";
-    } else if ((state === "left" || state === "base") && line === MIDDLE) {
+    } else if ((state === "left" || state === "base") && marker(line, MIDDLE)) {
       roles.push("marker");
       state = "right";
     } else if (state === "right" && marker(line, CLOSE)) {
@@ -272,7 +276,7 @@ function closes(lines: string[], at: number): boolean {
   let middle = false;
   for (let i = at + 1; i < lines.length; i++) {
     if (marker(lines[i], OPEN)) return false;
-    if (lines[i] === MIDDLE) middle = true;
+    if (marker(lines[i], MIDDLE)) middle = true;
     else if (middle && marker(lines[i], CLOSE)) return true;
   }
   return false;
@@ -295,7 +299,7 @@ export function resultOf(file: ConflictFile, decisions: Decision[], text: { text
 
 const MARKS = [OPEN, BASE, MIDDLE, CLOSE] as const;
 /** Which of git's markers a line looks like, if any. */
-export const markOf = (line: string) => MARKS.find((m) => (m === MIDDLE ? line === m : marker(line, m))) ?? null;
+export const markOf = (line: string) => MARKS.find((m) => marker(line, m)) ?? null;
 
 /** Lines that look like git's markers but are not part of a whole conflict, such as what is
  *  left of a block when one of its markers was deleted: more of them than the file's own
@@ -348,7 +352,7 @@ export const stepIndex = (at: number, by: 1 | -1, count: number): number => (cou
 export function kindOf(file: ConflictFile, labelOf: (side: ConflictSide) => string): { short: string; long: string } {
   const renamed = file.renamed ? labelOf(file.renamed.side) : null;
   const from = file.renamed?.from ?? "";
-  if (file.binary) return { short: "Binary file", long: "A binary file: one side’s version is taken whole." };
+  if (file.binary) return { short: "Binary file", long: "A binary file: stage the working result or take a side." };
   if (file.link) return { short: "Link or submodule", long: "A symbolic link or submodule: one side’s version is taken whole." };
   if (!file.ours || !file.theirs) {
     const gone = labelOf(!file.ours ? "ours" : "theirs");
@@ -500,3 +504,8 @@ export function mergeSimple(chunks: Chunk[], decisions: Decision[]): { decisions
 
 /** How many open conflicts of a file Apply Non-Conflicting Changes would merge. */
 export const simpleCount = (chunks: Chunk[], decisions: Decision[]): number => mergeSimple(chunks, decisions).merged;
+
+/** Start from the actual working file without changing markers, line endings or partial edits. */
+export function workingText(file: ConflictFile): { text: string; start: string; stray: number } | null {
+  return file.worktree == null ? null : { text: file.worktree, start: file.worktree, stray: strayMarkers(file.worktree, file.chunks) };
+}

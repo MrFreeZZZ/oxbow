@@ -165,7 +165,7 @@
       <button class="link" onclick={() => (oplog.allMoves = !oplog.allMoves)}>{oplog.allMoves ? "Only Lost Commits" : "Show All Moves"}</button>
     </div>
   {:else}
-  <p class="intro">Every change to the repository is recorded. Restore any point, including after reset or rebase.</p>
+  <p class="intro">Supported changes are recorded with file snapshots. Snapshots taken during a Git operation can be browsed, but its conflict stages, metadata and rerere records cannot be restored.</p>
   {#if oplog.entriesError}{@render failed("the Operation Log", oplog.entriesError, oplog.entries.length > 0, oplog.loading, () => oplog.load())}{/if}
   <div class="list">
     {#each oplog.entries as entry, i (entry.id)}
@@ -179,7 +179,7 @@
           <span class="detail">{entry.failed ? "Stopped half way · " : ""}{entry.detail}</span>
           {#if blocked && !unread}<WhyNote text={blocked} />{/if}
         </span>
-        <span class="when" title="Oxbow can go back to this step until then">
+        <span class="when" title="File snapshots are kept until then">
           <span>{relativeTime(entry.time)}</span>
           <span class="until">{keptUntil(entry)}</span>
         </span>
@@ -205,7 +205,7 @@
       </div>
     {:else}
       {#if !oplog.entriesError}
-        <div class="empty">Nothing to undo yet. Every change Oxbow makes to this repository shows up here. What a terminal or another app did is in Git Reflog.</div>
+        <div class="empty">No recorded steps yet. Supported changes Oxbow makes show up here. Git Reflog shows commit and branch moves from other apps.</div>
       {/if}
     {/each}
   </div>
@@ -230,8 +230,8 @@
       onclick={toggle}
       aria-haspopup="dialog"
       aria-expanded={oplog.open}
-      aria-label={latest ? `Undo ${latest.title}, open operation log` : "Open operation log"}
-      title={latest ? withKeys(isRedo(latest) ? "Redo, from the Operation Log" : `Undo “${latest.title}”`, combo("undo")) : "Operation Log"}
+      aria-label={latest && !cannotRestore(latest, false) ? `Undo ${latest.title}, open operation log` : "Open operation log"}
+      title={latest && !cannotRestore(latest, false) ? withKeys(isRedo(latest) ? "Redo, from the Operation Log" : `Undo “${latest.title}”`, combo("undo")) : "Operation Log"}
     >
       <svg class="icon" viewBox="0 0 16 16"><path d="M5.5 4 2.5 7l3 3M3 7h6.5a3.5 3.5 0 0 1 0 7H7" /></svg>
       <svg class="icon chevron" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>

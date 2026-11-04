@@ -4,7 +4,7 @@
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./api";
-import { oplog, revertInsteadRequest, undoRequest } from "./oplog.svelte";
+import { cannotRestore, oplog, revertInsteadRequest, undoRequest } from "./oplog.svelte";
 import { prefs } from "./prefs.svelte";
 import { addLine, cutLine } from "./liveLines";
 import { errorLine } from "./reads";
@@ -258,7 +258,7 @@ const RISKY = new Set<Action["kind"]>([
 
 /** Actions that can change something the Operation Log doesn't keep: even when the settings say
  *  not to ask, these ask once the plan says what Undo can't bring back. */
-const GAPS = new Set<Action["kind"]>(["discard", "discardChangelist", "reset", "restore", "takeVersion", "restoreLocalVersion", "worktreeRemove", "submoduleRemove"]);
+const GAPS = new Set<Action["kind"]>(["discard", "discardChangelist", "reset", "restore", "takeVersion", "restoreLocalVersion", "worktreeRemove", "submoduleRemove", "resolve", "resolveWorking", "takeFile", "continue", "abort", "skip"]);
 
 function isForcePush(action: Action): boolean {
   return (action.kind === "push" && action.force) || action.kind === "replayAndPush";
@@ -670,7 +670,7 @@ class ConfirmState {
   async #undoFromLog(action: Action, started: number): Promise<(() => Request) | null> {
     if (action.kind === "clearOperationLog") return null;
     const entry = await oplog.newest();
-    return entry && !(entry instanceof Error) && entry.time >= started && !entry.failed ? () => undoRequest(entry) : null;
+    return entry && !(entry instanceof Error) && entry.time >= started && !entry.failed && !cannotRestore(entry, false) ? () => undoRequest(entry) : null;
   }
 
   /** A short message in the top right corner, e.g. after copying a name. */

@@ -211,3 +211,19 @@ const chunks: Chunk[] = [
   const theirs = long.map((l, i) => (i % 2 ? `${l} theirs` : l));
   assert.equal(mergeConflict({ kind: "conflict", base: long, ours, theirs }), null);
 }
+
+// Real Git worktree markers may use diff3/zdiff3, CRLF and an attribute-defined width.
+{
+  const { workingText } = await import("../src/lib/conflicts.ts");
+  for (const width of [7, 12]) for (const eol of ["\n", "\r\n"]) {
+    const working = ["partial manual change", `${"<".repeat(width)} HEAD`, "ours", `${"|".repeat(width)} base`, "ancestor", "=".repeat(width), "theirs", `${">".repeat(width)} topic`, ""].join(eol);
+    assert.equal(openMarkers(working), 1);
+    assert.equal(strayMarkers(working, []), 0);
+    const imported = workingText({ chunks: [], worktree: working } as unknown as ConflictFile)!;
+    assert.equal(imported.text, working);
+    assert.equal(imported.start, working);
+    const partial = working.replace(`${">".repeat(width)} topic`, "finished manually");
+    assert.equal(openMarkers(partial), 0);
+    assert.equal(strayMarkers(partial, []), 3);
+  }
+}

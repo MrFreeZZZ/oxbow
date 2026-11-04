@@ -6,7 +6,8 @@
   import type { Request } from "./confirm.svelte";
   import type { OpEntry, RefMove, SnapshotComparison } from "./types";
   import { relativeTime, shortId } from "./format";
-  import { keptUntil, oplog, restoreRequest, undoRequest } from "./oplog.svelte";
+  import { cannotRestore, keptUntil, oplog, restoreRequest, undoRequest } from "./oplog.svelte";
+  import { nav } from "./nav.svelte";
   import CompareChanges from "./CompareChanges.svelte";
 
   let {
@@ -64,6 +65,7 @@
   }
 
   function goBack() {
+    if (cannotRestore(entry, after)) return;
     run(after ? restoreRequest(entry, later) : undoRequest(entry, later));
   }
 
@@ -106,7 +108,8 @@
         {/if}
       </h1>
       <p class="sub">
-        {#if c.files.length}The diff reads from then to now: {after ? "Restore to Here" : "Undo"} takes these changes back.{:else}{after ? "Restore to Here" : "Undo"} would change no files{result?.refs.length ? ", only branches" : ""}.{/if}
+        {#if cannotRestore(entry, after)}Conflict stages and rerere records cannot be restored. Browse the saved files and use Save As to recover a copy before replacing anything.
+        {:else if c.files.length}The diff reads from then to now: {after ? "Restore to Here" : "Undo"} takes these changes back.{:else}{after ? "Restore to Here" : "Undo"} would change no files{result?.refs.length ? ", only branches" : ""}.{/if}
         {#if result?.stagingDiffers} What is staged differs too; the diff shows the files on disk.{/if}
       </p>
       {#if result?.refs.length}
@@ -127,7 +130,8 @@
           {/if}
         </button>
         <span class="grow"></span>
-        <button class="button small primary" onclick={goBack}>{after ? "Restore to Here…" : "Undo…"}</button>
+        <button class="button small" onclick={() => nav.openBrowse((after ? entry.after : entry.before).worktree, "Saved files", null, true)}>Browse Saved Files</button>
+        <button class="button small primary" disabled={!!cannotRestore(entry, after)} title={cannotRestore(entry, after) ?? undefined} onclick={goBack}>{after ? "Restore to Here…" : "Undo…"}</button>
       </div>
     {/if}
   </div>
@@ -264,6 +268,7 @@
   }
   .actions {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
     margin-top: 4px;

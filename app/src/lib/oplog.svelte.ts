@@ -214,7 +214,8 @@ export function clearRequest(count: number): Request {
 /** Why a step can't be gone back to, or null when it can. */
 export function cannotRestore(entry: OpEntry, after: boolean): string | null {
   const trees = after ? entry.after : entry.before;
-  return trees.index ? null : `Can’t ${after ? "restore" : "undo"}: a merge or rebase was in progress ${after ? "right after" : "before"} this step`;
+  if (trees.operation) return "Can’t restore a snapshot taken during a Git operation: its metadata and rerere records are not restored. Use Browse Saved Files to recover file copies.";
+  return trees.index ? null : `Can’t ${after ? "restore" : "undo"}: the index had conflict stages ${after ? "right after" : "before"} this step. Use Compare with Now → Browse Saved Files → Save As to recover a file copy; conflict stages and rerere records cannot be restored.`;
 }
 
 /** The reflog's list: lost commits only, a newer lost one standing for those it keeps, or every move. */

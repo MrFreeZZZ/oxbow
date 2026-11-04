@@ -34,6 +34,12 @@
 before and after state. Undo (⌘Z on macOS) can restore local work after a commit, rebase, merge,
 deleted branch, dropped stash, hard reset or discard. Confirmations explain what cannot be
 recovered. Remote changes and arbitrary custom scripts are not covered by Undo.
+Resolving a conflict does not support Undo: snapshots do not keep unmerged index stages,
+operation metadata or rerere records. Resolve asks first, including staging an externally resolved binary file or deletion. Its file snapshots remain available
+in Operation Log → Compare with Now → Browse Saved Files → Save As. Save a copy before replacing
+current files; this does not reopen the conflict. Local History can also restore versions it
+has kept. Undo/Restore is blocked while an operation is in progress. Rerere's cache is shared
+Git state and is never reset by this recovery path.
 
 **Transparent commands.** Risky actions ask first and show the planned git commands. Simple
 actions run at once and appear in Activity. The Console shows command output for troubleshooting.

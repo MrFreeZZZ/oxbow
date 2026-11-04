@@ -109,11 +109,18 @@ pub(crate) async fn open_merge_tool(
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
     path: String,
+    stages: String,
 ) -> CommandResult<bool> {
     let repo = current(&session, &window)?;
     let title = format!("Open {path} in the merge tool");
+    let change = crate::turns::Running::new(window.label(), repo.name(), title.clone());
+    let turns = session.turns.clone();
+    let stop = session.new_stop(&window);
     logged(Some(at(&repo)), console::EntryKind::Action, title, move || {
-        repo.open_merge_tool(&path)
+        let Some(_turn) = turns.take(&repo.common_dir(), change, &stop.cancel, |_| {}) else {
+            return Err(oxbow_core::Error::Cancelled);
+        };
+        repo.open_merge_tool_checked(&path, &stages)
     })
     .await
 }

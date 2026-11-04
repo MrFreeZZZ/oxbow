@@ -28,6 +28,7 @@
     copy,
     onPath,
     version = 0,
+    snapshot = false,
   }: {
     /** The commit whose files these are. */
     rev: string;
@@ -41,6 +42,8 @@
     onPath: (path: string | null) => void;
     /** Goes up on every reload, so Compare with Working Copy follows the file on disk. */
     version?: number;
+    /** A recovery copy, without commit history or actions that replace working files. */
+    snapshot?: boolean;
   } = $props();
 
   const row = $derived(lookup(rev));
@@ -245,10 +248,12 @@
     e.preventDefault();
     const entries: MenuEntry[] = [{ kind: "header", label: item.path }];
     if (item.kind !== "folder" && item.kind !== "submodule") {
+      if (!snapshot) entries.push({ kind: "item", label: "File History", icon: menuIcons.history, run: () => fileHistory(item.path) });
       entries.push(
-        { kind: "item", label: "File History", icon: menuIcons.history, run: () => fileHistory(item.path) },
         { kind: "item", label: "Local History", icon: menuIcons.history, run: () => nav.openFile(item.path, NEWEST_SAVED) },
         { kind: "item", label: "Save As…", icon: menuIcons.patch, run: () => saveAs(item.path) },
+      );
+      if (!snapshot) entries.push(
         { kind: "sep" },
         { kind: "item", label: "Take This Version…", icon: menuIcons.checkout, run: () => confirm.runner?.(takeVersionRequest(asFile(item.path), rev, row?.summary ?? null)) },
         { kind: "item", label: "Compare with Working Copy", icon: menuIcons.compare, run: () => compare(item.path) },
@@ -348,9 +353,9 @@
         <span class="path" title={path}><span class="dir">{where.dir}</span><b>{where.name}</b></span>
         {#if file}<span class="muted">{bytes(file.size)}{file.text != null ? ` · ${lines.length.toLocaleString()} ${lines.length === 1 ? "line" : "lines"}` : ""}</span>{/if}
         <span class="spacer"></span>
-        <button class="button" onclick={() => fileHistory(path)} title="The commits that changed it, from {shortId(rev)} back">
+        {#if !snapshot}<button class="button" onclick={() => fileHistory(path)} title="The commits that changed it, from {shortId(rev)} back">
           <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3l2 1.5" /></svg>File History
-        </button>
+        </button>{/if}
         <button class="button" onclick={() => saveAs(path)} title="Write it somewhere as it is in {shortId(rev)}">Save As…</button>
       </div>
       {#if fileError}

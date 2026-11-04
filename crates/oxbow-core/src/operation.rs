@@ -132,6 +132,9 @@ pub struct ConflictFile {
     pub open_end: bool,
     /// The index versions and the file on disk: decisions go stale when either changes.
     pub stages: String,
+    /// Exact UTF-8 working file, including Git's marker style and line endings. Never a
+    /// claim that the resolution is correct: the user reviews it before staging.
+    pub worktree: Option<String>,
 }
 
 /// Where a conflicted file came from when one side renamed it.
@@ -571,6 +574,13 @@ impl Repo {
                 },
             })
             .collect();
+        let working_path = self.workdir().join(path);
+        let worktree = if text && !binary && !link && working_path.symlink_metadata().is_ok_and(|meta| meta.is_file()) {
+            let bytes = std::fs::read(&working_path).map_err(Error::git)?;
+            String::from_utf8(bytes).ok().filter(|text| !text.contains('\0'))
+        } else {
+            None
+        };
         if self.conflict_version(path)? != version {
             return Err(Error::Git(format!("{path} changed while it was read; open it again")));
         }
@@ -586,6 +596,7 @@ impl Repo {
             chunks,
             open_end,
             stages: version,
+            worktree,
         })
     }
 
@@ -674,8 +685,8 @@ impl Repo {
         })
     }
 
-    /// The command that opens `path` in the merge tool. Git writes the file with conflict
-    /// markers, waits for the tool to quit, and stages the file if the merge worked.
+    /// Open the working file in the merge tool, with index stages supplied separately. Git
+    /// stages it on success; on failure it restores the prelaunch working file.
     pub fn merge_tool_command(&self, path: &str) -> Result<GitCommand> {
         if crate::trust::merge_tool_off(self.workdir()) {
             return Err(Error::Git(
@@ -699,10 +710,18 @@ impl Repo {
         args.extend(["--".to_owned(), literal(path)]);
         Ok(GitCommand::new(args)
             .comment(format!(
-                "opens {}; git stages the file when the merge is saved",
+                "opens {}; git stages the file when the tool reports success",
                 tool.label
             ))
             .waits_for_user())
+    }
+
+    /// Open the exact conflict shown by the UI; stale requests never start an external tool.
+    pub fn open_merge_tool_checked(&self, path: &str, expected: &str) -> Result<bool> {
+        if self.conflict_file(path)?.stages != expected {
+            return Err(Error::Git(format!("{path} changed since it was shown; open it again")));
+        }
+        self.open_merge_tool(path)
     }
 
     /// Open `path` in the merge tool and wait until it quits. True when git staged the file.
@@ -746,7 +765,22 @@ impl Repo {
             )));
         }
         let chunks = self.merge_blobs(&ours, base.as_deref().unwrap_or_default(), &theirs)?;
-        let eol: &[u8] = if crlf(&chunks) { b"\r\n" } else { b"\n" };
+        // An editor/rerere may already have changed the working file's line endings. Whole
+        // text edits follow its uniform endings; side choices still follow the index blobs.
+        let working = text.and_then(|_| std::fs::read(self.workdir().join(path)).ok());
+        let working_crlf = working.as_ref().and_then(|bytes| {
+            let mut endings = bytes.iter().enumerate().filter(|(_, byte)| **byte == b'\n');
+            let (first, _) = endings.next()?;
+            let crlf = first > 0 && bytes[first - 1] == b'\r';
+            endings
+                .all(|(i, _)| (i > 0 && bytes[i - 1] == b'\r') == crlf)
+                .then_some(crlf)
+        });
+        let eol: &[u8] = if working_crlf.unwrap_or_else(|| crlf(&chunks)) {
+            b"\r\n"
+        } else {
+            b"\n"
+        };
         // Whether the file ends without a line break, which typed lines keep.
         let open_end = ends_open(&chunks, &ours, &theirs);
         let typed_lines = |lines: &mut dyn Iterator<Item = &str>, out: &mut Vec<u8>| {
@@ -814,6 +848,7 @@ impl Repo {
         text: Option<&str>,
         expected: Option<&str>,
     ) -> Result<()> {
+        let text_input = text;
         let text = self.resolved_text(path, picks, text)?;
         let file = self.workdir().join(path);
         if let Some(parent) = file.parent() {
@@ -829,6 +864,14 @@ impl Repo {
             && self.conflict_version(path)? != expected
         {
             return Err(Error::Git(format!("{path} changed since it was shown; open it again")));
+        }
+        // An imported working result is staged without rewriting it. In particular, mixed
+        // line endings and a rerere/editor's exact bytes must not be normalized on review.
+        if picks.is_empty()
+            && let Some(typed) = text_input
+            && std::fs::read(&file).is_ok_and(|bytes| bytes == typed.as_bytes())
+        {
+            return Ok(());
         }
         std::fs::write(&file, text).map_err(|err| Error::Git(format!("could not write {path}: {err}")))
     }

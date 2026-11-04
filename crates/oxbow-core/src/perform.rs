@@ -76,9 +76,16 @@ impl Repo {
         if let Action::RevertFile { .. }
         | Action::CherryPickFile { .. }
         | Action::ApplySuggestion { .. }
-        | Action::TakeFile { .. } = action
+        | Action::TakeFile { .. }
+        | Action::ResolveWorking { .. } = action
         {
             self.plan(action)?;
+        }
+        if let Action::Resolve { path, stages, .. } = action {
+            let file = self.conflict_file(path)?;
+            if stages.as_ref().is_some_and(|expected| expected != &file.stages) {
+                return Err(Error::Git(format!("{path} changed since it was shown; open it again")));
+            }
         }
         // A commit the secrets check stops never starts: nothing runs, nothing to undo.
         if let Action::Commit {

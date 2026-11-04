@@ -29,6 +29,20 @@
     "shallowEnd",
     "summary"
   ],
+  "ConflictFile": [
+    "base",
+    "binary",
+    "chunks",
+    "link",
+    "openEnd",
+    "ours",
+    "path",
+    "renamed",
+    "stages",
+    "text",
+    "theirs",
+    "worktree"
+  ],
   "DiffLine": [
     "kind",
     "newLine",
@@ -243,6 +257,11 @@
     "time",
     "title",
     "untracked"
+  ],
+  "Trees": [
+    "index",
+    "operation",
+    "worktree"
   ],
   "UserCommand": [
     "id",

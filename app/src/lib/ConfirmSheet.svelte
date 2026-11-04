@@ -79,6 +79,8 @@
   /** The headline of one thing Undo can't bring back. */
   function gapTitle(gap: NotKept): string {
     switch (gap.kind) {
+      case "conflictState":
+        return "Undo can’t reopen this conflict";
       case "bigFiles":
         return `Undo can’t bring back ${gap.files.length + gap.more === 1 ? "this file" : "these files"}`;
       case "ignoredInTheWay":
@@ -102,6 +104,8 @@
   /** The line under the headline: why, and what to do instead. */
   function gapWhy(gap: NotKept): string {
     switch (gap.kind) {
+      case "conflictState":
+        return "Conflict stages, merge/rebase metadata and rerere records are not restored. The Operation Log keeps file snapshots: use Compare with Now → Browse Saved Files → Save As to recover a copy of a file. Abort abandons the operation; it does not rewind rerere.";
       case "bigFiles":
         return `Untracked files over ${Math.round(gap.limit / 1048576)} MB stay out of snapshots, so the Operation Log has no copy.`;
       case "ignoredInTheWay":

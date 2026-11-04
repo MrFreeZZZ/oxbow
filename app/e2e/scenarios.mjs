@@ -44,6 +44,14 @@ const openConflict = (app, name) =>
     await page.paint();
   }, name);
 
+/** Explicitly leave the working result before choosing index sides. The text remains an old draft. */
+const chooseConflictSides = (app) => app.js(async (page) => {
+  await page.click("Choose from Sides");
+  const confirm = await page.until(() => page.all(".leaving button", "Choose from Sides")[0], "the choice to keep the working text as an old draft");
+  confirm.click();
+  await page.until(() => page.all(".result .open .pick").length, "index-side choices");
+});
+
 /** Shows the changed file `name` in Changes. */
 const openChanged = (app, name) =>
   app.js(async (page, name) => {
@@ -127,10 +135,12 @@ export const SCENARIOS = [
     async run(ctx) {
       const r = rebaseInConflict(`${ctx.dir}/r`);
       let app = await ctx.start(r);
-      assert.deepEqual(await conflictFiles(app, 2), ["! a.txt 1 conflict left", "! b.txt Conflicted"]);
+      assert.deepEqual(await conflictFiles(app, 2), ["! a.txt 1 conflict left · as text", "! b.txt Conflicted"]);
       await openConflict(app, "a.txt");
+      await chooseConflictSides(app);
       await app.js(async (page) => page.all(".result .open .pick", "feature")[0].click());
       await openConflict(app, "b.txt");
+      await chooseConflictSides(app);
       await app.js(async (page) => page.all(".result .open .pick", "Edit")[0].click());
       await app.tap(() => document.querySelector(".typed .cm-content"));
       await app.keys("Ctrl+a", "typed by hand");
@@ -138,7 +148,8 @@ export const SCENARIOS = [
       await app.js((page) => page.click("History"));
       app = await ctx.start(r);
       const again = await conflictFiles(app, 2);
-      assert.deepEqual(again, ["! a.txt Ready to mark resolved", "! b.txt Ready to mark resolved"], "decisions kept over a restart");
+      assert.match(again[0], /^! a.txt Ready to mark resolved/, "side choice kept over a restart");
+      assert.match(again[1], /^! b.txt Ready to mark resolved/, "typed choice kept over a restart");
       await openConflict(app, "b.txt");
       assert.match(await screen(app), /typed by you .*typed by hand/, "typed lines kept over a restart");
       await app.js((page) => page.act("Mark Resolved"));
@@ -146,10 +157,10 @@ export const SCENARIOS = [
       await app.js((page) => page.act("Mark Resolved"));
       await app.js((page) => page.until(() => page.button("Continue Rebase") && !page.button("Continue Rebase").disabled, "Continue"));
       await app.js((page) => page.act("Continue Rebase"));
-      assert.deepEqual(await conflictFiles(app, 1), ["! b.txt 1 conflict left"]);
+      assert.deepEqual(await conflictFiles(app, 1), ["! b.txt 1 conflict left · as text"]);
       const step2 = await screen(app);
       assert.match(step2, /Commit 2 of 2/);
-      assert.match(step2, /Pick a side, keep both, or edit/, "the next step starts undecided");
+      assert.match(step2, /Result · Working file/, "the next step starts from its new working conflict");
       assert.equal(read(r, "b.txt").includes("typed by hand"), true, "step 1's typed lines are in its commit");
     },
   },

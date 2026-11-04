@@ -247,6 +247,12 @@ pub enum Action {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stages: Option<String>,
     },
+    /// Stage a reviewed working result (including binary bytes or a deletion) without writing
+    /// it. Both the working file and unmerged index must still match what was shown.
+    ResolveWorking {
+        path: String,
+        stages: String,
+    },
     /// Resolve `path` with one side's whole file; a side that deleted it deletes it.
     TakeFile {
         path: String,

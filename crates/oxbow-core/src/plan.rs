@@ -519,8 +519,18 @@ impl Repo {
             Action::Abort => self.plan_abort()?,
             Action::Skip => self.plan_skip()?,
             Action::Resolve { path, .. } => vec![GitCommand::new(["add", "--", &literal(path)]).comment(format!(
-                "Oxbow writes your choices into {path} first; add marks it resolved"
+                "stage the reviewed result of {path}; unchanged working text is not rewritten"
             ))],
+            Action::ResolveWorking { path, stages } => {
+                let file = self.conflict_file(path)?;
+                if file.stages != *stages {
+                    return Err(Error::Git(format!("{path} changed since it was shown; open it again")));
+                }
+                if file.link {
+                    return Err(Error::Git("resolve symbolic links and submodules by taking a side".into()));
+                }
+                vec![GitCommand::new(["add", "--", &literal(path)]).comment("stage the reviewed working file or its deletion without rewriting it")]
+            }
             Action::TakeFile { path, side, stages } => self.plan_take_file(path, *side, stages)?,
             Action::CherryPick { commit } => self.plan_cherry_pick(commit)?,
             Action::SavePatches {

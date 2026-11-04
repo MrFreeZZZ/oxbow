@@ -364,7 +364,7 @@ fn a_step_taken_during_a_merge_with_conflicts_cant_be_gone_back_to() {
     .unwrap();
     let id = repo.operation_log().unwrap()[0].id.clone();
     let err = repo.plan_restore(&id, false).unwrap_err();
-    assert!(err.to_string().contains("middle of a merge"), "{err}");
+    assert!(err.to_string().contains("conflict stages"), "{err}");
 }
 
 /// Set `cancel` from another thread once `ready` holds.
