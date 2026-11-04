@@ -2,6 +2,7 @@ import { mount } from "svelte";
 import "./app.css";
 import App from "./App.svelte";
 import WordPopover from "./lib/WordPopover.svelte";
+import UpdateRestartGate from "./lib/UpdateRestartGate.svelte";
 import { followDisplay, followLook } from "./lib/prefs.svelte";
 
 // Start in the system's look so nothing flashes; the Appearance setting takes over once read.
@@ -23,3 +24,5 @@ else if (location.hash === "#command") void import("./lib/UserCommandWindow.svel
 else mount(App, { target });
 // What a word of a git command means, over every window's sheets.
 mount(WordPopover, { target: document.body });
+
+mount(UpdateRestartGate, { target: document.body });

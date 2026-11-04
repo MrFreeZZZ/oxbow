@@ -1,5 +1,7 @@
-//! Works out what the About window shows: the version, with the number of commits as its last
-//! part so it grows with every merge; the commit the build is of; and when it was built.
+//! Records build provenance and validates distribution identity. The application reads its
+//! version from Tauri's package info, the same source used by the bundle and updater.
+
+mod build_identity;
 
 use std::path::Path;
 use std::process::Command;
@@ -46,16 +48,61 @@ fn main() {
         }
     }
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
-
-    let base = env!("CARGO_PKG_VERSION")
-        .splitn(3, '.')
-        .take(2)
-        .collect::<Vec<_>>()
-        .join(".");
-    let version = match git(&["rev-list", "--count", "HEAD"]) {
-        Some(count) => format!("{base}.{count}"),
-        None => env!("CARGO_PKG_VERSION").to_owned(),
+    for key in [
+        "OXBOW_BUILD_CHANNEL",
+        "OXBOW_BUILD_VERSION",
+        "OXBOW_BUILD_COMMIT",
+        "TAURI_CONFIG",
+        "OXBOW_UPDATER_TEST_ROOT",
+    ] {
+        println!("cargo:rerun-if-env-changed={key}");
+    }
+    println!("cargo:rerun-if-changed=build_identity.rs");
+    let config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string("tauri.conf.json").expect("read Tauri config"))
+            .expect("parse Tauri config");
+    let override_config: serde_json::Value = std::env::var("TAURI_CONFIG")
+        .map(|text| serde_json::from_str(&text).expect("parse Tauri config override"))
+        .unwrap_or_default();
+    let version = override_config
+        .get("version")
+        .unwrap_or(&config["version"])
+        .as_str()
+        .expect("Tauri version is a string");
+    if std::env::var_os("CARGO_FEATURE_UPDATER_TEST").is_some() {
+        assert_eq!(
+            override_config["identifier"], "app.oxbow.updater-test",
+            "Updater tests require their own identifier"
+        );
+        assert!(
+            matches!(version, "0.0.1" | "0.0.2"),
+            "Updater test versions must stay outside distribution versions"
+        );
+        let key = override_config
+            .pointer("/plugins/updater/pubkey")
+            .and_then(serde_json::Value::as_str)
+            .expect("Explicit updater test public key");
+        assert!(
+            !key.is_empty() && key != config["plugins"]["updater"]["pubkey"].as_str().unwrap(),
+            "Updater tests must use a disposable signing key"
+        );
+        let root = std::env::var("OXBOW_UPDATER_TEST_ROOT").expect("Updater test fixture directory");
+        println!("cargo:rustc-env=OXBOW_UPDATER_TEST_ROOT={root}");
+        println!("cargo:rerun-if-changed={root}/certificate.pem");
+    }
+    let full_commit = git(&["rev-parse", "HEAD"]);
+    let expected_version = std::env::var("OXBOW_BUILD_VERSION").ok();
+    let expected_commit = std::env::var("OXBOW_BUILD_COMMIT").ok();
+    let channel = std::env::var("OXBOW_BUILD_CHANNEL").ok();
+    let identity = build_identity::BuildIdentity {
+        version,
+        commit: full_commit.as_deref(),
+        expected_version: expected_version.as_deref(),
+        expected_commit: expected_commit.as_deref(),
+        channel: channel.as_deref(),
     };
+    let channel = identity.validate().expect("distribution build identity");
+    println!("cargo:rustc-env=OXBOW_BUILD_CHANNEL={channel}");
     let commit = match git(&["rev-parse", "--short=7", "HEAD"]) {
         Some(sha) if git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty()) => {
             format!("{sha}, modified")
@@ -71,7 +118,6 @@ fn main() {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs() as i64)
         });
-    println!("cargo:rustc-env=OXBOW_VERSION={version}");
     println!("cargo:rustc-env=OXBOW_COMMIT={commit}");
     println!("cargo:rustc-env=OXBOW_BUILT={}", built_at(now));
 

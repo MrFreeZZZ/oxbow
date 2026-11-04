@@ -10,7 +10,8 @@
   import { focusedView } from "./lib/graph";
   import CommitPanel from "./lib/CommitPanel.svelte";
   import ChangesPanel from "./lib/ChangesPanel.svelte";
-  import { savedMessage } from "./lib/commitDrafts.svelte";
+  import { beforeUpdateRestart } from "./lib/updateRestart.svelte";
+  import { keepMessagesForRestart, savedMessage } from "./lib/commitDrafts.svelte";
   import FolderGone from "./lib/FolderGone.svelte";
   import { goneScreen, messageOf } from "./lib/gone";
   import { tilde } from "./lib/term";
@@ -18,6 +19,7 @@
   import { confirm, type Request } from "./lib/confirm.svelte";
   import BranchPicker from "./lib/BranchPicker.svelte";
   import { detachRequest, keepRequest, newBranchRequest, switchRequest, trackRequest, type BranchContext } from "./lib/branches";
+  import UpdateNotification from "./lib/UpdateNotification.svelte";
   import DetachedBanner from "./lib/DetachedBanner.svelte";
   import OperationBanner from "./lib/OperationBanner.svelte";
   import { draftSaves } from "./lib/conflictDrafts";
@@ -1601,6 +1603,7 @@
 
   /** The window asks whether to close without the conflict draft: a close meanwhile waits. */
   let askingToClose = false;
+  $effect(() => beforeUpdateRestart(keepMessagesForRestart));
   /** Closing the window, or quitting, waits for the Conflicts screen's last draft to be written.
    *  When it can't be, or isn't after 3 seconds, the window stays and asks: Try Again, Close
    *  Without Saving, or Cancel, which also calls off a quit. */
@@ -1956,6 +1959,8 @@
     }
   }}
 />
+
+<UpdateNotification />
 
 {#if overviewShown || !repo || !history}
   <Welcome currentPath={repo?.path ?? null} onBack={repo && history ? () => (overviewShown = false) : undefined}

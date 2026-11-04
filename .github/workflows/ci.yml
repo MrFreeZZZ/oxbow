@@ -47,6 +47,10 @@ jobs:
       # The production build, with the CSP on; the shell crate also needs it to compile.
       - run: npm run build
         working-directory: app
+      - name: Install workflow checker
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - run: scripts/check.sh all
       # Known vulnerabilities in what the app is built from: RustSec for Cargo.lock, npm's
       # advisories for package-lock.json. Warnings (unmaintained crates of Tauri's Linux side)
@@ -78,9 +82,12 @@ jobs:
         working-directory: app
       - name: Build the app bundle
         # The bundle's version as About shows it: 0.1.<number of commits>.
+        env:
+          OXBOW_BUILD_CHANNEL: preview
         run: |
           base=$(node -p "require('./src-tauri/tauri.conf.json').version.split('.').slice(0, 2).join('.')")
-          npx tauri build --ci --bundles app --config "{\"version\":\"$base.$(git rev-list --count HEAD)\"}"
+          version="$base.$(git rev-list --count HEAD)"
+          OXBOW_BUILD_VERSION="$version" OXBOW_BUILD_COMMIT="$(git rev-parse HEAD)" npx tauri build --ci --bundles app --config "{\"version\":\"$version\"}"
         working-directory: app
       - uses: actions/upload-artifact@v4
         with:

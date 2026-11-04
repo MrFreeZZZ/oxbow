@@ -1,6 +1,9 @@
 /target
 node_modules/
 /app/dist
+/app/release-config.json
+/release-assets/
+/release-notes.txt
 /app/src-tauri/gen/schemas
 .DS_Store
 __pycache__/

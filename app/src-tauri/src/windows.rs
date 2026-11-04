@@ -70,7 +70,7 @@ pub(crate) fn close_window_of(app: AppHandle, window: tauri::WebviewWindow, sess
     }
 }
 
-/// The default macOS menu, with Settings… (⌘,) after About in the app menu. About shows the
+/// The default macOS menu, with Check for Updates… and Settings… (⌘,) after About. About shows the
 /// version, the commit the build is of and when it was built (build.rs).
 #[cfg(target_os = "macos")]
 pub(crate) fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
@@ -79,7 +79,7 @@ pub(crate) fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri
         let about = tauri::menu::AboutMetadata {
             name: Some(app.package_info().name.clone()),
             // "Version 0.1.113 (b5cc367)": macOS puts the short version in the parentheses.
-            version: Some(env!("OXBOW_VERSION").to_owned()),
+            version: Some(app.package_info().version.to_string()),
             short_version: Some(env!("OXBOW_COMMIT").to_owned()),
             copyright: Some(format!("Built {}", env!("OXBOW_BUILT"))),
             // No credits: macOS draws them larger than the version. Third-party notices ship in
@@ -88,9 +88,11 @@ pub(crate) fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri
         };
         app_menu.remove_at(0)?;
         app_menu.insert(&tauri::menu::PredefinedMenuItem::about(app, None, Some(about))?, 0)?;
+        let updates = tauri::menu::MenuItem::with_id(app, "check-updates", "Check for Updates…", true, None::<&str>)?;
+        app_menu.insert(&updates, 1)?;
         let settings = tauri::menu::MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
-        app_menu.insert(&settings, 2)?;
-        app_menu.insert(&tauri::menu::PredefinedMenuItem::separator(app)?, 3)?;
+        app_menu.insert(&settings, 3)?;
+        app_menu.insert(&tauri::menu::PredefinedMenuItem::separator(app)?, 4)?;
         // macOS's own Quit ends the app at once; this one lets the windows save first (quit()).
         let last = app_menu.items()?.len() - 1;
         app_menu.remove_at(last)?;

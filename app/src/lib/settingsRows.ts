@@ -47,7 +47,7 @@ export type Row = {
   /** More items for its gear menu. */
   more?: () => MenuEntry[];
 };
-export type Group = { title?: string; foot?: Text; rows: Row[]; preview?: "theme" | "branches" | "diff" | "console" };
+export type Group = { title?: string; foot?: Text; rows: Row[]; preview?: "theme" | "branches" | "diff" | "console"; detail?: "updates" };
 export type Section = {
   id: string;
   label: string;

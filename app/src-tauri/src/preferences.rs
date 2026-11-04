@@ -203,7 +203,11 @@ pub(crate) fn appearance(settings: &serde_json::Map<String, Value>) -> Option<Th
 /// deadlocks on Windows.
 #[tauri::command]
 pub(crate) async fn open_settings(app: AppHandle, section: Option<String>) -> CommandResult<()> {
-    show_settings_at(&app, section.as_deref() == Some("commands"))
+    show_settings_at(&app, section.as_deref() == Some("commands"))?;
+    if section.as_deref() == Some("updates") {
+        let _ = app.emit_to("settings", "settings-section", "updates");
+    }
+    Ok(())
 }
 
 /// Open the Settings window, or bring it to the front.

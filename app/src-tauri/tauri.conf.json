@@ -28,6 +28,13 @@
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://avatars.githubusercontent.com"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDExRUJFOURFQTU4MkVGQTUKUldTbDc0S2wzdW5yRVZNUXVpM2g0dVBINURLTEFUd1NmcWpYK25hTTUyOG02enQ4ZHpDOUtZSEgK",
+      "endpoints": [],
+      "requireSignedVersion": true
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",

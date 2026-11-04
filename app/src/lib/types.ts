@@ -1484,6 +1484,35 @@ export interface Gone extends GoneFolder {
   conflictDraft: boolean;
 }
 
+export type UpdateChannel = "release" | "preview";
+
+/** Package identity and channel selection, shared by every window. */
+export interface UpdateInfo {
+  version: string;
+  commit: string;
+  buildChannel: UpdateChannel;
+  channel: UpdateChannel;
+  platform: string | null;
+  availableChannels: UpdateChannel[];
+  canInstall: boolean;
+}
+
+export interface UpdateRelease {
+  version: string;
+  notes: string | null;
+}
+
+export type UpdateStatus = {
+  channel: UpdateChannel;
+  checkedAt: number | null;
+} & (
+  | { state: "idle" | "checking" | "current" }
+  | { state: "available" | "verifying" | "ready" | "preparing" | "installing"; release: UpdateRelease }
+  | { state: "downloading"; release: UpdateRelease; received: number; total: number | null }
+  | { state: "downloadFailed" | "installFailed"; release: UpdateRelease; message: string }
+  | { state: "failed" | "unsupported"; message: string }
+);
+
 /** What the Welcome window says about this computer's Git setup. */
 export interface WelcomeInfo {
   version: string;

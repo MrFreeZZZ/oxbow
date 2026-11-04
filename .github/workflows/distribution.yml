@@ -1,0 +1,214 @@
+name: Distribution
+
+on:
+  workflow_call:
+    inputs:
+      channel:
+        required: true
+        type: string
+      revision:
+        required: true
+        type: string
+      tag:
+        default: ''
+        type: string
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY:
+        required: true
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: Resolve distribution commit
+    runs-on: ubuntu-22.04
+    outputs:
+      sha: ${{ steps.identity.outputs.sha }}
+      version: ${{ steps.identity.outputs.version }}
+      tag: ${{ steps.identity.outputs.tag }}
+      epoch: ${{ steps.identity.outputs.epoch }}
+      matrix: ${{ steps.identity.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.revision }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Resolve and validate distribution identity
+        id: identity
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node scripts/release.mjs resolve
+
+  checks:
+    name: Checks
+    needs: resolve
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
+      - run: npm ci
+        working-directory: app
+      - run: npm run build
+        working-directory: app
+      - name: Install workflow checker
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: scripts/check.sh all
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit
+      - run: npm audit --audit-level=moderate
+        working-directory: app
+
+  macos-tests:
+    name: Tests (macOS)
+    needs: resolve
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: tests
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+        working-directory: app
+      - run: npm run build
+        working-directory: app
+      - run: cargo test -p oxbow-core -p oxbow-app
+
+  build:
+    name: ${{ matrix.name }}
+    needs: [resolve, checks, macos-tests]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      CHANNEL: ${{ inputs.channel }}
+      RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+      SOURCE_SHA: ${{ needs.resolve.outputs.sha }}
+      SOURCE_DATE_EPOCH: ${{ needs.resolve.outputs.epoch }}
+      OXBOW_BUILD_CHANNEL: ${{ inputs.channel }}
+      OXBOW_BUILD_VERSION: ${{ needs.resolve.outputs.version }}
+      OXBOW_BUILD_COMMIT: ${{ needs.resolve.outputs.sha }}
+      PLATFORM: ${{ matrix.platform }}
+      BUNDLE_DIR: target/${{ matrix.target }}/release/bundle
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: distribution-${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf libfuse2
+      - run: npm ci
+        working-directory: app
+      - name: Enable updater artifacts for this distribution build
+        run: node scripts/release.mjs config
+      - name: Build and sign application
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
+          BUNDLES: ${{ matrix.bundles }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          : "${TAURI_SIGNING_PRIVATE_KEY:?Updater signing key is missing}"
+          : "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:?Updater signing password is missing}"
+          npx tauri build --ci --bundles "$BUNDLES" --target "$TARGET" --config release-config.json
+        working-directory: app
+      - name: Verify the executable identity, collect packages and verify signatures
+        run: |
+          node scripts/release.mjs verify-build
+          node scripts/release.mjs collect
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distribution-${{ matrix.platform }}
+          path: release-assets/
+          if-no-files-found: error
+
+  publish:
+    name: Publish distribution packages
+    needs: [resolve, build]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      CHANNEL: ${{ inputs.channel }}
+      RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+      SOURCE_SHA: ${{ needs.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: distribution-*
+          path: release-assets
+          merge-multiple: true
+      - name: Generate release notes and a verified update manifest
+        run: |
+          node scripts/release.mjs notes
+          node scripts/release.mjs manifest
+      - name: Upload draft release or publish the Preview snapshot and index
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/publish-release.mjs

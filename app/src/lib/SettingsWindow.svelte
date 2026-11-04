@@ -7,7 +7,8 @@
   // SettingsRow.svelte.
 
   import { listen } from "@tauri-apps/api/event";
-  import { untrack } from "svelte";
+  import { untrack, onDestroy } from "svelte";
+  import { beforeUpdateRestart } from "./updateRestart.svelte";
   import { api } from "./api";
   import ConfirmSheet from "./ConfirmSheet.svelte";
   import { confirm } from "./confirm.svelte";
@@ -32,6 +33,7 @@
   import { commandsSection } from "./settingsCommands";
   import ThemeCards from "./ThemeCards.svelte";
   import ThemeSample from "./ThemeSample.svelte";
+  import UpdateStatusPanel from "./UpdateStatusPanel.svelte";
 
   api.monospaceFonts().then((list) => (model.fonts = list), () => {});
   load();
@@ -68,6 +70,7 @@
 
   listen<string>("settings-section", (event) => {
     if (event.payload === "commands") go("commands");
+    if (event.payload === "updates") go("general");
   }).catch(() => {});
 
   const needle = $derived(model.query.trim().toLowerCase());
@@ -151,6 +154,10 @@
   let json = $state(false);
   let jsonText = $state("");
   let jsonSaved = $state("");
+  onDestroy(beforeUpdateRestart(() => {
+    if (jsonText !== jsonSaved || editing || Object.keys(repoFiles.drafts).length) return "Save or discard your edits in Settings before restarting to install the update.";
+    return null;
+  }));
 
   // Repository Files: the file open in its editor, and the list read afresh for another
   // repository, whose drafts don't carry over.
@@ -372,6 +379,7 @@
               {#each group.rows as row (row.id)}
                 <SettingsRow {row} menuOn={menu?.row.id === row.id} onMenu={(x, y) => openMenu(row, x, y)} bind:editing />
               {/each}
+              {#if group.detail === "updates"}<UpdateStatusPanel />{/if}
             </div>
             {#if !needle && group.preview === "theme"}
               <div class="theme-choices"><ThemeCards /></div>

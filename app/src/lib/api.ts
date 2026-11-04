@@ -2,6 +2,8 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type { MenuPart } from "./appMenu";
 import type {
   AllSettings,
+  UpdateInfo,
+  UpdateStatus,
   FileCheck,
   RepoFileKind,
   RepoFileSaved,
@@ -126,6 +128,14 @@ export const api = {
   /** Empty Recent Repositories but for `keep`. */
   clearRecent: (keep: string[]) => invoke<void>("clear_recent", { keep }),
   welcomeInfo: () => invoke<WelcomeInfo>("welcome_info"),
+  updateInfo: () => invoke<UpdateInfo>("update_info"),
+  updateStatus: () => invoke<UpdateStatus>("update_status"),
+  checkUpdates: () => invoke<UpdateStatus>("check_updates"),
+  downloadUpdate: () => invoke<UpdateStatus>("download_update"),
+  cancelUpdateDownload: () => invoke<void>("cancel_update_download"),
+  installUpdate: () => invoke<UpdateStatus>("install_update"),
+  updateRestartReady: (generation: number, problem: string | null) => invoke<void>("update_restart_ready", { generation, problem }),
+  openUpdateRelease: () => invoke<void>("open_update_release"),
   folderState: (path: string) => invoke<"missing" | "empty" | "files" | "file">("folder_state", { path }),
   probeRemote: (url: string) => invoke<RemoteProbe>("probe_remote", { url }),
   cloneCommand: (options: CloneOptions) => invoke<GitCommand>("clone_command", { options }),
@@ -257,7 +267,7 @@ export const api = {
   stopAction: () => invoke<void>("stop_action"),
   getSetting: <T>(key: string) => invoke<T | null>("get_setting", { key }),
   allSettings: () => invoke<AllSettings>("all_settings"),
-  openSettings: (section?: "commands") => invoke<void>("open_settings", { section }),
+  openSettings: (section?: "commands" | "updates") => invoke<void>("open_settings", { section }),
   /** The key of the app menu's Settings…, "CmdOrCtrl+,", or null for none (macOS). */
   setSettingsKey: (accelerator: string | null) => invoke<void>("set_settings_key", { accelerator }),
   setMenu: (menus: MenuPart[]) => invoke<void>("set_menu", { menus }),

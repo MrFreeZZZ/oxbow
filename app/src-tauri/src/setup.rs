@@ -29,8 +29,8 @@ pub(crate) struct WelcomeInfo {
 
 /// What the Welcome window says about this computer's Git setup.
 #[tauri::command]
-pub(crate) async fn welcome_info() -> CommandResult<WelcomeInfo> {
-    let version = format!("{} ({})", env!("OXBOW_VERSION"), env!("OXBOW_COMMIT"));
+pub(crate) async fn welcome_info(app: AppHandle) -> CommandResult<WelcomeInfo> {
+    let version = format!("{} ({})", app.package_info().version, env!("OXBOW_COMMIT"));
     logged(None, console::EntryKind::Read, "Read the Git setup", move || {
         let global = config::global_config();
         let home = config::home_dir().unwrap_or_default();

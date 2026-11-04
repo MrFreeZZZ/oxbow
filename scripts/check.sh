@@ -5,6 +5,7 @@
 #   scripts/check.sh ui         Svelte front end: npm test, svelte-check
 #   scripts/check.sh core       oxbow-core: cargo fmt, clippy, cargo test -p oxbow-core
 #   scripts/check.sh tauri      app/src-tauri: cargo fmt, clippy, cargo test -p oxbow-app
+#   scripts/check.sh release    distribution tests and workflow validation (actionlint)
 #   scripts/check.sh all        everything
 # Several groups can be given at once: scripts/check.sh ui core
 set -uo pipefail
@@ -31,6 +32,7 @@ if [ ${#groups[@]} -eq 0 ] || [ "${groups[0]}" = auto ]; then
     grep -qE '^app/(src/|tests/|package|tsconfig|svelte\.config|vite\.config|index\.html)' <<<"$files" && groups+=(ui)
     grep -qE '^(crates/|Cargo\.|rustfmt\.toml)' <<<"$files" && groups+=(core)
     grep -qE '^(app/src-tauri/|Cargo\.)' <<<"$files" && groups+=(tauri)
+    grep -qE '^(app/src-tauri/update-channels\.json|\.github/workflows/|scripts/(check\.sh|release\.|publish-release\.|updater-test\.))' <<<"$files" && groups+=(release)
     if [ ${#groups[@]} -eq 0 ]; then
       echo "check: nothing to check (no app or core files changed since main)"
       exit 0
@@ -40,14 +42,15 @@ if [ ${#groups[@]} -eq 0 ] || [ "${groups[0]}" = auto ]; then
   fi
 fi
 
-want_ui=0 want_core=0 want_tauri=0
+want_ui=0 want_core=0 want_tauri=0 want_release=0
 for g in "${groups[@]}"; do
   case $g in
     ui) want_ui=1 ;;
     core) want_core=1 ;;
     tauri) want_tauri=1 ;;
-    all) want_ui=1 want_core=1 want_tauri=1 ;;
-    *) echo "check: unknown group '$g' (ui, core, tauri, all)" >&2; exit 2 ;;
+    release) want_release=1 ;;
+    all) want_ui=1 want_core=1 want_tauri=1 want_release=1 ;;
+    *) echo "check: unknown group '$g' (ui, core, tauri, release, all)" >&2; exit 2 ;;
   esac
 done
 
@@ -86,6 +89,12 @@ svelte_errors() { grep -E -B1 -A2 '^(Error|Warn)'; }
 ensure_node_modules() {
   [ -d app/node_modules ] || (cd app && npm ci --no-audit --no-fund) >"$logs/npm-install.log" 2>&1
 }
+
+if [ $want_release = 1 ]; then
+  run distribution node_tests node --test scripts/release.test.mjs
+  run updater-fixture cat node --check scripts/updater-test.mjs
+  run actionlint cat actionlint -no-color
+fi
 
 if [ $want_ui = 1 ]; then
   if ensure_node_modules; then

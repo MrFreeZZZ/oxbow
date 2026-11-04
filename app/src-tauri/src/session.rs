@@ -44,6 +44,7 @@ pub(crate) struct Session {
 #[derive(Default)]
 pub(crate) struct Stops {
     running: Mutex<HashMap<String, Vec<Arc<AtomicBool>>>>,
+    paused: AtomicBool,
 }
 
 /// A run's own Stop, heard by its window's Stop button until it is dropped.
@@ -54,12 +55,29 @@ pub(crate) struct RunStop {
 }
 
 impl Stops {
+    pub(crate) fn pause_if_idle(&self) -> bool {
+        let running = self.running.lock().expect("stops lock");
+        if !running.is_empty() {
+            return false;
+        }
+        self.paused.store(true, Ordering::SeqCst);
+        true
+    }
+
+    pub(crate) fn resume(&self) {
+        self.paused.store(false, Ordering::SeqCst);
+    }
+
     /// A Stop of its own for a run starting now in `window`: a run after it never clears it,
     /// and Stop in another window doesn't reach it.
     pub(crate) fn start(self: &Arc<Self>, window: &str) -> RunStop {
         let cancel = Arc::new(AtomicBool::new(false));
         let mut running = self.running.lock().expect("stops lock");
-        running.entry(window.to_owned()).or_default().push(cancel.clone());
+        if self.paused.load(Ordering::SeqCst) {
+            cancel.store(true, Ordering::Relaxed);
+        } else {
+            running.entry(window.to_owned()).or_default().push(cancel.clone());
+        }
         RunStop {
             stops: self.clone(),
             window: window.to_owned(),
@@ -470,6 +488,19 @@ mod tests {
         let changes = history.changes.clone().map(|tree| (number, Arc::new(tree)));
         let folders = Arc::new((history.worktrees.clone(), history.submodules.clone()));
         slot.keep_history(number, cache, changes, folders);
+    }
+
+    #[test]
+    fn restart_does_not_interrupt_commands_and_rejects_new_runs_until_resumed() {
+        let stops = Arc::new(Stops::default());
+        let active = stops.start("main");
+        assert!(!stops.pause_if_idle());
+        assert!(!active.cancel.load(Ordering::Relaxed));
+        drop(active);
+        assert!(stops.pause_if_idle());
+        assert!(stops.start("settings").cancel.load(Ordering::Relaxed));
+        stops.resume();
+        assert!(!stops.start("settings").cancel.load(Ordering::Relaxed));
     }
 
     #[test]

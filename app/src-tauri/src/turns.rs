@@ -19,6 +19,7 @@ use std::time::Duration;
 pub struct Turns {
     running: Mutex<HashMap<PathBuf, Vec<Running>>>,
     next: AtomicU64,
+    paused: AtomicBool,
 }
 
 /// A change running in a repository, or asking to.
@@ -90,6 +91,20 @@ pub fn canonical(common: &Path) -> PathBuf {
 }
 
 impl Turns {
+    /// Reserve an idle app for installation. Checked under the same lock as new turns.
+    pub(crate) fn pause_if_idle(&self) -> bool {
+        let running = self.running.lock().expect("turns lock");
+        if running.values().any(|list| !list.is_empty()) {
+            return false;
+        }
+        self.paused.store(true, Ordering::SeqCst);
+        true
+    }
+
+    pub(crate) fn resume(&self) {
+        self.paused.store(false, Ordering::SeqCst);
+    }
+
     /// Wait until no other change runs in the repository whose shared Git folder is `common`,
     /// then take the turn for `change`. A change that gives way is stopped rather than waited
     /// for, unless `change` gives way too. `on_wait` hears what it waits for, each time that
@@ -106,6 +121,9 @@ impl Turns {
         loop {
             let other = {
                 let mut running = self.running.lock().expect("turns lock");
+                if self.paused.load(Ordering::SeqCst) {
+                    return None;
+                }
                 let list = running.entry(common.clone()).or_default();
                 if list.is_empty() {
                     if cancel.load(Ordering::Relaxed) {
@@ -170,6 +188,20 @@ mod tests {
 
     fn change(window: &str, title: &str) -> Running {
         Running::new(window, "repo".into(), title.into())
+    }
+
+    #[test]
+    fn installation_reserves_only_an_idle_app_and_blocks_new_turns_until_resumed() {
+        let turns = Arc::new(Turns::default());
+        let never = AtomicBool::new(false);
+        let common = Path::new("/nowhere/update-test/.git");
+        let active = turns.take(common, change("main", "Push"), &never, |_| {}).unwrap();
+        assert!(!turns.pause_if_idle());
+        drop(active);
+        assert!(turns.pause_if_idle());
+        assert!(turns.take(common, change("main", "Commit"), &never, |_| {}).is_none());
+        turns.resume();
+        assert!(turns.take(common, change("main", "Commit"), &never, |_| {}).is_some());
     }
 
     #[test]

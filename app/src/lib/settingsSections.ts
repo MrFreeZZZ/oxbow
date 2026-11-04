@@ -9,6 +9,8 @@ import { GEAR, opts, type Group, type Option, type Section } from "./settingsRow
 import { themeById } from "./themes";
 import { tips, TIP_COUNT } from "./tips.svelte";
 import type { OpenApp } from "./types";
+import { channelDescription, installedVersion, updateChannels } from "./updates";
+import { updates } from "./updates.svelte";
 
 const confirmOff = () => !prefs.get("oxbow.confirm.enabled");
 
@@ -24,6 +26,29 @@ export const generalSection: Section = {
     {
       title: "Startup",
       rows: [prefRow("oxbow.startup.reopenRepository", "Reopen the repository from the last session", "switch", { sub: "Otherwise Oxbow starts on the Welcome window" })],
+    },
+    {
+      title: "Updates",
+      detail: "updates",
+      rows: [
+        {
+          id: "update-check",
+          label: "Current version",
+          sub: () => updates.problem && !updates.info ? "Couldn’t read the installed version" : installedVersion(updates.info),
+          off: () => updates.loading || updates.busy || (!updates.problem && !updates.canCheck),
+          control: { type: "button", label: () => updates.status?.state === "checking" ? "Checking…" : updates.problem ? "Retry" : "Check Now", run: () => updates.check() },
+        },
+        prefRow("oxbow.updates.channel", "Update channel", "popup", {
+          options: () => updateChannels(updates.info, updates.choice),
+          sub: () => channelDescription(updates.info, updates.choice),
+          subTone: () => updates.unsupported ? "warn" : undefined,
+          off: () => !updates.info || updates.busy,
+        }),
+        prefRow("oxbow.updates.autoCheck", "Check automatically", "switch", {
+          sub: "At startup and every 6 hours. Downloads and installation are up to you.",
+          off: () => updates.restarting,
+        }),
+      ],
     },
     {
       title: "Learning",

@@ -1,0 +1,10 @@
+{
+  "release": {
+    "endpoint": "https://github.com/MrFreeZZZ/oxbow/releases/latest/download/latest.json",
+    "platforms": ["darwin-aarch64", "darwin-x86_64", "linux-x86_64", "windows-x86_64"]
+  },
+  "preview": {
+    "endpoint": "https://github.com/MrFreeZZZ/oxbow/releases/download/preview/latest.json",
+    "platforms": ["darwin-aarch64"]
+  }
+}

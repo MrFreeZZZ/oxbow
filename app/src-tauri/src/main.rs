@@ -23,10 +23,15 @@ mod settings;
 mod setup;
 mod trusted;
 mod turns;
+mod updates;
 mod user_command_window;
 mod user_commands;
 mod windows;
 mod working;
+
+#[cfg(test)]
+#[path = "../build_identity.rs"]
+mod build_identity;
 
 use tauri::{Emitter, Manager};
 
@@ -36,6 +41,16 @@ use crate::session::Session;
 type CommandResult<T> = Result<T, String>;
 
 fn main() {
+    let context = tauri::generate_context!();
+    // Distribution jobs can inspect the actual executable without starting a GUI or Git.
+    if std::env::args().nth(1).as_deref() == Some("--build-info") {
+        println!(
+            "{}",
+            serde_json::to_string(&updates::build_info(context.package_info().version.to_string()))
+                .expect("build metadata")
+        );
+        return;
+    }
     let builder = tauri::Builder::default();
     // Other systems have no menu bar; the window's own ⌘, / Ctrl+, opens Settings there.
     #[cfg(target_os = "macos")]
@@ -48,12 +63,16 @@ fn main() {
         .manage(user_command_window::CommandWindows::default())
         .manage(overview::OverviewRuns::default())
         .manage(menu::MenuState::default())
+        .manage(updates::UpdateChecks::default())
         .manage(accounts::Accounts::default())
         .manage(gitlab_accounts::GitLabTokens::default())
         .on_window_event(|window, event| {
             let session = window.state::<Session>();
             let label = window.label().to_owned();
             match event {
+                tauri::WindowEvent::CloseRequested { api, .. } if updates::restarting(window.app_handle()) => {
+                    api.prevent_close()
+                }
                 // Settings shows and changes the repository of the window used last.
                 tauri::WindowEvent::Focused(true)
                     if label != "settings" && label != "console" && !user_command_window::is_command_window(&label) =>
@@ -79,8 +98,15 @@ fn main() {
             }
         })
         .on_menu_event(|app, event| {
+            if updates::restarting(app) {
+                return;
+            }
             if event.id() == "settings" {
                 let _ = show_settings(app);
+            }
+            #[cfg(target_os = "macos")]
+            if event.id() == "check-updates" {
+                let _ = updates::show_updates(app);
             }
             let focused = app.state::<Session>().focused.lock().expect("session lock").clone();
             menu::picked(app, event.id().as_ref(), focused);
@@ -90,6 +116,8 @@ fn main() {
             }
         })
         .setup(|app| {
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             // Before anything runs git: it must find git-lfs where Homebrew put it.
             oxbow_core::lfs::extend_path();
             let handle = app.handle();
@@ -98,6 +126,7 @@ fn main() {
             gitlab_accounts::lend_to_git(handle);
             console_window::follow(handle);
             menu::recent_changed(handle);
+            updates::start(handle);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -116,6 +145,14 @@ fn main() {
             repos::reconnect_folder,
             recent::clear_recent,
             setup::welcome_info,
+            updates::update_info,
+            updates::update_status,
+            updates::check_updates,
+            updates::open_update_release,
+            updates::download_update,
+            updates::cancel_update_download,
+            updates::install_update,
+            updates::update_restart_ready,
             setup::folder_state,
             setup::probe_remote,
             setup::clone_command,
@@ -280,6 +317,6 @@ fn main() {
             gitlab_accounts::gitlab_namespaces,
             gitlab_accounts::gitlab_publish
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running Oxbow");
 }

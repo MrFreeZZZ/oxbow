@@ -17,6 +17,9 @@ export const defaults = {
   "oxbow.appearance": "system" as "system" | "light" | "dark",
   "oxbow.history.rowStyle": "twoLines" as "twoLines" | "compact",
   "oxbow.startup.reopenRepository": true,
+  /** Auto follows this build's channel; explicit choices survive updates and restarts. */
+  "oxbow.updates.autoCheck": true,
+  "oxbow.updates.channel": "auto" as "auto" | "release" | "preview",
   /** Where Clone and New Repository put repositories; empty: ~/Developer or the like. */
   "oxbow.clone.folder": "",
   "oxbow.confirm.enabled": true,
@@ -122,6 +125,7 @@ type Rule = { oneOf?: readonly string[]; min?: number; max?: number; whole?: boo
 export const rules: Partial<Record<PrefKey, Rule>> = {
   "oxbow.appearance": { oneOf: ["system", "light", "dark"] },
   "oxbow.history.rowStyle": { oneOf: ["twoLines", "compact"] },
+  "oxbow.updates.channel": { oneOf: ["auto", "release", "preview"] },
   "oxbow.confirm.scope": { oneOf: ["all", "risky"] },
   "oxbow.undo.keepDays": { min: 1, max: 3650, whole: true },
   "oxbow.localHistory.keepDays": { min: 0, max: 30, whole: true },
@@ -247,6 +251,8 @@ class Prefs {
   }
 
   /** Whether settings.json holds anything, so Restore Defaults has something to do. */
+  get saving(): boolean { return Object.keys(this.#unsaved).length > 0; }
+
   get customized(): boolean {
     return Object.values({ ...this.#values, ...this.#unsaved }).some((value) => value !== null);
   }
