@@ -757,6 +757,7 @@
         style:--ring={lane(b.color)}
         style:background={focused === b.ref.name || lens.pointedRef === b.ref.name ? tint(b.color) : undefined}
         title={b.ref.name}
+        aria-label={b.ref.name}
         onclick={() => focus(b.ref)}
         oncontextmenu={(e) => branchMenu(e, b.ref)}
       >
@@ -1004,7 +1005,7 @@
     left: 0;
     top: 0;
     bottom: 0;
-    width: 248px;
+    width: 280px;
     background: var(--side);
     border-right: 1px solid var(--sep);
     display: flex;

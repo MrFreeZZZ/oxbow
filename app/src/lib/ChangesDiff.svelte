@@ -236,14 +236,17 @@
     <DiffTools {whole} onToggleWhole={() => (whole = !whole)} working />
   </div>
 {:else if shown}
-  <div class="dhead">
+  <div class="dhead" class:file-head={shown.kind === "file"}>
     {#if shown.kind === "file"}
       {@const file = shown}
       <div class="segmented" role="radiogroup" aria-label="Which part of the file">
         <button role="radio" aria-checked={file.side === "unstaged"} class:on={file.side === "unstaged"} disabled={!openUnstaged} onclick={() => onShow({ ...file, side: "unstaged" })} title={openUnstaged ? "What stays out of the commit" : "Nothing of this file is left out of the commit"}>Unstaged</button>
         <button role="radio" aria-checked={file.side === "staged"} class:on={file.side === "staged"} disabled={!openStaged} onclick={() => onShow({ ...file, side: "staged" })} title={openStaged ? "What goes into the commit" : "Nothing of this file is staged yet"}>Staged</button>
       </div>
-      <span class="caption grow">{file.side === "unstaged" && fileCaption ? fileCaption : caption(file)}</span>
+      <span class="file-context" title={file.path}>
+        <strong class="file-path">{file.path}</strong>
+        <span class="caption">{file.side === "unstaged" && fileCaption ? fileCaption : caption(file)}</span>
+      </span>
     {:else}
       <div class="grow">
         <div class="dtitle">
@@ -367,6 +370,31 @@
     min-height: 46px;
     padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
     flex-shrink: 0;
+  }
+  .dhead.file-head {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  .file-head :global(.tools) {
+    margin-left: auto;
+  }
+  .file-context {
+    order: 3;
+    flex-basis: 100%;
+    display: flex;
+    gap: var(--space-2);
+    min-width: 0;
+    font-size: var(--text-small);
+  }
+  .file-path {
+    min-width: 8ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .file-context .caption {
+    flex: 1;
+    text-align: right;
   }
   .caption {
     font-size: var(--text-small);

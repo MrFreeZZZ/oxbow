@@ -677,7 +677,7 @@
   .empty {
     margin: 0;
     padding: 0 12px;
-    font-size: var(--text-caption);
+    font-size: var(--text-small);
     line-height: 1.4;
     color: var(--text2);
   }

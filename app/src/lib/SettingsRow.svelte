@@ -60,7 +60,7 @@
     </span>
   {/if}
   {#if row.image?.()}<img class="avatar" src={row.image()} alt="" />{/if}
-  <span class="text" class:off>
+  <span class="text" class:unavailable={off}>
     <span class="name" class:mono={row.mono}>{text(row.label)}</span>
     {#if text(row.sub)}<span class="sub {row.subTone?.() ?? ''}">{text(row.sub)}</span>{/if}
   </span>
@@ -190,7 +190,11 @@
   }
 
   .sub {
-    font-size: var(--text-caption);
+    font-size: var(--text-small);
+    color: var(--text2);
+  }
+
+  .text.unavailable .name {
     color: var(--text2);
   }
 

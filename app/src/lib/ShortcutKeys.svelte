@@ -5,7 +5,7 @@
   import { keys } from "./keys";
   import { menuIcons } from "./Menu.svelte";
   import { shortcutEdit } from "./shortcutEdit.svelte";
-  import { bindingsOf, changedKeys, strokeOf, type ShortcutId } from "./shortcuts";
+  import { bindingsOf, changedKeys, commandOf, strokeOf, type ShortcutId } from "./shortcuts";
 
   let { id }: { id: ShortcutId } = $props();
 
@@ -50,7 +50,7 @@
   </span>
   <span class="tools">
     {#if combos.length}
-      <button class="tool add" onclick={() => shortcutEdit.start(id)} aria-label="Add a key" title="Add a Key">
+      <button class="tool add" onclick={() => shortcutEdit.start(id)} aria-label="Add another key for {commandOf(id).title}" title="Add Another Key">
         <svg class="icon small" viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9" /></svg>
       </button>
     {/if}
@@ -136,12 +136,13 @@
     color: var(--text);
   }
 
-  /* + shows on the row under the pointer; ↺ stays while the keys are your own. */
+  /* + stays visible as a quiet affordance, then strengthens on hover or keyboard focus. */
   .tool.add {
-    opacity: 0;
+    opacity: 0.55;
   }
 
   :global(.row:hover) .tool.add,
+  :global(.row:focus-within) .tool.add,
   .tool.add:focus-visible {
     opacity: 1;
   }

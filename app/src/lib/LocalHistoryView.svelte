@@ -120,7 +120,7 @@
         <div class="day">{day.day}</div>
         {#each day.versions as v (keyOf(v))}
           {@const name = splitPath(v.path)}
-          <button class="row" class:on={keyOf(v) === picked} class:dim={!v.kept} onclick={(e) => (choose(v), (e.currentTarget as HTMLElement).focus())} oncontextmenu={(e) => rowMenu(e, v)} title={v.path}>
+          <button class="row" class:on={keyOf(v) === picked} class:dim={!v.kept} onclick={(e) => (choose(v), (e.currentTarget as HTMLElement).focus())} oncontextmenu={(e) => rowMenu(e, v)} title={v.path} aria-label="{time(v.at)} {v.path}{v.gone ? ', deleted' : ''}">
             <span class="time">{time(v.at)}</span>
             <span class="name"><b>{name.name}</b>{#if name.dir}<span class="dir">{name.dir.slice(0, -1)}</span>{/if}</span>
             {#if v.gone}<span class="tag">deleted</span>{/if}
@@ -151,7 +151,7 @@
     border-top: 1px solid var(--sep);
   }
   .side {
-    width: 340px;
+    width: clamp(248px, 34%, 340px);
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
@@ -206,8 +206,8 @@
     align-items: center;
     gap: 10px;
     width: 100%;
-    height: 30px;
-    padding: 0 8px;
+    min-height: 46px;
+    padding: 4px 8px;
     border-radius: var(--radius-m);
     text-align: left;
     font-size: var(--text-small);
@@ -219,29 +219,34 @@
     background: var(--accent-quiet);
   }
   .row.dim {
-    opacity: 0.45;
+    color: var(--text2);
   }
   .time {
     flex-shrink: 0;
     min-width: 42px;
     white-space: nowrap;
     font-family: var(--mono);
-    font-size: var(--text-caption);
+    font-size: var(--text-small);
     color: var(--text2);
   }
   .name {
     flex-grow: 1;
     min-width: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
   }
   .name b {
     font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .dir {
-    margin-left: 6px;
     color: var(--text2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .tag {
     flex-shrink: 0;
@@ -254,7 +259,7 @@
   .hint {
     margin: 0;
     padding: 10px 14px 12px;
-    font-size: var(--text-caption);
+    font-size: var(--text-small);
     color: var(--text2);
     line-height: 1.45;
   }
@@ -269,7 +274,7 @@
     padding: 8px 10px;
     border-radius: var(--radius-m);
     background: var(--field);
-    font-size: var(--text-caption);
+    font-size: var(--text-small);
     line-height: 1.45;
     color: var(--text);
     overflow-wrap: anywhere;

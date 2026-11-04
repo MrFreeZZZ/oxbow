@@ -25,7 +25,7 @@ function prefixRequest(index: number | null, draft: BranchPrefix): Request {
   const item: BranchPrefix = { prefix, words: draft.words.trim(), ...(draft.from ? { from: draft.from } : {}) };
   return {
     title: index === null ? "Add a prefix" : `Edit ${list[index].prefix}`,
-    body: ["The pop-up at the start of every Name box for a new branch offers it, with what it is for."],
+    body: ["The Name box offers this prefix for new branches."],
     icon: "branch",
     button: index === null ? "Add Prefix" : "Save",
     always: true,

@@ -192,7 +192,7 @@
   </div>
   <ReviewLoadNotice {issues} busy={lab ? github.mrLoading : github.loading} provider={w.name} retry={() => github.refresh()} open={openProvider} />
   {#if !place && (github.loading || github.mrLoading)}
-    <div class="empty">Loading…</div>
+    <div class="empty" aria-live="polite"><strong>Loading reviews…</strong><span>Looking for this repository on GitHub and GitLab.</span></div>
   {:else if !place}
     <div class="empty">This repository has no remote on github.com, nor a GitLab project on a server you are signed in to.</div>
   {:else if problem && !list.length}
@@ -201,7 +201,11 @@
       <button class="button" onclick={() => api.openSettings()}>Open Settings</button>
     </div>
   {:else if !sections.some((s) => s.pulls.length)}
-    <div class="empty">{(lab ? github.mrLoading : github.loading) ? "Loading…" : issues.length ? "No matching requests have been loaded." : closed ? `No ${w.noun} was closed lately.` : `No open ${w.noun}s.`}</div>
+    {#if lab ? github.mrLoading : github.loading}
+      <div class="empty" aria-live="polite"><strong>Loading {w.noun}s…</strong><span>Fetching {closed ? "recently closed" : "open"} {w.noun}s from {w.name}.</span></div>
+    {:else}
+      <div class="empty">{issues.length ? "No matching requests have been loaded." : closed ? `No ${w.noun} was closed lately.` : `No open ${w.noun}s.`}</div>
+    {/if}
   {:else}
     <div class="scroll">
       {#each sections as s (s.title)}
@@ -273,6 +277,7 @@
     color: var(--text2);
     text-align: center;
   }
+  .empty strong { color: var(--text); font-size: var(--text-heading); }
   .scroll {
     flex-grow: 1;
     min-height: 0;

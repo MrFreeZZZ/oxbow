@@ -234,7 +234,7 @@
   /** The details panel can take any width that leaves the graph 360 px. */
   const GRAPH_MIN = 360;
   const PANEL_MIN = 320;
-  const SIDEBAR = 248;
+  const SIDEBAR = 280;
   const SETTINGS_ICON =
     "M12.78 6.52L14.44 6.56L14.44 9.44L12.78 9.48L12.42 10.33L13.57 11.54L11.54 13.57L10.33 12.42L9.48 12.78L9.44 14.44L6.56 14.44L6.52 12.78L5.67 12.42L4.46 13.57L2.43 11.54L3.58 10.33L3.22 9.48L1.56 9.44L1.56 6.56L3.22 6.52L3.58 5.67L2.43 4.46L4.46 2.43L5.67 3.58L6.52 3.22L6.56 1.56L9.44 1.56L9.48 3.22L10.33 3.58L11.54 2.43L13.57 4.46L12.42 5.67zM8 5.8a2.2 2.2 0 1 0 0 4.4a2.2 2.2 0 1 0 0-4.4";
   const CONSOLE_ICON = "M1.8 4a1.5 1.5 0 0 1 1.5-1.5h9.4A1.5 1.5 0 0 1 14.2 4v8a1.5 1.5 0 0 1-1.5 1.5H3.3A1.5 1.5 0 0 1 1.8 12zM4.8 6.2 6.8 8l-2 1.8M8.3 10H11";
@@ -2303,14 +2303,14 @@
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="content" class:expanded bind:this={content} onkeydown={paneKeys}>
         <section class="history" aria-label="Commit history" aria-hidden={expanded}>
-          <div class="columns">
+          <div class="columns" class:with-note={history.truncated && !found?.only}>
             <span class="what">
               {#if found?.only}Matching commits · graph hidden{:else if focusOnly && history.focus}
                 {@const hidden = history.rows.length - history.focus.rows.length}
                 {history.head.branch ?? "HEAD"}{history.trunk && history.head.branch !== history.trunk ? ` with ${history.trunk}` : ""} · {hidden.toLocaleString()} {hidden === 1 ? "commit" : "commits"} hidden
               {:else}Description{/if}
             </span>
-            {#if history.truncated && !found?.only}<span class="note">Latest {history.loaded.toLocaleString()} commits · older ones load as you scroll</span>{/if}
+            {#if history.truncated && !found?.only}<span class="note" title="Latest {history.loaded.toLocaleString()} commits · older ones load as you scroll">Latest {history.loaded.toLocaleString()} commits · scroll for older</span>{/if}
             {#if !found?.only}
               <button
                 class="focus-toggle"
@@ -2536,7 +2536,7 @@
   }
   .main {
     position: absolute;
-    left: 248px;
+    left: 280px;
     top: 0;
     right: 0;
     bottom: 0;
@@ -2793,6 +2793,7 @@
   }
   .columns {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 12px;
     height: 28px;
@@ -2802,14 +2803,22 @@
     font-weight: 600;
     color: var(--text2);
   }
+  .columns.with-note {
+    height: 44px;
+    align-content: center;
+    row-gap: 0;
+  }
   .columns .what {
     flex-grow: 1;
+    flex-basis: 0;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .note {
+    order: 5;
+    flex-basis: 100%;
     font-weight: 400;
     min-width: 0;
     overflow: hidden;

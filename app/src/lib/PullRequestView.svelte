@@ -104,6 +104,7 @@
   const signedIn = $derived(lab ? github.mrMe : github.me);
   let pr = $state<PullRequest | null>(null);
   let loading = $state(false);
+  let waitingLong = $state(false);
   let error = $state<string | null>(null);
   let stack = $state<Stack | null>(null);
   let tab = $state<"conversation" | "commits" | "files">("conversation");
@@ -195,6 +196,8 @@
     const workdir = nav.repo;
     const current = () => id === loadId && of === forge && workdir === nav.repo && summary?.number === number;
     loading = true;
+    waitingLong = false;
+    setTimeout(() => { if (current() && loading) waitingLong = true; }, 4000);
     try {
       await api.stopReads(["github-pull", "gitlab-merge-request"]);
       if (!current()) return;
@@ -209,7 +212,7 @@
     } catch (err) {
       if (current()) error = String(err);
     } finally {
-      if (current()) loading = false;
+      if (current()) { loading = false; waitingLong = false; }
     }
   }
 
@@ -791,9 +794,17 @@
       <ReviewLoadNotice issues={listIssues} provider={w.name} retry={() => github.refresh()} open={openProviderList} />
       <div class="empty">The list is incomplete. Retry or continue on {w.name} to find this branch’s {w.noun}.</div>
     {:else if summary && !pr}
-      <div class="empty">
-        <span>{error ?? (loading ? `Loading ${w.mark}${summary.number}…` : "")}</span>
-        {#if error}<button class="button" onclick={() => summary && load(summary.number)}>Retry</button>{/if}
+      <div class="empty review-loading" aria-live="polite" aria-busy={loading}>
+        <strong>{error ? `Couldn’t load ${w.noun} ${w.mark}${summary.number}` : `Loading ${w.noun} ${w.mark}${summary.number}…`}</strong>
+        {#if error}
+          <span class="review-message">{error}</span>
+          <div class="review-actions">
+            <button class="button" onclick={() => load(summary!.number)}>Retry</button>
+            <button class="button" onclick={() => (lab ? api.openGitLab(summary!.htmlUrl) : api.openGitHub(summary!.htmlUrl)).catch((err) => confirm.fail(err))}>Open on {w.name}</button>
+          </div>
+        {:else if loading}
+          <span>{waitingLong ? `Still fetching details from ${w.name}. This may take a while.` : `Fetching details from ${w.name}.`}</span>
+        {/if}
       </div>
     {:else if pr}
       <div class="title-block">
@@ -1346,6 +1357,10 @@
     color: var(--text2);
     text-align: center;
   }
+  .review-loading { padding: var(--space-4); }
+  .review-loading strong { color: var(--text); font-size: var(--text-heading); }
+  .review-message { max-width: 520px; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+  .review-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); }
 
   /* The stack strip */
   .stack-head {

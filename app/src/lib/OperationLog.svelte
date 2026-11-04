@@ -134,12 +134,12 @@
           </span>
           <span class="words">
             <span class="line">
-              <span class="title">{entry.summary}</span>
+              <span class="title" title={entry.summary}>{entry.summary}</span>
               {#if entry.lost}
                 <span class="lost" title={entry.lostCount === 1 ? "No branch, tag or remote branch has this commit" : `No branch, tag or remote branch has this commit or the ${entry.lostCount - 1} before it`}>{entry.lostCount > 1 ? `Lost · ${entry.lostCount}` : "Lost"}</span>
               {/if}
             </span>
-            <span class="detail"><span class="mono">{entry.selector}</span> · {moveText(entry)}</span>
+            <span class="detail" title={`${entry.selector} · ${moveText(entry)}`}><span class="mono">{entry.selector}</span> · {moveText(entry)}</span>
           </span>
           <span class="when" title={entry.lost ? "Git keeps this commit at least until then" : undefined}>
             <span>{relativeTime(entry.time)}</span>
@@ -175,8 +175,8 @@
           <svg class="icon" viewBox="0 0 16 16"><path d={entryIcon(entry)} /></svg>
         </span>
         <span class="words">
-          <span class="title">{entry.title}</span>
-          <span class="detail">{entry.failed ? "Stopped half way · " : ""}{entry.detail}</span>
+          <span class="title" title={entry.title}>{entry.title}</span>
+          <span class="detail" title={`${entry.failed ? "Stopped half way · " : ""}${entry.detail}`}>{entry.failed ? "Stopped half way · " : ""}{entry.detail}</span>
           {#if blocked && !unread}<WhyNote text={blocked} />{/if}
         </span>
         <span class="when" title="File snapshots are kept until then">

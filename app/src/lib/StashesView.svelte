@@ -386,15 +386,17 @@
               <span class="del">−{t?.del}</span>
               <FoldAll onFold={(fold) => diffView?.setAll(fold)} />
             </div>
-            {#each [...f.tracked.map((x) => ({ file: x, untracked: false })), ...f.untracked.map((x) => ({ file: x, untracked: true }))] as { file, untracked } (file.path + untracked)}
-              {@const p = splitPath(file.path)}
-              <button class="file" class:on={path === file.path} onclick={() => (path = file.path)}>
-                <span class="badge {untracked ? 'added' : file.status}">{untracked ? "A" : statusIcon[file.status]}</span>
-                <span class="grow ellipsis"><span class="dir">{p.dir}</span>{p.name}</span>
-                {#if untracked}<span class="meta">untracked</span>{/if}
-                <FileBadge {file} />
-              </button>
-            {/each}
+            <div class="file-list" role="group" aria-label="Stash files">
+              {#each [...f.tracked.map((x) => ({ file: x, untracked: false })), ...f.untracked.map((x) => ({ file: x, untracked: true }))] as { file, untracked } (file.path + untracked)}
+                {@const p = splitPath(file.path)}
+                <button class="file" class:on={path === file.path} aria-current={path === file.path ? "true" : undefined} title={file.path} onclick={() => (path = file.path)}>
+                  <span class="badge {untracked ? 'added' : file.status}">{untracked ? "A" : statusIcon[file.status]}</span>
+                  <span class="grow ellipsis"><span class="dir">{p.dir}</span>{p.name}</span>
+                  {#if untracked}<span class="meta">untracked</span>{/if}
+                  <FileBadge {file} />
+                </button>
+              {/each}
+            </div>
           </div>
         {/if}
         <DiffView
@@ -790,6 +792,7 @@
     font-weight: 600;
     color: var(--text2);
   }
+  .file-list { max-height: min(32vh, 260px); overflow-y: auto; overscroll-behavior: contain; }
   .file {
     display: flex;
     align-items: center;

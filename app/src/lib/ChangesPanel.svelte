@@ -1,7 +1,7 @@
 <script lang="ts" module>
   /** Untracked files start folded away, apart from the edits, and stay open once opened until
    *  the app quits; every window and repository shares that. */
-  const view = $state({ untracked: false });
+  const view = $state({ untracked: false, untrackedTouched: false });
 </script>
 
 <script lang="ts">
@@ -65,7 +65,14 @@
   const reads = new ChangesReads(
     (next) => {
       // A file staged or unstaged whole is shown where it went; a selection keeps the files still there.
+      const first = shown === null;
       shown = inItsList(keepShown(shown, next));
+      const opened = shown;
+      // The initial diff must have a visible row, unless the user folded this group.
+      if (first && opened?.kind === "file" && opened.side === "unstaged" && !opened.list &&
+          next.unstaged.some((f) => f.path === opened.path && f.status === "untracked") && !view.untrackedTouched) {
+        view.untracked = true;
+      }
       // Ticks go with the files that left their list.
       pruneTicks();
     },
@@ -293,7 +300,10 @@
     const list = idOf(group);
     if (!isAll(sideOf(group), fresh, list)) return show(allOf(group));
     if (group === "untracked") {
-      if (!needle) view.untracked = !view.untracked;
+      if (!needle) {
+        view.untracked = !view.untracked;
+        view.untrackedTouched = true;
+      }
     } else shut[group] = !shut[group];
   }
   const isOpen = (file: FileChange, group: List | "conflicted") =>
@@ -1186,7 +1196,10 @@
           <div class="group">
             <div class="ghead" class:on={isAll("unstaged", true)} style:background={isAll("unstaged", true) ? tint(color) : undefined} data-group="untracked">
               {@render tickAllBox("untracked", shownUntracked, "Select every untracked file", ".gname")}
-              {@render chevron(untrackedOpen, untrackedOpen ? "Hide the untracked files" : "Show the new files git does not track yet", () => (view.untracked = !view.untracked), !!needle)}
+              {@render chevron(untrackedOpen, untrackedOpen ? "Hide the untracked files" : "Show the new files git does not track yet", () => {
+                view.untracked = !view.untracked;
+                view.untrackedTouched = true;
+              }, !!needle)}
               <button class="gname" onkeydown={onFilesKey} onkeyup={onFilesKeyUp} onclick={(e) => openGroup(e, "untracked")} aria-current={isAll("unstaged", true) ? "true" : undefined} aria-expanded={untrackedOpen} title={!isAll("unstaged", true) ? "Show every new file git does not track yet" : untrackedOpen ? "Hide the untracked files" : "Show the untracked files"}>
                 <span class="gtitle" style:color={plate(color)}>Untracked</span><span class="n">{needle ? `${shownUntracked.length} of ${untracked.length}` : untracked.length}</span>
               </button>

@@ -901,6 +901,7 @@
   }
   .byline {
     color: var(--text2);
+    font-size: var(--text-small);
     white-space: nowrap;
     flex-shrink: 0;
   }
