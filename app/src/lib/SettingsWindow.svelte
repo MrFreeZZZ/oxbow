@@ -749,4 +749,56 @@
     color: var(--term-git);
     font-weight: 600;
   }
+
+  @media (max-width: 780px) {
+    nav {
+      width: 170px;
+    }
+
+    .section.child {
+      margin-left: 16px;
+    }
+
+    .section {
+      height: auto;
+      min-height: 32px;
+      padding-top: 5px;
+      padding-bottom: 5px;
+    }
+
+    .label {
+      white-space: normal;
+      overflow: visible;
+    }
+
+    header {
+      height: auto;
+      min-height: 52px;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 10px 12px;
+    }
+
+    header h1 {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      white-space: normal;
+    }
+
+    .spacer {
+      flex: 0 0 100%;
+      height: 0;
+    }
+
+    header .button {
+      max-width: 100%;
+      white-space: normal;
+      text-align: left;
+    }
+
+    .scroll {
+      overflow-x: hidden;
+      padding: 6px 14px 20px;
+    }
+  }
 </style>

@@ -126,4 +126,22 @@
     line-height: 1.4;
     color: var(--text2);
   }
+
+  @media (max-width: 780px) {
+    .key-tools {
+      flex-wrap: wrap;
+      margin: -6px -14px 0;
+      padding: 6px 14px 8px;
+    }
+
+    .key-search {
+      flex: 1 1 100%;
+      width: auto;
+      min-width: 0;
+    }
+
+    .spacer {
+      display: none;
+    }
+  }
 </style>

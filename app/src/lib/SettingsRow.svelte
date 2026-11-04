@@ -33,6 +33,7 @@
 
 <div
   class="row"
+  class:has-file={!!row.file}
   role="group"
   aria-label={text(row.label)}
   oncontextmenu={(event) => {
@@ -370,5 +371,66 @@
   .sub.warn,
   .sub.error {
     white-space: normal;
+  }
+
+  @media (max-width: 780px) {
+    .row {
+      display: grid;
+      grid-template-columns: 26px minmax(0, 1fr);
+      gap: 6px 8px;
+      padding: 10px 12px;
+    }
+
+    .text {
+      grid-column: 1 / -1;
+      grid-row: 1;
+    }
+
+    .row.has-file .text {
+      grid-column: 2;
+    }
+
+    .file,
+    .avatar {
+      grid-column: 1;
+      grid-row: 1;
+    }
+
+    .name,
+    .sub {
+      white-space: normal;
+      overflow: visible;
+      overflow-wrap: anywhere;
+    }
+
+    .gear {
+      position: static;
+      grid-column: 1;
+      grid-row: 2;
+      margin: 0;
+      opacity: 1;
+    }
+
+    .row > :not(.gear):not(.file):not(.avatar):not(.text) {
+      grid-column: 2;
+      justify-self: end;
+      min-width: 0;
+    }
+
+    .value {
+      max-width: 100%;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+
+    .seg {
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .field {
+      width: min(260px, 100%);
+      min-width: 0;
+    }
   }
 </style>

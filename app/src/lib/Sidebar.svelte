@@ -6,6 +6,7 @@
   import type { ForgeKind } from "./forge";
   import { lane, NO_BRANCH_COLOR, shortTime, tint } from "./format";
   import { sharedLeads } from "./refNames";
+  import { branchAccessibleName } from "./branchAccessibility";
   import type { Request } from "./confirm.svelte";
   import { confirm } from "./confirm.svelte";
   import { api } from "./api";
@@ -757,7 +758,15 @@
         style:--ring={lane(b.color)}
         style:background={focused === b.ref.name || lens.pointedRef === b.ref.name ? tint(b.color) : undefined}
         title={b.ref.name}
-        aria-label={b.ref.name}
+        aria-label={branchAccessibleName({
+          name: b.ref.name,
+          current: b.ref.name === history.head.branch,
+          tracking: b.ref.tracking,
+          worktree: worktreeOf(history, b.ref.name),
+          pullNumber: !head ? github.openPullOf(b.ref.name)?.number : null,
+          mergeNumber: github.openMergeRequestOf(b.ref.name)?.number,
+          operation: busy?.branch === b.ref.name ? busy.word : null,
+        })}
         onclick={() => focus(b.ref)}
         oncontextmenu={(e) => branchMenu(e, b.ref)}
       >
