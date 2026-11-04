@@ -90,13 +90,15 @@ is configurable. It captures saves only while the repository is open.
 
 ## Project status
 
-Oxbow is under active development. macOS is the primary build and testing target. Windows and
-Linux release builds, Developer ID signing and macOS notarization are pending. GitLab integration
-has automated tests against a test server; it has not yet been validated against a live GitLab
-service.
+Oxbow is under active development. macOS is the primary build and testing target. The beta release
+workflow builds macOS, Linux and Windows packages; runtime validation on Windows and Linux,
+Developer ID signing and macOS notarization are pending. GitLab integration has automated tests
+against a test server; it has not yet been validated against a live GitLab service.
 
 CI checks pull requests on Linux. Pushes to `main` also build a macOS app and run Rust tests on
 macOS. A macOS build artifact counts as checked only when every job in that run passes.
+Version tags run a separate release workflow that checks the tagged commit, builds all three
+platforms and prepares a draft prerelease for review.
 
 ## Build from source
 
