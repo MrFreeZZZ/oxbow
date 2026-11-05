@@ -406,7 +406,7 @@
         </div>
       </div>
 
-      <div class="list">
+      <div class="list" style:--selection-border={`color-mix(in srgb, ${lane(color)} 40%, transparent)`}>
         {#if detail && !detail.shallowEnd}
           <!-- The heading shows every file's diff, as Summary did. -->
           <button
@@ -572,7 +572,7 @@
   }
   /* The commit's subject, author and chain sit on the panel itself, with no frame; a hairline parts them from the files. */
   .head {
-    padding: var(--space-4) var(--space-5) var(--space-3);
+    padding: var(--space-4) var(--space-4) var(--space-3);
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -703,7 +703,8 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: var(--space-3) var(--space-3) var(--space-1);
+    min-height: 46px;
+    padding: var(--space-2) var(--space-3);
     flex-shrink: 0;
   }
   .filter {
@@ -780,7 +781,7 @@
     flex-grow: 1;
     min-height: 60px;
     overflow-y: auto;
-    padding: 0 var(--space-2) var(--space-2);
+    padding: var(--space-2);
   }
   /* The heading of the list, in small capitals in the branch color, as in Changes. */
   .all {
@@ -788,7 +789,7 @@
     align-items: center;
     gap: 6px;
     width: 100%;
-    height: 30px;
+    height: 34px;
     padding: 0 var(--space-2);
     border-radius: var(--radius-s);
     font-size: var(--text-caption);
@@ -819,6 +820,11 @@
   .file:hover,
   .folder:hover {
     background: var(--field);
+  }
+  /* Selection keeps the diff header's border, with or without keyboard focus. */
+  .list [aria-current="true"] {
+    box-shadow: inset 0 0 0 1px var(--selection-border);
+    outline: none;
   }
   .file.nested {
     padding-left: 44px;

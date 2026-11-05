@@ -80,6 +80,8 @@
   .chain {
     position: relative;
     height: 42px;
+    /* The rounded arrow tip sits inside its SVG box; align its visible edge with the subject. */
+    margin-left: calc(-1 * var(--space-1));
   }
   .shape {
     position: absolute;

@@ -705,7 +705,7 @@
       <div class="bar" style:background={tint(color, "head")} style:border-color={`color-mix(in srgb, ${lane(color)} 40%, transparent)`} style:--name={plate(color)}>
         {#if foldable}
           <button
-            class="head"
+            class="file-toggle"
             onclick={(e) => toggle(diff, e)}
             aria-expanded={!isShut}
             title={`${isShut ? "Show" : "Hide"} the diff. ${mac ? "⌥-click" : "Alt+click"}: every file`}
@@ -904,7 +904,7 @@
   .file.shut {
     padding-bottom: 0;
   }
-  .head {
+  .file-toggle {
     flex-grow: 1;
     min-width: 0;
     align-self: stretch;
@@ -946,6 +946,12 @@
     border: 1px solid transparent;
     border-radius: var(--radius-m);
     font-size: var(--text-small);
+  }
+  .bar:has(> .file-toggle:hover) {
+    background-image: linear-gradient(var(--hover-wash), var(--hover-wash));
+  }
+  .bar:has(> .file-toggle:active) {
+    background-image: linear-gradient(var(--press-wash), var(--press-wash));
   }
   .path {
     min-width: 0;
