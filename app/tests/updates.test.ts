@@ -66,3 +66,14 @@ test("only verified bytes are presented as ready; failures explain the retry ste
   }
   assert.match(updateNotice({ ...info, canInstall: false }, "auto", make("available"), null).message, /release page/);
 });
+
+
+test("an installed update requests only a restart, even after the configured channel changes", () => {
+  const installed: UpdateStatus = { channel: "preview", checkedAt: 1, state: "installed", release: { version: "0.1.551", notes: null }, message: "Oxbow could not restart. Try Restart Now, or quit and open Oxbow again." };
+  for (const choice of ["auto", "release", "preview"] as const) {
+    const notice = updateNotice({ ...info, availableChannels: ["release"] }, choice, installed, null);
+    assert.equal(notice.title, "Oxbow 0.1.551 is installed");
+    assert.match(notice.message, /Restart Now/);
+    assert.doesNotMatch(notice.title, /download/i);
+  }
+});

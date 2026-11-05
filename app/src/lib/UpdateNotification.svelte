@@ -10,8 +10,8 @@
 {#if show}
   <aside class="notice" aria-label="Oxbow update" aria-live="polite">
     <div class="words">
-      <strong>Oxbow {updates.available!.version} {updates.ready ? "is ready to install" : "is available"}</strong>
-      <p>Review the update and choose when to install it.</p>
+      <strong>Oxbow {updates.available!.version} {updates.installed ? "is installed" : updates.ready ? "is ready to install" : "is available"}</strong>
+      <p>{updates.installed ? "Restart Oxbow to use the installed update." : "Review the update and choose when to install it."}</p>
       <button class="button small primary" onclick={() => api.openSettings("updates").catch((error) => confirm.fail(error))}>Review Update</button>
     </div>
     <button class="button mini quiet icon-only" aria-label="Dismiss update notice" onclick={() => dismissed = key}>

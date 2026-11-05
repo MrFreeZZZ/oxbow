@@ -42,7 +42,7 @@ export const generalSection: Section = {
           options: () => updateChannels(updates.info, updates.choice),
           sub: () => channelDescription(updates.info, updates.choice),
           subTone: () => updates.unsupported ? "warn" : undefined,
-          off: () => !updates.info || updates.busy,
+          off: () => !updates.info || updates.busy || updates.installed,
         }),
         prefRow("oxbow.updates.autoCheck", "Check automatically", "switch", {
           sub: "At startup and every 6 hours. Downloads and installation are up to you.",

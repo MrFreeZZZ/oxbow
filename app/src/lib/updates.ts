@@ -40,6 +40,7 @@ export function updateNotice(info: UpdateInfo | null, choice: ChannelChoice, sta
   if (problem) return { title: "Couldn’t read update settings", message: problem, error: true };
   const channel = selectedChannel(info, choice);
   if (!info || !channel) return { title: "Reading update settings…", message: "", error: false };
+  if (status?.state === "installed") return { title: `Oxbow ${status.release.version} is installed`, message: status.message, error: true };
   if (channelUnavailable(info, choice)) return { title: "Channel unavailable on this device", message: channelDescription(info, choice), error: false };
   if (status?.state === "checking") return { title: "Checking for updates…", message: status.channel === channel ? `Looking for a newer ${channelLabel(channel)} build on GitHub.` : "Finishing the current update check…", error: false };
   if (!status || status.channel !== channel || status.state === "idle") return { title: "No update check yet", message: `Check for a newer ${channelLabel(channel)} build on GitHub.`, error: false };

@@ -35,6 +35,7 @@
   import ThemeCards from "./ThemeCards.svelte";
   import ThemeSample from "./ThemeSample.svelte";
   import UpdateStatusPanel from "./UpdateStatusPanel.svelte";
+  import { settingsRoute, settingsSection } from "./settingsNavigation";
 
   api.monospaceFonts().then((list) => (model.fonts = list), () => {});
   load();
@@ -54,7 +55,7 @@
   const mac = navigator.platform.startsWith("Mac");
 
   // Back and Forward walk the sections visited, like System Settings.
-  let visited = $state([location.hash === "#settings/commands" ? "commands" : "general"]);
+  let visited = $state([settingsRoute(location.hash) ?? "general"]);
   let at = $state(0);
   const current = $derived(shownSections.find((s) => s.id === visited[at]) ?? shownSections[0]);
 
@@ -70,8 +71,8 @@
   }
 
   listen<string>("settings-section", (event) => {
-    if (event.payload === "commands") go("commands");
-    if (event.payload === "updates") go("general");
+    const section = settingsSection(event.payload);
+    if (section) go(section);
   }).catch(() => {});
 
   const needle = $derived(model.query.trim().toLowerCase());

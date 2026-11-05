@@ -86,6 +86,7 @@ if (command === 'snapshot') {
   cpSync(join(fixture, '0.0.1', app), join(fixture, app), { recursive: true });
   // Do not leave test packages beside the production artifacts collected by release.mjs.
   for (const name of [app, `${app}.tar.gz`, `${app}.tar.gz.sig`]) rmSync(join(root, 'target/release/bundle/macos', name), { recursive: true, force: true });
+  rmSync(join(fixture, 'restart-failed'), { force: true });
   save('mode', 'valid');
   for (const name of ['states.jsonl', 'requests.jsonl', 'launches.jsonl']) save(name, '');
   console.log(`Ready: ${join(fixture, app)}`);

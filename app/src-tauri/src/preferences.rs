@@ -211,29 +211,26 @@ pub(crate) fn appearance(settings: &serde_json::Map<String, Value>) -> Option<Th
 /// deadlocks on Windows.
 #[tauri::command]
 pub(crate) async fn open_settings(app: AppHandle, section: Option<String>) -> CommandResult<()> {
-    show_settings_at(&app, section.as_deref() == Some("commands"))?;
-    if section.as_deref() == Some("updates") {
-        let _ = app.emit_to("settings", "settings-section", "updates");
-    }
+    show_settings_at(&app, section.as_deref())?;
     Ok(())
 }
 
 /// Open the Settings window, or bring it to the front.
 pub(crate) fn show_settings(app: &AppHandle) -> CommandResult<()> {
-    show_settings_at(app, false)
+    show_settings_at(app, None)
 }
 
-fn show_settings_at(app: &AppHandle, commands: bool) -> CommandResult<()> {
+pub(crate) fn show_settings_at(app: &AppHandle, section: Option<&str>) -> CommandResult<()> {
     if let Some(window) = app.get_webview_window("settings") {
-        if commands {
-            let _ = window.emit("settings-section", "commands");
+        if let Some(section @ ("commands" | "updates")) = section {
+            let _ = window.emit("settings-section", section);
         }
         return window.set_focus().map_err(|err| err.to_string());
     }
-    let url = if commands {
-        "index.html#settings/commands"
-    } else {
-        "index.html#settings"
+    let url = match section {
+        Some("commands") => "index.html#settings/commands",
+        Some("updates") => "index.html#settings/updates",
+        _ => "index.html#settings",
     };
     let builder = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(url.into()))
         .title("Settings")

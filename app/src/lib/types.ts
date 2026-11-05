@@ -1509,7 +1509,7 @@ export type UpdateStatus = {
   | { state: "idle" | "checking" | "current" }
   | { state: "available" | "verifying" | "ready" | "preparing" | "installing"; release: UpdateRelease }
   | { state: "downloading"; release: UpdateRelease; received: number; total: number | null }
-  | { state: "downloadFailed" | "installFailed"; release: UpdateRelease; message: string }
+  | { state: "downloadFailed" | "installFailed" | "installed"; release: UpdateRelease; message: string }
   | { state: "failed" | "unsupported"; message: string }
 );
 

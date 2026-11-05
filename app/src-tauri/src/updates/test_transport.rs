@@ -62,3 +62,12 @@ pub(super) fn record(status: &UpdateStatus) {
         let _ = writeln!(file, "{}", serde_json::to_string(status).unwrap());
     }
 }
+
+// Fault injection stays in the isolated fixture; it cannot affect production builds.
+pub(super) fn before_restart() -> Result<(), String> {
+    if std::path::Path::new(&format!("{ROOT}/restart-failed")).exists() {
+        Err("Oxbow could not restart. Try Restart Now, or quit and open Oxbow again.".into())
+    } else {
+        Ok(())
+    }
+}

@@ -18,11 +18,12 @@ class Updates {
   get busy() { return !!this.status && ["checking", "downloading", "verifying", "preparing", "installing"].includes(this.status.state); }
   get restarting() { return this.status?.state === "preparing" || this.status?.state === "installing"; }
   get unsupported() { return channelUnavailable(this.info, this.choice); }
-  get canCheck() { return !!this.info && !this.loading && !this.busy && !this.problem && !this.unsupported && this.channel === this.info.channel && !this.ready; }
+  get installed() { return this.status?.state === "installed"; }
+  get canCheck() { return !!this.info && !this.loading && !this.busy && !this.problem && !this.unsupported && this.channel === this.info.channel && !this.ready && !this.installed; }
   get notice() { return updateNotice(this.info, this.choice, this.status, this.problem); }
-  get available() { return !this.problem && !this.unsupported && this.status?.channel === this.channel && "release" in this.status ? this.status.release : null; }
+  get available() { return !this.problem && (this.installed || (!this.unsupported && this.status?.channel === this.channel)) && this.status && "release" in this.status ? this.status.release : null; }
   get ready() { return this.status?.state === "ready" || this.status?.state === "installFailed"; }
-  get canDownload() { return this.info?.canInstall && !this.busy && !!this.available && !this.ready; }
+  get canDownload() { return this.info?.canInstall && !this.busy && !!this.available && !this.ready && !this.installed; }
 
   async refresh() {
     const current = this.#loads.begin();
@@ -61,7 +62,7 @@ class Updates {
   }
   cancel() { api.cancelUpdateDownload().catch((error) => confirm.fail(error)); }
   async install() {
-    if (!this.ready || this.busy) return;
+    if ((!this.ready && !this.installed) || this.busy) return;
     try { this.status = await api.installUpdate(); } catch (error) { confirm.fail(error); await this.refresh(); }
   }
 }

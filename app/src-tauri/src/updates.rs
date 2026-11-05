@@ -1,6 +1,6 @@
 //! Shared update lifecycle. Only a verified download and an explicit, idle restart may install.
 
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -165,6 +165,10 @@ pub(crate) enum CheckState {
     Installing {
         release: UpdateRelease,
     },
+    Installed {
+        release: UpdateRelease,
+        message: String,
+    },
     DownloadFailed {
         release: UpdateRelease,
         message: String,
@@ -204,7 +208,8 @@ struct Checks {
     running: bool,
     status: UpdateStatus,
     update: Option<Update>,
-    bytes: Option<Vec<u8>>,
+    bytes: Option<Arc<Vec<u8>>>,
+    installed: bool,
     cancel: Option<watch::Sender<bool>>,
     preparing: std::collections::HashMap<String, Option<String>>,
     generation: u64,
@@ -255,7 +260,7 @@ impl Checks {
         } else {
             match result {
                 Ok(bytes) if bytes.len() <= 256 * 1024 * 1024 => {
-                    self.bytes = Some(bytes);
+                    self.bytes = Some(Arc::new(bytes));
                     CheckState::Ready { release }
                 }
                 Err(message) => CheckState::DownloadFailed { release, message },
@@ -267,8 +272,26 @@ impl Checks {
         };
     }
 
+    fn finish_install(&mut self, release: UpdateRelease, message: String) {
+        self.running = false;
+        self.preparing.clear();
+        self.status.state = if self.installed {
+            CheckState::Installed { release, message }
+        } else if self.bytes.is_some() {
+            CheckState::InstallFailed { release, message }
+        } else {
+            CheckState::DownloadFailed { release, message }
+        };
+    }
+
+    fn mark_installed(&mut self) {
+        self.installed = true;
+        self.bytes = None;
+        self.update = None;
+    }
+
     fn begin(&mut self, channel: Channel) -> bool {
-        if self.running {
+        if self.running || self.installed {
             return false;
         }
         self.running = true;
@@ -307,6 +330,7 @@ fn empty_checks() -> Checks {
         status: UpdateStatus::idle(Channel::built()),
         update: None,
         bytes: None,
+        installed: false,
         cancel: None,
         preparing: Default::default(),
         generation: 0,
@@ -353,7 +377,8 @@ fn release_of(state: &CheckState) -> Option<&UpdateRelease> {
         | CheckState::Preparing { release }
         | CheckState::Installing { release }
         | CheckState::DownloadFailed { release, .. }
-        | CheckState::InstallFailed { release, .. } => Some(release),
+        | CheckState::InstallFailed { release, .. }
+        | CheckState::Installed { release, .. } => Some(release),
         _ => None,
     }
 }
@@ -390,7 +415,7 @@ pub(crate) fn start(app: &AppHandle) {
                 let idle = {
                     let state = app.state::<UpdateChecks>();
                     let checks = state.0.lock().expect("update checks lock");
-                    !checks.running && checks.bytes.is_none()
+                    !checks.running && !checks.installed && checks.bytes.is_none()
                 };
                 if idle {
                     check_updates(app.clone()).await;
@@ -406,7 +431,7 @@ pub(crate) async fn download_update(app: AppHandle) -> UpdateStatus {
     let state = app.state::<UpdateChecks>();
     let (mut update, release, mut cancelled) = {
         let mut checks = state.0.lock().expect("update checks lock");
-        if checks.running || checks.status.channel != selected_channel(&app) || !can_install() {
+        if checks.running || checks.installed || checks.status.channel != selected_channel(&app) || !can_install() {
             return checks.status.clone();
         }
         let (Some(update), Some(release)) = (checks.update.clone(), release_of(&checks.status.state).cloned()) else {
@@ -499,7 +524,9 @@ pub(crate) async fn install_update(app: AppHandle) -> UpdateStatus {
     let session = app.state::<crate::session::Session>();
     let release = {
         let mut checks = state.0.lock().expect("update checks lock");
-        if checks.running || checks.bytes.is_none() || checks.status.channel != selected_channel(&app) || !can_install()
+        if checks.running
+            || (!checks.installed && (checks.bytes.is_none() || checks.status.channel != selected_channel(&app)))
+            || !can_install()
         {
             return checks.status.clone();
         }
@@ -522,7 +549,7 @@ pub(crate) async fn install_update(app: AppHandle) -> UpdateStatus {
     broadcast(&app);
     let result: Result<(), String> = async {
         if !session.stops.pause_if_idle() || !session.turns.pause_if_idle() {
-            return Err("Finish the running Git operations and commands, then try Restart & Install again.".into());
+            return Err("Finish the running Git operations and commands, then try restarting again.".into());
         }
         let generation = state.0.lock().expect("update checks lock").generation;
         app.emit("update-prepare-restart", generation).map_err(|_| "Could not prepare the windows for restart.")?;
@@ -537,25 +564,31 @@ pub(crate) async fn install_update(app: AppHandle) -> UpdateStatus {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         if app.webview_windows().keys().any(|label| !state.0.lock().expect("update checks lock").prepared.contains(label)) {
-            return Err("A new window opened during restart preparation. Try Restart & Install again.".into());
+            return Err("A new window opened during restart preparation. Try restarting again.".into());
         }
-        if selected_channel(&app) != state.0.lock().expect("update checks lock").status.channel {
+        let (installed, channel) = {
+            let checks = state.0.lock().expect("update checks lock");
+            (checks.installed, checks.status.channel)
+        };
+        if !installed && selected_channel(&app) != channel {
             return Err("The update channel changed. Check for updates again.".into());
         }
         app.save_window_state(tauri_plugin_window_state::StateFlags::all()).map_err(|_| "Window positions could not be saved. Try again.")?;
-        let (update, bytes) = {
+        let package = {
             let mut checks = state.0.lock().expect("update checks lock");
-            checks.status.state = CheckState::Installing { release: release.clone() };
-            (checks.update.clone().ok_or("Check for updates again.")?, checks.bytes.take().ok_or("Download the update again.")?)
+            if checks.installed {
+                None
+            } else {
+                checks.status.state = CheckState::Installing { release: release.clone() };
+                Some((checks.update.clone().ok_or("Check for updates again.")?, checks.bytes.clone().ok_or("Download the update again.")?))
+            }
         };
-        broadcast(&app);
-        let result = tauri::async_runtime::spawn_blocking(move || {
-            let result = update.install(&bytes);
-            (result, bytes)
-        }).await.map_err(|_| "The installer could not finish. Download the update again.")?;
-        if result.0.is_err() {
-            state.0.lock().expect("update checks lock").bytes = Some(result.1);
-            return Err("The update could not be installed. Check that the application and its folder are writable and try again, or install it from the release.".into());
+        if let Some((update, bytes)) = package {
+            broadcast(&app);
+            install_package(bytes, move |bytes| {
+                update.install(bytes).map_err(|_| "The update could not be installed. Check that the application and its folder are writable and try again, or install it from the release.".into())
+            }).await?;
+            state.0.lock().expect("update checks lock").mark_installed();
         }
         restart_installed(&app).await
     }.await;
@@ -563,21 +596,27 @@ pub(crate) async fn install_update(app: AppHandle) -> UpdateStatus {
     session.turns.resume();
     {
         let mut checks = state.0.lock().expect("update checks lock");
-        checks.running = false;
-        checks.preparing.clear();
-        let message = result.err().unwrap_or_default();
-        checks.status.state = if checks.bytes.is_some() {
-            CheckState::InstallFailed { release, message }
-        } else {
-            CheckState::DownloadFailed { release, message }
-        };
+        checks.finish_install(release, result.err().unwrap_or_default());
     }
     broadcast(&app)
+}
+
+// Keep an owner in Checks even if the blocking task panics. A failed join cannot tell us
+// how far the installer got, so report that uncertainty rather than a download failure.
+async fn install_package(
+    bytes: Arc<Vec<u8>>,
+    install: impl FnOnce(&[u8]) -> Result<(), String> + Send + 'static,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || install(&bytes))
+        .await
+        .map_err(|_| "The installer stopped unexpectedly. The application may have changed. Quit and reopen Oxbow to check its version, or install it from the release.".to_owned())?
 }
 
 /// Launch Services registers the replacement as a new macOS application instance. A plain
 /// executable spawn can leave the replacement running without an accessible application window.
 async fn restart_installed(app: &AppHandle) -> Result<(), String> {
+    #[cfg(feature = "updater-test")]
+    test_transport::before_restart()?;
     #[cfg(target_os = "macos")]
     {
         let binary = tauri::utils::platform::current_exe().map_err(|_| "Could not find the updated application.")?;
@@ -593,10 +632,10 @@ async fn restart_installed(app: &AppHandle) -> Result<(), String> {
                 .status()
         })
         .await
-        .map_err(|_| "Could not restart Oxbow. Quit and open it again to use the installed update.")?
-        .map_err(|_| "Could not restart Oxbow. Quit and open it again to use the installed update.")?;
+        .map_err(|_| "Oxbow could not restart. Try Restart Now, or quit and open Oxbow again.")?
+        .map_err(|_| "Oxbow could not restart. Try Restart Now, or quit and open Oxbow again.")?;
         if !status.success() {
-            return Err("Could not restart Oxbow. Quit and open it again to use the installed update.".into());
+            return Err("Oxbow could not restart. Try Restart Now, or quit and open Oxbow again.".into());
         }
         app.exit(0);
         std::future::pending().await
@@ -610,7 +649,7 @@ pub(crate) fn update_status(app: AppHandle) -> UpdateStatus {
     let state = app.state::<UpdateChecks>();
     let mut checks = state.0.lock().expect("update checks lock");
     let selected = selected_channel(&app);
-    if !checks.running && selected != checks.status.channel {
+    if !checks.running && !checks.installed && selected != checks.status.channel {
         checks.status = UpdateStatus::idle(selected);
         checks.update = None;
         checks.bytes = None;
@@ -771,7 +810,7 @@ pub(crate) fn open_update_release(app: AppHandle) -> crate::CommandResult<()> {
     let state = app.state::<UpdateChecks>();
     let checks = state.0.lock().expect("update checks lock");
     let page = match &checks.status.state {
-        state if checks.status.channel == channel && release_of(state).is_some() => {
+        state if (checks.installed || checks.status.channel == channel) && release_of(state).is_some() => {
             release_of(state).unwrap().page.clone()
         }
         _ => match channel {
@@ -786,8 +825,7 @@ pub(crate) fn open_update_release(app: AppHandle) -> crate::CommandResult<()> {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn show_updates(app: &AppHandle) -> crate::CommandResult<()> {
-    crate::preferences::show_settings(app)?;
-    let _ = app.emit_to("settings", "settings-section", "updates");
+    crate::preferences::show_settings_at(app, Some("updates"))?;
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         check_updates(app).await;
@@ -806,6 +844,57 @@ mod tests {
             notes: None,
             page: "https://github.com/MrFreeZZZ/oxbow/releases/tag/v0.1.551".into(),
         }
+    }
+
+    #[test]
+    fn installed_update_survives_restart_failures_and_cannot_be_checked_again() {
+        let mut checks = empty_checks();
+        checks.bytes = Some(Arc::new(vec![1, 2, 3]));
+        checks.mark_installed();
+        assert!(checks.bytes.is_none());
+        assert!(checks.update.is_none());
+        for message in ["Restart failed", "Unsaved editor", "A window did not respond"] {
+            checks.running = true;
+            checks.status.state = CheckState::Preparing { release: release() };
+            checks.finish_install(release(), message.into());
+            assert!(!checks.running);
+            assert!(matches!(&checks.status.state, CheckState::Installed { message: actual, .. } if actual == message));
+            for channel in [Channel::Release, Channel::Preview] {
+                assert!(!checks.begin(channel));
+                assert!(matches!(checks.status.state, CheckState::Installed { .. }));
+            }
+        }
+    }
+
+    #[test]
+    fn installer_errors_and_panics_keep_the_verified_package() {
+        tauri::async_runtime::block_on(async {
+            let mut checks = empty_checks();
+            let bytes = Arc::new(vec![1, 2, 3]);
+            checks.bytes = Some(bytes.clone());
+            for panic in [false, true] {
+                let error = install_package(bytes.clone(), move |data| {
+                    assert_eq!(data, &[1, 2, 3]);
+                    assert!(!panic, "injected installer panic");
+                    Err("injected install error".into())
+                })
+                .await
+                .unwrap_err();
+                if panic {
+                    assert!(error.contains("may have changed"));
+                } else {
+                    assert_eq!(error, "injected install error");
+                }
+                checks.finish_install(release(), error);
+                assert!(matches!(checks.status.state, CheckState::InstallFailed { .. }));
+                assert!(!checks.installed);
+                assert!(Arc::ptr_eq(checks.bytes.as_ref().unwrap(), &bytes));
+            }
+            install_package(bytes.clone(), |_| Ok(())).await.unwrap();
+            checks.mark_installed();
+            assert!(checks.installed);
+            assert!(checks.bytes.is_none());
+        });
     }
 
     #[test]

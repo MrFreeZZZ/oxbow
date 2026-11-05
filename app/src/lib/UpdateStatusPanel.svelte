@@ -25,7 +25,7 @@
       <button class="button small" disabled={updates.restarting} onclick={() => updates.open()}>{updates.available ? "View Release" : "View Releases"}</button>
       {#if updates.status?.state === "downloading"}<button class="button small" onclick={() => updates.cancel()}>Cancel</button>{/if}
       {#if updates.canDownload}<button class="button small primary" disabled={updates.loading} onclick={() => updates.download()}>{updates.status?.state === "downloadFailed" ? "Retry Download" : "Download Update"}</button>{/if}
-      {#if updates.ready}<button class="button small primary" disabled={updates.loading || updates.busy} onclick={() => updates.install()}>Restart &amp; Install</button>{/if}
+      {#if updates.ready || updates.installed}<button class="button small primary" disabled={updates.loading || updates.busy} onclick={() => updates.install()}>{updates.installed ? "Restart Now" : "Restart & Install"}</button>{/if}
     </div>
   {/if}
 </section>
