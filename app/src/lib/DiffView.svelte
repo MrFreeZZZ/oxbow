@@ -915,6 +915,25 @@
     padding: var(--space-2) 0;
     background: var(--surface-sticky);
   }
+  /* Paint the same viewport-aligned photograph over the scrolling lines. Scroll handlers
+     cannot keep a changing clip in sync with WebKit's asynchronous scrolling. */
+  :global(:root[data-background="on"]:not([data-transparency="reduce"]):not([data-contrast="more"])) header {
+    background: var(--win);
+    isolation: isolate;
+  }
+  :global(:root[data-background="on"]:not([data-transparency="reduce"]):not([data-contrast="more"])) header::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image: var(--window-background-image);
+    background-size: cover;
+    background-position: var(--window-background-position);
+    background-attachment: fixed;
+    opacity: var(--window-background-opacity);
+    filter: var(--window-background-filter);
+  }
   .bar {
     display: flex;
     align-items: center;

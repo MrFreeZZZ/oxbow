@@ -9,6 +9,7 @@
   --surface-graph: var(--graph-bg);
   --surface-code: var(--code-bg, transparent);
   --surface-sticky: var(--win);
+  --window-background-filter: none;
   /* Laid over a button's own color on hover and while pressed. */
   --hover-wash: rgba(0, 0, 0, 0.065);
   /* A list row under the pointer, such as a commit in the history. */
@@ -181,6 +182,7 @@
 
 /* Dark, when the Appearance setting or the system asks for it (prefs.svelte.ts sets data-theme). */
 :root[data-theme="dark"] {
+  --window-background-filter: brightness(0.55) saturate(0.85);
   color-scheme: dark;
   --win: #1e1e21;
   --hover-wash: rgba(255, 255, 255, 0.08);

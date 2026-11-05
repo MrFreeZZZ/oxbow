@@ -19,6 +19,17 @@
   const codeSurface = $derived(code.dark === dark ? "blend" : "opaque");
   $effect(() => {
     const root = document.documentElement;
+    root.style.setProperty("--window-background-image", `url(${JSON.stringify(background.url)})`);
+    root.style.setProperty("--window-background-position", background.position);
+    root.style.setProperty("--window-background-opacity", String(opacity));
+    return () => {
+      root.style.removeProperty("--window-background-image");
+      root.style.removeProperty("--window-background-position");
+      root.style.removeProperty("--window-background-opacity");
+    };
+  });
+  $effect(() => {
+    const root = document.documentElement;
     if (visible) root.dataset.background = "on";
     else delete root.dataset.background;
     root.dataset.backgroundCode = codeSurface;
@@ -35,5 +46,5 @@
 <style>
   #window-background { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
   img { width: 100%; height: 100%; object-fit: cover; }
-  :global(:root[data-theme="dark"]) img { filter: brightness(0.55) saturate(0.85); }
+  img { filter: var(--window-background-filter); }
 </style>
