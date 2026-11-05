@@ -644,7 +644,10 @@ impl Repo {
     /// them; 0 for a full clone. It changes when a fetch deepens the history, which moves no ref.
     pub fn shallow_stamp(&self) -> u64 {
         use std::hash::{Hash, Hasher};
-        let Ok(list) = std::fs::read(self.local().shallow_file()) else {
+        let Ok(path) = self.local().shallow_file() else {
+            return 0;
+        };
+        let Ok(list) = std::fs::read(path) else {
             return 0;
         };
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -851,7 +854,7 @@ impl Repo {
         let changes = changes.map_err(|err| note(ReadPart::Changes, err)).ok();
         let dirty = changes.as_ref().is_none_or(|tree| !tree.is_empty());
         let production = self.production_setting();
-        let shallow = repo.is_shallow();
+        let shallow = repo.is_shallow().map_err(Error::git)?;
 
         let key = rows_key(
             self.workdir(),

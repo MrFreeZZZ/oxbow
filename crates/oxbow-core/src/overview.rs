@@ -73,7 +73,7 @@ pub fn read(path: &Path, cancel: &AtomicBool) -> Result<RepoOverview> {
     };
     result.stashes = stash_count(&local, cancel)?;
     // A shallow boundary can make a comparison appear complete even though ancestry is missing.
-    if repo.local().is_shallow() {
+    if repo.local().is_shallow().map_err(Error::git)? {
         result.ahead = None;
         result.behind = None;
     }

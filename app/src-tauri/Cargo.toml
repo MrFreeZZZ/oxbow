@@ -15,24 +15,24 @@ name = "oxbow"
 path = "src/main.rs"
 
 [build-dependencies]
-serde_json = "1"
-tauri-build = { version = "2", features = [] }
+serde_json = "1.0.154"
+tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
-reqwest = { version = "0.13", default-features = false, optional = true }
-fontdb = "0.24"
-keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+reqwest = { version = "0.13.5", default-features = false, optional = true }
+fontdb = "0.24.0"
+keyring = "4.2.0"
 oxbow-core = { workspace = true }
 serde = { workspace = true }
-serde_json = "1"
-tauri = { version = "2", features = [] }
-tokio = { version = "1", features = ["time", "sync", "macros"] }
-tauri-plugin-dialog = "2"
-tauri-plugin-window-state = "2"
+serde_json = "1.0.154"
+tauri = { version = "2.12.5", features = [] }
+tokio = { version = "1.54.1", features = ["time", "sync", "macros"] }
+tauri-plugin-dialog = "2.8.4"
+tauri-plugin-window-state = "2.5.0"
 
 # Reduce Transparency and Increase Contrast, which WebKit doesn't tell the page about.
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility"] }
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
-tauri-plugin-updater = "~2.12.0"
+tauri-plugin-updater = "2.14.1"

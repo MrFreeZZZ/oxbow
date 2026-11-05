@@ -1,19 +1,9 @@
 name: CI
 
-# Every pull request runs the checks on Linux: format, lint, tests and the type check, the same
-# scripts/check.sh as before a push. They run again on each merge to main, beside the macOS build,
-# so the very commit an app is built from has checks of its own. The app is built for macOS only,
-# once per merge to main (or when run by hand from the Actions tab); beside it the core's and the
-# shell's tests run on macOS too, for what only a Mac's disk and git do differently.
-#
-# The macOS build waits for neither, on purpose: the app comes in about the same time as the
-# checks instead of after them. So its artifact is an unchecked build until Checks and Tests
-# (macOS) of the same run are green; the job's name and the run's summary say so, and a release
-# is made only from a run whose jobs are all green.
+# Pull requests run Linux checks. Manual runs also build and test macOS.
+# Pushes to main are checked, built and published once by Preview/Distribution.
 on:
   pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -28,20 +18,22 @@ jobs:
     name: Checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
       - name: Install what Tauri needs on Linux
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
+      - uses: Swatinem/rust-cache@v2.9.3
+      - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 22
+          node-version: 26.13.0
           cache: npm
           cache-dependency-path: app/package-lock.json
+      - name: Install npm
+        run: npm install --global npm@12.2.2
       - run: npm ci
         working-directory: app
       # The production build, with the CSP on; the shell crate also needs it to compile.
@@ -55,7 +47,7 @@ jobs:
       # Known vulnerabilities in what the app is built from: RustSec for Cargo.lock, npm's
       # advisories for package-lock.json. Warnings (unmaintained crates of Tauri's Linux side)
       # and low npm findings in build tools don't fail it; a vulnerability does.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2.90.1
         with:
           tool: cargo-audit
       - run: cargo audit
@@ -67,17 +59,19 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
         with:
           # The whole history: the version's last part counts its commits (build.rs).
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: Swatinem/rust-cache@v2.9.3
+      - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 22
+          node-version: 26.13.0
           cache: npm
           cache-dependency-path: app/package-lock.json
+      - name: Install npm
+        run: npm install --global npm@12.2.2
       - run: npm ci
         working-directory: app
       - name: Build the app bundle
@@ -89,7 +83,7 @@ jobs:
           version="$base.$(git rev-list --count HEAD)"
           OXBOW_BUILD_VERSION="$version" OXBOW_BUILD_COMMIT="$(git rev-parse HEAD)" npx tauri build --ci --bundles app --config "{\"version\":\"$version\"}"
         working-directory: app
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: oxbow-macOS
           path: target/release/bundle/macos/*.app
@@ -103,17 +97,19 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           # Test builds of their own, apart from the release build of the app job.
           key: tests
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 22
+          node-version: 26.13.0
           cache: npm
           cache-dependency-path: app/package-lock.json
+      - name: Install npm
+        run: npm install --global npm@12.2.2
       - run: npm ci
         working-directory: app
       # The shell crate compiles the front end in, as on Linux.

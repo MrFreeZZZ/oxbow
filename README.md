@@ -95,14 +95,14 @@ workflow builds macOS, Linux and Windows packages; runtime validation on Windows
 Developer ID signing and macOS notarization are pending. GitLab integration has automated tests
 against a test server; it has not yet been validated against a live GitLab service.
 
-CI checks pull requests on Linux. Pushes to `main` also build a macOS app and run Rust tests on
-macOS. A macOS build artifact counts as checked only when every job in that run passes.
+CI checks pull requests on Linux. Pushes to `main` run Preview, which checks Linux and tests
+macOS once before building and publishing a signed macOS Apple Silicon update.
 Version tags run a separate release workflow that checks the tagged commit, builds all three
 platforms and prepares a draft prerelease for review.
 
 ## Build from source
 
-You need Rust stable (1.88 or newer), Node.js 22.12 or newer, a system `git` and the
+You need Rust 1.99.1 (pinned in `rust-toolchain.toml`), Node.js 26.13 or newer, npm 12.2.2 or newer, a system `git` and the
 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your system.
 
 ```sh
