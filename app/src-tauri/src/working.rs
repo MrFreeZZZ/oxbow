@@ -47,6 +47,20 @@ pub(crate) async fn source_lines(
     .await
 }
 
+/// Counts for the old sides of a batch of diffs; an unreadable file has no count.
+#[tauri::command]
+pub(crate) async fn source_totals(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    sources: Vec<Source>,
+) -> CommandResult<Vec<Option<u32>>> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "Count unchanged lines", move || {
+        Ok(repo.source_totals(&sources))
+    })
+    .await
+}
+
 /// Open one side of a file diff in the app the system picks for it: the working-tree file as it
 /// is, any other version from a copy in a temporary folder named after it.
 #[tauri::command]

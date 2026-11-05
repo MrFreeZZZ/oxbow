@@ -237,6 +237,7 @@ export const api = {
     ),
   /** Lines `start` to `start + count - 1` (from 1) of one side of a file diff, and how many it has. */
   sourceLines: (source: Source, start: number, count: number) => invoke<SourceLines>("source_lines", { source, start, count }),
+  sourceTotals: (sources: Source[]) => invoke<(number | null)[]>("source_totals", { sources }),
   /** `label` names the copy: `logo (old a3f9c21).png`. */
   openSource: (source: Source, path: string, label: string) => invoke<void>("open_source", { source, path, label }),
   deletionCheck: (branch: string) => invoke<DeletionCheck>("deletion_check", { branch }),

@@ -643,6 +643,15 @@ impl Repo {
         self.read_source_upto(source, u64::MAX)
     }
 
+    /// Line counts for a batch of sources, in request order. An unreadable source leaves only
+    /// its own count unknown, so other files can still unfold their unchanged lines.
+    pub fn source_totals(&self, sources: &[Source]) -> Vec<Option<u32>> {
+        sources
+            .iter()
+            .map(|source| self.read_lines(source, 1, 0).ok().map(|read| read.total))
+            .collect()
+    }
+
     /// Lines `start` to `start + count - 1` (from 1) of one side of a file diff, and how many it
     /// has: the unchanged lines between hunks, shown as they are asked for. Past its end it has
     /// none, so a count of 0 only says how long it is.

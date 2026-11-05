@@ -30,7 +30,7 @@
 
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import type { DiffLine, FileDiff, Hunk, Side } from "./types";
+  import type { DiffLine, FileDiff, Hunk, Side, Source } from "./types";
   import { lane, plate, splitPath, tint } from "./format";
   import { prefs } from "./prefs.svelte";
   import { api, stopped } from "./api";
@@ -38,7 +38,7 @@
   import { languageOf, occurrences, paint } from "./syntax";
   import Lazy, { BLOCK, type FindHits } from "./Lazy.svelte";
   import { nav } from "./nav.svelte";
-  import { untrack } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { foldReason, startsFolded } from "./diffFold";
   import { addKnown, changedRow, changeStarts, pieces, rowsOf, sideKind, type Known, type Piece, type Row } from "./diffRows";
   import { mac, withKeys } from "./keys";
@@ -334,7 +334,7 @@
   const STEP = 20;
 
   /** Where a file's unchanged lines are read from: its old side, which never moves under it. */
-  const openKey = (diff: FileDiff): string | null => (diff.old ? `${diff.file.path}\0${JSON.stringify(diff.old)}` : null);
+  const openKey = (diff: FileDiff): string | null => (diff.old ? `${nav.repo}\0${diff.file.path}\0${JSON.stringify(diff.old)}` : null);
 
   /** What a file draws in order: its hunks, and around them the unchanged lines, folded or
    *  opened. A file cut short by the budget leaves out the lines after its last hunk drawn. */
@@ -360,21 +360,42 @@
 
   // How long each file drawn is, so the lines after its last hunk can be opened too.
   const measuring = new Set<string>();
+  let mounted = true;
+  onDestroy(() => { mounted = false; });
   $effect(() => {
     if (whole) return;
+    const repo = nav.repo;
+    const batch = new Map<string, { source: Source; keys: string[] }>();
     for (const diff of shown.files) {
       const key = openKey(diff);
       if (!key || !diff.old || totals.has(key) || measuring.has(key) || isFolded(diff) || special(diff) || !diff.hunks.length) continue;
       measuring.add(key);
-      api
-        .sourceLines(diff.old, 1, 0)
-        .then(
-          (read) => (totals = new Map(totals).set(key, read.total)),
-          // Without its length the lines after the last hunk just stay folded away.
-          () => {},
-        )
-        .finally(() => measuring.delete(key));
+      const sourceKey = JSON.stringify(diff.old);
+      const group = batch.get(sourceKey);
+      if (group) group.keys.push(key);
+      else batch.set(sourceKey, { source: diff.old, keys: [key] });
     }
+    if (!batch.size) return;
+    const groups = [...batch.values()];
+    api.sourceTotals(groups.map((group) => group.source)).then(
+      (counts) => {
+        if (!mounted || nav.repo !== repo) return;
+        const current = new Set(items.map(openKey));
+        const next = new Map(totals);
+        let changed = false;
+        groups.forEach((group, i) => {
+          const total = counts[i];
+          if (total == null) return;
+          for (const key of group.keys) if (current.has(key) && !next.has(key)) {
+            next.set(key, total);
+            changed = true;
+          }
+        });
+        if (changed) totals = next;
+      },
+      // Without its length the lines after the last hunk just stay folded away.
+      () => {},
+    ).finally(() => { for (const group of groups) for (const key of group.keys) measuring.delete(key); });
   });
 
   /** Starts of the blocks a run of `count` lines is drawn in. */

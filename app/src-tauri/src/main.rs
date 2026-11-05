@@ -197,6 +197,7 @@ fn main() {
             working::edit_changelists,
             working::source_bytes,
             working::source_lines,
+            working::source_totals,
             working::open_source,
             working::deletion_check,
             working::remote_deletion_check,

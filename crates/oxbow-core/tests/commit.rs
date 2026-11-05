@@ -315,6 +315,31 @@ fn a_big_commit_lists_its_files_at_once_and_diffs_them_a_page_at_a_time() {
 }
 
 #[test]
+fn source_totals_keep_order_and_isolate_unreadable_sources() {
+    let mut fx = Fixture::new();
+    fx.commit("lines.txt", "one\r\ntwo\nlast", "Root");
+    let blob = Source::Blob {
+        id: fx.git(&["rev-parse", "HEAD:lines.txt"]),
+    };
+    fx.write("empty.txt", "");
+    let file = Source::Worktree {
+        path: "empty.txt".into(),
+    };
+    let missing = Source::Worktree {
+        path: "gone.txt".into(),
+    };
+    let invalid = Source::Blob { id: "invalid".into() };
+    let repo = Repo::open(fx.path()).unwrap();
+    assert!(repo.source_totals(&[]).is_empty());
+    assert_eq!(
+        repo.source_totals(&[blob.clone(), missing, file.clone(), invalid, blob]),
+        vec![Some(3), None, Some(0), None, Some(3)]
+    );
+    fx.write("empty.txt", "now a line\n");
+    assert_eq!(repo.source_totals(&[file]), vec![Some(1)]);
+}
+
+#[test]
 fn unchanged_lines_between_hunks_are_read_from_the_old_side() {
     let mut fx = Fixture::new();
     let before: String = (1..=60).map(|n| format!("line {n}\n")).collect::<String>() + "last\r\n";
