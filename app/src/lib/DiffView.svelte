@@ -392,7 +392,8 @@
   const wrap = $derived(prefs.get("oxbow.diff.wrap"));
   const toggleWrap = () => prefs.set("oxbow.diff.wrap", !wrap);
   /** The sideways scrolling of a file's lines, under No Wrap only. */
-  const sideways = (node: HTMLElement, on: boolean) => (on ? hscroll(node) : undefined);
+  const sideways = (node: HTMLElement, layout: string | null) => (layout === null ? undefined : hscroll(node));
+  const textLayout = $derived(JSON.stringify([prefs.get("oxbow.text.font"), prefs.get("oxbow.text.fontSize"), prefs.get("oxbow.text.tabWidth")]));
   /** Whitespace changes left out, from Settings › Diff & Text or this view's button. Not in
    *  uncommitted changes, which stay exact so staging matches what is seen. */
   const ignoring = $derived(!working && prefs.get("oxbow.diff.ignoreWhitespace"));
@@ -844,7 +845,7 @@
       {@const cut = shown.cut?.diff === diff ? shown.cut : null}
       {#if notes?.top}{@render notes.top(diff)}{/if}
       {#key wrap}
-      <div class="code mono selectable" class:nowrap={!wrap} style:--digits={digits(diff)} style:--cols={wrap ? null : columns(diff)} use:sideways={!wrap}>
+      <div class="code mono selectable" class:nowrap={!wrap} style:--digits={digits(diff)} style:--cols={wrap ? null : columns(diff)} use:sideways={wrap ? null : `${textLayout}:${columns(diff)}`}>
         {#each piecesOf(diff, drawnHunks(diff, cut), !!cut) as piece (piece.kind === "hunk" ? `h${piece.h}` : `${piece.kind}${piece.from}`)}
           {#if piece.kind === "folded"}
             {@render foldBar(diff, piece)}
