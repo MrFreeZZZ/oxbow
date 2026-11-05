@@ -62,8 +62,13 @@ function main() {
     const key = JSON.parse(readFileSync("app/src-tauri/tauri.conf.json", "utf8")).plugins.updater.pubkey;
     validatePublished(manifest, info, repository, "release-assets", key);
     const release = optionalApi(repository, `releases/tags/${info.tag}`);
-    const tagCommit = optionalApi(repository, `commits/${info.tag}`);
-    if (tagCommit && tagCommit.sha !== info.sha) throw new Error("Remote tag no longer points to the built commit");
+    // A missing ref returns 404 here; commits/<missing tag> returns 422 instead.
+    const tag = optionalApi(repository, `git/ref/tags/${info.tag}`);
+    if (tag) {
+      // Resolve annotated tags through the commit endpoint too, rather than comparing tag objects.
+      const tagCommit = optionalApi(repository, `commits/${info.tag}`);
+      if (tagCommit?.sha !== info.sha) throw new Error("Remote tag no longer points to the built commit");
+    }
     if (release && !release.draft) {
       if (info.channel !== "preview" || !release.prerelease) throw new Error("A published release cannot be overwritten");
       // Recover a retry that published the snapshot but failed before updating the index.

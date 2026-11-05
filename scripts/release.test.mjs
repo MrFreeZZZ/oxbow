@@ -155,18 +155,20 @@ function publisher(t, channel) {
   writeFileSync(join(bin, "gh"), `#!/usr/bin/env node
 const fs=require('node:fs'),p=require('node:path'),root=process.env.FAKE_GH_DIR;
 const args=process.argv.slice(2),stateFile=p.join(root,'state.json');
-const state=fs.existsSync(stateFile)?JSON.parse(fs.readFileSync(stateFile)):{releases:{},calls:[]};
+const state=fs.existsSync(stateFile)?JSON.parse(fs.readFileSync(stateFile)):{releases:{},tags:{},calls:[]};
+state.tags??={};
 state.calls.push(args); const save=()=>fs.writeFileSync(stateFile,JSON.stringify(state));
-const fail=()=>{save();console.error('(HTTP 404)');process.exit(1)};
+const fail=(status=404)=>{save();console.error('(HTTP '+status+')');process.exit(1)};
 const value=flag=>args[args.indexOf(flag)+1];
 if(args[0]==='api'){
  const endpoint=args[1];let result;
  if(endpoint.includes('/releases/tags/'))result=state.releases[endpoint.split('/').pop()];
- else if(endpoint.includes('/commits/'))result={sha:process.env.SOURCE_SHA};
+ else if(endpoint.includes('/git/ref/tags/'))result=state.tags[endpoint.split('/').pop()];
+ else if(endpoint.includes('/commits/')){const ref=state.tags[endpoint.split('/').pop()];if(!ref)fail(422);result={sha:ref.commit};}
  if(!result)fail();save();console.log(JSON.stringify(result));
 }else{
  const tag=args[2],dir=p.join(root,'remote-'+tag),r=state.releases[tag];
- if(args[1]==='create'){state.releases[tag]={draft:args.includes('--draft'),prerelease:args.includes('--prerelease'),name:value('--title'),assets:[]};fs.mkdirSync(dir,{recursive:true});}
+ if(args[1]==='create'){state.tags[tag]={object:{type:'commit',sha:process.env.SOURCE_SHA},commit:process.env.SOURCE_SHA};state.releases[tag]={draft:args.includes('--draft'),prerelease:args.includes('--prerelease'),name:value('--title'),assets:[]};fs.mkdirSync(dir,{recursive:true});}
  else if(args[1]==='edit'){if(!r)fail();if(args.includes('--draft=false'))r.draft=false;}
  else if(args[1]==='upload'){
   if(tag==='preview'&&process.env.FAIL_INDEX_ONCE&&!state.failed){state.failed=true;save();process.exit(1);}
@@ -191,6 +193,39 @@ test("Release stays a draft and uploads its manifest last", (t) => {
   assert.equal(state.releases[f.info.tag].prerelease, false);
   assert.equal(state.calls.filter((a) => a[1] === "upload").at(-1)[3], "release-assets/latest.json");
   assert.equal(state.releases.preview, undefined);
+});
+
+test("the first Preview publishes when its tag does not exist yet", (t) => {
+  const f = publisher(t, "preview"), result = f.run();
+  assert.equal(result.status, 0, result.stderr);
+  const state = f.state();
+  assert.ok(state.calls.some((a) => a[0] === "api" && a[1].endsWith(`/git/ref/tags/${f.info.tag}`)));
+  assert.ok(state.calls.every((a) => a[0] !== "api" || !a[1].includes("/commits/")));
+  assert.equal(state.releases[f.info.tag].draft, false);
+  assert.equal(JSON.parse(readFileSync(join(f.root, "remote-preview/latest.json"))).commit, sha);
+});
+
+test("an existing lightweight or annotated tag must resolve to the built commit", (t) => {
+  for (const type of ["commit", "tag"]) {
+    const f = publisher(t, "preview");
+    writeFileSync(join(f.root, "state.json"), JSON.stringify({ releases: {}, calls: [], tags: {
+      [f.info.tag]: { object: { type, sha: type === "tag" ? "c".repeat(40) : sha }, commit: sha },
+    } }));
+    const result = f.run();
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(f.state().calls.some((a) => a[0] === "api" && a[1].endsWith(`/commits/${f.info.tag}`)));
+  }
+});
+
+test("a tag pointing to another commit stops publication before any mutation", (t) => {
+  const f = publisher(t, "preview");
+  writeFileSync(join(f.root, "state.json"), JSON.stringify({ releases: {}, calls: [], tags: {
+    [f.info.tag]: { object: { type: "commit", sha: "b".repeat(40) }, commit: "b".repeat(40) },
+  } }));
+  const result = f.run();
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Remote tag no longer points to the built commit/);
+  assert.ok(f.state().calls.every((a) => a[0] === "api"));
 });
 
 test("Preview recovers after snapshot publication without replacing signed packages", (t) => {
