@@ -612,8 +612,8 @@ async fn install_package(
         .map_err(|_| "The installer stopped unexpectedly. The application may have changed. Quit and reopen Oxbow to check its version, or install it from the release.".to_owned())?
 }
 
-/// Launch Services registers the replacement as a new macOS application instance. A plain
-/// executable spawn can leave the replacement running without an accessible application window.
+/// Use Launch Services after the old process exits. Launching a second instance while it is
+/// still running can leave the new process under a separate Dock icon.
 async fn restart_installed(app: &AppHandle) -> Result<(), String> {
     #[cfg(feature = "updater-test")]
     test_transport::before_restart()?;
@@ -625,23 +625,37 @@ async fn restart_installed(app: &AppHandle) -> Result<(), String> {
             .find(|path| path.extension().is_some_and(|ext| ext == "app"))
             .ok_or("Could not find the updated application bundle.")?
             .to_owned();
-        let status = tauri::async_runtime::spawn_blocking(move || {
-            std::process::Command::new("/usr/bin/open")
-                .arg("-n")
-                .arg(bundle)
-                .status()
-        })
-        .await
-        .map_err(|_| "Oxbow could not restart. Try Restart Now, or quit and open Oxbow again.")?
-        .map_err(|_| "Oxbow could not restart. Try Restart Now, or quit and open Oxbow again.")?;
-        if !status.success() {
-            return Err("Oxbow could not restart. Try Restart Now, or quit and open Oxbow again.".into());
-        }
+        // The helper is started before exit so that a spawn error remains recoverable. Paths
+        // are positional arguments, never shell source. Bound the wait in case exit stalls or
+        // the PID is reused; an alert explains how to recover if the deferred launch fails.
+        restart_helper(std::process::id(), &bundle, std::path::Path::new("/usr/bin/open"))
+            .spawn()
+            .map_err(|_| "Oxbow could not restart. Try Restart Now, or quit and open Oxbow again.")?;
         app.exit(0);
         std::future::pending().await
     }
     #[cfg(not(target_os = "macos"))]
     app.restart()
+}
+
+#[cfg(target_os = "macos")]
+fn restart_helper(pid: u32, bundle: &std::path::Path, opener: &std::path::Path) -> std::process::Command {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let mut command = Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg(r#"alert() { /usr/bin/osascript -e 'display alert "Oxbow could not restart" message "Quit Oxbow if it is still running, then open it from Applications." as warning'; }; i=0; while kill -0 "$1" 2>/dev/null; do i=$((i + 1)); if [ "$i" -ge 300 ]; then alert; exit 1; fi; sleep 0.1; done; "$3" "$2" || alert"#)
+        .arg("oxbow-restart")
+        .arg(pid.to_string())
+        .arg(bundle)
+        .arg(opener)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    command
 }
 
 #[tauri::command]
@@ -837,6 +851,37 @@ pub(crate) fn show_updates(app: &AppHandle) -> crate::CommandResult<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn restart_helper_waits_for_exit_and_passes_bundle_path_literally() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{Duration, Instant};
+
+        let dir = std::env::temp_dir().join(format!("oxbow-restart-test-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let opener = dir.join("test opener");
+        let result = dir.join("result");
+        std::fs::write(&opener, "#!/bin/sh\nprintf '%s' \"$1\" > \"$OXBOW_TEST_RESULT\"\n").unwrap();
+        std::fs::set_permissions(&opener, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let bundle = dir.join("App '$(not a command).app");
+        let mut old = std::process::Command::new("/bin/sleep").arg("10").spawn().unwrap();
+        let mut helper = restart_helper(old.id(), &bundle, &opener)
+            .env("OXBOW_TEST_RESULT", &result)
+            .spawn()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(250));
+        assert!(!result.exists(), "opened while the old process was alive");
+        old.kill().unwrap();
+        old.wait().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !result.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(helper.wait().unwrap().success());
+        assert_eq!(std::fs::read_to_string(&result).unwrap(), bundle.to_str().unwrap());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     fn release() -> UpdateRelease {
         UpdateRelease {
