@@ -29,8 +29,16 @@ class Nav {
   find = $state({ text: "", matchCase: false });
   found = $state({ count: 0, at: 0 });
 
+  /** File History flushes pending input and waits for the new matches before a step. */
+  applyFind: (() => Promise<boolean>) | null = null;
+
   /** The next match, or the previous one, wrapping around. */
-  findStep(by: 1 | -1) {
+  async findStep(by: 1 | -1) {
+    const apply = this.applyFind;
+    if (apply) {
+      const changed = await apply();
+      if (this.applyFind !== apply || changed) return;
+    }
     const { count, at } = this.found;
     if (count) this.found = { count, at: (at + by + count) % count };
   }

@@ -5,6 +5,7 @@
 
   import { tick, untrack } from "svelte";
   import { api, stopped } from "./api";
+  import { FindQuery } from "./findQuery.svelte";
   import { nav } from "./nav.svelte";
   import { confirm } from "./confirm.svelte";
   import { diffSettings, prefs, wholeByDefault } from "./prefs.svelte";
@@ -394,12 +395,29 @@
   // Find in file: the matches are counted from the lines (the diff's by DiffView), not from what
   // is drawn, and only the block with the current one is drawn wherever it is: drawing every
   // block with a match would undo drawing only what is seen.
-  const find = $derived(nav.find.text);
+  const query = new FindQuery();
+  $effect(() => {
+    const value = nav.find;
+    untrack(() => query.update(value));
+    return () => query.cancel();
+  });
+  $effect(() => {
+    const apply = async () => {
+      // Read the input directly too: Enter can precede the effect that queues its value.
+      query.update(nav.find);
+      const changed = query.flush();
+      await tick();
+      return changed;
+    };
+    nav.applyFind = apply;
+    return () => { if (nav.applyFind === apply) nav.applyFind = null; };
+  });
+  const find = $derived(query.value.text);
   let diffHits = $state<FindHits>([]);
   const blameHits = $derived.by(() => {
     const out: FindHits = [];
     if (!find || !blame) return out;
-    const matchCase = nav.find.matchCase;
+    const matchCase = query.value.matchCase;
     const count = (lines: { text: string }[]) => lines.reduce((n, l) => n + occurrences(l.text || " ", find, matchCase).length, 0);
     for (const group of groups) {
       const first = group.runs[0];
@@ -425,7 +443,7 @@
   let scrollDue = false;
 
   $effect(() => {
-    const key = `${find}\u0000${nav.find.matchCase}\u0000${mode}\u0000${path}`;
+    const key = `${find}\u0000${query.value.matchCase}\u0000${mode}\u0000${path}`;
     const shown = mode === "changes" ? diffs : blame;
     const count = hits.reduce((n, h) => n + h.count, 0);
     untrack(() => {
@@ -483,7 +501,7 @@
   // The commits that added or removed the text, asked of git a moment after typing stops.
   $effect(() => {
     const text = find;
-    const matchCase = nav.find.matchCase;
+    const matchCase = query.value.matchCase;
     const p = path;
     headCommit;
     if (!text) {
@@ -508,7 +526,7 @@
   {#each lines as l (l.no)}
     <div class="row">
       <button class="no" class:picked={line?.no === l.no} onclick={() => lineHistory(l.no)} title="Every change to line {l.no}">{l.no}</button>
-      <span class="text">{#each paint(l.text || " ", null, language, find || null, nav.find.matchCase) as piece, k (k)}<span class:found={piece.found} data-hit={piece.hit} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>
+      <span class="text">{#each paint(l.text || " ", null, language, find || null, query.value.matchCase) as piece, k (k)}<span class:found={piece.found} data-hit={piece.hit} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>
     </div>
   {/each}
 {/snippet}
@@ -656,7 +674,7 @@
             {whole}
             history={false}
             find={find || null}
-            matchCase={nav.find.matchCase}
+            matchCase={query.value.matchCase}
             {focus}
             bind:hits={diffHits}
             onToggleWhole={() => (whole = !whole)}
