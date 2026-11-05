@@ -302,7 +302,7 @@
     flex-grow: 1;
     min-width: 0;
     overflow: hidden;
-    background: var(--graph-bg);
+    background: var(--surface-graph);
     display: flex;
     flex-direction: column;
   }

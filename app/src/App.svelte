@@ -2792,7 +2792,7 @@
     min-width: 0;
     border-top: 1px solid var(--sep);
     overflow: hidden;
-    background: var(--graph-bg);
+    background: var(--surface-graph);
     display: flex;
     flex-direction: column;
   }

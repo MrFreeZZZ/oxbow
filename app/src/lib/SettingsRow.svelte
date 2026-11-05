@@ -118,12 +118,54 @@
     {/if}
   {:else if control?.type === "button"}
     <button class="button small" class:danger={control.danger} disabled={off} onclick={control.run}>{text(control.label)}</button>
+  {:else if control?.type === "range"}
+    <span class="range" class:off>
+      <input type="range" aria-label={text(row.label)} aria-valuetext={`${control.get()}${control.suffix ?? ""}`} min={control.min} max={control.max} step={control.step} value={control.get()} style:--range-fill="{100 * (control.get() - control.min) / (control.max - control.min)}%" disabled={off} oninput={(event) => control.set(Number(event.currentTarget.value))} />
+      <span class="range-value">{control.get()}{control.suffix ?? ""}</span>
+    </span>
   {:else if control?.type === "keys"}
     <ShortcutKeys id={control.id} />
   {/if}
 </div>
 
 <style>
+  .range {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: min(100%, 320px);
+    min-width: 0;
+  }
+
+  .range input {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    min-width: 0;
+    height: 4px;
+    border-radius: var(--radius-pill);
+    background: linear-gradient(to right, var(--accent) var(--range-fill), var(--sep) var(--range-fill));
+    cursor: pointer;
+  }
+
+  .range input::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: var(--radius-pill);
+    background: var(--seg-on);
+    border: 0.5px solid var(--panel-border);
+    box-shadow: var(--ctrl-shadow);
+  }
+
+  .range-value {
+    min-width: 4ch;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-size: var(--text-small);
+    color: var(--text2);
+  }
+
   .row {
     position: relative;
     display: flex;

@@ -1,5 +1,42 @@
 # Third-party notices
 
+## Seasonal background images
+
+The Settings thumbnails in app/src/assets/backgrounds/ are resized JPEG copies of
+the photographs below. The full/ directory contains WebP copies (winter resized to
+6000 pixels wide; the other full images keep their original pixel dimensions).
+Metadata is removed from the full images. The app displays cover crops, blends
+images with the window background and darkens/desaturates them in the dark look.
+No endorsement is implied. These notices and image licenses cover both sizes.
+
+Spring: Firehole River Biscuit Basin Spring 2019 34, by Mike Cline.
+Source: https://commons.wikimedia.org/wiki/File:Firehole_River_Biscuit_Basin_Spring_2019_34.jpg
+Licensed under Creative Commons Attribution-ShareAlike 4.0 International:
+https://creativecommons.org/licenses/by-sa/4.0/
+License text: https://creativecommons.org/licenses/by-sa/4.0/legalcode
+The resized and converted Spring images are distributed under that same license.
+
+Summer: Yellowstone River from Brink of Lower Falls (121392), by USGS
+Communications and Publishing, September 6, 2023.
+Source: https://commons.wikimedia.org/wiki/File:Yellowstone_River_from_Brink_of_Lower_Falls_(121392).jpg
+U.S. Geological Survey work, public domain in the United States.
+Copyright policy: https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits
+
+Autumn: Brule River Fall Colors - Judge CR Magney State Park, Minnesota,
+by Tony Webster, September 28, 2017.
+Source: https://www.flickr.com/photos/diversey/37177116850/
+Commons record: https://commons.wikimedia.org/wiki/File:Brule_River_Fall_Colors_-_Judge_CR_Magney_State_Park,_Minnesota_(37177116850).jpg
+Licensed under Creative Commons Attribution-ShareAlike 2.0 Generic:
+https://creativecommons.org/licenses/by-sa/2.0/
+License text: https://creativecommons.org/licenses/by-sa/2.0/legalcode
+The resized and converted Autumn images are distributed under that same license.
+
+Winter: Firehole River along the Lone Star Geyser Trail (2),
+by Yellowstone National Park.
+Source: https://www.flickr.com/photos/80223459@N05/39320051994/
+Commons record: https://commons.wikimedia.org/wiki/File:Firehole_River_along_the_Lone_Star_Geyser_Trail_(2)_(39320051994).jpg
+Marked public domain by Yellowstone National Park in the Commons source record.
+
 ## Oceanic Next
 
 The dark version of the Estuary code theme (`app/src/lib/themes.ts`) uses the colors of the

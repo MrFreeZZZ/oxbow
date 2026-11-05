@@ -106,6 +106,7 @@ pub(crate) fn set_setting(
     let mut settings = settings::read(&file).map_err(|problem| {
         format!("{problem} Oxbow doesn’t write over it until it is fixed in Edit in settings.json.")
     })?;
+    let previous_appearance = appearance(&settings);
     if value.is_null() {
         settings.remove(&key);
     } else {
@@ -113,7 +114,7 @@ pub(crate) fn set_setting(
     }
     settings::write(&file, &settings)?;
     *revision += 1;
-    apply_settings(&app, &session, &settings);
+    apply_settings(&app, &session, &settings, previous_appearance != appearance(&settings));
     // A window that misses this keeps showing the old value until it reloads; not an error.
     let _ = app.emit(
         "settings-changed",
@@ -127,7 +128,12 @@ pub(crate) fn set_setting(
 }
 
 /// The settings the backend itself follows: how diffs are made and the windows' appearance.
-pub(crate) fn apply_settings(app: &AppHandle, session: &Session, settings: &serde_json::Map<String, Value>) {
+pub(crate) fn apply_settings(
+    app: &AppHandle,
+    session: &Session,
+    settings: &serde_json::Map<String, Value>,
+    appearance_changed: bool,
+) {
     let defaults = DiffOptions::default();
     *session.diff.lock().expect("session lock") = DiffOptions {
         context_lines: settings
@@ -184,9 +190,11 @@ pub(crate) fn apply_settings(app: &AppHandle, session: &Session, settings: &serd
             .and_then(Value::as_u64)
             .map_or(oxbow_core::localhistory::DEFAULT_DAYS, |days| days.min(30) as u32),
     );
-    let theme = appearance(settings);
-    for window in app.webview_windows().values() {
-        let _ = window.set_theme(theme);
+    if appearance_changed {
+        let theme = appearance(settings);
+        for window in app.webview_windows().values() {
+            let _ = window.set_theme(theme);
+        }
     }
 }
 
@@ -310,7 +318,7 @@ fn settings_replaced(
     after: &serde_json::Map<String, Value>,
 ) {
     *revision += 1;
-    apply_settings(app, session, after);
+    apply_settings(app, session, after, appearance(before) != appearance(after));
     let removed = before
         .keys()
         .filter(|key| !after.contains_key(*key))

@@ -3,6 +3,7 @@ import "./app.css";
 import App from "./App.svelte";
 import WordPopover from "./lib/WordPopover.svelte";
 import UpdateRestartGate from "./lib/UpdateRestartGate.svelte";
+import WindowBackground from "./lib/WindowBackground.svelte";
 import { followDisplay, followLook } from "./lib/prefs.svelte";
 
 // Start in the system's look so nothing flashes; the Appearance setting takes over once read.
@@ -21,7 +22,10 @@ const target = document.getElementById("app")!;
 if (location.hash === "#settings" || location.hash === "#settings/commands") void import("./lib/SettingsWindow.svelte").then((m) => mount(m.default, { target }));
 else if (location.hash === "#console") void import("./lib/ConsoleWindow.svelte").then((m) => mount(m.default, { target }));
 else if (location.hash === "#command") void import("./lib/UserCommandWindow.svelte").then((m) => mount(m.default, { target }));
-else mount(App, { target });
+else {
+  mount(WindowBackground, { target: document.body });
+  mount(App, { target });
+}
 // What a word of a git command means, over every window's sheets.
 mount(WordPopover, { target: document.body });
 

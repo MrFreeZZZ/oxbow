@@ -409,7 +409,7 @@
     flex-direction: column;
     min-height: 0;
     border-right: 1px solid var(--sep);
-    background: var(--graph-bg);
+    background: var(--surface-graph);
   }
   .top {
     display: flex;
@@ -576,7 +576,7 @@
     line-height: var(--code-line);
     tab-size: var(--tab);
     color: var(--code-fg, var(--code));
-    background: var(--code-bg, transparent);
+    background: var(--surface-code);
     border-radius: var(--radius-l);
   }
   .row {

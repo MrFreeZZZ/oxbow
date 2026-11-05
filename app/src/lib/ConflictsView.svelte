@@ -1124,7 +1124,7 @@
     min-height: 0;
     padding: var(--space-2) var(--space-2) var(--space-3);
     border-right: 1px solid var(--sep);
-    background: var(--graph-bg);
+    background: var(--surface-graph);
   }
   .ghead {
     display: flex;

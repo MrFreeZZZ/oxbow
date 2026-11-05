@@ -437,7 +437,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    background: var(--graph-bg);
+    background: var(--surface-graph);
     min-height: 0;
   }
   .list-head {

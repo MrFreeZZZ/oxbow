@@ -1015,7 +1015,7 @@
     top: 0;
     bottom: 0;
     width: 280px;
-    background: var(--side);
+    background: var(--surface-side);
     border-right: 1px solid var(--sep);
     display: flex;
     flex-direction: column;

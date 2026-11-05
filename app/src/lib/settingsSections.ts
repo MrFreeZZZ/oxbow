@@ -143,6 +143,35 @@ export const themeSection: Section = {
         ],
       },
       {
+        title: "Background",
+        preview: "background",
+        rows: [
+          prefRow("oxbow.background.source", "Background", "popup", {
+            options: () => [
+              { value: "none", label: "None" },
+              { value: "spring", label: "Spring" },
+              { value: "summer", label: "Summer" },
+              { value: "autumn", label: "Autumn" },
+              { value: "winter", label: "Winter" },
+              { value: "custom", label: "Custom image" },
+            ],
+          }),
+          {
+            id: "oxbow.background.image",
+            label: "Custom image",
+            setting: { kind: "pref", key: "oxbow.background.image" },
+            control: { type: "value", text: () => prefs.get("oxbow.background.image") || "None" },
+          },
+          {
+            id: "oxbow.background.intensity",
+            label: "Intensity",
+            setting: { kind: "pref", key: "oxbow.background.intensity" },
+            off: () => prefs.get("oxbow.background.source") === "none",
+            control: { type: "range", min: 0, max: 100, step: 1, suffix: "%", get: () => prefs.get("oxbow.background.intensity"), set: (value) => { void prefs.set("oxbow.background.intensity", value); } },
+          },
+        ],
+      },
+      {
         title: "Code theme",
         preview: "theme",
         rows: [

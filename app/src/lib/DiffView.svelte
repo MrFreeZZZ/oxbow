@@ -913,7 +913,7 @@
     top: 0;
     z-index: 1;
     padding: var(--space-2) 0;
-    background: var(--win);
+    background: var(--surface-sticky);
   }
   .bar {
     display: flex;
@@ -1055,7 +1055,7 @@
     line-height: var(--code-line);
     tab-size: var(--tab);
     color: var(--code-fg, var(--code));
-    background: var(--code-bg, transparent);
+    background: var(--surface-code);
     border-radius: var(--radius-l);
   }
   /* The number columns fit the longest line number at the code's size. */

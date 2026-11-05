@@ -15,6 +15,9 @@ import { paletteOf, THEMES, themeById, themeVariables } from "./themes";
 export const defaults = {
   "oxbow.commands": [] as UserCommand[],
   "oxbow.appearance": "system" as "system" | "light" | "dark",
+  "oxbow.background.source": "none" as "none" | "spring" | "summer" | "autumn" | "winter" | "custom",
+  "oxbow.background.image": "",
+  "oxbow.background.intensity": 20,
   "oxbow.history.rowStyle": "twoLines" as "twoLines" | "compact",
   "oxbow.startup.reopenRepository": true,
   /** Auto follows this build's channel; explicit choices survive updates and restarts. */
@@ -124,6 +127,8 @@ type Rule = { oneOf?: readonly string[]; min?: number; max?: number; whole?: boo
 
 export const rules: Partial<Record<PrefKey, Rule>> = {
   "oxbow.appearance": { oneOf: ["system", "light", "dark"] },
+  "oxbow.background.source": { oneOf: ["none", "spring", "summer", "autumn", "winter", "custom"] },
+  "oxbow.background.intensity": { min: 0, max: 100, whole: true },
   "oxbow.history.rowStyle": { oneOf: ["twoLines", "compact"] },
   "oxbow.updates.channel": { oneOf: ["auto", "release", "preview"] },
   "oxbow.confirm.scope": { oneOf: ["all", "risky"] },
@@ -204,6 +209,8 @@ class Prefs {
   /** The number of the change settings.json was loaded at. */
   #loadedAt = -1;
   #saves = new SaveQueue();
+  /** Consumers follow the value of their key, rather than every replacement of the maps. */
+  #readers = new Map<PrefKey, () => unknown>();
   /** True once settings.json has been read. */
   loaded = $state(false);
   /** Why settings.json can't be read, so the defaults are in use; null when it can. */
@@ -212,6 +219,12 @@ class Prefs {
   failure = $state<SaveFailure | null>(null);
 
   constructor() {
+    $effect.root(() => {
+      for (const key of Object.keys(defaults) as PrefKey[]) {
+        const value = $derived.by(() => this.#read(key));
+        this.#readers.set(key, () => value);
+      }
+    });
     this.reload();
     listen<{ key: string; value: unknown; revision: number }>("settings-changed", (event) => {
       const { key, value, revision } = event.payload;
@@ -245,6 +258,10 @@ class Prefs {
   }
 
   get<K extends PrefKey>(key: K): PrefValue<K> {
+    return this.#readers.get(key)!() as PrefValue<K>;
+  }
+
+  #read<K extends PrefKey>(key: K): PrefValue<K> {
     const value = key in this.#unsaved ? this.#unsaved[key] : this.#values[key];
     // A value settings.json can't hold, e.g. typed in by hand, counts as the default.
     return (value !== undefined && value !== null && !problemOf(key, value) ? value : defaults[key]) as PrefValue<K>;
@@ -252,6 +269,8 @@ class Prefs {
 
   /** Whether settings.json holds anything, so Restore Defaults has something to do. */
   get saving(): boolean { return Object.keys(this.#unsaved).length > 0; }
+
+  pending(key: PrefKey): boolean { return key in this.#unsaved; }
 
   get customized(): boolean {
     return Object.values({ ...this.#values, ...this.#unsaved }).some((value) => value !== null);

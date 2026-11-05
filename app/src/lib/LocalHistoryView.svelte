@@ -157,7 +157,7 @@
     flex-direction: column;
     min-height: 0;
     border-right: 1px solid var(--sep);
-    background: var(--graph-bg);
+    background: var(--surface-graph);
   }
   .top {
     display: flex;
@@ -199,7 +199,7 @@
     font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
-    background: var(--graph-bg);
+    background: var(--surface-graph);
   }
   .row {
     display: flex;

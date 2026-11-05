@@ -348,7 +348,7 @@
   .welcome {
     height: 100%;
     display: flex;
-    background: var(--win);
+    background: var(--surface-main);
     color: var(--text);
   }
   .drag {
@@ -533,7 +533,7 @@
     position: relative;
     flex-grow: 1;
     min-width: 0;
-    background: var(--side);
+    background: var(--surface-side);
     border-left: 1px solid var(--side-border);
     display: flex;
     flex-direction: column;
@@ -753,7 +753,7 @@
     flex-shrink: 0;
     padding: 16px;
     border-radius: var(--radius-xl);
-    background: var(--win);
+    background: var(--surface-main);
     border: 0.5px solid var(--glass-border);
     box-shadow: var(--panel-shadow);
     display: flex;
@@ -833,7 +833,7 @@
   .status { max-width: 100%; overflow: hidden; text-overflow: ellipsis; display: block; }
   .status svg { vertical-align: -1px; margin-right: 4px; }
   .foot { text-align: center; padding: 0 8px; font-size: var(--text-caption); }
-  aside { width: clamp(300px, 28vw, 380px); flex-shrink: 0; border-left: 0.5px solid var(--sep); background: var(--win); overflow: auto; }
+  aside { width: clamp(300px, 28vw, 380px); flex-shrink: 0; border-left: 0.5px solid var(--sep); background: var(--surface-main); overflow: auto; }
   .inspector { padding: 32px 28px; }
   h2 { font-size: var(--text-large); font-weight: 600; margin: 0 0 8px; overflow-wrap: anywhere; }
   .full-path { margin: 0; color: var(--text2); font-size: var(--text-small); overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }

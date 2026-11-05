@@ -363,7 +363,7 @@
     width: 400px;
     flex-shrink: 0;
     overflow-y: auto;
-    background: var(--graph-bg);
+    background: var(--surface-graph);
     padding: 8px;
     outline: none;
   }

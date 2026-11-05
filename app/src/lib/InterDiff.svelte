@@ -106,7 +106,7 @@
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     column-gap: 4px;
     padding: var(--space-2) 0 6px;
-    background: var(--win);
+    background: var(--surface-sticky);
     font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);

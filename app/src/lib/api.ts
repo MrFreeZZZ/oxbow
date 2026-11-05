@@ -104,6 +104,11 @@ import type { ConsoleEntry, ConsoleRepos } from "./console";
 export const stopped = (err: unknown) => String(err) === "stopped";
 
 export const api = {
+  /** Only the custom image currently configured in settings.json; no arbitrary file access. */
+  backgroundImage: () => invoke<ArrayBuffer | ArrayBufferView | number[]>("background_image").then((data) =>
+    data instanceof ArrayBuffer ? new Uint8Array(data)
+      : ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+      : Uint8Array.from(data)),
   runUserCommand: (id: string, repository: string, branch: string, commit: string) => invoke<void>("run_user_command", { id, repository, branch, commit }),
   userCommandState: () => invoke<import("./console").CommandWindowState>("user_command_state"),
 

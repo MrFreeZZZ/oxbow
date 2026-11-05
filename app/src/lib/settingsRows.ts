@@ -19,6 +19,7 @@ export type Setting =
   | { kind: "git"; scope: ConfigScope; keys: string[]; commands: () => string[]; reset: () => Promise<void> };
 
 export type Control =
+  | { type: "range"; min: number; max: number; step: number; get: () => number; set: (value: number) => void; suffix?: string }
   | { type: "value"; text: Text }
   | { type: "seg" | "popup"; options: () => Option[]; get: () => Value; set: (value: Value) => void }
   | { type: "switch"; get: () => boolean; set: (on: boolean) => void }
@@ -47,7 +48,7 @@ export type Row = {
   /** More items for its gear menu. */
   more?: () => MenuEntry[];
 };
-export type Group = { title?: string; foot?: Text; rows: Row[]; preview?: "theme" | "branches" | "diff" | "console"; detail?: "updates" };
+export type Group = { title?: string; foot?: Text; rows: Row[]; preview?: "theme" | "branches" | "diff" | "console" | "background"; detail?: "updates" };
 export type Section = {
   id: string;
   label: string;

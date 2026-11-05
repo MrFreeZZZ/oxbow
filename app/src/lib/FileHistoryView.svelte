@@ -761,7 +761,7 @@
     flex-direction: column;
     min-height: 0;
     border-right: 1px solid var(--sep);
-    background: var(--graph-bg);
+    background: var(--surface-graph);
     overflow: hidden;
   }
   .top {
@@ -856,7 +856,7 @@
     border-left: 2px dashed var(--lane);
   }
   .saved .dot {
-    background: var(--graph-bg);
+    background: var(--surface-graph);
     border: 2px solid var(--lane);
     width: 6px;
     height: 6px;
@@ -895,6 +895,15 @@
     background: none;
     border-left: 2px dashed var(--lane);
   }
+  /* Leave hollow markers open to the window image without drawing the rail through them. */
+  .saved .rail::before,
+  .other .rail::before {
+    mask-image: linear-gradient(to bottom, #000 calc(50% - 5px), transparent calc(50% - 5px), transparent calc(50% + 5px), #000 calc(50% + 5px));
+  }
+  .saved.on .rail::before,
+  .other.on .rail::before {
+    mask-image: linear-gradient(to bottom, #000 calc(50% - 7px), transparent calc(50% - 7px), transparent calc(50% + 7px), #000 calc(50% + 7px));
+  }
   .dot {
     position: absolute;
     left: 4px;
@@ -915,7 +924,7 @@
     box-shadow: 0 0 0 2px var(--lane);
   }
   .dot.hollow {
-    background: var(--graph-bg);
+    background: var(--surface-graph);
     border: 2px solid var(--lane);
     width: 6px;
     height: 6px;
@@ -1163,7 +1172,7 @@
     line-height: var(--code-line);
     tab-size: var(--tab);
     color: var(--code-fg, var(--code));
-    background: var(--code-bg, transparent);
+    background: var(--surface-code);
     border-radius: var(--radius-l);
   }
   .block {

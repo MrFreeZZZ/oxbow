@@ -3,6 +3,7 @@
 
 mod accounts;
 mod actions;
+mod background;
 mod conflicts;
 mod console_window;
 mod drafts;
@@ -121,7 +122,7 @@ fn main() {
             // Before anything runs git: it must find git-lfs where Homebrew put it.
             oxbow_core::lfs::extend_path();
             let handle = app.handle();
-            apply_settings(handle, &handle.state::<Session>(), &read_settings(handle));
+            apply_settings(handle, &handle.state::<Session>(), &read_settings(handle), true);
             accounts::lend_to_git(handle);
             gitlab_accounts::lend_to_git(handle);
             console_window::follow(handle);
@@ -131,6 +132,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             preferences::display_options,
+            background::background_image,
             repos::open_repo,
             repos::close_repo,
             repos::trust_repo,

@@ -13,6 +13,7 @@
   import ConfirmSheet from "./ConfirmSheet.svelte";
   import { confirm } from "./confirm.svelte";
   import BranchPreview from "./BranchPreview.svelte";
+  import BackgroundChoices from "./BackgroundChoices.svelte";
   import DiffPreview from "./DiffPreview.svelte";
   import GitHubSignIn from "./GitHubSignIn.svelte";
   import GitLabSignIn from "./GitLabSignIn.svelte";
@@ -375,9 +376,12 @@
         {#each shown as group (group.key)}
           <section>
             {#if group.title}<h2>{group.title}</h2>{/if}
+            {#if !needle && group.preview === "background"}<div class="background-choices"><BackgroundChoices /></div>{/if}
             <div class="panel">
               {#each group.rows as row (row.id)}
-                <SettingsRow {row} menuOn={menu?.row.id === row.id} onMenu={(x, y) => openMenu(row, x, y)} bind:editing />
+                {#if needle || group.preview !== "background" || row.id === "oxbow.background.intensity"}
+                  <SettingsRow {row} menuOn={menu?.row.id === row.id} onMenu={(x, y) => openMenu(row, x, y)} bind:editing />
+                {/if}
               {/each}
               {#if group.detail === "updates"}<UpdateStatusPanel />{/if}
             </div>
@@ -661,6 +665,10 @@
 
   .theme-choices {
     padding: 8px 2px 2px;
+  }
+
+  .background-choices {
+    padding: 2px 2px var(--space-3);
   }
 
   .section-note {
