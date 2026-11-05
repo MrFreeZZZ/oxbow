@@ -41,7 +41,7 @@
 {/snippet}
 
 <div class="inter">
-  <div class="cols" aria-hidden="true">
+  <div class="cols background-sticky" aria-hidden="true">
     <span>Before <span class="mono">{before}</span></span>
     <span>After <span class="mono">{after}</span></span>
   </div>

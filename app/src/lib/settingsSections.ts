@@ -1,6 +1,7 @@
 // The Settings window's sections for Oxbow's own settings, which save at once to settings.json
 // and reach the main window through prefs: General, Appearance, Diff & Text and External Tools.
 
+import { backgroundIntensity, previewIntensity, saveIntensity } from "./backgroundIntensity.svelte";
 import { BRANCH_PALETTES, branchPaletteById } from "./branchPalettes";
 import { shortcut } from "./keys";
 import { prefs } from "./prefs.svelte";
@@ -167,7 +168,7 @@ export const themeSection: Section = {
             label: "Intensity",
             setting: { kind: "pref", key: "oxbow.background.intensity" },
             off: () => prefs.get("oxbow.background.source") === "none",
-            control: { type: "range", min: 0, max: 100, step: 1, suffix: "%", get: () => prefs.get("oxbow.background.intensity"), set: (value) => { void prefs.set("oxbow.background.intensity", value); } },
+            control: { type: "range", min: 0, max: 100, step: 1, suffix: "%", get: () => backgroundIntensity.value ?? prefs.get("oxbow.background.intensity"), set: previewIntensity, commit: () => { void saveIntensity(); } },
           },
         ],
       },

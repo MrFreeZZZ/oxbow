@@ -32,7 +32,12 @@ async function settle() {
   runtime.flush();
 }
 
-function fixture() {
+function fixture(render = true) {
+  let version = "v1";
+  const handlers = new Map<string, (event: { payload: any }) => void>();
+  const events: { name: string; payload: any }[] = [];
+  const emit = async (name: string, payload: any) => { events.push({ name, payload }); };
+  const listen = async (name: string, callback: (event: { payload: any }) => void) => { handlers.set(name, callback); return () => { handlers.delete(name); }; };
   const selection = runtime.state({ source: "none", image: "", pending: false });
   const reads: ReturnType<typeof deferred<Uint8Array>>[] = [];
   const decodes: { src: string; work: ReturnType<typeof deferred<void>> }[] = [];
@@ -65,16 +70,18 @@ function fixture() {
     get: (key: string) => runtime.get(selection)[key.endsWith("source") ? "source" : "image"],
     pending: () => runtime.get(selection).pending,
   };
-  const api = { backgroundImage: () => { const read = deferred<Uint8Array>(); reads.push(read); return read.promise; } };
-  const module = Function("$", "api", "prefs", "backgroundType", "MAX_PIXELS", "pictureSize", "Urls", "inTurn", "Image", "window", "spring", "summer", "autumn", "winter",
-    `${compiled}; return { background, followBackground, retryBackground };`)(
-    { ...runtime, effect_root: (fn: () => void) => { const stop = runtime.effect_root(fn); roots.push(stop); return stop; } },
+  const api = { backgroundImageVersion: async () => version, backgroundImage: () => { const read = deferred<Uint8Array>(); reads.push(read); return read.promise; } };
+  const module = Function("emit", "listen", "$", "api", "prefs", "backgroundType", "MAX_PIXELS", "pictureSize", "Urls", "inTurn", "Image", "window", "spring", "summer", "autumn", "winter",
+    `${compiled}; return { background, followBackground, followBackgroundStatus, retryBackground };`)(
+    emit, listen, { ...runtime, effect_root: (fn: () => void) => { const stop = runtime.effect_root(fn); roots.push(stop); return stop; } },
     api, prefs, backgroundType, MAX_PIXELS, pictureSize, OwnedUrls, inTurn, Image, window, "spring.webp", "summer.webp", "autumn.webp", "winter.webp",
   );
-  module.followBackground();
+  if (render) module.followBackground();
+  else roots.push(runtime.effect_root(() => module.followBackgroundStatus()));
   runtime.flush();
   return {
-    ...module, reads, decodes, live, window,
+    ...module, reads, decodes, live, window, events, handlers,
+    version(value: string) { version = value; },
     select(source: string, image = "", pending = false) { runtime.set(selection, { source, image, pending }); runtime.flush(); },
     stop() { roots.forEach((stop) => stop()); assert.equal(live.size, 0); },
   };
@@ -84,6 +91,7 @@ test("a custom read finishing after a preset switch cannot replace that preset",
   const f = fixture();
   try {
     f.select("custom", "/old.png");
+    await settle();
     f.select("summer");
     assert.equal(f.decodes[0].src, "summer.webp");
     f.decodes[0].work.resolve();
@@ -101,10 +109,12 @@ test("a stale custom decode cannot replace the newer file and releases its URL",
   const f = fixture();
   try {
     f.select("custom", "/old.png");
+    await settle();
     f.reads[0].resolve(png);
     await settle();
     const old = f.decodes[0];
     f.select("custom", "/new.png");
+    await settle();
     assert.equal(f.live.has(old.src), false);
     f.reads[1].resolve(png);
     await settle();
@@ -135,8 +145,10 @@ test("custom reads wait for saved preferences and Retry recovers from a read err
   const f = fixture();
   try {
     f.select("custom", "/new.png", true);
+    await settle();
     assert.equal(f.reads.length, 0);
     f.select("custom", "/new.png");
+    await settle();
     f.reads[0].reject(new Error("File missing"));
     await settle();
     assert.match(f.background.problem, /File missing/);
@@ -156,14 +168,17 @@ test("focus refresh retains the displayed image until its replacement decodes", 
   const f = fixture();
   try {
     f.select("custom", "/photo.png");
+    await settle();
     f.reads[0].resolve(png);
     await settle();
     f.decodes[0].work.resolve();
     await settle();
     const shown = f.background.url;
+    f.version("v2");
     f.window.dispatchEvent(new Event("focus"));
     await settle();
     assert.equal(f.background.url, shown);
+    assert.ok(f.live.has(shown), "the displayed URL stays valid while refreshing");
     f.reads[1].resolve(png);
     await settle();
     assert.equal(f.background.url, shown);
@@ -171,5 +186,62 @@ test("focus refresh retains the displayed image until its replacement decodes", 
     await settle();
     assert.equal(f.background.url, f.decodes[1].src);
     assert.equal(f.live.size, 1);
+  } finally { f.stop(); }
+});
+
+
+test("unchanged custom files do not reread or decode on focus; Retry still forces a read", async () => {
+  const f = fixture();
+  try {
+    f.select("custom", "/photo.png");
+    await settle();
+    f.reads[0].resolve(png);
+    await settle();
+    f.decodes[0].work.resolve();
+    await settle();
+    f.window.dispatchEvent(new Event("focus"));
+    await settle();
+    assert.equal(f.reads.length, 1);
+    assert.equal(f.decodes.length, 1);
+    f.retryBackground();
+    await settle();
+    assert.equal(f.reads.length, 2);
+    f.reads[1].resolve(png);
+    await settle();
+    f.decodes[1].work.resolve();
+    await settle();
+  } finally { f.stop(); }
+});
+
+test("Settings observes decode errors, ignores stale selections, and forwards Retry without decoding", async () => {
+  const f = fixture(false);
+  try {
+    f.select("custom", "/photo.png");
+    await settle();
+    const report = f.handlers.get("background-status")!;
+    report({ payload: { selection: JSON.stringify(["custom", "/old.png"]), loading: false, problem: "stale" } });
+    assert.equal(f.background.problem, "");
+    report({ payload: { selection: JSON.stringify(["custom", "/photo.png"]), loading: false, problem: "Decode failed" } });
+    assert.equal(f.background.problem, "Decode failed");
+    f.retryBackground();
+    await settle();
+    assert.ok(f.events.some((event: { name: string }) => event.name === "background-retry"));
+    assert.equal(f.reads.length, 0);
+    assert.equal(f.decodes.length, 0);
+  } finally { f.stop(); }
+});
+
+test("a failed decode is reported by the rendering window and releases its URL", async () => {
+  const f = fixture();
+  try {
+    f.select("custom", "/broken.png");
+    await settle();
+    f.reads[0].resolve(png);
+    await settle();
+    f.decodes[0].work.reject(new Error("Decode failed"));
+    await settle();
+    assert.equal(f.live.size, 0);
+    assert.equal(f.background.url, "");
+    assert.ok(f.events.some((event: { name: string; payload: { problem?: string } }) => event.name === "background-status" && event.payload.problem?.includes("Decode failed")));
   } finally { f.stop(); }
 });

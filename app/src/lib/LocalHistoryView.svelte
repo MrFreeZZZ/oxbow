@@ -117,7 +117,7 @@
         <p class="hint">No saved file matches “{filter}”.</p>
       {/if}
       {#each days as day (day.day)}
-        <div class="day">{day.day}</div>
+        <div class="day background-sticky">{day.day}</div>
         {#each day.versions as v (keyOf(v))}
           {@const name = splitPath(v.path)}
           <button class="row" class:on={keyOf(v) === picked} class:dim={!v.kept} onclick={(e) => (choose(v), (e.currentTarget as HTMLElement).focus())} oncontextmenu={(e) => rowMenu(e, v)} title={v.path} aria-label="{time(v.at)} {v.path}{v.gone ? ', deleted' : ''}">
@@ -193,6 +193,7 @@
     padding: 0 8px 8px;
   }
   .day {
+    z-index: 1;
     position: sticky;
     top: 0;
     padding: 8px 8px 4px;

@@ -120,7 +120,7 @@
     <button class="button small" class:danger={control.danger} disabled={off} onclick={control.run}>{text(control.label)}</button>
   {:else if control?.type === "range"}
     <span class="range" class:off>
-      <input type="range" aria-label={text(row.label)} aria-valuetext={`${control.get()}${control.suffix ?? ""}`} min={control.min} max={control.max} step={control.step} value={control.get()} style:--range-fill="{100 * (control.get() - control.min) / (control.max - control.min)}%" disabled={off} oninput={(event) => control.set(Number(event.currentTarget.value))} />
+      <input type="range" aria-label={text(row.label)} aria-valuetext={`${control.get()}${control.suffix ?? ""}`} min={control.min} max={control.max} step={control.step} value={control.get()} style:--range-fill="{100 * (control.get() - control.min) / (control.max - control.min)}%" disabled={off} oninput={(event) => control.set(Number(event.currentTarget.value))} onchange={() => control.commit?.()} onblur={() => control.commit?.()} />
       <span class="range-value">{control.get()}{control.suffix ?? ""}</span>
     </span>
   {:else if control?.type === "keys"}

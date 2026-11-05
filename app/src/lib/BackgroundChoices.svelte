@@ -1,7 +1,7 @@
 <script lang="ts">
   import { open } from "@tauri-apps/plugin-dialog";
   import { prefs } from "./prefs.svelte";
-  import { background, followBackground, retryBackground } from "./background.svelte";
+  import { background, followBackgroundStatus, retryBackground } from "./background.svelte";
   import spring from "../assets/backgrounds/spring.jpg";
   import summer from "../assets/backgrounds/summer.jpg";
   import autumn from "../assets/backgrounds/autumn.jpg";
@@ -19,7 +19,7 @@
   const source = $derived(prefs.get("oxbow.background.source"));
   const file = $derived(prefs.get("oxbow.background.image"));
   const filename = $derived(file.split(/[\\/]/).pop() || "Choose Image…");
-  followBackground();
+  followBackgroundStatus();
 
   async function chooseImage() {
     if (choosing) return;

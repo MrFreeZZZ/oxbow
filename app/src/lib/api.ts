@@ -105,6 +105,7 @@ export const stopped = (err: unknown) => String(err) === "stopped";
 
 export const api = {
   /** Only the custom image currently configured in settings.json; no arbitrary file access. */
+  backgroundImageVersion: () => invoke<string>("background_image_version"),
   backgroundImage: () => invoke<ArrayBuffer | ArrayBufferView | number[]>("background_image").then((data) =>
     data instanceof ArrayBuffer ? new Uint8Array(data)
       : ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)

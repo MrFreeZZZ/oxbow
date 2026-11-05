@@ -19,7 +19,7 @@ export type Setting =
   | { kind: "git"; scope: ConfigScope; keys: string[]; commands: () => string[]; reset: () => Promise<void> };
 
 export type Control =
-  | { type: "range"; min: number; max: number; step: number; get: () => number; set: (value: number) => void; suffix?: string }
+  | { type: "range"; min: number; max: number; step: number; get: () => number; set: (value: number) => void; commit?: () => void; suffix?: string }
   | { type: "value"; text: Text }
   | { type: "seg" | "popup"; options: () => Option[]; get: () => Value; set: (value: Value) => void }
   | { type: "switch"; get: () => boolean; set: (on: boolean) => void }

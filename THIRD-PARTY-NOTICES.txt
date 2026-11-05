@@ -3,8 +3,8 @@
 ## Seasonal background images
 
 The Settings thumbnails in app/src/assets/backgrounds/ are resized JPEG copies of
-the photographs below. The full/ directory contains WebP copies (winter resized to
-6000 pixels wide; the other full images keep their original pixel dimensions).
+the photographs below. The full/ directory contains WebP copies resized to
+3200 pixels wide, keeping their aspect ratios (WebP quality 85).
 Metadata is removed from the full images. The app displays cover crops, blends
 images with the window background and darkens/desaturates them in the dark look.
 No endorsement is implied. These notices and image licenses cover both sizes.

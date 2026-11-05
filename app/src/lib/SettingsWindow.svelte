@@ -6,6 +6,8 @@
   // are in settingsSections.ts, settingsGit.ts and settingsKeys.svelte.ts, a row's control in
   // SettingsRow.svelte.
 
+  import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { backgroundIntensity, saveIntensity } from "./backgroundIntensity.svelte";
   import { listen } from "@tauri-apps/api/event";
   import { untrack, onDestroy } from "svelte";
   import { beforeUpdateRestart } from "./updateRestart.svelte";
@@ -36,6 +38,23 @@
   import ThemeSample from "./ThemeSample.svelte";
   import UpdateStatusPanel from "./UpdateStatusPanel.svelte";
   import { settingsRoute, settingsSection } from "./settingsNavigation";
+
+  // A close can arrive before the slider's debounce or its final change event.
+  let closingIntensity = false;
+  const closing = getCurrentWindow().onCloseRequested(async (event) => {
+    if (!backgroundIntensity.saving) return;
+    event.preventDefault();
+    if (closingIntensity) return;
+    closingIntensity = true;
+    try {
+      while (backgroundIntensity.saving) await saveIntensity();
+      if (!prefs.failure) await getCurrentWindow().destroy();
+    } finally { closingIntensity = false; }
+  });
+  onDestroy(() => { void closing.then((stop) => stop()); void saveIntensity(); });
+  const flushIntensity = () => { void saveIntensity(); };
+  window.addEventListener("blur", flushIntensity);
+  onDestroy(() => window.removeEventListener("blur", flushIntensity));
 
   api.monospaceFonts().then((list) => (model.fonts = list), () => {});
   load();
@@ -157,6 +176,7 @@
   let jsonText = $state("");
   let jsonSaved = $state("");
   onDestroy(beforeUpdateRestart(() => {
+    if (backgroundIntensity.saving) return "Finish saving your settings before restarting to install the update.";
     if (jsonText !== jsonSaved || editing || Object.keys(repoFiles.drafts).length) return "Save or discard your edits in Settings before restarting to install the update.";
     return null;
   }));

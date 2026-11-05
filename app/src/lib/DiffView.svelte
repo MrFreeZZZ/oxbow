@@ -678,7 +678,7 @@
   {@const why = isShut ? foldReason(diff) : null}
   {@const kind = isShut ? null : special(diff)}
   <section class="file" class:shut={isShut} data-path={diff.file.path}>
-    <header>
+    <header class="background-sticky">
       <!-- Outlined in the branch color, as the Summary tab is. -->
       <div class="bar" style:background={tint(color, "head")} style:border-color={`color-mix(in srgb, ${lane(color)} 40%, transparent)`} style:--name={plate(color)}>
         {#if foldable}
@@ -914,25 +914,6 @@
     z-index: 1;
     padding: var(--space-2) 0;
     background: var(--surface-sticky);
-  }
-  /* Paint the same viewport-aligned photograph over the scrolling lines. Scroll handlers
-     cannot keep a changing clip in sync with WebKit's asynchronous scrolling. */
-  :global(:root[data-background="on"]:not([data-transparency="reduce"]):not([data-contrast="more"])) header {
-    background: var(--win);
-    isolation: isolate;
-  }
-  :global(:root[data-background="on"]:not([data-transparency="reduce"]):not([data-contrast="more"])) header::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-    pointer-events: none;
-    background-image: var(--window-background-image);
-    background-size: cover;
-    background-position: var(--window-background-position);
-    background-attachment: fixed;
-    opacity: var(--window-background-opacity);
-    filter: var(--window-background-filter);
   }
   .bar {
     display: flex;

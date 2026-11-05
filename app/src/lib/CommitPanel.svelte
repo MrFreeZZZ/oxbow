@@ -354,7 +354,7 @@
     <h1 class="selectable">
       {detail?.summary ?? row.summary}
       {#if branchName}
-        <span class="branch" style:color={plate(color)} style:background={tint(color, "label")} title="Branch of this commit">
+        <span class="branch" style:color={plate(color)} style:background={tint(color, "label")} style:box-shadow={`inset 0 0 0 1px color-mix(in srgb, ${lane(color)} 40%, transparent)`} title="Branch of this commit">
           <svg class="icon tiny" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg>
           {branchName}
         </span>

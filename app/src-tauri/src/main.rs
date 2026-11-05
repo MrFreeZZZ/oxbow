@@ -133,6 +133,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             preferences::display_options,
             background::background_image,
+            background::background_image_version,
             repos::open_repo,
             repos::close_repo,
             repos::trust_repo,
