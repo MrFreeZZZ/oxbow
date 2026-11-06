@@ -237,8 +237,24 @@ pub(crate) fn partial_hunk(text: &str, selected: &[usize], forward: bool) -> Opt
     // concatenate the next addition. Split context when only one side needs a newline.
     let old_last = emitted.iter().rposition(|row| row.0 != '+');
     let new_last = emitted.iter().rposition(|row| row.0 != '-');
-    let old_no_newline = emitted.iter().any(|row| row.0 != '+' && row.2);
-    let new_no_newline = emitted.iter().any(|row| row.0 != '-' && row.2);
+    let no_newline = |excluded: char, last: Option<usize>| {
+        let moved = emitted
+            .iter()
+            .enumerate()
+            .any(|(i, row)| row.0 != excluded && row.2 && last != Some(i));
+        if moved {
+            // Extending the former EOF uses this side's original ending, even if
+            // the last changed line on that side was left out of the selection.
+            parsed
+                .iter()
+                .rfind(|row| !row.0.starts_with(excluded))
+                .is_some_and(|row| row.1.is_some())
+        } else {
+            emitted.iter().any(|row| row.0 != excluded && row.2)
+        }
+    };
+    let old_no_newline = no_newline('+', old_last);
+    let new_no_newline = no_newline('-', new_last);
     let mut body = String::new();
     let mut emit_line = |kind: char, text: &str, no_newline: bool| {
         body.push(kind);

@@ -621,39 +621,45 @@ fn stashing_picked_lines_preserves_missing_final_newlines() {
 
 #[test]
 fn stashing_only_an_added_line_after_unterminated_context_preserves_bytes() {
-    let mut fx = Fixture::new();
-    fx.commit("eof.txt", "one\ntwo", "Root");
-    fx.write("eof.txt", "one\nTWO\nextra");
-    let repo = Repo::open(fx.path()).unwrap();
-    let hunk = repo
-        .working_diff("eof.txt", oxbow_core::Side::Unstaged, false)
-        .unwrap()
-        .hunks
-        .remove(0);
-    let picked = hunk
-        .lines
-        .iter()
-        .enumerate()
-        .filter(|(_, line)| line.kind == oxbow_core::LineKind::Added && line.text == "TWO")
-        .map(|(i, _)| i)
-        .collect::<Vec<_>>();
-    assert_eq!(picked.len(), 1);
-    repo.perform(&Action::StashHunk {
-        path: "eof.txt".into(),
-        header: hunk.header,
-        check: hunk.check,
-        lines: Some(picked),
-        message: Some("Added line".into()),
-    })
-    .unwrap();
-    assert_eq!(std::fs::read(fx.path().join("eof.txt")).unwrap(), b"one\nextra");
-    for (object, expected) in [(":eof.txt", "one\ntwo"), ("stash@{0}:eof.txt", "one\ntwo\nTWO")] {
-        let output = std::process::Command::new("git")
-            .args(["show", object])
-            .current_dir(fx.path())
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        assert_eq!(output.stdout, expected.as_bytes());
+    for ending in ["", "\n"] {
+        let mut fx = Fixture::new();
+        fx.commit("eof.txt", "one\ntwo", "Root");
+        fx.write("eof.txt", &format!("one\nTWO\nextra{ending}"));
+        let repo = Repo::open(fx.path()).unwrap();
+        let hunk = repo
+            .working_diff("eof.txt", oxbow_core::Side::Unstaged, false)
+            .unwrap()
+            .hunks
+            .remove(0);
+        let picked = hunk
+            .lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.kind == oxbow_core::LineKind::Added && line.text == "TWO")
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>();
+        assert_eq!(picked.len(), 1);
+        repo.perform(&Action::StashHunk {
+            path: "eof.txt".into(),
+            header: hunk.header,
+            check: hunk.check,
+            lines: Some(picked),
+            message: Some("Added line".into()),
+        })
+        .unwrap();
+        assert_eq!(
+            std::fs::read(fx.path().join("eof.txt")).unwrap(),
+            format!("one\nextra{ending}").as_bytes()
+        );
+        let stashed = format!("one\ntwo\nTWO{ending}");
+        for (object, expected) in [(":eof.txt", "one\ntwo"), ("stash@{0}:eof.txt", stashed.as_str())] {
+            let output = std::process::Command::new("git")
+                .args(["show", object])
+                .current_dir(fx.path())
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            assert_eq!(output.stdout, expected.as_bytes());
+        }
     }
 }

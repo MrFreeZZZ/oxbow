@@ -581,6 +581,22 @@ fn adding_selected_lines_after_an_unterminated_line_keeps_them_separate() {
             "extra",
             "one\ntwo\nextra",
         ),
+        (
+            "one\ntwo",
+            "one\nTWO\nextra\n",
+            Side::Unstaged,
+            LineKind::Added,
+            "TWO",
+            "one\ntwo\nTWO\n",
+        ),
+        (
+            "one\nTWO\nextra\n",
+            "one\ntwo",
+            Side::Staged,
+            LineKind::Removed,
+            "extra",
+            "one\ntwo\nextra\n",
+        ),
     ] {
         let mut fx = Fixture::new();
         fx.commit("eof.txt", base, "Root");
