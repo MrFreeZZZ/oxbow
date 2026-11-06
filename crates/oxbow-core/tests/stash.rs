@@ -575,3 +575,46 @@ fn lines_next_to_staged_changes_are_refused_with_the_way_out() {
         "no failed step in the Operation Log"
     );
 }
+
+#[test]
+fn stashing_picked_lines_preserves_missing_final_newlines() {
+    for edited in ["A\nb\nc", "A\nb\nC"] {
+        let mut fx = Fixture::new();
+        fx.commit("eof.txt", "a\nb\nc", "Root");
+        fx.write("eof.txt", edited);
+        let repo = Repo::open(fx.path()).unwrap();
+        let hunk = repo
+            .working_diff("eof.txt", oxbow_core::Side::Unstaged, false)
+            .unwrap()
+            .hunks
+            .remove(0);
+        let picked = hunk
+            .lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.kind != oxbow_core::LineKind::Context && line.text.eq_ignore_ascii_case("a"))
+            .map(|(i, _)| i)
+            .collect();
+        repo.perform(&Action::StashHunk {
+            path: "eof.txt".into(),
+            header: hunk.header,
+            check: hunk.check,
+            lines: Some(picked),
+            message: Some("First line".into()),
+        })
+        .unwrap();
+        assert_eq!(
+            std::fs::read(fx.path().join("eof.txt")).unwrap(),
+            edited.replacen('A', "a", 1).as_bytes()
+        );
+        for (object, expected) in [(":eof.txt", "a\nb\nc"), ("stash@{0}:eof.txt", "A\nb\nc")] {
+            let output = std::process::Command::new("git")
+                .args(["show", object])
+                .current_dir(fx.path())
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            assert_eq!(output.stdout, expected.as_bytes());
+        }
+    }
+}

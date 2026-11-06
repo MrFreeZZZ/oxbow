@@ -1923,6 +1923,8 @@
     else goForward();
   }}
   onkeydown={(event) => {
+    // Menu handles Escape on the same window; its listener may run after this one.
+    if (event.key === "Escape" && document.querySelector('[role="menu"]')) return;
     const hit = keymap.match(event);
     // The chord's note goes once its second key came.
     if (hit && chordNote && confirm.toast?.text === chordNote) confirm.dismiss();

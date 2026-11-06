@@ -486,3 +486,70 @@ fn files_listed_before_their_lines_are_counted_show_the_same_diffs() {
     );
     assert!(long.unwrap().diffs[0].limited);
 }
+
+#[test]
+fn picked_lines_preserve_exact_eof_bytes_in_both_directions() {
+    // Exercise unchanged EOF context, an unpicked EOF replacement, and a picked EOF
+    // replacement, including adding/removing the final newline and CRLF.
+    for (base, edited, pick, staged) in [
+        ("a\nb\nc", "A\nb\nc", "a", "A\nb\nc"),
+        ("a\nb", "A\nB", "a", "A\nb"),
+        ("a\nb", "A\nB", "b", "a\nB"),
+        ("a\nb", "A\nB\n", "a", "A\nb"),
+        ("a\nb\n", "A\nB", "a", "A\nb\n"),
+        ("a\r\nb", "A\r\nB", "a", "A\r\nb"),
+    ] {
+        let mut fx = Fixture::new();
+        fx.commit("eof.txt", base, "Root");
+        fx.write("eof.txt", edited);
+        let repo = Repo::open(fx.path()).unwrap();
+        let hunk = repo
+            .working_diff("eof.txt", Side::Unstaged, false)
+            .unwrap()
+            .hunks
+            .remove(0);
+        let selected = |hunk: &oxbow_core::Hunk| {
+            hunk.lines
+                .iter()
+                .enumerate()
+                .filter(|(_, line)| line.kind != LineKind::Context && line.text.eq_ignore_ascii_case(pick))
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>()
+        };
+        let picked = selected(&hunk);
+        assert_eq!(picked.len(), 2);
+        repo.perform(&Action::StageHunk {
+            path: "eof.txt".into(),
+            header: hunk.header,
+            check: hunk.check,
+            lines: Some(picked),
+        })
+        .unwrap();
+        let index = || {
+            let output = std::process::Command::new("git")
+                .args(["show", ":eof.txt"])
+                .current_dir(fx.path())
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            output.stdout
+        };
+        assert_eq!(index(), staged.as_bytes(), "{base:?} -> {edited:?}, pick {pick}");
+        assert_eq!(std::fs::read(fx.path().join("eof.txt")).unwrap(), edited.as_bytes());
+        let hunk = repo
+            .working_diff("eof.txt", Side::Staged, false)
+            .unwrap()
+            .hunks
+            .remove(0);
+        let picked = selected(&hunk);
+        repo.perform(&Action::UnstageHunk {
+            path: "eof.txt".into(),
+            header: hunk.header,
+            check: hunk.check,
+            lines: Some(picked),
+        })
+        .unwrap();
+        assert_eq!(index(), base.as_bytes());
+        assert_eq!(std::fs::read(fx.path().join("eof.txt")).unwrap(), edited.as_bytes());
+    }
+}

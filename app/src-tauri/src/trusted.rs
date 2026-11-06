@@ -10,7 +10,7 @@ use oxbow_core::{Repo, TrustFinding};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrustedRepo {
     pub path: String,
@@ -22,35 +22,72 @@ pub struct TrustedRepo {
 /// One read-change-write at a time: windows open repositories at once.
 static LOCK: Mutex<()> = Mutex::new(());
 
-fn file(app: &AppHandle) -> Option<PathBuf> {
+fn file(app: &AppHandle) -> crate::CommandResult<PathBuf> {
     app.path()
         .app_config_dir()
-        .ok()
         .map(|dir| dir.join("trusted-repositories.json"))
+        .map_err(|err| err.to_string())
 }
 
-fn read(app: &AppHandle) -> Vec<TrustedRepo> {
-    let Some(file) = file(app) else { return Vec::new() };
-    match std::fs::read_to_string(&file) {
-        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
-        Err(_) => {
-            let seeded: Vec<TrustedRepo> = crate::recent::read_recent(app)
-                .into_iter()
-                .map(|r| TrustedRepo {
-                    path: r.path,
-                    settings: Vec::new(),
-                })
-                .collect();
-            write(app, &seeded);
-            seeded
+fn read_file(file: &Path, seed: impl FnOnce() -> Vec<TrustedRepo>) -> crate::CommandResult<Vec<TrustedRepo>> {
+    match std::fs::read_to_string(file) {
+        Ok(text) => serde_json::from_str(&text)
+            .map_err(|err| format!("trusted-repositories.json isn't a list Oxbow can read: {err}.")),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            let list = seed();
+            write(file, &list)?;
+            Ok(list)
         }
+        Err(err) => Err(format!("Can't read trusted-repositories.json: {err}.")),
     }
 }
 
-fn write(app: &AppHandle, list: &[TrustedRepo]) {
-    let Some(file) = file(app) else { return };
-    if let Ok(text) = serde_json::to_string_pretty(list) {
-        let _ = crate::settings::replace(&file, &(text + "\n"));
+fn seed(app: &AppHandle) -> Vec<TrustedRepo> {
+    crate::recent::read_recent(app)
+        .into_iter()
+        .map(|r| TrustedRepo {
+            path: r.path,
+            settings: Vec::new(),
+        })
+        .collect()
+}
+
+fn try_read(app: &AppHandle) -> crate::CommandResult<Vec<TrustedRepo>> {
+    read_file(&file(app)?, || seed(app))
+}
+
+fn read(app: &AppHandle) -> Vec<TrustedRepo> {
+    try_read(app).unwrap_or_else(|err| {
+        eprintln!("{err}");
+        Vec::new()
+    })
+}
+
+fn write(file: &Path, list: &[TrustedRepo]) -> crate::CommandResult<()> {
+    let text = serde_json::to_string_pretty(list).map_err(|err| err.to_string())?;
+    crate::settings::replace(file, &(text + "\n"))
+        .map_err(|err| format!("Can't write trusted-repositories.json: {err}."))
+}
+
+fn update(
+    file: &Path,
+    seed: impl FnOnce() -> Vec<TrustedRepo>,
+    change: impl FnOnce(&mut Vec<TrustedRepo>),
+) -> crate::CommandResult<()> {
+    let mut list = read_file(file, seed)?;
+    let before = list.clone();
+    change(&mut list);
+    if list != before {
+        write(file, &list)?;
+    }
+    Ok(())
+}
+
+fn update_trusted(app: &AppHandle, change: impl FnOnce(&mut Vec<TrustedRepo>)) {
+    let _lock = LOCK.lock().expect("trusted lock");
+    let result = file(app).and_then(|file| update(&file, || seed(app), change));
+    if let Err(err) = result {
+        eprintln!("{err}");
     }
 }
 
@@ -75,28 +112,22 @@ pub fn is_trusted(app: &AppHandle, path: &Path) -> bool {
 
 /// Trust the repository at `path`, which has the settings `found`.
 pub fn add(app: &AppHandle, path: &Path, found: &[TrustFinding]) {
-    let _lock = LOCK.lock().expect("trusted lock");
-    let mut list = read(app);
-    list.retain(|r| !same(&r.path, path));
-    list.push(TrustedRepo {
-        path: path.display().to_string(),
-        settings: keys(found),
+    update_trusted(app, |list| {
+        list.retain(|r| !same(&r.path, path));
+        list.push(TrustedRepo {
+            path: path.display().to_string(),
+            settings: keys(found),
+        });
     });
-    write(app, &list);
 }
 
 /// A trusted repository was opened with the settings `found`: Settings lists them.
 pub fn note(app: &AppHandle, path: &Path, found: &[TrustFinding]) {
-    let _lock = LOCK.lock().expect("trusted lock");
-    let mut list = read(app);
-    let keys = keys(found);
-    let Some(entry) = list.iter_mut().find(|r| same(&r.path, path)) else {
-        return;
-    };
-    if entry.settings != keys {
-        entry.settings = keys;
-        write(app, &list);
-    }
+    update_trusted(app, |list| {
+        if let Some(entry) = list.iter_mut().find(|r| same(&r.path, path)) {
+            entry.settings = keys(found);
+        }
+    });
 }
 
 /// The settings of `repo` that run programs, and whether git may run them: the user trusts it,
@@ -132,8 +163,61 @@ pub fn trusted_repos(app: AppHandle) -> Vec<TrustedRepo> {
 /// Remove: the repository asks again the next time it opens.
 #[tauri::command]
 pub fn untrust_repo(app: AppHandle, path: String) {
-    let _lock = LOCK.lock().expect("trusted lock");
-    let mut list = read(&app);
-    list.retain(|r| !same(&r.path, Path::new(&path)));
-    write(&app, &list);
+    update_trusted(&app, |list| list.retain(|r| !same(&r.path, Path::new(&path))));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn seed() -> Vec<TrustedRepo> {
+        vec![TrustedRepo {
+            path: "/legacy/repo".into(),
+            settings: Vec::new(),
+        }]
+    }
+
+    #[test]
+    fn only_an_absent_list_is_seeded_from_recent_repositories() {
+        let dir = std::env::temp_dir().join(format!("oxbow-trusted-seed-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("trusted-repositories.json");
+        let _ = std::fs::remove_file(&file);
+        assert_eq!(read_file(&file, seed).unwrap()[0].path, "/legacy/repo");
+        assert_eq!(
+            read_file(&file, || panic!("seeded twice")).unwrap()[0].path,
+            "/legacy/repo"
+        );
+        update(&file, seed, Vec::clear).unwrap();
+        assert!(read_file(&file, || panic!("seeded an empty list")).unwrap().is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn broken_and_unreadable_lists_are_never_seeded_or_replaced() {
+        let dir = std::env::temp_dir().join(format!("oxbow-trusted-broken-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("trusted-repositories.json");
+        for broken in ["", "[", "{}", "[{\"settings\":[]}]"] {
+            std::fs::write(&file, broken).unwrap();
+            assert!(read_file(&file, || panic!("seeded a broken list")).is_err());
+            assert!(update(&file, seed, |_| panic!("changed a broken list")).is_err());
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), broken);
+        }
+        std::fs::write(&file, [0xff]).unwrap();
+        assert!(update(&file, seed, |_| panic!("changed invalid UTF-8")).is_err());
+        assert_eq!(std::fs::read(&file).unwrap(), [0xff]);
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir(&file).unwrap();
+        assert!(
+            update(
+                &file,
+                || panic!("seeded an unreadable list"),
+                |_| panic!("changed an unreadable list")
+            )
+            .is_err()
+        );
+        assert!(file.is_dir());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
