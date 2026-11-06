@@ -334,11 +334,13 @@
   function onKey(event: KeyboardEvent) {
     if (event.key === "Home" || (event.key === "ArrowUp" && (event.metaKey || event.ctrlKey))) {
       event.preventDefault();
+      viewport?.focus({ preventScroll: true });
       toTop();
       return;
     }
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     event.preventDefault();
+    viewport?.focus({ preventScroll: true });
     const current = selected ? (indexOf.get(selected) ?? -1) : -1;
     const next = Math.min(rows.length - 1, Math.max(0, current + (event.key === "ArrowDown" ? 1 : -1)));
     if (rows[next]) onSelect(rows[next].id);
@@ -433,6 +435,7 @@
     tabindex="0"
     role="listbox"
     aria-label="Commits"
+    aria-activedescendant={visible.some(({ row }) => row.id === selected) ? `history-option-${indexOf.get(selected!)}` : undefined}
   >
     {#if only && !rows.length}
       <!-- Only Matches with nothing found: the list says so itself, since no row can. -->
@@ -457,6 +460,7 @@
           class:pointed={pointed === row.id}
           class:menu-open={menu?.id === row.id}
           role="option"
+          id={`history-option-${index}`}
           aria-selected={picked}
           tabindex="-1"
           style:top="{PAD_TOP + index * ROW}px"
@@ -464,7 +468,10 @@
           class:picked
           style:--flash={tint(row.graph.color)}
           style:--ring={lane(row.graph.color)}
-          onclick={(e) => ((e.metaKey || e.ctrlKey) && onSecond && !row.worktree ? onSecond(row.id) : onSelect(row.id))}
+          onclick={(e) => {
+            viewport?.focus({ preventScroll: true });
+            (e.metaKey || e.ctrlKey) && onSecond && !row.worktree ? onSecond(row.id) : onSelect(row.id);
+          }}
           oncontextmenu={(e) => openMenu(e, row)}
           onkeydown={() => {}}
         >
@@ -779,6 +786,8 @@
      elsewhere or the window is in the background, as macOS lists do. */
   .row.picked {
     background: var(--sel-idle);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ring) 40%, transparent);
+    outline: none;
   }
   .viewport:focus-within .row.picked {
     background: var(--flash);

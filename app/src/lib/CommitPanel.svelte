@@ -791,7 +791,7 @@
     width: 100%;
     height: 34px;
     padding: 0 var(--space-2);
-    border-radius: var(--radius-s);
+    border-radius: var(--radius-m);
     font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
@@ -814,7 +814,7 @@
     width: 100%;
     height: 28px;
     padding: 0 var(--space-2) 0 22px;
-    border-radius: var(--radius-s);
+    border-radius: var(--radius-m);
     text-align: left;
   }
   .file:hover,
@@ -952,7 +952,7 @@
     margin: var(--space-2) var(--space-3) var(--space-3);
     padding: 10px 12px 12px;
     border: 1px solid transparent;
-    border-radius: var(--radius-xl);
+    border-radius: var(--radius-m);
     display: flex;
     flex-direction: column;
     gap: 8px;

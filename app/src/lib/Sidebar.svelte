@@ -738,6 +738,7 @@
       <button
         class="item"
         data-ref="HEAD"
+        class:branch-selected={focused === "HEAD"}
         class:menu-open={menu?.ref === "HEAD"}
         style:--ring={lane(color)}
         style:background={focused === "HEAD" ? tint(color) : undefined}
@@ -754,6 +755,7 @@
       <button
         class="item"
         data-ref={b.ref.name}
+        class:branch-selected={focused === b.ref.name}
         class:menu-open={menu?.ref === b.ref.name || lens.pointedRef === b.ref.name}
         style:--ring={lane(b.color)}
         style:background={focused === b.ref.name || lens.pointedRef === b.ref.name ? tint(b.color) : undefined}
@@ -1090,6 +1092,9 @@
   .item.current {
     background: var(--side-sel);
     font-weight: 600;
+  }
+  .item.branch-selected {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ring) 40%, transparent);
   }
   /* A clean working tree: Changes stays in its place, greyed. */
   .item:disabled {
