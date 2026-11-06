@@ -553,3 +553,74 @@ fn picked_lines_preserve_exact_eof_bytes_in_both_directions() {
         assert_eq!(std::fs::read(fx.path().join("eof.txt")).unwrap(), edited.as_bytes());
     }
 }
+
+#[test]
+fn adding_selected_lines_after_an_unterminated_line_keeps_them_separate() {
+    for (base, edited, side, kind, pick, expected) in [
+        (
+            "one\ntwo",
+            "one\nTWO\nextra",
+            Side::Unstaged,
+            LineKind::Added,
+            "TWO",
+            "one\ntwo\nTWO",
+        ),
+        (
+            "one\ntwo",
+            "one\nTWO\nextra",
+            Side::Unstaged,
+            LineKind::Added,
+            "extra",
+            "one\ntwo\nextra",
+        ),
+        (
+            "one\nTWO\nextra",
+            "one\ntwo",
+            Side::Staged,
+            LineKind::Removed,
+            "extra",
+            "one\ntwo\nextra",
+        ),
+    ] {
+        let mut fx = Fixture::new();
+        fx.commit("eof.txt", base, "Root");
+        fx.write("eof.txt", edited);
+        if side == Side::Staged {
+            fx.git(&["add", "eof.txt"]);
+        }
+        let repo = Repo::open(fx.path()).unwrap();
+        let hunk = repo.working_diff("eof.txt", side, false).unwrap().hunks.remove(0);
+        let picked = hunk
+            .lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.kind == kind && line.text == pick)
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>();
+        assert_eq!(picked.len(), 1);
+        let action = if side == Side::Staged {
+            Action::UnstageHunk {
+                path: "eof.txt".into(),
+                header: hunk.header,
+                check: hunk.check,
+                lines: Some(picked),
+            }
+        } else {
+            Action::StageHunk {
+                path: "eof.txt".into(),
+                header: hunk.header,
+                check: hunk.check,
+                lines: Some(picked),
+            }
+        };
+        repo.perform(&action).unwrap();
+        let output = std::process::Command::new("git")
+            .args(["show", ":eof.txt"])
+            .current_dir(fx.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, expected.as_bytes(), "{side:?}: {pick}");
+        assert_eq!(std::fs::read(fx.path().join("eof.txt")).unwrap(), edited.as_bytes());
+    }
+}

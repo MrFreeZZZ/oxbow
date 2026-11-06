@@ -176,33 +176,32 @@ pub(crate) fn partial_hunk(text: &str, selected: &[usize], forward: bool) -> Opt
             _ => {}
         }
     }
-    let mut body = String::new();
+    let mut emitted: Vec<(char, &str, bool)> = Vec::new();
     let (mut old, mut new, mut picked) = (0u32, 0u32, 0usize);
-    let mut emit = |(row, no_newline, index): (&str, Option<&str>, usize)| {
+    let mut emit = |index: usize| {
+        let (row, no_newline, _) = parsed[index];
         let added = row.starts_with('+');
-        if row.starts_with(' ') {
-            body.push_str(row);
+        let kind = row.as_bytes()[0] as char;
+        let kind = if row.starts_with(' ') {
             old += 1;
             new += 1;
+            kind
         } else if selected.contains(&index) {
             picked += 1;
-            body.push_str(row);
             if added {
                 new += 1;
             } else {
                 old += 1;
             }
+            kind
         } else if added != forward {
-            body.push(' ');
-            body.push_str(&row[1..]);
             old += 1;
             new += 1;
+            ' '
         } else {
             return;
-        }
-        if let Some(marker) = no_newline {
-            body.push_str(marker);
-        }
+        };
+        emitted.push((kind, &row[1..], no_newline.is_some()));
     };
     // A run of changed lines goes pair by pair, the n-th removed line beside the n-th added one,
     // so the lines left out keep their places: discarding `b`/`B` alone of `-a -b +A +B`
@@ -210,7 +209,7 @@ pub(crate) fn partial_hunk(text: &str, selected: &[usize], forward: bool) -> Opt
     let mut at = 0;
     while at < parsed.len() {
         if parsed[at].0.starts_with(' ') {
-            emit(parsed[at]);
+            emit(at);
             at += 1;
             continue;
         }
@@ -222,16 +221,41 @@ pub(crate) fn partial_hunk(text: &str, selected: &[usize], forward: bool) -> Opt
         let added: Vec<_> = run.iter().filter(|r| r.0.starts_with('+')).copied().collect();
         for n in 0..removed.len().max(added.len()) {
             if let Some(&row) = removed.get(n) {
-                emit(row);
+                emit(row.2);
             }
             if let Some(&row) = added.get(n) {
-                emit(row);
+                emit(row.2);
             }
         }
         at = end;
     }
     if picked == 0 {
         return None;
+    }
+    // A retained unterminated line may now have selected lines after it. Each side's
+    // marker belongs at its own EOF: leaving it on a context line would make git apply
+    // concatenate the next addition. Split context when only one side needs a newline.
+    let old_last = emitted.iter().rposition(|row| row.0 != '+');
+    let new_last = emitted.iter().rposition(|row| row.0 != '-');
+    let old_no_newline = emitted.iter().any(|row| row.0 != '+' && row.2);
+    let new_no_newline = emitted.iter().any(|row| row.0 != '-' && row.2);
+    let mut body = String::new();
+    let mut emit_line = |kind: char, text: &str, no_newline: bool| {
+        body.push(kind);
+        body.push_str(text);
+        if no_newline {
+            body.push_str("\\ No newline at end of file\n");
+        }
+    };
+    for (i, (kind, text, _)) in emitted.into_iter().enumerate() {
+        let old_end = old_no_newline && old_last == Some(i);
+        let new_end = new_no_newline && new_last == Some(i);
+        if kind == ' ' && old_end != new_end {
+            emit_line('-', text, old_end);
+            emit_line('+', text, new_end);
+        } else {
+            emit_line(kind, text, if kind == '+' { new_end } else { old_end });
+        }
     }
     // A side with no lines names the line before it, so the start moves by one when that changes.
     let start = |start: u32, was: u32, now: u32| match (was, now) {
