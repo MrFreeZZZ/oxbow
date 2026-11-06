@@ -2,7 +2,7 @@ name: Preview
 
 on:
   push:
-    branches: [main]
+    branches: [preview]
   workflow_dispatch:
 
 permissions:
@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   distribute:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/preview'
     permissions:
       contents: write
     uses: ./.github/workflows/distribution.yml

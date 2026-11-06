@@ -95,10 +95,17 @@ workflow builds macOS, Linux and Windows packages; runtime validation on Windows
 Developer ID signing and macOS notarization are pending. GitLab integration has automated tests
 against a test server; it has not yet been validated against a live GitLab service.
 
-CI checks pull requests on Linux. Pushes to `main` run Preview, which checks Linux and tests
+Development branches start from `preview` and target it with pull requests. `main` is reserved
+for releases: merge a validated `preview` (or a temporary `release/*` branch) through a pull
+request, then tag the merged commit. Urgent `hotfix/*` branches start from `main`; merge their
+fixes back into `preview` as well. Keep release merges as merge commits rather than squashing
+or rebasing, so both long-lived branches retain their shared history. Release notes and the
+changelog require approval before publication.
+
+CI checks pull requests and pushes to `main` on Linux. Pushes to `preview` run Preview, which checks Linux and tests
 macOS once before building and publishing a signed macOS Apple Silicon update.
 Version tags run a separate release workflow that checks the tagged commit, builds all three
-platforms and prepares a draft prerelease for review.
+platforms and prepares a draft release for review. Release commits must belong to `main`.
 
 ## Build from source
 
