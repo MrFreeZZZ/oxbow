@@ -1,4 +1,5 @@
 <script lang="ts">
+  import FileFilter from "./FileFilter.svelte";
   // Local History: every version of a file saved in the working copy lately, of every file,
   // newest first under the day it was saved, so even a file deleted since, or never added to git,
   // can be found and restored. A version shows what it changed, as in File History.
@@ -102,7 +103,7 @@
         {problem.waiting === 1 ? "isn’t" : "aren’t"} kept yet. {problem.error}. Local History tries again with the next save and every minute.
       </p>
     {/if}
-    <input class="filter" type="search" placeholder="Filter by file" bind:value={filter} aria-label="Filter by file" spellcheck="false" />
+    <div class="filter"><FileFilter bind:value={filter} /></div>
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="list" bind:this={list} onkeydown={keys}>
       {#if error}
@@ -174,18 +175,8 @@
   }
   .filter {
     margin: 4px 12px 6px;
-    height: 26px;
-    padding: 0 8px;
-    border-radius: var(--radius-m);
-    border: none;
-    background: var(--field);
-    color: var(--text);
-    font: inherit;
-    font-size: var(--text-small);
-  }
-  .filter:focus {
-    outline: 2px solid var(--accent);
-    outline-offset: -1px;
+    flex-shrink: 0;
+    min-width: 0;
   }
   .list {
     flex-grow: 1;

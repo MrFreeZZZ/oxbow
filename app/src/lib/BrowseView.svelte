@@ -1,4 +1,5 @@
 <script lang="ts">
+  import FileFilter from "./FileFilter.svelte";
   // Browse Files at This Commit: the repository as one commit has it, its folders on the left,
   // read one at a time, and the picked file on the right as text or a picture. A file is saved
   // elsewhere as it is there, followed back through File History from that commit, compared
@@ -313,11 +314,7 @@
       {#if label}<span class="label">{label}</span>{/if}
       <span class="summary" title={row?.summary}>{row?.summary ?? ""}</span>
     </div>
-    <div class="find">
-      <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5 14 14" /></svg>
-      <input bind:value={query} placeholder="Find a file" aria-label="Find a file" spellcheck="false" onkeydown={keydown} />
-      {#if query}<button class="clear" aria-label="Clear" onclick={() => (query = "")}>×</button>{/if}
-    </div>
+    <div class="find"><FileFilter bind:value={query} onkeydown={keydown} /></div>
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <div class="list" bind:this={list} role="tree" aria-label="Folders and files" tabindex="0" onkeydown={keydown}>
       {#if error}
@@ -438,32 +435,9 @@
     text-overflow: ellipsis;
   }
   .find {
-    display: flex;
-    align-items: center;
-    gap: 6px;
     margin: 4px 8px 6px;
-    padding: 0 8px;
-    height: 28px;
-    border-radius: var(--radius-m);
-    background: var(--field);
-  }
-  .find input {
-    flex-grow: 1;
+    flex-shrink: 0;
     min-width: 0;
-    border: none;
-    background: transparent;
-    color: var(--text);
-    font-size: var(--text-small);
-    outline: none;
-  }
-  .find .icon {
-    width: 13px;
-    height: 13px;
-    color: var(--text2);
-  }
-  .clear {
-    color: var(--text2);
-    font-size: var(--text-heading);
   }
   .list {
     flex-grow: 1;

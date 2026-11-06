@@ -15,13 +15,14 @@
 </script>
 
 <div class="key-tools">
-  <label class="key-search" class:recording={keySearch.record}>
-    <svg class="icon small" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5 14 14" /></svg>
+  <label class="key-search search-control" class:recording={keySearch.record}>
+    <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
     {#if keySearch.record}
       <input bind:this={keyField} aria-label="Press keys to find their command" placeholder="Press keys to find their command" value={keySearch.stroke ? keys(keySearch.stroke) : ""} onkeydown={searchKey} readonly />
     {:else}
       <input bind:this={keyField} type="search" aria-label="Search commands" placeholder="Search commands or keys" bind:value={keySearch.query} spellcheck="false" />
     {/if}
+    {#if keySearch.query || keySearch.stroke}<button type="button" class="clear" onclick={() => { keySearch.query = ""; keySearch.stroke = null; }} aria-label="Clear the filter" title="Clear the filter">×</button>{/if}
   </label>
   <button
     class="button pill"
@@ -60,39 +61,15 @@
   }
 
   .key-search {
-    display: flex;
-    align-items: center;
-    gap: 6px;
     width: 280px;
-    height: 30px;
-    padding: 0 10px;
-    border-radius: var(--radius-pill);
-    background: var(--field);
-    color: var(--text2);
   }
 
-  .key-search:focus-within {
-    box-shadow: var(--focus-ring);
-  }
-
-  .key-search input {
-    flex-grow: 1;
-    min-width: 0;
-    border: 0;
-    outline: 0;
-    background: transparent;
-    font: inherit;
-    color: var(--text);
+  .key-search.recording input {
     caret-color: transparent;
-    box-shadow: none;
   }
 
   .key-search input[type="search"] {
     caret-color: auto;
-  }
-
-  .key-search.recording input::placeholder {
-    color: var(--accent-ink);
   }
 
   .pill.on {

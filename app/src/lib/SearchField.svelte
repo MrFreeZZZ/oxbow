@@ -97,8 +97,8 @@
   }}
 />
 
-<div class="field" class:active={search.active}>
-  <svg class="icon glass" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="M10.3 10.3 14 14" /></svg>
+<div class="field search-control" class:active={search.active}>
+  <svg class="icon glass" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
   <button class="token" onclick={openMenu} aria-haspopup="menu" aria-expanded={menu} aria-label="Search in {label}">
     {label}
     <svg class="icon chevron" viewBox="0 0 16 16"><path d="M4.5 6.5 8 10l3.5-3.5" /></svg>
@@ -131,9 +131,7 @@
     <button class="arrow" onclick={() => step(1)} disabled={!matches.length} aria-label="Next match" title={withKeys("Next Match", "Enter")}>
       <svg class="icon" viewBox="0 0 16 16"><path d="M4.5 6.5 8 10l3.5-3.5" /></svg>
     </button>
-    <button class="clear" onclick={() => search.clear()} aria-label="Clear search">
-      <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" /><path d="M6 6l4 4M10 6l-4 4" /></svg>
-    </button>
+    <button class="clear" onclick={() => search.clear()} aria-label="Clear search">×</button>
   {/if}
 
   {#if menu}
@@ -196,24 +194,10 @@
 <style>
   .field {
     position: relative;
-    display: flex;
-    align-items: center;
-    gap: 4px;
     width: 300px;
     flex-shrink: 1;
     min-width: 200px;
-    height: 34px;
-    padding: 0 6px 0 10px;
-    border-radius: var(--radius-pill);
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--icon);
-  }
-  .field:focus-within {
-    box-shadow:
-      var(--glass-shadow),
-      var(--focus-ring);
+    --search-height: 34px;
   }
   .glass {
     flex-shrink: 0;
@@ -237,22 +221,6 @@
     height: 11px;
     color: var(--text2);
   }
-  input {
-    flex-grow: 1;
-    min-width: 40px;
-    border: 0;
-    outline: none;
-    background: none;
-    color: var(--text);
-    font: inherit;
-    font-size: var(--text-body);
-    user-select: text;
-    -webkit-user-select: text;
-    box-shadow: none;
-  }
-  input::placeholder {
-    color: var(--text3, var(--text2));
-  }
   .place {
     font-size: var(--text-caption);
     color: var(--text2);
@@ -274,19 +242,6 @@
   }
   .arrow:not(:disabled):hover {
     background: var(--side-sel);
-  }
-  .clear {
-    display: flex;
-    flex-shrink: 0;
-  }
-  .clear svg {
-    width: 15px;
-    height: 15px;
-    fill: var(--text2);
-    stroke: var(--win);
-    stroke-width: 1.5;
-    stroke-linecap: round;
-    opacity: 0.7;
   }
   .spinner {
     display: inline-block;

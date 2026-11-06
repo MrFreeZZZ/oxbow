@@ -123,9 +123,12 @@
 <div class="catcher" onclick={onClose}></div>
 <div class="pop" role="dialog" aria-label="Go to">
   <div class="field">
-    <svg class="icon" viewBox="0 0 16 16"><path d="M7 2.5a4.5 4.5 0 1 0 0 9a4.5 4.5 0 1 0 0-9M10.3 10.3 14 14" /></svg>
-    <input bind:this={input} bind:value={query} onkeydown={onKey} placeholder="Search {KINDS.find((k) => k.kind === kind)?.title.toLowerCase()} by name or path" spellcheck="false" autocomplete="off" aria-label="Search" />
-    <span class="keys">{shortcut("goToBranch")}</span>
+    <div class="search-control">
+      <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
+      <input bind:this={input} bind:value={query} onkeydown={onKey} placeholder="Search {KINDS.find((k) => k.kind === kind)?.title.toLowerCase()} by name or path" spellcheck="false" autocomplete="off" aria-label="Search" />
+      <span class="keys">{shortcut("goToBranch")}</span>
+      {#if query}<button type="button" class="clear" onclick={() => (query = "")} aria-label="Clear the filter" title="Clear the filter">×</button>{/if}
+    </div>
   </div>
   <div class="tabs" role="tablist" aria-label="Types">
     {#each KINDS as k (k.kind)}
@@ -205,27 +208,12 @@
   .field {
     display: flex;
     align-items: center;
-    gap: 10px;
     height: 48px;
-    padding: 0 14px 0 16px;
+    padding: 0 var(--space-3);
     flex-shrink: 0;
   }
-  .field .icon {
-    color: var(--text2);
-    flex-shrink: 0;
-  }
-  input {
-    flex-grow: 1;
-    min-width: 0;
-    border: 0;
-    outline: none;
-    background: none;
-    color: var(--text);
-    font: inherit;
-    font-size: var(--text-heading);
-    user-select: text;
-    -webkit-user-select: text;
-    box-shadow: none;
+  .field > :global(.search-control) {
+    width: 100%;
   }
   .keys {
     font-size: var(--text-caption);

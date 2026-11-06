@@ -97,9 +97,10 @@
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="catcher" onclick={() => (open = false)}></div>
     <div class="pop" role="menu" aria-label="Check out branch">
-      <label class="search">
-        <svg class="icon small" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
-        <input bind:this={field} bind:value={query} oninput={() => (active = 0)} onkeydown={onKey} placeholder="Switch to branch…" spellcheck="false" autocomplete="off" />
+      <label class="search search-control">
+        <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
+        <input bind:this={field} bind:value={query} oninput={() => (active = 0)} onkeydown={onKey} placeholder="Switch to branch…" aria-label="Switch to branch" spellcheck="false" autocomplete="off" />
+      {#if query}<button type="button" class="clear" onclick={() => { query = ""; active = 0; }} aria-label="Clear the filter" title="Clear the filter">×</button>{/if}
       </label>
       <div class="heading">Local branches</div>
       <div class="list">
@@ -192,31 +193,7 @@
     flex-direction: column;
   }
   .search {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    height: 30px;
     margin: 0 2px 4px;
-    padding: 0 10px;
-    border-radius: var(--radius-m);
-    background: var(--field);
-    color: var(--text2);
-  }
-  .search:focus-within {
-    box-shadow: var(--focus-ring);
-  }
-  .search input {
-    flex-grow: 1;
-    min-width: 0;
-    border: 0;
-    outline: none;
-    background: none;
-    color: var(--text);
-    font: inherit;
-    font-size: var(--text-small);
-    user-select: text;
-    -webkit-user-select: text;
-    box-shadow: none;
   }
   .heading {
     font-size: var(--text-caption);

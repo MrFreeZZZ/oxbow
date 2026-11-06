@@ -1,0 +1,58 @@
+/* Shared appearance; each screen owns width, placement and search behavior. */
+.search-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-shrink: 0;
+  height: var(--search-height, 26px);
+  padding: 0 6px 0 10px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--field);
+  color: var(--text2);
+}
+
+.search-control:focus-within {
+  box-shadow: var(--focus-ring);
+}
+
+.search-control > svg.icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  color: var(--text2);
+}
+
+.search-control > input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font: 400 var(--text-small) var(--font);
+  color: var(--text);
+  user-select: text;
+  -webkit-user-select: text;
+  box-shadow: none;
+}
+
+.search-control > input::-webkit-search-cancel-button,
+.search-control > input::-webkit-search-decoration {
+  -webkit-appearance: none;
+}
+
+.search-control > .clear {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  color: var(--text2);
+  font: 400 var(--text-body) / 1 var(--font);
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.search-control > .clear:hover {
+  background: var(--side-sel);
+  color: var(--text);
+}

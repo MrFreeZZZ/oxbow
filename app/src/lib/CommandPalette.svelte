@@ -116,11 +116,12 @@
 <!-- Closed, it gives the focus back to where it was, as a sheet does. -->
 <div class="pop" use:modal role="dialog" aria-label={commands ? "Command Palette" : placeholder}>
   <div class="field">
-    <svg class="icon" viewBox="0 0 16 16">
-      {#if commands}<path d="M3.5 4.5 7 8l-3.5 3.5M8.5 11.5h4" />{:else}<path d="M8 3.5V8l3 2M8 1.8a6.2 6.2 0 1 0 0 12.4a6.2 6.2 0 1 0 0-12.4" />{/if}
-    </svg>
-    <input bind:this={input} bind:value={text} onkeydown={onKey} {placeholder} spellcheck="false" autocomplete="off" aria-label={placeholder} />
-    {#if commands}<span class="keys">{shortcut("palette")}</span>{/if}
+    <div class="search-control">
+      <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
+      <input bind:this={input} bind:value={text} onkeydown={onKey} {placeholder} spellcheck="false" autocomplete="off" aria-label={placeholder} />
+      {#if commands}<span class="keys">{shortcut("palette")}</span>{/if}
+      {#if query}<button type="button" class="clear" onclick={() => (text = commands ? ">" : "")} aria-label="Clear the filter" title="Clear the filter">×</button>{/if}
+    </div>
   </div>
   <div class="list" bind:this={listEl} role="listbox" aria-label={commands ? "Commands" : placeholder}>
     {#if !shown.length}
@@ -173,28 +174,12 @@
   .field {
     display: flex;
     align-items: center;
-    gap: 10px;
     height: 48px;
-    padding: 0 14px 0 16px;
-    border-bottom: 1px solid var(--sep);
+    padding: 0 var(--space-3);
     flex-shrink: 0;
   }
-  .field .icon {
-    color: var(--text2);
-    flex-shrink: 0;
-  }
-  input {
-    flex-grow: 1;
-    min-width: 0;
-    border: 0;
-    outline: none;
-    background: none;
-    color: var(--text);
-    font: inherit;
-    font-size: var(--text-heading);
-    user-select: text;
-    -webkit-user-select: text;
-    box-shadow: none;
+  .field > :global(.search-control) {
+    width: 100%;
   }
   .keys {
     font-size: var(--text-caption);

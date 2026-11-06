@@ -195,9 +195,12 @@
 <div class="catcher" onclick={onClose}></div>
 <div class="pop" role="dialog" aria-label="Open file history">
   <div class="field">
-    <svg class="icon" viewBox="0 0 16 16"><path d="M4 1.5h5.5L13 5v9.5H4z" /><path d="M9.5 1.5V5H13" /></svg>
-    <input bind:this={input} bind:value={query} onkeydown={onKey} placeholder="Find a file to see its history" spellcheck="false" autocomplete="off" aria-label="File name" />
-    {#if shortcut("quickOpen")}<span class="keys">{shortcut("quickOpen")}</span>{/if}
+    <div class="search-control">
+      <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
+      <input bind:this={input} bind:value={query} onkeydown={onKey} placeholder="Find a file to see its history" spellcheck="false" autocomplete="off" aria-label="File name" />
+      {#if shortcut("quickOpen")}<span class="keys">{shortcut("quickOpen")}</span>{/if}
+      {#if query}<button type="button" class="clear" onclick={() => (query = "")} aria-label="Clear the filter" title="Clear the filter">×</button>{/if}
+    </div>
   </div>
   <div class="list" bind:this={listEl} role="listbox" aria-label="Files">
     {#if error}
@@ -268,28 +271,12 @@
   .field {
     display: flex;
     align-items: center;
-    gap: 10px;
     height: 48px;
-    padding: 0 14px 0 16px;
-    border-bottom: 1px solid var(--sep);
+    padding: 0 var(--space-3);
     flex-shrink: 0;
   }
-  .field .icon {
-    color: var(--text2);
-    flex-shrink: 0;
-  }
-  input {
-    flex-grow: 1;
-    min-width: 0;
-    border: 0;
-    outline: none;
-    background: none;
-    color: var(--text);
-    font: inherit;
-    font-size: var(--text-heading);
-    user-select: text;
-    -webkit-user-select: text;
-    box-shadow: none;
+  .field > :global(.search-control) {
+    width: 100%;
   }
   .keys {
     font-size: var(--text-caption);

@@ -5,6 +5,7 @@
 </script>
 
 <script lang="ts">
+  import FileFilter from "./FileFilter.svelte";
   import { tick, untrack } from "svelte";
   import { pressed } from "./shortcuts";
   import { api, stopped } from "./api";
@@ -955,23 +956,7 @@
   <div class="body" class:stacked bind:clientWidth={bodyWidth} bind:clientHeight={bodyHeight}>
     <div class="files" bind:this={filesBox} aria-label="Working copy" data-steps use:tabStepper={stepper} class:dragging={!!dragging} style:--changes-row-cursor={dragging ? "grabbing" : null} style:--selection-border={`color-mix(in srgb, ${lane(color)} 40%, transparent)`} style:height={stacked ? `${Math.round(filesShare * 100)}%` : null} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
       <div class="tools">
-        <label class="filter">
-          <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
-          <input
-            bind:value={filter}
-            placeholder="Filter files"
-            aria-label="Filter files"
-            spellcheck="false"
-            autocomplete="off"
-            onkeydown={(e) => {
-              if (e.key === "Escape" && filter) {
-                e.stopPropagation();
-                filter = "";
-              }
-            }}
-          />
-          {#if filter}<button class="clear" onclick={() => (filter = "")} aria-label="Clear the filter" title="Clear the filter">×</button>{/if}
-        </label>
+        <div class="filter"><FileFilter bind:value={filter} /></div>
         <div class="segmented icons" role="radiogroup" aria-label="Show files">
           <button role="radio" aria-checked={!listView.folders} class:on={!listView.folders} onclick={() => setFolders(false)} aria-label="List" title="One list of paths">
             <svg class="icon" viewBox="0 0 16 16"><path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01" /></svg>
@@ -1393,49 +1378,8 @@
     flex-shrink: 0;
   }
   .filter {
-    display: flex;
-    align-items: center;
-    gap: 6px;
     flex-grow: 1;
     min-width: 0;
-    height: 26px;
-    padding: 0 6px 0 10px;
-    border-radius: var(--radius-pill);
-    background: var(--field);
-    color: var(--text2);
-  }
-  .filter:focus-within {
-    box-shadow: var(--focus-ring);
-  }
-  .filter .icon {
-    width: 13px;
-    height: 13px;
-    flex-shrink: 0;
-  }
-  .filter input {
-    flex-grow: 1;
-    min-width: 0;
-    border: 0;
-    outline: 0;
-    background: transparent;
-    font: inherit;
-    font-size: var(--text-small);
-    color: var(--text);
-    user-select: text;
-    -webkit-user-select: text;
-    box-shadow: none;
-  }
-  .clear {
-    width: 18px;
-    height: 18px;
-    border-radius: var(--radius-pill);
-    color: var(--text2);
-    line-height: 1;
-    flex-shrink: 0;
-  }
-  .clear:hover {
-    background: var(--side-sel);
-    color: var(--text);
   }
   .segmented {
     flex-shrink: 0;
@@ -1504,9 +1448,5 @@
   }
   .dir {
     color: var(--text2);
-  }
-  input::placeholder {
-    color: var(--text2);
-    font-weight: 400;
   }
 </style>

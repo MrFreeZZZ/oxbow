@@ -230,9 +230,10 @@
       <div class="repos-main">
       <div class="head">
         <span class="title">Recent Repositories</span>
-        <label class="filter">
+        <label class="filter search-control">
           <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
           <input bind:value={filter} placeholder="Filter" aria-label="Filter repositories" spellcheck="false" autocomplete="off" />
+      {#if filter}<button type="button" class="clear" onclick={() => { filter = ""; }} aria-label="Clear the filter" title="Clear the filter">×</button>{/if}
         </label>
         <button class="button icon-only small" onclick={refresh} disabled={busy || loading} aria-label="Refresh repositories" title={busy ? "Refreshing…" : "Refresh local snapshots"}>
           <svg class="icon" viewBox="0 0 16 16"><path d={actionIcons.fetch} /></svg>
@@ -341,7 +342,6 @@
     </div>
   </div>
 {/snippet}
-
 
 {#snippet branch(s: RepoOverview)}
   <span class="branch" style:background={tint(s.color, "label")} style:color={plate(s.color)} title={s.branch ?? s.commit ?? "No commits"}>{s.branch ?? (s.commit ? "Detached HEAD" : "No commits")}</span>
@@ -580,31 +580,7 @@
     font-weight: 700;
   }
   .filter {
-    display: flex;
-    align-items: center;
-    gap: 6px;
     width: 200px;
-    height: 30px;
-    padding: 0 10px;
-    border-radius: var(--radius-pill);
-    background: var(--field);
-    color: var(--text2);
-  }
-  .filter:focus-within {
-    box-shadow: var(--focus-ring);
-  }
-  .filter input {
-    flex-grow: 1;
-    min-width: 0;
-    border: 0;
-    outline: 0;
-    background: transparent;
-    font: inherit;
-    font-size: var(--text-small);
-    color: var(--text);
-    user-select: text;
-    -webkit-user-select: text;
-    box-shadow: none;
   }
   .list {
     flex: 0 1 auto;

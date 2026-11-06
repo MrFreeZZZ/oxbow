@@ -422,9 +422,10 @@
         <button role="radio" aria-checked={filter === value} class:on={filter === value} onclick={() => (filter = value as ConsoleFilter)}>{label}</button>
       {/each}
     </div>
-    <label class="search">
-      <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5 14 14" /></svg>
+    <label class="search search-control">
+      <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
       <input bind:this={search} type="search" aria-label="Filter commands and output" placeholder="Filter commands and output" bind:value={query} spellcheck="false" />
+      {#if query}<button type="button" class="clear" onclick={() => { query = ""; }} aria-label="Clear the filter" title="Clear the filter">×</button>{/if}
     </label>
     <button class="button icon-only trash" aria-label="Clear History…" title="Clear History…" disabled={!allCount && !entries.length} onclick={askClear}>
       <svg class="icon" viewBox="0 0 16 16"><path d={TRASH} /></svg>
@@ -567,35 +568,9 @@
     box-shadow: var(--seg-shadow);
   }
   .search {
-    display: flex;
-    align-items: center;
-    gap: 6px;
     width: 220px;
     min-width: 120px;
     flex-shrink: 1;
-    height: 28px;
-    padding: 0 10px;
-    border-radius: var(--radius-pill);
-    background: var(--field);
-    color: var(--text2);
-  }
-  .search .icon {
-    width: 13px;
-    height: 13px;
-  }
-  .search:focus-within {
-    box-shadow: var(--focus-ring);
-  }
-  .search input {
-    flex: 1;
-    min-width: 0;
-    border: 0;
-    outline: 0;
-    background: transparent;
-    font: inherit;
-    font-size: var(--text-small);
-    color: var(--text);
-    box-shadow: none;
   }
   .trash {
     background: var(--glass);

@@ -85,9 +85,10 @@
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="catcher" onclick={() => (open = false)}></div>
     <div class="pop">
-      <div class="search">
-        <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="M10.3 10.3 14 14" /></svg>
+      <div class="search search-control">
+        <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
         <input bind:this={field} bind:value={filter} onkeydown={onKey} placeholder="Branch, tag or commit SHA" spellcheck="false" autocomplete="off" aria-label="Branch, tag or commit SHA" />
+      {#if filter}<button type="button" class="clear" onclick={() => { filter = ""; }} aria-label="Clear the filter" title="Clear the filter">×</button>{/if}
       </div>
       <div class="list" role="listbox" aria-label={label}>
         {#if typedSha}
@@ -193,31 +194,7 @@
     flex-direction: column;
   }
   .search {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    height: 30px;
     margin: 0 2px 4px;
-    padding: 0 10px;
-    border-radius: var(--radius-m);
-    background: var(--field);
-    color: var(--text2);
-  }
-  .search:focus-within {
-    box-shadow: var(--focus-ring);
-  }
-  .search input {
-    flex-grow: 1;
-    min-width: 0;
-    border: 0;
-    outline: none;
-    background: none;
-    color: var(--text);
-    font: inherit;
-    font-size: var(--text-small);
-    user-select: text;
-    -webkit-user-select: text;
-    box-shadow: none;
   }
   .list {
     max-height: 360px;

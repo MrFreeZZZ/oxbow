@@ -245,7 +245,7 @@
       </button>
     </div>
     {#if stashes.length}
-      <label class="filter">
+      <label class="filter search-control">
         <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
         <input
           bind:this={filterInput}
@@ -553,53 +553,11 @@
     color: var(--text2);
   }
   .filter {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    height: 26px;
     margin: 0 12px 8px;
-    padding: 0 6px 0 10px;
-    border-radius: var(--radius-pill);
-    background: var(--field);
-    color: var(--text2);
-    flex-shrink: 0;
-  }
-  .filter:focus-within {
-    box-shadow: var(--focus-ring);
-  }
-  .filter .icon {
-    width: 13px;
-    height: 13px;
-    flex-shrink: 0;
-  }
-  .filter input {
-    flex-grow: 1;
-    min-width: 0;
-    border: 0;
-    outline: 0;
-    background: transparent;
-    font: inherit;
-    font-size: var(--text-small);
-    color: var(--text);
-    user-select: text;
-    -webkit-user-select: text;
-    box-shadow: none;
   }
   .found {
     font-size: var(--text-caption);
     white-space: nowrap;
-  }
-  .clear {
-    width: 18px;
-    height: 18px;
-    border-radius: var(--radius-pill);
-    color: var(--text2);
-    line-height: 1;
-    flex-shrink: 0;
-  }
-  .clear:hover {
-    background: var(--side-sel);
-    color: var(--text);
   }
   .files-brief {
     gap: 6px;

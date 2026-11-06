@@ -96,7 +96,6 @@
 
   const needle = $derived(model.query.trim().toLowerCase());
 
-
   function matches(section: Section, group: Group, row: Row): boolean {
     const words = [labelOf(section), group.title ?? "", text(row.label), text(row.sub), row.id];
     return words.some((t) => t.toLowerCase().includes(needle));
@@ -169,7 +168,6 @@
     if (more.length && entries.length) entries.push({ kind: "sep" });
     return [...entries, ...more];
   }
-
 
   // settings.json as text, like VS Code.
   let json = $state(false);
@@ -292,10 +290,11 @@
 <div class="settings" class:mac>
   <nav aria-label="Settings sections">
     <div class="lights" data-tauri-drag-region></div>
-    <label class="search">
-      <svg class="icon small" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5 14 14" /></svg>
+    <label class="search search-control">
+      <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
       <!-- svelte-ignore a11y_autofocus -->
       <input type="search" aria-label="Search settings" placeholder="Search" bind:value={model.query} spellcheck="false" autofocus />
+      {#if model.query}<button type="button" class="clear" onclick={() => { model.query = ""; }} aria-label="Clear the filter" title="Clear the filter">×</button>{/if}
     </label>
     {#each shownSections as section (section.id)}
       {#if section.head}<div class="head">{section.head}</div>{/if}
@@ -509,30 +508,7 @@
   }
 
   .search {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    height: 30px;
     margin: 0 10px 8px;
-    padding: 0 10px;
-    border-radius: var(--radius-pill);
-    background: var(--field);
-    color: var(--text2);
-    flex-shrink: 0;
-  }
-  .search:focus-within {
-    box-shadow: var(--focus-ring);
-  }
-
-  .search input {
-    flex-grow: 1;
-    min-width: 0;
-    border: 0;
-    outline: 0;
-    background: transparent;
-    font: inherit;
-    color: var(--text);
-    box-shadow: none;
   }
 
   .head {
@@ -724,7 +700,6 @@
     font-size: var(--text-body);
   }
 
-
   .problem {
     margin: 0;
     padding: 8px 12px;
@@ -763,7 +738,6 @@
   .folder:hover {
     background: var(--field);
   }
-
 
   /* Diff & Text preview */
   .term-preview {

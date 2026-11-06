@@ -1,4 +1,5 @@
 <script lang="ts">
+  import FileFilter from "./FileFilter.svelte";
   // The Files tab of a pull request: what it changes since it split from its base, as GitHub
   // shows it, fetched here and read like any diff. Each file has a Viewed box, kept on GitHub:
   // a viewed file folds, and GitHub unticks it once it changes again. Lines near a change take
@@ -375,10 +376,7 @@
 
 <div class="files-tab">
   <div class="list">
-    <label class="filter">
-      <svg class="icon small" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
-      <input type="text" placeholder="Filter files" bind:value={filter} spellcheck="false" />
-    </label>
+    <div class="filter"><FileFilter bind:value={filter} /></div>
     {#if files.length}
       <div class="progress" title={session.lab ? "Files ticked Viewed, on this computer" : "Files ticked Viewed, here and on GitHub"}>
         <span>Viewed {viewedCount} of {files.length}</span>
@@ -465,29 +463,8 @@
     min-height: 0;
   }
   .filter {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    height: 28px;
-    padding: 0 10px;
-    border-radius: var(--radius-m);
-    background: var(--field);
-    color: var(--text2);
-    flex-shrink: 0;
-  }
-  .filter input {
-    flex-grow: 1;
     min-width: 0;
-    border: none;
-    background: none;
-    outline: none;
-    box-shadow: none;
-    font-size: var(--text-body);
-    color: var(--text);
-  }
-  .icon.small {
-    width: 13px;
-    height: 13px;
+    flex-shrink: 0;
   }
   .kept {
     margin: 0 6px 4px;
