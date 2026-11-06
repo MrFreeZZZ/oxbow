@@ -91,6 +91,34 @@ fn no_lists_no_file() {
 }
 
 #[test]
+fn stale_snapshot_cannot_remove_a_new_assignment() {
+    let (fx, repo) = setup();
+    let stale = repo.working_tree().unwrap();
+    fx.write("b.txt", "changed\n");
+    let id = create(&repo, "Work", &["b.txt"]);
+
+    repo.changelists(&stale).unwrap();
+    assert_eq!(paths_of(&read(&repo), &id), ["b.txt"]);
+}
+
+#[test]
+fn stale_snapshot_cannot_assign_a_file_that_is_no_longer_changed() {
+    let (fx, repo) = setup();
+    let id = create(&repo, "Work", &[]);
+    edit(&repo, ChangelistEdit::Activate { id: Some(id.clone()) });
+    fx.write("b.txt", "changed\n");
+    let stale = repo.working_tree().unwrap();
+    fx.write("b.txt", "b\n");
+
+    repo.changelists(&stale).unwrap();
+    let stored = std::fs::read_to_string(fx.path().join(".git/oxbow/changelists.json")).unwrap();
+    assert!(!stored.contains("b.txt"));
+    fx.write("b.txt", "changed again\n");
+    // The file is newly changed and goes to the active list on the next read.
+    assert_eq!(paths_of(&read(&repo), &id), ["b.txt"]);
+}
+
+#[test]
 fn lists_are_named_renamed_and_deleted() {
     let (fx, repo) = setup();
     fx.write("b.txt", "b2\n");

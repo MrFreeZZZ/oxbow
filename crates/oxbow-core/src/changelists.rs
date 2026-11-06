@@ -9,7 +9,8 @@
 //! of other lists stay staged.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use serde::{Deserialize, Serialize};
 
@@ -28,8 +29,22 @@ const CHECK_INDEX: &str = "oxbow/changelist-check-index";
 /// Names that would read as the lists of the panel itself.
 const TAKEN: [&str; 4] = ["unstaged", "staged", "untracked", "conflicted"];
 
-/// One reader or writer of the lists at a time, in this process.
-static LOCK: Mutex<()> = Mutex::new(());
+/// One reader or writer per working copy, including separately opened handles.
+fn list_lock(dir: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
+    let mut locks = LOCKS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    if let Some(lock) = locks.get(&dir).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(dir, Arc::downgrade(&lock));
+    lock
+}
 
 /// A run of changed lines in a hunk: its key, and its lines as indexes into the hunk's lines.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,6 +230,25 @@ fn gone() -> Error {
     Error::Git("That changelist is gone: another window may have deleted it".into())
 }
 
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+
+    #[test]
+    fn locks_are_shared_by_working_copy_and_independent_between_copies() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let a = list_lock(first.path());
+        let same = list_lock(&first.path().join("."));
+        let other = list_lock(second.path());
+        assert!(Arc::ptr_eq(&a, &same));
+        assert!(!Arc::ptr_eq(&a, &other));
+        let _held = a.lock().unwrap();
+        assert!(same.try_lock().is_err());
+        assert!(other.try_lock().is_ok());
+    }
+}
+
 /// The lists and what is in each, as the Changes panel shows them.
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -386,7 +420,8 @@ impl Repo {
     /// The lists, with what each holds of `tree`, a reading of the working tree made a moment
     /// ago. With a list active, files that started changing since the last reading go to it.
     pub fn changelists(&self, tree: &WorkingTree) -> Result<Changelists> {
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let lock = list_lock(&self.git_dir());
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         let mut store = self.read_store()?;
         if store.lists.is_empty() {
             return Ok(Changelists::default());
@@ -410,7 +445,9 @@ impl Repo {
             &copy
         };
         // Two steps, so both run: `|` and not `||`.
-        if drop_unchanged(&mut store, tree) | take_new_files(&mut store, tree) {
+        // A history snapshot can predate an edit to a list. Never update the store from it.
+        let current = self.working_files()?;
+        if drop_unchanged(&mut store, &current) | take_new_files(&mut store, &current) {
             self.write_store(&store)?;
         }
         Ok(self.resolve(&store, tree))
@@ -418,7 +455,8 @@ impl Repo {
 
     /// Change the lists, then read them as [`Repo::changelists`] does.
     pub fn edit_changelists(&self, edit: &ChangelistEdit) -> Result<Changelists> {
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let lock = list_lock(&self.git_dir());
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         let tree = self.working_tree()?;
         let mut store = self.read_store()?;
         apply_edit(&mut store, edit, &tree, &|path| self.keys_of(&tree, path))?;
@@ -460,19 +498,24 @@ impl Repo {
         let unstaged: HashMap<&str, &FileChange> = listable(tree).map(|f| (f.path.as_str(), f)).collect();
         let mut runs: Vec<StoredRun> = Vec::new();
         let mut keyed: Vec<String> = Vec::new();
+        let mut seen_runs = HashSet::new();
+        let mut seen_paths = HashSet::new();
         for run in std::mem::take(&mut store.runs) {
             if !unstaged.contains_key(run.path.as_str())
                 || run.list.as_ref().is_some_and(|id| !ids.contains(id))
-                || runs.iter().any(|r| r.path == run.path && r.key == run.key)
+                || !seen_runs.insert((run.path.clone(), run.key.clone()))
             {
                 continue;
             }
-            if !keyed.contains(&run.path) {
+            if seen_paths.insert(run.path.clone()) {
                 keyed.push(run.path.clone());
             }
             runs.push(run);
         }
         store.runs = runs;
+        let index = StoreIndex::new(store);
+        let mut valid = HashMap::new();
+        let mut collapsed = Vec::new();
         for path in keyed {
             let keys: Vec<String> = self
                 .file_runs(unstaged[path.as_str()])
@@ -480,17 +523,25 @@ impl Repo {
                 .into_iter()
                 .flat_map(|(_, runs)| runs.into_iter().map(|r| r.key))
                 .collect();
-            let owner = store.owner(&path).map(str::to_owned);
-            store
-                .runs
-                .retain(|r| r.path != path || (keys.contains(&r.key) && r.list != owner));
-            let lists: HashSet<Option<&str>> = keys.iter().map(|k| store.run_list(&path, k)).collect();
+            let owner = index.owner(&path).map(str::to_owned);
+            let lists: HashSet<Option<&str>> = keys.iter().map(|k| index.run_list(&path, k)).collect();
             if lists.len() == 1
                 && let Some(only) = lists.into_iter().next().map(|l| l.map(str::to_owned))
             {
-                store.set_owner(&path, only.as_deref());
-                store.runs.retain(|r| r.path != path);
+                collapsed.push((path.clone(), only));
             }
+            valid.insert(path, (keys.into_iter().collect::<HashSet<_>>(), owner));
+        }
+        drop(index);
+        let collapsed_paths: HashSet<&str> = collapsed.iter().map(|(path, _)| path.as_str()).collect();
+        store.runs.retain(|r| {
+            !collapsed_paths.contains(r.path.as_str())
+                && valid
+                    .get(&r.path)
+                    .is_some_and(|(keys, owner)| keys.contains(&r.key) && r.list != *owner)
+        });
+        for (path, only) in collapsed {
+            store.set_owner(&path, only.as_deref());
         }
         if store.active.as_ref().is_some_and(|id| !store.has(id)) {
             store.active = None;
@@ -569,7 +620,8 @@ impl Repo {
     /// What `list` (`None`: Unstaged) holds of the unstaged files, only of `only` when given,
     /// with the patch of its runs for `git apply` going `forward` or in reverse.
     pub(crate) fn list_part(&self, list: Option<&str>, only: Option<&[String]>, forward: bool) -> Result<ListPart> {
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let lock = list_lock(&self.git_dir());
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         let store = self.read_store()?;
         if let Some(id) = list
             && !store.has(id)
@@ -840,7 +892,8 @@ impl Repo {
         if !committed {
             return Ok(());
         }
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let lock = list_lock(&self.git_dir());
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         let tree = self.working_tree()?;
         let mut store = self.read_store()?;
         self.normalize(&mut store, &tree);
