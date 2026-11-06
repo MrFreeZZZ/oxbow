@@ -229,6 +229,7 @@ fn main() {
             menu::set_menu,
             git_config::git_settings,
             git_config::repo_settings,
+            git_config::repository_remotes,
             git_config::set_git_config,
             git_config::set_commit_checks,
             user_commands::run_user_command,

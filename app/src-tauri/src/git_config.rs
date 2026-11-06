@@ -75,6 +75,22 @@ pub(crate) struct Production {
     branches: Vec<String>,
 }
 
+/// Only remote addresses for the repository menu; no storage scan or settings reads.
+#[tauri::command]
+pub(crate) async fn repository_remotes(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+) -> CommandResult<Option<(String, Vec<oxbow_core::RemoteInfo>)>> {
+    let Ok(repo) = current(&session, &window) else {
+        return Ok(None);
+    };
+    read(at(&repo), "Read repository remote addresses", move || {
+        let repo = repo.reopen().unwrap_or(repo);
+        Ok(Some((repo.workdir().display().to_string(), repo.remotes_info()?)))
+    })
+    .await
+}
+
 /// Settings › This Repository, or nothing when no repository is open.
 #[tauri::command]
 pub(crate) async fn repo_settings(

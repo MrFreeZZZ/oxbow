@@ -35,7 +35,7 @@
   import { downloadRequest, installRequest, lfs, patternNote, pruneRequest, lfsTrackRequest, untrackRequest } from "./lfs.svelte";
   import { bytes } from "./unusual";
   import { nav } from "./nav.svelte";
-  import type { LfsPattern, ReadPart, RecentRepo, Submodule, Tracking, Worktree } from "./types";
+  import type { LfsPattern, ReadPart, RecentRepo, RemoteInfo, Submodule, Tracking, Worktree } from "./types";
   import { PART_NAMES, age, errorLine, type ReadStates } from "./reads";
   import { checking, stale } from "./folders";
   import { addSubmoduleRequest, openSubmoduleWindow, submoduleMenu as submoduleEntries, submoduleNote, submoduleWhere, syncRequest, updateRequest } from "./submodules";
@@ -240,45 +240,81 @@
     menu = { x: event.clientX, y: event.clientY, label, ref, entries };
   }
 
-  /** The repository button's menu: recent repositories, then clone, open, new. */
-  async function repoMenu(event: MouseEvent) {
+  /** Repository details and actions first, then Home and recent repositories. */
+  let remoteDetails: RemoteInfo[] | null = null;
+  let remoteDetailsFailed = false;
+  let repoMenuRequest = 0;
+  export async function repoMenu(event: MouseEvent) {
     const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    const recent = (await api.recentRepos().catch(() => [])).filter((r) => r.path !== repo.path && !r.missing);
-    menu = { x: box.left, y: box.bottom + 4, label: `Repository ${repo.name}`, ref: repo.path, entries: repoEntries(recent) };
+    const path = repo.path;
+    const request = ++repoMenuRequest;
+    remoteDetails = null;
+    remoteDetailsFailed = false;
+    let recent: RecentRepo[] = [];
+    menu = { x: box.left, y: box.bottom + 4, label: `Repository ${repo.name}`, ref: path, entries: repoEntries(recent) };
+    const refresh = (detailsOnly = false) => {
+      if (request === repoMenuRequest && repo.path === path && menu?.ref === path) {
+        const entries = repoEntries(recent);
+        menu = { ...menu, entries: detailsOnly ? [entries[0], ...menu.entries.slice(1)] : entries };
+      }
+    };
+    await Promise.all([
+      api.recentRepos().catch(() => []).then((repos) => { recent = repos.filter((r) => r.path !== path && !r.missing); refresh(); }),
+      api.repositoryRemotes().then((result) => {
+        if (request !== repoMenuRequest || repo.path !== path) return;
+        remoteDetails = result?.[0] === path ? result[1] : null;
+        remoteDetailsFailed = remoteDetails === null;
+        refresh(true);
+      }).catch(() => {
+        if (request !== repoMenuRequest || repo.path !== path) return;
+        remoteDetailsFailed = true;
+        refresh(true);
+      }),
+    ]);
   }
 
   /** How many recent repositories the repository menu lists. */
   const RECENT_IN_MENU = 8;
 
   function repoEntries(recent: RecentRepo[]): MenuEntry[] {
-    const entries: MenuEntry[] = [];
-    if (recent.length) {
-      entries.push({ kind: "header", label: "Recent" });
-      for (const r of recent.slice(0, RECENT_IN_MENU)) {
-        entries.push({
-          kind: "item",
-          label: r.name,
-          detail: tilde(r.path),
-          icon: FOLDER,
-          run: () => onOpenPath(r.path),
-          remove: { label: "Remove from Recent", run: () => forgetRecent(recent, r.path) },
-        });
-      }
-      entries.push({ kind: "item", label: "Clear Recent", icon: CLEAR, run: clearRecent }, { kind: "sep" });
-    }
-    entries.push(
-      { kind: "item", label: "Clone Repository…", icon: "M8 2.5v8M5 7.5l3 3 3-3M3 13.5h10", keys: shortcut("clone"), run: () => start.clone() },
-      { kind: "item", label: "Open Local Repository…", icon: FOLDER, keys: shortcut("open"), run: onOpen },
-      { kind: "item", label: "New Repository…", icon: "M8 3v10M3 8h10", keys: shortcut("newRepo"), run: () => start.newRepo() },
-      { kind: "sep" },
-    );
+    const count = history.refs.filter((ref) => ref.kind === "local").length;
+    const remoteCount = history.refs.filter((ref) => ref.kind === "remote").length;
+    const entries: MenuEntry[] = [
+      { kind: "details", label: repo.name, path: repo.path,
+        color: history.trunk ? ctx.colorOf(history.trunk) : 0,
+        branches: `${count} local · ${remoteCount} remote`,
+        remotes: remoteDetails ? (remoteDetails.length ? remoteDetails.map((remote) => ({
+          label: `Remote · ${remote.name}`,
+          lines: [remote.fetchUrl, ...(remote.pushUrl !== remote.fetchUrl ? [`Push: ${remote.pushUrl}`] : [])],
+        })) : [{ label: "Remotes", lines: ["No remotes"] }]) : [{
+          label: history.remotes.length ? `Remote · ${history.remotes.join(", ")}` : "Remotes",
+          lines: [history.remotes.length ? (remoteDetailsFailed ? "Remote addresses unavailable" : "Loading remote addresses…") : "No remotes"],
+        }],
+      },
+    ];
     if (history.head.commit) entries.push({ kind: "item", label: "Add Submodule…", icon: actionIcons.box, run: () => run(addSubmoduleRequest(submodules, repo.path)) });
     entries.push(
       { kind: "item", label: "Reload", icon: RELOAD, keys: shortcut("reload"), run: onReload },
       ...(onActivity ? [{ kind: "item" as const, label: "Activity", icon: ACTIVITY, run: onActivity }] : []),
       { kind: "item", label: "Open in Terminal", icon: menuIcons.terminal, run: () => api.openInTerminal().catch((err) => confirm.fail(err)) },
-      { kind: "item", label: "Welcome Window", icon: HOME, run: onWelcome },
+      { kind: "sep" },
+      { kind: "item", label: "Clone Repository…", icon: "M8 2.5v8M5 7.5l3 3 3-3M3 13.5h10", keys: shortcut("clone"), run: () => start.clone() },
+      { kind: "item", label: "Open Local Repository…", icon: FOLDER, keys: shortcut("open"), run: onOpen },
+      { kind: "item", label: "New Repository…", icon: "M8 3v10M3 8h10", keys: shortcut("newRepo"), run: () => start.newRepo() },
+      { kind: "sep" },
+      { kind: "item", label: "Oxbow Home", icon: HOME, run: onWelcome },
     );
+    if (recent.length) {
+      entries.push({ kind: "sep" }, { kind: "header", label: "Recent", keys: shortcut("openRecent") });
+      for (const r of recent.slice(0, RECENT_IN_MENU)) {
+        entries.push({
+          kind: "item", label: r.name, detail: tilde(r.path), icon: FOLDER,
+          run: () => onOpenPath(r.path),
+          remove: { label: "Remove from Recent", run: () => forgetRecent(recent, r.path) },
+        });
+      }
+      entries.push({ kind: "item", label: "Clear Recent", icon: CLEAR, run: clearRecent });
+    }
     return entries;
   }
 
@@ -651,23 +687,6 @@
 <nav aria-label="Sidebar">
   <div class="lights" data-tauri-drag-region></div>
 
-  <button
-    class="repo"
-    onclick={repoMenu}
-    oncontextmenu={(event) => {
-      event.preventDefault();
-      repoMenu(event);
-    }}
-    title="Switch, clone or start a repository"
-  >
-    <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z" /></svg>
-    <span class="repo-text">
-      <span class="repo-name">{repo.name}</span>
-      <span class="repo-path">{tilde(repo.path)}</span>
-    </span>
-    <svg class="icon small" viewBox="0 0 16 16"><path d="M5 6l3-3 3 3M5 10l3 3 3-3" /></svg>
-  </button>
-
   <div class="scroll" bind:this={list}>
     <div class="heading">Workspace</div>
     <button class="item" class:current={view === "history" && !showingChanges} onclick={() => onView("history")}>
@@ -1027,36 +1046,6 @@
     height: 56px;
     flex-shrink: 0;
   }
-  .repo {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    height: 36px;
-    margin: 0 8px 6px;
-    padding: 0 10px;
-    border-radius: var(--radius-m);
-    background: var(--field);
-    color: var(--icon);
-    flex-shrink: 0;
-  }
-  .repo-text {
-    flex-grow: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    line-height: 1.2;
-  }
-  .repo-name {
-    font-weight: 600;
-    color: var(--text);
-  }
-  .repo-path {
-    font-size: var(--text-caption);
-    color: var(--text2);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
   .small {
     width: 14px;
     height: 14px;
@@ -1064,6 +1053,8 @@
   .scroll {
     flex-grow: 1;
     overflow-y: auto;
+    /* History starts level with the graph, below its 30px status line and border. */
+    padding-top: 7px;
     padding-bottom: 10px;
   }
   .heading {
@@ -1073,7 +1064,10 @@
     padding: 14px 18px 4px;
   }
   .heading:first-child {
-    padding-top: 8px;
+    display: flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 0 18px 4px;
   }
   .item {
     display: flex;

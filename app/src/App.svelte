@@ -823,6 +823,7 @@
   let picker = $state<{ kind: "commands"; initial: string } | { kind: "recent"; repos: RecentRepo[] } | { kind: "objects"; first: ObjectKind; query: string } | null>(null);
   /** What Quick Open starts with when the palette's ">" was taken away. */
   let quickInitial = $state("");
+  let sidebar = $state<Sidebar>();
   let branchPicker = $state<BranchPicker>();
   /** Your own keys come with Settings › Keyboard Shortcuts, through prefs. */
   const keymap = new Keymap();
@@ -2003,7 +2004,7 @@
       <div class="side-catcher" onclick={() => (sideShown = false)}></div>
     {/if}
     <!-- Over a narrow window the sidebar steps aside again once something in it is picked. -->
-    <Sidebar {repo} {history} {reads} onRetry={retryRead} {selectedRow} ctx={branchCtx!} onOpen={chooseRepo} onOpenPath={load} onWelcome={showRepositories}
+    <Sidebar bind:this={sidebar} {repo} {history} {reads} onRetry={retryRead} {selectedRow} ctx={branchCtx!} onOpen={chooseRepo} onOpenPath={load} onWelcome={showRepositories}
       onPick={aside((id: string, missing?: string) => ((commitExpanded = false), pick(id, missing), requestAnimationFrame(() => list?.focus())))}
       {run}
       view={view === "series" ? seriesBack : reviewing ? "reviews" : view}
@@ -2033,7 +2034,14 @@
     <div class="main">
       <header data-tauri-drag-region>
         <div class="lead" data-tauri-drag-region>
-          <WindowTitle title={titleOf(repo, history)} steps={trailPath} onStep={goTo} />
+          {#if view !== "history" || showConflicts}
+            <WindowTitle title={titleOf(repo, history)} steps={trailPath} onStep={goTo} />
+          {/if}
+          <button class="capsule repo-picker" onclick={(event) => sidebar?.repoMenu(event)} oncontextmenu={(event) => { event.preventDefault(); void sidebar?.repoMenu(event); }} aria-label={`Repository ${repo.name}`} aria-haspopup="menu" title={`${repo.path}\n${branchCount} ${branchCount === 1 ? "branch" : "branches"}`}>
+            <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.folder} /></svg>
+            <span>{repo.name}</span>
+            <svg class="icon small" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>
+          </button>
           {#if repo.restricted.length}
             <RestrictedBadge findings={repo.restricted} onTrust={() => session.trust()} />
           {/if}
@@ -2664,6 +2672,20 @@
     align-items: center;
     gap: 10px;
     align-self: stretch;
+  }
+  .repo-picker {
+    min-width: max-content;
+    flex-shrink: 0;
+  }
+  .repo-picker span {
+    white-space: nowrap;
+  }
+  .repo-picker .icon {
+    flex-shrink: 0;
+  }
+  .repo-picker .small {
+    width: 12px;
+    height: 12px;
   }
   .lead {
     min-width: 0;

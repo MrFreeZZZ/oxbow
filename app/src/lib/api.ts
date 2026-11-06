@@ -31,6 +31,7 @@ import type {
   ConfigScope,
   GitSettings,
   RepoSettings,
+  RemoteInfo,
   CommitCheck,
   ConflictFile,
   MergeTool,
@@ -287,6 +288,7 @@ export const api = {
   setSetting: (key: string, value: unknown) => invoke<number>("set_setting", { key, value }),
   gitSettings: () => invoke<GitSettings>("git_settings"),
   repoSettings: () => invoke<RepoSettings | null>("repo_settings"),
+  repositoryRemotes: () => invoke<[string, RemoteInfo[]] | null>("repository_remotes"),
   /** `null` removes the value. */
   setGitConfig: (scope: ConfigScope, key: string, value: string | null) =>
     invoke<void>("set_git_config", { scope, values: [[key, value]], expectedRepo: null }),

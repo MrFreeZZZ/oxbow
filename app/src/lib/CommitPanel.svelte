@@ -352,7 +352,7 @@
   {@render banner?.()}
   <div class="head">
     <h1 class="selectable">
-      {detail?.summary ?? row.summary}
+      <span class="head-title">{detail?.summary ?? row.summary}</span>
       {#if branchName}
         <span class="branch" style:color={plate(color)} style:background={tint(color, "label")} style:box-shadow={`inset 0 0 0 1px color-mix(in srgb, ${lane(color)} 40%, transparent)`} title="Branch of this commit">
           <svg class="icon tiny" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg>
@@ -583,14 +583,12 @@
     align-items: center;
     gap: 4px;
     height: 20px;
-    margin-left: 6px;
     padding: 0 8px;
     border-radius: var(--radius-pill);
     font-size: var(--text-small);
     font-weight: 500;
     line-height: 1;
     white-space: nowrap;
-    vertical-align: 2px;
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -612,10 +610,18 @@
     height: 12px;
   }
   h1 {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 6px;
     margin: 0;
     font-size: var(--text-title);
     font-weight: 600;
     line-height: 1.3;
+  }
+  .head-title {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   .people {
     display: flex;

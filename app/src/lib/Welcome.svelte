@@ -226,6 +226,8 @@
   <section class="repos" aria-label="Repositories">
     <div class="drag top-drag" data-tauri-drag-region></div>
     {#if gone}{@render gone()}{:else}
+      <div class="repos-content">
+      <div class="repos-main">
       <div class="head">
         <span class="title">Recent Repositories</span>
         <label class="filter">
@@ -272,8 +274,10 @@
           {/if}
         {/if}
       </div>
+      </div>
       {#if needsIdentity}{@render identity()}{/if}
       <div class="foot"><svg class="icon" viewBox="0 0 16 16"><path d="M8 2.5v8M5 7.5l3 3 3-3M3 13.5h10" /></svg>Double-click to open · drop a folder or a Git URL anywhere in this window</div>
+      </div>
     {/if}
   </section>
 {#if !gone}    <aside aria-label="Selected repository">
@@ -542,6 +546,23 @@
   .top-drag {
     height: 12px;
   }
+  .repos-content {
+    display: flex;
+    flex-direction: column;
+    align-self: center;
+    flex: 1;
+    min-height: 0;
+    width: max-content;
+    min-width: min(560px, 100%);
+    max-width: min(1040px, 100%);
+  }
+  .repos-main {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    flex: 1;
+    min-height: 0;
+  }
   .head {
     display: flex;
     align-items: center;
@@ -552,6 +573,9 @@
   }
   .title {
     flex-grow: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: var(--text-body);
     font-weight: 700;
   }
@@ -583,7 +607,7 @@
     box-shadow: none;
   }
   .list {
-    flex-grow: 1;
+    flex: 0 1 auto;
     min-height: 0;
     overflow-y: auto;
     display: flex;
@@ -650,6 +674,7 @@
     flex-shrink: 0;
     max-width: 45%;
     line-height: 1.25;
+    margin-left: var(--space-4);
   }
   .branch {
     display: block;

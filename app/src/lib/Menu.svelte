@@ -17,8 +17,9 @@
       }
     /** Opens a submenu to the side, e.g. Reset ▸ Soft / Mixed / Hard. */
     | { kind: "sub"; label: string; icon: string; entries: SubEntry[] }
-    | { kind: "header"; label: string }
+    | { kind: "header"; label: string; keys?: string }
     | { kind: "note"; label: string }
+    | { kind: "details"; label: string; path: string; color: number; branches: string; remotes: { label: string; lines: string[] }[] }
     | { kind: "sep" };
 
   /** An item of a submenu: a label, and a grey hint on the right. */
@@ -68,6 +69,8 @@
 </script>
 
 <script lang="ts">
+  import { lane, tint } from "./format";
+
   // A context menu at the pointer, in the glass style of the design.
 
   let { x, y, label, entries, onClose }: { x: number; y: number; label: string; entries: MenuEntry[]; onClose: () => void } = $props();
@@ -86,10 +89,21 @@
   // Open at the pointer, kept inside the window.
   $effect(() => {
     if (!box) return;
-    const { width, height } = box.getBoundingClientRect();
-    left = Math.max(8, Math.min(x, window.innerWidth - width - 8));
-    top = Math.max(8, Math.min(y, window.innerHeight - height - 8));
+    const element = box;
+    const position = () => {
+      const { width, height } = element.getBoundingClientRect();
+      left = Math.max(8, Math.min(x, window.innerWidth - width - 8));
+      top = Math.max(8, Math.min(y, window.innerHeight - height - 8));
+    };
+    position();
+    const observer = new ResizeObserver(position);
+    observer.observe(element);
+    window.addEventListener("resize", position);
     box.querySelector<HTMLButtonElement>("button[role=menuitem]")?.focus();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", position);
+    };
   });
 
   // Beside the menu, on the right unless there is no room there.
@@ -163,14 +177,22 @@
     onClose();
   }}
 ></div>
-<div class="menu" class:keyed role="menu" aria-label={label} bind:this={box} style:left="{left}px" style:top="{top}px">
+<div class="menu" class:keyed role="menu" aria-label={label} bind:this={box} style:left="{left}px" style:top="{top}px" onscroll={() => (sub = null)}>
   {#each entries as entry, i (i)}
     {#if entry.kind === "header"}
-      <div class="header">{entry.label}</div>
+      <div class="header"><span>{entry.label}</span>{#if entry.keys}<span class="keys">{entry.keys}</span>{/if}</div>
     {:else if entry.kind === "sep"}
       <div class="sep"></div>
     {:else if entry.kind === "note"}
       <div class="note">{entry.label}</div>
+    {:else if entry.kind === "details"}
+      <div class="details" style:background={tint(entry.color)} style:box-shadow={`inset 0 0 0 1px color-mix(in srgb, ${lane(entry.color)} 40%, transparent)`}>
+        <div class="details-identity"><strong>{entry.label}</strong><span>{entry.path}</span></div>
+        <div class="details-group"><span class="details-label">Branches</span><span class="details-value">{entry.branches}</span></div>
+        {#each entry.remotes as remote}
+          <div class="details-group remote"><span class="details-label">{remote.label}</span>{#each remote.lines as line}<span class="details-value">{line}</span>{/each}</div>
+        {/each}
+      </div>
     {:else if entry.kind === "sub"}
       <button
         role="menuitem"
@@ -245,6 +267,8 @@
     width: max-content;
     min-width: 230px;
     max-width: 380px;
+    max-height: calc(100vh - 16px);
+    overflow-y: auto;
     padding: 5px;
     border-radius: var(--radius-xl);
     background: var(--sheet);
@@ -255,7 +279,14 @@
     display: flex;
     flex-direction: column;
   }
+  .menu > * {
+    flex-shrink: 0;
+  }
   .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
     height: 24px;
     padding: 0 10px;
     font-size: var(--text-caption);
@@ -265,6 +296,15 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .header > span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .header .keys {
+    flex-shrink: 0;
+    font-weight: 400;
   }
   .sep {
     height: 1px;
@@ -276,6 +316,39 @@
     font-size: var(--text-caption);
     line-height: 1.35;
     color: var(--text2);
+  }
+  .details {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    margin: var(--space-1);
+    padding: var(--space-3);
+    border-radius: var(--radius-m);
+    color: var(--text2);
+    font-size: var(--text-caption);
+    line-height: 1.35;
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
+  .details-identity, .details-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+  .details strong {
+    color: var(--text);
+    font-size: var(--text-body);
+    font-weight: 600;
+  }
+  .details-label {
+    font-weight: 600;
+  }
+  .details-value {
+    color: var(--text);
+  }
+  .details-group.remote {
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--sep);
   }
   button {
     display: flex;
@@ -338,7 +411,7 @@
   .submenu button {
     gap: 28px;
   }
-  button .keys {
+  .keys {
     flex-grow: 0;
     margin-left: 18px;
     font-size: var(--text-small);
