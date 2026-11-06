@@ -35,13 +35,9 @@ pub(crate) fn stash_before(branch: &str) -> GitCommand {
 /// What a commit or push says when Settings turned hooks off.
 pub(crate) const HOOKS_OFF: &str = "--no-verify: Git hooks are turned off in Settings";
 
-/// `main`, or `local:remote` when the branch has another name on the remote.
+/// Explicit branch refs keep local and remote tags with the same name out of a push.
 pub(crate) fn refspec(branch: &str, upstream: &str) -> String {
-    if branch == upstream {
-        branch.to_owned()
-    } else {
-        format!("{branch}:{upstream}")
-    }
+    format!("refs/heads/{branch}:refs/heads/{upstream}")
 }
 
 pub(crate) fn stdin_note(path: &str, header: &str) -> String {
@@ -434,7 +430,7 @@ impl Repo {
                 }));
                 if let Some(remote) = publish {
                     commands.push(
-                        GitCommand::new(["push", "-u", remote, name])
+                        GitCommand::new(["push", "-u", remote, &refspec(name, name)])
                             .comment(format!("-u: remember {remote}/{name} as its upstream"))
                             .with_progress(),
                     );
@@ -446,7 +442,7 @@ impl Repo {
                     vec![GitCommand::new(["branch", "-m", from, to]).comment("-m: move, which renames the branch")];
                 if let Some(up) = upstream {
                     commands.push(
-                        GitCommand::new(["push", "-u", &up.remote, to])
+                        GitCommand::new(["push", "-u", &up.remote, &refspec(to, to)])
                             .comment(format!("publish the new name and make {}/{to} the upstream", up.remote))
                             .with_progress(),
                     );

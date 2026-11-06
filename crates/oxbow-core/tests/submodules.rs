@@ -384,7 +384,7 @@ fn a_commit_only_this_clone_has_is_found_before_push_and_pushed_first() {
     };
     assert_eq!(
         shown(&repo, &push),
-        ["git push --recurse-submodules=on-demand origin main"]
+        ["git push --recurse-submodules=on-demand origin refs/heads/main:refs/heads/main"]
     );
     repo.perform(&push).unwrap();
     assert!(repo.unpushed_submodules().is_empty());

@@ -96,7 +96,11 @@ pub(crate) fn origin_and_push(url: &str, branch: &str, why: &str) -> Vec<GitComm
     if !crate::config::run_hooks() {
         push.push("--no-verify".to_owned());
     }
-    push.extend(["-u".to_owned(), "origin".to_owned(), branch.to_owned()]);
+    push.extend([
+        "-u".to_owned(),
+        "origin".to_owned(),
+        crate::plan::refspec(branch, branch),
+    ]);
     vec![
         GitCommand::new(["remote", "add", "origin", url]).comment(why),
         GitCommand::new(push)
@@ -598,7 +602,7 @@ mod tests {
             shown,
             [
                 "git remote add origin https://github.com/acme/api.git",
-                "git push -u origin main"
+                "git push -u origin refs/heads/main:refs/heads/main"
             ]
         );
         assert!(valid_repository_name("my-app.rs_2"));

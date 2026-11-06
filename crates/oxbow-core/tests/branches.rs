@@ -98,7 +98,10 @@ fn new_branches_are_created_switched_to_and_published() {
         .collect();
     assert_eq!(
         displays,
-        ["git switch -c feature/csv main", "git push -u origin feature/csv"]
+        [
+            "git switch -c feature/csv main",
+            "git push -u origin refs/heads/feature/csv:refs/heads/feature/csv"
+        ]
     );
     repo.perform(&create).unwrap();
     assert_eq!(head(&mut fx), "feature/csv");
