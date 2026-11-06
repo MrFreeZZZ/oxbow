@@ -20,9 +20,9 @@ cd "$root"
 changed_files() {
   # The newer fork point of the two, as either ref can be behind in a fresh clone.
   local bases base
-  bases=$(for ref in origin/preview preview; do git merge-base HEAD "$ref" 2>/dev/null; done)
+  bases=$(for ref in refs/remotes/origin/preview refs/heads/preview; do git merge-base HEAD "$ref" 2>/dev/null; done)
   if [ -z "$bases" ]; then
-    bases=$(for ref in origin/main main; do git merge-base HEAD "$ref" 2>/dev/null; done)
+    bases=$(for ref in refs/remotes/origin/main refs/heads/main; do git merge-base HEAD "$ref" 2>/dev/null; done)
   fi
   [ -n "$bases" ] || return 1
   base=$(git merge-base --independent $bases | head -n 1)
