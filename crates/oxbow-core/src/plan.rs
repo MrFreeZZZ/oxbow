@@ -876,7 +876,8 @@ impl Repo {
             args.push("--autostash");
             comment.push_str("; --autostash: keep uncommitted files");
         }
-        args.extend([remote, branch]);
+        let branch_ref = format!("refs/heads/{branch}");
+        args.extend([remote, &branch_ref]);
         GitCommand::new(args).comment(comment).with_progress()
     }
 }

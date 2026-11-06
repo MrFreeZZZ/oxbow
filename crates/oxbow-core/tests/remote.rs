@@ -669,7 +669,7 @@ fn rejected_push_names_the_commits_in_the_way_and_pull_and_push_fixes_it() {
     assert_eq!(
         commands,
         [
-            "git pull --rebase --autostash origin main",
+            "git pull --rebase --autostash origin refs/heads/main",
             "git push origin refs/heads/main:refs/heads/main"
         ]
     );
@@ -780,6 +780,7 @@ fn history_keeps_tracking_after_terminal_push_when_a_tag_shares_the_branch_name(
     let mut team = Team::new();
     team.me.git(&["switch", "-q", "-c", "preview"]);
     team.me.git(&["tag", "preview"]);
+    team.me.git(&["push", "-q", "origin", "refs/tags/preview"]);
     let repo = Repo::open(team.me.path()).unwrap();
     assert!(repo.history(&Default::default()).unwrap().tracking.is_none());
 
@@ -809,7 +810,8 @@ fn history_keeps_tracking_after_terminal_push_when_a_tag_shares_the_branch_name(
     team.kirill.git(&["fetch", "-q", "origin"]);
     team.kirill.git(&["switch", "-q", "-c", "preview", "origin/preview"]);
     team.kirill.commit("remote.txt", "remote\n", "Remote work");
-    team.kirill.git(&["push", "-q", "origin", "preview"]);
+    team.kirill
+        .git(&["push", "-q", "origin", "refs/heads/preview:refs/heads/preview"]);
     team.me.git(&["fetch", "-q", "origin"]);
     assert_eq!(repo.history(&Default::default()).unwrap().tracking.unwrap().behind, 1);
     repo.perform(&Action::Pull {
