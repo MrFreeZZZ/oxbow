@@ -776,6 +776,59 @@ fn pushing_a_branch_ignores_tags_with_the_source_or_destination_name() {
 }
 
 #[test]
+fn history_keeps_tracking_after_terminal_push_when_a_tag_shares_the_branch_name() {
+    let mut team = Team::new();
+    team.me.git(&["switch", "-q", "-c", "preview"]);
+    team.me.git(&["tag", "preview"]);
+    let repo = Repo::open(team.me.path()).unwrap();
+    assert!(repo.history(&Default::default()).unwrap().tracking.is_none());
+
+    team.me
+        .git(&["push", "-q", "-u", "origin", "refs/heads/preview:refs/heads/preview"]);
+    let history = repo.history(&Default::default()).unwrap();
+    let tracking = history.tracking.unwrap();
+    assert_eq!(
+        (tracking.remote.as_str(), tracking.branch.as_str()),
+        ("origin", "preview")
+    );
+    assert_eq!((tracking.ahead, tracking.behind), (0, 0));
+    let branch = history
+        .refs
+        .iter()
+        .find(|r| r.name == "preview" && r.kind == oxbow_core::RefKind::Local)
+        .unwrap();
+    assert_eq!(branch.tracking.as_ref(), Some(&tracking));
+    assert!(repo.branch_tracking().unwrap().contains_key("preview"));
+
+    team.me.commit("new.txt", "new\n", "Local work");
+    assert_eq!(repo.history(&Default::default()).unwrap().tracking.unwrap().ahead, 1);
+    team.me
+        .git(&["push", "-q", "origin", "refs/heads/preview:refs/heads/preview"]);
+    assert_eq!(repo.history(&Default::default()).unwrap().tracking.unwrap().ahead, 0);
+
+    team.kirill.git(&["fetch", "-q", "origin"]);
+    team.kirill.git(&["switch", "-q", "-c", "preview", "origin/preview"]);
+    team.kirill.commit("remote.txt", "remote\n", "Remote work");
+    team.kirill.git(&["push", "-q", "origin", "preview"]);
+    team.me.git(&["fetch", "-q", "origin"]);
+    assert_eq!(repo.history(&Default::default()).unwrap().tracking.unwrap().behind, 1);
+    repo.perform(&Action::Pull {
+        remote: "origin".into(),
+        branch: "preview".into(),
+        fetch_first: false,
+        submodules: false,
+        mode: Some(PullMode::Merge),
+    })
+    .unwrap();
+    let tracking = repo.history(&Default::default()).unwrap().tracking.unwrap();
+    assert_eq!((tracking.ahead, tracking.behind), (0, 0));
+    assert_eq!(
+        std::fs::read_to_string(team.me.path().join("remote.txt")).unwrap(),
+        "remote\n"
+    );
+}
+
+#[test]
 fn publishing_a_branch_sets_its_upstream() {
     let mut team = Team::new();
     team.me.git(&["switch", "-q", "-c", "feature/csv"]);

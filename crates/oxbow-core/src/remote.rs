@@ -493,7 +493,7 @@ impl Repo {
     pub fn branch_tracking(&self) -> Result<std::collections::HashMap<String, Tracking>> {
         let out = self.run(&GitCommand::new([
             "for-each-ref",
-            "--format=%(refname:short)%00%(upstream:remotename)%00%(upstream:remoteref)%00%(upstream:track,nobracket)",
+            "--format=%(refname)%00%(upstream:remotename)%00%(upstream:remoteref)%00%(upstream:track,nobracket)",
             "refs/heads",
         ]))?;
         Ok(out
@@ -501,7 +501,9 @@ impl Repo {
             .lines()
             .filter_map(|line| {
                 let (name, rest) = line.split_once('\0')?;
-                Some((name.to_owned(), parse_tracking(rest)?))
+                // Short ref names gain a `heads/` prefix when a tag has the same name.
+                let branch = name.strip_prefix("refs/heads/")?;
+                Some((branch.to_owned(), parse_tracking(rest)?))
             })
             .collect())
     }
