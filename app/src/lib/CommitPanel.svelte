@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { diffScroll } from "./diffScroll";
   import FileFilter from "./FileFilter.svelte";
   import { untrack, type Snippet } from "svelte";
   import { api, stopped } from "./api";
@@ -506,7 +507,7 @@
         {#if tab === null && diffs.length > 1}<FoldAll onFold={(fold) => diffView?.setAll(fold)} />{/if}
         <DiffTools {whole} onToggleWhole={() => (whole = !whole)} />
       </div>
-      <div class="scroll" bind:this={scroller}>
+      <div class="scroll" bind:this={scroller} use:diffScroll>
         {#if error}
           <p class="error" role="alert">{error}</p>
         {/if}

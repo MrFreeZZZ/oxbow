@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { diffScroll } from "./diffScroll";
   // Every change between the two sides of Compare, as one diff: Summary with the files, then a
   // tab per file, like the commit details.
 
@@ -245,7 +246,7 @@
     {/if}
   </div>
 
-  <div class="scroll" bind:this={scroller}>
+  <div class="scroll" bind:this={scroller} use:diffScroll>
     {#if error}<p class="error" role="alert">{error}</p>{/if}
     {#if tab === null}
       {#if c.files.length}

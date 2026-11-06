@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { diffScroll } from "./diffScroll";
   // File History: the commits that changed one file, across renames, with either what each one
   // changed (Changes) or who last changed every line (Blame). A line number shows every commit
   // that changed that line (git log -L).
@@ -667,7 +668,7 @@
         {#if pick.status === "added"}<p class="note">This commit created the file.</p>{/if}
         {#if renamedAt(pick)}<p class="note">This commit renamed it from <span class="mono">{pick.oldPath}</span>.</p>{/if}
         {#if !byId.has(pick.id) || file?.elsewhere.some((c) => c.id === pick.id)}<p class="note">This change is on another branch, not on {headName}.</p>{/if}
-        <div class="scroll">
+        <div class="scroll" use:diffScroll>
           <DiffView
             {diffs}
             {color}

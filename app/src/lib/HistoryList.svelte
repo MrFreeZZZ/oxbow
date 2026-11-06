@@ -423,7 +423,7 @@
 <div class="wrap">
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div
-    class="viewport"
+    class="viewport thin-scroll"
     bind:this={viewport}
     bind:clientHeight={height}
     bind:clientWidth={width}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { diffScroll } from "./diffScroll";
   // The diff column of the Changes panel: what is shown over it (a file's side, or every file
   // of a side), the diffs with the actions of each hunk and file, or the way on when a side has
   // nothing left.
@@ -264,7 +265,7 @@
     <DiffTools {whole} onToggleWhole={() => (whole = !whole)} working />
   </div>
 {/if}
-<div class="scroll" bind:this={scroller}>
+<div class="scroll" bind:this={scroller} use:diffScroll>
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   {#if openFile && openUnstaged && openStaged && !lastOpen}<div class="tip"><TipCard id="partlyStaged" /></div>{/if}
   {#if lastOpen}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { diffScroll } from "./diffScroll";
   import FileFilter from "./FileFilter.svelte";
   // The Files tab of a pull request: what it changes since it split from its base, as GitHub
   // shows it, fetched here and read like any diff. Each file has a Viewed box, kept on GitHub:
@@ -402,7 +403,7 @@
       {/each}
     </div>
   </div>
-  <div class="diff" bind:this={scroller}>
+  <div class="diff" bind:this={scroller} use:diffScroll>
     {#if reviewed}
       <div class="pushed">
         <svg class="icon" viewBox="0 0 16 16"><path d="M8 13V3.5M4.5 7 8 3.5 11.5 7" /></svg>

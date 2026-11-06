@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { diffScroll } from "./diffScroll";
   // A version of Local History beside what it changed: since the version saved before it (the
   // last commit for the oldest), or with Compare with Current File, how the file on disk now
   // differs from it. Restore puts it back on disk.
@@ -96,7 +97,7 @@
 {#if error}
   <p class="note error" role="alert">{error}</p>
 {:else if v.kept}
-  <div class="scroll">
+  <div class="scroll" use:diffScroll>
     <DiffView
       {diffs}
       {color}

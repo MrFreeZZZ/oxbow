@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { diffScroll } from "./diffScroll";
   // The Stashes screen: every stash on the left, the picked one on the right with whether it
   // applies to the checked-out branch, its actions, its files and their diffs.
   import { api, stopped } from "./api";
@@ -375,7 +376,7 @@
         {/if}
       </div>
 
-      <div class="scroll">
+      <div class="scroll" use:diffScroll>
         {#if error}<p class="error" role="alert">{error}</p>{/if}
         {#if f}
           {@const t = totals(f)}
