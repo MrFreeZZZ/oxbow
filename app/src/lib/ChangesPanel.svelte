@@ -15,11 +15,14 @@
   import { keyFocus as focusByKey, tabStepper } from "./tabs";
   import ChangesDiff from "./ChangesDiff.svelte";
   import type { LinePicker } from "./DiffView.svelte";
-  import PathName from "./PathName.svelte";
+  import ChangesAmendFiles from "./ChangesAmendFiles.svelte";
+  import ChangesGroupHeading from "./ChangesGroupHeading.svelte";
   import CommitForm from "./CommitForm.svelte";
   import Menu, { menuIcons, type MenuEntry, type SubEntry } from "./Menu.svelte";
   import { fileMenu, filesMenu, type FileMenuActions } from "./changesMenu";
-  import { BIG_FILE, bytes } from "./unusual";
+  import ChangesFileRow from "./ChangesFileRow.svelte";
+  import ChangesFileList from "./ChangesFileList.svelte";
+  import { changeBadge as badge } from "./changesList";
   import { discardRequest, stageRequest, stashFilesRequest, unstageRequest } from "./changes";
   import { discardPartRequest, groupFiles, hunkLists, idOf, keyOf, listName, nameRequest, runList, runsOfLines, shareOf, stagePartRequest, type ListKey } from "./changelists";
   import type { Changelist } from "./types";
@@ -364,9 +367,6 @@
     const all = paths.length > 0 && paths.every((p) => on.has(p));
     ticked = { ...ticked, [group]: all ? list.filter((p) => !these.has(p)) : [...list, ...paths.filter((p) => !on.has(p))] };
   }
-
-  /** A checkbox gives the keyboard to its row or heading, so ↑ ↓ and Space go on from there. */
-  const keysTo = (event: MouseEvent, selector: string) => (event.currentTarget as HTMLElement).parentElement?.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
 
   /** Every file shown once, in the order of the lists, each side led by all of its files: the
    *  steps of Next Tab and Previous Tab. */
@@ -901,180 +901,38 @@
     }
     return shown.side === "staged" ? shownStaged : shown.list ? listOf(keyOf(shown.list)) : shown.untracked ? shownUntracked : [...shownConflicted, ...shownTracked];
   });
-
-  const badge: Record<string, { text: string; tone: string; title: string }> = {
-    modified: { text: "M", tone: "orange", title: "Modified" },
-    added: { text: "A", tone: "green", title: "Added" },
-    untracked: { text: "U", tone: "green", title: "New, not tracked yet" },
-    deleted: { text: "D", tone: "red", title: "Deleted" },
-    renamed: { text: "R", tone: "orange", title: "Renamed" },
-    copied: { text: "C", tone: "orange", title: "Copied" },
-    conflicted: { text: "!", tone: "red", title: "Conflicted" },
-  };
 </script>
 
 {#snippet fileRow(file: FileChange, group: List | "conflicted", nested: boolean)}
-  {@const b = badge[file.status]}
-  {@const on = group !== "conflicted" && ticksOf(group).has(file.path)}
-  {@const open = isOpen(file, group)}
-  <!-- The part of a file staged in part that the other list holds. -->
   {@const other = group === "staged" ? unstagedByPath.get(file.path) : unstagedList(group) ? stagedByPath.get(file.path) : undefined}
-  <!-- What the list holds of a file it shares with another. -->
   {@const share = unstagedList(group) ? shareOf(lists, file.path, idOf(group)) : null}
-  <!-- Its changed lines, null while they are being counted. -->
-  {@const c = lined(file, sideOf(group))}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    class="file"
-    class:open
-    class:nested
-    class:bin={unstagedList(group)}
-    class:moving={dragging?.group === group && dragging.files.includes(file)}
-    class:ticked={on && !open}
-    style:background={open ? tint(color) : undefined}
-    data-group={group}
-    data-path={file.path}
-    oncontextmenu={(e) => openFileMenu(e, file, group)}
-  >
-    {#if group !== "conflicted"}
-      <button
-        class="tick"
-        class:on
-        role="checkbox"
-        aria-checked={on}
-        tabindex="-1"
-        aria-label="{on ? 'Unselect' : 'Select'} {file.path}"
-        title="Select for {group === 'staged' ? 'Unstage' : 'Stage'} and the file menu · Shift-click selects a range"
-        onclick={(e) => {
-          keysTo(e, ".name");
-          if (!dragged) tickFile(group, file.path, e.shiftKey);
-        }}
-      >{@render tickMark(on, false)}</button>
-    {/if}
-    <button
-      class="name"
-      onclick={(e) => rowClick(e, file, group)}
-      onpointerdown={(e) => dragFile(e, file, group)}
-      onkeydown={onFilesKey}
-      onkeyup={onFilesKeyUp}
-      aria-current={open ? "true" : undefined}
-      title={dragging ? undefined : `${file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}${group === "conflicted" ? "" : ` · ${modClick} to select, Shift-click to select a range, drag to ${group === "staged" ? "unstage" : "stage"}`}`}
-    >
-      <span class="badge {b.tone}" title={b.title}>{b.text}</span>
-      <PathName path={file.path} folders={!nested} />
-      {#if share}
-        <span class="note partial" title="{share.runs} of its {share.total} changes are here; the other{share.total - share.runs === 1 ? ' is' : 's are'} in {share.others.map((id) => listName(lists, id)).join(' and ')}">
-          <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" /><path class="fill" d="M8 2.5a5.5 5.5 0 0 0 0 11z" /></svg>{share.runs} of {share.total}
-        </span>
-      {/if}
-      {#if other}
-        <span class="note partial" title={group === "staged" ? `Staged in part: ${counts(file, "staged")} go into the commit, ${counts(other, "unstaged")} stay out` : `Staged in part: ${counts(other, "staged")} go into the commit, ${counts(file, "unstaged")} stay out`}>
-          <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" /><path class="fill" d="M8 2.5a5.5 5.5 0 0 0 0 11z" /></svg>Partial
-        </span>
-      {/if}
-      {#if file.submodule}
-        <span class="note" title="Another repository in a folder here">Submodule{file.submodule.changed && !file.submodule.moved ? " · changed inside" : ""}</span>
-      {:else if !c}
-        <span class="counts mono" title="Counting the changed lines…">…</span>
-      {:else if c.lfs}
-        <span class="note" title="Kept in Git LFS: git stores a small pointer">LFS{c.newSize !== undefined ? ` · ${bytes(c.newSize)}` : ""}</span>
-      {:else if (c.newSize ?? 0) >= BIG_FILE}
-        <span class="note warn" title="Too big for a git repository: GitHub refuses files over 100 MB">{bytes(c.newSize!)}</span>
-      {:else if !c.binary && !c.uncounted && file.status !== "conflicted"}
-        <span class="counts mono"><span class="add">+{c.additions}</span> <span class="del">−{c.deletions}</span></span>
-      {/if}
-    </button>
-    {#if unstagedList(group)}
-      <button class="discard" onclick={() => discardIn(group, [file])} aria-label="{file.status === 'untracked' ? 'Delete' : 'Discard changes in'} {file.path}" title={file.status === "untracked" ? "Delete this new file" : "Discard changes"}>
-        <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 4.5h11M6 4.5V3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5M4 4.5l.7 9a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.7-9" /></svg>
-      </button>
-    {/if}
-  </div>
-{/snippet}
-
-{#snippet tickMark(on: boolean, some: boolean)}
-  <svg viewBox="0 0 16 16"><path d={some ? "M4 8h8" : "M3.5 8.5l3 3 6-7"} /></svg>
-{/snippet}
-
-<!-- Ticks every listed file of a list or a folder, or none once they all are. -->
-{#snippet tickAllBox(group: List, files: FileChange[], label: string, focus: string)}
-  {@const n = files.filter((f) => ticksOf(group).has(f.path)).length}
-  {@const all = n > 0 && n === files.length}
-  <button
-    class="tick"
-    class:on={all}
-    class:some={n > 0 && !all}
-    role="checkbox"
-    aria-checked={all ? true : n ? "mixed" : false}
-    tabindex="-1"
-    aria-label={label}
-    title={all ? "Select none" : "Select all"}
-    disabled={!files.length}
-    onclick={(e) => {
-      keysTo(e, focus);
-      tickAll(group, files.map((f) => f.path));
-    }}
-  >{@render tickMark(all || n > 0, n > 0 && !all)}</button>
-{/snippet}
-
-<!-- Stage 4 Files; Stage 4 in a narrow list, where the bin beside it would push the list's name out. -->
-{#snippet pickedLabel(verb: string, n: number)}
-  {#if n === 1}{verb} File{:else}{verb} {n}<span class="word"> Files</span>{/if}
-{/snippet}
-
-<!-- Discard or Delete for the selected files, beside Stage: the bin of a row, held in view. -->
-{#snippet binPicked(files: FileChange[], group: List)}
-  {@const fresh = files.every((f) => f.status === "untracked")}
-  {@const what = files.length === 1 ? splitPath(files[0].path).name : `${files.length} files`}
-  <button class="discard held" onclick={() => discardIn(group, files)} aria-label={fresh ? `Delete ${what}` : `Discard changes in ${what}`} title={fresh ? `Delete ${what}…` : `Discard changes in ${what}…`}>
-    <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 4.5h11M6 4.5V3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5M4 4.5l.7 9a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.7-9" /></svg>
-  </button>
+  <ChangesFileRow {file} {group} {nested} {color} on={group !== "conflicted" && ticksOf(group).has(file.path)}
+    open={isOpen(file, group)} moving={dragging?.group === group && dragging.files.includes(file)}
+    dragging={!!dragging} counted={lined(file, sideOf(group))} {modClick}
+    partialTitle={other ? (group === "staged" ? `Staged in part: ${counts(file, "staged")} go into the commit, ${counts(other, "unstaged")} stay out` : `Staged in part: ${counts(other, "staged")} go into the commit, ${counts(file, "unstaged")} stay out`) : null}
+    share={share ? { runs: share.runs, total: share.total, title: `${share.runs} of its ${share.total} changes are here; the other${share.total - share.runs === 1 ? " is" : "s are"} in ${share.others.map((id) => listName(lists, id)).join(" and ")}` } : null}
+    events={{
+      tick: (e) => { if (group !== "conflicted" && !dragged) tickFile(group, file.path, e.shiftKey); },
+      open: (e) => rowClick(e, file, group), drag: (e) => dragFile(e, file, group),
+      menu: (e) => openFileMenu(e, file, group), discard: () => discardIn(group, [file]),
+      keyDown: onFilesKey, keyUp: onFilesKeyUp,
+    }} />
 {/snippet}
 
 {#snippet fileList(files: FileChange[], group: List | "conflicted")}
   {@const limit = listed[group] ?? LIST_STEP}
-  {#if listView.folders}
-    {@const cut = foldersWithin(byFolder(files), group, limit)}
-    {#each cut.folders as { folder, room } (folder.dir)}
-      {@const key = `${group}:${folder.dir}`}
-      {@const open = !folded.has(key)}
-      {#if room > 0}
-      <div class="folder">
-        {#if group !== "conflicted"}{@render tickAllBox(group, folder.files, `Select the files in ${folder.dir || "the top folder"}`, ".fold")}{/if}
-        <button class="fold" aria-expanded={open} onclick={() => fold(key)} title={folder.dir || "The repository's top folder"}>
-          <svg class="chevron" class:open viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" /></svg>
-          <svg class="icon folder-icon" viewBox="0 0 16 16"><path d="M1.5 4.5a1 1 0 0 1 1-1H6l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" /></svg>
-          <span class="dirname">{folder.dir ? folder.dir.slice(0, -1) : "Top folder"}</span>
-          <span class="n">{folder.files.length}</span>
-        </button>
-      </div>
-      {#if open}{#each folder.files.slice(0, room) as file (file.path)}{@render fileRow(file, group, true)}{/each}{/if}
-      {/if}
-    {/each}
-    {#if cut.hidden > 0}{@render moreRows(group, cut.hidden)}{/if}
-  {:else}
-    {#each files.slice(0, limit) as file (file.path)}{@render fileRow(file, group, false)}{/each}
-    {#if files.length > limit}{@render moreRows(group, files.length - limit)}{/if}
-  {/if}
+  <ChangesFileList {files} {group} folders={listView.folders} {folded}
+    cut={listView.folders ? foldersWithin(byFolder(files), group, limit) : null} {limit} step={LIST_STEP} ticks={ticksOf(group)}
+    onFold={fold} onTickAll={(paths) => { if (group !== "conflicted") tickAll(group, paths); }}
+    onMore={() => (listed = { ...listed, [group]: (listed[group] ?? LIST_STEP) + LIST_STEP })}>
+    {#snippet row(file: FileChange, nested: boolean)}{@render fileRow(file, group, nested)}{/snippet}
+  </ChangesFileList>
 {/snippet}
 
 {#snippet dropRow(label: string)}
   <div class="drop-row" aria-hidden="true">
     <svg class="icon" viewBox="0 0 16 16"><path d="M8 3v9M4.5 8.5 8 12l3.5-3.5" /></svg>{label}
   </div>
-{/snippet}
-
-{#snippet moreRows(group: List | "conflicted", left: number)}
-  <button class="more-rows" onclick={() => (listed = { ...listed, [group]: (listed[group] ?? LIST_STEP) + LIST_STEP })}
-    >Show {Math.min(left, LIST_STEP).toLocaleString()} more {Math.min(left, LIST_STEP) === 1 ? "file" : "files"}</button
-  >
-{/snippet}
-
-<!-- A list's heading: the chevron folds it; the name folds it too and shows every file of the side. -->
-{#snippet chevron(open: boolean, label: string, toggle: () => void, disabled = false)}
-  <button class="chev" aria-expanded={open} aria-label={label} title={disabled ? "Shown while the filter is on" : label} {disabled} onclick={toggle}>
-    <svg class="chevron" class:open viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" /></svg>
-  </button>
 {/snippet}
 
 <div class="panel">
@@ -1095,7 +953,7 @@
   </div>
 
   <div class="body" class:stacked bind:clientWidth={bodyWidth} bind:clientHeight={bodyHeight}>
-    <div class="files" bind:this={filesBox} aria-label="Working copy" data-steps use:tabStepper={stepper} class:dragging={!!dragging} style:--selection-border={`color-mix(in srgb, ${lane(color)} 40%, transparent)`} style:height={stacked ? `${Math.round(filesShare * 100)}%` : null} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
+    <div class="files" bind:this={filesBox} aria-label="Working copy" data-steps use:tabStepper={stepper} class:dragging={!!dragging} style:--changes-row-cursor={dragging ? "grabbing" : null} style:--selection-border={`color-mix(in srgb, ${lane(color)} 40%, transparent)`} style:height={stacked ? `${Math.round(filesShare * 100)}%` : null} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
       <div class="tools">
         <label class="filter">
           <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
@@ -1136,20 +994,14 @@
           </div>
         {/if}
         <div class="group" class:drop={dragging?.group !== "staged" && canDrop("unstaged")} class:over={dragging?.group !== "staged" && dropOn === "unstaged"} data-drop="unstaged">
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="ghead" class:on={isAll("unstaged")} style:background={isAll("unstaged") ? tint(color) : undefined} data-group="unstaged" oncontextmenu={openUnstagedMenu}>
-            {@render tickAllBox("unstaged", shownTracked, "Select every unstaged file", ".gname")}
-            {@render chevron(!shut.unstaged, shut.unstaged ? "Show the unstaged files" : "Hide the unstaged files", () => (shut.unstaged = !shut.unstaged))}
-            <button class="gname" onkeydown={onFilesKey} onkeyup={onFilesKeyUp} onclick={(e) => openGroup(e, "unstaged")} aria-current={isAll("unstaged") ? "true" : undefined} aria-expanded={!shut.unstaged} title={!isAll("unstaged") ? "Show every unstaged change" : shut.unstaged ? "Show the unstaged files" : "Hide the unstaged files"}>
-              <span class="gtitle" style:color={plate(color)}>Unstaged</span><span class="n">{needle ? `${shownTracked.length} of ${tracked.length}` : tracked.length}</span>
-            </button>
-            {#if pickedUnstaged.length}
-              {@render binPicked(pickedUnstaged, "unstaged")}
-              <button class="button mini primary" onclick={() => actOnPicked("unstaged")}>{@render pickedLabel("Stage", pickedUnstaged.length)}</button>
-            {:else if shownTracked.length}
-              <button class="button mini" onclick={() => stageIn("unstaged", shownTracked)}>{needle && shownTracked.length < tracked.length ? "Stage Shown" : "Stage All"}</button>
-            {/if}
-          </div>
+          <ChangesGroupHeading group={"unstaged"} files={shownTracked} total={tracked.length} {color} {needle}
+            expanded={!shut.unstaged} selected={isAll("unstaged")} ticked={ticksOf("unstaged")} picked={pickedUnstaged}
+            events={{ open: (e) => openGroup(e, "unstaged"), toggle: () => { shut.unstaged = !shut.unstaged; },
+              selectAll: () => tickAll("unstaged", shownTracked.map((f) => f.path)), keyDown: onFilesKey, keyUp: onFilesKeyUp,
+              picked: () => actOnPicked("unstaged"), all: () => stageIn("unstaged", shownTracked),
+              discard: () => discardIn("unstaged", pickedUnstaged),
+              menu: openUnstagedMenu,
+            }} />
           {#if !shut.unstaged}
             {@render fileList(shownTracked, "unstaged")}
             {#if !shownTracked.length}
@@ -1164,25 +1016,14 @@
           {@const open = !shut[key]}
           {@const picked = pickedFiles(key)}
           <div class="group" class:drop={canDrop(key)} class:over={dropOn === key} data-drop={key}>
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div class="ghead" class:on={all} style:background={all ? tint(color) : undefined} data-group={key} oncontextmenu={(e) => openListMenu(e, g)}>
-              {@render tickAllBox(key, g.shown, `Select every file of ${g.list.name}`, ".gname")}
-              {@render chevron(open, open ? `Hide the files of ${g.list.name}` : `Show the files of ${g.list.name}`, () => (shut = { ...shut, [key]: open }))}
-              <button class="gname" onkeydown={onFilesKey} onkeyup={onFilesKeyUp} onclick={(e) => openGroup(e, key)} aria-current={all ? "true" : undefined} aria-expanded={open} title={!all ? `Show every change of ${g.list.name}` : open ? "Hide its files" : "Show its files"}>
-                <svg class="icon clmark" style:color={plate(color)} viewBox="0 0 16 16"><path d="M3 3.5h10v9.5l-5-2.6L3 13z" /></svg>
-                <span class="gtitle cltitle" style:color={plate(color)}>{g.list.name}</span><span class="n">{needle ? `${g.shown.length} of ${g.files.length}` : g.files.length}</span>
-                {#if lists?.active === g.list.id}<span class="active" title="New changes go here: files that start changing join this list">Active</span>{/if}
-              </button>
-              {#if picked.length}
-                {@render binPicked(picked, key)}
-                <button class="button mini primary" onclick={() => actOnPicked(key)}>{@render pickedLabel("Stage", picked.length)}</button>
-              {:else if g.files.length}
-                <button class="button mini" onclick={() => commitList(g.list.id)} title="Commit the changes of {g.list.name}, and only those">Commit…</button>
-              {/if}
-              <button class="button icon-only mini" onclick={(e) => openListMenu(e, g)} aria-label="{g.list.name} menu" title="Stage, stash, rename or delete {g.list.name}">
-                <svg class="icon" viewBox="0 0 16 16"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" /></svg>
-              </button>
-            </div>
+            <ChangesGroupHeading group={key} files={g.shown} total={g.files.length} {color} {needle}
+            expanded={open} selected={all} ticked={ticksOf(key)} picked={picked} changelist={g.list} active={lists?.active === g.list.id}
+            events={{ open: (e) => openGroup(e, key), toggle: () => { shut = { ...shut, [key]: open }; },
+              selectAll: () => tickAll(key, g.shown.map((f) => f.path)), keyDown: onFilesKey, keyUp: onFilesKeyUp,
+              picked: () => actOnPicked(key), all: () => commitList(g.list.id),
+              discard: () => discardIn(key, picked),
+              menu: (e) => openListMenu(e, g),
+            }} />
             {#if open}
               {@render fileList(g.shown, key)}
               {#if !g.shown.length}
@@ -1194,22 +1035,14 @@
         {#if untracked.length}
           <!-- New files git does not track yet, apart from the edits and folded at first, as in Sublime Merge. -->
           <div class="group">
-            <div class="ghead" class:on={isAll("unstaged", true)} style:background={isAll("unstaged", true) ? tint(color) : undefined} data-group="untracked">
-              {@render tickAllBox("untracked", shownUntracked, "Select every untracked file", ".gname")}
-              {@render chevron(untrackedOpen, untrackedOpen ? "Hide the untracked files" : "Show the new files git does not track yet", () => {
-                view.untracked = !view.untracked;
-                view.untrackedTouched = true;
-              }, !!needle)}
-              <button class="gname" onkeydown={onFilesKey} onkeyup={onFilesKeyUp} onclick={(e) => openGroup(e, "untracked")} aria-current={isAll("unstaged", true) ? "true" : undefined} aria-expanded={untrackedOpen} title={!isAll("unstaged", true) ? "Show every new file git does not track yet" : untrackedOpen ? "Hide the untracked files" : "Show the untracked files"}>
-                <span class="gtitle" style:color={plate(color)}>Untracked</span><span class="n">{needle ? `${shownUntracked.length} of ${untracked.length}` : untracked.length}</span>
-              </button>
-              {#if pickedUntracked.length}
-                {@render binPicked(pickedUntracked, "untracked")}
-                <button class="button mini primary" onclick={() => actOnPicked("untracked")}>{@render pickedLabel("Stage", pickedUntracked.length)}</button>
-              {:else if shownUntracked.length}
-                <button class="button mini" onclick={() => stageIn("untracked", shownUntracked)}>{needle && shownUntracked.length < untracked.length ? "Stage Shown" : "Stage All"}</button>
-              {/if}
-            </div>
+            <ChangesGroupHeading group={"untracked"} files={shownUntracked} total={untracked.length} {color} {needle}
+            expanded={untrackedOpen} selected={isAll("unstaged", true)} ticked={ticksOf("untracked")} picked={pickedUntracked} foldDisabled={!!needle}
+            events={{ open: (e) => openGroup(e, "untracked"), toggle: () => { view.untracked = !view.untracked; view.untrackedTouched = true; },
+              selectAll: () => tickAll("untracked", shownUntracked.map((f) => f.path)), keyDown: onFilesKey, keyUp: onFilesKeyUp,
+              picked: () => actOnPicked("untracked"), all: () => stageIn("untracked", shownUntracked),
+              discard: () => discardIn("untracked", pickedUntracked),
+
+            }} />
             {#if untrackedOpen}
               {@render fileList(shownUntracked, "untracked")}
               {#if !shownUntracked.length}<p class="empty">No untracked files match the filter.</p>{/if}
@@ -1228,18 +1061,13 @@
         bind:this={stagedBox}
         style:min-height={stacked || shut.staged ? null : `min(${30 + Math.min(stagedHeight + lastRoom, stagedRows)}px, 45%)`}
       >
-        <div class="ghead" class:on={isAll("staged")} style:background={isAll("staged") ? tint(color) : undefined} data-group="staged">
-          {@render tickAllBox("staged", shownStaged, "Select every staged file", ".gname")}
-          {@render chevron(!shut.staged, shut.staged ? "Show the staged files" : "Hide the staged files", () => (shut.staged = !shut.staged))}
-          <button class="gname" onkeydown={onFilesKey} onkeyup={onFilesKeyUp} onclick={(e) => openGroup(e, "staged")} aria-current={isAll("staged") ? "true" : undefined} aria-expanded={!shut.staged} title={!isAll("staged") ? "Show the next commit: every staged change" : shut.staged ? "Show the staged files" : "Hide the staged files"}>
-            <span class="gtitle" style:color={plate(color)}>Staged</span><span class="n">{needle ? `${shownStaged.length} of ${staged.length}` : staged.length}</span>
-          </button>
-          {#if pickedStaged.length}
-            <button class="button mini primary" onclick={() => actOnPicked("staged")}>{@render pickedLabel("Unstage", pickedStaged.length)}</button>
-          {:else if shownStaged.length}
-            <button class="button mini" onclick={() => unstage(shownStaged)}>{needle && shownStaged.length < staged.length ? "Unstage Shown" : "Unstage All"}</button>
-          {/if}
-        </div>
+        <ChangesGroupHeading group={"staged"} files={shownStaged} total={staged.length} {color} {needle}
+            expanded={!shut.staged} selected={isAll("staged")} ticked={ticksOf("staged")} picked={pickedStaged}
+            events={{ open: (e) => openGroup(e, "staged"), toggle: () => { shut.staged = !shut.staged; },
+              selectAll: () => tickAll("staged", shownStaged.map((f) => f.path)), keyDown: onFilesKey, keyUp: onFilesKeyUp,
+              picked: () => actOnPicked("staged"), all: () => unstage(shownStaged),
+
+            }} />
         {#if dragging && dragging.group !== "staged"}{@render dropRow("Drop to Stage")}{/if}
         {#if !shut.staged}
           <div class="staged-files" bind:this={stagedList}>
@@ -1249,20 +1077,8 @@
                 <p class="empty">{needle && staged.length ? "No staged files match the filter." : "Stage files or lines to add them to the next commit."}</p>
               {/if}
               {#if lastFiles.length}
-                <!-- Amend: the commit it replaces keeps its files, and the staged ones join them. -->
-                <div class="from-last" title="Files of the commit Amend replaces: they stay in it, with the staged changes added">
-                  <span class="grow">From last commit</span><span class="n">{lastFiles.length}</span>
-                </div>
-                {#each lastFiles.filter(matches) as file (file.path)}
-                  {@const b = badge[file.status]}
-                  {@const open = lastOpen === file.path}
-                  <div class="file" class:open style:background={open ? tint(color) : undefined}>
-                    <button class="name" onkeydown={onFilesKey} onkeyup={onFilesKeyUp} onclick={() => openLast(file.path)} aria-current={open ? "true" : undefined} title="{file.path} · its changes in the last commit">
-                      <span class="badge {b.tone}" title={b.title}>{b.text}</span>
-                      <PathName path={file.path} />
-                    </button>
-                  </div>
-                {/each}
+                <ChangesAmendFiles files={lastFiles.filter(matches)} total={lastFiles.length} opened={lastOpen} {color}
+                  onOpen={openLast} onKeyDown={onFilesKey} onKeyUp={onFilesKeyUp} />
               {/if}
             </div>
           </div>
@@ -1342,8 +1158,6 @@
     flex-direction: column;
     min-height: 0;
   }
-  /* No frame: the head sits on the panel itself, like the commit details. */
-  /* One line: what this is, the branch, and the counts, so the files and the diff get the height. */
   .head {
     min-height: 40px;
     padding: var(--space-2) var(--space-4);
@@ -1380,7 +1194,6 @@
     width: 12px;
     height: 12px;
   }
-  /* Cut before the title and the branch are. */
   .sub {
     flex-shrink: 100;
     min-width: 0;
@@ -1390,8 +1203,6 @@
     font-size: var(--text-caption);
     color: var(--text2);
   }
-
-  /* The files beside their diff; in a narrow panel, over it. */
   .body {
     position: relative;
     flex-grow: 1;
@@ -1408,8 +1219,6 @@
     flex-direction: column;
     border-right: 1px solid var(--sep);
   }
-  /* Over the diff there is no room for lists that scroll apart: the files and the commit form
-     scroll as one. */
   .stacked .files {
     width: auto;
     border-right: 0;
@@ -1421,7 +1230,6 @@
     min-height: 0;
     overflow: visible;
   }
-  /* The border to drag between the files and the diff, like the graph's. */
   .edge {
     position: absolute;
     top: 50%;
@@ -1458,8 +1266,6 @@
   .group + .group {
     margin-top: var(--space-2);
   }
-  /* The staged files take the room the lists over them leave, and when both want more, give
-     way first, down to the height kept for them; the commit form always shows whole. */
   .group.staged {
     flex-shrink: 1000;
     min-height: 30px;
@@ -1469,7 +1275,6 @@
     min-height: 26px;
     overflow-y: auto;
   }
-  /* Where dragged files go: the other list, ringed in Steel, with a line saying what a drop does. */
   .drop {
     outline: 1.5px dashed var(--accent);
     outline-offset: -1px;
@@ -1497,12 +1302,6 @@
     cursor: grabbing;
     user-select: none;
   }
-  .files.dragging .name {
-    cursor: grabbing;
-  }
-  .file.moving {
-    opacity: 0.4;
-  }
   .ghost {
     position: fixed;
     z-index: 50;
@@ -1519,18 +1318,6 @@
     color: var(--text);
     pointer-events: none;
   }
-  /* Amend: the files the commit has already, under the staged ones. */
-  .from-last {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    height: 24px;
-    margin-top: 2px;
-    padding: 0 var(--space-2) 0 22px;
-    font-size: var(--text-caption);
-    color: var(--text2);
-  }
-  /* A border to drag: over the staged files, and between the files and the diff in one column. */
   .grip {
     flex-shrink: 0;
     height: 9px;
@@ -1553,8 +1340,6 @@
   .grip.across {
     margin: 0;
   }
-  /* Each list's heading reads as a section title, as in Finder's sidebar, not as one more row:
-     small capitals in the branch color, with the files under it. */
   .ghead {
     display: flex;
     align-items: center;
@@ -1569,107 +1354,22 @@
     color: var(--text2);
     flex-shrink: 0;
   }
-  .gname {
-    flex-grow: 1;
-    min-width: 0;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 0 4px;
-    font: inherit;
-    letter-spacing: inherit;
-    text-transform: inherit;
-    color: inherit;
-    text-align: left;
-  }
-  .gname:disabled {
-    opacity: 1;
-    cursor: default;
-  }
-  .chev {
-    width: 18px;
-    height: 22px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--text2);
-    flex-shrink: 0;
-  }
-  .chev:disabled {
-    opacity: 1;
-    cursor: default;
-  }
   .gtitle {
     font-weight: 700;
-  }
-  /* A changelist's name: the words it was given, as typed, after the list's mark. */
-  .cltitle {
-    min-width: 2em;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: var(--text-small);
-    letter-spacing: normal;
-    text-transform: none;
-  }
-  .clmark {
-    width: 13px;
-    height: 13px;
-    flex-shrink: 0;
-  }
-  .active {
-    display: inline-flex;
-    align-items: center;
-    height: 16px;
-    padding: 0 6px;
-    border-radius: 999px;
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: normal;
-    text-transform: none;
-    color: var(--accent-ink);
-    background: var(--accent-quiet);
-    flex-shrink: 0;
   }
   .gtitle.conflicted {
     color: var(--red);
     padding-left: 44px;
   }
-  .ghead .n,
-  .ghead .button {
+  .ghead .n {
     letter-spacing: normal;
     text-transform: none;
-  }
-  .ghead .button {
-    flex-shrink: 0;
-    white-space: nowrap;
   }
   .ghead {
     container-type: inline-size;
   }
-  @container (max-width: 300px) {
-    .ghead .word {
-      display: none;
-    }
-    /* No list mark, and Active as a dot: the list's name keeps the room. */
-    .clmark {
-      display: none;
-    }
-    .active {
-      width: 7px;
-      height: 7px;
-      padding: 0;
-      font-size: 0;
-      background: var(--accent);
-    }
-  }
   .n {
     font-weight: 400;
-  }
-  .grow {
-    flex-grow: 1;
-    min-width: 0;
   }
   .empty {
     margin: 0;
@@ -1677,123 +1377,9 @@
     font-size: var(--text-small);
     color: var(--text2);
   }
-  .more-rows {
-    display: block;
-    width: 100%;
-    height: 26px;
-    border-radius: var(--radius-s);
-    color: var(--text2);
-    font-size: var(--text-small);
-    text-align: center;
-  }
-  .more-rows:hover {
-    background: var(--field);
-  }
-  .file {
-    position: relative;
-    display: flex;
-    align-items: center;
-    height: 28px;
-    padding: 0 var(--space-2) 0 22px;
-    border-radius: var(--radius-m);
-  }
-  .file.open,
-  .ghead.on {
-    box-shadow: inset 0 0 0 1px var(--selection-border);
-  }
-  .file:hover {
-    background: var(--field);
-  }
-  .file.nested {
-    padding-left: 44px;
-  }
-  .file.ticked {
-    background: var(--side-sel);
-  }
-  /* A row's own button has the keys, but its ring goes round the whole row, on the row's rounded
-     plate, checkbox and bin included. */
   .ghead {
     position: relative;
   }
-  .name:focus-visible,
-  .name:global(.key-focus),
-  .fold:focus-visible,
-  .fold:global(.key-focus),
-  .gname:focus-visible,
-  .gname:global(.key-focus) {
-    outline: none;
-  }
-  .name:focus-visible::after,
-  .name:global(.key-focus)::after,
-  .fold:focus-visible::after,
-  .fold:global(.key-focus)::after,
-  .gname:focus-visible::after,
-  .gname:global(.key-focus)::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: var(--radius-s);
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
-    pointer-events: none;
-  }
-  .name:focus-visible::after,
-  .name:global(.key-focus)::after,
-  .gname:focus-visible::after,
-  .gname:global(.key-focus)::after {
-    border-radius: var(--radius-m);
-  }
-  .file.open .name::after,
-  .ghead.on .gname::after {
-    content: none;
-  }
-  :global(:root[data-contrast="more"]) .files :is(.name, .fold, .gname):focus-visible::after {
-    outline-width: 3px;
-  }
-  /* Always shown, one column of them left of the badges, the folders and the list names; drawn
-     like the line checkboxes of a diff. */
-  .tick {
-    width: 14px;
-    height: 14px;
-    flex-shrink: 0;
-    padding: 0;
-    border-radius: var(--radius-xs);
-    border: 1.2px solid var(--text2);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .tick:disabled {
-    opacity: 0.4;
-  }
-  .file > .tick,
-  .folder > .tick {
-    position: absolute;
-    left: 4px;
-    top: calc(50% - 7px);
-  }
-  .ghead > .tick {
-    margin: 0 2px;
-  }
-  .tick svg {
-    width: 11px;
-    height: 11px;
-    fill: none;
-    stroke: transparent;
-    stroke-width: 2;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-  .tick.on,
-  .tick.some {
-    background: var(--accent);
-    border-color: var(--accent);
-  }
-  .tick.on svg,
-  .tick.some svg {
-    stroke: #fff;
-  }
-  /* Filter and List / Folders over the lists. */
   .tools {
     display: flex;
     align-items: center;
@@ -1880,63 +1466,6 @@
     width: 14px;
     height: 14px;
   }
-  /* A folder over its files: fold them away. */
-  .folder {
-    position: relative;
-    display: flex;
-    align-items: center;
-    height: 26px;
-    padding: 0 var(--space-1) 0 22px;
-    border-radius: var(--radius-s);
-  }
-  .folder:hover {
-    background: var(--field);
-  }
-  .fold {
-    flex-grow: 1;
-    min-width: 0;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    font-size: var(--text-small);
-    color: var(--text2);
-  }
-  .chevron {
-    width: 10px;
-    height: 10px;
-    flex-shrink: 0;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.8;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    transition: transform 0.15s;
-  }
-  .chevron.open {
-    transform: rotate(90deg);
-  }
-  .folder-icon {
-    width: 14px;
-    height: 14px;
-    flex-shrink: 0;
-  }
-  .dirname {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-weight: 500;
-    color: var(--text);
-  }
-  .name {
-    flex-grow: 1;
-    min-width: 0;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
   .badge {
     width: 16px;
     height: 16px;
@@ -1971,78 +1500,6 @@
   .dir {
     color: var(--text2);
   }
-  .note {
-    font-size: var(--text-caption);
-    color: var(--text2);
-    flex-shrink: 0;
-  }
-  .note.warn {
-    color: var(--orange);
-  }
-  .partial {
-    display: flex;
-    align-items: center;
-    gap: 3px;
-  }
-  .partial .icon {
-    width: 11px;
-    height: 11px;
-  }
-  .partial .fill {
-    fill: currentColor;
-    stroke: none;
-  }
-  .counts {
-    font-size: var(--text-caption);
-    flex-shrink: 0;
-    white-space: nowrap;
-  }
-  .add {
-    color: var(--green);
-  }
-  .del {
-    color: var(--red);
-  }
-  /* The bin shows over the counts while the row is hovered. */
-  .discard {
-    position: absolute;
-    right: 2px;
-    top: 2px;
-    width: 24px;
-    height: 24px;
-    border-radius: var(--radius-pill);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--text2);
-    opacity: 0;
-  }
-  .discard .icon {
-    width: 14px;
-    height: 14px;
-  }
-  .file:hover .discard,
-  .discard:focus-visible {
-    opacity: 1;
-    background: var(--win);
-  }
-  .file.bin:hover .counts {
-    visibility: hidden;
-  }
-  .discard:hover {
-    color: var(--red);
-  }
-  .discard.held {
-    position: static;
-    flex-shrink: 0;
-    margin: 0 2px 0 4px;
-    opacity: 1;
-  }
-  .discard.held:hover,
-  .discard.held:focus-visible {
-    background: var(--win);
-  }
-
   input::placeholder {
     color: var(--text2);
     font-weight: 400;
