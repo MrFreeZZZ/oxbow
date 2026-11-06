@@ -2034,7 +2034,7 @@
       onActivity={history.remotes.length && remoteCtx ? showActivity : null}
     />
     <div class="main">
-      <header data-tauri-drag-region>
+      <header class:has-search={(view === "history" || view === "file") && !showConflicts} data-tauri-drag-region>
         <div class="lead" data-tauri-drag-region>
           {#if view !== "history" || showConflicts}
             <WindowTitle title={titleOf(repo, history)} steps={trailPath} onStep={goTo} />
@@ -2702,6 +2702,18 @@
     display: flex;
     align-items: center;
     align-self: stretch;
+  }
+  /* Center search in the space between the actual controls, also as either group changes size. */
+  header.has-search .lead {
+    flex: 0 1 auto;
+  }
+  header.has-search .center {
+    flex: 1 1 200px;
+    min-width: 200px;
+    justify-content: center;
+  }
+  header.has-search .trail {
+    flex: 0 0 auto;
   }
   .capsule {
     flex-shrink: 0;

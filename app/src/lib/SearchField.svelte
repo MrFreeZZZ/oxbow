@@ -97,7 +97,7 @@
   }}
 />
 
-<div class="field search-control" class:active={search.active}>
+<div class="field search-control" class:active={search.active} class:has-query={search.input.length > 0} class:search-menu-open={menu}>
   <svg class="icon glass" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
   <button class="token" onclick={openMenu} aria-haspopup="menu" aria-expanded={menu} aria-label="Search in {label}">
     {label}
@@ -204,7 +204,7 @@
     color: var(--text2);
   }
   .token {
-    display: flex;
+    display: none;
     align-items: center;
     gap: 2px;
     height: 22px;
@@ -215,6 +215,11 @@
     font-size: var(--text-small);
     font-weight: 600;
     flex-shrink: 0;
+  }
+  .field:focus-within .token,
+  .field.has-query .token,
+  .field.search-menu-open .token {
+    display: flex;
   }
   .chevron {
     width: 11px;

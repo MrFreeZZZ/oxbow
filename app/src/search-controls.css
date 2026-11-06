@@ -13,8 +13,15 @@
   color: var(--text2);
 }
 
-.search-control:focus-within {
+.search-control:focus-within,
+.search-control.search-menu-open {
+  background: var(--win);
   box-shadow: var(--focus-ring);
+}
+
+.search-control:focus-within > input::placeholder,
+.search-control.search-menu-open > input::placeholder {
+  color: transparent;
 }
 
 .search-control > svg.icon {
