@@ -378,7 +378,7 @@
     margin: var(--space-2) var(--space-3) var(--space-3);
     padding: 12px;
     border: 1px solid transparent;
-    border-radius: var(--radius-xl);
+    border-radius: var(--radius-m);
     display: flex;
     flex-direction: column;
     gap: 10px;

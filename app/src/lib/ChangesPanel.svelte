@@ -11,7 +11,7 @@
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import { confirm, type Part, type Request } from "./confirm.svelte";
   import type { ChangelistEdit, FileChange, FileDiff, Hunk, HistoryRow, Moving, Side, WorkingTree } from "./types";
-  import { plate, splitPath, tint } from "./format";
+  import { lane, plate, splitPath, tint } from "./format";
   import { keyFocus as focusByKey, tabStepper } from "./tabs";
   import ChangesDiff from "./ChangesDiff.svelte";
   import type { LinePicker } from "./DiffView.svelte";
@@ -1082,7 +1082,7 @@
     <h1>
       Uncommitted changes
       {#if branch}
-        <span class="branch" style:color={plate(color)} style:background={tint(color, "label")} title="Checked-out branch">
+        <span class="branch" style:color={plate(color)} style:background={tint(color, "label")} style:box-shadow={`inset 0 0 0 1px color-mix(in srgb, ${lane(color)} 40%, transparent)`} title="Checked-out branch">
           <svg class="icon tiny" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg>
           {branch}
         </span>
@@ -1095,7 +1095,7 @@
   </div>
 
   <div class="body" class:stacked bind:clientWidth={bodyWidth} bind:clientHeight={bodyHeight}>
-    <div class="files" bind:this={filesBox} aria-label="Working copy" data-steps use:tabStepper={stepper} class:dragging={!!dragging} style:height={stacked ? `${Math.round(filesShare * 100)}%` : null} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
+    <div class="files" bind:this={filesBox} aria-label="Working copy" data-steps use:tabStepper={stepper} class:dragging={!!dragging} style:--selection-border={`color-mix(in srgb, ${lane(color)} 40%, transparent)`} style:height={stacked ? `${Math.round(filesShare * 100)}%` : null} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
       <div class="tools">
         <label class="filter">
           <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
@@ -1561,7 +1561,7 @@
     gap: 2px;
     height: 30px;
     padding: 0 var(--space-1) 0 2px;
-    border-radius: var(--radius-s);
+    border-radius: var(--radius-m);
     font-size: var(--text-caption);
     font-weight: 600;
     letter-spacing: 0.05em;
@@ -1695,7 +1695,11 @@
     align-items: center;
     height: 28px;
     padding: 0 var(--space-2) 0 22px;
-    border-radius: var(--radius-s);
+    border-radius: var(--radius-m);
+  }
+  .file.open,
+  .ghead.on {
+    box-shadow: inset 0 0 0 1px var(--selection-border);
   }
   .file:hover {
     background: var(--field);
@@ -1732,6 +1736,16 @@
     outline: 2px solid var(--accent);
     outline-offset: -2px;
     pointer-events: none;
+  }
+  .name:focus-visible::after,
+  .name:global(.key-focus)::after,
+  .gname:focus-visible::after,
+  .gname:global(.key-focus)::after {
+    border-radius: var(--radius-m);
+  }
+  .file.open .name::after,
+  .ghead.on .gname::after {
+    content: none;
   }
   :global(:root[data-contrast="more"]) .files :is(.name, .fold, .gname):focus-visible::after {
     outline-width: 3px;
