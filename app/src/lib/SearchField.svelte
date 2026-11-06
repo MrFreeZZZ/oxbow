@@ -74,6 +74,7 @@
   }
 
   function openMenu() {
+    input?.focus();
     menu = !menu;
     if (menu) search.countModes(rows);
   }
@@ -99,7 +100,8 @@
 
 <div class="field search-control" class:active={search.active} class:has-query={search.input.length > 0} class:search-menu-open={menu}>
   <svg class="icon glass" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
-  <button class="token" onclick={openMenu} aria-haspopup="menu" aria-expanded={menu} aria-label="Search in {label}">
+  <!-- Keep the field focused: macOS WebKit does not focus a button on a mouse click. -->
+  <button class="token" onmousedown={(event) => { if (event.button === 0) event.preventDefault(); }} onclick={openMenu} aria-haspopup="menu" aria-expanded={menu} aria-label="Search in {label}">
     {label}
     <svg class="icon chevron" viewBox="0 0 16 16"><path d="M4.5 6.5 8 10l3.5-3.5" /></svg>
   </button>
