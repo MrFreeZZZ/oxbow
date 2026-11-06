@@ -314,7 +314,7 @@
       {#if label}<span class="label">{label}</span>{/if}
       <span class="summary" title={row?.summary}>{row?.summary ?? ""}</span>
     </div>
-    <div class="find"><FileFilter bind:value={query} onkeydown={keydown} /></div>
+    <div class="find"><FileFilter bind:value={query} onkeydown={keydown} color={row?.graph.color} /></div>
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <div class="list" bind:this={list} role="tree" aria-label="Folders and files" tabindex="0" onkeydown={keydown}>
       {#if error}

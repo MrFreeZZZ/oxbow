@@ -66,7 +66,7 @@
   import { amend, canBack, canForward, crumbs, detailOfPlace, emptyTrail, go, nameOfPlace, visit, type Place, type Trail } from "./lib/backStack";
   import { kept } from "./lib/kept";
   import { stepQuery, type SeriesQuery } from "./lib/series";
-  import { relativeTime } from "./lib/format";
+  import { lane, relativeTime } from "./lib/format";
   import { activity, failureShort, type ActivityItem } from "./lib/activity.svelte";
   import { github } from "./lib/github.svelte";
   import type { ForgeKind } from "./lib/forge";
@@ -2040,7 +2040,7 @@
             <WindowTitle title={titleOf(repo, history)} steps={trailPath} onStep={goTo} />
           {/if}
           <button class="capsule repo-picker" onclick={(event) => sidebar?.repoMenu(event)} oncontextmenu={(event) => { event.preventDefault(); void sidebar?.repoMenu(event); }} aria-label={`Repository ${repo.name}`} aria-haspopup="menu" title={`${repo.path}\n${branchCount} ${branchCount === 1 ? "branch" : "branches"}`}>
-            <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.folder} /></svg>
+            <svg class="icon" viewBox="0 0 16 16" style:color={history.trunk ? lane(0) : undefined}><path d={menuIcons.folder} /></svg>
             <span>{repo.name}</span>
             <svg class="icon small" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>
           </button>
@@ -2680,6 +2680,7 @@
     flex-shrink: 0;
   }
   .repo-picker span {
+    color: var(--text);
     white-space: nowrap;
   }
   .repo-picker .icon {

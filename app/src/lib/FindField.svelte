@@ -65,6 +65,7 @@
 
 <style>
   .field {
+    --search-focus-shadow: inset 0 0 0 0.5px var(--glass-border), var(--glass-shadow);
     width: 220px;
     flex-shrink: 1;
     min-width: 180px;

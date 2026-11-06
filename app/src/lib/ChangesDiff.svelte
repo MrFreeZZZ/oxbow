@@ -30,6 +30,7 @@
     whole = $bindable(),
     sel = $bindable(),
     scroller = $bindable(),
+    headerHeight = $bindable(46),
     openUnstaged,
     openStaged,
     sideFiles,
@@ -71,6 +72,8 @@
     /** Lines picked in one hunk, with the one clicked last for Shift-click. */
     sel: { hunk: Hunk; lines: number[]; anchor: number } | null;
     scroller?: HTMLDivElement;
+    /** The list toolbar follows this height when the columns are side by side. */
+    headerHeight?: number;
     /** The open file's unstaged and staged parts. */
     openUnstaged: FileChange | null;
     openStaged: FileChange | null;
@@ -228,7 +231,7 @@
 {/snippet}
 
 {#if lastOpen}
-  <div class="dhead">
+  <div class="dhead" bind:clientHeight={headerHeight}>
     <div class="grow">
       <div class="dtitle"><b>From last commit</b></div>
       <div class="caption">Amend keeps these changes in the commit</div>
@@ -236,7 +239,7 @@
     <DiffTools {whole} onToggleWhole={() => (whole = !whole)} working />
   </div>
 {:else if shown}
-  <div class="dhead" class:file-head={shown.kind === "file"}>
+  <div class="dhead" class:file-head={shown.kind === "file"} bind:clientHeight={headerHeight}>
     {#if shown.kind === "file"}
       {@const file = shown}
       <div class="segmented" role="radiogroup" aria-label="Which part of the file">

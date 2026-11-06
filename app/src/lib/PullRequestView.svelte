@@ -694,6 +694,7 @@
   $effect(() => draft.start());
   $effect(() => draft.askFacts());
   const form = $derived(draft.form);
+  const targetColor = $derived(form ? colorOf(form.base) : null);
   const labFacts = $derived(draft.labFacts);
   const below = $derived(draft.below);
   const newPull = $derived(draft.newPull);
@@ -757,7 +758,7 @@
   </button>
 {/snippet}
 
-<div class="pull">
+<div class="pull" style:--target-lane={targetColor === null ? undefined : lane(targetColor)} style:--target-plate={targetColor === null ? undefined : plate(targetColor)} style:--target-tint={targetColor === null ? undefined : tint(targetColor)}>
   <section class="main" aria-label="Pull request">
     {#if stackNames.length}
       <div class="stack-head">
@@ -962,7 +963,7 @@
           {#if toPush}{branch} has {plural(toPush, "commit")} that {toPush === 1 ? "is" : "are"} not on {w.name} yet.{:else}{branch} is on {w.name}; this opens a {w.noun} for it.{/if}
         </span>
       </div>
-      <div class="form">
+      <div class="form" style:--focus-ring="0 0 0 1px var(--target-border)">
         <label class="form-row">
           <span class="form-label">Title</span>
           <input class="field" bind:value={form.title} placeholder="What it does" />
@@ -971,7 +972,7 @@
           <span class="form-label">{lab ? "Target" : "Base"}</span>
           <span class="chips">
             {#each draft.bases as b (b)}
-              <button class="chip" class:on={form.base === b} style:background={form.base === b ? tint(colorOf(b), "label") : undefined} style:color={form.base === b ? plate(colorOf(b)) : undefined} onclick={() => draft.pickBase(b)}>{b}</button>
+              <button class="chip" class:on={form.base === b} style:box-shadow={form.base === b ? "inset 0 0 0 1px var(--target-border)" : undefined} style:background={form.base === b ? tint(colorOf(b), "label") : undefined} style:color={form.base === b ? plate(colorOf(b)) : undefined} onclick={() => draft.pickBase(b)}>{b}</button>
             {/each}
             {#if below && form.base === below}<span class="note">Picked from the stack: {branch} is built on {below}</span>{/if}
           </span>
@@ -1251,6 +1252,7 @@
     {:else if pr && pr.state === "closed"}
       <div class="skipped"><span class="grow">Closed without merging.</span></div>
     {:else if form && newPull}
+      <section class="create-panel" aria-label={`Create ${w.noun}`}>
       <span class="group-title">What happens</span>
       {#if newPull.push}
         <span class="step"><span class="num">1</span><span>Push {branch} to {newPull.push.remote} ({plural(toPush, "commit")})</span></span>
@@ -1272,6 +1274,7 @@
         {/if}
       {/if}
       <button class="button primary merge" disabled={!form.title.trim()} onclick={create}>{newPull.push ? "Push and Create" : lab ? "Create Merge Request" : "Create Pull Request"}</button>
+      </section>
     {/if}
   </aside>
 </div>
@@ -1282,6 +1285,8 @@
 
 <style>
   .pull {
+    --target-border: color-mix(in srgb, var(--target-lane) 40%, transparent);
+    --target-action: light-dark(var(--target-plate), color-mix(in srgb, var(--target-lane) 45%, black));
     flex-grow: 1;
     display: flex;
     min-height: 0;
@@ -1763,6 +1768,19 @@
     background: var(--panel);
     border: 0.5px solid var(--panel-border);
     overflow-y: auto;
+  }
+  .create-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    border-radius: var(--radius-m);
+    border: 1px solid var(--target-border);
+    background: var(--target-tint);
+  }
+  .create-panel .switch.on,
+  .create-panel .button.primary {
+    background: var(--target-action);
   }
   .form-row {
     display: flex;

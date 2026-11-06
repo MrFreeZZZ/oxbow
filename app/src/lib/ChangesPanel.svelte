@@ -104,6 +104,7 @@
   let sel = $state<{ hunk: Hunk; lines: number[]; anchor: number } | null>(null);
   let menu = $state<{ x: number; y: number; entries: MenuEntry[]; label: string } | null>(null);
   let diffScroller = $state<HTMLDivElement>();
+  let diffHeaderHeight = $state(46);
 
   const staged = $derived(tree?.staged ?? []);
   const unstaged = $derived(tree?.unstaged ?? []);
@@ -955,8 +956,8 @@
 
   <div class="body" class:stacked bind:clientWidth={bodyWidth} bind:clientHeight={bodyHeight}>
     <div class="files" bind:this={filesBox} aria-label="Working copy" data-steps use:tabStepper={stepper} class:dragging={!!dragging} style:--changes-row-cursor={dragging ? "grabbing" : null} style:--selection-border={`color-mix(in srgb, ${lane(color)} 40%, transparent)`} style:height={stacked ? `${Math.round(filesShare * 100)}%` : null} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
-      <div class="tools">
-        <div class="filter"><FileFilter bind:value={filter} /></div>
+      <div class="tools" style:height={!stacked && (shown || lastOpen) ? `${diffHeaderHeight}px` : null}>
+        <div class="filter"><FileFilter bind:value={filter} {color} /></div>
         <div class="segmented icons" role="radiogroup" aria-label="Show files">
           <button role="radio" aria-checked={!listView.folders} class:on={!listView.folders} onclick={() => setFolders(false)} aria-label="List" title="One list of paths">
             <svg class="icon" viewBox="0 0 16 16"><path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01" /></svg>
@@ -1092,6 +1093,7 @@
         bind:whole
         bind:sel
         bind:scroller={diffScroller}
+        bind:headerHeight={diffHeaderHeight}
         {openUnstaged}
         {openStaged}
         {sideFiles}
@@ -1248,6 +1250,9 @@
     min-height: 84px;
     overflow-y: auto;
     padding: 0 var(--space-2) var(--space-1);
+  }
+  .body:not(.stacked) .lists {
+    padding-top: var(--space-2);
   }
   .group {
     display: flex;

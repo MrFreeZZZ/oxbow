@@ -380,7 +380,7 @@
   <div class="body" class:stacked bind:clientWidth={bodyWidth}>
     <div class="files" bind:this={filesBox} aria-label="Changed files" data-steps use:tabStepper={fileTabs(paths, tab, openTab)} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
       <div class="tools">
-        <div class="filter"><FileFilter bind:value={filter} /></div>
+        <div class="filter"><FileFilter bind:value={filter} {color} /></div>
         <div class="segmented" role="radiogroup" aria-label="Show files">
           <button role="radio" aria-checked={!listView.folders} class:on={!listView.folders} onclick={() => setFolders(false)} aria-label="List" title="One list of paths">
             <svg class="icon" viewBox="0 0 16 16"><path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01" /></svg>

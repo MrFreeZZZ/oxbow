@@ -376,7 +376,7 @@
 
 <div class="files-tab">
   <div class="list">
-    <div class="filter"><FileFilter bind:value={filter} /></div>
+    <div class="filter"><FileFilter bind:value={filter} {color} /></div>
     {#if files.length}
       <div class="progress" title={session.lab ? "Files ticked Viewed, on this computer" : "Files ticked Viewed, here and on GitHub"}>
         <span>Viewed {viewedCount} of {files.length}</span>
