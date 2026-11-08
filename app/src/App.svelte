@@ -63,7 +63,7 @@
   import OperationLog from "./lib/OperationLog.svelte";
   import { shortcut, withKeys } from "./lib/keys";
   import { cannotRestore, isRedo, lostRow, oplog, undoRequest } from "./lib/oplog.svelte";
-  import { amend, canBack, canForward, crumbs, detailOfPlace, emptyTrail, go, nameOfPlace, visit, type Place, type Trail } from "./lib/backStack";
+  import { canBack, canForward, crumbs, detailOfPlace, moveToPlace, nameOfPlace, newNavigationTrail, recordPlace, resetNavigationTrail, restoreHistoryPosition, type Place } from "./lib/backStack";
   import { kept } from "./lib/kept";
   import { stepQuery, type SeriesQuery } from "./lib/series";
   import { lane, relativeTime } from "./lib/format";
@@ -386,13 +386,8 @@
 
   // --- Back and Forward ---
 
-  /** The places visited in this repository, and which one is current. */
-  let trail = $state<Trail>(emptyTrail());
-  /** The next change of the selected commit is a leap (a search result, a parent, a sidebar
-   *  branch), which History keeps as a place of its own. */
-  let jumping = false;
-  /** How far History's graph is scrolled, kept for its place when you leave it. */
-  let historyScroll: number | null = null;
+  const navigation = $state(newNavigationTrail());
+  const trail = $derived(navigation.trail);
   /** The list of places behind or ahead, from a right-click on Back or Forward. */
   let placesMenu = $state<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
 
@@ -435,18 +430,12 @@
   $effect(() => {
     const place = here;
     if (!place) return;
-    untrack(() => {
-      // History is left as scrolled now.
-      const scroll = historyScroll;
-      const before = amend(trail, (p) => (p.view === "history" ? { ...p, scroll } : p));
-      trail = visit(before, place.view === "history" ? { ...place, scroll } : place, jumping);
-      jumping = false;
-    });
+    untrack(() => recordPlace(navigation, place));
   });
 
   /** Select a commit by a leap: History keeps the commit you leave as a place to come back to. */
   function jump(id: string) {
-    if (id !== selected && view === "history" && !showConflicts) jumping = true;
+    if (id !== selected && view === "history" && !showConflicts) navigation.jumping = true;
     select(id);
   }
 
@@ -475,12 +464,8 @@
 
   /** Go to a place on the trail, as it was left. */
   function goTo(index: number) {
-    // History is left as scrolled now, for Forward to come back to.
-    const scroll = historyScroll;
-    const next = go(view === "history" ? amend(trail, (p) => (p.view === "history" ? { ...p, scroll } : p)) : trail, index);
-    if (!next) return;
-    trail = next;
-    const p = next.places[next.at];
+    const p = moveToPlace(navigation, index, view === "history");
+    if (!p) return;
     resolving = false;
     switch (p.view) {
       case "history": {
@@ -494,9 +479,15 @@
           selected = p.commit;
         }
         const id = selected;
-        const place = () => (p.scroll !== null ? list?.scrollTo(p.scroll) : id && list?.reveal(id));
-        if (!id || rowsById.has(id)) requestAnimationFrame(place);
-        else ensureLoaded(id).then((ok) => ok && selected === id && requestAnimationFrame(place));
+        const ticket = session.tickets.take();
+        void restoreHistoryPosition(navigation, p, id, {
+          loaded: (commit) => rowsById.has(commit),
+          load: ensureLoaded,
+          frame: requestAnimationFrame,
+          current: () => session.tickets.current(ticket) && view === "history" && selected === id,
+          scrollTo: (top) => list?.scrollTo(top),
+          reveal: (commit) => list?.reveal(commit),
+        });
         break;
       }
       case "file":
@@ -555,8 +546,8 @@
 
   /** Another repository starts a trail of its own, and what its screens kept is let go. */
   function forgetPlaces() {
-    trail = emptyTrail();
-    historyScroll = null;
+    resetNavigationTrail(navigation);
+    placesMenu = null;
     kept.clear();
   }
 
@@ -1694,7 +1685,7 @@
     showDetails();
     if (await ensureLoaded(entry.id)) {
       oplog.lost = null;
-      if (leap && entry.id !== selected) jumping = true;
+      if (leap && entry.id !== selected) navigation.jumping = true;
       selected = entry.id;
       requestAnimationFrame(() => list?.reveal(entry.id));
     } else {
@@ -1745,7 +1736,7 @@
    *  `missing` says why History can't show it, when no branch or tag reaches it. */
   function pick(id: string, missing?: string) {
     const before = selected;
-    if (id !== selected && view === "history" && !showConflicts) jumping = true;
+    if (id !== selected && view === "history" && !showConflicts) navigation.jumping = true;
     unhide(id);
     selected = id;
     second = null;
@@ -2351,7 +2342,7 @@
               history={graphHistory!}
               {selected}
               onSelect={select}
-              onScroll={(top) => (historyScroll = top)}
+              onScroll={(top) => (navigation.scroll = top)}
               menuFor={commitMenu}
               {found}
               second={pair ? second : null}

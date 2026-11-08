@@ -92,6 +92,69 @@ export function go(trail: Trail, to: number): Trail | null {
 export const canBack = (t: Trail) => t.at > 0;
 export const canForward = (t: Trail) => t.at < t.places.length - 1;
 
+type NavigationTrail = {
+  trail: Trail;
+  scroll: number | null;
+  jumping: boolean;
+  revision: number;
+};
+
+type HistoryPlace = Extract<Place, { view: "history" }>;
+
+export function newNavigationTrail(): NavigationTrail {
+  return { trail: emptyTrail(), scroll: null, jumping: false, revision: 0 };
+}
+
+export function resetNavigationTrail(state: NavigationTrail) {
+  state.trail = emptyTrail();
+  state.scroll = null;
+  state.jumping = false;
+  state.revision++;
+}
+
+function saveScroll(state: NavigationTrail): Trail {
+  return amend(state.trail, (place) => place.view === "history" ? { ...place, scroll: state.scroll } : place);
+}
+
+export function recordPlace(state: NavigationTrail, place: Place) {
+  const current = saveScroll(state);
+  state.trail = visit(current, place.view === "history" ? { ...place, scroll: state.scroll } : place, state.jumping);
+  state.jumping = false;
+}
+
+export function moveToPlace(state: NavigationTrail, index: number, leavingHistory: boolean): Place | null {
+  const next = go(leavingHistory ? saveScroll(state) : state.trail, index);
+  if (!next) return null;
+  state.trail = next;
+  state.jumping = false;
+  state.revision++;
+  const place = next.places[next.at];
+  if (place.view === "history") state.scroll = place.scroll;
+  return place;
+}
+
+export async function restoreHistoryPosition(
+  state: NavigationTrail,
+  place: HistoryPlace,
+  commit: string | null,
+  graph: {
+    loaded: (id: string) => boolean;
+    load: (id: string) => Promise<boolean>;
+    frame: (restore: () => void) => void;
+    current: () => boolean;
+    scrollTo: (top: number) => void;
+    reveal: (id: string) => void;
+  },
+) {
+  const revision = state.revision;
+  if (commit && !graph.loaded(commit) && !(await graph.load(commit))) return;
+  graph.frame(() => {
+    if (revision !== state.revision || !graph.current()) return;
+    if (place.scroll !== null) graph.scrollTo(place.scroll);
+    else if (commit) graph.reveal(commit);
+  });
+}
+
 /** The places that led here, oldest first, for the path in the header: a run of places with the
  *  same name shows once, by its latest one, and only the last `count` are kept. */
 export function crumbs(trail: Trail, label: (p: Place) => string, count = 3): { label: string; at: number }[] {
