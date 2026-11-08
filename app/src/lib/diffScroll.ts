@@ -1,5 +1,15 @@
-import { lane } from "./format";
+import { lane } from "./format.ts";
 import type { Hunk } from "./types";
+
+/** Editable controls own Escape while focused. A dismissed preview consumes the key. */
+export function dismissPreviewOnEscape(event: KeyboardEvent, dismiss: () => void) {
+  if (event.key !== "Escape" || event.defaultPrevented) return;
+  const target = event.target as HTMLElement | null;
+  if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable) return;
+  dismiss();
+  event.preventDefault();
+  event.stopPropagation();
+}
 
 /** Keep both sides of a large replacement in the preview, even before Lazy draws its rows. */
 export function changePreview(hunk: Hunk): string {
@@ -194,13 +204,14 @@ export function diffScroll(root: HTMLElement, color: number) {
   const onScroll = () => { hidePreview(); schedule(); };
   const onResize = () => { hidePreview(); schedule(true); };
   const onEscape = (event: KeyboardEvent) => {
-    if (hovered && event.key === "Escape") {
+    if (!hovered || event.key !== "Escape" || document.querySelector('[role="menu"]')) return;
+    const modal = (event.target as Element | null)?.closest?.('[aria-modal="true"]');
+    if (modal && !modal.contains(root)) return;
+    dismissPreviewOnEscape(event, () => {
       // Shrinking the rail can put another mark under a stationary pointer.
       escaped = true;
       hidePreview();
-      event.preventDefault();
-      event.stopPropagation();
-    }
+    });
   };
   rail.addEventListener("pointermove", event => {
     if (!escaped || (!event.movementX && !event.movementY)) return;

@@ -26,12 +26,48 @@ test("Back and Forward restore the commit and scroll saved at each History stop"
     load: async () => assert.fail("The commit is already loaded"),
     frame: (restore) => restore(),
     current: () => true,
-    scrollTo: (top) => scrolled.push(top),
+    scrollTo: (top) => {
+      scrolled.push(top);
+      state.scroll = top;
+    },
     reveal: () => assert.fail("The saved scroll takes precedence"),
   });
   assert.deepEqual(scrolled, [200]);
   assert.deepEqual(moveToPlace(state, 1, true), history("newer", 900));
+  assert.deepEqual(moveToPlace(state, 0, false), history("older", 200));
 });
+
+for (const cancelled of ["load failed", "frame expired"]) {
+  test(`History keeps the actual scroll when restoration is cancelled: ${cancelled}`, async () => {
+    const state = newNavigationTrail();
+    recordPlace(state, history("older"));
+    state.scroll = 200;
+    state.jumping = true;
+    recordPlace(state, history("newer"));
+    state.scroll = 900;
+
+    const place = moveToPlace(state, 0, true);
+    if (place?.view !== "history") throw new Error("Expected a History stop");
+    const frames: (() => void)[] = [];
+    let current = true;
+    await restoreHistoryPosition(state, place, place.commit, {
+      loaded: () => false,
+      load: async () => cancelled !== "load failed",
+      frame: (restore) => { frames.push(restore); },
+      current: () => current,
+      scrollTo: () => assert.fail("A cancelled restore must not scroll"),
+      reveal: () => assert.fail("A cancelled restore must not reveal"),
+    });
+
+    // Picking a row already in view changes the selection without producing a scroll event.
+    current = false;
+    recordPlace(state, history("visible"));
+    for (const frame of frames) frame();
+    assert.equal(state.scroll, 900);
+    assert.deepEqual(moveToPlace(state, 1, true), history("newer", 900));
+    assert.deepEqual(moveToPlace(state, 0, true), history("visible", 900));
+  });
+}
 
 test("switching repositories clears the trail and cancels pending History restoration", async () => {
   const state = newNavigationTrail();

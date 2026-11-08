@@ -4,6 +4,7 @@
 import type { FileMode } from "./nav.svelte";
 import type { SeriesQuery } from "./series";
 import type { CompareMode } from "./types";
+import { wordsOf, type ForgeKind } from "./forge.ts";
 
 /** A screen and what was picked on it. */
 export type Place =
@@ -18,7 +19,7 @@ export type Place =
   | { view: "series"; query: SeriesQuery }
   /** A pull request: of a branch here, or by its number when it is another account's or a fork's;
    *  `forge` "gitlab": the branch's merge request. */
-  | { view: "pull"; branch: string; number?: number | null; forge?: "github" | "gitlab" }
+  | { view: "pull"; branch: string; number?: number | null; forge?: ForgeKind }
   | { view: "reviews" }
   | { view: "stack"; branch: string | null }
   /** Browse Files at This Commit: the commit, the branch or tag it was opened from, the file shown. */
@@ -42,7 +43,7 @@ export function placeKey(p: Place): string {
     case "series":
       return `series\0${p.query.branch}\0${p.query.old}\0${p.query.new}`;
     case "pull":
-      return `pull\0${p.number ?? p.branch}`;
+      return `pull\0${p.forge ?? "github"}\0${p.number ?? p.branch}`;
     case "stack":
       return `stack\0${p.branch ?? ""}`;
     case "browse":
@@ -128,9 +129,7 @@ export function moveToPlace(state: NavigationTrail, index: number, leavingHistor
   state.trail = next;
   state.jumping = false;
   state.revision++;
-  const place = next.places[next.at];
-  if (place.view === "history") state.scroll = place.scroll;
-  return place;
+  return next.places[next.at];
 }
 
 export async function restoreHistoryPosition(
@@ -170,9 +169,8 @@ export function crumbs(trail: Trail, label: (p: Place) => string, count = 3): { 
   return out.slice(-count);
 }
 
-/** What a place is called, in the header's path and the list of places. `pullOf` finds the pull
- *  request of a branch, or the one with a number. */
-export function nameOfPlace(p: Place, pullOf: (branch: string, number: number | null) => { number: number } | null | undefined): string {
+/** What a place is called, in the header's path and the list of places. */
+export function nameOfPlace(p: Place, pullOf: (branch: string, forge: ForgeKind) => { number: number } | null | undefined): string {
   switch (p.view) {
     case "history":
       return "History";
@@ -189,8 +187,10 @@ export function nameOfPlace(p: Place, pullOf: (branch: string, number: number | 
     case "series":
       return "Compare Series";
     case "pull": {
-      const pull = pullOf(p.branch, p.number ?? null);
-      return pull ? `PR #${pull.number}` : `Pull Request ${p.branch}`;
+      const forge = p.forge ?? "github";
+      const number = p.number ?? pullOf(p.branch, forge)?.number;
+      if (number != null) return `${forge === "gitlab" ? "MR" : "PR"} ${wordsOf(forge).mark}${number}`;
+      return `${forge === "gitlab" ? "Merge Request" : "Pull Request"} ${p.branch}`;
     }
     case "reviews":
       return "Reviews";

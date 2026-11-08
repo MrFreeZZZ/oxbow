@@ -440,7 +440,7 @@
   }
 
   /** What a place is called, and the grey line under it in the list of places (backStack.ts). */
-  const placeName = (p: Place) => nameOfPlace(p, (branch, number) => (number ? github.byNumber(number) : github.pullOf(branch)));
+  const placeName = (p: Place) => nameOfPlace(p, (branch, forge) => github.pullOf(branch, forge));
   const placeDetail = (p: Place) => detailOfPlace(p, (id) => rowsById.get(id), history?.head.branch ?? null);
 
   const placeIcons: Record<Place["view"], string> = {
@@ -483,7 +483,7 @@
         void restoreHistoryPosition(navigation, p, id, {
           loaded: (commit) => rowsById.has(commit),
           load: ensureLoaded,
-          frame: requestAnimationFrame,
+          frame: (restore) => requestAnimationFrame(restore),
           current: () => session.tickets.current(ticket) && view === "history" && selected === id,
           scrollTo: (top) => list?.scrollTo(top),
           reveal: (commit) => list?.reveal(commit),
