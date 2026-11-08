@@ -173,7 +173,7 @@
             <p class="muted">Reading the commit…</p>
           {/each}
         </div>
-        <div class="diff" use:diffScroll>
+        <div class="diff" use:diffScroll={color}>
           {#if current}
             {#if byLine(current)}
               <DiffView diffs={[current]} {color} whole={false} onToggleWhole={() => {}} {picker} {hunkBar} openable={false} history={false} tools={false} />

@@ -246,7 +246,7 @@
     {/if}
   </div>
 
-  <div class="scroll" bind:this={scroller} use:diffScroll>
+  <div class="scroll" bind:this={scroller} use:diffScroll={color}>
     {#if error}<p class="error" role="alert">{error}</p>{/if}
     {#if tab === null}
       {#if c.files.length}

@@ -668,7 +668,7 @@
         {#if pick.status === "added"}<p class="note">This commit created the file.</p>{/if}
         {#if renamedAt(pick)}<p class="note">This commit renamed it from <span class="mono">{pick.oldPath}</span>.</p>{/if}
         {#if !byId.has(pick.id) || file?.elsewhere.some((c) => c.id === pick.id)}<p class="note">This change is on another branch, not on {headName}.</p>{/if}
-        <div class="scroll" use:diffScroll>
+        <div class="scroll" use:diffScroll={color}>
           <DiffView
             {diffs}
             {color}

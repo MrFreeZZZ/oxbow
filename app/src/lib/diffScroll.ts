@@ -1,3 +1,4 @@
+import { lane } from "./format";
 import type { Hunk } from "./types";
 
 /** Keep both sides of a large replacement in the preview, even before Lazy draws its rows. */
@@ -12,12 +13,13 @@ export function changePreview(hunk: Hunk): string {
 }
 
 /** One navigation rail for the entire scrolling diff, including lazy blocks in every file. */
-export function diffScroll(root: HTMLElement) {
+export function diffScroll(root: HTMLElement, color: number) {
   root.classList.add("diff-scroll", "thin-scroll");
   const anchor = document.createElement("div");
   anchor.className = "diff-rail-anchor";
   const rail = document.createElement("nav");
   rail.className = "diff-rail";
+  rail.style.setProperty("--diff-rail-color", lane(color));
   rail.setAttribute("aria-label", "Changes in this diff");
   anchor.append(rail);
   root.prepend(anchor);
@@ -146,7 +148,7 @@ export function diffScroll(root: HTMLElement) {
     if (hovered && !marks.includes(hovered)) hidePreview();
     anchor.hidden = marks.length === 0;
     rail.style.maxHeight = `${Math.max(0, root.clientHeight - 16)}px`;
-    rail.style.top = `${Math.max(8, (root.clientHeight - Math.min(marks.length * 14, root.clientHeight - 16)) / 2)}px`;
+    rail.style.top = `${Math.max(8, (root.clientHeight - rail.offsetHeight) / 2)}px`;
   }
 
   function update() {
@@ -164,7 +166,7 @@ export function diffScroll(root: HTMLElement) {
     // A long rail can scroll independently; keep the visible change in reach unless in use.
     if (first && !rail.matches(":hover, :focus-within")) {
       const y = first.button.offsetTop;
-      if (y < rail.scrollTop || y + 14 > rail.scrollTop + rail.clientHeight) rail.scrollTop = y - rail.clientHeight / 2;
+      if (y < rail.scrollTop || y + first.button.offsetHeight > rail.scrollTop + rail.clientHeight) rail.scrollTop = y - rail.clientHeight / 2;
     }
   }
 
@@ -216,6 +218,9 @@ export function diffScroll(root: HTMLElement) {
   rail.addEventListener("keydown", onKey);
   schedule(true);
   return {
+    update(color: number) {
+      rail.style.setProperty("--diff-rail-color", lane(color));
+    },
     destroy() {
       hidePreview();
       cancelAnimationFrame(frame);

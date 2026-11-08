@@ -944,7 +944,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    height: 34px;
+    height: var(--diff-header-height);
     padding: 0 var(--space-1) 0 var(--space-3);
     border: 1px solid transparent;
     border-radius: var(--radius-m);

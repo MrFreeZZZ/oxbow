@@ -403,7 +403,7 @@
       {/each}
     </div>
   </div>
-  <div class="diff" bind:this={scroller} use:diffScroll>
+  <div class="diff" bind:this={scroller} use:diffScroll={color}>
     {#if reviewed}
       <div class="pushed">
         <svg class="icon" viewBox="0 0 16 16"><path d="M8 13V3.5M4.5 7 8 3.5 11.5 7" /></svg>

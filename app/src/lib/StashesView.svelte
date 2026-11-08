@@ -376,7 +376,7 @@
         {/if}
       </div>
 
-      <div class="scroll" use:diffScroll>
+      <div class="scroll" use:diffScroll={branchColor(stash)}>
         {#if error}<p class="error" role="alert">{error}</p>{/if}
         {#if f}
           {@const t = totals(f)}

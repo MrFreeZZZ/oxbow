@@ -97,7 +97,7 @@
 {#if error}
   <p class="note error" role="alert">{error}</p>
 {:else if v.kept}
-  <div class="scroll" use:diffScroll>
+  <div class="scroll" use:diffScroll={color}>
     <DiffView
       {diffs}
       {color}
