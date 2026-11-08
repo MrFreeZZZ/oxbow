@@ -902,7 +902,7 @@
 
 <style>
   .file {
-    padding: 0 var(--space-3) var(--space-4);
+    padding: 0 var(--diff-file-inset) var(--space-4);
   }
   .file.shut {
     padding-bottom: 0;

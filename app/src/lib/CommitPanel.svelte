@@ -495,7 +495,7 @@
 
     {#if !stacked}<button class="edge" tabindex="-1" style:left={`${filesWidth(bodyWidth) - 4}px`} onpointerdown={(e) => resizeFiles(e, bodyWidth)} aria-label="Resize the files" title="Drag to resize"></button>{/if}
     <div class="diff" aria-label="Diff">
-      <div class="dhead">
+      <div class="dhead diff-toolbar">
         <span class="caption grow">
           {#if tab === null}
             {detail ? `${detail.files.length.toLocaleString()} ${detail.files.length === 1 ? "file" : "files"}` : ""}
@@ -1008,7 +1008,6 @@
     align-items: center;
     gap: 10px;
     min-height: 46px;
-    padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
     flex-shrink: 0;
   }
   .caption {

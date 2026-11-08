@@ -1,6 +1,15 @@
+:root {
+  --diff-rail-inset: var(--space-4);
+  --diff-file-inset: var(--space-3);
+}
+.diff-toolbar {
+  padding: var(--space-2) var(--diff-file-inset) var(--space-2)
+    calc(var(--diff-rail-inset) + var(--diff-file-inset));
+}
+
 /* Shared thin scrollbars for the diff and commit graph; the wider transparent thumb border keeps dragging easy. */
 .diff-scroll {
-  padding-left: var(--space-4);
+  padding-left: var(--diff-rail-inset);
 }
 .thin-scroll::-webkit-scrollbar {
   width: 12px;
@@ -27,7 +36,7 @@
   position: sticky;
   top: 0;
   height: 0;
-  margin-left: calc(-1 * var(--space-4));
+  margin-left: calc(-1 * var(--diff-rail-inset));
   z-index: 2;
 }
 .diff-rail {

@@ -232,7 +232,7 @@
 {/snippet}
 
 {#if lastOpen}
-  <div class="dhead" bind:clientHeight={headerHeight}>
+  <div class="dhead diff-toolbar" bind:clientHeight={headerHeight}>
     <div class="grow">
       <div class="dtitle"><b>From last commit</b></div>
       <div class="caption">Amend keeps these changes in the commit</div>
@@ -240,7 +240,7 @@
     <DiffTools {whole} onToggleWhole={() => (whole = !whole)} working />
   </div>
 {:else if shown}
-  <div class="dhead" class:file-head={shown.kind === "file"} bind:clientHeight={headerHeight}>
+  <div class="dhead diff-toolbar" class:file-head={shown.kind === "file"} bind:clientHeight={headerHeight}>
     {#if shown.kind === "file"}
       {@const file = shown}
       <div class="segmented" role="radiogroup" aria-label="Which part of the file">
@@ -372,7 +372,6 @@
     align-items: center;
     gap: 10px;
     min-height: 46px;
-    padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
     flex-shrink: 0;
   }
   .dhead.file-head {
