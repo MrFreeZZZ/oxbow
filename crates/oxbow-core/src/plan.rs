@@ -16,7 +16,7 @@ use crate::edit::plan_reset;
 use crate::error::{Error, Result};
 use crate::lfs;
 use crate::oplog::short_id;
-use crate::repo::Repo;
+use crate::repo::{Repo, local_branch_ref};
 use crate::tags;
 use crate::worktree::Side;
 
@@ -37,7 +37,7 @@ pub(crate) const HOOKS_OFF: &str = "--no-verify: Git hooks are turned off in Set
 
 /// Explicit branch refs keep local and remote tags with the same name out of a push.
 pub(crate) fn refspec(branch: &str, upstream: &str) -> String {
-    format!("refs/heads/{branch}:refs/heads/{upstream}")
+    format!("{}:{}", local_branch_ref(branch), local_branch_ref(upstream))
 }
 
 pub(crate) fn stdin_note(path: &str, header: &str) -> String {
@@ -876,7 +876,7 @@ impl Repo {
             args.push("--autostash");
             comment.push_str("; --autostash: keep uncommitted files");
         }
-        let branch_ref = format!("refs/heads/{branch}");
+        let branch_ref = local_branch_ref(branch);
         args.extend([remote, &branch_ref]);
         GitCommand::new(args).comment(comment).with_progress()
     }

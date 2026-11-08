@@ -4,6 +4,26 @@ use oxbow_core::Repo;
 use support::Fixture;
 
 #[test]
+fn lost_work_ignores_tags_that_share_branch_names() {
+    let mut fx = Fixture::new();
+    let root = fx.commit("a.txt", "a\n", "Root");
+    let lost = fx.git(&["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "Branch-only commit"]);
+    let lost = lost.trim();
+    fx.git(&["update-ref", "refs/heads/child", lost]);
+    fx.git(&["update-ref", "refs/heads/child", &root]);
+    fx.git(&["tag", "child", &root]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let entry = repo
+        .reflog_entries()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.id == lost)
+        .unwrap();
+    assert_eq!(entry.source, "child");
+    assert!(entry.lost);
+}
+
+#[test]
 fn a_hard_reset_in_a_terminal_leaves_the_commits_as_lost_work() {
     let mut fx = Fixture::new();
     let root = fx.commit("a.txt", "a\n", "Root");

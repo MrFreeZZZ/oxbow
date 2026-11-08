@@ -502,7 +502,7 @@ impl Repo {
             .filter_map(|line| {
                 let (name, rest) = line.split_once('\0')?;
                 // Short ref names gain a `heads/` prefix when a tag has the same name.
-                let branch = name.strip_prefix("refs/heads/")?;
+                let branch = crate::repo::local_branch_name(name)?;
                 Some((branch.to_owned(), parse_tracking(rest)?))
             })
             .collect())

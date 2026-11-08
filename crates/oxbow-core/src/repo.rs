@@ -85,6 +85,18 @@ pub struct RefInfo {
     pub tracking: Option<Tracking>,
 }
 
+const LOCAL_BRANCH_PREFIX: &str = "refs/heads/";
+
+/// A local branch as a revision, even when another ref shares its name.
+pub(crate) fn local_branch_ref(name: &str) -> String {
+    format!("{LOCAL_BRANCH_PREFIX}{name}")
+}
+
+/// Unlike Git's refname:short, this always returns the same name for a branch.
+pub(crate) fn local_branch_name(reference: &str) -> Option<&str> {
+    reference.strip_prefix(LOCAL_BRANCH_PREFIX)
+}
+
 impl Repo {
     /// Open the repository that contains `path`.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {

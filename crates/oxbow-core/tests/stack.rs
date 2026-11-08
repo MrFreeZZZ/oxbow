@@ -110,6 +110,43 @@ fn the_stack_reaches_from_the_checked_out_branch_up_to_the_last_one_built_on_it(
 }
 
 #[test]
+fn editing_a_stack_ignores_tags_that_share_branch_names() {
+    let mut fx = stacked();
+    fx.git(&["tag", "auth/3", "main"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let stack = repo.stack(None).unwrap();
+    assert_eq!(stack.top, "auth/3");
+    assert!(stack.left_behind.is_empty());
+
+    fx.git(&["tag", "auth/2", "main"]);
+    fx.git(&["tag", "main", "refs/heads/auth/3"]);
+    let stack = repo.stack(None).unwrap();
+    assert_eq!(stack.top, "auth/3");
+    assert_eq!(stack.base.summary, "Root");
+    assert_eq!(stack.commits.len(), 5);
+    assert!(stack.left_behind.is_empty());
+    let mut plan = as_is(&stack);
+    set(
+        &mut plan,
+        &id_of(&stack, "Wire token refresh"),
+        StepAction::Reword,
+        Some("Rename the top commit"),
+    );
+    repo.perform(&Action::EditStack { plan }).unwrap();
+    assert_eq!(repo.head().unwrap().branch.as_deref(), Some("auth/2"));
+    assert_eq!(
+        subjects(&mut fx, "refs/heads/auth/2..refs/heads/auth/3")
+            .first()
+            .map(String::as_str),
+        Some("Rename the top commit")
+    );
+    assert_eq!(
+        fx.git(&["rev-parse", "refs/tags/auth/3"]),
+        fx.git(&["rev-parse", "refs/heads/main"])
+    );
+}
+
+#[test]
 fn a_fork_on_top_of_the_stack_is_left_behind() {
     let mut fx = stacked();
     fx.git(&["switch", "-q", "-c", "auth/3b", "auth/2"]);

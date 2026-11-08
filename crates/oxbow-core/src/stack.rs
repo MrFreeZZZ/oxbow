@@ -18,7 +18,7 @@ use crate::cli::{GitCommand, shell_quote};
 use crate::error::{Error, Result};
 use crate::plan::paragraphs;
 use crate::remote::CommitBrief;
-use crate::repo::{RefKind, Repo};
+use crate::repo::{RefKind, Repo, local_branch_name, local_branch_ref};
 use crate::split::{StackSplit, split_of, split_part};
 
 /// More commits than this are not edited on screen.
@@ -348,12 +348,12 @@ impl Repo {
                 "{branch} is the main branch: there is no stack on top of it to edit"
             )));
         }
-        let trunk = trunk.clone();
+        let branch_ref = local_branch_ref(&branch);
         let base = self
-            .run(&GitCommand::new(["merge-base", &trunk.name, &branch]))
+            .run(&GitCommand::new(["merge-base", &trunk.target, &branch_ref]))
             .map(|out| out.stdout.trim().to_owned())
             .map_err(|_| Error::Git(format!("{branch} has no commit in common with {}", trunk.name)))?;
-        if self.is_ancestor(&branch, &trunk.name) {
+        if self.is_ancestor(&branch_ref, &trunk.target) {
             return Err(Error::Git(format!(
                 "{branch} has no commits of its own: {} has them all",
                 trunk.name
@@ -364,17 +364,17 @@ impl Repo {
         let local: Vec<_> = refs.iter().filter(|r| r.kind == RefKind::Local).collect();
         let containing = self.run(&GitCommand::new([
             "for-each-ref",
-            "--format=%(refname:short)",
+            "--format=%(refname)",
             "--contains",
-            &branch,
+            &branch_ref,
             "refs/heads",
         ]))?;
         let mut above: Vec<(usize, String)> = Vec::new();
-        for name in containing.stdout.lines().map(str::trim) {
-            if name.is_empty() || name == branch || name == trunk.name {
+        for name in containing.stdout.lines().filter_map(local_branch_name) {
+            if name == branch || name == trunk.name {
                 continue;
             }
-            let count = self.count(&format!("{branch}..{name}"))?;
+            let count = self.count(&format!("{branch_ref}..{}", local_branch_ref(name)))?;
             if count > 0 {
                 above.push((count, name.to_owned()));
             }
@@ -383,25 +383,30 @@ impl Repo {
         // Climb while the branches above all go one way; at a fork the stack ends.
         let mut top = branch.clone();
         loop {
+            let top_ref = local_branch_ref(&top);
             let higher: Vec<&String> = above
                 .iter()
                 .map(|(_, name)| name)
-                .filter(|name| **name != top && self.is_ancestor(&top, name))
+                .filter(|name| **name != top && self.is_ancestor(&top_ref, &local_branch_ref(name)))
                 .collect();
             let Some(next) = higher.first() else { break };
-            let one_way = higher.iter().all(|name| self.is_ancestor(next, name));
+            let next_ref = local_branch_ref(next);
+            let one_way = higher
+                .iter()
+                .all(|name| self.is_ancestor(&next_ref, &local_branch_ref(name)));
             if !one_way {
                 break;
             }
             // A merge Edit Stack can't leave out ends it too: the branches below stay editable.
-            let merges = self.list_range(&top, next)?.merges;
+            let merges = self.list_range(&top_ref, &next_ref)?.merges;
             if self.blocking_merge(&merges, &base, &trunk.name, next).is_some() {
                 break;
             }
             top = (*next).clone();
         }
-        let range = format!("{base}..{top}");
-        let listed = self.list_range(&base, &top)?;
+        let top_ref = local_branch_ref(&top);
+        let range = format!("{base}..{top_ref}");
+        let listed = self.list_range(&base, &top_ref)?;
         if let Some((why, merge)) = self.blocking_merge(&listed.merges, &base, &trunk.name, &top) {
             return Err(Error::Git(why + &self.below_merge(merge, &base)));
         }
@@ -513,7 +518,7 @@ impl Repo {
         if let Some(oldest) = listed.commits.first() {
             let out = self.run(&GitCommand::new([
                 "for-each-ref",
-                "--format=%(refname:short)",
+                "--format=%(refname)",
                 "--contains",
                 &oldest.id,
                 "refs/heads",
@@ -521,8 +526,8 @@ impl Repo {
             left_behind = out
                 .stdout
                 .lines()
-                .map(str::trim)
-                .filter(|name| !name.is_empty() && *name != trunk.name && !branches.iter().any(|b| b.name == *name))
+                .filter_map(local_branch_name)
+                .filter(|name| *name != trunk.name && !branches.iter().any(|b| b.name == *name))
                 .map(str::to_owned)
                 .collect();
             left_behind.sort();
@@ -617,14 +622,20 @@ impl Repo {
         let names: Vec<String> = self
             .run(&GitCommand::new([
                 "for-each-ref",
-                "--format=%(refname:short)",
+                "--format=%(refname)",
                 "--merged",
                 &merge.parent,
                 "--no-merged",
                 base,
                 "refs/heads",
             ]))
-            .map(|out| out.stdout.lines().map(str::to_owned).collect())
+            .map(|out| {
+                out.stdout
+                    .lines()
+                    .filter_map(local_branch_name)
+                    .map(str::to_owned)
+                    .collect()
+            })
             .unwrap_or_default();
         match names.as_slice() {
             [] => String::new(),
@@ -861,6 +872,7 @@ impl Repo {
         }
         // Whole shas in commands: seven characters can match more than one object.
         args.push(plan.base.clone());
+        // Rebase takes a branch name here so it moves the branch and keeps HEAD attached.
         args.push(plan.top.clone());
         let mut comment = if plan.onto != plan.base {
             format!("--onto {onto_shown}: replay the stack on top of it")
@@ -911,7 +923,7 @@ impl Repo {
         let mut lines = text.lines();
         let (top, head) = (lines.next()?, lines.next()?);
         let rebasing = std::fs::read_to_string(self.git_file("rebase-merge/head-name").ok()?).ok()?;
-        (rebasing.trim() == format!("refs/heads/{top}")).then(|| head.to_owned())
+        (rebasing.trim() == local_branch_ref(top)).then(|| head.to_owned())
     }
 
     /// The switch back that goes after Continue, Skip or Abort of a stack rebase that stopped.
@@ -996,7 +1008,7 @@ impl Repo {
     /// The plan's commits must be the stack's commits as they are now, with a new commit for
     /// each split.
     fn check_plan(&self, plan: &StackPlan) -> Result<Range> {
-        let range = self.list_range(&plan.base, &plan.top)?;
+        let range = self.list_range(&plan.base, &local_branch_ref(&plan.top))?;
         let parts: Vec<String> = plan.splits.iter().map(|s| split_part(&s.id)).collect();
         let mut now: Vec<&str> = range
             .commits
@@ -1242,12 +1254,12 @@ impl Repo {
         let rebased = restack
             .branches
             .iter()
-            .filter(|b| tip(&format!("refs/heads/{b}")).is_some())
+            .filter(|b| tip(&local_branch_ref(b)).is_some())
             .all(|b| {
                 restack
                     .drop
                     .iter()
-                    .all(|id| !self.is_ancestor(id, &format!("refs/heads/{b}")))
+                    .all(|id| !self.is_ancestor(id, &local_branch_ref(b)))
             });
         if !rebasing && !rebased {
             let _ = std::fs::remove_file(&file);
@@ -1258,7 +1270,7 @@ impl Repo {
                 .push
                 .iter()
                 .filter(|p| {
-                    let here = tip(&format!("refs/heads/{}", p.branch));
+                    let here = tip(&local_branch_ref(&p.branch));
                     here.is_some() && here != tip(&format!("refs/remotes/{remote}/{}", p.upstream))
                 })
                 .map(|p| p.branch.clone())
@@ -1495,7 +1507,7 @@ fn todo_text(
             }
             Emit::Fold { id, .. } => lines.push(format!("fixup {} {}", short_todo(id), subject(id))),
             Emit::Drop { id } => lines.push(format!("drop {} {}", short_todo(id), subject(id))),
-            Emit::Ref { name } => lines.push(format!("update-ref refs/heads/{name}")),
+            Emit::Ref { name } => lines.push(format!("update-ref {}", local_branch_ref(name))),
         }
     }
     if let Some(message) = pending {

@@ -1494,7 +1494,7 @@ pub const PRODUCTION_KEY: &str = "oxbow.productionBranch";
 /// Full ref name of a branch: `refs/heads/main`, `refs/remotes/origin/main`.
 pub fn full_ref(r: &RefInfo) -> Option<String> {
     match r.kind {
-        RefKind::Local => Some(format!("refs/heads/{}", r.name)),
+        RefKind::Local => Some(crate::repo::local_branch_ref(&r.name)),
         RefKind::Remote => Some(format!("refs/remotes/{}", r.name)),
         _ => None,
     }
