@@ -83,12 +83,9 @@ fn update(
     Ok(())
 }
 
-fn update_trusted(app: &AppHandle, change: impl FnOnce(&mut Vec<TrustedRepo>)) {
+fn update_trusted(app: &AppHandle, change: impl FnOnce(&mut Vec<TrustedRepo>)) -> crate::CommandResult<()> {
     let _lock = LOCK.lock().expect("trusted lock");
-    let result = file(app).and_then(|file| update(&file, || seed(app), change));
-    if let Err(err) = result {
-        eprintln!("{err}");
-    }
+    update(&file(app)?, || seed(app), change)
 }
 
 fn same(a: &str, b: &Path) -> bool {
@@ -111,23 +108,32 @@ pub fn is_trusted(app: &AppHandle, path: &Path) -> bool {
 }
 
 /// Trust the repository at `path`, which has the settings `found`.
-pub fn add(app: &AppHandle, path: &Path, found: &[TrustFinding]) {
+pub fn add(app: &AppHandle, path: &Path, found: &[TrustFinding]) -> crate::CommandResult<()> {
     update_trusted(app, |list| {
         list.retain(|r| !same(&r.path, path));
         list.push(TrustedRepo {
             path: path.display().to_string(),
             settings: keys(found),
         });
-    });
+    })
+}
+
+/// Record implicit trust after a completed operation, which still succeeded if this write fails.
+pub fn remember(app: &AppHandle, path: &Path, found: &[TrustFinding]) {
+    if let Err(err) = add(app, path, found) {
+        eprintln!("{err}");
+    }
 }
 
 /// A trusted repository was opened with the settings `found`: Settings lists them.
 pub fn note(app: &AppHandle, path: &Path, found: &[TrustFinding]) {
-    update_trusted(app, |list| {
+    if let Err(err) = update_trusted(app, |list| {
         if let Some(entry) = list.iter_mut().find(|r| same(&r.path, path)) {
             entry.settings = keys(found);
         }
-    });
+    }) {
+        eprintln!("{err}");
+    }
 }
 
 /// The settings of `repo` that run programs, and whether git may run them: the user trusts it,
@@ -162,8 +168,8 @@ pub fn trusted_repos(app: AppHandle) -> Vec<TrustedRepo> {
 
 /// Remove: the repository asks again the next time it opens.
 #[tauri::command]
-pub fn untrust_repo(app: AppHandle, path: String) {
-    update_trusted(&app, |list| list.retain(|r| !same(&r.path, Path::new(&path))));
+pub fn untrust_repo(app: AppHandle, path: String) -> crate::CommandResult<()> {
+    update_trusted(&app, |list| list.retain(|r| !same(&r.path, Path::new(&path))))
 }
 
 #[cfg(test)]
@@ -175,6 +181,48 @@ mod tests {
             path: "/legacy/repo".into(),
             settings: Vec::new(),
         }]
+    }
+
+    #[test]
+    fn failed_trust_write_leaves_repository_untrusted_on_reopen() {
+        let dir = std::env::temp_dir().join(format!("oxbow-trusted-add-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("trusted-repositories.json");
+        let next = dir.join("trusted-repositories.json.new");
+        write(&file, &[]).unwrap();
+        std::fs::create_dir(&next).unwrap();
+
+        let entry = TrustedRepo {
+            path: "/external/repo".into(),
+            settings: vec!["core.hooksPath".into()],
+        };
+        let add = |list: &mut Vec<TrustedRepo>| list.push(entry.clone());
+        assert!(update(&file, seed, add).unwrap_err().starts_with("Can't write"));
+        assert!(read_file(&file, seed).unwrap().is_empty());
+
+        std::fs::remove_dir(&next).unwrap();
+        update(&file, seed, add).unwrap();
+        assert_eq!(read_file(&file, seed).unwrap(), vec![entry]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn failed_remove_write_leaves_repository_trusted_on_reopen() {
+        let dir = std::env::temp_dir().join(format!("oxbow-trusted-remove-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("trusted-repositories.json");
+        let next = dir.join("trusted-repositories.json.new");
+        let entries = seed();
+        write(&file, &entries).unwrap();
+        std::fs::create_dir(&next).unwrap();
+
+        assert!(update(&file, seed, Vec::clear).unwrap_err().starts_with("Can't write"));
+        assert_eq!(read_file(&file, seed).unwrap(), entries);
+
+        std::fs::remove_dir(&next).unwrap();
+        update(&file, seed, Vec::clear).unwrap();
+        assert!(read_file(&file, seed).unwrap().is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -118,8 +118,15 @@ async function chooseGit() {
 }
 
 async function untrust(path: string) {
-  await api.untrustRepo(path);
+  model.problem = null;
+  try {
+    await api.untrustRepo(path);
+  } catch (err) {
+    model.problem = `Couldn’t remove repository trust. ${String(err)}`;
+    return;
+  }
   model.trusted = model.trusted.filter((t) => t.path !== path);
+  await load();
 }
 
 function size(bytes: number): string {
