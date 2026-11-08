@@ -641,7 +641,7 @@
       case "ready":
         return p.settings.canPush ? { label: "Ready for Review…", go: () => act(readyRequest(p)) } : null;
       case "conflicts":
-        if (history.head.branch === p.head) return { label: `Merge ${p.base}…`, go: () => act(mergeIntoRequest(ctx, `${remote}/${p.base}`)) };
+        if (history.head.branch === p.head) return { label: `Merge ${p.base}…`, go: () => act(mergeIntoRequest(ctx, { kind: "remote", name: `${remote}/${p.base}` })) };
         return local ? { label: `Switch to ${p.head}…`, go: () => act(switchRequest(ctx, p.head)) } : null;
       case "update":
         return p.settings.canPush ? { label: lab ? "Rebase…" : "Update Branch…", go: () => act(updateBranchRequest(ctx, p)) } : null;

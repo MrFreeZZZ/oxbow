@@ -650,6 +650,8 @@ fn rejected_push_names_the_commits_in_the_way_and_pull_and_push_fixes_it() {
     team.me.commit("b.txt", "mine\n", "Mine");
     let his = team.kirill.commit("c.txt", "his\n", "His change");
     team.kirill.git(&["push", "-q", "origin", "main"]);
+    team.kirill.git(&["tag", "main", "HEAD^"]);
+    team.kirill.git(&["push", "-q", "origin", "refs/tags/main"]);
 
     let repo = Repo::open(team.me.path()).unwrap();
     let error = repo.perform(&push(false)).unwrap_err();

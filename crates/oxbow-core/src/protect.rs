@@ -11,7 +11,7 @@ use crate::cli::GitCommand;
 use crate::error::{Error, Result};
 use crate::fix::Fix;
 use crate::operation::MergeMethod;
-use crate::repo::{RefKind, Repo};
+use crate::repo::{RefKind, Repo, local_branch_ref};
 
 /// Where Settings › This Repository › Protected Branches is kept: names and patterns separated by
 /// spaces. Not set means the default list; set and empty, none.
@@ -141,15 +141,16 @@ impl Repo {
                 branch,
                 method: MergeMethod::Rebase,
                 ..
-            } => self.check_head_keeps(branch, &guarded),
+            } => self.check_head_keeps(&self.branch_revision(branch), &guarded),
             Action::EditStack { plan } => {
+                let top = local_branch_ref(&plan.top);
                 for r in self
                     .refs()?
                     .iter()
                     .filter(|r| r.kind == RefKind::Local && guarded(&r.name))
                 {
                     let inside = r.name == plan.top
-                        || (self.is_ancestor(&r.target, &plan.top) && !self.is_ancestor(&r.target, &plan.base));
+                        || (self.is_ancestor(&r.target, &top) && !self.is_ancestor(&r.target, &plan.base));
                     if inside && self.drops_pushed(&r.target, Some(&plan.base))? {
                         return Err(no_rewrite(&r.name));
                     }

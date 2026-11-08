@@ -191,13 +191,27 @@ fn the_github_remote_is_found() {
 #[test]
 fn code_owners_name_who_reviews_the_changed_files() {
     let mut fixture = Fixture::new();
-    fixture.write(".github/CODEOWNERS", "* @acme/core\n/src/api/ @kirill\ndocs/* @maria\n");
+    fixture.write(".github/CODEOWNERS", "* @old-owner\n");
     fixture.commit("README.md", "hi\n", "Root");
     fixture.git(&["switch", "-q", "-c", "feature"]);
     fixture.commit("src/api/sessions.rs", "fn revoke() {}\n", "Revoke");
     fixture.commit("docs/api.md", "# API\n", "Docs");
+    fixture.commit(
+        ".github/CODEOWNERS",
+        "* @acme/core\n/src/api/ @kirill\ndocs/* @maria\n",
+        "Update owners",
+    );
+    fixture.git(&["tag", "feature", "refs/heads/main"]);
     let repo = Repo::open(fixture.path()).unwrap();
-    assert_eq!(repo.code_owners("main", "feature", false), ["maria", "kirill"]);
+    assert_eq!(
+        repo.code_owners("main", "feature", false),
+        ["acme/core", "maria", "kirill"]
+    );
+    fixture.git(&["tag", "main", "HEAD"]);
+    assert_eq!(
+        repo.code_owners("main", "feature", false),
+        ["acme/core", "maria", "kirill"]
+    );
 }
 
 /// A bare repository standing in for GitHub, and a clone of it with `main` pushed.
@@ -228,7 +242,7 @@ fn squash_on_github(url: &str, branch: &str) -> String {
     github.git(&["checkout", "-q", "-B", "main", "origin/main"]);
     github.git(&["merge", "-q", "--squash", &format!("origin/{branch}")]);
     github.git(&["commit", "-q", "-m", "Feature (#1)"]);
-    github.git(&["push", "-q", "origin", "main"]);
+    github.git(&["push", "-q", "origin", "refs/heads/main:refs/heads/main"]);
     github.git(&["rev-parse", "HEAD"])
 }
 
@@ -251,6 +265,8 @@ fn a_merged_pull_request_comes_home() {
     let tip = me.commit("c.txt", "three\n", "Three");
     me.git(&["push", "-q", "-u", "origin", "feature"]);
     let squashed = squash_on_github(&url, "feature");
+    me.git(&["tag", "feature", "main"]);
+    me.git(&["push", "-q", "origin", "refs/tags/feature"]);
 
     let repo = Repo::open(me.path()).unwrap();
     let landed = Action::PullRequestMerged {
@@ -260,7 +276,10 @@ fn a_merged_pull_request_comes_home() {
     };
     assert_eq!(
         shown(&repo, &landed),
-        ["git fetch --prune origin", "git fetch origin main:main"]
+        [
+            "git fetch --prune origin",
+            "git fetch origin refs/heads/main:refs/heads/main"
+        ]
     );
     let remote = Action::DeleteRemoteBranch {
         remote: "origin".into(),
@@ -270,7 +289,7 @@ fn a_merged_pull_request_comes_home() {
     assert_eq!(
         shown(&repo, &remote),
         [format!(
-            "git push --force-with-lease=refs/heads/feature:{tip} origin --delete feature"
+            "git push --force-with-lease=refs/heads/feature:{tip} origin --delete refs/heads/feature"
         )]
     );
     let local = Action::DeleteMergedBranch {
@@ -294,6 +313,7 @@ fn a_merged_pull_request_comes_home() {
     assert_eq!(me.git(&["branch", "--list", "feature"]), "");
     assert!(!me.git(&["config", "--get-regexp", "^branch\\."]).contains("feature"));
     assert_eq!(me.git(&["ls-remote", "--heads", "origin", "feature"]), "");
+    assert!(!me.git(&["ls-remote", "--tags", "origin", "feature"]).is_empty());
 }
 
 /// A main that is checked out catches up too, with a fast-forward merge, not a fetch into it.
@@ -304,6 +324,7 @@ fn a_checked_out_base_catches_up() {
     me.commit("b.txt", "two\n", "Two");
     me.git(&["push", "-q", "-u", "origin", "feature"]);
     me.git(&["switch", "-q", "main"]);
+    me.git(&["tag", "origin/main"]);
     let squashed = squash_on_github(&url, "feature");
 
     let repo = Repo::open(me.path()).unwrap();
@@ -314,7 +335,10 @@ fn a_checked_out_base_catches_up() {
     };
     assert_eq!(
         shown(&repo, &landed),
-        ["git fetch --prune origin", "git merge --ff-only origin/main"]
+        [
+            "git fetch --prune origin",
+            "git merge --ff-only refs/remotes/origin/main"
+        ]
     );
     repo.perform(&landed).unwrap();
     assert_eq!(me.git(&["rev-parse", "HEAD"]), squashed);
@@ -333,6 +357,8 @@ fn a_base_whose_commits_the_fetch_brings_catches_up() {
     me.commit("fix.txt", "fix\n", "Fix");
     // Pushed without updating origin/main here, as from another clone.
     me.git(&["push", "-q", &url, "main:main"]);
+    me.git(&["tag", "main", "HEAD^"]);
+    me.git(&["push", "-q", "origin", "refs/tags/main"]);
     me.git(&["switch", "-q", "feature"]);
     let squashed = squash_on_github(&url, "feature");
 
@@ -343,7 +369,7 @@ fn a_base_whose_commits_the_fetch_brings_catches_up() {
         branch: "feature".into(),
     };
     repo.perform(&landed).unwrap();
-    assert_eq!(me.git(&["rev-parse", "main"]), squashed);
+    assert_eq!(me.git(&["rev-parse", "refs/heads/main"]), squashed);
 }
 
 /// A base with a commit GitHub doesn't have stays as it is, and the fetch still lands.

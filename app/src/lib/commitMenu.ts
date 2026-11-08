@@ -82,8 +82,8 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
     const dropping = dropsPushed(history, row.id);
     const merging: MenuEntry[] = [];
     for (const label of mergeable) {
-      merging.push(item(`Merge ${label.name} into ${here}…`, menuIcons.merge, () => run(mergeRequest(ctx, label.name))));
-      if (history.head.branch && !dropping) merging.push(item(`Rebase ${here} onto ${label.name}…`, menuIcons.rebase, () => run(mergeRequest(ctx, label.name, "rebase"))));
+      merging.push(item(`Merge ${label.name} into ${here}…`, menuIcons.merge, () => run(mergeRequest(ctx, label))));
+      if (history.head.branch && !dropping) merging.push(item(`Rebase ${here} onto ${label.name}…`, menuIcons.rebase, () => run(mergeRequest(ctx, label, "rebase"))));
     }
     group(merging);
 

@@ -2,12 +2,12 @@
 // fast-forward, with a picture of the result and a dry run for conflicts), and the actions that
 // finish or abort a merge, rebase, cherry-pick or revert that stopped on conflicts.
 
-import { api } from "./api";
+import { api } from "./api.ts";
 import type { Part, PreviewRow, Recovery, Request } from "./confirm.svelte";
 import type { BranchContext } from "./branches";
-import type { CommitBrief, Failure, MergeMethod, MergePreview, Operation } from "./types";
-import { shortId } from "./format";
-import { dropsPushed } from "./protect";
+import type { CommitBrief, Failure, MergeMethod, MergePreview, Operation, Label } from "./types";
+import { shortId } from "./format.ts";
+import { dropsPushed } from "./protect.ts";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const chip = (ctx: BranchContext, name: string): Part => ({
@@ -38,22 +38,21 @@ function listFiles(paths: string[]): Part[] {
 }
 
 /** Branches offered as chips: the trunk first, then the most recent, always with `picked`. */
-function candidates(ctx: BranchContext, picked: string): string[] {
+function candidates(ctx: BranchContext, picked: Branch): Branch[] {
   const { history } = ctx;
   const head = history.head.branch;
   const time = new Map(history.rows.map((r) => [r.id, r.time]));
   const locals = history.refs
-    .filter((r) => r.kind === "local" && r.name !== head)
-    .sort((a, b) => (b.name === history.trunk ? 1 : 0) - (a.name === history.trunk ? 1 : 0) || (time.get(b.target) ?? 0) - (time.get(a.target) ?? 0))
-    .map((r) => r.name);
-  const list = locals.slice(0, 3);
-  if (!list.includes(picked)) list.push(picked);
+    .filter((r) => r.kind === "local" && r.name !== head && (picked.kind === "local" || r.name !== picked.name))
+    .sort((a, b) => (b.name === history.trunk ? 1 : 0) - (a.name === history.trunk ? 1 : 0) || (time.get(b.target) ?? 0) - (time.get(a.target) ?? 0));
+  const list: Branch[] = locals.slice(0, 3);
+  if (!list.some((r) => r.name === picked.name)) list.push(picked);
   return list;
 }
 
 /** The default message of a merge commit, the way git writes it (History reads the branch back from it). */
-function mergeMessage(ctx: BranchContext, branch: string): string {
-  const remote = ctx.history.refs.some((r) => r.kind === "remote" && r.name === branch);
+function mergeMessage(ctx: BranchContext, { name: branch, kind }: Branch): string {
+  const remote = kind === "remote";
   const into = ctx.history.head.branch ? ` into ${ctx.history.head.branch}` : "";
   return remote ? `Merge remote-tracking branch '${branch}'${into}` : `Merge branch '${branch}'${into}`;
 }
@@ -189,31 +188,36 @@ function verdict(ctx: BranchContext, p: MergePreview, method: MergeMethod): { to
   };
 }
 
+type Branch = Pick<Label, "kind" | "name">;
+const branchRef = (branch: Branch) => `refs/${branch.kind === "remote" ? "remotes" : "heads"}/${branch.name}`;
+
 /** The merge sheet for bringing `branch` into the checked-out branch. */
-export async function mergeRequest(ctx: BranchContext, branch: string, method: MergeMethod = "merge", message?: string): Promise<Request> {
-  const preview = await api.mergePreview(branch);
-  return mergeSheet(ctx, preview, method, message, new Map([[branch, preview]]));
+export async function mergeRequest(ctx: BranchContext, branch: Branch, method: MergeMethod = "merge", message?: string): Promise<Request> {
+  const ref = branchRef(branch);
+  const preview = await api.mergePreview(ref);
+  return mergeSheet(ctx, branch, preview, method, message, new Map([[ref, preview]]));
 }
 
-function mergeSheet(ctx: BranchContext, p: MergePreview, method: MergeMethod, typed: string | undefined, cache: Map<string, MergePreview>): Request {
+function mergeSheet(ctx: BranchContext, picked: Branch, p: MergePreview, method: MergeMethod, typed: string | undefined, cache: Map<string, MergePreview>): Request {
   const here = ctx.history.head.branch ?? "HEAD";
-  const branch = p.branch;
+  const branch = picked.name;
   const diverged = p.oursCount > 0;
   // Fast-forward is only possible while the checked-out branch has nothing of its own.
   if (method === "fastForward" && diverged) method = "merge";
   // A protected branch isn't rebased when that would rewrite its pushed commits.
-  const tip = ctx.history.refs.find((r) => (r.kind === "local" || r.kind === "remote") && r.name === branch)?.target ?? null;
+  const tip = ctx.history.refs.find((r) => r.kind === picked.kind && r.name === branch)?.target ?? null;
   const locked = diverged && dropsPushed(ctx.history, tip);
   if (method === "rebase" && locked) method = "merge";
-  const message = typed ?? (method === "squash" ? squashMessage(p) : mergeMessage(ctx, branch));
-  const again = (next: Partial<{ branch: string; method: MergeMethod; message: string }>) => {
-    const name = next.branch ?? branch;
+  const message = typed ?? (method === "squash" ? squashMessage(p) : mergeMessage(ctx, picked));
+  const again = (next: Partial<{ branch: Branch; method: MergeMethod; message: string }>) => {
+    const choice = next.branch ?? picked;
+    const ref = branchRef(choice);
     const keep = next.message ?? (next.branch || next.method ? undefined : message);
-    const cached = cache.get(name);
-    if (cached) return mergeSheet(ctx, cached, next.method ?? method, keep, cache);
-    return api.mergePreview(name).then((fresh) => {
-      cache.set(name, fresh);
-      return mergeSheet(ctx, fresh, next.method ?? method, keep, cache);
+    const cached = cache.get(ref);
+    if (cached) return mergeSheet(ctx, choice, cached, next.method ?? method, keep, cache);
+    return api.mergePreview(ref).then((fresh) => {
+      cache.set(ref, fresh);
+      return mergeSheet(ctx, choice, fresh, next.method ?? method, keep, cache);
     });
   };
   const conflicts = p.conflicts?.length ?? 0;
@@ -222,10 +226,10 @@ function mergeSheet(ctx: BranchContext, p: MergePreview, method: MergeMethod, ty
   const fields: Request["fields"] = [
     {
       label: "Bring in",
-      chips: candidates(ctx, branch).map((name) => ({
-        label: name,
-        on: name === branch,
-        pick: () => again({ branch: name }),
+      chips: candidates(ctx, picked).map((choice) => ({
+        label: choice.name,
+        on: choice.name === branch,
+        pick: () => again({ branch: choice }),
       })),
     },
     {
@@ -257,7 +261,7 @@ function mergeSheet(ctx: BranchContext, p: MergePreview, method: MergeMethod, ty
       text: {
         value: message,
         placeholder: "Commit message",
-        edit: (value) => mergeSheet(ctx, p, method, value, cache),
+        edit: (value) => mergeSheet(ctx, picked, p, method, value, cache),
       },
     });
   }
@@ -289,12 +293,11 @@ function mergeSheet(ctx: BranchContext, p: MergePreview, method: MergeMethod, ty
     done: method === "rebase" ? `Rebased ${here} onto ${branch}.` : `Merged ${branch} into ${here}.`,
     resolveConflicts: conflicts > 0,
     recover: (failure) => stoppedOnConflicts(failure, method === "rebase" ? "rebase" : "merge"),
-    // git writes the default merge message itself with --no-edit, without quotes to escape.
     action: {
       kind: "merge",
-      branch,
+      branch: branchRef(picked),
       method,
-      message: method === "squash" || (method === "merge" && message.trim() !== mergeMessage(ctx, branch)) ? message : null,
+      message: method === "merge" || method === "squash" ? message : null,
     },
   };
 }

@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use crate::cli::GitCommand;
 use crate::error::Result;
-use crate::repo::Repo;
+use crate::repo::{Repo, branch_label};
 
 /// One working folder of the repository.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -142,8 +142,8 @@ impl Repo {
                 branch.to_owned(),
                 shown,
             ];
-            args.extend(start.map(str::to_owned));
-            let at = start.unwrap_or("the current commit");
+            args.extend(start.map(|start| self.branch_revision(start)));
+            let at = start.map_or("the current commit", branch_label);
             vec![GitCommand::new(args).comment(format!(
                 "-b: create {branch} at {at} and check it out in the new folder {name}"
             ))]

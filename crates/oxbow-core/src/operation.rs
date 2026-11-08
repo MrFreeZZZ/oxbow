@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 use crate::cli::{GitCommand, literal};
 use crate::error::{Error, Result};
 use crate::remote::{CommitBrief, parse_briefs};
-use crate::repo::{RefKind, Repo};
+use crate::repo::{RefKind, Repo, branch_label};
 
-/// Where Oxbow notes which branch a squash merge is bringing in; `SQUASH_MSG` does not say.
+/// The label and source commit of a squash merge; `SQUASH_MSG` does not reliably name either.
 const SQUASH_SOURCE: &str = "OXBOW_SQUASH_SOURCE";
 
 /// Commits listed per side in a merge preview.
@@ -347,7 +347,7 @@ impl Repo {
                 message: read("MERGE_MSG").map(|m| strip_comments(&m)),
             }
         } else if let Some(message) = read("SQUASH_MSG") {
-            let source = read(SQUASH_SOURCE);
+            let source = self.squash_source().map(|(label, _)| label);
             Operation {
                 kind: OperationKind::Squash,
                 branch: here.clone(),
@@ -451,6 +451,9 @@ impl Repo {
 
     /// What merging `branch` into `HEAD` would bring and whether it would conflict.
     pub fn merge_preview(&self, branch: &str) -> Result<MergePreview> {
+        let label = branch_label(branch);
+        let reference = self.branch_revision(branch);
+        let branch = reference.as_str();
         let (incoming, incoming_count) = self.commits_in(&format!("HEAD..{branch}"))?;
         let (ours, ours_count) = self.commits_in(&format!("{branch}..HEAD"))?;
         let base = self
@@ -518,7 +521,7 @@ impl Repo {
             }
         };
         Ok(MergePreview {
-            branch: branch.to_owned(),
+            branch: label.to_owned(),
             incoming,
             incoming_count,
             ours,
@@ -647,7 +650,8 @@ impl Repo {
             .or_else(|| read("CHERRY_PICK_HEAD"))
             // A revert brings in the commit's parent, with the commit itself as the base.
             .or_else(|| read("REVERT_HEAD").map(|sha| format!("{sha}^")))
-            .or_else(|| read(SQUASH_SOURCE))
+            // Legacy squashes passed the short name to Git, which could select a tag.
+            .or_else(|| self.squash_source().map(|(label, revision)| revision.unwrap_or(label)))
             .or_else(|| self.pending_apply().map(|apply| apply.id))
     }
 
@@ -864,15 +868,25 @@ impl Repo {
         std::fs::write(&file, text).map_err(|err| Error::Git(format!("could not write {path}: {err}")))
     }
 
+    fn squash_source(&self) -> Option<(String, Option<String>)> {
+        let note = std::fs::read_to_string(self.git_dir().join(SQUASH_SOURCE)).ok()?;
+        let mut lines = note.trim().lines();
+        let label = lines.next()?.to_owned();
+        // A one-line note from an older version only recorded the branch's name.
+        let revision = lines.next().filter(|line| !line.is_empty()).map(str::to_owned);
+        Some((label, revision))
+    }
+
     /// After `git merge --squash` stopped on conflicts: keep what the user chose for the commit
     /// that finishes it. Git drops the `-m` message there, and `SQUASH_MSG` alone does not say
     /// which branch was squashed, so Oxbow writes both down beside it.
-    pub(crate) fn remember_squash(&self, branch: &str, message: Option<&str>) {
+    pub(crate) fn remember_squash(&self, branch: &str, revision: &str, message: Option<&str>) {
         let dir = self.git_dir();
         if let Some(message) = message.map(str::trim).filter(|m| !m.is_empty()) {
             let _ = std::fs::write(dir.join("SQUASH_MSG"), format!("{message}\n"));
         }
-        let _ = std::fs::write(dir.join(SQUASH_SOURCE), format!("{branch}\n"));
+        let label = branch_label(branch);
+        let _ = std::fs::write(dir.join(SQUASH_SOURCE), format!("{label}\n{revision}\n"));
     }
 
     pub(crate) fn plan_merge(
@@ -882,6 +896,8 @@ impl Repo {
         message: Option<&str>,
     ) -> Result<Vec<GitCommand>> {
         let here = self.head()?.branch.unwrap_or_else(|| "HEAD".to_owned());
+        let reference = self.branch_revision(branch);
+        let branch = branch_label(branch);
         let with_message = |args: &[&str]| {
             let mut args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
             match message.map(str::trim).filter(|m| !m.is_empty()) {
@@ -896,14 +912,17 @@ impl Repo {
                 if !crate::config::run_hooks() {
                     args.push("--no-verify".to_owned());
                 }
-                args.push(branch.to_owned());
+                args.push(reference);
                 vec![GitCommand::new(args).comment("--no-ff: a merge commit even when git could just move the branch")]
             }
             MergeMethod::FastForward => vec![
-                GitCommand::new(["merge", "--ff-only", branch])
+                GitCommand::new(["merge", "--ff-only", &reference])
                     .comment(format!("--ff-only: {here} moves up to {branch}, no new commit")),
             ],
             MergeMethod::Squash => {
+                let source = self
+                    .rev(&reference)
+                    .ok_or_else(|| Error::Git(format!("Cannot find {branch}")))?;
                 let mut commit = vec!["commit".to_owned()];
                 if !crate::config::run_hooks() {
                     commit.push("--no-verify".to_owned());
@@ -913,7 +932,7 @@ impl Repo {
                     None => commit.push("--no-edit".to_owned()),
                 }
                 vec![
-                    GitCommand::new(["merge", "--squash", branch])
+                    GitCommand::new(["merge", "--squash", &source])
                         .comment(format!("--squash: stage all of {branch}’s changes, without a commit")),
                     GitCommand::new(commit).comment(format!("one new commit on {here}; {branch} stays as it is")),
                 ]
@@ -924,9 +943,9 @@ impl Repo {
                 // --update-refs needs git 2.38.
                 let args = if self.config_value("rebase.updateRefs").is_none() && crate::config::git_at_least(2, 38) {
                     comment.push_str("; --update-refs: branches stacked on it move along");
-                    vec!["rebase", "--update-refs", branch]
+                    vec!["rebase", "--update-refs", &reference]
                 } else {
-                    vec!["rebase", branch]
+                    vec!["rebase", &reference]
                 };
                 vec![GitCommand::new(args).comment(comment)]
             }

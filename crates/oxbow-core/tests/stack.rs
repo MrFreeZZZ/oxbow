@@ -147,6 +147,45 @@ fn editing_a_stack_ignores_tags_that_share_branch_names() {
 }
 
 #[test]
+fn a_tag_on_a_protected_branch_does_not_put_it_inside_edit_stack() {
+    let mut fx = stacked();
+    let remote = tempfile::tempdir().unwrap();
+    let url = remote.path().to_str().unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q", "--bare", url])
+            .status()
+            .unwrap()
+            .success()
+    );
+    fx.git(&["remote", "add", "origin", url]);
+    fx.git(&["switch", "-q", "-c", "release/1", "main"]);
+    let release = fx.commit("release.txt", "release\n", "Release");
+    fx.git(&["push", "-q", "-u", "origin", "release/1"]);
+    fx.git(&["config", "oxbow.protectedBranches", "main release/*"]);
+    fx.git(&["switch", "-q", "auth/2"]);
+    fx.git(&["tag", "auth/3", &release]);
+
+    let repo = Repo::open(fx.path()).unwrap();
+    let stack = repo.stack(None).unwrap();
+    assert_eq!(stack.top, "auth/3");
+    let mut plan = as_is(&stack);
+    set(
+        &mut plan,
+        &id_of(&stack, "Wire token refresh"),
+        StepAction::Reword,
+        Some("Refresh tokens"),
+    );
+    repo.perform(&Action::EditStack { plan }).unwrap();
+    assert_eq!(
+        fx.git(&["log", "-1", "--format=%s", "refs/heads/auth/3"]),
+        "Refresh tokens"
+    );
+    assert_eq!(fx.git(&["rev-parse", "refs/heads/release/1"]), release);
+    assert_eq!(fx.git(&["rev-parse", "refs/tags/auth/3"]), release);
+}
+
+#[test]
 fn a_fork_on_top_of_the_stack_is_left_behind() {
     let mut fx = stacked();
     fx.git(&["switch", "-q", "-c", "auth/3b", "auth/2"]);

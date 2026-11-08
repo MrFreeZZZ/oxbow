@@ -348,7 +348,7 @@ function newBranchSheet(ctx: BranchContext, bases: Base[], list: BranchPrefix[],
   const action: Action = {
     kind: "createBranch",
     name,
-    start: fetching && upstream ? upstream : base.ref,
+    start: fetching && upstream ? `refs/remotes/${upstream}` : base.ref && base.key !== "commit" ? `refs/heads/${base.ref}` : base.ref,
     switch: state.switchTo,
     publish: state.publish && remote ? remote : null,
     fetch: fetching && tracking ? tracking.remote : null,

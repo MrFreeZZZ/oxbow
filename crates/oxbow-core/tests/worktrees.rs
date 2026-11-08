@@ -67,6 +67,7 @@ fn adding_a_worktree_checks_the_branch_out_in_a_new_folder() {
 fn a_new_branch_is_made_where_asked() {
     let mut fx = repo_with_branch();
     let first = fx.git(&["rev-parse", "fix/login"]);
+    fx.git(&["tag", "fix/login", "refs/heads/main"]);
     let repo = Repo::open(fx.path()).unwrap();
     let add = Action::WorktreeAdd {
         path: sibling(&fx, "repo-spike"),
@@ -76,7 +77,7 @@ fn a_new_branch_is_made_where_asked() {
     };
     assert_eq!(
         shown(&repo, &add),
-        ["git worktree add -b spike/cache ../repo-spike fix/login"]
+        ["git worktree add -b spike/cache ../repo-spike refs/heads/fix/login"]
     );
     repo.perform(&add).unwrap();
     assert_eq!(fx.git(&["rev-parse", "spike/cache"]), first);
