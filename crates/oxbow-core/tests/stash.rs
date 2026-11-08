@@ -663,3 +663,40 @@ fn stashing_only_an_added_line_after_unterminated_context_preserves_bytes() {
         }
     }
 }
+
+#[test]
+fn stashing_a_picked_removal_preserves_the_final_newline() {
+    let mut fx = Fixture::new();
+    fx.commit("eof.txt", "one\ntwo", "Root");
+    fx.write("eof.txt", "one\nTWO\nextra\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    let hunk = repo
+        .working_diff("eof.txt", oxbow_core::Side::Unstaged, false)
+        .unwrap()
+        .hunks
+        .remove(0);
+    let picked = hunk
+        .lines
+        .iter()
+        .position(|line| line.kind == oxbow_core::LineKind::Removed && line.text == "two")
+        .unwrap();
+    repo.perform(&Action::StashHunk {
+        path: "eof.txt".into(),
+        header: hunk.header,
+        check: hunk.check,
+        lines: Some(vec![picked]),
+        message: None,
+    })
+    .unwrap();
+    assert_eq!(
+        std::fs::read(fx.path().join("eof.txt")).unwrap(),
+        b"one\ntwo\nTWO\nextra\n"
+    );
+    let output = std::process::Command::new("git")
+        .args(["show", "stash@{0}:eof.txt"])
+        .current_dir(fx.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"one\n");
+}
