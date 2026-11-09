@@ -1,6 +1,7 @@
 // Back and Forward, as in a browser or VS Code: the places visited, each a screen with what was
 // picked on it, so a step back returns to where you were rather than to the commit graph.
 
+import { compareLabel } from "./compareRefs.ts";
 import type { FileMode } from "./nav.svelte";
 import type { SeriesQuery } from "./series";
 import type { CompareMode } from "./types";
@@ -216,7 +217,7 @@ export function detailOfPlace(
     case "file":
       return p.line ? `${p.path} · Blame` : `${p.path} · ${p.mode === "blame" ? "Blame" : "Changes"}`;
     case "compare":
-      return `${p.target} with ${p.base}`;
+      return `${compareLabel(p.target)} with ${compareLabel(p.base)}`;
     case "series":
       return p.query.branch;
     case "pull":

@@ -13,6 +13,7 @@ import { ancestors, cherryPickRequest, editMessageRequest, resetModes, resetRequ
 import { deleteTagRequest, isLocalTag, newTagRequest, pushTagsRequest } from "./tags";
 import { addToCommitRequest, dropCommitRequest, rewordRequest, squashRequest } from "./stack";
 import { bisectMarkRequest, bisectResetRequest, bisectStartRequest } from "./bisect";
+import { compareHead, compareLabel, compareRef } from "./compareRefs";
 import { keys } from "./keys";
 import { github } from "./github.svelte";
 import { branchMergeRequest, gitlabOf, signedInTo } from "./mergeRequest";
@@ -176,10 +177,11 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
   const saving = app.patchTarget(row);
   group([item(saving.since ? `Save ${saving.count} Commits as Patches…` : "Save as Patch…", menuIcons.patch, () => run(savePatchesRequest(saving)))]);
   // Compare this commit, named by its branch when one ends here, with HEAD or the default branch.
-  const name = row.labels.find((l) => l.kind === "local")?.name ?? row.id.slice(0, 7);
-  const against = [...new Set([isHead ? null : here, history.trunk])].filter((b): b is string => !!b && b !== name);
+  const branch = row.labels.find((l) => l.kind === "local");
+  const target = branch ? compareRef("local", branch.name) : row.id;
+  const against = [...new Set([isHead ? null : compareHead(history.head.branch), history.trunkRef])].filter((b): b is string => !!b && b !== target);
   const looking: MenuEntry[] = [browseItem(row, item, app)];
-  if (against.length) looking.push({ kind: "sub", label: "Compare", icon: menuIcons.compare, entries: against.map((b) => ({ label: `With ${b}`, run: () => app.openCompare(b, name) })) });
+  if (against.length) looking.push({ kind: "sub", label: "Compare", icon: menuIcons.compare, entries: against.map((b) => ({ label: `With ${compareLabel(b)}`, run: () => app.openCompare(b, target) })) });
   group(looking);
   group([
     {
@@ -215,10 +217,11 @@ function bisectMenu(
   }
   entries.push(item(bisect.found ? "Finish Bisect…" : "Stop Bisect…", menuIcons.bisect, () => run(bisectResetRequest(ctx, bisect))), { kind: "sep" });
   entries.push(item("New Branch from Here…", menuIcons.branch, () => run(newBranchRequest(ctx, undefined, row))), item("New Tag Here…", menuIcons.tag, () => run(newTagRequest(ctx, row))));
-  const name = row.labels.find((l) => l.kind === "local")?.name ?? row.id.slice(0, 7);
-  const against = [bisect.startIsBranch ? bisect.start : null, history.trunk].filter((b, i, all): b is string => !!b && b !== name && all.indexOf(b) === i);
+  const branch = row.labels.find((l) => l.kind === "local");
+  const target = branch ? compareRef("local", branch.name) : row.id;
+  const against = [bisect.startIsBranch ? compareRef("local", bisect.start) : null, history.trunkRef].filter((b, i, all): b is string => !!b && b !== target && all.indexOf(b) === i);
   entries.push({ kind: "sep" }, browseItem(row, item, app));
-  if (against.length) entries.push({ kind: "sub", label: "Compare", icon: menuIcons.compare, entries: against.map((b) => ({ label: `With ${b}`, run: () => app.openCompare(b, name) })) });
+  if (against.length) entries.push({ kind: "sub", label: "Compare", icon: menuIcons.compare, entries: against.map((b) => ({ label: `With ${compareLabel(b)}`, run: () => app.openCompare(b, target) })) });
   entries.push({
     kind: "sub",
     label: "Copy",

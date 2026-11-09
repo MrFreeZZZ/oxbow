@@ -74,8 +74,8 @@ impl Repo {
     /// The comparison of `base` and `target`, its files without line counts: those come with
     /// the pages of the diff and from [`Repo::tree_files_with`].
     pub fn compare(&self, base: &str, target: &str, mode: CompareMode) -> Result<Comparison> {
-        let base_id = self.commit_id(base)?;
-        let target_id = self.commit_id(target)?;
+        let base_id = self.compare_commit_id(base)?;
+        let target_id = self.compare_commit_id(target)?;
         let merge_base = self
             .run(&GitCommand::new(["merge-base", &base_id, &target_id]))
             .ok()
@@ -197,6 +197,22 @@ impl Repo {
             files,
             command,
         })
+    }
+
+    /// Full ref names from the picker must still name the same ref if it has since been deleted.
+    fn compare_commit_id(&self, name: &str) -> Result<String> {
+        let bytes = gix::bstr::BStr::new(name);
+        if !name.starts_with("refs/") || gix::validate::reference::name(bytes).is_err() {
+            return self.commit_id(name);
+        }
+        let unknown = || Error::UnknownCommit(name.to_owned());
+        let repo = self.local();
+        let mut reference = repo
+            .try_find_reference(name)
+            .map_err(|_| unknown())?
+            .filter(|reference| reference.name().as_bstr() == bytes)
+            .ok_or_else(unknown)?;
+        Ok(reference.peel_to_commit().map_err(|_| unknown())?.id().to_string())
     }
 
     /// The commit a branch, tag or SHA names.

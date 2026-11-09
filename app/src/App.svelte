@@ -57,6 +57,7 @@
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { getCurrentWindow, type CloseRequestedEvent } from "@tauri-apps/api/window";
   import { nav } from "./lib/nav.svelte";
+  import { compareRef } from "./lib/compareRefs";
   import type { CompareMode } from "./lib/types";
   import { startPublish, startPublishGitLab } from "./lib/publish";
   import { start } from "./lib/start.svelte";
@@ -2177,7 +2178,7 @@
           onPush={() => sync("push")}
           onPull={(mode) => sync("pull", mode)}
           onFetch={() => sync("fetch")}
-          onTheirs={(upstream) => openCompare(history!.head.branch!, upstream, "split")}
+          onTheirs={(upstream) => openCompare(compareRef("local", history!.head.branch!), compareRef("remote", upstream), "split")}
           onPublish={publishToGitHub}
           onPublishGitLab={labSignedIn ? publishToGitLab : null}
         />
@@ -2420,7 +2421,7 @@
                 copy={(text) => copyText(text, "Copied the command.")}
                 onSelect={select}
                 onClear={() => (second = null)}
-                onOpenCompare={(from, to) => openCompare(from.slice(0, 7), to.slice(0, 7), "tips")}
+                onOpenCompare={(from, to) => openCompare(from, to, "tips")}
               />
             {:else if selectedRow?.worktree}
               <ChangesPanel

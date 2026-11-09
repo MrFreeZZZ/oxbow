@@ -141,3 +141,16 @@ const walk = (...places: Place[]): Trail => places.reduce((t, p) => visit(t, p),
   assert.deepEqual(t.places, [browse("b.rs")]);
   assert.equal(visit(t, { ...browse(null), rev: "f00" }).places.length, 2);
 }
+
+// The visible labels can match while Back and Forward restore different Git refs.
+{
+  const local: Place = { view: "compare", base: "refs/heads/main", target: "refs/heads/preview", mode: "split" };
+  const tag: Place = { ...local, target: "refs/tags/preview" };
+  const trail = walk(local, tag);
+  assert.equal(detailOfPlace(local, () => undefined, null), "preview with main");
+  assert.equal(detailOfPlace(tag, () => undefined, null), "preview with main");
+  const back = go(trail, 0)!;
+  assert.deepEqual(back.places[back.at], local);
+  const forward = go(back, 1)!;
+  assert.deepEqual(forward.places[forward.at], tag);
+}

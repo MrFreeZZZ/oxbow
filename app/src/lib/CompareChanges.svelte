@@ -2,6 +2,7 @@
   // Every change between the two sides of Compare, or the diff of a selected file.
 
   import { untrack, type Snippet } from "svelte";
+  import { quoteGitArg } from "./compareRefs";
   import { api, stopped } from "./api";
   import { diffSettings, prefs, wholeByDefault } from "./prefs.svelte";
   import type { CompareFile, Comparison, FileChange, FileDiff, DiffPage } from "./types";
@@ -250,7 +251,7 @@
         onMore={loadMore}
         onToggleWhole={() => (whole = !whole)}
         loadFull={(d) => api.compareDiff(c.from, c.targetId, d.file.path, whole, true, FULL).then((all) => all[0])}
-        command={(d) => `git diff ${c.from.slice(0, 7)} ${c.targetId.slice(0, 7)} -- ${d.file.path}`}
+        command={(d) => `git diff ${c.from} ${c.targetId} -- ${quoteGitArg(`:(literal)${d.file.path}`)}`}
       />
     </ComparisonDiffPane>
   {/key}

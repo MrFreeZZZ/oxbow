@@ -10,7 +10,7 @@ const shown = (over: Partial<Shown> = {}): Shown => ({
   github: { place: "MrFreeZZZ/oxbow", open: 2 },
   pull: null,
   series: null,
-  compare: { base: "main", target: "feature" },
+  compare: { base: "refs/heads/main", target: "refs/tags/feature" },
   head: "main",
   running: null,
   failed: null,

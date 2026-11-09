@@ -2,6 +2,7 @@
   // A Base or Compare picker: branches, remote branches and tags, or any SHA typed in.
 
   import type { History } from "./types";
+  import { compareLabel, compareRef } from "./compareRefs";
   import { lane } from "./format";
 
   let {
@@ -25,7 +26,7 @@
   let filter = $state("");
   let field = $state<HTMLInputElement>();
 
-  const isTag = $derived(history.refs.some((r) => r.kind === "tag" && r.name === value));
+  const isTag = $derived(value.startsWith(compareRef("tag", "")));
   const groups = $derived.by(() => {
     const f = filter.trim().toLowerCase();
     const keep = (name: string) => !f || name.toLowerCase().includes(f);
@@ -33,13 +34,13 @@
     const head = history.head.branch;
     const ordered = head && local.includes(head) ? [head, ...local.filter((n) => n !== head)] : local;
     return [
-      { title: "Branches", kind: "local", names: ordered.filter(keep) },
-      { title: "Remote", kind: "remote", names: history.refs.filter((r) => r.kind === "remote" && !r.name.endsWith("/HEAD")).map((r) => r.name).filter(keep) },
-      { title: "Tags", kind: "tag", names: history.refs.filter((r) => r.kind === "tag").map((r) => r.name).filter(keep) },
+      { title: "Branches", kind: "local" as const, names: ordered.filter(keep) },
+      { title: "Remote", kind: "remote" as const, names: history.refs.filter((r) => r.kind === "remote" && !r.name.endsWith("/HEAD")).map((r) => r.name).filter(keep) },
+      { title: "Tags", kind: "tag" as const, names: history.refs.filter((r) => r.kind === "tag").map((r) => r.name).filter(keep) },
     ].filter((g) => g.names.length);
   });
   /** What the field holds looks like a commit id, so Return compares that commit. */
-  const typedSha = $derived(/^[0-9a-f]{4,40}$/i.test(filter.trim()) ? filter.trim() : null);
+  const typedSha = $derived(/^[0-9a-f]{4,64}$/i.test(filter.trim()) ? filter.trim() : null);
 
   function toggle() {
     open = !open;
@@ -49,7 +50,7 @@
 
   function pick(name: string) {
     open = false;
-    if (name !== value) onPick(name);
+    if (name !== value && name !== other) onPick(name);
   }
 
   function onKey(event: KeyboardEvent) {
@@ -59,13 +60,13 @@
       open = false;
     } else if (event.key === "Enter") {
       event.preventDefault();
-      const first = groups.flatMap((g) => g.names).find((n) => n !== other);
+      const first = groups.flatMap((g) => g.names.map((name) => compareRef(g.kind, name))).find((ref) => ref !== other);
       if (typedSha) pick(typedSha);
       else if (first) pick(first);
     }
   }
 
-  const note = (name: string) => (name === other ? "compared" : name === history.head.branch ? "HEAD" : name === history.trunk ? "default branch" : "");
+  const note = (ref: string) => (ref === other ? "compared" : history.head.branch && ref === compareRef("local", history.head.branch) ? "HEAD" : ref === history.trunkRef ? "default branch" : "");
 </script>
 
 <div class="picker">
@@ -73,11 +74,11 @@
     {#if isTag}
       <svg class="icon kind tag" viewBox="0 0 16 16"><path d="M2.5 2.5h5l6 6-5 5-6-6z" /><circle cx="5.5" cy="5.5" r="0.8" /></svg>
     {:else}
-      <svg class="icon kind" viewBox="0 0 16 16" style:color={lane(colorOf(value))}><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg>
+      <svg class="icon kind" viewBox="0 0 16 16" style:color={lane(colorOf(compareLabel(value)))}><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg>
     {/if}
     <span class="text">
       <span class="label">{label}</span>
-      <span class="value">{value}</span>
+      <span class="value">{compareLabel(value)}</span>
     </span>
     <svg class="icon chevron" viewBox="0 0 16 16"><path d="M4.5 6.5 8 10l3.5-3.5" /></svg>
   </button>
@@ -92,7 +93,7 @@
       </div>
       <div class="list" role="listbox" aria-label={label}>
         {#if typedSha}
-          <button class="row" role="option" aria-selected="false" onclick={() => pick(typedSha!)}>
+          <button class="row" class:on={typedSha === value} role="option" aria-selected={typedSha === value} disabled={typedSha === other} onclick={() => pick(typedSha!)}>
             <span class="dot commit"></span>
             <span class="name mono">{typedSha}</span>
             <span class="note">commit</span>
@@ -101,15 +102,16 @@
         {#each groups as g (g.title)}
           <div class="heading">{g.title}</div>
           {#each g.names as name (name)}
-            <button class="row" class:on={name === value} role="option" aria-selected={name === value} disabled={name === other} onclick={() => pick(name)}>
+            {@const ref = compareRef(g.kind, name)}
+            <button class="row" class:on={ref === value} role="option" aria-selected={ref === value} disabled={ref === other} onclick={() => pick(ref)}>
               {#if g.kind === "tag"}
                 <span class="dot diamond"></span>
               {:else}
                 <span class="dot" style:background={lane(colorOf(name))}></span>
               {/if}
               <span class="name">{name}</span>
-              <span class="note">{note(name)}</span>
-              <span class="check">{name === value ? "✓" : ""}</span>
+              <span class="note">{note(ref)}</span>
+              <span class="check">{ref === value ? "✓" : ""}</span>
             </button>
           {/each}
         {/each}
