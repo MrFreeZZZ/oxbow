@@ -88,6 +88,46 @@ export const SCENARIOS = [
     },
   },
   {
+    name: "comparison file focus",
+    async run(ctx) {
+      const app = await ctx.start(repo(`${ctx.dir}/r`, 3));
+      await app.js(async (page) => {
+        const commit = (name) => page.all("[aria-label=Commits] [role=option]", name)[0];
+        (await page.until(() => commit("Commit 3"), "Commit 3")).click();
+        commit("Commit 1").dispatchEvent(new MouseEvent("click", { bubbles: true, ctrlKey: true }));
+        (await page.until(() => document.querySelector("aside.panel .diff-list-group .group-title")?.closest("button"), "comparison All Changes")).click();
+      });
+      const verify = (row, focusSelector = row) => app.js(async (page, row, focusSelector) => {
+        await page.until(() => {
+          const current = document.querySelector('aside.panel [data-steps] [aria-current="true"]');
+          return current?.matches(row) && document.activeElement?.matches(focusSelector);
+        }, row + " with expected focus");
+      }, row, focusSelector);
+      const all = ".diff-list-group";
+      const first = '[title="src/f2.txt"]';
+      const last = '[title="src/f3.txt"]';
+      await app.keys("Ctrl+PageDown");
+      await verify(first);
+      await app.keys("Ctrl+PageUp");
+      await verify(all);
+      await app.keys("Ctrl+PageUp");
+      await verify(last);
+      await app.keys("Ctrl+PageDown");
+      await verify(all);
+      const focus = (selector) => app.js((page, selector) => document.querySelector(selector).focus(), selector);
+      const filter = 'aside.panel input[aria-label="Filter files"]';
+      await focus(filter);
+      await app.keys("f3", "Ctrl+PageDown");
+      await verify(last, filter);
+      await app.keys("Ctrl+PageUp");
+      await verify(all, filter);
+      const diff = 'aside.panel button[aria-label="Previous change"]';
+      await focus(diff);
+      await app.keys("Ctrl+PageDown");
+      await verify(last, diff);
+    },
+  },
+  {
     name: "staging after an outside edit",
     // Pick lines → stage → the file changes outside → stage again; the index has exactly that.
     async run(ctx) {

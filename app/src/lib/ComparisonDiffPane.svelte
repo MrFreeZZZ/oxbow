@@ -68,22 +68,31 @@
     requestAnimationFrame(() => list?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: "nearest" }));
   });
 
-  async function onRowKey(event: KeyboardEvent) {
+  function stepFile(by: 1 | -1, wrap: boolean) {
+    const focused = document.activeElement;
+    const fromRow = list?.contains(focused) && focused?.matches("button[aria-current]");
+    if (!fileTabs(paths, path, open)(by, wrap)) return false;
+    if (fromRow) void tick().then(() => {
+      if (document.activeElement !== focused) return;
+      const active = list?.querySelector<HTMLElement>('[aria-current="true"]');
+      if (active) keyFocus(active);
+    });
+    return true;
+  }
+
+  function onRowKey(event: KeyboardEvent) {
     const by = pressed("nextFile", event) ? 1 : pressed("previousFile", event) ? -1 : 0;
     if (!by) return;
     event.preventDefault();
-    if (!fileTabs(paths, path, open)(by, false)) return;
-    await tick();
-    const active = list?.querySelector<HTMLElement>('[aria-current="true"]');
-    if (active) keyFocus(active);
+    stepFile(by, false);
   }
 </script>
 
 <div class="body" class:stacked bind:clientWidth={width}>
-  <div class="files" aria-label="Changed files" data-steps use:tabStepper={fileTabs(paths, path, open)} style:width={stacked ? undefined : `${filesWidth(width)}px`}>
+  <div class="files" aria-label="Changed files" data-steps use:tabStepper={stepFile} style:width={stacked ? undefined : `${filesWidth(width)}px`}>
     <div class="filter"><FileFilter bind:value={filter} {color} /></div>
     <div class="list" bind:this={list} style:--selection-fill={tint(color)} style:--selection-border={`color-mix(in srgb, ${lane(color)} 40%, transparent)`}>
-      <button class="diff-list-row diff-list-group" aria-current={path === null ? "true" : undefined} onclick={(event) => rowClick(event, null)} onkeydown={onRowKey}>
+      <button class="diff-list-row diff-list-group" aria-current={path === null} onclick={(event) => rowClick(event, null)} onkeydown={onRowKey}>
         <span class="group-title" style:color={plate(color)}>All Changes</span>
         <span>{needle ? `${shown.length} of ${files.length}` : files.length.toLocaleString()}</span>
         <span class="grow"></span>
@@ -96,7 +105,7 @@
       </button>
       {#each shown.slice(0, listed) as file (file.path)}
         <div class="diff-list-row diff-list-file file">
-          <button class="diff-list-row-control name" aria-current={path === file.path ? "true" : undefined} onclick={(event) => rowClick(event, file.path)} onkeydown={onRowKey} title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
+          <button class="diff-list-row-control name" aria-current={path === file.path} onclick={(event) => rowClick(event, file.path)} onkeydown={onRowKey} title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
             <span class="diff-list-badge {tone[file.status] ?? "orange"}">{statusIcon[file.status] ?? "M"}</span>
             <PathName path={file.path} />
             {#if !counted || counted(file)}<FileBadge {file} />{/if}
