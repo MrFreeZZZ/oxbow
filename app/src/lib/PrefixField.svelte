@@ -4,18 +4,23 @@
   // place, and Backspace at the start of the box takes the prefix off. What is typed is cleaned
   // up as Settings › Git › Branches says.
 
-  import { tick } from "svelte";
-  import { splitPrefix, typedAfter, withPrefix, type BranchPrefix } from "./branchPrefixes";
+  import { onDestroy, tick } from "svelte";
+  import { onlyPrefix, splitPrefix, typedAfter, withPrefix, type BranchPrefix } from "./branchPrefixes";
   import { cleanTyped, rememberPrefix } from "./branchPrefs";
+
+  import type { RefInfo } from "./types";
+
+  const id = $props.id();
 
   let {
     value,
-    list,
+    list = [],
+    branchRefs,
     placeholder,
     label,
     focus = false,
     onedit,
-  }: { value: string; list: BranchPrefix[]; placeholder?: string; label: string; focus?: boolean; onedit: (value: string) => void } = $props();
+  }: { value: string; list?: BranchPrefix[]; branchRefs?: RefInfo[]; placeholder?: string; label: string; focus?: boolean; onedit: (value: string) => void } = $props();
 
   const parts = $derived(splitPrefix(value, list));
   const own = $derived(list.filter((p) => !p.repo));
@@ -26,6 +31,51 @@
   let input = $state<HTMLInputElement>();
   let menu = $state<HTMLDivElement>();
 
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  let matches = $state.raw<RefInfo[]>([]);
+  let active = $state(-1);
+  let results = $state<HTMLDivElement>();
+  let placement = $state({ left: 0, top: 0, width: 0, maxHeight: 0 });
+
+  function dismissMatches() {
+    clearTimeout(searchTimer);
+    matches = [];
+    active = -1;
+  }
+
+  onDestroy(() => clearTimeout(searchTimer));
+
+  function placeMatches() {
+    if (!box) return;
+    const rect = box.getBoundingClientRect();
+    const top = rect.bottom + 6;
+    placement = { left: rect.left, top, width: rect.width, maxHeight: Math.max(0, window.innerHeight - top - 8) };
+  }
+
+  function search(name: string, rest: string) {
+    dismissMatches();
+    if (!branchRefs || onlyPrefix(name.trim()) || !rest.trim()) return;
+    const query = rest.trim().toLowerCase();
+    searchTimer = setTimeout(() => {
+      if (document.activeElement !== input) return;
+      placeMatches();
+      matches = (branchRefs ?? [])
+        .filter((ref) => (ref.kind === "local" || ref.kind === "remote") && ref.name.toLowerCase().includes(query))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }, 150);
+  }
+
+  async function pickBranch(ref: RefInfo) {
+    dismissMatches();
+    const name = ref.kind === "remote" && ref.remote ? ref.name.slice(ref.remote.length + 1) : ref.name;
+    onedit(name);
+    await tick();
+    if (!input) return;
+    input.focus();
+    const end = input.value.length;
+    input.setSelectionRange(end, end);
+  }
+
   /** Puts the cursor in the box when it appears with `focus`. */
   function focusIf(node: HTMLInputElement, on: boolean) {
     if (on) requestAnimationFrame(() => node.focus());
@@ -35,6 +85,7 @@
 
   async function show() {
     if (!box) return;
+    dismissMatches();
     open = true;
     await tick();
     const r = box.getBoundingClientRect();
@@ -59,7 +110,7 @@
 
   function onInput(event: Event) {
     const el = event.currentTarget as HTMLInputElement;
-    const name = typedAfter(parts.prefix, cleanTyped(el.value), list);
+    const name = list.length ? typedAfter(parts.prefix, cleanTyped(el.value), list) : el.value;
     const split = splitPrefix(name, list);
     if (split.prefix && split.prefix !== parts.prefix) rememberPrefix(split.prefix);
     // The box shows the cleaned name at once, even when the name itself stays the same.
@@ -69,6 +120,7 @@
       el.setSelectionRange(caret, caret);
     }
     onedit(name);
+    if (branchRefs) search(name, split.rest);
   }
 
   // Escape and Tab close only the menu, not the sheet; Return and Space pick the focused item.
@@ -87,14 +139,56 @@
 
   function onInputKey(event: KeyboardEvent) {
     const el = event.currentTarget as HTMLInputElement;
-    if (event.key === "ArrowDown" && !event.metaKey && !event.ctrlKey) {
+    if (branchRefs && (event.key === "Tab" || event.code === "Tab")) dismissMatches();
+    if (matches.length && event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      dismissMatches();
+    } else if (matches.length && (event.key === "ArrowDown" || event.key === "ArrowUp") && !event.altKey && !event.metaKey && !event.ctrlKey) {
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      active = active < 0 && step < 0 ? matches.length - 1 : (active + step + matches.length) % matches.length;
+      results?.children[active]?.scrollIntoView({ block: "nearest" });
+    } else if (active >= 0 && event.key === "Enter" && !event.metaKey && !event.ctrlKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      void pickBranch(matches[active]);
+    } else if (list.length && event.key === "ArrowDown" && !event.metaKey && !event.ctrlKey) {
       event.preventDefault();
       void show();
     } else if (event.key === "Backspace" && parts.prefix && el.selectionStart === 0 && el.selectionEnd === 0) {
       event.preventDefault();
       onedit(parts.rest);
+      if (branchRefs) search(parts.rest, parts.rest);
     }
   }
+
+  $effect(() => {
+    if (!branchRefs) return;
+    const away = (event: Event) => {
+      if (event.target instanceof Node && results?.parentElement?.contains(event.target)) return;
+      if (event.type === "pointerdown" && event.target instanceof Node && box?.contains(event.target)) return;
+      dismissMatches();
+    };
+    window.addEventListener("pointerdown", away, true);
+    window.addEventListener("scroll", away, true);
+    window.addEventListener("resize", placeMatches);
+    return () => {
+      window.removeEventListener("pointerdown", away, true);
+      window.removeEventListener("scroll", away, true);
+      window.removeEventListener("resize", placeMatches);
+    };
+  });
+
+  // The command preview can resize and recenter the sheet after the results open.
+  $effect(() => {
+    if (!matches.length || !box) return;
+    const observer = new ResizeObserver(placeMatches);
+    observer.observe(box);
+    const sheet = box.closest('[role="alertdialog"]');
+    if (sheet) observer.observe(sheet);
+    return () => observer.disconnect();
+  });
 
   // A click anywhere else, or the sheet scrolling under it, closes the menu.
   $effect(() => {
@@ -112,25 +206,32 @@
   });
 </script>
 
-<div class="prefixed" bind:this={box}>
-  <button
-    class="type"
-    class:none={!parts.prefix}
-    class:open
-    aria-haspopup="menu"
-    aria-expanded={open}
-    title="What the branch is for"
-    onclick={() => (open ? hide() : show())}
-  >
-    {parts.prefix ?? "No prefix"}
-    <svg viewBox="0 0 10 10"><path d="M2.5 4l2.5 2.5L7.5 4" /></svg>
-  </button>
+<div class="prefixed" class:plain={!list.length} bind:this={box}>
+  {#if list.length}
+    <button
+      class="type"
+      class:none={!parts.prefix}
+      class:open
+      aria-haspopup="menu"
+      aria-expanded={open}
+      title="What the branch is for"
+      onclick={() => (open ? hide() : show())}
+    >
+      {parts.prefix ?? "No prefix"}
+      <svg viewBox="0 0 10 10"><path d="M2.5 4l2.5 2.5L7.5 4" /></svg>
+    </button>
+  {/if}
   <input
     class="text"
     bind:this={input}
     value={parts.rest}
     placeholder={placeholder === undefined ? undefined : splitPrefix(placeholder, list).rest}
     aria-label={label}
+    role={branchRefs ? "combobox" : undefined}
+    aria-autocomplete={branchRefs ? "list" : undefined}
+    aria-expanded={branchRefs ? matches.length > 0 : undefined}
+    aria-controls={matches.length ? `${id}-branches` : undefined}
+    aria-activedescendant={active >= 0 ? `${id}-branch-${active}` : undefined}
     spellcheck="false"
     autocomplete="off"
     use:focusIf={focus}
@@ -138,6 +239,34 @@
     oninput={onInput}
   />
 </div>
+
+{#if matches.length}
+  <div
+    class="menu suggestions"
+    style:left="{placement.left}px"
+    style:top="{placement.top}px"
+    style:width="{placement.width}px"
+    style:max-height="{placement.maxHeight}px"
+  >
+    <span class="head" id="{id}-branches-title" role="status">Existing branches ({matches.length})</span>
+    <div class="matches" role="listbox" id="{id}-branches" aria-labelledby="{id}-branches-title" bind:this={results}>
+      {#each matches as ref, i}
+        <button
+          role="option"
+          tabindex="-1"
+          id="{id}-branch-{i}"
+          aria-selected={i === active}
+          title={ref.name}
+          onmousedown={(event) => event.preventDefault()}
+          onclick={() => pickBranch(ref)}
+        >
+          <span class="branch-name">{ref.name}</span>
+          <span class="words">{ref.kind === "local" ? "Local" : "Remote"}</span>
+        </button>
+      {/each}
+    </div>
+  </div>
+{/if}
 
 {#if open}
   <div class="menu" role="menu" tabindex="-1" aria-label="Prefix" bind:this={menu} style:left="{at.left}px" style:top="{at.top}px" onkeydown={onMenuKey}>
@@ -174,6 +303,9 @@
   .prefixed:focus-within {
     border-color: var(--accent);
     box-shadow: var(--focus-ring);
+  }
+  .plain .text {
+    padding-inline: 10px;
   }
   .type {
     display: flex;
@@ -257,6 +389,34 @@
   .menu button:focus-visible,
   .menu button:focus {
     background: var(--side-sel);
+  }
+  .suggestions {
+    min-width: 0;
+  }
+  .suggestions .head {
+    flex-shrink: 0;
+    padding-inline: 6px;
+  }
+  .matches {
+    max-height: calc(5 * 26px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .matches button {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .matches .words {
+    flex-shrink: 0;
+  }
+  .matches button[aria-selected="true"] {
+    background: var(--side-sel);
+  }
+  .branch-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: var(--mono);
+    font-size: var(--text-small);
   }
   .check {
     width: 14px;
