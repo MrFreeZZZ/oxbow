@@ -3,6 +3,7 @@
   import { diffScroll } from "./diffScroll";
   import { lane, plate, tint } from "./format";
   import { filesWidth, resizeFiles } from "./listView.svelte";
+  import { pressed } from "./shortcuts";
   import { fileTabs, keyFocus, tabStepper } from "./tabs";
   import type { FileChange } from "./types";
   import DiffTools from "./DiffTools.svelte";
@@ -50,6 +51,12 @@
     onOpen(next);
   }
 
+  function rowClick(event: MouseEvent, next: string | null) {
+    // WebKit on macOS does not focus clicked buttons.
+    (event.currentTarget as HTMLButtonElement).focus({ preventScroll: true });
+    open(next);
+  }
+
   $effect(() => {
     shownPath;
     if (scroller) scroller.scrollTop = 0;
@@ -62,8 +69,7 @@
   });
 
   async function onRowKey(event: KeyboardEvent) {
-    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-    const by = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
+    const by = pressed("nextFile", event) ? 1 : pressed("previousFile", event) ? -1 : 0;
     if (!by) return;
     event.preventDefault();
     if (!fileTabs(paths, path, open)(by, false)) return;
@@ -77,7 +83,7 @@
   <div class="files" aria-label="Changed files" data-steps use:tabStepper={fileTabs(paths, path, open)} style:width={stacked ? undefined : `${filesWidth(width)}px`}>
     <div class="filter"><FileFilter bind:value={filter} {color} /></div>
     <div class="list" bind:this={list} style:--selection-fill={tint(color)} style:--selection-border={`color-mix(in srgb, ${lane(color)} 40%, transparent)`}>
-      <button class="diff-list-row diff-list-group" aria-current={path === null ? "true" : undefined} onclick={() => open(null)} onkeydown={onRowKey}>
+      <button class="diff-list-row diff-list-group" aria-current={path === null ? "true" : undefined} onclick={(event) => rowClick(event, null)} onkeydown={onRowKey}>
         <span class="group-title" style:color={plate(color)}>All Changes</span>
         <span>{needle ? `${shown.length} of ${files.length}` : files.length.toLocaleString()}</span>
         <span class="grow"></span>
@@ -90,7 +96,7 @@
       </button>
       {#each shown.slice(0, listed) as file (file.path)}
         <div class="diff-list-row diff-list-file file">
-          <button class="diff-list-row-control name" aria-current={path === file.path ? "true" : undefined} onclick={() => open(file.path)} onkeydown={onRowKey} title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
+          <button class="diff-list-row-control name" aria-current={path === file.path ? "true" : undefined} onclick={(event) => rowClick(event, file.path)} onkeydown={onRowKey} title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
             <span class="diff-list-badge {tone[file.status] ?? "orange"}">{statusIcon[file.status] ?? "M"}</span>
             <PathName path={file.path} />
             {#if !counted || counted(file)}<FileBadge {file} />{/if}
