@@ -26,6 +26,34 @@
 
   let input = $state<HTMLInputElement>();
   let menu = $state(false);
+  let field = $state<HTMLDivElement>();
+  let popup = $state<HTMLDivElement>();
+  let menuCenter = $state<number>();
+  let menuRoom = $state<number>();
+
+  $effect(() => {
+    if (!menu || !field || !popup) return;
+    const anchor = field;
+    const panel = popup;
+    function position() {
+      const box = anchor.getBoundingClientRect();
+      const half = panel.getBoundingClientRect().width / 2;
+      const center = Math.max(8 + half, Math.min(box.left + box.width / 2, window.innerWidth - 8 - half));
+      menuCenter = center - box.left;
+      menuRoom = Math.max(0, window.innerHeight - box.top - 40 - 8);
+    }
+    position();
+    const observer = new ResizeObserver(position);
+    observer.observe(anchor);
+    observer.observe(panel);
+    const header = anchor.closest("header");
+    if (header) observer.observe(header);
+    window.addEventListener("resize", position);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", position);
+    };
+  });
 
   const parsed = $derived(search.parsed);
   const label = $derived(MODES.find((m) => m.mode === parsed.mode)?.label ?? "Message");
@@ -98,48 +126,50 @@
   }}
 />
 
-<div class="field search-control" class:active={search.active} class:has-query={search.input.length > 0} class:search-menu-open={menu}>
-  <svg class="icon glass" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
-  <!-- Keep the field focused: macOS WebKit does not focus a button on a mouse click. -->
-  <button class="token" onmousedown={(event) => { if (event.button === 0) event.preventDefault(); }} onclick={openMenu} aria-haspopup="menu" aria-expanded={menu} aria-label="Search in {label}">
-    {label}
-    <svg class="icon chevron" viewBox="0 0 16 16"><path d="M4.5 6.5 8 10l3.5-3.5" /></svg>
-  </button>
-  <input
-    bind:this={input}
-    bind:value={search.input}
-    onkeydown={onKey}
-    oninput={() => search.takePrefix()}
-    onblur={() => search.remember()}
-    placeholder="Search history"
-    spellcheck="false"
-    autocomplete="off"
-    aria-label="Search history"
-    title={withKeys("Search History", combo("find"))}
-  />
-  {#if search.active}
-    <span class="place" aria-live="polite">
-      {#if search.busy && !search.result}
-        <span class="spinner" aria-label="Searching"></span>
-      {:else if matches.length}
-        {at >= 0 ? `${at + 1} of ${matches.length}` : `${matches.length}`}
-      {:else}
-        None
-      {/if}
-    </span>
-    <button class="arrow" onclick={() => step(-1)} disabled={!matches.length} aria-label="Previous match" title={withKeys("Previous Match", "Shift+Enter")}>
-      <svg class="icon" viewBox="0 0 16 16"><path d="M4.5 9.5 8 6l3.5 3.5" /></svg>
+<div class="field" bind:this={field} class:has-query={search.input.length > 0} class:search-menu-open={menu}>
+  <div class="control search-control" class:search-menu-open={menu}>
+    <svg class="icon glass" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
+    <!-- Keep the field focused: macOS WebKit does not focus a button on a mouse click. -->
+    <button class="token" onmousedown={(event) => { if (event.button === 0) event.preventDefault(); }} onclick={openMenu} aria-haspopup="menu" aria-expanded={menu} aria-label="Search in {label}">
+      {label}
+      <svg class="icon chevron" viewBox="0 0 16 16"><path d="M4.5 6.5 8 10l3.5-3.5" /></svg>
     </button>
-    <button class="arrow" onclick={() => step(1)} disabled={!matches.length} aria-label="Next match" title={withKeys("Next Match", "Enter")}>
-      <svg class="icon" viewBox="0 0 16 16"><path d="M4.5 6.5 8 10l3.5-3.5" /></svg>
-    </button>
-    <button class="clear" onclick={() => search.clear()} aria-label="Clear search">×</button>
-  {/if}
+    <input
+      bind:this={input}
+      bind:value={search.input}
+      onkeydown={onKey}
+      oninput={() => search.takePrefix()}
+      onblur={() => search.remember()}
+      placeholder="Search history"
+      spellcheck="false"
+      autocomplete="off"
+      aria-label="Search history"
+      title={withKeys("Search History", combo("find"))}
+    />
+    {#if search.active}
+      <span class="place" aria-live="polite">
+        {#if search.busy && !search.result}
+          <span class="spinner" aria-label="Searching"></span>
+        {:else if matches.length}
+          {at >= 0 ? `${at + 1} of ${matches.length}` : `${matches.length}`}
+        {:else}
+          None
+        {/if}
+      </span>
+      <button class="arrow" onclick={() => step(-1)} disabled={!matches.length} aria-label="Previous match" title={withKeys("Previous Match", "Shift+Enter")}>
+        <svg class="icon" viewBox="0 0 16 16"><path d="M4.5 9.5 8 6l3.5 3.5" /></svg>
+      </button>
+      <button class="arrow" onclick={() => step(1)} disabled={!matches.length} aria-label="Next match" title={withKeys("Next Match", "Enter")}>
+        <svg class="icon" viewBox="0 0 16 16"><path d="M4.5 6.5 8 10l3.5-3.5" /></svg>
+      </button>
+      <button class="clear" onclick={() => search.clear()} aria-label="Clear search">×</button>
+    {/if}
+  </div>
 
   {#if menu}
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="catcher" onclick={() => (menu = false)}></div>
-    <div class="pop" role="menu" aria-label="Search in">
+    <div class="pop" bind:this={popup} style:left={menuCenter === undefined ? "50%" : `${menuCenter}px`} style:max-height={menuRoom === undefined ? undefined : `${menuRoom}px`} role="menu" aria-label="Search in">
       <div class="heading">{parsed.text ? `Search “${parsed.text}” in` : "Search in"}</div>
       {#each modes as m (m.mode)}
         <button class="mode" class:on={m.mode === parsed.mode} role="menuitemradio" aria-checked={m.mode === parsed.mode} onclick={() => pick(m.mode)}>
@@ -195,11 +225,18 @@
 
 <style>
   .field {
+    --search-focus-shadow: inset 0 0 0 0.5px var(--glass-border), var(--glass-shadow);
     position: relative;
     width: 300px;
     flex-shrink: 1;
     min-width: 200px;
     --search-height: 34px;
+  }
+  /* Keep the input and its controls above the menu dismissal layer. */
+  .control {
+    position: relative;
+    z-index: 20;
+    width: 100%;
   }
   .glass {
     flex-shrink: 0;
@@ -272,10 +309,12 @@
   }
   .pop {
     position: absolute;
-    right: 0;
+    left: 50%;
+    transform: translateX(-50%);
     top: 40px;
     z-index: 20;
-    width: 380px;
+    width: min(380px, calc(100vw - 16px));
+    overflow-y: auto;
     padding: 6px;
     border-radius: var(--radius-xl);
     background: var(--sheet);

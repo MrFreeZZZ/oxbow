@@ -5,8 +5,8 @@
 import type { Part, Request } from "./confirm.svelte";
 import type { BranchContext } from "./branches";
 import type { Action, Bisect, BisectMark, History, HistoryRow } from "./types";
-import { ancestors } from "./commits";
-import { shortId } from "./format";
+import { ancestors } from "./historyAncestry.ts";
+import { shortId } from "./format.ts";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -19,15 +19,26 @@ export function estimateSteps(all: number): number {
   return e < 3 * x ? n : n - 1;
 }
 
-/** The commit a branch, tag or sha names, as far as History knows. */
-function resolve(history: History, name: string): string | null {
-  const ref = history.refs.find((r) => (r.kind === "local" || r.kind === "tag" || r.kind === "remote") && r.name === name);
-  if (ref) return ref.target;
-  return history.rows.find((r) => !r.worktree && r.id.startsWith(name))?.id ?? null;
+interface Boundary {
+  name: string;
+  id: string;
+}
+
+/** A branch choice, excluding tags that happen to share its name. */
+function branchTip(history: History, name: string | null): Boundary | null {
+  const ref = history.refs.find((r) => r.kind === "local" && r.name === name)
+    ?? history.refs.find((r) => r.kind === "remote" && r.name === name);
+  return ref ? { name: ref.name, id: ref.target } : null;
+}
+
+/** Keep the first choice for each label, as the sheet keys its chips by label. */
+function distinct(choices: (Boundary | null)[]): Boundary[] {
+  return choices.filter((choice, i): choice is Boundary =>
+    choice !== null && choices.findIndex((other) => other?.name === choice.name) === i);
 }
 
 /** What to call a commit: a branch or tag there, else its short sha. */
-export function nameOf(history: History, id: string): string {
+function nameOf(history: History, id: string): string {
   for (const kind of ["local", "tag", "remote"] as const) {
     const ref = history.refs.find((r) => r.kind === kind && r.target === id);
     if (ref) return ref.name;
@@ -44,49 +55,52 @@ function named(ctx: BranchContext, name: string): Part {
 }
 
 interface Start {
-  good: string;
-  bad: string;
+  good: Boundary | null;
+  bad: Boundary | null;
   /** The choices offered for each. */
-  goods: string[];
-  bads: string[];
+  goods: Boundary[];
+  bads: Boundary[];
   stash: boolean;
   test: boolean;
   command: string;
 }
 
 /** Commits that may be good: the newest few tags behind `bad`, and where `bad` left the trunk. */
-function goodChoices(history: History, bad: string): string[] {
-  const badId = resolve(history, bad);
+function goodChoices(history: History, badId: string | null): Boundary[] {
   if (!badId) return [];
   const behind = ancestors(history, badId);
   behind.delete(badId);
   const tagged = history.rows
     .filter((r) => behind.has(r.id))
-    .flatMap((r) => r.labels.filter((l) => l.kind === "tag").map((l) => l.name))
+    .flatMap((r) => r.labels.filter((l) => l.kind === "tag").map((l) => ({ name: l.name, id: r.id })))
     .slice(0, 3)
     .reverse();
-  if (tagged.length) return tagged;
+  if (tagged.length) return distinct(tagged);
   // No tags: where the branch split from the trunk, when it isn't on the trunk itself.
-  const trunkTip = history.trunk ? resolve(history, history.trunk) : null;
+  const trunkTip = branchTip(history, history.trunk)?.id ?? null;
   if (!trunkTip || trunkTip === badId) return [];
   const onTrunk = ancestors(history, trunkTip);
   const fork = history.rows.find((r) => behind.has(r.id) && onTrunk.has(r.id));
-  return fork ? [nameOf(history, fork.id)] : [];
+  return fork ? [{ name: nameOf(history, fork.id), id: fork.id }] : [];
 }
 
 /** Find What Broke This… on `bad` (a branch or commit), or Find First Bad Commit After This…
  *  on `good`, an older commit; the rest is filled in from the checked-out branch and tags. */
 export function bisectStartRequest(ctx: BranchContext, from: { good?: HistoryRow; bad?: HistoryRow }): Request {
   const { history } = ctx;
-  const here = history.head.branch ?? (history.head.commit ? shortId(history.head.commit) : "HEAD");
-  const bad = from.bad ? nameOf(history, from.bad.id) : here;
-  const bads = [...new Set([bad, here, history.trunk].filter((b): b is string => !!b))].filter((b) => !from.good || ancestors(history, resolve(history, b)).has(from.good.id));
-  const goods = from.good ? [...new Set([nameOf(history, from.good.id), ...goodChoices(history, bad)])] : goodChoices(history, bad);
+  const { head, trunk } = history;
+  const here = head.commit ? { name: head.branch ?? shortId(head.commit), id: head.commit } : null;
+  const bad = from.bad ? { name: nameOf(history, from.bad.id), id: from.bad.id } : here;
+  const bads = distinct([bad, here, branchTip(history, trunk)])
+    .filter((choice) => !from.good || ancestors(history, choice.id).has(from.good.id));
+  const initialBad = bads[0] ?? bad;
+  const suggestions = goodChoices(history, initialBad?.id ?? null);
+  const goods = from.good ? distinct([{ name: nameOf(history, from.good.id), id: from.good.id }, ...suggestions]) : suggestions;
   return startSheet(ctx, {
-    good: goods[0] ?? "",
-    bad: bads[0] ?? bad,
+    good: goods[0] ?? null,
+    bad: initialBad,
     goods,
-    bads: bads.length ? bads : [bad],
+    bads: bads.length ? bads : distinct([bad]),
     stash: ctx.uncommitted > 0,
     test: false,
     command: "",
@@ -97,31 +111,35 @@ function startSheet(ctx: BranchContext, state: Start): Request {
   const again = (change: Partial<Start>) => startSheet(ctx, { ...state, ...change });
   const { history } = ctx;
   const here = history.head.branch ?? (history.head.commit ? shortId(history.head.commit) : "HEAD");
-  const goodId = state.good ? resolve(history, state.good) : null;
-  const badId = resolve(history, state.bad);
-  const range = goodId && badId ? [...ancestors(history, badId)].filter((id) => !ancestors(history, goodId).has(id)).length : 0;
+  const good = state.good?.name ?? "a good commit";
+  const bad = state.bad?.name ?? here;
+  const goodId = state.good?.id ?? null;
+  const badId = state.bad?.id ?? null;
+  const beforeBad = ancestors(history, badId);
+  const beforeGood = ancestors(history, goodId);
+  const range = goodId && badId ? [...beforeBad].filter((id) => !beforeGood.has(id)).length : 0;
   const command = state.command.trim();
 
   let invalid: string | null = null;
   if (!goodId) invalid = "Pick a commit where it still worked: right-click an older commit and choose Find First Bad Commit After This…";
-  else if (!badId) invalid = `${state.bad} isn’t in the history.`;
-  else if (goodId === badId || !ancestors(history, badId).has(goodId)) invalid = `${state.good} isn’t older than ${state.bad}: pick a commit ${state.bad} grew from.`;
-  else if (range < 2) invalid = `There is nothing between ${state.good} and ${state.bad} to test: ${state.bad} is the first bad commit.`;
+  else if (!badId) invalid = `${bad} isn’t in the history.`;
+  else if (goodId === badId || !beforeBad.has(goodId)) invalid = `${good} isn’t older than ${bad}: pick a commit ${bad} grew from.`;
+  else if (range < 2) invalid = `There is nothing between ${good} and ${bad} to test: ${bad} is the first bad commit.`;
   else if (state.test && !command) invalid = "Type the command that tests a commit.";
 
-  const body: Part[] = ["Git checks out commits between ", named(ctx, state.good || "a good commit"), ", which worked, and ", named(ctx, state.bad), ", which is broken."];
+  const body: Part[] = ["Git checks out commits between ", named(ctx, good), ", which worked, and ", named(ctx, bad), ", which is broken."];
   if (range >= 2) body.push(` Each answer halves the range: ${plural(range, "commit")}, about ${plural(estimateSteps(range) + 1, "step")}.`);
   body.push(state.test ? " The test command runs at every step: exit code 0 means good, 125 skip, anything else bad." : " At each step you build and test, then mark the commit Good or Bad.");
 
   const fields: Request["fields"] = [
     {
       label: "Good",
-      chips: state.goods.map((name) => ({ label: name, mono: !isBranch(history, name) && !isTag(history, name), on: state.good === name, pick: () => again({ good: name }) })),
+      chips: state.goods.map((choice) => ({ label: choice.name, mono: !isBranch(history, choice.name) && !isTag(history, choice.name), on: state.good === choice, pick: () => again({ good: choice }) })),
       note: state.goods.length ? "A commit where it still worked." : "No tags behind it. Right-click an older commit in History and choose Find First Bad Commit After This…",
     },
     {
       label: "Bad",
-      chips: state.bads.map((name) => ({ label: name, mono: !isBranch(history, name) && !isTag(history, name), on: state.bad === name, pick: () => again({ bad: name, goods: state.goods }) })),
+      chips: state.bads.map((choice) => ({ label: choice.name, mono: !isBranch(history, choice.name) && !isTag(history, choice.name), on: state.bad === choice, pick: () => again({ bad: choice }) })),
       note: "A commit where it is broken.",
     },
   ];
@@ -134,7 +152,7 @@ function startSheet(ctx: BranchContext, state: Start): Request {
   }
   options.push({ label: "Answer each step with a test command", sub: "git bisect run: no clicking, the log shows every result", on: state.test, toggle: () => again({ test: !state.test }) });
 
-  const action: Action = { kind: "bisectStart", good: state.good, bad: state.bad, stash: state.stash && ctx.uncommitted > 0, command: state.test ? command : null };
+  const action: Action = { kind: "bisectStart", good: goodId ?? "", bad: badId ?? "", stash: state.stash && ctx.uncommitted > 0, command: state.test ? command : null };
   return {
     title: "Find the commit that broke it",
     body,

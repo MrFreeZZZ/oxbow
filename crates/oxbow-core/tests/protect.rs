@@ -198,7 +198,9 @@ fn pushed_commits_of_a_protected_branch_are_not_rewritten_and_unpushed_ones_are(
 
 #[test]
 fn a_rebase_of_a_protected_branch_stops_only_when_it_would_rewrite_pushed_commits() {
-    let (mut fx, _remote, [root, ..]) = pushed_main();
+    let (mut fx, _remote, [root, pushed, _]) = pushed_main();
+    fx.git(&["tag", "origin/main", &root]);
+    fx.git(&["tag", "other", &pushed]);
     fx.git(&["branch", "other", &root]);
     fx.git(&["checkout", "-q", "other"]);
     fx.commit("d.txt", "d\n", "Add d");

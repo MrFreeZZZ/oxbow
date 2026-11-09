@@ -32,7 +32,7 @@ const walk = (...places: Place[]): Trail => places.reduce((t, p) => visit(t, p),
   assert.equal(t.places.length, 2);
   t = visit(t, file("src/auth.ts", "c2", 12));
   assert.equal(t.places.length, 3);
-  assert.deepEqual(t.places.map(placeKey), ["pull\x00feature/login", "file\x00src/auth.ts\x00", "file\x00src/auth.ts\x0012"]);
+  assert.deepEqual(t.places.map(placeKey), ["pull\x00github\x00feature/login", "file\x00src/auth.ts\x00", "file\x00src/auth.ts\x0012"]);
 }
 
 // Back and Forward move along the trail; a new place drops what was ahead.
@@ -107,8 +107,20 @@ const walk = (...places: Place[]): Trail => places.reduce((t, p) => visit(t, p),
 // Places are named for the header and the list of places: a pull request by its number once
 // it has one, a commit by its summary.
 {
-  const pulls = (branch: string, number: number | null) => (number === 7 || branch === "feature/login" ? { number: 7 } : null);
+  const pulls = (branch: string, forge: "github" | "gitlab") =>
+    branch === "feature/login" ? { number: forge === "gitlab" ? 8 : 7 } : null;
   assert.equal(nameOfPlace(pull, pulls), "PR #7");
+  assert.equal(nameOfPlace({ ...pull, forge: "gitlab" }, pulls), "MR !8");
+  assert.equal(nameOfPlace({ view: "pull", branch: "other", forge: "gitlab" }, pulls), "Merge Request other");
+  const pr: Place = { ...pull, number: 7 };
+  const mr: Place = { ...pr, forge: "gitlab" };
+  assert.equal(nameOfPlace(mr, pulls), "MR !7");
+  assert.equal(nameOfPlace(pr, () => null), "PR #7");
+  assert.equal(nameOfPlace(mr, () => null), "MR !7");
+  assert.deepEqual(walk(pull, { ...pull, forge: "gitlab" }).places.length, 2);
+  assert.deepEqual(crumbs(walk(pr, mr, { view: "reviews" }), p => nameOfPlace(p, pulls)), [
+    { label: "PR #7", at: 0 }, { label: "MR !7", at: 1 },
+  ]);
   assert.equal(nameOfPlace({ view: "pull", branch: "other" }, pulls), "Pull Request other");
   assert.equal(nameOfPlace(file("src/app/main.rs"), pulls), "main.rs");
   assert.equal(nameOfPlace(file("src/app/main.rs", null, 12), pulls), "Line 12");
@@ -128,4 +140,17 @@ const walk = (...places: Place[]): Trail => places.reduce((t, p) => visit(t, p),
   const t = visit(visit(emptyTrail(), browse("a.rs")), browse("b.rs"));
   assert.deepEqual(t.places, [browse("b.rs")]);
   assert.equal(visit(t, { ...browse(null), rev: "f00" }).places.length, 2);
+}
+
+// The visible labels can match while Back and Forward restore different Git refs.
+{
+  const local: Place = { view: "compare", base: "refs/heads/main", target: "refs/heads/preview", mode: "split" };
+  const tag: Place = { ...local, target: "refs/tags/preview" };
+  const trail = walk(local, tag);
+  assert.equal(detailOfPlace(local, () => undefined, null), "preview with main");
+  assert.equal(detailOfPlace(tag, () => undefined, null), "preview with main");
+  const back = go(trail, 0)!;
+  assert.deepEqual(back.places[back.at], local);
+  const forward = go(back, 1)!;
+  assert.deepEqual(forward.places[forward.at], tag);
 }

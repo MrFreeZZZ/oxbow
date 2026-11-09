@@ -56,10 +56,7 @@ pub(crate) async fn open_repo(
             .map_err(|err| err.to_string())??
     };
     let restricted = match answer {
-        Some(TrustAnswer::Trust) => {
-            trusted::add(&app, &workdir, &found);
-            false
-        }
+        Some(TrustAnswer::Trust) => false,
         Some(TrustAnswer::Restricted) => !found.is_empty(),
         None if allowed => false,
         None => {
@@ -77,6 +74,8 @@ pub(crate) async fn open_repo(
     if restricted {
         let (dir, found) = (workdir.clone(), found.clone());
         blocking(move || oxbow_core::trust::restrict(&dir, &found)).await?;
+    } else if matches!(answer, Some(TrustAnswer::Trust)) {
+        save_trust(&app, &workdir, &found)?;
     } else {
         oxbow_core::trust::lift(&workdir);
     }
@@ -117,9 +116,13 @@ pub(crate) async fn trust_repo(app: AppHandle, path: String) -> CommandResult<()
         let dir = dir.clone();
         blocking(move || oxbow_core::trust::scan(&dir)).await?
     };
-    trusted::add(&app, &dir, &found);
-    oxbow_core::trust::lift(&dir);
-    let _ = app.emit("trust-changed", path);
+    save_trust(&app, &dir, &found)
+}
+
+fn save_trust(app: &AppHandle, dir: &Path, found: &[oxbow_core::TrustFinding]) -> CommandResult<()> {
+    trusted::add(app, dir, found).map_err(|err| format!("Couldn’t save repository trust. {err}"))?;
+    oxbow_core::trust::lift(dir);
+    let _ = app.emit("trust-changed", dir.to_string_lossy());
     Ok(())
 }
 

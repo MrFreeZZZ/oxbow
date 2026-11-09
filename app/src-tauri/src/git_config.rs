@@ -210,7 +210,7 @@ pub(crate) async fn set_commit_checks(
             repo.set_commit_checks(&checks)?;
             let workdir = repo.workdir();
             if !oxbow_core::trust::is_restricted(workdir) && checks.iter().any(|c| c.on) {
-                crate::trusted::add(&app, workdir, &oxbow_core::trust::scan(workdir).unwrap_or_default());
+                crate::trusted::remember(&app, workdir, &oxbow_core::trust::scan(workdir).unwrap_or_default());
             }
             Ok(())
         },

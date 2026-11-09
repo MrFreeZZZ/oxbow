@@ -57,16 +57,17 @@
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { getCurrentWindow, type CloseRequestedEvent } from "@tauri-apps/api/window";
   import { nav } from "./lib/nav.svelte";
+  import { compareRef } from "./lib/compareRefs";
   import type { CompareMode } from "./lib/types";
   import { startPublish, startPublishGitLab } from "./lib/publish";
   import { start } from "./lib/start.svelte";
   import OperationLog from "./lib/OperationLog.svelte";
   import { shortcut, withKeys } from "./lib/keys";
   import { cannotRestore, isRedo, lostRow, oplog, undoRequest } from "./lib/oplog.svelte";
-  import { amend, canBack, canForward, crumbs, detailOfPlace, emptyTrail, go, nameOfPlace, visit, type Place, type Trail } from "./lib/backStack";
+  import { canBack, canForward, crumbs, detailOfPlace, moveToPlace, nameOfPlace, newNavigationTrail, recordPlace, resetNavigationTrail, restoreHistoryPosition, type Place } from "./lib/backStack";
   import { kept } from "./lib/kept";
   import { stepQuery, type SeriesQuery } from "./lib/series";
-  import { relativeTime } from "./lib/format";
+  import { lane, relativeTime } from "./lib/format";
   import { activity, failureShort, type ActivityItem } from "./lib/activity.svelte";
   import { github } from "./lib/github.svelte";
   import type { ForgeKind } from "./lib/forge";
@@ -386,13 +387,8 @@
 
   // --- Back and Forward ---
 
-  /** The places visited in this repository, and which one is current. */
-  let trail = $state<Trail>(emptyTrail());
-  /** The next change of the selected commit is a leap (a search result, a parent, a sidebar
-   *  branch), which History keeps as a place of its own. */
-  let jumping = false;
-  /** How far History's graph is scrolled, kept for its place when you leave it. */
-  let historyScroll: number | null = null;
+  const navigation = $state(newNavigationTrail());
+  const trail = $derived(navigation.trail);
   /** The list of places behind or ahead, from a right-click on Back or Forward. */
   let placesMenu = $state<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
 
@@ -435,23 +431,17 @@
   $effect(() => {
     const place = here;
     if (!place) return;
-    untrack(() => {
-      // History is left as scrolled now.
-      const scroll = historyScroll;
-      const before = amend(trail, (p) => (p.view === "history" ? { ...p, scroll } : p));
-      trail = visit(before, place.view === "history" ? { ...place, scroll } : place, jumping);
-      jumping = false;
-    });
+    untrack(() => recordPlace(navigation, place));
   });
 
   /** Select a commit by a leap: History keeps the commit you leave as a place to come back to. */
   function jump(id: string) {
-    if (id !== selected && view === "history" && !showConflicts) jumping = true;
+    if (id !== selected && view === "history" && !showConflicts) navigation.jumping = true;
     select(id);
   }
 
   /** What a place is called, and the grey line under it in the list of places (backStack.ts). */
-  const placeName = (p: Place) => nameOfPlace(p, (branch, number) => (number ? github.byNumber(number) : github.pullOf(branch)));
+  const placeName = (p: Place) => nameOfPlace(p, (branch, forge) => github.pullOf(branch, forge));
   const placeDetail = (p: Place) => detailOfPlace(p, (id) => rowsById.get(id), history?.head.branch ?? null);
 
   const placeIcons: Record<Place["view"], string> = {
@@ -475,12 +465,8 @@
 
   /** Go to a place on the trail, as it was left. */
   function goTo(index: number) {
-    // History is left as scrolled now, for Forward to come back to.
-    const scroll = historyScroll;
-    const next = go(view === "history" ? amend(trail, (p) => (p.view === "history" ? { ...p, scroll } : p)) : trail, index);
-    if (!next) return;
-    trail = next;
-    const p = next.places[next.at];
+    const p = moveToPlace(navigation, index, view === "history");
+    if (!p) return;
     resolving = false;
     switch (p.view) {
       case "history": {
@@ -494,9 +480,15 @@
           selected = p.commit;
         }
         const id = selected;
-        const place = () => (p.scroll !== null ? list?.scrollTo(p.scroll) : id && list?.reveal(id));
-        if (!id || rowsById.has(id)) requestAnimationFrame(place);
-        else ensureLoaded(id).then((ok) => ok && selected === id && requestAnimationFrame(place));
+        const ticket = session.tickets.take();
+        void restoreHistoryPosition(navigation, p, id, {
+          loaded: (commit) => rowsById.has(commit),
+          load: ensureLoaded,
+          frame: (restore) => requestAnimationFrame(restore),
+          current: () => session.tickets.current(ticket) && view === "history" && selected === id,
+          scrollTo: (top) => list?.scrollTo(top),
+          reveal: (commit) => list?.reveal(commit),
+        });
         break;
       }
       case "file":
@@ -555,8 +547,8 @@
 
   /** Another repository starts a trail of its own, and what its screens kept is let go. */
   function forgetPlaces() {
-    trail = emptyTrail();
-    historyScroll = null;
+    resetNavigationTrail(navigation);
+    placesMenu = null;
     kept.clear();
   }
 
@@ -1694,7 +1686,7 @@
     showDetails();
     if (await ensureLoaded(entry.id)) {
       oplog.lost = null;
-      if (leap && entry.id !== selected) jumping = true;
+      if (leap && entry.id !== selected) navigation.jumping = true;
       selected = entry.id;
       requestAnimationFrame(() => list?.reveal(entry.id));
     } else {
@@ -1745,7 +1737,7 @@
    *  `missing` says why History can't show it, when no branch or tag reaches it. */
   function pick(id: string, missing?: string) {
     const before = selected;
-    if (id !== selected && view === "history" && !showConflicts) jumping = true;
+    if (id !== selected && view === "history" && !showConflicts) navigation.jumping = true;
     unhide(id);
     selected = id;
     second = null;
@@ -2040,7 +2032,7 @@
             <WindowTitle title={titleOf(repo, history)} steps={trailPath} onStep={goTo} />
           {/if}
           <button class="capsule repo-picker" onclick={(event) => sidebar?.repoMenu(event)} oncontextmenu={(event) => { event.preventDefault(); void sidebar?.repoMenu(event); }} aria-label={`Repository ${repo.name}`} aria-haspopup="menu" title={`${repo.path}\n${branchCount} ${branchCount === 1 ? "branch" : "branches"}`}>
-            <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.folder} /></svg>
+            <svg class="icon" viewBox="0 0 16 16" style:color={history.trunk ? lane(0) : undefined}><path d={menuIcons.folder} /></svg>
             <span>{repo.name}</span>
             <svg class="icon small" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>
           </button>
@@ -2186,7 +2178,7 @@
           onPush={() => sync("push")}
           onPull={(mode) => sync("pull", mode)}
           onFetch={() => sync("fetch")}
-          onTheirs={(upstream) => openCompare(history!.head.branch!, upstream, "split")}
+          onTheirs={(upstream) => openCompare(compareRef("local", history!.head.branch!), compareRef("remote", upstream), "split")}
           onPublish={publishToGitHub}
           onPublishGitLab={labSignedIn ? publishToGitLab : null}
         />
@@ -2351,7 +2343,7 @@
               history={graphHistory!}
               {selected}
               onSelect={select}
-              onScroll={(top) => (historyScroll = top)}
+              onScroll={(top) => (navigation.scroll = top)}
               menuFor={commitMenu}
               {found}
               second={pair ? second : null}
@@ -2429,7 +2421,7 @@
                 copy={(text) => copyText(text, "Copied the command.")}
                 onSelect={select}
                 onClear={() => (second = null)}
-                onOpenCompare={(from, to) => openCompare(from.slice(0, 7), to.slice(0, 7), "tips")}
+                onOpenCompare={(from, to) => openCompare(from, to, "tips")}
               />
             {:else if selectedRow?.worktree}
               <ChangesPanel
@@ -2680,6 +2672,7 @@
     flex-shrink: 0;
   }
   .repo-picker span {
+    color: var(--text);
     white-space: nowrap;
   }
   .repo-picker .icon {

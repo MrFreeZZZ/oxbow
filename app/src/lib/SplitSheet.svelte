@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { diffScroll } from "./diffScroll";
   // Split Commit: the commit's files on the left, each with a checkbox; the open file's diff on
   // the right, where single lines or whole hunks can be picked. What is picked becomes a new
   // commit right after this one, with the message typed under it; the rest stays in the commit
@@ -172,7 +173,7 @@
             <p class="muted">Reading the commit…</p>
           {/each}
         </div>
-        <div class="diff">
+        <div class="diff" use:diffScroll={color}>
           {#if current}
             {#if byLine(current)}
               <DiffView diffs={[current]} {color} whole={false} onToggleWhole={() => {}} {picker} {hunkBar} openable={false} history={false} tools={false} />

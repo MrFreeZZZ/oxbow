@@ -300,7 +300,7 @@
 
 </script>
 
-<div class="commit" role="group" aria-label="Commit" style:background={tint(color)} style:border-color={`color-mix(in srgb, ${lane(color)} 40%, transparent)`}>
+<div class="commit" role="group" aria-label="Commit" style:--focus-ring={`0 0 0 1px color-mix(in srgb, ${lane(color)} 40%, transparent)`} style:background={tint(color)} style:border-color={`color-mix(in srgb, ${lane(color)} 40%, transparent)`}>
   <div class="row top">
     {#if lists?.length}
       <!-- With changelists, Commit takes the staged changes or one list. -->

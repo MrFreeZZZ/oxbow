@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { diffScroll } from "./diffScroll";
   // The diff column of the Changes panel: what is shown over it (a file's side, or every file
   // of a side), the diffs with the actions of each hunk and file, or the way on when a side has
   // nothing left.
@@ -30,6 +31,7 @@
     whole = $bindable(),
     sel = $bindable(),
     scroller = $bindable(),
+    headerHeight = $bindable(46),
     openUnstaged,
     openStaged,
     sideFiles,
@@ -71,6 +73,8 @@
     /** Lines picked in one hunk, with the one clicked last for Shift-click. */
     sel: { hunk: Hunk; lines: number[]; anchor: number } | null;
     scroller?: HTMLDivElement;
+    /** The list toolbar follows this height when the columns are side by side. */
+    headerHeight?: number;
     /** The open file's unstaged and staged parts. */
     openUnstaged: FileChange | null;
     openStaged: FileChange | null;
@@ -228,7 +232,7 @@
 {/snippet}
 
 {#if lastOpen}
-  <div class="dhead">
+  <div class="dhead diff-toolbar" bind:clientHeight={headerHeight}>
     <div class="grow">
       <div class="dtitle"><b>From last commit</b></div>
       <div class="caption">Amend keeps these changes in the commit</div>
@@ -236,7 +240,7 @@
     <DiffTools {whole} onToggleWhole={() => (whole = !whole)} working />
   </div>
 {:else if shown}
-  <div class="dhead" class:file-head={shown.kind === "file"}>
+  <div class="dhead diff-toolbar" class:file-head={shown.kind === "file"} bind:clientHeight={headerHeight}>
     {#if shown.kind === "file"}
       {@const file = shown}
       <div class="segmented" role="radiogroup" aria-label="Which part of the file">
@@ -261,7 +265,7 @@
     <DiffTools {whole} onToggleWhole={() => (whole = !whole)} working />
   </div>
 {/if}
-<div class="scroll" bind:this={scroller}>
+<div class="scroll" bind:this={scroller} use:diffScroll={color}>
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   {#if openFile && openUnstaged && openStaged && !lastOpen}<div class="tip"><TipCard id="partlyStaged" /></div>{/if}
   {#if lastOpen}
@@ -364,15 +368,17 @@
   }
   /* Over the diff: which side of the file it is, or which side's files, and how it is drawn. */
   .dhead {
+    --file-context-line: 16px;
     display: flex;
     align-items: center;
     gap: 10px;
-    min-height: 46px;
-    padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
+    /* Reserve the file toolbar's two rows in the group view as well. */
+    min-height: calc(26px + 2px + var(--file-context-line) + 2 * var(--space-2));
     flex-shrink: 0;
   }
   .dhead.file-head {
     flex-wrap: wrap;
+    align-content: center;
     row-gap: 2px;
   }
   .file-head :global(.tools) {
@@ -385,6 +391,7 @@
     gap: var(--space-2);
     min-width: 0;
     font-size: var(--text-small);
+    line-height: var(--file-context-line);
   }
   .file-path {
     min-width: 8ch;
@@ -445,8 +452,8 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    min-height: 40px;
-    margin: 0 var(--space-3);
+    min-height: var(--diff-header-height);
+    margin: var(--changes-content-top, 0px) var(--space-3) 0;
     padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
     border-radius: var(--radius-m);
     background: var(--field);

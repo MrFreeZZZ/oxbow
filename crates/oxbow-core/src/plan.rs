@@ -16,7 +16,7 @@ use crate::edit::plan_reset;
 use crate::error::{Error, Result};
 use crate::lfs;
 use crate::oplog::short_id;
-use crate::repo::Repo;
+use crate::repo::{Repo, branch_label, local_branch_ref};
 use crate::tags;
 use crate::worktree::Side;
 
@@ -35,13 +35,9 @@ pub(crate) fn stash_before(branch: &str) -> GitCommand {
 /// What a commit or push says when Settings turned hooks off.
 pub(crate) const HOOKS_OFF: &str = "--no-verify: Git hooks are turned off in Settings";
 
-/// `main`, or `local:remote` when the branch has another name on the remote.
+/// Explicit branch refs keep local and remote tags with the same name out of a push.
 pub(crate) fn refspec(branch: &str, upstream: &str) -> String {
-    if branch == upstream {
-        branch.to_owned()
-    } else {
-        format!("{branch}:{upstream}")
-    }
+    format!("{}:{}", local_branch_ref(branch), local_branch_ref(upstream))
 }
 
 pub(crate) fn stdin_note(path: &str, header: &str) -> String {
@@ -382,7 +378,11 @@ impl Repo {
                     commands.push(stash_before(branch));
                 }
                 commands.push(
-                    GitCommand::new(["switch".to_owned(), "--track".to_owned(), format!("{remote}/{branch}")])
+                    GitCommand::new([
+                        "switch".to_owned(),
+                        "--track".to_owned(),
+                        format!("refs/remotes/{remote}/{branch}"),
+                    ])
                         .comment(format!("--track: create {branch} that follows {remote}/{branch}")),
                 );
                 commands
@@ -397,11 +397,14 @@ impl Repo {
             } => {
                 let at = start
                     .as_deref()
-                    .map_or("the current commit".to_owned(), |s| s.to_owned());
+                    .map_or("the current commit", branch_label);
                 // A start on the remote just fetched is where the branch begins, not what it follows.
-                let no_track = fetch
-                    .as_deref()
-                    .is_some_and(|remote| start.as_deref().is_some_and(|s| s.starts_with(&format!("{remote}/"))));
+                let fetched_start = start.as_deref().filter(|start| {
+                    fetch.as_deref().is_some_and(|remote| {
+                        start.strip_prefix("refs/remotes/").unwrap_or(start).starts_with(&format!("{remote}/"))
+                    })
+                });
+                let no_track = fetched_start.is_some();
                 let mut args = if *switch { vec!["switch".to_owned()] } else { vec!["branch".to_owned()] };
                 if no_track {
                     args.push("--no-track".to_owned());
@@ -410,7 +413,13 @@ impl Repo {
                     args.push("-c".to_owned());
                 }
                 args.push(name.clone());
-                args.extend(start.iter().cloned());
+                args.extend(start.as_deref().map(|start| {
+                    if no_track && !start.starts_with("refs/") {
+                        format!("refs/remotes/{start}")
+                    } else {
+                        self.branch_revision(start)
+                    }
+                }));
                 let head = self.head()?.branch;
                 let mut commands = Vec::new();
                 if let Some(remote) = fetch {
@@ -434,7 +443,7 @@ impl Repo {
                 }));
                 if let Some(remote) = publish {
                     commands.push(
-                        GitCommand::new(["push", "-u", remote, name])
+                        GitCommand::new(["push", "-u", remote, &refspec(name, name)])
                             .comment(format!("-u: remember {remote}/{name} as its upstream"))
                             .with_progress(),
                     );
@@ -446,7 +455,7 @@ impl Repo {
                     vec![GitCommand::new(["branch", "-m", from, to]).comment("-m: move, which renames the branch")];
                 if let Some(up) = upstream {
                     commands.push(
-                        GitCommand::new(["push", "-u", &up.remote, to])
+                        GitCommand::new(["push", "-u", &up.remote, &refspec(to, to)])
                             .comment(format!("publish the new name and make {}/{to} the upstream", up.remote))
                             .with_progress(),
                     );
@@ -455,7 +464,7 @@ impl Repo {
                             "push".to_owned(),
                             up.remote.clone(),
                             "--delete".to_owned(),
-                            up.branch.clone(),
+                            local_branch_ref(&up.branch),
                         ])
                         .comment("then remove the old name there")
                         .with_progress(),
@@ -476,7 +485,7 @@ impl Repo {
                             "push".to_owned(),
                             up.remote.clone(),
                             "--delete".to_owned(),
-                            up.branch.clone(),
+                            local_branch_ref(&up.branch),
                         ])
                         .comment(format!("removes {}/{} for everyone", up.remote, up.branch))
                         .with_progress(),
@@ -489,7 +498,7 @@ impl Repo {
                 branch,
                 expect: None,
             } => vec![
-                GitCommand::new(["push", remote, "--delete", branch])
+                GitCommand::new(["push", remote, "--delete", &local_branch_ref(branch)])
                     .comment("--delete: remove the branch on the remote")
                     .with_progress(),
             ],
@@ -500,10 +509,10 @@ impl Repo {
             } => vec![
                 GitCommand::new([
                     "push".to_owned(),
-                    format!("--force-with-lease=refs/heads/{branch}:{sha}"),
+                    format!("--force-with-lease={}:{sha}", local_branch_ref(branch)),
                     remote.clone(),
                     "--delete".to_owned(),
-                    branch.clone(),
+                    local_branch_ref(branch),
                 ])
                 .comment(format!(
                     "--force-with-lease: only while {branch} there is still the commit that was merged, so newer pushes stay"
@@ -880,7 +889,8 @@ impl Repo {
             args.push("--autostash");
             comment.push_str("; --autostash: keep uncommitted files");
         }
-        args.extend([remote, branch]);
+        let branch_ref = local_branch_ref(branch);
+        args.extend([remote, &branch_ref]);
         GitCommand::new(args).comment(comment).with_progress()
     }
 }

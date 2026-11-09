@@ -159,3 +159,33 @@ fn a_file_changed_before_the_newest_500_commits_keeps_its_commit() {
         assert!(!shared.only_base);
     }
 }
+
+#[test]
+fn qualified_refs_compare_the_selected_branch_remote_or_tag() {
+    let (mut fx, base, main, feature) = diverged();
+    fx.git(&["branch", "origin/feature", &main]);
+    fx.git(&["update-ref", "refs/remotes/origin/feature", &feature]);
+    fx.git(&["tag", "-a", "-m", "Tag with the same name", "origin/feature", &base]);
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let local = "refs/heads/origin/feature";
+    let remote = "refs/remotes/origin/feature";
+    let tag = "refs/tags/origin/feature";
+    let forward = repo.compare(local, tag, CompareMode::Tips).unwrap();
+    assert_eq!((&forward.base_id, &forward.target_id), (&main, &base));
+    assert_eq!((forward.ahead_count, forward.behind_count), (0, 1));
+    assert_eq!(forward.command, format!("git diff {local}..{tag}"));
+
+    let swapped = repo.compare(tag, local, CompareMode::Split).unwrap();
+    assert_eq!((&swapped.base_id, &swapped.target_id), (&base, &main));
+    assert_eq!((swapped.ahead_count, swapped.behind_count), (1, 0));
+    assert_eq!(swapped.command, format!("git diff {tag}...{local}"));
+
+    let tracked = repo.compare(&main[..7], remote, CompareMode::Tips).unwrap();
+    assert_eq!((&tracked.base_id, &tracked.target_id), (&main, &feature));
+
+    // A deleted branch must not fall back to a tag whose name looks like its full ref.
+    fx.git(&["tag", local, &base]);
+    fx.git(&["branch", "-D", "origin/feature"]);
+    assert!(repo.compare(local, tag, CompareMode::Tips).is_err());
+}

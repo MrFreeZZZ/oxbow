@@ -131,7 +131,7 @@ fn a_push_asks_gitlab_for_a_merge_request() {
     assert_eq!(
         plan.commands[0].display(),
         "git push -u -o merge_request.create -o merge_request.target=main -o 'merge_request.title=Draft: Export CSV' \
-         -o merge_request.remove_source_branch origin csv"
+         -o merge_request.remove_source_branch origin refs/heads/csv:refs/heads/csv"
     );
     assert!(
         plan.commands[0]
@@ -633,7 +633,7 @@ fn push_streams_its_output() {
     assert_eq!(
         events[0],
         ActionEvent::Command {
-            display: "git push origin main".into()
+            display: "git push origin refs/heads/main:refs/heads/main".into()
         }
     );
     assert!(
@@ -650,6 +650,8 @@ fn rejected_push_names_the_commits_in_the_way_and_pull_and_push_fixes_it() {
     team.me.commit("b.txt", "mine\n", "Mine");
     let his = team.kirill.commit("c.txt", "his\n", "His change");
     team.kirill.git(&["push", "-q", "origin", "main"]);
+    team.kirill.git(&["tag", "main", "HEAD^"]);
+    team.kirill.git(&["push", "-q", "origin", "refs/tags/main"]);
 
     let repo = Repo::open(team.me.path()).unwrap();
     let error = repo.perform(&push(false)).unwrap_err();
@@ -668,7 +670,10 @@ fn rejected_push_names_the_commits_in_the_way_and_pull_and_push_fixes_it() {
     let commands: Vec<String> = repo.plan(&both).unwrap().commands.iter().map(|c| c.display()).collect();
     assert_eq!(
         commands,
-        ["git pull --rebase --autostash origin main", "git push origin main"]
+        [
+            "git pull --rebase --autostash origin refs/heads/main",
+            "git push origin refs/heads/main:refs/heads/main"
+        ]
     );
     repo.perform(&both).unwrap();
     let tracking = repo.tracking().unwrap().unwrap();
@@ -703,7 +708,7 @@ fn force_push_with_lease_refuses_when_the_remote_moved_again() {
     };
     assert_eq!(
         repo.plan(&force).unwrap().commands[0].display(),
-        format!("git push --force-with-lease=main:{tip} origin main")
+        format!("git push --force-with-lease=main:{tip} origin refs/heads/main:refs/heads/main")
     );
     let error = repo.perform(&force).unwrap_err();
     assert_eq!(repo.explain_failure(&force, &error).kind, FailureKind::StaleLease);
@@ -729,6 +734,105 @@ fn force_push_with_lease_refuses_when_the_remote_moved_again() {
 }
 
 #[test]
+fn pushing_a_branch_ignores_tags_with_the_source_or_destination_name() {
+    for upstream in ["preview", "deployment"] {
+        let mut team = Team::new();
+        team.me.git(&["tag", "preview"]);
+        team.me.git(&["tag", "deployment"]);
+        team.me
+            .git(&["push", "origin", "refs/tags/preview", "refs/tags/deployment"]);
+        let tag = team.me.git(&["rev-parse", "refs/tags/preview"]);
+        team.me.git(&["switch", "-q", "-c", "preview"]);
+        team.me.commit("new.txt", "new\n", "New work");
+        let tip = team.me.git(&["rev-parse", "HEAD"]);
+        let repo = Repo::open(team.me.path()).unwrap();
+        let mut action = push(true);
+        if let Action::Push {
+            branch,
+            upstream: target,
+            ..
+        } = &mut action
+        {
+            *branch = "preview".into();
+            *target = upstream.into();
+        }
+        repo.perform(&action).unwrap();
+        assert_eq!(repo.tracking().unwrap().unwrap().branch, upstream);
+        assert_eq!(
+            team.kirill
+                .git(&["ls-remote", "--heads", "origin", upstream])
+                .split_whitespace()
+                .next(),
+            Some(tip.as_str())
+        );
+        for name in ["preview", "deployment"] {
+            assert_eq!(
+                team.kirill
+                    .git(&["ls-remote", "--tags", "origin", name])
+                    .split_whitespace()
+                    .next(),
+                Some(tag.as_str())
+            );
+        }
+    }
+}
+
+#[test]
+fn history_keeps_tracking_after_terminal_push_when_a_tag_shares_the_branch_name() {
+    let mut team = Team::new();
+    team.me.git(&["switch", "-q", "-c", "preview"]);
+    team.me.git(&["tag", "preview"]);
+    team.me.git(&["push", "-q", "origin", "refs/tags/preview"]);
+    let repo = Repo::open(team.me.path()).unwrap();
+    assert!(repo.history(&Default::default()).unwrap().tracking.is_none());
+
+    team.me
+        .git(&["push", "-q", "-u", "origin", "refs/heads/preview:refs/heads/preview"]);
+    let history = repo.history(&Default::default()).unwrap();
+    let tracking = history.tracking.unwrap();
+    assert_eq!(
+        (tracking.remote.as_str(), tracking.branch.as_str()),
+        ("origin", "preview")
+    );
+    assert_eq!((tracking.ahead, tracking.behind), (0, 0));
+    let branch = history
+        .refs
+        .iter()
+        .find(|r| r.name == "preview" && r.kind == oxbow_core::RefKind::Local)
+        .unwrap();
+    assert_eq!(branch.tracking.as_ref(), Some(&tracking));
+    assert!(repo.branch_tracking().unwrap().contains_key("preview"));
+
+    team.me.commit("new.txt", "new\n", "Local work");
+    assert_eq!(repo.history(&Default::default()).unwrap().tracking.unwrap().ahead, 1);
+    team.me
+        .git(&["push", "-q", "origin", "refs/heads/preview:refs/heads/preview"]);
+    assert_eq!(repo.history(&Default::default()).unwrap().tracking.unwrap().ahead, 0);
+
+    team.kirill.git(&["fetch", "-q", "origin"]);
+    team.kirill.git(&["switch", "-q", "-c", "preview", "origin/preview"]);
+    team.kirill.commit("remote.txt", "remote\n", "Remote work");
+    team.kirill
+        .git(&["push", "-q", "origin", "refs/heads/preview:refs/heads/preview"]);
+    team.me.git(&["fetch", "-q", "origin"]);
+    assert_eq!(repo.history(&Default::default()).unwrap().tracking.unwrap().behind, 1);
+    repo.perform(&Action::Pull {
+        remote: "origin".into(),
+        branch: "preview".into(),
+        fetch_first: false,
+        submodules: false,
+        mode: Some(PullMode::Merge),
+    })
+    .unwrap();
+    let tracking = repo.history(&Default::default()).unwrap().tracking.unwrap();
+    assert_eq!((tracking.ahead, tracking.behind), (0, 0));
+    assert_eq!(
+        std::fs::read_to_string(team.me.path().join("remote.txt")).unwrap(),
+        "remote\n"
+    );
+}
+
+#[test]
 fn publishing_a_branch_sets_its_upstream() {
     let mut team = Team::new();
     team.me.git(&["switch", "-q", "-c", "feature/csv"]);
@@ -748,7 +852,7 @@ fn publishing_a_branch_sets_its_upstream() {
     };
     assert_eq!(
         repo.plan(&publish).unwrap().commands[0].display(),
-        "git push -u origin feature/csv"
+        "git push -u origin refs/heads/feature/csv:refs/heads/feature/csv"
     );
     repo.perform(&publish).unwrap();
     let tracking = repo.tracking().unwrap().unwrap();

@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use crate::cli::GitCommand;
 use crate::error::{Error, Result};
-use crate::repo::Repo;
+use crate::repo::{Repo, local_branch_ref};
 
 mod client;
 mod shared;
@@ -125,6 +125,8 @@ impl Repo {
     /// `org/team`, in the order of the files they own. `gitlab` reads the file where GitLab
     /// looks for it, with its sections.
     pub fn code_owners(&self, base: &str, branch: &str, gitlab: bool) -> Vec<String> {
+        let base = self.branch_revision(base);
+        let branch = local_branch_ref(branch);
         let places: &[&str] = if gitlab {
             &["CODEOWNERS", "docs/CODEOWNERS", ".gitlab/CODEOWNERS"]
         } else {
@@ -211,7 +213,7 @@ impl Repo {
                 .comment("bring in the merge; --prune forgets branches deleted there")
                 .with_progress(),
         ];
-        let local = format!("refs/heads/{base}");
+        let local = local_branch_ref(base);
         let tracking = format!("refs/remotes/{remote}/{base}");
         // Whether base has commits of its own is decided after the fetch, by what it brought:
         // a base that has them stays as it is, Pull sorts that out.
@@ -220,7 +222,7 @@ impl Repo {
         }
         if head.as_deref() == Some(base) {
             plan.push(
-                GitCommand::new(["merge".to_owned(), "--ff-only".to_owned(), format!("{remote}/{base}")])
+                GitCommand::new(["merge", "--ff-only", &tracking])
                     .comment(format!(
                         "your checked-out {base} catches up, unless it has commits of its own; changes of yours in the way stop it, nothing is overwritten"
                     ))
@@ -230,7 +232,7 @@ impl Repo {
             // fetch refuses a base checked out in another worktree itself; this only keeps the
             // refusal from failing the whole step.
             plan.push(
-                GitCommand::new(["fetch".to_owned(), remote.to_owned(), format!("{base}:{base}")])
+                GitCommand::new(["fetch".to_owned(), remote.to_owned(), format!("{local}:{local}")])
                     .comment(format!(
                         "fast-forward your {base} to {remote}/{base}, unless it has commits of its own"
                     ))
@@ -331,11 +333,6 @@ impl Repo {
             return Ok(Some(format!("{doing}{place}")));
         }
         Ok(None)
-    }
-
-    fn has_ref(&self, name: &str) -> bool {
-        self.run(&GitCommand::new(["rev-parse", "--verify", "--quiet", name]))
-            .is_ok()
     }
 }
 

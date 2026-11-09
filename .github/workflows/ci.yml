@@ -1,8 +1,10 @@
 name: CI
 
 # Pull requests run Linux checks. Manual runs also build and test macOS.
-# Pushes to main are checked, built and published once by Preview/Distribution.
+# Preview pushes are checked, built and published once by Preview/Distribution.
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -14,6 +16,25 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  release-policy:
+    name: Release branch policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate the source of a release merge
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        env:
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: |
+          if [[ "$HEAD_REPOSITORY" != "$GITHUB_REPOSITORY" ]]; then
+            echo "Release merges must come from this repository."
+            exit 1
+          fi
+          case "$HEAD_BRANCH" in
+            preview|release/*|hotfix/*) ;;
+            *) echo "Merge development into preview first; main accepts preview, release/* or hotfix/*."; exit 1 ;;
+          esac
+
   checks:
     name: Checks
     runs-on: ubuntu-latest
@@ -56,7 +77,7 @@ jobs:
 
   app:
     name: App (macOS, unchecked until the checks are green)
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7.0.1
@@ -94,7 +115,7 @@ jobs:
 
   macos-tests:
     name: Tests (macOS)
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7.0.1

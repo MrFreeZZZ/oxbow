@@ -1,5 +1,7 @@
 // The title of a repository window: the name of what it shows, and the line under it.
 
+import { compareLabel } from "./compareRefs.ts";
+
 export type Screen = "history" | "stashes" | "oplog" | "local" | "compare" | "file" | "stack" | "pull" | "series" | "reviews" | "browse";
 
 export interface Shown {
@@ -68,7 +70,7 @@ export function windowTitle(s: Shown): Title {
     const sub = [label ? sha : null, summary].filter(Boolean).join(" · ");
     return here(label ? `Files of ${label}` : `Files at ${sha}`, `${inRepo}${sub || "every file as the commit has it"}`);
   }
-  if (s.screen === "compare") return here("Compare", `${s.compare.target} with ${s.compare.base}`);
+  if (s.screen === "compare") return here("Compare", `${compareLabel(s.compare.target)} with ${compareLabel(s.compare.base)}`);
   if (s.screen === "stashes") return here("Stashes", `${inRepo}on ${s.head ?? "detached HEAD"}`);
   if (s.screen === "oplog") return here("Operation Log", `${inRepo}every step, to undo or restore`);
   if (s.screen === "local") return here("Local History", `${inRepo}every version saved lately, to compare or restore`);

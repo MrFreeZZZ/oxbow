@@ -1,7 +1,6 @@
 <script lang="ts">
   import type { FileChange } from "./types";
   import type { ListKey } from "./changelists";
-  import { tint } from "./format";
   import { BIG_FILE, bytes } from "./unusual";
   import { changeBadge as badge, keysTo } from "./changesList";
   import ChangesCheckbox from "./ChangesCheckbox.svelte";
@@ -9,9 +8,9 @@
 
   import type { ChangesFileEvents } from "./changesList";
 
-  let { file, group, nested, color, on, open, moving, dragging, counted,
+  let { file, group, nested, on, open, moving, dragging, counted,
     partialTitle, share, modClick, events }: {
-    file: FileChange; group: ListKey | "conflicted"; nested: boolean; color: number;
+    file: FileChange; group: ListKey | "conflicted"; nested: boolean;
     on: boolean; open: boolean; moving: boolean; dragging: boolean;
     counted: FileChange | null; partialTitle: string | null;
     share: { runs: number; total: number; title: string } | null; modClick: string;
@@ -23,13 +22,12 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-  class="file"
+  class="file diff-list-row diff-list-file"
   class:open
   class:nested
   class:bin={unstaged}
   class:moving={moving}
   class:ticked={on && !open}
-  style:background={open ? tint(color) : undefined}
   data-group={group}
   data-path={file.path}
   oncontextmenu={events.menu}
@@ -40,7 +38,7 @@
       onclick={(e) => { keysTo(e, ".name"); events.tick(e); }} />
   {/if}
   <button
-    class="name"
+    class="name diff-list-row-control"
     onclick={events.open}
     onpointerdown={events.drag}
     onkeydown={events.keyDown}
@@ -48,7 +46,7 @@
     aria-current={open ? "true" : undefined}
     title={dragging ? undefined : `${file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}${group === "conflicted" ? "" : ` · ${modClick} to select, Shift-click to select a range, drag to ${group === "staged" ? "unstage" : "stage"}`}`}
   >
-    <span class="badge {b.tone}" title={b.title}>{b.text}</span>
+    <span class="diff-list-badge {b.tone}" title={b.title}>{b.text}</span>
     <PathName path={file.path} folders={!nested} />
     {#if share}
       <span class="note partial" title={share.title}>
@@ -85,44 +83,9 @@
   }
   .file {
     position: relative;
-    display: flex;
-    align-items: center;
-    height: 28px;
-    padding: 0 var(--space-2) 0 22px;
-    border-radius: var(--radius-m);
-  }
-  .file.open {
-    box-shadow: inset 0 0 0 1px var(--selection-border);
-  }
-  .file:hover {
-    background: var(--field);
-  }
-  .file.nested {
-    padding-left: 44px;
   }
   .file.ticked {
     background: var(--side-sel);
-  }
-  .name:focus-visible,
-  .name:global(.key-focus) {
-    outline: none;
-  }
-  .name:focus-visible::after,
-  .name:global(.key-focus)::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: var(--radius-s);
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
-    pointer-events: none;
-  }
-  .name:focus-visible::after,
-  .name:global(.key-focus)::after {
-    border-radius: var(--radius-m);
-  }
-  .file.open .name::after {
-    content: none;
   }
   .name {
     flex-grow: 1;
@@ -131,29 +94,6 @@
     display: flex;
     align-items: center;
     gap: 8px;
-  }
-  .badge {
-    width: 16px;
-    height: 16px;
-    border-radius: var(--radius-xs);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: var(--text-caption);
-    font-weight: 700;
-    flex-shrink: 0;
-  }
-  .badge.orange {
-    background: var(--orange-soft);
-    color: var(--orange);
-  }
-  .badge.green {
-    background: var(--green-soft);
-    color: var(--green);
-  }
-  .badge.red {
-    background: var(--red-soft);
-    color: var(--red);
   }
   .note {
     font-size: var(--text-caption);
@@ -216,5 +156,4 @@
     color: var(--red);
   }
   .name { cursor: var(--changes-row-cursor, default); }
-  :global(:root[data-contrast="more"]) .name:focus-visible::after { outline-width: 3px; }
 </style>

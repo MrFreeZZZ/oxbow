@@ -238,6 +238,14 @@ pub(crate) fn partial_hunk(text: &str, selected: &[usize], forward: bool) -> Opt
     let old_last = emitted.iter().rposition(|row| row.0 != '+');
     let new_last = emitted.iter().rposition(|row| row.0 != '-');
     let no_newline = |excluded: char, last: Option<usize>| {
+        // A reverse patch ending in context keeps the retained line's own ending.
+        // A restored old EOF before that context must not move its marker there.
+        if !forward
+            && excluded == '+'
+            && let Some(i) = last.filter(|&i| emitted[i].0 == ' ')
+        {
+            return emitted[i].2;
+        }
         let moved = emitted
             .iter()
             .enumerate()

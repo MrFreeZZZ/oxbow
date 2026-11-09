@@ -104,10 +104,14 @@ fn a_clean_merge_makes_a_merge_commit() {
     assert_eq!(preview.conflicts.unwrap().len(), 0);
     assert_eq!(preview.ours_count, 0);
 
-    let action = merge("feature", MergeMethod::Merge, Some("Merge branch 'feature' into main"));
+    let action = merge(
+        "refs/heads/feature",
+        MergeMethod::Merge,
+        Some("Merge branch 'feature' into main"),
+    );
     assert_eq!(
         repo.plan(&action).unwrap().commands[0].display(),
-        "git merge --no-ff -m 'Merge branch '\\''feature'\\'' into main' feature"
+        "git merge --no-ff -m 'Merge branch '\\''feature'\\'' into main' refs/heads/feature"
     );
     repo.perform(&action).unwrap();
     // A merge commit, even though a fast-forward was possible.
@@ -116,6 +120,47 @@ fn a_clean_merge_makes_a_merge_commit() {
         fx.git(&["log", "-1", "--format=%s"]),
         "Merge branch 'feature' into main"
     );
+}
+
+#[test]
+fn previews_and_merge_methods_use_the_branch_when_a_tag_shares_its_name() {
+    for method in [
+        MergeMethod::Merge,
+        MergeMethod::Squash,
+        MergeMethod::Rebase,
+        MergeMethod::FastForward,
+    ] {
+        let mut fx = Fixture::new();
+        let root = fx.commit("a.txt", "one\n", "Root");
+        fx.git(&["switch", "-q", "-c", "feature"]);
+        let tip = fx.commit("b.txt", "b\n", "Add b");
+        fx.git(&["switch", "-q", "main"]);
+        fx.git(&["tag", "feature", &root]);
+        if method == MergeMethod::Rebase {
+            fx.commit("c.txt", "c\n", "Add c");
+        }
+        let repo = Repo::open(fx.path()).unwrap();
+        assert_eq!(
+            repo.merge_preview("feature")
+                .unwrap()
+                .incoming
+                .first()
+                .map(|c| c.id.as_str()),
+            Some(tip.as_str())
+        );
+        repo.perform(&merge("feature", method, Some("Bring in feature")))
+            .unwrap();
+        assert_eq!(read(&fx, "b.txt"), "b\n");
+        match method {
+            MergeMethod::Merge => {
+                assert_eq!(fx.git(&["rev-parse", "HEAD^2"]), tip);
+                assert_eq!(fx.git(&["log", "-1", "--format=%B"]), "Bring in feature");
+            }
+            MergeMethod::Rebase => assert_eq!(fx.git(&["rev-parse", "HEAD^"]), tip),
+            MergeMethod::FastForward => assert_eq!(fx.git(&["rev-parse", "HEAD"]), tip),
+            MergeMethod::Squash => assert_eq!(fx.git(&["rev-parse", "HEAD^"]), root),
+        }
+    }
 }
 
 #[test]
@@ -331,7 +376,8 @@ fn a_squash_that_conflicts_keeps_the_chosen_message() {
     let repo = Repo::open(fx.path()).unwrap();
     let action = merge("feature", MergeMethod::Squash, Some("Feature in one commit"));
     let plan = repo.plan(&action).unwrap();
-    assert_eq!(plan.commands[0].display(), "git merge --squash feature");
+    let source = fx.git(&["rev-parse", "refs/heads/feature"]);
+    assert_eq!(plan.commands[0].display(), format!("git merge --squash {source}"));
     assert_eq!(plan.commands[1].display(), "git commit -m 'Feature in one commit'");
     repo.perform(&action).unwrap_err();
 
@@ -563,6 +609,70 @@ fn typed_text_is_refused_for_a_file_that_is_not_utf8() {
         std::fs::read(fx.path().join("a.txt"))
             .unwrap()
             .starts_with(b"caf\xe9\n<<<<<<<")
+    );
+}
+
+#[test]
+fn squash_rename_metadata_uses_the_commit_that_actually_conflicted() {
+    let mut fx = Fixture::new();
+    let root = fx.commit("old.txt", "one\ntwo\nthree\nfour\nfive\nsix\n", "Root");
+    fx.git(&["switch", "-q", "-c", "feature"]);
+    fx.git(&["mv", "old.txt", "new.txt"]);
+    let tip = fx.commit("new.txt", "one\nTWO\nthree\nfour\nfive\nsix\n", "Rename and shout");
+    fx.git(&["switch", "-q", "main"]);
+    fx.commit("old.txt", "one\n2\nthree\nfour\nfive\nsix\n", "Number two");
+    fx.git(&["tag", "feature", &root]);
+    let repo = Repo::open(fx.path()).unwrap();
+    repo.perform(&merge(
+        "refs/heads/feature",
+        MergeMethod::Squash,
+        Some("Feature in one commit"),
+    ))
+    .unwrap_err();
+
+    let expected = Some(Renamed {
+        from: "old.txt".into(),
+        side: ConflictSide::Theirs,
+    });
+    assert_eq!(repo.operation().unwrap().unwrap().theirs_label, "feature");
+    assert_eq!(repo.conflict_file("new.txt").unwrap().renamed, expected);
+
+    // The note pins the original source even if the branch moves while resolving.
+    fx.git(&["update-ref", "refs/heads/feature", &root, &tip]);
+    let reopened = Repo::open(fx.path()).unwrap();
+    assert_eq!(reopened.conflict_file("new.txt").unwrap().renamed, expected);
+}
+
+#[test]
+fn a_legacy_squash_note_keeps_gits_original_resolution_of_an_ambiguous_name() {
+    let mut fx = Fixture::new();
+    fx.commit("old.txt", "one\ntwo\nthree\nfour\nfive\nsix\n", "Root");
+    fx.git(&["branch", "feature"]);
+    fx.git(&["switch", "-q", "--detach"]);
+    fx.git(&["mv", "old.txt", "new.txt"]);
+    fx.commit("new.txt", "one\nTWO\nthree\nfour\nfive\nsix\n", "Rename and shout");
+    fx.git(&["tag", "feature"]);
+    fx.git(&["switch", "-q", "main"]);
+    fx.commit("old.txt", "one\n2\nthree\nfour\nfive\nsix\n", "Number two");
+
+    let output = std::process::Command::new("git")
+        .args(["merge", "--squash", "feature"])
+        .current_dir(fx.path())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    fx.write(".git/OXBOW_SQUASH_SOURCE", "feature\n");
+
+    let repo = Repo::open(fx.path()).unwrap();
+    assert_eq!(repo.operation().unwrap().unwrap().theirs_label, "feature");
+    assert_eq!(
+        repo.conflict_file("new.txt").unwrap().renamed,
+        Some(Renamed {
+            from: "old.txt".into(),
+            side: ConflictSide::Theirs,
+        })
     );
 }
 

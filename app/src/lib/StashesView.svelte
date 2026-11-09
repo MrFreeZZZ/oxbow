@@ -3,15 +3,15 @@
   // applies to the checked-out branch, its actions, its files and their diffs.
   import { api, stopped } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
-  import type { CommitDetail, FileChange, FileDiff, History, StashCheck, StashInfo } from "./types";
+  import { untrack } from "svelte";
+  import type { CommitDetail, DiffPage, FileChange, FileDiff, History, StashCheck, StashInfo } from "./types";
   import type { Request } from "./confirm.svelte";
   import { changesUnknown, type BranchContext } from "./branches";
   import { applyRequest, dropRequest, stashBranchRequest, stashMenu, stashName, stashRequest } from "./stash";
   import { filesBrief, filterWords, stashMatches } from "./stashFilter";
-  import { plate, relativeTime, shortId, splitPath, tint } from "./format";
+  import { plate, relativeTime, shortId, tint } from "./format";
   import DiffView from "./DiffView.svelte";
-  import FileBadge from "./FileBadge.svelte";
-  import FoldAll from "./FoldAll.svelte";
+  import ComparisonDiffPane from "./ComparisonDiffPane.svelte";
   import Menu, { type MenuEntry } from "./Menu.svelte";
 
   let {
@@ -45,6 +45,8 @@
   const STASH_COLOR = 10;
   /** Lane of the diff read: a newer read, for another file or setting, stops the older one. */
   const DIFF = "stash-diff";
+  const FULL = "stash-full";
+  const PAGE_LINES = 4000;
 
   /** A stash's files: the tracked ones against the commit it was made on, then the untracked ones. */
   interface Files {
@@ -63,6 +65,11 @@
     whole = wholeByDefault();
   });
   let diffs = $state<FileDiff[]>([]);
+  let shownPath = $state<string | null>(null);
+  let summary = $state<DiffPage | null>(null);
+  let summaryKey = "";
+  let loadingMore = $state(false);
+  let request = 0;
   let error = $state<string | null>(null);
   let menu = $state<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
 
@@ -145,42 +152,86 @@
     });
   });
 
-  // A new stash starts on its first file.
+  // A different stash starts on All Changes.
   $effect(() => {
-    const current = stash?.id;
-    const f = current ? files[current] : undefined;
-    if (!f) return;
-    const all = [...f.tracked, ...f.untracked];
-    if (!path || !all.some((x) => x.path === path)) path = all[0]?.path ?? null;
+    stash?.id;
+    path = null;
+    shownPath = null;
+    diffs = [];
+    api.stopReads([FULL]).catch(() => {});
   });
 
   $effect(() => {
     const current = stash;
-    const f = current ? files[current.id] : undefined;
+    const id = current?.id;
+    const f = id ? files[id] : undefined;
     const file = path;
     const wholeFile = whole;
-    diffSettings();
-    diffs = [];
-    if (!current || !f || !file) return;
-    // An untracked file's diff is in the stash's third commit.
-    const source = f.tracked.some((x) => x.path === file) ? current.id : current.untracked;
-    if (!source) return;
-    // Only the latest read counts: an older answer, or its error, arriving late is dropped.
-    let live = true;
-    api.commitDiff(source, file, wholeFile, false, DIFF).then(
-      (d) => {
-        if (live) diffs = d;
-      },
-      (err) => {
-        if (live && !stopped(err)) error = String(err);
-      },
-    );
-    return () => (live = false);
+    const settings = diffSettings();
+    if (!id || !f) return;
+    untrack(() => {
+      const turn = ++request;
+      const key = JSON.stringify([id, wholeFile, settings]);
+      if (summaryKey !== key) {
+        summary = null;
+        summaryKey = key;
+      }
+      loadingMore = false;
+      error = null;
+      const still = () => request === turn && stash?.id === id && path === file && whole === wholeFile && diffSettings() === settings;
+      const show = (loaded: FileDiff[]) => {
+        shownPath = file;
+        diffs = loaded;
+      };
+      const failed = (err: unknown) => {
+        if (still() && !stopped(err)) error = String(err);
+      };
+      if (file === null) {
+        if (summary) {
+          show(summary.diffs);
+          return;
+        }
+        api.commitDiffPage(id, 0, PAGE_LINES, wholeFile, DIFF).then((page) => {
+          if (!still()) return;
+          summary = page;
+          show(summary.diffs);
+        }, failed);
+      } else {
+        const cached = summary?.diffs.find((d) => d.file.path === file);
+        if (cached) {
+          show([cached]);
+          return;
+        }
+        api.commitDiff(id, file, wholeFile, false, DIFF).then((loaded) => {
+          if (still()) show(loaded);
+        }, failed);
+      }
+    });
   });
 
-  // The diff read stops when the view closes: its answer would go nowhere.
+  function loadMore() {
+    const page = summary;
+    const id = stash?.id;
+    if (!id || !page || page.next === null || loadingMore || path !== null || shownPath !== null) return;
+    const turn = request;
+    const wholeFile = whole;
+    const settings = diffSettings();
+    const still = () => request === turn && stash?.id === id && path === null && whole === wholeFile && diffSettings() === settings;
+    loadingMore = true;
+    api.commitDiffPage(id, page.next, PAGE_LINES, wholeFile, DIFF).then((more) => {
+      if (!still()) return;
+      loadingMore = false;
+      diffs = [...page.diffs, ...more.diffs];
+      summary = { ...more, diffs };
+    }, (err) => {
+      if (!still()) return;
+      loadingMore = false;
+      if (!stopped(err)) error = String(err);
+    });
+  }
+
   $effect(() => () => {
-    api.stopReads([DIFF]).catch(() => {});
+    api.stopReads([DIFF, FULL]).catch(() => {});
   });
 
   function pick(s: StashInfo) {
@@ -203,7 +254,6 @@
     (event.currentTarget as HTMLElement).querySelector<HTMLElement>(`[data-id="${shown[next].id}"]`)?.focus();
   }
 
-  const statusIcon: Record<string, string> = { added: "A", deleted: "D", modified: "M", renamed: "R", copied: "C" };
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 </script>
 
@@ -375,44 +425,35 @@
         {/if}
       </div>
 
-      <div class="scroll">
-        {#if error}<p class="error" role="alert">{error}</p>{/if}
-        {#if f}
-          {@const t = totals(f)}
-          <div class="files">
-            <div class="count">
-              <span class="grow">{plural(t?.count ?? 0, "file")}</span>
-              <span class="add">+{t?.add}</span>
-              <span class="del">−{t?.del}</span>
-              <FoldAll onFold={(fold) => diffView?.setAll(fold)} />
-            </div>
-            <div class="file-list" role="group" aria-label="Stash files">
-              {#each [...f.tracked.map((x) => ({ file: x, untracked: false })), ...f.untracked.map((x) => ({ file: x, untracked: true }))] as { file, untracked } (file.path + untracked)}
-                {@const p = splitPath(file.path)}
-                <button class="file" class:on={path === file.path} aria-current={path === file.path ? "true" : undefined} title={file.path} onclick={() => (path = file.path)}>
-                  <span class="badge {untracked ? 'added' : file.status}">{untracked ? "A" : statusIcon[file.status]}</span>
-                  <span class="grow ellipsis"><span class="dir">{p.dir}</span>{p.name}</span>
-                  {#if untracked}<span class="meta">untracked</span>{/if}
-                  <FileBadge {file} />
-                </button>
-              {/each}
-            </div>
-          </div>
-        {/if}
-        <DiffView
-          bind:this={diffView}
-          foldable
-          {diffs}
-          color={branchColor(stash)}
-          {whole}
-          onToggleWhole={() => (whole = !whole)}
-          loadFull={(d) => {
-            const s = stash!;
-            const source = files[s.id]?.tracked.some((x) => x.path === d.file.path) ? s.id : (s.untracked ?? s.id);
-            return api.commitDiff(source, d.file.path, whole, true).then((all) => all[0]);
-          }}
-        />
-      </div>
+      {#if f}
+        {#key stash.id}
+          {@const id = stash.id}
+          {@const color = branchColor(stash)}
+          {@const untracked = new Set(f.untracked.map((file) => file.path))}
+          {#snippet metadata(file: string)}
+            {#if untracked.has(file)}<span class="meta">untracked</span>{/if}
+          {/snippet}
+          <ComparisonDiffPane files={[...f.tracked, ...f.untracked]} {color} {path} {shownPath} onOpen={(file) => (path = file)}
+            {whole} onToggleWhole={() => (whole = !whole)} totals={totals(f)} {metadata}
+            onFold={shownPath === null && diffs.length > 1 ? (fold) => diffView?.setAll(fold) : undefined}>
+            {#if error}<p class="error" role="alert">{error}</p>{/if}
+            <DiffView
+              bind:this={diffView}
+              foldable={shownPath === null}
+              tools={false}
+              {diffs}
+              {color}
+              {whole}
+              pending={path === null && shownPath === null && summary?.next != null ? summary.files - summary.next : 0}
+              onMore={loadMore}
+              onToggleWhole={() => (whole = !whole)}
+              loadFull={(d) => api.commitDiff(id, d.file.path, whole, true, FULL).then((all) => all[0])}
+            />
+          </ComparisonDiffPane>
+        {/key}
+      {:else if error}
+        <p class="error" role="alert">{error}</p>
+      {/if}
     {/if}
   </section>
   {/if}
@@ -732,59 +773,6 @@
     font-size: var(--text-small);
     color: var(--text2);
   }
-  .scroll {
-    flex-grow: 1;
-    overflow-y: auto;
-    min-height: 0;
-  }
-  .files {
-    margin: var(--space-2) var(--space-3) var(--space-1);
-    padding: var(--space-1) 0 6px;
-  }
-  .count {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 0 8px 6px;
-    font-size: var(--text-caption);
-    font-weight: 600;
-    color: var(--text2);
-  }
-  .file-list { max-height: min(32vh, 260px); overflow-y: auto; overscroll-behavior: contain; }
-  .file {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    height: 26px;
-    padding: 0 8px;
-    border-radius: var(--radius-s);
-  }
-  .file:hover {
-    background: var(--field);
-  }
-  .file.on {
-    background: var(--side-sel);
-  }
-  .badge {
-    width: 16px;
-    height: 16px;
-    border-radius: var(--radius-s);
-    font-size: var(--text-caption);
-    font-weight: 700;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--field);
-    color: var(--text2);
-    flex-shrink: 0;
-  }
-  .badge.added {
-    color: var(--green);
-  }
-  .badge.deleted {
-    color: var(--red);
-  }
   .grow {
     flex-grow: 1;
     min-width: 0;
@@ -794,8 +782,9 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .dir {
+  .meta {
     color: var(--text2);
+    font-size: var(--text-caption);
   }
   .add {
     color: var(--green);
@@ -804,10 +793,6 @@
   .del {
     color: var(--red);
     font-size: var(--text-caption);
-  }
-  .num {
-    min-width: 22px;
-    text-align: right;
   }
   .error {
     color: var(--red);

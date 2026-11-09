@@ -85,7 +85,51 @@ pub struct RefInfo {
     pub tracking: Option<Tracking>,
 }
 
+const LOCAL_BRANCH_PREFIX: &str = "refs/heads/";
+
+/// A local branch as a revision, even when another ref shares its name.
+pub(crate) fn local_branch_ref(name: &str) -> String {
+    format!("{LOCAL_BRANCH_PREFIX}{name}")
+}
+
+/// Unlike Git's refname:short, this always returns the same name for a branch.
+pub(crate) fn local_branch_name(reference: &str) -> Option<&str> {
+    reference.strip_prefix(LOCAL_BRANCH_PREFIX)
+}
+
+/// A branch label without its ref namespace, for display.
+pub(crate) fn branch_label(reference: &str) -> &str {
+    local_branch_name(reference)
+        .or_else(|| reference.strip_prefix("refs/remotes/"))
+        .unwrap_or(reference)
+}
+
 impl Repo {
+    pub(crate) fn has_ref(&self, name: &str) -> bool {
+        self.run(&crate::cli::GitCommand::new(["show-ref", "--verify", "--quiet", name]))
+            .is_ok()
+    }
+
+    /// Older callers pass branch names as start points. Prefer exact branch refs to DWIM,
+    /// while keeping explicit refs and commit IDs as supplied.
+    pub(crate) fn branch_revision(&self, name: &str) -> String {
+        if name.starts_with("refs/")
+            || name == "HEAD"
+            || (matches!(name.len(), 40 | 64) && name.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            return name.to_owned();
+        }
+        let local = local_branch_ref(name);
+        if self.has_ref(&local) {
+            return local;
+        }
+        let remote = format!("refs/remotes/{name}");
+        if self.has_ref(&remote) {
+            return remote;
+        }
+        name.to_owned()
+    }
+
     /// Open the repository that contains `path`.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();

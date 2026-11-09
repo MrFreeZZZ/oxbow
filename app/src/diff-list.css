@@ -1,0 +1,86 @@
+/* File and group rows in Changes and Commit share the same geometry and selection. */
+.diff-list-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: var(--diff-header-height);
+  border-radius: var(--radius-m);
+}
+
+.diff-list-group {
+  flex-shrink: 0;
+  gap: 6px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-caption);
+  font-weight: 600;
+  color: var(--text2);
+}
+
+.diff-list-file {
+  gap: 8px;
+  padding: 0 var(--space-2) 0 22px;
+  text-align: left;
+}
+
+.diff-list-file.nested {
+  padding-left: 44px;
+}
+
+.diff-list-file:where(:hover) {
+  background: var(--field);
+}
+
+.diff-list-row[aria-current="true"],
+.diff-list-row:has(> [aria-current="true"]) {
+  background: var(--selection-fill);
+  box-shadow: inset 0 0 0 1px var(--selection-border);
+}
+
+.diff-list-row[aria-current="true"] {
+  outline: none;
+}
+
+.diff-list-row-control:is(:focus-visible, .key-focus) {
+  outline: none;
+}
+
+.diff-list-row-control:not([aria-current="true"]):is(:focus-visible, .key-focus)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-m);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  pointer-events: none;
+}
+
+:root[data-contrast="more"] .diff-list-row-control:focus-visible::after {
+  outline-width: 3px;
+}
+
+.diff-list-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-xs);
+  font-size: var(--text-caption);
+  font-weight: 700;
+}
+
+.diff-list-badge.orange {
+  background: var(--orange-soft);
+  color: var(--orange);
+}
+
+.diff-list-badge.green {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.diff-list-badge.red {
+  background: var(--red-soft);
+  color: var(--red);
+}

@@ -1,9 +1,11 @@
 // Back and Forward, as in a browser or VS Code: the places visited, each a screen with what was
 // picked on it, so a step back returns to where you were rather than to the commit graph.
 
+import { compareLabel } from "./compareRefs.ts";
 import type { FileMode } from "./nav.svelte";
 import type { SeriesQuery } from "./series";
 import type { CompareMode } from "./types";
+import { wordsOf, type ForgeKind } from "./forge.ts";
 
 /** A screen and what was picked on it. */
 export type Place =
@@ -18,7 +20,7 @@ export type Place =
   | { view: "series"; query: SeriesQuery }
   /** A pull request: of a branch here, or by its number when it is another account's or a fork's;
    *  `forge` "gitlab": the branch's merge request. */
-  | { view: "pull"; branch: string; number?: number | null; forge?: "github" | "gitlab" }
+  | { view: "pull"; branch: string; number?: number | null; forge?: ForgeKind }
   | { view: "reviews" }
   | { view: "stack"; branch: string | null }
   /** Browse Files at This Commit: the commit, the branch or tag it was opened from, the file shown. */
@@ -42,7 +44,7 @@ export function placeKey(p: Place): string {
     case "series":
       return `series\0${p.query.branch}\0${p.query.old}\0${p.query.new}`;
     case "pull":
-      return `pull\0${p.number ?? p.branch}`;
+      return `pull\0${p.forge ?? "github"}\0${p.number ?? p.branch}`;
     case "stack":
       return `stack\0${p.branch ?? ""}`;
     case "browse":
@@ -92,6 +94,67 @@ export function go(trail: Trail, to: number): Trail | null {
 export const canBack = (t: Trail) => t.at > 0;
 export const canForward = (t: Trail) => t.at < t.places.length - 1;
 
+type NavigationTrail = {
+  trail: Trail;
+  scroll: number | null;
+  jumping: boolean;
+  revision: number;
+};
+
+type HistoryPlace = Extract<Place, { view: "history" }>;
+
+export function newNavigationTrail(): NavigationTrail {
+  return { trail: emptyTrail(), scroll: null, jumping: false, revision: 0 };
+}
+
+export function resetNavigationTrail(state: NavigationTrail) {
+  state.trail = emptyTrail();
+  state.scroll = null;
+  state.jumping = false;
+  state.revision++;
+}
+
+function saveScroll(state: NavigationTrail): Trail {
+  return amend(state.trail, (place) => place.view === "history" ? { ...place, scroll: state.scroll } : place);
+}
+
+export function recordPlace(state: NavigationTrail, place: Place) {
+  const current = saveScroll(state);
+  state.trail = visit(current, place.view === "history" ? { ...place, scroll: state.scroll } : place, state.jumping);
+  state.jumping = false;
+}
+
+export function moveToPlace(state: NavigationTrail, index: number, leavingHistory: boolean): Place | null {
+  const next = go(leavingHistory ? saveScroll(state) : state.trail, index);
+  if (!next) return null;
+  state.trail = next;
+  state.jumping = false;
+  state.revision++;
+  return next.places[next.at];
+}
+
+export async function restoreHistoryPosition(
+  state: NavigationTrail,
+  place: HistoryPlace,
+  commit: string | null,
+  graph: {
+    loaded: (id: string) => boolean;
+    load: (id: string) => Promise<boolean>;
+    frame: (restore: () => void) => void;
+    current: () => boolean;
+    scrollTo: (top: number) => void;
+    reveal: (id: string) => void;
+  },
+) {
+  const revision = state.revision;
+  if (commit && !graph.loaded(commit) && !(await graph.load(commit))) return;
+  graph.frame(() => {
+    if (revision !== state.revision || !graph.current()) return;
+    if (place.scroll !== null) graph.scrollTo(place.scroll);
+    else if (commit) graph.reveal(commit);
+  });
+}
+
 /** The places that led here, oldest first, for the path in the header: a run of places with the
  *  same name shows once, by its latest one, and only the last `count` are kept. */
 export function crumbs(trail: Trail, label: (p: Place) => string, count = 3): { label: string; at: number }[] {
@@ -107,9 +170,8 @@ export function crumbs(trail: Trail, label: (p: Place) => string, count = 3): { 
   return out.slice(-count);
 }
 
-/** What a place is called, in the header's path and the list of places. `pullOf` finds the pull
- *  request of a branch, or the one with a number. */
-export function nameOfPlace(p: Place, pullOf: (branch: string, number: number | null) => { number: number } | null | undefined): string {
+/** What a place is called, in the header's path and the list of places. */
+export function nameOfPlace(p: Place, pullOf: (branch: string, forge: ForgeKind) => { number: number } | null | undefined): string {
   switch (p.view) {
     case "history":
       return "History";
@@ -126,8 +188,10 @@ export function nameOfPlace(p: Place, pullOf: (branch: string, number: number | 
     case "series":
       return "Compare Series";
     case "pull": {
-      const pull = pullOf(p.branch, p.number ?? null);
-      return pull ? `PR #${pull.number}` : `Pull Request ${p.branch}`;
+      const forge = p.forge ?? "github";
+      const number = p.number ?? pullOf(p.branch, forge)?.number;
+      if (number != null) return `${forge === "gitlab" ? "MR" : "PR"} ${wordsOf(forge).mark}${number}`;
+      return `${forge === "gitlab" ? "Merge Request" : "Pull Request"} ${p.branch}`;
     }
     case "reviews":
       return "Reviews";
@@ -153,7 +217,7 @@ export function detailOfPlace(
     case "file":
       return p.line ? `${p.path} · Blame` : `${p.path} · ${p.mode === "blame" ? "Blame" : "Changes"}`;
     case "compare":
-      return `${p.target} with ${p.base}`;
+      return `${compareLabel(p.target)} with ${compareLabel(p.base)}`;
     case "series":
       return p.query.branch;
     case "pull":

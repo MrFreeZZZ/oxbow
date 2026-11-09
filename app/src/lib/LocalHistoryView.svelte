@@ -103,7 +103,7 @@
         {problem.waiting === 1 ? "isn’t" : "aren’t"} kept yet. {problem.error}. Local History tries again with the next save and every minute.
       </p>
     {/if}
-    <div class="filter"><FileFilter bind:value={filter} /></div>
+    <div class="filter"><FileFilter bind:value={filter} {color} /></div>
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="list" bind:this={list} onkeydown={keys}>
       {#if error}

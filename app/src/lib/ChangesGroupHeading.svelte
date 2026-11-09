@@ -3,7 +3,7 @@
   import type { ListKey } from "./changelists";
   import type { ChangesGroupEvents } from "./changesList";
   import { keysTo } from "./changesList";
-  import { plate, tint, splitPath } from "./format";
+  import { plate, splitPath } from "./format";
   import ChangesCheckbox from "./ChangesCheckbox.svelte";
 
   let { group, files, total, color, needle, expanded, selected, ticked, picked,
@@ -24,7 +24,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="ghead" class:on={selected} style:background={selected ? tint(color) : undefined}
+<div class="ghead diff-list-row diff-list-group" class:on={selected}
   data-group={group} oncontextmenu={events.menu}>
   <ChangesCheckbox on={all} some={n > 0 && !all} placement="heading"
     label={changelist ? `Select every file of ${changelist.name}` : `Select every ${group} file`}
@@ -34,7 +34,7 @@
     title={foldDisabled ? "Shown while the filter is on" : foldLabel} disabled={foldDisabled} onclick={events.toggle}>
     <svg class="chevron" class:open={expanded} viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" /></svg>
   </button>
-  <button class="gname" onkeydown={events.keyDown} onkeyup={events.keyUp} onclick={events.open}
+  <button class="gname diff-list-row-control" onkeydown={events.keyDown} onkeyup={events.keyUp} onclick={events.open}
     aria-current={selected ? "true" : undefined} aria-expanded={expanded} title={showTitle}>
     {#if changelist}<svg class="icon clmark" style:color={plate(color)} viewBox="0 0 16 16"><path d="M3 3.5h10v9.5l-5-2.6L3 13z" /></svg>{/if}
     <span class="gtitle" class:cltitle={!!changelist} style:color={plate(color)}>{name}</span><span class="n">{needle ? `${files.length} of ${total}` : total}</span>
@@ -65,18 +65,10 @@
 
 <style>
   .ghead {
-    display: flex;
-    align-items: center;
     gap: 2px;
-    height: 30px;
     padding: 0 var(--space-1) 0 2px;
-    border-radius: var(--radius-m);
-    font-size: var(--text-caption);
-    font-weight: 600;
     letter-spacing: 0.05em;
     text-transform: uppercase;
-    color: var(--text2);
-    flex-shrink: 0;
   }
   .gname {
     flex-grow: 1;
@@ -155,32 +147,8 @@
   .n {
     font-weight: 400;
   }
-  .ghead.on {
-    box-shadow: inset 0 0 0 1px var(--selection-border);
-  }
   .ghead {
     position: relative;
-  }
-  .gname:focus-visible,
-  .gname:global(.key-focus) {
-    outline: none;
-  }
-  .gname:focus-visible::after,
-  .gname:global(.key-focus)::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: var(--radius-s);
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
-    pointer-events: none;
-  }
-  .gname:focus-visible::after,
-  .gname:global(.key-focus)::after {
-    border-radius: var(--radius-m);
-  }
-  .ghead.on .gname::after {
-    content: none;
   }
   .chevron {
     width: 10px;
@@ -247,5 +215,4 @@
     }
   }
 
-  :global(:root[data-contrast="more"]) .gname:focus-visible::after { outline-width: 3px; }
 </style>

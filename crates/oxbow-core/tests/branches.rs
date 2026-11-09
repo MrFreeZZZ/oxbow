@@ -80,6 +80,9 @@ fn changes_in_the_way_are_recognized_and_can_be_stashed() {
 #[test]
 fn new_branches_are_created_switched_to_and_published() {
     let (_remote, mut fx) = with_remote();
+    let root = fx.git(&["rev-parse", "HEAD"]);
+    let tip = fx.commit("b.txt", "b\n", "Add b");
+    fx.git(&["tag", "main", &root]);
     let repo = Repo::open(fx.path()).unwrap();
     let create = Action::CreateBranch {
         name: "feature/csv".into(),
@@ -98,10 +101,14 @@ fn new_branches_are_created_switched_to_and_published() {
         .collect();
     assert_eq!(
         displays,
-        ["git switch -c feature/csv main", "git push -u origin feature/csv"]
+        [
+            "git switch -c feature/csv refs/heads/main",
+            "git push -u origin refs/heads/feature/csv:refs/heads/feature/csv"
+        ]
     );
     repo.perform(&create).unwrap();
     assert_eq!(head(&mut fx), "feature/csv");
+    assert_eq!(fx.git(&["rev-parse", "HEAD"]), tip);
     assert_eq!(
         fx.git(&["rev-parse", "--abbrev-ref", "feature/csv@{upstream}"]),
         "origin/feature/csv"
@@ -180,7 +187,7 @@ fn a_new_branch_can_start_at_the_fetched_remote_and_leave_the_files_behind() {
         [
             "git fetch --prune origin",
             "git stash push --include-untracked -m 'Before switching to hotfix/rounding'",
-            "git switch --no-track -c hotfix/rounding origin/main",
+            "git switch --no-track -c hotfix/rounding refs/remotes/origin/main",
         ]
     );
     repo.perform(&create).unwrap();
@@ -196,13 +203,15 @@ fn a_new_branch_can_start_at_the_fetched_remote_and_leave_the_files_behind() {
 }
 
 #[test]
-fn remote_branches_are_checked_out_as_tracking_branches() {
+fn remote_branches_are_checked_out_as_tracking_branches_despite_matching_tags() {
     let (_remote, mut fx) = with_remote();
     fx.git(&["switch", "-q", "-c", "theirs"]);
-    fx.commit("t.txt", "t\n", "Their work");
+    let remote_tip = fx.commit("t.txt", "t\n", "Their work");
     fx.git(&["push", "-q", "origin", "theirs"]);
     fx.git(&["switch", "-q", "main"]);
     fx.git(&["branch", "-q", "-D", "theirs"]);
+    fx.git(&["tag", "origin/theirs"]);
+    assert_ne!(fx.git(&["rev-parse", "refs/tags/origin/theirs"]), remote_tip);
     let repo = Repo::open(fx.path()).unwrap();
 
     let track = Action::Track {
@@ -212,11 +221,15 @@ fn remote_branches_are_checked_out_as_tracking_branches() {
     };
     assert_eq!(
         repo.plan(&track).unwrap().commands[0].display(),
-        "git switch --track origin/theirs"
+        "git switch --track refs/remotes/origin/theirs"
     );
     repo.perform(&track).unwrap();
     assert_eq!(head(&mut fx), "theirs");
-    assert_eq!(fx.git(&["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/theirs");
+    assert_eq!(fx.git(&["rev-parse", "refs/heads/theirs"]), remote_tip);
+    assert_eq!(
+        fx.git(&["rev-parse", "--symbolic-full-name", "@{upstream}"]),
+        "refs/remotes/origin/theirs"
+    );
 }
 
 #[test]
@@ -225,6 +238,8 @@ fn renaming_on_the_remote_publishes_the_new_name_and_drops_the_old() {
     fx.git(&["switch", "-q", "-c", "old-name"]);
     fx.commit("o.txt", "o\n", "Work");
     fx.git(&["push", "-q", "-u", "origin", "old-name"]);
+    fx.git(&["tag", "old-name", "HEAD^"]);
+    fx.git(&["push", "-q", "origin", "refs/tags/old-name"]);
     let repo = Repo::open(fx.path()).unwrap();
 
     repo.perform(&Action::RenameBranch {
@@ -239,6 +254,7 @@ fn renaming_on_the_remote_publishes_the_new_name_and_drops_the_old() {
     assert_eq!(head(&mut fx), "new-name");
     assert_eq!(fx.git(&["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/new-name");
     assert_eq!(fx.git(&["ls-remote", "--heads", "origin", "old-name"]), "");
+    assert!(!fx.git(&["ls-remote", "--tags", "origin", "old-name"]).is_empty());
 }
 
 #[test]
@@ -314,12 +330,28 @@ fn deleting_a_branch_with_its_upstream_counts_commits_only_the_remote_has() {
     assert_eq!(check.lost_with_upstream[0].id, theirs);
     assert_eq!(repo.remote_deletion_check("origin/shared").unwrap()[0].id, theirs);
     assert!(repo.remote_deletion_check("origin/main").unwrap().is_empty());
+    fx.git(&["tag", "shared", "HEAD"]);
+    fx.git(&["push", "-q", "origin", "refs/tags/shared"]);
+    repo.perform(&Action::DeleteBranch {
+        name: "shared".into(),
+        force: true,
+        upstream: Some(RemoteBranch {
+            remote: "origin".into(),
+            branch: "shared".into(),
+        }),
+    })
+    .unwrap();
+    assert!(fx.git(&["ls-remote", "--heads", "origin", "shared"]).is_empty());
+    assert!(!fx.git(&["ls-remote", "--tags", "origin", "shared"]).is_empty());
 }
 
 #[test]
 fn remote_branches_are_deleted_on_the_remote() {
     let (_remote, mut fx) = with_remote();
     fx.git(&["push", "-q", "origin", "main:gone-soon"]);
+    fx.commit("b.txt", "b\n", "Add b");
+    fx.git(&["tag", "gone-soon"]);
+    fx.git(&["push", "-q", "origin", "refs/tags/gone-soon"]);
     let repo = Repo::open(fx.path()).unwrap();
     let delete = Action::DeleteRemoteBranch {
         remote: "origin".into(),
@@ -328,10 +360,11 @@ fn remote_branches_are_deleted_on_the_remote() {
     };
     assert_eq!(
         repo.plan(&delete).unwrap().commands[0].display(),
-        "git push origin --delete gone-soon"
+        "git push origin --delete refs/heads/gone-soon"
     );
     repo.perform(&delete).unwrap();
     assert_eq!(fx.git(&["ls-remote", "--heads", "origin", "gone-soon"]), "");
+    assert!(!fx.git(&["ls-remote", "--tags", "origin", "gone-soon"]).is_empty());
 }
 
 #[test]

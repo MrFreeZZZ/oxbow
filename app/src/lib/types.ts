@@ -130,6 +130,7 @@ export interface RemoteFetch {
 export interface History {
   head: HeadInfo;
   trunk: string | null;
+  trunkRef: string | null;
   /** The protected branches' names and patterns (`*` for any characters): see protect.ts. */
   protected: string[];
   trunkTipRow: number | null;

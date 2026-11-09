@@ -9,9 +9,9 @@ test("the sheet shows the request and commands as the backend runs them", () => 
   assert.deepEqual(labPublishCommands(publish, "https://git.corp", true), [
     `curl -X POST -H "PRIVATE-TOKEN: $GITLAB_TOKEN" https://git.corp/api/v4/projects -d '{"description":"Invoices","name":"billing","namespace_id":31,"path":"billing","visibility":"internal"}'`,
     "git remote add origin https://git.corp/acme/platform/billing.git",
-    "git push -u origin main",
+    "git push -u origin refs/heads/main:refs/heads/main",
   ]);
-  assert.equal(labPublishCommands({ ...publish, description: "" }, "https://git.corp", false)[2], "git push --no-verify -u origin main");
+  assert.equal(labPublishCommands({ ...publish, description: "" }, "https://git.corp", false)[2], "git push --no-verify -u origin refs/heads/main:refs/heads/main");
   assert.equal(labPublishNote(publish), "glab repo create acme/platform/billing --internal makes the same project");
 });
 

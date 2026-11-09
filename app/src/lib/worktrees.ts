@@ -124,7 +124,7 @@ export async function pullWorktreeRequest(ctx: BranchContext, repoPath: string, 
   const state: NewWorktree = {
     branch: name,
     create: true,
-    from: follows ? tracked : `refs/oxbow/${gitlab ? "mr" : "pull"}/${pull.number}/head`,
+    from: follows ? `refs/remotes/${tracked}` : `refs/oxbow/${gitlab ? "mr" : "pull"}/${pull.number}/head`,
     fromLabel: follows ? tracked : gitlab ? `merge request !${pull.number}` : `pull request #${pull.number}`,
     folder: tilde(await freeFolder(history, repoPath, name)),
     edited: false,
@@ -152,6 +152,9 @@ function newWorktreeSheet(ctx: BranchContext, repoPath: string, shown: string[],
   const nextTo = parentOf(path) === parentOf(repoPath.replace(/[/\\]$/, ""));
   const here = history.head.branch;
   const fromName = (state.from && state.fromLabel) || state.from || here || (history.head.commit ? shortId(history.head.commit) : "HEAD");
+  const startBranch = history.refs.find((r) => r.kind === "local" && r.name === state.from)
+    ?? history.refs.find((r) => r.kind === "remote" && r.name === state.from);
+  const start = startBranch ? `refs/${startBranch.kind === "remote" ? "remotes" : "heads"}/${startBranch.name}` : state.from;
 
   let invalid: string | null = null;
   let nameError: string | undefined;
@@ -245,7 +248,7 @@ function newWorktreeSheet(ctx: BranchContext, repoPath: string, shown: string[],
     status: `Creating ${folderName}…`,
     done: state.open ? `Created ${folderName}. It opens in a new window.` : `Created ${folderName}, with ${name} checked out.`,
     after: state.open ? () => void api.openWindow(path).catch((err) => console.error(err)) : undefined,
-    action: { kind: "worktreeAdd", path, branch: name, create: state.create, start: state.create ? state.from : null },
+    action: { kind: "worktreeAdd", path, branch: name, create: state.create, start: state.create ? start : null },
   };
 }
 

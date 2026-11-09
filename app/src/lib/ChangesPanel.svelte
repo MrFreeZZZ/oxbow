@@ -104,6 +104,7 @@
   let sel = $state<{ hunk: Hunk; lines: number[]; anchor: number } | null>(null);
   let menu = $state<{ x: number; y: number; entries: MenuEntry[]; label: string } | null>(null);
   let diffScroller = $state<HTMLDivElement>();
+  let diffHeaderHeight = $state(46);
 
   const staged = $derived(tree?.staged ?? []);
   const unstaged = $derived(tree?.unstaged ?? []);
@@ -831,7 +832,7 @@
    *  first, then as the border over them is dragged. Kept for every window and repository. Room
    *  the lists over them leave empty, the staged files take, up to all of them. */
   const STAGED_KEY = "oxbow.changes.stagedHeight";
-  const ROW = 28;
+  const ROW = 34;
   let stagedHeight = $state(readNumber(STAGED_KEY, 4 * ROW));
   /** In one column, the share of the height the files take over the diff. */
   const SHARE_KEY = "oxbow.changes.filesShare";
@@ -907,7 +908,7 @@
 {#snippet fileRow(file: FileChange, group: List | "conflicted", nested: boolean)}
   {@const other = group === "staged" ? unstagedByPath.get(file.path) : unstagedList(group) ? stagedByPath.get(file.path) : undefined}
   {@const share = unstagedList(group) ? shareOf(lists, file.path, idOf(group)) : null}
-  <ChangesFileRow {file} {group} {nested} {color} on={group !== "conflicted" && ticksOf(group).has(file.path)}
+  <ChangesFileRow {file} {group} {nested} on={group !== "conflicted" && ticksOf(group).has(file.path)}
     open={isOpen(file, group)} moving={dragging?.group === group && dragging.files.includes(file)}
     dragging={!!dragging} counted={lined(file, sideOf(group))} {modClick}
     partialTitle={other ? (group === "staged" ? `Staged in part: ${counts(file, "staged")} go into the commit, ${counts(other, "unstaged")} stay out` : `Staged in part: ${counts(other, "staged")} go into the commit, ${counts(file, "unstaged")} stay out`) : null}
@@ -954,9 +955,9 @@
   </div>
 
   <div class="body" class:stacked bind:clientWidth={bodyWidth} bind:clientHeight={bodyHeight}>
-    <div class="files" bind:this={filesBox} aria-label="Working copy" data-steps use:tabStepper={stepper} class:dragging={!!dragging} style:--changes-row-cursor={dragging ? "grabbing" : null} style:--selection-border={`color-mix(in srgb, ${lane(color)} 40%, transparent)`} style:height={stacked ? `${Math.round(filesShare * 100)}%` : null} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
-      <div class="tools">
-        <div class="filter"><FileFilter bind:value={filter} /></div>
+    <div class="files" bind:this={filesBox} aria-label="Working copy" data-steps use:tabStepper={stepper} class:dragging={!!dragging} style:--changes-row-cursor={dragging ? "grabbing" : null} style:--selection-fill={tint(color)} style:--selection-border={`color-mix(in srgb, ${lane(color)} 40%, transparent)`} style:height={stacked ? `${Math.round(filesShare * 100)}%` : null} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
+      <div class="tools" style:height={!stacked && (shown || lastOpen) ? `${diffHeaderHeight}px` : null}>
+        <div class="filter"><FileFilter bind:value={filter} {color} /></div>
         <div class="segmented icons" role="radiogroup" aria-label="Show files">
           <button role="radio" aria-checked={!listView.folders} class:on={!listView.folders} onclick={() => setFolders(false)} aria-label="List" title="One list of paths">
             <svg class="icon" viewBox="0 0 16 16"><path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01" /></svg>
@@ -974,7 +975,7 @@
         {#if dragging?.group === "staged"}{@render dropRow("Drop to Unstage")}{/if}
         {#if shownConflicted.length}
           <div class="group">
-            <div class="ghead"><span class="gtitle conflicted">Conflicted</span><span class="n">{shownConflicted.length}</span></div>
+            <div class="ghead diff-list-row diff-list-group"><span class="gtitle conflicted">Conflicted</span><span class="n">{shownConflicted.length}</span></div>
             {@render fileList(shownConflicted, "conflicted")}
           </div>
         {/if}
@@ -1044,7 +1045,7 @@
         class:over={dropOn === "staged"}
         data-drop="staged"
         bind:this={stagedBox}
-        style:min-height={stacked || shut.staged ? null : `min(${30 + Math.min(stagedHeight + lastRoom, stagedRows)}px, 45%)`}
+        style:min-height={stacked || shut.staged ? null : `min(calc(var(--diff-header-height) + ${Math.min(stagedHeight + lastRoom, stagedRows)}px), 45%)`}
       >
         <ChangesGroupHeading group={"staged"} files={shownStaged} total={staged.length} {color} {needle}
             expanded={!shut.staged} selected={isAll("staged")} ticked={ticksOf("staged")} picked={pickedStaged}
@@ -1062,7 +1063,7 @@
                 <p class="empty">{needle && staged.length ? "No staged files match the filter." : "Stage files or lines to add them to the next commit."}</p>
               {/if}
               {#if lastFiles.length}
-                <ChangesAmendFiles files={lastFiles.filter(matches)} total={lastFiles.length} opened={lastOpen} {color}
+                <ChangesAmendFiles files={lastFiles.filter(matches)} total={lastFiles.length} opened={lastOpen}
                   onOpen={openLast} onKeyDown={onFilesKey} onKeyUp={onFilesKeyUp} />
               {/if}
             </div>
@@ -1092,6 +1093,7 @@
         bind:whole
         bind:sel
         bind:scroller={diffScroller}
+        bind:headerHeight={diffHeaderHeight}
         {openUnstaged}
         {openStaged}
         {sideFiles}
@@ -1202,6 +1204,9 @@
   .body.stacked {
     flex-direction: column;
   }
+  .body:not(.stacked) {
+    --changes-content-top: var(--space-2);
+  }
   .files {
     flex-shrink: 0;
     min-height: 0;
@@ -1247,7 +1252,7 @@
     flex-grow: 1;
     min-height: 84px;
     overflow-y: auto;
-    padding: 0 var(--space-2) var(--space-1);
+    padding: var(--changes-content-top, 0px) var(--space-2) var(--space-1);
   }
   .group {
     display: flex;
@@ -1258,7 +1263,7 @@
   }
   .group.staged {
     flex-shrink: 1000;
-    min-height: 30px;
+    min-height: var(--diff-header-height);
     padding: 0 var(--space-2);
   }
   .staged-files {
@@ -1331,18 +1336,10 @@
     margin: 0;
   }
   .ghead {
-    display: flex;
-    align-items: center;
     gap: 2px;
-    height: 30px;
     padding: 0 var(--space-1) 0 2px;
-    border-radius: var(--radius-m);
-    font-size: var(--text-caption);
-    font-weight: 600;
     letter-spacing: 0.05em;
     text-transform: uppercase;
-    color: var(--text2);
-    flex-shrink: 0;
   }
   .gtitle {
     font-weight: 700;

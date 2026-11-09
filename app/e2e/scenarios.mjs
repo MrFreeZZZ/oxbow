@@ -88,6 +88,46 @@ export const SCENARIOS = [
     },
   },
   {
+    name: "comparison file focus",
+    async run(ctx) {
+      const app = await ctx.start(repo(`${ctx.dir}/r`, 3));
+      await app.js(async (page) => {
+        const commit = (name) => page.all("[aria-label=Commits] [role=option]", name)[0];
+        (await page.until(() => commit("Commit 3"), "Commit 3")).click();
+        commit("Commit 1").dispatchEvent(new MouseEvent("click", { bubbles: true, ctrlKey: true }));
+        (await page.until(() => document.querySelector("aside.panel .diff-list-group .group-title")?.closest("button"), "comparison All Changes")).click();
+      });
+      const verify = (row, focusSelector = row) => app.js(async (page, row, focusSelector) => {
+        await page.until(() => {
+          const current = document.querySelector('aside.panel [data-steps] [aria-current="true"]');
+          return current?.matches(row) && document.activeElement?.matches(focusSelector);
+        }, row + " with expected focus");
+      }, row, focusSelector);
+      const all = ".diff-list-group";
+      const first = '[title="src/f2.txt"]';
+      const last = '[title="src/f3.txt"]';
+      await app.keys("Ctrl+PageDown");
+      await verify(first);
+      await app.keys("Ctrl+PageUp");
+      await verify(all);
+      await app.keys("Ctrl+PageUp");
+      await verify(last);
+      await app.keys("Ctrl+PageDown");
+      await verify(all);
+      const focus = (selector) => app.js((page, selector) => document.querySelector(selector).focus(), selector);
+      const filter = 'aside.panel input[aria-label="Filter files"]';
+      await focus(filter);
+      await app.keys("f3", "Ctrl+PageDown");
+      await verify(last, filter);
+      await app.keys("Ctrl+PageUp");
+      await verify(all, filter);
+      const diff = 'aside.panel button[aria-label="Previous change"]';
+      await focus(diff);
+      await app.keys("Ctrl+PageDown");
+      await verify(last, diff);
+    },
+  },
+  {
     name: "staging after an outside edit",
     // Pick lines → stage → the file changes outside → stage again; the index has exactly that.
     async run(ctx) {
@@ -302,6 +342,74 @@ export const SCENARIOS = [
       await shows(app, "Couldn’t save");
       const after = await app.js(async (page) => page.all("[role=switch]")[0].getAttribute("aria-checked"));
       assert.equal(after, before, "the switch shows a setting that wasn't saved");
+    },
+  },
+  {
+    name: "repository trust that can't be saved",
+    async run(ctx) {
+      const r = repo(`${ctx.dir}/trust-repo`, 1);
+      git(r, "config", "core.hooksPath", ".githooks");
+      fs.mkdirSync(ctx.config, { recursive: true });
+      const file = path.join(ctx.config, "trusted-repositories.json");
+      const next = `${file}.new`;
+      const trusted = () => JSON.parse(fs.readFileSync(file, "utf8")).map((entry) => entry.path);
+      fs.writeFileSync(file, "[]");
+      fs.writeFileSync(path.join(ctx.config, "last-repository"), r);
+      fs.mkdirSync(next);
+
+      let app = await ctx.start();
+      const click = (label) => app.js((page, label) => page.click(label), label);
+      await click("Trust and Open");
+      await shows(app, "Couldn’t save repository trust.");
+      assert.deepEqual(trusted(), []);
+
+      app = await ctx.start();
+      await click("Open Restricted");
+      const trustOpenRepo = async () => {
+        await click("Restricted");
+        await click("Trust This Repository…");
+        await click("Trust This Repository");
+      };
+      await trustOpenRepo();
+      await shows(app, "Couldn’t save repository trust.");
+      assert.ok(await app.js(async (page) => !!page.button("Restricted")));
+      assert.deepEqual(trusted(), []);
+
+      app = await ctx.start();
+      await click("Open Restricted");
+      fs.rmdirSync(next);
+      await trustOpenRepo();
+      await app.js((page) => page.until(() => !page.button("Restricted"), "trust to take effect"));
+      assert.deepEqual(trusted(), [r]);
+
+      const openSafety = async () => {
+        await app.js((page) => page.until(() => page.all("[aria-label=Commits] [role=option]").length, "the history"));
+        const main = await app.window();
+        await click("Settings");
+        const handles = await eventually(async () => (await app.windows()).length === 2 && (await app.windows()), "the Settings window");
+        await app.switchTo(handles.find((handle) => handle !== main));
+        await click("Safety & Recovery");
+      };
+      app = await ctx.start();
+      await openSafety();
+      fs.mkdirSync(next);
+      await click("Remove");
+      await shows(app, "Couldn’t remove repository trust.");
+      assert.ok(await app.js(async (page) => !!page.button("Remove")));
+      assert.deepEqual(trusted(), [r]);
+
+      app = await ctx.start();
+      await openSafety();
+      fs.rmdirSync(next);
+      await click("Remove");
+      await shows(app, "No trusted repositories with such settings yet");
+      assert.deepEqual(trusted(), []);
+
+      app = await ctx.start();
+      await shows(app, "Trust and Open");
+      await click("Trust and Open");
+      await app.js((page) => page.until(() => page.all("[aria-label=Commits] [role=option]").length, "the history"));
+      assert.deepEqual(trusted(), [r]);
     },
   },
   {

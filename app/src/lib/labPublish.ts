@@ -23,7 +23,7 @@ export function labPublishCommands(publish: GitLabPublish, web: string, hooks: b
   return [
     `curl -X POST -H "PRIVATE-TOKEN: $GITLAB_TOKEN" ${web}/api/v4/projects -d ${quote(JSON.stringify(body))}`,
     `git remote add origin ${web}/${publish.namespace}/${publish.name}.git`,
-    `git push${hooks ? "" : " --no-verify"} -u origin ${publish.branch}`,
+    `git push${hooks ? "" : " --no-verify"} -u origin refs/heads/${publish.branch}:refs/heads/${publish.branch}`,
   ];
 }
 

@@ -597,6 +597,22 @@ fn adding_selected_lines_after_an_unterminated_line_keeps_them_separate() {
             "extra",
             "one\ntwo\nextra\n",
         ),
+        (
+            "one\ntwo",
+            "one\nTWO\nextra",
+            Side::Staged,
+            LineKind::Removed,
+            "two",
+            "one\ntwo\nTWO\nextra",
+        ),
+        (
+            "one\ntwo",
+            "one\nTWO\nextra\n",
+            Side::Staged,
+            LineKind::Removed,
+            "two",
+            "one\ntwo\nTWO\nextra\n",
+        ),
     ] {
         let mut fx = Fixture::new();
         fx.commit("eof.txt", base, "Root");
@@ -639,4 +655,33 @@ fn adding_selected_lines_after_an_unterminated_line_keeps_them_separate() {
         assert_eq!(output.stdout, expected.as_bytes(), "{side:?}: {pick}");
         assert_eq!(std::fs::read(fx.path().join("eof.txt")).unwrap(), edited.as_bytes());
     }
+}
+
+#[test]
+fn discarding_a_picked_removal_preserves_the_final_newline() {
+    let mut fx = Fixture::new();
+    fx.commit("eof.txt", "one\ntwo", "Root");
+    fx.write("eof.txt", "one\nTWO\nextra\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    let hunk = repo
+        .working_diff("eof.txt", Side::Unstaged, false)
+        .unwrap()
+        .hunks
+        .remove(0);
+    let picked = hunk
+        .lines
+        .iter()
+        .position(|line| line.kind == LineKind::Removed && line.text == "two")
+        .unwrap();
+    repo.perform(&Action::DiscardHunk {
+        path: "eof.txt".into(),
+        header: hunk.header,
+        check: hunk.check,
+        lines: Some(vec![picked]),
+    })
+    .unwrap();
+    assert_eq!(
+        std::fs::read(fx.path().join("eof.txt")).unwrap(),
+        b"one\ntwo\nTWO\nextra\n"
+    );
 }

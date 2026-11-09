@@ -50,6 +50,7 @@
   import { BIG_FILE } from "./lfs.svelte";
   import { bytes, imageType, isSvg } from "./unusual";
   import { hscroll, widestLine } from "./hscroll";
+  import { changePreview } from "./diffScroll";
 
   let {
     diffs,
@@ -875,10 +876,12 @@
             {@render hunkLines(diff, piece.hunk, partOf(piece), piece.hunk.lines.length, language, !!picker && diff.hunks.some((h) => picker.enabled(h)), [])}
           {:else}
             {@const hunk = diff.hunks[piece.h]}
-            {#if hunkBar}{@render hunkBar(diff, hunk)}{/if}
             {@const picking = !!picker?.enabled(hunk)}
             {@const picked = picking ? picker!.picked(hunk) : []}
+            <div data-diff-change={`${diff.file.path} · Old lines ${hunk.oldStart}–${hunk.oldStart + Math.max(0, hunk.oldLines - 1)} · New lines ${hunk.newStart}–${hunk.newStart + Math.max(0, hunk.newLines - 1)}`} data-diff-preview={changePreview(hunk)}>
+            {#if hunkBar}{@render hunkBar(diff, hunk)}{/if}
             {@render hunkLines(diff, hunk, piece.h, cut ? cut.lines[piece.h] : hunk.lines.length, language, picking, picked)}
+            </div>
           {/if}
         {/each}
         {#if !wrap}<div class="hbar" aria-hidden="true"><div></div></div>{/if}
@@ -899,7 +902,7 @@
 
 <style>
   .file {
-    padding: 0 var(--space-3) var(--space-4);
+    padding: 0 var(--diff-file-inset) var(--space-4);
   }
   .file.shut {
     padding-bottom: 0;
@@ -941,7 +944,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    height: 34px;
+    height: var(--diff-header-height);
     padding: 0 var(--space-1) 0 var(--space-3);
     border: 1px solid transparent;
     border-radius: var(--radius-m);

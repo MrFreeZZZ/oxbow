@@ -400,8 +400,12 @@ impl Repo {
                             method: MergeMethod::Squash,
                             message,
                         } = action
+                            && let [git, option, source] = command.args.as_slice()
+                            && git == "merge"
+                            && option == "--squash"
+                            && self.conflicted_paths().is_ok_and(|p| !p.is_empty())
                         {
-                            self.remember_squash(branch, message.as_deref());
+                            self.remember_squash(branch, source, message.as_deref());
                         }
                         if let Action::StashApply { id, pop, .. } = action
                             && self.conflicted_paths().is_ok_and(|p| !p.is_empty())

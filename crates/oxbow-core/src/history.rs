@@ -76,6 +76,8 @@ pub struct History {
     pub head: HeadInfo,
     /// Name of the branch drawn as the trunk in column 0.
     pub trunk: Option<String>,
+    /// Full Git ref of the trunk, including its branch namespace.
+    pub trunk_ref: Option<String>,
     /// The protected branches' names and patterns: see [`crate::protect`].
     pub protected: Vec<String>,
     /// Row of the trunk's newest commit. Rows above it are newer commits on other branches.
@@ -528,6 +530,7 @@ struct Rows {
     runs: Vec<Run>,
     lead_ins: Vec<LeadIn>,
     trunk: Option<String>,
+    trunk_ref: Option<String>,
     trunk_tip_row: Option<usize>,
     truncated: bool,
     loaded: usize,
@@ -951,6 +954,7 @@ impl Repo {
         Ok(History {
             head,
             trunk: built.trunk.clone(),
+            trunk_ref: built.trunk_ref.clone(),
             trunk_tip_row: built.trunk_tip_row,
             lead_ins: if same { Vec::new() } else { built.lead_ins.clone() },
             previous_branch,
@@ -1340,6 +1344,7 @@ impl Repo {
             runs,
             lead_ins,
             trunk: trunk_ref.map(|r| r.name.clone()),
+            trunk_ref: trunk_ref.and_then(full_ref),
             trunk_tip_row,
             truncated,
             loaded,
@@ -1494,7 +1499,7 @@ pub const PRODUCTION_KEY: &str = "oxbow.productionBranch";
 /// Full ref name of a branch: `refs/heads/main`, `refs/remotes/origin/main`.
 pub fn full_ref(r: &RefInfo) -> Option<String> {
     match r.kind {
-        RefKind::Local => Some(format!("refs/heads/{}", r.name)),
+        RefKind::Local => Some(crate::repo::local_branch_ref(&r.name)),
         RefKind::Remote => Some(format!("refs/remotes/{}", r.name)),
         _ => None,
     }

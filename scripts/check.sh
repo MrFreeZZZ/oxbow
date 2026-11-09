@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs the checks quietly: each one's full output goes to target/check/<name>.log, and only a
 # one-line summary, or the errors of the checks that failed, reach the terminal.
-#   scripts/check.sh            the checks for what changed since main (auto)
+#   scripts/check.sh            the checks for what changed since preview (auto)
 #   scripts/check.sh ui         Svelte front end: npm test, svelte-check
 #   scripts/check.sh core       oxbow-core: cargo fmt, clippy, cargo test -p oxbow-core
 #   scripts/check.sh tauri      app/src-tauri: cargo fmt, clippy, cargo test -p oxbow-app
@@ -15,11 +15,15 @@ logs="$root/target/check"
 mkdir -p "$logs"
 cd "$root"
 
-# What changed against main: committed on this branch, staged, unstaged and untracked.
+# What changed against preview: committed on this branch, staged, unstaged and untracked.
+# Older clones without preview fall back to main.
 changed_files() {
   # The newer fork point of the two, as either ref can be behind in a fresh clone.
   local bases base
-  bases=$(for ref in origin/main main; do git merge-base HEAD "$ref" 2>/dev/null; done)
+  bases=$(for ref in refs/remotes/origin/preview refs/heads/preview; do git merge-base HEAD "$ref" 2>/dev/null; done)
+  if [ -z "$bases" ]; then
+    bases=$(for ref in refs/remotes/origin/main refs/heads/main; do git merge-base HEAD "$ref" 2>/dev/null; done)
+  fi
   [ -n "$bases" ] || return 1
   base=$(git merge-base --independent $bases | head -n 1)
   { git diff --name-only "$base"; git ls-files --others --exclude-standard; } | sort -u
@@ -34,7 +38,7 @@ if [ ${#groups[@]} -eq 0 ] || [ "${groups[0]}" = auto ]; then
     grep -qE '^(app/src-tauri/|Cargo\.|rust-toolchain\.toml)' <<<"$files" && groups+=(tauri)
     grep -qE '^(app/src-tauri/update-channels\.json|\.github/workflows/|scripts/(check\.sh|release\.|publish-release\.|updater-test\.))' <<<"$files" && groups+=(release)
     if [ ${#groups[@]} -eq 0 ]; then
-      echo "check: nothing to check (no app or core files changed since main)"
+      echo "check: nothing to check (no relevant files changed against the development base)"
       exit 0
     fi
   else

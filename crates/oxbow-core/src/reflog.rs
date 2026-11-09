@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use crate::cli::GitCommand;
 use crate::error::Result;
-use crate::repo::Repo;
+use crate::repo::{Repo, local_branch_name};
 
 /// How many entries of `HEAD`'s reflog are read; it moves on every checkout.
 const HEAD_ENTRIES: usize = 1000;
@@ -55,17 +55,16 @@ pub struct ReflogEntry {
 impl Repo {
     /// The commits `HEAD`'s and the local branches' reflogs point at, newest first, each once.
     pub fn reflog_entries(&self) -> Result<Vec<ReflogEntry>> {
-        let mut sources = vec![("HEAD".to_owned(), HEAD_ENTRIES)];
-        let branches = self.run(&GitCommand::new([
-            "for-each-ref",
-            "--format=%(refname:short)",
-            "refs/heads",
-        ]))?;
-        sources.extend(branches.stdout.lines().map(|name| (name.to_owned(), BRANCH_ENTRIES)));
+        let branches = self.run(&GitCommand::new(["for-each-ref", "--format=%(refname)", "refs/heads"]))?;
+        let branches = branches
+            .stdout
+            .lines()
+            .filter_map(|reference| Some((reference, local_branch_name(reference)?, BRANCH_ENTRIES)));
+        let sources = std::iter::once(("HEAD", "HEAD", HEAD_ENTRIES)).chain(branches);
 
         let mut newest: HashMap<String, ReflogEntry> = HashMap::new();
-        for (source, max) in sources {
-            for entry in self.read_reflog(&source, max) {
+        for (reference, source, max) in sources {
+            for entry in self.read_reflog(reference, source, max) {
                 // A branch's entry beats `HEAD`'s for the same move: it says where the work was.
                 let better = newest.get(&entry.id).is_none_or(|seen| {
                     entry.time > seen.time || (entry.time == seen.time && seen.source == "HEAD" && source != "HEAD")
@@ -83,19 +82,14 @@ impl Repo {
     }
 
     /// The entries of one reflog, newest first; empty when the ref has none.
-    fn read_reflog(&self, source: &str, max: usize) -> Vec<ReflogEntry> {
-        let reference = if source == "HEAD" {
-            "HEAD".to_owned()
-        } else {
-            format!("refs/heads/{source}")
-        };
+    fn read_reflog(&self, reference: &str, source: &str, max: usize) -> Vec<ReflogEntry> {
         let Ok(out) = self.run(&GitCommand::new([
             "reflog".to_owned(),
             "show".to_owned(),
             "--date=unix".to_owned(),
             "--format=%H%x00%gd%x00%gs%x00%s%x00%an%x00%ae%x00%P".to_owned(),
             format!("--max-count={max}"),
-            reference,
+            reference.to_owned(),
             "--".to_owned(),
         ])) else {
             return Vec::new();

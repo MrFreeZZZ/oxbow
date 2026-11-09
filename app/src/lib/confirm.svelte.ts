@@ -8,7 +8,7 @@ import { cannotRestore, oplog, revertInsteadRequest, undoRequest } from "./oplog
 import { prefs } from "./prefs.svelte";
 import { addLine, cutLine } from "./liveLines";
 import { errorLine } from "./reads";
-import type { Action, ActionEvent, Failure, FixStep, GitCommand, NotKept, SecretFinding } from "./types";
+import type { Action, ActionEvent, Failure, FixStep, GitCommand, NotKept, RefInfo, SecretFinding } from "./types";
 import type { BranchPrefix } from "./branchPrefixes";
 
 /** What a toast reports: an action done, a note, something to look at, or a failure. */
@@ -174,8 +174,8 @@ export interface Field {
   label: string;
   /** `multiline` for a commit message: Return makes a new line, ⌘Return runs the action. */
   /** `focus` puts the cursor in it when it appears, e.g. the search box Other… opens. */
-  /** `prefixes`: a new branch's name, one of these prefixes a pop-up at the start of the box. */
-  text?: { value: string; placeholder?: string; multiline?: boolean; focus?: boolean; prefixes?: BranchPrefix[]; edit: (value: string) => Request };
+  /** `prefixes` supplies the prefix picker. `branchRefs` enables existing branch suggestions. */
+  text?: { value: string; placeholder?: string; multiline?: boolean; focus?: boolean; prefixes?: BranchPrefix[]; branchRefs?: RefInfo[]; edit: (value: string) => Request };
   /** `off` says why a chip can't be picked. */
   chips?: { label: string; on: boolean; mono?: boolean; off?: string; pick: () => Request | Promise<Request> }[];
   note?: string;

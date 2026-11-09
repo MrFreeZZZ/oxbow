@@ -16,12 +16,7 @@
 .search-control:focus-within,
 .search-control.search-menu-open {
   background: var(--win);
-  box-shadow: var(--focus-ring);
-}
-
-.search-control:focus-within > input::placeholder,
-.search-control.search-menu-open > input::placeholder {
-  color: transparent;
+  box-shadow: var(--search-focus-shadow, var(--focus-ring));
 }
 
 .search-control > svg.icon {

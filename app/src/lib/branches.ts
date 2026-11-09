@@ -348,13 +348,12 @@ function newBranchSheet(ctx: BranchContext, bases: Base[], list: BranchPrefix[],
   const action: Action = {
     kind: "createBranch",
     name,
-    start: fetching && upstream ? upstream : base.ref,
+    start: fetching && upstream ? `refs/remotes/${upstream}` : base.ref && base.key !== "commit" ? `refs/heads/${base.ref}` : base.ref,
     switch: state.switchTo,
     publish: state.publish && remote ? remote : null,
     fetch: fetching && tracking ? tracking.remote : null,
     stash: leaving,
   };
-  const similar = !clash && !problem ? similarNote(history, name) : null;
   return {
     title: "New Branch",
     body,
@@ -363,9 +362,9 @@ function newBranchSheet(ctx: BranchContext, bases: Base[], list: BranchPrefix[],
     fields: [
       {
         label: "Name",
-        text: { value: state.name, placeholder: "csv-export", prefixes: list, edit: (value) => again({ name: value }) },
+        text: { value: state.name, placeholder: "csv-export", prefixes: list, branchRefs: history.refs, edit: (value) => again({ name: value }) },
         error: !onlyPrefix(name) && problem ? problem : undefined,
-        note: clash ? `${remote} already has ${name}. To work on it, use Check Out as Local Branch on ${remote}/${name} in the sidebar.` : (similar ?? undefined),
+        note: clash ? `${remote} already has ${name}. To work on it, use Check Out as Local Branch on ${remote}/${name} in the sidebar.` : undefined,
       },
       {
         label: "From",

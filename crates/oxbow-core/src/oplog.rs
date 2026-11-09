@@ -27,7 +27,7 @@ use crate::edit::ResetMode;
 use crate::error::{Error, Result};
 use crate::fix::Fix;
 use crate::operation::{MergeMethod, OperationKind};
-use crate::repo::Repo;
+use crate::repo::{Repo, branch_label};
 
 /// The ref whose reflog keeps the entries' objects alive.
 pub const OPLOG_REF: &str = "refs/oxbow/oplog";
@@ -1170,12 +1170,15 @@ impl Repo {
             Action::RenameBranch { from, to, .. } => ("branch", format!("Rename {from} to {to}")),
             Action::DeleteBranch { name, .. } => ("drop", format!("Delete branch {name}")),
             Action::DeleteRemoteBranch { remote, branch, .. } => ("drop", format!("Delete {branch} on {remote}")),
-            Action::Merge { branch, method, .. } => match method {
-                MergeMethod::Merge => ("merge", format!("Merge {branch} into {here}")),
-                MergeMethod::Squash => ("merge", format!("Squash {branch} into {here}")),
-                MergeMethod::Rebase => ("rebase", format!("Rebase {here} onto {branch}")),
-                MergeMethod::FastForward => ("merge", format!("Fast-forward {here} to {branch}")),
-            },
+            Action::Merge { branch, method, .. } => {
+                let branch = branch_label(branch);
+                match method {
+                    MergeMethod::Merge => ("merge", format!("Merge {branch} into {here}")),
+                    MergeMethod::Squash => ("merge", format!("Squash {branch} into {here}")),
+                    MergeMethod::Rebase => ("rebase", format!("Rebase {here} onto {branch}")),
+                    MergeMethod::FastForward => ("merge", format!("Fast-forward {here} to {branch}")),
+                }
+            }
             Action::Continue { .. } => ("merge", "Continue after conflicts".to_owned()),
             Action::Abort => ("undo", "Abort the operation".to_owned()),
             Action::Skip => ("rebase", "Skip a commit".to_owned()),

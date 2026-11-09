@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { compareHead, compareRef } from "./compareRefs";
   import { lens } from "./lens.svelte";
   import { oplog } from "./oplog.svelte";
   import { shortcut } from "./keys";
@@ -128,7 +129,7 @@
   const headMr = $derived(history.head.branch && github.mrProject ? github.mergeRequestOf(history.head.branch) : null);
 
   const headName = $derived(history.head.branch ?? "HEAD");
-  const compareItem = (name: string): MenuEntry => ({ kind: "item", label: `Compare with ${headName}`, icon: menuIcons.compare, run: () => onCompare(headName, name) });
+  const compareItem = (kind: "local" | "remote" | "tag", name: string): MenuEntry => ({ kind: "item", label: `Compare with ${headName}`, icon: menuIcons.compare, run: () => onCompare(compareHead(history.head.branch), compareRef(kind, name)) });
   /** Browse Files at the commit a branch or tag points to, named by it. */
   const browseItem = (ref: RefInfo): MenuEntry => ({ kind: "item", label: "Browse Files", icon: menuIcons.folder, run: () => nav.openBrowse(ref.target, ref.name) });
 
@@ -360,8 +361,8 @@
     if (elsewhere && !elsewhere.missing) entries.push(item(`Open ${elsewhere.name}`, menuIcons.open, () => openWorktree(elsewhere)));
     else if (!isHead) entries.push(item("Check Out", menuIcons.checkout, () => run(switchRequest(ctx, ref.name))));
     if (!isHead && !elsewhere) entries.push(item("Open in New Worktree…", menuIcons.folder, () => run(newWorktreeRequest(ctx, repo.path, ref.name))));
-    if (!isHead) entries.push(...mergeItems(ref.name));
-    if (!isHead) entries.push(compareItem(ref.name));
+    if (!isHead) entries.push(...mergeItems(ref));
+    if (!isHead) entries.push(compareItem("local", ref.name));
     entries.push(browseItem(ref));
     if (!upstreamOf(ref) && history.defaultRemote) {
       entries.push({ kind: "sep" });
@@ -418,15 +419,14 @@
   }
 
   /** Merge and Rebase items for a branch other than the checked-out one. */
-  function mergeItems(name: string): MenuEntry[] {
+  function mergeItems(ref: RefInfo): MenuEntry[] {
     const here = history.head.branch ?? "HEAD";
     // A merge in progress has to be finished first; the banner says so.
     if (history.operation) return [];
     // Not a rebase that would rewrite pushed commits of a protected branch.
-    const tip = history.refs.find((r) => (r.kind === "local" || r.kind === "remote") && r.name === name)?.target ?? null;
     return [
-      { kind: "item", label: `Merge into ${here}…`, icon: menuIcons.merge, run: () => run(mergeRequest(ctx, name)) },
-      ...(history.head.branch && !dropsPushed(history, tip) ? [{ kind: "item", label: `Rebase ${here} onto ${name}…`, icon: menuIcons.rebase, run: () => run(mergeRequest(ctx, name, "rebase")) } as MenuEntry] : []),
+      { kind: "item", label: `Merge into ${here}…`, icon: menuIcons.merge, run: () => run(mergeRequest(ctx, ref)) },
+      ...(history.head.branch && !dropsPushed(history, ref.target) ? [{ kind: "item", label: `Rebase ${here} onto ${ref.name}…`, icon: menuIcons.rebase, run: () => run(mergeRequest(ctx, ref, "rebase")) } as MenuEntry] : []),
     ];
   }
 
@@ -437,8 +437,8 @@
     const entries: MenuEntry[] = [{ kind: "header", label: `${ref.name}${author ? ` · ${author}` : ""}` }];
     if (!taken) entries.push({ kind: "item", label: "Check Out as Local Branch", icon: menuIcons.checkout, run: () => run(trackRequest(ctx, ref, author)) });
     else entries.push({ kind: "note", label: `A local branch ${short} already exists, so it can’t be checked out under that name.` });
-    entries.push(...mergeItems(ref.name));
-    entries.push(compareItem(ref.name));
+    entries.push(...mergeItems(ref));
+    entries.push(compareItem("remote", ref.name));
     entries.push(browseItem(ref));
     entries.push({ kind: "item", label: "Copy Name", icon: menuIcons.copy, run: () => copy(ref.name) });
     entries.push({ kind: "sep" });
@@ -466,7 +466,7 @@
       entries.push({ kind: "note", label: "HEAD goes to the tagged commit, on no branch." });
     }
     if (row) entries.push({ kind: "item", label: `New Branch from ${ref.name}…`, icon: menuIcons.branch, run: () => run(newBranchRequest(ctx, undefined, row)) });
-    entries.push(compareItem(ref.name));
+    entries.push(compareItem("tag", ref.name));
     entries.push(browseItem(ref));
     const remote = history.defaultRemote;
     if (remote && isLocalTag(ctx, ref.name)) {

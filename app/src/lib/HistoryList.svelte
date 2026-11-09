@@ -316,8 +316,20 @@
   /** Scroll to where the list was, after Back or Forward. */
   export function scrollTo(top: number) {
     anchor = null;
-    if (viewport) viewport.scrollTop = top;
+    if (!viewport) return;
+    viewport.scrollTop = top;
+    syncScroll();
   }
+
+  function syncScroll() {
+    scrollTop = viewport?.scrollTop ?? 0;
+    onScroll?.(scrollTop);
+  }
+
+  // A remounted graph starts with its own position, even if no scroll event fires.
+  $effect(() => {
+    if (viewport) untrack(syncScroll);
+  });
 
   /** Hands the keyboard to the list, as Tab from the details panel or opening History do. */
   export function focus() {
@@ -423,14 +435,11 @@
 <div class="wrap">
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div
-    class="viewport"
+    class="viewport thin-scroll"
     bind:this={viewport}
     bind:clientHeight={height}
     bind:clientWidth={width}
-    onscroll={() => {
-      scrollTop = viewport?.scrollTop ?? 0;
-      onScroll?.(scrollTop);
-    }}
+    onscroll={syncScroll}
     onkeydown={onKey}
     tabindex="0"
     role="listbox"

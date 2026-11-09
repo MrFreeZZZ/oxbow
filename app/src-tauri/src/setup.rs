@@ -128,7 +128,7 @@ pub(crate) async fn clone_repo(
     )
     .await?;
     // A clone brings neither hooks nor settings along: what it has, the user's templates gave it.
-    trusted::add(&app, Path::new(&path), &[]);
+    trusted::remember(&app, Path::new(&path), &[]);
     Ok(path)
 }
 
@@ -155,6 +155,6 @@ pub(crate) async fn create_repo(app: AppHandle, options: oxbow_core::NewRepoOpti
         move || oxbow_core::setup::create_repo(&options),
     )
     .await?;
-    trusted::add(&app, Path::new(&path), &[]);
+    trusted::remember(&app, Path::new(&path), &[]);
     Ok(CreatedRepo { path, secrets })
 }

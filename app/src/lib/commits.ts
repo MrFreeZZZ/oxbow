@@ -2,11 +2,14 @@
 // revert it, reset the branch to it, undo the last commit, and edit the last commit's message.
 
 import { api } from "./api";
+import { ancestors, reachable } from "./historyAncestry";
 import type { Part, Recovery, Request } from "./confirm.svelte";
 import { changesUnknown, type BranchContext } from "./branches";
 import { nothingToPick, stoppedOnConflicts } from "./merge";
 import type { Failure, History, HistoryRow, ResetMode } from "./types";
 import { shortId } from "./format";
+
+export { ancestors } from "./historyAncestry";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const chip = (ctx: BranchContext, name: string): Part => ({ branch: name, color: ctx.colorOf(name) });
@@ -14,23 +17,6 @@ const chip = (ctx: BranchContext, name: string): Part => ({ branch: name, color:
 /** The checked-out branch, or HEAD when it is detached. */
 const hereName = (ctx: BranchContext) => ctx.history.head.branch ?? "HEAD";
 const here = (ctx: BranchContext): Part => (ctx.history.head.branch ? chip(ctx, ctx.history.head.branch) : { code: "HEAD" });
-
-/** The commits at `starts` and every commit before them, as far as History has loaded. */
-function reachable(history: History, starts: string[]): Set<string> {
-  const byId = new Map(history.rows.map((r) => [r.id, r]));
-  const seen = new Set<string>();
-  const stack = [...starts];
-  while (stack.length) {
-    const next = stack.pop()!;
-    if (seen.has(next)) continue;
-    seen.add(next);
-    stack.push(...(byId.get(next)?.parents ?? []));
-  }
-  return seen;
-}
-
-/** `id` and every commit before it. */
-export const ancestors = (history: History, id: string | null) => reachable(history, id ? [id] : []);
 
 /** Commits of the checked-out branch that a reset to `target` takes off it, newest first. */
 function leaving(history: History, target: string): HistoryRow[] {

@@ -839,7 +839,11 @@ fn publishing_makes_a_project_in_a_namespace_then_pushes_there() {
         shown[0],
         "git remote add origin https://git.corp/acme/platform/billing.git"
     );
-    assert!(shown[1].ends_with("-u origin main"), "{}", shown[1]);
+    assert!(
+        shown[1].ends_with("-u origin refs/heads/main:refs/heads/main"),
+        "{}",
+        shown[1]
+    );
 }
 
 fn leak_review(text: String) -> &'static str {

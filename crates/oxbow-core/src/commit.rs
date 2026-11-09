@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -464,7 +465,12 @@ impl Repo {
             .find(|s| s.id == id)
             .and_then(|s| s.untracked);
         if let Some(untracked) = untracked {
-            out.extend(tree_changes(repo, None, &from_tree(repo, &untracked)?)?);
+            let untracked = tree_changes(repo, None, &from_tree(repo, &untracked)?)?;
+            // A staged deletion can leave an untracked file at the same path.
+            // Use the untracked version for the list, counts and every diff read.
+            let paths: HashSet<_> = untracked.iter().map(|change| change.file.path.as_str()).collect();
+            out.retain(|change| !paths.contains(change.file.path.as_str()));
+            out.extend(untracked);
         }
         Ok(out)
     }

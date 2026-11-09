@@ -1,6 +1,8 @@
 mod support;
 
-use oxbow_core::{Action, ActionEvent, ConflictSide, DiffContext, OperationKind, Repo};
+use std::sync::atomic::AtomicBool;
+
+use oxbow_core::{Action, ActionEvent, ConflictSide, DiffContext, FileStatus, OperationKind, Repo};
 use support::Fixture;
 
 fn read(fx: &Fixture, file: &str) -> String {
@@ -64,6 +66,60 @@ fn a_stash_commit_lists_its_untracked_files_too() {
     let diff = repo.commit_diff(&id, Some("new.txt"), DiffContext::Compact).unwrap();
     assert_eq!(diff.len(), 1);
     assert_eq!(diff[0].file.additions, 1);
+}
+
+#[test]
+fn a_stash_shows_the_untracked_version_of_a_path_once() {
+    let mut fx = Fixture::new();
+    fx.commit("example.txt", "original\n", "Root");
+    fx.commit("tracked.txt", "before\n", "Add tracked file");
+    fx.git(&["rm", "example.txt"]);
+    fx.write("example.txt", "replacement\n");
+    fx.write("tracked.txt", "after\n");
+    fx.git(&["stash", "push", "-u"]);
+
+    let repo = Repo::open(fx.path()).unwrap();
+    let stash = &repo.stashes().unwrap()[0];
+    let id = &stash.id;
+    let cancel = AtomicBool::new(false);
+    let quick = repo.commit_detail_with(id, None, &cancel).unwrap();
+    let paths: Vec<_> = quick.files.iter().map(|file| file.path.as_str()).collect();
+    assert_eq!(paths, ["tracked.txt", "example.txt"]);
+    assert_eq!(quick.files[1].status, FileStatus::Added);
+
+    let first = repo.commit_diff_page(id, 0, 1, DiffContext::Compact, &cancel).unwrap();
+    assert_eq!(first.files, quick.files.len());
+    assert_eq!(first.diffs[0].file.path, paths[0]);
+    assert_eq!(first.next, Some(1));
+    let next = first.next.unwrap();
+    let second = repo
+        .commit_diff_page(id, next, 1, DiffContext::Compact, &cancel)
+        .unwrap();
+    assert_eq!(second.files, first.files);
+    assert_eq!(second.next, None);
+    assert_eq!(second.diffs.len(), 1);
+    assert_eq!(second.diffs[0].file.path, paths[1]);
+
+    let counted = repo.commit_detail_with(id, Some(next), &cancel).unwrap();
+    let replacement = &counted.files[next];
+    assert_eq!(replacement.path, paths[1]);
+    assert_eq!(replacement.status, FileStatus::Added);
+    assert_eq!((replacement.additions, replacement.deletions), (1, 0));
+    assert_eq!(repo.commit_detail(id).unwrap().files.len(), paths.len());
+
+    let file = repo.commit_diff(id, Some(paths[1]), DiffContext::Compact).unwrap();
+    let untracked = repo
+        .commit_diff(
+            stash.untracked.as_deref().unwrap(),
+            Some(paths[1]),
+            DiffContext::Compact,
+        )
+        .unwrap();
+    for diff in [&second.diffs, &file, &untracked] {
+        assert_eq!(diff.len(), 1);
+        assert_eq!(diff[0].file.status, FileStatus::Added);
+        assert_eq!(diff[0].hunks[0].lines[0].text, "replacement");
+    }
 }
 
 #[test]
@@ -662,4 +718,41 @@ fn stashing_only_an_added_line_after_unterminated_context_preserves_bytes() {
             assert_eq!(output.stdout, expected.as_bytes());
         }
     }
+}
+
+#[test]
+fn stashing_a_picked_removal_preserves_the_final_newline() {
+    let mut fx = Fixture::new();
+    fx.commit("eof.txt", "one\ntwo", "Root");
+    fx.write("eof.txt", "one\nTWO\nextra\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    let hunk = repo
+        .working_diff("eof.txt", oxbow_core::Side::Unstaged, false)
+        .unwrap()
+        .hunks
+        .remove(0);
+    let picked = hunk
+        .lines
+        .iter()
+        .position(|line| line.kind == oxbow_core::LineKind::Removed && line.text == "two")
+        .unwrap();
+    repo.perform(&Action::StashHunk {
+        path: "eof.txt".into(),
+        header: hunk.header,
+        check: hunk.check,
+        lines: Some(vec![picked]),
+        message: None,
+    })
+    .unwrap();
+    assert_eq!(
+        std::fs::read(fx.path().join("eof.txt")).unwrap(),
+        b"one\ntwo\nTWO\nextra\n"
+    );
+    let output = std::process::Command::new("git")
+        .args(["show", "stash@{0}:eof.txt"])
+        .current_dir(fx.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"one\n");
 }

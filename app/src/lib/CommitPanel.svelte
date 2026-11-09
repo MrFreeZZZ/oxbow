@@ -1,9 +1,10 @@
 <script lang="ts">
+  import { diffScroll } from "./diffScroll";
   import FileFilter from "./FileFilter.svelte";
   import { untrack, type Snippet } from "svelte";
   import { api, stopped } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
-  import type { CommitDetail, FileChange, FileDiff, HistoryRow } from "./types";
+  import type { CommitDetail, DiffPage, FileChange, FileDiff, HistoryRow } from "./types";
   import { fullDate, initials, relativeTime, lane, person, plate, shortId, tint } from "./format";
   import { fileTabs, keyFocus, tabStepper } from "./tabs";
   import { confirm } from "./confirm.svelte";
@@ -70,10 +71,10 @@
 
   let detail = $state<CommitDetail | null>(null);
   let diffs = $state<FileDiff[]>([]);
-  /** In Summary, where the next page of diffs starts; null once every file is loaded. */
-  let next = $state<number | null>(null);
-  /** Changed files in all, as the pages count them. */
-  let fileCount = $state(0);
+  let summary = $state.raw<DiffPage | null>(null);
+  let summaryKey = "";
+  let shownTab = $state<string | null>(null);
+  let diffRequest = 0;
   /** Summary's first page of diffs for a commit, whose files the counted list then skips. */
   let firstPage: { id: string; files: Promise<FileChange[]> } | null = null;
   /** The files of that first page, with their counts. */
@@ -124,6 +125,7 @@
 
   // The panel's reads stop when it closes: their answers would go nowhere.
   $effect(() => () => {
+    diffRequest++;
     api.stopReads([COUNTS, DIFF, FULL]).catch(() => {});
   });
   // Show Diff Anyway's read is for the commit it was asked on.
@@ -165,46 +167,74 @@
 
   /** The diffs to show: Summary's first page, or the file of the tab. */
   function loadDiffs(current: string, path: string | null, wholeFile: boolean, keep = false) {
-    const still = () => id === current && tab === path && whole === wholeFile;
-    const failed = (err: unknown) => {
-      if (id === current && !stopped(err) && !keep) error = String(err);
+    const request = ++diffRequest;
+    const settings = diffSettings();
+    const key = JSON.stringify([current, wholeFile, settings]);
+    if (summaryKey !== key || keep) {
+      summaryKey = key;
+      summary = null;
+    }
+    loadingMore = false;
+    const still = () => request === diffRequest && id === current && tab === path && whole === wholeFile && diffSettings() === settings;
+    const show = (loaded: FileDiff[]) => {
+      if (shownTab !== path && scroller) scroller.scrollTop = 0;
+      shownTab = path;
+      diffs = loaded;
     };
+    const failed = (err: unknown) => {
+      if (still() && !stopped(err) && !keep) error = String(err);
+    };
+    if (!keep && summary) {
+      if (path === null) {
+        show(summary.diffs);
+        return;
+      }
+      const file = summary.diffs.find((d) => d.file.path === path);
+      if (file) {
+        show([file]);
+        return;
+      }
+    }
     if (path === null) {
       const page = api.commitDiffPage(current, 0, PAGE_LINES, wholeFile, DIFF);
       if (!keep) firstPage = { id: current, files: page.then((p) => p.diffs.map((d) => d.file), () => []) };
       page.then((page) => {
         if (!still()) return;
-        diffs = page.diffs;
-        next = page.next;
-        fileCount = page.files;
+        summary = page;
+        show(page.diffs);
       }, failed);
     } else {
       api.commitDiff(current, path, wholeFile, false, DIFF).then((d) => {
-        if (still()) diffs = d;
+        if (still()) show(d);
       }, failed);
     }
   }
 
   /** The next page of Summary's diffs. */
   function loadMore() {
-    if (next === null || loadingMore || tab !== null) return;
+    const page = summary;
+    if (!page || page.next === null || loadingMore || tab !== null || shownTab !== null) return;
     const current = id;
     const wholeFile = whole;
-    const from = next;
+    const settings = diffSettings();
+    if (summaryKey !== JSON.stringify([current, wholeFile, settings])) return;
+    const request = diffRequest;
+    const still = () => request === diffRequest && id === current && tab === null && whole === wholeFile && diffSettings() === settings;
     loadingMore = true;
     api
-      .commitDiffPage(current, from, PAGE_LINES, wholeFile, DIFF)
+      .commitDiffPage(current, page.next, PAGE_LINES, wholeFile, DIFF)
       .then(
-        (page) => {
+        (more) => {
+          if (!still()) return;
           // Cleared with the new files, so the view can ask for the next page right away.
-          if (id === current) loadingMore = false;
-          if (id !== current || tab !== null || whole !== wholeFile || next !== from) return;
-          diffs = [...diffs, ...page.diffs];
-          next = page.next;
+          loadingMore = false;
+          diffs = [...page.diffs, ...more.diffs];
+          summary = { ...more, diffs };
         },
         (err) => {
-          if (id === current) loadingMore = false;
-          if (id === current && !stopped(err)) error = String(err);
+          if (!still()) return;
+          loadingMore = false;
+          if (!stopped(err)) error = String(err);
         },
       );
   }
@@ -214,6 +244,8 @@
     const current = id;
     untrack(() => {
       tab = null;
+      shownTab = null;
+      diffs = [];
       detail = null;
       error = null;
       listed = LIST_STEP;
@@ -227,9 +259,7 @@
     const wholeFile = whole;
     diffSettings();
     untrack(() => {
-      diffs = [];
-      next = null;
-      loadingMore = false;
+      error = null;
       loadDiffs(current, path, wholeFile);
     });
   });
@@ -242,7 +272,7 @@
     version;
     untrack(() => {
       const again = !!detail?.shallowEnd || error !== null;
-      if (!again && !diffs.some((d) => d.submodule)) return;
+      if (!again && !diffs.some((d) => d.submodule) && !summary?.diffs.some((d) => d.submodule)) return;
       if (again) loadDetail(id);
       loadDiffs(id, tab, whole, true);
     });
@@ -250,7 +280,6 @@
 
   function openTab(path: string | null) {
     tab = path;
-    if (scroller) scroller.scrollTop = 0;
   }
 
   /** A click on a row gives it the keys, so ↑ ↓ go on from there: WebKit on macOS doesn't focus
@@ -380,7 +409,7 @@
   <div class="body" class:stacked bind:clientWidth={bodyWidth}>
     <div class="files" bind:this={filesBox} aria-label="Changed files" data-steps use:tabStepper={fileTabs(paths, tab, openTab)} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
       <div class="tools">
-        <div class="filter"><FileFilter bind:value={filter} /></div>
+        <div class="filter"><FileFilter bind:value={filter} {color} /></div>
         <div class="segmented" role="radiogroup" aria-label="Show files">
           <button role="radio" aria-checked={!listView.folders} class:on={!listView.folders} onclick={() => setFolders(false)} aria-label="List" title="One list of paths">
             <svg class="icon" viewBox="0 0 16 16"><path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01" /></svg>
@@ -391,13 +420,12 @@
         </div>
       </div>
 
-      <div class="list" style:--selection-border={`color-mix(in srgb, ${lane(color)} 40%, transparent)`}>
+      <div class="list" style:--selection-fill={tint(color)} style:--selection-border={`color-mix(in srgb, ${lane(color)} 40%, transparent)`}>
         {#if detail && !detail.shallowEnd}
           <!-- The heading shows every file's diff, as Summary did. -->
           <button
-            class="all"
+            class="diff-list-row diff-list-group"
             aria-current={tab === null ? "true" : undefined}
-            style:background={tab === null ? tint(color) : undefined}
             onclick={(e) => rowClick(e, null)}
             onkeydown={onFilesKey}
             title="Show the changes of every file"
@@ -414,8 +442,8 @@
           </button>
           {#snippet fileRow(file: FileChange, nested: boolean)}
             {@const open = tab === file.path}
-            <button class="file" class:nested aria-current={open ? "true" : undefined} style:background={open ? tint(color) : undefined} onclick={(e) => rowClick(e, file.path)} onkeydown={onFilesKey} oncontextmenu={(e) => openFileMenu(e, file)} title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
-              <span class="badge {tone[file.status]}">{statusIcon[file.status]}</span>
+            <button class="file diff-list-row diff-list-file" class:nested aria-current={open ? "true" : undefined} onclick={(e) => rowClick(e, file.path)} onkeydown={onFilesKey} oncontextmenu={(e) => openFileMenu(e, file)} title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
+              <span class="diff-list-badge {tone[file.status]}">{statusIcon[file.status]}</span>
               <PathName path={file.path} folders={!nested} />
               {#if foundFiles.includes(file.path)}
                 <span class="found" title={find ? `Adds or removes “${find}”` : "The path matches the search"}>
@@ -442,7 +470,7 @@
             {#each shownFiles.slice(0, listed) as file (file.path)}{@render fileRow(file, false)}{/each}
           {/if}
           {#if shownFiles.length > listed}
-            <button class="file more" onclick={() => (listed += LIST_STEP)} onkeydown={onFilesKey}>Show {Math.min(shownFiles.length - listed, LIST_STEP).toLocaleString()} more {shownFiles.length - listed === 1 ? "file" : "files"}</button>
+            <button class="file more diff-list-row diff-list-file" onclick={() => (listed += LIST_STEP)} onkeydown={onFilesKey}>Show {Math.min(shownFiles.length - listed, LIST_STEP).toLocaleString()} more {shownFiles.length - listed === 1 ? "file" : "files"}</button>
           {/if}
           {#if needle && !shownFiles.length}<p class="empty">No files match the filter.</p>{/if}
         {/if}
@@ -494,19 +522,19 @@
 
     {#if !stacked}<button class="edge" tabindex="-1" style:left={`${filesWidth(bodyWidth) - 4}px`} onpointerdown={(e) => resizeFiles(e, bodyWidth)} aria-label="Resize the files" title="Drag to resize"></button>{/if}
     <div class="diff" aria-label="Diff">
-      <div class="dhead">
+      <div class="dhead diff-toolbar">
         <span class="caption grow">
-          {#if tab === null}
+          {#if shownTab === null}
             {detail ? `${detail.files.length.toLocaleString()} ${detail.files.length === 1 ? "file" : "files"}` : ""}
           {:else}
-            {@const at = detail?.files.findIndex((f) => f.path === tab) ?? -1}
+            {@const at = detail?.files.findIndex((f) => f.path === shownTab) ?? -1}
             {#if at >= 0 && detail}File {at + 1} of {detail.files.length.toLocaleString()}{/if}
           {/if}
         </span>
-        {#if tab === null && diffs.length > 1}<FoldAll onFold={(fold) => diffView?.setAll(fold)} />{/if}
+        {#if shownTab === null && diffs.length > 1}<FoldAll onFold={(fold) => diffView?.setAll(fold)} />{/if}
         <DiffTools {whole} onToggleWhole={() => (whole = !whole)} />
       </div>
-      <div class="scroll" bind:this={scroller}>
+      <div class="scroll" bind:this={scroller} use:diffScroll={color}>
         {#if error}
           <p class="error" role="alert">{error}</p>
         {/if}
@@ -522,13 +550,13 @@
         {/if}
         <DiffView
           bind:this={diffView}
-          foldable={tab === null}
+          foldable={shownTab === null}
           {diffs}
           {color}
           {whole}
           {find}
           commit={row.id}
-          pending={tab === null && next !== null ? fileCount - diffs.length : 0}
+          pending={tab === null && shownTab === null && summary?.next != null ? summary.files - diffs.length : 0}
           onMore={loadMore}
           onToggleWhole={() => (whole = !whole)}
           loadFull={(d) => api.commitDiff(row.id, d.file.path, whole, true, FULL).then((all) => all[0])}
@@ -733,19 +761,6 @@
     overflow-y: auto;
     padding: var(--space-2);
   }
-  /* The heading of the list, in small capitals in the branch color, as in Changes. */
-  .all {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    width: 100%;
-    height: 34px;
-    padding: 0 var(--space-2);
-    border-radius: var(--radius-m);
-    font-size: var(--text-caption);
-    font-weight: 600;
-    color: var(--text2);
-  }
   .gtitle {
     font-weight: 700;
     letter-spacing: 0.05em;
@@ -757,27 +772,8 @@
   .counting {
     font-weight: 400;
   }
-  .file {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    height: 28px;
-    padding: 0 var(--space-2) 0 22px;
-    border-radius: var(--radius-m);
-    text-align: left;
-  }
-  .file:hover,
   .folder:hover {
     background: var(--field);
-  }
-  /* Selection keeps the diff header's border, with or without keyboard focus. */
-  .list [aria-current="true"] {
-    box-shadow: inset 0 0 0 1px var(--selection-border);
-    outline: none;
-  }
-  .file.nested {
-    padding-left: 44px;
   }
   .file.more {
     justify-content: center;
@@ -850,30 +846,6 @@
     width: 10px;
     height: 10px;
     flex-shrink: 0;
-  }
-  /* The same letters as in Changes. */
-  .badge {
-    width: 16px;
-    height: 16px;
-    border-radius: var(--radius-xs);
-    font-size: var(--text-caption);
-    font-weight: 700;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-  }
-  .badge.orange {
-    background: var(--orange-soft);
-    color: var(--orange);
-  }
-  .badge.green {
-    background: var(--green-soft);
-    color: var(--green);
-  }
-  .badge.red {
-    background: var(--red-soft);
-    color: var(--red);
   }
   .grow {
     flex-grow: 1;
@@ -1007,7 +979,6 @@
     align-items: center;
     gap: 10px;
     min-height: 46px;
-    padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
     flex-shrink: 0;
   }
   .caption {

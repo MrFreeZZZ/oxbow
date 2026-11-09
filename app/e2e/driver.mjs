@@ -18,6 +18,7 @@ async function wd(method, path, body) {
 const KEYS = {
   Escape: "", Tab: "", Enter: "", Backspace: "", Space: "",
   ArrowUp: "", ArrowDown: "", ArrowLeft: "", ArrowRight: "",
+  PageUp: "", PageDown: "",
   Shift: "", Ctrl: "", Alt: "", Meta: "",
   F1: "", F5: "",
 };

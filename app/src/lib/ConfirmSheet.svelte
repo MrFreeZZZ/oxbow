@@ -314,9 +314,9 @@
                     rows="4"
                     oninput={(e) => confirm.edit(text.edit(e.currentTarget.value))}
                   ></textarea>
-                {:else if field.text?.prefixes?.length}
+                {:else if field.text?.prefixes?.length || field.text?.branchRefs}
                   {@const text = field.text}
-                  <PrefixField value={text.value} list={field.text.prefixes} placeholder={text.placeholder} label={field.label} focus={text.focus} onedit={(value) => confirm.edit(text.edit(value))} />
+                  <PrefixField value={text.value} list={text.prefixes} branchRefs={text.branchRefs} placeholder={text.placeholder} label={field.label} focus={text.focus} onedit={(value) => confirm.edit(text.edit(value))} />
                 {:else if field.text}
                   {@const text = field.text}
                   <input

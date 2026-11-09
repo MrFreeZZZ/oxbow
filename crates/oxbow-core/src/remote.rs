@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::action::Action;
 use crate::cli::GitCommand;
 use crate::error::{Error, Result};
-use crate::repo::Repo;
+use crate::repo::{Repo, local_branch_ref};
 
 /// The upstream of the checked-out branch and how far apart the two are.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -493,7 +493,7 @@ impl Repo {
     pub fn branch_tracking(&self) -> Result<std::collections::HashMap<String, Tracking>> {
         let out = self.run(&GitCommand::new([
             "for-each-ref",
-            "--format=%(refname:short)%00%(upstream:remotename)%00%(upstream:remoteref)%00%(upstream:track,nobracket)",
+            "--format=%(refname)%00%(upstream:remotename)%00%(upstream:remoteref)%00%(upstream:track,nobracket)",
             "refs/heads",
         ]))?;
         Ok(out
@@ -501,7 +501,9 @@ impl Repo {
             .lines()
             .filter_map(|line| {
                 let (name, rest) = line.split_once('\0')?;
-                Some((name.to_owned(), parse_tracking(rest)?))
+                // Short ref names gain a `heads/` prefix when a tag has the same name.
+                let branch = crate::repo::local_branch_name(name)?;
+                Some((branch.to_owned(), parse_tracking(rest)?))
             })
             .collect())
     }
@@ -562,12 +564,14 @@ impl Repo {
     /// Commits on `remote`/`branch` that `HEAD` does not have, newest first, after fetching that
     /// branch so the list is current.
     pub fn incoming(&self, remote: &str, branch: &str) -> Result<Vec<CommitBrief>> {
-        self.run(&GitCommand::new(["fetch", "--quiet", remote, branch]))?;
+        let tracking = format!("refs/remotes/{remote}/{branch}");
+        let refspec = format!("+{}:{tracking}", local_branch_ref(branch));
+        self.run(&GitCommand::new(["fetch", "--quiet", remote, &refspec]))?;
         let out = self.run(&GitCommand::new([
             "log",
             "--max-count=20",
             "--format=%H%x00%s%x00%an%x00%ct",
-            &format!("HEAD..refs/remotes/{remote}/{branch}"),
+            &format!("HEAD..{tracking}"),
         ]))?;
         Ok(parse_briefs(&out.stdout))
     }
