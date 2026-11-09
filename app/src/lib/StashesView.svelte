@@ -152,13 +152,6 @@
     });
   });
 
-  // A staged deletion can leave an untracked file at the same path. The list shows the
-  // untracked entry, so leave the tracked entry out of the paged diff as well.
-  function stashPage(page: DiffPage, untracked: FileChange[]): DiffPage {
-    const paths = new Set(untracked.map((file) => file.path));
-    return { ...page, diffs: page.diffs.filter((diff) => diff.file.status === "added" || !paths.has(diff.file.path)) };
-  }
-
   // A different stash starts on All Changes.
   $effect(() => {
     stash?.id;
@@ -200,7 +193,7 @@
         }
         api.commitDiffPage(id, 0, PAGE_LINES, wholeFile, DIFF).then((page) => {
           if (!still()) return;
-          summary = stashPage(page, f.untracked);
+          summary = page;
           show(summary.diffs);
         }, failed);
       } else {
@@ -209,8 +202,7 @@
           show([cached]);
           return;
         }
-        const source = f.untracked.some((entry) => entry.path === file) ? current.untracked ?? id : id;
-        api.commitDiff(source, file, wholeFile, false, DIFF).then((loaded) => {
+        api.commitDiff(id, file, wholeFile, false, DIFF).then((loaded) => {
           if (still()) show(loaded);
         }, failed);
       }
@@ -229,7 +221,7 @@
     api.commitDiffPage(id, page.next, PAGE_LINES, wholeFile, DIFF).then((more) => {
       if (!still()) return;
       loadingMore = false;
-      diffs = [...page.diffs, ...stashPage(more, files[id].untracked).diffs];
+      diffs = [...page.diffs, ...more.diffs];
       summary = { ...more, diffs };
     }, (err) => {
       if (!still()) return;
@@ -455,7 +447,7 @@
               pending={path === null && shownPath === null && summary?.next != null ? summary.files - summary.next : 0}
               onMore={loadMore}
               onToggleWhole={() => (whole = !whole)}
-              loadFull={(d) => api.commitDiff(untracked.has(d.file.path) ? stash.untracked ?? id : id, d.file.path, whole, true, FULL).then((all) => all[0])}
+              loadFull={(d) => api.commitDiff(id, d.file.path, whole, true, FULL).then((all) => all[0])}
             />
           </ComparisonDiffPane>
         {/key}
