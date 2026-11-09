@@ -1,18 +1,14 @@
 <script lang="ts">
-  import { diffScroll } from "./diffScroll";
-  // Every change between the two sides of Compare, as one diff: Summary with the files, then a
-  // tab per file, like the commit details.
+  // Every change between the two sides of Compare, or the diff of a selected file.
 
   import { untrack, type Snippet } from "svelte";
   import { api, stopped } from "./api";
   import { diffSettings, prefs, wholeByDefault } from "./prefs.svelte";
-  import type { CompareFile, Comparison, FileChange, FileDiff } from "./types";
-  import { lane, plate, shortId, splitPath, tabLabels, tabWindow, tint } from "./format";
-  import { fileTabs, tabStepper } from "./tabs";
+  import type { CompareFile, Comparison, FileChange, FileDiff, DiffPage } from "./types";
+  import { shortId } from "./format";
   import { CountTurns } from "./counting";
   import DiffView from "./DiffView.svelte";
-  import FileBadge from "./FileBadge.svelte";
-  import FoldAll from "./FoldAll.svelte";
+  import ComparisonDiffPane from "./ComparisonDiffPane.svelte";
 
   let {
     comparison: c,
@@ -36,8 +32,6 @@
 
   /** Lines of diff a page of the Summary brings, about what the diff shows at first. */
   const PAGE_LINES = 4000;
-  /** Rows of the Summary's file list drawn at first, and more on each request. */
-  const LIST_STEP = 300;
   /** Lanes of this view's reads: a newer read in a lane stops the older one. */
   const COUNTS = "compare-counts";
   const DIFF = "compare-diff";
@@ -47,24 +41,21 @@
   let tab = $state<string | null>(null);
   let whole = $state(wholeByDefault());
   let diffs = $state<FileDiff[]>([]);
-  /** In Summary, where the next page of diffs starts; null once every file is loaded. */
-  let next = $state<number | null>(null);
+  let shownTab = $state<string | null>(null);
+  let summary = $state<DiffPage | null>(null);
+  let summaryKey = "";
+  let summaryFor: Comparison | undefined;
+  let request = 0;
   let loadingMore = $state(false);
   /** The files with their line counts, once counted, and what they were counted for. */
   let counted = $state<{ key: string; files: FileChange[]; from: number } | null>(null);
   /** The files of Summary's first page, counted by their diffs, and what they were read for. */
   let firstFiles = $state<{ key: string; files: Map<string, FileChange> }>({ key: "", files: new Map() });
-  /** Rows of the Summary's file list drawn: thousands of files draw the rest on request. */
-  let listed = $state(LIST_STEP);
   let error = $state<string | null>(null);
-  let scroller = $state<HTMLDivElement>();
-  let tabBar = $state<HTMLDivElement>();
 
-  const paths = $derived(c.files.map((f) => f.path));
-  const labels = $derived(tabLabels(paths));
-  const shownTabs = $derived(tabWindow(paths.length, tab === null ? -1 : paths.indexOf(tab)));
   /** What the counts are for: the two sides and the settings that change them. */
-  const countKey = $derived(`${c.from}\0${c.targetId}\0${diffSettings()}`);
+  const comparisonKey = $derived(`${c.from}\0${c.targetId}`);
+  const countKey = $derived(`${comparisonKey}\0${diffSettings()}`);
   /** The files as far as they are known: until the counts come, a loaded diff has them. */
   const files = $derived.by<CompareFile[]>(() => {
     const done = counted?.key === countKey ? counted : null;
@@ -80,6 +71,7 @@
     counted?.key === countKey ? files.reduce((t, f) => ({ add: t.add + f.additions, del: t.del + f.deletions }), { add: 0, del: 0 }) : null,
   );
   const known = $derived(new Set(counted?.key === countKey ? [] : diffs.map((d) => d.file.path)));
+  const metadataByPath = $derived(new Map(c.files.map((file) => [file.path, file])));
   const authors = $derived([...new Set(c.ahead.map((a) => a.authorName))]);
   const commits = $derived(c.mode === "split" ? c.aheadCount : c.aheadCount + c.behindCount);
 
@@ -90,20 +82,14 @@
 
   // A new comparison starts on Summary.
   $effect(() => {
-    c.from;
-    c.targetId;
+    comparisonKey;
     untrack(() => {
       tab = null;
-      listed = LIST_STEP;
+      shownTab = null;
+      diffs = [];
       // A whole diff of the comparison before is no longer wanted.
       api.stopReads([FULL]).catch(() => {});
     });
-  });
-
-  // The selected tab may be scrolled out of the tab bar.
-  $effect(() => {
-    tab;
-    requestAnimationFrame(() => tabBar?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ inline: "nearest", block: "nearest" }));
   });
 
   /** Which read counts the lines: a new tab or diff mode does not ask again. */
@@ -126,70 +112,84 @@
   }
 
   $effect(() => {
-    const from = c.from;
-    const to = c.targetId;
-    const path = tab;
+    const comparison = c;
+    const from = comparison.from;
+    const to = comparison.targetId;
+    const path = tab !== null && metadataByPath.has(tab) ? tab : null;
     const wholeFile = whole;
-    diffSettings();
     const key = countKey;
     untrack(() => {
-      diffs = [];
-      next = null;
+      tab = path;
+      const turn = ++request;
+      const pageKey = JSON.stringify([key, wholeFile]);
+      if (summaryFor !== comparison || summaryKey !== pageKey) {
+        summaryFor = comparison;
+        summary = null;
+        summaryKey = pageKey;
+      }
       loadingMore = false;
       error = null;
-      const still = () => c.from === from && c.targetId === to && tab === path && whole === wholeFile;
+      const still = () => request === turn && c === comparison && countKey === key && tab === path && whole === wholeFile;
+      const show = (loaded: FileDiff[]) => {
+        shownTab = path;
+        diffs = loaded;
+      };
       const failed = (err: unknown) => {
         if (still() && !stopped(err)) error = String(err);
       };
       const run = turns.read(key, counted?.key === key);
       if (path === null) {
+        if (summary) {
+          count(key, run, from, to, summary.diffs.map((d) => d.file));
+          show(summary.diffs);
+          return;
+        }
         api.compareDiffPage(from, to, 0, PAGE_LINES, wholeFile, DIFF).then((page) => {
-          count(key, run, from, to, page.diffs.map((d) => d.file));
           if (!still()) return;
-          diffs = page.diffs;
-          next = page.next;
+          count(key, run, from, to, page.diffs.map((d) => d.file));
+          summary = page;
+          show(page.diffs);
         }, (err) => {
-          // A stopped read has a newer one, which counts in its place.
-          if (!stopped(err)) count(key, run, from, to, []);
+          if (still() && !stopped(err)) count(key, run, from, to, []);
           failed(err);
         });
       } else {
         count(key, run, from, to, []);
+        const cached = summary?.diffs.find((d) => d.file.path === path);
+        if (cached) {
+          show([cached]);
+          return;
+        }
         api.compareDiff(from, to, path, wholeFile, false, DIFF).then((d) => {
-          if (still()) diffs = d;
+          if (still()) show(d);
         }, failed);
       }
     });
   });
 
-  /** The next page of Summary's diffs. */
   function loadMore() {
-    if (next === null || loadingMore || tab !== null) return;
-    const from = c.from;
-    const to = c.targetId;
+    const page = summary;
+    if (!page || page.next === null || loadingMore || tab !== null || shownTab !== null) return;
+    const turn = request;
+    const comparison = c;
+    const key = countKey;
     const wholeFile = whole;
-    const start = next;
+    const still = () => request === turn && c === comparison && countKey === key && tab === null && whole === wholeFile;
     loadingMore = true;
-    api.compareDiffPage(from, to, start, PAGE_LINES, wholeFile, DIFF).then(
-      (page) => {
+    api.compareDiffPage(c.from, c.targetId, page.next, PAGE_LINES, wholeFile, DIFF).then(
+      (more) => {
+        if (!still()) return;
         loadingMore = false;
-        if (c.from !== from || c.targetId !== to || tab !== null || whole !== wholeFile || next !== start) return;
-        diffs = [...diffs, ...page.diffs];
-        next = page.next;
+        diffs = [...page.diffs, ...more.diffs];
+        summary = { ...more, diffs };
       },
       (err) => {
+        if (!still()) return;
         loadingMore = false;
         if (!stopped(err)) error = String(err);
       },
     );
   }
-
-  function openTab(path: string | null) {
-    tab = path;
-    if (scroller) scroller.scrollTop = 0;
-  }
-
-  const statusIcon: Record<string, string> = { added: "A", deleted: "D", modified: "M", renamed: "R", copied: "C" };
 </script>
 
 <div class="panel">
@@ -222,81 +222,38 @@
     </div>
   {/if}
 
-  <div class="tabs" role="tablist" aria-label="Changes" use:tabStepper={fileTabs(paths, tab, openTab)}>
-    <button
-      role="tab"
-      aria-selected={tab === null}
-      class="tab"
-      class:on={tab === null}
-      style:background={tab === null ? tint(color) : undefined}
-      style:border-color={tab === null ? `color-mix(in srgb, ${lane(color)} 40%, transparent)` : undefined}
-      style:color={tab === null ? plate(color) : undefined}
-      onclick={() => openTab(null)}>Summary</button
-    >
-    {#if c.files.length}
-      <span class="divider" aria-hidden="true"></span>
-      <div class="file-tabs" bind:this={tabBar}>
-        <!-- Thousands of files draw only the tabs around the open one. -->
-        {#if shownTabs.start}<button class="tab neutral more" onclick={() => openTab(paths[shownTabs.start - 1])} title="Open the file before these">+{shownTabs.start.toLocaleString()}</button>{/if}
-        {#each paths.slice(shownTabs.start, shownTabs.end) as path (path)}
-          <button role="tab" aria-selected={tab === path} class="tab neutral" class:on={tab === path} onclick={() => openTab(path)} title={path}>{labels.get(path)}</button>
-        {/each}
-        {#if shownTabs.end < paths.length}<button class="tab neutral more" onclick={() => openTab(paths[shownTabs.end])} title="Open the file after these">+{(paths.length - shownTabs.end).toLocaleString()}</button>{/if}
-      </div>
+  {#snippet metadata(path: string)}
+    {@const file = metadataByPath.get(path)}
+    {#if file?.onlyBase}
+      <span class="meta mono" title="Only {base}'s newer commits changed it">only on {base}</span>
+    {:else if file?.last}
+      {@const id = file.last}
+      <button class="sha mono" onclick={() => onPickCommit(id)} title="The latest commit on {target} that changed it">{shortId(id)}</button>
     {/if}
-  </div>
+  {/snippet}
 
-  <div class="scroll" bind:this={scroller} use:diffScroll={color}>
-    {#if error}<p class="error" role="alert">{error}</p>{/if}
-    {#if tab === null}
-      {#if c.files.length}
-        <div class="files">
-          <div class="count">
-            <span class="grow">{c.files.length} {c.files.length === 1 ? "file" : "files"} changed</span>
-            {#if totals}
-              <span class="add">+{totals.add}</span>
-              <span class="del">−{totals.del}</span>
-            {:else}
-              <span class="counting" title="Counting the changed lines">Counting…</span>
-            {/if}
-            <FoldAll onFold={(fold) => diffView?.setAll(fold)} />
-          </div>
-          {#each files.slice(0, listed) as file (file.path)}
-            {@const p = splitPath(file.path)}
-            <div class="file">
-              <button class="open" onclick={() => openTab(file.path)}>
-                <span class="badge {file.status}">{statusIcon[file.status]}</span>
-                <span class="grow ellipsis"><span class="dir">{p.dir}</span>{p.name}</span>
-              </button>
-              {#if file.onlyBase}
-                <span class="meta mono" title="Only {base}'s newer commits changed it">only on {base}</span>
-              {:else if file.last}
-                <button class="sha mono" onclick={() => onPickCommit(file.last!)} title="The latest commit on {target} that changed it">{shortId(file.last)}</button>
-              {/if}
-              {#if totals || known.has(file.path)}<FileBadge {file} />{/if}
-            </div>
-          {/each}
-          {#if files.length > listed}
-            <button class="file more" onclick={() => (listed += LIST_STEP)}>Show {Math.min(files.length - listed, LIST_STEP).toLocaleString()} more {files.length - listed === 1 ? "file" : "files"}</button>
-          {/if}
-        </div>
-      {:else}
-        <p class="empty">No differences: both sides have the same files.</p>
-      {/if}
-    {/if}
-    <DiffView
-      bind:this={diffView}
-      foldable
-      {diffs}
-      {color}
-      {whole}
-      pending={tab === null && next !== null ? c.files.length - diffs.length : 0}
-      onMore={loadMore}
-      onToggleWhole={() => (whole = !whole)}
-      loadFull={(d) => api.compareDiff(c.from, c.targetId, d.file.path, whole, true, FULL).then((all) => all[0])}
-      command={(d) => `git diff ${c.from.slice(0, 7)} ${c.targetId.slice(0, 7)} -- ${d.file.path}`}
-    />
-  </div>
+  {#key comparisonKey}
+    <ComparisonDiffPane {files} {color} path={tab} shownPath={shownTab} onOpen={(path) => (tab = path)}
+      {whole} onToggleWhole={() => (whole = !whole)} {totals} {metadata}
+      counted={(file) => !!totals || known.has(file.path)}
+      onFold={shownTab === null && diffs.length > 1 ? (fold) => diffView?.setAll(fold) : undefined}>
+      {#if error}<p class="error" role="alert">{error}</p>{/if}
+      {#if !c.files.length}<p class="empty">No differences: both sides have the same files.</p>{/if}
+      <DiffView
+        bind:this={diffView}
+        foldable={shownTab === null}
+        tools={false}
+        {diffs}
+        {color}
+        {whole}
+        pending={tab === null && shownTab === null && summary?.next != null ? c.files.length - diffs.length : 0}
+        onMore={loadMore}
+        onToggleWhole={() => (whole = !whole)}
+        loadFull={(d) => api.compareDiff(c.from, c.targetId, d.file.path, whole, true, FULL).then((all) => all[0])}
+        command={(d) => `git diff ${c.from.slice(0, 7)} ${c.targetId.slice(0, 7)} -- ${d.file.path}`}
+      />
+    </ComparisonDiffPane>
+  {/key}
 </div>
 
 <style>
@@ -334,133 +291,6 @@
     font-size: var(--text-small);
     line-height: 1.45;
   }
-  .tabs {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 10px 0 10px 12px;
-    flex-shrink: 0;
-  }
-  .divider {
-    width: 1px;
-    height: 16px;
-    background: var(--sep);
-    flex-shrink: 0;
-  }
-  .file-tabs {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-    padding-right: 12px;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-  .file-tabs::-webkit-scrollbar {
-    display: none;
-  }
-  .tab {
-    display: flex;
-    align-items: center;
-    height: 26px;
-    padding: 0 11px;
-    border-radius: var(--radius-pill);
-    border: 1px solid var(--sep);
-    font-size: var(--text-small);
-    font-weight: 500;
-    color: var(--text2);
-    flex-shrink: 0;
-  }
-  .tab.on {
-    font-weight: 600;
-  }
-  .tab.neutral.on {
-    background: var(--side-sel);
-    border-color: transparent;
-    color: var(--text);
-  }
-  .scroll {
-    flex-grow: 1;
-    overflow-y: auto;
-    min-height: 0;
-  }
-  .files {
-    margin: var(--space-2) var(--space-3) var(--space-1);
-    padding: var(--space-1) 0 6px;
-  }
-  .count {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 0 8px 6px;
-    font-size: var(--text-caption);
-    font-weight: 600;
-    color: var(--text2);
-  }
-  .file {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    height: 26px;
-    padding: 0 8px 0 0;
-    border-radius: var(--radius-s);
-  }
-  .file:hover {
-    background: var(--field);
-  }
-  .file.more {
-    width: 100%;
-    justify-content: center;
-    color: var(--text2);
-  }
-  .tab.more {
-    color: var(--text2);
-    font-weight: 400;
-  }
-  .counting {
-    font-weight: 400;
-  }
-  .open {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-grow: 1;
-    min-width: 0;
-    height: 26px;
-    padding-left: 8px;
-    text-align: left;
-  }
-  .badge {
-    width: 16px;
-    height: 16px;
-    border-radius: var(--radius-s);
-    font-size: var(--text-caption);
-    font-weight: 700;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--field);
-    color: var(--text2);
-    flex-shrink: 0;
-  }
-  .badge.added {
-    color: var(--green);
-  }
-  .badge.deleted {
-    color: var(--red);
-  }
-  .grow {
-    flex-grow: 1;
-    min-width: 0;
-  }
-  .ellipsis {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .dir {
-    color: var(--text2);
-  }
   .mono {
     font-family: var(--mono);
   }
@@ -474,22 +304,13 @@
     background: var(--side-sel);
     color: var(--text);
   }
-  .add {
-    color: var(--green);
-    font-size: var(--text-caption);
-  }
-  .del {
-    color: var(--red);
-    font-size: var(--text-caption);
-  }
-  .num {
-    min-width: 22px;
-    text-align: right;
-  }
   .meta {
     font-size: var(--text-caption);
     color: var(--text2);
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 35%;
   }
   .empty,
   .error {
