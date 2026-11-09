@@ -378,7 +378,11 @@ impl Repo {
                     commands.push(stash_before(branch));
                 }
                 commands.push(
-                    GitCommand::new(["switch".to_owned(), "--track".to_owned(), format!("{remote}/{branch}")])
+                    GitCommand::new([
+                        "switch".to_owned(),
+                        "--track".to_owned(),
+                        format!("refs/remotes/{remote}/{branch}"),
+                    ])
                         .comment(format!("--track: create {branch} that follows {remote}/{branch}")),
                 );
                 commands

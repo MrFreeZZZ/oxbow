@@ -203,13 +203,15 @@ fn a_new_branch_can_start_at_the_fetched_remote_and_leave_the_files_behind() {
 }
 
 #[test]
-fn remote_branches_are_checked_out_as_tracking_branches() {
+fn remote_branches_are_checked_out_as_tracking_branches_despite_matching_tags() {
     let (_remote, mut fx) = with_remote();
     fx.git(&["switch", "-q", "-c", "theirs"]);
-    fx.commit("t.txt", "t\n", "Their work");
+    let remote_tip = fx.commit("t.txt", "t\n", "Their work");
     fx.git(&["push", "-q", "origin", "theirs"]);
     fx.git(&["switch", "-q", "main"]);
     fx.git(&["branch", "-q", "-D", "theirs"]);
+    fx.git(&["tag", "origin/theirs"]);
+    assert_ne!(fx.git(&["rev-parse", "refs/tags/origin/theirs"]), remote_tip);
     let repo = Repo::open(fx.path()).unwrap();
 
     let track = Action::Track {
@@ -219,11 +221,15 @@ fn remote_branches_are_checked_out_as_tracking_branches() {
     };
     assert_eq!(
         repo.plan(&track).unwrap().commands[0].display(),
-        "git switch --track origin/theirs"
+        "git switch --track refs/remotes/origin/theirs"
     );
     repo.perform(&track).unwrap();
     assert_eq!(head(&mut fx), "theirs");
-    assert_eq!(fx.git(&["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/theirs");
+    assert_eq!(fx.git(&["rev-parse", "refs/heads/theirs"]), remote_tip);
+    assert_eq!(
+        fx.git(&["rev-parse", "--symbolic-full-name", "@{upstream}"]),
+        "refs/remotes/origin/theirs"
+    );
 }
 
 #[test]
