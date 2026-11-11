@@ -403,9 +403,10 @@
     if (!isTrunk) entries.push(item("Rename…", menuIcons.edit, () => run(renameRequest(ctx, ref))));
     // The branch's own commits, the ones the default branch doesn't have.
     const trunk = history.trunk;
-    if (!isTrunk && trunk) {
+    const trunkRef = history.trunkRef;
+    if (!isTrunk && trunk && trunkRef) {
       const what = ["The commits of ", { branch: ref.name, color: ctx.colorOf(ref.name) }, " that ", { branch: trunk, color: ctx.colorOf(trunk) }, " doesn’t have"];
-      entries.push(item("Save as Patches…", menuIcons.patch, () => run(savePatchesRequest({ to: ref.name, since: trunk, count: 0, name: ref.name, what }))));
+      entries.push(item("Save as Patches…", menuIcons.patch, () => run(savePatchesRequest({ to: compareRef("local", ref.name), since: trunkRef, count: 0, name: ref.name, what }))));
     }
     entries.push(item("Copy Name", menuIcons.copy, () => copy(ref.name)));
     if (!isHead && !isTrunk && !t?.gone && !elsewhere) {

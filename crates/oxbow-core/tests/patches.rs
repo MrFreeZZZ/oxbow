@@ -24,8 +24,8 @@ fn save_feature(repo: &Repo) -> (tempfile::TempDir, Vec<String>) {
     let dir = tempfile::tempdir().unwrap();
     let into = dir.path().join("patches").display().to_string();
     repo.perform(&Action::SavePatches {
-        to: "feature".into(),
-        since: Some("main".into()),
+        to: "refs/heads/feature".into(),
+        since: Some("refs/heads/main".into()),
         count: 0,
         into: into.clone(),
         one_file: false,
@@ -41,7 +41,9 @@ fn save_feature(repo: &Repo) -> (tempfile::TempDir, Vec<String>) {
 
 #[test]
 fn commits_are_saved_as_a_patch_file_each_or_all_in_one() {
-    let (fx, add_b, shout) = diverged();
+    let (mut fx, add_b, shout) = diverged();
+    fx.git(&["tag", "main", &add_b]);
+    fx.git(&["tag", "feature", "HEAD"]);
     let repo = Repo::open(fx.path()).unwrap();
     let (_dir, files) = save_feature(&repo);
     let names: Vec<&str> = files.iter().map(|f| f.rsplit('/').next().unwrap()).collect();
@@ -52,7 +54,9 @@ fn commits_are_saved_as_a_patch_file_each_or_all_in_one() {
             .starts_with(&format!("From {add_b} "))
     );
 
-    let commits = repo.patch_range("feature", Some("main"), 0).unwrap();
+    let commits = repo
+        .patch_range("refs/heads/feature", Some("refs/heads/main"), 0)
+        .unwrap();
     let summaries: Vec<&str> = commits.iter().map(|c| c.summary.as_str()).collect();
     assert_eq!(summaries, ["Add b", "Shout two"]);
     assert_eq!(repo.patch_range(&shout, None, 1).unwrap().len(), 1);

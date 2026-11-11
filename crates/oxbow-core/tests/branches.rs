@@ -372,18 +372,20 @@ fn detaching_and_keeping_commits_made_without_a_branch() {
     let mut fx = Fixture::new();
     let root = fx.commit("a.txt", "one\n", "Root");
     fx.commit("a.txt", "two\n", "Second");
+    fx.git(&["tag", "-a", "-m", "Root tag", "main", &root]);
     let repo = Repo::open(fx.path()).unwrap();
 
     let detach = Action::Detach {
-        commit: root.clone(),
+        commit: "refs/tags/main".into(),
         stash: false,
     };
     assert_eq!(
         repo.plan(&detach).unwrap().commands[0].display(),
-        format!("git switch --detach {}", root)
+        "git switch --detach refs/tags/main"
     );
     repo.perform(&detach).unwrap();
     assert_eq!(head(&mut fx), "");
+    assert_eq!(fx.git(&["rev-parse", "HEAD"]), root);
     let experiment = fx.commit("b.txt", "b\n", "Experiment");
 
     let history = repo.history(&Default::default()).unwrap();

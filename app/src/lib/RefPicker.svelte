@@ -2,7 +2,7 @@
   // A Base or Compare picker: branches, remote branches and tags, or any SHA typed in.
 
   import type { History } from "./types";
-  import { compareLabel, compareRef } from "./compareRefs";
+  import { compareLabel, compareRef, isCompareSha } from "./compareRefs";
   import { lane } from "./format";
 
   let {
@@ -40,7 +40,7 @@
     ].filter((g) => g.names.length);
   });
   /** What the field holds looks like a commit id, so Return compares that commit. */
-  const typedSha = $derived(/^[0-9a-f]{4,64}$/i.test(filter.trim()) ? filter.trim() : null);
+  const typedSha = $derived(isCompareSha(filter.trim()) ? filter.trim() : null);
 
   function toggle() {
     open = !open;

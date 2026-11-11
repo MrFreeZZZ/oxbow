@@ -189,3 +189,30 @@ fn qualified_refs_compare_the_selected_branch_remote_or_tag() {
     fx.git(&["branch", "-D", "origin/feature"]);
     assert!(repo.compare(local, tag, CompareMode::Tips).is_err());
 }
+
+#[test]
+fn bare_hex_compares_only_commit_ids_even_when_refs_match() {
+    let (mut fx, base, main, feature) = diverged();
+    let prefix = &feature[..9];
+    let missing = "cafedecafbadc0de";
+    for name in [prefix, missing] {
+        fx.git(&["branch", name, &main]);
+        fx.git(&["tag", name, &base]);
+    }
+    let blob = fx.git(&["rev-parse", "HEAD:main.txt"]);
+    let repo = Repo::open(fx.path()).unwrap();
+
+    for sha in [prefix, &prefix.to_ascii_uppercase(), &feature] {
+        let c = repo.compare(&main, sha, CompareMode::Tips).unwrap();
+        assert_eq!(c.target_id, feature);
+        assert_eq!(c.command, format!("git diff {main}..{feature}"));
+    }
+    for (reference, expected) in [("refs/heads", &main), ("refs/tags", &base)] {
+        let c = repo
+            .compare("HEAD", &format!("{reference}/{missing}"), CompareMode::Tips)
+            .unwrap();
+        assert_eq!(&c.target_id, expected);
+    }
+    assert!(repo.compare("HEAD", missing, CompareMode::Tips).is_err());
+    assert!(repo.compare("HEAD", &blob, CompareMode::Tips).is_err());
+}

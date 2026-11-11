@@ -3,6 +3,7 @@
 import type { Part, Recovery, Request } from "./confirm.svelte";
 import { remoteTrouble } from "./remote";
 import type { Action, CommitBrief, DeletionCheck, Failure, History, HistoryRow, RefInfo } from "./types";
+import { compareRef } from "./compareRefs";
 import { shortId } from "./format";
 import { onlyPrefix, splitPrefix, type BranchPrefix } from "./branchPrefixes";
 import { firstName, prefixesFor, prefixStart, similarNote } from "./branchPrefs";
@@ -175,7 +176,7 @@ export function trackRequest(ctx: BranchContext, ref: RefInfo, author: string): 
 
 /** Check out a commit without a branch. `tag` names the tag it was picked by. */
 export function detachRequest(ctx: BranchContext, row: HistoryRow, tag?: string): Request {
-  const action: Action = { kind: "detach", commit: tag ?? row.id, stash: false };
+  const action: Action = { kind: "detach", commit: tag === undefined ? row.id : compareRef("tag", tag), stash: false };
   const sha = shortId(row.id);
   const lost = onNoBranch(ctx.history).filter((r) => r.id !== row.id);
   const body: Part[] = ["Moves HEAD to commit ", { code: sha }, " ", { quote: row.summary }];

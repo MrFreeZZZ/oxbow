@@ -442,7 +442,7 @@ impl Repo {
 
         let mut touched = self.changed_between(&base, &tip)?;
         if !create {
-            touched.extend(self.changed_between(&tip, to)?);
+            touched.extend(self.changed_between(&tip, &format!("refs/heads/{to}"))?);
         }
         let aside = self.aside_for(&touched)?;
         if let Some(aside) = &aside {

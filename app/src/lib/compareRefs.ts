@@ -9,6 +9,8 @@ export function compareRef(kind: keyof typeof prefixes, name: string): string {
   return prefixes[kind] + name;
 }
 
+export const isCompareSha = (rev: string): boolean => /^[0-9a-f]{4,64}$/i.test(rev);
+
 export function compareLabel(rev: string): string {
   for (const prefix of Object.values(prefixes)) {
     if (rev.startsWith(prefix)) return rev.slice(prefix.length);

@@ -2,7 +2,7 @@
   // Compare: two branches, tags or commits side by side. The list shows the commits only one side
   // has and where they split; the panel shows every change at once, or one commit.
 
-  import { compareLabel, quoteGitArg } from "./compareRefs";
+  import { compareLabel, isCompareSha, quoteGitArg } from "./compareRefs";
   import { api } from "./api";
   import type { CompareCommit, CompareMode, Comparison, History, HistoryRow } from "./types";
   import { lane, relativeTime, shortId, tint } from "./format";
@@ -60,7 +60,11 @@
     api.compare(query.base, query.target, query.mode).then(
       (c) => {
         if (!latest) return;
-        result = { comparison: c, base: query.base, target: query.target };
+        result = {
+          comparison: c,
+          base: isCompareSha(query.base) ? c.baseId : query.base,
+          target: isCompareSha(query.target) ? c.targetId : query.target,
+        };
         loading = false;
         // A commit that is no longer on either side goes back to all the changes.
         if (picked && ![...c.ahead, ...c.behind].some((x) => x.id === picked) && c.mergeBase?.id !== picked) picked = null;

@@ -30,7 +30,7 @@ pub enum SearchMode {
 pub struct SearchQuery {
     pub mode: SearchMode,
     pub text: String,
-    /// Only commits of this branch; every branch, tag and stash when missing.
+    /// Short name of a local branch; every branch, tag and stash when missing.
     #[serde(default)]
     pub branch: Option<String>,
     /// Only commits after this date, as `git log --since` reads it (`1.week.ago`).
@@ -63,7 +63,11 @@ pub struct SearchResult {
 impl SearchQuery {
     /// The arguments that pick the commits, shared by the command that runs and the one shown.
     fn filters(&self) -> Vec<String> {
-        let mut args = vec![self.branch.clone().unwrap_or_else(|| "--all".to_owned())];
+        let mut args = vec![
+            self.branch
+                .as_ref()
+                .map_or_else(|| "--all".to_owned(), |name| format!("refs/heads/{name}")),
+        ];
         if let Some(since) = &self.since {
             args.push(format!("--since={since}"));
         }
@@ -233,7 +237,7 @@ mod tests {
         q.since = Some("1.week.ago".into());
         assert_eq!(
             q.command().display(),
-            "git log main --oneline --since=1.week.ago -- ':(icase)*banner*'"
+            "git log refs/heads/main --oneline --since=1.week.ago -- ':(icase)*banner*'"
         );
         assert_eq!(
             query(SearchMode::File, "page[ab]").command().display(),
