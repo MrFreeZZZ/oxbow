@@ -8,6 +8,7 @@
   import { split, type Found } from "./search.svelte";
   import { bisectPills, bisectRange, type BisectPill } from "./bisect";
   import { segmentsAt } from "./graph";
+  import { historyPosition, historyScrollTop, type HistoryPosition } from "./backStack";
 
   let {
     history,
@@ -46,8 +47,8 @@
     onClearSearch?: () => void;
     /** A commit a branch name or SHA in a git command points at, lit up while its popover is open. */
     pointed?: string | null;
-    /** How far down the list is scrolled, as it scrolls: Back returns to the same spot. */
-    onScroll?: (top: number) => void;
+    /** The first visible row and its offset, so Back returns to the same spot. */
+    onScroll?: (position: HistoryPosition | null) => void;
   } = $props();
 
   // Geometry from the design: 44px two-line rows, lanes 18px apart, trunk lane centered 14px in.
@@ -172,16 +173,14 @@
     untrack(() => {
       const old = anchored;
       anchored = next;
-      if (!old || old === next || !viewport || viewport.scrollTop < ROW) return;
-      const at = Math.max(0, Math.floor((viewport.scrollTop - PAD_TOP) / ROW));
-      const id = old[at]?.id;
-      const now = id === undefined ? -1 : next.findIndex((r) => r.id === id);
-      if (now < 0 || now === at) return;
-      const top = viewport.scrollTop + (now - at) * ROW;
+      if (!old || old === next || !viewport) return;
+      const position = viewport.scrollTop < ROW ? null : historyPosition(old, viewport.scrollTop, ROW, PAD_TOP);
+      const top = position ? historyScrollTop(position, indexOf.get(position.id), ROW, PAD_TOP) : null;
       anchor = top;
       tick().then(() => {
-        if (anchor === top && viewport) viewport.scrollTop = top;
-        anchor = null;
+        if (anchor === top && top !== null && viewport) viewport.scrollTop = top;
+        if (anchor === top) anchor = null;
+        syncScroll();
       });
     });
   });
@@ -313,17 +312,21 @@
     }
   }
 
-  /** Scroll to where the list was, after Back or Forward. */
-  export function scrollTo(top: number) {
+  /** Restore the same visible row after Back or Forward, or reveal the selection if it disappeared. */
+  export function restorePosition(position: HistoryPosition | null, commit: string | null) {
     anchor = null;
     if (!viewport) return;
-    viewport.scrollTop = top;
+    const top = position ? historyScrollTop(position, indexOf.get(position.id), ROW, PAD_TOP) : null;
+    if (top !== null) viewport.scrollTop = top;
+    else if (commit) reveal(commit);
+    else viewport.scrollTop = 0;
     syncScroll();
   }
 
   function syncScroll() {
-    scrollTop = viewport?.scrollTop ?? 0;
-    onScroll?.(scrollTop);
+    if (!viewport) return;
+    scrollTop = viewport.scrollTop;
+    onScroll?.(historyPosition(rows, scrollTop, ROW, PAD_TOP));
   }
 
   // A remounted graph starts with its own position, even if no scroll event fires.

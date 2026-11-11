@@ -64,7 +64,7 @@
   import OperationLog from "./lib/OperationLog.svelte";
   import { shortcut, withKeys } from "./lib/keys";
   import { cannotRestore, isRedo, lostRow, oplog, undoRequest } from "./lib/oplog.svelte";
-  import { canBack, canForward, crumbs, detailOfPlace, moveToPlace, nameOfPlace, newNavigationTrail, recordPlace, resetNavigationTrail, restoreHistoryPosition, type Place } from "./lib/backStack";
+  import { canBack, canForward, crumbs, detailOfPlace, moveToPlace, nameOfPlace, newNavigationTrail, placeKey, recordPlace, resetNavigationTrail, type Place } from "./lib/backStack";
   import { kept } from "./lib/kept";
   import { stepQuery, type SeriesQuery } from "./lib/series";
   import { lane, relativeTime } from "./lib/format";
@@ -465,8 +465,19 @@
 
   /** Go to a place on the trail, as it was left. */
   function goTo(index: number) {
-    const p = moveToPlace(navigation, index, view === "history");
-    if (!p) return;
+    const ticket = session.tickets.take();
+    const from = here && placeKey(here);
+    const fromView = view;
+    const fromResolving = resolving;
+    moveToPlace(navigation, index, {
+      load: (id) => rowsById.has(id) || ensureLoaded(id),
+      current: () => session.tickets.current(ticket) && view === fromView && resolving === fromResolving && !!here && placeKey(here) === from,
+      missing: (id) => confirm.say(notInHistory(id), "warn"),
+      show: showPlace,
+    });
+  }
+
+  function showPlace(p: Place, current: () => boolean) {
     resolving = false;
     switch (p.view) {
       case "history": {
@@ -475,19 +486,12 @@
         submoduleSel = null;
         oplog.compare = null;
         oplog.lost = null;
-        if (p.commit) {
-          unhide(p.commit);
-          selected = p.commit;
-        }
-        const id = selected;
-        const ticket = session.tickets.take();
-        void restoreHistoryPosition(navigation, p, id, {
-          loaded: (commit) => rowsById.has(commit),
-          load: ensureLoaded,
-          frame: (restore) => requestAnimationFrame(restore),
-          current: () => session.tickets.current(ticket) && view === "history" && selected === id,
-          scrollTo: (top) => list?.scrollTo(top),
-          reveal: (commit) => list?.reveal(commit),
+        if (p.commit) unhide(p.commit);
+        selected = p.commit;
+        requestAnimationFrame(() => {
+          if (current() && view === "history" && selected === p.commit) {
+            list?.restorePosition(p.scroll, p.commit);
+          }
         });
         break;
       }
@@ -2348,7 +2352,7 @@
               history={graphHistory!}
               {selected}
               onSelect={select}
-              onScroll={(top) => (navigation.scroll = top)}
+              onScroll={(position) => (navigation.scroll = position)}
               menuFor={commitMenu}
               {found}
               second={pair ? second : null}

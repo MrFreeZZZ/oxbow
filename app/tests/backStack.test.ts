@@ -1,8 +1,8 @@
-import { LIMIT, amend, canBack, canForward, crumbs, detailOfPlace, emptyTrail, go, nameOfPlace, placeKey, visit, type Place, type Trail } from "../src/lib/backStack.ts";
+import { LIMIT, amend, canBack, canForward, crumbs, detailOfPlace, emptyTrail, go, nameOfPlace, placeKey, visit, type HistoryPosition, type Place, type Trail } from "../src/lib/backStack.ts";
 import { Keymap } from "../src/lib/shortcuts.ts";
 import assert from "node:assert/strict";
 
-const history = (commit: string | null, scroll: number | null = null): Place => ({ view: "history", commit, scroll });
+const history = (commit: string | null, scroll: HistoryPosition | null = null): Place => ({ view: "history", commit, scroll });
 const file = (path: string, commit: string | null = null, line: number | null = null): Place => ({ view: "file", path, commit, mode: "blame", at: null, line });
 const pull: Place = { view: "pull", branch: "feature/login" };
 const name = (p: Place) => (p.view === "file" ? (p.line ? `Line ${p.line}` : p.path) : p.view === "pull" ? "PR #42" : p.view === "history" ? "History" : p.view);
@@ -53,8 +53,9 @@ const walk = (...places: Place[]): Trail => places.reduce((t, p) => visit(t, p),
 
 // History's scroll is set on the place being left.
 {
-  const t = amend(walk(history("a")), (p) => (p.view === "history" ? { ...p, scroll: 880 } : p));
-  assert.deepEqual(t.places[0], history("a", 880));
+  const scroll = { id: "visible", offset: -8 };
+  const t = amend(walk(history("a")), (p) => (p.view === "history" ? { ...p, scroll } : p));
+  assert.deepEqual(t.places[0], history("a", scroll));
   assert.deepEqual(amend(emptyTrail(), (p) => p), emptyTrail());
 }
 
