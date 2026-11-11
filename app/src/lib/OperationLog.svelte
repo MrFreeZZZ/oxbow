@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { popoverEscape } from "./popoverEscape";
   // The toolbar's Undo button and its popover: every step Oxbow ran here, newest first. The top
   // one has Undo; any other goes back to right after it with Restore to Here. Its second tab
   // reads git's reflog, which also sees what a terminal or another app did, and finds commits
@@ -85,15 +86,7 @@
     run(request);
   }
 
-  function onKey(event: KeyboardEvent) {
-    if (event.key === "Escape" && oplog.open) {
-      event.preventDefault();
-      oplog.open = false;
-    }
-  }
 </script>
-
-<svelte:window onkeydown={onKey} />
 
 {#snippet failed(what: string, error: string, kept: boolean, loading: boolean, retry: () => void)}
   <div class="read-note" role="alert" title={errorLine(error)}>
@@ -239,7 +232,7 @@
     {#if oplog.open}
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
       <div class="catcher" onclick={() => (oplog.open = false)}></div>
-      <div class="pop" role="dialog" aria-label="Operation Log">
+      <div class="pop" role="dialog" use:popoverEscape={() => (oplog.open = false)} aria-label="Operation Log">
         {@render body()}
       </div>
     {/if}

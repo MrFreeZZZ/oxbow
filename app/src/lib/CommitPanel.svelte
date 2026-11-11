@@ -289,13 +289,12 @@
     openTab(path);
   }
 
-  /** ↑ ↓ on a row of the list open the file over or under it, as in Changes. Each row's own
-   *  keys: All Changes, a file and Show More. */
-  function onFilesKey(event: KeyboardEvent) {
+  /** ↑ ↓ open the file over or under the focused row, as in Changes. */
+  function onFilesKey(event: KeyboardEvent, from = tab) {
     const by = pressed("nextFile", event) ? 1 : pressed("previousFile", event) ? -1 : 0;
     if (!by) return;
     event.preventDefault();
-    if (fileTabs(paths, tab, openTab)(by, false)) requestAnimationFrame(() => {
+    if (fileTabs(paths, from, openTab)(by, false)) requestAnimationFrame(() => {
         const open = filesBox?.querySelector<HTMLElement>('.list [aria-current="true"]');
         if (open) keyFocus(open);
       });
@@ -407,7 +406,7 @@
   </div>
 
   <div class="body" class:stacked bind:clientWidth={bodyWidth}>
-    <div class="files" bind:this={filesBox} aria-label="Changed files" data-steps use:tabStepper={fileTabs(paths, tab, openTab)} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
+    <div class="files" bind:this={filesBox} data-history-files aria-label="Changed files" data-steps use:tabStepper={fileTabs(paths, tab, openTab)} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
       <div class="tools">
         <div class="filter"><FileFilter bind:value={filter} {color} /></div>
         <div class="segmented" role="radiogroup" aria-label="Show files">
@@ -427,7 +426,7 @@
             class="diff-list-row diff-list-group"
             aria-current={tab === null ? "true" : undefined}
             onclick={(e) => rowClick(e, null)}
-            onkeydown={onFilesKey}
+            onkeydown={(event) => onFilesKey(event, null)}
             title="Show the changes of every file"
           >
             <span class="gtitle" style:color={plate(color)}>All Changes</span>
@@ -442,7 +441,7 @@
           </button>
           {#snippet fileRow(file: FileChange, nested: boolean)}
             {@const open = tab === file.path}
-            <button class="file diff-list-row diff-list-file" class:nested aria-current={open ? "true" : undefined} onclick={(e) => rowClick(e, file.path)} onkeydown={onFilesKey} oncontextmenu={(e) => openFileMenu(e, file)} title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
+            <button class="file diff-list-row diff-list-file" class:nested aria-current={open ? "true" : undefined} onclick={(e) => rowClick(e, file.path)} onkeydown={(event) => onFilesKey(event, file.path)} oncontextmenu={(e) => openFileMenu(e, file)} title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
               <span class="diff-list-badge {tone[file.status]}">{statusIcon[file.status]}</span>
               <PathName path={file.path} folders={!nested} />
               {#if foundFiles.includes(file.path)}

@@ -149,7 +149,7 @@
       const step = event.key === "ArrowDown" ? 1 : -1;
       active = active < 0 && step < 0 ? matches.length - 1 : (active + step + matches.length) % matches.length;
       results?.children[active]?.scrollIntoView({ block: "nearest" });
-    } else if (active >= 0 && event.key === "Enter" && !event.metaKey && !event.ctrlKey) {
+    } else if (matches[active] && event.key === "Enter" && !event.isComposing && !event.metaKey && !event.ctrlKey) {
       event.preventDefault();
       event.stopPropagation();
       void pickBranch(matches[active]);
@@ -409,8 +409,13 @@
   .matches .words {
     flex-shrink: 0;
   }
+  .matches button:hover {
+    background: var(--hover-wash);
+  }
   .matches button[aria-selected="true"] {
     background: var(--side-sel);
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
   .branch-name {
     overflow: hidden;

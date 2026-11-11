@@ -202,6 +202,7 @@
       else confirm.cancel();
     } else if (
       event.key === "Enter" &&
+      !event.isComposing &&
       confirm.phase === "ask" &&
       !(event.target instanceof HTMLButtonElement) &&
       // Return makes a new line in a message; ⌘Return runs the action.

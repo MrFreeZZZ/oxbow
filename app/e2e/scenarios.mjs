@@ -116,9 +116,17 @@ export const SCENARIOS = [
       await verify(all);
       const focus = (selector) => app.js((page, selector) => document.querySelector(selector).focus(), selector);
       const filter = 'aside.panel input[aria-label="Filter files"]';
+      await focus(last);
+      await app.keys("ArrowUp");
+      await verify(first);
       await focus(filter);
-      await app.keys("f3", "Ctrl+PageDown");
+      await app.keys("f3");
+      await verify(all, filter);
+      await shows(app, "1 of 2");
+      await shows(app, "file 2 1");
+      await app.keys("Ctrl+PageDown");
       await verify(last, filter);
+      await shows(app, "File 1 of 1");
       await app.keys("Ctrl+PageUp");
       await verify(all, filter);
       const diff = 'aside.panel button[aria-label="Previous change"]';

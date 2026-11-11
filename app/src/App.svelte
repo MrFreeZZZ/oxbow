@@ -953,8 +953,11 @@
 
   /** The next or the previous tab of the details panel, as ⌥⌘→ steps through VS Code's editors. */
   function stepTab(by: 1 | -1): boolean {
-    // Changes steps through its files, which are a list, not tabs.
-    const files = content?.querySelector("aside.panel [data-steps]");
+    // Compare and Stashes have their own file pane outside the History details.
+    if (showConflicts) return false;
+    const files = view === "compare" || view === "stashes"
+      ? document.querySelector("[data-comparison-files]")
+      : content?.querySelector("aside.panel [data-steps]");
     const steps = stepperOf(files);
     if (steps) return steps(by, true);
     const tabs = [...(content?.querySelectorAll<HTMLElement>('aside.panel [role="tablist"] [role="tab"]') ?? [])];
@@ -1792,9 +1795,8 @@
     });
   });
 
-  /** Tab moves between the commit list and the details panel, as a whole: from the list to the
-   *  open tab of the details, and Shift+Tab from that tab back to the list. Inside the details Tab
-   *  keeps its usual way through buttons and fields, and ← → step through the tabs. */
+  /** Tab enters the details at the file controls or the open panel tab. Shift+Tab from
+   *  the entry returns to the graph; controls inside the panel keep their usual Tab order. */
   function paneKeys(event: KeyboardEvent) {
     const target = event.target as HTMLElement;
     const panel = content?.querySelector<HTMLElement>("aside.panel");
@@ -1802,14 +1804,17 @@
     const tab = target.closest<HTMLElement>('[role="tab"]');
     // Shift+Tab comes as ISO_Left_Tab on Linux, which names no key; its code is still Tab.
     const isTab = event.key === "Tab" || event.code === "Tab";
-    if (isTab && !event.shiftKey && target.closest(".history")) {
-      const open = panel.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? panel.querySelector<HTMLElement>("button, input, textarea, [tabindex='0']");
+    if (isTab) {
+      const files = panel.querySelector<HTMLElement>('[data-history-files] input[aria-label="Filter files"]');
+      const open = files ?? panel.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? panel.querySelector<HTMLElement>("button:not([tabindex='-1']), input, textarea, [tabindex='0']");
       if (!open) return;
-      event.preventDefault();
-      keyFocus(open);
-    } else if (isTab && event.shiftKey && tab && panel.contains(tab)) {
-      event.preventDefault();
-      list?.focus();
+      if (!event.shiftKey && target.closest(".history")) {
+        event.preventDefault();
+        keyFocus(open);
+      } else if (event.shiftKey && (target === open || (!files && tab && panel.contains(tab)))) {
+        event.preventDefault();
+        list?.focus();
+      }
     } else if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && tab && panel.contains(tab)) {
       const list = tab.closest('[role="tablist"]');
       const step = stepperOf(list);

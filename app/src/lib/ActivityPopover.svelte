@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { popoverEscape } from "./popoverEscape";
   // The Activity popover under Fetch / Pull / Push, with Reload at the top: the fetch that runs now with its progress,
   // Output and Stop; a Push or Pull waiting for it; and under Done what ran lately with its git
   // commands, with Fix… and Try Again on a fetch that failed.
@@ -66,22 +67,14 @@
     return ICONS[item.kind];
   }
 
-  function onKey(event: KeyboardEvent) {
-    if (event.key === "Escape" && activity.open) {
-      event.preventDefault();
-      activity.open = false;
-    }
-  }
 
   const fixable = (item: ActivityItem) => item.failure?.kind === "auth" || item.failure?.kind === "network" || !!item.failure?.ssh;
 </script>
 
-<svelte:window onkeydown={onKey} />
-
 {#if activity.open}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="catcher" onclick={() => (activity.open = false)}></div>
-  <div class="pop" role="dialog" aria-label="Activity">
+  <div class="pop" role="dialog" use:popoverEscape={() => (activity.open = false)} aria-label="Activity">
     <div class="head">
       <span class="h">Activity</span>
       <span class="every">{auto ? `Auto-fetch every ${every} min` : "Auto-fetch is off"}</span>

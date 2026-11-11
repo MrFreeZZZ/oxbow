@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { popoverEscape } from "./popoverEscape";
   // Under the toolbar of History: where the work is, in one line. "feature/login · 3 changed ·
   // 1 staged · 2 to push · origin checked 4 min ago". A click opens the card with the four
   // places a change passes through: the working folder, the staging area, the local branch and
@@ -115,20 +116,12 @@
     return out;
   });
 
-  function onKey(event: KeyboardEvent) {
-    if (event.key === "Escape" && open) {
-      event.preventDefault();
-      open = false;
-    }
-  }
   /** Close the card, then act. */
   const then = (action: () => void) => () => {
     open = false;
     action();
   };
 </script>
-
-<svelte:window onkeydown={onKey} />
 
 <div class="status">
   <button class="line" class:open onclick={() => (open = !open)} aria-expanded={open} aria-haspopup="dialog">
@@ -155,7 +148,7 @@
   {#if open}
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="catcher" onclick={() => (open = false)}></div>
-    <div class="card" role="dialog" aria-label="Where your work is">
+    <div class="card" role="dialog" use:popoverEscape={() => (open = false)} aria-label="Where your work is">
       <div class="head">
         <span class="h">Where your work is</span>
         <span class="hint">{noTracking ? `Oxbow couldn’t read where ${branch} pushes and pulls` : upstream ? `${branch} tracks ${upstream}` : remote && history.head.commit ? `${branch} is not on ${remote} yet` : `${branch} is only on this computer`}</span>

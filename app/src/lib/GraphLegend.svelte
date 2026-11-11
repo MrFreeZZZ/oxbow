@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { popoverEscape } from "./popoverEscape";
   // "How to Read the Graph": what each mark of the graph means, each with an example from the
   // open repository that a click selects.
 
@@ -66,15 +67,7 @@
     return { a: g.color, b: 0 };
   }
 
-  function onKey(event: KeyboardEvent) {
-    if (open && event.key === "Escape") {
-      event.preventDefault();
-      open = false;
-    }
-  }
 </script>
-
-<svelte:window onkeydown={onKey} />
 
 <span class="anchor">
   <button class="legend-button" class:on={open} onclick={() => (open = !open)} aria-expanded={open} aria-label="How to read the graph" title="How to Read the Graph">
@@ -83,7 +76,7 @@
   {#if open}
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="catcher" onclick={() => (open = false)}></div>
-    <div class="pop" role="dialog" aria-label="How to read the graph">
+    <div class="pop" role="dialog" use:popoverEscape={() => (open = false)} aria-label="How to read the graph">
       <span class="title">How to Read the Graph</span>
       <span class="lead">Examples come from this repository: click one to find it in the graph.</span>
       <ul>
