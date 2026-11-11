@@ -34,6 +34,7 @@
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let matches = $state.raw<RefInfo[]>([]);
   let active = $state(-1);
+  let hovered = $state(-1);
   let results = $state<HTMLDivElement>();
   let placement = $state({ left: 0, top: 0, width: 0, maxHeight: 0 });
 
@@ -41,6 +42,7 @@
     clearTimeout(searchTimer);
     matches = [];
     active = -1;
+    hovered = -1;
   }
 
   onDestroy(() => clearTimeout(searchTimer));
@@ -139,6 +141,7 @@
 
   function onInputKey(event: KeyboardEvent) {
     const el = event.currentTarget as HTMLInputElement;
+    const suggestion = matches[active] ?? matches[hovered];
     if (branchRefs && (event.key === "Tab" || event.code === "Tab")) dismissMatches();
     if (matches.length && event.key === "Escape") {
       event.preventDefault();
@@ -149,10 +152,10 @@
       const step = event.key === "ArrowDown" ? 1 : -1;
       active = active < 0 && step < 0 ? matches.length - 1 : (active + step + matches.length) % matches.length;
       results?.children[active]?.scrollIntoView({ block: "nearest" });
-    } else if (matches[active] && event.key === "Enter" && !event.isComposing && !event.metaKey && !event.ctrlKey) {
+    } else if (suggestion && event.key === "Enter" && !event.isComposing && !event.metaKey && !event.ctrlKey) {
       event.preventDefault();
       event.stopPropagation();
-      void pickBranch(matches[active]);
+      void pickBranch(suggestion);
     } else if (list.length && event.key === "ArrowDown" && !event.metaKey && !event.ctrlKey) {
       event.preventDefault();
       void show();
@@ -256,7 +259,10 @@
           tabindex="-1"
           id="{id}-branch-{i}"
           aria-selected={i === active}
+          class:hovered={i === hovered}
           title={ref.name}
+          onpointerenter={(event) => { if (event.pointerType !== "touch") hovered = i; }}
+          onpointerleave={() => { if (hovered === i) hovered = -1; }}
           onmousedown={(event) => event.preventDefault()}
           onclick={() => pickBranch(ref)}
         >
@@ -409,7 +415,7 @@
   .matches .words {
     flex-shrink: 0;
   }
-  .matches button:hover {
+  .matches button.hovered {
     background: var(--hover-wash);
   }
   .matches button[aria-selected="true"] {
