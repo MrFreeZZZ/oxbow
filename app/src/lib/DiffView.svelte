@@ -44,6 +44,8 @@
   import { mac, withKeys } from "./keys";
   import { combo } from "./shortcuts";
   import ImageDiff from "./ImageDiff.svelte";
+  import { workingFileAction } from "./openFile";
+  import { openWorkingFile, watchWorkingFiles } from "./openFile.svelte";
   import UnusualCard from "./UnusualCard.svelte";
   import LfsCard from "./LfsCard.svelte";
   import SubmoduleCard from "./SubmoduleCard.svelte";
@@ -88,7 +90,7 @@
     hunkBar?: Snippet<[FileDiff, Hunk]>;
     /** Actions for the whole file on its header bar, for the working copy. */
     fileActions?: Snippet<[FileDiff]>;
-    /** Offer to open the file in the editor from Settings › External Tools. */
+    /** Offer to open the working copy in an external app. */
     openable?: boolean;
     /** Code being searched for in History: marked wherever it appears. */
     find?: string | null;
@@ -261,14 +263,14 @@
     window.addEventListener("pointerup", () => window.removeEventListener("pointermove", move), { once: true });
   }
 
-  /** Open the file in the editor, at its first change, or at `line`. */
-  function openInEditor(diff: FileDiff, line: number | null = null) {
+  /** Open the working copy. Text opens at its first change or at `line`. */
+  function openFile(diff: FileDiff, line: number | null = null) {
     const first = diff.hunks[0]?.lines.find((l) => l.kind !== "context" && l.newLine !== null) ?? diff.hunks[0]?.lines[0];
-    api.openInEditor(diff.file.path, line ?? first?.newLine ?? null).catch((err) => confirm.fail(err));
+    openWorkingFile(diff.file.path, line ?? first?.newLine ?? null);
   }
 
   /** Whether a line number of the file's new side opens it in the editor there. */
-  const lineOpens = (diff: FileDiff) => openable && diff.file.status !== "deleted" && !diff.file.submodule;
+  const lineOpens = (diff: FileDiff) => openable && diff.file.status !== "deleted" && statusOf(diff.file.path)?.kind === "text";
 
   /** Lines shown past `lineBudget`: each Show More adds a portion, never everything at once. */
   let extra = $state(0);
@@ -319,6 +321,8 @@
     }
     return { files, hidden: items.length - files.length, cut, left: budget };
   });
+
+  const statusOf = watchWorkingFiles(() => openable ? shown.files.filter((d) => !d.file.submodule).map((d) => d.file.path) : []);
 
   // Files still to load while the budget isn't spent, e.g. as the first ones start folded.
   $effect(() => {
@@ -586,7 +590,7 @@
 <!-- The number of a line of the file as it is now: a click opens the file in the editor there. -->
 {#snippet newNo(diff: FileDiff, no: number | null)}
   {#if no !== null && lineOpens(diff)}
-    <button class="no opens" tabindex="-1" onclick={() => openInEditor(diff, no)} title="Open in Editor at line {no}">{no}</button>
+    <button class="no opens" tabindex="-1" onclick={() => openFile(diff, no)} title={`${workingFileAction(statusOf(diff.file.path), !working).label} at line ${no}`}>{no}</button>
   {:else}
     <span class="no">{no ?? ""}</span>
   {/if}
@@ -700,6 +704,7 @@
   {@const isShut = isFolded(diff)}
   {@const why = isShut ? foldReason(diff) : null}
   {@const kind = isShut ? null : special(diff)}
+  {@const open = workingFileAction(statusOf(diff.file.path), !working)}
   <section class="file" class:shut={isShut} data-path={diff.file.path}>
     <header class="background-sticky">
       <!-- Outlined in the branch color, as the Summary tab is. -->
@@ -744,8 +749,14 @@
             <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.2l2 1.3" /></svg>
           </button>
         {/if}
-        {#if openable && diff.file.status !== "deleted" && !diff.file.submodule}
-          <button class="toggle" onclick={() => openInEditor(diff)} aria-label="Open in editor" title="Open in Editor">
+        {#if openable && !diff.file.submodule}
+          <button
+            class="toggle"
+            aria-disabled={!!open.reason}
+            aria-label={open.reason ? `${open.label}. ${open.reason}` : open.label}
+            title={open.reason ?? open.label}
+            onclick={() => !open.reason && openFile(diff)}
+          >
             <svg class="icon" viewBox="0 0 16 16"><path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" /></svg>
           </button>
         {/if}
@@ -851,7 +862,7 @@
     {:else if kind === "image"}
       <ImageDiff {diff} />
     {:else if kind}
-      <UnusualCard {diff} {kind} {openable} command={command?.(diff) ?? null} onShowAnyway={loadFull ? () => showAnyway(diff) : undefined} />
+      <UnusualCard {diff} {kind} {openable} {open} historical={!working} command={command?.(diff) ?? null} onShowAnyway={loadFull ? () => showAnyway(diff) : undefined} />
     {:else if diff.hunks.length === 0}
       <p class="note">
         {#if diff.file.status === "renamed"}
@@ -998,6 +1009,10 @@
     align-items: center;
     justify-content: center;
     color: var(--icon);
+  }
+  .toggle[aria-disabled="true"] {
+    opacity: 0.45;
+    cursor: default;
   }
   .toggle.on {
     background: var(--win);

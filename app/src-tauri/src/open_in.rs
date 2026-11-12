@@ -1,8 +1,9 @@
 //! Settings › Integrations › Open in: the editors and terminals installed on this computer,
 //! and opening a file or the repository folder in them.
 
-use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::ffi::{OsStr, OsString};
+use std::io::{ErrorKind, Read};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
 #[cfg(not(target_os = "macos"))]
@@ -259,6 +260,54 @@ fn terminal_installed(id: &str) -> bool {
     }
 }
 
+/// The existing working file, with its original name for the system's file association.
+pub fn working_file(root: &Path, path: &str) -> Result<PathBuf, String> {
+    let relative = Path::new(path);
+    let invalid = || format!("{path} is not a file inside this repository.");
+    if path.is_empty() || !relative.components().all(|part| matches!(part, Component::Normal(_))) {
+        return Err(invalid());
+    }
+    let file = root.join(relative);
+    let real = file.canonicalize().map_err(|err| {
+        if err.kind() == ErrorKind::NotFound {
+            format!("The working copy of {path} is missing from disk.")
+        } else {
+            format!("Could not access the working copy of {path}: {err}")
+        }
+    })?;
+    let root = root.canonicalize().map_err(|err| err.to_string())?;
+    if !real.starts_with(root) || !real.is_file() {
+        return Err(invalid());
+    }
+    Ok(file)
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub(crate) enum WorkingFileStatus {
+    Text,
+    Binary,
+    Unavailable { reason: String },
+}
+
+pub(crate) fn inspect_working_file(root: &Path, path: &str) -> Result<(PathBuf, WorkingFileStatus), String> {
+    let file = working_file(root, path)?;
+    let mut head = Vec::new();
+    // Match the diff's binary test, but read the current working file.
+    std::fs::File::open(&file)
+        .and_then(|f| f.take(8000).read_to_end(&mut head))
+        .map_err(|err| match err.kind() {
+            ErrorKind::NotFound => format!("The working copy of {path} is missing from disk."),
+            _ => format!("Could not read the working copy of {path}: {err}"),
+        })?;
+    let status = if head.contains(&0) {
+        WorkingFileStatus::Binary
+    } else {
+        WorkingFileStatus::Text
+    };
+    Ok((file, status))
+}
+
 /// Open `path` in the editor, at `line` when the editor can.
 pub fn open_file(editor: &str, path: &Path, line: Option<u32>) -> Result<(), String> {
     let tool = editor_command(editor).ok_or_else(|| format!("{editor} is not installed"))?;
@@ -357,28 +406,37 @@ pub fn quick_look(path: &Path) -> Result<(), String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        open_url(&path.display().to_string())
+        open_default(path)
     }
 }
 
 /// Open a web page in the default browser.
 pub fn open_url(url: &str) -> Result<(), String> {
+    open_with_system(OsStr::new(url))
+}
+
+/// Open the file in the app associated with its type by the system.
+pub fn open_default(path: &Path) -> Result<(), String> {
+    open_with_system(path.as_os_str())
+}
+
+fn open_with_system(target: &OsStr) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let command = {
         let mut command = Command::new("open");
-        command.arg(url);
+        command.arg(target);
         command
     };
     #[cfg(target_os = "windows")]
     let command = {
         let mut command = Command::new("rundll32");
-        command.args(["url.dll,FileProtocolHandler", url]);
+        command.arg("url.dll,FileProtocolHandler").arg(target);
         command
     };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let command = {
         let mut command = Command::new("xdg-open");
-        command.arg(url);
+        command.arg(target);
         command
     };
     launch(command)
@@ -406,6 +464,44 @@ mod tests {
             .into_iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn opening_a_working_file_requires_a_file_on_disk_inside_the_repo() {
+        let root = std::env::current_dir().unwrap();
+        assert_eq!(working_file(&root, "Cargo.toml"), Ok(root.join("Cargo.toml")));
+        assert_eq!(
+            working_file(&root, "missing-working-copy.png").unwrap_err(),
+            "The working copy of missing-working-copy.png is missing from disk."
+        );
+        assert!(working_file(&root, "../Cargo.toml").is_err());
+        assert!(working_file(&root, "src").is_err());
+    }
+
+    #[test]
+    fn opening_uses_the_live_file_after_replacement_or_removal() {
+        let root = std::env::temp_dir().join(format!("oxbow-working-file-test-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let path = "same name.txt";
+        let file = root.join(path);
+        std::fs::write(&file, "text").unwrap();
+        assert_eq!(
+            inspect_working_file(&root, path),
+            Ok((file.clone(), WorkingFileStatus::Text))
+        );
+        std::fs::write(&file, b"binary\0").unwrap();
+        assert_eq!(
+            inspect_working_file(&root, path),
+            Ok((file.clone(), WorkingFileStatus::Binary))
+        );
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(
+            inspect_working_file(&root, path).unwrap_err(),
+            "The working copy of same name.txt is missing from disk."
+        );
+        std::fs::write(&file, "back as text").unwrap();
+        assert_eq!(inspect_working_file(&root, path), Ok((file, WorkingFileStatus::Text)));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

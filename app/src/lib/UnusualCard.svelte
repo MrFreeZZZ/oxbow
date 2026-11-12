@@ -4,6 +4,8 @@
 
   import { api } from "./api";
   import { confirm } from "./confirm.svelte";
+  import type { workingFileAction } from "./openFile";
+  import { openWorkingFile } from "./openFile.svelte";
   import { mac } from "./keys";
   import TermBlock, { type TermLine } from "./TermBlock.svelte";
   import type { FileDiff, Source } from "./types";
@@ -14,6 +16,8 @@
     kind,
     command = null,
     openable = true,
+    open: openAction,
+    historical,
     onShowAnyway,
   }: {
     diff: FileDiff;
@@ -21,6 +25,8 @@
     /** The `git diff` that shows this file's change, for the binary card. */
     command?: string | null;
     openable?: boolean;
+    open: ReturnType<typeof workingFileAction>;
+    historical: boolean;
     onShowAnyway?: () => void;
   } = $props();
 
@@ -38,9 +44,7 @@
     onShowAnyway?.();
   }
 
-  function openInEditor() {
-    api.openInEditor(file.path, null).catch((err) => confirm.fail(err));
-  }
+  const openCopy = () => openWorkingFile(file.path);
 
   const binaryLines = $derived<TermLine[]>([
     ...(command ? [{ kind: "cmd" as const, text: command }] : []),
@@ -75,13 +79,17 @@
   const style = (eol: string) => (eol === "CRLF" ? "CRLF (the Windows style)" : eol === "LF" ? "LF" : "a mix of LF and CRLF");
 </script>
 
+{#snippet openButton()}
+  <button class="button small" disabled={!!openAction.reason} title={openAction.reason ?? openAction.label} onclick={openCopy}>{openAction.label}</button>
+{/snippet}
+
 <div class="card">
   {#if kind === "binary"}
     <div class="top">
       <span class="badge"><svg class="icon" viewBox="0 0 16 16"><path d="M4 1.5h5.5l3 3v10H4zM9.5 1.5v3h3M6.5 8v4M9.5 8v4M6 8h1M9 8h1" /></svg></span>
       <div>
         <h3>Binary file</h3>
-        <p>Git cannot show it as text, so Oxbow shows what changed about it.</p>
+        <p>Git cannot show it as text.{historical && openable && !openAction.reason ? " The open action uses the working copy on disk." : ""}</p>
       </div>
     </div>
     <dl class="facts">
@@ -99,12 +107,14 @@
     </dl>
     <TermBlock where={name} lines={binaryLines} copy={command ? [command] : []} />
     <div class="actions">
+      {#if openable}{@render openButton()}{/if}
       {#if diff.old}<button class="button small" onclick={() => open(diff.old!, "old")}>Open Old Version</button>{/if}
       {#if diff.new}<button class="button small" onclick={() => open(diff.new!, "new")}>Open New Version</button>{/if}
       {#if openable && file.status !== "deleted"}
         <button class="button small" onclick={() => api.revealFile(file.path).catch((err) => confirm.fail(err))}>{mac ? "Show in Finder" : "Show in Folder"}</button>
       {/if}
     </div>
+    {#if openable && openAction.reason}<p class="tip">{openAction.reason}</p>{/if}
     <p class="tip">Tip: a <code>textconv</code> rule in .gitattributes lets git diff some binary formats as text.</p>
   {:else if kind === "limited" || kind === "tooLarge"}
     <div class="top">
@@ -132,8 +142,9 @@
       {#if kind === "limited" && onShowAnyway}
         <button class="button small primary" disabled={busy} onclick={showAnyway}>{busy ? "Loading…" : "Show Diff Anyway"}</button>
       {/if}
-      {#if openable && file.status !== "deleted"}<button class="button small" onclick={openInEditor}>Open in Editor</button>{/if}
+      {#if openable}{@render openButton()}{/if}
     </div>
+    {#if openable && openAction.reason}<p class="tip">{openAction.reason}</p>{/if}
     {#if kind === "limited"}
       <p class="tip">Change the limit in <button class="link" onclick={() => api.openSettings()}>Settings › Diff & Text</button>.</p>
     {/if}

@@ -5,6 +5,7 @@ import { api } from "./api";
 import { confirm } from "./confirm.svelte";
 import { NEWEST_SAVED, restoreRequest, whenSaved } from "./localHistory";
 import { menuIcons, type MenuEntry } from "./Menu.svelte";
+import { workingFileMenuItem } from "./openFile.svelte";
 import { nav } from "./nav.svelte";
 import type { LocalVersion } from "./types";
 
@@ -44,7 +45,7 @@ export function localVersionEntries(v: LocalVersion, ctx: LocalVersionContext): 
   entries.push({ kind: "item", label: "Save As…", icon: menuIcons.patch, run: () => void saveVersionAs(v), off: !v.kept });
   entries.push({ kind: "sep" });
   if (ctx.history) entries.push({ kind: "item", label: "File History", icon: menuIcons.history, run: () => nav.openFile(v.path, NEWEST_SAVED) });
-  if (!v.gone) entries.push({ kind: "item", label: "Open in Editor", icon: menuIcons.open, run: () => api.openInEditor(v.path, null).catch((err) => confirm.fail(err)) });
+  entries.push(workingFileMenuItem(v.path, true));
   entries.push({ kind: "item", label: "Copy Path", icon: menuIcons.copy, run: () => navigator.clipboard.writeText(v.path).then(() => confirm.say(`Copied ${v.path}.`, "done"), () => {}) });
   return entries;
 }
