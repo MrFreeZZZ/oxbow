@@ -1,6 +1,6 @@
 //! Measure what opening and refreshing a repository costs, as a window does it: the history,
 //! then what the other worktrees and the submodules' folders have. On the fixtures of
-//! `scripts/make-perf-fixtures.sh` (see docs/measuring-reads.md):
+//! `scripts/make-perf-fixtures.sh` (see docs/performance/measuring-reads.md):
 //! `cargo run --release -p oxbow-core --example reads -- <path>...`
 //! `RUNS=30` repeats each step (default 15); `SLOW=2` makes `git status` in every other folder
 //! take 2 seconds longer, to see whether History waits for it; `AT_ONCE=1,2,4,8` compares how

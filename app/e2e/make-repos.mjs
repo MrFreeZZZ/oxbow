@@ -1,4 +1,4 @@
-// The repositories of the Mac checklist in docs/acceptance.md, the same the cloud scenarios use:
+// The repositories of the Mac checklist in docs/testing/acceptance.md, the same the cloud scenarios use:
 // `node app/e2e/make-repos.mjs ~/oxbow-acceptance`. Each run makes them afresh.
 
 import path from "node:path";

@@ -1,5 +1,5 @@
 // The acceptance scenarios: each starts the real app on fixtures of its own and checks what
-// docs/acceptance.md says, with real git underneath. `run(ctx)` throws on a failure and may give
+// docs/testing/acceptance.md says, with real git underneath. `run(ctx)` throws on a failure and may give
 // back a note (a time measured, which way the app went) for the line printed.
 
 import assert from "node:assert/strict";

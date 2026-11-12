@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Creates the repositories Oxbow's reads are measured on (see docs/measuring-reads.md):
+# Creates the repositories Oxbow's reads are measured on (see docs/performance/measuring-reads.md):
 #   history-100k    100,000 commits, 30 side branches (half merged back), 20 tags
 #   history-100k-clone  a clone of it, with origin's branches and a commit not pushed
 #   worktrees-20    a repository with 20 more worktrees, every third with uncommitted changes
