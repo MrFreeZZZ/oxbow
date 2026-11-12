@@ -519,7 +519,7 @@
       </div>
     </div>
 
-    {#if !stacked}<button class="edge" tabindex="-1" style:left={`${filesWidth(bodyWidth) - 4}px`} onpointerdown={(e) => resizeFiles(e, bodyWidth)} aria-label="Resize the files" title="Drag to resize"></button>{/if}
+    {#if !stacked}<button class="vertical-splitter" tabindex="-1" style:left={`${filesWidth(bodyWidth) - 4}px`} onpointerdown={(e) => resizeFiles(e, bodyWidth)} aria-label="Resize the files"></button>{/if}
     <div class="diff" aria-label="Diff">
       <div class="dhead diff-toolbar">
         <span class="caption grow">
@@ -695,20 +695,6 @@
   .stacked .list {
     flex: none;
     overflow: visible;
-  }
-  /* The border to drag between the files and the diff, like the graph's. */
-  .edge {
-    position: absolute;
-    top: 50%;
-    width: 7px;
-    height: 36px;
-    margin-top: -18px;
-    border-radius: var(--radius-xs);
-    background: var(--win);
-    border: 1px solid var(--glass-border);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-    z-index: 2;
-    cursor: col-resize;
   }
   .diff {
     flex-grow: 1;

@@ -334,6 +334,32 @@ button {
   white-space: nowrap;
 }
 
+.vertical-splitter {
+  position: absolute;
+  inset: 0 auto 0 -4px;
+  width: var(--space-2);
+  z-index: 3;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.vertical-splitter::after {
+  content: "";
+  position: absolute;
+  inset: 0 3px;
+  background: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.vertical-splitter:is(:hover, [data-resizing])::after {
+  opacity: 1;
+}
+
+.vertical-splitter:hover:not([data-resizing])::after {
+  transition: opacity 0s 300ms;
+}
+
 /* Buttons light up under the pointer: a soft wash over their own color, so glass capsules,
    grey buttons and the blue action buttons all react alike. Lists and menus with a hover of
    their own are left out. `:root` outweighs the components' own background rules, and only

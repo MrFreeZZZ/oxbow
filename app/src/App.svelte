@@ -2,6 +2,7 @@
   import { message, open } from "@tauri-apps/plugin-dialog";
   import { listen } from "@tauri-apps/api/event";
   import { api, settings } from "./lib/api";
+  import { resizeSplitter } from "./lib/resizeSplitter";
   import { WORKTREE_ID, type History, type HistoryRow, type OutsideChange, type ReadPart, type RecentRepo, type ReflogEntry, type RepoSummary } from "./lib/types";
   import { RepoSession } from "./lib/repoSession.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
@@ -1837,23 +1838,15 @@
   }
 
   function startResize(event: PointerEvent) {
-    const startX = event.clientX;
     // From the width it shows, which a narrow window may have cut down from the one saved.
     const startWidth = shownPanelWidth;
-    const target = event.currentTarget as HTMLElement;
-    target.setPointerCapture(event.pointerId);
-    const move = (e: PointerEvent) => {
+    resizeSplitter(event, (delta) => {
       // Saved without the hidden sidebar's room, so the graph keeps its width when the sidebar comes back.
-      const width = Math.max(Math.min(Math.max(startWidth - (e.clientX - startX), PANEL_MIN), panelMax) - panelBonus, PANEL_MIN);
+      const width = Math.max(Math.min(Math.max(startWidth - delta, PANEL_MIN), panelMax) - panelBonus, PANEL_MIN);
       panelWidth = width;
-    };
-    const up = () => {
-      target.removeEventListener("pointermove", move);
-      target.removeEventListener("pointerup", up);
+    }, () => {
       if (panelWidth !== null) api.setSetting(settings.detailsWidth, Math.round(panelWidth)).catch(() => {});
-    };
-    target.addEventListener("pointermove", move);
-    target.addEventListener("pointerup", up);
+    });
   }
 
   $effect(() => {
@@ -2368,7 +2361,7 @@
         {#if !detailsHidden}
         <aside class="panel" style:width={expanded ? null : `${shownPanelWidth}px`} aria-label="Commit details">
           {#if !expanded}
-            <button class="grip" tabindex="-1" onpointerdown={startResize} aria-label="Resize commit details" title="Drag to resize"></button>
+            <button class="vertical-splitter" tabindex="-1" onpointerdown={startResize} aria-label="Resize commit details"></button>
           {/if}
           <!-- In line with the graph's column bar: what the panel shows, and the room it takes. -->
           <div class="columns panel-bar">
@@ -2964,19 +2957,5 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
-  }
-  .grip {
-    position: absolute;
-    left: -4px;
-    top: 50%;
-    width: 7px;
-    height: 36px;
-    margin-top: -18px;
-    border-radius: var(--radius-xs);
-    background: var(--win);
-    border: 1px solid var(--glass-border);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-    z-index: 2;
-    cursor: col-resize;
   }
 </style>

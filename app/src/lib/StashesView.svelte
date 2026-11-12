@@ -368,7 +368,7 @@
   </section>
 
   <section class="detail" style:width="{panelWidth}px" aria-label="Stash details">
-    <button class="grip" tabindex="-1" onpointerdown={onGrip} aria-label="Resize the stash details" title="Drag to resize"></button>
+    <button class="vertical-splitter" tabindex="-1" onpointerdown={onGrip} aria-label="Resize the stash details"></button>
     {#if stash}
       {@const f = files[stash.id]}
       {@const conflicts = check?.conflicts ?? []}
@@ -659,20 +659,6 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
-  }
-  .grip {
-    position: absolute;
-    left: -4px;
-    top: 50%;
-    width: 7px;
-    height: 36px;
-    margin-top: -18px;
-    border-radius: var(--radius-xs);
-    background: var(--win);
-    border: 1px solid var(--glass-border);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-    z-index: 2;
-    cursor: col-resize;
   }
   .head {
     padding: 16px 16px 12px;

@@ -124,7 +124,7 @@
       {#if needle && !shown.length}<p class="empty">No files match the filter.</p>{/if}
     </div>
   </div>
-  {#if !stacked}<button class="edge" tabindex="-1" style:left={`${filesWidth(width) - 4}px`} onpointerdown={(event) => resizeFiles(event, width)} aria-label="Resize the files" title="Drag to resize"></button>{/if}
+  {#if !stacked}<button class="vertical-splitter" tabindex="-1" style:left={`${filesWidth(width) - 4}px`} onpointerdown={(event) => resizeFiles(event, width)} aria-label="Resize the files"></button>{/if}
   <div class="diff" aria-label="Diff">
     <div class="dhead diff-toolbar">
       <span class="caption grow">
@@ -153,19 +153,6 @@
   .file { position: relative; }
   .name { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: 100%; }
   .more { justify-content: center; padding: 0; color: var(--text2); font-size: var(--text-small); }
-  .edge {
-    position: absolute;
-    top: 50%;
-    width: 7px;
-    height: 36px;
-    margin-top: -18px;
-    border-radius: var(--radius-xs);
-    background: var(--win);
-    border: 1px solid var(--glass-border);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-    z-index: 2;
-    cursor: col-resize;
-  }
   .diff { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
   .dhead { display: flex; align-items: center; gap: 10px; min-height: 46px; flex-shrink: 0; }
   .caption, .empty { color: var(--text2); font-size: var(--text-small); }
