@@ -53,6 +53,108 @@
   import { bytes, imageType, isSvg } from "./unusual";
   import { hscroll, widestLine } from "./hscroll";
   import { changePreview } from "./diffScroll";
+  import { menuIcons } from "./Menu.svelte";
+
+  let copySelection = $state<{ text: string; x: number; y: number } | null>(null);
+  const copySize = 26;
+  let selectingWithMouse = false;
+  let mouseSelectionEnd: { x: number; y: number } | null = null;
+
+  function selectedCode() {
+    const selection = document.getSelection();
+    if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
+    const anchor = selection.anchorNode;
+    const element = anchor instanceof Element ? anchor : anchor?.parentElement;
+    const code = element?.closest(".code.selectable");
+    if (!code || !selection.focusNode || !code.contains(selection.focusNode) || !codeRoots.has(code)) return null;
+    const side = element?.closest(".half")?.getAttribute("data-side");
+    if (split && !side) return null;
+
+    const range = selection.getRangeAt(0);
+    const lines: string[] = [];
+    const rects: DOMRect[] = [];
+    for (const line of code.querySelectorAll<HTMLElement>(side ? `[data-side="${side}"] .selection-text` : ".selection-text")) {
+      if (!range.intersectsNode(line)) continue;
+      const part = document.createRange();
+      part.selectNodeContents(line);
+      if (line.contains(range.startContainer)) part.setStart(range.startContainer, range.startOffset);
+      if (line.contains(range.endContainer)) part.setEnd(range.endContainer, range.endOffset);
+      const value = part.toString();
+      if (part.collapsed) continue;
+      lines.push(line.hasAttribute("data-empty") ? "" : value);
+      rects.push(...Array.from(part.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0));
+    }
+    return { text: lines.join("\n"), rects };
+  }
+
+  const codeRoots = new Set<Element>();
+  function copyRoot(element: HTMLElement) {
+    codeRoots.add(element);
+    return { destroy: () => codeRoots.delete(element) };
+  }
+
+  function beginMouseSelection(event: MouseEvent) {
+    if (event.button !== 0 || (event.target instanceof Element && event.target.closest(".copy-selection"))) return;
+    selectingWithMouse = true;
+    mouseSelectionEnd = null;
+    copySelection = null;
+  }
+
+  function endMouseSelection(event: MouseEvent) {
+    if (event.button !== 0 || !selectingWithMouse) return;
+    selectingWithMouse = false;
+    mouseSelectionEnd = { x: event.clientX, y: event.clientY };
+    updateCopySelection();
+  }
+
+  function updateCopySelection() {
+    if (selectingWithMouse) return;
+    copySelection = null;
+    const selected = selectedCode();
+    if (!selected?.text) return;
+    const gap = 4;
+    const rects = selected.rects.filter((rect) => rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth);
+    if (!rects.length) return;
+    const first = rects[0], last = rects[rects.length - 1];
+    const clampX = (x: number) => Math.max(gap, Math.min(x, innerWidth - copySize - gap));
+    const clampY = (y: number) => Math.max(gap, Math.min(y, innerHeight - copySize - gap));
+    const nearPointer = mouseSelectionEnd
+      ? [
+          { x: mouseSelectionEnd.x + gap, y: clampY(mouseSelectionEnd.y - copySize / 2) },
+          { x: mouseSelectionEnd.x - copySize - gap, y: clampY(mouseSelectionEnd.y - copySize / 2) },
+          { x: clampX(mouseSelectionEnd.x - copySize / 2), y: mouseSelectionEnd.y + gap },
+          { x: clampX(mouseSelectionEnd.x - copySize / 2), y: mouseSelectionEnd.y - copySize - gap },
+        ]
+      : [];
+    const positions = [
+      ...nearPointer,
+      { x: last.right + gap, y: clampY(last.top) },
+      { x: clampX(last.left), y: last.bottom + gap },
+      { x: clampX(first.left), y: first.top - copySize - gap },
+      { x: first.left - copySize - gap, y: clampY(first.top) },
+    ];
+    const position = positions.find(({ x, y }) =>
+      x >= gap && x + copySize <= innerWidth - gap && y >= gap && y + copySize <= innerHeight - gap &&
+      rects.every((rect) => x + copySize <= rect.left || x >= rect.right || y + copySize <= rect.top || y >= rect.bottom),
+    );
+    if (position) copySelection = { ...position, text: selected.text };
+  }
+
+  function copyCode() {
+    if (!copySelection) return;
+    navigator.clipboard.writeText(copySelection.text).then(
+      () => confirm.say("Copied selection.", "done"),
+      () => confirm.say("Couldn’t copy to the clipboard.", "error"),
+    );
+  }
+
+  function copyWithKeyboard(event: ClipboardEvent) {
+    if (event.defaultPrevented || !event.clipboardData) return;
+    const selected = selectedCode();
+    if (!selected?.text) return;
+    event.clipboardData.setData("text/plain", selected.text);
+    event.preventDefault();
+  }
 
   let {
     diffs,
@@ -557,7 +659,7 @@
 
 <!-- A line's code: syntax colors, changed words, matches of Find. `counted` is false for the
      old side of an unchanged line in Side by Side, whose matches are the new side's again. -->
-{#snippet code(diff: FileDiff, line: DiffLine, language: ReturnType<typeof languageOf>, counted: boolean)}<span class="text"><span class="ink">{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found && counted} class:twin={piece.found && !counted} data-hit={counted ? piece.hit : undefined} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}{#if line.cr && own(showEol, diff.file.path)}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}{#if line.secret}<span class="secret" title="Looks like a secret: Oxbow stops the commit until it is unstaged, or you commit anyway. Add oxbow:allow to the line if it is not one."><svg viewBox="0 0 16 16"><path d="M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2" /></svg>{line.secret}</span>{/if}</span></span>{/snippet}
+{#snippet code(diff: FileDiff, line: DiffLine, language: ReturnType<typeof languageOf>, counted: boolean)}<span class="text"><span class="ink"><span class="selection-text" data-empty={line.text ? undefined : ""}>{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found && counted} class:twin={piece.found && !counted} data-hit={counted ? piece.hit : undefined} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>{#if line.cr && own(showEol, diff.file.path)}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}{#if line.secret}<span class="secret" title="Looks like a secret: Oxbow stops the commit until it is unstaged, or you commit anyway. Add oxbow:allow to the line if it is not one."><svg viewBox="0 0 16 16"><path d="M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2" /></svg>{line.secret}</span>{/if}</span></span>{/snippet}
 
 {#snippet pickBox(hunk: Hunk, line: DiffLine, i: number, on: boolean)}
   <button
@@ -603,6 +705,7 @@
   {@const on = at !== null && picked.includes(at)}
   <div
     class="half {line ? line.kind : 'empty'}"
+    data-side={side}
     class:picking
     class:faded={picked.length > 0 && !!line && line.kind !== "context" && !on}
     class:lit={!!line && !!notes?.lit(diff, line)}
@@ -698,6 +801,35 @@
     </div>
   {/if}
 {/snippet}
+
+<svelte:document
+  onmousedowncapture={beginMouseSelection}
+  onmouseupcapture={endMouseSelection}
+  onkeydowncapture={() => (mouseSelectionEnd = null)}
+  onselectionchange={updateCopySelection}
+  oncopy={copyWithKeyboard}
+  onscrollcapture={() => (copySelection = null)}
+/>
+<svelte:window
+  onresize={() => (copySelection = null)}
+  onblur={() => {
+    selectingWithMouse = false;
+    mouseSelectionEnd = null;
+    copySelection = null;
+  }}
+/>
+
+{#if copySelection}
+  <div class="copy-selection" style:left="{copySelection.x}px" style:top="{copySelection.y}px">
+    <button
+      class="button primary small icon-only"
+      aria-label="Copy to Clipboard"
+      title="Copy to Clipboard"
+      onmousedown={(event) => event.preventDefault()}
+      onclick={copyCode}
+    ><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d={menuIcons.copy} /></svg></button>
+  </div>
+{/if}
 
 {#each shown.files as diff (diff.file.path)}
   {@const path = splitPath(diff.file.path)}
@@ -878,7 +1010,7 @@
       {@const cut = shown.cut?.diff === diff ? shown.cut : null}
       {#if notes?.top}{@render notes.top(diff)}{/if}
       {#key wrap}
-      <div class="code mono selectable" class:nowrap={!wrap} style:--digits={digits(diff)} style:--cols={wrap ? null : columns(diff)} use:sideways={wrap ? null : `${textLayout}:${columns(diff)}:${digits(diff)}`}>
+      <div class="code mono selectable" use:copyRoot class:nowrap={!wrap} style:--digits={digits(diff)} style:--cols={wrap ? null : columns(diff)} use:sideways={wrap ? null : `${textLayout}:${columns(diff)}:${digits(diff)}`}>
         {#each piecesOf(diff, drawnHunks(diff, cut), !!cut) as piece (piece.kind === "hunk" ? `h${piece.h}` : `${piece.kind}${piece.from}`)}
           {#if piece.kind === "folded"}
             {@render foldBar(diff, piece)}
@@ -912,6 +1044,22 @@
 {/if}
 
 <style>
+  .copy-selection {
+    position: fixed;
+    z-index: 3;
+    display: grid;
+    border-radius: var(--radius-pill);
+    background: var(--accent);
+    box-shadow: var(--glass-shadow);
+    transform: translateZ(0);
+  }
+  .copy-selection .button {
+    color: white;
+    background-color: transparent;
+  }
+  .copy-selection .button:focus-visible {
+    outline-color: currentColor;
+  }
   .file {
     padding: 0 var(--diff-file-inset) var(--space-4);
   }
