@@ -130,11 +130,20 @@ impl Repo {
                     old: blob(&r.old_id),
                     new: blob(&r.new_id),
                     submodule: None,
+                    line_endings: None,
                     file: FileChange::default(),
                 };
                 match self.texts(&r)? {
                     None => file.binary = !is_special(&r),
                     Some((before, after)) => {
+                        diff.line_endings = Some([
+                            diff.old
+                                .as_ref()
+                                .and_then(|_| crate::commit::line_ending(before.as_bytes())),
+                            diff.new
+                                .as_ref()
+                                .and_then(|_| crate::commit::line_ending(after.as_bytes())),
+                        ]);
                         match crate::commit::diff_text_within(
                             &before,
                             &after,

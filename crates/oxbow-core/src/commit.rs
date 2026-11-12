@@ -146,6 +146,42 @@ pub struct EolChange {
     pub lines: u32,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub enum LineEnding {
+    #[serde(rename = "LF")]
+    Lf,
+    #[serde(rename = "CRLF")]
+    Crlf,
+    Mixed,
+    #[serde(rename = "No EOL")]
+    None,
+}
+
+pub(crate) fn line_ending(data: &[u8]) -> Option<LineEnding> {
+    if is_binary(data) {
+        return None;
+    }
+    let mut lf = false;
+    let mut crlf = false;
+    for (i, &byte) in data.iter().enumerate() {
+        if byte == b'\n' {
+            if i > 0 && data[i - 1] == b'\r' {
+                crlf = true;
+            } else {
+                lf = true;
+            }
+            if lf && crlf {
+                return Some(LineEnding::Mixed);
+            }
+        }
+    }
+    Some(match (lf, crlf) {
+        (true, _) => LineEnding::Lf,
+        (_, true) => LineEnding::Crlf,
+        _ => LineEnding::None,
+    })
+}
+
 /// Where the bytes of one side of a file diff can be read, to show an image or open a binary
 /// file in another app.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -170,6 +206,9 @@ pub struct FileDiff {
     /// The file before and after the change, where it exists.
     pub old: Option<Source>,
     pub new: Option<Source>,
+    /// Line endings from the complete old and new file contents.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_endings: Option<[Option<LineEnding>; 2]>,
     /// For a submodule: how its recorded commit moved, in place of line changes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub submodule: Option<crate::submodules::SubmoduleMove>,
@@ -287,6 +326,7 @@ type ChangesSlot = Mutex<Option<Arc<Vec<Change>>>>;
 
 /// What reading both sides of a change found.
 struct Inspected {
+    line_endings: Option<[Option<LineEnding>; 2]>,
     /// `None` for binary content.
     hunks: Option<Vec<Hunk>>,
     too_large: bool,
@@ -592,6 +632,7 @@ impl Repo {
                 old: None,
                 new: None,
                 submodule: Some(moved),
+                line_endings: None,
             });
         }
         let found = inspect(
@@ -615,6 +656,7 @@ impl Repo {
             old: blob(change.old),
             new: blob(change.new),
             submodule: None,
+            line_endings: found.line_endings,
         })
     }
 }
@@ -1146,12 +1188,14 @@ fn inspect(
         if [old, new].into_iter().flatten().any(|id| starts_binary(repo, id)) {
             file.binary = true;
             return Ok(Inspected {
+                line_endings: None,
                 hunks: None,
                 too_large: false,
                 limited: false,
             });
         }
         return Ok(Inspected {
+            line_endings: None,
             hunks: Some(Vec::new()),
             too_large: true,
             limited: false,
@@ -1177,6 +1221,7 @@ fn inspect(
             file.similarity = Some(if before == after { 100 } else { 0 });
         }
         return Ok(Inspected {
+            line_endings: None,
             hunks: None,
             too_large: false,
             limited: false,
@@ -1184,12 +1229,19 @@ fn inspect(
     }
     if before.len() > MAX_BLOB_BYTES || after.len() > MAX_BLOB_BYTES {
         return Ok(Inspected {
+            line_endings: None,
             hunks: Some(Vec::new()),
             too_large: true,
             limited: false,
         });
     }
     stop()?;
+    let line_endings = (with_words && file.lfs.is_none()).then(|| {
+        [
+            old.and_then(|_| line_ending(&before)),
+            new.and_then(|_| line_ending(&after)),
+        ]
+    });
     let before = String::from_utf8_lossy(&before);
     let after = String::from_utf8_lossy(&after);
     let budget = if max_lines == 0 {
@@ -1214,6 +1266,7 @@ fn inspect(
         file.similarity = Some(similarity(&before, &after, file.deletions));
     }
     Ok(Inspected {
+        line_endings,
         hunks: Some(hunks),
         too_large,
         limited,

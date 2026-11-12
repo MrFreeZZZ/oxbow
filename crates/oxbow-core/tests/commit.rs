@@ -413,3 +413,35 @@ fn lines_of_a_file_on_disk_are_read_again_once_it_changes() {
     set_time(at(30));
     assert_eq!(first(&repo.reopen().unwrap()), "swap 1");
 }
+
+#[test]
+fn diff_line_endings_come_from_both_complete_versions() {
+    use oxbow_core::Side;
+    use oxbow_core::commit::LineEnding::{Crlf, Lf, Mixed, None as NoEol};
+
+    let mut fx = Fixture::new();
+    let middle: String = (0..20).map(|i| format!("line {i}\n")).collect();
+    fx.write("delete", "old\r\n");
+    fx.commit("plain", &format!("start\r\n{middle}last\n"), "Root");
+    let changed = format!("start\r\n{middle}changed\n");
+    fx.write("plain", &changed);
+    fx.git(&["add", "plain"]);
+    fx.write("plain", &changed.replace('\n', "\r\n").replace("\r\r", "\r"));
+    fx.write("single", "unterminated");
+    fx.git(&["rm", "delete"]);
+
+    let repo = Repo::open(fx.path()).unwrap();
+    let staged = repo.working_diff("plain", Side::Staged, false).unwrap();
+    assert!(staged.hunks.iter().flat_map(|h| &h.lines).all(|l| !l.cr));
+    assert_eq!(staged.line_endings, Some([Some(Mixed), Some(Mixed)]));
+    let unstaged = repo.working_diff("plain", Side::Unstaged, false).unwrap();
+    assert_eq!(unstaged.line_endings, Some([Some(Mixed), Some(Crlf)]));
+    let added = repo.working_diff("single", Side::Unstaged, false).unwrap();
+    assert_eq!(added.line_endings, Some([None, Some(NoEol)]));
+    let deleted = repo.working_diff("delete", Side::Staged, false).unwrap();
+    assert_eq!(deleted.line_endings, Some([Some(Crlf), None]));
+
+    let id = fx.commit("plain", &format!("start\n{middle}last\n"), "Use LF");
+    let diff = repo.commit_diff(&id, Some("plain"), DiffContext::Compact).unwrap();
+    assert_eq!(diff[0].line_endings, Some([Some(Mixed), Some(Lf)]));
+}

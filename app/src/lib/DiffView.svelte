@@ -837,6 +837,10 @@
   {@const why = isShut ? foldReason(diff) : null}
   {@const kind = isShut ? null : special(diff)}
   {@const open = workingFileAction(statusOf(diff.file.path), !working)}
+  {@const [oldEnding, newEnding] = diff.lineEndings ?? []}
+  {@const ending = diff.file.status === "deleted" ? oldEnding
+    : diff.file.status === "added" || diff.file.status === "untracked" ? newEnding
+    : oldEnding && newEnding ? (oldEnding === newEnding ? oldEnding : `${oldEnding} → ${newEnding}`) : null}
   <section class="file" class:shut={isShut} data-path={diff.file.path}>
     <header class="background-sticky">
       <!-- Outlined in the branch color, as the Summary tab is. -->
@@ -858,6 +862,9 @@
           {@render name(diff)}
           <span class="status">{statusLabel[diff.file.status]}</span>
           <span class="spacer"></span>
+        {/if}
+        {#if ending}
+          <span class="mono size" title="Line endings: {ending}">{ending}</span>
         {/if}
         {#if diff.file.submodule}
           <span class="size">Submodule</span>

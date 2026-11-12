@@ -501,6 +501,8 @@ export interface Hunk {
   runs?: string[];
 }
 
+type LineEnding = "LF" | "CRLF" | "Mixed" | "No EOL";
+
 export interface FileDiff {
   file: FileChange;
   hunks: Hunk[];
@@ -509,6 +511,7 @@ export interface FileDiff {
   limited: boolean;
   old: Source | null;
   new: Source | null;
+  lineEndings?: [LineEnding | null, LineEnding | null];
   /** For a submodule: how its recorded commit moved, in place of lines. */
   submodule?: SubmoduleMove;
 }
