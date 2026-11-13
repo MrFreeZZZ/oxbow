@@ -2,7 +2,7 @@
   // Compare: two branches, tags or commits side by side. The list shows the commits only one side
   // has and where they split; the panel shows every change at once, or one commit.
 
-  import { compareLabel, quoteGitArg } from "./compareRefs";
+  import { compareLabel, isCompareSha, quoteGitArg } from "./compareRefs";
   import { api } from "./api";
   import type { CompareCommit, CompareMode, Comparison, History, HistoryRow } from "./types";
   import { lane, relativeTime, shortId, tint } from "./format";
@@ -60,7 +60,11 @@
     api.compare(query.base, query.target, query.mode).then(
       (c) => {
         if (!latest) return;
-        result = { comparison: c, base: query.base, target: query.target };
+        result = {
+          comparison: c,
+          base: isCompareSha(query.base) ? c.baseId : query.base,
+          target: isCompareSha(query.target) ? c.targetId : query.target,
+        };
         loading = false;
         // A commit that is no longer on either side goes back to all the changes.
         if (picked && ![...c.ahead, ...c.behind].some((x) => x.id === picked) && c.mergeBase?.id !== picked) picked = null;
@@ -194,7 +198,7 @@
         </div>
       </section>
       <aside class="panel" style:width="{panelWidth}px" aria-label="Changes">
-        <button class="grip" onpointerdown={onGrip} aria-label="Resize the changes" title="Drag to resize"></button>
+        <button class="vertical-splitter" title="Drag to resize" tabindex="-1" onpointerdown={onGrip} aria-label="Resize the changes"></button>
         {#if picked && pickedRow}
           <CommitPanel row={pickedRow} childIds={childrenOf(pickedRow.id)} {lookup} onSelect={(id) => (picked = id)} localTags={history.localTags} {version} inHead={(id) => ancestors(history, history.head.commit).has(id)} />
         {:else if picked}
@@ -428,20 +432,6 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
-  }
-  .grip {
-    position: absolute;
-    left: -4px;
-    top: 50%;
-    width: 7px;
-    height: 36px;
-    margin-top: -18px;
-    border-radius: var(--radius-xs);
-    background: var(--win);
-    border: 1px solid var(--glass-border);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-    z-index: 2;
-    cursor: col-resize;
   }
   .command {
     display: flex;

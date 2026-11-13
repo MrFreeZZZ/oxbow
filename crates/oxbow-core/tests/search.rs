@@ -66,6 +66,7 @@ fn branch_filter_limits_the_search() {
     let main = fx.commit("a.txt", "one\n", "Fix login");
     fx.git(&["switch", "-q", "-c", "topic"]);
     fx.commit("a.txt", "two\n", "Fix login again");
+    fx.git(&["tag", "main", "HEAD"]);
     let repo = Repo::open(fx.path()).unwrap();
     let query = SearchQuery {
         mode: SearchMode::Message,
@@ -76,7 +77,7 @@ fn branch_filter_limits_the_search() {
     };
     let result = repo.search(&query).unwrap();
     assert_eq!(result.hits.iter().map(|h| h.id.clone()).collect::<Vec<_>>(), [main]);
-    assert_eq!(result.command, "git log main --oneline -i -F --grep=login");
+    assert_eq!(result.command, "git log refs/heads/main --oneline -i -F --grep=login");
 }
 
 #[test]

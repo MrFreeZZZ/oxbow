@@ -1,102 +1,123 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  moveToPlace, newNavigationTrail, recordPlace, resetNavigationTrail, restoreHistoryPosition, type Place,
+  historyPosition, historyScrollTop, moveToPlace, newNavigationTrail, recordPlace, resetNavigationTrail,
+  type HistoryPosition, type Place,
 } from "../src/lib/backStack.ts";
 
-const history = (commit: string, scroll: number | null = null): Extract<Place, { view: "history" }> =>
-  ({ view: "history", commit, scroll });
+const history = (commit: string, scroll: HistoryPosition | null = null): Place => ({ view: "history", commit, scroll });
+const file: Place = { view: "file", path: "a.txt", commit: "visible", mode: "changes", at: null, line: null };
 
-test("Back and Forward restore the commit and scroll saved at each History stop", async () => {
+function navigation() {
   const state = newNavigationTrail();
-  recordPlace(state, history("older"));
-  state.scroll = 200;
-  state.jumping = true;
-  recordPlace(state, history("newer"));
-  state.scroll = 900;
-
-  const older = moveToPlace(state, 0, true);
-  assert.deepEqual(older, history("older", 200));
-  if (older?.view !== "history") throw new Error("Expected a History stop");
-  recordPlace(state, older);
-
-  const scrolled: number[] = [];
-  await restoreHistoryPosition(state, older, older.commit, {
-    loaded: () => true,
-    load: async () => assert.fail("The commit is already loaded"),
-    frame: (restore) => restore(),
+  const warnings: string[] = [];
+  const frames: (() => boolean)[] = [];
+  let shown: Place | null = null;
+  const graph = {
+    load: (_id: string): boolean | Promise<boolean> => true,
     current: () => true,
-    scrollTo: (top) => {
-      scrolled.push(top);
-      state.scroll = top;
+    missing: (id: string) => { warnings.push(id); },
+    show: (place: Place, current: () => boolean) => {
+      shown = place;
+      frames.push(current);
+      recordPlace(state, place);
     },
-    reveal: () => assert.fail("The saved scroll takes precedence"),
-  });
-  assert.deepEqual(scrolled, [200]);
-  assert.deepEqual(moveToPlace(state, 1, true), history("newer", 900));
-  assert.deepEqual(moveToPlace(state, 0, false), history("older", 200));
+  };
+  return { state, warnings, frames, graph, shown: () => shown };
+}
+
+test("Back and Forward keep each History stop's top row and pixel offset", () => {
+  const { state, graph, shown } = navigation();
+  const rows = ["head", "visible", "selected", "old"].map((id) => ({ id }));
+  recordPlace(state, history("selected"));
+  state.scroll = historyPosition(rows, 54, 44, 4);
+  recordPlace(state, file);
+  recordPlace(state, history("head"));
+  state.scroll = historyPosition(rows, 0, 44, 4);
+
+  const before = state.scroll;
+  moveToPlace(state, 0, graph);
+  const place = shown();
+  assert.deepEqual(place, history("selected", { id: "visible", offset: -6 }));
+  assert.ok(place?.view === "history" && place.scroll);
+  assert.equal(historyScrollTop(place.scroll, 1, 44, 4), 54);
+  const updated = [{ id: "newer" }, { id: "new" }, ...rows];
+  const index = updated.findIndex((r) => r.id === place.scroll?.id);
+  assert.equal(historyScrollTop(place.scroll, index, 44, 4), 142);
+  const clipped = historyPosition(rows, 90, 44, 4)!;
+  const compactTop = historyScrollTop(clipped, 1, 28, 4)!;
+  assert.equal(historyPosition(rows, compactTop, 28, 4)?.id, "visible");
+  assert.deepEqual(historyPosition(updated, 142, 44, 4), place.scroll);
+  assert.equal(historyScrollTop(place.scroll, undefined, 44, 4), null);
+  moveToPlace(state, 2, graph);
+  assert.deepEqual(shown(), history("head", before));
 });
 
-for (const cancelled of ["load failed", "frame expired"]) {
-  test(`History keeps the actual scroll when restoration is cancelled: ${cancelled}`, async () => {
-    const state = newNavigationTrail();
-    recordPlace(state, history("older"));
-    state.scroll = 200;
-    state.jumping = true;
-    recordPlace(state, history("newer"));
-    state.scroll = 900;
-
-    const place = moveToPlace(state, 0, true);
-    if (place?.view !== "history") throw new Error("Expected a History stop");
-    const frames: (() => void)[] = [];
-    let current = true;
-    await restoreHistoryPosition(state, place, place.commit, {
-      loaded: () => false,
-      load: async () => cancelled !== "load failed",
-      frame: (restore) => { frames.push(restore); },
-      current: () => current,
-      scrollTo: () => assert.fail("A cancelled restore must not scroll"),
-      reveal: () => assert.fail("A cancelled restore must not reveal"),
+for (const direction of ["Back", "Forward"]) {
+  test(`${direction} to a commit removed by a rewrite keeps the current screen and trail`, async () => {
+    const { state, graph, shown, warnings } = navigation();
+    if (direction === "Back") {
+      recordPlace(state, history("rewritten"));
+      recordPlace(state, file);
+    } else {
+      recordPlace(state, file);
+      recordPlace(state, history("rewritten"));
+      moveToPlace(state, 0, graph);
+    }
+    const trail = state.trail;
+    const screen = shown();
+    moveToPlace(state, direction === "Back" ? 0 : 1, {
+      ...graph,
+      load: async () => false,
     });
-
-    // Picking a row already in view changes the selection without producing a scroll event.
-    current = false;
-    recordPlace(state, history("visible"));
-    for (const frame of frames) frame();
-    assert.equal(state.scroll, 900);
-    assert.deepEqual(moveToPlace(state, 1, true), history("newer", 900));
-    assert.deepEqual(moveToPlace(state, 0, true), history("visible", 900));
+    assert.equal(state.trail, trail);
+    await Promise.resolve();
+    assert.equal(state.trail, trail);
+    assert.equal(shown(), screen);
+    assert.deepEqual(warnings, ["rewritten"]);
   });
 }
 
-test("switching repositories clears the trail and cancels pending History restoration", async () => {
-  const state = newNavigationTrail();
-  recordPlace(state, history("shared-commit"));
-  recordPlace(state, { view: "stashes", stash: null });
-  const place = moveToPlace(state, 0, false);
-  if (place?.view !== "history") throw new Error("Expected a History stop");
-  let finishLoad!: (loaded: boolean) => void;
-  const load = new Promise<boolean>((resolve) => { finishLoad = resolve; });
-  const frames: (() => void)[] = [];
-  const restored: string[] = [];
-  const graph = {
-    loaded: () => false,
-    load: () => load,
-    frame: (restore: () => void) => { frames.push(restore); },
-    current: () => true,
-    scrollTo: () => assert.fail("There is no saved scroll"),
-    reveal: (id: string) => restored.push(id),
-  };
-  const pendingLoad = restoreHistoryPosition(state, place, place.commit, graph);
-  await restoreHistoryPosition(state, place, place.commit, { ...graph, loaded: () => true });
-  state.jumping = true;
-  resetNavigationTrail(state);
-  recordPlace(state, history("shared-commit"));
+test("the current History stop is saved at the moment the destination finishes loading", async () => {
+  const { state, graph, shown } = navigation();
+  recordPlace(state, history("older"));
+  recordPlace(state, file);
+  recordPlace(state, history("newer"));
+  let finish!: (loaded: boolean) => void;
+  const load = new Promise<boolean>((resolve) => { finish = resolve; });
+  moveToPlace(state, 0, { ...graph, load: () => load });
+  assert.equal(state.trail.at, 2);
+  assert.equal(shown(), null);
+  state.scroll = { id: "latest-visible", offset: -12 };
+  finish(true);
+  await load;
+  assert.equal(state.trail.at, 0);
+  assert.deepEqual(shown(), history("older"));
+  assert.deepEqual(state.trail.places[2], history("newer", { id: "latest-visible", offset: -12 }));
+});
 
-  finishLoad(true);
-  await pendingLoad;
-  for (const frame of frames) frame();
-  assert.deepEqual(restored, []);
-  assert.deepEqual(state.trail, { at: 0, places: [history("shared-commit")] });
-  assert.equal(state.jumping, false);
+test("a delayed load cannot replace a newer transition or warn after a repository switch", async () => {
+  const { state, graph, shown, warnings, frames } = navigation();
+  recordPlace(state, history("older"));
+  recordPlace(state, file);
+  recordPlace(state, history("newer"));
+  let finish!: (loaded: boolean) => void;
+  const load = new Promise<boolean>((resolve) => { finish = resolve; });
+  moveToPlace(state, 0, { ...graph, load: () => load });
+  assert.equal(state.trail.at, 2);
+  moveToPlace(state, 1, graph);
+  finish(true);
+  await load;
+  assert.equal(state.trail.at, 1);
+  assert.deepEqual(shown(), file);
+
+  moveToPlace(state, 0, graph);
+  assert.equal(frames.at(-1)?.(), true);
+  moveToPlace(state, 2, { ...graph, load: async () => false });
+  resetNavigationTrail(state);
+  recordPlace(state, history("older"));
+  await Promise.resolve();
+  assert.deepEqual(warnings, []);
+  assert.equal(frames.at(-1)?.(), false);
+  assert.deepEqual(state.trail, { at: 0, places: [history("older")] });
 });

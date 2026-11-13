@@ -39,6 +39,17 @@ export function rowsOf(hunk: Hunk, count = hunk.lines.length): Row[] {
   return rows;
 }
 
+/** Text of a virtual block in visual order, omitting missing halves but keeping blank lines. */
+export function blockText(hunk: Hunk, count: number, start: number, size: number, side?: "left" | "right"): string[] {
+  if (!side) return hunk.lines.slice(start, Math.min(count, start + size)).map((line) => line.text);
+  const lines: string[] = [];
+  for (const row of rowsOf(hunk, count).slice(start, start + size)) {
+    const at = row[side];
+    if (at !== null) lines.push(hunk.lines[at].text);
+  }
+  return lines;
+}
+
 /** An unchanged line is the same line on both sides. */
 export const changedRow = (row: Row) => row.left !== row.right;
 

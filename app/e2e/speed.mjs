@@ -1,6 +1,6 @@
 // What Oxbow's own window takes, from the user's side: opening a big repository, a refresh after
 // a commit made outside, and moving between commits. `scripts/acceptance.sh --speed <folder>`
-// runs them on scripts/make-perf-fixtures.sh's repositories; docs/speed.md has the numbers. The
+// runs them on scripts/make-perf-fixtures.sh's repositories; docs/performance/speed.md has the numbers. The
 // same three are timed against other clients on a Mac with scripts/compare-clients.py.
 
 import path from "node:path";

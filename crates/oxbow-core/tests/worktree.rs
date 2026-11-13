@@ -211,6 +211,37 @@ fn a_file_name_with_pattern_characters_means_just_that_file() {
 }
 
 #[test]
+fn staged_rename_reports_line_endings_from_head_and_index() {
+    use oxbow_core::commit::LineEnding::Crlf;
+    use std::sync::atomic::AtomicBool;
+
+    let mut fx = Fixture::new();
+    fx.commit("before.txt", "first\r\nsecond\r\n", "Root");
+    fx.git(&["mv", "before.txt", "after.txt"]);
+    fx.write("after.txt", "first\nsecond\n");
+
+    let repo = Repo::open(fx.path()).unwrap();
+    let tree = repo.working_files().unwrap();
+    let single = repo.working_diff("after.txt", Side::Staged, false).unwrap();
+    let all = repo
+        .working_diff_page(
+            &tree,
+            &["after.txt".into()],
+            Side::Staged,
+            false,
+            0,
+            usize::MAX,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    for diff in [&single, &all.diffs[0]] {
+        assert_eq!(diff.file.status, FileStatus::Renamed);
+        assert_eq!(diff.file.old_path.as_deref(), Some("before.txt"));
+        assert_eq!(diff.line_endings, Some([Some(Crlf), Some(Crlf)]));
+    }
+}
+
+#[test]
 fn unstaging_a_rename_unstages_both_paths() {
     let mut fx = Fixture::new();
     fx.commit("old.txt", "keep me\n", "Root");
@@ -684,4 +715,24 @@ fn discarding_a_picked_removal_preserves_the_final_newline() {
         std::fs::read(fx.path().join("eof.txt")).unwrap(),
         b"one\ntwo\nTWO\nextra\n"
     );
+}
+
+#[test]
+fn a_staged_copy_reports_only_the_destination_line_endings() {
+    use oxbow_core::commit::LineEnding::Crlf;
+
+    let mut fx = Fixture::new();
+    let content = "first\r\nsecond\r\n".repeat(20);
+    fx.commit("source.txt", &content, "Root");
+    fx.git(&["config", "status.renames", "copies"]);
+    fx.write("copy.txt", &content);
+    fx.write("source.txt", &format!("{content}updated\r\n"));
+    fx.git(&["add", "source.txt", "copy.txt"]);
+
+    let diff = Repo::open(fx.path())
+        .unwrap()
+        .working_diff("copy.txt", Side::Staged, false)
+        .unwrap();
+    assert_eq!(diff.file.status, FileStatus::Copied);
+    assert_eq!(diff.line_endings, Some([None, Some(Crlf)]));
 }

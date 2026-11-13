@@ -3,6 +3,7 @@
   import { confirm, type Part } from "./confirm.svelte";
   import { actionIcons as icons } from "./icons";
   import { withKeys } from "./keys";
+  import { isImeEscape } from "./shortcuts";
   import { plate, tint } from "./format";
   import MergePreview from "./MergePreview.svelte";
   import WhyNote from "./WhyNote.svelte";
@@ -195,13 +196,14 @@
   }
 
   function onKey(event: KeyboardEvent) {
-    if (!request) return;
+    if (!request || isImeEscape(event)) return;
     if (event.key === "Escape") {
       event.preventDefault();
       if (running) confirm.stop();
       else confirm.cancel();
     } else if (
       event.key === "Enter" &&
+      !event.isComposing &&
       confirm.phase === "ask" &&
       !(event.target instanceof HTMLButtonElement) &&
       // Return makes a new line in a message; ⌘Return runs the action.

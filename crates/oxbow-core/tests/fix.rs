@@ -109,6 +109,49 @@ fn unpushed_commits_move_to_a_new_branch_without_touching_the_files() {
 }
 
 #[test]
+fn moving_to_a_branch_stashes_files_changed_only_on_the_branch_not_on_its_namesake_tag() {
+    let mut fx = Fixture::new();
+    let root = fx.commit("a.txt", "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n", "Root");
+    fx.git(&["switch", "-q", "-c", "feature"]);
+    let feature = fx.commit(
+        "a.txt",
+        "ONE\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n",
+        "Feature work",
+    );
+    fx.git(&["switch", "-q", "main"]);
+    let tip = fx.commit("b.txt", "b\n", "Meant for feature");
+    fx.git(&["tag", "feature", &tip]);
+    fx.write("a.txt", "one\ntwo\nthree\nfour\nfive\nsix\nseven\nEIGHT\n");
+
+    let repo = Repo::open(fx.path()).unwrap();
+    let action = fix(
+        &repo,
+        Fix::MoveCommits {
+            count: 1,
+            to: "feature".into(),
+            create: false,
+        },
+    );
+    assert_eq!(
+        kinds(&repo.plan(&action).unwrap().steps),
+        ["stash", "switch", "copy", "move", "pop"]
+    );
+    assert_eq!(displays(&repo, &action)[1], "git switch feature");
+    repo.perform(&action).unwrap();
+
+    assert_eq!(fx.git(&["branch", "--show-current"]), "feature");
+    assert_eq!(fx.git(&["rev-parse", "HEAD^"]), feature);
+    assert_eq!(fx.git(&["rev-parse", "refs/heads/main"]), root);
+    assert_eq!(fx.git(&["rev-parse", "refs/tags/feature"]), tip);
+    assert_eq!(
+        read(&fx, "a.txt").unwrap(),
+        "ONE\ntwo\nthree\nfour\nfive\nsix\nseven\nEIGHT\n"
+    );
+    assert_eq!(fx.git(&["status", "--short"]), "M a.txt");
+    assert_eq!(fx.git(&["stash", "list"]), "");
+}
+
+#[test]
 fn moving_to_an_existing_branch_copies_and_puts_files_in_the_way_aside() {
     let mut fx = Fixture::new();
     let root = fx.commit("a.txt", "a\n", "Root");

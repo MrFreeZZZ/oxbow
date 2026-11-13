@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { popoverEscape } from "./popoverEscape";
   // The title bar of a repository open Restricted: a capsule that says so, and under it what
   // git runs with off, with the way to trust it.
 
@@ -14,20 +15,12 @@
     if (open) box?.querySelector<HTMLButtonElement>("button.primary")?.focus();
   });
 
-  function onKey(event: KeyboardEvent) {
-    if (open && event.key === "Escape") {
-      event.preventDefault();
-      open = false;
-    }
-  }
 
   function trust() {
     open = false;
     onTrust();
   }
 </script>
-
-<svelte:window onkeydown={onKey} />
 
 <div class="place">
   <button class="restricted" class:open onclick={() => (open = !open)} aria-expanded={open}>
@@ -36,7 +29,7 @@
   {#if open}
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="catcher" onclick={() => (open = false)}></div>
-    <div class="pop" role="dialog" aria-label="Restricted" bind:this={box}>
+    <div class="pop" role="dialog" use:popoverEscape={() => (open = false)} aria-label="Restricted" bind:this={box}>
       <span class="title">Restricted</span>
       <span class="body">Oxbow runs Git here with this repository’s programs off. Your own Git settings still apply.</span>
       <ul>

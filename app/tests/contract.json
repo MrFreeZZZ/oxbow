@@ -79,6 +79,7 @@
     "file",
     "hunks",
     "limited",
+    "lineEndings",
     "new",
     "old",
     "tooLarge"

@@ -3,6 +3,7 @@
 // repository shares the choice.
 
 import type { FileChange } from "./types";
+import { resizeSplitter } from "./resizeSplitter";
 
 const FOLDERS_KEY = "oxbow.changes.folders";
 const WIDTH_KEY = "oxbow.changes.filesWidth";
@@ -48,23 +49,17 @@ export function filesWidth(body: number): number {
 
 /** Drags the border between the files and the diff; the width is kept once it is let go. */
 export function resizeFiles(event: PointerEvent, body: number) {
-  const startX = event.clientX;
   // From the width it shows, which a narrow panel may have cut down from the one kept.
   const from = filesWidth(body);
-  const target = event.currentTarget as HTMLElement;
-  target.setPointerCapture(event.pointerId);
-  const move = (e: PointerEvent) => (listView.width = Math.max(Math.min(from + e.clientX - startX, body - DIFF_MIN), FILES_MIN));
-  const up = () => {
-    target.removeEventListener("pointermove", move);
-    target.removeEventListener("pointerup", up);
+  resizeSplitter(event, (delta) => {
+    listView.width = Math.max(Math.min(from + delta, body - DIFF_MIN), FILES_MIN);
+  }, () => {
     try {
       localStorage.setItem(WIDTH_KEY, String(Math.round(listView.width)));
     } catch {
       // Lasts until the app quits.
     }
-  };
-  target.addEventListener("pointermove", move);
-  target.addEventListener("pointerup", up);
+  });
 }
 
 /** Files grouped by the folder they are in: the top folder first, then by name. */

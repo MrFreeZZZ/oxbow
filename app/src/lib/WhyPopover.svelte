@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { popoverEscape } from "./popoverEscape";
   // Under a grey toolbar button that was clicked: why it can't run now, and the way out.
 
   import type { Part } from "./confirm.svelte";
@@ -24,19 +25,11 @@
     box?.querySelector<HTMLButtonElement>("button.primary")?.focus();
   });
 
-  function onKey(event: KeyboardEvent) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      onClose();
-    }
-  }
 </script>
-
-<svelte:window onkeydown={onKey} />
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="catcher" onclick={onClose}></div>
-<div class="pop" role="dialog" aria-label={title} bind:this={box}>
+<div class="pop" role="dialog" use:popoverEscape={onClose} aria-label={title} bind:this={box}>
   <span class="title">
     <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" /><path d="M8 7.2v3.6M8 5.1v.1" /></svg>
     {title}

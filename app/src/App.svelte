@@ -2,6 +2,7 @@
   import { message, open } from "@tauri-apps/plugin-dialog";
   import { listen } from "@tauri-apps/api/event";
   import { api, settings } from "./lib/api";
+  import { resizeSplitter } from "./lib/resizeSplitter";
   import { WORKTREE_ID, type History, type HistoryRow, type OutsideChange, type ReadPart, type RecentRepo, type ReflogEntry, type RepoSummary } from "./lib/types";
   import { RepoSession } from "./lib/repoSession.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
@@ -20,6 +21,7 @@
   import BranchPicker from "./lib/BranchPicker.svelte";
   import { detachRequest, keepRequest, newBranchRequest, switchRequest, trackRequest, type BranchContext } from "./lib/branches";
   import UpdateNotification from "./lib/UpdateNotification.svelte";
+  import { updates } from "./lib/updates.svelte";
   import DetachedBanner from "./lib/DetachedBanner.svelte";
   import OperationBanner from "./lib/OperationBanner.svelte";
   import { draftSaves } from "./lib/conflictDrafts";
@@ -50,7 +52,7 @@
   import { namedLike, notInHistory, objectsOf, type ObjectAction, type ObjectItem, type ObjectKind } from "./lib/objects";
   import { commandsFor, commandId, type UserCommand } from "./lib/userCommands";
   import type { PaletteItem } from "./lib/palette";
-  import { Keymap, accelerator, bindingsOf, combo, commandOf, pressed, type ShortcutId } from "./lib/shortcuts";
+  import { Keymap, accelerator, bindingsOf, combo, commandOf, isImeEscape, pressed, type ShortcutId } from "./lib/shortcuts";
   import { menuBar, type Available } from "./lib/appMenu";
   import { stepChange } from "./lib/diffRows";
   import { conflictSteps, KEPT_CONFLICTS } from "./lib/conflicts";
@@ -64,7 +66,7 @@
   import OperationLog from "./lib/OperationLog.svelte";
   import { shortcut, withKeys } from "./lib/keys";
   import { cannotRestore, isRedo, lostRow, oplog, undoRequest } from "./lib/oplog.svelte";
-  import { canBack, canForward, crumbs, detailOfPlace, moveToPlace, nameOfPlace, newNavigationTrail, recordPlace, resetNavigationTrail, restoreHistoryPosition, type Place } from "./lib/backStack";
+  import { canBack, canForward, crumbs, detailOfPlace, moveToPlace, nameOfPlace, newNavigationTrail, placeKey, recordPlace, resetNavigationTrail, type Place } from "./lib/backStack";
   import { kept } from "./lib/kept";
   import { stepQuery, type SeriesQuery } from "./lib/series";
   import { lane, relativeTime } from "./lib/format";
@@ -252,7 +254,8 @@
       entries.push({ kind: "item", label: command.name, icon: CONSOLE_ICON, run: () => void runCustom(command) });
     }
     entries.push({ kind: "item", label: "Console", icon: CONSOLE_ICON, keys: shortcut("console") || undefined, run: () => api.openConsole() });
-    entries.push({ kind: "item", label: "Settings…", icon: SETTINGS_ICON, keys: shortcut("settings") || undefined, run: () => api.openSettings() });
+    const update = updates.available && `Oxbow ${updates.available.version} ${updates.installed ? "is installed" : updates.ready ? "is ready to install" : "is available"}`;
+    entries.push({ kind: "item", label: "Settings…", icon: SETTINGS_ICON, keys: shortcut("settings") || undefined, detail: update || undefined, run: () => api.openSettings() });
     return entries;
   }
   /** The details panel put away, so the graph takes the whole width; kept in settings.json. */
@@ -465,8 +468,19 @@
 
   /** Go to a place on the trail, as it was left. */
   function goTo(index: number) {
-    const p = moveToPlace(navigation, index, view === "history");
-    if (!p) return;
+    const ticket = session.tickets.take();
+    const from = here && placeKey(here);
+    const fromView = view;
+    const fromResolving = resolving;
+    moveToPlace(navigation, index, {
+      load: (id) => rowsById.has(id) || ensureLoaded(id),
+      current: () => session.tickets.current(ticket) && view === fromView && resolving === fromResolving && !!here && placeKey(here) === from,
+      missing: (id) => confirm.say(notInHistory(id), "warn"),
+      show: showPlace,
+    });
+  }
+
+  function showPlace(p: Place, current: () => boolean) {
     resolving = false;
     switch (p.view) {
       case "history": {
@@ -475,19 +489,12 @@
         submoduleSel = null;
         oplog.compare = null;
         oplog.lost = null;
-        if (p.commit) {
-          unhide(p.commit);
-          selected = p.commit;
-        }
-        const id = selected;
-        const ticket = session.tickets.take();
-        void restoreHistoryPosition(navigation, p, id, {
-          loaded: (commit) => rowsById.has(commit),
-          load: ensureLoaded,
-          frame: (restore) => requestAnimationFrame(restore),
-          current: () => session.tickets.current(ticket) && view === "history" && selected === id,
-          scrollTo: (top) => list?.scrollTo(top),
-          reveal: (commit) => list?.reveal(commit),
+        if (p.commit) unhide(p.commit);
+        selected = p.commit;
+        requestAnimationFrame(() => {
+          if (current() && view === "history" && selected === p.commit) {
+            list?.restorePosition(p.scroll, p.commit);
+          }
         });
         break;
       }
@@ -953,8 +960,11 @@
 
   /** The next or the previous tab of the details panel, as ⌥⌘→ steps through VS Code's editors. */
   function stepTab(by: 1 | -1): boolean {
-    // Changes steps through its files, which are a list, not tabs.
-    const files = content?.querySelector("aside.panel [data-steps]");
+    // Compare and Stashes have their own file pane outside the History details.
+    if (showConflicts) return false;
+    const files = view === "compare" || view === "stashes"
+      ? document.querySelector("[data-comparison-files]")
+      : content?.querySelector("aside.panel [data-steps]");
     const steps = stepperOf(files);
     if (steps) return steps(by, true);
     const tabs = [...(content?.querySelectorAll<HTMLElement>('aside.panel [role="tablist"] [role="tab"]') ?? [])];
@@ -1792,9 +1802,8 @@
     });
   });
 
-  /** Tab moves between the commit list and the details panel, as a whole: from the list to the
-   *  open tab of the details, and Shift+Tab from that tab back to the list. Inside the details Tab
-   *  keeps its usual way through buttons and fields, and ← → step through the tabs. */
+  /** Tab enters the details at the file controls or the open panel tab. Shift+Tab from
+   *  the entry returns to the graph; controls inside the panel keep their usual Tab order. */
   function paneKeys(event: KeyboardEvent) {
     const target = event.target as HTMLElement;
     const panel = content?.querySelector<HTMLElement>("aside.panel");
@@ -1802,14 +1811,17 @@
     const tab = target.closest<HTMLElement>('[role="tab"]');
     // Shift+Tab comes as ISO_Left_Tab on Linux, which names no key; its code is still Tab.
     const isTab = event.key === "Tab" || event.code === "Tab";
-    if (isTab && !event.shiftKey && target.closest(".history")) {
-      const open = panel.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? panel.querySelector<HTMLElement>("button, input, textarea, [tabindex='0']");
+    if (isTab) {
+      const files = panel.querySelector<HTMLElement>('[data-history-files] input[aria-label="Filter files"]');
+      const open = files ?? panel.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? panel.querySelector<HTMLElement>("button:not([tabindex='-1']), input, textarea, [tabindex='0']");
       if (!open) return;
-      event.preventDefault();
-      keyFocus(open);
-    } else if (isTab && event.shiftKey && tab && panel.contains(tab)) {
-      event.preventDefault();
-      list?.focus();
+      if (!event.shiftKey && target.closest(".history")) {
+        event.preventDefault();
+        keyFocus(open);
+      } else if (event.shiftKey && (target === open || (!files && tab && panel.contains(tab)))) {
+        event.preventDefault();
+        list?.focus();
+      }
     } else if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && tab && panel.contains(tab)) {
       const list = tab.closest('[role="tablist"]');
       const step = stepperOf(list);
@@ -1828,23 +1840,15 @@
   }
 
   function startResize(event: PointerEvent) {
-    const startX = event.clientX;
     // From the width it shows, which a narrow window may have cut down from the one saved.
     const startWidth = shownPanelWidth;
-    const target = event.currentTarget as HTMLElement;
-    target.setPointerCapture(event.pointerId);
-    const move = (e: PointerEvent) => {
+    resizeSplitter(event, (delta) => {
       // Saved without the hidden sidebar's room, so the graph keeps its width when the sidebar comes back.
-      const width = Math.max(Math.min(Math.max(startWidth - (e.clientX - startX), PANEL_MIN), panelMax) - panelBonus, PANEL_MIN);
+      const width = Math.max(Math.min(Math.max(startWidth - delta, PANEL_MIN), panelMax) - panelBonus, PANEL_MIN);
       panelWidth = width;
-    };
-    const up = () => {
-      target.removeEventListener("pointermove", move);
-      target.removeEventListener("pointerup", up);
+    }, () => {
       if (panelWidth !== null) api.setSetting(settings.detailsWidth, Math.round(panelWidth)).catch(() => {});
-    };
-    target.addEventListener("pointermove", move);
-    target.addEventListener("pointerup", up);
+    });
   }
 
   $effect(() => {
@@ -1874,6 +1878,7 @@
     const unlisten = getCurrentWindow().listen("repo-touched", () => refresh());
     // A terminal, an editor or another window changed the repository.
     const outside = getCurrentWindow().listen<OutsideChange>("outside-change", (event) => loader.outsideChanged(event.payload));
+    const openFileError = getCurrentWindow().listen<string>("open-file-error", (event) => confirm.fail(event.payload));
     // Signing in or out changes what GitHub tells about the pull requests.
     const account = listen("account-changed", () => repo && github.accountChanged());
     const closing = getCurrentWindow().onCloseRequested(closeRequested);
@@ -1896,6 +1901,7 @@
       front.then((stop) => stop());
       unlisten.then((stop) => stop());
       outside.then((stop) => stop());
+      openFileError.then((stop) => stop());
       account.then((stop) => stop());
       closing.then((stop) => stop());
     };
@@ -1915,6 +1921,7 @@
     else goForward();
   }}
   onkeydown={(event) => {
+    if (confirm.request && isImeEscape(event)) return;
     // Menu handles Escape on the same window; its listener may run after this one.
     if (event.key === "Escape" && document.querySelector('[role="menu"]')) return;
     const hit = keymap.match(event);
@@ -2128,6 +2135,7 @@
           {#if narrow}
             <button
               class="capsule"
+              class:update-available={!!updates.available}
               onclick={(event) => {
                 const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
                 moreMenu = moreMenu ? null : { x: box.left, y: box.bottom + 6 };
@@ -2135,7 +2143,7 @@
               aria-label="More"
               aria-haspopup="menu"
               aria-expanded={!!moreMenu}
-              title={(view !== "file" && view !== "browse") || showConflicts ? "New Branch, Console, Settings" : "Console, Settings"}
+              title={`${(view !== "file" && view !== "browse") || showConflicts ? "New Branch, Console, Settings" : "Console, Settings"}${updates.available ? " — an update is available" : ""}`}
             >
               <svg class="icon" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6" /><circle cx="8" cy="8" r=".6" /><circle cx="12.5" cy="8" r=".6" /></svg>
             </button>
@@ -2149,7 +2157,7 @@
                 <svg class="icon" viewBox="0 0 16 16"><path d={COMMANDS_ICON} /></svg>
               </button>
             </div>
-            <button class="capsule" onclick={() => api.openSettings()} aria-label="Settings" title={withKeys("Settings", combo("settings"))}>
+            <button class="capsule" class:update-available={!!updates.available} onclick={() => api.openSettings()} aria-label="Settings" title={withKeys("Settings", combo("settings"))}>
               <svg class="icon" viewBox="0 0 16 16"><path d={SETTINGS_ICON} /></svg>
             </button>
           {/if}
@@ -2343,7 +2351,7 @@
               history={graphHistory!}
               {selected}
               onSelect={select}
-              onScroll={(top) => (navigation.scroll = top)}
+              onScroll={(position) => (navigation.scroll = position)}
               menuFor={commitMenu}
               {found}
               second={pair ? second : null}
@@ -2359,7 +2367,7 @@
         {#if !detailsHidden}
         <aside class="panel" style:width={expanded ? null : `${shownPanelWidth}px`} aria-label="Commit details">
           {#if !expanded}
-            <button class="grip" tabindex="-1" onpointerdown={startResize} aria-label="Resize commit details" title="Drag to resize"></button>
+            <button class="vertical-splitter" title="Drag to resize" tabindex="-1" onpointerdown={startResize} aria-label="Resize commit details"></button>
           {/if}
           <!-- In line with the graph's column bar: what the panel shows, and the room it takes. -->
           <div class="columns panel-bar">
@@ -2722,6 +2730,11 @@
     color: var(--icon);
     font-weight: 500;
   }
+  .capsule.update-available {
+    background: var(--accent);
+    border-color: transparent;
+    color: #fff;
+  }
   .joined.steps > button {
     min-width: 32px;
     padding: 0 7px;
@@ -2955,19 +2968,5 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
-  }
-  .grip {
-    position: absolute;
-    left: -4px;
-    top: 50%;
-    width: 7px;
-    height: 36px;
-    margin-top: -18px;
-    border-radius: var(--radius-xs);
-    background: var(--win);
-    border: 1px solid var(--glass-border);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-    z-index: 2;
-    cursor: col-resize;
   }
 </style>

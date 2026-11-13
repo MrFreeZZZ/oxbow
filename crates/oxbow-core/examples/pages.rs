@@ -1,7 +1,7 @@
 //! Measure what the next page of older commits costs as History is scrolled down, the way the
 //! window asks for it (2,000 commits, then twice as many, at most 50,000 more at a time), and a
 //! jump straight to an old commit: `cargo run --release -p oxbow-core --example pages -- <path>`.
-//! On `history-100k` of `scripts/make-perf-fixtures.sh` (docs/measuring-reads.md). `RUNS=5`
+//! On `history-100k` of `scripts/make-perf-fixtures.sh` (docs/performance/measuring-reads.md). `RUNS=5`
 //! repeats the whole scroll (default 3); the median of each page is printed, and how many of the
 //! rows already shown came back the same: a row whose graph moved would come anew.
 

@@ -6,7 +6,7 @@ part of the screen the client's window is put on and notes two times:
   first      the screen first changed (the window, the new row, the selection moved)
   complete   it changed for the last time before staying still for a while (the diff painted)
 
-So it needs nothing from the clients but their windows; docs/speed.md has the steps and how to
+So it needs nothing from the clients but their windows; docs/performance/speed.md has the steps and how to
 read the numbers. macOS only, with python3 from the Xcode tools; nothing to install.
 
   python3 scripts/compare-clients.py --apps "Oxbow,Fork,Tower" ~/oxbow-perf/history-100k-clone

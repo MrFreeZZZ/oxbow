@@ -27,7 +27,7 @@
 //! cut leaves the old list or the new one, never an empty one.
 //!
 //! Measured on a clone of VS Code (21,000 files, 261 MB): a day's work on 20 files keeps a few
-//! MB, a formatter run over every file 90 MB once, a branch switch nothing (docs/speed.md).
+//! MB, a formatter run over every file 90 MB once, a branch switch nothing (docs/performance/speed.md).
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;

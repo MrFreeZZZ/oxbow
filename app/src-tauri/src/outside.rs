@@ -6,6 +6,7 @@ use oxbow_core::Repo;
 use serde_json::Value;
 use tauri::{AppHandle, State};
 
+use crate::open_in::WorkingFileStatus;
 use crate::preferences::read_settings;
 use crate::session::{Session, current};
 use crate::{CommandResult, open_in};
@@ -23,23 +24,52 @@ pub(crate) fn quick_look(window: tauri::WebviewWindow, session: State<'_, Sessio
     open_in::quick_look(&repo.workdir().join(Path::new(&path)))
 }
 
-/// Open a file of the repository in the editor chosen in Settings.
+/// Read the working copy status for each path, in the same order as the request.
 #[tauri::command]
-pub(crate) fn open_in_editor(
+pub(crate) async fn working_file_statuses(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    paths: Vec<String>,
+) -> CommandResult<Vec<WorkingFileStatus>> {
+    let root = current(&session, &window)?.workdir().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        paths
+            .iter()
+            .map(|path| match open_in::inspect_working_file(&root, path) {
+                Ok((_, status)) => status,
+                Err(reason) => WorkingFileStatus::Unavailable { reason },
+            })
+            .collect()
+    })
+    .await
+    .map_err(|err| err.to_string())
+}
+
+/// Pick the app using the file on disk when clicked, even if it changed after the UI checked.
+#[tauri::command]
+pub(crate) async fn open_working_file(
     app: AppHandle,
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
     path: String,
     line: Option<u32>,
 ) -> CommandResult<()> {
-    let repo = current(&session, &window)?;
-    let editor = read_settings(&app)
-        .get("oxbow.openIn.editor")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .or_else(|| open_in::editors().first().map(|app| app.id.to_owned()))
-        .ok_or("No editor found. Install one, then pick it in Settings › Integrations.")?;
-    open_in::open_file(&editor, &repo.workdir().join(Path::new(&path)), line)
+    let root = current(&session, &window)?.workdir().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (file, status) = open_in::inspect_working_file(&root, &path)?;
+        if status == WorkingFileStatus::Binary {
+            return open_in::open_default(&file, window);
+        }
+        let editor = read_settings(&app)
+            .get("oxbow.openIn.editor")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| open_in::editors().first().map(|app| app.id.to_owned()))
+            .ok_or("No editor found. Install one, then pick it in Settings › External Tools.")?;
+        open_in::open_file(&editor, &file, line)
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 /// Show a file of the repository in Finder (Explorer, or the file manager on Linux).

@@ -189,3 +189,93 @@ fn qualified_refs_compare_the_selected_branch_remote_or_tag() {
     fx.git(&["branch", "-D", "origin/feature"]);
     assert!(repo.compare(local, tag, CompareMode::Tips).is_err());
 }
+
+#[test]
+fn bare_hex_compares_only_commit_ids_even_when_refs_match() {
+    let (mut fx, base, main, feature) = diverged();
+    let prefix = &feature[..9];
+    let missing = "cafedecafbadc0de";
+    for name in [prefix, missing] {
+        fx.git(&["branch", name, &main]);
+        fx.git(&["tag", name, &base]);
+    }
+    let blob = fx.git(&["rev-parse", "HEAD:main.txt"]);
+    let repo = Repo::open(fx.path()).unwrap();
+
+    for sha in [prefix, &prefix.to_ascii_uppercase(), &feature] {
+        let c = repo.compare(&main, sha, CompareMode::Tips).unwrap();
+        assert_eq!(c.target_id, feature);
+        assert_eq!(c.command, format!("git diff {main}..{feature}"));
+    }
+    for (reference, expected) in [("refs/heads", &main), ("refs/tags", &base)] {
+        let c = repo
+            .compare("HEAD", &format!("{reference}/{missing}"), CompareMode::Tips)
+            .unwrap();
+        assert_eq!(&c.target_id, expected);
+    }
+    assert!(repo.compare("HEAD", missing, CompareMode::Tips).is_err());
+    assert!(repo.compare("HEAD", &blob, CompareMode::Tips).is_err());
+}
+
+#[test]
+fn annotated_tag_object_id_compares_its_commit() {
+    let (mut fx, _, main, feature) = diverged();
+    fx.git(&["tag", "-a", "-m", "Release", "release", &feature]);
+    let tag_id = fx.git(&["rev-parse", "refs/tags/release"]);
+    assert_ne!(tag_id, feature);
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let c = repo.compare(&main, &tag_id, CompareMode::Tips).unwrap();
+    assert_eq!(c.target_id, feature);
+    assert_eq!(c.command, format!("git diff {main}..{feature}"));
+}
+
+#[test]
+fn abbreviated_commit_id_ignores_a_colliding_blob() {
+    let (mut fx, _, main, feature) = diverged();
+    let prefix = &feature[..4];
+    // This blob shares the first four hex digits of the fixture's feature tip.
+    fx.write("collision.txt", "compare collision 71025\n");
+    let blob = fx.git(&["hash-object", "-w", "collision.txt"]);
+    assert!(blob.starts_with(prefix));
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let c = repo.compare(&main, prefix, CompareMode::Tips).unwrap();
+    assert_eq!(c.target_id, feature);
+}
+
+#[test]
+fn working_copy_comparison_reports_git_clean_snapshot_endings() {
+    use oxbow_core::{
+        DiffContext, Side,
+        commit::LineEnding::{Crlf, Lf},
+    };
+
+    let mut fx = Fixture::new();
+    fx.write(".gitattributes", "*.txt text eol=crlf\n");
+    let id = fx.commit("a.txt", "one\n", "Root");
+    fx.write("a.txt", "two\r\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    let comparison = repo.compare_with_working_copy(&id, "a.txt").unwrap();
+    fx.write("a.txt", "three\r\n");
+    let diff = repo
+        .tree_diff(
+            &comparison.base_id,
+            &comparison.target_id,
+            Some("a.txt"),
+            DiffContext::Compact,
+        )
+        .unwrap();
+    assert_eq!(diff[0].line_endings, Some([Some(Lf), Some(Lf)]));
+    assert!(
+        diff[0]
+            .hunks
+            .iter()
+            .flat_map(|h| &h.lines)
+            .any(|line| line.text == "two")
+    );
+    assert_eq!(
+        repo.working_diff("a.txt", Side::Unstaged, false).unwrap().line_endings,
+        Some([Some(Lf), Some(Crlf)])
+    );
+}

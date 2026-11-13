@@ -73,7 +73,7 @@ pub(crate) async fn open_source(
 ) -> CommandResult<()> {
     let repo = current(&session, &window)?;
     let file = match &source {
-        Source::Worktree { path } => repo.workdir().join(Path::new(path)),
+        Source::Worktree { path } => open_in::working_file(repo.workdir(), path)?,
         Source::Blob { id } => {
             let data = read(at(&repo), "Read a file", {
                 let source = source.clone();
@@ -98,7 +98,9 @@ pub(crate) async fn open_source(
             file
         }
     };
-    open_in::open_url(&file.display().to_string())
+    tauri::async_runtime::spawn_blocking(move || open_in::open_default(&file, window))
+        .await
+        .map_err(|err| err.to_string())?
 }
 
 /// Your latest commit messages, for ↑ in the commit message box.

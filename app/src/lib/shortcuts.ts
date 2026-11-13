@@ -244,6 +244,11 @@ function keyOf(event: KeyboardEvent): string | null {
   return NAMED[key] ?? key;
 }
 
+/** WebKit can clear isComposing on the key that ends composition. */
+export function isImeEscape(event: KeyboardEvent): boolean {
+  return event.key === "Escape" && (event.isComposing || event.keyCode === 229);
+}
+
 /** A key press as a combo, "Shift+Mod+P", or null for a modifier on its own. */
 export function strokeOf(event: KeyboardEvent, onMac = mac): string | null {
   const key = keyOf(event);

@@ -1,3 +1,4 @@
+import type { WorkingFileStatus } from "./openFile";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { MenuPart } from "./appMenu";
 import type {
@@ -316,7 +317,8 @@ export const api = {
   stopFetch: () => invoke<void>("stop_fetch"),
   publicKey: (key: string) => invoke<string>("public_key", { key }),
   pullSetup: () => invoke<PullSetup>("pull_setup"),
-  openInEditor: (path: string, line: number | null) => invoke<void>("open_in_editor", { path, line }),
+  workingFileStatuses: (paths: string[]) => invoke<WorkingFileStatus[]>("working_file_statuses", { paths }),
+  openWorkingFile: (path: string, line: number | null) => invoke<void>("open_working_file", { path, line }),
   revealFile: (path: string) => invoke<void>("reveal_file", { path }),
   /** Quick Look on macOS, the default app elsewhere. */
   quickLook: (path: string) => invoke<void>("quick_look", { path }),

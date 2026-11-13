@@ -558,6 +558,44 @@ impl Repo {
         !file.binary && file.lfs.is_none() && (over_limit(file, max_lines) || changed > MAX_DIFF_LINES || uncounted)
     }
 
+    fn diff_line_endings(
+        &self,
+        file: &FileChange,
+        side: Side,
+        old: Option<&Source>,
+        new: Option<&Source>,
+    ) -> Option<[Option<crate::commit::LineEnding>; 2]> {
+        if file.binary || file.lfs.is_some() {
+            return None;
+        }
+        let detect = |source: Option<&Source>| {
+            source.and_then(|source| {
+                let data = self.read_source_within(source, MAX_PATCH_BYTES as u64).ok()?;
+                crate::commit::line_ending(&data)
+            })
+        };
+        // A patch for the destination alone records a rename as an addition.
+        let old_ending = if file.status == FileStatus::Copied {
+            None
+        } else if let Some(path) = &file.old_path {
+            let spec = match side {
+                Side::Staged => format!("HEAD:{path}"),
+                Side::Unstaged => format!(":{path}"),
+            };
+            self.run(&GitCommand::new(["rev-parse", "--verify", "-q", &spec]))
+                .ok()
+                .and_then(|out| {
+                    detect(Some(&Source::Blob {
+                        id: out.stdout.trim().to_owned(),
+                    }))
+                })
+        } else {
+            detect(old)
+        };
+        let endings = [old_ending, detect(new)];
+        endings.iter().any(Option::is_some).then_some(endings)
+    }
+
     /// The diff of `file`, one entry of the working tree, on `side`.
     fn diff_of(&self, file: FileChange, side: Side, whole_file: bool, cancel: &AtomicBool) -> Result<FileDiff> {
         if let Some(sub) = file.submodule {
@@ -579,6 +617,7 @@ impl Repo {
             };
             let limited = over_limit(&file, max_lines);
             return Ok(FileDiff {
+                line_endings: None,
                 file,
                 hunks: Vec::new(),
                 too_large: !limited,
@@ -627,9 +666,15 @@ impl Repo {
         }
         // The blob ids of `index <old>..<new>`; all zeros stands for a side that does not exist.
         let blob = |id: &Option<String>| id.clone().filter(|id| id.bytes().any(|b| b != b'0'));
-        let old = blob(&parsed.ids.0).map(|id| Source::Blob { id });
+        // A mode-only patch has no index line, but still has two versions.
+        let ids = if parsed.ids.0.is_none() && parsed.ids.1.is_none() && file.mode.is_some() {
+            self.blob_ids(&file, side).unwrap_or_default()
+        } else {
+            parsed.ids
+        };
+        let old = blob(&ids.0).map(|id| Source::Blob { id });
         let new = match side {
-            Side::Staged => blob(&parsed.ids.1).map(|id| Source::Blob { id }),
+            Side::Staged => blob(&ids.1).map(|id| Source::Blob { id }),
             Side::Unstaged => (file.status != FileStatus::Deleted).then(|| Source::Worktree {
                 path: file.path.clone(),
             }),
@@ -660,6 +705,16 @@ impl Repo {
         let limited = !parsed.cut && over_limit(&file, max_lines);
         let too_large = parsed.cut || (!limited && hunks.iter().map(|h| h.lines.len()).sum::<usize>() > MAX_DIFF_LINES);
         FileDiff {
+            line_endings: if parsed.file_header.lines().any(|line| {
+                matches!(
+                    line,
+                    "old mode 120000" | "new mode 120000" | "new file mode 120000" | "deleted file mode 120000"
+                ) || (line.starts_with("index ") && line.ends_with(" 120000"))
+            }) {
+                None
+            } else {
+                self.diff_line_endings(&file, side, old.as_ref(), new.as_ref())
+            },
             file,
             hunks: if too_large || limited { Vec::new() } else { hunks },
             too_large,
@@ -706,6 +761,7 @@ impl Repo {
             old: None,
             new: None,
             submodule: Some(moved),
+            line_endings: None,
         }
     }
 

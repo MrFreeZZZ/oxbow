@@ -22,6 +22,8 @@
   import { countsOf, keyOf, NEWEST_SAVED, whenSaved } from "./localHistory";
   import { localVersionEntries } from "./localHistoryMenu";
   import { bytes } from "./unusual";
+  import { workingFileAction } from "./openFile";
+  import { openWorkingFile, watchWorkingFiles } from "./openFile.svelte";
 
   let {
     history,
@@ -370,9 +372,9 @@
   }
 
   /** Blame at HEAD: the file in the editor, at the line followed. */
-  function openInEditor() {
-    api.openInEditor(path, line?.no ?? null).catch((err) => confirm.fail(err));
-  }
+  const statusOf = watchWorkingFiles(() => mode === "blame" && !at ? [path] : []);
+  const openAction = $derived(workingFileAction(statusOf(path), false));
+  const openLine = $derived(statusOf(path)?.kind === "text" ? line?.no : undefined);
 
   /** Where Blame is: "at main (HEAD)" or "at 1a2b3c4, before ‘Edit config’". */
   const atLabel = $derived.by(() => {
@@ -706,7 +708,14 @@
       <div class="revision">
         <span class="where"><span class="dir">{splitPath(blameAt.path).dir}</span><b>{splitPath(blameAt.path).name}</b> <span class="at">{atLabel}</span></span>
         {#if at}<button class="back" onclick={() => ((at = null), (line = null))}>Back to HEAD</button>
-        {:else}<button class="back" onclick={openInEditor} title={line ? `Open ${splitPath(path).name} in the editor at line ${line.no}` : `Open ${splitPath(path).name} in the editor`}>{line ? `Open Line ${line.no} in Editor` : "Open in Editor"}</button>{/if}
+        {:else}
+          <button
+            class="back"
+            aria-disabled={!!openAction.reason}
+            title={openAction.reason}
+            onclick={() => !openAction.reason && openWorkingFile(path, openLine ?? null)}
+          >{openLine ? `Open Line ${openLine} in Editor` : openAction.label}</button>
+        {/if}
         <span class="spacer"></span>
         {#if blame?.ignoreRevs}
           {@const revs = blame.ignoreRevs}
@@ -1109,6 +1118,10 @@
     background: var(--field);
     font-size: var(--text-small);
     flex-shrink: 0;
+  }
+  .back[aria-disabled="true"] {
+    opacity: 0.45;
+    cursor: default;
   }
   .spacer {
     flex-grow: 1;

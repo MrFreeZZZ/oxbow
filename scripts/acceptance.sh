@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Runs the acceptance scenarios (app/e2e/scenarios.mjs; docs/acceptance.md says what each checks)
+# Runs the acceptance scenarios (app/e2e/scenarios.mjs; docs/testing/acceptance.md says what each checks)
 # on the real app: built with `tauri build`, opened under Xvfb and driven through tauri-driver,
 # with real git on fixtures made afresh. Linux only, as tauri-driver has no macOS WebDriver; the
-# Mac checklist in docs/acceptance.md covers the rest.
+# Mac checklist in docs/testing/acceptance.md covers the rest.
 #   scripts/acceptance.sh                  build the app, then run every scenario
 #   scripts/acceptance.sh staging two      only the scenarios whose name has one of these words
 #   OXBOW_APP=target/release/oxbow scripts/acceptance.sh    use a build already made

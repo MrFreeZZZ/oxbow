@@ -7,10 +7,12 @@ import type { SeriesQuery } from "./series";
 import type { CompareMode } from "./types";
 import { wordsOf, type ForgeKind } from "./forge.ts";
 
+export type HistoryPosition = { id: string; offset: number };
+
 /** A screen and what was picked on it. */
 export type Place =
-  /** History: the selected commit, and how far the graph was scrolled when you left it. */
-  | { view: "history"; commit: string | null; scroll: number | null }
+  /** History: the selected commit, and the first visible row and its offset when you left it. */
+  | { view: "history"; commit: string | null; scroll: HistoryPosition | null }
   /** File History: the file, its selected commit, Changes or Blame, Blame's revision and a line followed. */
   | { view: "file"; path: string; commit: string | null; mode: FileMode; at: { rev: string; path: string } | null; line: number | null }
   | { view: "stashes"; stash: string | null }
@@ -96,12 +98,10 @@ export const canForward = (t: Trail) => t.at < t.places.length - 1;
 
 type NavigationTrail = {
   trail: Trail;
-  scroll: number | null;
+  scroll: HistoryPosition | null;
   jumping: boolean;
   revision: number;
 };
-
-type HistoryPlace = Extract<Place, { view: "history" }>;
 
 export function newNavigationTrail(): NavigationTrail {
   return { trail: emptyTrail(), scroll: null, jumping: false, revision: 0 };
@@ -120,39 +120,61 @@ function saveScroll(state: NavigationTrail): Trail {
 
 export function recordPlace(state: NavigationTrail, place: Place) {
   const current = saveScroll(state);
-  state.trail = visit(current, place.view === "history" ? { ...place, scroll: state.scroll } : place, state.jumping);
-  state.jumping = false;
-}
-
-export function moveToPlace(state: NavigationTrail, index: number, leavingHistory: boolean): Place | null {
-  const next = go(leavingHistory ? saveScroll(state) : state.trail, index);
-  if (!next) return null;
+  const before = current.places[current.at];
+  const next = visit(current, place.view === "history" ? { ...place, scroll: state.scroll } : place, state.jumping);
+  const changedScreen = !before || placeKey(before) !== placeKey(place);
+  const changedCommit = before?.view === "history" && place.view === "history" && before.commit !== place.commit;
+  if (next.at !== current.at || changedScreen || changedCommit) {
+    state.revision++;
+  }
   state.trail = next;
   state.jumping = false;
-  state.revision++;
-  return next.places[next.at];
 }
 
-export async function restoreHistoryPosition(
+export function moveToPlace(
   state: NavigationTrail,
-  place: HistoryPlace,
-  commit: string | null,
+  index: number,
   graph: {
-    loaded: (id: string) => boolean;
-    load: (id: string) => Promise<boolean>;
-    frame: (restore: () => void) => void;
+    load: (id: string) => boolean | Promise<boolean>;
     current: () => boolean;
-    scrollTo: (top: number) => void;
-    reveal: (id: string) => void;
+    missing: (id: string) => void;
+    show: (place: Place, current: () => boolean) => void;
   },
 ) {
-  const revision = state.revision;
-  if (commit && !graph.loaded(commit) && !(await graph.load(commit))) return;
-  graph.frame(() => {
-    if (revision !== state.revision || !graph.current()) return;
-    if (place.scroll !== null) graph.scrollTo(place.scroll);
-    else if (commit) graph.reveal(commit);
-  });
+  const target = state.trail.places[index];
+  if (!target || index === state.trail.at) return;
+  const commit = target.view === "history" ? target.commit : null;
+  const revision = ++state.revision;
+  const current = () => revision === state.revision && graph.current();
+
+  function finish(loaded: boolean) {
+    if (!current()) return;
+    if (!loaded && commit) {
+      graph.missing(commit);
+      return;
+    }
+    const next = go(saveScroll(state), index);
+    if (!next) return;
+    const place = next.places[next.at];
+    state.trail = next;
+    state.jumping = false;
+    if (place.view === "history") state.scroll = place.scroll;
+    graph.show(place, () => revision === state.revision);
+  }
+
+  const loaded = commit ? graph.load(commit) : true;
+  if (typeof loaded === "boolean") finish(loaded);
+  else void loaded.then(finish, () => finish(false));
+}
+
+export function historyPosition(rows: readonly { id: string }[], top: number, rowHeight: number, padding: number): HistoryPosition | null {
+  const index = Math.max(0, Math.floor((top - padding) / rowHeight));
+  const row = rows[index];
+  return row ? { id: row.id, offset: padding + index * rowHeight - top } : null;
+}
+
+export function historyScrollTop(position: HistoryPosition, index: number | undefined, rowHeight: number, padding: number): number | null {
+  return index === undefined ? null : Math.max(0, padding + index * rowHeight - Math.max(1 - rowHeight, position.offset));
 }
 
 /** The places that led here, oldest first, for the path in the header: a run of places with the

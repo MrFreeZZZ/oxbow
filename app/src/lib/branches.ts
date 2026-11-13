@@ -3,6 +3,7 @@
 import type { Part, Recovery, Request } from "./confirm.svelte";
 import { remoteTrouble } from "./remote";
 import type { Action, CommitBrief, DeletionCheck, Failure, History, HistoryRow, RefInfo } from "./types";
+import { compareRef } from "./compareRefs";
 import { shortId } from "./format";
 import { onlyPrefix, splitPrefix, type BranchPrefix } from "./branchPrefixes";
 import { firstName, prefixesFor, prefixStart, similarNote } from "./branchPrefs";
@@ -74,9 +75,9 @@ function listCommits(commits: CommitBrief[]): Part[] {
 }
 
 /** Stash and Switch, when uncommitted files are in the way of a checkout. */
-function changesInTheWay(failure: Failure, action: Action & { kind: "switch" | "track" | "detach" }, ctx: BranchContext): Recovery | null {
+function changesInTheWay(failure: Failure, action: Action & { kind: "switch" | "track" | "detach" }, ctx: BranchContext, tag?: string): Recovery | null {
   if (failure.kind !== "localChanges") return null;
-  const target = action.kind === "detach" ? shortId(action.commit) : action.branch;
+  const target = action.kind === "detach" ? (tag ?? shortId(action.commit)) : action.branch;
   // A branch that keeps detached commits was already created before the switch stopped.
   const retry: Action = action.kind === "switch" ? { ...action, stash: true, keep: null } : { ...action, stash: true };
   return {
@@ -175,7 +176,7 @@ export function trackRequest(ctx: BranchContext, ref: RefInfo, author: string): 
 
 /** Check out a commit without a branch. `tag` names the tag it was picked by. */
 export function detachRequest(ctx: BranchContext, row: HistoryRow, tag?: string): Request {
-  const action: Action = { kind: "detach", commit: tag ?? row.id, stash: false };
+  const action: Action = { kind: "detach", commit: tag === undefined ? row.id : compareRef("tag", tag), stash: false };
   const sha = shortId(row.id);
   const lost = onNoBranch(ctx.history).filter((r) => r.id !== row.id);
   const body: Part[] = ["Moves HEAD to commit ", { code: sha }, " ", { quote: row.summary }];
@@ -191,7 +192,7 @@ export function detachRequest(ctx: BranchContext, row: HistoryRow, tag?: string)
     button: lost.length ? "Check Out Anyway" : "Check Out",
     status: `Checking out ${tag ?? sha}…`,
     done: `Checked out ${tag ?? sha}. HEAD is not on a branch now.`,
-    recover: (failure) => changesInTheWay(failure, action, ctx),
+    recover: (failure) => changesInTheWay(failure, action, ctx, tag),
     action,
   };
 }

@@ -40,10 +40,13 @@
   import { nav } from "./nav.svelte";
   import { onDestroy, untrack } from "svelte";
   import { foldReason, startsFolded } from "./diffFold";
-  import { addKnown, changedRow, changeStarts, pieces, rowsOf, sideKind, type Known, type Piece, type Row } from "./diffRows";
+  import { diffLineEndingLabel } from "./diffLineEndings";
+  import { addKnown, blockText, changedRow, changeStarts, pieces, rowsOf, sideKind, type Known, type Piece, type Row } from "./diffRows";
   import { mac, withKeys } from "./keys";
   import { combo } from "./shortcuts";
   import ImageDiff from "./ImageDiff.svelte";
+  import { workingFileAction } from "./openFile";
+  import { openWorkingFile, watchWorkingFiles } from "./openFile.svelte";
   import UnusualCard from "./UnusualCard.svelte";
   import LfsCard from "./LfsCard.svelte";
   import SubmoduleCard from "./SubmoduleCard.svelte";
@@ -51,6 +54,143 @@
   import { bytes, imageType, isSvg } from "./unusual";
   import { hscroll, widestLine } from "./hscroll";
   import { changePreview } from "./diffScroll";
+  import { menuIcons } from "./Menu.svelte";
+
+  let copySelection = $state<{ text: string; x: number; y: number } | null>(null);
+  let selectingWithMouse = false;
+
+  type CopySide = "left" | "right";
+  let mouseCopyBlock = $state<string>();
+  let mouseCopyStart: { code: Element; side: CopySide } | null = null;
+
+  function selectedCode(withRects = false) {
+    const selection = document.getSelection();
+    if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
+    const anchor = selection.anchorNode;
+    const element = anchor instanceof Element ? anchor : anchor?.parentElement;
+    const code = element?.closest(".code.selectable");
+    if (!code || !selection.focusNode || !code.contains(selection.focusNode) || !codeRoots.has(code)) return null;
+    const source = codeRoots.get(code)!;
+    const side = split
+      ? (mouseCopyStart?.code === code ? mouseCopyStart.side : element?.closest<HTMLElement>(".half")?.dataset.side as CopySide | undefined)
+      : undefined;
+    if (split && !side) return null;
+
+    const range = selection.getRangeAt(0);
+    const lines: string[] = [];
+    const rects: DOMRect[] = [];
+    let parts: ReturnType<typeof copyParts> | undefined;
+    const selector = side ? `[data-side="${side}"] .selection-text` : ".selection-text";
+    for (const block of code.querySelectorAll<HTMLElement>(".lazy[data-block]")) {
+      if (!range.intersectsNode(block)) continue;
+      if (!block.firstElementChild) {
+        parts ??= source();
+        const key = block.dataset.block!;
+        const separator = key.lastIndexOf(":");
+        const start = Number(key.slice(separator + 1));
+        const part = parts.get(key.slice(0, separator));
+        if (part) lines.push(...blockText(part.hunk, part.count, start, BLOCK, side));
+        continue;
+      }
+      for (const line of block.querySelectorAll<HTMLElement>(selector)) {
+        if (!range.intersectsNode(line)) continue;
+        const part = document.createRange();
+        part.selectNodeContents(line);
+        if (line.contains(range.startContainer)) part.setStart(range.startContainer, range.startOffset);
+        if (line.contains(range.endContainer)) part.setEnd(range.endContainer, range.endOffset);
+        if (part.collapsed) continue;
+        lines.push(line.hasAttribute("data-empty") ? "" : part.toString());
+        if (!withRects) continue;
+        // Range rectangles include text hidden by the No Wrap column.
+        const column = line.closest(".nowrap .text")?.getBoundingClientRect();
+        for (const rect of part.getClientRects()) {
+          const left = Math.max(rect.left, column?.left ?? 0, 0);
+          const right = Math.min(rect.right, column?.right ?? innerWidth, innerWidth);
+          if (right > left && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight) {
+            rects.push(new DOMRect(left, rect.top, right - left, rect.height));
+          }
+        }
+      }
+    }
+    if (!lines.length) {
+      // Suppress WebKit’s opposite-column copy, but let it copy non-code selections.
+      if (!side || ![...code.querySelectorAll(".selection-text")].some((line) => range.intersectsNode(line))) return null;
+    }
+    return { text: lines.join("\n"), rects };
+  }
+
+  function copyParts(diff: FileDiff, cut: { lines: number[] } | null) {
+    const parts = new Map<string, { hunk: Hunk; count: number }>();
+    for (const piece of piecesOf(diff, drawnHunks(diff, cut), !!cut)) {
+      if (piece.kind === "folded") continue;
+      const hunk = piece.kind === "hunk" ? diff.hunks[piece.h] : piece.hunk;
+      const count = piece.kind === "hunk" && cut ? cut.lines[piece.h] : hunk.lines.length;
+      parts.set(partKey(diff, partOf(piece)), { hunk, count });
+    }
+    return parts;
+  }
+
+  const codeRoots = new Map<Element, () => ReturnType<typeof copyParts>>();
+  function copyRoot(element: HTMLElement, source: () => ReturnType<typeof copyParts>) {
+    codeRoots.set(element, source);
+    return { destroy: () => codeRoots.delete(element) };
+  }
+
+  function beginMouseSelection(event: MouseEvent) {
+    if (event.button !== 0 || (event.target instanceof Element && event.target.closest(".copy-selection"))) return;
+    const target = event.target instanceof Element ? event.target : null;
+    const code = target?.closest(".code.selectable");
+    const side = target?.closest<HTMLElement>(".half")?.dataset.side;
+    if (!event.shiftKey) {
+      // Keep the browser’s selection anchor mounted when the user jumps before Shift-clicking.
+      mouseCopyBlock = target?.closest<HTMLElement>(".lazy")?.dataset.block;
+      mouseCopyStart = code && (side === "left" || side === "right") ? { code, side } : null;
+    }
+    selectingWithMouse = true;
+    copySelection = null;
+  }
+
+  function endMouseSelection(event: MouseEvent) {
+    if (event.button !== 0 || !selectingWithMouse) return;
+    selectingWithMouse = false;
+    updateCopySelection();
+  }
+
+  function updateCopySelection() {
+    if (selectingWithMouse) return;
+    copySelection = null;
+    const selected = selectedCode(true);
+    if (!selected?.text) return;
+    const { rects } = selected;
+    if (!rects.length) return;
+    const left = Math.min(...rects.map((rect) => rect.left));
+    const right = Math.max(...rects.map((rect) => rect.right));
+    const top = Math.min(...rects.map((rect) => rect.top));
+    const bottom = Math.max(...rects.map((rect) => rect.bottom));
+    const gap = 4;
+    const height = 26;
+    const above = top - height - gap;
+    const y = above >= gap ? above : bottom + gap;
+    if (y + height + gap <= innerHeight) {
+      copySelection = { x: (left + right) / 2, y, text: selected.text };
+    }
+  }
+
+  function copyCode() {
+    if (!copySelection) return;
+    navigator.clipboard.writeText(copySelection.text).then(
+      () => confirm.say("Copied selection.", "done"),
+      () => confirm.say("Couldn’t copy to the clipboard.", "error"),
+    );
+  }
+
+  function copyWithKeyboard(event: ClipboardEvent) {
+    if (event.defaultPrevented || !event.clipboardData) return;
+    const selected = selectedCode();
+    if (!selected) return;
+    event.clipboardData.setData("text/plain", selected.text);
+    event.preventDefault();
+  }
 
   let {
     diffs,
@@ -88,7 +228,7 @@
     hunkBar?: Snippet<[FileDiff, Hunk]>;
     /** Actions for the whole file on its header bar, for the working copy. */
     fileActions?: Snippet<[FileDiff]>;
-    /** Offer to open the file in the editor from Settings › External Tools. */
+    /** Offer to open the working copy in an external app. */
     openable?: boolean;
     /** Code being searched for in History: marked wherever it appears. */
     find?: string | null;
@@ -261,14 +401,14 @@
     window.addEventListener("pointerup", () => window.removeEventListener("pointermove", move), { once: true });
   }
 
-  /** Open the file in the editor, at its first change, or at `line`. */
-  function openInEditor(diff: FileDiff, line: number | null = null) {
+  /** Open the working copy. Text opens at its first change or at `line`. */
+  function openFile(diff: FileDiff, line: number | null = null) {
     const first = diff.hunks[0]?.lines.find((l) => l.kind !== "context" && l.newLine !== null) ?? diff.hunks[0]?.lines[0];
-    api.openInEditor(diff.file.path, line ?? first?.newLine ?? null).catch((err) => confirm.fail(err));
+    openWorkingFile(diff.file.path, line ?? first?.newLine ?? null);
   }
 
   /** Whether a line number of the file's new side opens it in the editor there. */
-  const lineOpens = (diff: FileDiff) => openable && diff.file.status !== "deleted" && !diff.file.submodule;
+  const lineOpens = (diff: FileDiff) => openable && diff.file.status !== "deleted" && statusOf(diff.file.path)?.kind === "text";
 
   /** Lines shown past `lineBudget`: each Show More adds a portion, never everything at once. */
   let extra = $state(0);
@@ -319,6 +459,8 @@
     }
     return { files, hidden: items.length - files.length, cut, left: budget };
   });
+
+  const statusOf = watchWorkingFiles(() => openable ? shown.files.filter((d) => !d.file.submodule).map((d) => d.file.path) : []);
 
   // Files still to load while the budget isn't spent, e.g. as the first ones start folded.
   $effect(() => {
@@ -445,7 +587,8 @@
   const rowMarks = (rows: Row[], start: number, end: number) => changeStarts((i) => changedRow(rows[i]), start, end);
 
   /** Name of the block of a hunk's lines from `start`, for Find in file to step to it. */
-  const blockKey = (diff: FileDiff, part: number | string, start: number) => `${diff.file.path}:${part}:${start}`;
+  const partKey = (diff: FileDiff, part: number | string) => `${diff.file.path}:${part}`;
+  const blockKey = (diff: FileDiff, part: number | string, start: number) => `${partKey(diff, part)}:${start}`;
   /** The part of a file's code a piece draws, in its blocks' names: a hunk by its index, lines
    *  opened by where they start. */
   const partOf = (piece: Piece) => (piece.kind === "hunk" ? piece.h : `x${piece.from}`);
@@ -553,7 +696,7 @@
 
 <!-- A line's code: syntax colors, changed words, matches of Find. `counted` is false for the
      old side of an unchanged line in Side by Side, whose matches are the new side's again. -->
-{#snippet code(diff: FileDiff, line: DiffLine, language: ReturnType<typeof languageOf>, counted: boolean)}<span class="text"><span class="ink">{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found && counted} class:twin={piece.found && !counted} data-hit={counted ? piece.hit : undefined} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}{#if line.cr && own(showEol, diff.file.path)}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}{#if line.secret}<span class="secret" title="Looks like a secret: Oxbow stops the commit until it is unstaged, or you commit anyway. Add oxbow:allow to the line if it is not one."><svg viewBox="0 0 16 16"><path d="M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2" /></svg>{line.secret}</span>{/if}</span></span>{/snippet}
+{#snippet code(diff: FileDiff, line: DiffLine, language: ReturnType<typeof languageOf>, counted: boolean)}<span class="text"><span class="ink"><span class="selection-text" data-empty={line.text ? undefined : ""}>{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found && counted} class:twin={piece.found && !counted} data-hit={counted ? piece.hit : undefined} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>{#if line.cr && own(showEol, diff.file.path)}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}{#if line.secret}<span class="secret" title="Looks like a secret: Oxbow stops the commit until it is unstaged, or you commit anyway. Add oxbow:allow to the line if it is not one."><svg viewBox="0 0 16 16"><path d="M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2" /></svg>{line.secret}</span>{/if}</span></span>{/snippet}
 
 {#snippet pickBox(hunk: Hunk, line: DiffLine, i: number, on: boolean)}
   <button
@@ -586,7 +729,7 @@
 <!-- The number of a line of the file as it is now: a click opens the file in the editor there. -->
 {#snippet newNo(diff: FileDiff, no: number | null)}
   {#if no !== null && lineOpens(diff)}
-    <button class="no opens" tabindex="-1" onclick={() => openInEditor(diff, no)} title="Open in Editor at line {no}">{no}</button>
+    <button class="no opens" tabindex="-1" onclick={() => openFile(diff, no)} title={`${workingFileAction(statusOf(diff.file.path), !working).label} at line ${no}`}>{no}</button>
   {:else}
     <span class="no">{no ?? ""}</span>
   {/if}
@@ -599,6 +742,7 @@
   {@const on = at !== null && picked.includes(at)}
   <div
     class="half {line ? line.kind : 'empty'}"
+    data-side={side}
     class:picking
     class:faded={picked.length > 0 && !!line && line.kind !== "context" && !on}
     class:lit={!!line && !!notes?.lit(diff, line)}
@@ -624,7 +768,7 @@
         lines={end - start}
         of={hunk.lines[rows[start].left ?? rows[start].right ?? 0]}
         name={blockKey(diff, h, start)}
-        force={focus === blockKey(diff, h, start)}
+        force={focus === blockKey(diff, h, start) || mouseCopyBlock === blockKey(diff, h, start)}
         marks={rowMarks(rows, start, end)}
       >
         {#each rows.slice(start, end) as _, j (j)}
@@ -643,7 +787,7 @@
   {:else}
     {#each blocks(count) as start (start)}
       {@const end = Math.min(count, start + BLOCK)}
-      <Lazy lines={end - start} of={hunk.lines[start]} name={blockKey(diff, h, start)} force={focus === blockKey(diff, h, start)} marks={lineMarks(hunk, start, end)}>
+      <Lazy lines={end - start} of={hunk.lines[start]} name={blockKey(diff, h, start)} force={focus === blockKey(diff, h, start) || mouseCopyBlock === blockKey(diff, h, start)} marks={lineMarks(hunk, start, end)}>
         {#each hunk.lines.slice(start, end) as line, j (j)}
           {@const i = start + j}
           {@const on = picked.includes(i)}
@@ -695,11 +839,41 @@
   {/if}
 {/snippet}
 
+<svelte:document
+  onmousedowncapture={beginMouseSelection}
+  onmouseupcapture={endMouseSelection}
+  onselectionchange={updateCopySelection}
+  oncopy={copyWithKeyboard}
+  onscrollcapture={() => (copySelection = null)}
+/>
+<svelte:window
+  onresize={() => (copySelection = null)}
+  onblur={() => {
+    selectingWithMouse = false;
+    copySelection = null;
+  }}
+/>
+
+{#if copySelection}
+  <button
+    class="button small copy-selection"
+    style:--selection-center="{copySelection.x}px"
+    style:top="{copySelection.y}px"
+    onmousedown={(event) => event.preventDefault()}
+    onclick={copyCode}
+  >
+    <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d={menuIcons.copy} /></svg>
+    Copy to clipboard
+  </button>
+{/if}
+
 {#each shown.files as diff (diff.file.path)}
   {@const path = splitPath(diff.file.path)}
   {@const isShut = isFolded(diff)}
   {@const why = isShut ? foldReason(diff) : null}
   {@const kind = isShut ? null : special(diff)}
+  {@const open = workingFileAction(statusOf(diff.file.path), !working)}
+  {@const ending = diffLineEndingLabel(diff)}
   <section class="file" class:shut={isShut} data-path={diff.file.path}>
     <header class="background-sticky">
       <!-- Outlined in the branch color, as the Summary tab is. -->
@@ -721,6 +895,9 @@
           {@render name(diff)}
           <span class="status">{statusLabel[diff.file.status]}</span>
           <span class="spacer"></span>
+        {/if}
+        {#if ending}
+          <span class="mono size" title="Line endings in the compared versions: {ending}">{ending}</span>
         {/if}
         {#if diff.file.submodule}
           <span class="size">Submodule</span>
@@ -744,8 +921,14 @@
             <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.2l2 1.3" /></svg>
           </button>
         {/if}
-        {#if openable && diff.file.status !== "deleted" && !diff.file.submodule}
-          <button class="toggle" onclick={() => openInEditor(diff)} aria-label="Open in editor" title="Open in Editor">
+        {#if openable && !diff.file.submodule}
+          <button
+            class="toggle"
+            aria-disabled={!!open.reason}
+            aria-label={open.reason ? `${open.label}. ${open.reason}` : open.label}
+            title={open.reason ?? open.label}
+            onclick={() => !open.reason && openFile(diff)}
+          >
             <svg class="icon" viewBox="0 0 16 16"><path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" /></svg>
           </button>
         {/if}
@@ -851,7 +1034,7 @@
     {:else if kind === "image"}
       <ImageDiff {diff} />
     {:else if kind}
-      <UnusualCard {diff} {kind} {openable} command={command?.(diff) ?? null} onShowAnyway={loadFull ? () => showAnyway(diff) : undefined} />
+      <UnusualCard {diff} {kind} {openable} {open} historical={!working} command={command?.(diff) ?? null} onShowAnyway={loadFull ? () => showAnyway(diff) : undefined} />
     {:else if diff.hunks.length === 0}
       <p class="note">
         {#if diff.file.status === "renamed"}
@@ -867,7 +1050,7 @@
       {@const cut = shown.cut?.diff === diff ? shown.cut : null}
       {#if notes?.top}{@render notes.top(diff)}{/if}
       {#key wrap}
-      <div class="code mono selectable" class:nowrap={!wrap} style:--digits={digits(diff)} style:--cols={wrap ? null : columns(diff)} use:sideways={wrap ? null : `${textLayout}:${columns(diff)}:${digits(diff)}`}>
+      <div class="code mono selectable" use:copyRoot={() => copyParts(diff, cut)} class:nowrap={!wrap} style:--digits={digits(diff)} style:--cols={wrap ? null : columns(diff)} use:sideways={wrap ? null : `${textLayout}:${columns(diff)}:${digits(diff)}`}>
         {#each piecesOf(diff, drawnHunks(diff, cut), !!cut) as piece (piece.kind === "hunk" ? `h${piece.h}` : `${piece.kind}${piece.from}`)}
           {#if piece.kind === "folded"}
             {@render foldBar(diff, piece)}
@@ -901,6 +1084,17 @@
 {/if}
 
 <style>
+  .copy-selection {
+    --copy-half-width: 72px;
+    position: fixed;
+    z-index: 3;
+    left: clamp(4px, calc(var(--selection-center) - var(--copy-half-width)), calc(100% - 2 * var(--copy-half-width) - 4px));
+    width: calc(2 * var(--copy-half-width));
+    padding-inline: var(--space-2);
+    border-radius: var(--radius-m);
+    background: var(--sheet);
+    white-space: nowrap;
+  }
   .file {
     padding: 0 var(--diff-file-inset) var(--space-4);
   }
@@ -998,6 +1192,10 @@
     align-items: center;
     justify-content: center;
     color: var(--icon);
+  }
+  .toggle[aria-disabled="true"] {
+    opacity: 0.45;
+    cursor: default;
   }
   .toggle.on {
     background: var(--win);

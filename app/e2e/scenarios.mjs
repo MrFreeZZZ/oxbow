@@ -1,5 +1,5 @@
 // The acceptance scenarios: each starts the real app on fixtures of its own and checks what
-// docs/acceptance.md says, with real git underneath. `run(ctx)` throws on a failure and may give
+// docs/testing/acceptance.md says, with real git underneath. `run(ctx)` throws on a failure and may give
 // back a note (a time measured, which way the app went) for the line printed.
 
 import assert from "node:assert/strict";
@@ -116,9 +116,17 @@ export const SCENARIOS = [
       await verify(all);
       const focus = (selector) => app.js((page, selector) => document.querySelector(selector).focus(), selector);
       const filter = 'aside.panel input[aria-label="Filter files"]';
+      await focus(last);
+      await app.keys("ArrowUp");
+      await verify(first);
       await focus(filter);
-      await app.keys("f3", "Ctrl+PageDown");
+      await app.keys("f3");
+      await verify(all, filter);
+      await shows(app, "1 of 2");
+      await shows(app, "file 2 1");
+      await app.keys("Ctrl+PageDown");
       await verify(last, filter);
+      await shows(app, "File 1 of 1");
       await app.keys("Ctrl+PageUp");
       await verify(all, filter);
       const diff = 'aside.panel button[aria-label="Previous change"]';
@@ -464,6 +472,12 @@ export const SCENARIOS = [
       for (let i = 0; i < 6; i++) await app.keys("Tab");
       const inside = await app.js(async (page) => !!document.activeElement?.closest("[role=alertdialog]"));
       assert.equal(inside, true, "Tab left the confirmation");
+      const imeEscape = await app.js(() => {
+        const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, isComposing: true });
+        return document.activeElement.dispatchEvent(event);
+      });
+      assert.equal(imeEscape, true, "Escape was intercepted during IME composition");
+      assert.equal(await app.js((page) => page.all("[role=alertdialog]").length), 1, "IME Escape closed the confirmation");
       await app.keys("Escape");
       await app.js((page) => page.until(() => !page.all("[role=alertdialog]").length, "the confirmation to close"));
       assert.equal(read(r, "src/f1.txt"), "changed\n");

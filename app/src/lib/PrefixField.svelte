@@ -7,6 +7,7 @@
   import { onDestroy, tick } from "svelte";
   import { onlyPrefix, splitPrefix, typedAfter, withPrefix, type BranchPrefix } from "./branchPrefixes";
   import { cleanTyped, rememberPrefix } from "./branchPrefs";
+  import { isImeEscape } from "./shortcuts";
 
   import type { RefInfo } from "./types";
 
@@ -34,6 +35,7 @@
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let matches = $state.raw<RefInfo[]>([]);
   let active = $state(-1);
+  let hovered = $state(-1);
   let results = $state<HTMLDivElement>();
   let placement = $state({ left: 0, top: 0, width: 0, maxHeight: 0 });
 
@@ -41,6 +43,7 @@
     clearTimeout(searchTimer);
     matches = [];
     active = -1;
+    hovered = -1;
   }
 
   onDestroy(() => clearTimeout(searchTimer));
@@ -138,7 +141,9 @@
   }
 
   function onInputKey(event: KeyboardEvent) {
+    if (isImeEscape(event)) return;
     const el = event.currentTarget as HTMLInputElement;
+    const suggestion = matches[active] ?? matches[hovered];
     if (branchRefs && (event.key === "Tab" || event.code === "Tab")) dismissMatches();
     if (matches.length && event.key === "Escape") {
       event.preventDefault();
@@ -149,10 +154,10 @@
       const step = event.key === "ArrowDown" ? 1 : -1;
       active = active < 0 && step < 0 ? matches.length - 1 : (active + step + matches.length) % matches.length;
       results?.children[active]?.scrollIntoView({ block: "nearest" });
-    } else if (active >= 0 && event.key === "Enter" && !event.metaKey && !event.ctrlKey) {
+    } else if (suggestion && event.key === "Enter" && !event.isComposing && !event.metaKey && !event.ctrlKey) {
       event.preventDefault();
       event.stopPropagation();
-      void pickBranch(matches[active]);
+      void pickBranch(suggestion);
     } else if (list.length && event.key === "ArrowDown" && !event.metaKey && !event.ctrlKey) {
       event.preventDefault();
       void show();
@@ -256,7 +261,10 @@
           tabindex="-1"
           id="{id}-branch-{i}"
           aria-selected={i === active}
+          class:hovered={i === hovered}
           title={ref.name}
+          onpointermove={(event) => { if (event.pointerType !== "touch") hovered = i; }}
+          onpointerleave={() => { if (hovered === i) hovered = -1; }}
           onmousedown={(event) => event.preventDefault()}
           onclick={() => pickBranch(ref)}
         >
@@ -385,7 +393,7 @@
     white-space: nowrap;
     outline: none;
   }
-  .menu button:hover,
+  .menu:not(.suggestions) button:hover,
   .menu button:focus-visible,
   .menu button:focus {
     background: var(--side-sel);
@@ -409,8 +417,13 @@
   .matches .words {
     flex-shrink: 0;
   }
+  .matches button.hovered {
+    background: var(--hover-wash);
+  }
   .matches button[aria-selected="true"] {
     background: var(--side-sel);
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
   .branch-name {
     overflow: hidden;

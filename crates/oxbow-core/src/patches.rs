@@ -9,7 +9,7 @@ use serde::Serialize;
 use crate::cli::{GitCommand, literal};
 use crate::error::{Error, Result};
 use crate::remote::{CommitBrief, parse_briefs};
-use crate::repo::Repo;
+use crate::repo::{Repo, branch_label};
 
 /// Commits listed in a preview at most: a mailbox can hold a whole branch.
 const PREVIEW_COMMITS: usize = 200;
@@ -353,11 +353,11 @@ pub(crate) fn mail_id(mail: &[u8]) -> Option<String> {
     (sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit())).then(|| sha.to_owned())
 }
 
-/// A sha shortened; a branch name as it is.
-fn short_name(rev: &str) -> String {
+/// A shortened SHA or the display name of a ref.
+fn short_name(rev: &str) -> &str {
     if rev.len() == 40 && rev.bytes().all(|b| b.is_ascii_hexdigit()) {
-        rev[..7].to_owned()
+        &rev[..7]
     } else {
-        rev.to_owned()
+        branch_label(rev.strip_prefix("refs/tags/").unwrap_or(rev))
     }
 }

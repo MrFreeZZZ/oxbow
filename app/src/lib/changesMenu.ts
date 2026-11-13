@@ -8,6 +8,7 @@ import { commitFileActions, commitFileRequest, type CommitFile } from "./commitF
 import { confirm, type Request } from "./confirm.svelte";
 import { splitPath } from "./format";
 import { menuIcons, type MenuEntry, type SubEntry } from "./Menu.svelte";
+import { workingFileMenuItem } from "./openFile.svelte";
 import { nav } from "./nav.svelte";
 import { NEWEST_SAVED } from "./localHistory";
 import type { FileChange, Side } from "./types";
@@ -103,8 +104,8 @@ export function fileMenu(repo: string, file: FileChange, group: Side | "untracke
       entries: ignoreChoices(file.path, file.status !== "untracked").map((choice) => ({ label: choice.label, hint: choice.pattern, run: () => a.act(ignoreRequest(file.path, choice)) })),
     });
   entries.push({ kind: "sep" });
-  if (file.status !== "deleted")
-    entries.push({ kind: "item", label: "Open in Editor", icon: menuIcons.open, run: () => api.openInEditor(file.path, null).catch((err) => confirm.fail(err)) });
+  if (!file.submodule)
+    entries.push(workingFileMenuItem(file.path, side === "staged"));
   if (file.status !== "deleted")
     entries.push({ kind: "item", label: revealLabel, icon: menuIcons.reveal, run: () => api.revealFile(file.path).catch((err) => confirm.fail(err)) });
   entries.push(copyMenu(repo, [file.path]));
@@ -140,8 +141,8 @@ export function commitFileMenu(repo: string, file: FileChange, commit: string, c
   const split = ctx.split;
   if (split) actions.push({ kind: "item", label: "Split into a New Commit…", icon: menuIcons.split, run: () => split(file.path) });
   if (actions.length) entries.push(...actions, { kind: "sep" });
+  if (!file.submodule) entries.push(workingFileMenuItem(file.path, true));
   if (file.status !== "deleted") {
-    entries.push({ kind: "item", label: "Open in Editor", icon: menuIcons.open, run: () => api.openInEditor(file.path, null).catch((err) => confirm.fail(err)) });
     entries.push({ kind: "item", label: revealLabel, icon: menuIcons.reveal, run: () => api.revealFile(file.path).catch((err) => confirm.fail(err)) });
   }
   entries.push(copyMenu(repo, [file.path]));

@@ -13,6 +13,10 @@ use crate::commit::FileChange;
 use crate::error::{Error, Result};
 use crate::repo::Repo;
 
+fn is_commit_hex(name: &str) -> bool {
+    (4..=64).contains(&name.len()) && name.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 /// At most this many commits of each side are listed.
 const LIMIT: usize = 500;
 
@@ -131,6 +135,8 @@ impl Repo {
             .collect();
 
         let dots = if mode == CompareMode::Split { "..." } else { ".." };
+        let base = if is_commit_hex(base) { &base_id } else { base };
+        let target = if is_commit_hex(target) { &target_id } else { target };
         let command = GitCommand::new(["diff".to_owned(), format!("{base}{dots}{target}")]).display();
         Ok(Comparison {
             base_id,
@@ -201,11 +207,28 @@ impl Repo {
 
     /// Full ref names from the picker must still name the same ref if it has since been deleted.
     fn compare_commit_id(&self, name: &str) -> Result<String> {
+        let unknown = || Error::UnknownCommit(name.to_owned());
+        if is_commit_hex(name) {
+            // Search object IDs directly: rev-parse <hex>^{commit} can resolve a ref.
+            let out = self
+                .run(&GitCommand::new(["rev-parse", &format!("--disambiguate={name}")]))
+                .map_err(|_| unknown())?;
+            let repo = self.local();
+            let mut commits = out
+                .stdout
+                .lines()
+                .filter_map(|line| gix::ObjectId::from_hex(line.as_bytes()).ok())
+                .filter_map(|id| repo.find_object(id).ok()?.peel_to_commit().ok());
+            let commit = commits.next().ok_or_else(unknown)?;
+            if commits.any(|other| other.id != commit.id) {
+                return Err(unknown());
+            }
+            return Ok(commit.id.to_string());
+        }
         let bytes = gix::bstr::BStr::new(name);
         if !name.starts_with("refs/") || gix::validate::reference::name(bytes).is_err() {
             return self.commit_id(name);
         }
-        let unknown = || Error::UnknownCommit(name.to_owned());
         let repo = self.local();
         let mut reference = repo
             .try_find_reference(name)

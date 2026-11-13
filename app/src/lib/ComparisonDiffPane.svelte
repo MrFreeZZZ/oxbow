@@ -43,7 +43,11 @@
   const needle = $derived(filter.trim().toLowerCase());
   const shown = $derived(needle ? files.filter((file) => file.path.toLowerCase().includes(needle) || file.oldPath?.toLowerCase().includes(needle)) : files);
   const paths = $derived(shown.map((file) => file.path));
-  const fileIndex = $derived(files.findIndex((file) => file.path === shownPath));
+  const fileIndex = $derived(shown.findIndex((file) => file.path === shownPath));
+
+  $effect(() => {
+    if (path !== null && !paths.includes(path)) onOpen(null);
+  });
 
   function open(next: string | null) {
     const index = next === null ? -1 : paths.indexOf(next);
@@ -68,11 +72,11 @@
     requestAnimationFrame(() => list?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: "nearest" }));
   });
 
-  function stepFile(by: 1 | -1, wrap: boolean) {
+  function stepFile(by: 1 | -1, wrap: boolean, rowPath = path) {
     const focused = document.activeElement;
-    const fromRow = list?.contains(focused) && focused?.matches("button[aria-current]");
-    if (!fileTabs(paths, path, open)(by, wrap)) return false;
-    if (fromRow) void tick().then(() => {
+    const fromRow = focused?.closest("[data-file-row]");
+    if (!fileTabs(paths, rowPath, open)(by, wrap)) return false;
+    if (fromRow && list?.contains(fromRow)) void tick().then(() => {
       if (document.activeElement !== focused) return;
       const active = list?.querySelector<HTMLElement>('[aria-current="true"]');
       if (active) keyFocus(active);
@@ -80,19 +84,19 @@
     return true;
   }
 
-  function onRowKey(event: KeyboardEvent) {
+  function onRowKey(event: KeyboardEvent, rowPath: string | null) {
     const by = pressed("nextFile", event) ? 1 : pressed("previousFile", event) ? -1 : 0;
     if (!by) return;
     event.preventDefault();
-    stepFile(by, false);
+    stepFile(by, false, rowPath);
   }
 </script>
 
 <div class="body" class:stacked bind:clientWidth={width}>
-  <div class="files" aria-label="Changed files" data-steps use:tabStepper={stepFile} style:width={stacked ? undefined : `${filesWidth(width)}px`}>
+  <div class="files" aria-label="Changed files" data-comparison-files data-steps use:tabStepper={stepFile} style:width={stacked ? undefined : `${filesWidth(width)}px`}>
     <div class="filter"><FileFilter bind:value={filter} {color} /></div>
     <div class="list" bind:this={list} style:--selection-fill={tint(color)} style:--selection-border={`color-mix(in srgb, ${lane(color)} 40%, transparent)`}>
-      <button class="diff-list-row diff-list-group" aria-current={path === null} onclick={(event) => rowClick(event, null)} onkeydown={onRowKey}>
+      <button class="diff-list-row diff-list-group" data-file-row aria-current={path === null ? "true" : undefined} onclick={(event) => rowClick(event, null)} onkeydown={(event) => onRowKey(event, null)}>
         <span class="group-title" style:color={plate(color)}>All Changes</span>
         <span>{needle ? `${shown.length} of ${files.length}` : files.length.toLocaleString()}</span>
         <span class="grow"></span>
@@ -104,8 +108,9 @@
         {/if}
       </button>
       {#each shown.slice(0, listed) as file (file.path)}
-        <div class="diff-list-row diff-list-file file">
-          <button class="diff-list-row-control name" aria-current={path === file.path} onclick={(event) => rowClick(event, file.path)} onkeydown={onRowKey} title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
+        <!-- svelte-ignore a11y_no_static_element_interactions (delegates keys from the row buttons) -->
+        <div class="diff-list-row diff-list-file file" data-file-row onkeydown={(event) => onRowKey(event, file.path)}>
+          <button class="diff-list-row-control name" aria-current={path === file.path ? "true" : undefined} onclick={(event) => rowClick(event, file.path)} title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
             <span class="diff-list-badge {tone[file.status] ?? "orange"}">{statusIcon[file.status] ?? "M"}</span>
             <PathName path={file.path} />
             {#if !counted || counted(file)}<FileBadge {file} />{/if}
@@ -119,11 +124,11 @@
       {#if needle && !shown.length}<p class="empty">No files match the filter.</p>{/if}
     </div>
   </div>
-  {#if !stacked}<button class="edge" tabindex="-1" style:left={`${filesWidth(width) - 4}px`} onpointerdown={(event) => resizeFiles(event, width)} aria-label="Resize the files" title="Drag to resize"></button>{/if}
+  {#if !stacked}<button class="vertical-splitter" title="Drag to resize" tabindex="-1" style:left={`${filesWidth(width) - 4}px`} onpointerdown={(event) => resizeFiles(event, width)} aria-label="Resize the files"></button>{/if}
   <div class="diff" aria-label="Diff">
     <div class="dhead diff-toolbar">
       <span class="caption grow">
-        {#if fileIndex >= 0}File {fileIndex + 1} of {files.length.toLocaleString()}
+        {#if fileIndex >= 0}File {fileIndex + 1} of {shown.length.toLocaleString()}
         {:else}{files.length.toLocaleString()} {files.length === 1 ? "file" : "files"}{/if}
       </span>
       {#if onFold}<FoldAll {onFold} />{/if}
@@ -148,19 +153,6 @@
   .file { position: relative; }
   .name { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: 100%; }
   .more { justify-content: center; padding: 0; color: var(--text2); font-size: var(--text-small); }
-  .edge {
-    position: absolute;
-    top: 50%;
-    width: 7px;
-    height: 36px;
-    margin-top: -18px;
-    border-radius: var(--radius-xs);
-    background: var(--win);
-    border: 1px solid var(--glass-border);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-    z-index: 2;
-    cursor: col-resize;
-  }
   .diff { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
   .dhead { display: flex; align-items: center; gap: 10px; min-height: 46px; flex-shrink: 0; }
   .caption, .empty { color: var(--text2); font-size: var(--text-small); }
