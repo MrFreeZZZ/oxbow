@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { loadWorkingFileStatuses, workingFileAction, type WorkingFileStatus } from "../src/lib/openFile.ts";
+import {
+  keepWorkingFileStatuses, loadWorkingFileStatuses, workingFileAction, type WorkingFileStatus,
+} from "../src/lib/openFile.ts";
 
 test("an unresolved working copy offers no app, and an absent copy gives its reason", () => {
   assert.deepEqual(workingFileAction(undefined, false), {
@@ -38,4 +40,38 @@ test("the next page retries a failed batch without rechecking known paths", asyn
   assert.equal(next.get("absent"), unavailable);
   assert.deepEqual(next.get("retry"), { kind: "binary" });
   assert.deepEqual(next.get("new"), { kind: "binary" });
+});
+
+test("a change on disk rechecks every file but keeps the last statuses until the answer", async () => {
+  const last = new Map<string, WorkingFileStatus>([["a.png", { kind: "binary" }], ["b.txt", { kind: "text" }]]);
+  const files = new Set(["a.png", "b.txt"]);
+  const kept = keepWorkingFileStatuses({ shown: last, checked: last }, files, "disk");
+  assert.deepEqual(kept.shown, last);
+  assert.equal(kept.checked.size, 0);
+  const calls: string[][] = [];
+  const next = await loadWorkingFileStatuses(files, kept.checked, async (paths) => {
+    calls.push(paths);
+    return paths.map(() => ({ kind: "text" }));
+  });
+  assert.deepEqual(calls, [["a.png", "b.txt"]]);
+  assert.deepEqual(next.get("a.png"), { kind: "text" });
+});
+
+test("a smaller list keeps what it still shows, and another repository shows nothing", () => {
+  const last = new Map<string, WorkingFileStatus>([["a.png", { kind: "binary" }], ["b.txt", { kind: "text" }]]);
+  const files = new Set(["b.txt"]);
+  const kept = keepWorkingFileStatuses({ shown: last, checked: last }, files, "none");
+  assert.deepEqual([...kept.shown.keys()], ["b.txt"]);
+  assert.deepEqual([...kept.checked.keys()], ["b.txt"]);
+  const other = keepWorkingFileStatuses({ shown: last, checked: last }, files, "repo");
+  assert.equal(other.shown.size, 0);
+  assert.equal(other.checked.size, 0);
+});
+
+test("a page loaded during a recheck asks again for the files only shown from before", () => {
+  const stale = new Map<string, WorkingFileStatus>([["a.png", { kind: "binary" }]]);
+  const fresh = new Map<string, WorkingFileStatus>();
+  const kept = keepWorkingFileStatuses({ shown: stale, checked: fresh }, new Set(["a.png", "c.txt"]), "none");
+  assert.deepEqual(kept.shown, stale);
+  assert.equal(kept.checked.size, 0);
 });

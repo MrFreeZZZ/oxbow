@@ -254,7 +254,8 @@
       entries.push({ kind: "item", label: command.name, icon: CONSOLE_ICON, run: () => void runCustom(command) });
     }
     entries.push({ kind: "item", label: "Console", icon: CONSOLE_ICON, keys: shortcut("console") || undefined, run: () => api.openConsole() });
-    entries.push({ kind: "item", label: "Settings…", icon: SETTINGS_ICON, keys: shortcut("settings") || undefined, run: () => api.openSettings() });
+    const update = updates.available && `Oxbow ${updates.available.version} ${updates.installed ? "is installed" : updates.ready ? "is ready to install" : "is available"}`;
+    entries.push({ kind: "item", label: "Settings…", icon: SETTINGS_ICON, keys: shortcut("settings") || undefined, detail: update || undefined, run: () => api.openSettings() });
     return entries;
   }
   /** The details panel put away, so the graph takes the whole width; kept in settings.json. */
@@ -2134,6 +2135,7 @@
           {#if narrow}
             <button
               class="capsule"
+              class:update-available={!!updates.available}
               onclick={(event) => {
                 const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
                 moreMenu = moreMenu ? null : { x: box.left, y: box.bottom + 6 };
@@ -2141,7 +2143,7 @@
               aria-label="More"
               aria-haspopup="menu"
               aria-expanded={!!moreMenu}
-              title={(view !== "file" && view !== "browse") || showConflicts ? "New Branch, Console, Settings" : "Console, Settings"}
+              title={`${(view !== "file" && view !== "browse") || showConflicts ? "New Branch, Console, Settings" : "Console, Settings"}${updates.available ? " — an update is available" : ""}`}
             >
               <svg class="icon" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6" /><circle cx="8" cy="8" r=".6" /><circle cx="12.5" cy="8" r=".6" /></svg>
             </button>

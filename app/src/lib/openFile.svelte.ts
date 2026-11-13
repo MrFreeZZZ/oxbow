@@ -4,7 +4,7 @@ import { api } from "./api";
 import { confirm } from "./confirm.svelte";
 import { menuIcons, type MenuEntry } from "./Menu.svelte";
 import { nav } from "./nav.svelte";
-import { loadWorkingFileStatuses, workingFileAction, type WorkingFileStatus } from "./openFile";
+import { keepWorkingFileStatuses, loadWorkingFileStatuses, workingFileAction, type WorkingFileStatus } from "./openFile";
 
 export function openWorkingFile(path: string, line: number | null = null) {
   return api.openWorkingFile(path, line).catch((err) => confirm.fail(err));
@@ -12,7 +12,7 @@ export function openWorkingFile(path: string, line: number | null = null) {
 
 /** Refresh visible actions when the diff changes or something touches the working tree. */
 export function watchWorkingFiles(paths: () => string[]) {
-  let statuses = $state.raw(new Map<string, WorkingFileStatus>());
+  let statuses = $state.raw<ReadonlyMap<string, WorkingFileStatus>>(new Map());
   let version = $state(0);
   let failure = $state<WorkingFileStatus>();
   onMount(() => {
@@ -24,25 +24,28 @@ export function watchWorkingFiles(paths: () => string[]) {
       void stop.then((unlisten) => unlisten?.());
     };
   });
+  let checked: ReadonlyMap<string, WorkingFileStatus> = new Map();
   let checkedVersion = -1;
   let checkedRepo: typeof nav.repo;
   $effect(() => {
     const repo = nav.repo;
-    const refresh = checkedVersion !== version || checkedRepo !== repo;
+    const change = checkedRepo !== repo ? "repo" : checkedVersion !== version ? "disk" : "none";
     checkedRepo = repo;
     checkedVersion = version;
-    const known = refresh ? new Map<string, WorkingFileStatus>() : untrack(() => statuses);
     const files = new Set(paths());
-    const kept = new Map(known);
-    for (const path of known.keys()) {
-      if (!files.has(path)) kept.delete(path);
-    }
-    if (refresh || kept.size !== known.size) statuses = kept;
+    const shown = untrack(() => statuses);
+    const kept = keepWorkingFileStatuses({ shown, checked }, files, change);
+    checked = kept.checked;
+    if (kept.shown.size !== shown.size) statuses = kept.shown;
     failure = undefined;
-    if (files.size === kept.size) return;
+    if (files.size === checked.size) return;
     let current = true;
-    void loadWorkingFileStatuses(files, kept, api.workingFileStatuses).then(
-      (next) => { if (current) statuses = next; },
+    void loadWorkingFileStatuses(files, checked, api.workingFileStatuses).then(
+      (next) => {
+        if (!current) return;
+        checked = next;
+        statuses = next;
+      },
       (err) => { if (current) failure = { kind: "unavailable", reason: String(err) }; },
     );
     return () => { current = false; };

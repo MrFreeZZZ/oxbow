@@ -16,6 +16,26 @@ export function workingFileAction(status: WorkingFileStatus | undefined, histori
   }
 }
 
+export type WorkingFileStatuses = {
+  /** What the actions show now. */
+  shown: ReadonlyMap<string, WorkingFileStatus>;
+  /** What was read from disk since it last changed; the rest is asked for again. */
+  checked: ReadonlyMap<string, WorkingFileStatus>;
+};
+
+/** The statuses kept for the files now visible. A change on disk asks again for every file but
+ *  shows the last answers until the new ones come; another repository starts with none. */
+export function keepWorkingFileStatuses(
+  last: WorkingFileStatuses,
+  files: ReadonlySet<string>,
+  change: "none" | "disk" | "repo",
+): WorkingFileStatuses {
+  if (change === "repo") return { shown: new Map(), checked: new Map() };
+  const visible = (statuses: ReadonlyMap<string, WorkingFileStatus>) =>
+    new Map([...statuses].filter(([path]) => files.has(path)));
+  return { shown: visible(last.shown), checked: change === "disk" ? new Map() : visible(last.checked) };
+}
+
 /** Keep only successful batch results, including per-file unavailable statuses. */
 export async function loadWorkingFileStatuses(
   files: Iterable<string>,
