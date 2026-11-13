@@ -40,7 +40,7 @@
   import { nav } from "./nav.svelte";
   import { onDestroy, untrack } from "svelte";
   import { foldReason, startsFolded } from "./diffFold";
-  import { addKnown, changedRow, changeStarts, pieces, rowsOf, sideKind, type Known, type Piece, type Row } from "./diffRows";
+  import { addKnown, blockText, changedRow, changeStarts, pieces, rowsOf, sideKind, type Known, type Piece, type Row } from "./diffRows";
   import { mac, withKeys } from "./keys";
   import { combo } from "./shortcuts";
   import ImageDiff from "./ImageDiff.svelte";
@@ -60,6 +60,10 @@
   let selectingWithMouse = false;
   let mouseSelectionEnd: { x: number; y: number } | null = null;
 
+  type CopySide = "left" | "right";
+  let mouseCopyBlock = $state<string>();
+  let mouseCopyStart: { code: Element; side: CopySide } | null = null;
+
   function selectedCode() {
     const selection = document.getSelection();
     if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
@@ -67,34 +71,73 @@
     const element = anchor instanceof Element ? anchor : anchor?.parentElement;
     const code = element?.closest(".code.selectable");
     if (!code || !selection.focusNode || !code.contains(selection.focusNode) || !codeRoots.has(code)) return null;
-    const side = element?.closest(".half")?.getAttribute("data-side");
+    const source = codeRoots.get(code)!;
+    const side = split
+      ? (mouseCopyStart?.code === code ? mouseCopyStart.side : element?.closest<HTMLElement>(".half")?.dataset.side as CopySide | undefined)
+      : undefined;
     if (split && !side) return null;
 
     const range = selection.getRangeAt(0);
     const lines: string[] = [];
     const rects: DOMRect[] = [];
-    for (const line of code.querySelectorAll<HTMLElement>(side ? `[data-side="${side}"] .selection-text` : ".selection-text")) {
-      if (!range.intersectsNode(line)) continue;
-      const part = document.createRange();
-      part.selectNodeContents(line);
-      if (line.contains(range.startContainer)) part.setStart(range.startContainer, range.startOffset);
-      if (line.contains(range.endContainer)) part.setEnd(range.endContainer, range.endOffset);
-      const value = part.toString();
-      if (part.collapsed) continue;
-      lines.push(line.hasAttribute("data-empty") ? "" : value);
-      rects.push(...Array.from(part.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0));
+    let parts: ReturnType<typeof copyParts> | undefined;
+    const selector = side ? `[data-side="${side}"] .selection-text` : ".selection-text";
+    for (const block of code.querySelectorAll<HTMLElement>(".lazy[data-block]")) {
+      if (!range.intersectsNode(block)) continue;
+      if (!block.firstElementChild) {
+        parts ??= source();
+        const key = block.dataset.block!;
+        const separator = key.lastIndexOf(":");
+        const start = Number(key.slice(separator + 1));
+        const part = parts.get(key.slice(0, separator));
+        if (part) lines.push(...blockText(part.hunk, part.count, start, BLOCK, side));
+        continue;
+      }
+      for (const line of block.querySelectorAll<HTMLElement>(selector)) {
+        if (!range.intersectsNode(line)) continue;
+        const part = document.createRange();
+        part.selectNodeContents(line);
+        if (line.contains(range.startContainer)) part.setStart(range.startContainer, range.startOffset);
+        if (line.contains(range.endContainer)) part.setEnd(range.endContainer, range.endOffset);
+        if (part.collapsed) continue;
+        lines.push(line.hasAttribute("data-empty") ? "" : part.toString());
+        rects.push(...Array.from(part.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0));
+      }
+    }
+    if (!lines.length) {
+      // Suppress WebKit’s opposite-column copy, but let it copy non-code selections.
+      if (!side || ![...code.querySelectorAll(".selection-text")].some((line) => range.intersectsNode(line))) return null;
     }
     return { text: lines.join("\n"), rects };
   }
 
-  const codeRoots = new Set<Element>();
-  function copyRoot(element: HTMLElement) {
-    codeRoots.add(element);
+  function copyParts(diff: FileDiff, cut: { lines: number[] } | null) {
+    const parts = new Map<string, { hunk: Hunk; count: number }>();
+    for (const piece of piecesOf(diff, drawnHunks(diff, cut), !!cut)) {
+      if (piece.kind === "folded") continue;
+      const hunk = piece.kind === "hunk" ? diff.hunks[piece.h] : piece.hunk;
+      const count = piece.kind === "hunk" && cut ? cut.lines[piece.h] : hunk.lines.length;
+      parts.set(partKey(diff, partOf(piece)), { hunk, count });
+    }
+    return parts;
+  }
+
+  const codeRoots = new Map<Element, () => ReturnType<typeof copyParts>>();
+  function copyRoot(element: HTMLElement, source: () => ReturnType<typeof copyParts>) {
+    codeRoots.set(element, source);
     return { destroy: () => codeRoots.delete(element) };
   }
 
   function beginMouseSelection(event: MouseEvent) {
     if (event.button !== 0 || (event.target instanceof Element && event.target.closest(".copy-selection"))) return;
+    const target = event.target instanceof Element ? event.target : null;
+    const code = target?.closest(".code.selectable");
+    const side = target?.closest<HTMLElement>(".half")?.dataset.side;
+    if (!event.shiftKey) {
+      // Keep the browser’s selection anchor mounted when the user jumps before Shift-clicking.
+      mouseCopyBlock = target?.closest<HTMLElement>(".lazy")?.dataset.block;
+      mouseCopyStart = code && (side === "left" || side === "right") ? { code, side } : null;
+    }
     selectingWithMouse = true;
     mouseSelectionEnd = null;
     copySelection = null;
@@ -151,7 +194,7 @@
   function copyWithKeyboard(event: ClipboardEvent) {
     if (event.defaultPrevented || !event.clipboardData) return;
     const selected = selectedCode();
-    if (!selected?.text) return;
+    if (!selected) return;
     event.clipboardData.setData("text/plain", selected.text);
     event.preventDefault();
   }
@@ -551,7 +594,8 @@
   const rowMarks = (rows: Row[], start: number, end: number) => changeStarts((i) => changedRow(rows[i]), start, end);
 
   /** Name of the block of a hunk's lines from `start`, for Find in file to step to it. */
-  const blockKey = (diff: FileDiff, part: number | string, start: number) => `${diff.file.path}:${part}:${start}`;
+  const partKey = (diff: FileDiff, part: number | string) => `${diff.file.path}:${part}`;
+  const blockKey = (diff: FileDiff, part: number | string, start: number) => `${partKey(diff, part)}:${start}`;
   /** The part of a file's code a piece draws, in its blocks' names: a hunk by its index, lines
    *  opened by where they start. */
   const partOf = (piece: Piece) => (piece.kind === "hunk" ? piece.h : `x${piece.from}`);
@@ -731,7 +775,7 @@
         lines={end - start}
         of={hunk.lines[rows[start].left ?? rows[start].right ?? 0]}
         name={blockKey(diff, h, start)}
-        force={focus === blockKey(diff, h, start)}
+        force={focus === blockKey(diff, h, start) || mouseCopyBlock === blockKey(diff, h, start)}
         marks={rowMarks(rows, start, end)}
       >
         {#each rows.slice(start, end) as _, j (j)}
@@ -750,7 +794,7 @@
   {:else}
     {#each blocks(count) as start (start)}
       {@const end = Math.min(count, start + BLOCK)}
-      <Lazy lines={end - start} of={hunk.lines[start]} name={blockKey(diff, h, start)} force={focus === blockKey(diff, h, start)} marks={lineMarks(hunk, start, end)}>
+      <Lazy lines={end - start} of={hunk.lines[start]} name={blockKey(diff, h, start)} force={focus === blockKey(diff, h, start) || mouseCopyBlock === blockKey(diff, h, start)} marks={lineMarks(hunk, start, end)}>
         {#each hunk.lines.slice(start, end) as line, j (j)}
           {@const i = start + j}
           {@const on = picked.includes(i)}
@@ -1017,7 +1061,7 @@
       {@const cut = shown.cut?.diff === diff ? shown.cut : null}
       {#if notes?.top}{@render notes.top(diff)}{/if}
       {#key wrap}
-      <div class="code mono selectable" use:copyRoot class:nowrap={!wrap} style:--digits={digits(diff)} style:--cols={wrap ? null : columns(diff)} use:sideways={wrap ? null : `${textLayout}:${columns(diff)}:${digits(diff)}`}>
+      <div class="code mono selectable" use:copyRoot={() => copyParts(diff, cut)} class:nowrap={!wrap} style:--digits={digits(diff)} style:--cols={wrap ? null : columns(diff)} use:sideways={wrap ? null : `${textLayout}:${columns(diff)}:${digits(diff)}`}>
         {#each piecesOf(diff, drawnHunks(diff, cut), !!cut) as piece (piece.kind === "hunk" ? `h${piece.h}` : `${piece.kind}${piece.from}`)}
           {#if piece.kind === "folded"}
             {@render foldBar(diff, piece)}

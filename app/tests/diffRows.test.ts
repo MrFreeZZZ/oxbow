@@ -1,4 +1,4 @@
-import { addKnown, changeStarts, changedRow, pairRows, pieces, sideKind, spans, stepChange } from "../src/lib/diffRows.ts";
+import { addKnown, blockText, changeStarts, changedRow, pairRows, pieces, sideKind, spans, stepChange } from "../src/lib/diffRows.ts";
 import type { DiffLine, Hunk } from "../src/lib/types.ts";
 import assert from "node:assert/strict";
 
@@ -140,4 +140,13 @@ const a = line("added");
   // A run read under the last hunk, with the file ending after it.
   assert.deepEqual(kinds(pieces(hunks, addKnown(known, 23, lines(8)), 30)).slice(-2), ["h1", "shown 23-30"]);
   assert.deepEqual(pieces([], [], 10), []);
+}
+
+// Unmounted blocks copy only the displayed rows, preserving blank lines and omitting missing halves.
+{
+  const lines = [line("removed", "old"), line("added", "new"), line("added", "extra"), line("context"), line("context", "cut")];
+  const hunk = { header: "", oldStart: 1, oldLines: 3, newStart: 1, newLines: 4, lines };
+  assert.deepEqual(blockText(hunk, 4, 1, 2), ["new", "extra"]);
+  assert.deepEqual(blockText(hunk, 4, 0, 3, "left"), ["old", ""]);
+  assert.deepEqual(blockText(hunk, 4, 1, 3, "right"), ["extra", ""]);
 }

@@ -263,7 +263,7 @@
           aria-selected={i === active}
           class:hovered={i === hovered}
           title={ref.name}
-          onpointerenter={(event) => { if (event.pointerType !== "touch") hovered = i; }}
+          onpointermove={(event) => { if (event.pointerType !== "touch") hovered = i; }}
           onpointerleave={() => { if (hovered === i) hovered = -1; }}
           onmousedown={(event) => event.preventDefault()}
           onclick={() => pickBranch(ref)}
@@ -393,7 +393,7 @@
     white-space: nowrap;
     outline: none;
   }
-  .menu button:hover,
+  .menu:not(.suggestions) button:hover,
   .menu button:focus-visible,
   .menu button:focus {
     background: var(--side-sel);
