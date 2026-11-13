@@ -198,7 +198,7 @@
         </div>
       </section>
       <aside class="panel" style:width="{panelWidth}px" aria-label="Changes">
-        <button class="vertical-splitter" onpointerdown={onGrip} aria-label="Resize the changes"></button>
+        <button class="vertical-splitter" title="Drag to resize" tabindex="-1" onpointerdown={onGrip} aria-label="Resize the changes"></button>
         {#if picked && pickedRow}
           <CommitPanel row={pickedRow} childIds={childrenOf(pickedRow.id)} {lookup} onSelect={(id) => (picked = id)} localTags={history.localTags} {version} inHead={(id) => ancestors(history, history.head.commit).has(id)} />
         {:else if picked}

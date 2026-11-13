@@ -445,3 +445,52 @@ fn diff_line_endings_come_from_both_complete_versions() {
     let diff = repo.commit_diff(&id, Some("plain"), DiffContext::Compact).unwrap();
     assert_eq!(diff[0].line_endings, Some([Some(Mixed), Some(Lf)]));
 }
+
+#[test]
+fn line_endings_distinguish_empty_cr_and_mixed_files() {
+    use oxbow_core::{
+        Side,
+        commit::LineEnding::{Cr, Empty, Lf, Mixed},
+    };
+
+    let mut fx = Fixture::new();
+    fx.write("filled", "");
+    fx.commit("cleared", "text\n", "Root");
+    fx.write("cleared", "");
+    fx.write("filled", "text\n");
+    fx.write("empty", "");
+    fx.write("mixed", "one\rtwo\r\nthree\n");
+    fx.write("mac", "one\rtwo\r");
+    let repo = Repo::open(fx.path()).unwrap();
+    let endings = |path| repo.working_diff(path, Side::Unstaged, false).unwrap().line_endings;
+    assert_eq!(endings("empty"), Some([None, Some(Empty)]));
+    assert_eq!(endings("cleared"), Some([Some(Lf), Some(Empty)]));
+    assert_eq!(endings("filled"), Some([Some(Empty), Some(Lf)]));
+    assert_eq!(endings("mixed"), Some([None, Some(Mixed)]));
+    assert_eq!(endings("mac"), Some([None, Some(Cr)]));
+    assert_eq!(serde_json::to_string(&Cr).unwrap(), "\"CR\"");
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinks_have_no_line_endings_in_working_staged_or_commit_diffs() {
+    use oxbow_core::Side;
+
+    let mut fx = Fixture::new();
+    fx.commit("target", "one\r\ntwo\r\n", "Root");
+    std::os::unix::fs::symlink("target", fx.path().join("link")).unwrap();
+    let repo = Repo::open(fx.path()).unwrap();
+    assert_eq!(
+        repo.working_diff("link", Side::Unstaged, false).unwrap().line_endings,
+        None
+    );
+    fx.git(&["add", "link"]);
+    assert_eq!(
+        repo.working_diff("link", Side::Staged, false).unwrap().line_endings,
+        None
+    );
+    fx.git(&["commit", "-qm", "Add link"]);
+    let id = fx.git(&["rev-parse", "HEAD"]);
+    let diff = repo.commit_diff(&id, Some("link"), DiffContext::Compact).unwrap();
+    assert_eq!(diff[0].line_endings, None);
+}

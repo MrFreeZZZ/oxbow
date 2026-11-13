@@ -2364,7 +2364,7 @@
         {#if !detailsHidden}
         <aside class="panel" style:width={expanded ? null : `${shownPanelWidth}px`} aria-label="Commit details">
           {#if !expanded}
-            <button class="vertical-splitter" tabindex="-1" onpointerdown={startResize} aria-label="Resize commit details"></button>
+            <button class="vertical-splitter" title="Drag to resize" tabindex="-1" onpointerdown={startResize} aria-label="Resize commit details"></button>
           {/if}
           <!-- In line with the graph's column bar: what the panel shows, and the room it takes. -->
           <div class="columns panel-bar">

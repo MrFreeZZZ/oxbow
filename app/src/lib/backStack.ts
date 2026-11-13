@@ -174,7 +174,7 @@ export function historyPosition(rows: readonly { id: string }[], top: number, ro
 }
 
 export function historyScrollTop(position: HistoryPosition, index: number | undefined, rowHeight: number, padding: number): number | null {
-  return index === undefined ? null : Math.max(0, padding + index * rowHeight - position.offset);
+  return index === undefined ? null : Math.max(0, padding + index * rowHeight - Math.max(1 - rowHeight, position.offset));
 }
 
 /** The places that led here, oldest first, for the path in the header: a run of places with the

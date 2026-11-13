@@ -519,7 +519,7 @@
       </div>
     </div>
 
-    {#if !stacked}<button class="vertical-splitter" tabindex="-1" style:left={`${filesWidth(bodyWidth) - 4}px`} onpointerdown={(e) => resizeFiles(e, bodyWidth)} aria-label="Resize the files"></button>{/if}
+    {#if !stacked}<button class="vertical-splitter" title="Drag to resize" tabindex="-1" style:left={`${filesWidth(bodyWidth) - 4}px`} onpointerdown={(e) => resizeFiles(e, bodyWidth)} aria-label="Resize the files"></button>{/if}
     <div class="diff" aria-label="Diff">
       <div class="dhead diff-toolbar">
         <span class="caption grow">

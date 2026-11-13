@@ -501,7 +501,7 @@ export interface Hunk {
   runs?: string[];
 }
 
-type LineEnding = "LF" | "CRLF" | "Mixed" | "No EOL";
+type LineEnding = "Empty" | "CR" | "LF" | "CRLF" | "Mixed" | "No EOL";
 
 export interface FileDiff {
   file: FileChange;

@@ -15,3 +15,16 @@ export function workingFileAction(status: WorkingFileStatus | undefined, histori
       return { label: "Open Working Copy", reason: "Checking the file on disk…" };
   }
 }
+
+/** Keep only successful batch results, including per-file unavailable statuses. */
+export async function loadWorkingFileStatuses(
+  files: Iterable<string>,
+  known: ReadonlyMap<string, WorkingFileStatus>,
+  read: (paths: string[]) => Promise<WorkingFileStatus[]>,
+) {
+  const missing = [...files].filter((path) => !known.has(path));
+  const results = await read(missing);
+  const next = new Map(known);
+  missing.forEach((path, i) => next.set(path, results[i]));
+  return next;
+}

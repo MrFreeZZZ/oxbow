@@ -95,7 +95,8 @@ export function fileBadge(file: FileChange): { badge: string; note: string; titl
     return { badge, note: "mode only", title: `File mode ${file.mode.old} → ${file.mode.new}` };
   }
   if (file.eol) {
-    const badge = `${file.eol.from} → ${file.eol.to}`;
+    const label = (ending: string) => ending === "mixed" ? "Mixed" : ending;
+    const badge = `${label(file.eol.from)} → ${label(file.eol.to)}`;
     return { badge, note: `${count(file.eol.lines)} lines`, title: "Only line endings changed" };
   }
   return null;

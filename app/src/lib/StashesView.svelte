@@ -368,7 +368,7 @@
   </section>
 
   <section class="detail" style:width="{panelWidth}px" aria-label="Stash details">
-    <button class="vertical-splitter" tabindex="-1" onpointerdown={onGrip} aria-label="Resize the stash details"></button>
+    <button class="vertical-splitter" title="Drag to resize" tabindex="-1" onpointerdown={onGrip} aria-label="Resize the stash details"></button>
     {#if stash}
       {@const f = files[stash.id]}
       {@const conflicts = check?.conflicts ?? []}

@@ -153,33 +153,35 @@ pub enum LineEnding {
     #[serde(rename = "CRLF")]
     Crlf,
     Mixed,
+    Empty,
+    #[serde(rename = "CR")]
+    Cr,
     #[serde(rename = "No EOL")]
     None,
 }
 
 pub(crate) fn line_ending(data: &[u8]) -> Option<LineEnding> {
+    if data.is_empty() {
+        return Some(LineEnding::Empty);
+    }
     if is_binary(data) {
         return None;
     }
-    let mut lf = false;
-    let mut crlf = false;
-    for (i, &byte) in data.iter().enumerate() {
-        if byte == b'\n' {
-            if i > 0 && data[i - 1] == b'\r' {
-                crlf = true;
-            } else {
-                lf = true;
-            }
-            if lf && crlf {
-                return Some(LineEnding::Mixed);
-            }
+    let mut ending = LineEnding::None;
+    let mut bytes = data.iter().copied().peekable();
+    while let Some(byte) = bytes.next() {
+        let next = match byte {
+            b'\r' if bytes.next_if_eq(&b'\n').is_some() => LineEnding::Crlf,
+            b'\r' => LineEnding::Cr,
+            b'\n' => LineEnding::Lf,
+            _ => continue,
+        };
+        if ending != LineEnding::None && ending != next {
+            return Some(LineEnding::Mixed);
         }
+        ending = next;
     }
-    Some(match (lf, crlf) {
-        (true, _) => LineEnding::Lf,
-        (_, true) => LineEnding::Crlf,
-        _ => LineEnding::None,
-    })
+    Some(ending)
 }
 
 /// Where the bytes of one side of a file diff can be read, to show an image or open a binary
@@ -305,6 +307,7 @@ struct Change {
     file: FileChange,
     old: Option<ObjectId>,
     new: Option<ObjectId>,
+    symlink: bool,
 }
 
 /// The changed files of the commit asked for last: its file list, its counts and each page of
@@ -656,7 +659,7 @@ impl Repo {
             old: blob(change.old),
             new: blob(change.new),
             submodule: None,
-            line_endings: found.line_endings,
+            line_endings: if change.symlink { None } else { found.line_endings },
         })
     }
 }
@@ -1034,16 +1037,26 @@ fn tree_changes(
                 new: mode_text(new),
             })
         };
+        let symlink = change.entry_mode().is_link()
+            || match &change {
+                ChangeDetached::Modification {
+                    previous_entry_mode, ..
+                } => previous_entry_mode.is_link(),
+                ChangeDetached::Rewrite { source_entry_mode, .. } => source_entry_mode.is_link(),
+                _ => false,
+            };
         out.push(match change {
             ChangeDetached::Addition { location, id, .. } => Change {
                 file: file(location.as_ref(), None, FileStatus::Added),
                 old: None,
                 new: Some(id),
+                symlink,
             },
             ChangeDetached::Deletion { location, id, .. } => Change {
                 file: file(location.as_ref(), None, FileStatus::Deleted),
                 old: Some(id),
                 new: None,
+                symlink,
             },
             ChangeDetached::Modification {
                 location,
@@ -1059,6 +1072,7 @@ fn tree_changes(
                 },
                 old: Some(previous_id),
                 new: Some(id),
+                symlink,
             },
             ChangeDetached::Rewrite {
                 source_location,
@@ -1080,6 +1094,7 @@ fn tree_changes(
                 },
                 old: Some(source_id),
                 new: Some(id),
+                symlink,
             },
         });
     }

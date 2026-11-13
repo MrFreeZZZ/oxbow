@@ -75,9 +75,9 @@ function listCommits(commits: CommitBrief[]): Part[] {
 }
 
 /** Stash and Switch, when uncommitted files are in the way of a checkout. */
-function changesInTheWay(failure: Failure, action: Action & { kind: "switch" | "track" | "detach" }, ctx: BranchContext): Recovery | null {
+function changesInTheWay(failure: Failure, action: Action & { kind: "switch" | "track" | "detach" }, ctx: BranchContext, tag?: string): Recovery | null {
   if (failure.kind !== "localChanges") return null;
-  const target = action.kind === "detach" ? shortId(action.commit) : action.branch;
+  const target = action.kind === "detach" ? (tag ?? shortId(action.commit)) : action.branch;
   // A branch that keeps detached commits was already created before the switch stopped.
   const retry: Action = action.kind === "switch" ? { ...action, stash: true, keep: null } : { ...action, stash: true };
   return {
@@ -192,7 +192,7 @@ export function detachRequest(ctx: BranchContext, row: HistoryRow, tag?: string)
     button: lost.length ? "Check Out Anyway" : "Check Out",
     status: `Checking out ${tag ?? sha}…`,
     done: `Checked out ${tag ?? sha}. HEAD is not on a branch now.`,
-    recover: (failure) => changesInTheWay(failure, action, ctx),
+    recover: (failure) => changesInTheWay(failure, action, ctx, tag),
     action,
   };
 }

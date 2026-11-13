@@ -1078,7 +1078,7 @@
       <button class="grip across" tabindex="-1" onpointerdown={dragShare} aria-label="Resize the files and the diff" title="Drag to resize"></button>
     {/if}
 
-    {#if !stacked}<button class="vertical-splitter" tabindex="-1" style:left={`${filesWidth(bodyWidth) - 4}px`} onpointerdown={(e) => resizeFiles(e, bodyWidth)} aria-label="Resize the files"></button>{/if}
+    {#if !stacked}<button class="vertical-splitter" title="Drag to resize" tabindex="-1" style:left={`${filesWidth(bodyWidth) - 4}px`} onpointerdown={(e) => resizeFiles(e, bodyWidth)} aria-label="Resize the files"></button>{/if}
     <div class="diff" aria-label="Diff">
       <ChangesDiff
         {color}

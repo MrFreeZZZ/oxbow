@@ -575,7 +575,9 @@ impl Repo {
             })
         };
         // A patch for the destination alone records a rename as an addition.
-        let old_ending = if let Some(path) = &file.old_path {
+        let old_ending = if file.status == FileStatus::Copied {
+            None
+        } else if let Some(path) = &file.old_path {
             let spec = match side {
                 Side::Staged => format!("HEAD:{path}"),
                 Side::Unstaged => format!(":{path}"),
@@ -615,7 +617,7 @@ impl Repo {
             };
             let limited = over_limit(&file, max_lines);
             return Ok(FileDiff {
-                line_endings: self.diff_line_endings(&file, side, old.as_ref(), new.as_ref()),
+                line_endings: None,
                 file,
                 hunks: Vec::new(),
                 too_large: !limited,
@@ -703,7 +705,16 @@ impl Repo {
         let limited = !parsed.cut && over_limit(&file, max_lines);
         let too_large = parsed.cut || (!limited && hunks.iter().map(|h| h.lines.len()).sum::<usize>() > MAX_DIFF_LINES);
         FileDiff {
-            line_endings: self.diff_line_endings(&file, side, old.as_ref(), new.as_ref()),
+            line_endings: if parsed.file_header.lines().any(|line| {
+                matches!(
+                    line,
+                    "old mode 120000" | "new mode 120000" | "new file mode 120000" | "deleted file mode 120000"
+                ) || (line.starts_with("index ") && line.ends_with(" 120000"))
+            }) {
+                None
+            } else {
+                self.diff_line_endings(&file, side, old.as_ref(), new.as_ref())
+            },
             file,
             hunks: if too_large || limited { Vec::new() } else { hunks },
             too_large,

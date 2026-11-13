@@ -60,7 +60,7 @@ class Nav {
   /** Files opened in File History lately, newest first, per repository. */
   recentFiles = $state<Record<string, string[]>>(loadRecent());
   /** The repository the recent files are kept for. */
-  repo = "";
+  repo = $state("");
 
   /** File History of `path` with `commit` selected; `at`: Blame of the file as that commit has
    *  it, as from Browse Files at This Commit. */

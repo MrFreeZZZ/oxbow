@@ -124,7 +124,7 @@
       {#if needle && !shown.length}<p class="empty">No files match the filter.</p>{/if}
     </div>
   </div>
-  {#if !stacked}<button class="vertical-splitter" tabindex="-1" style:left={`${filesWidth(width) - 4}px`} onpointerdown={(event) => resizeFiles(event, width)} aria-label="Resize the files"></button>{/if}
+  {#if !stacked}<button class="vertical-splitter" title="Drag to resize" tabindex="-1" style:left={`${filesWidth(width) - 4}px`} onpointerdown={(event) => resizeFiles(event, width)} aria-label="Resize the files"></button>{/if}
   <div class="diff" aria-label="Diff">
     <div class="dhead diff-toolbar">
       <span class="caption grow">

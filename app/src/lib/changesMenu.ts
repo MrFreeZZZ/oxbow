@@ -105,7 +105,7 @@ export function fileMenu(repo: string, file: FileChange, group: Side | "untracke
     });
   entries.push({ kind: "sep" });
   if (!file.submodule)
-    entries.push(workingFileMenuItem(file.path, false));
+    entries.push(workingFileMenuItem(file.path, side === "staged"));
   if (file.status !== "deleted")
     entries.push({ kind: "item", label: revealLabel, icon: menuIcons.reveal, run: () => api.revealFile(file.path).catch((err) => confirm.fail(err)) });
   entries.push(copyMenu(repo, [file.path]));

@@ -44,6 +44,9 @@ test("Back and Forward keep each History stop's top row and pixel offset", () =>
   const updated = [{ id: "newer" }, { id: "new" }, ...rows];
   const index = updated.findIndex((r) => r.id === place.scroll?.id);
   assert.equal(historyScrollTop(place.scroll, index, 44, 4), 142);
+  const clipped = historyPosition(rows, 90, 44, 4)!;
+  const compactTop = historyScrollTop(clipped, 1, 28, 4)!;
+  assert.equal(historyPosition(rows, compactTop, 28, 4)?.id, "visible");
   assert.deepEqual(historyPosition(updated, 142, 44, 4), place.scroll);
   assert.equal(historyScrollTop(place.scroll, undefined, 44, 4), null);
   moveToPlace(state, 2, graph);

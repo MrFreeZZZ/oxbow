@@ -40,6 +40,7 @@
   import { nav } from "./nav.svelte";
   import { onDestroy, untrack } from "svelte";
   import { foldReason, startsFolded } from "./diffFold";
+  import { diffLineEndingLabel } from "./diffLineEndings";
   import { addKnown, blockText, changedRow, changeStarts, pieces, rowsOf, sideKind, type Known, type Piece, type Row } from "./diffRows";
   import { mac, withKeys } from "./keys";
   import { combo } from "./shortcuts";
@@ -881,10 +882,7 @@
   {@const why = isShut ? foldReason(diff) : null}
   {@const kind = isShut ? null : special(diff)}
   {@const open = workingFileAction(statusOf(diff.file.path), !working)}
-  {@const [oldEnding, newEnding] = diff.lineEndings ?? []}
-  {@const ending = diff.file.status === "deleted" ? oldEnding
-    : diff.file.status === "added" || diff.file.status === "untracked" ? newEnding
-    : oldEnding && newEnding ? (oldEnding === newEnding ? oldEnding : `${oldEnding} → ${newEnding}`) : null}
+  {@const ending = diffLineEndingLabel(diff)}
   <section class="file" class:shut={isShut} data-path={diff.file.path}>
     <header class="background-sticky">
       <!-- Outlined in the branch color, as the Summary tab is. -->
@@ -908,7 +906,7 @@
           <span class="spacer"></span>
         {/if}
         {#if ending}
-          <span class="mono size" title="Line endings: {ending}">{ending}</span>
+          <span class="mono size" title="Line endings in the compared versions: {ending}">{ending}</span>
         {/if}
         {#if diff.file.submodule}
           <span class="size">Submodule</span>

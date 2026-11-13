@@ -716,3 +716,23 @@ fn discarding_a_picked_removal_preserves_the_final_newline() {
         b"one\ntwo\nTWO\nextra\n"
     );
 }
+
+#[test]
+fn a_staged_copy_reports_only_the_destination_line_endings() {
+    use oxbow_core::commit::LineEnding::Crlf;
+
+    let mut fx = Fixture::new();
+    let content = "first\r\nsecond\r\n".repeat(20);
+    fx.commit("source.txt", &content, "Root");
+    fx.git(&["config", "status.renames", "copies"]);
+    fx.write("copy.txt", &content);
+    fx.write("source.txt", &format!("{content}updated\r\n"));
+    fx.git(&["add", "source.txt", "copy.txt"]);
+
+    let diff = Repo::open(fx.path())
+        .unwrap()
+        .working_diff("copy.txt", Side::Staged, false)
+        .unwrap();
+    assert_eq!(diff.file.status, FileStatus::Copied);
+    assert_eq!(diff.line_endings, Some([None, Some(Crlf)]));
+}

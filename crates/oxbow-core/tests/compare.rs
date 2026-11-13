@@ -243,3 +243,39 @@ fn abbreviated_commit_id_ignores_a_colliding_blob() {
     let c = repo.compare(&main, prefix, CompareMode::Tips).unwrap();
     assert_eq!(c.target_id, feature);
 }
+
+#[test]
+fn working_copy_comparison_reports_git_clean_snapshot_endings() {
+    use oxbow_core::{
+        DiffContext, Side,
+        commit::LineEnding::{Crlf, Lf},
+    };
+
+    let mut fx = Fixture::new();
+    fx.write(".gitattributes", "*.txt text eol=crlf\n");
+    let id = fx.commit("a.txt", "one\n", "Root");
+    fx.write("a.txt", "two\r\n");
+    let repo = Repo::open(fx.path()).unwrap();
+    let comparison = repo.compare_with_working_copy(&id, "a.txt").unwrap();
+    fx.write("a.txt", "three\r\n");
+    let diff = repo
+        .tree_diff(
+            &comparison.base_id,
+            &comparison.target_id,
+            Some("a.txt"),
+            DiffContext::Compact,
+        )
+        .unwrap();
+    assert_eq!(diff[0].line_endings, Some([Some(Lf), Some(Lf)]));
+    assert!(
+        diff[0]
+            .hunks
+            .iter()
+            .flat_map(|h| &h.lines)
+            .any(|line| line.text == "two")
+    );
+    assert_eq!(
+        repo.working_diff("a.txt", Side::Unstaged, false).unwrap().line_endings,
+        Some([Some(Lf), Some(Crlf)])
+    );
+}

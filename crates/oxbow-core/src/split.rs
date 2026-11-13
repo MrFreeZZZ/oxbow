@@ -136,14 +136,16 @@ impl Repo {
                 match self.texts(&r)? {
                     None => file.binary = !is_special(&r),
                     Some((before, after)) => {
-                        diff.line_endings = Some([
-                            diff.old
-                                .as_ref()
-                                .and_then(|_| crate::commit::line_ending(before.as_bytes())),
-                            diff.new
-                                .as_ref()
-                                .and_then(|_| crate::commit::line_ending(after.as_bytes())),
-                        ]);
+                        diff.line_endings = (!is_special(&r)).then(|| {
+                            [
+                                diff.old
+                                    .as_ref()
+                                    .and_then(|_| crate::commit::line_ending(before.as_bytes())),
+                                diff.new
+                                    .as_ref()
+                                    .and_then(|_| crate::commit::line_ending(after.as_bytes())),
+                            ]
+                        });
                         match crate::commit::diff_text_within(
                             &before,
                             &after,

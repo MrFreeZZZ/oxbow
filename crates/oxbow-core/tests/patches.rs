@@ -23,14 +23,24 @@ fn diverged() -> (Fixture, String, String) {
 fn save_feature(repo: &Repo) -> (tempfile::TempDir, Vec<String>) {
     let dir = tempfile::tempdir().unwrap();
     let into = dir.path().join("patches").display().to_string();
-    repo.perform(&Action::SavePatches {
+    let action = Action::SavePatches {
         to: "refs/heads/feature".into(),
         since: Some("refs/heads/main".into()),
         count: 0,
         into: into.clone(),
         one_file: false,
-    })
-    .unwrap();
+    };
+    let plan = repo.plan(&action).unwrap();
+    assert!(
+        plan.commands[0]
+            .display()
+            .contains("refs/heads/main..refs/heads/feature")
+    );
+    assert_eq!(
+        plan.commands[0].comment.as_deref(),
+        Some("the commits feature has that main doesn’t, a numbered .patch file each")
+    );
+    repo.perform(&action).unwrap();
     let mut files: Vec<String> = std::fs::read_dir(&into)
         .unwrap()
         .map(|e| e.unwrap().path().display().to_string())
