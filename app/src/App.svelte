@@ -21,6 +21,7 @@
   import BranchPicker from "./lib/BranchPicker.svelte";
   import { detachRequest, keepRequest, newBranchRequest, switchRequest, trackRequest, type BranchContext } from "./lib/branches";
   import UpdateNotification from "./lib/UpdateNotification.svelte";
+  import { updates } from "./lib/updates.svelte";
   import DetachedBanner from "./lib/DetachedBanner.svelte";
   import OperationBanner from "./lib/OperationBanner.svelte";
   import { draftSaves } from "./lib/conflictDrafts";
@@ -2154,7 +2155,7 @@
                 <svg class="icon" viewBox="0 0 16 16"><path d={COMMANDS_ICON} /></svg>
               </button>
             </div>
-            <button class="capsule" onclick={() => api.openSettings()} aria-label="Settings" title={withKeys("Settings", combo("settings"))}>
+            <button class="capsule" class:update-available={!!updates.available} onclick={() => api.openSettings()} aria-label="Settings" title={withKeys("Settings", combo("settings"))}>
               <svg class="icon" viewBox="0 0 16 16"><path d={SETTINGS_ICON} /></svg>
             </button>
           {/if}
@@ -2726,6 +2727,11 @@
     box-shadow: var(--glass-shadow);
     color: var(--icon);
     font-weight: 500;
+  }
+  .capsule.update-available {
+    background: var(--accent);
+    border-color: transparent;
+    color: #fff;
   }
   .joined.steps > button {
     min-width: 32px;

@@ -57,15 +57,13 @@
   import { menuIcons } from "./Menu.svelte";
 
   let copySelection = $state<{ text: string; x: number; y: number } | null>(null);
-  const copySize = 26;
   let selectingWithMouse = false;
-  let mouseSelectionEnd: { x: number; y: number } | null = null;
 
   type CopySide = "left" | "right";
   let mouseCopyBlock = $state<string>();
   let mouseCopyStart: { code: Element; side: CopySide } | null = null;
 
-  function selectedCode() {
+  function selectedCode(withRects = false) {
     const selection = document.getSelection();
     if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
     const anchor = selection.anchorNode;
@@ -102,7 +100,16 @@
         if (line.contains(range.endContainer)) part.setEnd(range.endContainer, range.endOffset);
         if (part.collapsed) continue;
         lines.push(line.hasAttribute("data-empty") ? "" : part.toString());
-        rects.push(...Array.from(part.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0));
+        if (!withRects) continue;
+        // Range rectangles include text hidden by the No Wrap column.
+        const column = line.closest(".nowrap .text")?.getBoundingClientRect();
+        for (const rect of part.getClientRects()) {
+          const left = Math.max(rect.left, column?.left ?? 0, 0);
+          const right = Math.min(rect.right, column?.right ?? innerWidth, innerWidth);
+          if (right > left && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight) {
+            rects.push(new DOMRect(left, rect.top, right - left, rect.height));
+          }
+        }
       }
     }
     if (!lines.length) {
@@ -140,48 +147,33 @@
       mouseCopyStart = code && (side === "left" || side === "right") ? { code, side } : null;
     }
     selectingWithMouse = true;
-    mouseSelectionEnd = null;
     copySelection = null;
   }
 
   function endMouseSelection(event: MouseEvent) {
     if (event.button !== 0 || !selectingWithMouse) return;
     selectingWithMouse = false;
-    mouseSelectionEnd = { x: event.clientX, y: event.clientY };
     updateCopySelection();
   }
 
   function updateCopySelection() {
     if (selectingWithMouse) return;
     copySelection = null;
-    const selected = selectedCode();
+    const selected = selectedCode(true);
     if (!selected?.text) return;
-    const gap = 4;
-    const rects = selected.rects.filter((rect) => rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth);
+    const { rects } = selected;
     if (!rects.length) return;
-    const first = rects[0], last = rects[rects.length - 1];
-    const clampX = (x: number) => Math.max(gap, Math.min(x, innerWidth - copySize - gap));
-    const clampY = (y: number) => Math.max(gap, Math.min(y, innerHeight - copySize - gap));
-    const nearPointer = mouseSelectionEnd
-      ? [
-          { x: mouseSelectionEnd.x + gap, y: clampY(mouseSelectionEnd.y - copySize / 2) },
-          { x: mouseSelectionEnd.x - copySize - gap, y: clampY(mouseSelectionEnd.y - copySize / 2) },
-          { x: clampX(mouseSelectionEnd.x - copySize / 2), y: mouseSelectionEnd.y + gap },
-          { x: clampX(mouseSelectionEnd.x - copySize / 2), y: mouseSelectionEnd.y - copySize - gap },
-        ]
-      : [];
-    const positions = [
-      ...nearPointer,
-      { x: last.right + gap, y: clampY(last.top) },
-      { x: clampX(last.left), y: last.bottom + gap },
-      { x: clampX(first.left), y: first.top - copySize - gap },
-      { x: first.left - copySize - gap, y: clampY(first.top) },
-    ];
-    const position = positions.find(({ x, y }) =>
-      x >= gap && x + copySize <= innerWidth - gap && y >= gap && y + copySize <= innerHeight - gap &&
-      rects.every((rect) => x + copySize <= rect.left || x >= rect.right || y + copySize <= rect.top || y >= rect.bottom),
-    );
-    if (position) copySelection = { ...position, text: selected.text };
+    const left = Math.min(...rects.map((rect) => rect.left));
+    const right = Math.max(...rects.map((rect) => rect.right));
+    const top = Math.min(...rects.map((rect) => rect.top));
+    const bottom = Math.max(...rects.map((rect) => rect.bottom));
+    const gap = 4;
+    const height = 26;
+    const above = top - height - gap;
+    const y = above >= gap ? above : bottom + gap;
+    if (y + height + gap <= innerHeight) {
+      copySelection = { x: (left + right) / 2, y, text: selected.text };
+    }
   }
 
   function copyCode() {
@@ -850,7 +842,6 @@
 <svelte:document
   onmousedowncapture={beginMouseSelection}
   onmouseupcapture={endMouseSelection}
-  onkeydowncapture={() => (mouseSelectionEnd = null)}
   onselectionchange={updateCopySelection}
   oncopy={copyWithKeyboard}
   onscrollcapture={() => (copySelection = null)}
@@ -859,21 +850,21 @@
   onresize={() => (copySelection = null)}
   onblur={() => {
     selectingWithMouse = false;
-    mouseSelectionEnd = null;
     copySelection = null;
   }}
 />
 
 {#if copySelection}
-  <div class="copy-selection" style:left="{copySelection.x}px" style:top="{copySelection.y}px">
-    <button
-      class="button primary small icon-only"
-      aria-label="Copy to Clipboard"
-      title="Copy to Clipboard"
-      onmousedown={(event) => event.preventDefault()}
-      onclick={copyCode}
-    ><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d={menuIcons.copy} /></svg></button>
-  </div>
+  <button
+    class="button small copy-selection"
+    style:--selection-center="{copySelection.x}px"
+    style:top="{copySelection.y}px"
+    onmousedown={(event) => event.preventDefault()}
+    onclick={copyCode}
+  >
+    <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d={menuIcons.copy} /></svg>
+    Copy to clipboard
+  </button>
 {/if}
 
 {#each shown.files as diff (diff.file.path)}
@@ -1094,20 +1085,15 @@
 
 <style>
   .copy-selection {
+    --copy-half-width: 72px;
     position: fixed;
     z-index: 3;
-    display: grid;
-    border-radius: var(--radius-pill);
-    background: var(--accent);
-    box-shadow: var(--glass-shadow);
-    transform: translateZ(0);
-  }
-  .copy-selection .button {
-    color: white;
-    background-color: transparent;
-  }
-  .copy-selection .button:focus-visible {
-    outline-color: currentColor;
+    left: clamp(4px, calc(var(--selection-center) - var(--copy-half-width)), calc(100% - 2 * var(--copy-half-width) - 4px));
+    width: calc(2 * var(--copy-half-width));
+    padding-inline: var(--space-2);
+    border-radius: var(--radius-m);
+    background: var(--sheet);
+    white-space: nowrap;
   }
   .file {
     padding: 0 var(--diff-file-inset) var(--space-4);
