@@ -4,11 +4,13 @@
 use std::ffi::{OsStr, OsString};
 use std::io::{ErrorKind, Read};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 #[cfg(not(target_os = "macos"))]
 use oxbow_core::config::find_on_path;
 use serde::Serialize;
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+use tauri::Emitter;
 
 /// An editor or terminal that is installed.
 #[derive(Debug, Clone, Serialize)]
@@ -406,21 +408,31 @@ pub fn quick_look(path: &Path) -> Result<(), String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        open_default(path)
+        launch(system_opener(path.as_os_str()))
     }
 }
 
 /// Open a web page in the default browser.
 pub fn open_url(url: &str) -> Result<(), String> {
-    open_with_system(OsStr::new(url))
+    launch(system_opener(OsStr::new(url)))
 }
 
 /// Open the file in the app associated with its type by the system.
-pub fn open_default(path: &Path) -> Result<(), String> {
-    open_with_system(path.as_os_str())
+pub fn open_default(path: &Path, window: tauri::WebviewWindow) -> Result<(), String> {
+    let command = system_opener(path.as_os_str());
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let _ = window;
+    #[cfg(target_os = "macos")]
+    return check_open_status(command);
+    #[cfg(target_os = "windows")]
+    return launch(command);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    launch_checked(command, move |error| {
+        let _ = window.emit_to(tauri::EventTarget::window(window.label()), "open-file-error", error);
+    })
 }
 
-fn open_with_system(target: &OsStr) -> Result<(), String> {
+fn system_opener(target: &OsStr) -> Command {
     #[cfg(target_os = "macos")]
     let command = {
         let mut command = Command::new("open");
@@ -439,25 +451,106 @@ fn open_with_system(target: &OsStr) -> Result<(), String> {
         command.arg(target);
         command
     };
-    launch(command)
+    command
+}
+
+#[cfg(target_os = "macos")]
+fn check_open_status(mut command: Command) -> Result<(), String> {
+    let child = spawn_quietly(&mut command).map_err(default_open_error)?;
+    wait_for_open(child, command.get_program())
+}
+
+// xdg-open can stay alive until the opened application exits.
+#[cfg(any(not(any(target_os = "macos", target_os = "windows")), all(test, unix)))]
+fn launch_checked(mut command: Command, report_error: impl FnOnce(String) + Send + 'static) -> Result<(), String> {
+    let child = spawn_quietly(&mut command).map_err(default_open_error)?;
+    std::thread::spawn(move || {
+        if let Err(error) = wait_for_open(child, command.get_program()) {
+            report_error(error);
+        }
+    });
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn default_open_error(error: std::io::Error) -> String {
+    format!("Could not open in the default app. {error}")
+}
+
+#[cfg(not(target_os = "windows"))]
+fn wait_for_open(mut child: Child, program: &OsStr) -> Result<(), String> {
+    let status = child.wait().map_err(default_open_error)?;
+    if status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "Could not open in the default app. {} returned {status}.",
+        program.to_string_lossy()
+    ))
 }
 
 /// Start `command` and let it run on its own.
 fn launch(mut command: Command) -> Result<(), String> {
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|err| err.to_string())?;
+    let mut child = spawn_quietly(&mut command).map_err(|err| err.to_string())?;
     // Reap it when it exits, so no zombie is left behind.
     std::thread::spawn(move || child.wait());
     Ok(())
 }
 
+fn spawn_quietly(command: &mut Command) -> std::io::Result<Child> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn default_app_reports_an_unsuccessful_launcher() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 3"]);
+        assert_eq!(
+            check_open_status(command).unwrap_err(),
+            "Could not open in the default app. sh returned exit status: 3."
+        );
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 0"]);
+        assert_eq!(check_open_status(command), Ok(()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn background_open_returns_before_exit_and_reports_failure() {
+        use std::sync::mpsc::{RecvTimeoutError, channel};
+        use std::time::Duration;
+
+        let (send, receive) = channel();
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 2"]);
+        assert_eq!(launch_checked(command, move |err| send.send(err).unwrap()), Ok(()));
+        assert_eq!(receive.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
+        assert_eq!(
+            receive.recv_timeout(Duration::from_secs(10)),
+            Err(RecvTimeoutError::Disconnected)
+        );
+
+        let (send, receive) = channel();
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 4"]);
+        assert_eq!(launch_checked(command, move |err| send.send(err).unwrap()), Ok(()));
+        assert_eq!(
+            receive.recv_timeout(Duration::from_secs(5)).unwrap(),
+            "Could not open in the default app. sh returned exit status: 4."
+        );
+
+        let command = Command::new("./missing-oxbow-test-launcher");
+        assert!(launch_checked(command, |_| panic!("spawn errors return to the caller")).is_err());
+    }
 
     fn args(editor: &str, line: Option<u32>) -> Vec<String> {
         file_args(editor, Path::new("/repo/src/main.py"), line)

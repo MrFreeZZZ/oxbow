@@ -1,10 +1,14 @@
-import { accelerator, assign, bindingsOf, commandIds, conflicts, defaultsOf, Keymap, pressed, refusal, resetKeys, scopeOf, strokeOf, unassign, validCombo, type Custom, type ShortcutId } from "../src/lib/shortcuts.ts";
+import { accelerator, assign, bindingsOf, commandIds, conflicts, defaultsOf, isImeEscape, Keymap, pressed, refusal, resetKeys, scopeOf, strokeOf, unassign, validCombo, type Custom, type ShortcutId } from "../src/lib/shortcuts.ts";
 import { fit, rank, type PaletteItem } from "../src/lib/palette.ts";
 import assert from "node:assert/strict";
 
-type Press = Partial<Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">>;
+type Press = Partial<Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "isComposing" | "keyCode">>;
 const press = (p: Press) => ({ key: "", code: "", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...p }) as KeyboardEvent;
 const id = (hit: ReturnType<Keymap["match"]>) => (hit && "id" in hit ? hit.id : null);
+
+assert.equal(isImeEscape(press({ key: "Escape", isComposing: true })), true);
+assert.equal(isImeEscape(press({ key: "Escape", isComposing: false, keyCode: 229 })), true);
+assert.equal(isImeEscape(press({ key: "Escape", isComposing: false, keyCode: 27 })), false);
 
 // The Mac's keys are VS Code's: ⇧⌘P, ⌘B, ⌥⌘B, ⇧⌘U, ⌃⇧G, ⌘G.
 {

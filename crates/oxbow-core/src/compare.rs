@@ -213,8 +213,17 @@ impl Repo {
             let out = self
                 .run(&GitCommand::new(["rev-parse", &format!("--disambiguate={name}")]))
                 .map_err(|_| unknown())?;
-            let id = gix::ObjectId::from_hex(out.stdout.trim().as_bytes()).map_err(|_| unknown())?;
-            return Ok(self.local().find_commit(id).map_err(|_| unknown())?.id().to_string());
+            let repo = self.local();
+            let mut commits = out
+                .stdout
+                .lines()
+                .filter_map(|line| gix::ObjectId::from_hex(line.as_bytes()).ok())
+                .filter_map(|id| repo.find_object(id).ok()?.peel_to_commit().ok());
+            let commit = commits.next().ok_or_else(unknown)?;
+            if commits.any(|other| other.id != commit.id) {
+                return Err(unknown());
+            }
+            return Ok(commit.id.to_string());
         }
         let bytes = gix::bstr::BStr::new(name);
         if !name.starts_with("refs/") || gix::validate::reference::name(bytes).is_err() {

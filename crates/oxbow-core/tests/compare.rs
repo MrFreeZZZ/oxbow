@@ -216,3 +216,30 @@ fn bare_hex_compares_only_commit_ids_even_when_refs_match() {
     assert!(repo.compare("HEAD", missing, CompareMode::Tips).is_err());
     assert!(repo.compare("HEAD", &blob, CompareMode::Tips).is_err());
 }
+
+#[test]
+fn annotated_tag_object_id_compares_its_commit() {
+    let (mut fx, _, main, feature) = diverged();
+    fx.git(&["tag", "-a", "-m", "Release", "release", &feature]);
+    let tag_id = fx.git(&["rev-parse", "refs/tags/release"]);
+    assert_ne!(tag_id, feature);
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let c = repo.compare(&main, &tag_id, CompareMode::Tips).unwrap();
+    assert_eq!(c.target_id, feature);
+    assert_eq!(c.command, format!("git diff {main}..{feature}"));
+}
+
+#[test]
+fn abbreviated_commit_id_ignores_a_colliding_blob() {
+    let (mut fx, _, main, feature) = diverged();
+    let prefix = &feature[..4];
+    // This blob shares the first four hex digits of the fixture's feature tip.
+    fx.write("collision.txt", "compare collision 71025\n");
+    let blob = fx.git(&["hash-object", "-w", "collision.txt"]);
+    assert!(blob.starts_with(prefix));
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let c = repo.compare(&main, prefix, CompareMode::Tips).unwrap();
+    assert_eq!(c.target_id, feature);
+}

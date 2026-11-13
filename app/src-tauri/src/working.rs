@@ -98,7 +98,9 @@ pub(crate) async fn open_source(
             file
         }
     };
-    open_in::open_default(&file)
+    tauri::async_runtime::spawn_blocking(move || open_in::open_default(&file, window))
+        .await
+        .map_err(|err| err.to_string())?
 }
 
 /// Your latest commit messages, for ↑ in the commit message box.

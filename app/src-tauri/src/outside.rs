@@ -58,7 +58,7 @@ pub(crate) async fn open_working_file(
     tauri::async_runtime::spawn_blocking(move || {
         let (file, status) = open_in::inspect_working_file(&root, &path)?;
         if status == WorkingFileStatus::Binary {
-            return open_in::open_default(&file);
+            return open_in::open_default(&file, window);
         }
         let editor = read_settings(&app)
             .get("oxbow.openIn.editor")

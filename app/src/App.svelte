@@ -51,7 +51,7 @@
   import { namedLike, notInHistory, objectsOf, type ObjectAction, type ObjectItem, type ObjectKind } from "./lib/objects";
   import { commandsFor, commandId, type UserCommand } from "./lib/userCommands";
   import type { PaletteItem } from "./lib/palette";
-  import { Keymap, accelerator, bindingsOf, combo, commandOf, pressed, type ShortcutId } from "./lib/shortcuts";
+  import { Keymap, accelerator, bindingsOf, combo, commandOf, isImeEscape, pressed, type ShortcutId } from "./lib/shortcuts";
   import { menuBar, type Available } from "./lib/appMenu";
   import { stepChange } from "./lib/diffRows";
   import { conflictSteps, KEPT_CONFLICTS } from "./lib/conflicts";
@@ -1876,6 +1876,7 @@
     const unlisten = getCurrentWindow().listen("repo-touched", () => refresh());
     // A terminal, an editor or another window changed the repository.
     const outside = getCurrentWindow().listen<OutsideChange>("outside-change", (event) => loader.outsideChanged(event.payload));
+    const openFileError = getCurrentWindow().listen<string>("open-file-error", (event) => confirm.fail(event.payload));
     // Signing in or out changes what GitHub tells about the pull requests.
     const account = listen("account-changed", () => repo && github.accountChanged());
     const closing = getCurrentWindow().onCloseRequested(closeRequested);
@@ -1898,6 +1899,7 @@
       front.then((stop) => stop());
       unlisten.then((stop) => stop());
       outside.then((stop) => stop());
+      openFileError.then((stop) => stop());
       account.then((stop) => stop());
       closing.then((stop) => stop());
     };
@@ -1917,6 +1919,7 @@
     else goForward();
   }}
   onkeydown={(event) => {
+    if (confirm.request && isImeEscape(event)) return;
     // Menu handles Escape on the same window; its listener may run after this one.
     if (event.key === "Escape" && document.querySelector('[role="menu"]')) return;
     const hit = keymap.match(event);

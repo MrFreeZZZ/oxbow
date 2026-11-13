@@ -7,6 +7,7 @@
   import { onDestroy, tick } from "svelte";
   import { onlyPrefix, splitPrefix, typedAfter, withPrefix, type BranchPrefix } from "./branchPrefixes";
   import { cleanTyped, rememberPrefix } from "./branchPrefs";
+  import { isImeEscape } from "./shortcuts";
 
   import type { RefInfo } from "./types";
 
@@ -140,6 +141,7 @@
   }
 
   function onInputKey(event: KeyboardEvent) {
+    if (isImeEscape(event)) return;
     const el = event.currentTarget as HTMLInputElement;
     const suggestion = matches[active] ?? matches[hovered];
     if (branchRefs && (event.key === "Tab" || event.code === "Tab")) dismissMatches();

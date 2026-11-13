@@ -472,6 +472,12 @@ export const SCENARIOS = [
       for (let i = 0; i < 6; i++) await app.keys("Tab");
       const inside = await app.js(async (page) => !!document.activeElement?.closest("[role=alertdialog]"));
       assert.equal(inside, true, "Tab left the confirmation");
+      const imeEscape = await app.js(() => {
+        const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, isComposing: true });
+        return document.activeElement.dispatchEvent(event);
+      });
+      assert.equal(imeEscape, true, "Escape was intercepted during IME composition");
+      assert.equal(await app.js((page) => page.all("[role=alertdialog]").length), 1, "IME Escape closed the confirmation");
       await app.keys("Escape");
       await app.js((page) => page.until(() => !page.all("[role=alertdialog]").length, "the confirmation to close"));
       assert.equal(read(r, "src/f1.txt"), "changed\n");
