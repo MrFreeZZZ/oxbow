@@ -882,8 +882,8 @@ impl Repo {
         Some((label, revision))
     }
 
-    /// After `git merge --squash` stopped on conflicts: keep what the user chose for the commit
-    /// that finishes it. Git drops the `-m` message there, and `SQUASH_MSG` alone does not say
+    /// After `git merge --squash` stopped on conflicts, or merged before a commit that may fail:
+    /// keep what the user chose for the commit that finishes it. Git drops the `-m` message there, and `SQUASH_MSG` alone does not say
     /// which branch was squashed, so Oxbow writes both down beside it.
     pub(crate) fn remember_squash(&self, branch: &str, revision: &str, message: Option<&str>) {
         let dir = self.git_dir();

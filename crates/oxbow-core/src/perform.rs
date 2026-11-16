@@ -414,21 +414,23 @@ impl Repo {
                     {
                         return Err(Error::StashKept);
                     }
+                    // A squash stopped on conflicts, or merged and left to its commit, which can
+                    // fail too: the commit that finishes it by hand names the branch.
+                    if let Action::Merge {
+                        branch,
+                        method: MergeMethod::Squash,
+                        message,
+                    } = action
+                        && let [git, option, source] = command.args.as_slice()
+                        && git == "merge"
+                        && option == "--squash"
+                        && (ran.is_ok() || self.conflicted_paths().is_ok_and(|p| !p.is_empty()))
+                    {
+                        self.remember_squash(branch, source, message.as_deref());
+                    }
                     let out = ran.inspect_err(|_| {
                         if let Some(start) = &fix_start {
                             self.note_fix_rest(action, start.clone(), &commands, at);
-                        }
-                        if let Action::Merge {
-                            branch,
-                            method: MergeMethod::Squash,
-                            message,
-                        } = action
-                            && let [git, option, source] = command.args.as_slice()
-                            && git == "merge"
-                            && option == "--squash"
-                            && self.conflicted_paths().is_ok_and(|p| !p.is_empty())
-                        {
-                            self.remember_squash(branch, source, message.as_deref());
                         }
                         if let Action::StashApply { id, pop, .. } = action
                             && self.conflicted_paths().is_ok_and(|p| !p.is_empty())

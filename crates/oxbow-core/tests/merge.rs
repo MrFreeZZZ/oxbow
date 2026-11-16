@@ -433,6 +433,38 @@ fn a_squash_that_conflicts_keeps_the_chosen_message() {
     assert_eq!(read(&fx, "b.txt"), "new\n");
 }
 
+#[cfg(unix)]
+#[test]
+fn a_squash_whose_commit_is_stopped_still_names_the_branch_and_the_message() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "one\n", "Root");
+    fx.git(&["switch", "-q", "-c", "feature"]);
+    fx.commit("b.txt", "b\n", "Add b");
+    fx.git(&["switch", "-q", "main"]);
+    let hook = fx.path().join(".git/hooks/pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\necho no >&2\nexit 1\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let repo = Repo::open(fx.path()).unwrap();
+    let action = merge("feature", MergeMethod::Squash, Some("Feature in one commit"));
+    repo.perform(&action).unwrap_err();
+
+    let op = repo.operation().unwrap().expect("a squash in progress");
+    assert_eq!(op.kind, OperationKind::Squash);
+    assert_eq!(op.theirs_label, "feature");
+    assert_eq!(op.message.as_deref(), Some("Feature in one commit"));
+
+    // Finished, the note goes with it.
+    std::fs::remove_file(&hook).unwrap();
+    repo.perform(&Action::Continue {
+        message: op.message.clone(),
+    })
+    .unwrap();
+    assert!(repo.operation().unwrap().is_none());
+    assert!(!fx.path().join(".git/OXBOW_SQUASH_SOURCE").exists());
+    assert_eq!(fx.git(&["log", "-1", "--format=%s"]), "Feature in one commit");
+}
+
 #[test]
 fn a_file_deleted_on_one_side_is_kept_or_deleted_whole() {
     let mut fx = Fixture::new();
