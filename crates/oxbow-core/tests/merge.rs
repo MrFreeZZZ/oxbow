@@ -92,6 +92,39 @@ fn the_preview_lists_both_sides_and_predicts_the_conflict() {
 }
 
 #[test]
+fn a_preview_whose_conflict_check_fails_says_so_rather_than_guessing() {
+    let mut fx = diverged();
+    // The commits and trees are there, but not the file both sides changed: only the
+    // in-memory merge has to read it.
+    let blob = fx.git(&["rev-parse", "feature:a.txt"]);
+    std::fs::remove_file(fx.path().join(".git/objects").join(&blob[..2]).join(&blob[2..])).unwrap();
+    let repo = Repo::open(fx.path()).unwrap();
+    let err = repo.merge_preview("feature").unwrap_err();
+    assert!(err.to_string().contains("merge-tree"), "{err}");
+}
+
+#[test]
+fn a_merge_whose_incoming_commits_cant_be_counted_is_not_shown_as_bringing_none() {
+    let fx = diverged();
+    std::fs::write(fx.path().join(".git/MERGE_HEAD"), format!("{}\n", "1".repeat(40))).unwrap();
+    let repo = Repo::open(fx.path()).unwrap();
+    assert!(repo.operation().is_err());
+}
+
+#[test]
+fn branches_with_nothing_in_common_are_previewed_without_a_base() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "one\n", "Root");
+    fx.git(&["switch", "-q", "--orphan", "other"]);
+    fx.commit("b.txt", "b\n", "Elsewhere");
+    fx.git(&["switch", "-q", "main"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let preview = repo.merge_preview("other").unwrap();
+    assert!(preview.base.is_none() && preview.conflicts.is_none());
+    assert_eq!((preview.incoming_count, preview.files), (1, 0));
+}
+
+#[test]
 fn a_clean_merge_makes_a_merge_commit() {
     let mut fx = Fixture::new();
     fx.commit("a.txt", "one\n", "Root");

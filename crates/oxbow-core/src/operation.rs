@@ -100,7 +100,8 @@ pub struct MergePreview {
     pub ours_count: usize,
     /// Where the two split.
     pub base: Option<CommitBrief>,
-    /// Files that would conflict; `None` when this git can't tell (before 2.38).
+    /// Files that would conflict; `None` when this git can't tell (before 2.38) or the branches
+    /// have no commit in common. A check that fails is an error, not `None`.
     pub conflicts: Option<Vec<String>>,
     /// Files the incoming commits change.
     pub files: usize,
@@ -306,9 +307,10 @@ impl Repo {
             let sha = merge_head.lines().next().unwrap_or_default().to_owned();
             let incoming = name_of(&sha);
             let count = self
-                .run(&GitCommand::new(["rev-list", "--count", &format!("HEAD..{sha}")]))
-                .ok()
-                .and_then(|out| out.stdout.trim().parse().ok())
+                .run(&GitCommand::new(["rev-list", "--count", &format!("HEAD..{sha}")]))?
+                .stdout
+                .trim()
+                .parse()
                 .unwrap_or(0);
             Operation {
                 kind: OperationKind::Merge,
@@ -456,12 +458,15 @@ impl Repo {
         let branch = reference.as_str();
         let (incoming, incoming_count) = self.commits_in(&format!("HEAD..{branch}"))?;
         let (ours, ours_count) = self.commits_in(&format!("{branch}..HEAD"))?;
-        let base = self
-            .run(&GitCommand::new(["merge-base", "HEAD", branch]))
-            .ok()
-            .map(|out| out.stdout.trim().to_owned())
-            .filter(|sha| !sha.is_empty());
-        let changed = |from: &str, to: &str| -> Vec<String> {
+        // No commit in common: exit 1 with nothing said. Any other failure is said.
+        let merge_base = GitCommand::new(["merge-base", "HEAD", branch]);
+        let out = self.spawn(&merge_base, None)?;
+        let base = match out.status.code() {
+            Some(0) => Some(String::from_utf8_lossy(&out.stdout).trim().to_owned()).filter(|sha| !sha.is_empty()),
+            Some(1) if out.stdout.is_empty() && out.stderr.is_empty() => None,
+            code => return Err(failed(&merge_base, code, &out)),
+        };
+        let changed = |from: &str, to: &str| -> Result<Vec<String>> {
             self.run(&GitCommand::new([
                 "diff",
                 "--name-only",
@@ -477,12 +482,11 @@ impl Repo {
                     .map(str::to_owned)
                     .collect()
             })
-            .unwrap_or_default()
         };
         let (files, touched_here) = match &base {
             Some(base) => {
-                let theirs = changed(base, branch);
-                let here = changed(base, "HEAD");
+                let theirs = changed(base, branch)?;
+                let here = changed(base, "HEAD")?;
                 let touched = theirs.iter().filter(|p| here.contains(p)).count();
                 (theirs.len(), touched)
             }
@@ -491,19 +495,20 @@ impl Repo {
         // `merge-tree --write-tree` merges in memory: exit 0 is clean, 1 lists the conflicts.
         let conflicts = if incoming_count == 0 {
             Some(Vec::new())
+        } else if base.is_none() || !crate::config::git_at_least(2, 38) {
+            // merge-tree refuses histories with nothing in common.
+            None
         } else {
-            let out = self.spawn(
-                &GitCommand::new([
-                    "merge-tree",
-                    "--write-tree",
-                    "--name-only",
-                    "--no-messages",
-                    "-z",
-                    "HEAD",
-                    branch,
-                ]),
-                None,
-            )?;
+            let merge_tree = GitCommand::new([
+                "merge-tree",
+                "--write-tree",
+                "--name-only",
+                "--no-messages",
+                "-z",
+                "HEAD",
+                branch,
+            ]);
+            let out = self.spawn(&merge_tree, None)?;
             match out.status.code() {
                 Some(0) => Some(Vec::new()),
                 Some(1) => {
@@ -517,7 +522,7 @@ impl Repo {
                     names.dedup();
                     Some(names)
                 }
-                _ => None,
+                code => return Err(failed(&merge_tree, code, &out)),
             }
         };
         Ok(MergePreview {
@@ -526,7 +531,7 @@ impl Repo {
             incoming_count,
             ours,
             ours_count,
-            base: base.and_then(|sha| self.brief(&sha).ok()),
+            base: base.map(|sha| self.brief(&sha)).transpose()?,
             conflicts,
             files,
             touched_here,
@@ -1225,6 +1230,21 @@ fn tool_label(name: &str) -> String {
 
 fn short(sha: &str) -> String {
     sha.chars().take(7).collect()
+}
+
+/// `command` ended with `code`, which says neither yes nor no: what git said, as an error.
+fn failed(command: &GitCommand, code: Option<i32>, out: &std::process::Output) -> Error {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let output = if stderr.trim().is_empty() {
+        String::from_utf8_lossy(&out.stdout)
+    } else {
+        stderr
+    };
+    Error::Command {
+        command: command.display(),
+        code,
+        output: output.into_owned(),
+    }
 }
 
 /// A commit message without git's `#` comment lines.
