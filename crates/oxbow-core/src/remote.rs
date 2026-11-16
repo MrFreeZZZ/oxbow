@@ -372,7 +372,7 @@ impl Repo {
             &format!("{local}...{to}"),
         ]))?;
         let uncopied: std::collections::HashSet<&str> = uncopied.stdout.lines().collect();
-        let copied = self.recorded_copies(local);
+        let copied = self.recorded_copies(local)?;
         let theirs = self.run(&GitCommand::new([
             "log",
             "--reverse",
@@ -465,7 +465,7 @@ impl Repo {
         let mut text = format!("branch {branch}\n");
         for line in self.replay_record(branch) {
             if let Some((_, target)) = line.strip_prefix("copy ").and_then(|rest| rest.split_once(' '))
-                && self.is_ancestor(target, &local)
+                && self.copy_on(target, &local)?
             {
                 text.push_str(&line);
                 text.push('\n');
@@ -477,16 +477,26 @@ impl Repo {
     /// The commits Copy and Push copied onto `local` by hand after a conflict: each noted
     /// target must still be on the branch. Nothing else counts, not a commit's place after
     /// the start, nor its author or time.
-    fn recorded_copies(&self, local: &str) -> std::collections::HashSet<String> {
+    fn recorded_copies(&self, local: &str) -> Result<std::collections::HashSet<String>> {
+        let mut copies = std::collections::HashSet::new();
         let Some(branch) = local.strip_prefix("refs/heads/") else {
-            return std::collections::HashSet::new();
+            return Ok(copies);
         };
-        self.replay_record(branch)
-            .iter()
-            .filter_map(|line| line.strip_prefix("copy ")?.split_once(' '))
-            .filter(|(_, target)| self.is_ancestor(target, local))
-            .map(|(source, _)| source.to_owned())
-            .collect()
+        for line in self.replay_record(branch) {
+            if let Some((source, target)) = line.strip_prefix("copy ").and_then(|rest| rest.split_once(' '))
+                && self.copy_on(target, local)?
+            {
+                copies.insert(source.to_owned());
+            }
+        }
+        Ok(copies)
+    }
+
+    /// Whether the noted copy `target` is still on `local`. One taken off the branch may be
+    /// gone from the repository since; a check git couldn't make is an error, not a copy to
+    /// make again.
+    fn copy_on(&self, target: &str, local: &str) -> Result<bool> {
+        Ok(self.object_exists(target) && self.ancestry(target, local)?)
     }
 
     /// Upstream of every local branch that has one, by branch name.

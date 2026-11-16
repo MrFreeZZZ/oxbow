@@ -353,7 +353,7 @@ impl Repo {
             .run(&GitCommand::new(["merge-base", &trunk.target, &branch_ref]))
             .map(|out| out.stdout.trim().to_owned())
             .map_err(|_| Error::Git(format!("{branch} has no commit in common with {}", trunk.name)))?;
-        if self.is_ancestor(&branch_ref, &trunk.target) {
+        if self.ancestry(&branch_ref, &trunk.target)? {
             return Err(Error::Git(format!(
                 "{branch} has no commits of its own: {} has them all",
                 trunk.name
@@ -1360,8 +1360,23 @@ impl Repo {
     }
 
     pub(crate) fn is_ancestor(&self, ancestor: &str, of: &str) -> bool {
-        self.spawn(&GitCommand::new(["merge-base", "--is-ancestor", ancestor, of]), None)
-            .is_ok_and(|out| out.status.success())
+        self.ancestry(ancestor, of).unwrap_or(false)
+    }
+
+    /// Whether `ancestor` is an ancestor of `of`, for answers a failed check must not stand in
+    /// for: git that couldn't tell is an error.
+    pub(crate) fn ancestry(&self, ancestor: &str, of: &str) -> Result<bool> {
+        let command = GitCommand::new(["merge-base", "--is-ancestor", ancestor, of]);
+        let out = self.spawn(&command, None)?;
+        match out.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            code => Err(Error::Command {
+                command: command.display(),
+                code,
+                output: String::from_utf8_lossy(&out.stderr).into_owned(),
+            }),
+        }
     }
 
     /// A file in the git directory, for this worktree.

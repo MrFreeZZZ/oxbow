@@ -390,6 +390,13 @@ fn a_copied_commit_resolved_by_hand_is_not_copied_again() {
     team.me.git(&["reset", "-q", "--hard", "HEAD~1"]);
     let tracking = repo.tracking().unwrap().unwrap();
     assert_eq!(tracking.replay.unwrap().commits[0].id, tip);
+
+    // The copy taken off may be gone from the repository too: still nothing copied.
+    let copy = team.me.git(&["rev-parse", "HEAD@{1}"]);
+    let object = team.me.path().join(".git/objects").join(&copy[..2]).join(&copy[2..]);
+    std::fs::remove_file(object).unwrap();
+    let tracking = repo.tracking().unwrap().unwrap();
+    assert_eq!(tracking.replay.unwrap().commits[0].id, tip);
 }
 
 #[test]
