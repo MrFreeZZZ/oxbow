@@ -203,6 +203,17 @@ impl Repo {
                     what: format!("removing {folder}"),
                 });
             }
+            // Like a worktree's, these steps stay out of the log (see `perform`).
+            Action::BisectStart { .. } | Action::BisectMark { .. } | Action::BisectReset => {
+                out.push(NotKept::NotLogged {
+                    what: "this bisect step".to_owned(),
+                });
+            }
+            Action::SubmoduleUpdate { .. } | Action::SubmoduleSync { .. } | Action::SubmoduleAdd { .. } => {
+                out.push(NotKept::NotLogged {
+                    what: "this submodule step".to_owned(),
+                });
+            }
             Action::SubmoduleRemove { path } => {
                 // `git status` leaves ignored files out, so the folder can look clean with a
                 // `.env` in it; submodules inside it go with it too.

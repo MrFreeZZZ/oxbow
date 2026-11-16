@@ -15,7 +15,7 @@
   import { tips, type TipId } from "./tips.svelte";
   import { bytes } from "./unusual";
   import { errorLine } from "./reads";
-  import type { NotKept } from "./types";
+  import type { Action, NotKept } from "./types";
 
   let { repo, branch, color }: { repo: string; branch: string | null; color: number } = $props();
 
@@ -76,6 +76,8 @@
   }
 
   const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
+  const isBisect = (action?: Action) => action?.kind === "bisectStart" || action?.kind === "bisectMark" || action?.kind === "bisectReset";
+  const isSubmoduleStep = (action?: Action) => action?.kind === "submoduleUpdate" || action?.kind === "submoduleSync" || action?.kind === "submoduleAdd";
 
   /** The headline of one thing Undo can't bring back. */
   function gapTitle(gap: NotKept): string {
@@ -94,6 +96,8 @@
         if (gap.removed && gap.changed === null) return `Uncommitted files in ${gap.folder}, if any, are lost: git status failed there`;
         return gap.removed ? `${plural(gap.changed ?? 0, "uncommitted file")} in ${gap.folder} ${gap.changed === 1 ? "is" : "are"} lost` : `${gap.branch} is checked out in ${gap.folder}`;
       case "notLogged":
+        if (isBisect(request?.action)) return "Undo can’t take back bisect steps";
+        if (isSubmoduleStep(request?.action)) return "Undo can’t take back this submodule step";
         return "Undo can’t put the folder back";
       case "submoduleFolder":
         return `Undo can’t put ${gap.folder} back`;
@@ -120,6 +124,10 @@
           ? "Another folder’s changes are not in this repository’s Operation Log. Stash them first to keep them."
           : "Undo moves the branch, but the files in that folder stay as they are and show up there as changes.";
       case "notLogged":
+        if (isBisect(request?.action)) return "Bisect steps are not in the Operation Log: git keeps the answers itself. Stopping or finishing the bisect goes back to where it started, with any changes put aside for it.";
+        if (request?.action?.kind === "submoduleSync") return "Sync writes the URLs into .git/config, which the Operation Log doesn’t keep. Change .gitmodules and sync again to point it elsewhere.";
+        if (request?.action?.kind === "submoduleAdd") return "The new folder is another repository, so adding it is not in the Operation Log. Remove takes the submodule out again.";
+        if (isSubmoduleStep(request?.action)) return "A submodule’s folder is another repository, so this step is not in the Operation Log. Its commits stay: Update brings back the commit this repository records.";
         return `Worktree steps are not in the Operation Log. The branch and its commits stay, so you can make the folder again.`;
       case "submoduleFolder":
         return "Removing a submodule is not in the Operation Log. Its commits stay, so you can add it back, but files in its folder that aren’t in a commit are gone.";
