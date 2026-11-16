@@ -188,7 +188,7 @@ export function bisectMarkRequest(ctx: BranchContext, mark: BisectMark, row?: Hi
     button: words.button,
     status: "Bisecting…",
     done: `Marked ${shortId(id)} as ${words.done}.`,
-    action: { kind: "bisectMark", mark, commit: testing ? null : shortId(id) },
+    action: { kind: "bisectMark", mark, commit: testing ? null : id },
   };
 }
 

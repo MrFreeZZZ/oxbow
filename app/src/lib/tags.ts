@@ -70,7 +70,7 @@ function newTagSheet(ctx: BranchContext, at: HistoryRow | null, state: NewTag): 
   if (push) body.push(` Then it goes to ${push}: git push never sends tags on its own.`);
 
   const message = state.annotated ? state.message.trim() || name : null;
-  const action: Action = { kind: "createTag", name, commit: shortId(commit), message, push };
+  const action: Action = { kind: "createTag", name, commit, message, push };
   const fields: Request["fields"] = [
     {
       label: "Name",
