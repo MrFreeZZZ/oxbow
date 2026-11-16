@@ -352,13 +352,14 @@ impl Repo {
         if files.is_empty() {
             return BTreeSet::new();
         }
-        let listed = |args: Vec<&str>| {
+        let listed = |args: Vec<String>| {
             self.run(&GitCommand::new(args))
                 .map(|out| out.stdout)
                 .unwrap_or_default()
         };
-        let mut ls = vec!["ls-tree", "-r", "-z", tree, "--"];
-        ls.extend(files.iter().map(|p| p.as_str()));
+        let mut ls: Vec<String> = ["ls-tree", "-r", "-z", tree, "--"].map(str::to_owned).into();
+        // Pathspecs here; hash-object below reads the files themselves.
+        ls.extend(files.iter().map(|p| crate::cli::literal(p)));
         let in_tree: std::collections::HashMap<&str, String> = listed(ls)
             .split('\0')
             .filter_map(|entry| {
@@ -367,8 +368,8 @@ impl Repo {
                 Some((files.iter().find(|p| p.as_str() == path)?.as_str(), id.to_owned()))
             })
             .collect();
-        let mut hash = vec!["hash-object", "--"];
-        hash.extend(files.iter().map(|p| p.as_str()));
+        let mut hash: Vec<String> = ["hash-object", "--"].map(str::to_owned).into();
+        hash.extend(files.iter().map(|p| (*p).clone()));
         let ids = listed(hash);
         files
             .iter()
