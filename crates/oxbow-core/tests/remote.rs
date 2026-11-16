@@ -539,6 +539,66 @@ fn replay(base: String, lease: String) -> Action {
     }
 }
 
+/// Copy and Push stopped on the conflict with Kirill's commit, its record of copies made
+/// read-only: what comes next can't be noted in it.
+#[cfg(unix)]
+fn a_copy_whose_record_cant_be_written() -> (Team, Repo, std::path::PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let mut team = Team::new();
+    team.me.commit("b.txt", "mine\n", "Mine");
+    team.me.git(&["push", "-q", "origin", "main"]);
+    let old = team.me.git(&["rev-parse", "HEAD"]);
+    team.kirill.git(&["pull", "-q", "--rebase", "origin", "main"]);
+    team.kirill.commit("b.txt", "his\n", "His");
+    team.kirill.git(&["push", "-q", "origin", "main"]);
+    team.me.write("b.txt", "mine, better\n");
+    team.me.git(&["commit", "-q", "-a", "--amend", "--no-edit"]);
+    team.me.git(&["fetch", "-q", "origin"]);
+    let tip = team.me.git(&["rev-parse", "origin/main"]);
+    let repo = Repo::open(team.me.path()).unwrap();
+    let action = replay(old, tip);
+    let err = repo.perform(&action).unwrap_err();
+    assert_eq!(repo.explain_failure(&action, &err).kind, FailureKind::Conflict);
+    let record = team.me.path().join(".git/oxbow/replay");
+    std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o444)).unwrap();
+    (team, repo, record)
+}
+
+#[cfg(unix)]
+fn writable(record: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(record, std::fs::Permissions::from_mode(0o644)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_continue_whose_copy_cant_be_noted_is_still_in_the_operation_log() {
+    let (mut team, repo, record) = a_copy_whose_record_cant_be_written();
+    let logged = repo.operation_log().unwrap().len();
+    let head = team.me.git(&["rev-parse", "HEAD"]);
+    team.me.write("b.txt", "his, better\n");
+    team.me.git(&["add", "b.txt"]);
+
+    let err = repo.perform(&Action::Continue { message: None }).unwrap_err();
+    writable(&record);
+    assert!(err.to_string().contains("replay"), "{err}");
+    assert_ne!(team.me.git(&["rev-parse", "HEAD"]), head);
+    assert_eq!(repo.operation_log().unwrap().len(), logged + 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_abort_whose_record_cant_be_tidied_is_still_in_the_operation_log() {
+    let (team, repo, record) = a_copy_whose_record_cant_be_written();
+    let logged = repo.operation_log().unwrap().len();
+
+    let err = repo.perform(&Action::Abort).unwrap_err();
+    writable(&record);
+    assert!(err.to_string().contains("replay"), "{err}");
+    assert!(!team.me.path().join(".git/CHERRY_PICK_HEAD").exists());
+    assert_eq!(repo.operation_log().unwrap().len(), logged + 1);
+}
+
 #[test]
 fn a_teammates_commit_with_the_same_author_time_and_subject_is_still_copied() {
     let mut team = Team::new();

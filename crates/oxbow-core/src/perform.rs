@@ -196,18 +196,20 @@ impl Repo {
         if let Action::Continue { .. } | Action::Abort | Action::Skip = action {
             self.forget_fix_rest();
         }
+        // A note that can't be written is said once the step itself is written down.
+        let mut noted = Ok(());
         if let Some((branch, source, tip)) = &replaying {
             match action {
                 // Continue goes on with the picks left and can stop on the next one's conflict
                 // after it made this one's copy: the copy is noted either way. Nothing is noted
                 // when it stopped before making a commit.
                 Action::Continue { .. } => {
-                    let noted = self.note_replay_copy(branch, source, tip);
+                    let note = self.note_replay_copy(branch, source, tip);
                     if result.is_ok() {
-                        noted?;
+                        noted = note;
                     }
                 }
-                _ if result.is_ok() => self.forget_replay(branch)?,
+                _ if result.is_ok() => noted = self.forget_replay(branch),
                 _ => {}
             }
         }
@@ -245,7 +247,7 @@ impl Repo {
             // The commit stands either way: a list left behind is only tidied up later.
             let _ = self.after_changelist_commit(id, result.is_ok());
         }
-        result
+        noted.and(result)
     }
 
     fn perform_unlogged(
