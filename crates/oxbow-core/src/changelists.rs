@@ -884,8 +884,9 @@ impl Repo {
     }
 
     /// After list `id` was committed: the commit's staging area goes, and so does the list
-    /// when nothing is left in it, unless it is the active one.
-    pub(crate) fn after_changelist_commit(&self, id: &str, committed: bool) -> Result<()> {
+    /// when nothing is left in it, unless it is the active one. With `stale_index` the index
+    /// didn't follow the commit, so its status can't tell what went: all the list held did.
+    pub(crate) fn after_changelist_commit(&self, id: &str, committed: bool, stale_index: bool) -> Result<()> {
         if let Ok(index) = self.git_path(INDEX) {
             let _ = std::fs::remove_file(index);
         }
@@ -894,9 +895,16 @@ impl Repo {
         }
         let lock = list_lock(&self.git_dir());
         let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
-        let tree = self.working_tree()?;
         let mut store = self.read_store()?;
-        self.normalize(&mut store, &tree);
+        if stale_index {
+            if let Some(list) = store.lists.iter_mut().find(|l| l.id == id) {
+                list.files.clear();
+            }
+            store.runs.retain(|r| r.list.as_deref() != Some(id));
+        } else {
+            let tree = self.working_tree()?;
+            self.normalize(&mut store, &tree);
+        }
         let empty = store
             .lists
             .iter()

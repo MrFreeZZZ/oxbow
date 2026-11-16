@@ -191,7 +191,28 @@ impl Repo {
         if let Action::EditStack { plan } = action {
             self.remember_return(plan);
         }
+        let head = || self.head().ok().and_then(|head| head.commit);
+        let list_head = matches!(
+            action,
+            Action::Commit {
+                changelist: Some(_),
+                ..
+            }
+        )
+        .then(head);
         let result = self.perform_unlogged(action, on_event, cancel);
+        // A list's commit made, then the index failed to follow: what the list held is in the
+        // commit, while the index still has what it had before.
+        let list_committed = result.is_err() && list_head.is_some_and(|before| before != head());
+        let result = result.map_err(|err| {
+            if list_committed {
+                Error::Git(format!(
+                    "the commit was made, but git couldn't update what is staged after it: {err}"
+                ))
+            } else {
+                err
+            }
+        });
         self.forget_return();
         if let Action::Continue { .. } | Action::Abort | Action::Skip = action {
             self.forget_fix_rest();
@@ -245,7 +266,7 @@ impl Repo {
         } = action
         {
             // The commit stands either way: a list left behind is only tidied up later.
-            let _ = self.after_changelist_commit(id, result.is_ok());
+            let _ = self.after_changelist_commit(id, result.is_ok() || list_committed, list_committed);
         }
         noted.and(result)
     }

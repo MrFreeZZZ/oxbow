@@ -564,6 +564,27 @@ fn a_hook_that_stops_the_commit_leaves_everything_as_it_was() {
     assert_eq!(paths_of(&read(&repo), &id), ["b.txt", "new.txt"]);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_list_committed_while_the_index_cant_follow_is_gone_and_says_so() {
+    use std::os::unix::fs::PermissionsExt;
+    let (mut fx, repo) = setup();
+    fx.write("b.txt", "b2\n");
+    let id = create(&repo, "Login", &["b.txt"]);
+    // After the commit, the index is held by someone else: the reset to it fails.
+    let hook = fx.path().join(".git/hooks/post-commit");
+    std::fs::write(&hook, "#!/bin/sh\n: > .git/index.lock\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let head = fx.git(&["rev-parse", "HEAD"]);
+
+    let err = repo.perform(&commit_list(&id, "Login")).unwrap_err();
+    std::fs::remove_file(fx.path().join(".git/index.lock")).unwrap();
+    assert!(err.to_string().contains("the commit was made"), "{err}");
+    assert_ne!(fx.git(&["rev-parse", "HEAD"]), head);
+    assert_eq!(fx.git(&["show", "HEAD:b.txt"]), "b2");
+    assert!(read(&repo).lists.iter().all(|l| l.id != id));
+}
+
 #[test]
 fn amend_adds_the_list_to_the_last_commit() {
     let (mut fx, repo) = setup();
