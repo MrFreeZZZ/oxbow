@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use oxbow_core::{GitCommand, RefKind, RemoteInfo, Repo};
 use serde::Serialize;
@@ -112,6 +113,9 @@ fn fetch_identity(address: &str) -> String {
     address.strip_suffix(".git").unwrap_or(address).to_owned()
 }
 
+/// The window opens after the ancestry check; one that takes longer leaves publication unverified.
+const ANCESTRY_QUIET_LIMIT: Duration = Duration::from_secs(2);
+
 fn fetched_commit_url(repo: &Repo, id: &str, remotes: &[RemoteInfo]) -> Option<String> {
     let path = repo
         .run(&GitCommand::new([
@@ -135,30 +139,37 @@ fn fetched_commit_url(repo: &Repo, id: &str, remotes: &[RemoteInfo]) -> Option<S
             continue;
         }
         // Only a recorded fetch ties a specific object to the address that served it.
-        for line in fetch_head.lines() {
-            let mut fields = line.splitn(3, '\t');
-            let (Some(tip), Some(_), Some(source)) = (fields.next(), fields.next(), fields.next()) else {
-                continue;
-            };
-            let Some((_, address)) = source.rsplit_once(" of ") else {
-                continue;
-            };
-            if tip.len() == id.len()
-                && tip.bytes().all(|byte| byte.is_ascii_hexdigit())
-                && fetch_identity(address) == identity
-                && (tip == id
-                    || repo
-                        .run(&GitCommand::new([
-                            "--no-replace-objects",
-                            "merge-base",
-                            "--is-ancestor",
-                            id,
-                            tip,
-                        ]))
-                        .is_ok())
-            {
-                return Some(url);
-            }
+        let mut tips: Vec<&str> = fetch_head
+            .lines()
+            .filter_map(|line| {
+                let mut fields = line.splitn(3, '\t');
+                let (Some(tip), Some(_), Some(source)) = (fields.next(), fields.next(), fields.next()) else {
+                    return None;
+                };
+                let (_, address) = source.rsplit_once(" of ")?;
+                (tip.len() == id.len()
+                    && tip.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    && fetch_identity(address) == identity)
+                    .then_some(tip)
+            })
+            .collect();
+        if tips.contains(&id) {
+            return Some(url);
+        }
+        if tips.is_empty() {
+            continue;
+        }
+        tips.sort_unstable();
+        tips.dedup();
+        // The best common base of the commit and all the tips together is the commit itself
+        // exactly when one of the tips contains it.
+        let mut args = vec!["--no-replace-objects", "merge-base", id];
+        args.extend(tips);
+        if repo
+            .run(&GitCommand::new(args).quiet_limit(ANCESTRY_QUIET_LIMIT))
+            .is_ok_and(|output| output.stdout.trim() == id)
+        {
+            return Some(url);
         }
     }
     None
@@ -301,28 +312,32 @@ pub(crate) fn open_summary_commit_link(window: WebviewWindow, windows: State<'_,
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::{display_remote_url, web_commit};
+
+    fn run_git(dir: &Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=QA",
+                "-c",
+                "user.email=qa@example.com",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
 
     #[test]
     fn changing_remote_url_does_not_reuse_old_tracking_refs_or_fetch_evidence() {
         let dir = oxbow_core::cli::private_temp_folder("oxbow-summary-test-").unwrap();
-        let git = |args: &[&str]| {
-            let output = std::process::Command::new("git")
-                .args([
-                    "-c",
-                    "user.name=QA",
-                    "-c",
-                    "user.email=qa@example.com",
-                    "-c",
-                    "commit.gpgsign=false",
-                ])
-                .args(args)
-                .current_dir(dir.path())
-                .output()
-                .unwrap();
-            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-            String::from_utf8(output.stdout).unwrap().trim().to_owned()
-        };
+        let git = |args: &[&str]| run_git(dir.path(), args);
         git(&["init", "-q", "-b", "main"]);
         git(&["remote", "add", "origin", "https://github.com/example/old.git"]);
         git(&["commit", "--allow-empty", "-qm", "Seen on old remote"]);
@@ -353,6 +368,83 @@ mod tests {
         let unknown = super::commit_context(&repo, &git(&["rev-parse", "HEAD"]));
         assert_eq!(unknown.url, None);
         assert_eq!(unknown.publication, "Publication status unknown");
+    }
+
+    #[test]
+    fn history_under_a_recorded_tip_is_confirmed_and_a_side_branch_is_not() {
+        let dir = oxbow_core::cli::private_temp_folder("oxbow-summary-test-").unwrap();
+        let git = |args: &[&str]| run_git(dir.path(), args);
+        git(&["init", "-q", "-b", "main"]);
+        git(&["remote", "add", "origin", "https://github.com/example/old.git"]);
+        git(&["commit", "--allow-empty", "-qm", "Parent"]);
+        let parent = git(&["rev-parse", "HEAD"]);
+        git(&["commit", "--allow-empty", "-qm", "Child"]);
+        let child = git(&["rev-parse", "HEAD"]);
+        git(&["switch", "-q", "-c", "side", &parent]);
+        git(&["commit", "--allow-empty", "-qm", "Side"]);
+        let side = git(&["rev-parse", "HEAD"]);
+        let fetch_head = git(&["rev-parse", "--path-format=absolute", "--git-path", "FETCH_HEAD"]);
+        std::fs::write(
+            fetch_head,
+            format!("{child}\t\tbranch 'main' of https://github.com/example/old\n"),
+        )
+        .unwrap();
+        let repo = oxbow_core::Repo::open(dir.path()).unwrap();
+
+        let under = super::commit_context(&repo, &parent);
+        assert_eq!(
+            under.url,
+            Some(format!("https://github.com/example/old/commit/{parent}"))
+        );
+        assert_eq!(under.publication, "Confirmed by a recorded fetch");
+
+        let beside = super::commit_context(&repo, &side);
+        assert_eq!(beside.url, None);
+        assert_eq!(beside.publication, "Publication status unknown");
+    }
+
+    #[test]
+    fn the_first_remote_whose_fetched_tips_contain_the_commit_gets_the_link() {
+        let dir = oxbow_core::cli::private_temp_folder("oxbow-summary-test-").unwrap();
+        let git = |args: &[&str]| run_git(dir.path(), args);
+        git(&["init", "-q", "-b", "main"]);
+        git(&["remote", "add", "origin", "https://github.com/example/old.git"]);
+        git(&["remote", "add", "upstream", "https://github.com/example/upstream.git"]);
+        git(&["commit", "--allow-empty", "-qm", "Parent"]);
+        let parent = git(&["rev-parse", "HEAD"]);
+        git(&["commit", "--allow-empty", "-qm", "Child"]);
+        let child = git(&["rev-parse", "HEAD"]);
+        git(&["switch", "-q", "-c", "other", &parent]);
+        git(&["commit", "--allow-empty", "-qm", "Other"]);
+        let other = git(&["rev-parse", "HEAD"]);
+        git(&["switch", "-q", "-c", "side", &parent]);
+        git(&["commit", "--allow-empty", "-qm", "Side"]);
+        let side = git(&["rev-parse", "HEAD"]);
+        let fetch_head = git(&["rev-parse", "--path-format=absolute", "--git-path", "FETCH_HEAD"]);
+        std::fs::write(
+            fetch_head,
+            format!(
+                "{child}\t\tbranch 'main' of https://github.com/example/old\n\
+                 {other}\tnot-for-merge\tbranch 'other' of https://github.com/example/old\n\
+                 {side}\t\tbranch 'main' of https://github.com/example/upstream\n"
+            ),
+        )
+        .unwrap();
+        let repo = oxbow_core::Repo::open(dir.path()).unwrap();
+
+        let shared = super::commit_context(&repo, &parent);
+        assert_eq!(
+            shared.url,
+            Some(format!("https://github.com/example/old/commit/{parent}"))
+        );
+        assert_eq!(shared.publication, "Confirmed by a recorded fetch");
+
+        let upstream_only = super::commit_context(&repo, &side);
+        assert_eq!(
+            upstream_only.url,
+            Some(format!("https://github.com/example/upstream/commit/{side}"))
+        );
+        assert_eq!(upstream_only.publication, "Confirmed by a recorded fetch");
     }
 
     #[test]
