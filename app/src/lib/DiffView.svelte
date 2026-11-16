@@ -41,6 +41,7 @@
   import { onDestroy, untrack } from "svelte";
   import { foldReason, startsFolded } from "./diffFold";
   import { diffLineEndingLabel } from "./diffLineEndings";
+  import { changeBadge } from "./changesList";
   import { addKnown, blockText, changedRow, changeStarts, pieces, rowsOf, sideKind, type Known, type Piece, type Row } from "./diffRows";
   import { mac, withKeys } from "./keys";
   import { combo } from "./shortcuts";
@@ -635,16 +636,6 @@
   /** A file is cut only when this many lines more than the budget allows would be left out. */
   const CUT_SLACK = 500;
 
-  const statusLabel: Record<string, string> = {
-    added: "Added",
-    deleted: "Deleted",
-    modified: "Modified",
-    renamed: "Renamed",
-    copied: "Copied",
-    untracked: "New",
-    conflicted: "Conflicted",
-  };
-
   /** Rounded corners for the first and last line of a run of added or removed lines. */
   function radius(lines: DiffLine[], i: number): string {
     const line = lines[i];
@@ -867,13 +858,40 @@
   </button>
 {/if}
 
+{#snippet fileHeading(diff: FileDiff, isShut: boolean, why: string | null)}
+  {@const badge = changeBadge[diff.file.status]}
+  {@const ending = diffLineEndingLabel(diff)}
+  {#if foldable}
+    <svg class="icon chevron" class:shut={isShut} viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 6 8 9.5 11.5 6" /></svg>
+  {/if}
+  <span class="diff-list-badge {badge.tone}" role="img" aria-label={badge.title} title={badge.title}>{badge.text}</span>
+  {@render name(diff)}
+  {#if diff.file.submodule}
+    <span class="size">Submodule</span>
+  {:else if diff.file.lfs}
+    {@const f = diff.file}
+    <span class="mono size" title="Kept in Git LFS">LFS · {f.oldSize !== undefined && f.newSize !== undefined && f.oldSize !== f.newSize ? `${bytes(f.oldSize)} → ${bytes(f.newSize)}` : bytes(f.newSize ?? f.oldSize ?? 0)}</span>
+  {:else if diff.file.binary}
+    {@const f = diff.file}
+    <span class="mono size">{f.oldSize !== undefined && f.newSize !== undefined ? `${bytes(f.oldSize)} → ${bytes(f.newSize)}` : bytes(f.newSize ?? f.oldSize ?? 0)}</span>
+  {:else if diff.file.mode && diff.file.additions + diff.file.deletions === 0}
+    <span class="mono size">mode {diff.file.mode.old} → {diff.file.mode.new}</span>
+  {:else}
+    {@const countTitle = ignoring ? "Lines changed besides whitespace. The list of files counts every line." : undefined}
+    <span class="mono add" title={countTitle}>+{diff.file.additions}</span>
+    <span class="mono del" title={countTitle}>−{diff.file.deletions}</span>
+  {/if}
+  {#if ending}
+    <span class="mono size" title="Line endings in the compared versions: {ending}">{ending}</span>
+  {/if}
+  {#if why && why !== badge.title}<span class="why">· {why}</span>{/if}
+{/snippet}
+
 {#each shown.files as diff (diff.file.path)}
-  {@const path = splitPath(diff.file.path)}
   {@const isShut = isFolded(diff)}
   {@const why = isShut ? foldReason(diff) : null}
   {@const kind = isShut ? null : special(diff)}
   {@const open = workingFileAction(statusOf(diff.file.path), !working)}
-  {@const ending = diffLineEndingLabel(diff)}
   <section class="file" class:shut={isShut} data-path={diff.file.path}>
     <header class="background-sticky">
       <!-- Outlined in the branch color, as the Summary tab is. -->
@@ -885,36 +903,12 @@
             aria-expanded={!isShut}
             title={`${isShut ? "Show" : "Hide"} the diff. ${mac ? "⌥-click" : "Alt+click"}: every file`}
           >
-            <svg class="icon chevron" class:shut={isShut} viewBox="0 0 16 16"><path d="M4.5 6 8 9.5 11.5 6" /></svg>
-            {@render name(diff)}
-            <span class="status">{statusLabel[diff.file.status]}</span>
-            {#if why && why !== statusLabel[diff.file.status]}<span class="why">· {why}</span>{/if}
-            <span class="spacer"></span>
+            {@render fileHeading(diff, isShut, why)}
           </button>
         {:else}
-          {@render name(diff)}
-          <span class="status">{statusLabel[diff.file.status]}</span>
-          <span class="spacer"></span>
+          <div class="file-name">{@render fileHeading(diff, isShut, why)}</div>
         {/if}
-        {#if ending}
-          <span class="mono size" title="Line endings in the compared versions: {ending}">{ending}</span>
-        {/if}
-        {#if diff.file.submodule}
-          <span class="size">Submodule</span>
-        {:else if diff.file.lfs}
-          {@const f = diff.file}
-          <span class="mono size" title="Kept in Git LFS">LFS · {f.oldSize !== undefined && f.newSize !== undefined && f.oldSize !== f.newSize ? `${bytes(f.oldSize)} → ${bytes(f.newSize)}` : bytes(f.newSize ?? f.oldSize ?? 0)}</span>
-        {:else if diff.file.binary}
-          {@const f = diff.file}
-          <span class="mono size">{f.oldSize !== undefined && f.newSize !== undefined ? `${bytes(f.oldSize)} → ${bytes(f.newSize)}` : bytes(f.newSize ?? f.oldSize ?? 0)}</span>
-        {:else if diff.file.mode && diff.file.additions + diff.file.deletions === 0}
-          <span class="mono size">mode {diff.file.mode.old} → {diff.file.mode.new}</span>
-        {:else}
-          <span class="counts" title={ignoring ? "Lines changed besides whitespace. The list of files counts every line." : undefined}>
-            <span class="mono add">+{diff.file.additions}</span>
-            <span class="mono del">−{diff.file.deletions}</span>
-          </span>
-        {/if}
+        <div class="file-actions">
         {#if fileActions}{@render fileActions(diff)}{/if}
         {#if openable && history && diff.file.status !== "untracked" && !diff.file.submodule}
           <button class="toggle" onclick={() => nav.openFile(diff.file.path, commit)} aria-label="File history" title="File History and Blame">
@@ -983,6 +977,7 @@
           </svg>
         </button>
         {/if}
+        </div>
       </div>
     </header>
 
@@ -1102,19 +1097,33 @@
     padding-bottom: 0;
   }
   .file-toggle {
-    flex-grow: 1;
-    min-width: 0;
     align-self: stretch;
-    display: flex;
-    align-items: center;
-    gap: 8px;
     margin-left: -6px;
     padding-left: 4px;
     border-radius: var(--radius-m);
   }
+  .file-name,
+  .file-toggle,
+  .file-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .file-name,
+  .file-toggle {
+    flex: 1;
+  }
+  .file-actions {
+    flex-shrink: 0;
+  }
+  .file-actions:empty {
+    display: none;
+  }
   .chevron {
     width: 14px;
     height: 14px;
+    flex-shrink: 0;
     color: var(--name);
     transition: transform 0.15s ease;
   }
@@ -1122,6 +1131,8 @@
     transform: rotate(-90deg);
   }
   .why {
+    overflow: hidden;
+    text-overflow: ellipsis;
     color: var(--text2);
     font-size: var(--text-caption);
     white-space: nowrap;
@@ -1159,22 +1170,21 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .counts {
-    flex-shrink: 0;
-    white-space: nowrap;
-  }
   .dir {
     color: var(--text2);
     font-weight: 400;
   }
-  .from,
-  .status {
+  .from {
+    overflow: hidden;
+    text-overflow: ellipsis;
     color: var(--text2);
     font-size: var(--text-caption);
     white-space: nowrap;
   }
-  .spacer {
-    flex-grow: 1;
+  .size,
+  .add,
+  .del {
+    flex-shrink: 0;
   }
   .add {
     color: var(--green);
