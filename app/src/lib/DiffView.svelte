@@ -878,8 +878,10 @@
     <span class="mono size">mode {diff.file.mode.old} → {diff.file.mode.new}</span>
   {:else}
     {@const countTitle = ignoring ? "Lines changed besides whitespace. The list of files counts every line." : undefined}
-    <span class="mono add" title={countTitle}>+{diff.file.additions}</span>
-    <span class="mono del" title={countTitle}>−{diff.file.deletions}</span>
+    <span class="mono counts" title={countTitle}>
+      <span class="add">+{diff.file.additions}</span>
+      <span class="del">−{diff.file.deletions}</span>
+    </span>
   {/if}
   {#if ending}
     <span class="mono size" title="Line endings in the compared versions: {ending}">{ending}</span>
@@ -1113,6 +1115,7 @@
   .file-name,
   .file-toggle {
     flex: 1;
+    overflow: hidden;
   }
   .file-actions {
     flex-shrink: 0;
@@ -1182,17 +1185,16 @@
     white-space: nowrap;
   }
   .size,
-  .add,
-  .del {
+  .counts {
     flex-shrink: 0;
+    font-size: var(--text-caption);
+    white-space: nowrap;
   }
   .add {
     color: var(--green);
-    font-size: var(--text-caption);
   }
   .del {
     color: var(--red);
-    font-size: var(--text-caption);
   }
   .toggle {
     width: 26px;
@@ -1217,8 +1219,6 @@
   }
   .size {
     color: var(--text2);
-    font-size: var(--text-caption);
-    white-space: nowrap;
   }
   .banner {
     display: flex;
