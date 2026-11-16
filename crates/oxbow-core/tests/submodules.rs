@@ -327,6 +327,49 @@ fn a_submodule_is_added_and_removed() {
 }
 
 #[test]
+fn a_submodule_whose_path_looks_like_a_pattern_is_the_only_one_touched() {
+    let (mut fx, lib, ids) = app_with_submodule();
+    let url = lib.path().display().to_string();
+    for path in ["libs/a[1]", "libs/a1"] {
+        fx.git(&["-c", "protocol.file.allow=always", "submodule", "add", &url, path]);
+    }
+    fx.git(&["commit", "-q", "-m", "Add two more"]);
+    for path in ["libs/a[1]", "libs/a1"] {
+        fx.git(&["-C", path, "checkout", "-q", &ids[0]]);
+    }
+    let repo = Repo::open(fx.path()).unwrap();
+    let pattern = "libs/a[1]".to_owned();
+
+    let update = Action::SubmoduleUpdate {
+        paths: vec![pattern.clone()],
+        latest: false,
+    };
+    assert_eq!(
+        shown(&repo, &update),
+        ["git submodule update --init --recursive -- ':(literal)libs/a[1]'"]
+    );
+    repo.perform(&update).unwrap();
+    assert_eq!(fx.git(&["-C", "libs/a[1]", "rev-parse", "HEAD"]), ids[2]);
+    assert_eq!(fx.git(&["-C", "libs/a1", "rev-parse", "HEAD"]), ids[0]);
+
+    let synced = repo
+        .perform(&Action::SubmoduleSync {
+            paths: vec![pattern.clone()],
+        })
+        .unwrap();
+    assert!(
+        synced.contains("'libs/a[1]'") && !synced.contains("'libs/a1'"),
+        "{synced}"
+    );
+
+    repo.perform(&Action::SubmoduleRemove { path: pattern }).unwrap();
+    let staged = fx.git(&["ls-files", "-s", "--", "libs"]);
+    assert!(staged.contains("160000") && staged.contains("libs/a1"), "{staged}");
+    assert!(!staged.contains("a[1]"), "{staged}");
+    assert!(fx.path().join("libs/a1/rules.txt").exists());
+}
+
+#[test]
 fn a_commit_only_this_clone_has_is_found_before_push_and_pushed_first() {
     allow_file_urls();
     // The library on a bare server, so its clone can push to it.
