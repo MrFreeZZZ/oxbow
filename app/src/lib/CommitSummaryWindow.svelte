@@ -1,14 +1,16 @@
 <script lang="ts">
+  import FileLineCounts from "./FileLineCounts.svelte";
   import { onMount } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { api } from "./api";
-  import { shortId } from "./format";
+  import { shortId, fileDeletionWidth } from "./format";
   import { mac } from "./keys";
   import { summaryText } from "./commitSummary";
 
   const win = getCurrentWindow();
   let snapshot = $state.raw<Awaited<ReturnType<typeof api.commitSummaryState>> | null>(null);
   const summary = $derived(snapshot?.summary);
+  const deletionWidth = $derived(fileDeletionWidth(summary?.groups.flatMap((group) => group.files.map((file) => file.counts)) ?? []));
   const context = $derived(snapshot?.context);
   let folded = $state<Record<string, boolean>>({});
   let status = $state("");
@@ -134,7 +136,7 @@
               {group.name} <span class="group-count">{group.files.length.toLocaleString()}</span>
             </button>
           </h2>
-          <ul class="settings-panel" role="list" id={`summary-${group.name}`} hidden={folded[group.name]}>
+          <ul class="settings-panel" role="list" style:--file-deletion-width={deletionWidth} id={`summary-${group.name}`} hidden={folded[group.name]}>
             {#each group.files as file (file.path)}
               <li>
                 <div class="paths">
@@ -142,10 +144,7 @@
                   {#if file.origin}<div class="origin">{file.origin}</div>{/if}
                 </div>
                 {#if file.counts}
-                  <span class="counts mono">
-                    <span class="add">+{file.counts.additions}</span>
-                    <span class="del">−{file.counts.deletions}</span>
-                  </span>
+                  <FileLineCounts add={file.counts.additions} del={file.counts.deletions} />
                 {/if}
               </li>
             {/each}
@@ -204,8 +203,5 @@
   .paths { min-width: 0; }
   .paths > div { white-space: pre-wrap; }
   .origin { margin-top: var(--space-1); }
-  .counts { display: flex; gap: var(--space-2); flex-shrink: 0; }
-  .add { color: var(--green); }
-  .del { color: var(--red); }
   .notice { padding: var(--space-2) var(--space-4); color: var(--text2); font-size: var(--text-small); }
 </style>

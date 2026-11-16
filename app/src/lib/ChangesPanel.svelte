@@ -12,7 +12,7 @@
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import { confirm, type Part, type Request } from "./confirm.svelte";
   import type { ChangelistEdit, FileChange, FileDiff, Hunk, HistoryRow, Moving, Side, WorkingTree } from "./types";
-  import { lane, plate, splitPath, tint } from "./format";
+  import { lane, plate, splitPath, tint, fileDeletionWidth } from "./format";
   import { keyFocus as focusByKey, tabStepper } from "./tabs";
   import ChangesDiff from "./ChangesDiff.svelte";
   import type { LinePicker } from "./DiffView.svelte";
@@ -182,6 +182,11 @@
   const diffFiles = $derived(new Map(diffsOf ? diffs.map((d) => [`${diffsOf!.side}:${d.file.path}`, d.file]) : []));
   /** `file` of a list with its changed lines, or null while they are being counted. */
   const lined = (file: FileChange, side: Side) => countedFile(file, tree?.counted !== false, diffFiles, side);
+
+  const deletionWidth = $derived(fileDeletionWidth([
+    ...unstaged.map((file) => lined(file, "unstaged")),
+    ...staged.map((file) => lined(file, "staged")),
+  ]));
 
   /** All the files of a list, the filter aside. */
   function filesOf(group: List | "conflicted"): FileChange[] {
@@ -955,7 +960,7 @@
   </div>
 
   <div class="body" class:stacked bind:clientWidth={bodyWidth} bind:clientHeight={bodyHeight}>
-    <div class="files" bind:this={filesBox} aria-label="Working copy" data-steps use:tabStepper={stepper} class:dragging={!!dragging} style:--changes-row-cursor={dragging ? "grabbing" : null} style:--selection-fill={tint(color)} style:--selection-border={`color-mix(in srgb, ${lane(color)} 40%, transparent)`} style:height={stacked ? `${Math.round(filesShare * 100)}%` : null} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
+    <div class="files" bind:this={filesBox} aria-label="Working copy" data-steps use:tabStepper={stepper} class:dragging={!!dragging} style:--file-deletion-width={deletionWidth} style:--changes-row-cursor={dragging ? "grabbing" : null} style:--selection-fill={tint(color)} style:--selection-border={`color-mix(in srgb, ${lane(color)} 40%, transparent)`} style:height={stacked ? `${Math.round(filesShare * 100)}%` : null} style:width={stacked ? null : `${filesWidth(bodyWidth)}px`}>
       <div class="tools" style:height={!stacked && (shown || lastOpen) ? `${diffHeaderHeight}px` : null}>
         <div class="filter"><FileFilter bind:value={filter} {color} /></div>
         <div class="segmented icons" role="radiogroup" aria-label="Show files">
@@ -1252,6 +1257,9 @@
     flex-shrink: 1000;
     min-height: var(--diff-header-height);
     padding: 0 var(--space-2);
+  }
+  .lists, .staged-files {
+    scrollbar-gutter: stable;
   }
   .staged-files {
     min-height: 26px;

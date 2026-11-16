@@ -1,11 +1,12 @@
 <script lang="ts">
+  import FileLineCounts from "./FileLineCounts.svelte";
   import { diffScroll } from "./diffScroll";
   import FileFilter from "./FileFilter.svelte";
   import { untrack, type Snippet } from "svelte";
   import { api, stopped } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { CommitDetail, DiffPage, FileChange, FileDiff, HistoryRow } from "./types";
-  import { fullDate, initials, relativeTime, lane, person, plate, shortId, tint } from "./format";
+  import { fullDate, initials, relativeTime, lane, person, plate, shortId, tint, fileDeletionWidth } from "./format";
   import { fileTabs, keyFocus, tabStepper } from "./tabs";
   import { confirm } from "./confirm.svelte";
   import DiffView from "./DiffView.svelte";
@@ -435,7 +436,7 @@
         </div>
       </div>
 
-      <div class="list" style:--selection-fill={tint(color)} style:--selection-border={`color-mix(in srgb, ${lane(color)} 40%, transparent)`}>
+      <div class="list" style:--file-deletion-width={fileDeletionWidth(files, totals?.del)} style:--selection-fill={tint(color)} style:--selection-border={`color-mix(in srgb, ${lane(color)} 40%, transparent)`}>
         {#if detail && !detail.shallowEnd}
           <!-- The heading shows every file's diff, as Summary did. -->
           <button
@@ -449,8 +450,7 @@
             <span class="n">{needle ? `${shownFiles.length} of ${detail.files.length}` : detail.files.length.toLocaleString()}</span>
             <span class="grow"></span>
             {#if totals}
-              <span class="mono add">+{totals.add}</span>
-              <span class="mono del">−{totals.del}</span>
+              <FileLineCounts add={totals.add} del={totals.del} />
             {:else}
               <span class="counting" title="Counting the changed lines">Counting…</span>
             {/if}
@@ -862,14 +862,6 @@
   }
   .dir {
     color: var(--text2);
-  }
-  .add {
-    color: var(--green);
-    font-size: var(--text-caption);
-  }
-  .del {
-    color: var(--red);
-    font-size: var(--text-caption);
   }
 
   /* Commit Details, at the bottom of the files. */

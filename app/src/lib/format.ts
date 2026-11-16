@@ -126,3 +126,8 @@ export function tabLabels(paths: string[]): Map<string, string> {
   }
   return new Map(paths.map((p) => [p, label(p, depth.get(p)!)]));
 }
+
+export function fileDeletionWidth(files: readonly ({ deletions: number } | null)[], total = 0): string {
+  const max = files.reduce((max, file) => Math.max(max, file?.deletions ?? 0), total);
+  return `${String(max).length + 1}ch`;
+}
