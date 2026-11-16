@@ -207,11 +207,17 @@ impl Repo {
 
     /// Whether the file on disk differs from its staged version.
     fn has_unstaged(&self, path: &str) -> Result<bool> {
-        let out = self.spawn(
-            &GitCommand::new(["diff", "--quiet", "--no-ext-diff", "--", &literal(path)]),
-            None,
-        )?;
-        Ok(out.status.code() == Some(1))
+        let command = GitCommand::new(["diff", "--quiet", "--no-ext-diff", "--", &literal(path)]);
+        let out = self.spawn(&command, None)?;
+        match out.status.code() {
+            Some(0) => Ok(false),
+            Some(1) => Ok(true),
+            code => Err(Error::Command {
+                command: command.display(),
+                code,
+                output: String::from_utf8_lossy(&out.stderr).into_owned(),
+            }),
+        }
     }
 
     /// Take This Version: the file as `commit` has it, on disk only.
