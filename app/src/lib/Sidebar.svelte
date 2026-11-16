@@ -688,7 +688,7 @@
 <nav aria-label="Sidebar">
   <div class="lights" data-tauri-drag-region></div>
 
-  <div class="scroll" bind:this={list}>
+  <div class="scroll thin-scroll" bind:this={list}>
     <div class="heading">Workspace</div>
     <button class="item" class:current={view === "history" && !showingChanges} onclick={() => onView("history")}>
       <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" /><path d="M8 4.5V8l2.5 1.5" /></svg>

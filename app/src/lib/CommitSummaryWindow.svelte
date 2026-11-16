@@ -98,7 +98,7 @@
         <p class="repo-path">{context.path}</p>
         <dl class="repo-fields">
           <div><dt>Branches</dt><dd>{context.branches}</dd></div>
-          <div><dt>Current branch</dt><dd>{context.branch}</dd></div>
+          <div><dt>Commit branch</dt><dd>{summary.branch}</dd></div>
         </dl>
         <dl class="repo-remotes">
           {#each context.remotes as remote (remote.name)}

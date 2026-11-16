@@ -1,4 +1,4 @@
-import type { CommitDetail, FileChange, RemoteInfo } from "./types";
+import type { CommitDetail, FileChange, RemoteInfo, RowLayout } from "./types";
 
 const groupNames = ["Added", "Modified", "Deleted"] as const;
 type GroupName = typeof groupNames[number];
@@ -14,13 +14,13 @@ export interface SummaryContext {
   path: string;
   branches: string;
   remotes: RemoteInfo[];
-  branch: string;
   publication: string;
   url: string | null;
 }
 
 export interface CommitSummary {
   id: string;
+  branch: string;
   title: string;
   description: string;
   author: string;
@@ -29,7 +29,13 @@ export interface CommitSummary {
   empty: string;
 }
 
-export function commitSummary(detail: CommitDetail, loaded: ReadonlyMap<string, FileChange>, date: string): CommitSummary {
+export function commitSummary(
+  detail: CommitDetail,
+  loaded: ReadonlyMap<string, FileChange>,
+  date: string,
+  graph: Pick<RowLayout, "branch" | "color">,
+  trunk: string | null,
+): CommitSummary {
   const groups: Record<GroupName, SummaryFile[]> = { Added: [], Modified: [], Deleted: [] };
   for (const [index, file] of detail.files.entries()) {
     const { path, oldPath, status } = file;
@@ -46,6 +52,7 @@ export function commitSummary(detail: CommitDetail, loaded: ReadonlyMap<string, 
   }
   return {
     id: detail.id,
+    branch: graph.branch ?? (graph.color === 0 ? trunk : null) ?? "Unknown",
     title: detail.summary,
     description: detail.body || "No description.",
     author: detail.author.email ? `${detail.author.name} <${detail.author.email}>` : detail.author.name,
@@ -60,7 +67,7 @@ export function summaryText(summary: CommitSummary, context: SummaryContext): st
     `Repository: ${context.repository}`,
     `Path: ${context.path}`,
     `Branches: ${context.branches}`,
-    `Current branch: ${context.branch}`,
+    `Commit branch: ${summary.branch}`,
     ...context.remotes.flatMap(({ name, fetchUrl, pushUrl }) => [
       `Remote · ${name}: ${fetchUrl}`,
       ...(pushUrl !== fetchUrl ? [`Push: ${pushUrl}`] : []),

@@ -2270,6 +2270,7 @@
             query={seriesQuery}
             {version}
             {colorOf}
+            trunk={history?.trunk ?? null}
             lookup={(id) => rowsById.get(id)}
             onBranch={(name) => {
               const b = seriesQuery?.branches.find((x) => x.branch === name);
@@ -2445,7 +2446,7 @@
                 onResolve={operation ? () => (resolving = true) : undefined}
               />
             {:else if selectedRow}
-              <CommitPanel row={selectedRow} childIds={childrenOf.get(selectedRow.id) ?? []} lookup={(id) => rowsById.get(id)} onSelect={jump} localTags={history.localTags} {version}
+              <CommitPanel row={selectedRow} childIds={childrenOf.get(selectedRow.id) ?? []} lookup={(id) => rowsById.get(id)} onSelect={jump} trunk={history.trunk} localTags={history.localTags} {version}
                 inHead={(id) => ancestors(history!, history!.head.commit).has(id)}
                 onSplit={!operation && headStack.has(selectedRow.id) && selectedRow.parents.length === 1 ? (path) => openSplit(selectedRow!, path) : null}
                 onUnshallow={history.shallow && history.defaultRemote ? () => run(unshallowRequest(history!.defaultRemote!)) : null}

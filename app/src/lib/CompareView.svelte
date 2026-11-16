@@ -200,7 +200,7 @@
       <aside class="panel" style:width="{panelWidth}px" aria-label="Changes">
         <button class="vertical-splitter" title="Drag to resize" tabindex="-1" onpointerdown={onGrip} aria-label="Resize the changes"></button>
         {#if picked && pickedRow}
-          <CommitPanel row={pickedRow} childIds={childrenOf(pickedRow.id)} {lookup} onSelect={(id) => (picked = id)} localTags={history.localTags} {version} inHead={(id) => ancestors(history, history.head.commit).has(id)} />
+          <CommitPanel row={pickedRow} childIds={childrenOf(pickedRow.id)} {lookup} onSelect={(id) => (picked = id)} trunk={history.trunk} localTags={history.localTags} {version} inHead={(id) => ancestors(history, history.head.commit).has(id)} />
         {:else if picked}
           <p class="missing">This commit is older than the loaded history, so its details aren’t shown here.</p>
         {:else}

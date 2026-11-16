@@ -29,6 +29,7 @@
     childIds,
     lookup,
     onSelect,
+    trunk = null,
     localTags = [],
     find = null,
     foundFiles = [],
@@ -43,6 +44,7 @@
     childIds: string[];
     lookup: (id: string) => HistoryRow | undefined;
     onSelect: (id: string) => void;
+    trunk?: string | null;
     /** Tags the remote doesn't have yet: drawn dashed. */
     localTags?: string[];
     /** Text a code search looked for: marked in the diff. */
@@ -365,8 +367,9 @@
     const loaded = new Map(firstFiles);
     for (const { file } of diffs) loaded.set(file.path, file);
     const { time, offset } = detail.author;
+    const graph = lookup(row.id)?.graph ?? row.graph;
     try {
-      await api.openCommitSummary(nav.repo, commitSummary(detail, loaded, fullDate(time, offset)));
+      await api.openCommitSummary(nav.repo, commitSummary(detail, loaded, fullDate(time, offset), graph, trunk));
     } catch (err) {
       confirm.say(String(err), "error");
     }

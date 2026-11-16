@@ -29,7 +29,6 @@ struct Context {
     path: String,
     branches: String,
     remotes: Vec<RemoteInfo>,
-    branch: String,
     publication: &'static str,
     url: Option<String>,
 }
@@ -197,10 +196,6 @@ fn commit_context(repo: &Repo, id: &str) -> Context {
                 push_url: display_remote_url(&remote.push_url),
             })
             .collect(),
-        branch: repo.head().map_or_else(
-            |_| "Unknown branch".into(),
-            |head| head.branch.unwrap_or_else(|| "Detached HEAD".into()),
-        ),
         publication: "Publication status unknown",
         url: None,
     };

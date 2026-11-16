@@ -16,6 +16,7 @@
     version,
     colorOf,
     lookup,
+    trunk,
     onBranch,
     copy,
   }: {
@@ -24,6 +25,7 @@
     version: number;
     colorOf: (name: string) => number;
     lookup: (id: string) => HistoryRow | undefined;
+    trunk: string | null;
     /** Another branch of the same step. */
     onBranch: (branch: string) => void;
     copy: (text: string) => void;
@@ -232,7 +234,7 @@
             {#snippet banner()}{@render head(pair!)}{/snippet}
             <div class="holder">
               {#key commit.id}
-                <CommitPanel row={seriesRow(commit, color)} childIds={[]} {lookup} onSelect={() => {}} {banner} />
+                <CommitPanel row={seriesRow(commit, color)} childIds={[]} {lookup} trunk={lookup(commit.id) ? trunk : null} onSelect={() => {}} {banner} />
               {/key}
             </div>
           {:else}
