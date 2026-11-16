@@ -6,7 +6,17 @@
 // lives in app.css. Stash (10) and no-branch (11) grays are the same in every palette, also in
 // app.css.
 
-export type BranchPaletteId = "mineral" | "paper" | "signal" | "winter" | "oxbow";
+export type BranchPaletteId =
+  | "mineral" | "paper" | "signal" | "winter" | "oxbow"
+  | "violet"
+  | "walnut"
+  | "moss"
+  | "blue-amber"
+  | "sage-brass"
+  | "teal-copper"
+  | "berry-coral"
+  | "iris-gold"
+  | "slate-pink";
 
 interface Look {
   /** Background of the graph and the other surfaces drawn on `--graph-bg`. */
@@ -100,6 +110,141 @@ export const BRANCH_PALETTES: BranchPalette[] = [
       bg: "#252422",
       lines: ["#94B2CC", "#5D938E", "#8DD2DA", "#63A6C2", "#7875B1", "#8C6884", "#E3AE83", "#99745B"],
       plates: ["#94B2CC", "#96D9D3", "#93D8E0", "#9AD4EE", "#C5C5F7", "#E8BADD", "#EDC09D", "#EFBF9F"],
+    },
+  },
+  {
+    id: "violet",
+    name: "Violet",
+    note: "Cool violet and lavender, iris production",
+    light: {
+      bg: "#F7F4FC",
+      lines: ["#6452A3", "#8A6D9E", "#5A3B8C", "#3A3A52", "#237881", "#A64E81", "#58773B", "#9E582F"],
+      plates: ["#5D4C98", "#685276", "#5A3B8C", "#3A3A52", "#1D626A", "#88406A", "#476030", "#834927"],
+    },
+    dark: {
+      bg: "#0E0B1D",
+      lines: ["#8D7FC8", "#C9C2E3", "#B274D0", "#8E98B5", "#5BA1AC", "#CD8AB5", "#AABF87", "#CA936D"],
+      plates: ["#C0B9E1", "#D0CAE7", "#D4B1E5", "#BBC1D3", "#9EC8CE", "#E0B8D2", "#BFCFA5", "#DEBCA4"],
+    },
+  },
+  {
+    id: "walnut",
+    name: "Walnut",
+    note: "Warm wood and stone, walnut production",
+    light: {
+      bg: "#FAF5EE",
+      lines: ["#8B623E", "#4A4A46", "#8C7766", "#6B4A2E", "#36776D", "#AC5950", "#657434", "#716099"],
+      plates: ["#765335", "#4A4A46", "#68584B", "#6B4A2E", "#2D635A", "#8A4740", "#535F2B", "#605282"],
+    },
+    dark: {
+      bg: "#1A120E",
+      lines: ["#B68A61", "#8A9295", "#D5C4AE", "#DE976A", "#82ADA2", "#C77D71", "#A7AD6B", "#A394C4"],
+      plates: ["#D6BDA7", "#BDC2C4", "#DCCEBC", "#EBBFA3", "#B2CCC5", "#E0B8B1", "#C7CBA0", "#C9C0DC"],
+    },
+  },
+  {
+    id: "moss",
+    name: "Moss",
+    note: "Forest green and soft olive, moss production",
+    light: {
+      bg: "#F4F6EF",
+      lines: ["#526B4D", "#1E3A2E", "#777B63", "#3E5A3F", "#946D30", "#397690", "#94596F", "#AD5134"],
+      plates: ["#485E44", "#1E3A2E", "#585B49", "#3E5A3F", "#725425", "#2E5E73", "#7B4A5C", "#8E422B"],
+    },
+    dark: {
+      bg: "#0F1F17",
+      lines: ["#93AC86", "#589B88", "#C7CBB8", "#8F9B55", "#BD9A62", "#7EACC4", "#BC8FA2", "#D38563"],
+      plates: ["#BFCEB8", "#A8CBC1", "#D2D5C5", "#C3C9A3", "#D9C5A6", "#B3CEDC", "#D9C0CB", "#E7BCA9"],
+    },
+  },
+  {
+    id: "blue-amber",
+    name: "Blue & Amber",
+    note: "Clear blue and amber, cyan production",
+    light: {
+      bg: "#F5F7FC",
+      lines: ["#1D7E99", "#B86402", "#3A506B", "#90734F", "#646BB0", "#367D65", "#8D588E", "#B74E4A"],
+      plates: ["#176277", "#8A4B02", "#3A506B", "#6D573C", "#51578F", "#2C6552", "#784B79", "#943F3C"],
+    },
+    dark: {
+      bg: "#0B132B",
+      lines: ["#5BC0DE", "#D97706", "#8291A2", "#F4D6B0", "#9DA1E1", "#80BEA6", "#BB8EB4", "#D97568"],
+      plates: ["#98D7EA", "#ECBA80", "#BEC6CF", "#F4D6B0", "#C7C9EE", "#B0D7C8", "#DAC1D6", "#ECB9B2"],
+    },
+  },
+  {
+    id: "sage-brass",
+    name: "Sage & Brass",
+    note: "Soft greens and brass, sage production",
+    light: {
+      bg: "#F7F7F0",
+      lines: ["#577656", "#946E32", "#3E5A3F", "#877D63", "#38758A", "#A25164", "#74618F", "#AC5231"],
+      plates: ["#486247", "#735627", "#3E5A3F", "#645C49", "#2E6173", "#8A4555", "#64537B", "#904529"],
+    },
+    dark: {
+      bg: "#0B0F0D",
+      lines: ["#8CA98C", "#B08D57", "#7B8E7B", "#D9C7A3", "#78A6B9", "#C3828D", "#A093BC", "#C97753"],
+      plates: ["#B7C9B7", "#D2BE9F", "#B6C1B6", "#DECEAE", "#ABC8D4", "#DDB8BE", "#C7BFD7", "#E1B4A0"],
+    },
+  },
+  {
+    id: "teal-copper",
+    name: "Teal & Copper",
+    note: "Muted teal and copper, teal production",
+    light: {
+      bg: "#F8F6F2",
+      lines: ["#3E7880", "#A44E1B", "#205C61", "#867D6D", "#967131", "#705C9C", "#607F42", "#3A6D9F"],
+      plates: ["#336269", "#8F4417", "#205C61", "#625B50", "#725625", "#635189", "#4B6333", "#315D87"],
+    },
+    dark: {
+      bg: "#0A0F14",
+      lines: ["#7FB3B8", "#DB782F", "#669699", "#EADCC8", "#C5A268", "#AEA2D7", "#9DBD80", "#6F9CC7"],
+      plates: ["#B2D1D4", "#ECB993", "#B1C9CB", "#EADCC8", "#DDC8A6", "#CFC8E7", "#C0D5AE", "#B1CAE1"],
+    },
+  },
+  {
+    id: "berry-coral",
+    name: "Berry & Coral",
+    note: "Berry pink and coral, raspberry production",
+    light: {
+      bg: "#FCF5F6",
+      lines: ["#AC3C72", "#C04A37", "#7A2E6F", "#947071", "#5267AD", "#946B36", "#347872", "#59763B"],
+      plates: ["#973564", "#9A3B2C", "#7A2E6F", "#705556", "#455791", "#75552B", "#2B625D", "#496130"],
+    },
+    dark: {
+      bg: "#1A0F2E",
+      lines: ["#DA6A9A", "#FF6B6B", "#AF82A9", "#F4D7D4", "#889BDD", "#C9A269", "#76AFA8", "#A0BD82"],
+      plates: ["#EDB6CE", "#FFB4B4", "#D7C0D4", "#F4D7D4", "#BFC9ED", "#E0CAAA", "#B2D2CE", "#C4D6B2"],
+    },
+  },
+  {
+    id: "iris-gold",
+    name: "Iris & Gold",
+    note: "Iris and gold, violet production",
+    light: {
+      bg: "#FAF7F0",
+      lines: ["#6A5ACD", "#AD6800", "#8E5C9F", "#87734E", "#2E7394", "#44765D", "#B94A61", "#776657"],
+      plates: ["#5B4DB0", "#855000", "#764C84", "#6B5B3E", "#27627E", "#3A6550", "#983D50", "#68594C"],
+    },
+    dark: {
+      bg: "#1A1A1F",
+      lines: ["#9286DA", "#F4A62A", "#AC81BE", "#F0D9B5", "#79ADC7", "#8EB093", "#D57C87", "#A59583"],
+      plates: ["#CAC4ED", "#F8CA7F", "#D6C1DF", "#F1DBB8", "#B5D2E0", "#C0D3C3", "#EABEC3", "#D1C9C0"],
+    },
+  },
+  {
+    id: "slate-pink",
+    name: "Slate & Pink",
+    note: "Cool slate and vivid pink, steel production",
+    light: {
+      bg: "#F5F7FA",
+      lines: ["#566B89", "#B62D75", "#717C87", "#334155", "#237881", "#695D9D", "#93692F", "#4D7750"],
+      plates: ["#495B74", "#9E2766", "#545C64", "#334155", "#1D626A", "#5C528A", "#765426", "#3F6242"],
+    },
+    dark: {
+      bg: "#121212",
+      lines: ["#7D9ABD", "#EF62A7", "#F1F5F9", "#9194A0", "#73B5BB", "#9C97DB", "#CFA46D", "#91B58B"],
+      plates: ["#C1CFDF", "#F8B7D7", "#F1F5F9", "#CBCDD2", "#B6D9DC", "#CECCED", "#E6CFB2", "#C5D8C2"],
     },
   },
 ];

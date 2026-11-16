@@ -4,7 +4,7 @@
 
   import { model } from "./settingsModel.svelte";
   import ShortcutKeys from "./ShortcutKeys.svelte";
-  import { GEAR, text, withCurrent, type Row } from "./settingsRows";
+  import { GEAR, stepPopup, text, withCurrent, type Row } from "./settingsRows";
 
   let {
     row,
@@ -81,6 +81,11 @@
         aria-label={text(row.label)}
         disabled={off}
         value={String(control.get())}
+        onkeydown={(event) => {
+          if (!row.stepPopupWithArrows) return;
+          const option = stepPopup(options, event.currentTarget.selectedIndex, event);
+          if (option) control.set(option.value);
+        }}
         onchange={(event) => {
           const option = options.find((o) => String(o.value) === event.currentTarget.value);
           if (option) control.set(option.value);
@@ -361,6 +366,10 @@
     font: inherit;
     font-size: var(--text-small);
     outline: 0;
+  }
+
+  .popup select:focus-visible {
+    box-shadow: var(--focus-ring);
   }
 
   .popup .icon {
