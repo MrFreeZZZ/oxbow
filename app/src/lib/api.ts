@@ -280,6 +280,9 @@ export const api = {
   /** The key of the app menu's Settings…, "CmdOrCtrl+,", or null for none (macOS). */
   setSettingsKey: (accelerator: string | null) => invoke<void>("set_settings_key", { accelerator }),
   setMenu: (menus: MenuPart[]) => invoke<void>("set_menu", { menus }),
+  openCommitSummary: (repository: string, summary: import("./commitSummary").CommitSummary) => invoke<void>("open_commit_summary", { repository, summary }),
+  commitSummaryState: () => invoke<{ summary: import("./commitSummary").CommitSummary; context: import("./commitSummary").SummaryContext }>("commit_summary_state"),
+  openSummaryCommitLink: () => invoke<void>("open_summary_commit_link"),
   openConsole: () => invoke<void>("open_console"),
   consoleRepos: () => invoke<ConsoleRepos>("console_repos"),
   /** The log of a repository (null: what ran outside any), oldest first. */

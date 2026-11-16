@@ -653,3 +653,9 @@ button.key-focus {
   opacity: var(--window-background-opacity);
   filter: var(--window-background-filter);
 }
+
+.settings-panel {
+  border-radius: var(--radius-l);
+  background: var(--panel);
+  border: 0.5px solid var(--panel-border);
+}

@@ -17,12 +17,12 @@ addEventListener("focus", windowState);
 addEventListener("blur", windowState);
 windowState();
 
-// The Settings window loads the same page with #settings, the Console with #console. Only the
-// main window's code is read up front: the other two load theirs.
+// Auxiliary windows use a hash route and load their views on demand.
 const target = document.getElementById("app")!;
 if (settingsRoute(location.hash) !== null) void import("./lib/SettingsWindow.svelte").then((m) => mount(m.default, { target }));
 else if (location.hash === "#console") void import("./lib/ConsoleWindow.svelte").then((m) => mount(m.default, { target }));
 else if (location.hash === "#command") void import("./lib/UserCommandWindow.svelte").then((m) => mount(m.default, { target }));
+else if (location.hash === "#commit-summary") void import("./lib/CommitSummaryWindow.svelte").then((m) => mount(m.default, { target }));
 else {
   mount(WindowBackground, { target: document.body });
   mount(App, { target });

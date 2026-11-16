@@ -12,6 +12,8 @@
   import DiffTools from "./DiffTools.svelte";
   import FoldAll from "./FoldAll.svelte";
   import PathName from "./PathName.svelte";
+  import { commitSummary } from "./commitSummary";
+  import { actionIcons } from "./icons";
   import CommitChain from "./CommitChain.svelte";
   import FileBadge from "./FileBadge.svelte";
   import { byFolder, filesWidth, listView, resizeFiles, setFolders } from "./listView.svelte";
@@ -246,6 +248,7 @@
       tab = null;
       shownTab = null;
       diffs = [];
+      firstFiles = new Map();
       detail = null;
       error = null;
       listed = LIST_STEP;
@@ -357,7 +360,17 @@
   function copy(text: string, what: string) {
     navigator.clipboard.writeText(text).then(() => confirm.say(`Copied ${what}.`, "done"), () => {});
   }
-  const message = $derived(detail ? [detail.summary, detail.body].filter(Boolean).join("\n\n") : row.summary);
+  async function openSummary() {
+    if (!detail || detail.id !== id) return;
+    const loaded = new Map(firstFiles);
+    for (const { file } of diffs) loaded.set(file.path, file);
+    const { time, offset } = detail.author;
+    try {
+      await api.openCommitSummary(nav.repo, commitSummary(detail, loaded, fullDate(time, offset)));
+    } catch (err) {
+      confirm.say(String(err), "error");
+    }
+  }
   /** Who made the commit, when that isn't the author, such as GitHub for a merged pull request;
    *  or when, if the author made it again later, as in a rebase. Null when it adds nothing. */
   const committed = $derived.by(() => {
@@ -514,8 +527,11 @@
               {/if}
             </div>
           {/if}
-          <button class="copy-message" onclick={() => copy(message, "the message")}>Copy Message</button>
         {/if}
+        <button class="button primary small summary-button" disabled={detail?.id !== id} onclick={openSummary}>
+          <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d={actionIcons.lines} /></svg>
+          Summary
+        </button>
       </div>
     </div>
 
@@ -867,11 +883,14 @@
   }
   .details-top {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 6px;
   }
   .details-head {
     flex-grow: 1;
+    max-width: 100%;
+    overflow-wrap: anywhere;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -889,7 +908,7 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    flex-shrink: 0;
+    margin-inline-start: auto;
     font-size: var(--text-caption);
     color: var(--text);
   }
@@ -948,14 +967,8 @@
   .parent:disabled {
     color: inherit;
   }
-  .copy-message {
+  .summary-button {
     align-self: flex-end;
-    color: var(--accent-ink);
-    font-size: var(--text-small);
-    font-weight: 500;
-  }
-  .copy-message:hover {
-    text-decoration: underline;
   }
 
   /* Over the diff: how many files, and how the diff is drawn. */
