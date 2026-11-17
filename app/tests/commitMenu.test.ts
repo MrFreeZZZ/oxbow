@@ -69,3 +69,11 @@ for (const mode of ["apply", "cancel", "stale"] as const) {
   await runFlow();
   assert.deepEqual(calls, mode === "apply" ? [[ctx, paths], "preview request"] : []);
 }
+
+// Both normal and bisect Copy menus start unverified, after Message.
+for (const h of [history, { ...history, bisect: { found: true, start: "topic", startIsBranch: false } } as History]) {
+  const copy = entries(row.graph, h).find((entry) => entry.kind === "sub" && entry.label === "Copy");
+  assert.ok(copy?.kind === "sub");
+  assert.deepEqual(copy.entries.map((entry) => entry.label), ["SHA", "Short SHA", "Message", "Commit Link"]);
+  assert.equal(copy.entries[3].off, true);
+}

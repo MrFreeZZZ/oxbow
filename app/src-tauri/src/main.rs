@@ -276,6 +276,7 @@ fn main() {
             preferences::restore_default_settings,
             preferences::restore_settings_backup,
             preferences::reveal_settings,
+            commit_summary_window::commit_link,
             commit_summary_window::open_commit_summary,
             commit_summary_window::commit_summary_state,
             commit_summary_window::open_summary_commit_link,

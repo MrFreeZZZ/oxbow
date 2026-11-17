@@ -15,6 +15,8 @@
     selected,
     onSelect,
     menuFor,
+    linkFor,
+    copyLink,
     found = null,
     second = null,
     onSecond,
@@ -30,6 +32,8 @@
     onSelect: (id: string) => void;
     /** Entries of a commit's right-click menu; none, no menu. */
     menuFor: (row: HistoryRow) => MenuEntry[];
+    linkFor: (id: string) => Promise<string | null>;
+    copyLink: (url: string) => void;
     /** A search: other commits fade, or only the matches are listed. */
     found?: Found | null;
     /** A second commit picked with ⌘-click, compared with the selected one. */
@@ -73,6 +77,24 @@
     event.preventDefault();
     menu = { x: event.clientX, y: event.clientY, id: row.id, entries };
   }
+
+  $effect(() => {
+    const opened = menu;
+    const snapshot = history;
+    if (!opened) return;
+    const copy = untrack(() => opened.entries.find((entry) => entry.kind === "sub" && entry.label === "Copy"));
+    if (copy?.kind !== "sub") return;
+    const link = copy.entries.find((entry) => entry.label === "Commit Link");
+    if (!link) return;
+    link.off = true;
+    let active = true;
+    linkFor(opened.id).then((url) => {
+      if (!active || menu !== opened || history !== snapshot || !url) return;
+      link.run = () => copyLink(url);
+      link.off = false;
+    }).catch(() => {});
+    return () => { active = false; };
+  });
 
   // When the layout changes, e.g. a checkout moves a branch to the left column, lines and dots
   // glide from their old columns to the new ones instead of jumping.

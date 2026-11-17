@@ -2359,6 +2359,8 @@
               onSelect={select}
               onScroll={(position) => (navigation.scroll = position)}
               menuFor={commitMenu}
+              linkFor={(id) => api.commitLink(repo.path, id)}
+              copyLink={(url) => copyText(url, "Copied the commit link.")}
               {found}
               second={pair ? second : null}
               onSecond={pickSecond}

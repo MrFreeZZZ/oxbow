@@ -203,6 +203,7 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
         { label: "SHA", hint: row.id.slice(0, 7) + "…", run: () => copyText(row.id, `Copied ${row.id.slice(0, 7)}.`) },
         { label: "Short SHA", hint: row.id.slice(0, 7), run: () => copyText(row.id.slice(0, 7), `Copied ${row.id.slice(0, 7)}.`) },
         { label: "Message", run: () => copyMessage(row.id) },
+        { label: "Commit Link", off: true, run: () => {} },
       ],
     },
   ]);
@@ -241,6 +242,7 @@ function bisectMenu(
       { label: "SHA", hint: row.id.slice(0, 7) + "…", run: () => copyText(row.id, `Copied ${row.id.slice(0, 7)}.`) },
       { label: "Short SHA", hint: row.id.slice(0, 7), run: () => copyText(row.id.slice(0, 7), `Copied ${row.id.slice(0, 7)}.`) },
       { label: "Message", run: () => copyMessage(row.id) },
+      { label: "Commit Link", off: true, run: () => {} },
     ],
   });
   return entries;

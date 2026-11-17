@@ -23,7 +23,7 @@
     | { kind: "sep" };
 
   /** An item of a submenu: a label, and a grey hint on the right. */
-  export type SubEntry = { label: string; hint?: string; danger?: boolean; run: () => void };
+  export type SubEntry = { label: string; hint?: string; danger?: boolean; off?: boolean; run: () => void };
 
   /** Icon paths of menu items, from the Branches design. */
   export const menuIcons = {
@@ -246,7 +246,7 @@
   {#if parent?.kind === "sub"}
     <div class="menu submenu" role="menu" aria-label={parent.label} bind:this={subBox} style:left="{subLeft}px" style:top="{subTop}px">
       {#each parent.entries as entry (entry.label)}
-        <button role="menuitem" class:danger={entry.danger} onclick={() => choose(entry.run)}>
+        <button role="menuitem" class:danger={entry.danger} class:off={entry.off} aria-disabled={entry.off} onclick={() => !entry.off && choose(entry.run)}>
           <span>{entry.label}</span>
           {#if entry.hint}<span class="hint">{entry.hint}</span>{/if}
         </button>

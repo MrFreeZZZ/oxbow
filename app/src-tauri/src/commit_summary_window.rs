@@ -34,6 +34,9 @@ struct Context {
 }
 
 fn web_commit(address: &str, id: &str) -> Option<String> {
+    if address.contains(['?', '#', '\\']) || address.chars().any(char::is_control) {
+        return None;
+    }
     if address.contains("://")
         && !["https://", "http://", "ssh://", "git://"]
             .iter()
@@ -112,7 +115,7 @@ fn fetch_identity(address: &str) -> String {
     address.strip_suffix(".git").unwrap_or(address).to_owned()
 }
 
-/// The window opens after the ancestry check; one that takes longer leaves publication unverified.
+/// A slow ancestry check leaves publication unverified.
 const ANCESTRY_QUIET_LIMIT: Duration = Duration::from_secs(2);
 
 fn fetched_commit_url(repo: &Repo, id: &str, remotes: &[RemoteInfo]) -> Option<String> {
@@ -125,6 +128,26 @@ fn fetched_commit_url(repo: &Repo, id: &str, remotes: &[RemoteInfo]) -> Option<S
         ]))
         .ok()?;
     let fetch_head = std::fs::read_to_string(Path::new(path.stdout.trim_end_matches(['\r', '\n']))).ok()?;
+    let upstream = repo.head().ok().and_then(|head| head.branch).and_then(|branch| {
+        repo.run(&GitCommand::new([
+            "for-each-ref",
+            "--format=%(upstream:remotename)",
+            &format!("refs/heads/{branch}"),
+        ]))
+        .ok()
+        .map(|output| output.stdout.trim().to_owned())
+    });
+    let default = repo.default_remote();
+    let mut remotes: Vec<_> = remotes.iter().collect();
+    remotes.sort_by_key(|remote| {
+        if Some(&remote.name) == upstream.as_ref() {
+            0
+        } else if Some(&remote.name) == default.as_ref() {
+            1
+        } else {
+            2
+        }
+    });
     for remote in remotes {
         let Some(url) = web_commit(&remote.fetch_url, id) else {
             continue;
@@ -225,6 +248,24 @@ impl SummaryWindows {
     pub(crate) fn remove(&self, label: &str) {
         self.snapshots.lock().expect("summary windows lock").remove(label);
     }
+}
+
+#[tauri::command]
+pub(crate) async fn commit_link(
+    window: WebviewWindow,
+    session: State<'_, Session>,
+    repository: String,
+    id: String,
+) -> CommandResult<Option<String>> {
+    let repo = expected(current(&session, &window)?, Some(&repository))?;
+    if !matches!(id.len(), 40 | 64) || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("Invalid commit SHA.".into());
+    }
+    crate::session::blocking(move || {
+        let remotes = repo.remotes_info().unwrap_or_default();
+        Ok(fetched_commit_url(&repo, &id, &remotes))
+    })
+    .await
 }
 
 #[tauri::command]
@@ -443,6 +484,97 @@ mod tests {
     }
 
     #[test]
+    fn confirmed_upstream_then_default_then_other_remote() {
+        let dir = oxbow_core::cli::private_temp_folder("oxbow-link-test-").unwrap();
+        let git = |args: &[&str]| run_git(dir.path(), args);
+        git(&["init", "-q", "-b", "topic"]);
+        git(&["commit", "--allow-empty", "-qm", "Published"]);
+        let sha = git(&["rev-parse", "HEAD"]);
+        for name in ["aaa", "origin", "upstream"] {
+            git(&["remote", "add", name, &format!("https://gitlab.local/team/{name}.git")]);
+            git(&["update-ref", &format!("refs/remotes/{name}/topic"), &sha]);
+        }
+        git(&["branch", "--set-upstream-to=upstream/topic"]);
+        let fetch_head = git(&["rev-parse", "--path-format=absolute", "--git-path", "FETCH_HEAD"]);
+        let repo = oxbow_core::Repo::open(dir.path()).unwrap();
+        for names in [
+            vec!["aaa", "origin", "upstream"],
+            vec!["aaa", "origin"],
+            vec!["aaa"],
+            vec![],
+        ] {
+            std::fs::write(
+                &fetch_head,
+                names
+                    .iter()
+                    .map(|name| format!("{sha}\t\tbranch 'topic' of https://gitlab.local/team/{name}\n"))
+                    .collect::<String>(),
+            )
+            .unwrap();
+            let chosen = names
+                .last()
+                .map(|name| format!("https://gitlab.local/team/{name}/-/commit/{sha}"));
+            assert_eq!(
+                super::fetched_commit_url(&repo, &sha, &repo.remotes_info().unwrap()),
+                chosen
+            );
+        }
+        git(&["config", "--unset", "branch.topic.merge"]);
+        std::fs::write(
+            &fetch_head,
+            ["aaa", "origin", "upstream"]
+                .iter()
+                .map(|name| format!("{sha}\t\tbranch 'topic' of https://gitlab.local/team/{name}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        assert_eq!(git(&["config", "branch.topic.remote"]), "upstream");
+        assert_eq!(
+            super::fetched_commit_url(&repo, &sha, &repo.remotes_info().unwrap()),
+            Some(format!("https://gitlab.local/team/origin/-/commit/{sha}"))
+        );
+        git(&["switch", "--detach", "-q"]);
+        std::fs::write(
+            &fetch_head,
+            ["aaa", "origin", "upstream"]
+                .iter()
+                .map(|name| format!("{sha}\t\tbranch 'topic' of https://gitlab.local/team/{name}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        assert_eq!(
+            super::fetched_commit_url(&repo, &sha, &repo.remotes_info().unwrap()),
+            Some(format!("https://gitlab.local/team/origin/-/commit/{sha}"))
+        );
+    }
+
+    #[test]
+    fn rewritten_fetch_url_is_not_publication_evidence_for_the_configured_address() {
+        let dir = oxbow_core::cli::private_temp_folder("oxbow-link-test-").unwrap();
+        let git = |args: &[&str]| run_git(dir.path(), args);
+        git(&["init", "-q", "-b", "main"]);
+        git(&["commit", "--allow-empty", "-qm", "Published elsewhere"]);
+        let sha = git(&["rev-parse", "HEAD"]);
+        git(&["remote", "add", "origin", "https://github.com/team/repo.git"]);
+        git(&[
+            "config",
+            "url.https://github.com/other/.insteadOf",
+            "https://github.com/team/",
+        ]);
+        let fetch_head = git(&["rev-parse", "--path-format=absolute", "--git-path", "FETCH_HEAD"]);
+        std::fs::write(
+            fetch_head,
+            format!("{sha}\t\tbranch 'main' of https://github.com/other/repo\n"),
+        )
+        .unwrap();
+        let repo = oxbow_core::Repo::open(dir.path()).unwrap();
+        assert_eq!(
+            super::fetched_commit_url(&repo, &sha, &repo.remotes_info().unwrap()),
+            None
+        );
+    }
+
+    #[test]
     fn remote_addresses_omit_credentials_in_summary() {
         assert_eq!(
             display_remote_url("https://token@example.com/team/repo.git?secret=value#fragment"),
@@ -470,5 +602,17 @@ mod tests {
         );
         assert_eq!(web_commit("git@github.com:team/../repo", "abc"), None);
         assert_eq!(web_commit("/local/repo.git", "abc"), None);
+        for address in [
+            "https://user:secret@gitlab.local/team/repo.git?token=secret",
+            "https://github.com/team/repo.git#secret",
+            "file://gitlab.local/team/repo.git",
+            "https://gitlab.local/team/../repo.git",
+        ] {
+            assert_eq!(web_commit(address, "abc"), None);
+        }
+        assert_eq!(
+            web_commit("ssh://git@gitlab.example.com:2222/team/repo.git", "abc").as_deref(),
+            Some("https://gitlab.example.com/team/repo/-/commit/abc")
+        );
     }
 }
