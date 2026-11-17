@@ -409,7 +409,7 @@
         // While File History is still bringing a place back (a followed line loads its history
         // first), the place is the one asked for, not how the file was before.
         const { path, commit, at, line } = fileLive ?? { ...nav.file, at: nav.file.at ?? null, line: nav.file.line ?? null };
-        return { view, path, commit, mode: nav.fileMode, at, line };
+        return { view, path, base: nav.file.base, commit, mode: nav.fileMode, at, line };
       }
       case "stashes":
         return { view, stash: stashSel };
@@ -500,7 +500,7 @@
       }
       case "file":
         nav.fileMode = p.mode;
-        nav.file = { path: p.path, commit: p.commit, at: p.at, line: p.line, seq: nav.nextFile() };
+        nav.file = { path: p.path, base: p.base, commit: p.commit, at: p.at, line: p.line, seq: nav.nextFile() };
         break;
       case "stashes":
         stashSel = p.stash;
@@ -2231,8 +2231,8 @@
           <ConflictsView.component folder={repo.path} {history} op={operation} {colorOf} {version} {run} {refresh} />
         {/key}
       {:else if view === "file" && nav.file}
-        {#key repo.path + nav.file.path}
-          <FileHistoryView.component {history} path={nav.file.path} start={nav.file.commit} lookup={(id) => rowsById.get(id)} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "the command" : text}.`)} {version} />
+        {#key JSON.stringify([repo.path, nav.file.path, nav.file.base])}
+          <FileHistoryView.component {history} path={nav.file.path} base={nav.file.base} start={nav.file.commit} lookup={(id) => rowsById.get(id)} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "the command" : text}.`)} {version} />
         {/key}
       {:else if view === "browse" && browsing}
         {#key repo.path}

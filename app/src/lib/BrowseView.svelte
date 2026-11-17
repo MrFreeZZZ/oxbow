@@ -242,8 +242,7 @@
     requestAnimationFrame(() => (comparing = true));
   }
 
-  // Blame starts at this commit: the file as it is here, and the commits that made it so.
-  const fileHistory = (target: string) => nav.openFile(target, rev, rev);
+  const fileHistory = (target: string) => nav.openFile(target, rev, { base: rev, at: rev });
 
   function rowMenu(e: MouseEvent, item: TreeItem) {
     e.preventDefault();

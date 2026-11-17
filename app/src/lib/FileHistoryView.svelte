@@ -7,6 +7,7 @@
   import { tick, untrack } from "svelte";
   import { api, stopped } from "./api";
   import { FindQuery } from "./findQuery.svelte";
+  import { ancestors } from "./commits";
   import { nav } from "./nav.svelte";
   import { confirm } from "./confirm.svelte";
   import { diffSettings, prefs, wholeByDefault } from "./prefs.svelte";
@@ -28,6 +29,7 @@
   let {
     history,
     path,
+    base,
     start,
     lookup,
     copy,
@@ -35,7 +37,9 @@
   }: {
     history: History;
     path: string;
-    /** The commit to select first; HEAD's latest change when missing. */
+    /** The revision the list walks back from; null for HEAD. */
+    base: string | null;
+    /** The commit to select first; the latest change in the list when missing. */
     start: string | null;
     lookup: (id: string) => HistoryRow | undefined;
     copy: (text: string) => void;
@@ -92,21 +96,24 @@
   $effect(() => {
     const p = path;
     historyKey;
+    const rev = base;
+    let current = true;
     error = null;
-    api.fileHistory(p, null, LOG).then(
+    api.fileHistory(p, rev, LOG).then(
       (h) => {
-        if (path !== p) return;
+        if (!current) return;
         file = h;
-        if (!selected || !h.commits.some((c) => c.id === selected)) {
+        if (!selected || (!h.commits.some((c) => c.id === selected) && !h.elsewhere.some((c) => c.id === selected))) {
           const wanted = start && (h.commits.some((c) => c.id === start) || h.elsewhere.some((c) => c.id === start)) ? start : h.commits[0]?.id ?? null;
           if (wanted && h.elsewhere.some((c) => c.id === wanted)) showElsewhere = true;
           selected = wanted;
         }
       },
       (err) => {
-        if (path === p && !stopped(err)) error = String(err);
+        if (current && !stopped(err)) error = String(err);
       },
     );
+    return () => { current = false; };
   });
 
   // The saved versions, again on every reload: a save in an editor is told as one. File History
@@ -164,7 +171,10 @@
     const goal = nav.file;
     if (!goal || goal.path !== path) return;
     untrack(() => {
-      if (goal.commit && file && byId.has(goal.commit)) selected = goal.commit;
+      if (goal.commit && file) {
+        if (file.elsewhere.some((c) => c.id === goal.commit)) showElsewhere = true;
+        if (byId.has(goal.commit)) selected = goal.commit;
+      }
       at = goal.at ?? null;
       if (!goal.line) {
         line = null;
@@ -353,11 +363,16 @@
   let menu = $state<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
   /** Compare with Working Copy: a commit's file beside the file on disk, in place of the diff. */
   let comparing = $state<FileCommit | null>(null);
-  const onOther = (c: FileCommit) => !byId.has(c.id) || !!file?.elsewhere.some((e) => e.id === c.id);
+  const outsideHistory = (c: FileCommit) => !!file?.elsewhere.some((e) => e.id === c.id);
+  function inHead(c: FileCommit): boolean | null {
+    if (!base) return !outsideHistory(c);
+    if (ancestors(history, headCommit).has(c.id)) return true;
+    return history.truncated || !lookup(c.id) ? null : false;
+  }
   function changeMenu(event: MouseEvent, c: FileCommit) {
     event.preventDefault();
     const entries: MenuEntry[] = [{ kind: "header", label: `${splitPath(c.path).name} in ${shortId(c.id)}` }];
-    entries.push(...commitFileEntries(c, c.id, { summary: c.summary, inHead: !onOther(c), compare: () => (select(c.id), (comparing = c)) }));
+    entries.push(...commitFileEntries(c, c.id, { summary: c.summary, inHead: inHead(c), compare: () => (select(c.id), (comparing = c)) }));
     if (c.status !== "deleted") entries.push({ kind: "item", label: "Browse Files at This Commit", icon: menuIcons.folder, run: () => nav.openBrowse(c.id, null, c.path) });
     entries.push({ kind: "sep" }, { kind: "item", label: "Copy SHA", icon: menuIcons.copy, run: () => copy(c.id) });
     const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
@@ -386,8 +401,14 @@
 
   /** Whether Blame's revision has this commit: otherwise it offers Blame Here. */
   function inRevision(c: FileCommit): boolean {
-    if (!file || file.elsewhere.some((x) => x.id === c.id)) return false;
-    if (!at) return true;
+    if (!at) return inHead(c) === true;
+    if (c.id === at.rev) return true;
+    if (c.parents[0] === at.rev || !file) return false;
+    if (base && at.rev !== base && lookup(at.rev) && lookup(c.id)) {
+      if (ancestors(history, at.rev).has(c.id)) return true;
+      if (!history.truncated) return false;
+    }
+    if (outsideHistory(c)) return false;
     const i = file.commits.findIndex((x) => x.id === c.id);
     const here = file.commits.findIndex((x) => x.id === at!.rev);
     if (here >= 0) return i >= here;
@@ -601,7 +622,7 @@
       <p class="error" role="alert">{error}</p>
     {:else if file}
       <div class="top">
-        <span>{file.commits.length}{file.more ? "+" : ""} {file.commits.length === 1 ? "change" : "changes"} to this file</span>
+        <span title={base ?? undefined}>{file.commits.length}{file.more ? "+" : ""} {file.commits.length === 1 ? "change" : "changes"} {base ? `through ${shortId(base)}` : "to this file"}</span>
         <span class="follows" title="git log --follow">
           <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 5.5h9M9 3l2.5 2.5L9 8M13.5 10.5h-9M7 8l-2.5 2.5L7 13" /></svg>Follows renames
         </span>
@@ -621,7 +642,7 @@
       {#if file.elsewhere.length}
         <div class="elsewhere">
           <svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3" stroke-dasharray="2 2" /></svg>
-          <span>{file.elsewhere.length} more {file.elsewhere.length === 1 ? "change" : "changes"} on other branches</span>
+          <span>{file.elsewhere.length} more {file.elsewhere.length === 1 ? "change" : "changes"} {base ? "outside this history" : "on other branches"}</span>
           <button onclick={() => (showElsewhere = !showElsewhere)}>{showElsewhere ? "Hide" : "Show"}</button>
         </div>
       {/if}
@@ -640,7 +661,7 @@
           <div class="sep"></div>
         {/if}
         {#each file.commits as c (c.id)}{@render commitRow(c, false)}{/each}
-        {#if !file.commits.length}<p class="hint">No commit on {headName} has this file.</p>{/if}
+        {#if !file.commits.length}<p class="hint">{base ? `No changes to this file through ${shortId(base)}.` : `No commit on ${headName} has this file.`}</p>{/if}
       </div>
       <p class="hint">
         {mode === "blame" ? "Click a commit to highlight its lines. Click a line number to see every change to that line." : "Click a commit to see what it changed in this file."}
@@ -669,7 +690,7 @@
         </div>
         {#if pick.status === "added"}<p class="note">This commit created the file.</p>{/if}
         {#if renamedAt(pick)}<p class="note">This commit renamed it from <span class="mono">{pick.oldPath}</span>.</p>{/if}
-        {#if !byId.has(pick.id) || file?.elsewhere.some((c) => c.id === pick.id)}<p class="note">This change is on another branch, not on {headName}.</p>{/if}
+        {#if outsideHistory(pick)}<p class="note">{base ? `This change is outside the history through ${shortId(base)}.` : `This change is on another branch, not on ${headName}.`}</p>{/if}
         <div class="scroll" use:diffScroll={color}>
           <DiffView
             {diffs}

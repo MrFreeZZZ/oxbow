@@ -13,10 +13,10 @@ function loadRecent(): Record<string, string[]> {
 }
 
 class Nav {
-  /** File History's file and the commit to start on; null when it isn't open. Back and Forward
+  /** File History's file, history base (null for HEAD), and the commit to start on; null when it isn't open. Back and Forward
    *  also bring back Blame's revision and the line that was followed. `seq` tells each request
    *  from the one before, even for the same file. */
-  file = $state<{ path: string; commit: string | null; at?: { rev: string; path: string } | null; line?: number | null; seq: number } | null>(null);
+  file = $state<{ path: string; base: string | null; commit: string | null; at?: { rev: string; path: string } | null; line?: number | null; seq: number } | null>(null);
   /** How File History is now: its file, selected commit, Blame's revision and followed line;
    *  `seq` is the request of `file` it has finished bringing back, so until it matches, File
    *  History is still on its way there and this is how it was before. */
@@ -62,10 +62,9 @@ class Nav {
   /** The repository the recent files are kept for. */
   repo = $state("");
 
-  /** File History of `path` with `commit` selected; `at`: Blame of the file as that commit has
-   *  it, as from Browse Files at This Commit. */
-  openFile(path: string, commit: string | null = null, at: string | null = null) {
-    this.file = { path, commit, at: at ? { rev: at, path } : null, seq: this.nextFile() };
+  /** File History of `path` with `commit` selected. Browse can set the history base and Blame revision. */
+  openFile(path: string, commit: string | null = null, { base = null, at = null }: { base?: string | null; at?: string | null } = {}) {
+    this.file = { path, base, commit, at: at ? { rev: at, path } : null, seq: this.nextFile() };
     if (!this.repo) return;
     const list = [path, ...(this.recentFiles[this.repo] ?? []).filter((p) => p !== path)].slice(0, 8);
     this.recentFiles = { ...this.recentFiles, [this.repo]: list };

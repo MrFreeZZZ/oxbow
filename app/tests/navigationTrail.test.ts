@@ -6,7 +6,7 @@ import {
 } from "../src/lib/backStack.ts";
 
 const history = (commit: string, scroll: HistoryPosition | null = null): Place => ({ view: "history", commit, scroll });
-const file: Place = { view: "file", path: "a.txt", commit: "visible", mode: "changes", at: null, line: null };
+const file: Place = { view: "file", path: "a.txt", base: null, commit: "visible", mode: "changes", at: null, line: null };
 
 function navigation() {
   const state = newNavigationTrail();
