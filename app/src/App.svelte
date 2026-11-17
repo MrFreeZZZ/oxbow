@@ -1426,7 +1426,7 @@
 
   /** The right-click menu of a commit in the graph (commitMenu.ts). */
   function commitMenu(row: HistoryRow): MenuEntry[] {
-    return commitMenuOf(row, { history, ctx: branchCtx, headStack, run, copyText, copyMessage, openStack, openSplit, openFixes, openCompare, openBrowse: (rev, label) => nav.openBrowse(rev, label), patchTarget, openPull });
+    return commitMenuOf(row, { history, ctx: branchCtx, headStack, run, copyText, copyMessage, openStack, openSplit, openFixes, openCompare, openBrowse: (rev, label) => nav.openBrowse(rev, label), patchTarget, applyPatches, openPull });
   }
 
   /** G, B or S while bisecting: the answer for the commit under test. */

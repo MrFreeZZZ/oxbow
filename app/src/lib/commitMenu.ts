@@ -37,6 +37,7 @@ export interface CommitMenuApp {
   openBrowse: (rev: string, label: string | null) => void;
   /** The commits Save as Patches writes for a row. */
   patchTarget: (row: HistoryRow) => PatchTarget;
+  applyPatches: () => void;
   /** The Pull Request screen of a branch: its pull request, or the form for a new one. */
   /** The Pull Request screen of `branch`; `forge` "gitlab": its merge request. */
   openPull: (branch: string, number?: number | null, forge?: "github" | "gitlab") => void;
@@ -175,7 +176,17 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
   }
   group(tagging);
   const saving = app.patchTarget(row);
-  group([item(saving.since ? `Save ${saving.count} Commits as Patches…` : "Save as Patch…", menuIcons.patch, () => run(savePatchesRequest(saving)))]);
+  const rowBranch = row.graph.branch ?? (row.graph.color === 0 ? history.trunk : null);
+  const onBranch = !!history.head.branch && !!rowBranch && rowBranch === history.head.branch;
+  group([
+    item(saving.since ? `Save ${saving.count} Commits as Patches…` : "Save as Patch…", menuIcons.patch, () => run(savePatchesRequest(saving))),
+    {
+      kind: "item", label: "Apply Patches…", icon: menuIcons.patch,
+      off: !onBranch || !!history.operation,
+      detail: !onBranch ? "Switch to this branch to apply patches." : history.operation ? "Finish or abort what git is in the middle of first." : undefined,
+      run: app.applyPatches,
+    },
+  ]);
   // Compare this commit, named by its branch when one ends here, with HEAD or the default branch.
   const branch = row.labels.find((l) => l.kind === "local");
   const target = branch ? compareRef("local", branch.name) : row.id;
