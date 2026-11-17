@@ -4,7 +4,7 @@
 import type { History, HistoryRow } from "./types";
 import type { BisectMark } from "./types";
 import type { Request } from "./confirm.svelte";
-import { menuIcons, type MenuEntry } from "./Menu.svelte";
+import { menuIcons, type MenuEntry, type SubEntry } from "./Menu.svelte";
 import { detachRequest, keepRequest, newBranchRequest, switchRequest, type BranchContext } from "./branches";
 import { mergeRequest } from "./merge";
 import { savePatchesRequest, type PatchTarget } from "./patches";
@@ -23,6 +23,7 @@ import { dropsPushed, lockedCommit, lockedNote, protectedHead } from "./protect"
 export interface CommitMenuApp {
   history: History | null;
   ctx: BranchContext | null;
+  selectedRow: HistoryRow | null;
   /** The checked-out branch's own commits, above the trunk, which can be rewritten in place. */
   headStack: Set<string>;
   run: (request: Request | Promise<Request>) => unknown;
@@ -192,7 +193,8 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
   const target = branch ? compareRef("local", branch.name) : row.id;
   const against = [...new Set([isHead ? null : compareHead(history.head.branch), history.trunkRef])].filter((b): b is string => !!b && b !== target);
   const looking: MenuEntry[] = [browseItem(row, item, app)];
-  if (against.length) looking.push({ kind: "sub", label: "Compare", icon: menuIcons.compare, entries: against.map((b) => ({ label: `With ${compareLabel(b)}`, run: () => app.openCompare(b, target) })) });
+  const comparisons = compareEntries(row, app, against, target);
+  if (comparisons.length) looking.push({ kind: "sub", label: "Compare", icon: menuIcons.compare, entries: comparisons });
   group(looking);
   group([
     {
@@ -233,7 +235,8 @@ function bisectMenu(
   const target = branch ? compareRef("local", branch.name) : row.id;
   const against = [bisect.startIsBranch ? compareRef("local", bisect.start) : null, history.trunkRef].filter((b, i, all): b is string => !!b && b !== target && all.indexOf(b) === i);
   entries.push({ kind: "sep" }, browseItem(row, item, app));
-  if (against.length) entries.push({ kind: "sub", label: "Compare", icon: menuIcons.compare, entries: against.map((b) => ({ label: `With ${compareLabel(b)}`, run: () => app.openCompare(b, target) })) });
+  const comparisons = compareEntries(row, app, against, target);
+  if (comparisons.length) entries.push({ kind: "sub", label: "Compare", icon: menuIcons.compare, entries: comparisons });
   entries.push({
     kind: "sub",
     label: "Copy",
@@ -245,6 +248,15 @@ function bisectMenu(
       { label: "Commit Link", off: true, run: () => {} },
     ],
   });
+  return entries;
+}
+
+function compareEntries(row: HistoryRow, app: CommitMenuApp, against: string[], target: string): SubEntry[] {
+  const entries: SubEntry[] = against.map((b) => ({ label: `With ${compareLabel(b)}`, run: () => app.openCompare(b, target) }));
+  const selected = app.selectedRow;
+  if (selected && !selected.worktree && selected.id !== row.id) {
+    entries.push({ label: "With Selected Commit…", hint: selected.id.slice(0, 7), run: () => app.openCompare(selected.id, row.id) });
+  }
   return entries;
 }
 
