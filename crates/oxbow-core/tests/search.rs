@@ -84,7 +84,12 @@ fn branch_filter_limits_the_search() {
 fn a_sha_prefix_resolves_anywhere_in_the_repository() {
     let mut fx = Fixture::new();
     let root = fx.commit("a.txt", "1\n", "Root");
-    fx.commit("a.txt", "2\n", "Second");
+    let second = fx.commit("a.txt", "2\n", "Second");
+    fx.git(&["branch", "0000000", &second]);
+    fx.git(&["tag", "1111111", &second]);
+    fx.git(&["branch", &root[..7], &second]);
+    fx.git(&["tag", "-a", "-m", "Release", "release", &second]);
+    let tag_id = fx.git(&["rev-parse", "refs/tags/release"]);
     let repo = Repo::open(fx.path()).unwrap();
     assert_eq!(repo.resolve_commit(&root[..7]).as_deref(), Some(root.as_str()));
     assert_eq!(
@@ -94,6 +99,25 @@ fn a_sha_prefix_resolves_anywhere_in_the_repository() {
     assert_eq!(repo.resolve_commit("main"), None);
     assert_eq!(repo.resolve_commit("abc"), None);
     assert_eq!(repo.resolve_commit("0000000"), None);
+    assert_eq!(repo.resolve_commit("1111111"), None);
+    assert_eq!(repo.resolve_commit(&tag_id), None);
+}
+
+#[test]
+fn a_sha_prefix_shared_by_two_commits_is_ambiguous() {
+    let mut fx = Fixture::new();
+    let tree = fx.git(&["write-tree"]);
+    // These messages produce distinct commits with the same prefix on the fixture clock.
+    let first = fx.git(&["commit-tree", &tree, "-m", "Collision 140"]);
+    let second = fx.git(&["commit-tree", &tree, "-m", "Collision 20"]);
+    assert_ne!(first, second);
+    assert_eq!(&first[..4], &second[..4]);
+
+    let repo = Repo::open(fx.path()).unwrap();
+    assert_eq!(repo.resolve_commit(&first[..4]), None);
+    for id in [&first, &second] {
+        assert_eq!(repo.resolve_commit(&id[..5]).as_deref(), Some(id.as_str()));
+    }
 }
 
 #[test]
