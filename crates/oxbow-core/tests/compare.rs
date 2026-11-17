@@ -51,6 +51,23 @@ fn tip_to_tip_also_shows_the_base_side_undone() {
 }
 
 #[test]
+fn unrelated_histories_compare_tips() {
+    let mut fx = Fixture::new();
+    let main = fx.commit("main.txt", "main\n", "Main root");
+    fx.git(&["switch", "-q", "--orphan", "other"]);
+    let other = fx.commit("other.txt", "other\n", "Other root");
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let c = repo.compare("main", "other", CompareMode::Split).unwrap();
+    assert_eq!(c.mode, CompareMode::Tips);
+    assert!(c.merge_base.is_none());
+    assert_eq!((&c.from, &c.target_id), (&main, &other));
+    assert_eq!(c.command, "git diff main..other");
+    let files: Vec<_> = c.files.iter().map(|f| (f.file.path.as_str(), f.only_base)).collect();
+    assert_eq!(files, [("main.txt", true), ("other.txt", false)]);
+}
+
+#[test]
 fn unknown_names_are_errors() {
     let (fx, ..) = diverged();
     let repo = Repo::open(fx.path()).unwrap();

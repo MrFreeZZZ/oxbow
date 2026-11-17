@@ -80,11 +80,11 @@ impl Repo {
     pub fn compare(&self, base: &str, target: &str, mode: CompareMode) -> Result<Comparison> {
         let base_id = self.compare_commit_id(base)?;
         let target_id = self.compare_commit_id(target)?;
-        let merge_base = self
-            .run(&GitCommand::new(["merge-base", &base_id, &target_id]))
-            .ok()
-            .map(|out| out.stdout.trim().to_owned())
-            .filter(|id| !id.is_empty());
+        let merge_base = match self.run(&GitCommand::new(["merge-base", &base_id, &target_id])) {
+            Ok(out) => Some(out.stdout.trim().to_owned()),
+            Err(Error::Command { code: Some(1), .. }) => None,
+            Err(err) => return Err(err),
+        };
         let mode = if merge_base.is_none() { CompareMode::Tips } else { mode };
 
         let counts = self.run(&GitCommand::new([
