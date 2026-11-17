@@ -182,7 +182,7 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
   group([
     item(saving.since ? `Save ${saving.count} Commits as Patches…` : "Save as Patch…", menuIcons.patch, () => run(savePatchesRequest(saving))),
     {
-      kind: "item", label: "Apply Patches…", icon: menuIcons.patch,
+      kind: "item", label: "Apply Patches…", icon: menuIcons.applyPatch,
       off: !onBranch || !!history.operation,
       detail: !onBranch ? "Switch to this branch to apply patches." : history.operation ? "Finish or abort what git is in the middle of first." : undefined,
       run: app.applyPatches,
