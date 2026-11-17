@@ -236,6 +236,8 @@
     if (!request) focusedFor = null;
     const key = request && (confirm.phase === "ask" || recovery?.button) ? `${confirm.phase}:${request.title}` : null;
     if (!key || key === focusedFor) return;
+    // A disabled primary button can't take focus. Wait for the plan if there's no text field.
+    if (confirm.planning && !request?.fields?.some((field) => field.text)) return;
     focusedFor = key;
     requestAnimationFrame(() => {
       // The first text box, when a sheet has several.
@@ -598,7 +600,7 @@
             {/if}
           {:else}
             <button class="button" onclick={() => confirm.cancel()} title={withKeys("Cancel", "Escape")}>Cancel</button>
-            <button class="button primary" class:danger={request.danger} bind:this={goButton} disabled={!!request.invalid} title={request.invalid ?? withKeys(request.button, multiline ? "Mod+Enter" : "Enter")} onclick={() => confirm.go()}>{request.button}</button>
+            <button class="button primary" class:danger={request.danger} bind:this={goButton} disabled={!confirm.canGo} title={request.invalid ?? withKeys(request.button, multiline ? "Mod+Enter" : "Enter")} onclick={() => confirm.go()}>{request.button}</button>
           {/if}
         </div>
       {/if}
