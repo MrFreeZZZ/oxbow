@@ -25,6 +25,8 @@
     diffsOf,
     pending,
     error,
+    diffError,
+    onRetry,
     lastOpen,
     lastDiffs,
     needle,
@@ -64,6 +66,8 @@
     /** Files still to come, past the pages read. */
     pending: number;
     error: string | null;
+    diffError: string | null;
+    onRetry?: () => void;
     /** A file of the commit Amend replaces, its diff in that commit shown instead. */
     lastOpen: string | null;
     lastDiffs: FileDiff[];
@@ -267,6 +271,12 @@
 {/if}
 <div class="scroll" bind:this={scroller} use:diffScroll={color}>
   {#if error}<p class="error" role="alert">{error}</p>{/if}
+  {#if diffError}
+    <div class="error diff-error">
+      <span role="alert">{diffError}</span>
+      {#if onRetry}<button class="button small" onclick={onRetry}>Retry</button>{/if}
+    </div>
+  {/if}
   {#if openFile && openUnstaged && openStaged && !lastOpen}<div class="tip"><TipCard id="partlyStaged" /></div>{/if}
   {#if lastOpen}
     <DiffView diffs={lastDiffs} {color} {whole} onToggleWhole={() => (whole = !whole)} tools={false} />
@@ -441,6 +451,12 @@
     margin: 12px 20px 0;
     font-size: var(--text-small);
     color: var(--red);
+  }
+  .diff-error {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
   }
   .nothing {
     margin: var(--space-5);

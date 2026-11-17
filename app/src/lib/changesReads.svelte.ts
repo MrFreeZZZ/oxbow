@@ -31,6 +31,7 @@ export class ChangesReads {
   /** The changelists, read with the files; null until read, or when they can't be. */
   lists = $state<Changelists | null>(null);
   error = $state<string | null>(null);
+  diffError = $state<string | null>(null);
   /** Goes up with each reading of the files, so the diffs are read again. */
   loads = $state(0);
   /** The diffs in the diff column, and what they were read for: until a new read is in, the
@@ -95,7 +96,7 @@ export class ChangesReads {
     const t = this.tree;
     const g = grouped;
     if (!t || !target) {
-      this.#asked = null;
+      this.#start(null);
       this.diffs = [];
       this.diffsOf = target;
       return;
@@ -118,19 +119,37 @@ export class ChangesReads {
     const ask: Ask = { side: target.side, paths, whole: wholeFile, reading: this.#reading, settings, round, target };
     // The counts of the same reading came in: the diffs shown or on their way are still the ones asked for.
     if (this.#asked && sameAsk(this.#asked, ask)) return;
+    this.#start(ask);
+  }
+
+  get canRetry() {
+    return this.diffError !== null && this.more === null;
+  }
+
+  retry() {
+    if (this.canRetry) this.#start(this.#asked);
+  }
+
+  #start(ask: Ask | null) {
     this.#asked = ask;
-    const first = paths.length ? api.workingDiffPage(paths, target.side, wholeFile, this.#reading, 0, PAGE_LINES, LANES[target.side]) : Promise.resolve({ diffs: [], next: null, files: 0 });
+    // Only the first page of this request can supply the next offset.
+    this.more = null;
+    this.pending = 0;
+    this.#loadingMore = false;
+    this.diffError = null;
+    if (!ask) return;
+    const first = ask.paths.length ? api.workingDiffPage(ask.paths, ask.side, ask.whole, ask.reading, 0, PAGE_LINES, LANES[ask.side]) : Promise.resolve({ diffs: [], next: null, files: 0 });
     first.then(
       (page) => {
         if (this.#asked !== ask) return;
         this.diffs = page.diffs;
-        this.diffsOf = target;
+        this.diffsOf = ask.target;
         this.more = page.next;
         this.pending = page.files - page.diffs.length;
         this.#diffsIn();
       },
       (err) => {
-        if (this.#asked === ask && !stopped(err)) this.error = String(err);
+        if (this.#asked === ask && !stopped(err)) this.diffError = String(err);
       },
     );
   }
@@ -141,17 +160,19 @@ export class ChangesReads {
     const from = this.more;
     if (!ask || from === null || this.#loadingMore) return;
     this.#loadingMore = true;
+    this.diffError = null;
     api.workingDiffPage(ask.paths, ask.side, ask.whole, ask.reading, from, PAGE_LINES, LANES[ask.side]).then(
       (page) => {
-        this.#loadingMore = false;
         if (this.#asked !== ask || this.more !== from) return;
+        this.#loadingMore = false;
         this.diffs = [...this.diffs, ...page.diffs];
         this.more = page.next;
         this.pending = Math.max(0, this.pending - page.diffs.length);
       },
       (err) => {
+        if (this.#asked !== ask) return;
         this.#loadingMore = false;
-        if (this.#asked === ask && !stopped(err)) this.error = String(err);
+        if (!stopped(err)) this.diffError = String(err);
       },
     );
   }
@@ -159,7 +180,7 @@ export class ChangesReads {
   /** The panel closes: its reads stop, their answers would go nowhere. */
   stop() {
     this.#load++;
-    this.#asked = null;
+    this.#start(null);
     api.stopReads(Object.values(LANES)).catch(() => {});
   }
 }

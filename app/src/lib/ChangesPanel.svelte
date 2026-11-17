@@ -1092,6 +1092,8 @@
         {diffsOf}
         {pending}
         {error}
+        diffError={reads.diffError}
+        onRetry={reads.canRetry ? () => reads.retry() : undefined}
         {lastOpen}
         {lastDiffs}
         {needle}
