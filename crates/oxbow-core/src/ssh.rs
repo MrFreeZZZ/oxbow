@@ -70,9 +70,14 @@ pub struct SshTarget {
 
 impl SshTarget {
     pub fn login(&self) -> String {
+        let host = self
+            .host
+            .strip_prefix('[')
+            .and_then(|host| host.strip_suffix(']'))
+            .unwrap_or(&self.host);
         match &self.user {
-            Some(user) => format!("{user}@{}", self.host),
-            None => self.host.clone(),
+            Some(user) => format!("{user}@{host}"),
+            None => host.to_owned(),
         }
     }
 
@@ -91,10 +96,23 @@ pub fn ssh_target(url: &str) -> Option<SshTarget> {
             Some((user, host)) => (Some(user.to_owned()), host),
             None => (None, authority),
         };
-        let (host, port) = match hostport.rsplit_once(':') {
-            Some((host, port)) if !host.is_empty() => (host, port.parse().ok()),
-            _ => (hostport, None),
+        let (host, suffix) = if hostport.starts_with('[') {
+            hostport.split_at(hostport.find(']')? + 1)
+        } else {
+            hostport.split_at(hostport.find(':').unwrap_or(hostport.len()))
         };
+        let port = if suffix.is_empty() {
+            None
+        } else {
+            let port = suffix.strip_prefix(':')?;
+            if !port.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            Some(port.parse::<std::num::NonZeroU16>().ok()?.get())
+        };
+        if !valid_host(host) {
+            return None;
+        }
         return Some(SshTarget {
             user,
             host: host.to_owned(),
@@ -107,20 +125,37 @@ pub fn ssh_target(url: &str) -> Option<SshTarget> {
     }
     // scp-like: [user@]host:path, where the host part has no slash.
     let (authority, path) = url.split_once(':')?;
+    let (authority, path) = if authority.contains('[') && !authority.contains('/') {
+        let end = url.find(']')? + 1;
+        (&url[..end], url[end..].strip_prefix(':')?)
+    } else {
+        (authority, path)
+    };
     // A single letter is a Windows drive, as git reads it.
     if authority.len() < 2 || authority.contains('/') || path.is_empty() {
         return None;
     }
     let (user, host) = match authority.rsplit_once('@') {
-        Some((user, host)) => (Some(user.to_owned()), host.to_owned()),
-        None => (None, authority.to_owned()),
+        Some((user, host)) => (Some(user.to_owned()), host),
+        None => (None, authority),
     };
+    if !valid_host(host) {
+        return None;
+    }
     Some(SshTarget {
         user,
-        host,
+        host: host.to_owned(),
         port: None,
         path: path.to_owned(),
     })
+}
+
+fn valid_host(host: &str) -> bool {
+    let host = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    !host.is_empty() && !host.contains(['[', ']']) && !host.contains(char::is_whitespace)
 }
 
 /// Private keys `ssh` tries on its own, in its order, that exist in `~/.ssh`.
@@ -196,20 +231,7 @@ impl Repo {
     }
 }
 
-fn check(remote: &str, url: &str, target: &SshTarget) -> SshCheck {
-    let mut steps = Vec::new();
-    let (agent_code, agent_out) = ask("ssh-add", &["-l".to_owned()]);
-    // 0: keys listed, 1: an empty agent, 2: no agent at all.
-    let agent_has_keys = agent_code == Some(0);
-    steps.push(SshStep {
-        command: "ssh-add -l".into(),
-        output: if agent_out.is_empty() {
-            "The agent has no identities.".into()
-        } else {
-            agent_out.clone()
-        },
-        bad: false,
-    });
+fn probe_args(target: &SshTarget) -> Vec<String> {
     let mut args = vec![
         "-T".to_owned(),
         "-o".to_owned(),
@@ -221,12 +243,29 @@ fn check(remote: &str, url: &str, target: &SshTarget) -> SshCheck {
         args.push("-p".to_owned());
         args.push(port.to_string());
     }
-    args.push(target.login());
-    let (_, out) = ask("ssh", &args);
-    let mut shown = format!("ssh -T {}", target.login());
-    if let Some(port) = target.port {
-        shown = format!("ssh -T -p {port} {}", target.login());
-    }
+    args.extend(["--".to_owned(), target.login()]);
+    args
+}
+
+fn check(remote: &str, url: &str, target: &SshTarget) -> SshCheck {
+    let mut steps = Vec::new();
+    let (agent_code, agent_out) = ask("ssh-add", &["-l".to_owned()]);
+    // 0: keys listed, 1: an empty agent, 2: no agent at all.
+    let agent_has_keys = agent_code == Some(0);
+    steps.push(SshStep {
+        command: "ssh-add -l".into(),
+        output: if agent_out.is_empty() {
+            "The agent has no identities.".into()
+        } else {
+            agent_out
+        },
+        bad: false,
+    });
+    let (_, out) = ask("ssh", &probe_args(target));
+    let shown = match target.port {
+        Some(port) => format!("ssh -T -p {port} -- {}", target.login()),
+        None => format!("ssh -T -- {}", target.login()),
+    };
     let keys = default_keys();
     let key = keys.first().cloned();
     let locked = key.as_deref().is_some_and(has_passphrase);
@@ -356,6 +395,70 @@ mod tests {
         assert!(ssh_target("https://github.com/acme/api.git").is_none());
         assert!(ssh_target("/Users/anna/repos/api").is_none());
         assert!(ssh_target("C:/repos/api").is_none());
+    }
+
+    #[test]
+    fn ssh_addresses_require_a_host_and_a_valid_explicit_port() {
+        for url in [
+            "ssh:///group/repo",
+            "ssh://git@/group/repo",
+            "ssh://:22/group/repo",
+            "git@:group/repo",
+            "ssh://[]/group/repo",
+            "ssh://host:/group/repo",
+            "ssh://host:zero/group/repo",
+            "ssh://host:0/group/repo",
+            "ssh://host:65536/group/repo",
+        ] {
+            assert!(ssh_target(url).is_none(), "{url}");
+        }
+    }
+
+    #[test]
+    fn ipv6_works_in_scp_and_ssh_urls() {
+        let scp = ssh_target("git@[2001:db8::1]:group/repo").unwrap();
+        assert_eq!(scp.login(), "git@2001:db8::1");
+        assert_eq!(scp.path, "group/repo");
+        assert_eq!(scp.port, None);
+        assert_eq!(scp.https_url(), "https://[2001:db8::1]/group/repo");
+        let url = ssh_target("git+ssh://[2001:db8::1]:65535/group/repo").unwrap();
+        assert_eq!(url.login(), "2001:db8::1");
+        assert_eq!(url.port, Some(65535));
+        let url = ssh_target("ssh://[::1]/group/repo").unwrap();
+        assert_eq!(url.login(), "::1");
+        assert_eq!(url.port, None);
+    }
+
+    #[test]
+    fn ssh_probe_puts_the_destination_after_all_options() {
+        let target = ssh_target("ssh://git@example.com:2222/group/repo").unwrap();
+        assert_eq!(
+            probe_args(&target),
+            [
+                "-T",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
+                "-p",
+                "2222",
+                "--",
+                "git@example.com"
+            ]
+        );
+        let target = ssh_target("example.com:group/repo").unwrap();
+        assert_eq!(
+            probe_args(&target),
+            [
+                "-T",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
+                "--",
+                "example.com"
+            ]
+        );
     }
 
     #[test]
