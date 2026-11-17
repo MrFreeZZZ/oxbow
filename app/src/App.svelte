@@ -1153,12 +1153,15 @@
     return out;
   }
 
+  /** A sheet keeps the window's commands until it closes, apart from opening other windows or zooming. */
+  function windowCommandsFree(): boolean {
+    return !confirm.request && !start.sheet && !document.querySelector('[aria-modal="true"]');
+  }
+
   /** Run a window-wide shortcut. False when it can't run here and now, so the key does what it
    *  would do anyway, e.g. ⌘Z in a text field. */
   function shortcutKey(id: ShortcutId, event: KeyboardEvent): boolean {
-    // A sheet keeps the keyboard: the window's commands wait until it closes, but for those
-    // that open another window or zoom.
-    const free = !confirm.request && !start.sheet && !document.querySelector('[aria-modal="true"]');
+    const free = windowCommandsFree();
     const inRepo = !!history && free && !overviewShown;
     switch (id) {
       case "repositories":
@@ -1883,7 +1886,9 @@
     const account = listen("account-changed", () => repo && github.accountChanged());
     const closing = getCurrentWindow().onCloseRequested(closeRequested);
     const picked = getCurrentWindow().listen<ShortcutId>("menu-command", (event) => fromMenu(event.payload));
-    const recent = getCurrentWindow().listen<string>("menu-open", (event) => void load(event.payload));
+    const recent = getCurrentWindow().listen<string>("menu-open", (event) => {
+      if (!loading && windowCommandsFree()) void load(event.payload);
+    });
     // Another window trusted a repository: git runs its settings here too.
     const trusted = listen<string>("trust-changed", (event) => {
       session.trusted(event.payload);

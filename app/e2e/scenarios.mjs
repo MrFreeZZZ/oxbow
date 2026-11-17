@@ -443,6 +443,43 @@ export const SCENARIOS = [
     },
   },
   {
+    name: "open recent during confirmation",
+    async run(ctx) {
+      const a = repo(`${ctx.dir}/repo-a`, 1);
+      const b = repo(`${ctx.dir}/repo-b`, 1);
+      const original = read(a, "src/f1.txt");
+      const app = await ctx.start(a);
+      const openRecent = () => app.js(async (page, payload) => {
+        const tauri = window.__TAURI_INTERNALS__;
+        await tauri.invoke("plugin:event|emit_to", {
+          target: { kind: "AnyLabel", label: tauri.metadata.currentWindow.label },
+          event: "menu-open",
+          payload,
+        });
+        await page.paint();
+      }, b);
+
+      write(a, "src/f1.txt", "changed in A\n");
+      write(b, "src/f1.txt", "changed in B\n");
+      await shows(app, "1 changed");
+      await openChanged(app, "f1.txt");
+      await app.js(async (page) => {
+        await page.click("Discard");
+        await page.until(() => page.all("[role=alertdialog]").length, "the confirmation");
+      });
+
+      await openRecent();
+      assert.equal(await app.js(async (page) => page.all('button[aria-label="Repository repo-a"]').length), 1);
+      await app.js((page) => page.answer("Discard"));
+      await eventually(() => read(a, "src/f1.txt") === original, "A's change to be discarded");
+      assert.equal(read(b, "src/f1.txt"), "changed in B\n");
+      await app.js((page) => page.until(() => !page.all("[role=alertdialog]").length, "the confirmation to close"));
+
+      await openRecent();
+      await app.js((page) => page.until(() => page.all('button[aria-label="Repository repo-b"]').length, "repository B"));
+    },
+  },
+  {
     name: "keys and modals",
     // The palette opens on its keys, Escape closes it and gives the focus back; a confirmation
     // keeps Tab inside; ⌘P-like keys work on a Russian layout too.
