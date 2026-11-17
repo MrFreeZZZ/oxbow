@@ -16,7 +16,7 @@ use std::sync::{Arc, RwLock};
 use serde::Serialize;
 
 use crate::cli::GitCommand;
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 /// What a setting found makes git run, and so what Restricted turns off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -149,7 +149,8 @@ fn scan_one(dir: &Path) -> Result<Vec<TrustFinding>> {
     // Hooks run from the repository's own folder unless the user's settings send git elsewhere.
     let set_here = own.iter().rev().find(|e| e.key == "core.hookspath");
     let set_by_user = set_here.is_none() && user_entries().iter().any(|e| e.key == "core.hookspath");
-    if !set_by_user && let Some(folder) = hooks_folder(dir, set_here.map(|e| e.value.as_str())) {
+    if !set_by_user {
+        let folder = hooks_folder(dir, set_here.map(|e| e.value.as_str()))?;
         let origin = shown_folder(dir, &folder);
         for name in HOOKS {
             if runnable(&folder.join(name)) {
@@ -318,18 +319,20 @@ fn user_entries() -> Vec<Entry> {
 /// Where git looks for the hooks of the repository at `dir`: the `core.hooksPath` it sets, or
 /// the hooks folder of its git folder. Not asked of git, which may run restricted there already
 /// and name Oxbow's empty folder.
-fn hooks_folder(dir: &Path, set: Option<&str>) -> Option<PathBuf> {
+fn hooks_folder(dir: &Path, set: Option<&str>) -> Result<PathBuf> {
     let path = match set {
         Some(path) => match path.strip_prefix("~/") {
-            Some(rest) => crate::config::home_dir()?.join(rest),
+            Some(rest) => crate::config::home_dir()
+                .ok_or_else(|| Error::Git("can't resolve core.hooksPath without a home folder".into()))?
+                .join(rest),
             None => PathBuf::from(path),
         },
         None => {
-            let out = crate::cli::run_in(dir, &GitCommand::new(["rev-parse", "--git-common-dir"]), None).ok()?;
+            let out = crate::cli::run_in(dir, &GitCommand::new(["rev-parse", "--git-common-dir"]), None)?;
             PathBuf::from(out.stdout.trim_end_matches(['\n', '\r'])).join("hooks")
         }
     };
-    Some(if path.is_absolute() { path } else { dir.join(path) })
+    Ok(if path.is_absolute() { path } else { dir.join(path) })
 }
 
 /// `folder` as the sheet shows it: inside the working tree from its top, otherwise whole.
@@ -370,9 +373,9 @@ static RESTRICTED: RwLock<Vec<(PathBuf, Arc<Restriction>)>> = RwLock::new(Vec::n
 
 /// Run git in the repository at `dir`, and in its linked worktrees, with `found` turned off.
 pub fn restrict(dir: &Path, found: &[TrustFinding]) -> Result<()> {
-    let restriction = Arc::new(restriction(found, &user_entries())?);
     let mut folders = vec![dir.to_path_buf()];
-    folders.extend(linked_worktrees(dir));
+    folders.extend(linked_worktrees(dir)?);
+    let restriction = Arc::new(restriction(found, &user_entries())?);
     let mut list = RESTRICTED.write().expect("restricted lock");
     for folder in folders {
         for path in [folder.clone(), real(&folder)] {
@@ -386,7 +389,8 @@ pub fn restrict(dir: &Path, found: &[TrustFinding]) -> Result<()> {
 /// Run git in the repository at `dir`, and in its linked worktrees, as it is set up again.
 pub fn lift(dir: &Path) {
     let mut folders = vec![dir.to_path_buf()];
-    folders.extend(linked_worktrees(dir));
+    // Trust still lifts the restriction for this folder if Git cannot list the others.
+    folders.extend(linked_worktrees(dir).unwrap_or_default());
     let folders: Vec<PathBuf> = folders.iter().flat_map(|f| [f.clone(), real(f)]).collect();
     RESTRICTED
         .write()
@@ -543,7 +547,7 @@ fn no_hooks_folder() -> Result<PathBuf> {
         let folder = dir.join("no-hooks");
         crate::cli::create_private_dir(&folder).map(|()| folder)
     });
-    made.map_err(|err| crate::error::Error::Git(format!("can't make a folder for no hooks: {err}")))
+    made.map_err(|err| Error::Git(format!("can't make a folder for no hooks: {err}")))
 }
 
 /// `path` with its links followed, so that two spellings of one folder match.
@@ -552,21 +556,32 @@ fn real(path: &Path) -> PathBuf {
 }
 
 /// The folders of the repository's other worktrees.
-fn linked_worktrees(dir: &Path) -> Vec<PathBuf> {
-    let Ok(out) = crate::cli::run_in(dir, &GitCommand::new(["worktree", "list", "--porcelain", "-z"]), None) else {
-        return Vec::new();
-    };
-    out.stdout
+fn linked_worktrees(dir: &Path) -> Result<Vec<PathBuf>> {
+    let out = crate::cli::run_in(dir, &GitCommand::new(["worktree", "list", "--porcelain", "-z"]), None)?;
+    Ok(out
+        .stdout
         .split('\0')
         .filter_map(|line| line.strip_prefix("worktree "))
         .map(PathBuf::from)
         .filter(|path| path != dir)
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelled_git_queries_do_not_count_as_empty_results() {
+        let folder = tempfile::tempdir().unwrap();
+        let dir = folder.path();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        crate::cli::stoppable(&stop, || {
+            assert!(matches!(hooks_folder(dir, None), Err(Error::Cancelled)));
+            assert!(matches!(restrict(dir, &[]), Err(Error::Cancelled)));
+            assert!(!is_restricted(dir));
+        });
+    }
 
     #[test]
     fn a_bool_fsmonitor_runs_nothing_of_the_repository() {
