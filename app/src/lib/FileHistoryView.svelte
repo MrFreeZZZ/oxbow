@@ -201,18 +201,19 @@
     // A commit's blame never changes; HEAD's does once HEAD moves.
     if (target.rev === "HEAD") headCommit;
     const options = { ignoreWhitespace: prefs.get("oxbow.blame.ignoreWhitespace"), ignoreRevs: prefs.get("oxbow.blame.ignoreRevs") };
+    let current = true;
     blameError = null;
     api.blame(target.path, target.rev, options, BLAME).then(
       (b) => {
-        if (blameAt.rev === target.rev && blameAt.path === target.path && sameOptions(options)) blame = b;
+        if (current) blame = b;
       },
       (err) => {
-        // A newer blame, or leaving the screen, stopped it.
-        if (stopped(err)) return;
+        if (!current || stopped(err)) return;
         blame = null;
         blameError = String(err);
       },
     );
+    return () => { current = false; };
   });
 
   $effect(() => {
@@ -230,10 +231,6 @@
     );
   });
 
-  /** Whether Blame's switches are still as `options` says: a blame read before a switch changed
-   *  doesn't land after the newer one. */
-  const sameOptions = (options: { ignoreWhitespace: boolean; ignoreRevs: boolean }) =>
-    options.ignoreWhitespace === prefs.get("oxbow.blame.ignoreWhitespace") && options.ignoreRevs === prefs.get("oxbow.blame.ignoreRevs");
   const blameSpaces = $derived(prefs.get("oxbow.blame.ignoreWhitespace"));
   const skipRevs = $derived(prefs.get("oxbow.blame.ignoreRevs"));
 
