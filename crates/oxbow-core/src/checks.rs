@@ -7,7 +7,7 @@
 //! that starts with `#` is a check turned off. A repository from someone else can carry them,
 //! as it can hooks, so [`crate::trust`] lists them, and in Restricted none runs.
 
-use std::sync::atomic::AtomicBool;
+use std::{fs, io::Write, sync::atomic::AtomicBool};
 
 use serde::{Deserialize, Serialize};
 
@@ -106,7 +106,41 @@ impl Repo {
 
     /// Keep `checks` as this repository's, in this order; empty ones are left out.
     pub fn set_commit_checks(&self, checks: &[CommitCheck]) -> Result<()> {
-        match self.run(&GitCommand::new(["config", "--local", "--unset-all", CHECK_KEY])) {
+        // Hold Git's lock from the first read until the whole replacement is ready.
+        let config = self.common_dir().join("config");
+        let io_error = |err| Error::Git(format!("could not update {}: {err}", config.display()));
+        let mut lock = gix::lock::File::acquire(
+            &config,
+            gix::lock::acquire::Fail::Immediately,
+            None,
+            0,
+            Some(&gix::lock::acquire::resolve_symlink),
+        )
+        .map_err(Error::git)?;
+        let source = lock.resource_path();
+        let metadata = match fs::symlink_metadata(&source) {
+            Ok(meta) if meta.is_file() => Some(meta),
+            Ok(_) => return Err(Error::Git(format!("{} is not a regular file", source.display()))),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => return Err(io_error(err)),
+        };
+        let scratch = crate::cli::private_temp_folder("oxbow-checks-").map_err(io_error)?;
+        let draft = scratch.path().join("config");
+        if metadata.is_some() {
+            fs::write(&draft, fs::read(&source).map_err(io_error)?).map_err(io_error)?;
+        } else {
+            fs::write(&draft, []).map_err(io_error)?;
+        }
+        let draft_path = draft
+            .to_str()
+            .ok_or_else(|| Error::Git("temporary Git config path is not UTF-8".into()))?;
+        match self.run(&GitCommand::new([
+            "config",
+            "--file",
+            draft_path,
+            "--unset-all",
+            CHECK_KEY,
+        ])) {
             // 5: there were none.
             Ok(_) | Err(Error::Command { code: Some(5), .. }) => {}
             Err(err) => return Err(err),
@@ -114,12 +148,22 @@ impl Repo {
         for check in checks.iter().filter(|c| !c.command.trim().is_empty()) {
             self.run(&GitCommand::new([
                 "config",
-                "--local",
+                "--file",
+                draft_path,
                 "--add",
                 CHECK_KEY,
                 &value_of(check),
             ]))?;
         }
+        let data = fs::read(draft).map_err(io_error)?;
+        lock.with_mut(|file| {
+            if let Some(metadata) = metadata {
+                file.set_permissions(metadata.permissions())?;
+            }
+            file.write_all(&data)
+        })
+        .map_err(io_error)?;
+        lock.commit().map_err(Error::git)?;
         Ok(())
     }
 
