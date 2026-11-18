@@ -118,7 +118,7 @@ platforms and prepares a draft release for review. Release commits must belong t
 
 ## Build from source
 
-You need Rust 1.99.1 (pinned in `rust-toolchain.toml`), Node.js 26.13 or newer, npm 12.2.2 or newer, a system `git` and the
+You need Rust 1.100.0 (pinned in `rust-toolchain.toml`), Node.js 26.13.1 or newer, npm 12.2.3 or newer, a system `git` and the
 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your system.
 
 ```sh

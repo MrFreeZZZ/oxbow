@@ -42,7 +42,7 @@ jobs:
         run: git merge-base --is-ancestor HEAD refs/remotes/origin/main
       - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 26.13.0
+          node-version: 26.13.1
       - name: Resolve and validate distribution identity
         id: identity
         env:
@@ -60,13 +60,13 @@ jobs:
           ref: ${{ needs.resolve.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: dtolnay/rust-toolchain@1.100.0
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2.9.3
       - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 26.13.0
+          node-version: 26.13.1
           cache: npm
           cache-dependency-path: app/package-lock.json
       - name: Install Linux build dependencies
@@ -74,7 +74,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
       - name: Install npm
-        run: npm install --global npm@12.2.2
+        run: npm install --global npm@12.2.3
       - run: npm ci
         working-directory: app
       - run: npm run build
@@ -84,12 +84,38 @@ jobs:
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - run: scripts/check.sh all
-      - uses: taiki-e/install-action@v2.90.1
+      - uses: taiki-e/install-action@v2.90.5
         with:
           tool: cargo-audit
       - run: cargo audit
       - run: npm audit --audit-level=moderate
+        if: inputs.channel != 'preview'
         working-directory: app
+      - name: Audit npm dependencies (Preview)
+        if: inputs.channel == 'preview'
+        working-directory: app
+        run: |
+          report=$(mktemp)
+          trap 'rm -f "$report"' EXIT
+          status=0
+          npm audit --audit-level=moderate --json > "$report" || status=$?
+          cat "$report"
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+
+          # Remove this exception when a patched picomatch version is available.
+          if [ "$status" -eq 1 ] && jq -e '
+            .auditReportVersion == 2 and .error == null and
+            (.vulnerabilities | type == "object") and
+            ([.vulnerabilities[].via[] | objects | select(.severity != "info" and .severity != "low")]
+              | length > 0 and all(.[]; .name == "picomatch" and .severity == "high" and
+                .url == "https://github.com/advisories/GHSA-fc5q-39xc-vjpf"))
+          ' "$report" > /dev/null; then
+            echo "::warning::Preview temporarily allows picomatch advisory GHSA-fc5q-39xc-vjpf"
+            exit 0
+          fi
+          exit "$status"
 
   macos-tests:
     name: Tests (macOS)
@@ -101,17 +127,17 @@ jobs:
           ref: ${{ needs.resolve.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: dtolnay/rust-toolchain@1.100.0
       - uses: Swatinem/rust-cache@v2.9.3
         with:
           key: tests
       - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 26.13.0
+          node-version: 26.13.1
           cache: npm
           cache-dependency-path: app/package-lock.json
       - name: Install npm
-        run: npm install --global npm@12.2.2
+        run: npm install --global npm@12.2.3
       - run: npm ci
         working-directory: app
       - run: npm run build
@@ -145,7 +171,7 @@ jobs:
           ref: ${{ needs.resolve.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: dtolnay/rust-toolchain@1.100.0
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2.9.3
@@ -153,7 +179,7 @@ jobs:
           key: distribution-${{ matrix.target }}
       - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 26.13.0
+          node-version: 26.13.1
           cache: npm
           cache-dependency-path: app/package-lock.json
       - name: Install Linux build dependencies
@@ -162,7 +188,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf libfuse2
       - name: Install npm
-        run: npm install --global npm@12.2.2
+        run: npm install --global npm@12.2.3
       - run: npm ci
         working-directory: app
       - name: Enable updater artifacts for this distribution build
@@ -207,7 +233,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 26.13.0
+          node-version: 26.13.1
       - uses: actions/download-artifact@v8.0.2
         with:
           pattern: distribution-*
