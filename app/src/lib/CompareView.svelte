@@ -40,19 +40,23 @@
     onGrip: (event: PointerEvent) => void;
   } = $props();
 
-  let result = $state<{ comparison: Comparison; base: string; target: string } | null>(null);
+  let loaded = $state<{
+    query: { base: string; target: string; mode: CompareMode };
+    comparison: Comparison;
+    base: string;
+    target: string;
+  } | null>(null);
+  const result = $derived(loaded?.query.base === base && loaded.query.target === target && loaded.query.mode === mode ? loaded : null);
   const comparison = $derived(result?.comparison);
   const baseLabel = $derived(compareLabel(result?.base ?? base));
   const targetLabel = $derived(compareLabel(result?.target ?? target));
   let error = $state<string | null>(null);
-  let loading = $state(false);
   /** A commit picked in the list; none shows all the changes. */
   let picked = $state<string | null>(null);
 
   $effect(() => {
     const query = { base, target, mode };
     version;
-    loading = true;
     error = null;
     // Only the latest request counts: one for the same refs from before a reload may answer
     // after it, with what the branches were then.
@@ -60,19 +64,18 @@
     api.compare(query.base, query.target, query.mode).then(
       (c) => {
         if (!latest) return;
-        result = {
+        loaded = {
+          query,
           comparison: c,
           base: isCompareSha(query.base) ? c.baseId : query.base,
           target: isCompareSha(query.target) ? c.targetId : query.target,
         };
-        loading = false;
         // A commit that is no longer on either side goes back to all the changes.
         if (picked && ![...c.ahead, ...c.behind].some((x) => x.id === picked) && c.mergeBase?.id !== picked) picked = null;
       },
       (err) => {
         if (!latest) return;
-        result = null;
-        loading = false;
+        loaded = null;
         error = String(err);
       },
     );
@@ -103,9 +106,7 @@
 
   function subline(c: Comparison): string {
     if (!c.mergeBase) return "Their histories never met, so the tips are compared directly.";
-    const split = `They split at ${shortId(c.mergeBase.id)} ${c.mergeBase.summary} · ${relativeTime(c.mergeBase.time)}`;
-    if (c.aheadCount && !c.behindCount) return `${baseLabel} can fast-forward to ${targetLabel}. ${split}`;
-    return split;
+    return `Common ancestor · ${shortId(c.mergeBase.id)} ${c.mergeBase.summary} · ${relativeTime(c.mergeBase.time)}`;
   }
 
   function dotColor(id: string): string {
@@ -138,17 +139,17 @@
       <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 5.5h9M9 3l2.5 2.5L9 8M13.5 10.5h-9M7 8l-2.5 2.5L7 13" /></svg>
     </button>
     <RefPicker label="Compare" value={target} other={base} {history} {colorOf} onPick={(name) => onChange({ base, target: name, mode })} />
-    <div class="summary-text">
+    <div class="segmented" role="radiogroup" aria-label="File comparison mode">
+      <button role="radio" aria-checked={(comparison?.mode ?? mode) === "split"} class:on={(comparison?.mode ?? mode) === "split"} disabled={!!comparison && !comparison.mergeBase} onclick={() => onChange({ base, target, mode: "split" })} title="Compare the common ancestor with the Compare side (git diff A...B)">From Common Ancestor <span class="dots">...</span></button>
+      <button role="radio" aria-checked={(comparison?.mode ?? mode) === "tips"} class:on={(comparison?.mode ?? mode) === "tips"} onclick={() => onChange({ base, target, mode: "tips" })} title="Compare the Base and Compare snapshots directly (git diff A..B)">Tip to Tip <span class="dots">..</span></button>
+    </div>
+    <div class="summary-text" aria-live="polite">
       {#if comparison}
         <span class="headline">{headline(comparison)}</span>
         <span class="sub">{subline(comparison)}</span>
-      {:else if loading}
+      {:else if !error}
         <span class="sub">Comparing…</span>
       {/if}
-    </div>
-    <div class="segmented" role="radiogroup" aria-label="Compare from">
-      <button role="radio" aria-checked={mode === "split"} class:on={mode === "split"} disabled={!!comparison && !comparison.mergeBase} onclick={() => onChange({ base, target, mode: "split" })} title="What {compareLabel(target)} changed after it split from {compareLabel(base)} (git diff A...B)">Since Split <span class="dots">...</span></button>
-      <button role="radio" aria-checked={mode === "tips"} class:on={mode === "tips"} onclick={() => onChange({ base, target, mode: "tips" })} title="The two latest states, directly (git diff A..B)">Tip to Tip <span class="dots">..</span></button>
     </div>
   </div>
 
@@ -164,8 +165,8 @@
           <button class="all" class:on={picked === null} style:background={picked === null ? tint(color) : undefined} onclick={() => (picked = null)}>
             <svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5h5.5L12 5v8.5H4z" /><path d="M6 8h4M6 10.5h4" /></svg>
             <span class="lines">
-              <span class="summary">{c.mode === "split" ? `All changes on ${targetLabel}` : "Every difference, tip to tip"}</span>
-              <span class="byline">{c.files.length} {c.files.length === 1 ? "file" : "files"} · {n(c.mode === "split" ? c.aheadCount : c.aheadCount + c.behindCount)}</span>
+              <span class="summary">File changes</span>
+              <span class="byline">{c.files.length} {c.files.length === 1 ? "file" : "files"}</span>
             </span>
           </button>
 
@@ -175,15 +176,13 @@
           </div>
           {#each c.ahead as commit (commit.id)}{@render commitRow(commit)}{/each}
           {#if c.aheadCount > c.ahead.length}<p class="more">and {(c.aheadCount - c.ahead.length).toLocaleString()} more</p>{/if}
-          {#if !c.aheadCount}<p class="more">Nothing: every commit of {targetLabel} is on {baseLabel} too.</p>{/if}
 
           <div class="section">
-            <span><b>Only on {baseLabel}</b> {c.behindCount} <span class="aside">· {c.mode === "split" ? "not in the diff" : "in the diff, reversed"}</span></span>
+            <span><b>Only on {baseLabel}</b> {c.behindCount}</span>
             <button class="hint mono" onclick={() => copyCommand(behindCommand)} title="Copy">{behindCommand}</button>
           </div>
           {#each c.behind as commit (commit.id)}{@render commitRow(commit)}{/each}
           {#if c.behindCount > c.behind.length}<p class="more">and {(c.behindCount - c.behind.length).toLocaleString()} more</p>{/if}
-          {#if !c.behindCount}<p class="more">Nothing new on {baseLabel} since they split.</p>{/if}
 
           {#if c.mergeBase}
             {@const m = c.mergeBase}
@@ -234,6 +233,7 @@
   /* The two refs and the mode: a strip between hairlines, no box of its own. */
   .bar {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
     padding: var(--space-2) var(--space-3);
@@ -254,12 +254,11 @@
     color: var(--icon);
   }
   .summary-text {
-    flex-grow: 1;
+    flex-basis: 100%;
     min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 2px;
-    padding-left: 8px;
   }
   .headline {
     font-weight: 600;
