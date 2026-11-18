@@ -51,10 +51,10 @@
       { mark: "head", name: "HEAD", text: "The commit you have checked out. Its branch takes the leftmost line.", row: find((r) => r.id === history.head.commit) },
       { mark: "trunk", name: trunk, text: `The production branch: its first-parent line, thicker and in Steel.`, row: find((r) => r.graph.color === 0) },
       { mark: "branch", name: "Branch", text: "Every other branch keeps one color, picked by its name.", row: find((r) => r.id !== history.head.commit && r.graph.color > 0 && r.graph.color < STASH && r.labels.some((l) => l.kind === "local" || l.kind === "remote")) },
-      { mark: "merge", name: "Merge", text: "A thick ring in the commit’s lane color. Side lines lead to the other parents.", row: findExample((r) => isMerge(r) && !isFork(r)) ?? mergeFork },
+      { mark: "merge", name: "Merge", text: "A thin outer ring. Side lines below the commit lead to the other parents.", row: findExample((r) => isMerge(r) && !isFork(r)) ?? mergeFork },
       { mark: "unpushed", name: "Not pushed", text: "Dashed line, hollow dot: the remote doesn’t have this commit yet.", row: findExample((r) => isUnpushed(r) && !isFork(r)) ?? findExample(isUnpushed) },
       { mark: "fork", name: "Branch point", text: "A thin outer ring in the commit’s lane color. One or more branches start here.", row: findExample((r) => isFork(r) && !r.unpushed && !isMerge(r) && !isStash(r)) ?? findExample((r) => isFork(r) && !isMerge(r) && !isStash(r)) ?? mergeFork },
-      { mark: "mergeFork", name: "Merge and branch point", text: "A merge ring inside a thin outer ring. A branch also starts at this merge.", row: mergeFork },
+      { mark: "mergeFork", name: "Merge and branch point", text: "A light center and a thin outer ring. A branch also starts at this merge.", row: mergeFork },
       { mark: "tag", name: "Tag", text: "Yellow capsule. A dashed edge: the remote doesn’t have the tag yet.", row: find((r) => r.labels.some((l) => l.kind === "tag")) },
       { mark: "stash", name: "Stash", text: "Gray dashed line down to the commit it was made on.", row: find(isStash) },
       { mark: "leadIn", name: "Starts lower", text: "Gray dotted line from the top: newer commits of other branches come first.", row: history.leadIns.length ? history.rows[history.leadIns[0].row] : undefined },
@@ -85,23 +85,24 @@
               {#if entry.mark === "head"}
                 <path d="M32 0V34" stroke={lane(0)} stroke-width="3" opacity="0.35" />
                 <path d="M12 0V34" stroke={lane(c)} stroke-width="2" />
-                <circle cx="12" cy="17" r="7.5" fill={lane(c)} />
+                <circle cx="12" cy="17" r="4" fill={lane(c)} />
               {:else if entry.mark === "trunk"}
                 <path d="M14 0V34" stroke={lane(0)} stroke-width="3" />
-                <circle cx="14" cy="17" r="6.5" fill={lane(0)} />
+                <circle cx="14" cy="17" r="4" fill={lane(0)} />
               {:else if entry.mark === "branch"}
                 <path d="M14 0V34" stroke={lane(0)} stroke-width="3" opacity="0.35" />
                 <path d="M32 0V9C32 17 14 17 14 26" stroke={lane(c)} stroke-width="2" fill="none" />
-                <circle cx="32" cy="8" r="5.5" fill={lane(c)} />
+                <circle cx="32" cy="8" r="4" fill={lane(c)} />
               {:else if entry.mark === "merge" || entry.mark === "fork" || entry.mark === "mergeFork" || entry.mark === "unpushed" || entry.mark === "cut"}
                 {@const row = entry.row}
                 {@const merge = row ? isMerge(row) : entry.mark === "merge" || entry.mark === "mergeFork"}
                 {@const fork = row ? isFork(row) : entry.mark === "fork" || entry.mark === "mergeFork"}
                 {@const unpushed = row?.unpushed ?? entry.mark === "unpushed"}
+                {@const hollow = unpushed && !merge}
                 {@const hidden = entry.mark === "cut" ? row?.graph.cuts?.[0] : undefined}
                 {@const color = lane(c)}
                 {@const y = entry.mark === "cut" ? 13 : 17}
-                {@const radius = fork ? 6 : merge ? 9 : c === 0 ? 6.5 : 5.5}
+                {@const radius = 4}
                 {@const dash = unpushed ? "2 5" : undefined}
                 <path d={hidden && hidden.from === hidden.to ? "M14 0V13" : "M14 0V34"} stroke={color} stroke-width={c === 0 ? 3 : 2} stroke-dasharray={dash} stroke-linecap="round" />
                 {#if fork}
@@ -116,17 +117,17 @@
                 {:else if merge}
                   <path d="M14 17C14 26 32 26 32 34" stroke={lane(row?.graph.mergeColors[0] ?? 0)} stroke-width="2" stroke-dasharray={dash} fill="none" />
                 {/if}
-                {#if fork}
+                {#if fork || merge}
                   <circle cx="14" cy={y} r={radius + 3} fill={color} />
                   <circle cx="14" cy={y} r={radius + 1.5} fill="var(--graph-bg)" />
                 {/if}
-                {#if merge}
+                {#if merge && fork}
                   <circle cx="14" cy={y} r={radius} fill={color} />
                   <circle cx="14" cy={y} r={radius * 0.32} fill="var(--graph-bg)" />
-                {:else if fork && !unpushed}
-                  <circle cx="14" cy={y} r={radius} fill={color} />
+                {:else if merge || fork || hollow}
+                  <circle cx="14" cy={y} r={hollow ? radius - 0.5 : radius} fill={hollow ? "var(--graph-bg)" : color} stroke={hollow ? color : undefined} />
                 {:else}
-                  <circle cx="14" cy={y} r={radius - 1} fill={unpushed ? "var(--graph-bg)" : color} stroke={unpushed ? color : "var(--graph-bg)"} stroke-width="2" />
+                  <circle cx="14" cy={y} r={radius + 1} fill={color} stroke="var(--graph-bg)" stroke-width="2" />
                 {/if}
               {:else if entry.mark === "tag"}
                 <rect x="4" y="10" width="36" height="14" rx="7" fill="var(--tag-bg)" stroke="var(--tag-border)" />
@@ -135,19 +136,19 @@
               {:else if entry.mark === "stash"}
                 <path d="M14 0V34" stroke={lane(0)} stroke-width="3" opacity="0.35" />
                 <path d="M32 8C32 17 14 17 14 26" stroke={lane(STASH)} stroke-width="2" stroke-dasharray="2 5" stroke-linecap="round" fill="none" />
-                <circle cx="32" cy="8" r="5.5" fill="var(--graph-bg)" stroke={lane(STASH)} stroke-width="2" />
-                <circle cx="14" cy="26" r="5.5" fill={lane(0)} />
+                <circle cx="32" cy="8" r="3.5" fill="var(--graph-bg)" stroke={lane(STASH)} />
+                <circle cx="14" cy="26" r="4" fill={lane(0)} />
               {:else if entry.mark === "leadIn"}
                 <path d="M14 0V17" stroke="var(--lead-in)" stroke-width="2" stroke-dasharray="2 5" stroke-linecap="round" />
                 <path d="M14 22V34" stroke={lane(c)} stroke-width="2" />
-                <circle cx="14" cy="24" r="5.5" fill={lane(c)} />
+                <circle cx="14" cy="24" r="4" fill={lane(c)} />
               {:else if entry.mark === "noBranch"}
                 <path d="M14 0V34" stroke={lane(NO_BRANCH)} stroke-width="2" />
-                <circle cx="14" cy="17" r="5.5" fill={lane(NO_BRANCH)} />
+                <circle cx="14" cy="17" r="4" fill={lane(NO_BRANCH)} />
               {:else}
                 <path d="M14 0V34" stroke={lane(4)} stroke-width="2" />
-                <circle cx="14" cy="8" r="5" fill={lane(4)} />
-                <circle cx="14" cy="25" r="5" fill={lane(4)} />
+                <circle cx="14" cy="8" r="4" fill={lane(4)} />
+                <circle cx="14" cy="25" r="4" fill={lane(4)} />
                 <text x="22" y="28" fill={lane(4)}>↑</text>
               {/if}
             </svg>

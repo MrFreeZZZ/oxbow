@@ -263,22 +263,22 @@
   function dot(row: HistoryRow, index: number) {
     const g = row.graph;
     const isMerge = row.parents.length > 1 && !row.labels.some((label) => label.kind === "stash");
-    const fork = g.forkColors.length > 0;
-    const isSelected = row.id === selected || row.id === second;
-    const junctionSize = compact ? 14 : 18;
-    const size = fork ? junctionSize - 6
-      : isMerge ? junctionSize
-      : compact ? (isSelected ? 12 : g.color === 0 ? 11 : 9) : isSelected ? 15 : g.color === 0 ? 13 : 11;
-    const outer = fork ? junctionSize : size;
+    const isFork = g.forkColors.length > 0;
+    const ring = isMerge || isFork;
+    const diameter = compact ? 6 : 8;
+    const hollow = row.unpushed && !isMerge;
+    // A solid commit's 2 px background border sits outside the visible disk.
+    const size = ring || hollow ? diameter : diameter + 4;
+    const outer = ring ? size + 6 : size;
     return {
       size,
       outer,
       left: x(columnOf(row)) - outer / 2,
       top: y(index) - outer / 2,
       color: lane(g.color),
-      fork,
-      merge: isMerge,
-      hollow: row.unpushed && !isMerge,
+      ring,
+      hole: isMerge && isFork,
+      hollow,
     };
   }
 
@@ -600,10 +600,10 @@
 
       {#each visible as { row, index } (row.id)}
         {@const d = dot(row, index)}
-        <span class="halo" class:fork={d.fork} class:faded={faded(row)} style:left="{d.left}px" style:top="{d.top}px" style:width="{d.outer}px" style:height="{d.outer}px" style:--dot-color={d.color}>
-          <span class="gap" style:width="{d.fork ? d.outer - 3 : d.size}px" style:height="{d.fork ? d.outer - 3 : d.size}px">
-            <span class="dot" class:merge={d.merge} class:hollow={d.hollow} style:width="{d.size}px" style:height="{d.size}px">
-              {#if d.merge}<span class="hole"></span>{/if}
+        <span class="halo" class:ring={d.ring} class:faded={faded(row)} style:left="{d.left}px" style:top="{d.top}px" style:width="{d.outer}px" style:height="{d.outer}px" style:--dot-color={d.color}>
+          <span class="gap" style:width="{d.ring ? d.outer - 3 : d.size}px" style:height="{d.ring ? d.outer - 3 : d.size}px">
+            <span class="dot" class:hollow={d.hollow} style:width="{d.size}px" style:height="{d.size}px">
+              {#if d.hole}<span class="hole"></span>{/if}
             </span>
           </span>
         </span>
@@ -999,21 +999,21 @@
     position: absolute;
     pointer-events: none;
   }
-  .halo.fork {
+  .halo.ring {
     background: var(--dot-color);
   }
-  .fork .gap {
+  .ring .gap {
     background: var(--graph-bg);
   }
   .dot {
     border: 2px solid var(--graph-bg);
     background: var(--dot-color);
   }
-  .dot.merge,
-  .fork .dot:not(.hollow) {
+  .ring .dot:not(.hollow) {
     border-width: 0;
   }
   .dot.hollow {
+    border-width: 1px;
     border-color: var(--dot-color);
     background: var(--graph-bg);
   }
