@@ -262,31 +262,23 @@
 
   function dot(row: HistoryRow, index: number) {
     const g = row.graph;
-    const isMerge = row.parents.length > 1;
+    const isMerge = row.parents.length > 1 && !row.labels.some((label) => label.kind === "stash");
+    const fork = g.forkColors.length > 0;
     const isSelected = row.id === selected || row.id === second;
-    const size = compact ? (isMerge ? 14 : isSelected ? 12 : g.color === 0 ? 11 : 9) : isMerge ? 18 : isSelected ? 15 : g.color === 0 ? 13 : 11;
-    const forks = g.forkColors;
-    const halo =
-      forks.length === 0
-        ? "transparent"
-        : forks.length === 1
-          ? lane(forks[0])
-          : `conic-gradient(${forks.map((c, j) => `${lane(c)} ${(100 * j) / forks.length}% ${(100 * (j + 1)) / forks.length}%`).join(", ")})`;
-    const merged = g.mergeColors[0] ?? g.color;
+    const junctionSize = compact ? 14 : 18;
+    const size = fork ? junctionSize - 6
+      : isMerge ? junctionSize
+      : compact ? (isSelected ? 12 : g.color === 0 ? 11 : 9) : isSelected ? 15 : g.color === 0 ? 13 : 11;
+    const outer = fork ? junctionSize : size;
     return {
       size,
-      outer: size + 8,
-      left: x(columnOf(row)) - (size + 8) / 2,
-      top: y(index) - (size + 8) / 2,
-      halo,
-      gap: forks.length ? "var(--graph-bg)" : "transparent",
-      fill: isMerge
-        ? `linear-gradient(90deg, ${lane(g.color)} 50%, ${lane(merged)} 50%)`
-        : row.unpushed
-          ? "var(--graph-bg)"
-          : lane(g.color),
-      ring: isMerge ? "transparent" : row.unpushed ? lane(g.color) : "var(--graph-bg)",
-      hole: isMerge,
+      outer,
+      left: x(columnOf(row)) - outer / 2,
+      top: y(index) - outer / 2,
+      color: lane(g.color),
+      fork,
+      merge: isMerge,
+      hollow: row.unpushed && !isMerge,
     };
   }
 
@@ -608,10 +600,10 @@
 
       {#each visible as { row, index } (row.id)}
         {@const d = dot(row, index)}
-        <span class="halo" class:faded={faded(row)} style:left="{d.left}px" style:top="{d.top}px" style:width="{d.outer}px" style:height="{d.outer}px" style:background={d.halo}>
-          <span class="gap" style:width="{d.size + 4}px" style:height="{d.size + 4}px" style:background={d.gap}>
-            <span class="dot" style:width="{d.size}px" style:height="{d.size}px" style:background={d.fill} style:border-color={d.ring}>
-              {#if d.hole}<span class="hole"></span>{/if}
+        <span class="halo" class:fork={d.fork} class:faded={faded(row)} style:left="{d.left}px" style:top="{d.top}px" style:width="{d.outer}px" style:height="{d.outer}px" style:--dot-color={d.color}>
+          <span class="gap" style:width="{d.fork ? d.outer - 3 : d.size}px" style:height="{d.fork ? d.outer - 3 : d.size}px">
+            <span class="dot" class:merge={d.merge} class:hollow={d.hollow} style:width="{d.size}px" style:height="{d.size}px">
+              {#if d.merge}<span class="hole"></span>{/if}
             </span>
           </span>
         </span>
@@ -1007,12 +999,27 @@
     position: absolute;
     pointer-events: none;
   }
+  .halo.fork {
+    background: var(--dot-color);
+  }
+  .fork .gap {
+    background: var(--graph-bg);
+  }
   .dot {
-    border: 2px solid transparent;
+    border: 2px solid var(--graph-bg);
+    background: var(--dot-color);
+  }
+  .dot.merge,
+  .fork .dot:not(.hollow) {
+    border-width: 0;
+  }
+  .dot.hollow {
+    border-color: var(--dot-color);
+    background: var(--graph-bg);
   }
   .hole {
-    width: 8px;
-    height: 8px;
+    width: 32%;
+    height: 32%;
     border-radius: 50%;
     background: var(--graph-bg);
   }

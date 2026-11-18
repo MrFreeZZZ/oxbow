@@ -449,7 +449,9 @@ fn place(commits: &[GraphCommit], plan: &Plan) -> Vec<RowLayout> {
         let mut fork_colors = Vec::new();
         for &col in &waiting {
             let lane = lanes[col].take().expect("waiting lane exists");
-            if lane.first_parent && !lane.side && lane.color != color && !fork_colors.contains(&lane.color) {
+            // The trunk can change columns and still continue through this commit.
+            let ends = lane.color != color || (col != column && !lane.trunk);
+            if lane.first_parent && !lane.side && ends && !fork_colors.contains(&lane.color) {
                 fork_colors.push(lane.color);
             }
         }
@@ -1100,6 +1102,24 @@ mod tests {
         assert_eq!((rows[0].column, rows[1].column, rows[2].column), (1, 2, 2));
         assert_eq!(rows[2].branch.as_deref(), Some("auth"));
         assert_eq!(rows[2].fork_colors, vec![color_for_name("experiment")]);
+    }
+
+    #[test]
+    fn branches_with_the_same_color_still_mark_their_fork_point() {
+        let commits = [
+            named(commit(&[2], false), "feature/a"),
+            named(commit(&[2], false), "feature/f"),
+            commit(&[3], false),
+            commit(&[], false),
+        ];
+        for focus in [None, Some(1)] {
+            let rows = layout(&commits, focus).rows;
+            assert_ne!(rows[0].column, rows[1].column);
+            assert_eq!(rows[0].color, rows[1].color);
+            assert_eq!(rows[2].color, rows[0].color);
+            assert_eq!(rows[2].fork_colors, [rows[1].color]);
+            assert!(rows[3].fork_colors.is_empty());
+        }
     }
 
     #[test]
