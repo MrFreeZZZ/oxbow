@@ -80,11 +80,11 @@ impl Repo {
     pub fn compare(&self, base: &str, target: &str, mode: CompareMode) -> Result<Comparison> {
         let base_id = self.compare_commit_id(base)?;
         let target_id = self.compare_commit_id(target)?;
-        let merge_base = self
-            .run(&GitCommand::new(["merge-base", &base_id, &target_id]))
-            .ok()
-            .map(|out| out.stdout.trim().to_owned())
-            .filter(|id| !id.is_empty());
+        let merge_base = match self.run(&GitCommand::new(["merge-base", &base_id, &target_id])) {
+            Ok(out) => Some(out.stdout.trim().to_owned()),
+            Err(Error::Command { code: Some(1), .. }) => None,
+            Err(err) => return Err(err),
+        };
         let mode = if merge_base.is_none() { CompareMode::Tips } else { mode };
 
         let counts = self.run(&GitCommand::new([
@@ -209,21 +209,7 @@ impl Repo {
     fn compare_commit_id(&self, name: &str) -> Result<String> {
         let unknown = || Error::UnknownCommit(name.to_owned());
         if is_commit_hex(name) {
-            // Search object IDs directly: rev-parse <hex>^{commit} can resolve a ref.
-            let out = self
-                .run(&GitCommand::new(["rev-parse", &format!("--disambiguate={name}")]))
-                .map_err(|_| unknown())?;
-            let repo = self.local();
-            let mut commits = out
-                .stdout
-                .lines()
-                .filter_map(|line| gix::ObjectId::from_hex(line.as_bytes()).ok())
-                .filter_map(|id| repo.find_object(id).ok()?.peel_to_commit().ok());
-            let commit = commits.next().ok_or_else(unknown)?;
-            if commits.any(|other| other.id != commit.id) {
-                return Err(unknown());
-            }
-            return Ok(commit.id.to_string());
+            return self.commit_from_hex_prefix(name, true).ok_or_else(unknown);
         }
         let bytes = gix::bstr::BStr::new(name);
         if !name.starts_with("refs/") || gix::validate::reference::name(bytes).is_err() {
@@ -236,6 +222,28 @@ impl Repo {
             .filter(|reference| reference.name().as_bstr() == bytes)
             .ok_or_else(unknown)?;
         Ok(reference.peel_to_commit().map_err(|_| unknown())?.id().to_string())
+    }
+
+    /// Search object IDs directly; revision parsing can resolve a ref with the same name.
+    pub(crate) fn commit_from_hex_prefix(&self, prefix: &str, peel_tags: bool) -> Option<String> {
+        let out = self
+            .run(&GitCommand::new(["rev-parse", &format!("--disambiguate={prefix}")]))
+            .ok()?;
+        let repo = self.local();
+        let mut commits = out
+            .stdout
+            .lines()
+            .filter_map(|line| gix::ObjectId::from_hex(line.as_bytes()).ok())
+            .filter_map(|id| {
+                let object = repo.find_object(id).ok()?;
+                if peel_tags {
+                    Some(object.peel_to_commit().ok()?.id)
+                } else {
+                    (object.kind == gix::object::Kind::Commit).then_some(id)
+                }
+            });
+        let commit = commits.next()?;
+        (!commits.any(|other| other != commit)).then(|| commit.to_string())
     }
 
     /// The commit a branch, tag or SHA names.

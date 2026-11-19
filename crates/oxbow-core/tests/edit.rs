@@ -275,6 +275,28 @@ fn a_merge_needs_the_file_on_disk_as_it_is_staged() {
 }
 
 #[test]
+fn a_file_git_cant_compare_with_its_staged_version_is_not_taken_as_unchanged() {
+    let (mut fx, both) = two_files();
+    let spelled = TEN.replace("2\n", "two\n").replace("5\n", "five\n");
+    fx.commit("a.txt", &spelled, "Spell five");
+    // Reading the file on disk now fails, so git can't say whether it differs.
+    fx.write(".git/info/attributes", "a.txt filter=broken\n");
+    fx.git(&["config", "filter.broken.clean", "false"]);
+    fx.git(&["config", "filter.broken.required", "true"]);
+    fx.write("a.txt", &spelled);
+    let repo = Repo::open(fx.path()).unwrap();
+    let err = repo
+        .plan(&Action::RevertFile {
+            commit: both,
+            path: "a.txt".into(),
+            old_path: None,
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("git diff --quiet"), "{err}");
+}
+
+#[test]
 fn cherry_pick_this_file_brings_one_file_of_another_branch_uncommitted() {
     let (mut fx, add_b, shout) = diverged();
     let head = fx.git(&["rev-parse", "HEAD"]);

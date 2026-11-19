@@ -12,7 +12,7 @@
   import { api, stopped } from "./api";
   import { wholeByDefault } from "./prefs.svelte";
   import type { Comparison, DiffLine, DraftComment, FileChange, FileDiff, Hunk, Spot } from "./types";
-  import { shortId, splitPath } from "./format";
+  import { shortId, splitPath, fileDeletionWidth } from "./format";
   import DiffView, { type LineNotes } from "./DiffView.svelte";
   import FileBadge from "./FileBadge.svelte";
   import Avatar from "./Avatar.svelte";
@@ -385,7 +385,7 @@
       </div>
       {#if session.lab}<div class="kept">GitLab keeps no Viewed ticks: these stay on this computer.</div>{/if}
     {/if}
-    <div class="rows">
+    <div class="rows" style:--file-deletion-width={fileDeletionWidth(files)}>
       {#each shownFiles as file (file.path)}
         {@const p = splitPath(file.path)}
         <div class="file" class:on={picked === file.path} class:done={session.viewed.has(file.path)}>

@@ -1,22 +1,25 @@
 <script lang="ts">
+  import FileLineCounts from "./FileLineCounts.svelte";
   import { diffScroll } from "./diffScroll";
   import FileFilter from "./FileFilter.svelte";
   import { untrack, type Snippet } from "svelte";
   import { api, stopped } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { CommitDetail, DiffPage, FileChange, FileDiff, HistoryRow } from "./types";
-  import { fullDate, initials, relativeTime, lane, person, plate, shortId, tint } from "./format";
+  import { fullDate, initials, relativeTime, lane, person, plate, shortId, tint, fileDeletionWidth } from "./format";
   import { fileTabs, keyFocus, tabStepper } from "./tabs";
   import { confirm } from "./confirm.svelte";
   import DiffView from "./DiffView.svelte";
   import DiffTools from "./DiffTools.svelte";
   import FoldAll from "./FoldAll.svelte";
   import PathName from "./PathName.svelte";
+  import { commitSummary } from "./commitSummary";
+  import { actionIcons } from "./icons";
   import CommitChain from "./CommitChain.svelte";
   import FileBadge from "./FileBadge.svelte";
   import { byFolder, filesWidth, listView, resizeFiles, setFolders } from "./listView.svelte";
-  import Menu, { type MenuEntry } from "./Menu.svelte";
-  import { commitFileMenu } from "./changesMenu";
+  import Menu from "./Menu.svelte";
+  import { commitFileMenu, type FileMenu } from "./changesMenu";
   import type { CommitFile } from "./commitFiles";
   import WorkingCopyPanel from "./WorkingCopyPanel.svelte";
   import { nav } from "./nav.svelte";
@@ -27,6 +30,7 @@
     childIds,
     lookup,
     onSelect,
+    trunk = null,
     localTags = [],
     find = null,
     foundFiles = [],
@@ -41,6 +45,7 @@
     childIds: string[];
     lookup: (id: string) => HistoryRow | undefined;
     onSelect: (id: string) => void;
+    trunk?: string | null;
     /** Tags the remote doesn't have yet: drawn dashed. */
     localTags?: string[];
     /** Text a code search looked for: marked in the diff. */
@@ -246,6 +251,7 @@
       tab = null;
       shownTab = null;
       diffs = [];
+      firstFiles = new Map();
       detail = null;
       error = null;
       listed = LIST_STEP;
@@ -300,11 +306,21 @@
       });
   }
 
-  let menu = $state<{ x: number; y: number; entries: MenuEntry[]; label: string } | null>(null);
+  let menu = $state.raw<({ x: number; y: number } & FileMenu) | null>(null);
   function openFileMenu(event: MouseEvent, file: FileChange) {
     event.preventDefault();
-    const ctx = { summary: detail?.summary ?? row.summary, inHead: inHead ? inHead(row.id) : null, compare: (f: CommitFile) => (comparing = { commit: row.id, file: f }), split: onSplit };
-    menu = { x: event.clientX, y: event.clientY, ...commitFileMenu(nav.repo, file, row.id, ctx) };
+    const commit = row.id;
+    const repo = nav.repo;
+    let canBlame = $state(false);
+    const ctx = { summary: detail?.summary ?? row.summary, inHead: inHead ? inHead(commit) : null, compare: (f: CommitFile) => (comparing = { commit, file: f }), split: onSplit };
+    const opened = { x: event.clientX, y: event.clientY, ...commitFileMenu(repo, file, commit, ctx, () => canBlame) };
+    menu = opened;
+    if (file.status === "deleted" || file.submodule) return;
+    // The diff's binary flag describes both sides, and is missing until inspection.
+    api.fileIsBinaryAt(commit, file.path).then((binary) => {
+      if (!binary && menu === opened && row.id === commit && nav.repo === repo)
+        canBlame = true;
+    }, () => {});
   }
   /** Compare with Working Copy: a file of this commit beside the file on disk, in place of the details. */
   let comparing = $state<{ commit: string; file: CommitFile } | null>(null);
@@ -357,7 +373,18 @@
   function copy(text: string, what: string) {
     navigator.clipboard.writeText(text).then(() => confirm.say(`Copied ${what}.`, "done"), () => {});
   }
-  const message = $derived(detail ? [detail.summary, detail.body].filter(Boolean).join("\n\n") : row.summary);
+  async function openSummary() {
+    if (!detail || detail.id !== id) return;
+    const loaded = new Map(firstFiles);
+    for (const { file } of diffs) loaded.set(file.path, file);
+    const { time, offset } = detail.author;
+    const graph = lookup(row.id)?.graph ?? row.graph;
+    try {
+      await api.openCommitSummary(nav.repo, commitSummary(detail, loaded, fullDate(time, offset), graph, trunk));
+    } catch (err) {
+      confirm.say(String(err), "error");
+    }
+  }
   /** Who made the commit, when that isn't the author, such as GitHub for a merged pull request;
    *  or when, if the author made it again later, as in a rebase. Null when it adds nothing. */
   const committed = $derived.by(() => {
@@ -419,7 +446,7 @@
         </div>
       </div>
 
-      <div class="list" style:--selection-fill={tint(color)} style:--selection-border={`color-mix(in srgb, ${lane(color)} 40%, transparent)`}>
+      <div class="list" style:--file-deletion-width={fileDeletionWidth(files, totals?.del)} style:--selection-fill={tint(color)} style:--selection-border={`color-mix(in srgb, ${lane(color)} 40%, transparent)`}>
         {#if detail && !detail.shallowEnd}
           <!-- The heading shows every file's diff, as Summary did. -->
           <button
@@ -433,8 +460,7 @@
             <span class="n">{needle ? `${shownFiles.length} of ${detail.files.length}` : detail.files.length.toLocaleString()}</span>
             <span class="grow"></span>
             {#if totals}
-              <span class="mono add">+{totals.add}</span>
-              <span class="mono del">−{totals.del}</span>
+              <FileLineCounts add={totals.add} del={totals.del} />
             {:else}
               <span class="counting" title="Counting the changed lines">Counting…</span>
             {/if}
@@ -514,8 +540,11 @@
               {/if}
             </div>
           {/if}
-          <button class="copy-message" onclick={() => copy(message, "the message")}>Copy Message</button>
         {/if}
+        <button class="button primary small summary-button" disabled={detail?.id !== id} onclick={openSummary}>
+          <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d={actionIcons.lines} /></svg>
+          Summary
+        </button>
       </div>
     </div>
 
@@ -844,14 +873,6 @@
   .dir {
     color: var(--text2);
   }
-  .add {
-    color: var(--green);
-    font-size: var(--text-caption);
-  }
-  .del {
-    color: var(--red);
-    font-size: var(--text-caption);
-  }
 
   /* Commit Details, at the bottom of the files. */
   .details {
@@ -867,11 +888,14 @@
   }
   .details-top {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 6px;
   }
   .details-head {
     flex-grow: 1;
+    max-width: 100%;
+    overflow-wrap: anywhere;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -889,7 +913,7 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    flex-shrink: 0;
+    margin-inline-start: auto;
     font-size: var(--text-caption);
     color: var(--text);
   }
@@ -948,14 +972,8 @@
   .parent:disabled {
     color: inherit;
   }
-  .copy-message {
+  .summary-button {
     align-self: flex-end;
-    color: var(--accent-ink);
-    font-size: var(--text-small);
-    font-weight: 500;
-  }
-  .copy-message:hover {
-    text-decoration: underline;
   }
 
   /* Over the diff: how many files, and how the diff is drawn. */

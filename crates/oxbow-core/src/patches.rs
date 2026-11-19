@@ -2,7 +2,7 @@
 //! patches go in with `git am`, which makes their commits and can stop on conflicts like a
 //! rebase; a plain diff goes into the files with `git apply`, uncommitted.
 
-use std::path::Path;
+use std::{io::Write, path::Path};
 
 use serde::Serialize;
 
@@ -47,6 +47,25 @@ pub struct PatchFile {
 }
 
 impl Repo {
+    /// Save the diff of one committed file, preserving Git's output byte for byte.
+    pub fn save_file_patch(&self, commit: &str, path: &str, old_path: Option<&str>, to: &Path) -> Result<()> {
+        if !to.is_absolute() {
+            return Err(Error::Git(format!("{} is not a full path", to.display())));
+        }
+        let patch = self.file_patch_bytes(commit, path, old_path, true)?;
+        if patch.is_empty() {
+            return Err(Error::Git(format!("{} doesn’t change {path}", short_name(commit))));
+        }
+        let write_error = |err: std::io::Error| Error::Git(format!("Couldn’t write {}: {err}", to.display()));
+        let dir = to
+            .parent()
+            .ok_or_else(|| Error::Git("Choose a file for the patch".into()))?;
+        let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(write_error)?;
+        temp.write_all(&patch).map_err(write_error)?;
+        temp.persist(to).map_err(|err| write_error(err.error))?;
+        Ok(())
+    }
+
     /// What applying the patch files at `paths` would bring, and whether they fit.
     pub fn patch_preview(&self, paths: &[String]) -> Result<PatchPreview> {
         let paths = patch_paths(paths)?;

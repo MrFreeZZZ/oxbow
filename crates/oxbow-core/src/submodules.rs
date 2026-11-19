@@ -13,7 +13,7 @@ use gix::bstr::ByteSlice;
 use serde::Serialize;
 
 use crate::action::{ActionEvent, PartState};
-use crate::cli::GitCommand;
+use crate::cli::{GitCommand, literal};
 use crate::error::{Error, FailedPart, Result};
 use crate::remote::{CommitBrief, parse_briefs};
 use crate::repo::Repo;
@@ -529,7 +529,7 @@ impl Repo {
         let mut args = vec!["submodule".to_owned(), "sync".to_owned(), "--recursive".to_owned()];
         if !paths.is_empty() {
             args.push("--".to_owned());
-            args.extend(paths.iter().cloned());
+            args.extend(paths.iter().map(|p| literal(p)));
         }
         vec![GitCommand::new(args).comment("take the URLs from .gitmodules, so fetches go to the new address")]
     }
@@ -550,10 +550,11 @@ impl Repo {
     /// Remove the submodule at `path`: empty its folder and forget it, then delete it from the
     /// index and `.gitmodules`. Its clone stays in `.git/modules`, so adding it back is quick.
     pub(crate) fn plan_submodule_remove(&self, path: &str) -> Vec<GitCommand> {
+        let path = literal(path);
         vec![
-            GitCommand::new(["submodule", "deinit", "-f", "--", path])
+            GitCommand::new(["submodule", "deinit", "-f", "--", &path])
                 .comment("-f: empty the folder even with changes in it, and forget its settings in .git/config"),
-            GitCommand::new(["rm", "-f", "--", path])
+            GitCommand::new(["rm", "-f", "--", &path])
                 .comment("remove the folder and its .gitmodules entry, staged for the next commit"),
         ]
     }
@@ -584,7 +585,7 @@ fn update_command(path: Option<&String>, latest: bool) -> GitCommand {
     args.push("--recursive".to_owned());
     if let Some(path) = path {
         args.push("--".to_owned());
-        args.push(path.clone());
+        args.push(literal(path));
     }
     GitCommand::new(args)
         .comment(format!("{note}; --recursive: its submodules too"))

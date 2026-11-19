@@ -3,7 +3,7 @@ import { Keymap } from "../src/lib/shortcuts.ts";
 import assert from "node:assert/strict";
 
 const history = (commit: string | null, scroll: HistoryPosition | null = null): Place => ({ view: "history", commit, scroll });
-const file = (path: string, commit: string | null = null, line: number | null = null): Place => ({ view: "file", path, commit, mode: "blame", at: null, line });
+const file = (path: string, commit: string | null = null, line: number | null = null, base: string | null = null): Place => ({ view: "file", path, base, commit, mode: "blame", at: null, line });
 const pull: Place = { view: "pull", branch: "feature/login" };
 const name = (p: Place) => (p.view === "file" ? (p.line ? `Line ${p.line}` : p.path) : p.view === "pull" ? "PR #42" : p.view === "history" ? "History" : p.view);
 const walk = (...places: Place[]): Trail => places.reduce((t, p) => visit(t, p), emptyTrail());
@@ -32,7 +32,22 @@ const walk = (...places: Place[]): Trail => places.reduce((t, p) => visit(t, p),
   assert.equal(t.places.length, 2);
   t = visit(t, file("src/auth.ts", "c2", 12));
   assert.equal(t.places.length, 3);
-  assert.deepEqual(t.places.map(placeKey), ["pull\x00github\x00feature/login", "file\x00src/auth.ts\x00", "file\x00src/auth.ts\x0012"]);
+  assert.deepEqual(t.places.map(placeKey), ["pull\x00github\x00feature/login", "file\x00src/auth.ts\x00\x00", "file\x00src/auth.ts\x00\x0012"]);
+}
+
+// The same file at two snapshots and at HEAD keeps three places, independent of the selected commit and Blame.
+{
+  const older = file("config.txt", "initial", null, "111111111");
+  const newer = file("config.txt", "initial", null, "222222222");
+  const head = file("config.txt", "latest");
+  const blamed = { ...older, commit: "another", at: { rev: "blamed", path: "config.txt" } } as Place;
+  const t = walk(older, blamed, newer, head);
+  assert.deepEqual(t.places, [blamed, newer, head]);
+  const back = go(t, 0)!;
+  assert.equal(back.places[back.at], blamed);
+  const forward = go(back, 1)!;
+  assert.equal(forward.places[forward.at], newer);
+  assert.equal(detailOfPlace(older, () => undefined, null), "config.txt · Through 1111111 · Blame");
 }
 
 // Back and Forward move along the trail; a new place drops what was ahead.

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import FileLineCounts from "./FileLineCounts.svelte";
   import type { FileChange } from "./types";
   import type { ListKey } from "./changelists";
   import { BIG_FILE, bytes } from "./unusual";
@@ -67,7 +68,7 @@
     {:else if (counted.newSize ?? 0) >= BIG_FILE}
       <span class="note warn" title="Too big for a git repository: GitHub refuses files over 100 MB">{bytes(counted.newSize!)}</span>
     {:else if !counted.binary && !counted.uncounted && file.status !== "conflicted"}
-      <span class="counts mono"><span class="add">+{counted.additions}</span> <span class="del">−{counted.deletions}</span></span>
+      <FileLineCounts add={counted.additions} del={counted.deletions} />
     {/if}
   </button>
   {#if unstaged}
@@ -121,12 +122,6 @@
     flex-shrink: 0;
     white-space: nowrap;
   }
-  .add {
-    color: var(--green);
-  }
-  .del {
-    color: var(--red);
-  }
   .discard {
     position: absolute;
     right: 2px;
@@ -149,7 +144,7 @@
     opacity: 1;
     background: var(--win);
   }
-  .file.bin:hover .counts {
+  .file.bin:hover :is(.counts, :global(.file-line-counts)) {
     visibility: hidden;
   }
   .discard:hover {

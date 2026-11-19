@@ -15,6 +15,8 @@
     selected,
     onSelect,
     menuFor,
+    linkFor,
+    copyLink,
     found = null,
     second = null,
     onSecond,
@@ -30,6 +32,8 @@
     onSelect: (id: string) => void;
     /** Entries of a commit's right-click menu; none, no menu. */
     menuFor: (row: HistoryRow) => MenuEntry[];
+    linkFor: (id: string) => Promise<string | null>;
+    copyLink: (url: string) => void;
     /** A search: other commits fade, or only the matches are listed. */
     found?: Found | null;
     /** A second commit picked with ⌘-click, compared with the selected one. */
@@ -73,6 +77,24 @@
     event.preventDefault();
     menu = { x: event.clientX, y: event.clientY, id: row.id, entries };
   }
+
+  $effect(() => {
+    const opened = menu;
+    const snapshot = history;
+    if (!opened) return;
+    const copy = untrack(() => opened.entries.find((entry) => entry.kind === "sub" && entry.label === "Copy"));
+    if (copy?.kind !== "sub") return;
+    const link = copy.entries.find((entry) => entry.label === "Commit Link");
+    if (!link) return;
+    link.off = true;
+    let active = true;
+    linkFor(opened.id).then((url) => {
+      if (!active || menu !== opened || history !== snapshot || !url) return;
+      link.run = () => copyLink(url);
+      link.off = false;
+    }).catch(() => {});
+    return () => { active = false; };
+  });
 
   // When the layout changes, e.g. a checkout moves a branch to the left column, lines and dots
   // glide from their old columns to the new ones instead of jumping.
@@ -240,31 +262,23 @@
 
   function dot(row: HistoryRow, index: number) {
     const g = row.graph;
-    const isMerge = row.parents.length > 1;
-    const isSelected = row.id === selected || row.id === second;
-    const size = compact ? (isMerge ? 14 : isSelected ? 12 : g.color === 0 ? 11 : 9) : isMerge ? 18 : isSelected ? 15 : g.color === 0 ? 13 : 11;
-    const forks = g.forkColors;
-    const halo =
-      forks.length === 0
-        ? "transparent"
-        : forks.length === 1
-          ? lane(forks[0])
-          : `conic-gradient(${forks.map((c, j) => `${lane(c)} ${(100 * j) / forks.length}% ${(100 * (j + 1)) / forks.length}%`).join(", ")})`;
-    const merged = g.mergeColors[0] ?? g.color;
+    const isMerge = row.parents.length > 1 && !row.labels.some((label) => label.kind === "stash");
+    const isFork = g.forkColors.length > 0;
+    const ring = isMerge || isFork;
+    const diameter = compact ? 6 : 8;
+    const hollow = row.unpushed && !isMerge;
+    // A solid commit's 2 px background border sits outside the visible disk.
+    const size = ring || hollow ? diameter : diameter + 4;
+    const outer = ring ? size + 6 : size;
     return {
       size,
-      outer: size + 8,
-      left: x(columnOf(row)) - (size + 8) / 2,
-      top: y(index) - (size + 8) / 2,
-      halo,
-      gap: forks.length ? "var(--graph-bg)" : "transparent",
-      fill: isMerge
-        ? `linear-gradient(90deg, ${lane(g.color)} 50%, ${lane(merged)} 50%)`
-        : row.unpushed
-          ? "var(--graph-bg)"
-          : lane(g.color),
-      ring: isMerge ? "transparent" : row.unpushed ? lane(g.color) : "var(--graph-bg)",
-      hole: isMerge,
+      outer,
+      left: x(columnOf(row)) - outer / 2,
+      top: y(index) - outer / 2,
+      color: lane(g.color),
+      ring,
+      hole: isMerge && isFork,
+      hollow,
     };
   }
 
@@ -586,9 +600,9 @@
 
       {#each visible as { row, index } (row.id)}
         {@const d = dot(row, index)}
-        <span class="halo" class:faded={faded(row)} style:left="{d.left}px" style:top="{d.top}px" style:width="{d.outer}px" style:height="{d.outer}px" style:background={d.halo}>
-          <span class="gap" style:width="{d.size + 4}px" style:height="{d.size + 4}px" style:background={d.gap}>
-            <span class="dot" style:width="{d.size}px" style:height="{d.size}px" style:background={d.fill} style:border-color={d.ring}>
+        <span class="halo" class:ring={d.ring} class:faded={faded(row)} style:left="{d.left}px" style:top="{d.top}px" style:width="{d.outer}px" style:height="{d.outer}px" style:--dot-color={d.color}>
+          <span class="gap" style:width="{d.ring ? d.outer - 3 : d.size}px" style:height="{d.ring ? d.outer - 3 : d.size}px">
+            <span class="dot" class:hollow={d.hollow} style:width="{d.size}px" style:height="{d.size}px">
               {#if d.hole}<span class="hole"></span>{/if}
             </span>
           </span>
@@ -985,12 +999,27 @@
     position: absolute;
     pointer-events: none;
   }
+  .halo.ring {
+    background: var(--dot-color);
+  }
+  .ring .gap {
+    background: var(--graph-bg);
+  }
   .dot {
-    border: 2px solid transparent;
+    border: 2px solid var(--graph-bg);
+    background: var(--dot-color);
+  }
+  .ring .dot:not(.hollow) {
+    border-width: 0;
+  }
+  .dot.hollow {
+    border-width: 1px;
+    border-color: var(--dot-color);
+    background: var(--graph-bg);
   }
   .hole {
-    width: 8px;
-    height: 8px;
+    width: 32%;
+    height: 32%;
     border-radius: 50%;
     background: var(--graph-bg);
   }

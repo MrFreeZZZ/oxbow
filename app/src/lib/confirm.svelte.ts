@@ -305,6 +305,7 @@ export interface RunPart {
 
 class ConfirmState {
   request = $state<Request | null>(null);
+  planning = $state(false);
   commands = $state<GitCommand[]>([]);
   /** What Undo can't bring back once the action ran, from the plan. */
   notKept = $state<NotKept[]>([]);
@@ -343,7 +344,7 @@ class ConfirmState {
   /** Why the step that ran isn't in the Operation Log; null when it is. */
   #notLogged: string | null = null;
   #resolve: ((done: boolean) => void) | null = null;
-  /** Goes up with every plan asked for, so a slow answer can't replace a newer one. */
+  /** Changes when the request changes or stops asking, even before the next plan is sent. */
   #planned = 0;
   #editTimer: ReturnType<typeof setTimeout> | undefined;
   /** How failures go on after a recovery button ran an action of its own. */
@@ -364,6 +365,10 @@ class ConfirmState {
   /** Whether an action of this window runs now: the sheet keeps its last phase once it closes. */
   get running(): boolean {
     return this.phase === "running" && this.request !== null;
+  }
+
+  get canGo(): boolean {
+    return !!this.request && this.phase === "ask" && !this.planning && !this.request.invalid;
   }
 
   /** Ask, then run. Resolves to true once the action ran, false if it was cancelled or failed. */
@@ -395,36 +400,35 @@ class ConfirmState {
   }
 
   go() {
-    const background = this.request?.background;
-    if (background && this.phase === "ask") {
+    const request = this.request;
+    if (!request || !this.canGo) return;
+    if (request.background) {
       this.#finish(true);
-      background();
-      return;
-    }
-    if (!this.request || this.phase !== "ask" || this.request.invalid) return;
-    if (this.request.local) this.#runLocal(this.request);
-    else if (this.request.action) this.#execute(this.request.action, this.request.status ?? this.request.title, this.request.done);
+      request.background();
+    } else if (request.local) this.#runLocal(request);
+    else if (request.action) this.#execute(request.action, request.status ?? request.title, request.done);
   }
 
   /** Show another version of the request, after a checkbox or chip changed it. */
   async change(request: Request | Promise<Request>) {
-    if (this.phase !== "ask") return;
+    if (!this.request || this.phase !== "ask") return;
+    const mine = this.#resetPlanning(true);
     try {
       const next = await request;
-      if (this.phase === "ask") await this.#ask(next);
+      if (mine === this.#planned) await this.#ask(next, mine);
     } catch (err) {
+      if (mine !== this.#planned) return;
       this.#fail({ kind: "other", output: String(err), incoming: [], remoteTip: null, hook: null });
     }
   }
 
   /** Show the request for the text just typed; its commands follow once typing pauses. */
   edit(request: Request) {
-    if (this.phase !== "ask") return;
+    if (!this.request || this.phase !== "ask") return;
+    const mine = this.#resetPlanning(true);
     this.request = request;
-    clearTimeout(this.#editTimer);
-    // `request` is the latest text: a newer keystroke clears this timer.
     this.#editTimer = setTimeout(() => {
-      if (this.phase === "ask") this.#ask(request);
+      if (mine === this.#planned) this.#ask(request, mine);
     }, 150);
   }
 
@@ -492,8 +496,7 @@ class ConfirmState {
     return !!plan?.notKept.length;
   }
 
-  async #ask(request: Request) {
-    const mine = ++this.#planned;
+  async #ask(request: Request, mine = this.#resetPlanning(true)) {
     this.#recover = null;
     this.quiet = false;
     this.request = request;
@@ -506,9 +509,13 @@ class ConfirmState {
       this.notKept = [];
       this.steps = [];
       this.phase = "ask";
+      this.planning = false;
       return;
     }
-    if (!request.action) return;
+    if (!request.action) {
+      this.planning = false;
+      return;
+    }
     try {
       const plan = await api.planAction(request.action);
       if (mine !== this.#planned) return;
@@ -522,6 +529,7 @@ class ConfirmState {
         this.request = { ...request, alt: { label: "Revert Instead", request: () => revertInsteadRequest(commit.id, commit.summary, pushed.branch) } };
       }
       this.phase = "ask";
+      this.planning = false;
     } catch (err) {
       if (mine !== this.#planned) return;
       this.commands = [];
@@ -532,7 +540,7 @@ class ConfirmState {
   }
 
   async #execute(action: Action, status: string, done?: string, next?: Step, chained = false, withoutUndo = false): Promise<void> {
-    this.#stopPlanning();
+    this.#resetPlanning();
     if (!chained) {
       this.#ranCommands = [];
       this.#notLogged = null;
@@ -587,7 +595,7 @@ class ConfirmState {
 
   /** Run a request's `local` step: it has no git output, so the sheet closes on success. */
   async #runLocal(request: Request) {
-    this.#stopPlanning();
+    this.#resetPlanning();
     this.phase = "running";
     this.status = request.status ?? request.title;
     this.lines = [];
@@ -603,6 +611,7 @@ class ConfirmState {
   }
 
   async #fail(failure: Failure) {
+    const mine = this.#resetPlanning();
     this.failure = failure;
     // Why Undo isn't ready, in one line, is in the sheet's words already: not again under them.
     const said = failure.kind === "noUndo" && !failure.output.trim().includes("\n");
@@ -624,7 +633,10 @@ class ConfirmState {
       this.onRan?.({ title: this.recovery.title, icon: this.request?.icon ?? "box", action: running.action, commands: this.#ranCommands, failed: `${failed.join(", ")} failed` });
     }
     const button = this.recovery?.button;
-    if (button) this.recoveryCommands = (await api.planAction(button.action).catch(() => ({ commands: [], notKept: [] }))).commands;
+    if (button) {
+      const plan = await api.planAction(button.action).catch(() => ({ commands: [] }));
+      if (mine === this.#planned) this.recoveryCommands = plan.commands;
+    }
   }
 
   #onEvent(event: ActionEvent) {
@@ -731,15 +743,14 @@ class ConfirmState {
     return this.toast ? this.#toastLeft : 0;
   }
 
-  /** Once the action starts or the sheet closes, a plan still on its way is out of date: it must
-   *  not put the sheet back to asking, where Save would run the action a second time. */
-  #stopPlanning() {
+  #resetPlanning(planning = false) {
     clearTimeout(this.#editTimer);
-    this.#planned++;
+    this.planning = planning;
+    return ++this.#planned;
   }
 
   #finish(done: boolean) {
-    this.#stopPlanning();
+    this.#resetPlanning();
     this.#recover = null;
     this.quiet = false;
     this.request = null;

@@ -191,23 +191,46 @@ impl Repo {
         if let Action::EditStack { plan } = action {
             self.remember_return(plan);
         }
+        let head = || self.head().ok().and_then(|head| head.commit);
+        let list_head = matches!(
+            action,
+            Action::Commit {
+                changelist: Some(_),
+                ..
+            }
+        )
+        .then(head);
         let result = self.perform_unlogged(action, on_event, cancel);
+        // A list's commit made, then the index failed to follow: what the list held is in the
+        // commit, while the index still has what it had before.
+        let list_committed = result.is_err() && list_head.is_some_and(|before| before != head());
+        let result = result.map_err(|err| {
+            if list_committed {
+                Error::Git(format!(
+                    "the commit was made, but git couldn't update what is staged after it: {err}"
+                ))
+            } else {
+                err
+            }
+        });
         self.forget_return();
         if let Action::Continue { .. } | Action::Abort | Action::Skip = action {
             self.forget_fix_rest();
         }
+        // A note that can't be written is said once the step itself is written down.
+        let mut noted = Ok(());
         if let Some((branch, source, tip)) = &replaying {
             match action {
                 // Continue goes on with the picks left and can stop on the next one's conflict
                 // after it made this one's copy: the copy is noted either way. Nothing is noted
                 // when it stopped before making a commit.
                 Action::Continue { .. } => {
-                    let noted = self.note_replay_copy(branch, source, tip);
+                    let note = self.note_replay_copy(branch, source, tip);
                     if result.is_ok() {
-                        noted?;
+                        noted = note;
                     }
                 }
-                _ if result.is_ok() => self.forget_replay(branch)?,
+                _ if result.is_ok() => noted = self.forget_replay(branch),
                 _ => {}
             }
         }
@@ -243,9 +266,9 @@ impl Repo {
         } = action
         {
             // The commit stands either way: a list left behind is only tidied up later.
-            let _ = self.after_changelist_commit(id, result.is_ok());
+            let _ = self.after_changelist_commit(id, result.is_ok() || list_committed, list_committed);
         }
-        result
+        noted.and(result)
     }
 
     fn perform_unlogged(
@@ -391,21 +414,23 @@ impl Repo {
                     {
                         return Err(Error::StashKept);
                     }
+                    // A squash stopped on conflicts, or merged and left to its commit, which can
+                    // fail too: the commit that finishes it by hand names the branch.
+                    if let Action::Merge {
+                        branch,
+                        method: MergeMethod::Squash,
+                        message,
+                    } = action
+                        && let [git, option, source] = command.args.as_slice()
+                        && git == "merge"
+                        && option == "--squash"
+                        && (ran.is_ok() || self.conflicted_paths().is_ok_and(|p| !p.is_empty()))
+                    {
+                        self.remember_squash(branch, source, message.as_deref());
+                    }
                     let out = ran.inspect_err(|_| {
                         if let Some(start) = &fix_start {
                             self.note_fix_rest(action, start.clone(), &commands, at);
-                        }
-                        if let Action::Merge {
-                            branch,
-                            method: MergeMethod::Squash,
-                            message,
-                        } = action
-                            && let [git, option, source] = command.args.as_slice()
-                            && git == "merge"
-                            && option == "--squash"
-                            && self.conflicted_paths().is_ok_and(|p| !p.is_empty())
-                        {
-                            self.remember_squash(branch, source, message.as_deref());
                         }
                         if let Action::StashApply { id, pop, .. } = action
                             && self.conflicted_paths().is_ok_and(|p| !p.is_empty())

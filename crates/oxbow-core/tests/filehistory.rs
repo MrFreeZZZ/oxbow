@@ -78,6 +78,15 @@ fn history_follows_renames_and_blame_names_each_line() {
 }
 
 #[test]
+#[cfg(unix)]
+fn line_history_treats_a_leading_colon_as_part_of_the_path() {
+    let mut fx = Fixture::new();
+    let id = fx.commit(":leading", "one\n", "Add it");
+    let repo = Repo::open(fx.path()).unwrap();
+    assert_eq!(repo.line_history(":leading", 1, "HEAD").unwrap(), [id]);
+}
+
+#[test]
 fn a_huge_blame_stops_at_its_last_whole_line_and_reads_stop() {
     let mut fx = Fixture::new();
     // About 12 MiB of porcelain: more than blame reads.

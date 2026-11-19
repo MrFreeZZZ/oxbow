@@ -46,6 +46,18 @@ function state(now = Date.now) {
   const value = Function("api", "$state", "keepList", "Date", `${js}; return github;`)(api, (v: unknown) => v, keepList, { now });
   return { value, gh, gl, api };
 }
+
+{
+  const { value } = state();
+  const merged = { ...pull(227, "merged"), head: "preview" };
+  const open = { ...pull(228), head: "preview" };
+  value.pulls = [merged];
+  assert.equal(value.pullOf("preview"), null, "a merged PR no longer represents its branch");
+  assert.equal(value.byNumber(227), merged, "Reviews can still open the merged PR by number");
+  value.pulls = [merged, open];
+  assert.equal(value.pullOf("preview"), open);
+}
+
 // Repositories, account changes and refreshes can resolve in reverse order on both providers.
 for (const change of ["repository", "account", "refresh"]) {
   const s = state();

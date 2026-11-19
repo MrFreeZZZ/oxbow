@@ -409,7 +409,7 @@
         // While File History is still bringing a place back (a followed line loads its history
         // first), the place is the one asked for, not how the file was before.
         const { path, commit, at, line } = fileLive ?? { ...nav.file, at: nav.file.at ?? null, line: nav.file.line ?? null };
-        return { view, path, commit, mode: nav.fileMode, at, line };
+        return { view, path, base: nav.file.base, commit, mode: nav.fileMode, at, line };
       }
       case "stashes":
         return { view, stash: stashSel };
@@ -500,7 +500,7 @@
       }
       case "file":
         nav.fileMode = p.mode;
-        nav.file = { path: p.path, commit: p.commit, at: p.at, line: p.line, seq: nav.nextFile() };
+        nav.file = { path: p.path, base: p.base, commit: p.commit, at: p.at, line: p.line, seq: nav.nextFile() };
         break;
       case "stashes":
         stashSel = p.stash;
@@ -1153,12 +1153,15 @@
     return out;
   }
 
+  /** A sheet keeps the window's commands until it closes, apart from opening other windows or zooming. */
+  function windowCommandsFree(): boolean {
+    return !confirm.request && !start.sheet && !document.querySelector('[aria-modal="true"]');
+  }
+
   /** Run a window-wide shortcut. False when it can't run here and now, so the key does what it
    *  would do anyway, e.g. ⌘Z in a text field. */
   function shortcutKey(id: ShortcutId, event: KeyboardEvent): boolean {
-    // A sheet keeps the keyboard: the window's commands wait until it closes, but for those
-    // that open another window or zoom.
-    const free = !confirm.request && !start.sheet && !document.querySelector('[aria-modal="true"]');
+    const free = windowCommandsFree();
     const inRepo = !!history && free && !overviewShown;
     switch (id) {
       case "repositories":
@@ -1423,7 +1426,7 @@
 
   /** The right-click menu of a commit in the graph (commitMenu.ts). */
   function commitMenu(row: HistoryRow): MenuEntry[] {
-    return commitMenuOf(row, { history, ctx: branchCtx, headStack, run, copyText, copyMessage, openStack, openSplit, openFixes, openCompare, openBrowse: (rev, label) => nav.openBrowse(rev, label), patchTarget, openPull });
+    return commitMenuOf(row, { history, ctx: branchCtx, selectedRow, headStack, run, copyText, copyMessage, openStack, openSplit, openFixes, openCompare, openBrowse: (rev, label) => nav.openBrowse(rev, label), patchTarget, applyPatches, openPull });
   }
 
   /** G, B or S while bisecting: the answer for the commit under test. */
@@ -1883,7 +1886,9 @@
     const account = listen("account-changed", () => repo && github.accountChanged());
     const closing = getCurrentWindow().onCloseRequested(closeRequested);
     const picked = getCurrentWindow().listen<ShortcutId>("menu-command", (event) => fromMenu(event.payload));
-    const recent = getCurrentWindow().listen<string>("menu-open", (event) => void load(event.payload));
+    const recent = getCurrentWindow().listen<string>("menu-open", (event) => {
+      if (!loading && windowCommandsFree()) void load(event.payload);
+    });
     // Another window trusted a repository: git runs its settings here too.
     const trusted = listen<string>("trust-changed", (event) => {
       session.trusted(event.payload);
@@ -2231,8 +2236,8 @@
           <ConflictsView.component folder={repo.path} {history} op={operation} {colorOf} {version} {run} {refresh} />
         {/key}
       {:else if view === "file" && nav.file}
-        {#key repo.path + nav.file.path}
-          <FileHistoryView.component {history} path={nav.file.path} start={nav.file.commit} lookup={(id) => rowsById.get(id)} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "the command" : text}.`)} {version} />
+        {#key JSON.stringify([repo.path, nav.file.path, nav.file.base])}
+          <FileHistoryView.component {history} path={nav.file.path} base={nav.file.base} start={nav.file.commit} lookup={(id) => rowsById.get(id)} copy={(text) => copyText(text, `Copied ${text.length > 40 ? "the command" : text}.`)} {version} />
         {/key}
       {:else if view === "browse" && browsing}
         {#key repo.path}
@@ -2270,6 +2275,7 @@
             query={seriesQuery}
             {version}
             {colorOf}
+            trunk={history?.trunk ?? null}
             lookup={(id) => rowsById.get(id)}
             onBranch={(name) => {
               const b = seriesQuery?.branches.find((x) => x.branch === name);
@@ -2353,6 +2359,8 @@
               onSelect={select}
               onScroll={(position) => (navigation.scroll = position)}
               menuFor={commitMenu}
+              linkFor={(id) => api.commitLink(repo.path, id)}
+              copyLink={(url) => copyText(url, "Copied the commit link.")}
               {found}
               second={pair ? second : null}
               onSecond={pickSecond}
@@ -2445,7 +2453,7 @@
                 onResolve={operation ? () => (resolving = true) : undefined}
               />
             {:else if selectedRow}
-              <CommitPanel row={selectedRow} childIds={childrenOf.get(selectedRow.id) ?? []} lookup={(id) => rowsById.get(id)} onSelect={jump} localTags={history.localTags} {version}
+              <CommitPanel row={selectedRow} childIds={childrenOf.get(selectedRow.id) ?? []} lookup={(id) => rowsById.get(id)} onSelect={jump} trunk={history.trunk} localTags={history.localTags} {version}
                 inHead={(id) => ancestors(history!, history!.head.commit).has(id)}
                 onSplit={!operation && headStack.has(selectedRow.id) && selectedRow.parents.length === 1 ? (path) => openSplit(selectedRow!, path) : null}
                 onUnshallow={history.shallow && history.defaultRemote ? () => run(unshallowRequest(history!.defaultRemote!)) : null}

@@ -4,6 +4,7 @@
 mod accounts;
 mod actions;
 mod background;
+mod commit_summary_window;
 mod conflicts;
 mod console_window;
 mod drafts;
@@ -62,6 +63,7 @@ fn main() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(Session::default())
         .manage(user_command_window::CommandWindows::default())
+        .manage(commit_summary_window::SummaryWindows::default())
         .manage(overview::OverviewRuns::default())
         .manage(menu::MenuState::default())
         .manage(updates::UpdateChecks::default())
@@ -75,9 +77,7 @@ fn main() {
                     api.prevent_close()
                 }
                 // Settings shows and changes the repository of the window used last.
-                tauri::WindowEvent::Focused(true)
-                    if label != "settings" && label != "console" && !user_command_window::is_command_window(&label) =>
-                {
+                tauri::WindowEvent::Focused(true) if label == "main" || label.starts_with("repo-") => {
                     let changed = session.focused.lock().expect("session lock").replace(label.clone()) != Some(label);
                     if changed {
                         let _ = window.emit_to("settings", "repo-changed", ());
@@ -85,6 +85,9 @@ fn main() {
                     }
                 }
                 tauri::WindowEvent::Destroyed => {
+                    if commit_summary_window::is_summary_window(&label) {
+                        window.state::<commit_summary_window::SummaryWindows>().remove(&label);
+                    }
                     if user_command_window::is_command_window(&label) {
                         session.stops.stop(&label);
                     }
@@ -187,7 +190,9 @@ fn main() {
             history::tree_at,
             history::files_at,
             history::file_at,
+            history::file_is_binary_at,
             history::save_file_at,
+            history::save_file_patch,
             working::working_tree,
             working::working_counts,
             working::recent_messages,
@@ -273,6 +278,10 @@ fn main() {
             preferences::restore_default_settings,
             preferences::restore_settings_backup,
             preferences::reveal_settings,
+            commit_summary_window::commit_link,
+            commit_summary_window::open_commit_summary,
+            commit_summary_window::commit_summary_state,
+            commit_summary_window::open_summary_commit_link,
             console_window::open_console,
             console_window::console_repos,
             console_window::console_entries,

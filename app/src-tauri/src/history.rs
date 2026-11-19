@@ -414,6 +414,20 @@ pub(crate) async fn file_at(
     read(at(&repo), "Read a file of a commit", move || repo.file_at(&rev, &path)).await
 }
 
+#[tauri::command]
+pub(crate) async fn file_is_binary_at(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    rev: String,
+    path: String,
+) -> CommandResult<bool> {
+    let repo = current(&session, &window)?;
+    read(at(&repo), "Check a file of a commit", move || {
+        repo.file_is_binary(&rev, &path)
+    })
+    .await
+}
+
 /// Save As: a file as a commit has it, written where the user chose.
 #[tauri::command]
 pub(crate) async fn save_file_at(
@@ -426,6 +440,27 @@ pub(crate) async fn save_file_at(
     let repo = current(&session, &window)?;
     read(at(&repo), "Save a file of a commit", move || {
         repo.save_file_at(&rev, &path, std::path::Path::new(&to))
+    })
+    .await
+}
+
+/// Save one file's change from the repository where its menu was opened.
+#[tauri::command]
+pub(crate) async fn save_file_patch(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    repository: String,
+    commit: String,
+    path: String,
+    old_path: Option<String>,
+    to: String,
+) -> CommandResult<()> {
+    let repo = current(&session, &window)?;
+    if repo.workdir() != std::path::Path::new(&repository) {
+        return Err("The repository changed. Open the file menu again to save a patch.".into());
+    }
+    read(at(&repo), "Save a file patch", move || {
+        repo.save_file_patch(&commit, &path, old_path.as_deref(), std::path::Path::new(&to))
     })
     .await
 }

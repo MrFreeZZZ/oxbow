@@ -397,7 +397,7 @@
           <section>
             {#if group.title}<h2>{group.title}</h2>{/if}
             {#if !needle && group.preview === "background"}<div class="background-choices"><BackgroundChoices /></div>{/if}
-            <div class="panel">
+            <div class="settings-panel">
               {#each group.rows as row (row.id)}
                 {#if needle || group.preview !== "background" || row.id === "oxbow.background.intensity"}
                   <SettingsRow {row} menuOn={menu?.row.id === row.id} onMenu={(x, y) => openMenu(row, x, y)} bind:editing />
@@ -674,12 +674,6 @@
     font-size: var(--text-body);
     line-height: 1.5;
     color: var(--text);
-  }
-
-  .panel {
-    border-radius: var(--radius-l);
-    background: var(--panel);
-    border: 0.5px solid var(--panel-border);
   }
 
   .button.small {

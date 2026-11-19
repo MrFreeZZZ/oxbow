@@ -73,8 +73,6 @@
   );
   const known = $derived(new Set(counted?.key === countKey ? [] : diffs.map((d) => d.file.path)));
   const metadataByPath = $derived(new Map(c.files.map((file) => [file.path, file])));
-  const authors = $derived([...new Set(c.ahead.map((a) => a.authorName))]);
-  const commits = $derived(c.mode === "split" ? c.aheadCount : c.aheadCount + c.behindCount);
 
   // The view's reads stop when it closes: their answers would go nowhere.
   $effect(() => () => {
@@ -200,25 +198,13 @@
     <div class="head">
       <h1>
         {#if c.mode === "split"}
-          What {target} changed since it split from {base}
+          File changes on {target}
         {:else}
-          How {target} differs from {base}
+          File changes from {base} to {target}
         {/if}
       </h1>
-      <p class="sub">
-        {[
-          authors.length ? `By ${authors.slice(0, 3).join(", ")}${authors.length > 3 ? ` and ${authors.length - 3} more` : ""}` : null,
-          `${c.files.length} ${c.files.length === 1 ? "file" : "files"}`,
-          `${commits} ${commits === 1 ? "commit" : "commits"}`,
-        ]
-          .filter(Boolean)
-          .join(" · ")}
-      </p>
-      {#if c.mode === "tips" && c.behindCount}
-        <p class="warn">
-          Also shows the {c.behindCount} newer {c.behindCount === 1 ? "commit" : "commits"} on {base} undone, because the tips are compared directly.
-          {#if c.mergeBase}Since Split leaves them out.{/if}
-        </p>
+      {#if c.mode === "split"}
+        <p class="sub">From common ancestor {shortId(c.from)}</p>
       {/if}
     </div>
   {/if}
@@ -239,7 +225,17 @@
       counted={(file) => !!totals || known.has(file.path)}
       onFold={shownTab === null && diffs.length > 1 ? (fold) => diffView?.setAll(fold) : undefined}>
       {#if error}<p class="error" role="alert">{error}</p>{/if}
-      {#if !c.files.length}<p class="empty">No differences: both sides have the same files.</p>{/if}
+      {#if !c.files.length}
+        <p class="empty">
+          {#if c.mode === "split" && c.from === c.targetId}
+            {target} is at the common ancestor. There are no changes on this side since that commit.
+          {:else if c.mode === "split"}
+            The files on {target} match the common ancestor {shortId(c.from)}.
+          {:else}
+            The two snapshots have identical files.
+          {/if}
+        </p>
+      {/if}
       <DiffView
         bind:this={diffView}
         foldable={shownTab === null}
@@ -283,15 +279,6 @@
     color: var(--text2);
     font-size: var(--text-small);
   }
-  .warn {
-    margin: 4px 0 0;
-    padding: 8px 12px;
-    border-radius: var(--radius-m);
-    background: var(--orange-soft);
-    color: var(--orange);
-    font-size: var(--text-small);
-    line-height: 1.45;
-  }
   .mono {
     font-family: var(--mono);
   }
@@ -311,7 +298,6 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 35%;
   }
   .empty,
   .error {

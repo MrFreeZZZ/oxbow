@@ -92,6 +92,39 @@ fn the_preview_lists_both_sides_and_predicts_the_conflict() {
 }
 
 #[test]
+fn a_preview_whose_conflict_check_fails_says_so_rather_than_guessing() {
+    let mut fx = diverged();
+    // The commits and trees are there, but not the file both sides changed: only the
+    // in-memory merge has to read it.
+    let blob = fx.git(&["rev-parse", "feature:a.txt"]);
+    std::fs::remove_file(fx.path().join(".git/objects").join(&blob[..2]).join(&blob[2..])).unwrap();
+    let repo = Repo::open(fx.path()).unwrap();
+    let err = repo.merge_preview("feature").unwrap_err();
+    assert!(err.to_string().contains("merge-tree"), "{err}");
+}
+
+#[test]
+fn a_merge_whose_incoming_commits_cant_be_counted_is_not_shown_as_bringing_none() {
+    let fx = diverged();
+    std::fs::write(fx.path().join(".git/MERGE_HEAD"), format!("{}\n", "1".repeat(40))).unwrap();
+    let repo = Repo::open(fx.path()).unwrap();
+    assert!(repo.operation().is_err());
+}
+
+#[test]
+fn branches_with_nothing_in_common_are_previewed_without_a_base() {
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "one\n", "Root");
+    fx.git(&["switch", "-q", "--orphan", "other"]);
+    fx.commit("b.txt", "b\n", "Elsewhere");
+    fx.git(&["switch", "-q", "main"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let preview = repo.merge_preview("other").unwrap();
+    assert!(preview.base.is_none() && preview.conflicts.is_none());
+    assert_eq!((preview.incoming_count, preview.files), (1, 0));
+}
+
+#[test]
 fn a_clean_merge_makes_a_merge_commit() {
     let mut fx = Fixture::new();
     fx.commit("a.txt", "one\n", "Root");
@@ -398,6 +431,38 @@ fn a_squash_that_conflicts_keeps_the_chosen_message() {
     assert_eq!(fx.git(&["log", "-1", "--format=%s %P"]).split(' ').count(), 5);
     assert_eq!(fx.git(&["log", "-1", "--format=%s"]), "Feature in one commit");
     assert_eq!(read(&fx, "b.txt"), "new\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_squash_whose_commit_is_stopped_still_names_the_branch_and_the_message() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut fx = Fixture::new();
+    fx.commit("a.txt", "one\n", "Root");
+    fx.git(&["switch", "-q", "-c", "feature"]);
+    fx.commit("b.txt", "b\n", "Add b");
+    fx.git(&["switch", "-q", "main"]);
+    let hook = fx.path().join(".git/hooks/pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\necho no >&2\nexit 1\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let repo = Repo::open(fx.path()).unwrap();
+    let action = merge("feature", MergeMethod::Squash, Some("Feature in one commit"));
+    repo.perform(&action).unwrap_err();
+
+    let op = repo.operation().unwrap().expect("a squash in progress");
+    assert_eq!(op.kind, OperationKind::Squash);
+    assert_eq!(op.theirs_label, "feature");
+    assert_eq!(op.message.as_deref(), Some("Feature in one commit"));
+
+    // Finished, the note goes with it.
+    std::fs::remove_file(&hook).unwrap();
+    repo.perform(&Action::Continue {
+        message: op.message.clone(),
+    })
+    .unwrap();
+    assert!(repo.operation().unwrap().is_none());
+    assert!(!fx.path().join(".git/OXBOW_SQUASH_SOURCE").exists());
+    assert_eq!(fx.git(&["log", "-1", "--format=%s"]), "Feature in one commit");
 }
 
 #[test]

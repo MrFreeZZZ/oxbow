@@ -2,6 +2,7 @@
   export type MenuEntry =
     /** `keys`: its shortcut, grey on the right, e.g. "⌘O". `detail`: a grey second line, e.g. a folder's path;
      *  orange with `warn`. `off`: listed greyed and does nothing, its detail saying why.
+     *  `hidden`: reserves the item's index until it can be shown.
      *  `remove`: a × on hover (or Delete on the focused item) that takes the item off a list and keeps the menu open. */
     | {
         kind: "item";
@@ -12,6 +13,7 @@
         detail?: string;
         warn?: boolean;
         off?: boolean;
+        hidden?: boolean;
         run: () => void;
         remove?: { label: string; run: () => void };
       }
@@ -23,7 +25,7 @@
     | { kind: "sep" };
 
   /** An item of a submenu: a label, and a grey hint on the right. */
-  export type SubEntry = { label: string; hint?: string; danger?: boolean; run: () => void };
+  export type SubEntry = { label: string; hint?: string; danger?: boolean; off?: boolean; run: () => void };
 
   /** Icon paths of menu items, from the Branches design. */
   export const menuIcons = {
@@ -39,6 +41,7 @@
     rebase: "M4.5 14V7M4.5 7c0-3 7-1 7-5M11.5 2v12M9.5 4 11.5 2l2 2",
     split: "M8 1.5v4M8 5.5 4 9.5v5M8 5.5l4 4v5",
     patch: "M4 1.5h5.5l3 3v10h-8.5zM9.5 1.5v3h3M8.3 6.2v5.2M6.2 9.4l2.1 2.1 2.1-2.1",
+    applyPatch: "M4 1.5h5.5l3 3v10h-8.5zM9.5 1.5v3h3M8.3 11.4V6.2M6.2 8.3l2.1-2.1 2.1 2.1",
     cherry: "M3 12a2 2 0 1 0 4 0a2 2 0 1 0-4 0M9 11a2 2 0 1 0 4 0a2 2 0 1 0-4 0M5 10c.5-4 3-6.5 6-8M11 9c-.5-2.5-.5-5 0-7",
     undo: "M3 6.5h7a3.5 3.5 0 0 1 0 7H6M5.5 4 3 6.5 5.5 9",
     revert: "M12.5 8a4.5 4.5 0 1 1-1.3-3.2M11.5 2v3h-3",
@@ -207,7 +210,7 @@
         <span>{entry.label}</span>
         <svg class="icon chevron" viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
       </button>
-    {:else}
+    {:else if !entry.hidden}
       {@const run = entry.run}
       {@const drop = entry.remove}
       <div class="row" class:removable={drop}>
@@ -246,7 +249,7 @@
   {#if parent?.kind === "sub"}
     <div class="menu submenu" role="menu" aria-label={parent.label} bind:this={subBox} style:left="{subLeft}px" style:top="{subTop}px">
       {#each parent.entries as entry (entry.label)}
-        <button role="menuitem" class:danger={entry.danger} onclick={() => choose(entry.run)}>
+        <button role="menuitem" class:danger={entry.danger} class:off={entry.off} aria-disabled={entry.off} onclick={() => !entry.off && choose(entry.run)}>
           <span>{entry.label}</span>
           {#if entry.hint}<span class="hint">{entry.hint}</span>{/if}
         </button>

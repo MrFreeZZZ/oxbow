@@ -1,6 +1,6 @@
 mod support;
 
-use oxbow_core::{Action, NotKept, Repo, ResetMode};
+use oxbow_core::{Action, BisectMark, NotKept, Repo, ResetMode};
 use support::Fixture;
 
 /// A sparse file just over the snapshot limit: quick to make, never read.
@@ -110,6 +110,24 @@ fn an_ignored_file_just_as_the_commit_has_it_is_not_named() {
     let root = fx.git(&["rev-parse", "HEAD"]);
     fx.git(&["rm", "-q", "--cached", ".env"]);
     fx.commit(".gitignore", ".env\n", "Ignore .env");
+    let repo = Repo::open(fx.path()).unwrap();
+
+    let reset = Action::Reset {
+        commit: root,
+        mode: ResetMode::Hard,
+    };
+    assert!(repo.not_kept(&reset).unwrap().is_empty());
+}
+
+// Windows allows no `:` in a file name.
+#[cfg(unix)]
+#[test]
+fn an_ignored_file_named_like_a_pathspec_just_as_the_commit_has_it_is_not_named() {
+    let mut fx = Fixture::new();
+    fx.commit(":env", "TOKEN=example\n", "Root");
+    let root = fx.git(&["rev-parse", "HEAD"]);
+    fx.git(&["rm", "-q", "--cached", "--", ":(literal):env"]);
+    fx.commit(".gitignore", "/:env\n", "Ignore :env");
     let repo = Repo::open(fx.path()).unwrap();
 
     let reset = Action::Reset {
@@ -281,6 +299,43 @@ fn undoing_a_pushed_commit_says_only_this_copy_changes_and_offers_revert() {
             assert_eq!(revert.as_deref(), Some(second.as_str()));
         }
         other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn bisect_and_submodule_steps_say_they_stay_out_of_the_log() {
+    let mut fx = Fixture::new();
+    let root = fx.commit("a.txt", "one\n", "Root");
+    let tip = fx.commit("a.txt", "two\n", "Two");
+    let repo = Repo::open(fx.path()).unwrap();
+    for action in [
+        Action::BisectStart {
+            good: root,
+            bad: tip,
+            stash: false,
+            command: None,
+        },
+        Action::BisectMark {
+            mark: BisectMark::Good,
+            commit: None,
+        },
+        Action::BisectReset,
+        Action::SubmoduleUpdate {
+            paths: Vec::new(),
+            latest: false,
+        },
+        Action::SubmoduleSync { paths: Vec::new() },
+        Action::SubmoduleAdd {
+            url: "https://example.com/lib.git".into(),
+            path: "libs/lib".into(),
+            branch: None,
+        },
+    ] {
+        let notes = repo.not_kept(&action).unwrap();
+        assert!(
+            matches!(notes[..], [NotKept::NotLogged { .. }]),
+            "{action:?}: {notes:?}"
+        );
     }
 }
 

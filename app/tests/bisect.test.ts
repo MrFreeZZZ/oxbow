@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { bisectStartRequest } from "../src/lib/bisect.ts";
+import { bisectMarkRequest, bisectStartRequest } from "../src/lib/bisect.ts";
 import type { BranchContext } from "../src/lib/branches.ts";
 import type { HistoryRow } from "../src/lib/types.ts";
 
@@ -36,4 +36,17 @@ test("bisect uses the commits shown in the range when a branch and tag share a n
       kind: "bisectStart", good: good.id, bad: bad.id, stash: false, command: null,
     });
   }
+});
+
+test("marking another commit sends its whole id, not the short one shown", () => {
+  const row = (digit: string) => ({ id: digit.repeat(40), summary: digit, parents: [], labels: [] }) as unknown as HistoryRow;
+  const testing = row("a");
+  const other = row("b");
+  const ctx = {
+    history: { rows: [testing, other], refs: [], head: { branch: null, commit: testing.id }, trunk: null, bisect: null },
+    uncommitted: 0,
+    colorOf: () => 0,
+  } as unknown as BranchContext;
+  assert.deepEqual(bisectMarkRequest(ctx, "good", other).action, { kind: "bisectMark", mark: "good", commit: other.id });
+  assert.deepEqual(bisectMarkRequest(ctx, "bad").action, { kind: "bisectMark", mark: "bad", commit: null });
 });

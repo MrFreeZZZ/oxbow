@@ -42,6 +42,8 @@ export type Row = {
   /** A file's picture before the label; `missing` draws it dashed with a plus. */
   file?: () => { missing: boolean };
   control?: Control;
+  /** Plain up and down arrows change the focused popup's value directly. */
+  stepPopupWithArrows?: boolean;
   setting?: Setting;
   /** Greyed out while another setting makes this one irrelevant. */
   off?: () => boolean;
@@ -70,4 +72,11 @@ export function withCurrent(options: Option[], current: Value): Option[] {
   const extra = { value: current as string | number, label: String(current) };
   const at = typeof current === "number" ? options.findIndex((o) => typeof o.value === "number" && o.value > current) : -1;
   return at < 0 ? [...options, extra] : [...options.slice(0, at), extra, ...options.slice(at)];
+}
+
+export function stepPopup(options: Option[], index: number, event: KeyboardEvent): Option | undefined {
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+  event.preventDefault();
+  return options[index + (event.key === "ArrowUp" ? -1 : 1)];
 }

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import FileLineCounts from "./FileLineCounts.svelte";
   // The end of a row in a file list: a small badge and note for an unusual change (Image, Binary,
   // Large, +x, CRLF → LF, Renamed), otherwise the added and removed line counts.
 
@@ -16,8 +17,7 @@
   <span class="note" class:warn={badge.warn}>{badge.note}</span>
 {:else}
   {#if renamed}<span class="badge" title={file.oldPath ? `From ${file.oldPath}` : undefined}>{file.status === "copied" ? "Copied" : "Renamed"}</span>{/if}
-  <span class="mono add">+{file.additions}</span>
-  <span class="mono del">−{file.deletions}</span>
+  <FileLineCounts add={file.additions} del={file.deletions} />
 {/if}
 
 <style>
@@ -42,15 +42,5 @@
   }
   .note.warn {
     color: var(--orange);
-  }
-  .add {
-    color: var(--green);
-    font-size: var(--text-caption);
-  }
-  .del {
-    color: var(--red);
-    font-size: var(--text-caption);
-    min-width: 22px;
-    text-align: right;
   }
 </style>

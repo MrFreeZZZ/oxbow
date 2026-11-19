@@ -335,7 +335,9 @@ impl Repo {
                 "--format=%H".to_owned(),
                 format!("-L{line},{line}:{path}"),
                 rev,
-            ]),
+            ])
+            // A path inside -L cannot use the :(literal) prefix.
+            .env("GIT_LITERAL_PATHSPECS", "1"),
             cancel,
         )?;
         Ok(out

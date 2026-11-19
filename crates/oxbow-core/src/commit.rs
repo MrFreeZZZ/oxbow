@@ -15,6 +15,7 @@ use crate::repo::Repo;
 pub const CONTEXT_LINES: u32 = 3;
 /// Blobs larger than this are not diffed line by line.
 const MAX_BLOB_BYTES: usize = 16 * 1024 * 1024;
+const BINARY_SAMPLE_BYTES: usize = 8000;
 /// Diff lines built for one file at most, even with no line limit in Settings (Show Diff Anyway):
 /// 16 MiB of newlines would otherwise be 16 million lines, over a gigabyte.
 const MAX_SHOWN_LINES: usize = 1_000_000;
@@ -919,7 +920,7 @@ impl Repo {
     }
 }
 
-fn find_commit<'r>(repo: &'r gix::Repository, id: &str) -> Result<gix::Commit<'r>> {
+pub(crate) fn find_commit<'r>(repo: &'r gix::Repository, id: &str) -> Result<gix::Commit<'r>> {
     let oid = ObjectId::from_hex(id.as_bytes()).map_err(|_| Error::UnknownCommit(id.to_owned()))?;
     repo.find_commit(oid).map_err(|_| Error::UnknownCommit(id.to_owned()))
 }
@@ -1123,9 +1124,14 @@ fn blob_size(repo: &gix::Repository, id: Option<ObjectId>) -> u64 {
 
 /// Whether a blob looks binary from its first bytes, the way git decides, without reading the
 /// rest: `git cat-file` streams it and is stopped once they are in.
-fn starts_binary(repo: &gix::Repository, id: ObjectId) -> bool {
+pub(crate) fn starts_binary(repo: &gix::Repository, id: ObjectId, size: u64) -> Result<bool> {
     use std::io::Read;
     use std::process::Stdio;
+    let mut head = [0; BINARY_SAMPLE_BYTES];
+    let sample = &mut head[..size.min(BINARY_SAMPLE_BYTES as u64) as usize];
+    if sample.is_empty() {
+        return Ok(false);
+    }
     let display = format!("git cat-file blob {id}");
     let dir = repo.workdir().unwrap_or(repo.git_dir());
     let log = crate::console::started(dir, &display);
@@ -1141,30 +1147,37 @@ fn starts_binary(repo: &gix::Repository, id: ObjectId) -> bool {
         Ok(child) => child,
         Err(err) => {
             log.not_started(&err.to_string());
-            return false;
+            return Err(Error::GitNotFound(err.to_string()));
         }
     };
-    let mut head = Vec::with_capacity(8000);
-    if let Some(out) = child.stdout.take() {
-        let _ = out.take(8000).read_to_end(&mut head);
-    }
+    let read = child.stdout.take().expect("piped stdout").read_exact(sample);
     let _ = child.kill();
-    let status = child.wait().ok();
+    let code = child.wait().ok().and_then(|status| status.code());
+    let mut output = log.output();
+    if let Err(err) = read {
+        let message = format!("could not read the first {} bytes: {err}", sample.len());
+        output.push(&message, true);
+        log.done_lines(code.filter(|&code| code != 0).or(Some(1)), output);
+        return Err(Error::Command {
+            command: display,
+            code,
+            output: message,
+        });
+    }
     // Only its first bytes are read, and they are file content, not something to show.
-    let binary = is_binary(&head);
+    let binary = is_binary(sample);
     let note = format!(
         "read the first {} bytes: {}",
-        head.len(),
+        sample.len(),
         if binary { "binary" } else { "text" }
     );
-    let mut output = log.output();
     output.push(&note, false);
-    log.done_lines(status.and_then(|s| s.code()).or(Some(0)), output);
-    binary
+    log.done_lines(Some(0), output);
+    Ok(binary)
 }
 
-fn is_binary(data: &[u8]) -> bool {
-    data[..data.len().min(8000)].contains(&0)
+pub(crate) fn is_binary(data: &[u8]) -> bool {
+    data[..data.len().min(BINARY_SAMPLE_BYTES)].contains(&0)
 }
 
 /// Read both sides of a change and diff them line by line, filling in what `file` can tell
@@ -1200,7 +1213,10 @@ fn inspect(
             file.similarity = Some(if old == new { 100 } else { 0 });
         }
         // Its first bytes still tell a picture or other binary file from big text.
-        if [old, new].into_iter().flatten().any(|id| starts_binary(repo, id)) {
+        if [(old, sizes.0), (new, sizes.1)]
+            .into_iter()
+            .any(|(id, size)| id.is_some_and(|id| starts_binary(repo, id, size).unwrap_or(false)))
+        {
             file.binary = true;
             return Ok(Inspected {
                 line_endings: None,

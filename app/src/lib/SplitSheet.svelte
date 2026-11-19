@@ -8,7 +8,7 @@
 
   import { api } from "./api";
   import { modal } from "./modal";
-  import { shortId } from "./format";
+  import { shortId, fileDeletionWidth } from "./format";
   import { withKeys } from "./keys";
   import DiffView, { type LinePicker } from "./DiffView.svelte";
   import FileBadge from "./FileBadge.svelte";
@@ -146,7 +146,7 @@
       <p class="error">{error}</p>
     {:else}
       <div class="panes">
-        <div class="files" role="list" aria-label="Files of the commit">
+        <div class="files" role="list" style:--file-deletion-width={fileDeletionWidth(diffs?.map((d) => d.file) ?? [])} aria-label="Files of the commit">
           {#each diffs ?? [] as d (d.file.path)}
             {@const state = fileState(picks, d)}
             <div class="file" class:on={open === d.file.path} role="listitem">
@@ -162,7 +162,7 @@
               >
                 <svg viewBox="0 0 16 16"><path d={state === "some" ? "M4 8h8" : "M3.5 8.5l3 3 6-7"} /></svg>
               </button>
-              <button class="name" onclick={() => (open = d.file.path)}>
+              <button class="name" title={d.file.path} onclick={() => (open = d.file.path)}>
                 <PathName path={d.file.path} />
                 <span class="sub">
                   {#if d.file.status === "added"}New file · {:else if d.file.status === "deleted"}Deleted · {/if}{#if !byLine(d)}whole only{:else}<FileBadge file={d.file} />{/if}
@@ -306,7 +306,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
+    align-items: stretch;
     gap: 1px;
     text-align: left;
   }

@@ -145,12 +145,10 @@ class GitHubState {
     return this.#path ? this.load(this.#path, true) : Promise.resolve();
   }
 
-  /** The pull request of `branch`: its open one, else the latest one. Forks don't count. On
-   *  `gitlab`, its merge request. */
+  /** The open GitHub pull request of `branch`, excluding forks. On `gitlab`, its merge request. */
   pullOf(branch: string, forge: ForgeKind = "github"): PullSummary | null {
     if (forge === "gitlab") return this.mergeRequestOf(branch);
-    const own = this.pulls.filter((p) => p.head === branch && (!p.headOwner || p.headOwner === this.repo?.owner));
-    return own.find((p) => p.state === "open") ?? own[0] ?? null;
+    return this.pulls.find((p) => p.state === "open" && p.head === branch && (!p.headOwner || p.headOwner === this.repo?.owner)) ?? null;
   }
 
   /** Pull request `number`, if the list has it; on `gitlab`, merge request `!number`. */

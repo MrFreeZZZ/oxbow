@@ -1,12 +1,13 @@
 // The right-click menu of a file in the Changes panel's lists, or of several picked files, and of
 // a file of a commit.
 
+import { save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import { ignoreChoices, ignoreRequest, stashFilesRequest, stashMessageFor, type StashCandidate } from "./changes";
 import { stashStagedRequest } from "./stashLines";
 import { commitFileActions, commitFileRequest, type CommitFile } from "./commitFiles";
 import { confirm, type Request } from "./confirm.svelte";
-import { splitPath } from "./format";
+import { shortId, splitPath } from "./format";
 import { menuIcons, type MenuEntry, type SubEntry } from "./Menu.svelte";
 import { workingFileMenuItem } from "./openFile.svelte";
 import { nav } from "./nav.svelte";
@@ -133,13 +134,35 @@ export interface CommitFileContext {
 
 /** The menu of a file of a commit: what can be done with it, as with a file in Changes, but
  *  nothing to stage, stash or discard; and its change on its own, undone or copied. */
-export function commitFileMenu(repo: string, file: FileChange, commit: string, ctx: CommitFileContext): FileMenu {
+export function commitFileMenu(repo: string, file: FileChange, commit: string, ctx: CommitFileContext, canBlame: () => boolean): FileMenu {
   const name = splitPath(file.path).name;
   const what = { modified: "modified", added: "added", untracked: "added", deleted: "deleted", renamed: "renamed", copied: "copied", conflicted: "conflicted" }[file.status];
   const entries: MenuEntry[] = [{ kind: "header", label: `${name} · ${what} in this commit` }];
   const actions = commitFileEntries(file, commit, ctx);
   const split = ctx.split;
   if (split) actions.push({ kind: "item", label: "Split into a New Commit…", icon: menuIcons.split, run: () => split(file.path) });
+  if (!file.submodule) {
+    const { path, oldPath, status } = file;
+    actions.push({
+      kind: "item",
+      label: "Save File Patch…",
+      icon: menuIcons.patch,
+      run: async () => {
+        try {
+          const to = await save({
+            title: "Save File Patch",
+            defaultPath: `${shortId(commit)}-${name}.patch`,
+            filters: [{ name: "Patch", extensions: ["patch"] }],
+          });
+          if (!to) return;
+          await api.saveFilePatch(repo, commit, path, status === "renamed" ? oldPath ?? null : null, to);
+          confirm.say(`Saved a patch for ${name}.`, "done");
+        } catch (err) {
+          confirm.fail(err);
+        }
+      },
+    });
+  }
   if (actions.length) entries.push(...actions, { kind: "sep" });
   if (!file.submodule) entries.push(workingFileMenuItem(file.path, true));
   if (file.status !== "deleted") {
@@ -147,6 +170,16 @@ export function commitFileMenu(repo: string, file: FileChange, commit: string, c
   }
   entries.push(copyMenu(repo, [file.path]));
   entries.push({ kind: "item", label: "File History", icon: menuIcons.history, run: () => nav.openFile(file.path, commit) });
+  entries.push({
+    kind: "item",
+    label: "Blame at This Commit",
+    icon: menuIcons.history,
+    get hidden() { return !canBlame(); },
+    run: () => {
+      nav.fileMode = "blame";
+      nav.openFile(file.path, commit, { base: commit, at: commit });
+    },
+  });
   entries.push({ kind: "item", label: "Local History", icon: menuIcons.history, run: () => nav.openFile(file.path, NEWEST_SAVED) });
   if (file.status !== "deleted" && !file.submodule) entries.push({ kind: "item", label: "Browse Files at This Commit", icon: menuIcons.folder, run: () => nav.openBrowse(commit, null, file.path) });
   return { entries, label: `${name} menu` };

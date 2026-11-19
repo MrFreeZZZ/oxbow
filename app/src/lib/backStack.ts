@@ -13,8 +13,8 @@ export type HistoryPosition = { id: string; offset: number };
 export type Place =
   /** History: the selected commit, and the first visible row and its offset when you left it. */
   | { view: "history"; commit: string | null; scroll: HistoryPosition | null }
-  /** File History: the file, its selected commit, Changes or Blame, Blame's revision and a line followed. */
-  | { view: "file"; path: string; commit: string | null; mode: FileMode; at: { rev: string; path: string } | null; line: number | null }
+  /** File History: the file, its history base, its selected commit, Changes or Blame, Blame's revision and a line followed. */
+  | { view: "file"; path: string; base: string | null; commit: string | null; mode: FileMode; at: { rev: string; path: string } | null; line: number | null }
   | { view: "stashes"; stash: string | null }
   | { view: "oplog" }
   | { view: "local" }
@@ -35,12 +35,12 @@ export const LIMIT = 50;
 
 export const emptyTrail = (): Trail => ({ places: [], at: -1 });
 
-/** What makes a place another one: a different screen, file, followed line, branch or range.
+/** What makes a place another one: a different screen, file, history base, followed line, branch or range.
  *  The rest (the selected commit, Changes or Blame, the scroll) is how you left it. */
 export function placeKey(p: Place): string {
   switch (p.view) {
     case "file":
-      return `file\0${p.path}\0${p.line ?? ""}`;
+      return `file\0${p.path}\0${p.base ?? ""}\0${p.line ?? ""}`;
     case "compare":
       return `compare\0${p.base}\0${p.target}`;
     case "series":
@@ -237,7 +237,7 @@ export function detailOfPlace(
       return row ? (row.worktree ? "Uncommitted changes" : row.summary) : undefined;
     }
     case "file":
-      return p.line ? `${p.path} · Blame` : `${p.path} · ${p.mode === "blame" ? "Blame" : "Changes"}`;
+      return `${p.path} · ${p.base ? `Through ${p.base.slice(0, 7)} · ` : ""}${p.line || p.mode === "blame" ? "Blame" : "Changes"}`;
     case "compare":
       return `${compareLabel(p.target)} with ${compareLabel(p.base)}`;
     case "series":

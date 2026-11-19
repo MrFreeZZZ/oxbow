@@ -1,8 +1,8 @@
 mod support;
 
 use oxbow_core::{Action, ActionEvent, CommitCheck, Error, FailureKind, Fix, Repo, TrustKind, trust};
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::{fs, sync::Arc};
 use support::Fixture;
 
 fn commit(skip_checks: bool) -> Action {
@@ -47,11 +47,70 @@ fn checks_are_kept_in_the_repository_config_in_order() {
     );
     assert_eq!(repo.commit_checks().unwrap(), checks[..2]);
 
-    // Written again whole: the old values go.
-    repo.set_commit_checks(&[check("npm test", true)]).unwrap();
-    assert_eq!(repo.commit_checks().unwrap(), [check("npm test", true)]);
+    let replacement = [check("npm test", true), check("cargo test", false)];
+    repo.set_commit_checks(&replacement).unwrap();
+    assert_eq!(repo.commit_checks().unwrap(), replacement);
+    assert_eq!(fx.git(&["config", "--local", "user.name"]), "Alexander");
     repo.set_commit_checks(&[]).unwrap();
     assert_eq!(repo.commit_checks().unwrap(), []);
+}
+
+#[test]
+fn a_failed_replacement_leaves_the_original_config_intact() {
+    let mut fx = staged();
+    fx.git(&["config", "--add", "oxbow.check", "old"]);
+    fx.git(&["config", "--add", "oxbow.check", "# disabled"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let config = repo.common_dir().join("config");
+    let before = fs::read(&config).unwrap();
+
+    // Git cannot start with a NUL in an argument, after the first add has succeeded.
+    let err = repo
+        .set_commit_checks(&[check("new", true), check("invalid\0argument", true)])
+        .unwrap_err();
+    assert!(matches!(err, Error::GitNotFound(_)), "{err}");
+    assert_eq!(fs::read(&config).unwrap(), before);
+    assert_eq!(
+        repo.commit_checks().unwrap(),
+        [check("old", true), check("disabled", false)]
+    );
+    assert!(!config.with_extension("lock").exists());
+}
+
+#[test]
+fn a_linked_worktree_updates_the_shared_config() {
+    let mut fx = staged();
+    let linked = fx.path().with_file_name("linked");
+    fx.git(&["worktree", "add", "--detach", linked.to_str().unwrap()]);
+    let checks = [check("cargo test", true)];
+    Repo::open(&linked).unwrap().set_commit_checks(&checks).unwrap();
+    assert_eq!(Repo::open(fx.path()).unwrap().commit_checks().unwrap(), checks);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_config_uses_the_target_lock_and_keeps_its_mode() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let fx = staged();
+    let config = fx.path().join(".git/config");
+    let target = config.with_file_name("settings");
+    fs::rename(&config, &target).unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+    symlink("settings", &config).unwrap();
+    let repo = Repo::open(fx.path()).unwrap();
+    let lock = target.with_extension("lock");
+    fs::write(&lock, "another writer").unwrap();
+    let checks = [check("cargo test", true)];
+    assert!(repo.set_commit_checks(&checks).is_err());
+    assert_eq!(fs::read_to_string(&lock).unwrap(), "another writer");
+    assert_eq!(repo.commit_checks().unwrap(), []);
+    fs::remove_file(lock).unwrap();
+
+    repo.set_commit_checks(&checks).unwrap();
+    assert!(config.is_symlink());
+    assert_eq!(fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o640);
+    assert_eq!(repo.commit_checks().unwrap(), checks);
 }
 
 #[cfg(unix)]

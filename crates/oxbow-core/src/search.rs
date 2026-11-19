@@ -176,9 +176,7 @@ impl Repo {
         if !(4..=40).contains(&prefix.len()) || !prefix.bytes().all(|b| b.is_ascii_hexdigit()) {
             return None;
         }
-        let repo = self.local();
-        let id = repo.rev_parse_single(format!("{prefix}^{{commit}}").as_str()).ok()?;
-        Some(id.detach().to_string())
+        self.commit_from_hex_prefix(prefix, false)
     }
 }
 

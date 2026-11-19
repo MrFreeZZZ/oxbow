@@ -8,10 +8,10 @@
     calc(var(--diff-rail-inset) + var(--diff-file-inset));
 }
 
-/* Shared thin scrollbars for the diff and commit graph; the wider transparent thumb border keeps dragging easy. */
 .diff-scroll {
   padding-left: var(--diff-rail-inset);
 }
+/* The transparent border makes the shared thin thumb easier to drag. */
 .thin-scroll::-webkit-scrollbar {
   width: 12px;
 }

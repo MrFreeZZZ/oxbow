@@ -200,7 +200,10 @@ export const api = {
   treeAt: (rev: string, dir: string) => invoke<TreeItem[]>("tree_at", { rev, dir }),
   filesAt: (rev: string) => invoke<string[]>("files_at", { rev }),
   fileAt: (rev: string, path: string) => invoke<FileAt>("file_at", { rev, path }),
+  fileIsBinaryAt: (rev: string, path: string) => invoke<boolean>("file_is_binary_at", { rev, path }),
   saveFileAt: (rev: string, path: string, to: string) => invoke<void>("save_file_at", { rev, path, to }),
+  saveFilePatch: (repository: string, commit: string, path: string, oldPath: string | null, to: string) =>
+    invoke<void>("save_file_patch", { repository, commit, path, oldPath, to }),
   /** Local History of one file, newest first. */
   localHistory: (path: string) => invoke<LocalVersion[]>("local_history", { path }),
   /** Local History of every file, newest first. */
@@ -280,6 +283,10 @@ export const api = {
   /** The key of the app menu's Settings…, "CmdOrCtrl+,", or null for none (macOS). */
   setSettingsKey: (accelerator: string | null) => invoke<void>("set_settings_key", { accelerator }),
   setMenu: (menus: MenuPart[]) => invoke<void>("set_menu", { menus }),
+  commitLink: (repository: string, id: string) => invoke<string | null>("commit_link", { repository, id }),
+  openCommitSummary: (repository: string, summary: import("./commitSummary").CommitSummary) => invoke<void>("open_commit_summary", { repository, summary }),
+  commitSummaryState: () => invoke<{ summary: import("./commitSummary").CommitSummary; context: import("./commitSummary").SummaryContext }>("commit_summary_state"),
+  openSummaryCommitLink: () => invoke<void>("open_summary_commit_link"),
   openConsole: () => invoke<void>("open_console"),
   consoleRepos: () => invoke<ConsoleRepos>("console_repos"),
   /** The log of a repository (null: what ran outside any), oldest first. */

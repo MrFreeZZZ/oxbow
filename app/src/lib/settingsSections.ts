@@ -192,7 +192,8 @@ export const themeSection: Section = {
         preview: "branches",
         foot: "Light and dark follow Appearance above. Branch names pick their color; the production branch is set per repository in This Repository.",
         rows: [
-          prefRow("oxbow.branchPalette", "Branch palette", "seg", {
+          prefRow("oxbow.branchPalette", "Branch palette", "popup", {
+            stepPopupWithArrows: true,
             sub: () => branchPaletteById(prefs.get("oxbow.branchPalette")).note,
             options: () => BRANCH_PALETTES.map((palette) => ({ value: palette.id, label: palette.name })),
           }),

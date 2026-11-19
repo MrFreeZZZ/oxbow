@@ -2,9 +2,12 @@
   // One row of the Settings window: its label and sub line, the gear with its menu, and its
   // control (segments, popup, switch, a value with Edit, a button or a command's keys).
 
+  import { mac } from "./keys";
   import { model } from "./settingsModel.svelte";
   import ShortcutKeys from "./ShortcutKeys.svelte";
-  import { GEAR, text, withCurrent, type Row } from "./settingsRows";
+  import { GEAR, stepPopup, text, withCurrent, type Row } from "./settingsRows";
+
+  const canDetectOpenSelect = CSS.supports("selector(select:open)");
 
   let {
     row,
@@ -81,6 +84,15 @@
         aria-label={text(row.label)}
         disabled={off}
         value={String(control.get())}
+        onkeydown={(event) => {
+          if (!row.stepPopupWithArrows) return;
+          const select = event.currentTarget;
+          // Older macOS WebKit keeps the open menu's arrow events out of the page.
+          // shortcut: Elsewhere without :open, use native keys until the WebView supports it.
+          if (canDetectOpenSelect ? select.matches(":open") : !mac) return;
+          const option = stepPopup(options, select.selectedIndex, event);
+          if (option) control.set(option.value);
+        }}
         onchange={(event) => {
           const option = options.find((o) => String(o.value) === event.currentTarget.value);
           if (option) control.set(option.value);
@@ -361,6 +373,10 @@
     font: inherit;
     font-size: var(--text-small);
     outline: 0;
+  }
+
+  .popup select:focus-visible {
+    box-shadow: var(--focus-ring);
   }
 
   .popup .icon {
