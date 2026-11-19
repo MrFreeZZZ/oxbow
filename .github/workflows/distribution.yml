@@ -89,33 +89,7 @@ jobs:
           tool: cargo-audit
       - run: cargo audit
       - run: npm audit --audit-level=moderate
-        if: inputs.channel != 'preview'
         working-directory: app
-      - name: Audit npm dependencies (Preview)
-        if: inputs.channel == 'preview'
-        working-directory: app
-        run: |
-          report=$(mktemp)
-          trap 'rm -f "$report"' EXIT
-          status=0
-          npm audit --audit-level=moderate --json > "$report" || status=$?
-          cat "$report"
-          if [ "$status" -eq 0 ]; then
-            exit 0
-          fi
-
-          # Remove this exception when a patched picomatch version is available.
-          if [ "$status" -eq 1 ] && jq -e '
-            .auditReportVersion == 2 and .error == null and
-            (.vulnerabilities | type == "object") and
-            ([.vulnerabilities[].via[] | objects | select(.severity != "info" and .severity != "low")]
-              | length > 0 and all(.[]; .name == "picomatch" and .severity == "high" and
-                .url == "https://github.com/advisories/GHSA-fc5q-39xc-vjpf"))
-          ' "$report" > /dev/null; then
-            echo "::warning::Preview temporarily allows picomatch advisory GHSA-fc5q-39xc-vjpf"
-            exit 0
-          fi
-          exit "$status"
 
   macos-tests:
     name: Tests (macOS)
