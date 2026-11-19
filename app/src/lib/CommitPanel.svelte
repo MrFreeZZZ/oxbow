@@ -18,8 +18,8 @@
   import CommitChain from "./CommitChain.svelte";
   import FileBadge from "./FileBadge.svelte";
   import { byFolder, filesWidth, listView, resizeFiles, setFolders } from "./listView.svelte";
-  import Menu, { type MenuEntry } from "./Menu.svelte";
-  import { commitFileMenu } from "./changesMenu";
+  import Menu from "./Menu.svelte";
+  import { commitFileMenu, type FileMenu } from "./changesMenu";
   import type { CommitFile } from "./commitFiles";
   import WorkingCopyPanel from "./WorkingCopyPanel.svelte";
   import { nav } from "./nav.svelte";
@@ -306,11 +306,21 @@
       });
   }
 
-  let menu = $state<{ x: number; y: number; entries: MenuEntry[]; label: string } | null>(null);
+  let menu = $state.raw<({ x: number; y: number } & FileMenu) | null>(null);
   function openFileMenu(event: MouseEvent, file: FileChange) {
     event.preventDefault();
-    const ctx = { summary: detail?.summary ?? row.summary, inHead: inHead ? inHead(row.id) : null, compare: (f: CommitFile) => (comparing = { commit: row.id, file: f }), split: onSplit };
-    menu = { x: event.clientX, y: event.clientY, ...commitFileMenu(nav.repo, file, row.id, ctx) };
+    const commit = row.id;
+    const repo = nav.repo;
+    let canBlame = $state(false);
+    const ctx = { summary: detail?.summary ?? row.summary, inHead: inHead ? inHead(commit) : null, compare: (f: CommitFile) => (comparing = { commit, file: f }), split: onSplit };
+    const opened = { x: event.clientX, y: event.clientY, ...commitFileMenu(repo, file, commit, ctx, () => canBlame) };
+    menu = opened;
+    if (file.status === "deleted" || file.submodule) return;
+    // The diff's binary flag describes both sides, and is missing until inspection.
+    api.fileIsBinaryAt(commit, file.path).then((binary) => {
+      if (!binary && menu === opened && row.id === commit && nav.repo === repo)
+        canBlame = true;
+    }, () => {});
   }
   /** Compare with Working Copy: a file of this commit beside the file on disk, in place of the details. */
   let comparing = $state<{ commit: string; file: CommitFile } | null>(null);

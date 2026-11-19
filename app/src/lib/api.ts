@@ -200,6 +200,7 @@ export const api = {
   treeAt: (rev: string, dir: string) => invoke<TreeItem[]>("tree_at", { rev, dir }),
   filesAt: (rev: string) => invoke<string[]>("files_at", { rev }),
   fileAt: (rev: string, path: string) => invoke<FileAt>("file_at", { rev, path }),
+  fileIsBinaryAt: (rev: string, path: string) => invoke<boolean>("file_is_binary_at", { rev, path }),
   saveFileAt: (rev: string, path: string, to: string) => invoke<void>("save_file_at", { rev, path, to }),
   /** Local History of one file, newest first. */
   localHistory: (path: string) => invoke<LocalVersion[]>("local_history", { path }),

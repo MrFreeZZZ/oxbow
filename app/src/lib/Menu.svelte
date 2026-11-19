@@ -2,6 +2,7 @@
   export type MenuEntry =
     /** `keys`: its shortcut, grey on the right, e.g. "⌘O". `detail`: a grey second line, e.g. a folder's path;
      *  orange with `warn`. `off`: listed greyed and does nothing, its detail saying why.
+     *  `hidden`: reserves the item's index until it can be shown.
      *  `remove`: a × on hover (or Delete on the focused item) that takes the item off a list and keeps the menu open. */
     | {
         kind: "item";
@@ -12,6 +13,7 @@
         detail?: string;
         warn?: boolean;
         off?: boolean;
+        hidden?: boolean;
         run: () => void;
         remove?: { label: string; run: () => void };
       }
@@ -208,7 +210,7 @@
         <span>{entry.label}</span>
         <svg class="icon chevron" viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
       </button>
-    {:else}
+    {:else if !entry.hidden}
       {@const run = entry.run}
       {@const drop = entry.remove}
       <div class="row" class:removable={drop}>

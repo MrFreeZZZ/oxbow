@@ -6,6 +6,7 @@ use std::path::Path;
 use gix::object::tree::EntryKind;
 use serde::Serialize;
 
+use crate::commit::{is_binary, starts_binary};
 use crate::error::{Error, Result};
 use crate::repo::Repo;
 
@@ -123,7 +124,7 @@ impl Repo {
         }
         let data = repo.find_object(id).map_err(Error::git)?.detach().data;
         // A symbolic link's text is the path it points to.
-        let binary = kind != EntryKind::Link && data.iter().take(8000).any(|b| *b == 0);
+        let binary = kind != EntryKind::Link && is_binary(&data);
         Ok(FileAt {
             path: path.to_owned(),
             id: id.to_string(),
@@ -132,6 +133,19 @@ impl Repo {
             text: (!binary).then(|| String::from_utf8_lossy(&data).into_owned()),
             binary,
         })
+    }
+
+    /// Whether the file in this commit contains binary data, without returning its contents.
+    pub fn file_is_binary(&self, rev: &str, path: &str) -> Result<bool> {
+        let repo = self.local();
+        let (id, kind) = blob_of(&repo, rev, path)?;
+        if kind == EntryKind::Link {
+            return Ok(false);
+        }
+        if repo.find_header(id).map_err(Error::git)?.size() > MAX_TEXT {
+            return Ok(starts_binary(&repo, id));
+        }
+        Ok(is_binary(&repo.find_blob(id).map_err(Error::git)?.data))
     }
 
     /// Save As: the file `path` as `rev` has it, written to `to`, byte for byte.

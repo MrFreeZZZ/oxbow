@@ -1123,7 +1123,7 @@ fn blob_size(repo: &gix::Repository, id: Option<ObjectId>) -> u64 {
 
 /// Whether a blob looks binary from its first bytes, the way git decides, without reading the
 /// rest: `git cat-file` streams it and is stopped once they are in.
-fn starts_binary(repo: &gix::Repository, id: ObjectId) -> bool {
+pub(crate) fn starts_binary(repo: &gix::Repository, id: ObjectId) -> bool {
     use std::io::Read;
     use std::process::Stdio;
     let display = format!("git cat-file blob {id}");
@@ -1163,7 +1163,7 @@ fn starts_binary(repo: &gix::Repository, id: ObjectId) -> bool {
     binary
 }
 
-fn is_binary(data: &[u8]) -> bool {
+pub(crate) fn is_binary(data: &[u8]) -> bool {
     data[..data.len().min(8000)].contains(&0)
 }
 

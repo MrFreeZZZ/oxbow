@@ -190,6 +190,7 @@ fn main() {
             history::tree_at,
             history::files_at,
             history::file_at,
+            history::file_is_binary_at,
             history::save_file_at,
             working::working_tree,
             working::working_counts,

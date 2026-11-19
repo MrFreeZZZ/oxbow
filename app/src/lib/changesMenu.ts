@@ -133,7 +133,7 @@ export interface CommitFileContext {
 
 /** The menu of a file of a commit: what can be done with it, as with a file in Changes, but
  *  nothing to stage, stash or discard; and its change on its own, undone or copied. */
-export function commitFileMenu(repo: string, file: FileChange, commit: string, ctx: CommitFileContext): FileMenu {
+export function commitFileMenu(repo: string, file: FileChange, commit: string, ctx: CommitFileContext, canBlame: () => boolean): FileMenu {
   const name = splitPath(file.path).name;
   const what = { modified: "modified", added: "added", untracked: "added", deleted: "deleted", renamed: "renamed", copied: "copied", conflicted: "conflicted" }[file.status];
   const entries: MenuEntry[] = [{ kind: "header", label: `${name} · ${what} in this commit` }];
@@ -147,6 +147,16 @@ export function commitFileMenu(repo: string, file: FileChange, commit: string, c
   }
   entries.push(copyMenu(repo, [file.path]));
   entries.push({ kind: "item", label: "File History", icon: menuIcons.history, run: () => nav.openFile(file.path, commit) });
+  entries.push({
+    kind: "item",
+    label: "Blame at This Commit",
+    icon: menuIcons.history,
+    get hidden() { return !canBlame(); },
+    run: () => {
+      nav.fileMode = "blame";
+      nav.openFile(file.path, commit, { base: commit, at: commit });
+    },
+  });
   entries.push({ kind: "item", label: "Local History", icon: menuIcons.history, run: () => nav.openFile(file.path, NEWEST_SAVED) });
   if (file.status !== "deleted" && !file.submodule) entries.push({ kind: "item", label: "Browse Files at This Commit", icon: menuIcons.folder, run: () => nav.openBrowse(commit, null, file.path) });
   return { entries, label: `${name} menu` };
