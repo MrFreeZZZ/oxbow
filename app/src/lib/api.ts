@@ -202,6 +202,8 @@ export const api = {
   fileAt: (rev: string, path: string) => invoke<FileAt>("file_at", { rev, path }),
   fileIsBinaryAt: (rev: string, path: string) => invoke<boolean>("file_is_binary_at", { rev, path }),
   saveFileAt: (rev: string, path: string, to: string) => invoke<void>("save_file_at", { rev, path, to }),
+  saveFilePatch: (repository: string, commit: string, path: string, oldPath: string | null, to: string) =>
+    invoke<void>("save_file_patch", { repository, commit, path, oldPath, to }),
   /** Local History of one file, newest first. */
   localHistory: (path: string) => invoke<LocalVersion[]>("local_history", { path }),
   /** Local History of every file, newest first. */

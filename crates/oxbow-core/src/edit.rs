@@ -81,7 +81,17 @@ impl Repo {
         reverse: bool,
     ) -> Result<Vec<GitCommand>> {
         let sha = short_id(commit);
-        let patch = self.file_patch(commit, path, old_path)?;
+        let patch = self.file_patch_bytes(commit, path, old_path, false)?;
+        if patch.len() > MAX_FILE_PATCH {
+            return Err(Error::Git(format!(
+                "the change to {path} is too big to apply from here; git diff and git apply in a terminal can"
+            )));
+        }
+        let patch = String::from_utf8(patch).map_err(|_| {
+            Error::Git(format!(
+                "{path} is text that isn’t UTF-8, so its change can’t go through here; git diff and git apply in a terminal can"
+            ))
+        })?;
         if patch.is_empty() {
             return Err(Error::Git(format!("{sha} doesn’t change {path}")));
         }
@@ -153,12 +163,27 @@ impl Repo {
 
     /// What `commit` changed in `path` (and `old_path`, before a rename), from its first parent,
     /// as a patch `git apply` takes whatever the diff settings say.
-    fn file_patch(&self, commit: &str, path: &str, old_path: Option<&str>) -> Result<String> {
-        let parent = self
-            .parents(commit)?
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| EMPTY_TREE.to_owned());
+    pub(crate) fn file_patch_bytes(
+        &self,
+        commit: &str,
+        path: &str,
+        old_path: Option<&str>,
+        export: bool,
+    ) -> Result<Vec<u8>> {
+        let parent = if export {
+            let repo = self.local();
+            let revision = crate::commit::find_commit(&repo, commit)?;
+            // Read the actual parent even at a shallow boundary.
+            revision.parent_ids().next().map_or_else(
+                || gix::ObjectId::empty_tree(repo.object_hash()).to_string(),
+                |id| id.to_string(),
+            )
+        } else {
+            self.parents(commit)?
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| EMPTY_TREE.to_owned())
+        };
         let mut args: Vec<String> = [
             "diff",
             "--no-color",
@@ -171,25 +196,54 @@ impl Repo {
         ]
         .map(str::to_owned)
         .to_vec();
-        args.extend([parent, commit.to_owned(), "--".to_owned()]);
+        let mut range = vec![parent, commit.to_owned(), "--".to_owned()];
         if let Some(old) = old_path.filter(|old| *old != path) {
-            args.push(literal(old));
+            range.push(literal(old));
         }
-        args.push(literal(path));
+        range.push(literal(path));
+        if export {
+            args.extend(
+                [
+                    "--no-relative",
+                    "--unified=3",
+                    "--output-indicator-new=+",
+                    "--output-indicator-old=-",
+                    "--output-indicator-context= ",
+                ]
+                .map(str::to_owned),
+            );
+            // Even a literal file pathspec matches descendants if the path was a directory in either tree.
+            let names = [
+                "diff",
+                "--name-only",
+                "-z",
+                "--no-relative",
+                "--no-renames",
+                "--no-ext-diff",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .chain(range.iter().cloned())
+            .collect();
+            let names = String::from_utf8(self.file_diff(names)?)
+                .map_err(|_| Error::Git(format!("Couldn’t identify all Git paths matching {path}")))?;
+            range.extend(
+                names
+                    .split_terminator('\0')
+                    .filter(|name| *name != path && Some(*name) != old_path)
+                    .map(|name| format!(":(exclude,literal){name}")),
+            );
+        }
+        args.extend(range);
+        self.file_diff(args)
+    }
+
+    fn file_diff(&self, args: Vec<String>) -> Result<Vec<u8>> {
         let out = self.spawn(&GitCommand::new(args), None)?;
         if !out.status.success() {
             return Err(Error::Git(String::from_utf8_lossy(&out.stderr).trim().to_owned()));
         }
-        if out.stdout.len() > MAX_FILE_PATCH {
-            return Err(Error::Git(format!(
-                "the change to {path} is too big to apply from here; git diff and git apply in a terminal can"
-            )));
-        }
-        String::from_utf8(out.stdout).map_err(|_| {
-            Error::Git(format!(
-                "{path} is text that isn’t UTF-8, so its change can’t go through here; git diff and git apply in a terminal can"
-            ))
-        })
+        Ok(out.stdout)
     }
 
     /// Whether `git <args>` merges the patch in without conflicts: tried on a copy of the index.

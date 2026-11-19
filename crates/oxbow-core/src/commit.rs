@@ -919,7 +919,7 @@ impl Repo {
     }
 }
 
-fn find_commit<'r>(repo: &'r gix::Repository, id: &str) -> Result<gix::Commit<'r>> {
+pub(crate) fn find_commit<'r>(repo: &'r gix::Repository, id: &str) -> Result<gix::Commit<'r>> {
     let oid = ObjectId::from_hex(id.as_bytes()).map_err(|_| Error::UnknownCommit(id.to_owned()))?;
     repo.find_commit(oid).map_err(|_| Error::UnknownCommit(id.to_owned()))
 }

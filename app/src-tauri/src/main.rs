@@ -192,6 +192,7 @@ fn main() {
             history::file_at,
             history::file_is_binary_at,
             history::save_file_at,
+            history::save_file_patch,
             working::working_tree,
             working::working_counts,
             working::recent_messages,

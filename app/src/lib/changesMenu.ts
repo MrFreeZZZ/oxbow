@@ -1,12 +1,13 @@
 // The right-click menu of a file in the Changes panel's lists, or of several picked files, and of
 // a file of a commit.
 
+import { save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import { ignoreChoices, ignoreRequest, stashFilesRequest, stashMessageFor, type StashCandidate } from "./changes";
 import { stashStagedRequest } from "./stashLines";
 import { commitFileActions, commitFileRequest, type CommitFile } from "./commitFiles";
 import { confirm, type Request } from "./confirm.svelte";
-import { splitPath } from "./format";
+import { shortId, splitPath } from "./format";
 import { menuIcons, type MenuEntry, type SubEntry } from "./Menu.svelte";
 import { workingFileMenuItem } from "./openFile.svelte";
 import { nav } from "./nav.svelte";
@@ -140,6 +141,28 @@ export function commitFileMenu(repo: string, file: FileChange, commit: string, c
   const actions = commitFileEntries(file, commit, ctx);
   const split = ctx.split;
   if (split) actions.push({ kind: "item", label: "Split into a New Commit…", icon: menuIcons.split, run: () => split(file.path) });
+  if (!file.submodule) {
+    const { path, oldPath, status } = file;
+    actions.push({
+      kind: "item",
+      label: "Save File Patch…",
+      icon: menuIcons.patch,
+      run: async () => {
+        try {
+          const to = await save({
+            title: "Save File Patch",
+            defaultPath: `${shortId(commit)}-${name}.patch`,
+            filters: [{ name: "Patch", extensions: ["patch"] }],
+          });
+          if (!to) return;
+          await api.saveFilePatch(repo, commit, path, status === "renamed" ? oldPath ?? null : null, to);
+          confirm.say(`Saved a patch for ${name}.`, "done");
+        } catch (err) {
+          confirm.fail(err);
+        }
+      },
+    });
+  }
   if (actions.length) entries.push(...actions, { kind: "sep" });
   if (!file.submodule) entries.push(workingFileMenuItem(file.path, true));
   if (file.status !== "deleted") {

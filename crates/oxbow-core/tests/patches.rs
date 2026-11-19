@@ -207,3 +207,95 @@ fn a_plain_diff_goes_into_the_files_uncommitted() {
     // Once it is in, the same diff no longer fits the files.
     assert_eq!(repo.patch_preview(&paths).unwrap().not_clean, ["a.txt"]);
 }
+
+#[test]
+fn a_saved_file_patch_round_trips_only_the_selected_change() {
+    let mut source = Fixture::new();
+    const TEXT: &str = "text[1].txt";
+    source.write("keep.txt", "before\n");
+    source.write("text1.txt", "before\n");
+    source.write("old.txt", "rename me\n");
+    source.write("delete.txt", "delete me\n");
+    source.write("was-file", "this was a file\n");
+    std::fs::write(source.path().join(TEXT), b"before \xff\n\ncontext\n").unwrap();
+    std::fs::write(source.path().join("binary.dat"), b"old\0\xff").unwrap();
+    let root = source.commit("root.txt", "root change\n", "Root with several files");
+    source.git(&["mv", "old.txt", "new.txt"]);
+    source.git(&["rm", "delete.txt", "was-file"]);
+    source.write("was-file/unrelated.txt", "directory now\n");
+    source.write("keep.txt", "after\n");
+    source.write("text1.txt", "after\n");
+    std::fs::write(source.path().join(TEXT), b"after \xff\n\ncontext\n").unwrap();
+    std::fs::write(source.path().join("binary.dat"), b"new\0\xfe").unwrap();
+    let feature = source.commit("added.txt", "added\n", "Change several files");
+    source.git(&["switch", "-qc", "first-parent", &root]);
+    source.commit("parent-only.txt", "first parent\n", "Change on the first parent");
+    source.git(&["merge", "--no-ff", "--no-edit", &feature]);
+    let later = source.git(&["rev-parse", "HEAD"]);
+    for (key, value) in [
+        ("diff.noprefix", "true"),
+        ("diff.mnemonicPrefix", "true"),
+        ("diff.relative", "true"),
+        ("diff.context", "0"),
+        ("diff.external", "false"),
+    ] {
+        source.git(&["config", key, value]);
+    }
+    let repo = Repo::open(source.path()).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("selected.patch");
+    let paths = vec![output.to_str().unwrap().to_owned()];
+    let mut empty = Fixture::new();
+    empty.git(&["commit", "--allow-empty", "-qm", "Empty"]);
+    let empty_repo = Repo::open(empty.path()).unwrap();
+    let apply = |target: &Repo, expected: &str| {
+        let preview = target.patch_preview(&paths).unwrap();
+        assert!(preview.plain && !preview.fails && preview.not_clean.is_empty());
+        assert_eq!(preview.files.len(), 1);
+        assert_eq!(preview.files[0].path, expected);
+        target.perform(&Action::ApplyPatches { paths: paths.clone() }).unwrap();
+    };
+    repo.save_file_patch(&root, "root.txt", None, &output).unwrap();
+    apply(&empty_repo, "root.txt");
+    assert_eq!(read(&empty, "root.txt"), "root change\n");
+    assert!(!empty.path().join("keep.txt").exists());
+
+    source.git(&["switch", "--detach", &root]);
+    for (path, old_path) in [
+        (TEXT, None),
+        ("new.txt", Some("old.txt")),
+        ("delete.txt", None),
+        ("added.txt", None),
+        ("binary.dat", None),
+        ("was-file", None),
+    ] {
+        repo.save_file_patch(&later, path, old_path, &output).unwrap();
+        let patch = std::fs::read(&output).unwrap();
+        assert!(patch.starts_with(b"diff --git a/"));
+        if old_path.is_some() {
+            assert!(patch.ends_with(b"rename from old.txt\nrename to new.txt\n"));
+        }
+        if path == "binary.dat" {
+            assert!(patch.windows(16).any(|bytes| bytes == b"GIT binary patch"));
+        }
+        apply(&repo, path);
+    }
+    assert_eq!(
+        std::fs::read(source.path().join(TEXT)).unwrap(),
+        b"after \xff\n\ncontext\n"
+    );
+    assert_eq!(std::fs::read(source.path().join("binary.dat")).unwrap(), b"new\0\xfe");
+    assert_eq!(read(&source, "new.txt"), "rename me\n");
+    assert_eq!(read(&source, "added.txt"), "added\n");
+    assert_eq!(read(&source, "keep.txt"), "before\n");
+    assert_eq!(read(&source, "text1.txt"), "before\n");
+    for path in ["old.txt", "delete.txt", "was-file"] {
+        assert!(!source.path().join(path).exists());
+    }
+    assert_eq!(source.git(&["rev-parse", "HEAD"]), root);
+    assert!(source.git(&["diff", "--cached", "--name-only"]).is_empty());
+
+    let saved = std::fs::read(&output).unwrap();
+    assert!(repo.save_file_patch(&later, "missing.txt", None, &output).is_err());
+    assert_eq!(std::fs::read(&output).unwrap(), saved);
+}
