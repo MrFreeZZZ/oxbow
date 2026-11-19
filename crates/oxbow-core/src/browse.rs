@@ -142,8 +142,9 @@ impl Repo {
         if kind == EntryKind::Link {
             return Ok(false);
         }
-        if repo.find_header(id).map_err(Error::git)?.size() > MAX_TEXT {
-            return Ok(starts_binary(&repo, id));
+        let size = repo.find_header(id).map_err(Error::git)?.size();
+        if size > MAX_TEXT {
+            return starts_binary(&repo, id, size);
         }
         Ok(is_binary(&repo.find_blob(id).map_err(Error::git)?.data))
     }

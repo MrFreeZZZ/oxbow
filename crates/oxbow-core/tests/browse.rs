@@ -87,12 +87,14 @@ fn binary_check_reads_the_requested_snapshot() {
     let mut fx = Fixture::new();
     std::fs::write(fx.path().join("content.txt"), b"binary\0").unwrap();
     std::fs::write(fx.path().join("large.txt"), vec![0; MAX_TEXT as usize + 1]).unwrap();
+    fx.write("large-text.txt", &"x".repeat(MAX_TEXT as usize + 1));
     let binary = fx.commit("note.txt", "note\n", "Binary files");
     let text = fx.commit("content.txt", "now text\n", "Text file");
     let repo = Repo::open(fx.path()).unwrap();
 
     assert!(repo.file_is_binary(&binary, "content.txt").unwrap());
     assert!(repo.file_is_binary(&text, "large.txt").unwrap());
+    assert!(!repo.file_is_binary(&text, "large-text.txt").unwrap());
     assert!(!repo.file_is_binary(&text, "content.txt").unwrap());
     assert!(repo.file_is_binary(&text, "missing.txt").is_err());
 }
