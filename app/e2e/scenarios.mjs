@@ -132,6 +132,35 @@ export const SCENARIOS = [
     },
   },
   {
+    name: "compare restores focus after a branch moves",
+    async run(ctx) {
+      const r = repo(`${ctx.dir}/r`, 3);
+      git(r, "branch", "feature", "HEAD~1");
+      git(r, "switch", "feature");
+      git(r, "commit", "--allow-empty", "-m", "Old feature tip");
+      git(r, "switch", "main");
+      const app = await ctx.start(r);
+      await app.js(async (page) => {
+        const row = await page.until(() => page.all('[aria-label="Commits"] [role="option"]', "Old feature tip")[0]);
+        const box = row.getBoundingClientRect();
+        row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: box.left + 60, clientY: box.top + 8 }));
+        await page.click("Compare");
+        (await page.until(() => page.all('.submenu [role="menuitem"]', "With main")[0])).click();
+        (await page.until(() => page.all(".compare [data-compare-row]", "Old feature tip")[0])).click();
+      });
+      git(r, "branch", "-f", "feature", "main~1");
+      await app.keys("F5");
+      await app.js((page) => page.until(() => {
+        const current = document.querySelector('.compare [data-compare-row][aria-current="true"]');
+        return current === document.activeElement && current?.getAttribute("data-compare-row") === "";
+      }, "File changes has focus after the old feature tip disappears"));
+      await app.keys("ArrowDown");
+      await app.js((page) => page.until(() =>
+        document.activeElement?.matches('.compare [data-compare-row][aria-current="true"]') &&
+        page.words(document.activeElement).includes("Commit 3"), "ArrowDown moves to the remaining commit"));
+    },
+  },
+  {
     name: "comparison file focus",
     async run(ctx) {
       const app = await ctx.start(repo(`${ctx.dir}/r`, 3));

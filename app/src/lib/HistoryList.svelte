@@ -58,6 +58,7 @@
   // Geometry from the design: 44px two-line rows, lanes 18px apart, trunk lane centered 14px in.
   // Compact rows (General → History rows) put everything on one 28px line.
   const compact = $derived(prefs.get("oxbow.history.rowStyle") === "compact");
+  const diameter = $derived(compact ? 6 : 8);
   const ROW = $derived(compact ? 28 : 44);
   const PAD_TOP = 4;
   const PAD_LEFT = 8;
@@ -80,7 +81,6 @@
 
   $effect(() => {
     const opened = menu;
-    const snapshot = history;
     if (!opened) return;
     const copy = untrack(() => opened.entries.find((entry) => entry.kind === "sub" && entry.label === "Copy"));
     if (copy?.kind !== "sub") return;
@@ -88,8 +88,8 @@
     if (!link) return;
     link.off = true;
     let active = true;
-    linkFor(opened.id).then((url) => {
-      if (!active || menu !== opened || history !== snapshot || !url) return;
+    untrack(() => linkFor(opened.id)).then((url) => {
+      if (!active || menu !== opened || !url) return;
       link.run = () => copyLink(url);
       link.off = false;
     }).catch(() => {});
@@ -265,7 +265,6 @@
     const isMerge = row.parents.length > 1 && !row.labels.some((label) => label.kind === "stash");
     const isFork = g.forkColors.length > 0;
     const ring = isMerge || isFork;
-    const diameter = compact ? 6 : 8;
     const hollow = row.unpushed && !isMerge;
     // A solid commit's 2 px background border sits outside the visible disk.
     const size = ring || hollow ? diameter : diameter + 4;
@@ -565,7 +564,7 @@
 
       {#if only}
         {#each visible as { row, index } (row.id)}
-          <span class="flat-dot" style:top="{y(index) - 4}px" style:background={lane(row.graph.color)}></span>
+          <span class="flat-dot" style:top="{y(index)}px" style:width="{diameter}px" style:height="{diameter}px" style:background={lane(row.graph.color)}></span>
         {/each}
       {:else}
       <svg class="lines" class:faded={!!found} width="100%" height={PAD_TOP * 2 + rows.length * ROW} aria-hidden="true">
@@ -974,9 +973,8 @@
   }
   .flat-dot {
     position: absolute;
-    left: 22px;
-    width: 8px;
-    height: 8px;
+    left: 26px;
+    transform: translate(-50%, -50%);
     border-radius: var(--radius-pill);
     pointer-events: none;
   }

@@ -10,6 +10,7 @@
   import CompareChanges from "./CompareChanges.svelte";
   import { ancestors } from "./commits";
   import CommitPanel from "./CommitPanel.svelte";
+  import { tick } from "svelte";
 
   let {
     history,
@@ -56,14 +57,16 @@
   let list = $state<HTMLDivElement>();
   let previousRefs: { base: string; target: string } | undefined;
 
-  $effect(() => {
+  function focusCurrentRow() {
     const current = list?.querySelector<HTMLButtonElement>("[aria-current='true']");
     const active = document.activeElement;
     if (current && (!active || active === document.body)) {
       current.focus({ preventScroll: true });
       current.scrollIntoView({ block: "nearest" });
     }
-  });
+  }
+
+  $effect(focusCurrentRow);
 
   $effect(() => {
     const query = { base, target, mode };
@@ -77,6 +80,8 @@
     api.compare(query.base, query.target, query.mode).then(
       (c) => {
         if (!latest) return;
+        const focused = document.activeElement;
+        const focusedRow = focused?.matches("button[data-compare-row]") && list?.contains(focused) ? focused : null;
         loaded = {
           query,
           comparison: c,
@@ -85,6 +90,9 @@
         };
         // A commit that is no longer on either side goes back to all the changes.
         if (picked && ![...c.ahead, ...c.behind].some((x) => x.id === picked) && c.mergeBase?.id !== picked) picked = null;
+        if (focusedRow) void tick().then(() => {
+          if (latest && !focusedRow.isConnected) focusCurrentRow();
+        });
       },
       (err) => {
         if (!latest) return;
