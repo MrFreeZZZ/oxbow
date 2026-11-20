@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use oxbow_core::repofiles::RepoFileKind;
 use oxbow_core::{Action, HistoryOptions, LocalHistory, Repo, Side};
 use serde_json::Value;
-use support::Fixture;
+use support::{Fixture, server};
 
 /// The fields of `value`, an object, sorted.
 fn fields(value: &Value) -> Vec<String> {
@@ -61,6 +61,31 @@ fn shapes() -> BTreeMap<&'static str, Vec<String>> {
     let blame = json(repo.blame("a.txt", "HEAD").unwrap());
     let operations = json(repo.operation_log().unwrap());
     let versions = json(repo.local_history_all().unwrap());
+    let github = oxbow_core::pulls::GitHubRepo {
+        owner: "acme".into(),
+        name: "api".into(),
+        remote: "origin".into(),
+    };
+    let address = server(vec![
+        (
+            "/repos/acme/api/pulls/1",
+            r#"{"number":1,"base":{"ref":"main","sha":"base"}}"#,
+        ),
+        ("/repos/acme/api", "{}"),
+    ]);
+    let pull = json(
+        oxbow_core::github::Client::new(&address, &address)
+            .with_token("test")
+            .pull_request(&github, 1)
+            .unwrap(),
+    );
+    let review_fetch = json(oxbow_core::review::ReviewFetch {
+        tips: Some(oxbow_core::review::ReviewTips {
+            base: head.clone(),
+            head,
+        }),
+        stale: None,
+    });
 
     let command = json(oxbow_core::user_commands::UserCommand {
         id: "tests".into(),
@@ -96,6 +121,9 @@ fn shapes() -> BTreeMap<&'static str, Vec<String>> {
         ("ConflictFile", fields(&conflict)),
         ("Trees", fields(at(&operations, "/0/before"))),
         ("UserCommand", fields(&command)),
+        ("PullRequest", fields(&pull)),
+        ("ReviewFetch", fields(&review_fetch)),
+        ("ReviewTips", fields(at(&review_fetch, "/tips"))),
         (
             "LoadIssue",
             fields(&json(oxbow_core::pulls::LoadIssue {
@@ -113,26 +141,13 @@ fn shapes() -> BTreeMap<&'static str, Vec<String>> {
         ),
         (
             "ReviewPlace",
-            fields(&json(oxbow_core::review::Reviewed::github(
-                &oxbow_core::pulls::GitHubRepo {
-                    owner: "acme".into(),
-                    name: "api".into(),
-                    remote: "origin".into(),
-                },
-            ))),
+            fields(&json(oxbow_core::review::Reviewed::github(&github))),
         ),
         (
             "ReviewDraftState",
             fields(&json(
-                repo.review_draft_state(
-                    &oxbow_core::review::Reviewed::github(&oxbow_core::pulls::GitHubRepo {
-                        owner: "acme".into(),
-                        name: "api".into(),
-                        remote: "origin".into(),
-                    }),
-                    1,
-                )
-                .unwrap(),
+                repo.review_draft_state(&oxbow_core::review::Reviewed::github(&github), 1)
+                    .unwrap(),
             )),
         ),
         (

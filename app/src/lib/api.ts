@@ -93,6 +93,7 @@ import type {
   ReviewDraft,
   ReviewTarget,
   ReviewDraftState,
+  ReviewFetch,
   Viewing,
   PullSummary,
   LfsStatus,
@@ -408,7 +409,7 @@ export const api = {
   gitlabCodeOwners: (base: string, branch: string) => invoke<GitLabUser[]>("gitlab_code_owners", { base, branch }),
   gitlabPeople: (search: string) => invoke<GitLabUser[]>("gitlab_people", { search }),
   /** Fetch merge request `!number` and its target here, into project-scoped review refs. */
-  gitlabFetch: (number: number, base: string, target?: ReviewTarget) => invoke<void>("gitlab_fetch", { number, base, target }),
+  gitlabFetch: (number: number, base: string, target?: ReviewTarget, allowStale = false) => invoke<ReviewFetch>("gitlab_fetch", { number, base, target, allowStale }),
   gitlabStatuses: (numbers: number[]) => invoke<PullStatus[]>("gitlab_statuses", { numbers }),
   /** Open and recently closed, the latest updated first. */
   githubPulls: () => invoke<PullList>("github_pulls"),
@@ -420,7 +421,7 @@ export const api = {
   codeOwners: (base: string, branch: string) => invoke<string[]>("code_owners", { base, branch }),
   githubPullStatuses: () => invoke<PullStatus[]>("github_pull_statuses"),
   /** Fetches the pull request's head and base into project-scoped review refs, quietly. */
-  pullFetch: (number: number, base: string, target?: ReviewTarget) => invoke<void>("pull_fetch", { number, base, target }),
+  pullFetch: (number: number, base: string, target?: ReviewTarget, allowStale = false) => invoke<ReviewFetch>("pull_fetch", { number, base, target, allowStale }),
   githubViewing: (number: number, target?: ReviewTarget) => invoke<Viewing>("github_viewing", { number, target }),
   /** One small call, sent quietly: no sheet, no Activity. */
   githubSend: (call: PullCall, target?: ReviewTarget) => invoke<unknown>("github_send", { call, target }),

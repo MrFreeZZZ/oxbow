@@ -61,6 +61,7 @@
     ctx,
     colorOf,
     version,
+    reviewRefresh,
     run,
     onBranch,
     copy,
@@ -76,6 +77,8 @@
     colorOf: (name: string) => number;
     /** Goes up on every reload, so the pull request loads again. */
     version: number;
+    /** Goes up when Reload Repository is explicitly requested. */
+    reviewRefresh: number;
     run: (request: Request | Promise<Request>) => Promise<boolean>;
     /** Show another branch of the stack. */
     onBranch: (name: string) => void;
@@ -147,9 +150,11 @@
   let checksAgain = 0;
   let loadId = 0;
   let shownKey = "";
+  let filesRefresh = $state(0);
   $effect(() => {
     const number = summary?.number;
     void version;
+    void reviewRefresh;
     void forge;
     const key = JSON.stringify([nav.repo, forge, lab ? github.mrProject : github.repo, number]);
     untrack(() => { if (shownKey !== key) { shownKey = key; pr = null; error = null; checksAgain = 0; } });
@@ -192,6 +197,7 @@
 
   async function load(number: number) {
     const id = ++loadId;
+    const refresh = reviewRefresh;
     const of = forge;
     const workdir = nav.repo;
     const current = () => id === loadId && of === forge && workdir === nav.repo && summary?.number === number;
@@ -212,7 +218,7 @@
     } catch (err) {
       if (current()) error = String(err);
     } finally {
-      if (current()) { loading = false; waitingLong = false; }
+      if (current()) { filesRefresh = refresh; loading = false; waitingLong = false; }
     }
   }
 
@@ -866,7 +872,9 @@
         open={() => pr && (lab ? api.openGitLab(pr.htmlUrl) : api.openGitHub(pr.htmlUrl)).catch((err) => confirm.fail(err))}
       />
       {#if tab === "files"}
-        {#if review}<PullFiles session={review} me={signedIn} color={colorOf(pr.head)} {version} />{/if}
+        {#if review}
+          {#key review}<PullFiles session={review} me={signedIn} color={colorOf(pr.head)} refresh={filesRefresh} />{/key}
+        {/if}
       {:else}
       <div class="scroll">
         {#if tab === "conversation"}

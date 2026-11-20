@@ -241,6 +241,8 @@ fn a_merge_request_in_full_comes_as_a_pull_request() {
         web_url: "https://git.corp/team/app".into(),
     };
     let mut mr = client(&address).merge_request(&project, 12).unwrap();
+    assert!(mr.gitlab.as_ref().unwrap().diff.is_some());
+    assert_eq!(mr.base_sha, None);
     assert_eq!((mr.summary.number, mr.summary.title.as_str()), (12, "Export CSV"));
     assert_eq!(
         (mr.mergeable, mr.mergeable_state.as_str(), mr.changed_files),

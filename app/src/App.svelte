@@ -159,7 +159,11 @@
   const load = (path: string) => { overviewShown = false; return session.load(path); };
   const refresh = () => loader.refresh();
   const refreshQuietly = () => loader.refreshQuietly();
-  const reload = () => loader.reload();
+  let reviewRefresh = $state(0);
+  const reload = () => {
+    reviewRefresh++;
+    return loader.reload();
+  };
   const retryRead = (part: ReadPart) => loader.retryRead(part);
   const loadOlder = (until: string | null = null) => loader.loadOlder(until);
   const ensureLoaded = (id: string) => loader.ensureLoaded(id);
@@ -2298,6 +2302,7 @@
             ctx={branchCtx}
             {colorOf}
             {version}
+            {reviewRefresh}
             {run}
             onBranch={(name) => ((pullBranch = name), (pullNumber = null))}
             copy={(text) => copyText(text, `Copied ${text.length > 40 ? "it" : text}.`)}

@@ -3,10 +3,10 @@
 //! change has a number of its own, and one that waits says what it waits for.
 //!
 //! Reads (history, diffs, status) take no turn: they run beside anything, as git keeps its own
-//! files apart with locks. A fetch takes one: it writes refs and FETCH_HEAD, and tags it fetched
+//! files apart with locks. A regular fetch takes one: it writes refs and FETCH_HEAD, and tags it fetched
 //! while an action ran would go into that action's step in the Operation Log, for Undo to take
 //! back. A fetch of the timer gives way instead of making an action wait: the action stops it,
-//! and the next one fetches again.
+//! and the next one fetches again. Review fetches have their own turn for their shared refs.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -14,10 +14,18 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// The changes running now, by the repository's shared Git folder.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Scope {
+    Repository,
+    ReviewFetch,
+}
+
+type TurnKey = (PathBuf, Scope);
+
+/// The changes running now, by the repository's shared Git folder and scope.
 #[derive(Default)]
 pub struct Turns {
-    running: Mutex<HashMap<PathBuf, Vec<Running>>>,
+    running: Mutex<HashMap<TurnKey, Vec<Running>>>,
     next: AtomicU64,
     paused: AtomicBool,
 }
@@ -77,10 +85,10 @@ impl Running {
     }
 }
 
-/// A change's turn: the others in its repository wait until it is dropped.
+/// A change's turn: the others in its repository and scope wait until it is dropped.
 pub struct Turn {
     turns: Arc<Turns>,
-    common: PathBuf,
+    key: TurnKey,
     id: u64,
 }
 
@@ -112,11 +120,30 @@ impl Turns {
     pub fn take(
         self: &Arc<Self>,
         common: &Path,
+        change: Running,
+        cancel: &AtomicBool,
+        on_wait: impl FnMut(&Running),
+    ) -> Option<Turn> {
+        self.take_in((canonical(common), Scope::Repository), change, cancel, on_wait)
+    }
+
+    /// Serialize writes and snapshots of review refs across the repository's worktrees.
+    pub(crate) fn take_review_fetch(
+        self: &Arc<Self>,
+        common: &Path,
+        change: Running,
+        cancel: &AtomicBool,
+    ) -> Option<Turn> {
+        self.take_in((canonical(common), Scope::ReviewFetch), change, cancel, |_| {})
+    }
+
+    fn take_in(
+        self: &Arc<Self>,
+        key: TurnKey,
         mut change: Running,
         cancel: &AtomicBool,
         mut on_wait: impl FnMut(&Running),
     ) -> Option<Turn> {
-        let common = canonical(common);
         let mut told = None;
         loop {
             let other = {
@@ -124,10 +151,10 @@ impl Turns {
                 if self.paused.load(Ordering::SeqCst) {
                     return None;
                 }
-                let list = running.entry(common.clone()).or_default();
+                let list = running.entry(key.clone()).or_default();
                 if list.is_empty() {
                     if cancel.load(Ordering::Relaxed) {
-                        running.remove(&common);
+                        running.remove(&key);
                         return None;
                     }
                     let id = self.next.fetch_add(1, Ordering::Relaxed);
@@ -135,7 +162,7 @@ impl Turns {
                     list.push(change);
                     return Some(Turn {
                         turns: self.clone(),
-                        common,
+                        key,
                         id,
                     });
                 }
@@ -166,17 +193,21 @@ impl Turns {
     /// What a window other than `window` is changing in the repository at `common` now.
     pub fn other(&self, common: &Path, window: &str) -> Option<Running> {
         let running = self.running.lock().expect("turns lock");
-        running.get(common)?.iter().find(|r| r.window != window).cloned()
+        running
+            .get(&(common.to_path_buf(), Scope::Repository))?
+            .iter()
+            .find(|r| r.window != window)
+            .cloned()
     }
 }
 
 impl Drop for Turn {
     fn drop(&mut self) {
         let mut running = self.turns.running.lock().expect("turns lock");
-        if let Some(list) = running.get_mut(&self.common) {
+        if let Some(list) = running.get_mut(&self.key) {
             list.retain(|r| r.id != self.id);
             if list.is_empty() {
-                running.remove(&self.common);
+                running.remove(&self.key);
             }
         }
     }
@@ -230,6 +261,52 @@ mod tests {
         assert!(go.is_some());
         drop(go);
         assert!(turns.running.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_review_fetch_waits_only_for_review_fetches_of_the_same_repository() {
+        let turns = Arc::new(Turns::default());
+        let dir = std::env::temp_dir().join(format!("oxbow-review-turn-{}", std::process::id()));
+        let common = dir.join(".git");
+        std::fs::create_dir_all(common.join("worktrees/linked")).unwrap();
+        let alternate = common.join("worktrees/linked/../..");
+        let never = AtomicBool::new(false);
+        let review = turns
+            .take_review_fetch(&alternate, change("worktree", "Fetch PR"), &never)
+            .unwrap();
+        let common = canonical(&common);
+        assert!(turns.other(&common, "main").is_none());
+        assert!(
+            turns
+                .take_review_fetch(&dir.join("other"), change("other", "Fetch PR"), &never)
+                .is_some()
+        );
+        let commit = turns
+            .take(&common, change("main", "Commit"), &never, |_| {
+                panic!("waited for a review")
+            })
+            .unwrap();
+        assert_eq!(turns.other(&common, "worktree").unwrap().title, "Commit");
+
+        let stop = AtomicBool::new(true);
+        let mut waited_for = Vec::new();
+        let pending = turns.take_in(
+            (common.clone(), Scope::ReviewFetch),
+            change("main", "Fetch MR"),
+            &stop,
+            |other| waited_for.push(other.window.clone()),
+        );
+        assert!(pending.is_none());
+        assert_eq!(waited_for, ["worktree"]);
+        drop(review);
+        assert!(
+            turns
+                .take_review_fetch(&common, change("main", "Fetch MR"), &never)
+                .is_some()
+        );
+        drop(commit);
+        assert!(turns.running.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

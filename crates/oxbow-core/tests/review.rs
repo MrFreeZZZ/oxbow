@@ -152,7 +152,7 @@ fn a_pull_request_is_fetched_out_of_the_branch_lists() {
     let url = remote.path().join("acme.git");
     let url = url.to_str().unwrap().to_owned();
     let mut github = Fixture::new();
-    github.commit("a.txt", "one\n", "Root");
+    let main = github.commit("a.txt", "one\n", "Root");
     github.git(&["clone", "-q", "--bare", ".", &url]);
     github.git(&["switch", "-q", "-c", "fork-work"]);
     let head = github.commit("limit.rs", "struct Limiter;\n", "Rate limit");
@@ -161,8 +161,18 @@ fn a_pull_request_is_fetched_out_of_the_branch_lists() {
     let mut me = Fixture::new();
     me.git(&["remote", "add", "origin", &url]);
     let repo = Repo::open(me.path()).unwrap();
-    repo.run(&repo.pull_fetch_command(&Reviewed::github(&acme()), "origin", 421, "main"))
-        .unwrap();
+    let place = Reviewed::github(&acme());
+    let fetch = |base| {
+        repo.fetch_review(
+            &repo.pull_fetch_command(&place, "origin", 421, base),
+            &place,
+            421,
+            true,
+            &Default::default(),
+        )
+    };
+    let original = fetch("main").unwrap().tips.unwrap();
+    assert_eq!((&original.base, &original.head), (&main, &head));
     assert_eq!(
         me.git(&["rev-parse", &Reviewed::github(&acme()).reference(421, "head")]),
         head
@@ -170,14 +180,27 @@ fn a_pull_request_is_fetched_out_of_the_branch_lists() {
     // Only the base shows, as its remote branch: git updates that one too.
     assert_eq!(me.git(&["branch", "-a"]), "remotes/origin/main");
     let compared = repo
-        .compare(
-            &Reviewed::github(&acme()).reference(421, "base"),
-            &Reviewed::github(&acme()).reference(421, "head"),
-            oxbow_core::CompareMode::Split,
-        )
+        .compare(&original.base, &original.head, oxbow_core::CompareMode::Split)
         .unwrap();
     let paths: Vec<&str> = compared.files.iter().map(|f| f.file.path.as_str()).collect();
     assert_eq!(paths, ["limit.rs"]);
+
+    github.git(&["push", "-q", &url, "fork-work:refs/heads/other"]);
+    let moved = fetch("other").unwrap().tips.unwrap();
+    assert_eq!((&moved.base, &original.base), (&head, &main));
+    assert!(matches!(
+        repo.fetch_review(
+            &repo.pull_fetch_command(&place, "origin", 421, "main"),
+            &place,
+            421,
+            true,
+            &std::sync::atomic::AtomicBool::new(true),
+        ),
+        Err(oxbow_core::Error::Cancelled)
+    ));
+    let offline = fetch("missing").unwrap();
+    assert!(offline.stale.is_some());
+    assert_eq!(offline.tips, Some(moved));
 }
 
 #[test]
