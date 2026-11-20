@@ -337,9 +337,10 @@ export const api = {
     invoke<RepoFileSaved>("save_repo_file", { kind, gitlab, text, over, expectedRepo }),
   /** Sends `fetch-event`s marked with `fetch`, Activity's number for it, while it runs; rejects
    *  with a `Failure`. Without a number, Stop doesn't reach it. One of the timer (`auto`) stops
-   *  for an action and comes back with `gaveWay`. */
+   *  for an action and comes back with `gaveWay`. A duplicate returns the time left until
+   *  the next interval, or null while the other fetch is still running. */
   fetchInBackground: (remote: string | null, fetch: number | null = null, auto = false) =>
-    invoke<{ updated: number; gaveWay: boolean }>("fetch_in_background", { remote, fetch, auto }),
+    invoke<{ updated: number; gaveWay: boolean } | { retryAfterMs: number | null }>("fetch_in_background", { remote, fetch, auto }),
   stopFetch: () => invoke<void>("stop_fetch"),
   publicKey: (key: string) => invoke<string>("public_key", { key }),
   pullSetup: () => invoke<PullSetup>("pull_setup"),

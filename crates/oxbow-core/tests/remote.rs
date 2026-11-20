@@ -6,6 +6,52 @@ use std::sync::atomic::AtomicBool;
 use oxbow_core::{Action, ActionEvent, FailureKind, PullMode, Repo};
 use support::Fixture;
 
+#[test]
+fn fetch_targets_follow_the_worktrees_remote_configuration() {
+    let mut fixture = Fixture::new();
+    fixture.commit("a.txt", "one", "Init");
+    fixture.git(&["remote", "add", "origin", "https://example.invalid/one"]);
+    fixture.git(&["remote", "add", "mirror", "https://example.invalid/mirror"]);
+    fixture.git(&["config", "remote.mirror.skipFetchAll", "true"]);
+    fixture.git(&["config", "extensions.worktreeConfig", "true"]);
+    let linked = fixture.path().parent().unwrap().join("linked");
+    fixture.git(&["worktree", "add", "-qb", "linked", linked.to_str().unwrap()]);
+    let repo = Repo::open(fixture.path()).unwrap();
+    let linked_repo = Repo::open(&linked).unwrap();
+    let all = repo.fetch_targets(None);
+    assert!(all == repo.fetch_targets(Some("origin")));
+    assert!(all != repo.fetch_targets(Some("mirror")));
+    assert!(all == linked_repo.fetch_targets(None));
+    let git = |args: &[&str]| {
+        linked_repo
+            .run(&oxbow_core::cli::GitCommand::new(args.iter().copied()))
+            .unwrap()
+            .stdout
+    };
+    let origin_url = || git(&["remote", "get-url", "origin"]).trim().to_owned();
+    let origin_targets = || linked_repo.reopen().unwrap().fetch_targets(Some("origin"));
+    git(&["config", "--worktree", "remote.mirror.skipDefaultUpdate", "false"]);
+    assert!(all != linked_repo.reopen().unwrap().fetch_targets(None));
+    git(&[
+        "config",
+        "--worktree",
+        "remote.origin.url",
+        "https://example.invalid/two",
+    ]);
+    assert_eq!(origin_url(), "https://example.invalid/one");
+    assert!(all == origin_targets());
+    git(&["config", "--worktree", "remote.origin.url", ""]);
+    git(&[
+        "config",
+        "--worktree",
+        "--add",
+        "remote.origin.url",
+        "https://example.invalid/two",
+    ]);
+    assert_eq!(origin_url(), "https://example.invalid/two");
+    assert!(all != origin_targets());
+}
+
 /// A bare repository standing in for GitHub, and two clones of it: ours and a teammate's.
 struct Team {
     _remote: tempfile::TempDir,

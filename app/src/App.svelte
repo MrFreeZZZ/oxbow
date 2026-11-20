@@ -1580,8 +1580,9 @@
   async function backgroundFetch(auto: boolean) {
     const target = fetchTarget();
     if (!target) return;
-    const ok = await activity.fetch(target.remote, target.label, auto);
-    if (!ok) return;
+    const result = await activity.fetch(target.remote, target.label, auto);
+    if (typeof result !== "boolean") return result.retryAfterMs;
+    if (!result) return;
     await api.refreshRemoteTags().catch(() => false);
     await refreshQuietly();
     if (!auto) confirm.say(activity.recent[0]?.sub === "Nothing new" ? `Fetched ${target.label}. Nothing new.` : `Fetched ${target.label}.`, "done");
@@ -1643,15 +1644,22 @@
   const hasRemotes = $derived(!!history?.remotes.length);
   $effect(() => {
     if (overviewShown || !repo || !hasRemotes || !prefs.get("oxbow.fetch.auto")) return;
+    const interval = prefs.get("oxbow.fetch.interval") * 60_000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const fetchNow = () => {
+      const next = setTimeout(fetchNow, interval);
+      timer = next;
       if (confirm.request || document.hidden || loading || activity.running) return;
-      backgroundFetch(true);
+      void backgroundFetch(true).then((retryAfterMs) => {
+        if (timer !== next || retryAfterMs == null) return;
+        clearTimeout(timer);
+        timer = setTimeout(fetchNow, retryAfterMs);
+      });
     };
-    const first = setTimeout(fetchNow, 5000);
-    const timer = setInterval(fetchNow, prefs.get("oxbow.fetch.interval") * 60_000);
+    timer = setTimeout(fetchNow, 5000);
     return () => {
-      clearTimeout(first);
-      clearInterval(timer);
+      clearTimeout(timer);
+      timer = undefined;
     };
   });
 

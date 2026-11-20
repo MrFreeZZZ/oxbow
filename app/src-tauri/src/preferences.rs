@@ -10,6 +10,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State, Theme, WebviewUrl, WebviewWindowBuilder};
 
 use crate::session::Session;
+use crate::turns::{DEFAULT_FETCH_INTERVAL, MAX_FETCH_INTERVAL};
 use crate::{CommandResult, open_in, settings};
 
 /// User settings live in `settings.json` in the app's config folder, as flat `oxbow.*` keys,
@@ -134,6 +135,9 @@ pub(crate) fn apply_settings(
     settings: &serde_json::Map<String, Value>,
     appearance_changed: bool,
 ) {
+    session
+        .turns
+        .set_fetch_interval(fetch_interval(settings.get("oxbow.fetch.interval")));
     let defaults = DiffOptions::default();
     *session.diff.lock().expect("session lock") = DiffOptions {
         context_lines: settings
@@ -195,6 +199,30 @@ pub(crate) fn apply_settings(
         for window in app.webview_windows().values() {
             let _ = window.set_theme(theme);
         }
+    }
+}
+
+fn fetch_interval(value: Option<&Value>) -> u64 {
+    value
+        .and_then(Value::as_f64)
+        .filter(|n| n.fract() == 0.0 && (1.0..=MAX_FETCH_INTERVAL as f64).contains(n))
+        .map_or(DEFAULT_FETCH_INTERVAL, |n| n as u64)
+}
+
+#[cfg(test)]
+#[test]
+fn fetch_interval_matches_the_preference_range_and_default() {
+    assert_eq!(fetch_interval(None), 15);
+    for value in [
+        serde_json::json!("2"),
+        serde_json::json!(2.5),
+        serde_json::json!(0),
+        serde_json::json!(1441),
+    ] {
+        assert_eq!(fetch_interval(Some(&value)), 15);
+    }
+    for minutes in [1, 2, 1440] {
+        assert_eq!(fetch_interval(Some(&serde_json::json!(minutes as f64))), minutes);
     }
 }
 

@@ -1,12 +1,87 @@
 //! Talking to remotes: where the checked-out branch is tracked, and what went wrong when a
 //! fetch, pull or push failed.
 
+use std::path::PathBuf;
+
+use gix::bstr::ByteSlice;
 use serde::Serialize;
 
 use crate::action::Action;
 use crate::cli::GitCommand;
 use crate::error::{Error, Result};
 use crate::repo::{Repo, local_branch_ref};
+
+/// What a timer fetch would contact and which refs it would fetch, without contacting a remote.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct FetchTarget {
+    name: String,
+    url: Option<gix::url::Url>,
+    local_path: Option<PathBuf>,
+    refspecs: Vec<gix::refspec::RefSpec>,
+}
+
+impl Repo {
+    /// Normalize an explicit remote and an all-remotes fetch to comparable target lists.
+    pub fn fetch_targets(&self, remote: Option<&str>) -> Vec<FetchTarget> {
+        let repo = self.local();
+        let config = repo.config_snapshot();
+        let names = match remote {
+            Some(name) => vec![name.to_owned()],
+            None => self.remotes(),
+        };
+        names
+            .into_iter()
+            .filter(|name| {
+                if remote.is_some() {
+                    return true;
+                }
+                // Git uses whichever spelling of this setting occurs last.
+                let key = config
+                    .plumbing()
+                    .sections_by_name("remote")
+                    .into_iter()
+                    .flatten()
+                    .filter(|section| section.header().subsection_name() == Some(name.as_bytes().as_bstr()))
+                    .filter_map(|section| {
+                        section
+                            .value_names()
+                            .filter(|key| {
+                                key.eq_ignore_ascii_case("skipFetchAll")
+                                    || key.eq_ignore_ascii_case("skipDefaultUpdate")
+                            })
+                            .last()
+                    })
+                    .last();
+                !key.and_then(|key| config.boolean(format!("remote.{name}.{key}").as_str()))
+                    .unwrap_or(false)
+            })
+            .map(|name| {
+                let direction = gix::remote::Direction::Fetch;
+                let found = repo
+                    .try_find_remote(name.as_bytes().as_bstr())
+                    .and_then(|found| found.ok());
+                let url = found.as_ref().and_then(|remote| remote.url(direction)).cloned();
+                let local_path = url
+                    .as_ref()
+                    .filter(|url| url.scheme == gix::url::Scheme::File && url.host.is_none())
+                    .and_then(|url| gix::path::from_bstr(url.path.as_bstr()).ok())
+                    .map(|path| {
+                        let path = self.workdir().join(path);
+                        path.canonicalize().unwrap_or(path)
+                    });
+                let refspecs = found
+                    .map(|remote| remote.refspecs(direction).to_vec())
+                    .unwrap_or_default();
+                FetchTarget {
+                    name,
+                    url,
+                    local_path,
+                    refspecs,
+                }
+            })
+            .collect()
+    }
+}
 
 /// The upstream of the checked-out branch and how far apart the two are.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -703,7 +778,7 @@ fn commit_refused(output: &str) -> bool {
 pub fn is_ref_update(line: &str) -> bool {
     let mut chars = line.chars();
     chars.next() == Some(' ')
-        && chars.next().is_some_and(|flag| " +-*t!=".contains(flag))
+        && chars.next().is_some_and(|flag| " +-*t".contains(flag))
         && chars.next() == Some(' ')
         && line.contains(" -> ")
         && !line.contains("[up to date]")
@@ -784,6 +859,9 @@ mod tests {
         assert!(!is_ref_update("From github.com:acme/api"));
         assert!(!is_ref_update("Receiving objects:  64% (1203/1880)"));
         assert!(!is_ref_update(" = [up to date]      main       -> origin/main"));
+        assert!(!is_ref_update(
+            " ! [rejected]        main       -> origin/main  (non-fast-forward)"
+        ));
     }
 
     #[test]

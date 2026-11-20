@@ -112,7 +112,7 @@ class Activity {
   }
 
   /** Fetch `remote` (null: every remote) in the background; `label` names it, e.g. "origin". */
-  async fetch(remote: string | null, label: string, auto = false): Promise<boolean> {
+  async fetch(remote: string | null, label: string, auto = false): Promise<boolean | { retryAfterMs: number | null }> {
     if (this.running) return false;
     this.running = { id: this.#next++, kind: "fetch", title: `Fetching ${label}`, sub: "Connecting…", state: "running", time: Date.now(), auto, remote };
     this.percent = null;
@@ -123,8 +123,10 @@ class Activity {
     const current = () => this.running?.id === id;
     let ok = false;
     try {
-      const { updated, gaveWay } = await api.fetchInBackground(remote, id, auto);
+      const result = await api.fetchInBackground(remote, id, auto);
       if (!current()) return false;
+      if ("retryAfterMs" in result) return result;
+      const { updated, gaveWay } = result;
       // The timer's fetch stopped for an action: the next one fetches again, nothing to tell.
       if (gaveWay) return false;
       ok = true;
