@@ -271,7 +271,25 @@ export const api = {
   landedOn: (merged: string, candidates: string[]) => invoke<Landing | null>("landed_on", { merged, candidates }),
   restack: () => invoke<RestackState | null>("restack"),
   saveRestack: (restack: Restack | null) => invoke<void>("save_restack", { restack }),
-  stackPreview: (plan: StackPlan) => invoke<StackPreview>("stack_preview", { plan }),
+  async stackPreview(plan: StackPlan, scope?: { workdir: string; signal: AbortSignal }): Promise<StackPreview> {
+    if (!scope) return invoke<StackPreview>("stack_preview", { plan });
+    const { workdir, signal } = scope;
+    const lane = "stack-preview";
+    let stopping: Promise<void> | undefined;
+    const stop = () => { stopping = api.stopReads([lane]).catch(() => {}); };
+    // A Stop sent before the native command registered its lane could miss the read.
+    const onStart = new Channel<void>(() => {
+      if (signal.aborted) stop();
+      else signal.addEventListener("abort", stop, { once: true });
+    });
+    try {
+      return await invoke<StackPreview>("stack_preview", { plan, scope: { workdir, lane, onStart } });
+    } finally {
+      onStart.onmessage = () => {};
+      signal.removeEventListener("abort", stop);
+      await stopping;
+    }
+  },
   splitFiles: (commit: string) => invoke<FileDiff[]>("split_files", { commit }),
   planAction: (action: Action) => invoke<Plan>("plan_action", { action }),
   /** Rejects with a `Failure`. */

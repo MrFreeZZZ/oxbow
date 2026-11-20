@@ -686,15 +686,45 @@ pub(crate) async fn landed_on(
     .await
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StackPreviewScope {
+    workdir: String,
+    lane: String,
+    on_start: tauri::ipc::JavaScriptChannelId,
+}
+
 /// A dry run of an Edit Stack plan: what it changes, where it would stop, what to push.
 #[tauri::command]
 pub(crate) async fn stack_preview(
     window: tauri::WebviewWindow,
     session: State<'_, Session>,
     plan: oxbow_core::StackPlan,
+    scope: Option<StackPreviewScope>,
 ) -> CommandResult<oxbow_core::StackPreview> {
-    let repo = current(&session, &window)?;
-    read(at(&repo), "Preview the stack", move || repo.stack_preview(&plan)).await
+    let Some(scope) = scope else {
+        let repo = current(&session, &window)?;
+        return read(at(&repo), "Preview the stack", move || repo.stack_preview(&plan)).await;
+    };
+    let on_start = scope.on_start.channel_on::<_, ()>(window.as_ref().clone());
+    // Take the repository and its Stop together so a switch can never miss this read.
+    let (mut repo, cancel) = session
+        .slot(&window, |slot| {
+            let repo = slot.repo.clone()?;
+            (repo.workdir().to_string_lossy() == scope.workdir).then(|| (repo, slot.lane(scope.lane)))
+        })
+        .ok_or_else(|| oxbow_core::Error::Cancelled.to_string())?;
+    repo.set_diff_options(*session.diff.lock().expect("session lock"));
+    on_start.send(()).map_err(|err| err.to_string())?;
+    drop(on_start);
+    read(at(&repo), "Preview the stack", move || {
+        let result = oxbow_core::cli::stoppable(&cancel, || repo.stack_preview(&plan));
+        if cancel.load(Ordering::Relaxed) {
+            return Err(oxbow_core::Error::Cancelled);
+        }
+        result
+    })
+    .await
 }
 
 /// The changes of `commit` file by file, as Split Commit picks from them.

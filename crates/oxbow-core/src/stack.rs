@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::action::{BranchPush, RemoteBranch};
-use crate::cli::{GitCommand, shell_quote};
+use crate::cli::{GitCommand, check_stop, shell_quote};
 use crate::error::{Error, Result};
 use crate::plan::paragraphs;
 use crate::remote::CommitBrief;
@@ -352,7 +352,10 @@ impl Repo {
         let base = self
             .run(&GitCommand::new(["merge-base", &trunk.target, &branch_ref]))
             .map(|out| out.stdout.trim().to_owned())
-            .map_err(|_| Error::Git(format!("{branch} has no commit in common with {}", trunk.name)))?;
+            .map_err(|err| match err {
+                Error::Cancelled => err,
+                _ => Error::Git(format!("{branch} has no commit in common with {}", trunk.name)),
+            })?;
         if self.ancestry(&branch_ref, &trunk.target)? {
             return Err(Error::Git(format!(
                 "{branch} has no commits of its own: {} has them all",
@@ -383,6 +386,7 @@ impl Repo {
         // Climb while the branches above all go one way; at a fork the stack ends.
         let mut top = branch.clone();
         loop {
+            check_stop()?;
             let top_ref = local_branch_ref(&top);
             let higher: Vec<&String> = above
                 .iter()
@@ -649,6 +653,7 @@ impl Repo {
 
     /// Replay `plan` in memory: what it changes, where it would stop, what to push afterwards.
     pub fn stack_preview(&self, plan: &StackPlan) -> Result<StackPreview> {
+        check_stop()?;
         let range = self.check_plan(plan)?;
         let resolved = self.resolve_splits(plan, range)?;
         let (plan, range) = (&resolved.plan, &resolved.range);
@@ -669,6 +674,7 @@ impl Repo {
         let mut tips: HashMap<String, String> = HashMap::new();
         let mut stopped = false;
         for (i, emit) in emits.iter().enumerate() {
+            check_stop()?;
             match emit {
                 Emit::Pick { id, edit } => {
                     if *edit {
@@ -800,6 +806,7 @@ impl Repo {
         }
         tip_from.insert(plan.top.clone(), last);
         for branch in &stack.branches {
+            check_stop()?;
             let Some(new_tip) = tips.get(&branch.name) else {
                 continue;
             };
@@ -833,6 +840,7 @@ impl Repo {
         for branch in &mut preview.branches {
             branch.tip_from = resolved.shown(&branch.tip_from);
         }
+        check_stop()?;
         Ok(preview)
     }
 
@@ -1104,6 +1112,7 @@ impl Repo {
         let commits = records
             .iter()
             .map(|[id, parents, tree, message]| {
+                check_stop()?;
                 let id = id.trim_start_matches('\n');
                 let mut parents = parents.split_whitespace().map(str::to_owned);
                 let listed = Listed {
@@ -1145,6 +1154,7 @@ impl Repo {
         ]))?;
         let mut stats = HashMap::new();
         for record in out.stdout.split('\u{1e}').filter(|r| !r.trim().is_empty()) {
+            check_stop()?;
             let mut lines = record.lines();
             let Some(id) = lines.next() else { continue };
             let (mut add, mut del) = (0u32, 0u32);

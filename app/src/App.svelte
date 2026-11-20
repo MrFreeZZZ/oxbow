@@ -2311,7 +2311,7 @@
         {/key}
       {:else if view === "stack" && branchCtx}
         {#key repo.path}
-          <EditStackView.component branch={stackBranch} ctx={branchCtx} {colorOf} {version} {run} onClose={() => (view = "history")} onSeries={seriesOfLastStep} />
+          <EditStackView.component workdir={repo.path} branch={stackBranch} ctx={branchCtx} {colorOf} {version} {run} onClose={() => (view = "history")} onSeries={seriesOfLastStep} />
         {/key}
       {:else if view === "local"}
         {#key repo.path}

@@ -1,3 +1,8 @@
+<script module lang="ts">
+  // A reopened editor also waits for the stopped Git process to exit.
+  let pendingPreview: Promise<unknown> | undefined;
+</script>
+
 <script lang="ts">
   // Edit Stack: the stack's commits on its line, newest at the top, with a branch line above
   // each branch's commits. Each commit gets an action (pick, reword, edit, squash, fixup, drop)
@@ -6,8 +11,8 @@
   // and new tip, whether it needs a force push and its pull request. Templates make a plan in one
   // go: Squash WIP, Fix Messages, Move to Branch. Split Commit takes picked files or lines out of
   // a commit into a new one right above it, which can then be moved like any other.
-  import { untrack } from "svelte";
-  import { api } from "./api";
+  import { onDestroy, untrack } from "svelte";
+  import { api, stopped } from "./api";
   import type { Request } from "./confirm.svelte";
   import { confirm } from "./confirm.svelte";
   import type { BranchContext } from "./branches";
@@ -43,6 +48,7 @@
   import type { BranchAfter, Stack, StackPreview, StepAction } from "./types";
 
   let {
+    workdir,
     branch,
     ctx,
     colorOf,
@@ -51,6 +57,7 @@
     onClose,
     onSeries,
   }: {
+    workdir: string;
     /** A branch of the stack; the checked-out one when null. */
     branch: string | null;
     ctx: BranchContext;
@@ -64,6 +71,7 @@
   } = $props();
 
   let stack = $state<Stack | null>(null);
+  let loading = $state(false);
   let error = $state<string | null>(null);
   let draft = $state<Draft>({ items: [], acts: {}, messages: {}, onto: false });
   let selected = $state<string | null>(null);
@@ -92,10 +100,15 @@
 
   /** Moving onto the newest trunk is on at first, as in the design; after that it stays as set. */
   let firstLoad = true;
+  let loadId = 0;
+  onDestroy(() => { ++loadId; });
 
   async function load() {
+    const mine = ++loadId;
+    loading = true;
     try {
       const next = await api.stack(branch);
+      if (mine !== loadId) return;
       stack = next;
       error = null;
       // A plan left half made comes back while the stack is as it was.
@@ -110,8 +123,11 @@
       selected ??= next.commits[0]?.id ?? null;
       if (selected && !next.commits.some((c) => c.id === selected)) selected = next.commits[0]?.id ?? null;
     } catch (err) {
+      if (mine !== loadId) return;
       stack = null;
       error = String(err);
+    } finally {
+      if (mine === loadId) loading = false;
     }
   }
 
@@ -139,29 +155,35 @@
   }
 
   // The dry run follows the plan, a moment after it stops changing.
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let asked = 0;
   $effect(() => {
-    if (!stack) return;
+    preview = null;
+    previewError = null;
+    checking = loading || !!stack;
+    if (loading || !stack) return;
+    const folder = workdir;
     const plan = planOf(stack, draft);
     JSON.stringify(plan);
-    clearTimeout(timer);
-    const mine = ++asked;
-    checking = true;
-    timer = setTimeout(async () => {
+    const controller = new AbortController();
+    const { signal } = controller;
+    const timer = setTimeout(async () => {
+      await pendingPreview?.catch(() => {});
+      if (signal.aborted) return;
+      const request = api.stackPreview(plan, { workdir: folder, signal });
+      pendingPreview = request;
       try {
-        const next = await api.stackPreview(plan);
-        if (mine !== asked) return;
-        preview = next;
-        previewError = null;
+        const next = await request;
+        if (!signal.aborted) preview = next;
       } catch (err) {
-        if (mine !== asked) return;
-        preview = null;
-        previewError = String(err);
+        if (!signal.aborted && !stopped(err)) previewError = String(err);
       } finally {
-        if (mine === asked) checking = false;
+        if (pendingPreview === request) pendingPreview = undefined;
+        if (!signal.aborted) checking = false;
       }
     }, 250);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   });
 
   const byId = $derived(new Map(stack ? commitsWithSplits(stack, draft).map((c) => [c.id, c]) : []));
