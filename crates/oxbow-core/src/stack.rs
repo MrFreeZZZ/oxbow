@@ -385,21 +385,21 @@ impl Repo {
         above.sort();
         // Climb while the branches above all go one way; at a fork the stack ends.
         let mut top = branch.clone();
-        loop {
+        'climb: loop {
             check_stop()?;
             let top_ref = local_branch_ref(&top);
-            let higher: Vec<&String> = above
-                .iter()
-                .map(|(_, name)| name)
-                .filter(|name| **name != top && self.is_ancestor(&top_ref, &local_branch_ref(name)))
-                .collect();
+            let mut higher = Vec::new();
+            for (_, name) in &above {
+                if *name != top && self.ancestry(&top_ref, &local_branch_ref(name))? {
+                    higher.push(name);
+                }
+            }
             let Some(next) = higher.first() else { break };
             let next_ref = local_branch_ref(next);
-            let one_way = higher
-                .iter()
-                .all(|name| self.is_ancestor(&next_ref, &local_branch_ref(name)));
-            if !one_way {
-                break;
+            for name in &higher {
+                if !self.ancestry(&next_ref, &local_branch_ref(name))? {
+                    break 'climb;
+                }
             }
             // A merge Edit Stack can't leave out ends it too: the branches below stay editable.
             let merges = self.list_range(&top_ref, &next_ref)?.merges;
@@ -813,8 +813,8 @@ impl Repo {
             let moves = !stopped && *new_tip != branch.tip;
             let force_push = match &branch.upstream {
                 Some(up) if moves => {
-                    let remote = format!("refs/remotes/{}/{}", up.remote, up.branch);
-                    (!self.is_ancestor(&remote, new_tip)).then(|| up.clone())
+                    let upstream = format!("{}@{{upstream}}", branch.name);
+                    (!self.ancestry(&upstream, new_tip)?).then(|| up.clone())
                 }
                 _ => None,
             };

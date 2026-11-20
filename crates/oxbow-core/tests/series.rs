@@ -198,6 +198,11 @@ fn the_latest_rewrite_comes_from_the_remote_branch() {
     fx.git(&["push", "-q", "origin", "feature"]);
     assert_eq!(repo.last_rewrite("feature").unwrap().unwrap().new, second);
     assert_eq!(repo.last_rewrite("main").unwrap(), None);
+
+    // The old commit can disappear before the remote-tracking reflog entry does.
+    let object = fx.path().join(".git/objects").join(&first[..2]).join(&first[2..]);
+    std::fs::remove_file(object).unwrap();
+    assert_eq!(repo.last_rewrite("feature").unwrap(), None);
 }
 
 #[test]

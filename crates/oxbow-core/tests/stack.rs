@@ -730,6 +730,40 @@ fn a_pushed_branch_that_is_rewritten_needs_a_force_push() {
 }
 
 #[test]
+fn preview_checks_the_upstream_mapped_by_the_fetch_refspec() {
+    let mut fx = stacked();
+    fx.git(&["remote", "add", "origin", "."]);
+    fx.git(&["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/custom/*"]);
+    fx.git(&["config", "branch.auth/2.remote", "origin"]);
+    fx.git(&["config", "branch.auth/2.merge", "refs/heads/auth/2"]);
+    fx.git(&["tag", "auth/2", "main"]);
+    let upstream = "refs/remotes/custom/auth/2";
+    fx.git(&["update-ref", upstream, "refs/heads/auth/2"]);
+    let repo = Repo::open(fx.path()).unwrap();
+    let stack = repo.stack(None).unwrap();
+    let mut plan = as_is(&stack);
+    let expose = id_of(&stack, "Expose sessions endpoint");
+    set(&mut plan, &expose, StepAction::Reword, Some("Expose /v2/sessions"));
+
+    let force_push = || {
+        repo.stack_preview(&plan)
+            .unwrap()
+            .branches
+            .into_iter()
+            .find(|b| b.name == "auth/2")
+            .unwrap()
+            .force_push
+    };
+    let push = force_push().unwrap();
+    assert_eq!((push.remote.as_str(), push.branch.as_str()), ("origin", "auth/2"));
+
+    fx.git(&["update-ref", upstream, "refs/heads/auth/1"]);
+    assert!(force_push().is_none());
+    fx.git(&["update-ref", "-d", upstream]);
+    assert!(force_push().is_none());
+}
+
+#[test]
 fn a_branch_forking_off_the_middle_of_the_stack_is_left_behind() {
     let mut fx = stacked();
     fx.git(&["switch", "-q", "-c", "spike", "auth/1"]);
