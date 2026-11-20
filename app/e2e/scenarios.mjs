@@ -90,10 +90,14 @@ export const SCENARIOS = [
   {
     name: "compare with selected commit keys",
     async run(ctx) {
-      const app = await ctx.start(repo(`${ctx.dir}/r`, 4));
+      const r = repo(`${ctx.dir}/r`, 4);
+      git(r, "switch", "-c", "base", "HEAD~2");
+      git(r, "commit", "--allow-empty", "-m", "Base commit");
+      git(r, "switch", "main");
+      const app = await ctx.start(r);
       await app.js(async (page) => {
         const commit = (name) => page.all('[aria-label="Commits"] [role="option"]', name)[0];
-        commit("Commit 2").click();
+        commit("Base commit").click();
         const row = commit("Commit 4");
         const box = row.getBoundingClientRect();
         row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: box.left + 60, clientY: box.top + 8 }));
@@ -101,7 +105,9 @@ export const SCENARIOS = [
         (await page.until(() => page.all('.submenu [role="menuitem"]', "With Selected Commit")[0])).click();
       });
       const verify = (text) => app.js((page, text) => page.until(() => {
-        const row = document.querySelector('.compare .list button[aria-pressed="true"]');
+        const current = document.querySelectorAll('.compare [data-compare-row][aria-current="true"]');
+        if (current.length !== 1) return false;
+        const [row] = current;
         if (!row || row !== document.activeElement || !page.words(row).includes(text)) return false;
         const style = getComputedStyle(row);
         return style.boxShadow !== "none" && style.outlineStyle === "none";
@@ -110,10 +116,19 @@ export const SCENARIOS = [
       await app.keys("ArrowDown");
       await verify("Commit 4");
       await shows(app, "file 4 1");
-      await app.keys("ArrowDown", "ArrowDown", "ArrowDown");
+      await app.keys("ArrowDown");
+      await verify("Commit 3");
+      // A mode change while the list has focus recreates the focused row.
+      await app.js((page) => page.click("Tip to Tip .."));
+      await verify("Commit 3");
+      await app.keys("ArrowDown");
+      await verify("Base commit");
+      // Tab focus can rest on a different row. Arrows still move from the selection.
+      await app.js(async (page) => page.all(".compare [data-compare-row]", "Commit 4")[0].focus());
+      await app.keys("ArrowDown");
       await verify("Common ancestor");
       await app.keys("ArrowUp");
-      await verify("Commit 3");
+      await verify("Base commit");
     },
   },
   {
