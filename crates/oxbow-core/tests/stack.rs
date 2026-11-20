@@ -507,6 +507,11 @@ fn an_edit_stops_the_rebase_on_that_commit() {
     let mut plan = as_is(&stack);
     let expose = id_of(&stack, "Expose sessions endpoint");
     set(&mut plan, &expose, StepAction::Edit, None);
+    let preview = repo.stack_preview(&plan).unwrap();
+    assert!(preview.changed, "an edit is enough to run the plan");
+    assert_eq!(preview.edits, 1);
+    assert_eq!(preview.rewritten, 0);
+    assert!(preview.branches.iter().all(|branch| branch.same_sha && !branch.moves));
     let commands = repo.plan(&Action::EditStack { plan: plan.clone() }).unwrap().commands;
     assert_eq!(commands.len(), 1, "no switch back while the rebase waits");
     repo.perform(&Action::EditStack { plan }).unwrap();
@@ -516,6 +521,93 @@ fn an_edit_stops_the_rebase_on_that_commit() {
     assert!(repo.operation().unwrap().is_none());
     assert_eq!(subjects(&mut fx, "main..auth/3").len(), 5);
     assert_eq!(fx.git(&["branch", "--show-current"]), "auth/2");
+}
+
+#[test]
+fn folding_into_an_edit_honors_the_combined_message_and_manual_amend() {
+    let original = "Expose sessions endpoint";
+    let combined = "Expose sessions endpoint\n\nValidate refresh rotation";
+    let typed = "Handle sessions\n\n- expose the endpoint\n- user's refresh";
+    let manual = "Rework the sessions endpoint\n\nKeep this manual edit.";
+    let manual_combined = "Rework the sessions endpoint\n\nKeep this manual edit.\n\nValidate refresh rotation";
+    for (fold, message, amend, expected) in [
+        (StepAction::Squash, None, None, combined),
+        (StepAction::Squash, Some(combined), Some(manual), manual_combined),
+        (StepAction::Squash, None, Some(manual), manual_combined),
+        (StepAction::Squash, Some(typed), None, typed),
+        (StepAction::Squash, Some(typed), Some(original), typed),
+        (StepAction::Squash, Some(typed), Some(manual), manual),
+        (StepAction::Fixup, None, None, original),
+        (StepAction::Fixup, None, Some(manual), manual),
+    ] {
+        let mut fx = stacked();
+        let repo = Repo::open(fx.path()).unwrap();
+        let stack = repo.stack(None).unwrap();
+        let mut plan = as_is(&stack);
+        let target = id_of(&stack, original);
+        let folded = id_of(&stack, "Validate refresh rotation");
+        set(&mut plan, &target, StepAction::Edit, message);
+        set(&mut plan, &folded, fold, None);
+        set(&mut plan, &id_of(&stack, "Add expiry banner"), StepAction::Fixup, None);
+
+        repo.perform(&Action::EditStack { plan }).unwrap();
+        let op = repo.operation().unwrap().unwrap();
+        assert_eq!(op.kind, OperationKind::Rebase);
+        assert_eq!(op.commit.unwrap().id, target);
+        assert_eq!(fx.git(&["log", "-1", "--format=%B"]), original);
+        assert!(!fx.path().join("refresh.rs").exists());
+        if let Some(message) = amend {
+            fx.write("api.rs", "// amended\nfn sessions() {}\n");
+            fx.git(&["add", "api.rs"]);
+            fx.git(&["commit", "--amend", "-m", message]);
+        }
+
+        repo.perform(&Action::Continue { message: None }).unwrap();
+        assert!(repo.operation().unwrap().is_none());
+        assert_eq!(fx.git(&["branch", "--show-current"]), "auth/2");
+        assert_eq!(subjects(&mut fx, "main..auth/2").len(), 2);
+        assert_eq!(fx.git(&["log", "-1", "--format=%B", "auth/2"]), expected);
+        assert_eq!(fx.git(&["show", "auth/2:refresh.rs"]), "fn rotate() {}");
+        assert_eq!(fx.git(&["show", "auth/2:ui.rs"]), "banner");
+        let api = fx.git(&["show", "auth/2:api.rs"]);
+        assert_eq!(api.contains("// amended"), amend.is_some());
+        assert!(api.ends_with("fn sessions() {}"));
+    }
+}
+
+#[test]
+fn a_squash_conflict_does_not_strip_the_message_amended_during_edit() {
+    let manual = "New subject\n\n# Heading in the message";
+    let squashed = "Squash this\n\n# Keep the user's heading\nKeep $(literal) and \\c";
+    let combined = format!("{manual}\n\n{squashed}");
+    for (message, expected) in [(None, combined.as_str()), (Some("Custom combination"), manual)] {
+        let mut fx = Fixture::new();
+        fx.commit("file.txt", "base\n", "Root");
+        fx.commit("HEAD", "a file named HEAD\n", "Add a file named HEAD");
+        fx.git(&["switch", "-c", "feature"]);
+        let target = fx.commit("file.txt", "edit\n", "Edit target");
+        let folded = fx.commit("file.txt", "folded\n", squashed);
+        let repo = Repo::open(fx.path()).unwrap();
+        let mut plan = as_is(&repo.stack(None).unwrap());
+        set(&mut plan, &target, StepAction::Edit, message);
+        set(&mut plan, &folded, StepAction::Squash, None);
+
+        repo.perform(&Action::EditStack { plan }).unwrap();
+        fx.write("file.txt", "amended\n");
+        fx.git(&["commit", "--amend", "-a", "-m", manual]);
+        let next = Action::Continue { message: None };
+        assert!(repo.perform(&next).is_err());
+        assert_eq!(repo.operation().unwrap().unwrap().conflicted, 1);
+
+        fx.write("file.txt", "amended and folded\n");
+        fx.git(&["add", "file.txt"]);
+        repo.perform(&next).unwrap();
+        assert!(repo.operation().unwrap().is_none());
+        assert_eq!(fx.git(&["branch", "--show-current"]), "feature");
+        assert_eq!(fx.git(&["log", "-1", "--format=%B"]), expected);
+        assert_eq!(fx.git(&["show", "HEAD:file.txt"]), "amended and folded");
+        assert!(fx.git(&["for-each-ref", "refs/rewritten/"]).is_empty());
+    }
 }
 
 #[test]

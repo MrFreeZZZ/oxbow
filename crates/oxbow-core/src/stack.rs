@@ -686,7 +686,7 @@ impl Repo {
                         continue;
                     }
                     let c = by_id[id.as_str()];
-                    if messages.contains_key(&i) {
+                    if !edit && messages.contains_key(&i) {
                         changed = true;
                     }
                     if !changed && c.parent == cur {
@@ -775,7 +775,7 @@ impl Repo {
             }
         }
         preview.moved = moved(range, plan, &emits, &original);
-        preview.changed = changed || preview.moved > 0;
+        preview.changed = changed || preview.moved > 0 || preview.edits > 0;
 
         // Branches afterwards, top first, with what they own.
         let mut owned: HashMap<String, usize> = HashMap::new();
@@ -1436,6 +1436,12 @@ fn has_folds(emits: &[Emit], i: usize) -> bool {
     matches!(emits.get(i + 1), Some(Emit::Fold { .. }))
 }
 
+struct GroupMessage {
+    text: String,
+    /// Squash messages to append if the user amends the target of an automatic combination.
+    append_to_edit: Option<String>,
+}
+
 /// The new message of each pick (by its index in `emits`) whose message changes: a reword, or
 /// the combined message of squashes into it. The parts of a split always get one, so the
 /// rebase commits them again: they were made unsigned, by the split commit's committer.
@@ -1444,7 +1450,7 @@ fn group_messages(
     emits: &[Emit],
     by_id: &HashMap<&str, &Listed>,
     parts: &HashMap<String, String>,
-) -> HashMap<usize, String> {
+) -> HashMap<usize, GroupMessage> {
     let parts: HashSet<&str> = parts.values().map(String::as_str).collect();
     let asked: HashMap<&str, &str> = plan
         .steps
@@ -1454,16 +1460,15 @@ fn group_messages(
                 id,
                 action,
                 message: Some(m),
-            } if !matches!(action, StepAction::Edit | StepAction::Drop) && !m.trim().is_empty() => {
-                Some((id.as_str(), m.as_str()))
-            }
+            } if *action != StepAction::Drop && !m.trim().is_empty() => Some((id.as_str(), m.as_str())),
             _ => None,
         })
         .collect();
     let mut out = HashMap::new();
     for (i, emit) in emits.iter().enumerate() {
-        let Emit::Pick { id, edit: false } = emit else { continue };
-        let original = by_id.get(id.as_str()).map_or("", |c| c.message.as_str());
+        let Emit::Pick { id, edit } = emit else { continue };
+        let original = by_id.get(id.as_str()).map_or("", |c| c.message.trim());
+        let asked = asked.get(id.as_str()).map(|m| m.trim());
         let squashed: Vec<&str> = emits[i + 1..]
             .iter()
             .map_while(|e| match e {
@@ -1471,24 +1476,22 @@ fn group_messages(
                 _ => None,
             })
             .filter(|(_, squash)| *squash)
-            .filter_map(|(id, _)| by_id.get(id.as_str()).map(|c| c.message.as_str()))
+            .filter_map(|(id, _)| by_id.get(id.as_str()).map(|c| c.message.trim()))
             .collect();
-        let message = match asked.get(id.as_str()) {
-            Some(m) if m.trim() != original.trim() || !squashed.is_empty() => Some(m.trim().to_owned()),
-            _ if !squashed.is_empty() => Some(
-                std::iter::once(original)
-                    .chain(squashed)
-                    .map(str::trim)
-                    .collect::<Vec<_>>()
-                    .join("\n\n"),
-            ),
-            Some(m) if parts.contains(id.as_str()) => Some(m.trim().to_owned()),
-            _ if parts.contains(id.as_str()) => Some(original.trim().to_owned()),
-            _ => None,
+        let (text, append_to_edit) = if !squashed.is_empty() {
+            let suffix = squashed.join("\n\n");
+            let automatic = format!("{original}\n\n{suffix}");
+            let text = asked.unwrap_or(automatic.trim());
+            // The UI sends the automatic combination even when the field was left alone.
+            let suffix = suffix.trim();
+            let append_to_edit = (*edit && text == automatic.trim() && !suffix.is_empty()).then(|| suffix.to_owned());
+            (text.to_owned(), append_to_edit)
+        } else if !edit && (asked.is_some_and(|m| m != original) || parts.contains(id.as_str())) {
+            (asked.unwrap_or(original).to_owned(), None)
+        } else {
+            continue;
         };
-        if let Some(message) = message {
-            out.insert(i, message);
-        }
+        out.insert(i, GroupMessage { text, append_to_edit });
     }
     out
 }
@@ -1496,7 +1499,7 @@ fn group_messages(
 /// The todo list git gets, one line per step.
 fn todo_text(
     emits: &[Emit],
-    messages: &HashMap<usize, String>,
+    messages: &HashMap<usize, GroupMessage>,
     by_id: &HashMap<&str, &Listed>,
     emptied: &HashSet<String>,
 ) -> String {
@@ -1508,13 +1511,13 @@ fn todo_text(
             .to_owned()
     };
     let mut lines = Vec::new();
-    let mut pending: Option<String> = None;
+    let mut pending = None;
     for (i, emit) in emits.iter().enumerate() {
         // A new message goes on once the commit and everything folded into it are in.
         if !matches!(emit, Emit::Fold { .. })
-            && let Some(message) = pending.take()
+            && let Some(line) = pending.take()
         {
-            lines.push(reword_line(&message));
+            lines.push(line);
         }
         match emit {
             Emit::Pick { id, edit } => {
@@ -1527,7 +1530,13 @@ fn todo_text(
                 };
                 lines.push(format!("{word} {} {}", short_todo(id), subject(id)));
                 if word != "drop" {
-                    pending = messages.get(&i).cloned();
+                    pending = messages.get(&i).map(|message| {
+                        let label = edit.then(|| format!("oxbow-edit-{i}"));
+                        if let Some(label) = &label {
+                            lines.push(format!("label {label}"));
+                        }
+                        reword_line(message, label.as_deref().map(|label| (id.as_str(), label)))
+                    });
                 }
             }
             Emit::Fold { id, .. } => lines.push(format!("fixup {} {}", short_todo(id), subject(id))),
@@ -1535,28 +1544,57 @@ fn todo_text(
             Emit::Ref { name } => lines.push(format!("update-ref {}", local_branch_ref(name))),
         }
     }
-    if let Some(message) = pending {
-        lines.push(reword_line(&message));
+    if let Some(line) = pending {
+        lines.push(line);
     }
     lines.join("\n") + "\n"
 }
 
 /// An `exec` line that gives the commit just made `message`. A todo line is one line, so a
 /// message with line breaks inside a paragraph is printed into the commit line by line.
-fn reword_line(message: &str) -> String {
+fn reword_line(message: &GroupMessage, edited: Option<(&str, &str)>) -> String {
     const AMEND: &str = "git commit --amend --only --no-verify --allow-empty";
-    let paragraphs = paragraphs(message);
-    if paragraphs.iter().all(|p| !p.contains('\n')) {
+    let paragraphs = paragraphs(&message.text);
+    let amend = if paragraphs.is_empty() {
+        format!("{AMEND} --allow-empty-message -m ''")
+    } else if paragraphs.iter().all(|p| !p.contains('\n')) {
         let flags: Vec<String> = paragraphs.iter().map(|p| format!("-m {}", shell_quote(p))).collect();
-        return format!("exec {AMEND} {}", flags.join(" "));
+        format!("{AMEND} {}", flags.join(" "))
+    } else {
+        let lines: Vec<String> = paragraphs
+            .iter()
+            .flat_map(|p| std::iter::once(String::new()).chain(p.split('\n').map(shell_quote)))
+            .skip(1)
+            .map(|l| if l.is_empty() { "''".to_owned() } else { l })
+            .collect();
+        format!("printf '%s\\n' {} | {AMEND} -F -", lines.join(" "))
+    };
+    if let Some((id, label)) = edited {
+        // Fixup can strip comments after a conflict. The label saves the actual amended message.
+        let saved = format!("refs/rewritten/{label}");
+        let show = "git show -s --no-notes --no-show-signature --format=%B%x01";
+        let after_edit = if let Some(squashed) = &message.append_to_edit {
+            let lines = squashed.lines().map(shell_quote).collect::<Vec<_>>().join(" ");
+            // Remove the sentinel and trailing newlines before appending a blank line.
+            format!(
+                "prefix=$(printf '%s' \"${{edited%?}}\") && \
+                 {{ if [ -n \"$prefix\" ]; then printf '%s\\n\\n' \"$prefix\"; fi; printf '%s\\n' {lines}; }} | \
+                 {AMEND} --cleanup=verbatim -F -"
+            )
+        } else {
+            format!(
+                "current=$({show} HEAD --) && if [ \"$current\" != \"$edited\" ]; then \
+                 {AMEND} --allow-empty-message --cleanup=verbatim -C {saved}; fi"
+            )
+        };
+        format!(
+            "exec original=$({show} {id} --) && edited=$({show} {saved} --) && \
+             if [ \"$edited\" = \"$original\" ]; then {amend}; \
+             else {after_edit}; fi"
+        )
+    } else {
+        format!("exec {amend}")
     }
-    let lines: Vec<String> = paragraphs
-        .iter()
-        .flat_map(|p| std::iter::once(String::new()).chain(p.split('\n').map(shell_quote)))
-        .skip(1)
-        .map(|l| if l.is_empty() { "''".to_owned() } else { l })
-        .collect();
-    format!("exec printf '%s\\n' {} | {AMEND} -F -", lines.join(" "))
 }
 
 /// How many commits are in a new place: out of their old order, or under another branch.
