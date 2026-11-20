@@ -184,6 +184,9 @@ jobs:
           $client = Join-Path $env:RUNNER_TEMP 'artifact-signing'
           $archive = "$client.zip"
           Invoke-WebRequest 'https://api.nuget.org/v3-flatcontainer/microsoft.artifactsigning.client/1.0.151/microsoft.artifactsigning.client.1.0.151.nupkg' -OutFile $archive
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne '35375a4bc4e1102da729fc3d8d9925f774c3baae6b8b7ff6398d948ca9ab0d8a') {
+            throw 'Unexpected SHA-256 for Microsoft.ArtifactSigning.Client 1.0.151.'
+          }
           Expand-Archive -LiteralPath $archive -DestinationPath $client
           $dlib = Get-Item -LiteralPath (Join-Path $client 'bin/x64/Azure.CodeSigning.Dlib.dll')
           $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
@@ -232,8 +235,18 @@ jobs:
         run: |
           $installers = @(Get-ChildItem -LiteralPath (Join-Path $env:BUNDLE_DIR 'nsis') -Filter '*-setup.exe' -File)
           if ($installers.Count -ne 1) { throw 'Expected exactly one Windows installer.' }
-          $app = Join-Path (Split-Path $env:BUNDLE_DIR) 'oxbow.exe'
-          foreach ($file in $app, $installers[0].FullName) {
+          $installer = $installers[0].FullName
+          # Tauri restores the unsigned executable outside the NSIS bundle.
+          $extractDir = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'oxbow-authenticode')
+          $sevenZip = Join-Path $env:ProgramFiles '7-Zip/7z.exe'
+          # Rename duplicate entries so they fail the file count check.
+          & $sevenZip x -tNsis -ssc- -aou "-o$($extractDir.FullName)" -- $installer oxbow.exe
+          if ($LASTEXITCODE -ne 0) { throw "7-Zip extraction failed with exit code $LASTEXITCODE." }
+          $apps = @(Get-ChildItem -LiteralPath $extractDir.FullName -File -Force)
+          if ($apps.Count -ne 1 -or $apps[0].Name -cne 'oxbow.exe') {
+            throw 'Expected exactly one oxbow.exe at the root of the Windows installer.'
+          }
+          foreach ($file in $installer, $apps[0].FullName) {
             $signature = Get-AuthenticodeSignature -LiteralPath $file
             if ($signature.Status -ne 'Valid' -or -not $signature.TimeStamperCertificate) {
               throw "Invalid or missing timestamped Authenticode signature for ${file}: $($signature.Status)"
