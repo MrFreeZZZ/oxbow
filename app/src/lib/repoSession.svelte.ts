@@ -77,12 +77,13 @@ export class RepoSession {
     this.#hooks.leaving();
     oplog.forget();
     lfs.forget();
-    activity.reset();
+    const stopping = activity.reset();
     this.loader.stopPaging();
     this.repo = null;
     this.loader.clear();
     nav.repo = "";
     try {
+      await stopping;
       await api.closeRepo();
       this.loader.reset();
       let summary = await api.openRepo(path);
@@ -214,9 +215,9 @@ export class RepoSession {
   close() {
     this.trustAsk?.answer(null);
     this.tickets.switch();
-    this.#opening = this.#opening.then(() => api.closeRepo()).catch((err) => { this.error = String(err); });
+    const stopping = activity.reset();
+    this.#opening = this.#opening.then(() => stopping).then(() => api.closeRepo()).catch((err) => { this.error = String(err); });
     this.loader.stopPaging();
-    activity.reset();
     oplog.forget();
     this.repo = null;
     nav.repo = "";

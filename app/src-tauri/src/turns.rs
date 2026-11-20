@@ -320,8 +320,15 @@ mod tests {
         ]);
         git(&["remote", "add", "origin", "https://example.invalid/repo"]);
         git(&["worktree", "add", "-qb", "linked", "linked"]);
-        let linked = Repo::open(dir.join("linked")).unwrap();
         let repo = repo.reopen().unwrap();
+        git(&["remote", "add", "mirror", "https://example.invalid/mirror"]);
+        let linked = Repo::open(dir.join("linked")).unwrap();
+        assert_eq!(repo.remotes(), ["origin"]);
+        assert_eq!(linked.remotes(), ["mirror", "origin"]);
+        let main_plan = repo.reopen().unwrap().auto_fetch().unwrap();
+        let linked_plan = linked.reopen().unwrap().auto_fetch().unwrap();
+        assert_eq!(main_plan.command, linked_plan.command);
+        assert!(main_plan.remote.is_none());
         let common = repo.common_dir();
         let alternative = common.join("worktrees/linked/../..");
         assert_eq!(canonical(&alternative), canonical(&common));
@@ -329,13 +336,11 @@ mod tests {
         let turns = Arc::new(Turns::default());
         turns.set_fetch_interval(2);
         let now = Instant::now();
-        let reserve = |at| turns.reserve_auto_fetch(&alternative, linked.fetch_targets(None), at);
+        let reserve = |at| turns.reserve_auto_fetch(&alternative, linked_plan.targets.clone(), at);
         let never = AtomicBool::new(false);
         let manual = || turns.take(&common, change("main", "Fetch"), &never, |_| panic!("waited"));
         let manual_running = manual().unwrap();
-        let stopped = turns
-            .reserve_auto_fetch(&common, repo.fetch_targets(Some("origin")), now)
-            .unwrap();
+        let stopped = turns.reserve_auto_fetch(&common, main_plan.targets, now).unwrap();
         assert!(matches!(reserve(now), Err(None)), "duplicate reached a busy repository");
         drop(stopped);
         drop(manual_running);

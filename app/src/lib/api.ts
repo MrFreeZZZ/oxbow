@@ -340,8 +340,8 @@ export const api = {
    *  for an action and comes back with `gaveWay`. A duplicate returns the time left until
    *  the next interval, or null while the other fetch is still running. */
   fetchInBackground: (remote: string | null, fetch: number | null = null, auto = false) =>
-    invoke<{ updated: number; gaveWay: boolean } | { retryAfterMs: number | null }>("fetch_in_background", { remote, fetch, auto }),
-  stopFetch: () => invoke<void>("stop_fetch"),
+    invoke<{ updated: number; gaveWay: boolean; remote: string | null } | { retryAfterMs: number | null }>("fetch_in_background", { remote, fetch, auto }),
+  stopFetch: (fetch: number) => invoke<void>("stop_fetch", { fetch }),
   publicKey: (key: string) => invoke<string>("public_key", { key }),
   pullSetup: () => invoke<PullSetup>("pull_setup"),
   workingFileStatuses: (paths: string[]) => invoke<WorkingFileStatus[]>("working_file_statuses", { paths }),

@@ -2,10 +2,11 @@
 //! progress and Stop, and fetching in the background.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use oxbow_core::console;
+use oxbow_core::remote::AutoFetchPlan;
 use oxbow_core::{Action, Failure, Plan};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -155,6 +156,16 @@ pub(crate) struct Fetched {
     updated: u32,
     /// It stopped part way for an action, as a fetch of the timer does.
     gave_way: bool,
+    remote: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct FetchFailure {
+    #[serde(flatten)]
+    failure: Box<Failure>,
+    /// Present only for a Git command that ran; null means all remotes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remote: Option<Option<String>>,
 }
 
 #[derive(Serialize)]
@@ -174,8 +185,12 @@ fn fetch_result_distinguishes_skips_from_completed_fetches() {
     let fetched = FetchResult::Fetched(Fetched {
         updated: 1,
         gave_way: false,
+        remote: None,
     });
-    assert_eq!(to_value(fetched).unwrap(), json!({ "updated": 1, "gaveWay": false }));
+    assert_eq!(
+        to_value(fetched).unwrap(),
+        json!({ "updated": 1, "gaveWay": false, "remote": null })
+    );
     for retry_after_ms in [None, Some(5000)] {
         let skipped = FetchResult::Skipped { retry_after_ms };
         assert_eq!(to_value(skipped).unwrap(), json!({ "retryAfterMs": retry_after_ms }));
@@ -188,6 +203,7 @@ fn fetch_result_distinguishes_skips_from_completed_fetches() {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct FetchEvent {
     fetch: Option<u64>,
+    remote: Option<String>,
     event: oxbow_core::ActionEvent,
 }
 
@@ -202,8 +218,8 @@ pub(crate) async fn fetch_in_background(
     remote: Option<String>,
     fetch: Option<u64>,
     auto: Option<bool>,
-) -> Result<FetchResult, Failure> {
-    let failed = |output: String| Failure {
+) -> Result<FetchResult, FetchFailure> {
+    let failure = |output: String| Failure {
         kind: oxbow_core::FailureKind::Other,
         output,
         incoming: Vec::new(),
@@ -214,24 +230,54 @@ pub(crate) async fn fetch_in_background(
         check: None,
         tracking: None,
     };
-    let repo = current(&session, &window).map_err(failed)?;
-    let cancel = if fetch.is_some() {
-        session.new_fetch_cancel(&window)
-    } else {
-        Arc::new(AtomicBool::new(false))
+    let failed = move |output: String| FetchFailure {
+        failure: Box::new(failure(output)),
+        remote: None,
     };
+    let cancelled = move || FetchFailure {
+        failure: Box::new(Failure {
+            kind: oxbow_core::FailureKind::Cancelled,
+            ..failure(String::new())
+        }),
+        remote: None,
+    };
+    let (repo, cancel) = session.slot(&window, |slot| {
+        let repo = slot
+            .repo
+            .clone()
+            .ok_or_else(|| failed("No repository is open".to_owned()))?;
+        let cancel = match fetch {
+            Some(id) => slot.start_fetch(id).ok_or_else(cancelled)?,
+            None => Arc::default(),
+        };
+        Ok::<_, FetchFailure>((repo, cancel))
+    })?;
     // A fetch of the timer stops for an action rather than make it wait.
     let gives_way = (auto == Some(true)).then(|| GiveWay::new(cancel.clone()));
     let label = window.label().to_owned();
     let turn_window = session.label(&window);
     let turns = session.turns.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(cancelled());
+        }
+        let repo = if auto == Some(true) {
+            repo.reopen().map_err(|err| failed(err.to_string()))?
+        } else {
+            repo
+        };
         let common = repo.common_dir();
-        let mut reservation = if auto == Some(true) {
-            let fresh = repo.reopen().unwrap_or_else(|_| repo.clone());
-            let targets = fresh.fetch_targets(remote.as_deref());
+        let (remote, command, mut reservation) = if auto == Some(true) {
+            let Some(AutoFetchPlan {
+                targets,
+                remote,
+                command,
+            }) = repo.auto_fetch()
+            else {
+                return Ok(FetchResult::Skipped { retry_after_ms: None });
+            };
             match turns.reserve_auto_fetch(&common, targets, Instant::now()) {
-                Ok(reservation) => Some(reservation),
+                Ok(reservation) => (remote, command, Some(reservation)),
                 Err(retry) => {
                     return Ok(FetchResult::Skipped {
                         retry_after_ms: retry.map(|delay| delay.as_millis() as u64 + 1),
@@ -239,7 +285,8 @@ pub(crate) async fn fetch_in_background(
                 }
             }
         } else {
-            None
+            let command = repo.fetch_command(remote.as_deref());
+            (remote, command, None)
         };
         let action = Action::Fetch { remote: remote.clone() };
         let (kind, title) = if auto == Some(true) {
@@ -251,7 +298,15 @@ pub(crate) async fn fetch_in_background(
             )
         };
         let emit = |event| {
-            let _ = app.emit_to(label.as_str(), "fetch-event", FetchEvent { fetch, event });
+            let _ = app.emit_to(
+                label.as_str(),
+                "fetch-event",
+                FetchEvent {
+                    fetch,
+                    remote: remote.clone(),
+                    event,
+                },
+            );
         };
         // A change running in the repository goes first, from any window.
         let mut change = Running::new(&turn_window, repo.name(), title.clone());
@@ -266,17 +321,11 @@ pub(crate) async fn fetch_in_background(
         });
         let gave_way = || gives_way.as_ref().is_some_and(GiveWay::gave_way);
         let Some(_turn) = turn else {
-            return Err(Failure {
-                kind: oxbow_core::FailureKind::Cancelled,
-                ..failed(String::new())
-            });
+            return Err(cancelled());
         };
         let mut updated = 0;
         let done = console::scope(Some(repo.workdir()), kind, title, || {
-            let command = repo
-                .fetch_command(remote.as_deref())
-                .with_progress()
-                .quiet_limit(FETCH_QUIET_LIMIT);
+            let command = command.with_progress().quiet_limit(FETCH_QUIET_LIMIT);
             emit(oxbow_core::ActionEvent::Command {
                 display: command.display(),
             });
@@ -302,13 +351,18 @@ pub(crate) async fn fetch_in_background(
                 Ok(_) => Ok(Fetched {
                     updated,
                     gave_way: false,
+                    remote: remote.clone(),
                 }),
                 // Stopped for an action: the next fetch of the timer tries again.
                 Err(oxbow_core::Error::Cancelled) if gave_way() => Ok(Fetched {
                     updated,
                     gave_way: true,
+                    remote: remote.clone(),
                 }),
-                Err(err) => Err(repo.explain_failure(&action, &err)),
+                Err(err) => Err(FetchFailure {
+                    failure: Box::new(repo.explain_failure(&action, &err)),
+                    remote: Some(remote.clone()),
+                }),
             }
         });
         if updated > 0 {
@@ -322,8 +376,8 @@ pub(crate) async fn fetch_in_background(
 
 /// Stop the background fetch.
 #[tauri::command]
-pub(crate) fn stop_fetch(window: tauri::WebviewWindow, session: State<'_, Session>) {
-    session.fetch_cancel(&window).store(true, Ordering::Relaxed);
+pub(crate) fn stop_fetch(window: tauri::WebviewWindow, session: State<'_, Session>, fetch: u64) {
+    session.slot(&window, |slot| slot.stop_fetch(fetch));
 }
 
 /// The public half of an SSH key, to paste into GitHub.

@@ -113,6 +113,7 @@ pub(crate) struct Slot {
     pub(crate) pending: Option<PathBuf>,
     /// Stop of the fetch running in the background, apart from actions in the sheet.
     pub(crate) fetch_cancel: Arc<AtomicBool>,
+    fetch_id: u64,
     /// The commit rows of the last history, for the next reload to reuse.
     pub(crate) history: HistoryCache,
     /// Number of the last history read started here, or of the last repository opened here:
@@ -136,6 +137,23 @@ pub(crate) struct Slot {
 }
 
 impl Slot {
+    pub(crate) fn start_fetch(&mut self, id: u64) -> Option<Arc<AtomicBool>> {
+        if id <= self.fetch_id {
+            return None;
+        }
+        self.stop_fetch(id);
+        self.fetch_cancel = Arc::default();
+        Some(self.fetch_cancel.clone())
+    }
+
+    /// Stop can arrive before this fetch starts, or after a newer fetch has replaced it.
+    pub(crate) fn stop_fetch(&mut self, id: u64) {
+        if id >= self.fetch_id {
+            self.fetch_id = id;
+            self.fetch_cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
     /// Open `repo` in this window: what was read of the repository open before goes.
     pub(crate) fn open(&mut self, repo: Repo) {
         self.close();
@@ -317,19 +335,6 @@ impl Session {
             return Err(oxbow_core::Error::Cancelled.to_string());
         }
         Ok(Some(stop))
-    }
-
-    pub(crate) fn fetch_cancel(&self, window: &tauri::WebviewWindow) -> Arc<AtomicBool> {
-        self.slot(window, |slot| slot.fetch_cancel.clone())
-    }
-
-    /// A Stop of its own for a new background fetch: one stopped before it, e.g. of the
-    /// repository open before, stays stopped.
-    pub(crate) fn new_fetch_cancel(&self, window: &tauri::WebviewWindow) -> Arc<AtomicBool> {
-        self.slot(window, |slot| {
-            slot.fetch_cancel = Arc::new(AtomicBool::new(false));
-            slot.fetch_cancel.clone()
-        })
     }
 
     /// A Stop for a new read in `lane`, which stops the one running there. Without a lane the
@@ -535,6 +540,26 @@ mod tests {
         assert!(stops.start("settings").cancel.load(Ordering::Relaxed));
         stops.resume();
         assert!(!stops.start("settings").cancel.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn background_fetch_stop_and_start_are_scoped_to_the_latest_request() {
+        let mut slot = Slot::default();
+        let auto = slot.start_fetch(1).unwrap();
+        let manual = slot.start_fetch(2).unwrap();
+        assert!(auto.load(Ordering::Relaxed));
+        slot.stop_fetch(1);
+        assert!(slot.start_fetch(1).is_none());
+        assert!(!manual.load(Ordering::Relaxed));
+
+        slot.stop_fetch(3);
+        slot.close();
+        assert!(slot.start_fetch(3).is_none());
+        let reopened = slot.start_fetch(4).unwrap();
+        slot.stop_fetch(3);
+        assert!(!reopened.load(Ordering::Relaxed));
+        slot.stop_fetch(4);
+        assert!(reopened.load(Ordering::Relaxed));
     }
 
     #[test]
