@@ -430,13 +430,16 @@ mod tests {
             .unwrap();
         assert_eq!(turns.other(&common, "worktree").unwrap().title, "Commit");
 
-        let stop = AtomicBool::new(true);
+        let stop = AtomicBool::new(false);
         let mut waited_for = Vec::new();
         let pending = turns.take_in(
             (common.clone(), Scope::ReviewFetch),
             change("main", "Fetch MR"),
             &stop,
-            |other| waited_for.push(other.window.clone()),
+            |other| {
+                waited_for.push(other.window.clone());
+                stop.store(true, Ordering::Relaxed);
+            },
         );
         assert!(pending.is_none());
         assert_eq!(waited_for, ["worktree"]);

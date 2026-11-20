@@ -179,15 +179,19 @@ fn a_pull_request_is_fetched_out_of_the_branch_lists() {
     );
     // Only the base shows, as its remote branch: git updates that one too.
     assert_eq!(me.git(&["branch", "-a"]), "remotes/origin/main");
-    let compared = repo
-        .compare(&original.base, &original.head, oxbow_core::CompareMode::Split)
-        .unwrap();
-    let paths: Vec<&str> = compared.files.iter().map(|f| f.file.path.as_str()).collect();
-    assert_eq!(paths, ["limit.rs"]);
 
     github.git(&["push", "-q", &url, "fork-work:refs/heads/other"]);
     let moved = fetch("other").unwrap().tips.unwrap();
     assert_eq!((&moved.base, &original.base), (&head, &main));
+
+    // A comparison of the displayed snapshot still uses its original base and head.
+    let compared = repo
+        .compare(&original.base, &original.head, oxbow_core::CompareMode::Split)
+        .unwrap();
+    assert_eq!(compared.from, main);
+    assert_eq!(compared.target_id, head);
+    let paths: Vec<&str> = compared.files.iter().map(|f| f.file.path.as_str()).collect();
+    assert_eq!(paths, ["limit.rs"]);
     assert!(matches!(
         repo.fetch_review(
             &repo.pull_fetch_command(&place, "origin", 421, "main"),
