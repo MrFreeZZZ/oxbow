@@ -282,6 +282,7 @@
 
 <svelte:window
   onfocus={() => {
+    if (model.loading || repoFiles.loading) return;
     load();
     if (model.repo && !repoFiles.open) loadRepoFiles();
   }}
