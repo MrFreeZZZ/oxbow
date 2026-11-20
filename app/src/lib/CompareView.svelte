@@ -371,7 +371,7 @@
     background: var(--side-sel);
   }
   :is(.all, .commit, .ancestor).on {
-    box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--pick-lane) 40%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pick-lane) 40%, transparent);
     outline: none;
   }
   .lines {
