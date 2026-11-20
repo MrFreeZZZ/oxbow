@@ -88,6 +88,35 @@ export const SCENARIOS = [
     },
   },
   {
+    name: "compare with selected commit keys",
+    async run(ctx) {
+      const app = await ctx.start(repo(`${ctx.dir}/r`, 4));
+      await app.js(async (page) => {
+        const commit = (name) => page.all('[aria-label="Commits"] [role="option"]', name)[0];
+        commit("Commit 2").click();
+        const row = commit("Commit 4");
+        const box = row.getBoundingClientRect();
+        row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: box.left + 60, clientY: box.top + 8 }));
+        await page.click("Compare");
+        (await page.until(() => page.all('.submenu [role="menuitem"]', "With Selected Commit")[0])).click();
+      });
+      const verify = (text) => app.js((page, text) => page.until(() => {
+        const row = document.querySelector('.compare .list button[aria-pressed="true"]');
+        if (!row || row !== document.activeElement || !page.words(row).includes(text)) return false;
+        const style = getComputedStyle(row);
+        return style.boxShadow !== "none" && style.outlineStyle === "none";
+      }, `${text} focused with only the selection border`), text);
+      await verify("File changes");
+      await app.keys("ArrowDown");
+      await verify("Commit 4");
+      await shows(app, "file 4 1");
+      await app.keys("ArrowDown", "ArrowDown", "ArrowDown");
+      await verify("Common ancestor");
+      await app.keys("ArrowUp");
+      await verify("Commit 3");
+    },
+  },
+  {
     name: "comparison file focus",
     async run(ctx) {
       const app = await ctx.start(repo(`${ctx.dir}/r`, 3));
