@@ -4,6 +4,7 @@ import { test } from "node:test";
 import ts from "typescript";
 import { compileModule } from "svelte/compiler";
 import * as runtime from "svelte/internal/client";
+import { stopped } from "../src/lib/api.ts";
 
 const view = fs.readFileSync(new URL("../src/lib/PullFiles.svelte", import.meta.url), "utf8");
 const shared = view.slice(view.indexOf("  const fetches"), view.indexOf("</script>"));
@@ -28,6 +29,7 @@ const js = ts.transpile(`
       loadMore,
       get comparison() { return comparison; },
       get diffs() { return diffs; },
+      get loading() { return loading; },
       get error() { return error; },
       get stale() { return stale; },
     };
@@ -65,7 +67,7 @@ function fixture(lab = false) {
     stopReads: async () => {},
   };
   const mount = Function("$", "api", "untrack", "wholeByDefault", "stopped",
-    `${compiled}; return mount;`)(runtime, api, runtime.untrack, () => false, () => false);
+    `${compiled}; return mount;`)(runtime, api, runtime.untrack, () => false, stopped);
   function open(project = "acme/api", number = 1) {
     let state!: ReturnType<typeof mount>;
     const stop = runtime.effect_root(() => { state = mount(lab, project, number); });
@@ -123,6 +125,38 @@ test("Files fetches for revisions and explicit refresh, even after failure", asy
   state.update({ headSha: "new head" });
   await settle();
   assert.deepEqual(fetches.slice(3).map(call => call.args[2]), ["main", "other", "other"]);
+});
+
+test("a stopped fetch clears loading without an error or losing the displayed files", async (t) => {
+  const { state, fetches, compares, pages, stop } = fixture();
+  t.after(stop);
+  assert.equal(state.loading, true);
+  fetches[0].reject("stopped");
+  await settle();
+  assert.equal(state.loading, false);
+  assert.equal(state.error, null);
+  assert.equal(state.stale, null);
+  assert.equal(state.comparison, null);
+
+  state.refresh();
+  await settle();
+  fetches[1].resolve(result("first"));
+  await settle();
+  compares[0].resolve(comparison("first"));
+  await settle();
+  pages[0].resolve({ diffs: [diff("first")], next: null });
+  await settle();
+
+  state.refresh();
+  await settle();
+  assert.equal(state.loading, true);
+  fetches[2].reject("stopped");
+  await settle();
+  assert.equal(state.loading, false);
+  assert.equal(state.error, null);
+  assert.equal(state.stale, null);
+  assert.deepEqual(state.comparison.files, [diff("first").file]);
+  assert.deepEqual(state.diffs, [diff("first")]);
 });
 
 test("returning to Files shares its fetch, while another project or request gets its own", async (t) => {

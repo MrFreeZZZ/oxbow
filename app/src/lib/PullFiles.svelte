@@ -109,7 +109,13 @@
     const fetch = editor.lab ? api.gitlabFetch : api.pullFetch;
     inFlight(fetches, key, () => fetch(editor.number, onto, editor.saves.target, true)).then(
       (result) => finish(result),
-      (err) => finish({ tips: null, stale: String(err) }),
+      (err) => {
+        if (stopped(err)) {
+          if (current()) loading = false;
+          return;
+        }
+        finish({ tips: null, stale: String(err) });
+      },
     );
     function finish(result: ReviewFetch) {
       if (!current()) return;
