@@ -23,7 +23,7 @@ const PULL: &str = r#"{"number":419,"title":"Expose /v2/sessions endpoint","stat
  "html_url":"https://github.com/acme/api/pull/419","user":{"login":"alexander","avatar_url":"https://a/1"},
  "created_at":"2026-10-08T10:00:00Z","updated_at":"2026-10-08T12:00:00Z","body":"Adds handlers.",
  "head":{"ref":"auth/2-api","sha":"e17a5c9aaaa","repo":{"owner":{"login":"acme"}}},
- "base":{"ref":"auth/1-models","repo":{"owner":{"login":"acme"}}},
+ "base":{"ref":"auth/1-models","sha":"94d6f1f5afc7d017e0fb416fb4fe2c10cc923299","repo":{"owner":{"login":"acme"}}},
  "additions":94,"deletions":12,"changed_files":3,"commits":2,"mergeable":true,"mergeable_state":"blocked",
  "merged_at":null,"auto_merge":null,
  "requested_reviewers":[{"login":"maria"}],"requested_teams":[{"slug":"core"}]}"#;
@@ -77,6 +77,7 @@ fn a_pull_request_is_read_in_full() {
 
     assert_eq!(pr.summary.state, PullState::Open);
     assert_eq!(pr.summary.base, "auth/1-models");
+    assert_eq!(pr.base_sha.as_deref(), Some("94d6f1f5afc7d017e0fb416fb4fe2c10cc923299"));
     assert_eq!((pr.additions, pr.deletions, pr.commit_count), (94, 12, 2));
     assert_eq!(pr.mergeable_state, "blocked");
     assert_eq!(pr.summary.requested, ["maria", "acme/core"]);

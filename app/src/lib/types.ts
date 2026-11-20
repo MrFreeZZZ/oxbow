@@ -1952,6 +1952,8 @@ export interface PullList {
 
 export interface PullRequest extends PullSummary {
   loadIssues: LoadIssue[];
+  /** The current target branch tip when supplied by the provider. */
+  baseSha: string | null;
   additions: number;
   deletions: number;
   changedFiles: number;
@@ -1972,6 +1974,16 @@ export interface PullRequest extends PullSummary {
   settings: MergeSettings;
   /** What only a merge request on GitLab has; null on GitHub. */
   gitlab: GitLabFacts | null;
+}
+
+export interface ReviewTips {
+  base: string;
+  head: string;
+}
+
+export interface ReviewFetch {
+  tips: ReviewTips | null;
+  stale: string | null;
 }
 
 /** A GitLab merge request's own facts. */

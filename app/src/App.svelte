@@ -159,7 +159,11 @@
   const load = (path: string) => { overviewShown = false; return session.load(path); };
   const refresh = () => loader.refresh();
   const refreshQuietly = () => loader.refreshQuietly();
-  const reload = () => loader.reload();
+  let reviewRefresh = $state(0);
+  const reload = () => {
+    reviewRefresh++;
+    return loader.reload();
+  };
   const retryRead = (part: ReadPart) => loader.retryRead(part);
   const loadOlder = (until: string | null = null) => loader.loadOlder(until);
   const ensureLoaded = (id: string) => loader.ensureLoaded(id);
@@ -1576,8 +1580,9 @@
   async function backgroundFetch(auto: boolean) {
     const target = fetchTarget();
     if (!target) return;
-    const ok = await activity.fetch(target.remote, target.label, auto);
-    if (!ok) return;
+    const result = await activity.fetch(target.remote, target.label, auto);
+    if (typeof result !== "boolean") return result.retryAfterMs;
+    if (!result) return;
     await api.refreshRemoteTags().catch(() => false);
     await refreshQuietly();
     if (!auto) confirm.say(activity.recent[0]?.sub === "Nothing new" ? `Fetched ${target.label}. Nothing new.` : `Fetched ${target.label}.`, "done");
@@ -1639,15 +1644,22 @@
   const hasRemotes = $derived(!!history?.remotes.length);
   $effect(() => {
     if (overviewShown || !repo || !hasRemotes || !prefs.get("oxbow.fetch.auto")) return;
+    const interval = prefs.get("oxbow.fetch.interval") * 60_000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const fetchNow = () => {
+      const next = setTimeout(fetchNow, interval);
+      timer = next;
       if (confirm.request || document.hidden || loading || activity.running) return;
-      backgroundFetch(true);
+      void backgroundFetch(true).then((retryAfterMs) => {
+        if (timer !== next || retryAfterMs == null) return;
+        clearTimeout(timer);
+        timer = setTimeout(fetchNow, retryAfterMs);
+      });
     };
-    const first = setTimeout(fetchNow, 5000);
-    const timer = setInterval(fetchNow, prefs.get("oxbow.fetch.interval") * 60_000);
+    timer = setTimeout(fetchNow, 5000);
     return () => {
-      clearTimeout(first);
-      clearInterval(timer);
+      clearTimeout(timer);
+      timer = undefined;
     };
   });
 
@@ -2298,6 +2310,7 @@
             ctx={branchCtx}
             {colorOf}
             {version}
+            {reviewRefresh}
             {run}
             onBranch={(name) => ((pullBranch = name), (pullNumber = null))}
             copy={(text) => copyText(text, `Copied ${text.length > 40 ? "it" : text}.`)}
@@ -2306,7 +2319,7 @@
         {/key}
       {:else if view === "stack" && branchCtx}
         {#key repo.path}
-          <EditStackView.component branch={stackBranch} ctx={branchCtx} {colorOf} {version} {run} onClose={() => (view = "history")} onSeries={seriesOfLastStep} />
+          <EditStackView.component workdir={repo.path} branch={stackBranch} ctx={branchCtx} {colorOf} {version} {run} onClose={() => (view = "history")} onSeries={seriesOfLastStep} />
         {/key}
       {:else if view === "local"}
         {#key repo.path}

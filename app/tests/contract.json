@@ -209,6 +209,43 @@
     "issues",
     "items"
   ],
+  "PullRequest": [
+    "additions",
+    "author",
+    "autoMerge",
+    "base",
+    "baseSha",
+    "body",
+    "changedFiles",
+    "checks",
+    "commitCount",
+    "commits",
+    "commitsComplete",
+    "created",
+    "deletions",
+    "draft",
+    "gitlab",
+    "head",
+    "headOwner",
+    "headSha",
+    "htmlUrl",
+    "loadIssues",
+    "mergeCommit",
+    "mergeable",
+    "mergeableState",
+    "mergedAt",
+    "mergedBy",
+    "nodeId",
+    "number",
+    "requested",
+    "requiredApprovals",
+    "reviews",
+    "settings",
+    "state",
+    "timeline",
+    "title",
+    "updated"
+  ],
   "RefInfo": [
     "kind",
     "name",
@@ -245,10 +282,18 @@
     "headRef",
     "revision"
   ],
+  "ReviewFetch": [
+    "stale",
+    "tips"
+  ],
   "ReviewPlace": [
     "gitlab",
     "host",
     "project"
+  ],
+  "ReviewTips": [
+    "base",
+    "head"
   ],
   "StashInfo": [
     "base",

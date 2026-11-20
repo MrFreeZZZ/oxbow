@@ -3,23 +3,64 @@
 //! change has a number of its own, and one that waits says what it waits for.
 //!
 //! Reads (history, diffs, status) take no turn: they run beside anything, as git keeps its own
-//! files apart with locks. A fetch takes one: it writes refs and FETCH_HEAD, and tags it fetched
+//! files apart with locks. A regular fetch takes one: it writes refs and FETCH_HEAD, and tags it fetched
 //! while an action ran would go into that action's step in the Operation Log, for Undo to take
 //! back. A fetch of the timer gives way instead of making an action wait: the action stops it,
-//! and the next one fetches again.
+//! and the next one fetches again. Review fetches have their own turn for their shared refs.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-/// The changes running now, by the repository's shared Git folder.
+use oxbow_core::remote::FetchTarget;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Scope {
+    Repository,
+    ReviewFetch,
+}
+
+type TurnKey = (PathBuf, Scope);
+type AutoFetchKey = (PathBuf, Vec<FetchTarget>);
+
+pub(crate) const DEFAULT_FETCH_INTERVAL: u64 = 15;
+pub(crate) const MAX_FETCH_INTERVAL: u64 = 1440;
+
+/// The changes running now, by the repository's shared Git folder and scope.
 #[derive(Default)]
 pub struct Turns {
-    running: Mutex<HashMap<PathBuf, Vec<Running>>>,
+    running: Mutex<HashMap<TurnKey, Vec<Running>>>,
     next: AtomicU64,
     paused: AtomicBool,
+    // None is a reserved fetch, including while it waits for its repository turn.
+    auto_fetches: Mutex<HashMap<AutoFetchKey, Option<Instant>>>,
+    fetch_interval: AtomicU64,
+}
+
+pub(crate) struct AutoFetch {
+    turns: Arc<Turns>,
+    key: AutoFetchKey,
+    attempted_at: Option<Instant>,
+}
+
+impl AutoFetch {
+    /// Successful and failed attempts both use their interval. Stop and giving way don't.
+    pub(crate) fn attempted(&mut self, started: Instant) {
+        self.attempted_at = Some(started);
+    }
+}
+
+impl Drop for AutoFetch {
+    fn drop(&mut self) {
+        let mut fetches = self.turns.auto_fetches.lock().expect("auto fetch lock");
+        if let Some(attempted_at) = self.attempted_at {
+            *fetches.get_mut(&self.key).expect("reserved auto fetch") = Some(attempted_at);
+        } else {
+            fetches.remove(&self.key);
+        }
+    }
 }
 
 /// A change running in a repository, or asking to.
@@ -77,10 +118,10 @@ impl Running {
     }
 }
 
-/// A change's turn: the others in its repository wait until it is dropped.
+/// A change's turn: the others in its repository and scope wait until it is dropped.
 pub struct Turn {
     turns: Arc<Turns>,
-    common: PathBuf,
+    key: TurnKey,
     id: u64,
 }
 
@@ -91,6 +132,46 @@ pub fn canonical(common: &Path) -> PathBuf {
 }
 
 impl Turns {
+    pub(crate) fn set_fetch_interval(&self, minutes: u64) {
+        self.fetch_interval.store(minutes, Ordering::Relaxed);
+    }
+
+    /// Claim the timer's fetch before it reaches the repository queue. A skipped tick can only
+    /// predict when to try again if the previous attempt has already ended.
+    pub(crate) fn reserve_auto_fetch(
+        self: &Arc<Self>,
+        common: &Path,
+        targets: Vec<FetchTarget>,
+        now: Instant,
+    ) -> Result<AutoFetch, Option<Duration>> {
+        let key = (canonical(common), targets);
+        let mut fetches = self.auto_fetches.lock().expect("auto fetch lock");
+        let minutes = self.fetch_interval.load(Ordering::Relaxed);
+        let interval = Duration::from_secs(60 * if minutes == 0 { DEFAULT_FETCH_INTERVAL } else { minutes });
+        fetches.retain(|_, start| {
+            start
+                .is_none_or(|start| now.saturating_duration_since(start) < Duration::from_secs(60 * MAX_FETCH_INTERVAL))
+        });
+        match fetches.get(&key) {
+            Some(None) => return Err(None),
+            Some(Some(start)) => {
+                if let Some(remaining) = interval.checked_sub(now.saturating_duration_since(*start))
+                    && !remaining.is_zero()
+                {
+                    return Err(Some(remaining));
+                }
+            }
+            None => {}
+        }
+        // A guard owns the entry until the command ends, even if it is still queued.
+        fetches.insert(key.clone(), None);
+        Ok(AutoFetch {
+            turns: self.clone(),
+            key,
+            attempted_at: None,
+        })
+    }
+
     /// Reserve an idle app for installation. Checked under the same lock as new turns.
     pub(crate) fn pause_if_idle(&self) -> bool {
         let running = self.running.lock().expect("turns lock");
@@ -112,11 +193,30 @@ impl Turns {
     pub fn take(
         self: &Arc<Self>,
         common: &Path,
+        change: Running,
+        cancel: &AtomicBool,
+        on_wait: impl FnMut(&Running),
+    ) -> Option<Turn> {
+        self.take_in((canonical(common), Scope::Repository), change, cancel, on_wait)
+    }
+
+    /// Serialize writes and snapshots of review refs across the repository's worktrees.
+    pub(crate) fn take_review_fetch(
+        self: &Arc<Self>,
+        common: &Path,
+        change: Running,
+        cancel: &AtomicBool,
+    ) -> Option<Turn> {
+        self.take_in((canonical(common), Scope::ReviewFetch), change, cancel, |_| {})
+    }
+
+    fn take_in(
+        self: &Arc<Self>,
+        key: TurnKey,
         mut change: Running,
         cancel: &AtomicBool,
         mut on_wait: impl FnMut(&Running),
     ) -> Option<Turn> {
-        let common = canonical(common);
         let mut told = None;
         loop {
             let other = {
@@ -124,10 +224,10 @@ impl Turns {
                 if self.paused.load(Ordering::SeqCst) {
                     return None;
                 }
-                let list = running.entry(common.clone()).or_default();
+                let list = running.entry(key.clone()).or_default();
                 if list.is_empty() {
                     if cancel.load(Ordering::Relaxed) {
-                        running.remove(&common);
+                        running.remove(&key);
                         return None;
                     }
                     let id = self.next.fetch_add(1, Ordering::Relaxed);
@@ -135,7 +235,7 @@ impl Turns {
                     list.push(change);
                     return Some(Turn {
                         turns: self.clone(),
-                        common,
+                        key,
                         id,
                     });
                 }
@@ -166,17 +266,21 @@ impl Turns {
     /// What a window other than `window` is changing in the repository at `common` now.
     pub fn other(&self, common: &Path, window: &str) -> Option<Running> {
         let running = self.running.lock().expect("turns lock");
-        running.get(common)?.iter().find(|r| r.window != window).cloned()
+        running
+            .get(&(common.to_path_buf(), Scope::Repository))?
+            .iter()
+            .find(|r| r.window != window)
+            .cloned()
     }
 }
 
 impl Drop for Turn {
     fn drop(&mut self) {
         let mut running = self.turns.running.lock().expect("turns lock");
-        if let Some(list) = running.get_mut(&self.common) {
+        if let Some(list) = running.get_mut(&self.key) {
             list.retain(|r| r.id != self.id);
             if list.is_empty() {
-                running.remove(&self.common);
+                running.remove(&self.key);
             }
         }
     }
@@ -188,6 +292,75 @@ mod tests {
 
     fn change(window: &str, title: &str) -> Running {
         Running::new(window, "repo".into(), title.into())
+    }
+
+    #[test]
+    fn auto_fetches_share_a_worktree_target_before_and_after_the_turn() {
+        use oxbow_core::{Repo, cli::GitCommand};
+
+        let fixture = oxbow_core::cli::private_temp_folder("oxbow-auto-fetch-").unwrap();
+        let dir = fixture.path();
+        let out = std::process::Command::new("git")
+            .args(["init", "-q", "-b", "main"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let repo = Repo::open(dir).unwrap();
+        let git = |args: &[&str]| repo.run(&GitCommand::new(args.iter().copied())).unwrap();
+        git(&[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "Init",
+            "--allow-empty",
+        ]);
+        git(&["remote", "add", "origin", "https://example.invalid/repo"]);
+        git(&["worktree", "add", "-qb", "linked", "linked"]);
+        let linked = Repo::open(dir.join("linked")).unwrap();
+        let repo = repo.reopen().unwrap();
+        let common = repo.common_dir();
+        let alternative = common.join("worktrees/linked/../..");
+        assert_eq!(canonical(&alternative), canonical(&common));
+
+        let turns = Arc::new(Turns::default());
+        turns.set_fetch_interval(2);
+        let now = Instant::now();
+        let reserve = |at| turns.reserve_auto_fetch(&alternative, linked.fetch_targets(None), at);
+        let never = AtomicBool::new(false);
+        let manual = || turns.take(&common, change("main", "Fetch"), &never, |_| panic!("waited"));
+        let manual_running = manual().unwrap();
+        let stopped = turns
+            .reserve_auto_fetch(&common, repo.fetch_targets(Some("origin")), now)
+            .unwrap();
+        assert!(matches!(reserve(now), Err(None)), "duplicate reached a busy repository");
+        drop(stopped);
+        drop(manual_running);
+
+        let mut attempt = reserve(now).unwrap();
+        assert!(matches!(reserve(now + Duration::from_secs(180)), Err(None)));
+        assert!(
+            turns
+                .reserve_auto_fetch(&dir.join("other"), repo.fetch_targets(None), now)
+                .is_ok()
+        );
+        assert!(
+            turns
+                .reserve_auto_fetch(&common, repo.fetch_targets(Some("different")), now)
+                .is_ok()
+        );
+        // A regular error consumes the interval just like a success.
+        attempt.attempted(now);
+        drop(attempt);
+        let next = now + Duration::from_secs(1);
+        assert!(matches!(reserve(next), Err(Some(delay)) if delay == Duration::from_secs(119)));
+        assert!(manual().is_some(), "manual fetch had to wait for the cooldown");
+        assert!(reserve(now + Duration::from_secs(120)).is_ok());
+        turns.set_fetch_interval(1);
+        assert!(reserve(now + Duration::from_secs(60)).is_ok());
     }
 
     #[test]
@@ -230,6 +403,52 @@ mod tests {
         assert!(go.is_some());
         drop(go);
         assert!(turns.running.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_review_fetch_waits_only_for_review_fetches_of_the_same_repository() {
+        let turns = Arc::new(Turns::default());
+        let dir = std::env::temp_dir().join(format!("oxbow-review-turn-{}", std::process::id()));
+        let common = dir.join(".git");
+        std::fs::create_dir_all(common.join("worktrees/linked")).unwrap();
+        let alternate = common.join("worktrees/linked/../..");
+        let never = AtomicBool::new(false);
+        let review = turns
+            .take_review_fetch(&alternate, change("worktree", "Fetch PR"), &never)
+            .unwrap();
+        let common = canonical(&common);
+        assert!(turns.other(&common, "main").is_none());
+        assert!(
+            turns
+                .take_review_fetch(&dir.join("other"), change("other", "Fetch PR"), &never)
+                .is_some()
+        );
+        let commit = turns
+            .take(&common, change("main", "Commit"), &never, |_| {
+                panic!("waited for a review")
+            })
+            .unwrap();
+        assert_eq!(turns.other(&common, "worktree").unwrap().title, "Commit");
+
+        let stop = AtomicBool::new(true);
+        let mut waited_for = Vec::new();
+        let pending = turns.take_in(
+            (common.clone(), Scope::ReviewFetch),
+            change("main", "Fetch MR"),
+            &stop,
+            |other| waited_for.push(other.window.clone()),
+        );
+        assert!(pending.is_none());
+        assert_eq!(waited_for, ["worktree"]);
+        drop(review);
+        assert!(
+            turns
+                .take_review_fetch(&common, change("main", "Fetch MR"), &never)
+                .is_some()
+        );
+        drop(commit);
+        assert!(turns.running.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

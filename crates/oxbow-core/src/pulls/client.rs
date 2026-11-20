@@ -426,6 +426,7 @@ impl Client {
         let summary_state = summary.state;
         Ok(PullRequest {
             load_issues,
+            base_sha: pull.pointer("/base/sha").and_then(Value::as_str).map(str::to_owned),
             additions: number_field("additions"),
             deletions: number_field("deletions"),
             changed_files: number_field("changed_files"),

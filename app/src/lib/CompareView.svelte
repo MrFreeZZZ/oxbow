@@ -53,9 +53,22 @@
   let error = $state<string | null>(null);
   /** A commit picked in the list; none shows all the changes. */
   let picked = $state<string | null>(null);
+  let list = $state<HTMLDivElement>();
+  let previousRefs: { base: string; target: string } | undefined;
+
+  $effect(() => {
+    const current = list?.querySelector<HTMLButtonElement>("[aria-current='true']");
+    const active = document.activeElement;
+    if (current && (!active || active === document.body)) {
+      current.focus({ preventScroll: true });
+      current.scrollIntoView({ block: "nearest" });
+    }
+  });
 
   $effect(() => {
     const query = { base, target, mode };
+    if (previousRefs?.base !== query.base || previousRefs.target !== query.target) picked = null;
+    previousRefs = query;
     version;
     error = null;
     // Only the latest request counts: one for the same refs from before a reload may answer
@@ -84,13 +97,6 @@
     };
   });
 
-  // Other refs start over on all the changes.
-  $effect(() => {
-    base;
-    target;
-    picked = null;
-  });
-
   const color = $derived(colorOf(targetLabel));
   const pickedRow = $derived(picked ? lookup(picked) : undefined);
 
@@ -114,6 +120,26 @@
     return row ? lane(row.graph.color) : "var(--text2)";
   }
 
+  function pickRow(row: HTMLButtonElement, id: string | null) {
+    picked = id;
+    row.focus({ preventScroll: true });
+  }
+
+  function onListKey(event: KeyboardEvent & { currentTarget: HTMLDivElement }) {
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    const rows = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button[data-compare-row]"));
+    const focused = rows.findIndex((row) => row === event.target);
+    if (focused < 0) return;
+    const current = rows.findIndex((row) => row.dataset.compareRow === (picked ?? ""));
+
+    event.preventDefault();
+    const index = (current < 0 ? focused : current) + (event.key === "ArrowDown" ? 1 : -1);
+    const next = rows[Math.max(0, Math.min(rows.length - 1, index))];
+    pickRow(next, next.dataset.compareRow || null);
+    next.scrollIntoView({ block: "nearest" });
+  }
+
   let copied = $state(false);
   function copyCommand(command: string) {
     copy(command);
@@ -123,7 +149,8 @@
 </script>
 
 {#snippet commitRow(commit: CompareCommit)}
-  <button class="commit" class:on={picked === commit.id} style:background={picked === commit.id ? tint(lookup(commit.id)?.graph.color ?? color) : undefined} onclick={() => (picked = commit.id)}>
+  {@const rowColor = lookup(commit.id)?.graph.color ?? color}
+  <button class="commit" class:on={picked === commit.id} data-compare-row={commit.id} aria-current={picked === commit.id ? "true" : undefined} style:--pick-lane={lane(rowColor)} style:background={picked === commit.id ? tint(rowColor) : undefined} onclick={(event) => pickRow(event.currentTarget, commit.id)}>
     <span class="dot" style:background={dotColor(commit.id)}></span>
     <span class="lines">
       <span class="summary">{commit.summary}</span>
@@ -161,8 +188,9 @@
     {@const behindCommand = `git log ${quoteGitArg(`${shownTarget}..${shownBase}`)} --`}
     <div class="content">
       <section class="list" aria-label="Commits">
-        <div class="scroll">
-          <button class="all" class:on={picked === null} style:background={picked === null ? tint(color) : undefined} onclick={() => (picked = null)}>
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions (Delegate arrow keys from the row buttons.) -->
+        <div class="scroll" role="group" bind:this={list} onkeydown={onListKey}>
+          <button class="all" class:on={picked === null} data-compare-row="" aria-current={picked === null ? "true" : undefined} style:--pick-lane={lane(color)} style:background={picked === null ? tint(color) : undefined} onclick={(event) => pickRow(event.currentTarget, null)}>
             <svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5h5.5L12 5v8.5H4z" /><path d="M6 8h4M6 10.5h4" /></svg>
             <span class="lines">
               <span class="summary">File changes</span>
@@ -186,7 +214,7 @@
 
           {#if c.mergeBase}
             {@const m = c.mergeBase}
-            <button class="ancestor" class:on={picked === m.id} onclick={() => (picked = m.id)}>
+            <button class="ancestor" class:on={picked === m.id} data-compare-row={m.id} aria-current={picked === m.id ? "true" : undefined} style:--pick-lane={lane(lookup(m.id)?.graph.color ?? color)} onclick={(event) => pickRow(event.currentTarget, m.id)}>
               <span class="ring"></span>
               <span class="lines">
                 <span class="byline">Common ancestor · git merge-base</span>
@@ -341,6 +369,10 @@
   }
   .ancestor.on {
     background: var(--side-sel);
+  }
+  :is(.all, .commit, .ancestor).on {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pick-lane) 40%, transparent);
+    outline: none;
   }
   .lines {
     display: flex;

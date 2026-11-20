@@ -1,3 +1,10 @@
+<script module lang="ts">
+  import type { ReviewFetch } from "./types";
+
+  // A quick return to Files can share the fetch started before the tab closed.
+  const fetches = new Map<string, Promise<ReviewFetch>>();
+</script>
+
 <script lang="ts">
   import { diffScroll } from "./diffScroll";
   import FileFilter from "./FileFilter.svelte";
@@ -10,8 +17,8 @@
   // on this computer.
   import { untrack } from "svelte";
   import { api, stopped } from "./api";
-  import { wholeByDefault } from "./prefs.svelte";
-  import type { Comparison, DiffLine, DraftComment, FileChange, FileDiff, Hunk, Spot } from "./types";
+  import { diffSettings, wholeByDefault } from "./prefs.svelte";
+  import type { Comparison, DiffLine, DraftComment, FileChange, FileDiff, Hunk, ReviewTips, Spot } from "./types";
   import { shortId, splitPath, fileDeletionWidth } from "./format";
   import DiffView, { type LineNotes } from "./DiffView.svelte";
   import FileBadge from "./FileBadge.svelte";
@@ -27,14 +34,13 @@
     session,
     me,
     color,
-    version,
+    refresh,
   }: {
     session: ReviewSession;
     /** The account signed in, which comments here. */
     me: string | null;
     color: number;
-    /** Goes up on every reload, so the files load again. */
-    version: number;
+    refresh: number;
   } = $props();
 
   const pr = $derived(session.pr);
@@ -65,131 +71,163 @@
   /** Files the author changed since the review started; null while unknown. */
   let changed = $state.raw<Set<string> | null>(null);
 
-  let head = $state("");
-  let base = $state("");
   /** The commit the draft's comments are on, when the pull request moved on from it. */
   const reviewed = $derived(session.draft && session.draft.commit !== pr.headSha ? session.draft.commit : null);
+  const reviewBase = $derived(since ? reviewed : null);
+  const revisions = $derived(JSON.stringify([pr.headSha, pr.base, pr.baseSha || null]));
+  const request = $derived(JSON.stringify([revisions, refresh]));
+  let fetched = $state.raw<{ request: string; tips: ReviewTips | null } | null>(null);
+  const comparisons = new Map<string, Promise<Comparison>>();
+  let firstPageFailed = false;
+
+  function inFlight<T>(reads: Map<string, Promise<T>>, key: string, start: () => Promise<T>): Promise<T> {
+    const running = reads.get(key);
+    if (running) return running;
+    const pending = start().finally(() => reads.delete(key));
+    reads.set(key, pending);
+    return pending;
+  }
+
+  function compare(base: string, head: string, mode: "split" | "tips") {
+    return inFlight(comparisons, JSON.stringify([base, head, mode]), () => api.compare(base, head, mode));
+  }
 
   $effect(() => () => {
     api.stopReads([COUNTS, DIFF, FULL]).catch(() => {});
   });
 
-  // Fetched again for every new head, and on every reload.
+  // The component is keyed by its review session, and only these inputs require a fetch.
   $effect(() => {
-    const number = pr.number;
-    const sha = pr.headSha;
-    const onto = pr.base;
-    void version;
-    untrack(() => load(number, sha, onto));
+    const wanted = request;
+    const onto = untrack(() => pr.base);
+    const editor = untrack(() => session);
+    const key = JSON.stringify([editor.saves.target, editor.number, revisions]);
+    let active = true;
+    const current = () => active && request === wanted && session === editor;
+    loading = true;
+    error = null;
+    const fetch = editor.lab ? api.gitlabFetch : api.pullFetch;
+    inFlight(fetches, key, () => fetch(editor.number, onto, editor.saves.target, true)).then(
+      (result) => finish(result),
+      (err) => {
+        if (stopped(err)) {
+          if (current()) loading = false;
+          return;
+        }
+        finish({ tips: null, stale: String(err) });
+      },
+    );
+    function finish(result: ReviewFetch) {
+      if (!current()) return;
+      const tips = result.stale ? fetched?.tips ?? result.tips : result.tips;
+      stale = result.stale;
+      fetched = { request: wanted, tips };
+      if (tips) editor.loadViewing().catch(() => {});
+      else { error = stale; loading = false; }
+    }
+    return () => { active = false; };
   });
 
-  // Back to all the changes once there's nothing since the review.
+  // The comparison uses immutable IDs, even if another view fetches into the same refs.
   $effect(() => {
-    if (!reviewed && since) untrack(() => ((since = false), read()));
+    const snapshot = fetched;
+    const wanted = request;
+    const fromReview = reviewBase;
+    if (snapshot?.request !== wanted || !snapshot.tips) return;
+    const { base, head } = snapshot.tips;
+    const editor = untrack(() => session);
+    let active = true;
+    const current = () => active && session === editor && request === wanted && fetched === snapshot && reviewBase === fromReview;
+    compare(fromReview ?? base, head, fromReview ? "tips" : "split").then(
+      (c) => {
+        if (!current()) return;
+        if (comparison?.from !== c.from || comparison.targetId !== c.targetId || firstPageFailed) comparison = c;
+        editor.shown = c.targetId;
+        if (!fromReview) editor.files = c.files.length;
+        error = null;
+        loading = false;
+      },
+      (err) => {
+        if (!current()) return;
+        error = stale ?? String(err);
+        loading = false;
+      },
+    );
+    return () => { active = false; };
   });
+
+  $effect(() => { if (!reviewed && since) since = false; });
 
   // The files changed since the review started, so comments stay off their new lines.
   $effect(() => {
     const from = reviewed;
+    const snapshot = fetched;
+    const wanted = request;
     const sha = pr.headSha;
     changed = null;
-    if (!from) return;
-    api.compare(from, sha, "tips").then(
-      (c) => reviewed === from && (changed = new Set(c.files.map((f) => f.path))),
-      () => reviewed === from && (changed = new Set(comparison?.files.map((f) => f.path) ?? [])),
+    if (!from || snapshot?.request !== wanted || snapshot.tips?.head !== sha) return;
+    let active = true;
+    const current = () => active && request === wanted && fetched === snapshot && reviewed === from;
+    compare(from, sha, "tips").then(
+      (c) => current() && (changed = new Set(c.files.map((f) => f.path))),
+      () => current() && (changed = new Set(comparison?.files.map((f) => f.path) ?? [])),
     );
+    return () => { active = false; };
   });
 
-  async function load(number: number, sha: string, onto: string) {
-    const editor = session;
-    const still = () => session === editor && pr.number === number && pr.headSha === sha;
-    loading = !comparison;
-    error = null;
-    try {
-      await session.saves.ready();
-      if (!still()) return;
-      head = session.saves.state!.headRef;
-      base = session.saves.state!.baseRef;
-    } catch (err) { if (still()) { error = String(err); loading = false; } return; }
-    stale = await (session.lab ? api.gitlabFetch(number, onto, session.saves.target) : api.pullFetch(number, onto, session.saves.target)).then(
-      () => null,
-      (err) => String(err),
-    );
-    if (!still()) return;
-    session.loadViewing().catch(() => {});
-    await read();
-  }
-
-  /** The diff of all the changes, or of the ones since the review started. */
-  async function read() {
-    const sha = pr.headSha;
-    try {
-      const c = since && reviewed ? await api.compare(reviewed, head, "tips") : await api.compare(base, head, "split");
-      if (pr.headSha !== sha) return;
-      const same = comparison && comparison.from === c.from && comparison.targetId === c.targetId;
-      comparison = c;
-      session.shown = c.targetId;
-      if (!since) session.files = c.files.length;
-      if (!same) readDiffs(c);
-    } catch (err) {
-      error = stale ?? String(err);
-    } finally {
-      loading = false;
-    }
-  }
-
-  function showSince(on: boolean) {
-    if (since === on) return;
-    since = on;
-    read();
-  }
-
-  function readDiffs(c: Comparison) {
+  let more: Promise<void> | null = null;
+  let currentDiff: (() => boolean) | null = null;
+  $effect(() => { whole = wholeByDefault(); });
+  $effect(() => {
+    const c = comparison;
+    const wholeFile = whole;
+    const settings = diffSettings();
+    if (!c) return;
     diffs = [];
     next = null;
     counts = null;
-    const wholeFile = whole;
-    const still = () => comparison === c && whole === wholeFile;
+    more = null;
+    firstPageFailed = false;
+    const still = () => currentDiff === still && comparison === c && whole === wholeFile && diffSettings() === settings;
+    currentDiff = still;
     api.compareDiffPage(c.from, c.targetId, 0, PAGE_LINES, wholeFile, DIFF).then(
       (page) => {
         if (!still()) return;
         diffs = page.diffs;
         next = page.next;
       },
-      (err) => still() && !stopped(err) && (error = String(err)),
+      (err) => {
+        if (!still() || stopped(err)) return;
+        firstPageFailed = true;
+        error = String(err);
+      },
     );
     api.compareCounts(c.from, c.targetId, 0, COUNTS).then(
-      (list) => comparison === c && (counts = list),
+      (list) => still() && (counts = list),
       () => {},
     );
-  }
+    return () => { currentDiff = null; };
+  });
 
-  function toggleWhole() {
-    whole = !whole;
-    if (comparison) readDiffs(comparison);
-  }
-
-  let more: Promise<void> | null = null;
   /** The next page of diffs. */
   function loadMore(): Promise<void> {
     const c = comparison;
-    if (!c || next === null) return Promise.resolve();
+    const current = currentDiff;
+    if (!c || next === null || !current?.()) return Promise.resolve();
     if (more) return more;
     const start = next;
     const wholeFile = whole;
-    more = api.compareDiffPage(c.from, c.targetId, start, PAGE_LINES, wholeFile, DIFF).then(
+    const pending = api.compareDiffPage(c.from, c.targetId, start, PAGE_LINES, wholeFile, DIFF).then(
       (page) => {
-        more = null;
-        if (comparison !== c || whole !== wholeFile || next !== start) return;
+        if (!current() || next !== start) return;
         diffs = [...diffs, ...page.diffs];
         next = page.next;
       },
       (err) => {
-        more = null;
-        if (!stopped(err)) error = String(err);
+        if (current() && !stopped(err)) error = String(err);
       },
-    );
-    return more;
+    ).finally(() => { if (more === pending) more = null; });
+    return more = pending;
   }
 
   /** The files with their line counts once counted, else as far as their diffs say. */
@@ -211,13 +249,16 @@
   /** Show a file's diff, loading pages of diffs until it is there. */
   async function reveal(path: string) {
     picked = path;
+    const current = currentDiff;
     while (!diffs.some((d) => d.file.path === path) && next !== null) {
       const before = next;
       await loadMore();
+      if (!current?.()) return;
       if (next === before) break;
     }
     diffView?.fold(path, false);
     requestAnimationFrame(() => {
+      if (!current?.()) return;
       const section = scroller?.querySelector<HTMLElement>(`section[data-path="${CSS.escape(path)}"]`);
       section?.scrollIntoView({ block: "start" });
     });
@@ -410,8 +451,8 @@
         <div class="pushed-text">
           <span><b>{pushedText(pr, reviewed)}</b> Your comments stay on {shortId(reviewed)}, the version you read.</span>
           <div class="segmented" role="radiogroup" aria-label="Changes shown">
-            <button role="radio" aria-checked={!since} class:on={!since} onclick={() => showSince(false)}>All Changes</button>
-            <button role="radio" aria-checked={since} class:on={since} onclick={() => showSince(true)}>Since Your Review</button>
+            <button role="radio" aria-checked={!since} class:on={!since} onclick={() => (since = false)}>All Changes</button>
+            <button role="radio" aria-checked={since} class:on={since} onclick={() => (since = true)}>Since Your Review</button>
           </div>
         </div>
       </div>
@@ -436,7 +477,7 @@
         notes={me ? notes : null}
         pending={next !== null ? comparison.files.length - diffs.length : 0}
         onMore={() => void loadMore()}
-        onToggleWhole={toggleWhole}
+        onToggleWhole={() => (whole = !whole)}
         loadFull={(d) => api.compareDiff(comparison!.from, comparison!.targetId, d.file.path, whole, true, FULL).then((all) => all[0])}
         command={(d) => `git diff ${comparison!.from.slice(0, 7)} ${comparison!.targetId.slice(0, 7)} -- ${d.file.path}`}
       />

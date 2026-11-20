@@ -382,6 +382,20 @@ pub(crate) fn recording<T>(f: impl FnOnce() -> T) -> (T, Vec<String>) {
     (value, mine)
 }
 
+/// Commands whose input and output are managed by Oxbow need no Windows console.
+pub(crate) fn background_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let command = Command::new(program);
+    #[cfg(windows)]
+    let command = {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut command = command;
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+    };
+    command
+}
+
 /// `git` set up to run `command` in `dir`.
 fn command_in(dir: &Path, command: &GitCommand) -> Command {
     RAN.with(|ran| {
@@ -390,7 +404,7 @@ fn command_in(dir: &Path, command: &GitCommand) -> Command {
         }
     });
     let mut git = match &command.program {
-        Some(program) => Command::new(program),
+        Some(program) => background_command(program),
         None => crate::config::git(),
     };
     if command.program.is_none()
@@ -428,11 +442,8 @@ fn kill_tree(child: &mut Child) {
     }
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let _ = Command::new("taskkill")
+        let _ = background_command("taskkill")
             .args(["/PID", &child.id().to_string(), "/T", "/F"])
-            .creation_flags(CREATE_NO_WINDOW)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

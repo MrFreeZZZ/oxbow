@@ -2,7 +2,7 @@
 //! person would in a terminal, so the sheet can offer the fix that fits.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use serde::Serialize;
 
@@ -180,7 +180,7 @@ fn tilde(path: &Path) -> String {
 
 /// The key needs a passphrase: `ssh-keygen -y` can't read it with an empty one.
 fn has_passphrase(key: &Path) -> bool {
-    Command::new("ssh-keygen")
+    crate::cli::background_command("ssh-keygen")
         .args(["-y", "-P", ""])
         .arg("-f")
         .arg(key)
@@ -195,7 +195,7 @@ fn has_passphrase(key: &Path) -> bool {
 /// Run a command and return its exit code and what it printed.
 fn ask(program: &str, args: &[String]) -> (Option<i32>, String) {
     let shown = crate::GitCommand::new(args.iter().cloned()).program(program);
-    let mut command = Command::new(program);
+    let mut command = crate::cli::background_command(program);
     command.args(args).env("LC_ALL", "C");
     match crate::cli::output_of(command, &home_dir().unwrap_or_default(), &shown) {
         Ok(output) => {

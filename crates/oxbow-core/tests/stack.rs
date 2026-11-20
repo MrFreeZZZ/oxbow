@@ -146,6 +146,42 @@ fn editing_a_stack_ignores_tags_that_share_branch_names() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn cancelling_a_stack_preview_stops_its_running_git_command() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    let mut fx = stacked();
+    let repo = Repo::open(fx.path()).unwrap();
+    let plan = as_is(&repo.stack(None).unwrap());
+    let hook = fx.path().join(".git/preview-monitor");
+    fx.write(
+        ".git/preview-monitor",
+        "#!/bin/sh\ntouch .git/preview-started\nexec sleep 15\n",
+    );
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    fx.git(&["config", "core.fsmonitor", hook.to_str().unwrap()]);
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let stop = cancel.clone();
+    let preview = std::thread::spawn(move || oxbow_core::cli::stoppable(&stop, || repo.stack_preview(&plan)));
+    let started = fx.path().join(".git/preview-started");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !started.exists() && !preview.is_finished() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let running = started.exists();
+    let now = Instant::now();
+    cancel.store(true, Ordering::Relaxed);
+    let result = preview.join().unwrap();
+    assert!(running, "Git did not reach the blocking fsmonitor hook: {result:?}");
+    assert!(matches!(result, Err(Error::Cancelled)), "{result:?}");
+    assert!(now.elapsed() < Duration::from_secs(3), "Git ran after Stop");
+}
+
 #[test]
 fn a_tag_on_a_protected_branch_does_not_put_it_inside_edit_stack() {
     let mut fx = stacked();

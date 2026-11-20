@@ -198,7 +198,7 @@ pub(crate) fn run_hooks() -> bool {
 /// `git`, set up the way Oxbow runs it.
 pub(crate) fn git() -> Command {
     let program = PROGRAM.read().expect("git program lock").clone();
-    let mut git = Command::new(program.unwrap_or_else(|| PathBuf::from("git")));
+    let mut git = crate::cli::background_command(program.unwrap_or_else(|| PathBuf::from("git")));
     git
         // Paths with non-ASCII names come back as they are, not as octal escapes.
         .args(["-c", "core.quotePath=false"])
@@ -598,7 +598,7 @@ pub fn ssh_source() -> SshSource {
 }
 
 fn fingerprint(path: &Path) -> Option<String> {
-    let output = Command::new("ssh-keygen")
+    let output = crate::cli::background_command("ssh-keygen")
         .arg("-lf")
         .arg(path)
         .stdin(Stdio::null())

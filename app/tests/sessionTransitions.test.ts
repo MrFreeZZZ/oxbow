@@ -2,6 +2,7 @@
 // tests cover ordering and failed requests without needing a WebView or a live Git repository.
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import test from "node:test";
 import ts from "typescript";
 import { Tickets } from "../src/lib/loads.ts";
 import { Latest } from "../src/lib/latest.ts";
@@ -84,3 +85,64 @@ function session() {
   assert.equal(model.repo.path, "B");
   assert.equal(model.loading, false);
 }
+
+test("Settings ignores focus during either read and refreshes on the next focus after both finish", async () => {
+  const settingsReads: ReturnType<typeof deferred>[] = [];
+  const fileReads: ReturnType<typeof deferred>[] = [];
+  const api = {
+    gitSettings: async () => null,
+    repoSettings: () => {
+      const read = deferred();
+      settingsReads.push(read);
+      return read.promise;
+    },
+    githubAccount: async () => null,
+    gitlabAccounts: async () => [],
+    trustedRepos: async () => [],
+    repoFiles: () => {
+      const read = deferred();
+      fileReads.push(read);
+      return read.promise;
+    },
+  };
+  const globals = { $state: (value: unknown) => value, api, Latest };
+  const { load, model } = controller("settingsModel.svelte.ts", globals, "({load, model})");
+  const { loadRepoFiles, repoFiles } = controller("repoFileState.svelte.ts", globals, "({loadRepoFiles, repoFiles})");
+  const window = fs.readFileSync(new URL("../src/lib/SettingsWindow.svelte", import.meta.url), "utf8");
+  const handler = window.match(/<svelte:window\s+onfocus=\{([\s\S]*?)\}\s*\/>/)?.[1];
+  assert.ok(handler);
+  const focus = Function("model", "repoFiles", "load", "loadRepoFiles", `return (${handler});`)(
+    model, repoFiles, load, loadRepoFiles,
+  );
+  const repo = { path: "A" };
+  repoFiles.repo = repo.path;
+  const initial = load();
+  focus();
+  assert.equal(settingsReads.length, 1);
+  assert.equal(fileReads.length, 0);
+  settingsReads[0].resolve(repo);
+  await initial;
+  assert.equal(settingsReads.length, 1, "focus during the initial load is not replayed");
+  assert.equal(fileReads.length, 0);
+
+  focus();
+  assert.equal(settingsReads.length, 2);
+  assert.equal(fileReads.length, 1);
+  settingsReads[1].resolve(repo);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(model.loading, false);
+  assert.equal(repoFiles.loading, true);
+  focus();
+  assert.equal(settingsReads.length, 2);
+  assert.equal(fileReads.length, 1);
+  fileReads[0].resolve({ files: [] });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(settingsReads.length, 2, "focus during the file read is not replayed");
+  assert.equal(fileReads.length, 1);
+
+  focus();
+  assert.equal(settingsReads.length, 3);
+  assert.equal(fileReads.length, 2);
+  settingsReads[2].resolve(repo);
+  fileReads[1].resolve({ files: [] });
+});

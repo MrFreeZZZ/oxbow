@@ -658,6 +658,8 @@ impl Client {
         };
         Ok(PullRequest {
             load_issues,
+            // GitLab's diff refs describe a diff version, not the live target branch.
+            base_sha: None,
             additions: 0,
             deletions: 0,
             changed_files: digits.parse().unwrap_or(0),

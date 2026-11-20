@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use serde::{Deserialize, Serialize};
@@ -325,12 +326,55 @@ pub struct ReviewDraft {
     pub replies: Vec<DraftReply>,
 }
 
+/// Immutable tips captured while the review refs are still held by this fetch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReviewTips {
+    pub base: String,
+    pub head: String,
+}
+
+#[derive(Serialize)]
+pub struct ReviewFetch {
+    pub tips: Option<ReviewTips>,
+    pub stale: Option<String>,
+}
+
 impl Repo {
+    /// Run under the repository's fetch turn, including the read of the resulting refs.
+    pub fn fetch_review(
+        &self,
+        command: &GitCommand,
+        place: &Reviewed,
+        number: u64,
+        allow_stale: bool,
+        cancel: &AtomicBool,
+    ) -> Result<ReviewFetch> {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(Error::Cancelled);
+        }
+        let stale = match self.run_cancellable(command, cancel) {
+            Ok(_) => None,
+            Err(err) if allow_stale && !matches!(err, Error::Cancelled) => Some(err.to_string()),
+            Err(err) => return Err(err),
+        };
+        let tips = self.review_tips(place, number);
+        let tips = if stale.is_some() { tips.ok() } else { Some(tips?) };
+        Ok(ReviewFetch { tips, stale })
+    }
+
+    fn review_tips(&self, place: &Reviewed, number: u64) -> Result<ReviewTips> {
+        Ok(ReviewTips {
+            base: self.compare_commit_id(&place.reference(number, "base"))?,
+            head: self.compare_commit_id(&place.reference(number, "head"))?,
+        })
+    }
+
     /// `git fetch` of a pull request's head and base into its project refs, so its changes can be
     /// read here; a pull request from a fork included.
     pub fn pull_fetch_command(&self, place: &Reviewed, remote: &str, number: u64, base: &str) -> GitCommand {
         GitCommand::new([
             "fetch".to_owned(),
+            "--atomic".to_owned(),
             "--no-tags".to_owned(),
             "--no-write-fetch-head".to_owned(),
             remote.to_owned(),
@@ -347,6 +391,7 @@ impl Repo {
     pub fn merge_request_fetch_command(&self, place: &Reviewed, remote: &str, number: u64, base: &str) -> GitCommand {
         GitCommand::new([
             "fetch".to_owned(),
+            "--atomic".to_owned(),
             "--no-tags".to_owned(),
             "--no-write-fetch-head".to_owned(),
             remote.to_owned(),

@@ -187,6 +187,14 @@ impl Slot {
             cancel.store(true, Ordering::Relaxed);
         }
     }
+
+    pub(crate) fn lane(&mut self, lane: String) -> Arc<AtomicBool> {
+        let cancel = Arc::new(AtomicBool::new(false));
+        if let Some(older) = self.lanes.insert(lane, cancel.clone()) {
+            older.store(true, Ordering::Relaxed);
+        }
+        cancel
+    }
 }
 
 /// What [`Session::commits`] holds.
@@ -298,13 +306,10 @@ impl Session {
     /// A Stop for a new read in `lane`, which stops the one running there. Without a lane the
     /// read runs to its end.
     pub(crate) fn lane(&self, window: &tauri::WebviewWindow, lane: Option<String>) -> Arc<AtomicBool> {
-        let cancel = Arc::new(AtomicBool::new(false));
-        if let Some(lane) = lane
-            && let Some(older) = self.slot(window, |slot| slot.lanes.insert(lane, cancel.clone()))
-        {
-            older.store(true, Ordering::Relaxed);
+        match lane {
+            Some(lane) => self.slot(window, |slot| slot.lane(lane)),
+            None => Arc::new(AtomicBool::new(false)),
         }
-        cancel
     }
 
     /// A destroyed window stops its reads and fetch before its slot is forgotten.

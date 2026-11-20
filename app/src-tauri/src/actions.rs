@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use oxbow_core::console;
 use oxbow_core::{Action, Failure, Plan};
@@ -156,6 +157,31 @@ pub(crate) struct Fetched {
     gave_way: bool,
 }
 
+#[derive(Serialize)]
+#[serde(untagged)]
+pub(crate) enum FetchResult {
+    Fetched(Fetched),
+    Skipped {
+        #[serde(rename = "retryAfterMs")]
+        retry_after_ms: Option<u64>,
+    },
+}
+
+#[cfg(test)]
+#[test]
+fn fetch_result_distinguishes_skips_from_completed_fetches() {
+    use serde_json::{json, to_value};
+    let fetched = FetchResult::Fetched(Fetched {
+        updated: 1,
+        gave_way: false,
+    });
+    assert_eq!(to_value(fetched).unwrap(), json!({ "updated": 1, "gaveWay": false }));
+    for retry_after_ms in [None, Some(5000)] {
+        let skipped = FetchResult::Skipped { retry_after_ms };
+        assert_eq!(to_value(skipped).unwrap(), json!({ "retryAfterMs": retry_after_ms }));
+    }
+}
+
 /// What a background fetch printed, with the number Activity gave the fetch: a fetch of the
 /// repository open before may still be printing while the next one runs.
 #[derive(Serialize, Clone)]
@@ -176,7 +202,7 @@ pub(crate) async fn fetch_in_background(
     remote: Option<String>,
     fetch: Option<u64>,
     auto: Option<bool>,
-) -> Result<Fetched, Failure> {
+) -> Result<FetchResult, Failure> {
     let failed = |output: String| Failure {
         kind: oxbow_core::FailureKind::Other,
         output,
@@ -200,6 +226,21 @@ pub(crate) async fn fetch_in_background(
     let turn_window = session.label(&window);
     let turns = session.turns.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let common = repo.common_dir();
+        let mut reservation = if auto == Some(true) {
+            let fresh = repo.reopen().unwrap_or_else(|_| repo.clone());
+            let targets = fresh.fetch_targets(remote.as_deref());
+            match turns.reserve_auto_fetch(&common, targets, Instant::now()) {
+                Ok(reservation) => Some(reservation),
+                Err(retry) => {
+                    return Ok(FetchResult::Skipped {
+                        retry_after_ms: retry.map(|delay| delay.as_millis() as u64 + 1),
+                    });
+                }
+            }
+        } else {
+            None
+        };
         let action = Action::Fetch { remote: remote.clone() };
         let (kind, title) = if auto == Some(true) {
             (console::EntryKind::Background, "Auto fetch".to_owned())
@@ -217,7 +258,7 @@ pub(crate) async fn fetch_in_background(
         if let Some(way) = &gives_way {
             change = change.giving_way(way.clone());
         }
-        let turn = turns.take(&repo.common_dir(), change, &cancel, |other| {
+        let turn = turns.take(&common, change, &cancel, |other| {
             emit(oxbow_core::ActionEvent::Waiting {
                 title: other.title.clone(),
                 window: other.folder.clone(),
@@ -230,6 +271,7 @@ pub(crate) async fn fetch_in_background(
                 ..failed(String::new())
             });
         };
+        let mut updated = 0;
         let done = console::scope(Some(repo.workdir()), kind, title, || {
             let command = repo
                 .fetch_command(remote.as_deref())
@@ -238,7 +280,7 @@ pub(crate) async fn fetch_in_background(
             emit(oxbow_core::ActionEvent::Command {
                 display: command.display(),
             });
-            let mut updated = 0;
+            let started = Instant::now();
             let result = console::main(|| {
                 repo.run_streaming(
                     &command,
@@ -251,6 +293,11 @@ pub(crate) async fn fetch_in_background(
                     &cancel,
                 )
             });
+            if !matches!(result, Err(oxbow_core::Error::Cancelled))
+                && let Some(reservation) = &mut reservation
+            {
+                reservation.attempted(started);
+            }
             match result {
                 Ok(_) => Ok(Fetched {
                     updated,
@@ -264,10 +311,10 @@ pub(crate) async fn fetch_in_background(
                 Err(err) => Err(repo.explain_failure(&action, &err)),
             }
         });
-        if done.as_ref().is_ok_and(|fetched| fetched.updated > 0) {
+        if updated > 0 {
             tell_others(&app, &app.state::<Session>(), &repo, &turn_window);
         }
-        done
+        done.map(FetchResult::Fetched)
     })
     .await
     .unwrap_or_else(|err| Err(failed(err.to_string())))

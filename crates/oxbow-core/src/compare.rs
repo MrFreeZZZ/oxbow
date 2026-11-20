@@ -206,7 +206,7 @@ impl Repo {
     }
 
     /// Full ref names from the picker must still name the same ref if it has since been deleted.
-    fn compare_commit_id(&self, name: &str) -> Result<String> {
+    pub(crate) fn compare_commit_id(&self, name: &str) -> Result<String> {
         let unknown = || Error::UnknownCommit(name.to_owned());
         if is_commit_hex(name) {
             return self.commit_from_hex_prefix(name, true).ok_or_else(unknown);

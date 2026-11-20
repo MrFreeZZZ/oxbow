@@ -122,10 +122,11 @@ function detailsLoader() {
   const js = ts.transpile(body, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
   const loader = Function("api", "keepDetails", `
     let loadId=0, checksAgain=0, forge='github', lab=false, nav={repo:'A'}, summary={number:1};
-    let pr=null, error=null, loading=false;
+    let pr=null, error=null, loading=false, reviewRefresh=0, filesRefresh=0;
     ${js}
     return {load, select(repo, of, number) { nav.repo=repo; forge=of; lab=of==='gitlab'; summary={number}; },
-      get pr(){return pr}, get error(){return error}, get loading(){return loading}};
+      refresh() { reviewRefresh++; return load(summary.number); },
+      get pr(){return pr}, get error(){return error}, get loading(){return loading}, get filesRefresh(){return filesRefresh}};
   `)(api, keepDetails);
   return { loader, requests };
 }
@@ -137,13 +138,15 @@ for (const provider of ["github", "gitlab"]) {
     const of = switchTo === "provider" ? (provider === "github" ? "gitlab" : "github") : provider;
     const number = switchTo === "number" ? 2 : 1;
     loader.select(switchTo === "repository" ? "B" : "A", of, number);
-    const second = loader.load(number); await turn();
+    const second = switchTo === "refresh" ? loader.refresh() : loader.load(number); await turn();
+    assert.equal(loader.filesRefresh, 0, "Files waits for details before refreshing");
     const newest = { ...fresh, number, title: "newest", mergeableState: "clean", loadIssues: [] };
     requests[1].answer.resolve(newest); await second;
     requests[0].answer.resolve({ ...fresh, title: "stale", mergeableState: "clean" }); await first;
     assert.equal(loader.pr.title, "newest", `${provider}: ${switchTo} cannot accept a stale detail response`);
     assert.equal(loader.loading, false);
     assert.equal(loader.error, null);
+    assert.equal(loader.filesRefresh, switchTo === "refresh" ? 1 : 0);
   }
 }
 
@@ -157,12 +160,14 @@ for (const provider of ["github", "gitlab"]) {
   requests[1].answer.resolve({ ...fresh, title: "kept", mergeableState: "clean", loadIssues: [] }); await second;
   requests[0].answer.reject(new Error("old network error")); await first;
   assert.equal(loader.error, null);
-  const failed = loader.load(1); await turn();
+  const failed = loader.refresh(); await turn();
   requests[2].answer.reject(new Error("current network error")); await failed;
   assert.equal(loader.pr.title, "kept");
   assert.match(loader.error, /current network error/);
+  assert.equal(loader.filesRefresh, 1, "Files can refresh even when refreshed details failed");
   const retry = loader.load(1); await turn();
   requests[3].answer.resolve({ ...fresh, title: "retried", mergeableState: "clean", loadIssues: [] }); await retry;
   assert.equal(loader.pr.title, "retried");
   assert.equal(loader.error, null);
+  assert.equal(loader.filesRefresh, 1, "normal details reloads do not refresh Files");
 }

@@ -69,6 +69,8 @@ pub struct PullRequest {
     pub load_issues: Vec<LoadIssue>,
     #[serde(flatten)]
     pub summary: PullSummary,
+    /// The current target branch tip when the provider supplies it.
+    pub base_sha: Option<String>,
     pub additions: u32,
     pub deletions: u32,
     pub changed_files: u32,

@@ -13,6 +13,7 @@ export const repoFiles = $state({
   /** The repository the list is of, by its path. */
   repo: null as string | null,
   list: null as RepoFiles | null,
+  loading: false,
   problem: null as string | null,
   /** The file open in the editor. */
   open: null as RepoFileKind | null,
@@ -26,6 +27,7 @@ const loads = new Latest(() => repoFiles.repo);
 
 export async function loadRepoFiles() {
   const current = loads.begin();
+  repoFiles.loading = true;
   try {
     const list = await api.repoFiles();
     if (!current()) return;
@@ -33,6 +35,8 @@ export async function loadRepoFiles() {
     repoFiles.problem = null;
   } catch (err) {
     if (current()) repoFiles.problem = String(err);
+  } finally {
+    if (current()) repoFiles.loading = false;
   }
 }
 
@@ -51,6 +55,7 @@ export function forgetRepoFiles(repo: string | null) {
   loads.drop();
   repoFiles.repo = repo;
   repoFiles.list = null;
+  repoFiles.loading = false;
   repoFiles.problem = null;
   repoFiles.open = null;
   repoFiles.drafts = {};

@@ -4,13 +4,13 @@
 //! projects the remotes point at, and their merge request pages in the browser.
 
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use oxbow_core::console::EntryKind;
 use oxbow_core::github::Client;
 use oxbow_core::gitlab_api::{GitLabUser, Step};
 use oxbow_core::pulls::{Call, GitHubRepo, PullRequest, started_review};
-use oxbow_core::review::{PullStatus, ReviewDraft, ReviewDraftState, Reviewed, Viewing};
+use oxbow_core::review::{PullStatus, ReviewDraft, ReviewDraftState, ReviewFetch, Reviewed, Viewing};
 use oxbow_core::{ActionEvent, GitLabProject, OutputLine};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -18,6 +18,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::CommandResult;
 use crate::accounts::Accounts;
 use crate::session::{Session, at, blocking, current, logged, read};
+use crate::turns::Running;
 
 /// Captured by the editor, never inferred from whichever repository the window opens next.
 #[derive(Clone, serde::Deserialize)]
@@ -160,6 +161,7 @@ pub async fn gitlab_merge_request(
 }
 
 /// Fetch merge request `!number` and its target `base` here, quietly, to show its changes.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn gitlab_fetch(
     app: AppHandle,
@@ -169,20 +171,20 @@ pub async fn gitlab_fetch(
     number: u64,
     base: String,
     target: Option<ReviewTarget>,
-) -> CommandResult<()> {
+    allow_stale: Option<bool>,
+) -> CommandResult<ReviewFetch> {
     let (repo, project, _) = signed_in_project(&app, &window, &session, &tokens)
         .await?
         .ok_or_else(|| "Sign in to this repository’s GitLab in Settings › Accounts".to_owned())?;
     let place = Reviewed::gitlab(&project);
     check_review_target(&repo, &place, target.as_ref())?;
-    logged(
-        Some(at(&repo)),
-        EntryKind::Background,
+    let command = repo.merge_request_fetch_command(&place, &project.remote, number, &base);
+    fetch_review(
+        &session,
+        &window,
+        repo,
         format!("Fetch merge request !{number}"),
-        move || {
-            repo.run(&repo.merge_request_fetch_command(&place, &project.remote, number, &base))
-                .map(|_| ())
-        },
+        move |repo, cancel| repo.fetch_review(&command, &place, number, allow_stale.unwrap_or_default(), cancel),
     )
     .await
 }
@@ -545,19 +547,39 @@ pub async fn pull_fetch(
     number: u64,
     base: String,
     target: Option<ReviewTarget>,
-) -> CommandResult<()> {
+    allow_stale: Option<bool>,
+) -> CommandResult<ReviewFetch> {
     let (repo, github) = github_repo_of(&session, &window)?;
     let place = Reviewed::github(&github);
     check_review_target(&repo, &place, target.as_ref())?;
-    logged(
-        Some(at(&repo)),
-        EntryKind::Background,
+    let command = repo.pull_fetch_command(&place, &github.remote, number, &base);
+    fetch_review(
+        &session,
+        &window,
+        repo,
         format!("Fetch pull request #{number}"),
-        move || {
-            repo.run(&repo.pull_fetch_command(&place, &github.remote, number, &base))
-                .map(|_| ())
-        },
+        move |repo, cancel| repo.fetch_review(&command, &place, number, allow_stale.unwrap_or_default(), cancel),
     )
+    .await
+}
+
+async fn fetch_review(
+    session: &Session,
+    window: &tauri::WebviewWindow,
+    repo: oxbow_core::Repo,
+    title: String,
+    work: impl FnOnce(&oxbow_core::Repo, &AtomicBool) -> oxbow_core::Result<ReviewFetch> + Send + 'static,
+) -> CommandResult<ReviewFetch> {
+    let turns = session.turns.clone();
+    let stop = session.new_stop(window);
+    let change = Running::new(&session.label(window), repo.name(), title.clone());
+    logged(Some(at(&repo)), EntryKind::Background, title, move || {
+        // Other review fetches share these refs, even from another worktree.
+        let _turn = turns
+            .take_review_fetch(&repo.common_dir(), change, &stop.cancel)
+            .ok_or(oxbow_core::Error::Cancelled)?;
+        work(&repo, &stop.cancel)
+    })
     .await
 }
 

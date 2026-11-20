@@ -93,6 +93,7 @@ import type {
   ReviewDraft,
   ReviewTarget,
   ReviewDraftState,
+  ReviewFetch,
   Viewing,
   PullSummary,
   LfsStatus,
@@ -270,7 +271,25 @@ export const api = {
   landedOn: (merged: string, candidates: string[]) => invoke<Landing | null>("landed_on", { merged, candidates }),
   restack: () => invoke<RestackState | null>("restack"),
   saveRestack: (restack: Restack | null) => invoke<void>("save_restack", { restack }),
-  stackPreview: (plan: StackPlan) => invoke<StackPreview>("stack_preview", { plan }),
+  async stackPreview(plan: StackPlan, scope?: { workdir: string; signal: AbortSignal }): Promise<StackPreview> {
+    if (!scope) return invoke<StackPreview>("stack_preview", { plan });
+    const { workdir, signal } = scope;
+    const lane = "stack-preview";
+    let stopping: Promise<void> | undefined;
+    const stop = () => { stopping = api.stopReads([lane]).catch(() => {}); };
+    // A Stop sent before the native command registered its lane could miss the read.
+    const onStart = new Channel<void>(() => {
+      if (signal.aborted) stop();
+      else signal.addEventListener("abort", stop, { once: true });
+    });
+    try {
+      return await invoke<StackPreview>("stack_preview", { plan, scope: { workdir, lane, onStart } });
+    } finally {
+      onStart.onmessage = () => {};
+      signal.removeEventListener("abort", stop);
+      await stopping;
+    }
+  },
   splitFiles: (commit: string) => invoke<FileDiff[]>("split_files", { commit }),
   planAction: (action: Action) => invoke<Plan>("plan_action", { action }),
   /** Rejects with a `Failure`. */
@@ -318,9 +337,10 @@ export const api = {
     invoke<RepoFileSaved>("save_repo_file", { kind, gitlab, text, over, expectedRepo }),
   /** Sends `fetch-event`s marked with `fetch`, Activity's number for it, while it runs; rejects
    *  with a `Failure`. Without a number, Stop doesn't reach it. One of the timer (`auto`) stops
-   *  for an action and comes back with `gaveWay`. */
+   *  for an action and comes back with `gaveWay`. A duplicate returns the time left until
+   *  the next interval, or null while the other fetch is still running. */
   fetchInBackground: (remote: string | null, fetch: number | null = null, auto = false) =>
-    invoke<{ updated: number; gaveWay: boolean }>("fetch_in_background", { remote, fetch, auto }),
+    invoke<{ updated: number; gaveWay: boolean } | { retryAfterMs: number | null }>("fetch_in_background", { remote, fetch, auto }),
   stopFetch: () => invoke<void>("stop_fetch"),
   publicKey: (key: string) => invoke<string>("public_key", { key }),
   pullSetup: () => invoke<PullSetup>("pull_setup"),
@@ -408,7 +428,7 @@ export const api = {
   gitlabCodeOwners: (base: string, branch: string) => invoke<GitLabUser[]>("gitlab_code_owners", { base, branch }),
   gitlabPeople: (search: string) => invoke<GitLabUser[]>("gitlab_people", { search }),
   /** Fetch merge request `!number` and its target here, into project-scoped review refs. */
-  gitlabFetch: (number: number, base: string, target?: ReviewTarget) => invoke<void>("gitlab_fetch", { number, base, target }),
+  gitlabFetch: (number: number, base: string, target?: ReviewTarget, allowStale = false) => invoke<ReviewFetch>("gitlab_fetch", { number, base, target, allowStale }),
   gitlabStatuses: (numbers: number[]) => invoke<PullStatus[]>("gitlab_statuses", { numbers }),
   /** Open and recently closed, the latest updated first. */
   githubPulls: () => invoke<PullList>("github_pulls"),
@@ -420,7 +440,7 @@ export const api = {
   codeOwners: (base: string, branch: string) => invoke<string[]>("code_owners", { base, branch }),
   githubPullStatuses: () => invoke<PullStatus[]>("github_pull_statuses"),
   /** Fetches the pull request's head and base into project-scoped review refs, quietly. */
-  pullFetch: (number: number, base: string, target?: ReviewTarget) => invoke<void>("pull_fetch", { number, base, target }),
+  pullFetch: (number: number, base: string, target?: ReviewTarget, allowStale = false) => invoke<ReviewFetch>("pull_fetch", { number, base, target, allowStale }),
   githubViewing: (number: number, target?: ReviewTarget) => invoke<Viewing>("github_viewing", { number, target }),
   /** One small call, sent quietly: no sheet, no Activity. */
   githubSend: (call: PullCall, target?: ReviewTarget) => invoke<unknown>("github_send", { call, target }),
