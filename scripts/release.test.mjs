@@ -64,33 +64,11 @@ test("build configurations bind numeric versions and the correct channel endpoin
     const config = buildConfig(info);
     assert.equal(config.version, info.version);
     assert.equal(config.bundle.createUpdaterArtifacts, true);
-    assert.equal(config.bundle.windows, undefined);
     assert.deepEqual(config.plugins.updater.endpoints, [channel === "release"
       ? "https://github.com/MrFreeZZZ/oxbow/releases/latest/download/latest.json"
       : "https://github.com/MrFreeZZZ/oxbow/releases/download/preview/latest.json"]);
   }
   assert.throws(() => identity("release", "0.1.0550", sha, "v0.1.0550"), /Invalid distribution version/);
-});
-
-test("Windows Release can build without Azure and requires complete signing configuration when enabled", () => {
-  const platform = "windows-x86_64";
-  const info = identity("release", "0.1.550", sha, "v0.1.550");
-  const signing = {
-    signTool: "C:/Program Files (x86)/Windows Kits/signtool.exe",
-    dlib: "C:/Signing Tools/Azure.CodeSigning.Dlib.dll",
-    metadata: "C:/Signing Tools/metadata.json",
-  };
-  assert.deepEqual(buildConfig(info, platform).bundle, { createUpdaterArtifacts: true });
-  assert.throws(() => buildConfig(info, platform, { signTool: signing.signTool }), /not configured/);
-  const { bundle } = buildConfig(info, platform, signing);
-  assert.equal(bundle.createUpdaterArtifacts, true);
-  assert.equal(bundle.windows.signCommand.cmd, signing.signTool);
-  assert.deepEqual(bundle.windows.signCommand.args, [
-    "sign", "/fd", "SHA256", "/tr", "http://timestamp.acs.microsoft.com", "/td", "SHA256",
-    "/d", "Oxbow", "/dlib", signing.dlib, "/dmdf", signing.metadata, "%1",
-  ]);
-  const preview = identity("preview", info.version, sha, `preview-${sha}`);
-  assert.throws(() => buildConfig(preview, platform, signing), /requires a Windows Release build/);
 });
 
 test("the built executable must match the package version, channel, architecture and source", () => {

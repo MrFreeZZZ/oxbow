@@ -17,8 +17,6 @@ on:
         required: true
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
         required: true
-      AZURE_CLIENT_SECRET:
-        required: false
 
 permissions:
   contents: read
@@ -141,7 +139,6 @@ jobs:
       OXBOW_BUILD_COMMIT: ${{ needs.resolve.outputs.sha }}
       PLATFORM: ${{ matrix.platform }}
       BUNDLE_DIR: target/${{ matrix.target }}/release/bundle
-      WINDOWS_SIGNING_ENABLED: ${{ matrix.platform == 'windows-x86_64' && (vars.AZURE_SIGNING_ENDPOINT != '' || vars.AZURE_SIGNING_ACCOUNT != '' || vars.AZURE_SIGNING_PROFILE != '') }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -168,91 +165,20 @@ jobs:
         run: npm install --global npm@12.2.3
       - run: npm ci
         working-directory: app
-      - name: Prepare Windows Authenticode signing
-        if: env.WINDOWS_SIGNING_ENABLED == 'true'
-        shell: pwsh
-        env:
-          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
-          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
-          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
-        run: |
-          foreach ($name in 'AZURE_SIGNING_ENDPOINT', 'AZURE_SIGNING_ACCOUNT', 'AZURE_SIGNING_PROFILE') {
-            if (-not [Environment]::GetEnvironmentVariable($name)) {
-              throw "Set the GitHub Actions variable $name to configure Windows signing."
-            }
-          }
-          $client = Join-Path $env:RUNNER_TEMP 'artifact-signing'
-          $archive = "$client.zip"
-          Invoke-WebRequest 'https://api.nuget.org/v3-flatcontainer/microsoft.artifactsigning.client/1.0.151/microsoft.artifactsigning.client.1.0.151.nupkg' -OutFile $archive
-          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne '35375a4bc4e1102da729fc3d8d9925f774c3baae6b8b7ff6398d948ca9ab0d8a') {
-            throw 'Unexpected SHA-256 for Microsoft.ArtifactSigning.Client 1.0.151.'
-          }
-          Expand-Archive -LiteralPath $archive -DestinationPath $client
-          $dlib = Get-Item -LiteralPath (Join-Path $client 'bin/x64/Azure.CodeSigning.Dlib.dll')
-          $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
-          $signtool = Get-ChildItem -Path "$sdk/10.0.*/x64/signtool.exe" -File |
-            Sort-Object { [version]$_.Directory.Parent.Name } -Descending |
-            Select-Object -First 1
-          if (-not $signtool) { throw 'Windows SDK SignTool was not found.' }
-          $metadata = Join-Path $client 'metadata.json'
-          @{
-            Endpoint = $env:AZURE_SIGNING_ENDPOINT
-            CodeSigningAccountName = $env:AZURE_SIGNING_ACCOUNT
-            CertificateProfileName = $env:AZURE_SIGNING_PROFILE
-          } | ConvertTo-Json | Set-Content -LiteralPath $metadata
-          "WINDOWS_SIGNTOOL=$($signtool.FullName)" >> $env:GITHUB_ENV
-          "WINDOWS_SIGNING_DLIB=$($dlib.FullName)" >> $env:GITHUB_ENV
-          "WINDOWS_SIGNING_METADATA=$metadata" >> $env:GITHUB_ENV
-      - name: Generate Tauri distribution config
-        run: |
-          if [[ "$RUNNER_OS" == Windows && "$WINDOWS_SIGNING_ENABLED" != true ]]; then
-            echo "::notice::Windows installer will ship without Authenticode. The updater signature is still required."
-          fi
-          node scripts/release.mjs config
+      - name: Enable updater artifacts for this distribution build
+        run: node scripts/release.mjs config
       - name: Build and sign application
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
-          AZURE_CLIENT_ID: ${{ env.WINDOWS_SIGNING_ENABLED == 'true' && vars.AZURE_CLIENT_ID || '' }}
-          AZURE_TENANT_ID: ${{ env.WINDOWS_SIGNING_ENABLED == 'true' && vars.AZURE_TENANT_ID || '' }}
-          AZURE_CLIENT_SECRET: ${{ env.WINDOWS_SIGNING_ENABLED == 'true' && secrets.AZURE_CLIENT_SECRET || '' }}
           BUNDLES: ${{ matrix.bundles }}
           TARGET: ${{ matrix.target }}
         run: |
           : "${TAURI_SIGNING_PRIVATE_KEY:?Updater signing key is missing}"
           : "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:?Updater signing password is missing}"
-          if [[ "$WINDOWS_SIGNING_ENABLED" == true ]]; then
-            : "${AZURE_CLIENT_ID:?Set the GitHub Actions variable AZURE_CLIENT_ID}"
-            : "${AZURE_TENANT_ID:?Set the GitHub Actions variable AZURE_TENANT_ID}"
-            : "${AZURE_CLIENT_SECRET:?Set the GitHub Actions secret AZURE_CLIENT_SECRET}"
-          fi
           npx tauri build --ci --bundles "$BUNDLES" --target "$TARGET" --config release-config.json
         working-directory: app
-      - name: Verify Windows Authenticode signatures and timestamps
-        if: env.WINDOWS_SIGNING_ENABLED == 'true'
-        shell: pwsh
-        run: |
-          $installers = @(Get-ChildItem -LiteralPath (Join-Path $env:BUNDLE_DIR 'nsis') -Filter '*-setup.exe' -File)
-          if ($installers.Count -ne 1) { throw 'Expected exactly one Windows installer.' }
-          $installer = $installers[0].FullName
-          # Tauri restores the unsigned executable outside the NSIS bundle.
-          $extractDir = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'oxbow-authenticode')
-          $sevenZip = Join-Path $env:ProgramFiles '7-Zip/7z.exe'
-          # Rename duplicate entries so they fail the file count check.
-          & $sevenZip x -tNsis -ssc- -aou "-o$($extractDir.FullName)" -- $installer oxbow.exe
-          if ($LASTEXITCODE -ne 0) { throw "7-Zip extraction failed with exit code $LASTEXITCODE." }
-          $apps = @(Get-ChildItem -LiteralPath $extractDir.FullName -File -Force)
-          if ($apps.Count -ne 1 -or $apps[0].Name -cne 'oxbow.exe') {
-            throw 'Expected exactly one oxbow.exe at the root of the Windows installer.'
-          }
-          foreach ($file in $installer, $apps[0].FullName) {
-            $signature = Get-AuthenticodeSignature -LiteralPath $file
-            if ($signature.Status -ne 'Valid' -or -not $signature.TimeStamperCertificate) {
-              throw "Invalid or missing timestamped Authenticode signature for ${file}: $($signature.Status)"
-            }
-            Write-Host "Verified $file signed by $($signature.SignerCertificate.Subject)"
-          }
       - name: Verify the executable identity, collect packages and verify signatures
         run: |
           node scripts/release.mjs verify-build

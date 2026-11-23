@@ -129,25 +129,11 @@ function environmentInfo() {
   return identity(process.env.CHANNEL, process.env.RELEASE_VERSION, process.env.SOURCE_SHA, process.env.RELEASE_TAG);
 }
 
-export function buildConfig(info, platform, windowsSigning) {
+export function buildConfig(info) {
   identity(info.channel, info.version, info.sha, info.tag);
-  const bundle = { createUpdaterArtifacts: true };
-  if (windowsSigning) {
-    requireValue(platform === "windows-x86_64" && platforms[info.channel].includes(platform), "Windows signing requires a Windows Release build");
-    const { signTool, dlib, metadata } = windowsSigning;
-    requireValue(signTool && dlib && metadata, "Windows Authenticode signing is not configured");
-    bundle.windows = {
-      signCommand: {
-        cmd: signTool,
-        // Tauri signs the installer before computing its updater signature.
-        args: ["sign", "/fd", "SHA256", "/tr", "http://timestamp.acs.microsoft.com", "/td", "SHA256",
-          "/d", "Oxbow", "/dlib", dlib, "/dmdf", metadata, "%1"],
-      },
-    };
-  }
   return {
     version: info.version,
-    bundle,
+    bundle: { createUpdaterArtifacts: true },
     plugins: { updater: { endpoints: [channels[info.channel].endpoint] } },
   };
 }
@@ -175,12 +161,7 @@ function main() {
     appendFileSync(process.env.GITHUB_OUTPUT, Object.entries(outputs).map(([k, v]) => `${k}=${v}\n`).join(""));
   } else if (command === "config") {
     // Only distribution jobs require a private key. Normal PR/local builds remain unsigned.
-    const windowsSigning = process.env.WINDOWS_SIGNING_ENABLED === "true" ? {
-      signTool: process.env.WINDOWS_SIGNTOOL,
-      dlib: process.env.WINDOWS_SIGNING_DLIB,
-      metadata: process.env.WINDOWS_SIGNING_METADATA,
-    } : undefined;
-    const config = buildConfig(environmentInfo(), process.env.PLATFORM, windowsSigning);
+    const config = buildConfig(environmentInfo());
     writeFileSync("app/release-config.json", `${JSON.stringify(config, null, 2)}\n`);
   } else if (command === "collect") {
     collect(process.env.BUNDLE_DIR, "release-assets", process.env.PLATFORM, environmentInfo());
