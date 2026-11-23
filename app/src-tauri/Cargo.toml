@@ -16,7 +16,7 @@ path = "src/main.rs"
 
 [build-dependencies]
 serde_json = "1.0.154"
-tauri-build = { version = "2.7.5", features = [] }
+tauri-build = { version = "2.7.6", features = [] }
 
 [dependencies]
 reqwest = { version = "0.13.5", default-features = false, optional = true }
@@ -25,7 +25,7 @@ keyring = "4.2.0"
 oxbow-core = { workspace = true }
 serde = { workspace = true }
 serde_json = "1.0.154"
-tauri = { version = "2.12.6", features = [] }
+tauri = { version = "2.12.7", features = [] }
 tokio = { version = "1.54.1", features = ["time", "sync", "macros"] }
 tauri-plugin-dialog = "2.8.4"
 tauri-plugin-window-state = "2.5.0"

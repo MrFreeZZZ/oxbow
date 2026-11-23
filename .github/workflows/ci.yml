@@ -68,7 +68,7 @@ jobs:
       # Known vulnerabilities in what the app is built from: RustSec for Cargo.lock, npm's
       # advisories for package-lock.json. Warnings (unmaintained crates of Tauri's Linux side)
       # and low npm findings in build tools don't fail it; a vulnerability does.
-      - uses: taiki-e/install-action@v2.90.5
+      - uses: taiki-e/install-action@v2.90.8
         with:
           tool: cargo-audit
       - run: cargo audit

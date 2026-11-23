@@ -113,7 +113,7 @@ impl Repo {
             &config,
             gix::lock::acquire::Fail::Immediately,
             None,
-            0,
+            gix::fs::SharedPermissions::Umask,
             Some(&gix::lock::acquire::resolve_symlink),
         )
         .map_err(Error::git)?;
