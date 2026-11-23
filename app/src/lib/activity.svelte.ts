@@ -95,6 +95,10 @@ class Activity {
   #next = Math.floor(performance.timeOrigin * 1000);
   #fetch: ActivityItem | null = null;
 
+  get hasFetch(): boolean {
+    return this.#fetch !== null;
+  }
+
   constructor() {
     // Only what the running fetch prints: one of the repository open before may still be printing.
     // This window's own: each window numbers its fetches.
@@ -185,13 +189,11 @@ class Activity {
     } finally {
       if (current()) {
         this.#fetch = null;
-        if (this.running) {
-          this.running = null;
-          this.percent = null;
-          const waiting = this.queued[0];
-          this.queued = [];
-          if (waiting) this.startQueued?.(waiting);
-        }
+        this.running = null;
+        this.percent = null;
+        const waiting = this.queued[0];
+        this.queued = [];
+        if (waiting) this.startQueued?.(waiting);
       }
     }
     return ok;
