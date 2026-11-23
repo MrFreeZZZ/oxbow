@@ -576,6 +576,30 @@ fn folding_into_an_edit_honors_the_combined_message_and_manual_amend() {
 }
 
 #[test]
+fn a_squash_into_an_untouched_edit_keeps_the_message_with_cleanup_strip() {
+    for body in ["# Heading", "# Heading\nKeep $(literal) and \\c"] {
+        let mut fx = Fixture::new();
+        fx.commit("base.txt", "base\n", "Root");
+        fx.git(&["switch", "-c", "feature"]);
+        let target = fx.commit("edit.txt", "edit\n", &format!("Edit target\n\n{body}"));
+        let folded = fx.commit("fold.txt", "fold\n", "Squash this");
+        fx.git(&["config", "commit.cleanup", "strip"]);
+        let repo = Repo::open(fx.path()).unwrap();
+        let mut plan = as_is(&repo.stack(None).unwrap());
+        set(&mut plan, &target, StepAction::Edit, None);
+        set(&mut plan, &folded, StepAction::Squash, None);
+
+        repo.perform(&Action::EditStack { plan }).unwrap();
+        assert_eq!(repo.operation().unwrap().unwrap().commit.unwrap().id, target);
+        repo.perform(&Action::Continue { message: None }).unwrap();
+
+        assert!(repo.operation().unwrap().is_none());
+        assert_eq!(fx.git(&["log", "-1", "--format=%s"]), "Edit target");
+        assert_eq!(fx.git(&["log", "-1", "--format=%b"]), format!("{body}\n\nSquash this"));
+    }
+}
+
+#[test]
 fn a_squash_conflict_does_not_strip_the_message_amended_during_edit() {
     let manual = "New subject\n\n# Heading in the message";
     let squashed = "Squash this\n\n# Keep the user's heading\nKeep $(literal) and \\c";

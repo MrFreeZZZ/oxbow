@@ -1554,12 +1554,13 @@ fn todo_text(
 /// message with line breaks inside a paragraph is printed into the commit line by line.
 fn reword_line(message: &GroupMessage, edited: Option<(&str, &str)>) -> String {
     const AMEND: &str = "git commit --amend --only --no-verify --allow-empty";
+    let cleanup = if edited.is_some() { " --cleanup=verbatim" } else { "" };
     let paragraphs = paragraphs(&message.text);
     let amend = if paragraphs.is_empty() {
-        format!("{AMEND} --allow-empty-message -m ''")
+        format!("{AMEND}{cleanup} --allow-empty-message -m ''")
     } else if paragraphs.iter().all(|p| !p.contains('\n')) {
         let flags: Vec<String> = paragraphs.iter().map(|p| format!("-m {}", shell_quote(p))).collect();
-        format!("{AMEND} {}", flags.join(" "))
+        format!("{AMEND}{cleanup} {}", flags.join(" "))
     } else {
         let lines: Vec<String> = paragraphs
             .iter()
@@ -1567,7 +1568,7 @@ fn reword_line(message: &GroupMessage, edited: Option<(&str, &str)>) -> String {
             .skip(1)
             .map(|l| if l.is_empty() { "''".to_owned() } else { l })
             .collect();
-        format!("printf '%s\\n' {} | {AMEND} -F -", lines.join(" "))
+        format!("printf '%s\\n' {} | {AMEND}{cleanup} -F -", lines.join(" "))
     };
     if let Some((id, label)) = edited {
         // Fixup can strip comments after a conflict. The label saves the actual amended message.
