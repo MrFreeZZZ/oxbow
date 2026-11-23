@@ -181,17 +181,13 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
   const looking: MenuEntry[] = [browseItem(row, item, app)];
   const comparisons = compareEntries(row, app, against, target);
   if (comparisons.length) looking.push({ kind: "sub", label: "Compare", icon: menuIcons.compare, entries: comparisons });
-  const saving = app.patchTarget(row);
   const rowBranch = row.graph.branch ?? (row.graph.color === 0 ? history.trunk : null);
   const onBranch = !!history.head.branch && !!rowBranch && rowBranch === history.head.branch;
+  const applyBlocked = !onBranch
+    ? "Switch to this branch to apply patches."
+    : history.operation ? "Finish or abort what git is in the middle of first." : undefined;
   looking.push(
-    item(saving.since ? `Save ${saving.count} Commits as Patches…` : "Save as Patch…", menuIcons.patch, () => run(savePatchesRequest(saving))),
-    {
-      kind: "item", label: "Apply Patches…", icon: menuIcons.applyPatch,
-      off: !onBranch || !!history.operation,
-      detail: !onBranch ? "Switch to this branch to apply patches." : history.operation ? "Finish or abort what git is in the middle of first." : undefined,
-      run: app.applyPatches,
-    },
+    patchesMenu(row, app, applyBlocked),
     {
       kind: "sub",
       label: "Copy",
@@ -233,6 +229,7 @@ function bisectMenu(
   entries.push({ kind: "sep" }, browseItem(row, item, app));
   const comparisons = compareEntries(row, app, against, target);
   if (comparisons.length) entries.push({ kind: "sub", label: "Compare", icon: menuIcons.compare, entries: comparisons });
+  entries.push(patchesMenu(row, app, "Finish the bisect first."));
   entries.push({
     kind: "sub",
     label: "Copy",
@@ -245,6 +242,19 @@ function bisectMenu(
     ],
   });
   return entries;
+}
+
+function patchesMenu(row: HistoryRow, app: CommitMenuApp, applyBlocked: string | undefined): MenuEntry {
+  const saving = app.patchTarget(row);
+  return {
+    kind: "sub",
+    label: "Patches",
+    icon: menuIcons.patch,
+    entries: [
+      { label: saving.since ? `Save ${saving.count} Commits as Patches…` : "Save as Patch…", run: () => app.run(savePatchesRequest(saving)) },
+      { label: "Apply Patches…", off: !!applyBlocked, detail: applyBlocked, run: app.applyPatches },
+    ],
+  };
 }
 
 function compareEntries(row: HistoryRow, app: CommitMenuApp, against: string[], target: string): SubEntry[] {

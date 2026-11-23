@@ -25,14 +25,15 @@ function entries(graph = row.graph, h = history, overrides: Partial<CommitMenuAp
     ...overrides,
   } as unknown as CommitMenuApp);
 }
-function apply(graph = row.graph, h = history) {
-  const entry = entries(graph, h).find((e) => e.kind === "item" && e.label === "Apply Patches…");
-  assert.ok(entry?.kind === "item");
-  return entry;
+function patches(graph = row.graph, h = history) {
+  const submenu = entries(graph, h).find((e) => e.kind === "sub" && e.label === "Patches");
+  assert.ok(submenu?.kind === "sub");
+  return submenu.entries;
 }
-const items = entries();
-const index = items.findIndex((e) => e.kind === "item" && e.label === "Save as Patch…");
-assert.equal(items[index + 1].kind, "item");
+function apply(graph = row.graph, h = history) {
+  return patches(graph, h)[1];
+}
+assert.deepEqual(patches().map((entry) => entry.label), ["Save as Patch…", "Apply Patches…"]);
 assert.equal(apply().off, false);
 assert.equal(apply().detail, undefined);
 assert.equal(apply().run, applyPatches, "use the window's existing patch flow");
