@@ -24,8 +24,8 @@
     | { kind: "details"; label: string; path: string; color: number; branches: string; remotes: { label: string; lines: string[] }[] }
     | { kind: "sep" };
 
-  /** An item of a submenu: a label, and a grey hint on the right. */
-  export type SubEntry = { label: string; hint?: string; danger?: boolean; off?: boolean; run: () => void };
+  /** An item of a submenu, with an optional second line and a grey hint on the right. */
+  export type SubEntry = { label: string; detail?: string; hint?: string; danger?: boolean; off?: boolean; run: () => void };
 
   /** Icon paths of menu items, from the Branches design. */
   export const menuIcons = {
@@ -112,11 +112,27 @@
   // Beside the menu, on the right unless there is no room there.
   $effect(() => {
     if (!sub || !subBox || !box) return;
-    const menu = box.getBoundingClientRect();
-    const item = sub.item.getBoundingClientRect();
-    const { width, height } = subBox.getBoundingClientRect();
-    subLeft = menu.right - 4 + width > window.innerWidth - 8 ? menu.left + 4 - width : menu.right - 4;
-    subTop = Math.max(8, Math.min(item.top - 5, window.innerHeight - height - 8));
+    const menu = box;
+    const item = sub.item;
+    const popup = subBox;
+    const position = () => {
+      const menuRect = menu.getBoundingClientRect();
+      const { width, height } = popup.getBoundingClientRect();
+      const right = left + menuRect.width - 4;
+      const maxLeft = window.innerWidth - width - 8;
+      subLeft = right <= maxLeft ? right : Math.max(8, left + 4 - width);
+      const itemTop = top + item.getBoundingClientRect().top - menuRect.top;
+      subTop = Math.max(8, Math.min(itemTop - 5, window.innerHeight - height - 8));
+    };
+    position();
+    const observer = new ResizeObserver(position);
+    observer.observe(menu);
+    observer.observe(popup);
+    window.addEventListener("resize", position);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", position);
+    };
   });
 
   function openSub(index: number, item: HTMLElement, focus = false) {
@@ -249,8 +265,15 @@
   {#if parent?.kind === "sub"}
     <div class="menu submenu" role="menu" aria-label={parent.label} bind:this={subBox} style:left="{subLeft}px" style:top="{subTop}px">
       {#each parent.entries as entry (entry.label)}
-        <button role="menuitem" class:danger={entry.danger} class:off={entry.off} aria-disabled={entry.off} onclick={() => !entry.off && choose(entry.run)}>
-          <span>{entry.label}</span>
+        <button role="menuitem" class:danger={entry.danger} class:two={entry.detail} class:off={entry.off} aria-disabled={entry.off} onclick={() => !entry.off && choose(entry.run)}>
+          {#if entry.detail}
+            <span class="lines">
+              <span>{entry.label}</span>
+              <span class="detail">{entry.detail}</span>
+            </span>
+          {:else}
+            <span>{entry.label}</span>
+          {/if}
           {#if entry.hint}<span class="hint">{entry.hint}</span>{/if}
         </button>
       {/each}
@@ -399,7 +422,7 @@
   }
   button.off > .icon,
   button.off .lines > span:first-child,
-  button.off > span {
+  button.off > span:not(.lines) {
     opacity: 0.45;
   }
   button .chevron {
@@ -410,9 +433,19 @@
   }
   .submenu {
     min-width: 0;
+    max-width: min(380px, calc(100vw - 16px));
   }
   .submenu button {
     gap: 28px;
+  }
+  .submenu button.two {
+    height: auto;
+    min-height: 38px;
+    padding-block: var(--space-1);
+  }
+  .submenu .detail {
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   .keys {
     flex-grow: 0;
@@ -430,7 +463,7 @@
     color: var(--text2);
   }
   /* A long hint, such as a path, gives way; the label stays whole. */
-  .submenu button > span:first-child {
+  .submenu button > span:first-child:not(.lines) {
     flex-shrink: 0;
   }
   .row {
