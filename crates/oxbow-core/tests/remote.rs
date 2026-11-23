@@ -7,6 +7,35 @@ use oxbow_core::{Action, ActionEvent, FailureKind, PullMode, Repo};
 use support::Fixture;
 
 #[test]
+fn timer_fetch_uses_the_selected_remotes_even_if_more_are_added_before_git_runs() {
+    let mut source = Fixture::new();
+    source.commit("a.txt", "one", "Init");
+    let url = source.path().to_str().unwrap();
+    let mut fixture = Fixture::new();
+    let repo = Repo::open(fixture.path()).unwrap();
+    assert!(repo.auto_fetch().is_none());
+
+    fixture.git(&["remote", "add", "origin", url]);
+    fixture.git(&["config", "remote.origin.skipFetchAll", "true"]);
+    let single = repo.reopen().unwrap().auto_fetch().unwrap();
+    assert_eq!(single.remote.as_deref(), Some("origin"));
+    assert_eq!(single.command.args.last().unwrap(), "origin");
+    assert_eq!(single.targets.len(), 1);
+
+    fixture.git(&["remote", "add", "mirror", url]);
+    fixture.git(&["remote", "add", "peer", url]);
+    let multiple = repo.reopen().unwrap().auto_fetch().unwrap();
+    assert!(multiple.remote.is_none());
+    assert_eq!(multiple.targets.len(), 2);
+    fixture.git(&["remote", "add", "new", url]);
+    repo.run(&multiple.command).unwrap();
+    assert_eq!(
+        fixture.git(&["for-each-ref", "--format=%(refname)", "refs/remotes/*/main"]),
+        "refs/remotes/mirror/main\nrefs/remotes/peer/main"
+    );
+}
+
+#[test]
 fn fetch_targets_follow_the_worktrees_remote_configuration() {
     let mut fixture = Fixture::new();
     fixture.commit("a.txt", "one", "Init");

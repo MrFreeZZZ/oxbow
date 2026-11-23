@@ -26,8 +26,7 @@
 //! list, when old versions go, is forced to the disk before it takes the list's place, so a power
 //! cut leaves the old list or the new one, never an empty one.
 //!
-//! Measured on a clone of VS Code (21,000 files, 261 MB): a day's work on 20 files keeps a few
-//! MB, a formatter run over every file 90 MB once, a branch switch nothing (docs/performance/speed.md).
+//! What a run costs is measured with `examples/localhistory.rs`. Old figures are not kept.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;

@@ -20,7 +20,41 @@ pub struct FetchTarget {
     refspecs: Vec<gix::refspec::RefSpec>,
 }
 
+pub struct AutoFetchPlan {
+    pub targets: Vec<FetchTarget>,
+    /// The one configured remote, or None for an all-remotes fetch.
+    pub remote: Option<String>,
+    pub command: GitCommand,
+}
+
 impl Repo {
+    /// Resolve the timer's targets and command from this snapshot of the repository config.
+    pub fn auto_fetch(&self) -> Option<AutoFetchPlan> {
+        let remotes = self.remotes();
+        let remote = match remotes.as_slice() {
+            [] => return None,
+            [remote] => Some(remote.clone()),
+            _ => None,
+        };
+        let targets = self.fetch_targets(remote.as_deref());
+        if targets.is_empty() {
+            return None;
+        }
+        let mut command = self.fetch_command(remote.as_deref());
+        // Keep the group fixed while the fetch waits for its turn.
+        if remote.is_none() {
+            command.args.pop();
+            command.args.extend(["--multiple".into(), "--".into()]);
+            command.args.extend(targets.iter().map(|target| target.name.clone()));
+            command.comment = None;
+        }
+        Some(AutoFetchPlan {
+            targets,
+            remote,
+            command,
+        })
+    }
+
     /// Normalize an explicit remote and an all-remotes fetch to comparable target lists.
     pub fn fetch_targets(&self, remote: Option<&str>) -> Vec<FetchTarget> {
         let repo = self.local();

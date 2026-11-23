@@ -1526,14 +1526,15 @@
       activity.open = !activity.open;
       return;
     }
-    if (kind !== "fetch" && activity.running) {
+    if (kind !== "fetch" && activity.hasFetch) {
       const branch = history?.head.branch ?? "HEAD";
       activity.queue(kind, kind === "push" ? `Push ${branch}` : `Pull into ${branch}`, mode);
       return;
     }
     // Commits made outside the app since the last reload belong in the sheet.
-    await refresh();
-    if (!remoteCtx) return;
+    const opened = repo;
+    await (kind === "fetch" ? refresh() : loader.refreshForSync());
+    if (!opened || repo !== opened || !remoteCtx) return;
     // Pull or Push that can't run says why under its button, as the grey button does.
     if (kind !== "fetch" && syncBlock(remoteCtx, kind)) {
       why = kind;
@@ -1541,7 +1542,9 @@
     }
     if (kind === "fetch") {
       // The sheet closes on Fetch: the fetch runs in the background, with its progress on the button.
-      await confirm.run({ ...fetchRequest(remoteCtx), background: () => void backgroundFetch(false) });
+      await confirm.run({ ...fetchRequest(remoteCtx), background: () => {
+        if (repo === opened) void backgroundFetch(false);
+      } });
       return;
     }
     const setup =
@@ -1557,6 +1560,7 @@
         : undefined;
     // Submodule commits nobody else has would leave the pushed commits pointing at nothing.
     const unpushedSubs = kind === "push" && history?.submodules.length ? await api.unpushedSubmodules().catch(() => []) : [];
+    if (repo !== opened || !remoteCtx) return;
     const request = kind === "pull" ? pullRequest(remoteCtx, setup) : pushRequest(remoteCtx, unpushedSubs);
     const opBefore = history?.operation ?? null;
     await confirm.run(request);
@@ -1578,14 +1582,16 @@
 
   /** Fetch in the background; one someone asked for says how it went. */
   async function backgroundFetch(auto: boolean) {
-    const target = fetchTarget();
-    if (!target) return;
-    const result = await activity.fetch(target.remote, target.label, auto);
+    const target = auto ? null : fetchTarget();
+    if (!auto && !target) return;
+    const opened = repo;
+    const result = await activity.fetch(target?.remote ?? null, auto);
     if (typeof result !== "boolean") return result.retryAfterMs;
-    if (!result) return;
+    if (!result || repo !== opened) return;
     await api.refreshRemoteTags().catch(() => false);
+    if (repo !== opened) return;
     await refreshQuietly();
-    if (!auto) confirm.say(activity.recent[0]?.sub === "Nothing new" ? `Fetched ${target.label}. Nothing new.` : `Fetched ${target.label}.`, "done");
+    if (target && repo === opened) confirm.say(activity.recent[0]?.sub === "Nothing new" ? `Fetched ${target.label}. Nothing new.` : `Fetched ${target.label}.`, "done");
   }
 
   /** Fix… of a failed fetch in Activity: the sheet with the way out, e.g. Add Key to Agent. */
@@ -1649,7 +1655,7 @@
     const fetchNow = () => {
       const next = setTimeout(fetchNow, interval);
       timer = next;
-      if (confirm.request || document.hidden || loading || activity.running) return;
+      if (confirm.request || document.hidden || loading || activity.hasFetch) return;
       void backgroundFetch(true).then((retryAfterMs) => {
         if (timer !== next || retryAfterMs == null) return;
         clearTimeout(timer);

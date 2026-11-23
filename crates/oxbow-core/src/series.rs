@@ -189,8 +189,8 @@ impl Repo {
         let rewritten = vec![local.clone(), upstream.clone()];
         if let (Ok(here), Ok(there)) = (self.commit_id(&local), self.commit_id(&upstream))
             && here != there
-            && !self.is_ancestor(&there, &here)
-            && !self.is_ancestor(&here, &there)
+            && !self.ancestry(&there, &here)?
+            && !self.ancestry(&here, &there)?
         {
             return Ok(Some(Rewrite {
                 old: there,
@@ -224,9 +224,14 @@ impl Repo {
                 Some((id, time, parts.next().unwrap_or_default()))
             })
             .collect();
+        let repo = self.local();
         for pair in moves.windows(2) {
             let ((new, time, message), (old, ..)) = (pair[0], pair[1]);
-            if new != old && !self.is_ancestor(old, new) && self.object_exists(old) {
+            if new == old {
+                continue;
+            }
+            let old_id = gix::ObjectId::from_hex(old.as_bytes()).map_err(Error::git)?;
+            if repo.try_find_header(old_id).map_err(Error::git)?.is_some() && !self.ancestry(old, new)? {
                 return Ok(Some(Rewrite {
                     old: old.to_owned(),
                     new: new.to_owned(),

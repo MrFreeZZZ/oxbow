@@ -91,36 +91,56 @@ class Activity {
   showOutput = $state(false);
   /** Starts a Push or Pull that waited for the fetch; set by the app. */
   startQueued: ((item: ActivityItem) => void) | null = null;
-  #next = 1;
+  // The backend keeps the latest request number when the WebView reloads.
+  #next = Math.floor(performance.timeOrigin * 1000);
+  #fetch: ActivityItem | null = null;
+
+  get hasFetch(): boolean {
+    return this.#fetch !== null;
+  }
 
   constructor() {
     // Only what the running fetch prints: one of the repository open before may still be printing.
     // This window's own: each window numbers its fetches.
-    getCurrentWindow().listen<{ fetch: number | null; event: ActionEvent }>("fetch-event", ({ payload }) => {
-      if (payload.fetch !== null && payload.fetch === this.running?.id) this.#onEvent(payload.event);
+    getCurrentWindow().listen<{ fetch: number | null; remote: string | null; event: ActionEvent }>("fetch-event", ({ payload }) => {
+      const fetch = this.#fetch;
+      if (!fetch || payload.fetch !== fetch.id) return;
+      if (!this.running && (payload.event.kind === "waiting" || payload.event.kind === "command")) {
+        const remote = payload.remote;
+        this.#showFetch({ ...fetch, remote, title: `Fetching ${remote ?? "all remotes"}` });
+      }
+      this.#onEvent(payload.event);
     }).catch(() => {});
   }
 
   /** A new repository: nothing of the old one's applies. */
   reset() {
-    if (this.running) api.stopFetch().catch(() => {});
+    const fetch = this.#fetch;
+    this.#fetch = null;
     this.running = null;
     this.queued = [];
     this.recent = [];
     this.problem = null;
     this.open = false;
+    if (fetch) return api.stopFetch(fetch.id).catch(() => {});
   }
 
-  /** Fetch `remote` (null: every remote) in the background; `label` names it, e.g. "origin". */
-  async fetch(remote: string | null, label: string, auto = false): Promise<boolean | { retryAfterMs: number | null }> {
-    if (this.running) return false;
-    this.running = { id: this.#next++, kind: "fetch", title: `Fetching ${label}`, sub: "Connecting…", state: "running", time: Date.now(), auto, remote };
+  #showFetch(item: ActivityItem) {
+    this.running = item;
     this.percent = null;
     this.lines = [];
     this.showOutput = false;
-    // After reset() a new repository's fetch may be running: this one's answer is the old one's.
-    const id = this.running.id;
-    const current = () => this.running?.id === id;
+  }
+
+  /** The timer's fetch remains invisible until the backend takes it or says what it waits for. */
+  async fetch(remote: string | null, auto: boolean): Promise<boolean | { retryAfterMs: number | null }> {
+    if (this.#fetch && (auto || !this.#fetch.auto)) return false;
+    const id = this.#next++;
+    let label = remote ?? "all remotes";
+    const item: ActivityItem = { id, kind: "fetch", title: `Fetching ${label}`, sub: "Connecting…", state: "running", time: Date.now(), auto, remote };
+    this.#fetch = item;
+    if (!auto) this.#showFetch(item);
+    const current = () => this.#fetch?.id === id;
     let ok = false;
     try {
       const result = await api.fetchInBackground(remote, id, auto);
@@ -129,6 +149,8 @@ class Activity {
       const { updated, gaveWay } = result;
       // The timer's fetch stopped for an action: the next one fetches again, nothing to tell.
       if (gaveWay) return false;
+      remote = result.remote;
+      label = remote ?? "all remotes";
       ok = true;
       this.#fixProblem();
       this.#finished({
@@ -138,11 +160,14 @@ class Activity {
         state: "done",
         auto,
         remote,
-        commands: this.#commands(),
+        commands: this.running ? this.#commands() : [],
       });
     } catch (err) {
       if (!current()) return false;
       const failure = toFailure(err);
+      if (auto && !this.running && !("remote" in failure)) return false;
+      remote = "remote" in failure ? failure.remote ?? null : this.running?.remote ?? null;
+      label = remote ?? "all remotes";
       if (failure.kind === "cancelled") {
         this.#finished({ kind: "fetch", title: `Stopped fetching ${label}`, sub: "Nothing changed", state: "stopped", remote });
       } else {
@@ -154,7 +179,7 @@ class Activity {
           auto,
           remote,
           failure,
-          lines: this.lines.filter((line) => !line.progress),
+          lines: this.running ? this.lines.filter((line) => !line.progress) : [],
         });
         if (this.problem) this.recent = this.recent.filter((i) => i.id !== this.problem!.id);
         this.problem = item;
@@ -163,6 +188,7 @@ class Activity {
       }
     } finally {
       if (current()) {
+        this.#fetch = null;
         this.running = null;
         this.percent = null;
         const waiting = this.queued[0];
@@ -174,7 +200,7 @@ class Activity {
   }
 
   stop() {
-    if (this.running) api.stopFetch().catch(() => {});
+    if (this.running) api.stopFetch(this.running.id).catch(() => {});
   }
 
   /** Push or Pull pressed while the fetch runs: it starts when the fetch is done. */
@@ -262,8 +288,10 @@ class Activity {
   }
 }
 
-function toFailure(err: unknown): Failure {
-  if (err && typeof err === "object" && "kind" in err) return err as Failure;
+type FetchFailure = Failure & { remote?: string | null };
+
+function toFailure(err: unknown): FetchFailure {
+  if (err && typeof err === "object" && "kind" in err) return err as FetchFailure;
   return { kind: "other", output: String(err), incoming: [], remoteTip: null, hook: null };
 }
 

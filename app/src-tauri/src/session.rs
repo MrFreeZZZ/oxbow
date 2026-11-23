@@ -113,6 +113,7 @@ pub(crate) struct Slot {
     pub(crate) pending: Option<PathBuf>,
     /// Stop of the fetch running in the background, apart from actions in the sheet.
     pub(crate) fetch_cancel: Arc<AtomicBool>,
+    fetch_id: u64,
     /// The commit rows of the last history, for the next reload to reuse.
     pub(crate) history: HistoryCache,
     /// Number of the last history read started here, or of the last repository opened here:
@@ -129,11 +130,30 @@ pub(crate) struct Slot {
     /// Stop of the read running in each lane (a search, the commit panel's diff): a newer read
     /// in the lane stops the older, whose answer would be dropped anyway.
     lanes: HashMap<String, Arc<AtomicBool>>,
+    /// The latest Files fetch in this window, even if its IPC call has already finished.
+    files_fetch_id: u64,
     /// Tells the window what changes in its repository outside it; stops when dropped.
     pub(crate) watch: Option<oxbow_core::Watch>,
 }
 
 impl Slot {
+    pub(crate) fn start_fetch(&mut self, id: u64) -> Option<Arc<AtomicBool>> {
+        if id <= self.fetch_id {
+            return None;
+        }
+        self.stop_fetch(id);
+        self.fetch_cancel = Arc::default();
+        Some(self.fetch_cancel.clone())
+    }
+
+    /// Stop can arrive before this fetch starts, or after a newer fetch has replaced it.
+    pub(crate) fn stop_fetch(&mut self, id: u64) {
+        if id >= self.fetch_id {
+            self.fetch_id = id;
+            self.fetch_cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
     /// Open `repo` in this window: what was read of the repository open before goes.
     pub(crate) fn open(&mut self, repo: Repo) {
         self.close();
@@ -190,10 +210,23 @@ impl Slot {
 
     pub(crate) fn lane(&mut self, lane: String) -> Arc<AtomicBool> {
         let cancel = Arc::new(AtomicBool::new(false));
+        self.replace_lane(lane, &cancel);
+        cancel
+    }
+
+    fn replace_lane(&mut self, lane: String, cancel: &Arc<AtomicBool>) {
         if let Some(older) = self.lanes.insert(lane, cancel.clone()) {
             older.store(true, Ordering::Relaxed);
         }
-        cancel
+    }
+
+    fn start_files_fetch(&mut self, id: u64, stop: &RunStop) -> bool {
+        if id <= self.files_fetch_id {
+            return false;
+        }
+        self.files_fetch_id = id;
+        self.replace_lane("review-files-fetch".into(), &stop.cancel);
+        true
     }
 }
 
@@ -290,17 +323,18 @@ impl Session {
         self.stops.start(window.label())
     }
 
-    pub(crate) fn fetch_cancel(&self, window: &tauri::WebviewWindow) -> Arc<AtomicBool> {
-        self.slot(window, |slot| slot.fetch_cancel.clone())
-    }
-
-    /// A Stop of its own for a new background fetch: one stopped before it, e.g. of the
-    /// repository open before, stays stopped.
-    pub(crate) fn new_fetch_cancel(&self, window: &tauri::WebviewWindow) -> Arc<AtomicBool> {
-        self.slot(window, |slot| {
-            slot.fetch_cancel = Arc::new(AtomicBool::new(false));
-            slot.fetch_cancel.clone()
-        })
+    /// Files fetches participate in ordinary Stop and replace only their own window's Files fetch.
+    pub(crate) fn new_files_fetch(
+        &self,
+        window: &tauri::WebviewWindow,
+        id: Option<u64>,
+    ) -> CommandResult<Option<RunStop>> {
+        let Some(id) = id else { return Ok(None) };
+        let stop = self.new_stop(window);
+        if !self.slot(window, |slot| slot.start_files_fetch(id, &stop)) {
+            return Err(oxbow_core::Error::Cancelled.to_string());
+        }
+        Ok(Some(stop))
     }
 
     /// A Stop for a new read in `lane`, which stops the one running there. Without a lane the
@@ -506,6 +540,55 @@ mod tests {
         assert!(stops.start("settings").cancel.load(Ordering::Relaxed));
         stops.resume();
         assert!(!stops.start("settings").cancel.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn background_fetch_stop_and_start_are_scoped_to_the_latest_request() {
+        let mut slot = Slot::default();
+        let auto = slot.start_fetch(1).unwrap();
+        let manual = slot.start_fetch(2).unwrap();
+        assert!(auto.load(Ordering::Relaxed));
+        slot.stop_fetch(1);
+        assert!(slot.start_fetch(1).is_none());
+        assert!(!manual.load(Ordering::Relaxed));
+
+        slot.stop_fetch(3);
+        slot.close();
+        assert!(slot.start_fetch(3).is_none());
+        let reopened = slot.start_fetch(4).unwrap();
+        slot.stop_fetch(3);
+        assert!(!reopened.load(Ordering::Relaxed));
+        slot.stop_fetch(4);
+        assert!(reopened.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn a_files_fetch_only_supersedes_older_files_fetches_in_its_window() {
+        let stops = Arc::new(Stops::default());
+        let mut main = Slot::default();
+        let mut other = Slot::default();
+        let first = stops.start("main");
+        let worktree = stops.start("main");
+        let other_files = stops.start("other");
+        assert!(main.start_files_fetch(1, &first));
+        assert!(other.start_files_fetch(2, &other_files));
+
+        let newest = stops.start("main");
+        assert!(main.start_files_fetch(3, &newest));
+        assert!(first.cancel.load(Ordering::Relaxed));
+        drop(first);
+        let late = stops.start("main");
+        assert!(!main.start_files_fetch(2, &late));
+        for run in [&newest, &worktree, &other_files] {
+            assert!(!run.cancel.load(Ordering::Relaxed));
+        }
+
+        stops.stop("main");
+        assert!(newest.cancel.load(Ordering::Relaxed));
+        assert!(worktree.cancel.load(Ordering::Relaxed));
+        assert!(!other_files.cancel.load(Ordering::Relaxed));
+        other.close();
+        assert!(other_files.cancel.load(Ordering::Relaxed));
     }
 
     #[test]

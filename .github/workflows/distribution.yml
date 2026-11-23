@@ -84,7 +84,7 @@ jobs:
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - run: scripts/check.sh all
-      - uses: taiki-e/install-action@v2.90.5
+      - uses: taiki-e/install-action@v2.90.8
         with:
           tool: cargo-audit
       - run: cargo audit

@@ -116,7 +116,8 @@ export async function pullWorktreeRequest(ctx: BranchContext, repoPath: string, 
   const { history } = ctx;
   const local = history.refs.some((r) => r.kind === "local" && r.name === pull.head);
   if (local && !fork) return newWorktreeRequest(ctx, repoPath, pull.head);
-  await (gitlab ? api.gitlabFetch(pull.number, pull.base) : api.pullFetch(pull.number, pull.base));
+  const { tips } = await (gitlab ? api.gitlabFetch(pull.number, pull.base) : api.pullFetch(pull.number, pull.base));
+  if (!tips) throw new Error("Could not find the fetched review head.");
   const tracked = `${remote}/${pull.head}`;
   const follows = !fork && history.refs.some((r) => r.kind === "remote" && r.name === tracked);
   const name = fork || local ? `${gitlab ? "mr" : "pr"}/${pull.number}` : pull.head;
@@ -124,7 +125,7 @@ export async function pullWorktreeRequest(ctx: BranchContext, repoPath: string, 
   const state: NewWorktree = {
     branch: name,
     create: true,
-    from: follows ? `refs/remotes/${tracked}` : `refs/oxbow/${gitlab ? "mr" : "pull"}/${pull.number}/head`,
+    from: follows ? `refs/remotes/${tracked}` : tips.head,
     fromLabel: follows ? tracked : gitlab ? `merge request !${pull.number}` : `pull request #${pull.number}`,
     folder: tilde(await freeFolder(history, repoPath, name)),
     edited: false,

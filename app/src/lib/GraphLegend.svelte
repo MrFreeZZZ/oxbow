@@ -65,6 +65,16 @@
     return list;
   });
 
+  function forkDash(row: HistoryRow | undefined): string | undefined {
+    if (!row) return;
+    // The incoming curve is stored on the row above the fork.
+    const shownIndex = shown.rows.indexOf(row);
+    const previous = shownIndex >= 0 ? shown.rows[shownIndex - 1] : history.rows[history.rows.indexOf(row) - 1];
+    const { column, forkColors } = row.graph;
+    const curve = previous?.graph.segments.find((seg) => seg.color === forkColors[0] && seg.to === column && seg.from !== column);
+    return curve?.dashed ? "2 5" : undefined;
+  }
+
 </script>
 
 <span class="anchor">
@@ -79,7 +89,7 @@
       <span class="lead">Examples come from this repository: click one to find it in the graph.</span>
       <ul>
         {#each entries as entry (entry.mark)}
-          {@const c = entry.row?.graph.color ?? 4}
+          {@const c = entry.row?.graph.color ?? (entry.mark === "noBranch" ? NO_BRANCH : 4)}
           <li>
             <svg class="glyph" viewBox="0 0 44 34" aria-hidden="true">
               {#if entry.mark === "head"}
@@ -93,7 +103,7 @@
                 <path d="M14 0V34" stroke={lane(0)} stroke-width="3" opacity="0.35" />
                 <path d="M32 0V9C32 17 14 17 14 26" stroke={lane(c)} stroke-width="2" fill="none" />
                 <circle cx="32" cy="8" r="4" fill={lane(c)} />
-              {:else if entry.mark === "merge" || entry.mark === "fork" || entry.mark === "mergeFork" || entry.mark === "unpushed" || entry.mark === "cut"}
+              {:else if entry.mark === "merge" || entry.mark === "fork" || entry.mark === "mergeFork" || entry.mark === "unpushed" || entry.mark === "cut" || entry.mark === "noBranch"}
                 {@const row = entry.row}
                 {@const merge = row ? isMerge(row) : entry.mark === "merge" || entry.mark === "mergeFork"}
                 {@const fork = row ? isFork(row) : entry.mark === "fork" || entry.mark === "mergeFork"}
@@ -106,7 +116,8 @@
                 {@const dash = unpushed ? "2 5" : undefined}
                 <path d={hidden && hidden.from === hidden.to ? "M14 0V13" : "M14 0V34"} stroke={color} stroke-width={c === 0 ? 3 : 2} stroke-dasharray={dash} stroke-linecap="round" />
                 {#if fork}
-                  <path d="M32 0C32 10 14 8 14 {y}" stroke={lane(row?.graph.forkColors[0] ?? 0)} stroke-width="2" fill="none" />
+                  {@const incomingDash = forkDash(row)}
+                  <path d="M32 0C32 10 14 8 14 {y}" stroke={lane(row?.graph.forkColors[0] ?? 0)} stroke-width="2" stroke-dasharray={incomingDash} stroke-linecap={incomingDash ? "round" : undefined} fill="none" />
                 {/if}
                 {#if hidden}
                   {@const end = hidden.to < hidden.from ? 4 : hidden.to === hidden.from ? 14 : 30}
@@ -126,6 +137,8 @@
                   <circle cx="14" cy={y} r={radius * 0.32} fill="var(--graph-bg)" />
                 {:else if merge || fork || hollow}
                   <circle cx="14" cy={y} r={hollow ? radius - 0.5 : radius} fill={hollow ? "var(--graph-bg)" : color} stroke={hollow ? color : undefined} />
+                {:else if entry.mark === "noBranch"}
+                  <circle cx="14" cy={y} r={radius} fill={color} />
                 {:else}
                   <circle cx="14" cy={y} r={radius + 1} fill={color} stroke="var(--graph-bg)" stroke-width="2" />
                 {/if}
@@ -142,9 +155,6 @@
                 <path d="M14 0V17" stroke="var(--lead-in)" stroke-width="2" stroke-dasharray="2 5" stroke-linecap="round" />
                 <path d="M14 22V34" stroke={lane(c)} stroke-width="2" />
                 <circle cx="14" cy="24" r="4" fill={lane(c)} />
-              {:else if entry.mark === "noBranch"}
-                <path d="M14 0V34" stroke={lane(NO_BRANCH)} stroke-width="2" />
-                <circle cx="14" cy="17" r="4" fill={lane(NO_BRANCH)} />
               {:else}
                 <path d="M14 0V34" stroke={lane(4)} stroke-width="2" />
                 <circle cx="14" cy="8" r="4" fill={lane(4)} />

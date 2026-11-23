@@ -8,10 +8,12 @@ const effect = list.match(/\$effect\(\(\) => \{\n    const opened = menu;[\s\S]*
 assert.ok(effect);
 // Run the actual lifecycle with controlled completion order and cleanup.
 const install = Function("state", "$effect", "untrack", "linkFor", "copyLink", ts.transpile(effect.replace(/\bmenu\b/g, "state.menu").replace(/\bhistory\b/g, "state.history")));
-for (const mode of ["confirmed", "unknown", "failure", "closed", "other-menu", "other-history", "disposed"] as const) {
+for (const mode of ["confirmed", "unknown", "failure", "closed", "other-menu", "history-reloaded", "disposed"] as const) {
   const link = { label: "Commit Link", off: true, run: () => {} };
   const opened = { id: "abc", entries: [{ kind: "sub", label: "Copy", entries: [link] }] };
-  const state = { menu: opened as typeof opened | null, history: {} };
+  let history = {};
+  let historyReads = 0;
+  const state = { menu: opened as typeof opened | null, get history() { historyReads++; return history; } };
   let finish!: (url: string | null) => void;
   let fail!: () => void;
   let cleanup: (() => void) | undefined;
@@ -22,14 +24,16 @@ for (const mode of ["confirmed", "unknown", "failure", "closed", "other-menu", "
   assert.equal(link.off, true);
   if (mode === "closed") state.menu = null;
   if (mode === "other-menu") state.menu = { ...opened };
-  if (mode === "other-history") state.history = {};
+  if (mode === "history-reloaded") history = {};
   if (mode === "disposed") cleanup?.();
   if (mode === "failure") fail();
   else finish(mode === "unknown" ? null : "https://github.com/team/repo/commit/abc");
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(link.off, mode !== "confirmed", mode);
+  assert.equal(historyReads, 0, "the check must not subscribe to history changes");
+  const available = mode === "confirmed" || mode === "history-reloaded";
+  assert.equal(link.off, !available, mode);
   link.run();
-  assert.deepEqual(copied, mode === "confirmed" ? ["https://github.com/team/repo/commit/abc"] : [], mode);
+  assert.deepEqual(copied, available ? ["https://github.com/team/repo/commit/abc"] : [], mode);
 }
 
 // Native button keyboard activation goes through the same guarded onclick as mouse clicks.

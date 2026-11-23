@@ -113,6 +113,19 @@ export class HistoryLoader {
     return this.#reloads.ask();
   }
 
+  /** A sync sheet needs the reloaded refs even when an older page delays the reload. */
+  async refreshForSync(): Promise<void> {
+    const opened = this.#session.repo;
+    do {
+      const page = this.#pageRun;
+      await this.refresh();
+      if (page) await page;
+      if (this.#session.repo !== opened) return;
+      // The page starts deferred reloads as it finishes.
+      await this.#reloads.running;
+    } while (this.#pageRun && this.#session.repo === opened);
+  }
+
   /** Reload for nothing done here that the watch wouldn't see: the window came back to the
    *  front, something changed outside, a fetch, which leaves the files alone. What the watch
    *  noticed no change in isn't asked of git again; when nothing changed, nothing is read again. */
@@ -270,6 +283,7 @@ export class HistoryLoader {
   /** Load the next page of older commits, or with `until` the history down to that commit.
    *  Whether `until` is in History now. */
   loadOlder(until: string | null = null): Promise<boolean> {
+    if (this.paging) return Promise.resolve(false);
     const run = this.#loadPage(until);
     if (this.paging) {
       this.#pageRun = run;
@@ -280,7 +294,7 @@ export class HistoryLoader {
 
   async #loadPage(until: string | null): Promise<boolean> {
     const session = this.#session;
-    if (!session.repo || session.loading || this.paging || !this.history?.truncated) return false;
+    if (!session.repo || session.loading || !this.history?.truncated) return false;
     const mine = session.tickets.take();
     this.#page = mine.requestId;
     this.paging = until ?? "more";
@@ -322,6 +336,7 @@ export class HistoryLoader {
   /** Another repository, or none: older commits on their way belong to the old one. */
   stopPaging() {
     this.#page = null;
+    this.#pageRun = null;
     this.paging = null;
     this.#reloads.forgetAfterPage();
     this.#settling = false;

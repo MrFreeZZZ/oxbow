@@ -17,7 +17,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::CommandResult;
 use crate::accounts::Accounts;
-use crate::session::{Session, at, blocking, current, logged, read};
+use crate::session::{RunStop, Session, at, blocking, current, logged, read};
 use crate::turns::Running;
 
 /// Captured by the editor, never inferred from whichever repository the window opens next.
@@ -172,10 +172,16 @@ pub async fn gitlab_fetch(
     base: String,
     target: Option<ReviewTarget>,
     allow_stale: Option<bool>,
+    files_fetch_id: Option<u64>,
 ) -> CommandResult<ReviewFetch> {
-    let (repo, project, _) = signed_in_project(&app, &window, &session, &tokens)
-        .await?
-        .ok_or_else(|| "Sign in to this repository’s GitLab in Settings › Accounts".to_owned())?;
+    // Register before project discovery so an older invocation can't replace a newer one.
+    let stop = session.new_files_fetch(&window, files_fetch_id)?;
+    let project = signed_in_project(&app, &window, &session, &tokens).await;
+    if stop.as_ref().is_some_and(|stop| stop.cancel.load(Ordering::Relaxed)) {
+        return Err(oxbow_core::Error::Cancelled.to_string());
+    }
+    let (repo, project, _) =
+        project?.ok_or_else(|| "Sign in to this repository’s GitLab in Settings › Accounts".to_owned())?;
     let place = Reviewed::gitlab(&project);
     check_review_target(&repo, &place, target.as_ref())?;
     let command = repo.merge_request_fetch_command(&place, &project.remote, number, &base);
@@ -184,6 +190,7 @@ pub async fn gitlab_fetch(
         &window,
         repo,
         format!("Fetch merge request !{number}"),
+        stop,
         move |repo, cancel| repo.fetch_review(&command, &place, number, allow_stale.unwrap_or_default(), cancel),
     )
     .await
@@ -540,6 +547,7 @@ pub async fn github_pull_statuses(
 }
 
 /// Fetch pull request `number` and its base `base` here, quietly, to show its changes.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn pull_fetch(
     window: tauri::WebviewWindow,
@@ -548,7 +556,9 @@ pub async fn pull_fetch(
     base: String,
     target: Option<ReviewTarget>,
     allow_stale: Option<bool>,
+    files_fetch_id: Option<u64>,
 ) -> CommandResult<ReviewFetch> {
+    let stop = session.new_files_fetch(&window, files_fetch_id)?;
     let (repo, github) = github_repo_of(&session, &window)?;
     let place = Reviewed::github(&github);
     check_review_target(&repo, &place, target.as_ref())?;
@@ -558,6 +568,7 @@ pub async fn pull_fetch(
         &window,
         repo,
         format!("Fetch pull request #{number}"),
+        stop,
         move |repo, cancel| repo.fetch_review(&command, &place, number, allow_stale.unwrap_or_default(), cancel),
     )
     .await
@@ -568,10 +579,11 @@ async fn fetch_review(
     window: &tauri::WebviewWindow,
     repo: oxbow_core::Repo,
     title: String,
+    stop: Option<RunStop>,
     work: impl FnOnce(&oxbow_core::Repo, &AtomicBool) -> oxbow_core::Result<ReviewFetch> + Send + 'static,
 ) -> CommandResult<ReviewFetch> {
     let turns = session.turns.clone();
-    let stop = session.new_stop(window);
+    let stop = stop.unwrap_or_else(|| session.new_stop(window));
     let change = Running::new(&session.label(window), repo.name(), title.clone());
     logged(Some(at(&repo)), EntryKind::Background, title, move || {
         // Other review fetches share these refs, even from another worktree.
