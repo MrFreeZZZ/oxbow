@@ -69,7 +69,6 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
   const switching: MenuEntry[] = others.slice(0, 3).map((label) => item(`Check Out ${label.name}`, menuIcons.checkout, () => run(switchRequest(ctx, label.name))));
   if (others.length > 3) switching.push({ kind: "note", label: `${others.length - 3} more branches here, in the branch list.` });
   if (!isHead) switching.push(item("Check Out This Commit…", menuIcons.checkout, () => run(detachRequest(ctx, row))));
-  group(switching);
 
   // Branches at this commit can be merged or rebased onto right here, as from the branch list;
   // the commit itself can be copied, undone or made the branch's tip. None of it while a merge
@@ -83,13 +82,11 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
     const inHead = ancestors(history, history.head.commit).has(row.id);
     const locked = inHead && lockedCommit(history, row);
     const dropping = dropsPushed(history, row.id);
-    const merging: MenuEntry[] = [];
     for (const label of mergeable) {
-      merging.push(item(`Merge ${label.name} into ${here}…`, menuIcons.merge, () => run(mergeRequest(ctx, label))));
-      if (history.head.branch && !dropping) merging.push(item(`Rebase ${here} onto ${label.name}…`, menuIcons.rebase, () => run(mergeRequest(ctx, label, "rebase"))));
+      switching.push(item(`Merge ${label.name} into ${here}…`, menuIcons.merge, () => run(mergeRequest(ctx, label))));
+      if (history.head.branch && !dropping) switching.push(item(`Rebase ${here} onto ${label.name}…`, menuIcons.rebase, () => run(mergeRequest(ctx, label, "rebase"))));
     }
-    group(merging);
-
+    group(switching);
     const editing: MenuEntry[] = [];
     if (isHead && row.parents.length === 1 && !locked) editing.push(item("Undo Commit", menuIcons.undo, () => run(undoCommitRequest(ctx, row))));
     if (isHead && !locked) editing.push(item("Edit Message…", menuIcons.edit, () => run(editMessageRequest(ctx, row))));
@@ -102,13 +99,15 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
     }
     if (own && row.parents.length === 1) editing.push(item("Split Commit…", menuIcons.split, () => app.openSplit(row)));
     if (own && headStack.has(row.parents[0] ?? "")) editing.push(item("Squash into Previous…", menuIcons.merge, () => run(squashRequest(ctx, row))));
-    if (own) editing.push(item("Drop Commit…", menuIcons.drop, () => run(dropCommitRequest(ctx, row)), true));
     if (own) editing.push(item("Edit Stack…", menuIcons.rebase, () => app.openStack(null)));
-    if (!inHead && history.head.commit) editing.push(item(`Cherry-Pick onto ${here}`, menuIcons.cherry, () => run(cherryPickRequest(ctx, row))));
-    if (inHead) editing.push(item("Revert Commit…", menuIcons.revert, () => run(revertRequest(ctx, row))));
-    if (inHead && history.head.branch) editing.push(item("Fix a Mistake…", menuIcons.fix, () => app.openFixes(row.id)));
+    if (own) editing.push(item("Drop Commit…", menuIcons.drop, () => run(dropCommitRequest(ctx, row)), true));
+    group(editing);
+
+    const branchActions: MenuEntry[] = [];
+    if (!inHead && history.head.commit) branchActions.push(item(`Cherry-Pick onto ${here}`, menuIcons.cherry, () => run(cherryPickRequest(ctx, row))));
+    if (inHead) branchActions.push(item("Revert Commit…", menuIcons.revert, () => run(revertRequest(ctx, row))));
     if (!isHead && history.head.commit && !dropping) {
-      editing.push({
+      branchActions.push({
         kind: "sub",
         label: `Reset ${here} to Here`,
         icon: menuIcons.reset,
@@ -116,14 +115,15 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
       });
     }
     const branch = protectedHead(history);
-    if (branch && (locked || dropping)) editing.push({ kind: "note", label: lockedNote(branch) });
-    group(editing);
+    if (branch && (locked || dropping)) branchActions.push({ kind: "note", label: lockedNote(branch) });
+    if (inHead && history.head.branch) branchActions.push(item("Fix a Mistake…", menuIcons.fix, () => app.openFixes(row.id)));
 
     // Bisect: from a branch tip (or HEAD) back to a tag, or from an older commit up to HEAD.
-    const finding: MenuEntry[] = [];
-    if (isHead || row.labels.some((l) => l.kind === "local")) finding.push(item("Find What Broke This…", menuIcons.bisect, () => run(bisectStartRequest(ctx, { bad: row }))));
-    else if (inHead) finding.push(item("Find First Bad Commit After This…", menuIcons.bisect, () => run(bisectStartRequest(ctx, { good: row }))));
-    group(finding);
+    if (isHead || row.labels.some((l) => l.kind === "local")) branchActions.push(item("Find What Broke This…", menuIcons.bisect, () => run(bisectStartRequest(ctx, { bad: row }))));
+    else if (inHead) branchActions.push(item("Find First Bad Commit After This…", menuIcons.bisect, () => run(bisectStartRequest(ctx, { good: row }))));
+    group(branchActions);
+  } else {
+    group(switching);
   }
 
   // Pull and merge requests of the branches that end here, as from the branch list.
@@ -148,16 +148,14 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
     if (mr) reviewing.push(item(`Merge Request !${mr.number} of ${ref.name}`, menuIcons.pull, () => app.openPull(name, null, "gitlab")));
     else reviewing.push(item(`Create Merge Request for ${ref.name}…`, menuIcons.pull, () => run(branchMergeRequest(ctx, ref, project))));
   }
-  group(reviewing);
-
-  group([isHead && !history.head.branch ? item("Create Branch…", menuIcons.branch, () => run(keepRequest(ctx))) : item("New Branch from Here…", menuIcons.branch, () => run(newBranchRequest(ctx, undefined, row)))]);
+  reviewing.push(isHead && !history.head.branch ? item("Create Branch…", menuIcons.branch, () => run(keepRequest(ctx))) : item("New Branch from Here…", menuIcons.branch, () => run(newBranchRequest(ctx, undefined, row))));
   // Tags: a new one here, and pushing or deleting the ones on this commit.
   // Push Tag and Delete Tag list the commit's tags in submenus, like Reset and Copy.
-  const tagging: MenuEntry[] = [item("New Tag Here…", menuIcons.tag, () => run(newTagRequest(ctx, row)))];
+  reviewing.push(item("New Tag Here…", menuIcons.tag, () => run(newTagRequest(ctx, row))));
   const tagsHere = row.labels.filter((l) => l.kind === "tag").map((l) => l.name);
   const unpushed = history.defaultRemote ? tagsHere.filter((name) => isLocalTag(ctx, name)) : [];
   if (unpushed.length) {
-    tagging.push({
+    reviewing.push({
       kind: "sub",
       label: `Push Tag to ${history.defaultRemote}`,
       icon: menuIcons.push,
@@ -168,26 +166,14 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
     });
   }
   if (tagsHere.length) {
-    tagging.push({
+    reviewing.push({
       kind: "sub",
       label: "Delete Tag",
       icon: menuIcons.drop,
       entries: tagsHere.map((name) => ({ label: `${name}…`, danger: true, run: () => run(deleteTagRequest(ctx, name)) })),
     });
   }
-  group(tagging);
-  const saving = app.patchTarget(row);
-  const rowBranch = row.graph.branch ?? (row.graph.color === 0 ? history.trunk : null);
-  const onBranch = !!history.head.branch && !!rowBranch && rowBranch === history.head.branch;
-  group([
-    item(saving.since ? `Save ${saving.count} Commits as Patches…` : "Save as Patch…", menuIcons.patch, () => run(savePatchesRequest(saving))),
-    {
-      kind: "item", label: "Apply Patches…", icon: menuIcons.applyPatch,
-      off: !onBranch || !!history.operation,
-      detail: !onBranch ? "Switch to this branch to apply patches." : history.operation ? "Finish or abort what git is in the middle of first." : undefined,
-      run: app.applyPatches,
-    },
-  ]);
+  group(reviewing);
   // Compare this commit, named by its branch when one ends here, with HEAD or the default branch.
   const branch = row.labels.find((l) => l.kind === "local");
   const target = branch ? compareRef("local", branch.name) : row.id;
@@ -195,8 +181,17 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
   const looking: MenuEntry[] = [browseItem(row, item, app)];
   const comparisons = compareEntries(row, app, against, target);
   if (comparisons.length) looking.push({ kind: "sub", label: "Compare", icon: menuIcons.compare, entries: comparisons });
-  group(looking);
-  group([
+  const saving = app.patchTarget(row);
+  const rowBranch = row.graph.branch ?? (row.graph.color === 0 ? history.trunk : null);
+  const onBranch = !!history.head.branch && !!rowBranch && rowBranch === history.head.branch;
+  looking.push(
+    item(saving.since ? `Save ${saving.count} Commits as Patches…` : "Save as Patch…", menuIcons.patch, () => run(savePatchesRequest(saving))),
+    {
+      kind: "item", label: "Apply Patches…", icon: menuIcons.applyPatch,
+      off: !onBranch || !!history.operation,
+      detail: !onBranch ? "Switch to this branch to apply patches." : history.operation ? "Finish or abort what git is in the middle of first." : undefined,
+      run: app.applyPatches,
+    },
     {
       kind: "sub",
       label: "Copy",
@@ -208,7 +203,8 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
         { label: "Commit Link", off: true, run: () => {} },
       ],
     },
-  ]);
+  );
+  group(looking);
   return entries;
 }
 
