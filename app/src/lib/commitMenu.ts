@@ -114,13 +114,13 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
         entries: resetModes.map((m) => ({ label: m.label, hint: m.keeps, danger: m.mode === "hard", run: () => run(resetRequest(ctx, row, m.mode)) })),
       });
     }
-    const branch = protectedHead(history);
-    if (branch && (locked || dropping)) branchActions.push({ kind: "note", label: lockedNote(branch) });
     if (inHead && history.head.branch) branchActions.push(item("Fix a Mistake…", menuIcons.fix, () => app.openFixes(row.id)));
 
     // Bisect: from a branch tip (or HEAD) back to a tag, or from an older commit up to HEAD.
     if (isHead || row.labels.some((l) => l.kind === "local")) branchActions.push(item("Find What Broke This…", menuIcons.bisect, () => run(bisectStartRequest(ctx, { bad: row }))));
     else if (inHead) branchActions.push(item("Find First Bad Commit After This…", menuIcons.bisect, () => run(bisectStartRequest(ctx, { good: row }))));
+    const branch = protectedHead(history);
+    if (branch && (locked || dropping)) branchActions.push({ kind: "note", label: lockedNote(branch) });
     group(branchActions);
   } else {
     group(switching);

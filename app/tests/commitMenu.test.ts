@@ -89,8 +89,11 @@ test("Checkout, Merge and Rebase share the optional top group and respect branch
     "Check Out other", "Check Out This Commit…", "Merge other into topic…", null,
   ]);
   assert.ok(!labels(protectedItems).some((label) => label?.startsWith("Reset ") || label?.startsWith("Rebase ")));
-  assert.ok(protectedItems.some((entry) => entry.kind === "note" && entry.label ===
-    "topic is protected: its pushed commits can be reverted, not rewritten."));
+  const protectionNote = protectedItems.findIndex((entry) => entry.kind === "note" && entry.label ===
+    "topic is protected: its pushed commits can be reverted, not rewritten.");
+  assert.ok(protectionNote >= 2);
+  assert.deepEqual(labels(protectedItems.slice(protectionNote - 2, protectionNote)), ["Fix a Mistake…", "Find What Broke This…"]);
+  assert.equal(protectedItems[protectionNote + 1]?.kind, "sep");
   assert.ok(labels(protectedItems).includes("New Branch from Here…"));
 
   const busy = labels(entries(older.graph, { ...h, operation: merging.operation }, {}, older));
