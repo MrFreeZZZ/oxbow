@@ -6,7 +6,7 @@ import * as runtime from "svelte/internal/client";
 import type * as Drafts from "../src/lib/commitDrafts.svelte.ts";
 import { test } from "node:test";
 import { api, apiForSession, type RepoNotice, type RepoTabOpen } from "../src/lib/api.ts";
-import { DIALOG_IN_THE_WAY, readTabLayout, repoTabActions, RepoTabs, saveTabLayout, type OpenFrom, type OpenTab } from "../src/lib/repoTabs.ts";
+import { DIALOG_IN_THE_WAY, isPending, readTabLayout, repoTabActions, RepoTabs, saveTabLayout, type OpenFrom, type OpenTab, type ShownTab } from "../src/lib/repoTabs.ts";
 import type { History, RepoSummary } from "../src/lib/types.ts";
 
 const summary = (id: number): RepoSummary => ({ path: `/repo/${id}`, name: String(id), restricted: [] });
@@ -20,29 +20,31 @@ function windowTabs(
   beforeClose = async (_id: number) => true,
   hooks: { canSwitch?: () => boolean; switchProblem?: () => string | null } = {},
 ) {
-  const state = { tabs: [] as readonly OpenTab[], active: null as number | null, free: true };
+  const state = { tabs: [] as readonly ShownTab[], active: null as number | null, highlighted: null as number | null, free: true };
   const errors: unknown[] = [];
   const notices: RepoNotice[] = [];
-  const tabs = new RepoTabs({
-    closeBatch: async (ids, next, previous) => {
-      if (next !== null && next !== previous) await backend.activate(next);
-      for (const id of ids) await backend.close(id);
-    },
-    ...backend,
-  }, {
-    show: (tabs, active) => Object.assign(state, { tabs, active }),
-    canSwitch: hooks.canSwitch ?? (() => state.free),
-    switchProblem: hooks.switchProblem,
-    beforeClose,
-    whileClosing: (run) => run(),
-    notice: (notice) => notices.push(notice),
-  });
+  let tabs!: RepoTabs;
   const from: OpenFrom = {
     live: () => true,
     trust: async () => null,
     reopened: () => {},
     fail: async (_path, error) => { errors.push(error); },
   };
+  tabs = new RepoTabs({
+    closeBatch: async (ids, next, previous) => {
+      if (next !== null && next !== previous) await backend.activate(next);
+      for (const id of ids) await backend.close(id);
+    },
+    ...backend,
+  }, {
+    show: (tabs, active, highlighted) => Object.assign(state, { tabs, active, highlighted }),
+    canSwitch: hooks.canSwitch ?? (() => state.free),
+    switchProblem: hooks.switchProblem,
+    beforeClose,
+    whileClosing: (run) => run(),
+    notice: (notice) => notices.push(notice),
+    loadTab: (path) => tabs.open(path, from),
+  });
   return { tabs, state, from, errors, notices };
 }
 
@@ -88,7 +90,7 @@ test("dragging a tab reorders the list and leaves the active repository in place
   assert.deepEqual(state.tabs.map(tab => tab.id), [3, 2, 1]);
 });
 
-test("the next run restores tab order and selection by path, skipping an unavailable folder", async () => {
+test("the next run opens only the active repository and keeps the others until they are shown", async () => {
   let saved: string | null = null;
   const storage = {
     getItem: () => saved,
@@ -99,8 +101,10 @@ test("the next run restores tab order and selection by path, skipping an unavail
   saveTabLayout(original, 2, storage);
   const layout = readTabLayout(storage);
   assert.ok(layout);
+  const opened: string[] = [];
   const { tabs, state, from, errors } = windowTabs({
     async open(path) {
+      opened.push(path);
       const original = Number(path.at(-1));
       if (original === 3) throw new Error("Folder is unavailable");
       return { kind: "opened", session: original + 10, repo: summary(original) };
@@ -110,14 +114,89 @@ test("the next run restores tab order and selection by path, skipping an unavail
     close: async () => {},
   });
   await tabs.restore(layout, path => tabs.open(path, from));
-  assert.deepEqual(state.tabs.map(tab => tab.id), [11, 12, 14]);
+  assert.deepEqual(opened, ["/repo/2"]);
+  assert.deepEqual(state.tabs.map(tab => tab.repo.path), ["/repo/1", "/repo/2", "/repo/3", "/repo/4"]);
+  assert.equal(isPending(state.tabs[0]), true);
+  assert.equal(isPending(state.tabs[1]), false);
   assert.equal(state.active, 12);
-  assert.equal(errors.length, 1);
+  assert.equal(errors.length, 0);
+
+  await tabs.activate(state.tabs[0].id);
+  assert.equal(state.active, 11);
+  assert.deepEqual(state.tabs.map(tab => tab.id), [11, 12, state.tabs[2].id, state.tabs[3].id]);
+  assert.equal(isPending(state.tabs[0]), false);
+
+  const unavailable = state.tabs[2].id;
+  await tabs.activate(unavailable);
+  assert.equal(state.active, 11);
+  assert.equal(state.highlighted, 11);
+  assert.equal(isPending(state.tabs[2]), true);
+  assert.match(String(errors[0]), /Folder is unavailable/);
+
+  await tabs.close(state.tabs[3].id);
+  assert.deepEqual(state.tabs.map(tab => tab.repo.path), ["/repo/1", "/repo/2", "/repo/3"]);
+  assert.equal(state.active, 11);
 
   saveTabLayout([], null, storage);
   assert.deepEqual(readTabLayout(storage), { paths: [], active: null });
   saved = '{"paths":[42],"active":null}';
   assert.equal(readTabLayout(storage), null);
+});
+
+test("closing the active tab opens the next restored repository before closing", async () => {
+  const closed: number[] = [];
+  const { tabs, state, from } = windowTabs({
+    open: async (path) => opened(Number(path.at(-1))),
+    history: async () => history,
+    activate: async () => {},
+    close: async (id) => { closed.push(id); },
+  });
+  await tabs.restore({ paths: ["/repo/1", "/repo/2", "/repo/4"], active: "/repo/1" }, path => tabs.open(path, from));
+  await tabs.close(1);
+  assert.equal(state.active, 2);
+  assert.deepEqual(state.tabs.map(tab => tab.repo.path), ["/repo/2", "/repo/4"]);
+  assert.deepEqual(closed, [1]);
+});
+
+test("an open tab stays selected when a restored tab finishes opening afterwards", async () => {
+  const reading = Promise.withResolvers<void>();
+  let release: (value: History) => void = () => {};
+  const activated: number[] = [];
+  const { tabs, state, from } = windowTabs({
+    open: async (path) => opened(Number(path.at(-1))),
+    history: async (id) => {
+      if (id === 1) {
+        reading.resolve();
+        return new Promise<History>((resolve) => { release = resolve; });
+      }
+      return history;
+    },
+    activate: async (id) => { activated.push(id); },
+    close: async () => {},
+  });
+  await tabs.restore({ paths: ["/repo/1", "/repo/2"], active: "/repo/2" }, path => tabs.open(path, from));
+  const opening = tabs.activate(state.tabs[0].id);
+  await reading.promise;
+  await tabs.activate(2);
+  release(history);
+  await opening;
+  assert.equal(state.active, 2);
+  assert.equal(state.highlighted, 2);
+  assert.equal(isPending(state.tabs[0]), false);
+  assert.equal(activated.at(-1), 2);
+});
+
+test("turning tabs off drops repositories that have not been opened", async () => {
+  const { tabs, state, from } = windowTabs({
+    open: async (path) => opened(Number(path.at(-1))),
+    history: async () => history,
+    activate: async () => {},
+    close: async () => {},
+  });
+  await tabs.restore({ paths: ["/repo/1", "/repo/2"], active: "/repo/1" }, path => tabs.open(path, from));
+  tabs.setMode(false);
+  assert.deepEqual(state.tabs.map(tab => tab.repo.path), ["/repo/1"]);
+  assert.equal(state.active, 1);
 });
 
 test("closing the other tabs checks all guards before selecting the target and closing anything", async () => {

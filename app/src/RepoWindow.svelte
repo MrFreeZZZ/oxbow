@@ -12,7 +12,7 @@
   import type { RepoScope } from "./lib/repoScope";
   import { loadDetailsChrome } from "./lib/detailsChrome.svelte";
   import { nextTabNumberPhase, TAB_NUMBER_DELAY, type TabNumberPhase } from "./lib/repoTabNumbers";
-  import { DIALOG_IN_THE_WAY, readTabLayout, RepoTabs, saveTabLayout, type OpenTab } from "./lib/repoTabs";
+  import { DIALOG_IN_THE_WAY, isPending, readTabLayout, RepoTabs, saveTabLayout, type ShownTab } from "./lib/repoTabs";
   import { settleReviewSaves } from "./lib/reviewSaves";
   import { mac, type ShortcutId } from "./lib/shortcuts";
   import type { Gone } from "./lib/types";
@@ -23,8 +23,9 @@
   let finishing = 0;
   let localClose = $state(false);
   const blocked = $derived(preparing !== 0 || localClose);
-  let tabs = $state.raw<readonly OpenTab[]>([]);
+  let tabs = $state.raw<readonly ShownTab[]>([]);
   let activeId = $state<RepoSessionId | null>(null);
+  let highlightedId = $state<RepoSessionId | null>(null);
   let launched = $state(false);
   const main = getCurrentWindow().label === "main";
   let sideHidden = $state(false);
@@ -98,12 +99,14 @@
     close: (id) => apiForSession(id).closeRepo(true),
     closeBatch: (ids, active, previous) => api.closeRepoTabs(ids, active, previous),
   }, {
-    show(next, active) {
+    show(next, active, highlighted) {
       if (main && launched && (active !== activeId || next.length !== tabs.length
         || next.some((tab, i) => tab.id !== tabs[i].id))) saveTabLayout(next, active);
       tabs = next;
       activeId = active;
+      highlightedId = highlighted;
     },
+    loadTab: (path) => openSaved(path, false),
     canSwitch,
     switchProblem: () => noDialog() ? null : DIALOG_IN_THE_WAY,
     beforeClose: async (id) => {
@@ -130,6 +133,10 @@
   export const activateTab = (id: RepoSessionId) => manager.activate(id).catch(report);
   export const closeTab = (id: RepoSessionId) => manager.close(id).catch(report);
   const moveTab = (id: RepoSessionId, to: number) => manager.move(id, to).catch(report);
+  async function openSaved(path: string, restoring: boolean) {
+    await tick();
+    await (activeScreen() ?? screens.get(null)?.screen)?.startup(path, restoring);
+  }
   const activeNow = () => activeId;
   const closeOtherTabs = (id: RepoSessionId) => manager.closeOthers(id).catch(report);
   const stepTab = (by: 1 | -1) => manager.step(by).catch(report);
@@ -238,10 +245,7 @@
       if (!alive) return;
       const layout = restoreTabs ? readTabLayout() : null;
       if (layout && tabsEnabled) {
-        await manager.restore(layout, async (folder) => {
-          await tick();
-          await activeScreen()?.startup(folder, true);
-        });
+        await manager.restore(layout, (folder) => openSaved(folder, true));
       } else {
         const folder = layout ? layout.active ?? layout.paths.at(-1) : path;
         if (folder) await openRepository(folder);
@@ -263,21 +267,24 @@
 <svelte:window onkeydown={onTabModifier} onkeyup={onTabModifier} onblur={() => setNumberPhase("idle")} />
 
 {#snippet tabStrip(openMenu: (event: MouseEvent) => void, openRecent: () => void, copyPath: (path: string) => void)}
-  {#if activeId !== null}
-    <RepoTabStrip {tabs} {activeId} showNumbers={numberPhase === "showing"} {openMenu} {openRecent} {copyPath}
+  {#if tabs.length > 0}
+    <RepoTabStrip {tabs} activeId={highlightedId} showNumbers={numberPhase === "showing"} {openMenu} {openRecent} {copyPath}
       activate={activateTab} close={closeTab} closeOthers={closeOtherTabs}
       canSwitch={canSwitch} activeNow={activeNow} move={moveTab} />
   {/if}
 {/snippet}
 
 <RepoTabView {register} tab={null} active={activeId === null} {blocked} bind:sideHidden
-  {launched} openPath={(path, from) => manager.open(path, from).catch(report)} />
+  {launched} tabStrip={tabsEnabled && launched && activeId === null && tabs.length > 0 ? tabStrip : undefined}
+  openPath={(path, from) => manager.open(path, from).catch(report)} />
 {#each tabs as tab (tab.id)}
-  <RepoTabView {register} {tab} active={activeId === tab.id} {blocked} {launched} bind:sideHidden
-    tabStrip={tabsEnabled && activeId === tab.id ? tabStrip : undefined}
-    stepRepoTab={tabsEnabled && tabs.length > 1 ? stepTab : undefined}
-    jumpRepoTab={tabsEnabled && tabs.length > 1 ? jumpTab : undefined}
-    openPath={(path, from) => manager.open(path, {
-      ...from, live: () => from.live() && tabs.some(open => open.id === tab.id),
-    }).catch(report)} closeTab={() => closeTab(tab.id)} lostTab={(gone) => lostTab(tab.id, gone)} />
+  {#if !isPending(tab)}
+    <RepoTabView {register} {tab} active={activeId === tab.id} {blocked} {launched} bind:sideHidden
+      tabStrip={tabsEnabled && activeId === tab.id ? tabStrip : undefined}
+      stepRepoTab={tabsEnabled && tabs.length > 1 ? stepTab : undefined}
+      jumpRepoTab={tabsEnabled && tabs.length > 1 ? jumpTab : undefined}
+      openPath={(path, from) => manager.open(path, {
+        ...from, live: () => from.live() && tabs.some(open => open.id === tab.id),
+      }).catch(report)} closeTab={() => closeTab(tab.id)} lostTab={(gone) => lostTab(tab.id, gone)} />
+  {/if}
 {/each}

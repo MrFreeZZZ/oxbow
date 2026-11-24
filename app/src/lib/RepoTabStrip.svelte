@@ -4,14 +4,14 @@
   import { withKeys } from "./keys";
   import { tabDragOffsets } from "./repoTabDrag";
   import { beginTabDrag, noteTabOrder, tabGesture } from "./repoTabDrag.svelte";
-  import { repoTabActions, type OpenTab } from "./repoTabs";
+  import { repoTabActions, type ShownTab } from "./repoTabs";
   import { combo, mac } from "./shortcuts";
   import { keyFocus } from "./tabs";
   import { tick } from "svelte";
 
   let { tabs, activeId, showNumbers, openMenu, openRecent, copyPath, activate, close, closeOthers, canSwitch, activeNow, move }: {
-    tabs: readonly OpenTab[];
-    activeId: RepoSessionId;
+    tabs: readonly ShownTab[];
+    activeId: RepoSessionId | null;
     /** 1–9 in place of the folder icon, while ⌘ or Ctrl is held. */
     showNumbers: boolean;
     openMenu: (event: MouseEvent) => void;
@@ -28,7 +28,7 @@
 
   let list = $state<HTMLDivElement>();
   let focused = $state<RepoSessionId | null>(null);
-  let menu = $state<{ x: number; y: number; tab: OpenTab; anchor: HTMLButtonElement } | null>(null);
+  let menu = $state<{ x: number; y: number; tab: ShownTab; anchor: HTMLButtonElement } | null>(null);
   const activeSelector = '[data-repo-tab-list] [role="tab"][aria-selected="true"]';
   const orderKey = $derived(tabs.map(tab => tab.id).join("\0"));
   const shownId = $derived.by(() => {
@@ -75,7 +75,7 @@
     if (tab && (document.activeElement === document.body || list?.contains(document.activeElement))) keyFocus(tab);
   }
 
-  function showContext(event: MouseEvent | KeyboardEvent, tab: OpenTab) {
+  function showContext(event: MouseEvent | KeyboardEvent, tab: ShownTab) {
     event.preventDefault();
     const anchor = event.currentTarget as HTMLButtonElement;
     const box = anchor.getBoundingClientRect();
@@ -90,7 +90,7 @@
     if (document.hasFocus() && document.activeElement?.closest('[role="menu"]')) anchor?.focus();
   }
 
-  function contextEntries(tab: OpenTab): MenuEntry[] {
+  function contextEntries(tab: ShownTab): MenuEntry[] {
     const actions = repoTabActions(tab, tabs.length, {
       copyPath,
       close: (id) => void withTabFocus(close(id)),
@@ -104,7 +104,7 @@
     ];
   }
 
-  function tabKey(event: KeyboardEvent, tab: OpenTab) {
+  function tabKey(event: KeyboardEvent, tab: ShownTab) {
     if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
       showContext(event, tab);
       return;

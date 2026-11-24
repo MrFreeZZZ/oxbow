@@ -2077,9 +2077,27 @@
 <UpdateNotification />
 
 {#if overviewShown || !repo || !history}
-  <Welcome currentPath={repo?.path ?? null} onBack={repo && history ? () => (overviewShown = false) : undefined}
-    loading={loading || openingPath} error={session.gone ? null : (error ?? settingsNote?.text ?? null)} onOpen={chooseRepo} onOpenPath={load}
-    onLocate={(path) => { void session.findFolder(path, load, () => { if (!openPath) overviewShown = false; }); }} gone={session.gone ? goneAside : undefined} />
+  {#if tabStrip}
+    <div class="welcome-host" class:mac>
+      <div class="repo-tabs">
+        {@render tabStrip(
+          (event) => { if (windowCommandsFree()) void sidebar?.repoMenu(event, true); },
+          () => { if (windowCommandsFree()) void openRecent(); },
+          (path) => copyText(path, "Copied the repository path."),
+        )}
+      </div>
+      <div class="welcome-body">
+        {@render welcomeScreen()}
+      </div>
+    </div>
+  {:else}
+    {@render welcomeScreen()}
+  {/if}
+  {#snippet welcomeScreen()}
+    <Welcome currentPath={repo?.path ?? null} onBack={repo && history ? () => (overviewShown = false) : undefined}
+      loading={loading || openingPath} error={session.gone ? null : (error ?? settingsNote?.text ?? null)} onOpen={chooseRepo} onOpenPath={load}
+      onLocate={(path) => { void session.findFolder(path, load, () => { if (!openPath) overviewShown = false; }); }} gone={session.gone ? goneAside : undefined} />
+  {/snippet}
   {#snippet goneAside()}
     {#if session.gone && goneShown}
       <FolderGone
@@ -2782,6 +2800,24 @@
   .window.narrow.mac header,
   .window.side-hidden.mac header {
     padding-left: 218px;
+  }
+  .welcome-host {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .welcome-body {
+    flex: 1;
+    min-height: 0;
+  }
+  /* Welcome has no sidebar, so the strip leaves the same room for the window controls. */
+  .welcome-host .repo-tabs {
+    --repo-tabs-leading: 136px;
+    --repo-tabs-height: 48px;
+  }
+  .welcome-host.mac .repo-tabs {
+    --repo-tabs-leading: 218px;
   }
   .repo-tabs {
     flex-shrink: 0;
