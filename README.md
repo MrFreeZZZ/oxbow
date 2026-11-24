@@ -32,6 +32,8 @@ Oxbow is a quiet desktop window for the whole repository: the graph, the diff, t
 
 ## What you can do
 
+**Switch between repositories.** Open a recent or local repository in a tab. When you switch back, Oxbow returns you to the same screen and place in History, with your commit draft. Worktrees can still open in their own windows. Use **Settings → General → Windows → Show repository tabs** to return to one repository per window.
+
 **Follow the history.** The trunk of the graph is the production branch: `main` or `master`, unless you choose another. The checked-out branch takes the left column down to the commit it forked from, and the trunk stays on the left when that branch is the one checked out. Every other branch keeps its own column and a stable color for as long as its line runs. Yellow is reserved for tags. A thin outer ring in the color of the commit's line marks a merge or a branch point. A commit that is both also has a small light center. Dashed lines show commits the remote does not have yet, with a thin hollow dot for ordinary commits. Compare branches and commits, search history and changed code, and open a file's history or blame. Browse the files at a commit. Back and Forward return you to the same place in History.
 
 **Shape the commit.** Stage by file, hunk or line. Amend replaces the last commit instead of adding a new one. Changelists group files and runs of lines, then commit them from an index of their own. The message draft stays with the folder. Before a commit, Oxbow checks staged lines for secrets unless you turn that off, and runs any checks this repository has set. Diffs sit side by side or in one column, file headers show line endings when they can be read, and selected code copies in one click.
