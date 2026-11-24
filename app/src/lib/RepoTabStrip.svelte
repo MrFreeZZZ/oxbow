@@ -336,7 +336,7 @@
     flex: 0 0 16px;
     color: var(--text2);
   }
-  /* The same round mark as the close button's focus: a 16 px circle, the accent outline drawn inside. */
+  /* The close button's gray circle, holding the shortcut digit. */
   .number {
     flex: 0 0 16px;
     display: flex;
@@ -345,8 +345,7 @@
     width: 16px;
     height: 16px;
     border-radius: var(--radius-pill);
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
+    background: var(--hover-wash);
     color: var(--text);
     font-size: var(--text-small);
     font-weight: 600;
