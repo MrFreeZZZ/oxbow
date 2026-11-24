@@ -164,11 +164,6 @@ export function commitFileMenu(repo: string, file: FileChange, commit: string, c
     });
   }
   if (actions.length) entries.push(...actions, { kind: "sep" });
-  if (!file.submodule) entries.push(workingFileMenuItem(file.path, true));
-  if (file.status !== "deleted") {
-    entries.push({ kind: "item", label: revealLabel, icon: menuIcons.reveal, run: () => api.revealFile(file.path).catch((err) => confirm.fail(err)) });
-  }
-  entries.push(copyMenu(repo, [file.path]));
   entries.push({ kind: "item", label: "File History", icon: menuIcons.history, run: () => nav.openFile(file.path, commit) });
   entries.push({
     kind: "item",
@@ -180,8 +175,14 @@ export function commitFileMenu(repo: string, file: FileChange, commit: string, c
       nav.openFile(file.path, commit, { base: commit, at: commit });
     },
   });
-  entries.push({ kind: "item", label: "Local History", icon: menuIcons.history, run: () => nav.openFile(file.path, NEWEST_SAVED) });
   if (file.status !== "deleted" && !file.submodule) entries.push({ kind: "item", label: "Browse Files at This Commit", icon: menuIcons.folder, run: () => nav.openBrowse(commit, null, file.path) });
+  entries.push({ kind: "sep" });
+  if (!file.submodule) entries.push(workingFileMenuItem(file.path, true));
+  if (file.status !== "deleted") {
+    entries.push({ kind: "item", label: revealLabel, icon: menuIcons.reveal, run: () => api.revealFile(file.path).catch((err) => confirm.fail(err)) });
+  }
+  entries.push({ kind: "item", label: "Local History", icon: menuIcons.history, run: () => nav.openFile(file.path, NEWEST_SAVED) });
+  entries.push(copyMenu(repo, [file.path]));
   return { entries, label: `${name} menu` };
 }
 
