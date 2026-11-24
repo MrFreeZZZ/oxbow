@@ -333,13 +333,13 @@
     "id": "nextRepoTab",
     "title": "Next Repository Tab",
     "enabled": false,
-    "accelerator": null
+    "accelerator": "Ctrl+Tab"
    },
    {
     "id": "previousRepoTab",
     "title": "Previous Repository Tab",
     "enabled": false,
-    "accelerator": null
+    "accelerator": "Ctrl+Shift+Tab"
    }
   ]
  },

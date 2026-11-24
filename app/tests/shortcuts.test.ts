@@ -1,4 +1,4 @@
-import { accelerator, assign, bindingsOf, commandIds, conflicts, defaultsOf, isImeEscape, Keymap, pressed, refusal, resetKeys, scopeOf, strokeOf, unassign, validCombo, type Custom, type ShortcutId } from "../src/lib/shortcuts.ts";
+import { accelerator, assign, bindingsOf, changedKeys, commandIds, conflicts, defaultsOf, isImeEscape, Keymap, pressed, refusal, resetKeys, scopeOf, strokeOf, unassign, validCombo, type Custom, type ShortcutId } from "../src/lib/shortcuts.ts";
 import { fit, rank, type PaletteItem } from "../src/lib/palette.ts";
 import assert from "node:assert/strict";
 
@@ -11,12 +11,17 @@ assert.equal(isImeEscape(press({ key: "Escape", isComposing: false, keyCode: 229
 assert.equal(isImeEscape(press({ key: "Escape", isComposing: false, keyCode: 27 })), false);
 
 for (const onMac of [true, false]) {
-  assert.deepEqual(defaultsOf("nextRepoTab", onMac), []);
-  assert.deepEqual(defaultsOf("previousRepoTab", onMac), []);
-  const map = new Keymap(onMac, () => ({ nextRepoTab: ["Mod+F6"], previousRepoTab: ["Mod+Shift+F6"] }));
+  assert.deepEqual(defaultsOf("nextRepoTab", onMac), ["Ctrl+Tab"]);
+  assert.deepEqual(defaultsOf("previousRepoTab", onMac), ["Ctrl+Shift+Tab"]);
+  const map = new Keymap(onMac);
+  const tab = { key: "Tab", code: "Tab", ctrlKey: true };
+  assert.equal(id(map.match(press(tab))), "nextRepoTab");
+  assert.equal(id(map.match(press({ ...tab, shiftKey: true }))), "previousRepoTab");
+  const own = new Keymap(onMac, () => ({ nextRepoTab: ["Mod+F6"], previousRepoTab: ["Mod+Shift+F6"] }));
   const next = { key: "F6", code: "F6", metaKey: onMac, ctrlKey: !onMac };
-  assert.equal(id(map.match(press(next))), "nextRepoTab");
-  assert.equal(id(map.match(press({ ...next, shiftKey: true }))), "previousRepoTab");
+  assert.equal(id(own.match(press(next))), "nextRepoTab");
+  assert.equal(id(own.match(press({ ...next, shiftKey: true }))), "previousRepoTab");
+  assert.equal(own.match(press(tab)), null);
 }
 
 // The Mac's keys are VS Code's: ⇧⌘P, ⌘B, ⌥⌘B, ⇧⌘U, ⌃⇧G, ⌘G.
@@ -38,7 +43,10 @@ for (const onMac of [true, false]) {
   assert.equal(id(map.match(press({ key: "r", code: "KeyR", ctrlKey: true }))), "openRecent");
   assert.equal(id(map.match(press({ key: "r", code: "KeyR", metaKey: true }))), "reload");
   assert.equal(id(map.match(press({ key: "+", code: "Equal", metaKey: true, shiftKey: true }))), "zoomIn");
-  assert.equal(id(map.match(press({ key: "Tab", code: "Tab", ctrlKey: true }))), "nextTab");
+  assert.equal(id(map.match(press({ key: "Tab", code: "Tab", ctrlKey: true }))), "nextRepoTab");
+  assert.equal(id(map.match(press({ key: "1", code: "Digit1", metaKey: true }))), "repoTabNumber");
+  assert.equal(id(map.match(press({ key: "9", code: "Digit9", metaKey: true }))), "repoTabNumber");
+  assert.equal(id(map.match(press({ key: "Tab", code: "Tab", ctrlKey: true, shiftKey: true }))), "previousRepoTab");
   assert.equal(id(map.match(press({ key: "ArrowLeft", code: "ArrowLeft", metaKey: true, altKey: true }))), "previousTab");
   // The old keys still work.
   assert.equal(id(map.match(press({ key: "s", code: "KeyS", metaKey: true, ctrlKey: true }))), "sidebar");
@@ -157,6 +165,16 @@ for (const onMac of [true, false]) {
   assert.equal(refusal("push", "F6", true), null);
   assert.equal(refusal("push", "Mod+K F", true), null);
   assert.match(refusal("push", "Mod+Q", true)!, /quits Oxbow/);
+  assert.match(refusal("push", "Mod+1", true)!, /repository tab/);
+  assert.match(refusal("push", "Mod+9", false)!, /repository tab/);
+  assert.equal(refusal("push", "Ctrl+1", true), null);
+  assert.deepEqual(defaultsOf("repoTabNumber", true), ["Mod+1", "Mod+2", "Mod+3", "Mod+4", "Mod+5", "Mod+6", "Mod+7", "Mod+8", "Mod+9"]);
+  assert.deepEqual(bindingsOf("repoTabNumber", { repoTabNumber: [] }, true), defaultsOf("repoTabNumber", true));
+  assert.equal(changedKeys("repoTabNumber", { repoTabNumber: ["Mod+F6"] }, true), false);
+  assert.deepEqual(assign("repoTabNumber", "Mod+F6", { sidebar: ["Mod+B"] }, true), { sidebar: ["Mod+B"] });
+  assert.deepEqual(assign("push", "Mod+3", {}, false), {});
+  assert.deepEqual(unassign("repoTabNumber", "Mod+1", {}, true), {});
+  assert.deepEqual(resetKeys("repoTabNumber", { repoTabNumber: [] }), { repoTabNumber: [] });
   assert.match(refusal("push", "Ctrl+C", false)!, /copies/);
   assert.equal(refusal("bisectGood", "N", true), null);
   assert.match(refusal("commitNow", "Enter", true)!, /types in text fields/);

@@ -6,7 +6,7 @@
   import type { Gone } from "./lib/types";
   import type { OpenFrom, OpenTab } from "./lib/repoTabs";
 
-  let { register, tab, active, blocked, launched, openPath, closeTab, lostTab, tabStrip, stepRepoTab, sideHidden = $bindable() }: {
+  let { register, tab, active, blocked, launched, openPath, closeTab, lostTab, tabStrip, stepRepoTab, jumpRepoTab, sideHidden = $bindable() }: {
     register: (scope: RepoScope, screen: App) => () => void;
     tab: OpenTab | null;
     active: boolean;
@@ -17,6 +17,7 @@
     lostTab?: (gone: Gone) => Promise<void>;
     tabStrip?: ComponentProps<typeof App>["tabStrip"];
     stepRepoTab?: ComponentProps<typeof App>["stepRepoTab"];
+    jumpRepoTab?: ComponentProps<typeof App>["jumpRepoTab"];
     sideHidden: boolean;
   } = $props();
 
@@ -36,7 +37,7 @@
 
 <div class="repo-tab-view" class:active hidden={!active} inert={!active || blocked}
   id={tab ? `repo-panel-${tab.id}` : undefined} role={tab ? "tabpanel" : undefined} aria-label={tab?.repo.name}>
-  <App bind:this={screen} openedTab={tab ?? undefined} {launched} {openPath} {closeTab} {lostTab} {tabStrip} {stepRepoTab} bind:sideHidden />
+  <App bind:this={screen} openedTab={tab ?? undefined} {launched} {openPath} {closeTab} {lostTab} {tabStrip} {stepRepoTab} {jumpRepoTab} bind:sideHidden />
   <WordPopover />
 </div>
 

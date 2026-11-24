@@ -2,7 +2,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow, type CloseRequestedEvent } from "@tauri-apps/api/window";
   import { message } from "@tauri-apps/plugin-dialog";
-  import { onMount, tick } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import type App from "./App.svelte";
   import RepoTabView from "./RepoTabView.svelte";
   import RepoTabStrip from "./lib/RepoTabStrip.svelte";
@@ -11,9 +11,10 @@
   import { FIRST_HISTORY_PAGE } from "./lib/historyLoad.svelte";
   import type { RepoScope } from "./lib/repoScope";
   import { loadDetailsChrome } from "./lib/detailsChrome.svelte";
+  import { nextTabNumberPhase, TAB_NUMBER_DELAY, type TabNumberPhase } from "./lib/repoTabNumbers";
   import { DIALOG_IN_THE_WAY, readTabLayout, RepoTabs, saveTabLayout, type OpenTab } from "./lib/repoTabs";
   import { settleReviewSaves } from "./lib/reviewSaves";
-  import type { ShortcutId } from "./lib/shortcuts";
+  import { mac, type ShortcutId } from "./lib/shortcuts";
   import type { Gone } from "./lib/types";
   import { beforeUpdateRestart } from "./lib/updateRestart.svelte";
 
@@ -47,6 +48,29 @@
     !document.querySelector('[aria-modal="true"]:not([hidden] *)');
   const canSwitch = () => !blocked && noDialog();
   const report = (error: unknown) => activeScreen()?.fileOpenError(String(error));
+
+  let numberPhase = $state<TabNumberPhase>("idle");
+  let numberTimer: ReturnType<typeof setTimeout> | undefined;
+  function setNumberPhase(next: TabNumberPhase) {
+    if (next === numberPhase) return;
+    clearTimeout(numberTimer);
+    numberTimer = undefined;
+    numberPhase = next;
+    if (next !== "waiting") return;
+    numberTimer = setTimeout(() => {
+      numberTimer = undefined;
+      if (numberPhase === "waiting") numberPhase = "showing";
+    }, TAB_NUMBER_DELAY);
+  }
+  function onTabModifier(event: KeyboardEvent) {
+    if (!tabsEnabled || tabs.length < 2 || !canSwitch()) return setNumberPhase("idle");
+    const type = event.type === "keyup" ? "keyup" : "keydown";
+    setNumberPhase(nextTabNumberPhase(numberPhase, event, type, mac));
+  }
+  onDestroy(() => clearTimeout(numberTimer));
+  $effect(() => {
+    if (!tabsEnabled || tabs.length < 2) setNumberPhase("idle");
+  });
 
   async function tabDraftProblem(id: RepoSessionId) {
     const scope = screens.get(id)?.scope;
@@ -109,6 +133,10 @@
   const activeNow = () => activeId;
   const closeOtherTabs = (id: RepoSessionId) => manager.closeOthers(id).catch(report);
   const stepTab = (by: 1 | -1) => manager.step(by).catch(report);
+  const jumpTab = (n: number) => {
+    const tab = tabs[n - 1];
+    if (tab) activateTab(tab.id);
+  };
 
   async function lostTab(id: RepoSessionId, gone: Gone) {
     const shown = activeId === id;
@@ -232,9 +260,11 @@
   });
 </script>
 
+<svelte:window onkeydown={onTabModifier} onkeyup={onTabModifier} onblur={() => setNumberPhase("idle")} />
+
 {#snippet tabStrip(openMenu: (event: MouseEvent) => void, openRecent: () => void, copyPath: (path: string) => void)}
   {#if activeId !== null}
-    <RepoTabStrip {tabs} {activeId} {openMenu} {openRecent} {copyPath}
+    <RepoTabStrip {tabs} {activeId} showNumbers={numberPhase === "showing"} {openMenu} {openRecent} {copyPath}
       activate={activateTab} close={closeTab} closeOthers={closeOtherTabs}
       canSwitch={canSwitch} activeNow={activeNow} move={moveTab} />
   {/if}
@@ -246,6 +276,7 @@
   <RepoTabView {register} {tab} active={activeId === tab.id} {blocked} {launched} bind:sideHidden
     tabStrip={tabsEnabled && activeId === tab.id ? tabStrip : undefined}
     stepRepoTab={tabsEnabled && tabs.length > 1 ? stepTab : undefined}
+    jumpRepoTab={tabsEnabled && tabs.length > 1 ? jumpTab : undefined}
     openPath={(path, from) => manager.open(path, {
       ...from, live: () => from.live() && tabs.some(open => open.id === tab.id),
     }).catch(report)} closeTab={() => closeTab(tab.id)} lostTab={(gone) => lostTab(tab.id, gone)} />

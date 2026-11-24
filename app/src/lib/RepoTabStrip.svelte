@@ -5,13 +5,15 @@
   import { tabDragOffsets } from "./repoTabDrag";
   import { beginTabDrag, noteTabOrder, tabGesture } from "./repoTabDrag.svelte";
   import { repoTabActions, type OpenTab } from "./repoTabs";
-  import { combo } from "./shortcuts";
+  import { combo, mac } from "./shortcuts";
   import { keyFocus } from "./tabs";
   import { tick } from "svelte";
 
-  let { tabs, activeId, openMenu, openRecent, copyPath, activate, close, closeOthers, canSwitch, activeNow, move }: {
+  let { tabs, activeId, showNumbers, openMenu, openRecent, copyPath, activate, close, closeOthers, canSwitch, activeNow, move }: {
     tabs: readonly OpenTab[];
     activeId: RepoSessionId;
+    /** 1–9 in place of the folder icon, while ⌘ or Ctrl is held. */
+    showNumbers: boolean;
     openMenu: (event: MouseEvent) => void;
     openRecent: () => void;
     copyPath: (path: string) => void;
@@ -133,6 +135,7 @@
       <div class="item" class:selected class:dragging={!!offsets && tab.id === shownId} role="presentation"
         style:transform={offsets ? `translateX(${Math.round(offsets[index])}px)` : undefined}>
         <button class="tab-button" role="tab" aria-selected={selected} aria-controls={`repo-panel-${tab.id}`}
+          aria-keyshortcuts={tabs.length > 1 && index < 9 ? `${mac ? "Meta" : "Control"}+${index + 1}` : undefined}
           tabindex={tab.id === (focused ?? shownId) ? 0 : -1} data-tab-id={tab.id} title={tab.repo.path}
           onpointerdown={(event) => beginTabDrag(event, tab.id, tabs.map(item => item.id), {
             canSwitch,
@@ -146,7 +149,11 @@
           }}
           onfocus={() => focused = tab.id} onkeydown={(event) => tabKey(event, tab)}
           oncontextmenu={(event) => showContext(event, tab)}>
-          <svg class="icon folder" viewBox="0 0 16 16"><path d={menuIcons.folder} /></svg>
+          {#if showNumbers && index < 9}
+            <span class="number" aria-hidden="true">{index + 1}</span>
+          {:else}
+            <svg class="icon folder" viewBox="0 0 16 16"><path d={menuIcons.folder} /></svg>
+          {/if}
           <span>{tab.repo.name}</span>
         </button>
         <button class="control close" tabindex={selected ? 0 : -1} aria-label={`Close ${tab.repo.name} tab`}
@@ -328,6 +335,22 @@
   .folder {
     flex: 0 0 16px;
     color: var(--text2);
+  }
+  /* The same round mark as the close button's focus: a 16 px circle, the accent outline drawn inside. */
+  .number {
+    flex: 0 0 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: var(--radius-pill);
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    color: var(--text);
+    font-size: var(--text-small);
+    font-weight: 600;
+    line-height: 1;
   }
   .selected .folder { color: var(--accent); }
   .control {

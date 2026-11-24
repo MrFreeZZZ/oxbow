@@ -37,10 +37,11 @@
   import { detailsChrome, noteDetailsChromeEdit } from "./lib/detailsChrome.svelte";
   import { DETAILS_PANEL_MIN } from "./lib/detailsChrome";
   import { useRepoScope } from "./lib/repoScope";
+  import { repoTabDigit } from "./lib/repoTabNumbers";
   import { autoFetchScheduled, repoWorkOnFocus } from "./lib/tabWork";
   import type { OpenFrom, OpenTab } from "./lib/repoTabs";
 
-  let { openedTab, launched, openPath, closeTab, lostTab, tabStrip, stepRepoTab, sideHidden = $bindable() }: {
+  let { openedTab, launched, openPath, closeTab, lostTab, tabStrip, stepRepoTab, jumpRepoTab, sideHidden = $bindable() }: {
     openedTab?: OpenTab;
     launched: boolean;
     openPath?: (path: string, from: OpenFrom) => Promise<void>;
@@ -48,6 +49,8 @@
     lostTab?: (gone: Gone) => Promise<void>;
     tabStrip?: Snippet<[(event: MouseEvent) => void, () => void, (path: string) => void]>;
     stepRepoTab?: (by: 1 | -1) => Promise<void>;
+    /** Open repository tab 1–9. Present while two or more tabs are open. */
+    jumpRepoTab?: (n: number) => void;
     /** The sidebar of a wide window put away with its button, kept between launches. */
     sideHidden: boolean;
   } = $props();
@@ -2019,6 +2022,17 @@
   }}
   onkeydown={(event) => {
     if (!scope.isActive()) return;
+    // ⌘1–⌘9 (Ctrl+1–Ctrl+9 elsewhere) always belong to the repository tabs.
+    if (!event.isComposing) {
+      const digit = repoTabDigit(event);
+      if (digit) {
+        keymap.match(event);
+        keymap.endChord();
+        event.preventDefault();
+        if (!event.repeat && jumpRepoTab && windowCommandsFree()) jumpRepoTab(digit);
+        return;
+      }
+    }
     if (confirm.request && isImeEscape(event)) return;
     // Menu handles Escape on the same window; its listener may run after this one.
     if (event.key === "Escape" && document.querySelector('[role="menu"]:not([inert] *)')) return;
