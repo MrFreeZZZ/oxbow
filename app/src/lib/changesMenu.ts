@@ -110,6 +110,7 @@ export function fileMenu(repo: string, file: FileChange, group: Side | "untracke
   if (file.status !== "deleted")
     entries.push({ kind: "item", label: revealLabel, icon: menuIcons.reveal, run: () => api.revealFile(file.path).catch((err) => confirm.fail(err)) });
   entries.push(copyMenu(repo, [file.path]));
+  entries.push({ kind: "sep" });
   if (file.status !== "untracked" && file.status !== "added") entries.push({ kind: "item", label: "File History", icon: menuIcons.history, run: () => nav.openFile(file.path) });
   // Saved versions of any file, new or deleted ones too.
   entries.push({ kind: "item", label: "Local History", icon: menuIcons.history, run: () => nav.openFile(file.path, NEWEST_SAVED) });
