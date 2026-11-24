@@ -204,18 +204,23 @@ fn fill_recent(app: &AppHandle, recent: &Submenu<Wry>) {
 pub fn picked(app: &AppHandle, id: &str, focused: Option<String>) {
     let target = focused.unwrap_or_else(|| "main".to_owned());
     if let Some(command) = id.strip_prefix(COMMAND) {
-        let _ = app.emit_to(&target, "menu-command", command);
+        let session = app.state::<crate::session::Session>();
+        if let Ok(Some(address)) = session.resolve(&target, None) {
+            session.emit_repo(app, &address, "menu-command", command, true);
+        } else {
+            let _ = app.emit_to(&target, "menu-command", command);
+        }
     } else if let Some(path) = id.strip_prefix(RECENT) {
         let _ = app.emit_to(&target, "menu-open", path);
     } else if id == CLEAR_RECENT {
         // The repositories open now stay, as Clear in the Welcome window keeps the open one.
         let keep = app
             .state::<crate::session::Session>()
-            .windows
+            .repositories
             .lock()
             .expect("session lock")
-            .values()
-            .filter_map(|slot| slot.repo.as_ref().map(|repo| repo.workdir().display().to_string()))
+            .open_paths()
+            .map(|path| path.display().to_string())
             .collect();
         if let Err(err) = crate::recent::clear_recent(app.clone(), keep) {
             eprintln!("{err}");

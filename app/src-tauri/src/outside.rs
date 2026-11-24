@@ -8,7 +8,7 @@ use tauri::{AppHandle, State};
 
 use crate::open_in::WorkingFileStatus;
 use crate::preferences::read_settings;
-use crate::session::{Session, current};
+use crate::session::{RepoRequest, Session, current};
 use crate::{CommandResult, open_in};
 
 /// The Git LFS download page, for installing it without Homebrew.
@@ -19,7 +19,7 @@ pub(crate) fn open_lfs_download() -> CommandResult<()> {
 
 /// Preview a file of the working copy: Quick Look on macOS, the default app elsewhere.
 #[tauri::command]
-pub(crate) fn quick_look(window: tauri::WebviewWindow, session: State<'_, Session>, path: String) -> CommandResult<()> {
+pub(crate) fn quick_look(window: RepoRequest, session: State<'_, Session>, path: String) -> CommandResult<()> {
     let repo = current(&session, &window)?;
     open_in::quick_look(&repo.workdir().join(Path::new(&path)))
 }
@@ -27,7 +27,7 @@ pub(crate) fn quick_look(window: tauri::WebviewWindow, session: State<'_, Sessio
 /// Read the working copy status for each path, in the same order as the request.
 #[tauri::command]
 pub(crate) async fn working_file_statuses(
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
     paths: Vec<String>,
 ) -> CommandResult<Vec<WorkingFileStatus>> {
@@ -49,7 +49,7 @@ pub(crate) async fn working_file_statuses(
 #[tauri::command]
 pub(crate) async fn open_working_file(
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
     path: String,
     line: Option<u32>,
@@ -74,11 +74,7 @@ pub(crate) async fn open_working_file(
 
 /// Show a file of the repository in Finder (Explorer, or the file manager on Linux).
 #[tauri::command]
-pub(crate) fn reveal_file(
-    window: tauri::WebviewWindow,
-    session: State<'_, Session>,
-    path: String,
-) -> CommandResult<()> {
+pub(crate) fn reveal_file(window: RepoRequest, session: State<'_, Session>, path: String) -> CommandResult<()> {
     let repo = current(&session, &window)?;
     open_in::reveal(&repo.workdir().join(Path::new(&path)))
 }
@@ -88,7 +84,7 @@ pub(crate) fn reveal_file(
 #[tauri::command]
 pub(crate) fn open_in_terminal(
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
     worktree: Option<String>,
 ) -> CommandResult<()> {
@@ -129,11 +125,7 @@ pub(crate) fn worktree_folder(repo: &Repo, path: &str) -> CommandResult<PathBuf>
 
 /// Show a worktree's folder in Finder (Explorer, or the file manager on Linux).
 #[tauri::command]
-pub(crate) fn reveal_worktree(
-    window: tauri::WebviewWindow,
-    session: State<'_, Session>,
-    path: String,
-) -> CommandResult<()> {
+pub(crate) fn reveal_worktree(window: RepoRequest, session: State<'_, Session>, path: String) -> CommandResult<()> {
     let repo = current(&session, &window)?;
     open_in::reveal(&worktree_folder(&repo, &path)?)
 }

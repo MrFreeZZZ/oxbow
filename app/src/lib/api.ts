@@ -1,8 +1,11 @@
 import type { WorkingFileStatus } from "./openFile";
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { MenuPart } from "./appMenu";
 import type {
   AllSettings,
+  ActionEvent,
+  OutsideChange,
+  OutputLine,
   UpdateInfo,
   UpdateStatus,
   FileCheck,
@@ -106,7 +109,34 @@ import type { ConsoleEntry, ConsoleRepos } from "./console";
 /** What a read answers when a newer one in its lane, or `stopReads`, stopped it. */
 export const stopped = (err: unknown) => String(err) === "stopped";
 
-export const api = {
+export type RepoSessionId = number;
+
+export type RepoTabOpen =
+  | { kind: "opened" | "existing"; session: RepoSessionId; repo: RepoSummary }
+  | { kind: "otherWindow"; window: string }
+  | { kind: "untrusted"; repo: RepoSummary };
+
+interface RepoEventPayload {
+  "action-event": ActionEvent;
+  "clone-line": OutputLine;
+  "fetch-event": { fetch: number | null; remote: string | null; event: ActionEvent };
+  "outside-change": OutsideChange;
+  "repo-touched": null;
+  "menu-command": string;
+  "open-file-error": string;
+  "repo-activate-request": null;
+  "repo-closed": null;
+}
+
+export type RepoNotice = {
+  [E in keyof RepoEventPayload]: { session: RepoSessionId; event: E; payload: RepoEventPayload[E] };
+}[keyof RepoEventPayload];
+
+/** Capture the address once per tab. An unbound call uses the window's active repository. */
+export const apiForSession = (repoSession: RepoSessionId) =>
+  apiWithInvoke((command, args) => tauriInvoke(command, { ...args, repoSession }));
+
+const apiWithInvoke = (invoke: <T>(command: string, args?: Record<string, unknown>) => Promise<T>) => ({
   /** Only the custom image currently configured in settings.json; no arbitrary file access. */
   backgroundImageVersion: () => invoke<string>("background_image_version"),
   backgroundImage: () => invoke<ArrayBuffer | ArrayBufferView | number[]>("background_image").then((data) =>
@@ -120,6 +150,12 @@ export const api = {
   displayOptions: () => invoke<{ reduceTransparency: boolean; increaseContrast: boolean }>("display_options"),
   initialRepo: () => invoke<string | null>("initial_repo"),
   closeRepo: () => invoke<void>("close_repo"),
+  openRepoTab: (path: string, answer?: "trust" | "restricted") => invoke<RepoTabOpen>("open_repo_tab", { path, answer }),
+  findRepoTab: (path: string) => invoke<{ window: string; session: RepoSessionId | null } | null>("find_repo_tab", { path }),
+  activateRepoTab: () => invoke<void>("activate_repo_tab"),
+  /** Register once in the owner window before opening tabs. */
+  repoEvents: (onNotice: (notice: RepoNotice) => void) =>
+    invoke<void>("repo_events", { onNotice: new Channel(onNotice) }),
   /** A repository whose settings run programs comes back `untrusted`, unopened, unless it is
    *  trusted or Settings says not to ask; `answer` is the user's reply to that. */
   openRepo: (path: string, answer: "trust" | "restricted" | null = null) => invoke<RepoSummary>("open_repo", { path, answer }),
@@ -276,7 +312,7 @@ export const api = {
     const { workdir, signal } = scope;
     const lane = "stack-preview";
     let stopping: Promise<void> | undefined;
-    const stop = () => { stopping = api.stopReads([lane]).catch(() => {}); };
+    const stop = () => { stopping = invoke<void>("stop_reads", { lanes: [lane] }).catch(() => {}); };
     // A Stop sent before the native command registered its lane could miss the read.
     const onStart = new Channel<void>(() => {
       if (signal.aborted) stop();
@@ -452,7 +488,9 @@ export const api = {
   saveReviewDraft: (target: ReviewTarget, number: number, draft: ReviewDraft | null, expected: string) => invoke<string>("save_review_draft", { target, number, draft, expected }),
   gitlabViewing: (number: number, target: ReviewTarget) => invoke<Viewing>("gitlab_viewing", { number, target }),
   gitlabSetViewed: (number: number, path: string, viewed: boolean, target: ReviewTarget) => invoke<void>("gitlab_set_viewed", { number, path, viewed, target }),
-};
+});
+
+export const api = apiWithInvoke(tauriInvoke);
 
 /** Keys of `settings.json`. */
 export const settings = {

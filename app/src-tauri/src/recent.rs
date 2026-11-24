@@ -8,7 +8,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 use crate::repos::last_repo_file;
-use crate::session::Session;
+use crate::session::{RepoRequest, Session};
 use crate::{CommandResult, menu};
 
 /// Repositories opened before, newest first, kept in `recent-repositories.json`.
@@ -139,16 +139,17 @@ pub(crate) fn recent_repos(app: AppHandle) -> CommandResult<Vec<RecentRepo>> {
 
 /// Folders of the repositories a gone folder may be a worktree of: the window's own, whose
 /// records outlive the folder, and the recent ones.
-pub(crate) fn known_repos(app: &AppHandle, session: &Session, window: &tauri::WebviewWindow) -> Vec<PathBuf> {
+pub(crate) fn known_repos(app: &AppHandle, session: &Session, window: &RepoRequest) -> Vec<PathBuf> {
     let open = session.slot(window, |slot| slot.repo.as_ref().map(Repo::common_dir));
-    open.and_then(|common| {
-        (common.file_name().is_some_and(|name| name == ".git"))
-            .then(|| common.parent().map(Path::to_path_buf))
-            .flatten()
-    })
-    .into_iter()
-    .chain(read_recent(app).into_iter().map(|r| PathBuf::from(r.path)))
-    .collect()
+    open.flatten()
+        .and_then(|common| {
+            (common.file_name().is_some_and(|name| name == ".git"))
+                .then(|| common.parent().map(Path::to_path_buf))
+                .flatten()
+        })
+        .into_iter()
+        .chain(read_recent(app).into_iter().map(|r| PathBuf::from(r.path)))
+        .collect()
 }
 
 /// Where the window's Conflicts drafts are kept.

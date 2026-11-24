@@ -17,6 +17,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::CommandResult;
+use crate::session::RepoRequest;
 
 /// The Client ID of Oxbow's GitHub OAuth app (registered by MrFreeZZZ, device flow on, tokens
 /// that don't expire), for signing in with the browser. It is public, not a secret. Settings can
@@ -497,23 +498,26 @@ pub async fn github_owners(app: AppHandle, accounts: State<'_, Accounts>) -> Com
 #[tauri::command]
 pub async fn github_publish(
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     accounts: State<'_, Accounts>,
     path: String,
     publish: Publish,
     create: Option<bool>,
 ) -> CommandResult<String> {
+    window.check_workdir(&path)?;
     if !github::valid_repository_name(&publish.name) {
         return Err("Use letters, digits, - _ and . for the name".into());
     }
     let client = accounts.client(&app)?;
-    let label = window.label().to_owned();
     // Dropped once the run is over: Stop no longer reaches it.
     let stop = app.state::<crate::session::Session>().new_stop(&window);
     let cancel = stop.cancel.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(oxbow_core::Error::Cancelled.to_string());
+        }
         let emit = |event: ActionEvent| {
-            let _ = app.emit_to(label.as_str(), "action-event", event);
+            window.progress("action-event", event);
         };
         let say = |text: String| {
             emit(ActionEvent::Line(OutputLine {

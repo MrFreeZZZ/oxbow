@@ -88,14 +88,15 @@ fn main() {
                     if commit_summary_window::is_summary_window(&label) {
                         window.state::<commit_summary_window::SummaryWindows>().remove(&label);
                     }
-                    if user_command_window::is_command_window(&label) {
-                        session.stops.stop(&label);
-                    }
                     window.state::<overview::OverviewRuns>().stop(&label, None);
                     session.remove_window(&label);
                     let mut focused = session.focused.lock().expect("session lock");
                     if focused.as_deref() == Some(label.as_str()) {
                         *focused = None;
+                    }
+                    drop(focused);
+                    if label == "main" || label.starts_with("repo-") {
+                        repos::changed(window.app_handle());
                     }
                 }
                 _ => {}
@@ -138,6 +139,10 @@ fn main() {
             background::background_image,
             background::background_image_version,
             repos::open_repo,
+            repos::open_repo_tab,
+            repos::find_repo_tab,
+            repos::activate_repo_tab,
+            session::repo_events,
             repos::close_repo,
             repos::trust_repo,
             trusted::trusted_repos,

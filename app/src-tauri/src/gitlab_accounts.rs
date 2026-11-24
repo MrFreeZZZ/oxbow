@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use oxbow_core::gitlab_api::{self, Client, GitLabPublish, Namespace, Server};
@@ -17,6 +18,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::CommandResult;
 use crate::accounts::{Accounts, Keyring, Store, accounts_file, read_all, store_name, update_all};
+use crate::session::RepoRequest;
 
 const SERVICE: &str = "Oxbow GitLab";
 
@@ -159,24 +161,27 @@ pub async fn gitlab_namespaces(
 #[tauri::command]
 pub async fn gitlab_publish(
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     tokens: State<'_, GitLabTokens>,
     path: String,
     host: String,
     publish: GitLabPublish,
     create: Option<bool>,
 ) -> CommandResult<String> {
+    window.check_workdir(&path)?;
     if !oxbow_core::github::valid_repository_name(&publish.name) || publish.name.starts_with('-') {
         return Err("Use letters, digits, - _ and . for the name".into());
     }
     let client = tokens.client(&app, &host)?;
-    let label = window.label().to_owned();
     // Dropped once the run is over: Stop no longer reaches it.
     let stop = app.state::<crate::session::Session>().new_stop(&window);
     let cancel = stop.cancel.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(oxbow_core::Error::Cancelled.to_string());
+        }
         let emit = |event: ActionEvent| {
-            let _ = app.emit_to(label.as_str(), "action-event", event);
+            window.progress("action-event", event);
         };
         let server = client.server().clone();
         let web_url = if create == Some(false) {

@@ -95,20 +95,17 @@ pub fn show_console(app: &AppHandle) -> CommandResult<()> {
 /// The repositories with a log: the open ones and Recent Repositories, and what ran outside any.
 #[tauri::command]
 pub async fn console_repos(app: AppHandle, session: State<'_, Session>) -> CommandResult<ConsoleRepos> {
+    let focused = session.focused.lock().expect("session lock").clone();
     let (current, open) = {
-        let windows = session.windows.lock().expect("session lock");
-        let focused = session.focused.lock().expect("session lock").clone();
-        let path_of = |label: &str| {
-            windows
-                .get(label)
-                .and_then(|slot| slot.repo.as_ref())
-                .map(|repo| repo.workdir().display().to_string())
-        };
-        let current = focused.as_deref().and_then(path_of).or_else(|| path_of("main"));
-        let open: Vec<String> = windows
-            .values()
-            .filter_map(|slot| slot.repo.as_ref())
-            .map(|repo| repo.workdir().display().to_string())
+        let repositories = session.repositories.lock().expect("session lock");
+        let current = repositories
+            .active(focused.as_deref().unwrap_or("main"))
+            .or_else(|| repositories.active("main"))
+            .and_then(|address| repositories.repo(&address))
+            .map(|repo| repo.workdir().display().to_string());
+        let open: Vec<String> = repositories
+            .open_paths()
+            .map(|path| path.display().to_string())
             .collect();
         (current, open)
     };

@@ -9,8 +9,6 @@ use std::process::{Child, Command, Stdio};
 #[cfg(not(target_os = "macos"))]
 use oxbow_core::config::find_on_path;
 use serde::Serialize;
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-use tauri::Emitter;
 
 /// An editor or terminal that is installed.
 #[derive(Debug, Clone, Serialize)]
@@ -418,7 +416,7 @@ pub fn open_url(url: &str) -> Result<(), String> {
 }
 
 /// Open the file in the app associated with its type by the system.
-pub fn open_default(path: &Path, window: tauri::WebviewWindow) -> Result<(), String> {
+pub fn open_default(path: &Path, window: crate::session::RepoRequest) -> Result<(), String> {
     let command = system_opener(path.as_os_str());
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     let _ = window;
@@ -427,9 +425,7 @@ pub fn open_default(path: &Path, window: tauri::WebviewWindow) -> Result<(), Str
     #[cfg(target_os = "windows")]
     return launch(command);
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    launch_checked(command, move |error| {
-        let _ = window.emit_to(tauri::EventTarget::window(window.label()), "open-file-error", error);
-    })
+    launch_checked(command, move |error| window.progress("open-file-error", error))
 }
 
 fn system_opener(target: &OsStr) -> Command {

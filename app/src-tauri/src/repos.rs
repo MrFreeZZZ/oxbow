@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::preferences::read_settings;
 use crate::recent::{drafts_dir, forget_repo, known_repos, remember_repo};
-use crate::session::{Session, blocking, logged};
+use crate::session::{Address, Located, Opened, RepoRequest, Session, blocking, logged, workdir_key};
 use crate::{CommandResult, drafts, trusted, turns};
 
 #[derive(Serialize)]
@@ -46,8 +46,59 @@ pub(crate) async fn open_repo(
     path: String,
     answer: Option<TrustAnswer>,
 ) -> CommandResult<RepoSummary> {
+    match open(&app, &session, window.label(), path, answer, true).await? {
+        TabOpen::Opened { repo, .. } | TabOpen::Existing { repo, .. } | TabOpen::Untrusted { repo } => Ok(repo),
+        TabOpen::OtherWindow { .. } => Err("This repository is already open in another window.".into()),
+    }
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub(crate) enum TabOpen {
+    Opened { session: u64, repo: RepoSummary },
+    Existing { session: u64, repo: RepoSummary },
+    OtherWindow { window: String },
+    Untrusted { repo: RepoSummary },
+}
+
+/// Opening pins a session to this window. Activation is a separate IPC command, so the UI
+/// chooses when to commit a context switch.
+#[tauri::command]
+pub(crate) async fn open_repo_tab(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    path: String,
+    answer: Option<TrustAnswer>,
+) -> CommandResult<TabOpen> {
+    open(&app, &session, window.label(), path, answer, false).await
+}
+
+async fn open(
+    app: &AppHandle,
+    session: &Session,
+    label: &str,
+    path: String,
+    answer: Option<TrustAnswer>,
+    legacy: bool,
+) -> CommandResult<TabOpen> {
+    if label != "main" && !label.starts_with("repo-") {
+        return Err("Open repositories from a repository window.".into());
+    }
+    let replacing = session.begin_open(label, legacy)?;
     let repo = blocking(move || Repo::open(&path)).await?;
     let workdir = repo.workdir().to_path_buf();
+    // A second open cannot apply a different trust answer to a session opened while it waited.
+    let _opening = session.opening.lock().await;
+    let canonical = workdir_key(&workdir);
+    let found = {
+        let repositories = session.repositories.lock().expect("session lock");
+        Session::check_open(&repositories, label, replacing)?;
+        repositories.opening_target(&canonical, label, legacy)
+    };
+    if let Some(target) = found {
+        return duplicate(app, session, label, replacing, &repo, target);
+    }
     // Before anything else runs git there: its settings could run programs on the first read.
     let (found, allowed) = {
         let (app, repo) = (app.clone(), repo.clone());
@@ -55,6 +106,7 @@ pub(crate) async fn open_repo(
             .await
             .map_err(|err| err.to_string())??
     };
+    Session::check_open(&session.repositories.lock().expect("session lock"), label, replacing)?;
     let restricted = match answer {
         Some(TrustAnswer::Trust) => false,
         Some(TrustAnswer::Restricted) => !found.is_empty(),
@@ -63,11 +115,13 @@ pub(crate) async fn open_repo(
             // Until the user answers, nothing of the repository's runs.
             let (dir, kept) = (workdir.clone(), found.clone());
             blocking(move || oxbow_core::trust::restrict(&dir, &kept)).await?;
-            return Ok(RepoSummary {
-                name: repo.name(),
-                path: workdir.display().to_string(),
-                restricted: Vec::new(),
-                untrusted: Some(found),
+            return Ok(TabOpen::Untrusted {
+                repo: RepoSummary {
+                    name: repo.name(),
+                    path: workdir.display().to_string(),
+                    restricted: Vec::new(),
+                    untrusted: Some(found),
+                },
             });
         }
     };
@@ -75,7 +129,7 @@ pub(crate) async fn open_repo(
         let (dir, found) = (workdir.clone(), found.clone());
         blocking(move || oxbow_core::trust::restrict(&dir, &found)).await?;
     } else if matches!(answer, Some(TrustAnswer::Trust)) {
-        save_trust(&app, &workdir, &found)?;
+        save_trust(app, &workdir, &found)?;
     } else {
         oxbow_core::trust::lift(&workdir);
     }
@@ -85,27 +139,136 @@ pub(crate) async fn open_repo(
         restricted: if restricted { found } else { Vec::new() },
         untrusted: None,
     };
-    // The next start opens what the first window had; another worktree's window doesn't count.
-    if window.label() == "main"
-        && let Some(file) = last_repo_file(&app)
-    {
-        // Remembering the repository is a convenience; failing to save it is not an error.
-        let _ = std::fs::create_dir_all(file.parent().expect("config file has a parent"));
-        let _ = std::fs::write(&file, &summary.path);
+    let address = match session.finish_open(label, replacing, repo.clone())? {
+        Opened::New(address) => address,
+        Opened::Existing(target) => return duplicate(app, session, label, replacing, &repo, target),
+    };
+    if legacy {
+        remember_main(app, label, &summary.path);
     }
-    remember_repo(&app, &summary.path);
-    session.slot(&window, |slot| slot.open(repo));
-    watch_repo(app.clone(), window.label().to_owned());
-    // Settings shows this repository under This Repository.
-    let _ = app.emit("repo-changed", ());
-    Ok(summary)
+    remember_repo(app, &summary.path);
+    watch_repo(app.clone(), address.clone(), repo);
+    changed(app);
+    Ok(TabOpen::Opened {
+        session: address.id,
+        repo: summary,
+    })
 }
 
-/// Close the repository while keeping the window on Welcome.
+fn duplicate(
+    app: &AppHandle,
+    session: &Session,
+    label: &str,
+    replacing: Option<u64>,
+    repo: &Repo,
+    target: Located,
+) -> CommandResult<TabOpen> {
+    if let Located::Open(address) = &target
+        && address.window == label
+    {
+        let workdir = repo.workdir();
+        let restricted = if oxbow_core::trust::is_restricted(workdir) {
+            oxbow_core::trust::scan(workdir).map_err(|err| err.to_string())?
+        } else {
+            Vec::new()
+        };
+        if replacing.is_some() {
+            session.activate(address, replacing)?;
+            let path = workdir.display().to_string();
+            remember_main(app, label, &path);
+            remember_repo(app, &path);
+            changed(app);
+        }
+        return Ok(TabOpen::Existing {
+            session: address.id,
+            repo: RepoSummary {
+                name: repo.name(),
+                path: workdir.display().to_string(),
+                restricted,
+                untrusted: None,
+            },
+        });
+    }
+    crate::windows::raise_repo(app, &target)?;
+    Ok(TabOpen::OtherWindow {
+        window: target.window().to_owned(),
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TabLocation {
+    window: String,
+    /// Present only for an open session owned by the calling window.
+    session: Option<u64>,
+}
+
+/// Look up an open or reserved working folder without opening or activating anything.
 #[tauri::command]
-pub(crate) fn close_repo(app: AppHandle, window: tauri::WebviewWindow, session: State<'_, Session>) {
-    session.slot(&window, |slot| slot.close());
+pub(crate) fn find_repo_tab(
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    path: String,
+) -> Option<TabLocation> {
+    let path = workdir_key(Path::new(&path));
+    let repositories = session.repositories.lock().expect("session lock");
+    let target = repositories.locate(&path, Some(window.label()))?;
+    let id = match &target {
+        Located::Open(address) if address.window == window.label() => Some(address.id),
+        _ => None,
+    };
+    Some(TabLocation {
+        window: target.window().to_owned(),
+        session: id,
+    })
+}
+
+/// Activate a session owned by the calling window.
+#[tauri::command]
+pub(crate) fn activate_repo_tab(app: AppHandle, window: RepoRequest, session: State<'_, Session>) -> CommandResult<()> {
+    let address = window
+        .address
+        .as_ref()
+        .filter(|_| window.explicit)
+        .ok_or("A repository session is required.")?;
+    let path = session
+        .repositories
+        .lock()
+        .expect("session lock")
+        .repo(address)
+        .map(|repo| repo.workdir().display().to_string())
+        .ok_or_else(|| oxbow_core::Error::Cancelled.to_string())?;
+    session.activate(address, None)?;
+    remember_main(&app, window.label(), &path);
+    changed(&app);
+    Ok(())
+}
+
+fn remember_main(app: &AppHandle, label: &str, path: &str) {
+    // The next start opens what the first window had; another worktree's window doesn't count.
+    if label == "main"
+        && let Some(file) = last_repo_file(app)
+    {
+        let _ = std::fs::create_dir_all(file.parent().expect("config file has a parent"));
+        let _ = std::fs::write(&file, path);
+    }
+}
+
+pub(crate) fn changed(app: &AppHandle) {
     let _ = app.emit("repo-changed", ());
+}
+
+/// Close the addressed repository. An unaddressed legacy close also supersedes a pending open.
+#[tauri::command]
+pub(crate) fn close_repo(app: AppHandle, window: RepoRequest, session: State<'_, Session>) {
+    if window
+        .address
+        .as_ref()
+        .is_none_or(|address| address.window == window.label())
+    {
+        session.close(window.label(), window.address.as_ref(), !window.explicit);
+        changed(&app);
+    }
 }
 
 /// Trust This Repository…: git runs its settings from now on, in every window that has it open.
@@ -126,45 +289,34 @@ fn save_trust(app: &AppHandle, dir: &Path, found: &[oxbow_core::TrustFinding]) -
     Ok(())
 }
 
-/// Watch the repository open in window `label`, which hears each change outside it as an
-/// `outside-change`. Started after the repository opened: a big folder takes a while to watch.
-/// Without a watch the window still reads afresh when it comes back to the front.
-fn watch_repo(app: AppHandle, label: String) {
+/// Watch this particular opening of the repository. A slow watch cannot attach after a close
+/// and reopen of the same working directory.
+fn watch_repo(app: AppHandle, address: Address, repo: Repo) {
     tauri::async_runtime::spawn_blocking(move || {
         let session = app.state::<Session>();
-        let Some(repo) = session
-            .windows
-            .lock()
-            .expect("session lock")
-            .get(&label)
-            .and_then(|slot| slot.repo.clone())
-        else {
+        if !session.live(&address) {
             return;
-        };
+        }
         let events = app.clone();
-        let to = label.clone();
+        let to = address.clone();
         let turns = session.turns.clone();
         let common = turns::canonical(&repo.common_dir());
+        let key = to.turn_key();
         let Ok(watch) = repo.watch(move |changed| {
-            // Mostly another window's action, still running: it is told by that window's name.
-            let window = turns.other(&common, &to).map(|other| other.folder);
+            let window = turns.other(&common, &key).map(|other| other.folder);
             let change = OutsideChange {
                 git: changed.git,
                 files: changed.files,
                 at: changed.at,
                 window,
             };
-            let _ = events.emit_to(to.as_str(), "outside-change", change);
+            events
+                .state::<Session>()
+                .emit_repo(&events, &to, "outside-change", change, true);
         }) else {
             return;
         };
-        // Another repository was opened meanwhile, or the window closed: the watch stops here.
-        if let Some(slot) = session.windows.lock().expect("session lock").get_mut(&label)
-            && slot.repo.as_ref().is_some_and(|open| open.workdir() == repo.workdir())
-            && slot.watch.is_none()
-        {
-            slot.watch = Some(watch);
-        }
+        session.with_slot(&address, |slot| slot.watch = Some(watch));
     });
 }
 
@@ -181,23 +333,15 @@ pub(crate) struct OutsideChange {
     window: Option<String>,
 }
 
-/// Tell the other windows of `repo` that window `label` changed it, right as it is done.
-pub(crate) fn tell_others(app: &AppHandle, session: &Session, repo: &Repo, label: &str) {
+/// Tell the other sessions of the same shared Git directory as soon as a change finishes.
+pub(crate) fn tell_others(app: &AppHandle, session: &Session, repo: &Repo, address: Option<&Address>) {
+    let Some(address) = address else { return };
     let common = turns::canonical(&repo.common_dir());
-    let others: Vec<String> = session
-        .windows
+    let others = session
+        .repositories
         .lock()
         .expect("session lock")
-        .iter()
-        .filter(|(other, slot)| {
-            other.as_str() != label
-                && slot
-                    .repo
-                    .as_ref()
-                    .is_some_and(|open| turns::canonical(&open.common_dir()) == common)
-        })
-        .map(|(other, _)| other.clone())
-        .collect();
+        .siblings(&common, address);
     let change = OutsideChange {
         git: true,
         files: true,
@@ -207,7 +351,7 @@ pub(crate) fn tell_others(app: &AppHandle, session: &Session, repo: &Repo, label
         window: Some(repo.name()),
     };
     for other in others {
-        let _ = app.emit_to(other.as_str(), "outside-change", change.clone());
+        session.emit_repo(app, &other, "outside-change", change.clone(), true);
     }
 }
 
@@ -221,11 +365,10 @@ pub(crate) fn initial_repo(
 ) -> Option<String> {
     if window.label() != "main" {
         return session
-            .windows
+            .repositories
             .lock()
             .expect("session lock")
-            .get(window.label())
-            .and_then(|slot| slot.pending.as_ref())
+            .pending(window.label())
             .map(|path| path.display().to_string());
     }
     let reopen = read_settings(&app)
@@ -258,7 +401,7 @@ pub(crate) struct Gone {
 #[tauri::command]
 pub(crate) async fn gone_folder(
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
     path: String,
 ) -> CommandResult<Option<Gone>> {
@@ -291,7 +434,7 @@ pub(crate) struct Reconnected {
 #[tauri::command]
 pub(crate) async fn reconnect_folder(
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
     old: String,
     new: String,

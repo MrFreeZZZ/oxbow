@@ -9,28 +9,25 @@ use serde_json::Value;
 use tauri::{AppHandle, State};
 
 use crate::recent::drafts_dir;
-use crate::session::{Session, at, current, logged, read};
+use crate::session::{RepoRequest, Session, at, current, logged, read};
 use crate::{CommandResult, drafts};
 
 /// Both sides of a conflicted file, for the Conflicts screen.
 #[tauri::command]
 pub(crate) async fn conflict_file(
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
     path: String,
 ) -> CommandResult<ConflictFile> {
     let repo = current(&session, &window)?;
-    read(at(&repo), "Read a conflict", move || repo.conflict_file(&path)).await
+    read(&window, at(&repo), "Read a conflict", move || repo.conflict_file(&path)).await
 }
 
 /// The merge tool git is set to open, for the Conflicts screen's button.
 #[tauri::command]
-pub(crate) async fn merge_tool(
-    window: tauri::WebviewWindow,
-    session: State<'_, Session>,
-) -> CommandResult<Option<MergeTool>> {
+pub(crate) async fn merge_tool(window: RepoRequest, session: State<'_, Session>) -> CommandResult<Option<MergeTool>> {
     let repo = current(&session, &window)?;
-    read(at(&repo), "Read the merge tool", move || Ok(repo.merge_tool())).await
+    read(&window, at(&repo), "Read the merge tool", move || Ok(repo.merge_tool())).await
 }
 
 /// The draft file of the window's working folder, in the app's data folder.
@@ -40,7 +37,10 @@ fn draft_file(app: &AppHandle, repo: &Repo) -> CommandResult<PathBuf> {
 
 /// The repository at `workdir`, the working folder the Conflicts screen was opened for. A save
 /// can arrive after the window opened another repository, and must still go to its own.
-fn draft_repo(session: &Session, window: &tauri::WebviewWindow, workdir: &str) -> CommandResult<Repo> {
+fn draft_repo(session: &Session, window: &RepoRequest, workdir: &str) -> CommandResult<Repo> {
+    if window.explicit {
+        return crate::session::expected(current(session, window)?, Some(workdir));
+    }
     if let Ok(repo) = current(session, window)
         && repo.workdir() == Path::new(workdir)
     {
@@ -57,7 +57,7 @@ fn draft_repo(session: &Session, window: &tauri::WebviewWindow, workdir: &str) -
 #[tauri::command]
 pub(crate) async fn conflict_draft(
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
     workdir: String,
 ) -> CommandResult<Option<Value>> {
@@ -73,7 +73,7 @@ pub(crate) async fn conflict_draft(
 #[tauri::command]
 pub(crate) async fn save_conflict_draft(
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
     workdir: String,
     draft: Value,
@@ -95,7 +95,7 @@ pub(crate) async fn save_conflict_draft(
 #[tauri::command]
 pub(crate) async fn drop_conflict_draft(
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
     workdir: String,
 ) -> CommandResult<()> {
@@ -106,14 +106,14 @@ pub(crate) async fn drop_conflict_draft(
 /// Open a conflicted file in the merge tool and wait until it quits: true when git staged it.
 #[tauri::command]
 pub(crate) async fn open_merge_tool(
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
     path: String,
     stages: String,
 ) -> CommandResult<bool> {
     let repo = current(&session, &window)?;
     let title = format!("Open {path} in the merge tool");
-    let change = crate::turns::Running::new(window.label(), repo.name(), title.clone());
+    let change = crate::turns::Running::new(&window.turn_key(), repo.name(), title.clone());
     let turns = session.turns.clone();
     let stop = session.new_stop(&window);
     logged(Some(at(&repo)), console::EntryKind::Action, title, move || {

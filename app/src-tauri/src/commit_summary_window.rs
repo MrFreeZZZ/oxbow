@@ -9,7 +9,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use crate::CommandResult;
-use crate::session::{Session, current, expected};
+use crate::session::{RepoRequest, Session, current, expected};
 
 #[derive(Default)]
 pub(crate) struct SummaryWindows {
@@ -252,7 +252,7 @@ impl SummaryWindows {
 
 #[tauri::command]
 pub(crate) async fn commit_link(
-    window: WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
     repository: String,
     id: String,
@@ -271,7 +271,7 @@ pub(crate) async fn commit_link(
 #[tauri::command]
 pub(crate) async fn open_commit_summary(
     app: AppHandle,
-    owner: WebviewWindow,
+    owner: RepoRequest,
     windows: State<'_, SummaryWindows>,
     session: State<'_, Session>,
     repository: String,
@@ -281,7 +281,7 @@ pub(crate) async fn open_commit_summary(
     if label != "main" && !label.starts_with("repo-") {
         return Err("Open Commit Summary from a repository window.".into());
     }
-    let label = format!("commit-summary-{label}");
+    let label = format!("commit-summary-{}", owner.output_owner());
     let repo = expected(current(&session, &owner)?, Some(&repository))?;
     let id = summary
         .get("id")
@@ -291,6 +291,7 @@ pub(crate) async fn open_commit_summary(
         .to_owned();
     let _opening = windows.opening.lock().await;
     let context = crate::session::blocking(move || Ok(commit_context(&repo, &id))).await?;
+    owner.ensure_open()?;
     let snapshot = Snapshot { summary, context };
 
     windows

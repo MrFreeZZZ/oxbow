@@ -8,28 +8,21 @@ use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use crate::CommandResult;
 use crate::outside::worktree_folder;
 use crate::preferences::{appearance, read_settings};
-use crate::session::{Session, WindowTarget, current};
+use crate::session::{Located, RepoRequest, Session, WindowTarget, current, workdir_key};
 
 /// Open the worktree at `path` in a window of its own, or bring forward the window that has it.
 /// Async, because making a window in a synchronous command deadlocks on Windows.
 #[tauri::command]
 pub(crate) async fn open_window(
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
     path: String,
 ) -> CommandResult<()> {
     let repo = current(&session, &window)?;
     let folder = worktree_folder(&repo, &path)?;
     let label = match session.reserve_window(&folder) {
-        WindowTarget::Existing(label) => {
-            // The reservation can precede the native window: its first invocation builds it.
-            if let Some(open) = app.get_webview_window(&label) {
-                let _ = open.unminimize();
-                open.set_focus().map_err(|err| err.to_string())?;
-            }
-            return Ok(());
-        }
+        WindowTarget::Existing(target) => return raise_repo(&app, &target),
         WindowTarget::New(label) => label,
     };
     // Named after the folder, so the Window menu and Mission Control tell the windows apart.
@@ -52,21 +45,51 @@ pub(crate) async fn open_window(
         .hidden_title(true)
         .traffic_light_position(tauri::LogicalPosition::new(22.0, 30.0));
     if let Err(err) = builder.build() {
-        session.windows.lock().expect("session lock").remove(&label);
+        session.remove_window(&label);
         return Err(err.to_string());
     }
     Ok(())
 }
 
-/// Close the window of the worktree that was at `path`, after it was removed.
+/// Bring forward the owner. Its UI activates the existing tab after handling the request.
+pub(crate) fn raise_repo(app: &AppHandle, target: &Located) -> CommandResult<()> {
+    // The reservation can precede the native window: its first invocation builds it.
+    if let Some(window) = app.get_webview_window(target.window()) {
+        let _ = window.unminimize();
+        window.set_focus().map_err(|err| err.to_string())?;
+        if let Located::Open(address) = target {
+            app.state::<Session>()
+                .emit_repo(app, address, "repo-activate-request", (), false);
+        }
+    }
+    Ok(())
+}
+
+/// Close the worktree's session after its removal. Legacy worktree windows close as before.
 #[tauri::command]
-pub(crate) fn close_window_of(app: AppHandle, window: tauri::WebviewWindow, session: State<'_, Session>, path: String) {
-    if let Some(open) = session
-        .window_of(Path::new(&path))
-        .filter(|label| label != window.label())
-        .and_then(|label| app.get_webview_window(&label))
+pub(crate) fn close_window_of(app: AppHandle, window: RepoRequest, session: State<'_, Session>, path: String) {
+    let path = workdir_key(Path::new(&path));
+    let (target, close_window) = {
+        let repositories = session.repositories.lock().expect("session lock");
+        let target = repositories.locate(&path, None);
+        let close_window = match &target {
+            Some(Located::Open(address)) => repositories.closes_legacy_window(address),
+            Some(Located::Pending(_)) => true,
+            None => false,
+        };
+        (target, close_window)
+    };
+    let Some(target) = target else { return };
+    if close_window && target.window() != window.label() {
+        if let Some(open) = app.get_webview_window(target.window()) {
+            let _ = open.close();
+        }
+    } else if let Located::Open(address) = target
+        && window.address.as_ref() != Some(&address)
     {
-        let _ = open.close();
+        session.close(&address.window, Some(&address), false);
+        session.emit_closed(&address);
+        crate::repos::changed(&app);
     }
 }
 
