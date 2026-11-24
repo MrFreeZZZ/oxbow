@@ -146,20 +146,21 @@ export function unstageRequest(files: FileChange[]): Request {
 /** Throw away the edits in files, or delete those git does not track yet. */
 export function discardRequest(files: FileChange[]): Request {
   const fresh = files.filter((f) => f.status === "untracked");
+  const onlyUntracked = fresh.length === files.length;
   const body: Part[] =
-    fresh.length === files.length
+    onlyUntracked
       ? ["Deletes ", ...name(files), ". Git does not track ", files.length === 1 ? "it" : "them", " yet."]
       : fresh.length
-        ? ["Throws away your edits in ", ...name(files.filter((f) => !fresh.includes(f))), " and deletes ", ...name(fresh), ", which git does not track yet."]
+        ? ["Discards unstaged changes in ", ...name(files.filter((f) => f.status !== "untracked")), " and deletes ", ...name(fresh), ", which Git does not track yet."]
         : ["Throws away your edits in ", ...name(files), " and puts back the staged or committed version."];
   return {
-    title: `Discard changes in ${count(files)}?`,
+    title: onlyUntracked ? `Delete ${count(files)}?` : `Discard changes in ${count(files)}?`,
     body,
     icon: "discard",
-    button: "Discard",
+    button: onlyUntracked ? "Delete" : "Discard",
     danger: true,
     note: "Undo brings it back, from the toast or the Operation Log.",
-    done: `Discarded changes in ${count(files)}.`,
+    done: onlyUntracked ? `Deleted ${count(files)}.` : `Discarded changes in ${count(files)}.`,
     action: { kind: "discard", paths: files.map((f) => f.path) },
   };
 }
