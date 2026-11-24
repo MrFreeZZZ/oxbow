@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onMount, untrack } from "svelte";
 import { menuIcons, type MenuEntry } from "./Menu.svelte";
 import { keepWorkingFileStatuses, loadWorkingFileStatuses, workingFileAction, type WorkingFileStatus } from "./openFile";
+import { repoWorkOnFocus } from "./tabWork";
 
 export function openWorkingFile(scope: RepoScope, path: string, line: number | null = null) {
   return scope.api.openWorkingFile(path, line).catch((err) => scope.confirm.fail(err));
@@ -17,12 +18,23 @@ export function watchWorkingFiles(scope: RepoScope, paths: () => string[]) {
     const refresh = () => version++;
     const stop = scope.id === null ? getCurrentWindow().listen("outside-change", refresh).catch(() => {}) : null;
     scope.filesChanged.add(refresh);
-    window.addEventListener("focus", refresh);
+    const onFocus = () => { if (repoWorkOnFocus(scope.isActive())) refresh(); };
+    window.addEventListener("focus", onFocus);
     return () => {
-      window.removeEventListener("focus", refresh);
+      window.removeEventListener("focus", onFocus);
       scope.filesChanged.delete(refresh);
       void stop?.then((unlisten) => unlisten?.());
     };
+  });
+  let sawFocus = false;
+  let wasActive = false;
+  $effect(() => {
+    const active = repoWorkOnFocus(scope.isActive());
+    untrack(() => {
+      if (sawFocus && active && !wasActive) version++;
+      sawFocus = true;
+      wasActive = active;
+    });
   });
   let checked: ReadonlyMap<string, WorkingFileStatus> = new Map();
   let checkedVersion = -1;

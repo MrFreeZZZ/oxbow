@@ -55,9 +55,14 @@ interface TabBackend {
   closeBatch(ids: RepoSessionId[], active: RepoSessionId | null, previous: RepoSessionId | null): Promise<void>;
 }
 
+/** Shown when a sheet is already open, so a new repository is not dropped without a word. */
+export const DIALOG_IN_THE_WAY = "Close the open dialog first.";
+
 interface WindowHooks {
   show(tabs: readonly OpenTab[], active: RepoSessionId | null): void;
   canSwitch(): boolean;
+  /** Why a switch is refused, when the user should hear it. Null stays quiet, as a mode change does. */
+  switchProblem?(): string | null;
   beforeClose(id: RepoSessionId): Promise<boolean>;
   whileClosing(run: () => Promise<void>): Promise<void>;
   notice(notice: RepoNotice): void;
@@ -153,11 +158,20 @@ export class RepoTabs {
     return next;
   }
 
+  /** True when the open should stop. A dialog throws, so the new session is not dropped in silence. */
+  #switchBlocked(): boolean {
+    if (this.#hooks.canSwitch()) return false;
+    const problem = this.#hooks.switchProblem?.();
+    if (problem) throw new Error(problem);
+    return true;
+  }
+
   async #open(path: string, from: OpenFrom) {
-    if (this.#disposed || !from.live() || !this.#hooks.canSwitch()) return;
+    if (this.#disposed || !from.live()) return;
     let owned: RepoSessionId | null = null;
     this.#opening = true;
     try {
+      if (this.#switchBlocked()) return;
       let result = await this.#backend.open(path);
       if (result.kind === "untrusted") {
         if (!from.live() || this.#disposed) return;
@@ -179,7 +193,7 @@ export class RepoTabs {
       if (!from.live() || this.#disposed || this.#closed.has(id)) return;
       const history = await this.#backend.history(id);
       await this.#serialize(async () => {
-        if (!from.live() || this.#closed.has(id) || !this.#hooks.canSwitch()) return;
+        if (!from.live() || this.#closed.has(id) || this.#switchBlocked()) return;
         const attach = () => {
           this.#tabs = [...this.#tabs, { id, repo, history }];
           this.#active = id;
@@ -188,7 +202,10 @@ export class RepoTabs {
           for (const notice of this.#early.get(id) ?? []) this.#hooks.notice(notice);
         };
         if (!this.#enabled && this.#active !== null) {
-          await this.#closeBatch([this.#active], id, attach);
+          if (!await this.#closeBatch([this.#active], id, attach) && !this.#exists(id)) {
+            const problem = this.#hooks.switchProblem?.();
+            if (problem) throw new Error(problem);
+          }
         } else {
           await this.#backend.activate(id);
           if (!this.#disposed && !this.#closed.has(id)) attach();
@@ -226,7 +243,8 @@ export class RepoTabs {
     }
   }
 
-  async #closeBatch(ids: RepoSessionId[], keep: RepoSessionId | null, after?: () => void) {
+  async #closeBatch(ids: RepoSessionId[], keep: RepoSessionId | null, after?: () => void): Promise<boolean> {
+    let closed = false;
     await this.#hooks.whileClosing(async () => {
       for (const id of ids) if (!await this.#hooks.beforeClose(id)) return;
       await this.#backend.closeBatch(ids, keep, this.#active);
@@ -236,7 +254,9 @@ export class RepoTabs {
         this.#active = keep;
         this.#show();
       }
+      closed = true;
     });
+    return closed;
   }
 
   close(id: RepoSessionId) {

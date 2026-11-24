@@ -6,7 +6,7 @@ import * as runtime from "svelte/internal/client";
 import type * as Drafts from "../src/lib/commitDrafts.svelte.ts";
 import { test } from "node:test";
 import { api, apiForSession, type RepoNotice, type RepoTabOpen } from "../src/lib/api.ts";
-import { readTabLayout, repoTabActions, RepoTabs, saveTabLayout, type OpenFrom, type OpenTab } from "../src/lib/repoTabs.ts";
+import { DIALOG_IN_THE_WAY, readTabLayout, repoTabActions, RepoTabs, saveTabLayout, type OpenFrom, type OpenTab } from "../src/lib/repoTabs.ts";
 import type { History, RepoSummary } from "../src/lib/types.ts";
 
 const summary = (id: number): RepoSummary => ({ path: `/repo/${id}`, name: String(id), restricted: [] });
@@ -15,7 +15,11 @@ const opened = (session: number): RepoTabOpen => ({ kind: "opened", session, rep
 
 type TabBackend = ConstructorParameters<typeof RepoTabs>[0];
 
-function windowTabs(backend: Omit<TabBackend, "closeBatch"> & Partial<Pick<TabBackend, "closeBatch">>, beforeClose = async (_id: number) => true) {
+function windowTabs(
+  backend: Omit<TabBackend, "closeBatch"> & Partial<Pick<TabBackend, "closeBatch">>,
+  beforeClose = async (_id: number) => true,
+  hooks: { canSwitch?: () => boolean; switchProblem?: () => string | null } = {},
+) {
   const state = { tabs: [] as readonly OpenTab[], active: null as number | null, free: true };
   const errors: unknown[] = [];
   const notices: RepoNotice[] = [];
@@ -27,7 +31,8 @@ function windowTabs(backend: Omit<TabBackend, "closeBatch"> & Partial<Pick<TabBa
     ...backend,
   }, {
     show: (tabs, active) => Object.assign(state, { tabs, active }),
-    canSwitch: () => state.free,
+    canSwitch: hooks.canSwitch ?? (() => state.free),
+    switchProblem: hooks.switchProblem,
     beforeClose,
     whileClosing: (run) => run(),
     notice: (notice) => notices.push(notice),
@@ -165,6 +170,31 @@ test("opening deduplicates canonical paths, preserves the original on failure an
   assert.equal(state.active, 1);
   assert.deepEqual(state.tabs.map(tab => tab.id), [1, 2]);
   assert.deepEqual(actions, ["activate:1", "activate:2", "close:3", "activate:1"]);
+});
+
+test("replacing a repository while a dialog is open reports it and releases the new session", async () => {
+  const closed: number[] = [];
+  let dialog = false;
+  const { tabs, state, from, errors } = windowTabs({
+    open: async (path) => opened(Number(path)),
+    history: async (id) => {
+      if (id === 2) dialog = true;
+      return history;
+    },
+    activate: async (id) => { if (id === 2) assert.fail("dialog open activated"); },
+    close: async (id) => { closed.push(id); },
+    closeBatch: async () => { throw new Error("replaced despite the dialog"); },
+  }, async () => true, {
+    canSwitch: () => !dialog,
+    switchProblem: () => dialog ? DIALOG_IN_THE_WAY : null,
+  });
+  tabs.setMode(false);
+  await tabs.open("1", from);
+  await tabs.open("2", from);
+  assert.equal(state.active, 1);
+  assert.deepEqual(state.tabs.map(tab => tab.id), [1]);
+  assert.deepEqual(closed, [2]);
+  assert.match(String(errors[0]), new RegExp(DIALOG_IN_THE_WAY));
 });
 
 test("an open that becomes blocked during its first History read releases its provisional session", async () => {

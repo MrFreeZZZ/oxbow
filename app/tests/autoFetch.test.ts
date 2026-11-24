@@ -3,6 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 import ts from "typescript";
 import { Reloads, Tickets } from "../src/lib/loads.ts";
+import { autoFetchScheduled, repoWorkOnFocus } from "../src/lib/tabWork.ts";
 
 const app = fs.readFileSync(new URL("../src/App.svelte", import.meta.url), "utf8");
 
@@ -301,6 +302,9 @@ test("auto-fetch replaces the next interval for a timed retry and keeps it for a
     $effect: (start: () => () => void) => t.after(start()),
     overviewShown: false,
     repo: {},
+    scope: { isActive: () => true },
+    autoFetchScheduled,
+    repoWorkOnFocus,
     prefs: { get: (key: string) => ({ "oxbow.fetch.auto": true, "oxbow.fetch.interval": 1 })[key] },
     confirm: { request: null },
     document: { hidden: false },

@@ -34,7 +34,10 @@
   import { fetchRequest as fetchRequestInRepo, pullRequest as pullRequestInRepo, pushRequest as pushRequestInRepo, syncBlock, unshallowRequest as unshallowRequestInRepo, type RemoteContext, type SyncFix } from "./lib/remote";
   import SyncButtons from "./lib/SyncButtons.svelte";
   import Welcome from "./lib/Welcome.svelte";
+  import { detailsChrome, noteDetailsChromeEdit } from "./lib/detailsChrome.svelte";
+  import { DETAILS_PANEL_MIN } from "./lib/detailsChrome";
   import { useRepoScope } from "./lib/repoScope";
+  import { autoFetchScheduled, repoWorkOnFocus } from "./lib/tabWork";
   import type { OpenFrom, OpenTab } from "./lib/repoTabs";
 
   let { openedTab, launched, openPath, closeTab, lostTab, tabStrip, stepRepoTab, sideHidden = $bindable() }: {
@@ -275,9 +278,6 @@
   let searchField = $state<SearchField>();
   let findField = $state<FindField>();
   let stashesView = $state<StashesView>();
-  /** The width of the details panel, one for Changes and a commit so the graph keeps its width
-   *  between them; until it is dragged, as wide as the graph lets it be. */
-  let panelWidth = $state<number | null>(null);
   /** The Conflicts screen is open in place of History. */
   let resolving = $state(false);
   const operation = $derived(history?.operation ?? null);
@@ -338,7 +338,7 @@
   let moreMenu = $state<{ x: number; y: number } | null>(null);
   /** The details panel can take any width that leaves the graph 360 px. */
   const GRAPH_MIN = 360;
-  const PANEL_MIN = 320;
+  const PANEL_MIN = DETAILS_PANEL_MIN;
   const SIDEBAR = 280;
   const SETTINGS_ICON =
     "M12.78 6.52L14.44 6.56L14.44 9.44L12.78 9.48L12.42 10.33L13.57 11.54L11.54 13.57L10.33 12.42L9.48 12.78L9.44 14.44L6.56 14.44L6.52 12.78L5.67 12.42L4.46 13.57L2.43 11.54L3.58 10.33L3.22 9.48L1.56 9.44L1.56 6.56L3.22 6.52L3.58 5.67L2.43 4.46L4.46 2.43L5.67 3.58L6.52 3.22L6.56 1.56L9.44 1.56L9.48 3.22L10.33 3.58L11.54 2.43L13.57 4.46L12.42 5.67zM8 5.8a2.2 2.2 0 1 0 0 4.4a2.2 2.2 0 1 0 0-4.4";
@@ -358,35 +358,35 @@
     entries.push({ kind: "item", label: "Settings…", icon: SETTINGS_ICON, keys: shortcut("settings") || undefined, detail: update || undefined, run: () => api.openSettings() });
     return entries;
   }
-  /** The details panel put away, so the graph takes the whole width; kept in settings.json. */
-  let detailsHidden = $state(false);
   /** The details panel over the whole content, for a long diff; the graph comes back with the same
    *  button or Esc. A commit's goes back once another is picked; Changes stays so, kept in
    *  settings.json, until the graph is asked back. */
   let commitExpanded = $state(false);
-  let changesExpanded = $state(false);
-  const expanded = $derived.by(() => (onChanges ? changesExpanded : commitExpanded));
+  const expanded = $derived.by(() => (onChanges ? detailsChrome.changesExpanded : commitExpanded));
   function setChangesExpanded(on: boolean) {
-    if (changesExpanded === on) return;
-    changesExpanded = on;
+    if (detailsChrome.changesExpanded === on) return;
+    noteDetailsChromeEdit();
+    detailsChrome.changesExpanded = on;
     api.setSetting(settings.changesExpanded, on).catch(() => {});
   }
   function toggleDetails() {
     commitExpanded = false;
     if (onChanges) setChangesExpanded(false);
-    detailsHidden = !detailsHidden;
-    api.setSetting(settings.detailsHidden, detailsHidden).catch(() => {});
+    noteDetailsChromeEdit();
+    detailsChrome.detailsHidden = !detailsChrome.detailsHidden;
+    api.setSetting(settings.detailsHidden, detailsChrome.detailsHidden).catch(() => {});
     // Back from the whole width, the list keeps the selected commit in view.
     if (selected) requestAnimationFrame(() => list?.reveal(selected!));
   }
   function showDetails() {
-    if (!detailsHidden) return;
-    detailsHidden = false;
+    if (!detailsChrome.detailsHidden) return;
+    noteDetailsChromeEdit();
+    detailsChrome.detailsHidden = false;
     api.setSetting(settings.detailsHidden, false).catch(() => {});
   }
   function toggleExpanded() {
     if (!expanded) showDetails();
-    if (onChanges) setChangesExpanded(!changesExpanded);
+    if (onChanges) setChangesExpanded(!detailsChrome.changesExpanded);
     else commitExpanded = !commitExpanded;
     if (!expanded && selected) requestAnimationFrame(() => list?.reveal(selected!));
   }
@@ -400,7 +400,7 @@
   /** A hidden sidebar's room goes to the details panel, as in Mail: the graph keeps its width and only moves to the edge. */
   const panelBonus = $derived(!narrow && sideHidden ? SIDEBAR : 0);
   const shownPanelWidth = $derived.by(() =>
-    panelWidth === null ? panelMax : Math.min(Math.max(panelWidth + panelBonus, PANEL_MIN), panelMax),
+    detailsChrome.panelWidth === null ? panelMax : Math.min(Math.max(detailsChrome.panelWidth + panelBonus, PANEL_MIN), panelMax),
   );
   /** The screen next to the sidebar. */
   let view = $state<"history" | "stashes" | "oplog" | "local" | "compare" | "file" | "stack" | "pull" | "series" | "reviews" | "browse">("history");
@@ -499,8 +499,10 @@
     const active = scope.isActive();
     const graph = list;
     untrack(() => {
+      const becameActive = active && !wasActive;
       if (!active && wasActive) returnToHistory = navigation.scroll;
       wasActive = active;
+      if (becameActive) loader.cameBack();
       if (!active || !graph || !returnToHistory) return;
       const position = returnToHistory;
       const revision = navigation.revision;
@@ -1232,7 +1234,7 @@
     add("oplog", () => ((view = "oplog"), (resolving = false)));
     add("localHistory", () => ((view = "local"), (resolving = false)));
     if (view === "history" && !showConflicts) {
-      add("details", toggleDetails, detailsHidden ? "Show Details" : "Hide Details");
+      add("details", toggleDetails, detailsChrome.detailsHidden ? "Show Details" : "Hide Details");
       add("expand", toggleExpanded, expanded ? "Show Graph" : "Expand Details");
       add("focusOnly", () => void setFocusOnly(!focusOnly), focusOnly ? "Show All Branches" : "Show Current Branch Only");
     }
@@ -1761,13 +1763,13 @@
   // Fetch, and Activity says what is wrong.
   const hasRemotes = $derived(!!history?.remotes.length);
   $effect(() => {
-    if (overviewShown || !repo || !hasRemotes || !prefs.get("oxbow.fetch.auto")) return;
+    if (!autoFetchScheduled(scope.isActive(), !overviewShown && !!repo && hasRemotes, prefs.get("oxbow.fetch.auto"))) return;
     const interval = prefs.get("oxbow.fetch.interval") * 60_000;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const fetchNow = () => {
       const next = setTimeout(fetchNow, interval);
       timer = next;
-      if (confirm.request || document.hidden || loading || activity.hasFetch) return;
+      if (!repoWorkOnFocus(scope.isActive()) || confirm.request || document.hidden || loading || activity.hasFetch) return;
       void backgroundFetch(true).then((retryAfterMs) => {
         if (timer !== next || retryAfterMs == null) return;
         clearTimeout(timer);
@@ -1976,24 +1978,14 @@
     resizeSplitter(event, (delta) => {
       // Saved without the hidden sidebar's room, so the graph keeps its width when the sidebar comes back.
       const width = Math.max(Math.min(Math.max(startWidth - delta, PANEL_MIN), panelMax) - panelBonus, PANEL_MIN);
-      panelWidth = width;
+      noteDetailsChromeEdit();
+      detailsChrome.panelWidth = width;
     }, () => {
-      if (panelWidth !== null) api.setSetting(settings.detailsWidth, Math.round(panelWidth)).catch(() => {});
+      if (detailsChrome.panelWidth !== null) api.setSetting(settings.detailsWidth, Math.round(detailsChrome.panelWidth)).catch(() => {});
     });
   }
 
   $effect(() => {
-    // Changes once kept a width of its own: it serves until the shared one is saved.
-    Promise.all([api.getSetting<number>(settings.detailsWidth), api.getSetting<number>(settings.changesWidth)]).then(([details, changes]) => {
-      const width = typeof details === "number" ? details : changes;
-      if (typeof width === "number") panelWidth = Math.max(width, PANEL_MIN);
-    });
-    api.getSetting<boolean>(settings.changesExpanded).then((on) => {
-      if (typeof on === "boolean") changesExpanded = on;
-    });
-    api.getSetting<boolean>(settings.detailsHidden).then((hidden) => {
-      if (typeof hidden === "boolean") detailsHidden = hidden;
-    });
     api.getSetting<number>(settings.zoomLevel).then((level) => {
       if (!openedTab && typeof level === "number" && level !== 0) zoom(level, false);
     });
@@ -2010,11 +2002,13 @@
   });
 </script>
 
-<svelte:document onvisibilitychange={() => document.visibilityState === "visible" && loader.unseen && loader.showsAgain()} />
+<svelte:document onvisibilitychange={() => {
+  if (repoWorkOnFocus(scope.isActive()) && document.visibilityState === "visible" && loader.unseen) loader.showsAgain();
+}} />
 
 <svelte:window
   bind:innerWidth={windowWidth}
-  onfocus={() => loader.cameBack()}
+  onfocus={() => { if (repoWorkOnFocus(scope.isActive())) loader.cameBack(); }}
   onmouseup={(event) => {
     if (!scope.isActive()) return;
     // A mouse's own Back and Forward buttons.
@@ -2456,7 +2450,7 @@
               </button>
               <GraphLegend {history} shown={graphHistory!} onShow={jump} />
             {/if}
-            {#if detailsHidden}
+            {#if detailsChrome.detailsHidden}
               <button class="bar-button" onclick={toggleDetails} aria-label="Show details" title={withKeys("Show Details", combo("details"))}>
                 <svg class="icon" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2" /><path d="M10 3v10" /></svg>
               </button>
@@ -2483,7 +2477,7 @@
             />
           {/key}
         </section>
-        {#if !detailsHidden}
+        {#if !detailsChrome.detailsHidden}
         <aside class="panel" style:width={expanded ? null : `${shownPanelWidth}px`} aria-label="Commit details">
           {#if !expanded}
             <button class="vertical-splitter" title="Drag to resize" tabindex="-1" onpointerdown={startResize} aria-label="Resize commit details"></button>

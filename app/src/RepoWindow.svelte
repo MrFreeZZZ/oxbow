@@ -10,7 +10,8 @@
   import { keepCommitMessage, keepMessagesForRestart } from "./lib/commitDrafts.svelte";
   import { FIRST_HISTORY_PAGE } from "./lib/historyLoad.svelte";
   import type { RepoScope } from "./lib/repoScope";
-  import { readTabLayout, RepoTabs, saveTabLayout, type OpenTab } from "./lib/repoTabs";
+  import { loadDetailsChrome } from "./lib/detailsChrome.svelte";
+  import { DIALOG_IN_THE_WAY, readTabLayout, RepoTabs, saveTabLayout, type OpenTab } from "./lib/repoTabs";
   import { settleReviewSaves } from "./lib/reviewSaves";
   import type { ShortcutId } from "./lib/shortcuts";
   import type { Gone } from "./lib/types";
@@ -80,10 +81,12 @@
       activeId = active;
     },
     canSwitch,
+    switchProblem: () => noDialog() ? null : DIALOG_IN_THE_WAY,
     beforeClose: async (id) => {
       const problem = await tabDraftProblem(id);
       if (problem) throw new Error(problem);
-      return !preparing && noDialog();
+      if (!noDialog()) throw new Error(DIALOG_IN_THE_WAY);
+      return !preparing;
     },
     async whileClosing(run) {
       localClose = true;
@@ -147,6 +150,7 @@
     void api.getSetting<boolean>(settings.sidebarHidden).then((hidden) => {
       if (alive && typeof hidden === "boolean") sideHidden = hidden;
     }).catch(() => {});
+    void loadDetailsChrome();
     const guards = beforeUpdateRestart(async () => {
       const problem = keepMessagesForRestart();
       if (problem) return problem;
