@@ -1,9 +1,8 @@
 <script lang="ts">
-  import { message, open } from "@tauri-apps/plugin-dialog";
-  import { listen } from "@tauri-apps/api/event";
-  import { api, settings } from "./lib/api";
+  import { open } from "@tauri-apps/plugin-dialog";
+  import { settings, type RepoNotice } from "./lib/api";
   import { resizeSplitter } from "./lib/resizeSplitter";
-  import { WORKTREE_ID, type History, type HistoryRow, type OutsideChange, type ReadPart, type RecentRepo, type ReflogEntry, type RepoSummary } from "./lib/types";
+  import { WORKTREE_ID, type Gone, type History, type HistoryRow, type ReadPart, type RecentRepo, type ReflogEntry, type RepoSummary } from "./lib/types";
   import { RepoSession } from "./lib/repoSession.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
   import HistoryList from "./lib/HistoryList.svelte";
@@ -11,40 +10,66 @@
   import { focusedView } from "./lib/graph";
   import CommitPanel from "./lib/CommitPanel.svelte";
   import ChangesPanel from "./lib/ChangesPanel.svelte";
-  import { beforeUpdateRestart } from "./lib/updateRestart.svelte";
-  import { keepMessagesForRestart, savedMessage } from "./lib/commitDrafts.svelte";
+  import { savedMessage } from "./lib/commitDrafts.svelte";
   import FolderGone from "./lib/FolderGone.svelte";
   import { goneScreen, messageOf } from "./lib/gone";
   import { tilde } from "./lib/term";
   import ConfirmSheet from "./lib/ConfirmSheet.svelte";
-  import { confirm, type Request } from "./lib/confirm.svelte";
+  import { type Request } from "./lib/confirm.svelte";
   import BranchPicker from "./lib/BranchPicker.svelte";
-  import { detachRequest, keepRequest, newBranchRequest, switchRequest, trackRequest, type BranchContext } from "./lib/branches";
+  import { detachRequest, keepRequest as keepRequestInRepo, newBranchRequest as newBranchRequestInRepo, switchRequest as switchRequestInRepo, trackRequest, type BranchContext } from "./lib/branches";
   import UpdateNotification from "./lib/UpdateNotification.svelte";
   import { updates } from "./lib/updates.svelte";
   import DetachedBanner from "./lib/DetachedBanner.svelte";
   import OperationBanner from "./lib/OperationBanner.svelte";
-  import { draftSaves } from "./lib/conflictDrafts";
-  import { settleReviewSaves } from "./lib/reviewSaves";
   import { abortRequest, continueRequest, describe, skipRequest } from "./lib/merge";
-  import { applyPatchesRequest, choosePatchFiles, savePatchesRequest, type PatchTarget } from "./lib/patches";
+  import { applyPatchesRequest as applyPatchesRequestInRepo, choosePatchFiles, savePatchesRequest as savePatchesRequestInRepo, type PatchTarget } from "./lib/patches";
   import { stashRequest } from "./lib/stash";
-  import { newWorktreeRequest } from "./lib/worktrees";
+  import { newWorktreeRequest as newWorktreeRequestInRepo } from "./lib/worktrees";
   import StashesView from "./lib/StashesView.svelte";
   import { ancestors } from "./lib/commits";
   import { lockedCommit } from "./lib/protect";
   import type { Operation } from "./lib/types";
   import Menu, { menuIcons, type MenuEntry } from "./lib/Menu.svelte";
-  import { fetchRequest, pullRequest, pushRequest, syncBlock, unshallowRequest, type RemoteContext, type SyncFix } from "./lib/remote";
+  import { fetchRequest as fetchRequestInRepo, pullRequest as pullRequestInRepo, pushRequest as pushRequestInRepo, syncBlock, unshallowRequest as unshallowRequestInRepo, type RemoteContext, type SyncFix } from "./lib/remote";
   import SyncButtons from "./lib/SyncButtons.svelte";
   import Welcome from "./lib/Welcome.svelte";
+  import { useRepoScope } from "./lib/repoScope";
+  import type { OpenFrom, OpenTab } from "./lib/repoTabs";
+
+  let { openedTab, launched, openPath, closeTab, lostTab }: {
+    openedTab?: OpenTab;
+    launched: boolean;
+    openPath?: (path: string, from: OpenFrom) => Promise<void>;
+    closeTab?: () => Promise<void>;
+    lostTab?: (gone: Gone) => Promise<void>;
+  } = $props();
+  const scope = useRepoScope();
+  const { kept } = scope;
+  const keepRequest = keepRequestInRepo.bind(null, scope);
+  const newBranchRequest = newBranchRequestInRepo.bind(null, scope);
+  const switchRequest = switchRequestInRepo.bind(null, scope);
+  const { api, confirm, draftSaves, search, nav, start, oplog, activity, github, lfs, lens, tips } = scope;
+  const applyPatchesRequest = applyPatchesRequestInRepo.bind(null, scope);
+  const savePatchesRequest = savePatchesRequestInRepo.bind(null, scope);
+  const newWorktreeRequest = newWorktreeRequestInRepo.bind(null, scope);
+  const fetchRequest = fetchRequestInRepo.bind(null, scope);
+  const pullRequest = pullRequestInRepo.bind(null, scope);
+  const pushRequest = pushRequestInRepo.bind(null, scope);
+  const unshallowRequest = unshallowRequestInRepo.bind(null, scope);
+  const startPublish = startPublishInRepo.bind(null, scope);
+  const startPublishGitLab = startPublishGitLabInRepo.bind(null, scope);
+  const loadFixState = loadFixStateInRepo.bind(null, scope);
+  const commitMenuOf = commitMenuOfInRepo.bind(null, scope);
+  const splitRequest = splitRequestInRepo.bind(null, scope);
+
   let overviewShown = $state(false);
   const showRepositories = () => { closePickers(); overviewShown = true; };
   import { prefs } from "./lib/prefs.svelte";
   import SearchField from "./lib/SearchField.svelte";
   import SearchBar from "./lib/SearchBar.svelte";
-  import { search, type Found } from "./lib/search.svelte";
-  import { tick, untrack } from "svelte";
+  import { type Found } from "./lib/search.svelte";
+  import { onMount, tick, untrack } from "svelte";
   import FindField from "./lib/FindField.svelte";
   import QuickOpen from "./lib/QuickOpen.svelte";
   import CommandPalette from "./lib/CommandPalette.svelte";
@@ -57,29 +82,21 @@
   import { stepChange } from "./lib/diffRows";
   import { conflictSteps, KEPT_CONFLICTS } from "./lib/conflicts";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { getCurrentWindow, type CloseRequestedEvent } from "@tauri-apps/api/window";
-  import { nav } from "./lib/nav.svelte";
   import { compareRef } from "./lib/compareRefs";
   import type { CompareMode } from "./lib/types";
-  import { startPublish, startPublishGitLab } from "./lib/publish";
-  import { start } from "./lib/start.svelte";
+  import { startPublish as startPublishInRepo, startPublishGitLab as startPublishGitLabInRepo } from "./lib/publish";
   import OperationLog from "./lib/OperationLog.svelte";
   import { shortcut, withKeys } from "./lib/keys";
-  import { cannotRestore, isRedo, lostRow, oplog, undoRequest } from "./lib/oplog.svelte";
-  import { canBack, canForward, crumbs, detailOfPlace, moveToPlace, nameOfPlace, newNavigationTrail, placeKey, recordPlace, resetNavigationTrail, type Place } from "./lib/backStack";
-  import { kept } from "./lib/kept";
+  import { cannotRestore, isRedo, lostRow, undoRequest } from "./lib/oplog.svelte";
+  import { canBack, canForward, crumbs, detailOfPlace, moveToPlace, nameOfPlace, newNavigationTrail, placeKey, recordPlace, resetNavigationTrail, type HistoryPosition, type Place } from "./lib/backStack";
   import { stepQuery, type SeriesQuery } from "./lib/series";
   import { lane, relativeTime } from "./lib/format";
-  import { activity, failureShort, type ActivityItem } from "./lib/activity.svelte";
-  import { github } from "./lib/github.svelte";
+  import { failureShort, type ActivityItem } from "./lib/activity.svelte";
   import type { ForgeKind } from "./lib/forge";
-  import { lfs } from "./lib/lfs.svelte";
   import LfsBanner from "./lib/LfsBanner.svelte";
   import StatusLine from "./lib/StatusLine.svelte";
-  import { lens } from "./lib/lens.svelte";
   import TipCard from "./lib/TipCard.svelte";
-  import { tips } from "./lib/tips.svelte";
-  import { fixChoices, fixRequest, fixStateLine, loadFixState, type FixContext, type FixId } from "./lib/fixes";
+  import { fixChoices, fixRequest, fixStateLine, loadFixState as loadFixStateInRepo, type FixContext, type FixId } from "./lib/fixes";
   import { bisectMarkRequest, bisectResetRequest } from "./lib/bisect";
   import { keys, mac } from "./lib/keys";
   import type { BisectMark, OpEntry } from "./lib/types";
@@ -87,8 +104,8 @@
   import { keyFocus, stepperOf } from "./lib/tabs";
   import { Lazy } from "./lib/lazyScreen.svelte";
   import TrustSheet from "./lib/TrustSheet.svelte";
-  import { commitMenu as commitMenuOf } from "./lib/commitMenu";
-  import { splitRequest } from "./lib/stack";
+  import { commitMenu as commitMenuOfInRepo } from "./lib/commitMenu";
+  import { splitRequest as splitRequestInRepo } from "./lib/stack";
   import RestrictedBadge from "./lib/RestrictedBadge.svelte";
   import WindowTitle from "./lib/WindowTitle.svelte";
   import { windowTitle, type Title } from "./lib/windowTitle";
@@ -114,7 +131,7 @@
   const PairPanel = new Lazy(() => import("./lib/PairPanel.svelte"));
 
   // The window's repository and its history: repoSession.svelte.ts, historyLoad.svelte.ts.
-  const session = new RepoSession({
+  const session = new RepoSession(scope, {
     leaving() {
       // The commit panel must not ask the new repository about the old one's commits.
       selected = null;
@@ -132,10 +149,22 @@
       selected = next.head.commit ?? next.rows[0]?.id ?? null;
       requestAnimationFrame(() => selected && list?.reveal(selected));
     },
+    lost(gone) {
+      if (lostTab) void lostTab(gone);
+    },
     reloaded(next) {
-      if (!selected || !next.rows.some((r) => r.id === selected)) selected = next.head.commit ?? next.rows[0]?.id ?? null;
-      // Current Branch Only follows a checkout: a commit it no longer shows gives way to HEAD.
-      else if (next.focus && !next.focus.rows.some((i) => next.rows[i].id === selected)) selected = next.head.commit ?? selected;
+      const id = selected;
+      const fallback = next.head.commit ?? next.rows[0]?.id ?? null;
+      if (!id || id === WORKTREE_ID && !loader.rowsById.has(id)) selected = fallback;
+      else if (next.focus) {
+        if (!next.focus.rows.some((i) => next.rows[i].id === id)) selected = fallback;
+      } else if (!loader.rowsById.has(id)) {
+        // Older selections can fall past the loaded rows when new commits arrive above them.
+        const ticket = session.tickets.take();
+        void ensureLoaded(id).then((found) => {
+          if (!found && session.tickets.current(ticket) && selected === id) selected = history?.head.commit ?? fallback;
+        });
+      }
     },
     closed() {
       selected = null;
@@ -156,7 +185,71 @@
   const focusOnly = $derived(loader.focusOnly);
   /** Goes up on every reload of the history, so the views showing it reload too. */
   const version = $derived(loader.version);
-  const load = (path: string) => { overviewShown = false; return session.load(path); };
+  let openingPath = $state(false);
+  let alive = true;
+  const load = async (path: string) => {
+    if (!alive) return;
+    if (!openPath) {
+      overviewShown = false;
+      return session.load(path);
+    }
+    if (openingPath) return;
+    openingPath = true;
+    try {
+      await openPath(path, {
+        live: () => alive,
+        reopened: async (id, summary) => {
+          if (scope.id !== id) return;
+          overviewShown = false;
+          if (!session.gone) return;
+          const next = await loader.first();
+          if (alive) session.attach(summary, next);
+        },
+        trust: (name, findings) => scope.isActive() ? session.askTrust(name, findings, true) : Promise.resolve(null),
+        fail: async (path, error) => {
+          if (session.repo) confirm.fail(error);
+          else await session.failed(path, error, session.tickets.take());
+        },
+      });
+    } finally {
+      openingPath = false;
+    }
+  };
+  export const startup = (path: string) => load(path);
+  export function showGone(gone: Gone) { session.showGone(gone); }
+  export function recentFromMenu(path: string) {
+    if (!loading && !openingPath && windowCommandsFree()) void load(path);
+  }
+  export function accountChanged() {
+    if (session.repo) github.accountChanged();
+  }
+  export const trustChanged = (path: string) => session.trusted(path);
+  export function windowFocused() {
+    menuShown = "";
+    untrack(showMenu);
+  }
+  export function notice(event: RepoNotice) {
+    switch (event.event) {
+      case "action-event": confirm.onEvent(event.payload); break;
+      case "fetch-event": activity.onFetch(event.payload); break;
+      case "clone-line": scope.clone.line?.(event.payload); break;
+      case "outside-change":
+        for (const refresh of scope.filesChanged) refresh();
+        void loader.outsideChanged(event.payload);
+        break;
+      case "repo-touched": void refresh(); break;
+      case "open-file-error": confirm.fail(event.payload); break;
+      case "menu-command": fromMenu(event.payload as ShortcutId); break;
+    }
+  }
+  export function changedOutside(event: Parameters<typeof loader.outsideChanged>[0]) {
+    void loader.outsideChanged(event);
+  }
+  export const repoTouched = () => void refresh();
+  export const fileOpenError = (error: string) => confirm.fail(error);
+  export function canSwitch() {
+    return !session.trustAsk && !start.sheet && !confirm.request;
+  }
   const refresh = () => loader.refresh();
   const refreshQuietly = () => loader.refreshQuietly();
   let reviewRefresh = $state(0);
@@ -167,8 +260,8 @@
   const retryRead = (part: ReadPart) => loader.retryRead(part);
   const loadOlder = (until: string | null = null) => loader.loadOlder(until);
   const ensureLoaded = (id: string) => loader.ensureLoaded(id);
-  const closeRepo = () => session.close();
-  const findFolder = (old: string) => session.findFolder(old);
+  const closeRepo = () => closeTab ? closeTab() : session.close();
+  const findFolder = (old: string) => session.findFolder(old, load);
   $effect(() => {
     if (loader.history?.unpushedPending) untrack(() => loader.settleUnpushed());
   });
@@ -396,6 +489,29 @@
 
   const navigation = $state(newNavigationTrail());
   const trail = $derived(navigation.trail);
+  let returnToHistory: HistoryPosition | null = null;
+  let wasActive = true;
+  $effect.pre(() => {
+    if (scope.id === null) return;
+    const active = scope.isActive();
+    const graph = list;
+    untrack(() => {
+      if (!active && wasActive) returnToHistory = navigation.scroll;
+      wasActive = active;
+      if (!active || !graph || !returnToHistory) return;
+      const position = returnToHistory;
+      const revision = navigation.revision;
+      const ticket = session.tickets.take();
+      returnToHistory = null;
+      void (async () => {
+        await tick();
+        const found = rowsById.has(position.id) || position.id !== WORKTREE_ID && await ensureLoaded(position.id);
+        if (alive && scope.isActive() && list === graph && navigation.revision === revision && session.tickets.current(ticket)) {
+          graph.restorePosition(found ? position : null, selected);
+        }
+      })();
+    });
+  });
   /** The list of places behind or ahead, from a right-click on Back or Forward. */
   let placesMenu = $state<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
 
@@ -497,7 +613,8 @@
         selected = p.commit;
         requestAnimationFrame(() => {
           if (current() && view === "history" && selected === p.commit) {
-            list?.restorePosition(p.scroll, p.commit);
+            if (scope.isActive()) list?.restorePosition(p.scroll, p.commit);
+            else returnToHistory = p.scroll;
           }
         });
         break;
@@ -711,6 +828,7 @@
       return;
     }
     searchTimer = setTimeout(() => search.run(untrack(() => history?.rows ?? []), untrack(() => !!history?.truncated)), 220);
+    return () => clearTimeout(searchTimer);
   });
   // A new search selects its first match; a reload with the same search keeps the selection.
   let selectedFor = "";
@@ -766,8 +884,11 @@
     }
     const before = history?.head;
     const opBefore = history?.operation ?? null;
+    if (!alive) return false;
     const ok = await confirm.run(request);
+    if (!alive) return ok;
     await refresh();
+    if (!alive) return ok;
     if (ok && request.action?.kind === "fetchTags") checkRemoteTags();
     // A stash made or put back is the newest, and the Stashes screen shows it.
     if (ok && (request.action?.kind === "stashPush" || request.action?.kind === "stashHunk" || request.action?.kind === "stashStore")) stashSel = history?.stashes[0]?.id ?? null;
@@ -842,6 +963,10 @@
   /** The menu bar shows the commands of the window in front (appMenu.ts). */
   function showMenu() {
     if (!mac) return;
+    if (!scope.isActive()) {
+      menuShown = "";
+      return;
+    }
     const available: Available = new Map(paletteCommands().map((c) => [c.id, c.title]));
     available.set("palette", undefined);
     if (history) for (const id of ["findNext", "findPrevious", "nextTab", "previousTab"]) available.set(id, undefined);
@@ -854,7 +979,8 @@
   $effect(showMenu);
 
   /** A command picked in the menu bar runs as its key would in the field that has the focus. */
-  function fromMenu(id: ShortcutId) {
+  export function fromMenu(id: ShortcutId) {
+    if (!scope.isActive()) return;
     const event = { target: document.activeElement, altKey: false } as unknown as KeyboardEvent;
     shortcutKey(id, event);
   }
@@ -967,7 +1093,7 @@
     // Compare and Stashes have their own file pane outside the History details.
     if (showConflicts) return false;
     const files = view === "compare" || view === "stashes"
-      ? document.querySelector("[data-comparison-files]")
+      ? document.querySelector("[data-comparison-files]:not([inert] *)")
       : content?.querySelector("aside.panel [data-steps]");
     const steps = stepperOf(files);
     if (steps) return steps(by, true);
@@ -1159,7 +1285,7 @@
 
   /** A sheet keeps the window's commands until it closes, apart from opening other windows or zooming. */
   function windowCommandsFree(): boolean {
-    return !confirm.request && !start.sheet && !document.querySelector('[aria-modal="true"]');
+    return !confirm.request && !start.sheet && !document.querySelector('[aria-modal="true"]:not([inert] *)');
   }
 
   /** Run a window-wide shortcut. False when it can't run here and now, so the key does what it
@@ -1618,32 +1744,6 @@
     if (await api.refreshRemoteTags().catch(() => false)) await refreshQuietly();
   }
 
-  /** The window asks whether to close without the conflict draft: a close meanwhile waits. */
-  let askingToClose = false;
-  $effect(() => beforeUpdateRestart(keepMessagesForRestart));
-  /** Closing the window, or quitting, waits for the Conflicts screen's last draft to be written.
-   *  When it can't be, or isn't after 3 seconds, the window stays and asks: Try Again, Close
-   *  Without Saving, or Cancel, which also calls off a quit. */
-  async function closeRequested(event: CloseRequestedEvent) {
-    if (askingToClose) return event.preventDefault();
-    // A save that failed earlier gets another go first: what stopped it may be over.
-    draftSaves.retry();
-    const [conflictWhy, reviewWhy] = await Promise.all([draftSaves.settle(3000), settleReviewSaves(3000)]);
-    const why = conflictWhy ?? reviewWhy;
-    if (why === null) return;
-    event.preventDefault();
-    askingToClose = true;
-    const answer = await message(`Oxbow couldn’t save your ${conflictWhy ? "conflict" : "review"} draft: ${why.replace(/\.$/, "")}. Do you really want to close without it?`, {
-      title: `Your ${conflictWhy ? "conflict" : "review"} draft isn’t saved`,
-      kind: "warning",
-      buttons: { yes: "Try Again", no: "Close Without Saving", cancel: "Cancel" },
-    }).catch(() => "Cancel");
-    askingToClose = false;
-    if (answer === "Close Without Saving") return void getCurrentWindow().destroy();
-    if (answer === "Try Again") return void getCurrentWindow().close();
-    api.cancelQuit().catch(() => {});
-  }
-
   // Background fetch, from Settings › Git › Fetch: keeps ahead/behind counts current. It skips a
   // turn while a sheet is open or the window is hidden; a failure only puts the amber dot on
   // Fetch, and Activity says what is wrong.
@@ -1805,21 +1905,19 @@
     }
   }
 
-  /** Once the repository to open at launch is known, so Welcome doesn't shrink the window first. */
-  let launched = $state(false);
   // Welcome is a compact window; a repository gets the repository window's size back.
   $effect(() => {
     const welcome = overviewShown || !repo || !history;
-    if (launched && !(welcome && loading)) fitWindow(welcome);
+    if (scope.isActive() && launched && !(welcome && (loading || openingPath))) fitWindow(welcome);
   });
 
   let content = $state<HTMLDivElement>();
   // The commit list has the keyboard when History opens and nothing else asked for it, so ↑ ↓
   // work at once and the selection shows in its branch color.
   $effect(() => {
-    if (view !== "history" || !list || showConflicts) return;
+    if (!scope.isActive() || view !== "history" || !list || showConflicts) return;
     requestAnimationFrame(() => {
-      if (document.activeElement === document.body || document.activeElement === null) list?.focus();
+      if (scope.isActive() && canSwitch() && (document.activeElement === document.body || document.activeElement === null)) list?.focus();
     });
   });
 
@@ -1888,45 +1986,17 @@
       if (typeof hidden === "boolean") detailsHidden = hidden;
     });
     api.getSetting<number>(settings.zoomLevel).then((level) => {
-      if (typeof level === "number" && level !== 0) zoom(level, false);
+      if (!openedTab && typeof level === "number" && level !== 0) zoom(level, false);
     });
-    api.initialRepo().then((path) => {
-      if (path) load(path);
-      launched = true;
-    });
-    // Settings changed remotes or packed the repository. Only this window's: each window has
-    // its own repository.
-    const unlisten = getCurrentWindow().listen("repo-touched", () => refresh());
-    // A terminal, an editor or another window changed the repository.
-    const outside = getCurrentWindow().listen<OutsideChange>("outside-change", (event) => loader.outsideChanged(event.payload));
-    const openFileError = getCurrentWindow().listen<string>("open-file-error", (event) => confirm.fail(event.payload));
-    // Signing in or out changes what GitHub tells about the pull requests.
-    const account = listen("account-changed", () => repo && github.accountChanged());
-    const closing = getCurrentWindow().onCloseRequested(closeRequested);
-    const picked = getCurrentWindow().listen<ShortcutId>("menu-command", (event) => fromMenu(event.payload));
-    const recent = getCurrentWindow().listen<string>("menu-open", (event) => {
-      if (!loading && windowCommandsFree()) void load(event.payload);
-    });
-    // Another window trusted a repository: git runs its settings here too.
-    const trusted = listen<string>("trust-changed", (event) => {
-      session.trusted(event.payload);
-    });
-    // Back in front: the menu bar shows this window's commands again.
-    const front = getCurrentWindow().onFocusChanged(({ payload }) => {
-      if (!payload) return;
-      menuShown = "";
-      untrack(showMenu);
-    });
+  });
+
+  untrack(() => { if (openedTab) session.attach(openedTab.repo, openedTab.history); });
+  onMount(() => {
+    const scoped = !!openPath;
     return () => {
-      picked.then((stop) => stop());
-      recent.then((stop) => stop());
-      trusted.then((stop) => stop());
-      front.then((stop) => stop());
-      unlisten.then((stop) => stop());
-      outside.then((stop) => stop());
-      openFileError.then((stop) => stop());
-      account.then((stop) => stop());
-      closing.then((stop) => stop());
+      alive = false;
+      clearTimeout(slideTimer);
+      if (scoped) session.dispose();
     };
   });
 </script>
@@ -1937,6 +2007,7 @@
   bind:innerWidth={windowWidth}
   onfocus={() => loader.cameBack()}
   onmouseup={(event) => {
+    if (!scope.isActive()) return;
     // A mouse's own Back and Forward buttons.
     if ((event.button !== 3 && event.button !== 4) || !history || overviewShown || confirm.request || start.sheet) return;
     event.preventDefault();
@@ -1944,9 +2015,10 @@
     else goForward();
   }}
   onkeydown={(event) => {
+    if (!scope.isActive()) return;
     if (confirm.request && isImeEscape(event)) return;
     // Menu handles Escape on the same window; its listener may run after this one.
-    if (event.key === "Escape" && document.querySelector('[role="menu"]')) return;
+    if (event.key === "Escape" && document.querySelector('[role="menu"]:not([inert] *)')) return;
     const hit = keymap.match(event);
     // The chord's note goes once its second key came.
     if (hit && chordNote && confirm.toast?.text === chordNote) confirm.dismiss();
@@ -1962,7 +2034,7 @@
     } else if (hit && "id" in hit && shortcutKey(hit.id, event)) {
       event.preventDefault();
     } else if (overviewShown) {
-      if (event.key === "Escape" && !event.defaultPrevented && !confirm.request && !start.sheet && !picker && !document.querySelector('[role="menu"]')) {
+      if (event.key === "Escape" && !event.defaultPrevented && !confirm.request && !start.sheet && !picker && !document.querySelector('[role="menu"]:not([inert] *)')) {
         event.preventDefault();
         overviewShown = false;
       }
@@ -1989,8 +2061,8 @@
 
 {#if overviewShown || !repo || !history}
   <Welcome currentPath={repo?.path ?? null} onBack={repo && history ? () => (overviewShown = false) : undefined}
-    {loading} error={session.gone ? null : (error ?? settingsNote?.text ?? null)} onOpen={chooseRepo} onOpenPath={load}
-    onLocate={(path) => { void session.findFolder(path, () => (overviewShown = false)); }} gone={session.gone ? goneAside : undefined} />
+    loading={loading || openingPath} error={session.gone ? null : (error ?? settingsNote?.text ?? null)} onOpen={chooseRepo} onOpenPath={load}
+    onLocate={(path) => { void session.findFolder(path, load, () => { if (!openPath) overviewShown = false; }); }} gone={session.gone ? goneAside : undefined} />
   {#snippet goneAside()}
     {#if session.gone && goneShown}
       <FolderGone
@@ -1999,10 +2071,10 @@
         shown={shownPath}
         busy={loading || session.reconnecting}
         note={session.goneNote}
-        onMain={() => session.goneMain()}
+        onMain={() => session.goneMain(load)}
         onFind={() => session.gone && findFolder(session.gone.path)}
         onRetry={() => session.gone && load(session.gone.path)}
-        onClose={() => session.goneClose()}
+        onClose={() => closeTab ? closeTab() : session.goneClose()}
       />
     {/if}
   {/snippet}
@@ -2376,7 +2448,7 @@
               history={graphHistory!}
               {selected}
               onSelect={select}
-              onScroll={(position) => (navigation.scroll = position)}
+              onScroll={(position) => { if (scope.isActive()) navigation.scroll = position; }}
               menuFor={commitMenu}
               linkFor={(id) => api.commitLink(repo.path, id)}
               copyLink={(url) => copyText(url, "Copied the commit link.")}

@@ -3,19 +3,21 @@
   // yours, then the others; or the recently closed ones. A row opens the Pull Request screen, or
   // checks the pull request out in a worktree of its own. Merge requests on GitLab show the same
   // way once signed in there; a repository on both picks one at the top.
+  import { useRepoScope } from "./repoScope";
   import { untrack } from "svelte";
   import ReviewLoadNotice from "./ReviewLoadNotice.svelte";
-  import { confirm } from "./confirm.svelte";
-  import { api } from "./api";
-  import { github } from "./github.svelte";
   import type { Request } from "./confirm.svelte";
   import type { BranchContext } from "./branches";
   import type { PullSummary, ReviewDraft } from "./types";
   import { person, plate, relativeTime, tint } from "./format";
-  import { pullWorktreeRequest, worktreeOf } from "./worktrees";
+  import { pullWorktreeRequest as pullWorktreeRequestInRepo, worktreeOf } from "./worktrees";
   import { listFor } from "./reviews";
   import { countWords } from "./reviewDraft";
   import { wordsOf, type ForgeKind } from "./forge";
+
+  const scope = useRepoScope();
+  const { confirm, api, github } = scope;
+  const pullWorktreeRequest = pullWorktreeRequestInRepo.bind(null, scope);
 
   let {
     ctx,

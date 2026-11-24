@@ -4,12 +4,15 @@
   // changed one (message, code, author), a new commit or a dropped one; a changed pair shows how
   // its two versions differ, apart from the base under them.
 
-  import { api } from "./api";
+  import { useRepoScope } from "./repoScope";
   import type { HistoryRow, Series, SeriesCommit, SeriesPair } from "./types";
   import { relativeTime, shortId, tint, plate } from "./format";
   import { baseLine, firstPick, headline, pairLabel, seriesRow, tally, type SeriesQuery } from "./series";
   import CommitPanel from "./CommitPanel.svelte";
   import InterDiff from "./InterDiff.svelte";
+
+  const scope = useRepoScope();
+  const { api } = scope;
 
   let {
     query,

@@ -1,16 +1,15 @@
+import type { RepoScope } from "./repoScope";
 // The right-click menu of a file in the Changes panel's lists, or of several picked files, and of
 // a file of a commit.
 
 import { save } from "@tauri-apps/plugin-dialog";
-import { api } from "./api";
 import { ignoreChoices, ignoreRequest, stashFilesRequest, stashMessageFor, type StashCandidate } from "./changes";
 import { stashStagedRequest } from "./stashLines";
 import { commitFileActions, commitFileRequest, type CommitFile } from "./commitFiles";
-import { confirm, type Request } from "./confirm.svelte";
+import { type Request } from "./confirm.svelte";
 import { shortId, splitPath } from "./format";
 import { menuIcons, type MenuEntry, type SubEntry } from "./Menu.svelte";
 import { workingFileMenuItem } from "./openFile.svelte";
-import { nav } from "./nav.svelte";
 import { NEWEST_SAVED } from "./localHistory";
 import type { FileChange, Side } from "./types";
 
@@ -44,7 +43,7 @@ const revealLabel = navigator.platform.startsWith("Mac") ? "Reveal in Finder" : 
 
 /** Copy Path/Reference, as in JetBrains IDEs: the path from the disk's root, the name, or the
  *  path in the repository, of one file or of several on lines of their own. */
-function copyMenu(repo: string, paths: string[]): MenuEntry {
+function copyMenu(scope: RepoScope, repo: string, paths: string[]): MenuEntry {
   // Windows paths come with backslashes.
   const sep = repo.includes("\\") && !repo.includes("/") ? "\\" : "/";
   const absolute = (path: string) => repo.replace(/[\\/]+$/, "") + sep + path.replaceAll("/", sep);
@@ -52,7 +51,7 @@ function copyMenu(repo: string, paths: string[]): MenuEntry {
   const item = (label: string, texts: string[]): SubEntry => ({
     label,
     hint: one ? texts[0] : undefined,
-    run: () => navigator.clipboard.writeText(texts.join("\n")).then(() => confirm.say(one ? `Copied ${texts[0]}.` : `Copied ${paths.length} paths.`, "done"), () => {}),
+    run: () => navigator.clipboard.writeText(texts.join("\n")).then(() => scope.confirm.say(one ? `Copied ${texts[0]}.` : `Copied ${paths.length} paths.`, "done"), () => {}),
   });
   return {
     kind: "sub",
@@ -67,7 +66,7 @@ function copyMenu(repo: string, paths: string[]): MenuEntry {
 }
 
 /** The menu of several picked files of one list. */
-export function filesMenu(repo: string, several: FileChange[], group: Side | "untracked", a: FileMenuActions): FileMenu {
+export function filesMenu(scope: RepoScope, repo: string, several: FileChange[], group: Side | "untracked", a: FileMenuActions): FileMenu {
   const n = several.length;
   const fresh = several.every((f) => f.status === "untracked");
   const entries: MenuEntry[] = [{ kind: "header", label: `${n} selected files${a.where ? ` ${a.where}` : ""}` }];
@@ -77,7 +76,7 @@ export function filesMenu(repo: string, several: FileChange[], group: Side | "un
   entries.push({ kind: "item", label: "Stash These Files…", icon: menuIcons.stash, run: () => a.act(stashFilesRequest(a.stashCandidates(), several.map((f) => f.path), stashMessageFor(several[0].path))) });
   if (group === "staged") entries.push(stashStagedItem(a));
   entries.push({ kind: "sep" });
-  entries.push(copyMenu(repo, several.map((f) => f.path)));
+  entries.push(copyMenu(scope, repo, several.map((f) => f.path)));
   if (group !== "staged") {
     entries.push({ kind: "sep" });
     entries.push({ kind: "item", label: fresh ? `Delete ${n} Files…` : `Discard ${n} Files…`, icon: menuIcons.drop, danger: true, run: () => a.actOnPicked("discard") });
@@ -86,7 +85,7 @@ export function filesMenu(repo: string, several: FileChange[], group: Side | "un
 }
 
 /** The menu of one file. */
-export function fileMenu(repo: string, file: FileChange, group: Side | "untracked" | "conflicted", a: FileMenuActions): FileMenu {
+export function fileMenu(scope: RepoScope, repo: string, file: FileChange, group: Side | "untracked" | "conflicted", a: FileMenuActions): FileMenu {
   const side = group === "untracked" ? "unstaged" : group;
   const name = splitPath(file.path).name;
   const what = { modified: "modified", added: "new file", untracked: "untracked", deleted: "deleted", renamed: "renamed", copied: "copied", conflicted: "conflicted" }[file.status];
@@ -106,14 +105,14 @@ export function fileMenu(repo: string, file: FileChange, group: Side | "untracke
     });
   entries.push({ kind: "sep" });
   if (!file.submodule)
-    entries.push(workingFileMenuItem(file.path, side === "staged"));
+    entries.push(workingFileMenuItem(scope, file.path, side === "staged"));
   if (file.status !== "deleted")
-    entries.push({ kind: "item", label: revealLabel, icon: menuIcons.reveal, run: () => api.revealFile(file.path).catch((err) => confirm.fail(err)) });
-  entries.push(copyMenu(repo, [file.path]));
+    entries.push({ kind: "item", label: revealLabel, icon: menuIcons.reveal, run: () => scope.api.revealFile(file.path).catch((err) => scope.confirm.fail(err)) });
+  entries.push(copyMenu(scope, repo, [file.path]));
   entries.push({ kind: "sep" });
-  if (file.status !== "untracked" && file.status !== "added") entries.push({ kind: "item", label: "File History", icon: menuIcons.history, run: () => nav.openFile(file.path) });
+  if (file.status !== "untracked" && file.status !== "added") entries.push({ kind: "item", label: "File History", icon: menuIcons.history, run: () => scope.nav.openFile(file.path) });
   // Saved versions of any file, new or deleted ones too.
-  entries.push({ kind: "item", label: "Local History", icon: menuIcons.history, run: () => nav.openFile(file.path, NEWEST_SAVED) });
+  entries.push({ kind: "item", label: "Local History", icon: menuIcons.history, run: () => scope.nav.openFile(file.path, NEWEST_SAVED) });
   if (side === "unstaged") {
     entries.push({ kind: "sep" });
     entries.push({ kind: "item", label: file.status === "untracked" ? "Delete File…" : "Discard Changes…", icon: menuIcons.drop, danger: true, run: () => a.discard([file]) });
@@ -135,11 +134,11 @@ export interface CommitFileContext {
 
 /** The menu of a file of a commit: what can be done with it, as with a file in Changes, but
  *  nothing to stage, stash or discard; and its change on its own, undone or copied. */
-export function commitFileMenu(repo: string, file: FileChange, commit: string, ctx: CommitFileContext, canBlame: () => boolean): FileMenu {
+export function commitFileMenu(scope: RepoScope, repo: string, file: FileChange, commit: string, ctx: CommitFileContext, canBlame: () => boolean): FileMenu {
   const name = splitPath(file.path).name;
   const what = { modified: "modified", added: "added", untracked: "added", deleted: "deleted", renamed: "renamed", copied: "copied", conflicted: "conflicted" }[file.status];
   const entries: MenuEntry[] = [{ kind: "header", label: `${name} · ${what} in this commit` }];
-  const actions = commitFileEntries(file, commit, ctx);
+  const actions = commitFileEntries(scope, file, commit, ctx);
   const split = ctx.split;
   if (split) actions.push({ kind: "item", label: "Split into a New Commit…", icon: menuIcons.split, run: () => split(file.path) });
   if (!file.submodule) {
@@ -156,34 +155,34 @@ export function commitFileMenu(repo: string, file: FileChange, commit: string, c
             filters: [{ name: "Patch", extensions: ["patch"] }],
           });
           if (!to) return;
-          await api.saveFilePatch(repo, commit, path, status === "renamed" ? oldPath ?? null : null, to);
-          confirm.say(`Saved a patch for ${name}.`, "done");
+          await scope.api.saveFilePatch(repo, commit, path, status === "renamed" ? oldPath ?? null : null, to);
+          scope.confirm.say(`Saved a patch for ${name}.`, "done");
         } catch (err) {
-          confirm.fail(err);
+          scope.confirm.fail(err);
         }
       },
     });
   }
   if (actions.length) entries.push(...actions, { kind: "sep" });
-  entries.push({ kind: "item", label: "File History", icon: menuIcons.history, run: () => nav.openFile(file.path, commit) });
+  entries.push({ kind: "item", label: "File History", icon: menuIcons.history, run: () => scope.nav.openFile(file.path, commit) });
   entries.push({
     kind: "item",
     label: "Blame at This Commit",
     icon: menuIcons.history,
     get hidden() { return !canBlame(); },
     run: () => {
-      nav.fileMode = "blame";
-      nav.openFile(file.path, commit, { base: commit, at: commit });
+      scope.nav.fileMode = "blame";
+      scope.nav.openFile(file.path, commit, { base: commit, at: commit });
     },
   });
-  if (file.status !== "deleted" && !file.submodule) entries.push({ kind: "item", label: "Browse Files at This Commit", icon: menuIcons.folder, run: () => nav.openBrowse(commit, null, file.path) });
+  if (file.status !== "deleted" && !file.submodule) entries.push({ kind: "item", label: "Browse Files at This Commit", icon: menuIcons.folder, run: () => scope.nav.openBrowse(commit, null, file.path) });
   entries.push({ kind: "sep" });
-  if (!file.submodule) entries.push(workingFileMenuItem(file.path, true));
+  if (!file.submodule) entries.push(workingFileMenuItem(scope, file.path, true));
   if (file.status !== "deleted") {
-    entries.push({ kind: "item", label: revealLabel, icon: menuIcons.reveal, run: () => api.revealFile(file.path).catch((err) => confirm.fail(err)) });
+    entries.push({ kind: "item", label: revealLabel, icon: menuIcons.reveal, run: () => scope.api.revealFile(file.path).catch((err) => scope.confirm.fail(err)) });
   }
-  entries.push({ kind: "item", label: "Local History", icon: menuIcons.history, run: () => nav.openFile(file.path, NEWEST_SAVED) });
-  entries.push(copyMenu(repo, [file.path]));
+  entries.push({ kind: "item", label: "Local History", icon: menuIcons.history, run: () => scope.nav.openFile(file.path, NEWEST_SAVED) });
+  entries.push(copyMenu(scope, repo, [file.path]));
   return { entries, label: `${name} menu` };
 }
 
@@ -191,14 +190,14 @@ const actionIcons = { revertFile: menuIcons.revert, cherryPickFile: menuIcons.ch
 
 /** Revert This File, Cherry-Pick This File, Take This Version and Compare with Working Copy, as
  *  menu items; the same in File History. */
-export function commitFileEntries(file: CommitFile, commit: string, ctx: CommitFileContext): MenuEntry[] {
+export function commitFileEntries(scope: RepoScope, file: CommitFile, commit: string, ctx: CommitFileContext): MenuEntry[] {
   return commitFileActions(file, ctx.inHead).map((action) => ({
     kind: "item",
     label: action.label,
     icon: actionIcons[action.id],
     run: () => {
       if (action.id === "compare") ctx.compare(file);
-      else confirm.runner?.(commitFileRequest(action.id, file, commit, ctx.summary));
+      else scope.confirm.runner?.(commitFileRequest(action.id, file, commit, ctx.summary));
     },
   }));
 }

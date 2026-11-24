@@ -1,9 +1,10 @@
+import type { RepoScope } from "./repoScope";
 // Settings › This Repository › Repository Files: the list of the shared files and the one open
 // in the editor (RepoFileEditor.svelte). Text not saved yet stays while Settings is open, so
 // going back to the list and in again keeps it.
 
 import { api } from "./api";
-import { confirm, type Part, type Request } from "./confirm.svelte";
+import { type Part, type Request } from "./confirm.svelte";
 import { Latest } from "./latest";
 import { rowSub } from "./repoFiles";
 import type { Row, Section } from "./settingsRows";
@@ -81,8 +82,8 @@ export function untrackRequest(paths: string[]): Request {
   };
 }
 
-export async function untrack(paths: string[]) {
-  await confirm.run(untrackRequest(paths));
+export async function untrack(scope: RepoScope, paths: string[]) {
+  await scope.confirm.run(untrackRequest(paths));
 }
 
 const FILE_ICON = "M4 1.8h5l3 3v9.4H4zM9 1.8v3h3M6 8h4M6 10.5h4";

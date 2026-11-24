@@ -1,11 +1,11 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { popoverEscape } from "./popoverEscape";
   // The Activity popover under Fetch / Pull / Push, with Reload at the top: the fetch that runs now with its progress,
   // Output and Stop; a Push or Pull waiting for it; and under Done what ran lately with its git
   // commands, with Fix… and Try Again on a fetch that failed.
 
-  import { activity, type ActivityItem } from "./activity.svelte";
-  import { api } from "./api";
+  import { type ActivityItem } from "./activity.svelte";
   import { relativeTime } from "./format";
   import { actionIcons } from "./icons";
   import { prefs } from "./prefs.svelte";
@@ -13,6 +13,9 @@
   import { shortcut } from "./keys";
 
   /** Commands a row shows before Show All. */
+  const scope = useRepoScope();
+  const { activity, api } = scope;
+
   const FEW = 2;
 
   /** Rows whose commands are all shown. */

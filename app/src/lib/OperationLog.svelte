@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { popoverEscape } from "./popoverEscape";
   // The toolbar's Undo button and its popover: every step Oxbow ran here, newest first. The top
   // one has Undo; any other goes back to right after it with Restore to Here. Its second tab
@@ -6,7 +7,7 @@
   // no branch has any more.
 
   import type { Request } from "./confirm.svelte";
-  import { cannotRestore, clearRequest, entryIcon, isRedo, keptUntil, lostUntil, moveIcon, moveText, oplog, reflogRows, restoreRequest, undoRequest } from "./oplog.svelte";
+  import { cannotRestore, clearRequest, entryIcon, isRedo, keptUntil, lostUntil, moveIcon, moveText, reflogRows, restoreRequest, undoRequest } from "./oplog.svelte";
   import { relativeTime } from "./format";
   import { errorLine } from "./reads";
   import { prefs } from "./prefs.svelte";
@@ -14,6 +15,9 @@
   import { combo } from "./shortcuts";
   import WhyNote from "./WhyNote.svelte";
   import type { OpEntry, ReflogEntry } from "./types";
+
+  const scope = useRepoScope();
+  const { oplog } = scope;
 
   let {
     repo,

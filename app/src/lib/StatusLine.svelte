@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { popoverEscape } from "./popoverEscape";
   // Under the toolbar of History: where the work is, in one line. "feature/login · 3 changed ·
   // 1 staged · 2 to push · origin checked 4 min ago". A click opens the card with the four
@@ -7,10 +8,13 @@
   // as fresh as that fetch, so the line always says how old they are.
 
   import type { History, ReadPart } from "./types";
-  import { activity, failureShort } from "./activity.svelte";
+  import { failureShort } from "./activity.svelte";
   import { PART_NAMES, errorLine, readAgo, troubled, type ReadStates } from "./reads";
   import { lane, plate, relativeTime, tint } from "./format";
   import { isProtected } from "./protect";
+
+  const scope = useRepoScope();
+  const { activity } = scope;
 
   let {
     history,

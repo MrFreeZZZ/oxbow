@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { api } from "./api";
+  import { useRepoScope } from "./repoScope";
   import { updates } from "./updates.svelte";
-  import { confirm } from "./confirm.svelte";
+  const scope = useRepoScope();
+  const { api, confirm } = scope;
+
   let dismissed = $state<string | null>(null);
   const key = $derived(updates.available ? `${updates.channel}:${updates.available.version}` : null);
   const show = $derived(key !== null && key !== dismissed && !updates.busy && !confirm.toast && !confirm.request);

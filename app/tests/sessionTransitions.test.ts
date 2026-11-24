@@ -32,11 +32,9 @@ function session() {
     async first() { throw new Error("history failed"); }
   }
   const noop = { forget() {}, reset() {} };
-  const C = controller("repoSession.svelte.ts", {
-    $state: (v: unknown) => v, api, Tickets, HistoryLoader,
-    oplog: noop, lfs: noop, activity: noop, nav: {}, github: { load() {} },
-  }, "RepoSession");
-  const state = new C({ leaving() {}, closed() {}, opened() {} });
+  const scope = { api, oplog: noop, lfs: noop, activity: noop, nav: {}, github: { load() {} } };
+  const C = controller("repoSession.svelte.ts", { $state: (v: unknown) => v, Tickets, HistoryLoader }, "RepoSession");
+  const state = new C(scope, { leaving() {}, closed() {}, opened() {} });
   state.repo = { path: "A" };
   return { state, api, backend: () => backend };
 }

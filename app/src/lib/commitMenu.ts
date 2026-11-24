@@ -1,3 +1,4 @@
+import type { RepoScope } from "./repoScope";
 // The right-click menu of a commit in the graph: what can be done with it, from where the
 // repository is now. While bisecting it answers about the commit instead.
 
@@ -15,7 +16,6 @@ import { addToCommitRequest, dropCommitRequest, rewordRequest, squashRequest } f
 import { bisectMarkRequest, bisectResetRequest, bisectStartRequest } from "./bisect";
 import { compareHead, compareLabel, compareRef } from "./compareRefs";
 import { keys } from "./keys";
-import { github } from "./github.svelte";
 import { branchMergeRequest, gitlabOf, signedInTo } from "./mergeRequest";
 import { dropsPushed, lockedCommit, lockedNote, protectedHead } from "./protect";
 
@@ -45,7 +45,7 @@ export interface CommitMenuApp {
 }
 
 /** The right-click menu of a commit in the graph. */
-export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
+export function commitMenu(scope: RepoScope, row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
   const { history, ctx, headStack, run, copyText, copyMessage } = app;
   if (!ctx || !history) return [];
   if (row.worktree) {
@@ -55,9 +55,9 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
     ];
   }
   const stash = history.stashes.find((s) => s.id === row.id);
-  if (stash) return stashMenu(ctx, stash, run, (text) => copyText(text, `Copied ${text.length > 40 ? "it" : text}.`));
+  if (stash) return stashMenu(scope, ctx, stash, run, (text) => copyText(text, `Copied ${text.length > 40 ? "it" : text}.`));
   const item = (label: string, icon: string, act: () => void, danger = false): MenuEntry => ({ kind: "item", label, icon, run: act, danger });
-  if (history.bisect) return bisectMenu(row, ctx, item, history, app);
+  if (history.bisect) return bisectMenu(scope, row, ctx, item, history, app);
   const isHead = row.id === history.head.commit;
   const here = history.head.branch ?? "HEAD";
   const entries: MenuEntry[] = [{ kind: "header", label: `${row.id.slice(0, 7)} · ${row.summary}` }];
@@ -66,7 +66,7 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
   };
   // A commit many branches point at lists the first few; the rest are in the branch list.
   const others = row.labels.filter((l) => l.kind === "local" && l.name !== history!.head.branch);
-  const switching: MenuEntry[] = others.slice(0, 3).map((label) => item(`Check Out ${label.name}`, menuIcons.checkout, () => run(switchRequest(ctx, label.name))));
+  const switching: MenuEntry[] = others.slice(0, 3).map((label) => item(`Check Out ${label.name}`, menuIcons.checkout, () => run(switchRequest(scope, ctx, label.name))));
   if (others.length > 3) switching.push({ kind: "note", label: `${others.length - 3} more branches here, in the branch list.` });
   if (!isHead) switching.push(item("Check Out This Commit…", menuIcons.checkout, () => run(detachRequest(ctx, row))));
 
@@ -83,24 +83,24 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
     const locked = inHead && lockedCommit(history, row);
     const dropping = dropsPushed(history, row.id);
     for (const label of mergeable) {
-      switching.push(item(`Merge ${label.name} into ${here}…`, menuIcons.merge, () => run(mergeRequest(ctx, label))));
-      if (history.head.branch && !dropping) switching.push(item(`Rebase ${here} onto ${label.name}…`, menuIcons.rebase, () => run(mergeRequest(ctx, label, "rebase"))));
+      switching.push(item(`Merge ${label.name} into ${here}…`, menuIcons.merge, () => run(mergeRequest(scope, ctx, label))));
+      if (history.head.branch && !dropping) switching.push(item(`Rebase ${here} onto ${label.name}…`, menuIcons.rebase, () => run(mergeRequest(scope, ctx, label, "rebase"))));
     }
     group(switching);
     const editing: MenuEntry[] = [];
     if (isHead && row.parents.length === 1 && !locked) editing.push(item("Undo Commit", menuIcons.undo, () => run(undoCommitRequest(ctx, row))));
-    if (isHead && !locked) editing.push(item("Edit Message…", menuIcons.edit, () => run(editMessageRequest(ctx, row))));
+    if (isHead && !locked) editing.push(item("Edit Message…", menuIcons.edit, () => run(editMessageRequest(scope, ctx, row))));
     // The checked-out branch's own commits, above the trunk, can be rewritten in place.
     const own = headStack.has(row.id);
     if (own && !isHead) {
-      editing.push(item("Edit Message…", menuIcons.edit, () => run(rewordRequest(ctx, row))));
+      editing.push(item("Edit Message…", menuIcons.edit, () => run(rewordRequest(scope, ctx, row))));
       const staged = history.rows[0]?.worktree?.staged ?? 0;
       if (staged) editing.push(item("Add Staged Changes to This Commit…", menuIcons.stage, () => run(addToCommitRequest(ctx, row))));
     }
     if (own && row.parents.length === 1) editing.push(item("Split Commit…", menuIcons.split, () => app.openSplit(row)));
-    if (own && headStack.has(row.parents[0] ?? "")) editing.push(item("Squash into Previous…", menuIcons.merge, () => run(squashRequest(ctx, row))));
+    if (own && headStack.has(row.parents[0] ?? "")) editing.push(item("Squash into Previous…", menuIcons.merge, () => run(squashRequest(scope, ctx, row))));
     if (own) editing.push(item("Edit Stack…", menuIcons.rebase, () => app.openStack(null)));
-    if (own) editing.push(item("Drop Commit…", menuIcons.drop, () => run(dropCommitRequest(ctx, row)), true));
+    if (own) editing.push(item("Drop Commit…", menuIcons.drop, () => run(dropCommitRequest(scope, ctx, row)), true));
     group(editing);
 
     const branchActions: MenuEntry[] = [];
@@ -129,29 +129,29 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
   // Pull and merge requests of the branches that end here, as from the branch list.
   const reviewing: MenuEntry[] = [];
   for (const ref of history.refs.filter((r) => r.kind === "local" && r.target === row.id && r.name !== history!.trunk).slice(0, 2)) {
-    if (github.repo) {
-      const pull = github.pullOf(ref.name);
+    if (scope.github.repo) {
+      const pull = scope.github.pullOf(ref.name);
       reviewing.push(item(pull ? `Pull Request #${pull.number} of ${ref.name}` : `Create Pull Request for ${ref.name}…`, menuIcons.pull, () => app.openPull(ref.name)));
     }
-    const project = gitlabOf(history, github.gitlab, ref);
-    const mr = project ? github.mergeRequestOf(ref.name) : null;
+    const project = gitlabOf(history, scope.github.gitlab, ref);
+    const mr = project ? scope.github.mergeRequestOf(ref.name) : null;
     if (mr) reviewing.push(item(`Merge Request !${mr.number} of ${ref.name}`, menuIcons.pull, () => app.openPull(ref.name, null, "gitlab")));
-    else if (project) reviewing.push(item(`Create Merge Request for ${ref.name}…`, menuIcons.pull, () => (signedInTo(project) ? app.openPull(ref.name, null, "gitlab") : run(branchMergeRequest(ctx, ref, project)))));
+    else if (project) reviewing.push(item(`Create Merge Request for ${ref.name}…`, menuIcons.pull, () => (signedInTo(scope, project) ? app.openPull(ref.name, null, "gitlab") : run(branchMergeRequest(scope, ctx, ref, project)))));
   }
   // A branch only a GitLab remote has, e.g. a teammate's: its New merge request page.
   const locals = new Set(history.refs.filter((r) => r.kind === "local").map((r) => r.name));
   for (const ref of history.refs.filter((r) => r.kind === "remote" && r.target === row.id).slice(0, 2)) {
-    const project = github.gitlab.find((p) => ref.name.startsWith(`${p.remote}/`));
+    const project = scope.github.gitlab.find((p) => ref.name.startsWith(`${p.remote}/`));
     const name = project ? ref.name.slice(project.remote.length + 1) : "";
     if (!project || name === "HEAD" || name === history.trunk || locals.has(name)) continue;
-    const mr = github.mergeRequestOf(name);
+    const mr = scope.github.mergeRequestOf(name);
     if (mr) reviewing.push(item(`Merge Request !${mr.number} of ${ref.name}`, menuIcons.pull, () => app.openPull(name, null, "gitlab")));
-    else reviewing.push(item(`Create Merge Request for ${ref.name}…`, menuIcons.pull, () => run(branchMergeRequest(ctx, ref, project))));
+    else reviewing.push(item(`Create Merge Request for ${ref.name}…`, menuIcons.pull, () => run(branchMergeRequest(scope, ctx, ref, project))));
   }
-  reviewing.push(isHead && !history.head.branch ? item("Create Branch…", menuIcons.branch, () => run(keepRequest(ctx))) : item("New Branch from Here…", menuIcons.branch, () => run(newBranchRequest(ctx, undefined, row))));
+  reviewing.push(isHead && !history.head.branch ? item("Create Branch…", menuIcons.branch, () => run(keepRequest(scope, ctx))) : item("New Branch from Here…", menuIcons.branch, () => run(newBranchRequest(scope, ctx, undefined, row))));
   // Tags: a new one here, and pushing or deleting the ones on this commit.
   // Push Tag and Delete Tag list the commit's tags in submenus, like Reset and Copy.
-  reviewing.push(item("New Tag Here…", menuIcons.tag, () => run(newTagRequest(ctx, row))));
+  reviewing.push(item("New Tag Here…", menuIcons.tag, () => run(newTagRequest(scope, ctx, row))));
   const tagsHere = row.labels.filter((l) => l.kind === "tag").map((l) => l.name);
   const unpushed = history.defaultRemote ? tagsHere.filter((name) => isLocalTag(ctx, name)) : [];
   if (unpushed.length) {
@@ -160,8 +160,8 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
       label: `Push Tag to ${history.defaultRemote}`,
       icon: menuIcons.push,
       entries: [
-        ...unpushed.map((name) => ({ label: name, run: () => run(pushTagsRequest(ctx, [name])) })),
-        ...(unpushed.length > 1 ? [{ label: `All ${unpushed.length}`, run: () => run(pushTagsRequest(ctx, unpushed)) }] : []),
+        ...unpushed.map((name) => ({ label: name, run: () => run(pushTagsRequest(scope, ctx, [name])) })),
+        ...(unpushed.length > 1 ? [{ label: `All ${unpushed.length}`, run: () => run(pushTagsRequest(scope, ctx, unpushed)) }] : []),
       ],
     });
   }
@@ -170,7 +170,7 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
       kind: "sub",
       label: "Delete Tag",
       icon: menuIcons.drop,
-      entries: tagsHere.map((name) => ({ label: `${name}…`, danger: true, run: () => run(deleteTagRequest(ctx, name)) })),
+      entries: tagsHere.map((name) => ({ label: `${name}…`, danger: true, run: () => run(deleteTagRequest(scope, ctx, name)) })),
     });
   }
   group(reviewing);
@@ -187,7 +187,7 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
     ? "Switch to this branch to apply patches."
     : history.operation ? "Finish or abort what git is in the middle of first." : undefined;
   looking.push(
-    patchesMenu(row, app, applyBlocked),
+    patchesMenu(scope, row, app, applyBlocked),
     {
       kind: "sub",
       label: "Copy",
@@ -206,7 +206,7 @@ export function commitMenu(row: HistoryRow, app: CommitMenuApp): MenuEntry[] {
 
 /** The commit menu while bisecting: answers about the commit, Stop or Finish, and the
  *  things that don't move HEAD. */
-function bisectMenu(
+function bisectMenu(scope: RepoScope,
   row: HistoryRow,
   ctx: BranchContext,
   item: (label: string, icon: string, act: () => void, danger?: boolean) => MenuEntry,
@@ -222,14 +222,14 @@ function bisectMenu(
     entries.push(mark("Mark as Good", menuIcons.good, "good", "G"), mark("Mark as Bad", menuIcons.bad, "bad", "B"), mark("Skip This Commit", menuIcons.skip, "skip", "S"), { kind: "sep" });
   }
   entries.push(item(bisect.found ? "Finish Bisect…" : "Stop Bisect…", menuIcons.bisect, () => run(bisectResetRequest(ctx, bisect))), { kind: "sep" });
-  entries.push(item("New Branch from Here…", menuIcons.branch, () => run(newBranchRequest(ctx, undefined, row))), item("New Tag Here…", menuIcons.tag, () => run(newTagRequest(ctx, row))));
+  entries.push(item("New Branch from Here…", menuIcons.branch, () => run(newBranchRequest(scope, ctx, undefined, row))), item("New Tag Here…", menuIcons.tag, () => run(newTagRequest(scope, ctx, row))));
   const branch = row.labels.find((l) => l.kind === "local");
   const target = branch ? compareRef("local", branch.name) : row.id;
   const against = [bisect.startIsBranch ? compareRef("local", bisect.start) : null, history.trunkRef].filter((b, i, all): b is string => !!b && b !== target && all.indexOf(b) === i);
   entries.push({ kind: "sep" }, browseItem(row, item, app));
   const comparisons = compareEntries(row, app, against, target);
   if (comparisons.length) entries.push({ kind: "sub", label: "Compare", icon: menuIcons.compare, entries: comparisons });
-  entries.push(patchesMenu(row, app, "Finish the bisect first."));
+  entries.push(patchesMenu(scope, row, app, "Finish the bisect first."));
   entries.push({
     kind: "sub",
     label: "Copy",
@@ -244,14 +244,14 @@ function bisectMenu(
   return entries;
 }
 
-function patchesMenu(row: HistoryRow, app: CommitMenuApp, applyBlocked: string | undefined): MenuEntry {
+function patchesMenu(scope: RepoScope, row: HistoryRow, app: CommitMenuApp, applyBlocked: string | undefined): MenuEntry {
   const saving = app.patchTarget(row);
   return {
     kind: "sub",
     label: "Patches",
     icon: menuIcons.patch,
     entries: [
-      { label: saving.since ? `Save ${saving.count} Commits as Patches…` : "Save as Patch…", run: () => app.run(savePatchesRequest(saving)) },
+      { label: saving.since ? `Save ${saving.count} Commits as Patches…` : "Save as Patch…", run: () => app.run(savePatchesRequest(scope, saving)) },
       { label: "Apply Patches…", off: !!applyBlocked, detail: applyBlocked, run: app.applyPatches },
     ],
   };

@@ -1,12 +1,14 @@
 <script lang="ts">
   // Finish Review: the summary, the verdict, and Submit, which sends the review with its comments
   // and replies. The summary and verdict stay with the draft while it waits.
+  import { useRepoScope } from "./repoScope";
   import type { ReviewSession } from "./review.svelte";
   import type { Verdict } from "./types";
   import { approvedBy, asksChanges, countWords, submitProblem } from "./reviewDraft";
-  import { github } from "./github.svelte";
   import { shortId } from "./format";
-  import { api } from "./api";
+
+  const scope = useRepoScope();
+  const { github, api } = scope;
 
   let { session, mine, anchor }: { session: ReviewSession; mine: boolean; /** The button it opens from, which it hangs under. */ anchor: HTMLElement | undefined } = $props();
 

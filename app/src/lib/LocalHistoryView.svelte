@@ -1,18 +1,22 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import FileFilter from "./FileFilter.svelte";
   // Local History: every version of a file saved in the working copy lately, of every file,
   // newest first under the day it was saved, so even a file deleted since, or never added to git,
   // can be found and restored. A version shows what it changed, as in File History.
 
   import { untrack } from "svelte";
-  import { api } from "./api";
   import { splitPath } from "./format";
   import { prefs } from "./prefs.svelte";
   import { byDay, keyOf, MAX_LISTED_ALL } from "./localHistory";
-  import { localVersionEntries } from "./localHistoryMenu";
+  import { localVersionEntries as localVersionEntriesInRepo } from "./localHistoryMenu";
   import type { LocalHistoryProblem, LocalVersion } from "./types";
   import LocalVersionView from "./LocalVersionView.svelte";
   import Menu, { type MenuEntry } from "./Menu.svelte";
+
+  const scope = useRepoScope();
+  const { api } = scope;
+  const localVersionEntries = localVersionEntriesInRepo.bind(null, scope);
 
   let {
     color,

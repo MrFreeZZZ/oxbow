@@ -1,18 +1,24 @@
 <script lang="ts">
   // The Stashes screen: every stash on the left, the picked one on the right with whether it
   // applies to the checked-out branch, its actions, its files and their diffs.
-  import { api, stopped } from "./api";
+  import { useRepoScope } from "./repoScope";
+  import { stopped } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import { untrack } from "svelte";
   import type { CommitDetail, DiffPage, FileChange, FileDiff, History, StashCheck, StashInfo } from "./types";
   import type { Request } from "./confirm.svelte";
   import { changesUnknown, type BranchContext } from "./branches";
-  import { applyRequest, dropRequest, stashBranchRequest, stashMenu, stashName, stashRequest } from "./stash";
+  import { applyRequest as applyRequestInRepo, dropRequest, stashBranchRequest, stashMenu as stashMenuInRepo, stashName, stashRequest } from "./stash";
   import { filesBrief, filterWords, stashMatches } from "./stashFilter";
   import { plate, relativeTime, shortId, tint } from "./format";
   import DiffView from "./DiffView.svelte";
   import ComparisonDiffPane from "./ComparisonDiffPane.svelte";
   import Menu, { type MenuEntry } from "./Menu.svelte";
+
+  const scope = useRepoScope();
+  const { api } = scope;
+  const applyRequest = applyRequestInRepo.bind(null, scope);
+  const stashMenu = stashMenuInRepo.bind(null, scope);
 
   let {
     history,

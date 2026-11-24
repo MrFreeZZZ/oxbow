@@ -2,7 +2,7 @@
 // a file is partly staged. Got It closes a tip for good; Turn Off Tips closes them all, and
 // Settings › General turns them back on.
 
-import { confirm, type Part } from "./confirm.svelte";
+import { confirm as windowConfirm, type Part } from "./confirm.svelte";
 import { prefs } from "./prefs.svelte";
 
 export interface Tip {
@@ -62,7 +62,9 @@ export const TIPS = {
 export type TipId = keyof typeof TIPS;
 export const TIP_COUNT = Object.keys(TIPS).length;
 
-class Tips {
+export class Tips {
+  constructor(private readonly confirm = windowConfirm) {}
+
   /** Whether the tip may show: tips are on and it wasn't closed. */
   shows(id: TipId): boolean {
     return prefs.loaded && prefs.get("oxbow.tips.show") && !prefs.get("oxbow.tips.seen").includes(id);
@@ -80,7 +82,7 @@ class Tips {
 
   off() {
     prefs.set("oxbow.tips.show", false);
-    confirm.say("Tips are off. Settings › General turns them back on.");
+    this.confirm.say("Tips are off. Settings › General turns them back on.");
   }
 
   /** Every tip shows once more. */

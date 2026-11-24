@@ -6,13 +6,10 @@
   // opens it. After the base of a stack merged, the rest of the stack can be restacked onto the
   // trunk from here, in three steps kept between runs: a push that fails goes on later. A merge
   // request on GitLab shows here the same way, in GitLab's words.
+  import { useRepoScope } from "./repoScope";
   import { onDestroy, untrack } from "svelte";
   import { keepDetails } from "./reviewLoads";
   import ReviewLoadNotice from "./ReviewLoadNotice.svelte";
-  import { confirm } from "./confirm.svelte";
-  import { api } from "./api";
-  import { nav } from "./nav.svelte";
-  import { github } from "./github.svelte";
   import { wordsOf, type ForgeKind } from "./forge";
   import type { Request } from "./confirm.svelte";
   import type { BranchContext } from "./branches";
@@ -21,7 +18,6 @@
   import { lane, person, plate, relativeTime, shortId, splitPath, tint } from "./format";
   import PickChips from "./PickChips.svelte";
   import { exactPerson, matchLabels, squashChosen } from "./mrForm";
-  import { kept } from "./kept";
   import PullFiles from "./PullFiles.svelte";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import ReviewThread from "./ReviewThread.svelte";
@@ -29,29 +25,46 @@
   import { ReviewSession } from "./review.svelte";
   import { PullDraft } from "./pullDraft.svelte";
   import { countWords, spotLabel } from "./reviewDraft";
-  import { pullWorktreeRequest, worktreeOf } from "./worktrees";
+  import { pullWorktreeRequest as pullWorktreeRequestInRepo, worktreeOf } from "./worktrees";
   import { softArrows } from "./shapes";
   import { editStackRequest, freshDraft, planOf } from "./stack";
-  import { switchRequest } from "./branches";
-  import { mergeRequest as mergeIntoRequest } from "./merge";
+  import { switchRequest as switchRequestInRepo } from "./branches";
+  import { mergeRequest as mergeIntoRequestInRepo } from "./merge";
   import { blockers, nextStep, restackFinished, restackLines, restackTouches, stillToRetarget, type RestackLine } from "./nextStep";
   import {
-    autoMergeRequest,
-    closeRequest,
-    createRequest,
+    autoMergeRequest as autoMergeRequestInRepo,
+    closeRequest as closeRequestInRepo,
+    createRequest as createRequestInRepo,
     defaultMethod,
-    draftRequest,
+    draftRequest as draftRequestInRepo,
     mergeMessage,
-    mergeRequest,
+    mergeRequest as mergeRequestInRepo,
     METHODS,
     methodsOf,
-    targetRequest,
+    targetRequest as targetRequestInRepo,
     readBody,
-    readyRequest,
-    restackPushRequest,
-    reviewersRequest,
-    updateBranchRequest,
+    readyRequest as readyRequestInRepo,
+    restackPushRequest as restackPushRequestInRepo,
+    reviewersRequest as reviewersRequestInRepo,
+    updateBranchRequest as updateBranchRequestInRepo,
   } from "./pr";
+
+  const scope = useRepoScope();
+  const { kept } = scope;
+  const switchRequest = switchRequestInRepo.bind(null, scope);
+  const { confirm, api, nav, github } = scope;
+  const pullWorktreeRequest = pullWorktreeRequestInRepo.bind(null, scope);
+  const mergeIntoRequest = mergeIntoRequestInRepo.bind(null, scope);
+  const autoMergeRequest = autoMergeRequestInRepo.bind(null, scope);
+  const closeRequest = closeRequestInRepo.bind(null, scope);
+  const createRequest = createRequestInRepo.bind(null, scope);
+  const draftRequest = draftRequestInRepo.bind(null, scope);
+  const mergeRequest = mergeRequestInRepo.bind(null, scope);
+  const targetRequest = targetRequestInRepo.bind(null, scope);
+  const readyRequest = readyRequestInRepo.bind(null, scope);
+  const restackPushRequest = restackPushRequestInRepo.bind(null, scope);
+  const reviewersRequest = reviewersRequestInRepo.bind(null, scope);
+  const updateBranchRequest = updateBranchRequestInRepo.bind(null, scope);
 
   let {
     branch,
@@ -181,7 +194,7 @@
         : { gitlab: false, host: "github.com", project: `${github.repo!.owner}/${github.repo!.name}`.toLowerCase() };
       const same = review?.number === p.number && review.saves.target.workdir === workdir && JSON.stringify(review.saves.target.place) === JSON.stringify(place);
       if (same) review!.pr = p;
-      else { review?.dispose(); review = new ReviewSession(p, run, () => load(p.number), { workdir, place }, p.gitlab ? "gitlab" : "github"); }
+      else { review?.dispose(); review = new ReviewSession(scope, p, run, () => load(p.number), { workdir, place }, p.gitlab ? "gitlab" : "github"); }
     });
   });
   onDestroy(() => { ++loadId; review?.dispose(); api.stopReads(["github-pull", "gitlab-merge-request"]).catch(() => {}); });
@@ -668,7 +681,7 @@
   // --- A new pull request ---
 
   // The form, what it starts with and what it would open: pullDraft.svelte.ts.
-  const draft = new PullDraft({
+  const draft = new PullDraft(scope, {
     get branch() {
       return branch;
     },

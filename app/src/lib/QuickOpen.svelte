@@ -1,13 +1,15 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { shortcut } from "./keys";
   // Quick Open (⌘P): pick any file in HEAD to open its File History, by typing a few letters of
   // its path. Files opened lately and the ones the selected commit changed come first. A ">"
   // typed first turns it into the Command Palette, as in VS Code.
 
-  import { api } from "./api";
-  import { nav } from "./nav.svelte";
   import { shortId, splitPath } from "./format";
   import { matches } from "./lfs.svelte";
+
+  const scope = useRepoScope();
+  const { api, nav } = scope;
 
   let {
     commit,

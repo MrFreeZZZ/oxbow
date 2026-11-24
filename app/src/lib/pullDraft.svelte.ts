@@ -1,10 +1,9 @@
+import type { RepoScope } from "./repoScope";
 // The form that opens a pull request (a merge request on GitLab) for a branch that has none, on
 // the Pull Request screen: what it starts with (the branch's commits, CODEOWNERS, GitLab's own
 // defaults and templates), what is picked in it, and the pull request it would open.
 
 import { untrack } from "svelte";
-import { api } from "./api";
-import { github } from "./github.svelte";
 import { wordsOf, type ForgeKind } from "./forge";
 import type { BranchContext } from "./branches";
 import type { GitLabCreateFacts, GitLabUser, History, PullSummary, Stack } from "./types";
@@ -61,7 +60,7 @@ export class PullDraft {
   /** GitLab's people found, by username: their ids, for sending. */
   #ids: Record<string, number> = {};
 
-  constructor(facts: DraftFacts) {
+  constructor(private readonly scope: RepoScope, facts: DraftFacts) {
     this.#facts = facts;
   }
 
@@ -128,7 +127,7 @@ export class PullDraft {
   async #loadLabFacts(rev: string) {
     this.#factsAsked = true;
     try {
-      this.labFacts = await api.gitlabCreateFacts(rev);
+      this.labFacts = await this.scope.api.gitlabCreateFacts(rev);
       if (this.#fresh && this.form) this.#startFrom(this.labFacts);
       this.#fresh = false;
     } catch (err) {
@@ -162,16 +161,16 @@ export class PullDraft {
     const name = this.#facts.branch;
     const ref = base === this.below ? base : (this.#facts.stack?.trunk ?? base);
     if (this.#lab) {
-      const owners = await api.gitlabCodeOwners(ref, name).catch(() => [] as GitLabUser[]);
+      const owners = await this.scope.api.gitlabCodeOwners(ref, name).catch(() => [] as GitLabUser[]);
       const form = this.form;
       if (!form || form.branch !== name) return;
-      const others = owners.filter((o) => o.username !== github.mrMe);
+      const others = owners.filter((o) => o.username !== this.scope.github.mrMe);
       form.known = { ...form.known, ...Object.fromEntries(others.map((o) => [o.username, o.id])) };
       form.suggested = others.map((o) => o.username);
       form.reviewers = [...form.suggested];
       return;
     }
-    const owners = await api.codeOwners(ref, name).catch(() => [] as string[]);
+    const owners = await this.scope.api.codeOwners(ref, name).catch(() => [] as string[]);
     const form = this.form;
     if (!form || form.branch !== name) return;
     form.suggested = owners.filter((o) => o !== this.#facts.me);
@@ -181,7 +180,7 @@ export class PullDraft {
   /** GitLab's people for a box of the form: name, username and their id kept for sending. */
   async findPeople(text: string): Promise<Pick[]> {
     if (!text.trim()) return [];
-    const people = await api.gitlabPeople(text);
+    const people = await this.scope.api.gitlabPeople(text);
     for (const p of people) this.#ids[p.username] = p.id;
     if (this.form) this.form.known = { ...this.form.known, ...Object.fromEntries(people.map((p) => [p.username, p.id])) };
     return people.map((p) => ({ key: p.username, label: p.username, sub: p.name }));
@@ -214,7 +213,7 @@ export class PullDraft {
     if (!stack || stack.branches.length < 2) return null;
     const w = wordsOf(forge);
     const lines = [...stack.branches].reverse().map((b) => {
-      const p = github.pullOf(b.name, forge);
+      const p = this.scope.github.pullOf(b.name, forge);
       return { branch: b.name, number: b.name === branch ? `${w.mark}$NUMBER` : p ? `${w.mark}${p.number}` : null, merged: p?.state === "merged" };
     });
     return lines.some((l) => l.branch !== branch && l.number) ? lines : null;
@@ -222,7 +221,7 @@ export class PullDraft {
   /** The stack's other open pull requests, oldest first. */
   readonly others = $derived.by(() => {
     const { stack, branch, forge } = this.#facts;
-    return stack ? [...stack.branches].reverse().map((b) => github.openPullOf(b.name, forge)).filter((p): p is PullSummary => !!p && p.head !== branch) : [];
+    return stack ? [...stack.branches].reverse().map((b) => this.scope.github.openPullOf(b.name, forge)).filter((p): p is PullSummary => !!p && p.head !== branch) : [];
   });
 
   /** The pull request the form would open, with the push it needs first. */
@@ -236,7 +235,7 @@ export class PullDraft {
     const remote = t && !t.gone ? t.remote : place.remote;
     const needsPush = !t || t.gone || t.ahead > 0;
     const known = form.known ?? {};
-    const project = github.mrProject;
+    const project = this.scope.github.mrProject;
     const ref = localRef;
     const gitlab =
       lab && project && ref
@@ -249,7 +248,7 @@ export class PullDraft {
               squash: !!form.squash,
             },
             assignee: form.assignee ?? null,
-            fallback: () => branchMergeRequest(ctx, ref, project),
+            fallback: () => branchMergeRequest(this.scope, ctx, ref, project),
           }
         : null;
     // A merge request needs its local branch: that's what goes up, and what the push path asks for.

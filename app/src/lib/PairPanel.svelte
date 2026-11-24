@@ -2,10 +2,13 @@
   // Two commits picked in History (click one, ⌘-click another): what changed from the older one to
   // the newer one, as one diff. Swap reads it the other way; Open in Compare goes further.
 
-  import { api } from "./api";
+  import { useRepoScope } from "./repoScope";
   import type { Comparison, HistoryRow } from "./types";
   import { lane, plate, relativeTime, shortId, tint } from "./format";
   import CompareChanges from "./CompareChanges.svelte";
+
+  const scope = useRepoScope();
+  const { api } = scope;
 
   let {
     older,

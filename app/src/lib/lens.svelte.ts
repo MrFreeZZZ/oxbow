@@ -19,7 +19,7 @@ interface Known {
   colorOf: (name: string) => number;
 }
 
-class Lens {
+export class Lens {
   /** The open popover and the word it hangs under. */
   open = $state.raw<{ look: Look; at: DOMRect; from: Element } | null>(null);
   #known = $state.raw<Known | null>(null);

@@ -2,17 +2,20 @@
   // Clone Repository: a URL checked as it is typed, the folder it goes to, submodules and shallow
   // switches, the exact command, then git's three phases as it runs.
 
+  import { useRepoScope } from "./repoScope";
   import { modal } from "./modal";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { open as chooseFolder } from "@tauri-apps/plugin-dialog";
-  import { api } from "./api";
   import { plate, tint } from "./format";
   import { prefs } from "./prefs.svelte";
-  import { join, nameFromUrl, start } from "./start.svelte";
+  import { join, nameFromUrl } from "./start.svelte";
   import TermBlock, { type TermLine } from "./TermBlock.svelte";
   import WhyNote from "./WhyNote.svelte";
   import { tilde } from "./term";
   import type { OutputLine, RemoteProbe } from "./types";
+
+  const scope = useRepoScope();
+  const { api, start } = scope;
 
   let { url: initialUrl, onDone, onClose }: { url: string; onDone: (path: string) => void; onClose: () => void } = $props();
 
@@ -172,7 +175,10 @@
     failure = "";
     cloningInto = "";
     resetPhases();
-    const unlisten = await getCurrentWindow().listen<OutputLine>("clone-line", (event) => onLine(event.payload));
+    const unlisten = scope.id === null
+      ? await getCurrentWindow().listen<OutputLine>("clone-line", (event) => onLine(event.payload))
+      : () => { scope.clone.line = null; };
+    if (scope.id !== null) scope.clone.line = onLine;
     try {
       const path = await api.cloneRepo(options);
       unlisten();
@@ -195,6 +201,7 @@
   }
 
   function onKey(event: KeyboardEvent) {
+    if (!scope.isActive()) return;
     if (event.key === "Escape") {
       event.preventDefault();
       close();
@@ -213,14 +220,15 @@
   });
 
   const probeBranchColor = 0;
+  const titleId = $props.id();
 </script>
 
 <svelte:window onkeydown={onKey} />
 
 <div class="dim">
-  <div class="sheet" use:modal role="dialog" aria-modal="true" aria-labelledby="clone-title" aria-busy={phase === "running"}>
+  <div class="sheet" use:modal role="dialog" aria-modal="true" aria-labelledby={titleId} aria-busy={phase === "running"}>
     <div class="head">
-      <span class="title" id="clone-title">Clone Repository</span>
+      <span class="title" id={titleId}>Clone Repository</span>
       <span class="sub">Any Git URL works: SSH or HTTPS, GitHub, GitLab, Bitbucket or your own server.</span>
     </div>
 

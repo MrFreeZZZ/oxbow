@@ -2,11 +2,14 @@
   // settings.json as text, like VS Code: the text box draws only the caret and selection, and a
   // colored copy of its text under it shows what is wrong as it is typed.
 
-  import { api } from "./api";
+  import { useRepoScope } from "./repoScope";
   import { check, lineOf, segments } from "./jsonCheck";
   import { keys } from "./keys";
   import { knownSetting, prefs, problemOf } from "./prefs.svelte";
   import { load } from "./settingsModel.svelte";
+
+  const scope = useRepoScope();
+  const { api } = scope;
 
   let { text = $bindable(), saved = $bindable() }: { text: string; saved: string } = $props();
 

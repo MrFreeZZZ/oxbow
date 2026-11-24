@@ -2,12 +2,14 @@
   // Compare with Working Copy, from a file of a commit: the file as the commit has it beside the
   // file on disk now, so it is plain what Take This Version would replace.
 
-  import { api } from "./api";
-  import { confirm } from "./confirm.svelte";
+  import { useRepoScope } from "./repoScope";
   import type { Comparison } from "./types";
   import { shortId, splitPath } from "./format";
   import { takeVersionRequest, type CommitFile } from "./commitFiles";
   import CompareChanges from "./CompareChanges.svelte";
+
+  const scope = useRepoScope();
+  const { api, confirm } = scope;
 
   let {
     commit,
@@ -59,6 +61,7 @@
   }
 
   function onKey(event: KeyboardEvent) {
+    if (!scope.isActive()) return;
     if (event.key === "Escape" && !event.defaultPrevented && !confirm.request) onClose();
   }
 </script>

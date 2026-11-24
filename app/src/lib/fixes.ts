@@ -1,8 +1,8 @@
+import type { RepoScope } from "./repoScope";
 // Fix a Mistake: the list of typical mistakes, and the sheet of each fix. Every fix is planned
 // from how the repository looks right now (`fixState`): the core checks that state again before
 // anything runs, and the sheet shows the plan's steps, each with its commands.
 
-import { api } from "./api";
 import { checkFailed } from "./commitChecks";
 import type { Icon, Part, Recovery, Request, StepLine } from "./confirm.svelte";
 import { nameProblem, onNoBranch, type BranchContext } from "./branches";
@@ -665,4 +665,4 @@ export function fixStateLine(fc: FixContext): Part[] {
 }
 
 /** The repository's fix state, for opening the list. */
-export const loadFixState = () => api.fixState();
+export const loadFixState = (scope: RepoScope) => scope.api.fixState();

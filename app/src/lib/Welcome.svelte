@@ -1,18 +1,21 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { onMount, onDestroy, untrack, type Snippet } from "svelte";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import Menu, { type MenuEntry } from "./Menu.svelte";
   import { prefs } from "./prefs.svelte";
-  import { looksLikeUrl, start } from "./start.svelte";
+  import { looksLikeUrl } from "./start.svelte";
   import { shortcut } from "./keys";
   import { tilde } from "./term";
-  import { api } from "./api";
   import { OverviewReader, overviewFacts, selectedOverview, trackingNote, overviewStatus } from "./overview";
   import { actionIcons } from "./icons";
   import { menuIcons } from "./Menu.svelte";
   import { plate, tint, relativeTime } from "./format";
   import SettingsRow from "./SettingsRow.svelte";
   import type { OverviewRow, RepoOverview } from "./types";
+
+  const scope = useRepoScope();
+  const { start, api } = scope;
 
   let { onBack, onOpen, onOpenPath, onLocate, currentPath = null, loading, error: sessionError, gone }: {
     onBack?: () => void;
@@ -145,7 +148,7 @@
     let disposed = false;
     getCurrentWebview()
       .onDragDropEvent((event) => {
-        if (event.payload.type === "drop" && event.payload.paths[0] && !start.sheet) dropFolder(event.payload.paths[0]);
+        if (scope.isActive() && event.payload.type === "drop" && event.payload.paths[0] && !start.sheet) dropFolder(event.payload.paths[0]);
       })
       .then((unlisten) => { if (disposed) unlisten(); else stop = unlisten; })
       .catch(() => {});
@@ -161,6 +164,7 @@
   }
 
   function onPaste(event: ClipboardEvent) {
+    if (!scope.isActive()) return;
     if (start.sheet || event.target instanceof HTMLInputElement) return;
     const text = event.clipboardData?.getData("text/plain") ?? "";
     if (looksLikeUrl(text)) {

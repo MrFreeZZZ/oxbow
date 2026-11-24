@@ -1,7 +1,7 @@
+import type { RepoScope } from "./repoScope";
 // Actions on one commit from its menu in History: cherry-pick it onto the checked-out branch,
 // revert it, reset the branch to it, undo the last commit, and edit the last commit's message.
 
-import { api } from "./api";
 import { ancestors, reachable } from "./historyAncestry";
 import type { Part, Recovery, Request } from "./confirm.svelte";
 import { changesUnknown, type BranchContext } from "./branches";
@@ -177,8 +177,8 @@ export function undoCommitRequest(ctx: BranchContext, row: HistoryRow): Request 
 }
 
 /** Change the message of the last commit. */
-export async function editMessageRequest(ctx: BranchContext, row: HistoryRow): Promise<Request> {
-  const detail = await api.commitDetail(row.id);
+export async function editMessageRequest(scope: RepoScope, ctx: BranchContext, row: HistoryRow): Promise<Request> {
+  const detail = await scope.api.commitDetail(row.id);
   const original = [detail.summary, detail.body.trim()].filter(Boolean).join("\n\n");
   return editMessageSheet(ctx, row, original, original);
 }

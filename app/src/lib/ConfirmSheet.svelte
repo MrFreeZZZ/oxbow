@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { modal } from "./modal";
-  import { confirm, type Part } from "./confirm.svelte";
+  import { type Part } from "./confirm.svelte";
   import { actionIcons as icons } from "./icons";
   import { withKeys } from "./keys";
   import { isImeEscape } from "./shortcuts";
@@ -12,10 +13,13 @@
   import { prefs } from "./prefs.svelte";
   import CommandWords from "./CommandWords.svelte";
   import TipCard from "./TipCard.svelte";
-  import { tips, type TipId } from "./tips.svelte";
+  import { type TipId } from "./tips.svelte";
   import { bytes } from "./unusual";
   import { errorLine } from "./reads";
   import type { Action, NotKept } from "./types";
+
+  const scope = useRepoScope();
+  const { confirm, tips } = scope;
 
   let { repo, branch, color }: { repo: string; branch: string | null; color: number } = $props();
 
@@ -204,6 +208,7 @@
   }
 
   function onKey(event: KeyboardEvent) {
+    if (!scope.isActive()) return;
     if (!request || isImeEscape(event)) return;
     if (event.key === "Escape") {
       event.preventDefault();
@@ -235,11 +240,13 @@
     // A closed sheet forgets, so the same sheet opened again gets the focus again.
     if (!request) focusedFor = null;
     const key = request && (confirm.phase === "ask" || recovery?.button) ? `${confirm.phase}:${request.title}` : null;
+    if (!scope.isActive()) { focusedFor = null; return; }
     if (!key || key === focusedFor) return;
     // A disabled primary button can't take focus. Wait for the plan if there's no text field.
     if (confirm.planning && !request?.fields?.some((field) => field.text)) return;
     focusedFor = key;
     requestAnimationFrame(() => {
+      if (!scope.isActive()) return;
       // The first text box, when a sheet has several.
       const textBox = fieldsBox?.querySelector<HTMLInputElement | HTMLTextAreaElement>(".text");
       if (confirm.phase === "ask" && textBox) {
@@ -257,6 +264,7 @@
     const box = linesBox;
     if (box) requestAnimationFrame(() => (box.scrollTop = box.scrollHeight));
   });
+  const titleId = $props.id();
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -272,7 +280,7 @@
 {#if request && shown}
   <!-- Run without asking: out of sight unless it takes a while, so a quick stage never flashes. -->
   <div class="dim" class:quiet={confirm.quiet && running}>
-    <div class="sheet" use:modal role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-busy={running}>
+    <div class="sheet" use:modal role="alertdialog" aria-modal="true" aria-labelledby={titleId} aria-busy={running}>
       <div class="top">
         <span
           class="tile"
@@ -282,7 +290,7 @@
           <svg class="icon" viewBox="0 0 16 16"><path d={icons[shown.icon]} /></svg>
         </span>
         <div class="words">
-          <span class="title" id="confirm-title">{shown.title}</span>
+          <span class="title" id={titleId}>{shown.title}</span>
           {#if shown.body.length}
             <span class="body">
               {#each shown.body as part, i (i)}

@@ -1,3 +1,4 @@
+import type { RepoScope } from "./repoScope";
 // Confirmations for checking out, creating, renaming and deleting branches.
 
 import type { Part, Recovery, Request } from "./confirm.svelte";
@@ -115,10 +116,10 @@ function leftBehind(lost: HistoryRow[]): Part[] {
   ];
 }
 
-export function switchRequest(ctx: BranchContext, branch: string): Request {
+export function switchRequest(scope: RepoScope, ctx: BranchContext, branch: string): Request {
   // Another worktree has it checked out: git refuses, so that folder is offered instead.
   const elsewhere = worktreeOf(ctx.history, branch);
-  if (elsewhere) return elsewhereRequest(ctx, branch, elsewhere);
+  if (elsewhere) return elsewhereRequest(scope, ctx, branch, elsewhere);
   const action: Action = { kind: "switch", branch, stash: false, keep: null };
   const lost = onNoBranch(ctx.history);
   if (lost.length) {
@@ -128,10 +129,10 @@ export function switchRequest(ctx: BranchContext, branch: string): Request {
       icon: "warn",
       tone: "warn",
       button: "Switch Anyway",
-      alt: { label: "Create Branch First", request: () => keepRequest(ctx, branch) },
+      alt: { label: "Create Branch First", request: () => keepRequest(scope, ctx, branch) },
       status: `Switching to ${branch}…`,
       done: `Switched to ${branch}. ${plural(lost.length, "commit")} left behind.`,
-      recover: (failure) => changesInTheWay(failure, action, ctx) ?? refusedForWorktree(failure, ctx),
+      recover: (failure) => changesInTheWay(failure, action, ctx) ?? refusedForWorktree(scope, failure, ctx),
       action,
     };
   }
@@ -146,7 +147,7 @@ export function switchRequest(ctx: BranchContext, branch: string): Request {
     button: "Switch",
     status: `Switching to ${branch}…`,
     done: `Switched to ${branch}.`,
-    recover: (failure) => changesInTheWay(failure, action, ctx) ?? refusedForWorktree(failure, ctx),
+    recover: (failure) => changesInTheWay(failure, action, ctx) ?? refusedForWorktree(scope, failure, ctx),
     action,
   };
 }
@@ -198,12 +199,12 @@ export function detachRequest(ctx: BranchContext, row: HistoryRow, tag?: string)
 }
 
 /** Create a branch at a detached HEAD, so its commits belong to it. With `then`, switch there afterwards. */
-export function keepRequest(ctx: BranchContext, then?: string): Request {
-  return keepSheet(ctx, then, firstName(prefixesFor(ctx.history)), false);
+export function keepRequest(scope: RepoScope, ctx: BranchContext, then?: string): Request {
+  return keepSheet(scope, ctx, then, firstName(prefixesFor(ctx.history)), false);
 }
 
-function keepSheet(ctx: BranchContext, then: string | undefined, typed: string, publishIt: boolean): Request {
-  const again = (value: string, publish = publishIt) => keepSheet(ctx, then, value, publish);
+function keepSheet(scope: RepoScope, ctx: BranchContext, then: string | undefined, typed: string, publishIt: boolean): Request {
+  const again = (value: string, publish = publishIt) => keepSheet(scope, ctx, then, value, publish);
   const name = typed.trim();
   const problem = nameProblem(ctx, name);
   const commit = ctx.history.head.commit;
@@ -254,7 +255,7 @@ function keepSheet(ctx: BranchContext, then: string | undefined, typed: string, 
     recover: (failure) =>
       action.kind === "switch"
         ? changesInTheWay(failure, action, ctx)
-        : remoteTrouble(failure, action, "Publishing to", remote ?? "the remote", `Created and published ${name}.`),
+        : remoteTrouble(scope, failure, action, "Publishing to", remote ?? "the remote", `Created and published ${name}.`),
     action,
   };
 }
@@ -285,7 +286,7 @@ interface Base {
 /** The New Branch sheet. `from` is the branch it was opened on, if any; `at` a commit it was opened on. */
 /** `switchTo` is the sheet's first choice: a branch that rescues lost work starts without one,
  *  so nothing but the new branch changes. */
-export function newBranchRequest(ctx: BranchContext, from?: string, at?: HistoryRow, switchTo = true): Request {
+export function newBranchRequest(scope: RepoScope, ctx: BranchContext, from?: string, at?: HistoryRow, switchTo = true): Request {
   const { head, trunk } = ctx.history;
   const target = (name: string) => local(ctx, name)?.target ?? null;
   const bases: Base[] = [
@@ -302,11 +303,11 @@ export function newBranchRequest(ctx: BranchContext, from?: string, at?: History
   if (at && at.id !== head.commit) bases.push({ key: "commit", label: shortId(at.id), ref: at.id, sha: at.id, color: at.graph.color });
   const start = at && at.id !== head.commit ? "commit" : from === head.branch ? "head" : from === trunk ? "trunk" : from ? "from" : "head";
   const list = prefixesFor(ctx.history);
-  return newBranchSheet(ctx, bases, list, { name: firstName(list), base: start, picked: !!from || !!at, switchTo, publish: false, fetch: null, stash: null });
+  return newBranchSheet(scope, ctx, bases, list, { name: firstName(list), base: start, picked: !!from || !!at, switchTo, publish: false, fetch: null, stash: null });
 }
 
-function newBranchSheet(ctx: BranchContext, bases: Base[], list: BranchPrefix[], state: NewBranch): Request {
-  const again = (change: Partial<NewBranch>) => newBranchSheet(ctx, bases, list, { ...state, ...change });
+function newBranchSheet(scope: RepoScope, ctx: BranchContext, bases: Base[], list: BranchPrefix[], state: NewBranch): Request {
+  const again = (change: Partial<NewBranch>) => newBranchSheet(scope, ctx, bases, list, { ...state, ...change });
   const { history } = ctx;
   const name = state.name.trim();
   // hotfix/ and the like start from the production branch, until another base is picked.
@@ -435,7 +436,7 @@ function newBranchSheet(ctx: BranchContext, bases: Base[], list: BranchPrefix[],
       }
       const via = fetching && tracking ? tracking.remote : (remote ?? "the remote");
       const verb = fetching && action.publish ? "Reaching" : fetching ? "Fetching from" : "Publishing to";
-      const trouble = remoteTrouble(failure, action, verb, via, `Created ${name}.`);
+      const trouble = remoteTrouble(scope, failure, action, verb, via, `Created ${name}.`);
       // Offline, a branch can still start where the local production branch is.
       if (trouble && fetching && !action.publish && baseBranch) trouble.alt = { label: `Start from Your ${baseBranch}`, request: () => again({ fetch: false }) };
       return trouble;
@@ -445,11 +446,11 @@ function newBranchSheet(ctx: BranchContext, bases: Base[], list: BranchPrefix[],
 }
 
 /** The Rename sheet for a local branch. */
-export function renameRequest(ctx: BranchContext, ref: RefInfo): Request {
-  return renameSheet(ctx, ref, ref.name, !!upstreamOf(ref) && !ref.tracking?.behind);
+export function renameRequest(scope: RepoScope, ctx: BranchContext, ref: RefInfo): Request {
+  return renameSheet(scope, ctx, ref, ref.name, !!upstreamOf(ref) && !ref.tracking?.behind);
 }
 
-function renameSheet(ctx: BranchContext, ref: RefInfo, to: string, onRemote: boolean): Request {
+function renameSheet(scope: RepoScope, ctx: BranchContext, ref: RefInfo, to: string, onRemote: boolean): Request {
   const from = ref.name;
   const name = to.trim();
   const up = upstreamOf(ref);
@@ -475,7 +476,7 @@ function renameSheet(ctx: BranchContext, ref: RefInfo, to: string, onRemote: boo
     fields: [
       {
         label: "New name",
-        text: { value: to, edit: (value) => renameSheet(ctx, ref, value, onRemote) },
+        text: { value: to, edit: (value) => renameSheet(scope, ctx, ref, value, onRemote) },
         error: name && name !== from && problem ? problem : undefined,
       },
     ],
@@ -485,20 +486,20 @@ function renameSheet(ctx: BranchContext, ref: RefInfo, to: string, onRemote: boo
             label: `Also rename it on ${up.remote}`,
             sub: "Teammates see the new name after their next fetch",
             on: onRemote,
-            toggle: () => renameSheet(ctx, ref, to, !onRemote),
+            toggle: () => renameSheet(scope, ctx, ref, to, !onRemote),
           },
         ]
       : [],
     invalid: problem,
     status: `Renaming ${from}…`,
     done: `Renamed ${from} to ${name}.`,
-    recover: (failure) => (up ? remoteTrouble(failure, action, "Renaming on", up.remote, `Renamed ${from} to ${name}.`) : null),
+    recover: (failure) => (up ? remoteTrouble(scope, failure, action, "Renaming on", up.remote, `Renamed ${from} to ${name}.`) : null),
     action,
   };
 }
 
 /** The Delete sheet for a local branch, after asking git what would be lost. */
-export function deleteRequest(ctx: BranchContext, ref: RefInfo, check: DeletionCheck, onRemote = false): Request {
+export function deleteRequest(scope: RepoScope, ctx: BranchContext, ref: RefInfo, check: DeletionCheck, onRemote = false): Request {
   const name = ref.name;
   const up = upstreamOf(ref);
   const both = !!up && onRemote;
@@ -530,14 +531,14 @@ export function deleteRequest(ctx: BranchContext, ref: RefInfo, check: DeletionC
             label: `Also delete ${up.remote}/${up.branch}`,
             sub: "Removes it on the remote for everyone",
             on: onRemote,
-            toggle: () => deleteRequest(ctx, ref, check, !onRemote),
+            toggle: () => deleteRequest(scope, ctx, ref, check, !onRemote),
           },
         ]
       : [],
     note: force ? (both ? `Undo brings the branch back here, not on ${up!.remote}.` : "Undo brings the branch back, from the toast or the Operation Log.") : undefined,
     status: `Deleting ${name}…`,
     done: `Deleted ${name}${both ? ` here and on ${up!.remote}` : ""}.`,
-    recover: (failure) => notMerged(failure, ctx, action) ?? (up ? remoteTrouble(failure, action, "Deleting on", up.remote, `Deleted ${name}.`) : null),
+    recover: (failure) => notMerged(failure, ctx, action) ?? (up ? remoteTrouble(scope, failure, action, "Deleting on", up.remote, `Deleted ${name}.`) : null),
     action,
   };
 }
@@ -560,7 +561,7 @@ function notMerged(failure: Failure, ctx: BranchContext, action: Action & { kind
 }
 
 /** Delete a remote branch (`origin/x`) on its remote. */
-export function deleteRemoteRequest(ctx: BranchContext, ref: RefInfo, author: string, lost: CommitBrief[]): Request {
+export function deleteRemoteRequest(scope: RepoScope, ctx: BranchContext, ref: RefInfo, author: string, lost: CommitBrief[]): Request {
   const remote = ref.remote!;
   const branch = ref.name.slice(remote.length + 1);
   const action: Action = { kind: "deleteRemoteBranch", remote, branch };
@@ -580,7 +581,7 @@ export function deleteRemoteRequest(ctx: BranchContext, ref: RefInfo, author: st
     note: "Anyone who still has the branch can push it back.",
     status: `Deleting ${branch} on ${remote}…`,
     done: `Deleted ${ref.name}.`,
-    recover: (failure) => remoteTrouble(failure, action, "Deleting on", remote, `Deleted ${ref.name}.`),
+    recover: (failure) => remoteTrouble(scope, failure, action, "Deleting on", remote, `Deleted ${ref.name}.`),
     action,
   };
 }

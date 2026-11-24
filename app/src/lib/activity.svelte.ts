@@ -4,7 +4,7 @@
 // opens a sheet: the Fetch button gets an amber dot, and Fix… in Activity opens the way out.
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { api } from "./api";
+import { api as windowApi } from "./api";
 import { lineKind, waitingWords, type Icon, type Ran, type TermLine } from "./confirm.svelte";
 import { hostName } from "./remote";
 import type { ActionEvent, Failure } from "./types";
@@ -77,7 +77,9 @@ export function phaseOf(text: string): { phase: string; percent: number | null }
   return { phase: `${match[1]} ${percent}%${speed ? ` · ${speed}` : ""}`, percent };
 }
 
-class Activity {
+type FetchNotice = { fetch: number | null; remote: string | null; event: ActionEvent };
+
+export class Activity {
   running = $state<ActivityItem | null>(null);
   /** Percent of the step git is on, or null before git says. */
   percent = $state<number | null>(null);
@@ -99,18 +101,20 @@ class Activity {
     return this.#fetch !== null;
   }
 
-  constructor() {
-    // Only what the running fetch prints: one of the repository open before may still be printing.
-    // This window's own: each window numbers its fetches.
-    getCurrentWindow().listen<{ fetch: number | null; remote: string | null; event: ActionEvent }>("fetch-event", ({ payload }) => {
-      const fetch = this.#fetch;
-      if (!fetch || payload.fetch !== fetch.id) return;
-      if (!this.running && (payload.event.kind === "waiting" || payload.event.kind === "command")) {
-        const remote = payload.remote;
-        this.#showFetch({ ...fetch, remote, title: `Fetching ${remote ?? "all remotes"}` });
-      }
-      this.#onEvent(payload.event);
-    }).catch(() => {});
+  constructor(private readonly api: typeof windowApi = windowApi, legacyEvents = true) {
+    if (legacyEvents) getCurrentWindow()
+      .listen<FetchNotice>("fetch-event", ({ payload }) => this.onFetch(payload))
+      .catch(() => {});
+  }
+
+  onFetch(payload: FetchNotice) {
+    const fetch = this.#fetch;
+    if (!fetch || payload.fetch !== fetch.id) return;
+    if (!this.running && (payload.event.kind === "waiting" || payload.event.kind === "command")) {
+      const remote = payload.remote;
+      this.#showFetch({ ...fetch, remote, title: `Fetching ${remote ?? "all remotes"}` });
+    }
+    this.#onEvent(payload.event);
   }
 
   /** A new repository: nothing of the old one's applies. */
@@ -122,7 +126,7 @@ class Activity {
     this.recent = [];
     this.problem = null;
     this.open = false;
-    if (fetch) return api.stopFetch(fetch.id).catch(() => {});
+    if (fetch) return this.api.stopFetch(fetch.id).catch(() => {});
   }
 
   #showFetch(item: ActivityItem) {
@@ -143,7 +147,7 @@ class Activity {
     const current = () => this.#fetch?.id === id;
     let ok = false;
     try {
-      const result = await api.fetchInBackground(remote, id, auto);
+      const result = await this.api.fetchInBackground(remote, id, auto);
       if (!current()) return false;
       if ("retryAfterMs" in result) return result;
       const { updated, gaveWay } = result;
@@ -200,7 +204,7 @@ class Activity {
   }
 
   stop() {
-    if (this.running) api.stopFetch(this.running.id).catch(() => {});
+    if (this.running) this.api.stopFetch(this.running.id).catch(() => {});
   }
 
   /** Push or Pull pressed while the fetch runs: it starts when the fetch is done. */

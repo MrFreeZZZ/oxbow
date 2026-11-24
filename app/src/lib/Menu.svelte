@@ -71,9 +71,12 @@
 </script>
 
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { lane, tint } from "./format";
 
   // A context menu at the pointer, in the glass style of the design.
+
+  const scope = useRepoScope();
 
   let { x, y, label, entries, onClose }: { x: number; y: number; label: string; entries: MenuEntry[]; onClose: () => void } = $props();
 
@@ -156,6 +159,7 @@
   }
 
   function onKey(event: KeyboardEvent) {
+    if (!scope.isActive()) return;
     const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const removable = focused?.dataset.index ? entries[Number(focused.dataset.index)] : undefined;
     if ((event.key === "Delete" || event.key === "Backspace") && removable?.kind === "item" && removable.remove) {

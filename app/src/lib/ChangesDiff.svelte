@@ -1,14 +1,14 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { diffScroll } from "./diffScroll";
   // The diff column of the Changes panel: what is shown over it (a file's side, or every file
   // of a side), the diffs with the actions of each hunk and file, or the way on when a side has
   // nothing left.
 
-  import { api } from "./api";
   import { hunkRequest, linesRequest, stashMessageFor, type LinesKind } from "./changes";
   import { stashLinesRequest } from "./stashLines";
   import type { Shown } from "./changesView";
-  import { confirm, type Request } from "./confirm.svelte";
+  import { type Request } from "./confirm.svelte";
   import DiffTools from "./DiffTools.svelte";
   import DiffView, { type LinePicker } from "./DiffView.svelte";
   import FoldAll from "./FoldAll.svelte";
@@ -17,6 +17,9 @@
   import { updateFolderRequest } from "./submodules";
   import TipCard from "./TipCard.svelte";
   import type { FileChange, FileDiff, Hunk, Side } from "./types";
+
+  const scope = useRepoScope();
+  const { api, confirm } = scope;
 
   let {
     color,

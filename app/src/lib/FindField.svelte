@@ -1,10 +1,13 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { withKeys } from "./keys";
   import { combo } from "./shortcuts";
   // Find in file, in File History's toolbar: the text, a letter-case switch, which match is
   // current among how many, and arrows to the previous and next one.
 
-  import { nav } from "./nav.svelte";
+
+  const scope = useRepoScope();
+  const { nav } = scope;
 
   let input = $state<HTMLInputElement>();
   const active = $derived(!!nav.find.text);

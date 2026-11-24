@@ -29,15 +29,14 @@
 </script>
 
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import type { Snippet } from "svelte";
   import type { DiffLine, FileDiff, Hunk, Side, Source } from "./types";
   import { lane, plate, splitPath, tint } from "./format";
   import { prefs } from "./prefs.svelte";
-  import { api, stopped } from "./api";
-  import { confirm } from "./confirm.svelte";
+  import { stopped } from "./api";
   import { languageOf, occurrences, paint } from "./syntax";
   import Lazy, { BLOCK, type FindHits } from "./Lazy.svelte";
-  import { nav } from "./nav.svelte";
   import { onDestroy, untrack } from "svelte";
   import { foldReason, startsFolded } from "./diffFold";
   import { diffLineEndingLabel } from "./diffLineEndings";
@@ -47,7 +46,7 @@
   import { combo } from "./shortcuts";
   import ImageDiff from "./ImageDiff.svelte";
   import { workingFileAction } from "./openFile";
-  import { openWorkingFile, watchWorkingFiles } from "./openFile.svelte";
+  import { openWorkingFile as openWorkingFileInRepo, watchWorkingFiles as watchWorkingFilesInRepo } from "./openFile.svelte";
   import UnusualCard from "./UnusualCard.svelte";
   import LfsCard from "./LfsCard.svelte";
   import SubmoduleCard from "./SubmoduleCard.svelte";
@@ -56,6 +55,11 @@
   import { hscroll, widestLine } from "./hscroll";
   import { changePreview } from "./diffScroll";
   import { menuIcons } from "./Menu.svelte";
+
+  const scope = useRepoScope();
+  const { api, confirm, nav } = scope;
+  const openWorkingFile = openWorkingFileInRepo.bind(null, scope);
+  const watchWorkingFiles = watchWorkingFilesInRepo.bind(null, scope);
 
   let copySelection = $state<{ code: Element; text: string; x: number; y: number } | null>(null);
   let selectingWithMouse = false;
@@ -143,6 +147,7 @@
   }
 
   function beginMouseSelection(event: MouseEvent) {
+    if (!scope.isActive()) return;
     if (event.button !== 0 || (event.target instanceof Element && event.target.closest(".copy-selection"))) return;
     const target = event.target instanceof Element ? event.target : null;
     const code = target?.closest(".code.selectable");
@@ -157,12 +162,14 @@
   }
 
   function endMouseSelection(event: MouseEvent) {
+    if (!scope.isActive()) return;
     if (event.button !== 0 || !selectingWithMouse) return;
     selectingWithMouse = false;
     updateCopySelection();
   }
 
   function updateCopySelection() {
+    if (!scope.isActive()) return;
     if (selectingWithMouse) return;
     copySelection = null;
     const selected = selectedCode(true);
@@ -191,6 +198,7 @@
   }
 
   function copyWithKeyboard(event: ClipboardEvent) {
+    if (!scope.isActive()) return;
     if (event.defaultPrevented || !event.clipboardData) return;
     const selected = selectedCode();
     if (!selected) return;

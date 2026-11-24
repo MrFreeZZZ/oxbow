@@ -2,13 +2,15 @@
   // Compare with Now, from the Operation Log: the files as they were at a step beside the files
   // now, so it is plain what Undo or Restore to Here would take back before running it.
 
-  import { api } from "./api";
+  import { useRepoScope } from "./repoScope";
   import type { Request } from "./confirm.svelte";
   import type { OpEntry, RefMove, SnapshotComparison } from "./types";
   import { relativeTime, shortId } from "./format";
-  import { cannotRestore, keptUntil, oplog, restoreRequest, undoRequest } from "./oplog.svelte";
-  import { nav } from "./nav.svelte";
+  import { cannotRestore, keptUntil, restoreRequest, undoRequest } from "./oplog.svelte";
   import CompareChanges from "./CompareChanges.svelte";
+
+  const scope = useRepoScope();
+  const { api, oplog, nav } = scope;
 
   let {
     entry,

@@ -204,7 +204,8 @@ export function diffScroll(root: HTMLElement, color: number) {
   const onScroll = () => { hidePreview(); schedule(); };
   const onResize = () => { hidePreview(); schedule(true); };
   const onEscape = (event: KeyboardEvent) => {
-    if (!hovered || event.key !== "Escape" || document.querySelector('[role="menu"]')) return;
+    if (root.closest("[inert]")) return;
+    if (!hovered || event.key !== "Escape" || document.querySelector('[role="menu"]:not([inert] *)')) return;
     const modal = (event.target as Element | null)?.closest?.('[aria-modal="true"]');
     if (modal && !modal.contains(root)) return;
     dismissPreviewOnEscape(event, () => {

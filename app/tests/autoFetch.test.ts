@@ -67,12 +67,12 @@ function setup(fetch: (auto: boolean) => Promise<FetchReply>, timeOrigin = perfo
     openConflicts: () => {},
   };
   const { activity, backgroundFetch, sync, setRemote, switchRepo } = Function(
-    ...Object.keys(globals), `${js}; return {
+    ...Object.keys(globals), "windowApi", `${js}; return {
       activity, backgroundFetch, sync,
       setRemote: (remote) => { remoteCtx = { remote }; },
       switchRepo: () => { repo = { path: "other" }; return activity.reset(); },
     };`,
-  )(...Object.values(globals));
+  )(...Object.values(globals), globals.api);
   const event = (fetch: number, remote: string | null, event: unknown) => onEvent({ payload: { fetch, remote, event } });
   return { activity, backgroundFetch, sync, calls, requests, event, refresh, confirmed, setRemote, switchRepo };
 }
@@ -228,7 +228,7 @@ test("queued Pull waits for the older history page and the reload that reads fre
     lfs: { load: () => {} },
   };
   const HistoryLoader = Function(...Object.keys(globals), `${js}; return HistoryLoader;`)(...Object.values(globals));
-  const loader = new HistoryLoader({ repo: {}, tickets: new Tickets() }, (next: typeof initial) => setRemote(next.remote));
+  const loader = new HistoryLoader(globals, { repo: {}, tickets: new Tickets() }, (next: typeof initial) => setRemote(next.remote));
   loader.history = initial;
   const paging = loader.loadOlder();
   assert.deepEqual(reads, [4000]);

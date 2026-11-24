@@ -3,15 +3,21 @@
   // repository records against the one its folder has, the commits between them, and the way to
   // bring the folder in line.
 
-  import { api } from "./api";
-  import { confirm, type Request } from "./confirm.svelte";
+  import { useRepoScope } from "./repoScope";
+  import { type Request } from "./confirm.svelte";
   import { shortId, shortTime } from "./format";
   import Menu, { type MenuEntry } from "./Menu.svelte";
-  import { followsWord, openSubmoduleWindow, submoduleMenu, submoduleRequest } from "./submodules";
+  import { followsWord, openSubmoduleWindow as openSubmoduleWindowInRepo, submoduleMenu as submoduleMenuInRepo, submoduleRequest as submoduleRequestInRepo } from "./submodules";
   import { submoduleActions } from "./submoduleActions";
   import { errorLine } from "./reads";
   import { checking } from "./folders";
   import type { CommitBrief, Submodule, SubmoduleMove } from "./types";
+
+  const scope = useRepoScope();
+  const { api, confirm } = scope;
+  const openSubmoduleWindow = openSubmoduleWindowInRepo.bind(null, scope);
+  const submoduleMenu = submoduleMenuInRepo.bind(null, scope);
+  const submoduleRequest = submoduleRequestInRepo.bind(null, scope);
 
   let {
     sub,

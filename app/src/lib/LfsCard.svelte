@@ -2,14 +2,15 @@
   // In place of a diff: a file too big for git, with the way into Git LFS, or a file Git LFS
   // keeps, with the pointer git actually stores for it.
 
-  import { api } from "./api";
-  import { confirm } from "./confirm.svelte";
+  import { useRepoScope } from "./repoScope";
   import { mac } from "./keys";
-  import { nav } from "./nav.svelte";
-  import { installRequest, lfs, lfsTrackRequest, untrackRequest } from "./lfs.svelte";
+  import { installRequest, lfsTrackRequest, untrackRequest } from "./lfs.svelte";
   import TermBlock from "./TermBlock.svelte";
   import type { FileDiff, LfsPointer } from "./types";
   import { bytes, bytesDelta, imageType } from "./unusual";
+
+  const scope = useRepoScope();
+  const { api, confirm, nav, lfs } = scope;
 
   let {
     diff,

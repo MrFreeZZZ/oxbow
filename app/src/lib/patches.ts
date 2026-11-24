@@ -1,10 +1,10 @@
+import type { RepoScope } from "./repoScope";
 // Commits as patch files: Save as Patches writes them with git format-patch, a file each or all
 // in one; Apply Patches shows what patch files bring, then runs git am (or git apply for a plain
 // diff), which can stop on conflicts like a rebase.
 
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { desktopDir, homeDir } from "@tauri-apps/api/path";
-import { api } from "./api";
 import type { Part, Recovery, Request } from "./confirm.svelte";
 import type { BranchContext } from "./branches";
 import { stoppedOnConflicts } from "./merge";
@@ -73,8 +73,8 @@ interface SaveState {
 }
 
 /** Save as Patches: the commits listed, where they go, and the command. */
-export async function savePatchesRequest(target: PatchTarget): Promise<Request> {
-  const commits = await api.patchRange(target.to, target.since, target.count);
+export async function savePatchesRequest(scope: RepoScope, target: PatchTarget): Promise<Request> {
+  const commits = await scope.api.patchRange(target.to, target.since, target.count);
   return saveSheet(target, commits, { oneFile: false, place: "", edited: false });
 }
 
@@ -164,8 +164,8 @@ export async function choosePatchFiles(): Promise<string[] | null> {
 }
 
 /** Apply Patches: what the files bring and whether it fits, before git am runs. */
-export async function applyPatchesRequest(ctx: BranchContext, paths: string[]): Promise<Request> {
-  return applySheet(ctx, paths, await api.patchPreview(paths));
+export async function applyPatchesRequest(scope: RepoScope, ctx: BranchContext, paths: string[]): Promise<Request> {
+  return applySheet(ctx, paths, await scope.api.patchPreview(paths));
 }
 
 function applySheet(ctx: BranchContext, paths: string[], preview: PatchPreview): Request {

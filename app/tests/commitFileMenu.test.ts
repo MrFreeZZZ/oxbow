@@ -42,6 +42,7 @@ const globals = {
 };
 const js = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 const commitFileMenu = Function(...Object.keys(globals), `${js}; return commitFileMenu;`)(...Object.values(globals)) as (
+  scope: Pick<typeof globals, "api" | "confirm" | "nav">,
   repo: string,
   file: { path: string; status: string; oldPath?: string | null; submodule?: unknown },
   commit: string,
@@ -52,7 +53,7 @@ const commitFileMenu = Function(...Object.keys(globals), `${js}; return commitFi
 const file = (status: string, more: { oldPath?: string | null; submodule?: unknown; path?: string } = {}) => ({ path: "src/app.py", status, ...more });
 const ctx = { summary: "Edit the app", inHead: true, compare() {} };
 function menu(entry = file("modified"), canBlame: () => boolean = () => false, context: CommitFileContext = ctx) {
-  return commitFileMenu(repo, entry, sha, context, canBlame);
+  return commitFileMenu(globals, repo, entry, sha, context, canBlame);
 }
 function visibleLabels(entries: MenuEntry[]) {
   return entries.filter((entry) => entry.kind !== "item" || !entry.hidden)

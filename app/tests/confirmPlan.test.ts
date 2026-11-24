@@ -23,7 +23,8 @@ function fixture() {
     prefs: { get: () => false },
     addLine,
     cutLine,
-    api: {
+    windowOplog: {},
+    windowApi: {
       planAction: (action: Extract<Action, { kind: "renameBranch" }>) => {
         const plan = Promise.withResolvers<Plan>();
         plans.set(action.to, plan);

@@ -2,17 +2,21 @@
   // New Repository: git init in a new or existing folder, starter files, and the first commit,
   // with the exact commands. A folder that is a repository already is opened instead.
 
+  import { useRepoScope } from "./repoScope";
   import { modal } from "./modal";
   import { open as chooseFolder } from "@tauri-apps/plugin-dialog";
-  import { api } from "./api";
   import { prefs } from "./prefs.svelte";
-  import { labPlaces, publishCommands, publishNote, repositoryName, type LabPlace } from "./publish";
+  import { labPlaces as labPlacesInRepo, publishCommands, publishNote, repositoryName, type LabPlace } from "./publish";
   import { labPublishCommands, labPublishNote, validProjectName, visibilityText } from "./labPublish";
-  import { join, start } from "./start.svelte";
+  import { join } from "./start.svelte";
   import TermBlock, { type TermLine } from "./TermBlock.svelte";
   import WhyNote from "./WhyNote.svelte";
   import { tilde } from "./term";
   import type { GitHubOwners, GitLabPublish, GitLabVisibility, NewRepoPlan, Publish } from "./types";
+
+  const scope = useRepoScope();
+  const { api, start } = scope;
+  const labPlaces = labPlacesInRepo.bind(null, scope);
 
   let {
     folder: initialFolder,
@@ -203,6 +207,7 @@
   }
 
   function onKey(event: KeyboardEvent) {
+    if (!scope.isActive()) return;
     if (event.key === "Escape" && !running) {
       event.preventDefault();
       onClose();
@@ -246,14 +251,15 @@
     !plan ? "" : plan.exists && plan.entries > 0 ? "everything in the folder" : `${plan.writes.length} ${plan.writes.length === 1 ? "file" : "files"}`,
   );
   const noIdentity = $derived(!!info && commit && (!info.name || !info.email));
+  const titleId = $props.id();
 </script>
 
 <svelte:window onkeydown={onKey} />
 
 <div class="dim">
-  <div class="sheet" use:modal role="dialog" aria-modal="true" aria-labelledby="new-title" aria-busy={running}>
+  <div class="sheet" use:modal role="dialog" aria-modal="true" aria-labelledby={titleId} aria-busy={running}>
     <div class="head">
-      <span class="title" id="new-title">New Repository</span>
+      <span class="title" id={titleId}>New Repository</span>
       <span class="sub">Starts version control in a new folder, or in a folder you already have.</span>
     </div>
 

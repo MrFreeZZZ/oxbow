@@ -1,8 +1,8 @@
+import type { RepoScope } from "./repoScope";
 // Submodules: other repositories checked out in a folder here, at the commit this one records.
 // What the sidebar says about each, and the requests that update, sync, add and remove them.
 
-import { api } from "./api";
-import { confirm, type Part, type Recovery, type Request } from "./confirm.svelte";
+import { type Part, type Recovery, type Request } from "./confirm.svelte";
 import { checking, stale } from "./folders";
 import { shortId } from "./format";
 import { menuIcons, type MenuEntry } from "./Menu.svelte";
@@ -41,7 +41,7 @@ export function submoduleWhere(sub: Submodule): string {
 const nameOf = (repoPath: string) => repoPath.split(/[\\/]/).filter(Boolean).pop() ?? "this repository";
 
 /** Check out the recorded commit in `sub`'s folder, cloning it first when it isn't. All of them without `sub`. */
-export function updateRequest(subs: Submodule[], sub: Submodule | null, repoPath: string): Request {
+export function updateRequest(scope: RepoScope, subs: Submodule[], sub: Submodule | null, repoPath: string): Request {
   const repo = nameOf(repoPath);
   if (!sub) {
     const fresh = subs.filter((s) => !s.cloned).length;
@@ -59,7 +59,7 @@ export function updateRequest(subs: Submodule[], sub: Submodule | null, repoPath
       past: "Updated submodules",
       action: { kind: "submoduleUpdate", paths: [], latest: false },
       partWhy: submoduleFailure,
-      recover: (failure) => partlyRecovery(failure),
+      recover: (failure) => partlyRecovery(scope, failure),
       ...leavingWarning(subs),
     };
   }
@@ -121,15 +121,15 @@ export function submoduleFailure(error: string): string {
 }
 
 /** The sheet of one of `submoduleActions`. */
-export function submoduleRequest(action: SubmoduleAction, sub: Submodule, subs: Submodule[], repoPath: string): Request {
-  return action.id === "latest" ? latestRequest(sub, repoPath) : updateRequest(subs, sub, repoPath);
+export function submoduleRequest(scope: RepoScope, action: SubmoduleAction, sub: Submodule, subs: Submodule[], repoPath: string): Request {
+  return action.id === "latest" ? latestRequest(sub, repoPath) : updateRequest(scope, subs, sub, repoPath);
 }
 
 /** After Update All failed on some: which, why, and a way to try those again. The others stay
  *  updated. */
-function partlyRecovery(failure: Failure): Recovery | null {
+function partlyRecovery(scope: RepoScope, failure: Failure): Recovery | null {
   if (failure.kind !== "partlyDone") return null;
-  const parts = confirm.parts;
+  const parts = scope.confirm.parts;
   const failed = parts.filter((p) => p.state === "failed");
   if (!failed.length) return null;
   const done = parts.filter((p) => p.state === "done").length;
@@ -154,7 +154,7 @@ function partlyRecovery(failure: Failure): Recovery | null {
       action: { kind: "submoduleUpdate", paths: failed.map((p) => p.name), latest: false },
       status: one ? `Updating ${one}…` : "Updating submodules…",
       done: one ? `${one} is at the commit this repository records.` : "The submodules are at the commits this repository records.",
-      recover: partlyRecovery,
+      recover: partlyRecovery.bind(null, scope),
     },
     note: failed.length === 1 ? "Open it in a new window to look into it." : "Open them in new windows to look into them.",
     close: "Done",
@@ -162,11 +162,11 @@ function partlyRecovery(failure: Failure): Recovery | null {
 }
 
 /** The menu of a submodule, the same in the sidebar and on its card. */
-export function submoduleMenu(sub: Submodule, subs: Submodule[], repoPath: string, run: (request: Request) => void): MenuEntry[] {
+export function submoduleMenu(scope: RepoScope, sub: Submodule, subs: Submodule[], repoPath: string, run: (request: Request) => void): MenuEntry[] {
   const pending = checking(sub);
   const at = pending ? "checking…" : sub.current ? sub.current.slice(0, 7) : sub.cloned ? "no commit" : "not cloned";
   const entries: MenuEntry[] = [{ kind: "header", label: `${sub.path} · ${at}` }];
-  if (sub.cloned) entries.push({ kind: "item", label: "Open in New Window", icon: menuIcons.open, run: () => openSubmoduleWindow(sub) });
+  if (sub.cloned) entries.push({ kind: "item", label: "Open in New Window", icon: menuIcons.open, run: () => openSubmoduleWindow(scope, sub) });
   for (const action of submoduleActions(sub, pending)) {
     entries.push({
       kind: "item",
@@ -175,15 +175,15 @@ export function submoduleMenu(sub: Submodule, subs: Submodule[], repoPath: strin
       detail: action.off ?? action.caution?.title ?? action.about,
       warn: !action.off && !!action.caution,
       off: !!action.off,
-      run: () => run(submoduleRequest(action, sub, subs, repoPath)),
+      run: () => run(submoduleRequest(scope, action, sub, subs, repoPath)),
     });
   }
   entries.push({ kind: "item", label: "Sync URL", icon: menuIcons.compare, run: () => run(syncRequest(sub)) });
   entries.push({ kind: "sep" });
   if (sub.cloned) {
     entries.push(
-      { kind: "item", label: "Show in Finder", icon: menuIcons.reveal, run: () => api.revealWorktree(sub.path).catch((err) => confirm.fail(err)) },
-      { kind: "item", label: "Open in Terminal", icon: menuIcons.terminal, run: () => api.openInTerminal(sub.path).catch((err) => confirm.fail(err)) },
+      { kind: "item", label: "Show in Finder", icon: menuIcons.reveal, run: () => scope.api.revealWorktree(sub.path).catch((err) => scope.confirm.fail(err)) },
+      { kind: "item", label: "Open in Terminal", icon: menuIcons.terminal, run: () => scope.api.openInTerminal(sub.path).catch((err) => scope.confirm.fail(err)) },
     );
   }
   if (sub.url) {
@@ -194,8 +194,8 @@ export function submoduleMenu(sub: Submodule, subs: Submodule[], repoPath: strin
       icon: menuIcons.copy,
       run: () =>
         navigator.clipboard.writeText(url).then(
-          () => confirm.say(`Copied ${url}.`, "done"),
-          () => confirm.say("Couldn’t copy to the clipboard.", "error"),
+          () => scope.confirm.say(`Copied ${url}.`, "done"),
+          () => scope.confirm.say("Couldn’t copy to the clipboard.", "error"),
         ),
     });
   }
@@ -204,8 +204,8 @@ export function submoduleMenu(sub: Submodule, subs: Submodule[], repoPath: strin
 }
 
 /** A submodule's folder in its own window. */
-export function openSubmoduleWindow(sub: Submodule) {
-  api.openWindow(sub.path).catch((err) => confirm.fail(err));
+export function openSubmoduleWindow(scope: RepoScope, sub: Submodule) {
+  scope.api.openWindow(sub.path).catch((err) => scope.confirm.fail(err));
 }
 
 /** From Changes: put a submodule's folder back at the commit the index records. */
@@ -310,22 +310,28 @@ function repoName(url: string): string {
 }
 
 /** What the last check of a URL found, so the sheet can say it while it is still the URL typed. */
-let probed: { url: string; text: string; error: boolean } | null = null;
-let probing = "";
+
 /** Number of the sheet opened last, and what is typed in it now: a check that answers late
  *  updates that, never the fields as they were when it started, nor a sheet closed since. */
-let form = 0;
-let typed: NewSubmodule | null = null;
+type ProbeForm = {
+  probed: { url: string; text: string; error: boolean } | null;
+  probing: string;
+  form: number;
+  typed: NewSubmodule | null;
+};
+const probeForms = new WeakMap<RepoScope, ProbeForm>();
 
 /** The Add Submodule sheet; without `state`, a new one. */
-export function addSubmoduleRequest(subs: Submodule[], repoPath: string, state?: NewSubmodule): Request {
+export function addSubmoduleRequest(scope: RepoScope, subs: Submodule[], repoPath: string, state?: NewSubmodule): Request {
+  const probeForm = probeForms.get(scope) ?? { probed: null, probing: "", form: 0, typed: null };
+  probeForms.set(scope, probeForm);
   if (!state) {
-    form++;
-    probing = "";
+    probeForm.form++;
+    probeForm.probing = "";
     state = { url: "", folder: "", edited: false, branch: "" };
   }
-  typed = state;
-  const again = (change: Partial<NewSubmodule>) => addSubmoduleRequest(subs, repoPath, { ...state, ...change });
+  probeForm.typed = state;
+  const again = (change: Partial<NewSubmodule>) => addSubmoduleRequest(scope, subs, repoPath, { ...state, ...change });
   const url = state.url.trim();
   const folder = state.folder.trim().replace(/^\.\//, "").replace(/[/\\]+$/, "");
   const branch = state.branch.trim();
@@ -336,25 +342,26 @@ export function addSubmoduleRequest(subs: Submodule[], repoPath: string, state?:
   else if (/^([/\\]|[A-Za-z]:)/.test(folder) || folder.split(/[/\\]/).includes("..")) invalid = folderError = "A folder inside this repository, like libs/name.";
   else if (subs.some((s) => s.path === folder)) invalid = folderError = "That folder is a submodule already.";
 
-  const known = probed && probed.url === url ? probed : null;
-  if (url && !known && probing !== url) {
-    probing = url;
-    const mine = form;
+  const { probed } = probeForm;
+  const known = probed?.url === url ? probed : null;
+  if (url && !known && probeForm.probing !== url) {
+    probeForm.probing = url;
+    const mine = probeForm.form;
     // Checked after typing stops for a moment, then shown if the URL is still the one typed.
     const show = () => {
-      if (mine === form && probing === url && typed?.url.trim() === url && confirm.request?.action?.kind === "submoduleAdd") {
-        confirm.change(addSubmoduleRequest(subs, repoPath, typed));
+      if (mine === probeForm.form && probeForm.probing === url && probeForm.typed?.url.trim() === url && scope.confirm.request?.action?.kind === "submoduleAdd") {
+        scope.confirm.change(addSubmoduleRequest(scope, subs, repoPath, probeForm.typed));
       }
     };
     setTimeout(() => {
-      if (mine !== form || probing !== url) return;
-      api.probeRemote(url).then(
+      if (mine !== probeForm.form || probeForm.probing !== url) return;
+      scope.api.probeRemote(url).then(
         (probe) => {
-          probed = { url, error: false, text: `Found${probe.defaultBranch ? ` · default branch ${probe.defaultBranch}` : " · empty repository"}` };
+          probeForm.probed = { url, error: false, text: `Found${probe.defaultBranch ? ` · default branch ${probe.defaultBranch}` : " · empty repository"}` };
           show();
         },
         () => {
-          probed = { url, error: true, text: "Can’t reach it: check the address, or your access to it." };
+          probeForm.probed = { url, error: true, text: "Can’t reach it: check the address, or your access to it." };
           show();
         },
       );

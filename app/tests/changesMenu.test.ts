@@ -24,11 +24,15 @@ type ChangesRequests = Pick<typeof import("../src/lib/changes.ts"),
 const requests = load<ChangesRequests>(
   "changes", "discardRequest, ignoreChoices, ignoreRequest, stashFilesRequest, stashMessageFor", { splitPath },
 );
-const { fileMenu, filesMenu } = load<Pick<typeof import("../src/lib/changesMenu.ts"), "fileMenu" | "filesMenu">>("changesMenu", "fileMenu, filesMenu", {
+const scoped = load<Pick<typeof import("../src/lib/changesMenu.ts"), "fileMenu" | "filesMenu">>("changesMenu", "fileMenu, filesMenu", {
   ...requests, splitPath, stashStagedRequest, navigator: { platform: "MacIntel" },
   menuIcons: new Proxy({}, { get: () => "" }),
   workingFileMenuItem: () => ({ kind: "item", label: "Open Working Copy", icon: "", run() {} }),
 });
+
+const scope = {} as Parameters<typeof scoped.fileMenu>[0];
+const fileMenu = scoped.fileMenu.bind(null, scope);
+const filesMenu = scoped.filesMenu.bind(null, scope);
 
 const file = (status: FileChange["status"], path = "src/app.py"): FileChange => ({
   path, status, oldPath: null, additions: 0, deletions: 0, binary: false,

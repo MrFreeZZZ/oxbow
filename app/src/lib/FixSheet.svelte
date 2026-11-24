@@ -2,12 +2,15 @@
   // Fix a Mistake: what happened, in the words people search for. Picking a row opens that
   // fix's sheet, planned from the repository as it is; a row that can't be used says why.
 
+  import { useRepoScope } from "./repoScope";
   import { modal } from "./modal";
   import type { Part } from "./confirm.svelte";
   import type { FixChoice, FixId } from "./fixes";
   import { actionIcons as icons } from "./icons";
   import { plate, tint } from "./format";
   import { withKeys } from "./keys";
+
+  const scope = useRepoScope();
 
   let { choices, summary, onPick, onClose }: { choices: FixChoice[]; summary: Part[]; onPick: (id: FixId) => void; onClose: () => void } = $props();
 
@@ -17,6 +20,7 @@
   });
 
   function onKey(event: KeyboardEvent) {
+    if (!scope.isActive()) return;
     if (event.key === "Escape") {
       event.preventDefault();
       onClose();
@@ -30,16 +34,17 @@
     const next = event.key === "ArrowDown" ? (at + 1) % rows.length : (at - 1 + rows.length) % rows.length;
     rows[next].focus();
   }
+  const titleId = $props.id();
 </script>
 
 <svelte:window onkeydown={onKey} />
 
 <div class="dim">
-  <div class="sheet" use:modal role="dialog" aria-modal="true" aria-labelledby="fix-title" bind:this={box}>
+  <div class="sheet" use:modal role="dialog" aria-modal="true" aria-labelledby={titleId} bind:this={box}>
     <div class="top">
       <span class="tile"><svg class="icon" viewBox="0 0 16 16"><path d={icons.fix} /></svg></span>
       <div class="words">
-        <span class="title" id="fix-title">Fix a Mistake</span>
+        <span class="title" id={titleId}>Fix a Mistake</span>
         <span class="body">Pick what happened. Oxbow looks at your repository and shows the steps, with their git commands, before anything runs.</span>
         <span class="state">
           {#each summary as part, i (i)}
@@ -54,7 +59,7 @@
         <button class="fix" class:off={!!choice.off} disabled={!!choice.off} onclick={() => onPick(choice.id)}>
           <span class="fix-tile"><svg class="icon" viewBox="0 0 16 16"><path d={icons[choice.icon]} /></svg></span>
           <span class="fix-words">
-            <span class="fix-title">{choice.title}</span>
+            <span class={titleId}>{choice.title}</span>
             {#if choice.off}
               <span class="fix-sub why"><svg class="icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.75" /><path d="M8 7.2v3.6M8 5.2v.01" /></svg>{choice.off}</span>
             {:else}

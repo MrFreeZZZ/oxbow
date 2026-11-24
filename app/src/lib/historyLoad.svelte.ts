@@ -1,21 +1,18 @@
+import type { RepoScope } from "./repoScope";
 // The history of the window's repository: its first page, reloads (asked for, after an action,
 // after a change outside), older pages as the list scrolls on, and the other folders' states.
 // The repository itself opens and closes in repoSession.svelte.ts.
 
-import { api, stopped } from "./api";
+import { stopped } from "./api";
 import type { History, HistoryRow, OutsideChange, ReadPart } from "./types";
 import { reloadNews, retried, settle, stillFailing, withRows, type ReadStates } from "./reads";
 import { carryStates, failChecking, withState } from "./folders";
 import { Reloads } from "./loads";
 import type { RepoSession } from "./repoSession.svelte";
-import { activity } from "./activity.svelte";
-import { confirm } from "./confirm.svelte";
-import { oplog } from "./oplog.svelte";
-import { lfs } from "./lfs.svelte";
 
 /** Commits of the first load. Each load as the list scrolls on doubles what is loaded, up to
  *  `MAX_STEP` more at a time, and brings only the rows that are new. */
-const PAGE = 2_000;
+export const FIRST_HISTORY_PAGE = 2_000;
 const MAX_STEP = 50_000;
 
 export class HistoryLoader {
@@ -32,7 +29,7 @@ export class HistoryLoader {
 
   #session: RepoSession;
   /** Commits to load: a page, and more once the list has scrolled on or a commit further down was asked for. */
-  #limit = PAGE;
+  #limit = FIRST_HISTORY_PAGE;
   /** Commits loaded down to that no branch reaches, so History never gets them. */
   #unreachable = new Set<string>();
   /** Past the unpushed commits a load walks, the rest are told in the background, and a reload
@@ -60,7 +57,7 @@ export class HistoryLoader {
   /** After a reload that read something new: what the window keeps selected. */
   #reloaded: (next: History) => void;
 
-  constructor(session: RepoSession, reloaded: (next: History) => void) {
+  constructor(private readonly scope: RepoScope, session: RepoSession, reloaded: (next: History) => void) {
     this.#session = session;
     this.#reloaded = reloaded;
   }
@@ -82,22 +79,22 @@ export class HistoryLoader {
 
   /** Another repository opens: it starts on a page, with every branch. */
   reset() {
-    this.#limit = PAGE;
+    this.#limit = FIRST_HISTORY_PAGE;
     this.#unreachable = new Set();
     this.focusOnly = false;
   }
 
   /** The first page of the repository being opened, read before it shows. */
   first(): Promise<History> {
-    return api.history(this.#limit);
+    return this.scope.api.history(this.#limit);
   }
 
   /** The repository opened with `next`: shown, and Undo and LFS read for it. */
   opened(next: History) {
     this.#take(next, null);
     this.version++;
-    oplog.load();
-    lfs.load();
+    this.scope.oplog.load();
+    this.scope.lfs.load();
   }
 
   /** No repository: nothing to show. */
@@ -142,8 +139,8 @@ export class HistoryLoader {
     const after = this.history;
     if (!before || !after || after === before) return;
     const news = reloadNews(before, after);
-    activity.reloaded(news.text, after.reads);
-    if (!activity.open) confirm.say(`Reloaded. ${news.text}.`, news.partial ? "warn" : "done");
+    this.scope.activity.reloaded(news.text, after.reads);
+    if (!this.scope.activity.open) this.scope.confirm.say(`Reloaded. ${news.text}.`, news.partial ? "warn" : "done");
   }
 
   async #reloadNow() {
@@ -154,15 +151,15 @@ export class HistoryLoader {
     this.#all = false;
     this.#readSince = Date.now();
     try {
-      const next = withRows(await api.history(this.#limit, null, shown?.key ?? null, this.focusOnly, quiet), shown);
+      const next = withRows(await this.scope.api.history(this.#limit, null, shown?.key ?? null, this.focusOnly, quiet), shown);
       // Another repository was opened meanwhile: this answer may come from the old one.
       if (!session.tickets.current(mine) || session.loading) return;
       this.#take(next, shown);
       // Nothing changed: the views, Undo and LFS have it all already.
       if (!next.unchanged) {
         this.version++;
-        oplog.load();
-        lfs.load();
+        this.scope.oplog.load();
+        this.scope.lfs.load();
       }
       this.#reloaded(next);
     } catch (err) {
@@ -190,7 +187,7 @@ export class HistoryLoader {
     const tickets = this.#session.tickets;
     const mine = tickets.take();
     try {
-      await api.folderStates(this.#foldersSince, (state) => {
+      await this.scope.api.folderStates(this.#foldersSince, (state) => {
         if (tickets.current(mine) && this.history) this.history = withState(this.history, state);
       });
     } catch (err) {
@@ -207,7 +204,7 @@ export class HistoryLoader {
     const mine = tickets.take();
     this.#settling = true;
     const ids = h.rows.filter((r) => !r.unpushed && !r.worktree).map((r) => r.id);
-    api.settleUnpushed(ids, "history-unpushed").then(
+    this.scope.api.settleUnpushed(ids, "history-unpushed").then(
       (found) => {
         this.#settling = false;
         if (found && tickets.current(mine)) this.refreshQuietly();
@@ -228,7 +225,7 @@ export class HistoryLoader {
   async outsideChanged(change: OutsideChange) {
     if (!this.#session.repo || !this.history) return;
     // This window's own action and the reload after it go first: what they changed is no news.
-    while (confirm.running || this.#reloads.running) await (this.#reloads.running ?? new Promise((done) => setTimeout(done, 200)));
+    while (this.scope.confirm.running || this.#reloads.running) await (this.#reloads.running ?? new Promise((done) => setTimeout(done, 200)));
     // A reload that began after it sees it already, e.g. the one after an action here.
     if (this.#readSince > change.at) return;
     if (document.visibilityState === "hidden") {
@@ -243,7 +240,7 @@ export class HistoryLoader {
     const after = this.history;
     if (!change.git || !after || after === before || !tickets.current(mine)) return;
     const news = reloadNews(before, after);
-    if (news.text !== "Nothing new") activity.outside(news.text, after.reads, change.window);
+    if (news.text !== "Nothing new") this.scope.activity.outside(news.text, after.reads, change.window);
   }
 
   /** The window shows again: minimized, hidden or covered by other windows before, which needn't
@@ -270,7 +267,7 @@ export class HistoryLoader {
       return;
     }
     try {
-      const patch = part === "worktrees" ? { worktrees: await api.worktrees() } : { submodules: await api.submodules() };
+      const patch = part === "worktrees" ? { worktrees: await this.scope.api.worktrees() } : { submodules: await this.scope.api.submodules() };
       if (!tickets.current(mine) || !this.history || !this.reads) return;
       const done = retried(this.history, this.reads, part, patch, Date.now());
       this.history = done.history;
@@ -303,7 +300,7 @@ export class HistoryLoader {
       while (this.#reloads.running) await this.#reloads.running;
       const shown = this.history;
       const limit = this.#limit;
-      const next = withRows(await api.history(until ? limit : limit + Math.min(limit, MAX_STEP), until, shown?.key ?? null, this.focusOnly), shown);
+      const next = withRows(await this.scope.api.history(until ? limit : limit + Math.min(limit, MAX_STEP), until, shown?.key ?? null, this.focusOnly), shown);
       if (!session.tickets.current(mine) || session.loading) return false;
       this.#limit = Math.max(this.#limit, next.loaded);
       this.#take(next, shown);
@@ -340,6 +337,6 @@ export class HistoryLoader {
     this.paging = null;
     this.#reloads.forgetAfterPage();
     this.#settling = false;
-    api.stopReads(["history-unpushed"]).catch(() => {});
+    this.scope.api.stopReads(["history-unpushed"]).catch(() => {});
   }
 }

@@ -2,9 +2,13 @@
   // The words of one command in a terminal block, colored. A subcommand or flag the dictionary
   // knows, a branch name and a SHA open a popover on click: what it means, or which commit it is.
 
+  import { useRepoScope } from "./repoScope";
   import { manual, meaning } from "./gitWords";
-  import { lens, type Look } from "./lens.svelte";
+  import { type Look } from "./lens.svelte";
   import { tokens } from "./term";
+
+  const scope = useRepoScope();
+  const { lens } = scope;
 
   let { text }: { text: string } = $props();
 

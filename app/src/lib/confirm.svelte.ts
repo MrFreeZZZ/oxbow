@@ -3,8 +3,8 @@
 // the same sheet with git's live output. A failure turns the sheet into the way out of it.
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { api } from "./api";
-import { cannotRestore, oplog, revertInsteadRequest, undoRequest } from "./oplog.svelte";
+import { api as windowApi } from "./api";
+import { cannotRestore, oplog as windowOplog, revertInsteadRequest, undoRequest } from "./oplog.svelte";
 import { prefs } from "./prefs.svelte";
 import { addLine, cutLine } from "./liveLines";
 import { errorLine } from "./reads";
@@ -303,7 +303,7 @@ export interface RunPart {
   bytes?: { done: number; total: number };
 }
 
-class ConfirmState {
+export class ConfirmState {
   request = $state<Request | null>(null);
   planning = $state(false);
   commands = $state<GitCommand[]>([]);
@@ -355,10 +355,9 @@ class ConfirmState {
   #toastSince = 0;
   #toastCount = 0;
 
-  constructor() {
-    // This window's own: another window's action may run right after this one.
-    getCurrentWindow()
-      .listen<ActionEvent>("action-event", (event) => this.#onEvent(event.payload))
+  constructor(private readonly api: typeof windowApi = windowApi, private readonly oplog: typeof windowOplog = windowOplog, legacyEvents = true) {
+    if (legacyEvents) getCurrentWindow()
+      .listen<ActionEvent>("action-event", ({ payload }) => this.onEvent(payload))
       .catch(() => {});
   }
 
@@ -481,7 +480,7 @@ class ConfirmState {
   }
 
   stop() {
-    if (this.phase === "running") api.stopAction().catch(() => {});
+    if (this.phase === "running") this.api.stopAction().catch(() => {});
   }
 
   cancel() {
@@ -492,7 +491,7 @@ class ConfirmState {
    *  asks after all. */
   async #losesWork(request: Request): Promise<boolean> {
     if (!request.action || !GAPS.has(request.action.kind)) return false;
-    const plan = await api.planAction(request.action).catch(() => null);
+    const plan = await this.api.planAction(request.action).catch(() => null);
     return !!plan?.notKept.length;
   }
 
@@ -517,7 +516,7 @@ class ConfirmState {
       return;
     }
     try {
-      const plan = await api.planAction(request.action);
+      const plan = await this.api.planAction(request.action);
       if (mine !== this.#planned) return;
       this.commands = plan.commands;
       this.notKept = plan.notKept;
@@ -560,7 +559,7 @@ class ConfirmState {
     const after = this.request && action === this.request.action ? this.request.after : undefined;
     const started = Math.floor(Date.now() / 1000);
     try {
-      const output = await api.performAction(action, withoutUndo);
+      const output = await this.api.performAction(action, withoutUndo);
       this.ran = action;
       if (next) return this.#execute(next.action, next.status, next.done, undefined, true);
       const request = this.request;
@@ -634,12 +633,12 @@ class ConfirmState {
     }
     const button = this.recovery?.button;
     if (button) {
-      const plan = await api.planAction(button.action).catch(() => ({ commands: [] }));
+      const plan = await this.api.planAction(button.action).catch(() => ({ commands: [] }));
       if (mine === this.#planned) this.recoveryCommands = plan.commands;
     }
   }
 
-  #onEvent(event: ActionEvent) {
+  onEvent(event: ActionEvent) {
     if (this.phase !== "running") return;
     if (event.kind === "notLogged") {
       this.#notLogged = event.reason;
@@ -681,7 +680,7 @@ class ConfirmState {
   /** Undo of the step the Operation Log just recorded for `action`, when there is one. */
   async #undoFromLog(action: Action, started: number): Promise<(() => Request) | null> {
     if (action.kind === "clearOperationLog") return null;
-    const entry = await oplog.newest();
+    const entry = await this.oplog.newest();
     return entry && !(entry instanceof Error) && entry.time >= started && !entry.failed && !cannotRestore(entry, false) ? () => undoRequest(entry) : null;
   }
 

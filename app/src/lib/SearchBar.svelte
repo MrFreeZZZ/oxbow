@@ -2,12 +2,16 @@
   // The bar under the toolbar while searching: how many commits matched, filters for author,
   // branch and date, the same search as a `git log` command, and In Graph / Only Matches.
 
+  import { useRepoScope } from "./repoScope";
   import type { History } from "./types";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import { actionIcons } from "./icons";
   import { shortcut } from "./keys";
   import type { ObjectItem, ObjectKind } from "./objects";
-  import { SINCE, search } from "./search.svelte";
+  import { SINCE } from "./search.svelte";
+
+  const scope = useRepoScope();
+  const { search } = scope;
 
   let {
     history,

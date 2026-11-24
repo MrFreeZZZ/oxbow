@@ -5,12 +5,13 @@
 </script>
 
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import FileFilter from "./FileFilter.svelte";
   import { tick, untrack } from "svelte";
   import { pressed } from "./shortcuts";
-  import { api, stopped } from "./api";
+  import { stopped } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
-  import { confirm, type Part, type Request } from "./confirm.svelte";
+  import { type Part, type Request } from "./confirm.svelte";
   import type { ChangelistEdit, FileChange, FileDiff, Hunk, HistoryRow, Moving, Side, WorkingTree } from "./types";
   import { lane, plate, splitPath, tint, fileDeletionWidth } from "./format";
   import { keyFocus as focusByKey, tabStepper } from "./tabs";
@@ -20,7 +21,7 @@
   import ChangesGroupHeading from "./ChangesGroupHeading.svelte";
   import CommitForm from "./CommitForm.svelte";
   import Menu, { menuIcons, type MenuEntry, type SubEntry } from "./Menu.svelte";
-  import { fileMenu, filesMenu, type FileMenuActions } from "./changesMenu";
+  import { fileMenu as fileMenuInRepo, filesMenu as filesMenuInRepo, type FileMenuActions } from "./changesMenu";
   import ChangesFileRow from "./ChangesFileRow.svelte";
   import ChangesFileList from "./ChangesFileList.svelte";
   import { changeBadge as badge } from "./changesList";
@@ -31,6 +32,11 @@
   import { draftFor, saveDraft } from "./commitDrafts.svelte";
   import { ChangesReads } from "./changesReads.svelte";
   import { byFolder, filesWidth, listView, resizeFiles, setFolders } from "./listView.svelte";
+
+  const scope = useRepoScope();
+  const { api, confirm } = scope;
+  const fileMenu = fileMenuInRepo.bind(null, scope);
+  const filesMenu = filesMenuInRepo.bind(null, scope);
 
   let {
     repo,
@@ -67,6 +73,7 @@
 
   // What the panel reads from git: changesReads.svelte.ts.
   const reads = new ChangesReads(
+    api,
     (next) => {
       // A file staged or unstaged whole is shown where it went; a selection keeps the files still there.
       const first = shown === null;
@@ -510,6 +517,7 @@
     const from = { x: event.clientX, y: event.clientY };
     const files = () => (ticksOf(group).has(file.path) ? pickedFiles(group) : [file]);
     const move = (e: PointerEvent) => {
+      if (!scope.isActive()) return;
       if (!dragging && Math.hypot(e.clientX - from.x, e.clientY - from.y) < 5) return;
       dragging = { group, files: dragging?.files ?? files(), x: e.clientX, y: e.clientY };
       dropOn = dropTarget(e.clientX, e.clientY, group);
@@ -534,6 +542,7 @@
     const up = () => end(true);
     const cancel = () => end(false);
     const key = (e: KeyboardEvent) => {
+      if (!scope.isActive()) return;
       if (e.key !== "Escape" || !dragging) return;
       e.preventDefault();
       e.stopPropagation();

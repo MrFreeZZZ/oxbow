@@ -2,8 +2,8 @@
   // Compare: two branches, tags or commits side by side. The list shows the commits only one side
   // has and where they split; the panel shows every change at once, or one commit.
 
+  import { useRepoScope } from "./repoScope";
   import { compareLabel, isCompareSha, quoteGitArg } from "./compareRefs";
-  import { api } from "./api";
   import type { CompareCommit, CompareMode, Comparison, History, HistoryRow } from "./types";
   import { lane, relativeTime, shortId, tint } from "./format";
   import RefPicker from "./RefPicker.svelte";
@@ -11,6 +11,9 @@
   import { ancestors } from "./commits";
   import CommitPanel from "./CommitPanel.svelte";
   import { tick } from "svelte";
+
+  const scope = useRepoScope();
+  const { api } = scope;
 
   let {
     history,

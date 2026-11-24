@@ -1,7 +1,8 @@
+import type { RepoScope } from "./repoScope";
 // What Changes reads from git: the files and the changelists with each reload, their changed
 // lines once counted, and the diffs of the diff column, a page at a time.
 
-import { api, stopped } from "./api";
+import { stopped } from "./api";
 import type { Changelists, FileDiff, Side, WorkingTree } from "./types";
 import type { Grouped } from "./changelists";
 import { sameShown, type Shown } from "./changesView";
@@ -52,7 +53,7 @@ export class ChangesReads {
 
   /** `listed`: a new reading of the files is in, for what is shown and ticked to follow it.
    *  `diffsIn`: new diffs replaced the shown ones. */
-  constructor(listed: (next: WorkingTree) => void, diffsIn: () => void) {
+  constructor(private readonly api: RepoScope["api"], listed: (next: WorkingTree) => void, diffsIn: () => void) {
     this.#listed = listed;
     this.#diffsIn = diffsIn;
   }
@@ -64,10 +65,10 @@ export class ChangesReads {
       const read = given ? snapshot : null;
       // The same reading again, counted here already: its counts stay.
       const kept = given && !given.counted && read === this.#reading && this.tree?.counted ? this.tree : null;
-      const next = kept ?? given ?? (await api.workingTree());
+      const next = kept ?? given ?? (await this.api.workingTree());
       if (mine !== this.#load) return;
       let listsError: string | null = null;
-      const found = await api.changelists(read).catch((err) => ((listsError = String(err)), null));
+      const found = await this.api.changelists(read).catch((err) => ((listsError = String(err)), null));
       if (mine !== this.#load) return;
       this.#reading = read;
       this.tree = next;
@@ -84,7 +85,7 @@ export class ChangesReads {
   /** The changed lines of the files of reading `read`, which the history lists before they are
    *  counted: the list shows at once, and the counts come after. */
   async #countLines(read: number, mine: number) {
-    const counted = await api.workingCounts(read, LANES.counts).catch(() => null);
+    const counted = await this.api.workingCounts(read, LANES.counts).catch(() => null);
     // A newer reading has counts of its own coming.
     if (counted && mine === this.#load && this.#reading === read) this.tree = counted;
   }
@@ -138,7 +139,7 @@ export class ChangesReads {
     this.#loadingMore = false;
     this.diffError = null;
     if (!ask) return;
-    const first = ask.paths.length ? api.workingDiffPage(ask.paths, ask.side, ask.whole, ask.reading, 0, PAGE_LINES, LANES[ask.side]) : Promise.resolve({ diffs: [], next: null, files: 0 });
+    const first = ask.paths.length ? this.api.workingDiffPage(ask.paths, ask.side, ask.whole, ask.reading, 0, PAGE_LINES, LANES[ask.side]) : Promise.resolve({ diffs: [], next: null, files: 0 });
     first.then(
       (page) => {
         if (this.#asked !== ask) return;
@@ -161,7 +162,7 @@ export class ChangesReads {
     if (!ask || from === null || this.#loadingMore) return;
     this.#loadingMore = true;
     this.diffError = null;
-    api.workingDiffPage(ask.paths, ask.side, ask.whole, ask.reading, from, PAGE_LINES, LANES[ask.side]).then(
+    this.api.workingDiffPage(ask.paths, ask.side, ask.whole, ask.reading, from, PAGE_LINES, LANES[ask.side]).then(
       (page) => {
         if (this.#asked !== ask || this.more !== from) return;
         this.#loadingMore = false;
@@ -181,6 +182,6 @@ export class ChangesReads {
   stop() {
     this.#load++;
     this.#start(null);
-    api.stopReads(Object.values(LANES)).catch(() => {});
+    this.api.stopReads(Object.values(LANES)).catch(() => {});
   }
 }

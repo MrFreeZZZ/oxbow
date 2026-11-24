@@ -2,12 +2,15 @@
   // Fetch, Pull and Push in the toolbar, in one capsule: Fetch shows Activity's progress, and a
   // grey Pull or Push still answers a click, with why it can't run, under it.
 
-  import { api } from "./api";
-  import { activity, type ActivityItem } from "./activity.svelte";
+  import { useRepoScope } from "./repoScope";
+  import { type ActivityItem } from "./activity.svelte";
   import ActivityPopover from "./ActivityPopover.svelte";
   import WhyPopover from "./WhyPopover.svelte";
   import type { RemoteContext, SyncBlock, SyncFix } from "./remote";
   import type { History } from "./types";
+
+  const scope = useRepoScope();
+  const { api, activity } = scope;
 
   let {
     history,

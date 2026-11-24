@@ -1,0 +1,194 @@
+import type { RepoNotice, RepoSessionId, RepoTabOpen } from "./api";
+import type { History, RepoSummary, TrustFinding } from "./types";
+
+type Answer = "trust" | "restricted";
+
+export interface OpenTab {
+  id: RepoSessionId;
+  repo: RepoSummary;
+  history: History;
+}
+
+interface TabBackend {
+  open(path: string, answer?: Answer): Promise<RepoTabOpen>;
+  history(id: RepoSessionId): Promise<History>;
+  activate(id: RepoSessionId): Promise<void>;
+  close(id: RepoSessionId): Promise<void>;
+}
+
+interface WindowHooks {
+  show(tabs: readonly OpenTab[], active: RepoSessionId | null): void;
+  canSwitch(): boolean;
+  beforeClose(id: RepoSessionId): Promise<boolean>;
+  notice(notice: RepoNotice): void;
+}
+
+export interface OpenFrom {
+  live(): boolean;
+  trust(name: string, findings: TrustFinding[]): Promise<Answer | null>;
+  reopened(id: RepoSessionId, repo: RepoSummary): void | Promise<void>;
+  fail(path: string, error: unknown): Promise<void>;
+}
+
+/** Owns this window's backend sessions. Only a tab with its first History ready can take focus. */
+export class RepoTabs {
+  #tabs: OpenTab[] = [];
+  #active: RepoSessionId | null = null;
+  #queue = Promise.resolve();
+  #opens = Promise.resolve();
+  #closed = new Set<RepoSessionId>();
+  #opening = false;
+  #early = new Map<RepoSessionId, RepoNotice[]>();
+  #disposed = false;
+
+  #backend: TabBackend;
+  #hooks: WindowHooks;
+
+  constructor(backend: TabBackend, hooks: WindowHooks) {
+    this.#backend = backend;
+    this.#hooks = hooks;
+  }
+
+  #serialize(run: () => Promise<void>): Promise<void> {
+    const next = this.#queue.then(() => { if (!this.#disposed) return run(); });
+    this.#queue = next.catch(() => {});
+    return next;
+  }
+
+  #show() {
+    if (!this.#disposed) this.#hooks.show(this.#tabs, this.#active);
+  }
+
+  #exists(id: RepoSessionId) {
+    return !this.#closed.has(id) && this.#tabs.some(tab => tab.id === id);
+  }
+
+  async #activate(id: RepoSessionId) {
+    if (this.#active === id || !this.#exists(id) || !this.#hooks.canSwitch()) return;
+    await this.#backend.activate(id);
+    if (!this.#exists(id)) return;
+    if (!this.#hooks.canSwitch() && this.#active !== null && this.#exists(this.#active)) {
+      await this.#backend.activate(this.#active);
+      return;
+    }
+    this.#active = id;
+    this.#show();
+  }
+
+  activate(id: RepoSessionId) {
+    return this.#serialize(() => this.#activate(id));
+  }
+
+  open(path: string, from: OpenFrom) {
+    const next = this.#opens.then(() => this.#open(path, from));
+    this.#opens = next.catch(() => {});
+    return next;
+  }
+
+  async #open(path: string, from: OpenFrom) {
+    if (this.#disposed || !from.live() || !this.#hooks.canSwitch()) return;
+    let owned: RepoSessionId | null = null;
+    this.#opening = true;
+    try {
+      let result = await this.#backend.open(path);
+      if (result.kind === "untrusted") {
+        if (!from.live() || this.#disposed) return;
+        const answer = await from.trust(result.repo.name, result.repo.untrusted ?? []);
+        if (!answer || !from.live() || this.#disposed) return;
+        result = await this.#backend.open(path, answer);
+      }
+      if (result.kind === "otherWindow" || result.kind === "untrusted") return;
+      const { session: id, repo } = result;
+      if (this.#exists(id)) {
+        if (from.live() && !this.#disposed) {
+          await this.activate(id);
+          if (this.#active === id) await from.reopened(id, repo);
+        }
+        return;
+      }
+      // Also reclaim an existing backend session if the WebView was reloaded.
+      owned = id;
+      if (!from.live() || this.#disposed || this.#closed.has(id)) return;
+      const history = await this.#backend.history(id);
+      await this.#serialize(async () => {
+        if (!from.live() || this.#closed.has(id) || !this.#hooks.canSwitch()) return;
+        await this.#backend.activate(id);
+        if (this.#disposed || this.#closed.has(id)) return;
+        if (!this.#hooks.canSwitch()) {
+          const previous = this.#active;
+          if (previous === null) return;
+          if (this.#exists(previous)) {
+            await this.#backend.activate(previous);
+            return;
+          }
+        }
+        this.#tabs = [...this.#tabs, { id, repo, history }];
+        this.#active = id;
+        owned = null;
+        this.#show();
+        for (const notice of this.#early.get(id) ?? []) this.#hooks.notice(notice);
+      });
+    } catch (error) {
+      if (from.live() && !this.#disposed) await from.fail(path, error);
+    } finally {
+      this.#opening = false;
+      this.#early.clear();
+      if (owned !== null && !this.#closed.has(owned)) await this.#backend.close(owned);
+    }
+  }
+
+  async #remove(id: RepoSessionId) {
+    this.#tabs = this.#tabs.filter(tab => tab.id !== id);
+    if (id !== this.#active) return void this.#show();
+    this.#active = null;
+    try {
+      for (const next of [...this.#tabs].reverse()) {
+        if (!this.#exists(next.id)) continue;
+        try {
+          await this.#backend.activate(next.id);
+          if (!this.#exists(next.id)) continue;
+          this.#active = next.id;
+          break;
+        } catch (error) {
+          if (this.#exists(next.id)) throw error;
+        }
+      }
+    } finally {
+      this.#show();
+    }
+  }
+
+  close(id: RepoSessionId) {
+    return this.#serialize(async () => {
+      if (!this.#exists(id) || !this.#hooks.canSwitch() || !await this.#hooks.beforeClose(id)) return;
+      await this.#retire(id);
+    });
+  }
+
+  lose(id: RepoSessionId) {
+    return this.#serialize(async () => {
+      if (this.#exists(id)) await this.#retire(id);
+    });
+  }
+
+  async #retire(id: RepoSessionId) {
+    await this.#backend.close(id);
+    this.#closed.add(id);
+    await this.#remove(id);
+  }
+
+  receive(notice: RepoNotice) {
+    const id = notice.session;
+    if (notice.event === "repo-closed") {
+      this.#closed.add(id);
+      return this.#serialize(() => this.#remove(id));
+    }
+    if (notice.event === "repo-activate-request") return this.activate(id);
+    if (this.#exists(id)) this.#hooks.notice(notice);
+    else if (this.#opening && !this.#closed.has(id)) this.#early.set(id, [...this.#early.get(id) ?? [], notice]);
+  }
+
+  dispose() {
+    this.#disposed = true;
+  }
+}

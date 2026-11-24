@@ -1,9 +1,9 @@
+import type { RepoScope } from "./repoScope";
 // Pull requests: the sheets that open, merge and change them, and the stack list Oxbow keeps in
 // the description of each pull request of a stack. GitHub's side shows as curl (and the `gh`
 // command that does the same); what happens here afterwards is ordinary git. A merge request on
 // GitLab (one with `gitlab` facts) goes through the same sheets, in GitLab's words and calls.
 
-import { api } from "./api";
 import type { Part, Request } from "./confirm.svelte";
 import type { BranchContext } from "./branches";
 import { shortId } from "./format";
@@ -18,13 +18,13 @@ const chip = (ctx: BranchContext, name: string): Part => ({ branch: name, color:
 
 /** GitHub's words, or GitLab's for a merge request. */
 export const wordsOfPull = (pr: PullRequest): Words => (pr.gitlab ? GITLAB : GITHUB);
-const preview = (w: Words, calls: PullCall[]) => (w.kind === "gitlab" ? api.gitlabCallsPreview(calls) : api.githubCallsPreview(calls));
-const send = (w: Words, calls: PullCall[]) => (w.kind === "gitlab" ? api.gitlabRun(calls) : api.githubRun(calls));
+const preview = (scope: RepoScope, w: Words, calls: PullCall[]) => (w.kind === "gitlab" ? scope.api.gitlabCallsPreview(calls) : scope.api.githubCallsPreview(calls));
+const send = (scope: RepoScope, w: Words, calls: PullCall[]) => (w.kind === "gitlab" ? scope.api.gitlabRun(calls) : scope.api.githubRun(calls));
 
 /** A failed git step says what git said. */
-async function perform(action: Action) {
+async function perform(scope: RepoScope, action: Action) {
   try {
-    await api.performAction(action);
+    await scope.api.performAction(action);
   } catch (err) {
     throw (err as Failure)?.output ?? String(err);
   }
@@ -129,7 +129,7 @@ const firstLine = (err: unknown) => String(err).trim().split("\n").find((line) =
 /** Merge on GitHub (or GitLab), then bring the merge here; deleting the branch comes last, and a
  *  delete that fails only adds a note: the merge is in by then. `place` is where it lives: the
  *  remote, and on GitHub the repository's owner. */
-export async function mergeRequest(ctx: BranchContext, place: { remote: string; owner: string | null }, pr: PullRequest, method: MergeMethodName, deleteBranch: boolean): Promise<Request> {
+export async function mergeRequest(scope: RepoScope, ctx: BranchContext, place: { remote: string; owner: string | null }, pr: PullRequest, method: MergeMethodName, deleteBranch: boolean): Promise<Request> {
   const w = wordsOfPull(pr);
   const lab = w.kind === "gitlab";
   const n = `${w.mark}${pr.number}`;
@@ -154,9 +154,9 @@ export async function mergeRequest(ctx: BranchContext, place: { remote: string; 
     });
   // A delete that can't be done (uncommitted changes on the branch) is left out and said so.
   const [curls, plan, ...cleanupPlans] = await Promise.all([
-    preview(w, calls),
-    api.planAction(landed),
-    ...cleanup.map((c) => api.planAction(c.action).catch((err: unknown) => String(err))),
+    preview(scope, w, calls),
+    scope.api.planAction(landed),
+    ...cleanup.map((c) => scope.api.planAction(c.action).catch((err: unknown) => String(err))),
   ]);
   const skipped = cleanupPlans.filter((p): p is string => typeof p === "string");
   const steps = cleanup.filter((_, i) => typeof cleanupPlans[i] !== "string");
@@ -181,12 +181,12 @@ export async function mergeRequest(ctx: BranchContext, place: { remote: string; 
       commands: [...curls, ...commands.map((c) => c.display)],
       comments: [`${w.cli} merge ${pr.number}${flags} does the same`, ...commands.map((c) => c.comment)],
       run: async () => {
-        await send(w, calls);
-        await perform(landed);
+        await send(scope, w, calls);
+        await perform(scope, landed);
         const notes: string[] = [];
         for (const step of steps) {
           try {
-            await api.performAction(step.action);
+            await scope.api.performAction(step.action);
           } catch (err) {
             notes.push(step.failed((err as Failure)?.output ?? err));
           }
@@ -199,12 +199,12 @@ export async function mergeRequest(ctx: BranchContext, place: { remote: string; 
 
 /** Ask GitHub to merge it on its own once checks pass and it is approved, or stop asking; on
  *  GitLab, once the pipeline passes. */
-export async function autoMergeRequest(pr: PullRequest, method: MergeMethodName | null): Promise<Request> {
+export async function autoMergeRequest(scope: RepoScope, pr: PullRequest, method: MergeMethodName | null): Promise<Request> {
   const w = wordsOfPull(pr);
   const lab = w.kind === "gitlab";
   const n = `${w.mark}${pr.number}`;
   const calls: PullCall[] = [{ kind: "autoMerge", number: pr.number, id: pr.nodeId, method }];
-  const [curl] = await preview(w, calls);
+  const [curl] = await preview(scope, w, calls);
   const on = method !== null;
   const how = method ? (lab ? methodsOf(pr) : METHODS).find((m) => m.id === method)!.label.toLowerCase() : "";
   const comment = lab
@@ -230,18 +230,18 @@ export async function autoMergeRequest(pr: PullRequest, method: MergeMethodName 
       commands: [curl],
       comment,
       run: async () => {
-        await send(w, calls);
+        await send(scope, w, calls);
         return on ? `${n} merges once it is ready.` : `Auto-merge of ${n} is off.`;
       },
     },
   };
 }
 
-export async function readyRequest(pr: PullRequest): Promise<Request> {
+export async function readyRequest(scope: RepoScope, pr: PullRequest): Promise<Request> {
   const w = wordsOfPull(pr);
   const n = `${w.mark}${pr.number}`;
   const calls: PullCall[] = [{ kind: "readyForReview", number: pr.number, id: pr.nodeId, title: pr.gitlab ? pr.title : null }];
-  const [curl] = await preview(w, calls);
+  const [curl] = await preview(scope, w, calls);
   return {
     title: `Mark ${n} ready for review?`,
     body: [w.kind === "gitlab" ? "It stops being a draft: GitLab takes Draft: off its title, and it can merge." : "It stops being a draft, and the reviewers it asks for hear about it."],
@@ -252,7 +252,7 @@ export async function readyRequest(pr: PullRequest): Promise<Request> {
       commands: [curl],
       comment: `${w.cli} ${w.kind === "gitlab" ? "update" : "ready"} ${pr.number}${w.kind === "gitlab" ? " --ready" : ""} does the same`,
       run: async () => {
-        await send(w, calls);
+        await send(scope, w, calls);
         return `${n} is ready for review.`;
       },
     },
@@ -260,11 +260,11 @@ export async function readyRequest(pr: PullRequest): Promise<Request> {
 }
 
 /** Make it a draft again: it can't merge until it is marked ready. */
-export async function draftRequest(pr: PullRequest): Promise<Request> {
+export async function draftRequest(scope: RepoScope, pr: PullRequest): Promise<Request> {
   const w = wordsOfPull(pr);
   const n = `${w.mark}${pr.number}`;
   const calls: PullCall[] = [{ kind: "convertToDraft", number: pr.number, id: pr.nodeId, title: pr.gitlab ? pr.title : null }];
-  const [curl] = await preview(w, calls);
+  const [curl] = await preview(scope, w, calls);
   return {
     title: `Mark ${n} as a draft?`,
     body: [w.kind === "gitlab" ? "GitLab puts Draft: before its title, and it can’t merge until it is marked ready." : "It can’t merge until it is marked ready for review again; the reviews it has stay."],
@@ -275,7 +275,7 @@ export async function draftRequest(pr: PullRequest): Promise<Request> {
       commands: [curl],
       comment: `${w.cli} ${w.kind === "gitlab" ? `update ${pr.number} --draft` : `ready ${pr.number} --undo`} does the same`,
       run: async () => {
-        await send(w, calls);
+        await send(scope, w, calls);
         return `${n} is a draft.`;
       },
     },
@@ -283,11 +283,11 @@ export async function draftRequest(pr: PullRequest): Promise<Request> {
 }
 
 /** Close it, or open it again; its branch stays as it is. */
-export async function closeRequest(pr: PullRequest, open: boolean): Promise<Request> {
+export async function closeRequest(scope: RepoScope, pr: PullRequest, open: boolean): Promise<Request> {
   const w = wordsOfPull(pr);
   const n = `${w.mark}${pr.number}`;
   const calls: PullCall[] = [{ kind: "setState", number: pr.number, open }];
-  const [curl] = await preview(w, calls);
+  const [curl] = await preview(scope, w, calls);
   return {
     title: open ? `Reopen ${n}?` : `Do you really want to close ${n}?`,
     body: [open ? `It is open again on ${w.name}, with its conversation and reviews.` : `It stays on ${w.name}, closed, and can be reopened. Its branch stays.`],
@@ -298,7 +298,7 @@ export async function closeRequest(pr: PullRequest, open: boolean): Promise<Requ
       commands: [curl],
       comment: `${w.cli} ${open ? "reopen" : "close"} ${pr.number} does the same`,
       run: async () => {
-        await send(w, calls);
+        await send(scope, w, calls);
         return open ? `${n} is open again.` : `Closed ${n}.`;
       },
     },
@@ -306,20 +306,20 @@ export async function closeRequest(pr: PullRequest, open: boolean): Promise<Requ
 }
 
 /** Point it at another branch to merge into, picked from `choices` or typed. */
-export async function targetRequest(ctx: BranchContext, pr: PullRequest, choices: string[]): Promise<Request> {
+export async function targetRequest(scope: RepoScope, ctx: BranchContext, pr: PullRequest, choices: string[]): Promise<Request> {
   const w = wordsOfPull(pr);
   // The request once, with a stand-in for the branch the sheet then fills in as it is picked.
-  const [shape] = await preview(w, [{ kind: "update", number: pr.number, base: TARGET }]);
-  return targetSheet(ctx, pr, w, choices, "", shape);
+  const [shape] = await preview(scope, w, [{ kind: "update", number: pr.number, base: TARGET }]);
+  return targetSheet(scope, ctx, pr, w, choices, "", shape);
 }
 
 const TARGET = "OXBOW_TARGET_BRANCH";
 
-function targetSheet(ctx: BranchContext, pr: PullRequest, w: Words, choices: string[], target: string, shape: string): Request {
+function targetSheet(scope: RepoScope, ctx: BranchContext, pr: PullRequest, w: Words, choices: string[], target: string, shape: string): Request {
   const n = `${w.mark}${pr.number}`;
   const name = target.trim();
   const calls: PullCall[] = [{ kind: "update", number: pr.number, base: name }];
-  const again = (next: string) => targetSheet(ctx, pr, w, choices, next, shape);
+  const again = (next: string) => targetSheet(scope, ctx, pr, w, choices, next, shape);
   return {
     title: `Change what ${n} merges into?`,
     body: ["It merges into ", chip(ctx, pr.base), ` now. ${w.name} shows its changes against the new target, and ${w.checks} ${w.kind === "gitlab" ? "runs" : "run"} again.`],
@@ -338,7 +338,7 @@ function targetSheet(ctx: BranchContext, pr: PullRequest, w: Words, choices: str
       commands: [shape.replace(TARGET, JSON.stringify(name || "<branch>").slice(1, -1))],
       comment: `${w.cli} ${w.kind === "gitlab" ? "update" : "edit"} ${pr.number} --${w.kind === "gitlab" ? "target-branch" : "base"} ${name || "<branch>"} does the same`,
       run: async () => {
-        await send(w, calls);
+        await send(scope, w, calls);
         return `${n} merges into ${name} now.`;
       },
     },
@@ -384,14 +384,14 @@ function stackUpdates(pull: NewPull, number: string): PullCall[] {
 /** Whether GitLab's answer says the sign-in can't open it: the token is refused, or may not. */
 export const tokenRefused = (output: string) => /didn't accept the token|may not do this|Not signed in to/.test(output);
 
-export async function createRequest(ctx: BranchContext, pull: NewPull): Promise<Request> {
+export async function createRequest(scope: RepoScope, ctx: BranchContext, pull: NewPull): Promise<Request> {
   const lab = !!pull.gitlab;
   const w = lab ? GITLAB : GITHUB;
   const create: PullCall = { kind: "create", head: pull.branch, base: pull.base, title: pull.title.trim(), body: newBody(pull), draft: pull.draft, gitlab: pull.gitlab?.create ?? null };
   // GitLab takes the reviewers with the merge request itself.
   const reviewers: PullCall[] = pull.reviewers.length && !lab ? [{ kind: "requestReviewers", number: 0, reviewers: pull.reviewers }] : [];
   const later = stackUpdates(pull, `${w.mark}$NUMBER`);
-  const [curls, plan] = await Promise.all([preview(w, [create, ...reviewers, ...later]), pull.push ? api.planAction(pull.push) : Promise.resolve(null)]);
+  const [curls, plan] = await Promise.all([preview(scope, w, [create, ...reviewers, ...later]), pull.push ? scope.api.planAction(pull.push) : Promise.resolve(null)]);
   const pushed = plan?.commands ?? [];
   const body: Part[] = [];
   if (pull.push) body.push("Pushes ", chip(ctx, pull.branch), ` to ${pull.push.remote}, then opens`);
@@ -431,8 +431,8 @@ export async function createRequest(ctx: BranchContext, pull: NewPull): Promise<
         ...later.map(() => `its stack list gets the new ${w.noun}`),
       ],
       run: async () => {
-        if (pull.push) await perform(pull.push);
-        const made = (await send(w, [create, ...reviewers])) as { number?: number; iid?: number } | null;
+        if (pull.push) await perform(scope, pull.push);
+        const made = (await send(scope, w, [create, ...reviewers])) as { number?: number; iid?: number } | null;
         const number = lab ? made?.iid : made?.number;
         if (number && pull.stack) {
           const own = stackSection(
@@ -440,7 +440,7 @@ export async function createRequest(ctx: BranchContext, pull: NewPull): Promise<
             pull.branch,
             w.noun,
           );
-          await send(w, [{ kind: "update", number, body: withStack(create.body, own) }, ...stackUpdates(pull, `${w.mark}${number}`)]);
+          await send(scope, w, [{ kind: "update", number, body: withStack(create.body, own) }, ...stackUpdates(pull, `${w.mark}${number}`)]);
         }
         return number ? `Opened ${w.mark}${number}.` : `Opened the ${w.noun}.`;
       },
@@ -465,7 +465,7 @@ export async function createRequest(ctx: BranchContext, pull: NewPull): Promise<
 /** Force push the rewritten branches and point their pull requests at the trunk: the restack's
  *  last two steps, or the ones still to go. `failed` keeps the step that failed and why, for
  *  going on from it later; `done` runs once both went through. */
-export async function restackPushRequest(
+export async function restackPushRequest(scope: RepoScope,
   ctx: BranchContext,
   w: Words,
   push: (Action & { kind: "pushBranches" }) | null,
@@ -475,7 +475,7 @@ export async function restackPushRequest(
 ): Promise<Request | null> {
   const calls: PullCall[] = retarget.map((r) => ({ kind: "update", number: r.number, base: r.base }));
   if (!push && !calls.length) return null;
-  const [curls, plan] = await Promise.all([calls.length ? preview(w, calls) : Promise.resolve([]), push ? api.planAction(push) : Promise.resolve(null)]);
+  const [curls, plan] = await Promise.all([calls.length ? preview(scope, w, calls) : Promise.resolve([]), push ? scope.api.planAction(push) : Promise.resolve(null)]);
   const pushed = plan?.commands ?? [];
   const body: Part[] = [];
   if (push) {
@@ -502,14 +502,14 @@ export async function restackPushRequest(
       run: async () => {
         if (push)
           try {
-            await perform(push);
+            await perform(scope, push);
           } catch (err) {
             await failed("push", firstLine(err)).catch(() => {});
             throw err;
           }
         if (calls.length)
           try {
-            await send(w, calls);
+            await send(scope, w, calls);
           } catch (err) {
             await failed("base", firstLine(err)).catch(() => {});
             throw err;
@@ -525,11 +525,11 @@ export async function restackPushRequest(
 
 /** Merge the base into the branch on GitHub, like its Update branch button; on GitLab rebase
  *  the branch onto the target, like its Rebase button. */
-export async function updateBranchRequest(ctx: BranchContext, pr: PullRequest): Promise<Request> {
+export async function updateBranchRequest(scope: RepoScope, ctx: BranchContext, pr: PullRequest): Promise<Request> {
   const w = wordsOfPull(pr);
   const lab = w.kind === "gitlab";
   const calls: PullCall[] = [{ kind: "updateBranch", number: pr.number, sha: pr.headSha }];
-  const [curl] = await preview(w, calls);
+  const [curl] = await preview(scope, w, calls);
   const local = ctx.history.refs.find((r) => r.kind === "local" && r.name === pr.head);
   const ahead = local?.tracking && !local.tracking.gone ? local.tracking.ahead : 0;
   const body: Part[] = lab
@@ -549,7 +549,7 @@ export async function updateBranchRequest(ctx: BranchContext, pr: PullRequest): 
       commands: [curl],
       comment: lab ? `glab mr rebase ${pr.number} does the same` : `gh pr update-branch ${pr.number} does the same`,
       run: async () => {
-        await send(w, calls);
+        await send(scope, w, calls);
         return `${w.name} is ${lab ? "rebasing" : "updating"} ${pr.head}.`;
       },
     },
@@ -558,12 +558,12 @@ export async function updateBranchRequest(ctx: BranchContext, pr: PullRequest): 
 
 /** Ask `logins` to review it; on GitLab by their account `ids`, which go with the ones it asks
  *  already. */
-export async function reviewersRequest(pr: PullRequest, logins: string[], ids: number[] = []): Promise<Request> {
+export async function reviewersRequest(scope: RepoScope, pr: PullRequest, logins: string[], ids: number[] = []): Promise<Request> {
   const w = wordsOfPull(pr);
   const lab = w.kind === "gitlab";
   const all = lab ? [...new Set([...(pr.gitlab?.reviewerIds ?? []), ...ids])] : [];
   const calls: PullCall[] = [{ kind: "requestReviewers", number: pr.number, reviewers: logins, ids: all }];
-  const [curl] = await preview(w, calls);
+  const [curl] = await preview(scope, w, calls);
   const n = `${w.mark}${pr.number}`;
   return {
     title: `Ask ${logins.join(", ")} to review ${n}?`,
@@ -575,7 +575,7 @@ export async function reviewersRequest(pr: PullRequest, logins: string[], ids: n
       commands: [curl],
       comment: lab ? `glab mr update ${pr.number} --reviewer +${logins.join(",+")} does the same` : `gh pr edit ${pr.number} ${logins.map((l) => `--add-reviewer ${l}`).join(" ")} does the same`,
       run: async () => {
-        await send(w, calls);
+        await send(scope, w, calls);
         return `Asked ${logins.join(", ")} to review ${n}.`;
       },
     },

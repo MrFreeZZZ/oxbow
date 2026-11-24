@@ -43,7 +43,7 @@ function state(now = Date.now) {
   };
   const source = fs.readFileSync(new URL("../src/lib/github.svelte.ts", import.meta.url), "utf8").replace(/^import .*;\n/gm, "").replace(/export /g, "");
   const js = ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
-  const value = Function("api", "$state", "keepList", "Date", `${js}; return github;`)(api, (v: unknown) => v, keepList, { now });
+  const value = Function("windowApi", "$state", "keepList", "Date", `${js}; return github;`)(api, (v: unknown) => v, keepList, { now });
   return { value, gh, gl, api };
 }
 

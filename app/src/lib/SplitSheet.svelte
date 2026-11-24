@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { diffScroll } from "./diffScroll";
   // Split Commit: the commit's files on the left, each with a checkbox; the open file's diff on
   // the right, where single lines or whole hunks can be picked. What is picked becomes a new
@@ -6,7 +7,6 @@
   // with its own message. From the commit menu it goes on to the dry run's sheet, in Edit Stack
   // into the plan.
 
-  import { api } from "./api";
   import { modal } from "./modal";
   import { shortId, fileDeletionWidth } from "./format";
   import { withKeys } from "./keys";
@@ -28,6 +28,9 @@
     type Picks,
   } from "./split";
   import type { FileDiff, Hunk } from "./types";
+
+  const scope = useRepoScope();
+  const { api } = scope;
 
   let {
     commit,
@@ -102,6 +105,7 @@
   }
 
   function onKey(event: KeyboardEvent) {
+    if (!scope.isActive()) return;
     if (event.key === "Escape") {
       event.preventDefault();
       onClose();
@@ -114,6 +118,7 @@
   const pickedLine = $derived(
     counts.files ? `${counts.files} ${counts.files === 1 ? "file" : "files"} · +${counts.additions} −${counts.deletions} picked` : "Nothing picked yet",
   );
+  const titleId = $props.id();
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -131,11 +136,11 @@
 {/snippet}
 
 <div class="dim">
-  <div class="sheet" use:modal role="dialog" aria-modal="true" aria-labelledby="split-title">
+  <div class="sheet" use:modal role="dialog" aria-modal="true" aria-labelledby={titleId}>
     <div class="top">
       <span class="tile"><svg class="icon" viewBox="0 0 16 16"><path d="M8 1.5v4M8 5.5 4 9.5v5M8 5.5l4 4v5" /></svg></span>
       <div class="words">
-        <span class="title" id="split-title">Split Commit</span>
+        <span class="title" id={titleId}>Split Commit</span>
         <span class="body">
           Pick the files or lines that go into a new commit right after <span class="chip mono">{shortId(commit.id)}</span> “{commit.summary}”. The rest stays in it, with its message.
         </span>

@@ -45,7 +45,7 @@ function session(forge: "github" | "gitlab" = "github") {
     confirm: { fail: (err: unknown) => errors.push(err) }, github: {}, wordsOf: () => ({}) };
   const C = Function(...Object.keys(globals), `${js}; return ReviewSession;`)(...Object.values(globals));
   const address = target();
-  const editor = new C({ number: 7, nodeId: "pr-7", headSha: "head", changedFiles: 2, reviews: [] }, async (request: any) => {
+  const editor = new C(globals, { number: 7, nodeId: "pr-7", headSha: "head", changedFiles: 2, reviews: [] }, async (request: any) => {
     requests.push(request);
     await request.local.run();
     return true;

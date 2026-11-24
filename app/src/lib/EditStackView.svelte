@@ -11,22 +11,20 @@
   // and new tip, whether it needs a force push and its pull request. Templates make a plan in one
   // go: Squash WIP, Fix Messages, Move to Branch. Split Commit takes picked files or lines out of
   // a commit into a new one right above it, which can then be moved like any other.
+  import { useRepoScope } from "./repoScope";
   import { onDestroy, untrack } from "svelte";
-  import { api, stopped } from "./api";
+  import { stopped } from "./api";
   import type { Request } from "./confirm.svelte";
-  import { confirm } from "./confirm.svelte";
   import type { BranchContext } from "./branches";
   import { lane, plate, shortId, tint } from "./format";
   import { shortcut, withKeys } from "./keys";
   import { combo, pressed } from "./shortcuts";
-  import { kept as keptPlans } from "./kept";
-  import { github } from "./github.svelte";
   import { messageNote, moveToBranch, neighborBranch, squashWip, wipOf } from "./stackTemplates";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import SplitSheet from "./SplitSheet.svelte";
   import { commitsWithSplits, picksOf, splitOf, splitPart, withSplit, withoutSplit, type DraftSplit } from "./split";
   import WhyNote from "./WhyNote.svelte";
-  import { oplog, undoRequest } from "./oplog.svelte";
+  import { undoRequest } from "./oplog.svelte";
   import { softArrows } from "./shapes";
   import {
     ACTIONS,
@@ -46,6 +44,10 @@
     type Item,
   } from "./stack";
   import type { BranchAfter, Stack, StackPreview, StepAction } from "./types";
+
+  const scope = useRepoScope();
+  const { kept: keptPlans } = scope;
+  const { api, confirm, github, oplog } = scope;
 
   let {
     workdir,
@@ -360,7 +362,7 @@
     // The first subject worth a look gets the cursor.
     const first = stack.commits.find((c) => messageNote(c.summary) && fixable(c.id)) ?? stack.commits.find((c) => fixable(c.id));
     if (first) selected = first.id;
-    requestAnimationFrame(() => document.querySelector<HTMLInputElement>(`.list input.fix[data-id="${first?.id}"]`)?.focus());
+    requestAnimationFrame(() => document.querySelector<HTMLInputElement>(`.list input.fix:not([inert] *)[data-id="${first?.id}"]`)?.focus());
   }
 
   /** In Fix Messages, a commit that keeps a message of its own gets a text box. */
@@ -389,7 +391,7 @@
   function fixKey(event: KeyboardEvent) {
     if (event.key !== "Enter") return;
     event.preventDefault();
-    const boxes = [...document.querySelectorAll<HTMLInputElement>(".list input.fix")];
+    const boxes = [...document.querySelectorAll<HTMLInputElement>(".list input.fix:not([inert] *)")];
     const next = boxes[boxes.indexOf(event.currentTarget as HTMLInputElement) + 1];
     if (next) {
       next.focus();
@@ -458,6 +460,7 @@
   }
 
   function onKey(event: KeyboardEvent) {
+    if (!scope.isActive()) return;
     if (!stack || confirm.request || menu || splitting || event.defaultPrevented) return;
     const target = event.target as HTMLElement | null;
     const typing = !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA");

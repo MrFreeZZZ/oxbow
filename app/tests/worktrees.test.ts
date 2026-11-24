@@ -5,7 +5,7 @@ import ts from "typescript";
 
 const source = readFileSync(new URL("../src/lib/worktrees.ts", import.meta.url), "utf8");
 const request = source.slice(source.indexOf("export async function pullWorktreeRequest"), source.indexOf("/** Branch chips"));
-const setup = Function("api", "newWorktreeRequest", "newWorktreeSheet", "freeBranches", "freeFolder", "tilde",
+const setup = Function( "newWorktreeRequest", "newWorktreeSheet", "freeBranches", "freeFolder", "tilde",
   `${ts.transpile(request.replace("export ", ""), { target: ts.ScriptTarget.ES2022 })}; return pullWorktreeRequest;`);
 
 test("Review worktrees use the fetched head unless they can use a local or tracking branch", async () => {
@@ -18,14 +18,15 @@ test("Review worktrees use the fetched head unless they can use a local or track
     if (fetchError) throw fetchError;
     return { tips, stale: null };
   };
-  const worktree = setup({ pullFetch: fetch("GitHub"), gitlabFetch: fetch("GitLab") },
-    (_ctx, _path, branch) => ({ branch, create: false }),
-    (_ctx, _path, _shown, _free, state) => state,
+  const scope = { api: { pullFetch: fetch("GitHub"), gitlabFetch: fetch("GitLab") } };
+  const worktree = setup(
+    (_scope, _ctx, _path, branch) => ({ branch, create: false }),
+    (_scope, _ctx, _path, _shown, _free, state) => state,
     () => [], async () => "/worktree", (path) => path);
   const pull = { number: 7, base: "main", head: "feature", headSha: "c".repeat(40) };
   const local = { kind: "local", name: "feature" };
   const remote = { kind: "remote", name: "origin/feature" };
-  const make = (refs = [], fork = false, gitlab = false) => worktree({ history: { refs } }, "/repo", pull, "origin", fork, gitlab);
+  const make = (refs = [], fork = false, gitlab = false) => worktree(scope, { history: { refs } }, "/repo", pull, "origin", fork, gitlab);
 
   assert.deepEqual(await make([local, remote]), { branch: "feature", create: false });
   assert.deepEqual(fetches, []);

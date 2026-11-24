@@ -2,10 +2,14 @@
   // A commit from git's reflog that no branch has, in History's details panel: where it came
   // from, until when git keeps it, and Create Branch to keep it, without a reset.
 
+  import { useRepoScope } from "./repoScope";
   import type { HistoryRow, ReflogEntry } from "./types";
   import { relativeTime } from "./format";
-  import { lostRow, lostUntil, moveText, oplog } from "./oplog.svelte";
+  import { lostRow, lostUntil, moveText } from "./oplog.svelte";
   import CommitPanel from "./CommitPanel.svelte";
+
+  const scope = useRepoScope();
+  const { oplog } = scope;
 
   let {
     entry,

@@ -15,7 +15,7 @@ import { dropsPushed, lockedCommit, lockedNote, protectedHead } from "../src/lib
 const source = fs.readFileSync(new URL("../src/lib/commitMenu.ts", import.meta.url), "utf8")
   .replace(/^import .*;\n/gm, "").replace(/^export /gm, "");
 const saveRequest = Promise.resolve<Request>({ title: "Save patches", body: [], icon: "patch", button: "Save Patches" });
-const savePatchesRequest = mock.fn((_target: PatchTarget) => saveRequest);
+const savePatchesRequest = mock.fn((_scope: typeof scope, _target: PatchTarget) => saveRequest);
 const globals = {
   menuIcons: {}, ancestors, dropsPushed, lockedCommit, lockedNote, protectedHead,
   resetModes: [], compareHead, compareLabel, compareRef, savePatchesRequest,
@@ -23,7 +23,8 @@ const globals = {
   github: { gitlab: [{ remote: "origin" }], mergeRequestOf: () => null },
   gitlabOf: (h: History, projects: { remote: string }[]) => projects.find((p) => p.remote === h.defaultRemote),
 };
-const menu = Function(...Object.keys(globals), `${ts.transpile(source)}; return commitMenu;`)(...Object.values(globals)) as (row: HistoryRow, app: CommitMenuApp) => MenuEntry[];
+const scope = { github: globals.github };
+const menu = Function(...Object.keys(globals), `${ts.transpile(source)}; return commitMenu;`)(...Object.values(globals)) as (scope: typeof scope, row: HistoryRow, app: CommitMenuApp) => MenuEntry[];
 const row = { id: "abc1234", summary: "Commit", parents: [], labels: [], graph: { color: 1, branch: "topic" }, worktree: null, unpushed: false } as unknown as HistoryRow;
 const history = {
   head: { branch: "topic", commit: row.id }, trunk: "main", trunkRef: null,
@@ -34,7 +35,7 @@ const merging = { ...history, operation: { kind: "merge" } } as History;
 let applied = 0;
 const applyPatches = () => { applied++; };
 function entries(graph = row.graph, h = history, overrides: Partial<CommitMenuApp> = {}, target = row) {
-  return menu({ ...target, graph }, {
+  return menu(scope, { ...target, graph }, {
     history: h, ctx: { history: h }, selectedRow: null, headStack: new Set(), applyPatches,
     patchTarget: (r: HistoryRow): PatchTarget => ({ to: r.id, count: 1, since: null, name: r.summary, what: [] }),
     ...overrides,
@@ -137,7 +138,7 @@ test("Save for a range forwards the original patch target to the export handler"
   assert.ok(!save.off);
   save.run();
   assert.equal(savePatchesRequest.mock.callCount(), 1);
-  assert.equal(savePatchesRequest.mock.calls[0].arguments[0], target);
+  assert.equal(savePatchesRequest.mock.calls[0].arguments[1], target);
   assert.equal(run.mock.callCount(), 1);
   assert.equal(run.mock.calls[0].arguments[0], saveRequest);
 });

@@ -2,10 +2,12 @@
   // In place of a diff: a submodule's recorded commit moved. Which way, the commits it gained or
   // dropped as far as its clone has them, and the two lines git itself shows for it.
 
-  import { api } from "./api";
-  import { confirm } from "./confirm.svelte";
+  import { useRepoScope } from "./repoScope";
   import { shortId, shortTime } from "./format";
   import type { Side, SubmoduleMove } from "./types";
+
+  const scope = useRepoScope();
+  const { api, confirm } = scope;
 
   let {
     move,
