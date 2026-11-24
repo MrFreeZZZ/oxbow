@@ -99,7 +99,7 @@
     {#each tabs as tab (tab.id)}
       {@const selected = tab.id === activeId}
       <div class="item" class:selected role="presentation">
-        <button class="tab" role="tab" aria-selected={selected} aria-controls={`repo-panel-${tab.id}`}
+        <button class="tab-button" role="tab" aria-selected={selected} aria-controls={`repo-panel-${tab.id}`}
           tabindex={tab.id === (focused ?? activeId) ? 0 : -1} data-tab-id={tab.id} title={tab.repo.path}
           onclick={(event) => {
             const picking = activate(tab.id);
@@ -186,7 +186,23 @@
       radial-gradient(circle at 100% 0, transparent calc(var(--curve) - .5px), var(--win) var(--curve)) right / var(--curve) 100% no-repeat;
     pointer-events: none;
   }
-  .tab,
+  .item:not(.selected)::before {
+    content: "";
+    position: absolute;
+    inset: 3px var(--space-1);
+    border-radius: var(--radius-m);
+    pointer-events: none;
+  }
+  .item:not(.selected):hover::before {
+    background: var(--hover-wash);
+  }
+  .item:not(.selected):has(.tab-button:active)::before {
+    background: var(--press-wash);
+  }
+  .item:not(.selected):has(.tab-button:is(:focus-visible, :global(.key-focus)))::before {
+    box-shadow: var(--focus-ring);
+  }
+  .tab-button,
   .control {
     position: relative;
     display: flex;
@@ -197,15 +213,13 @@
     color: var(--text2);
     font: inherit;
   }
-  .tab:hover,
   .control:hover {
     background-image: linear-gradient(var(--hover-wash), var(--hover-wash));
   }
-  .tab:active,
   .control:active {
     background-image: linear-gradient(var(--press-wash), var(--press-wash));
   }
-  .tab {
+  .tab-button {
     align-self: stretch;
     flex: 1;
     min-width: 0;
@@ -214,7 +228,14 @@
     color: var(--text);
     text-align: left;
   }
-  .tab span {
+  .tab-button:is(:focus-visible, :global(.key-focus)) {
+    outline-style: none;
+  }
+  .selected .tab-button:is(:focus-visible, :global(.key-focus)) span {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .tab-button span {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -223,7 +244,7 @@
     flex: 0 0 16px;
     color: var(--text2);
   }
-  .selected .tab { font-weight: 500; }
+  .selected .tab-button { font-weight: 500; }
   .selected .folder { color: var(--accent); }
   .control {
     flex: none;
@@ -242,6 +263,9 @@
     width: 24px;
     height: 24px;
     margin: 0;
+    padding: var(--space-1);
+    border-radius: var(--radius-pill);
+    background-clip: content-box;
   }
   .close .icon { width: 12px; height: 12px; }
   .selected .close, .add { color: var(--text); }
