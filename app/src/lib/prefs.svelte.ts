@@ -262,7 +262,8 @@ class Prefs {
   }
 
   #read<K extends PrefKey>(key: K): PrefValue<K> {
-    const value = key in this.#unsaved ? this.#unsaved[key] : this.#values[key];
+    // Publish the whitespace mode once the backend can serve diffs for it.
+    const value = key !== "oxbow.diff.ignoreWhitespace" && key in this.#unsaved ? this.#unsaved[key] : this.#values[key];
     // A value settings.json can't hold, e.g. typed in by hand, counts as the default.
     return (value !== undefined && value !== null && !problemOf(key, value) ? value : defaults[key]) as PrefValue<K>;
   }

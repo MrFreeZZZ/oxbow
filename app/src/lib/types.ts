@@ -480,6 +480,8 @@ export interface DiffLine {
   oldLine: number | null;
   newLine: number | null;
   text: string;
+  /** The old text of a context line whose whitespace changes were hidden. */
+  oldText?: string;
   /** The line ends with CRLF; `text` leaves the CR out. */
   cr?: boolean;
   words: WordPart[] | null;

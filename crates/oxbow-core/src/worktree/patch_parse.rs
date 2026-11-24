@@ -114,6 +114,7 @@ pub(super) fn parse_patch_within(patch: &str, max: usize) -> ParsedPatch {
             old_line,
             new_line,
             text,
+            old_text: None,
             cr,
             words: None,
             secret: None,

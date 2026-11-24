@@ -6,7 +6,7 @@ import { compileModule } from "svelte/compiler";
 import * as runtime from "svelte/internal/client";
 import { isNewer, loadedOver, SaveQueue } from "../src/lib/settingSaves.ts";
 
-const defaults = { "oxbow.background.intensity": 20, "oxbow.diff.contextLines": 3, "oxbow.diff.files": "smart" };
+const defaults = { "oxbow.background.intensity": 20, "oxbow.diff.contextLines": 3, "oxbow.diff.ignoreWhitespace": false, "oxbow.diff.files": "smart" };
 const source = fs.readFileSync(new URL("../src/lib/prefs.svelte.ts", import.meta.url), "utf8");
 const cls = source.slice(source.indexOf("class Prefs {"), source.indexOf("export const prefs"));
 const compiled = compileModule(ts.transpile(cls, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext }), { filename: "prefs.svelte.js", generate: "client" }).js.code
@@ -15,9 +15,11 @@ let revision = 0;
 let stored: Record<string, unknown> = {};
 let changed!: (event: { payload: { key: string; value: unknown; revision: number } }) => void;
 let fail = false;
+let saving: Promise<void> | undefined;
 const api = {
   allSettings: async () => ({ values: { ...stored }, revision, problem: null }),
   setSetting: async (key: string, value: unknown) => {
+    await saving;
     if (fail) throw new Error("Disk full");
     if (value === null) delete stored[key]; else stored[key] = value;
     return ++revision;
@@ -77,4 +79,15 @@ await prefs.set("oxbow.diff.files", "collapsed");
 runtime.flush();
 assert.equal(reads, 2);
 assert.equal(folds, 2);
+
+// Selecting a file during the save should still use the currently applied mode.
+const release = Promise.withResolvers<void>();
+saving = release.promise;
+const save = prefs.set("oxbow.diff.ignoreWhitespace", true);
+runtime.flush();
+assert.equal(prefs.get("oxbow.diff.ignoreWhitespace"), false);
+release.resolve();
+assert.equal(await save, true);
+runtime.flush();
+assert.equal(prefs.get("oxbow.diff.ignoreWhitespace"), true);
 stop();

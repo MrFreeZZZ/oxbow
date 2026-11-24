@@ -150,3 +150,13 @@ const a = line("added");
   assert.deepEqual(blockText(hunk, 4, 0, 3, "left"), ["old", ""]);
   assert.deepEqual(blockText(hunk, 4, 1, 3, "right"), ["extra", ""]);
 }
+
+// Copying a virtualized context row follows the displayed side, including hidden indentation.
+{
+  const hunk = { header: "", oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: [
+    { ...line("context", "    finish()"), oldText: "finish()" },
+  ] };
+  assert.deepEqual(blockText(hunk, 1, 0, 1), ["    finish()"]);
+  assert.deepEqual(blockText(hunk, 1, 0, 1, "left"), ["finish()"]);
+  assert.deepEqual(blockText(hunk, 1, 0, 1, "right"), ["    finish()"]);
+}

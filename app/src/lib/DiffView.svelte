@@ -42,7 +42,7 @@
   import { foldReason, startsFolded } from "./diffFold";
   import { diffLineEndingLabel } from "./diffLineEndings";
   import { changeBadge } from "./changesList";
-  import { addKnown, blockText, changedRow, changeStarts, pieces, rowsOf, sideKind, type Known, type Piece, type Row } from "./diffRows";
+  import { addKnown, blockText, changedRow, changeStarts, lineText, pieces, rowsOf, sideKind, type Known, type Piece, type Row } from "./diffRows";
   import { mac, withKeys } from "./keys";
   import { combo } from "./shortcuts";
   import ImageDiff from "./ImageDiff.svelte";
@@ -275,9 +275,7 @@
   let showEol = $state<Record<string, boolean>>({});
   /** SVG files shown as code instead of as a picture, by path. */
   let showCode = $state<Record<string, boolean>>({});
-  /** Unchanged lines opened between hunks, and how many lines the old side has, by file and
-   *  old side: a diff loaded again (a refresh, a setting, another file staged) keeps them while
-   *  its old side is the same, since that is where they are read from. */
+  /** Opened context and old line totals, keyed by the source versions read. */
   let opened = $state.raw(new Map<string, Known>());
   let totals = $state.raw(new Map<string, number>());
   $effect(() => {
@@ -477,8 +475,10 @@
   /** Lines one click opens over or under a hunk. */
   const STEP = 20;
 
-  /** Where a file's unchanged lines are read from: its old side, which never moves under it. */
-  const openKey = (diff: FileDiff): string | null => (diff.old ? `${nav.repo}\0${diff.file.path}\0${JSON.stringify(diff.old)}` : null);
+  /** Filtered context can differ between the two versions. */
+  const newContextSource = (diff: FileDiff) => ignoring && diff.old?.kind === "blob" && diff.new?.kind === "blob" ? diff.new : null;
+  const openKey = (diff: FileDiff): string | null =>
+    diff.old ? JSON.stringify([nav.repo, diff.file.path, diff.old, newContextSource(diff)]) : null;
 
   /** What a file draws in order: its hunks, and around them the unchanged lines, folded or
    *  opened. A file cut short by the budget leaves out the lines after its last hunk drawn. */
@@ -489,14 +489,20 @@
     return pieces(hunks, (key && opened.get(key)) || [], key && !cut ? (totals.get(key) ?? null) : null);
   }
 
-  /** Old lines `from` to `to` of a file, opened. */
-  function reveal(diff: FileDiff, from: number, to: number) {
+  /** Open context by its old line numbers, with both versions when whitespace is hidden. */
+  function reveal(diff: FileDiff, from: number, to: number, shift: number) {
     const key = openKey(diff);
     if (!key || !diff.old) return;
-    api.sourceLines(diff.old, from, to - from + 1).then(
-      (read) => {
-        opened = new Map(opened).set(key, addKnown(opened.get(key) ?? [], from, read.lines));
-        totals = new Map(totals).set(key, read.total);
+    const newSource = newContextSource(diff);
+    const count = to - from + 1;
+    Promise.all([api.sourceLines(diff.old, from, count), newSource && api.sourceLines(newSource, from + shift, count)]).then(
+      ([before, after]) => {
+        const lines = after ? after.lines.map((line, i) => ({
+          ...line,
+          oldText: before.lines[i]?.text !== line.text ? before.lines[i]?.text : undefined,
+        })) : before.lines;
+        opened = new Map(opened).set(key, addKnown(opened.get(key) ?? [], from, lines));
+        totals = new Map(totals).set(key, before.total);
       },
       (err) => stopped(err) || confirm.fail(err),
     );
@@ -578,8 +584,9 @@
   function columns(diff: FileDiff): number {
     const key = openKey(diff);
     const known = key ? opened.get(key) : undefined;
-    const cols = widest(diff, () => diff.hunks.flatMap((h) => h.lines.map((l) => l.text)));
-    return known ? Math.max(cols, widest(known, () => known.flatMap((run) => run.lines.map((l) => l.text)))) : cols;
+    const texts = (line: { text: string; oldText?: string }) => line.oldText === undefined ? [line.text] : [line.text, line.oldText];
+    const cols = widest(diff, () => diff.hunks.flatMap((h) => h.lines.flatMap(texts)));
+    return known ? Math.max(cols, widest(known, () => known.flatMap((run) => run.lines.flatMap(texts)))) : cols;
   }
 
   /** Where changes start among a hunk's lines `start` to `end`, for Next Change. */
@@ -687,7 +694,7 @@
 
 <!-- A line's code: syntax colors, changed words, matches of Find. `counted` is false for the
      old side of an unchanged line in Side by Side, whose matches are the new side's again. -->
-{#snippet code(diff: FileDiff, line: DiffLine, language: ReturnType<typeof languageOf>, counted: boolean)}<span class="text"><span class="ink"><span class="selection-text" data-empty={line.text ? undefined : ""}>{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found && counted} class:twin={piece.found && !counted} data-hit={counted ? piece.hit : undefined} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>{#if line.cr && own(showEol, diff.file.path)}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}{#if line.secret}<span class="secret" title="Looks like a secret: Oxbow stops the commit until it is unstaged, or you commit anyway. Add oxbow:allow to the line if it is not one."><svg viewBox="0 0 16 16"><path d="M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2" /></svg>{line.secret}</span>{/if}</span></span>{/snippet}
+{#snippet code(diff: FileDiff, line: DiffLine, language: ReturnType<typeof languageOf>, counted: boolean, text = line.text)}<span class="text"><span class="ink"><span class="selection-text" data-empty={text ? undefined : ""}>{#each paint(text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found && counted} class:twin={piece.found && !counted} data-hit={counted ? piece.hit : undefined} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>{#if line.cr && own(showEol, diff.file.path)}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}{#if line.secret}<span class="secret" title="Looks like a secret: Oxbow stops the commit until it is unstaged, or you commit anyway. Add oxbow:allow to the line if it is not one."><svg viewBox="0 0 16 16"><path d="M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2" /></svg>{line.secret}</span>{/if}</span></span>{/snippet}
 
 {#snippet pickBox(hunk: Hunk, line: DiffLine, i: number, on: boolean)}
   <button
@@ -745,7 +752,7 @@
       {#if line && at !== null && line.kind !== "context"}{@render pickBox(hunk, line, at, on)}{:else}<span></span>{/if}
     {/if}
     {#if side === "right" && line}{@render newNo(diff, line.newLine)}{:else}<span class="no">{line ? ((side === "left" ? line.oldLine : line.newLine) ?? "") : ""}</span>{/if}
-    {#if line}{@render code(diff, line, language, side === "right" || line.kind !== "context")}{/if}
+    {#if line}{@render code(diff, line, language, side === "right" || line.kind !== "context", lineText(line, side))}{/if}
   </div>
 {/snippet}
 
@@ -816,16 +823,16 @@
     <div class="fold">
       <span class="grow">{label}</span>
       {#if count > STEP && piece.above}
-        <button class="open" onclick={() => reveal(diff, piece.from, piece.from + STEP - 1)} title="Show {STEP} more lines under the code above">
+        <button class="open" onclick={() => reveal(diff, piece.from, piece.from + STEP - 1, piece.shift)} title="Show {STEP} more lines under the code above">
           <svg class="icon" viewBox="0 0 16 16"><path d="M8 3v9M4.5 8.5 8 12l3.5-3.5" /></svg>{STEP} More Lines
         </button>
       {/if}
       {#if count > STEP && piece.below}
-        <button class="open" onclick={() => reveal(diff, piece.to - STEP + 1, piece.to)} title="Show {STEP} more lines over the code below">
+        <button class="open" onclick={() => reveal(diff, piece.to - STEP + 1, piece.to, piece.shift)} title="Show {STEP} more lines over the code below">
           <svg class="icon" viewBox="0 0 16 16"><path d="M8 13V4M4.5 7.5 8 4l3.5 3.5" /></svg>{STEP} More Lines
         </button>
       {/if}
-      <button class="open" onclick={() => reveal(diff, piece.from, piece.to)} title="Show every unchanged line here">Show All</button>
+      <button class="open" onclick={() => reveal(diff, piece.from, piece.to, piece.shift)} title="Show every unchanged line here">Show All</button>
     </div>
   {/if}
 {/snippet}

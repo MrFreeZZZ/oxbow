@@ -45,12 +45,15 @@ export function blockText(hunk: Hunk, count: number, start: number, size: number
   const lines: string[] = [];
   for (const row of rowsOf(hunk, count).slice(start, start + size)) {
     const at = row[side];
-    if (at !== null) lines.push(hunk.lines[at].text);
+    if (at !== null) lines.push(lineText(hunk.lines[at], side));
   }
   return lines;
 }
 
-/** An unchanged line is the same line on both sides. */
+/** Text of a line in its column. Unified shows the newer context. */
+export const lineText = (line: DiffLine, side: "left" | "right") => side === "left" ? (line.oldText ?? line.text) : line.text;
+
+/** Context lines share an index even when their whitespace differs. */
 export const changedRow = (row: Row) => row.left !== row.right;
 
 /** Where changes start among items `start` to `end`, counted from `start`: an item that changes
@@ -105,10 +108,11 @@ export function spans(hunks: Hunk[]): Span[] {
 
 /** Unchanged lines read so far, from the old side: runs in order, none touching another, each
  *  from its first line's number. */
-export type Known = { start: number; lines: SourceLine[] }[];
+type ContextLine = SourceLine & Pick<DiffLine, "oldText">;
+export type Known = { start: number; lines: ContextLine[] }[];
 
 /** `known` with `lines` from line `start` added. */
-export function addKnown(known: Known, start: number, lines: SourceLine[]): Known {
+export function addKnown(known: Known, start: number, lines: ContextLine[]): Known {
   if (!lines.length) return known;
   const runs = [...known, { start, lines }].sort((a, b) => a.start - b.start);
   const out: Known = [];
@@ -145,7 +149,7 @@ function shownHunk(run: Known[number], from: number, to: number, shift: number):
     const lines: DiffLine[] = [];
     for (let n = from; n <= to; n++) {
       const line = run.lines[n - run.start];
-      lines.push({ kind: "context", oldLine: n, newLine: n + shift, text: line.text, cr: line.cr, words: null });
+      lines.push({ ...line, kind: "context", oldLine: n, newLine: n + shift, words: null });
     }
     hunk = { header: "", oldStart: from, oldLines: to - from + 1, newStart: from + shift, newLines: to - from + 1, lines };
     byRange.set(key, hunk);
