@@ -328,6 +328,18 @@
     "title": "Previous Tab",
     "enabled": false,
     "accelerator": "Alt+CmdOrCtrl+Left"
+   },
+   {
+    "id": "nextRepoTab",
+    "title": "Next Repository Tab",
+    "enabled": false,
+    "accelerator": null
+   },
+   {
+    "id": "previousRepoTab",
+    "title": "Previous Repository Tab",
+    "enabled": false,
+    "accelerator": null
    }
   ]
  },

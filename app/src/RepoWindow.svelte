@@ -5,7 +5,8 @@
   import { onMount, tick } from "svelte";
   import type App from "./App.svelte";
   import RepoTabView from "./RepoTabView.svelte";
-  import { api, apiForSession, type RepoSessionId } from "./lib/api";
+  import RepoTabStrip from "./lib/RepoTabStrip.svelte";
+  import { api, apiForSession, settings, type RepoSessionId } from "./lib/api";
   import { keepMessagesForRestart } from "./lib/commitDrafts.svelte";
   import { FIRST_HISTORY_PAGE } from "./lib/historyLoad.svelte";
   import type { RepoScope } from "./lib/repoScope";
@@ -20,6 +21,7 @@
   let tabs = $state.raw<readonly OpenTab[]>([]);
   let activeId = $state<RepoSessionId | null>(null);
   let launched = $state(false);
+  let sideHidden = $state(false);
   const screens = new Map<RepoSessionId | null, { screen: App; scope: RepoScope }>();
   function register(scope: RepoScope, screen: App) {
     screens.set(scope.id, { screen, scope });
@@ -57,7 +59,7 @@
     beforeClose: async (id) => {
       const problem = await tabDraftProblem(id);
       if (!problem) return canSwitch();
-      screens.get(id)?.screen.fileOpenError(problem);
+      report(problem);
       return false;
     },
     notice: (notice) => {
@@ -70,6 +72,8 @@
   export const openRepository = (path: string) => activeScreen()?.startup(path);
   export const activateTab = (id: RepoSessionId) => manager.activate(id).catch(report);
   export const closeTab = (id: RepoSessionId) => manager.close(id).catch(report);
+  const closeOtherTabs = (id: RepoSessionId) => manager.closeOthers(id).catch(report);
+  const stepTab = (by: 1 | -1) => manager.step(by).catch(report);
 
   async function lostTab(id: RepoSessionId, gone: Gone) {
     const shown = activeId === id;
@@ -112,6 +116,9 @@
   onMount(() => {
     let alive = true;
     const window = getCurrentWindow();
+    void api.getSetting<boolean>(settings.sidebarHidden).then((hidden) => {
+      if (alive && typeof hidden === "boolean") sideHidden = hidden;
+    }).catch(() => {});
     const guards = beforeUpdateRestart(async () => {
       const problem = keepMessagesForRestart();
       if (problem) return problem;
@@ -151,10 +158,19 @@
   });
 </script>
 
-<RepoTabView {register} tab={null} active={activeId === null}
+{#snippet tabStrip(openMenu: (event: MouseEvent) => void, openRecent: () => void, copyPath: (path: string) => void)}
+  {#if activeId !== null}
+    <RepoTabStrip {tabs} {activeId} {openMenu} {openRecent} {copyPath}
+      activate={activateTab} close={closeTab} closeOthers={closeOtherTabs} />
+  {/if}
+{/snippet}
+
+<RepoTabView {register} tab={null} active={activeId === null} bind:sideHidden
   {launched} openPath={tabsEnabled ? (path, from) => manager.open(path, from).catch(report) : undefined} />
 {#each tabs as tab (tab.id)}
-  <RepoTabView {register} {tab} active={activeId === tab.id} {launched}
+  <RepoTabView {register} {tab} active={activeId === tab.id} {launched} bind:sideHidden
+    tabStrip={activeId === tab.id ? tabStrip : undefined}
+    stepRepoTab={tabs.length > 1 ? stepTab : undefined}
     openPath={(path, from) => manager.open(path, {
       ...from, live: () => from.live() && tabs.some(open => open.id === tab.id),
     }).catch(report)} closeTab={() => closeTab(tab.id)} lostTab={(gone) => lostTab(tab.id, gone)} />

@@ -6,21 +6,21 @@ import * as runtime from "svelte/internal/client";
 import type * as Drafts from "../src/lib/commitDrafts.svelte.ts";
 import { test } from "node:test";
 import { api, apiForSession, type RepoNotice, type RepoTabOpen } from "../src/lib/api.ts";
-import { RepoTabs, type OpenFrom, type OpenTab } from "../src/lib/repoTabs.ts";
+import { repoTabActions, RepoTabs, type OpenFrom, type OpenTab } from "../src/lib/repoTabs.ts";
 import type { History, RepoSummary } from "../src/lib/types.ts";
 
 const summary = (id: number): RepoSummary => ({ path: `/repo/${id}`, name: String(id), restricted: [] });
 const history = {} as History;
 const opened = (session: number): RepoTabOpen => ({ kind: "opened", session, repo: summary(session) });
 
-function windowTabs(backend: ConstructorParameters<typeof RepoTabs>[0]) {
+function windowTabs(backend: ConstructorParameters<typeof RepoTabs>[0], beforeClose = async (_id: number) => true) {
   const state = { tabs: [] as readonly OpenTab[], active: null as number | null, free: true };
   const errors: unknown[] = [];
   const notices: RepoNotice[] = [];
   const tabs = new RepoTabs(backend, {
     show: (tabs, active) => Object.assign(state, { tabs, active }),
     canSwitch: () => state.free,
-    beforeClose: async () => true,
+    beforeClose,
     notice: (notice) => notices.push(notice),
   });
   const from: OpenFrom = {
@@ -31,6 +31,73 @@ function windowTabs(backend: ConstructorParameters<typeof RepoTabs>[0]) {
   };
   return { tabs, state, from, errors, notices };
 }
+
+test("repository shortcuts wrap in tab order and close picks the right neighbor, then the left", async () => {
+  const { tabs, state, from } = windowTabs({
+    open: async (path) => opened(Number(path)),
+    history: async () => history,
+    activate: async () => {},
+    close: async () => {},
+  });
+  for (const id of ["1", "2", "3", "4"]) await tabs.open(id, from);
+  await tabs.step(1);
+  assert.equal(state.active, 1);
+  await tabs.step(-1);
+  assert.equal(state.active, 4);
+  await tabs.activate(2);
+  await tabs.close(2);
+  assert.equal(state.active, 3);
+  await tabs.close(4);
+  assert.equal(state.active, 3);
+  await tabs.close(3);
+  assert.equal(state.active, 1);
+  await tabs.close(1);
+  assert.equal(state.active, null);
+});
+
+test("closing the other tabs checks all guards before selecting the target and closing anything", async () => {
+  const events: string[] = [];
+  let blocked = 3;
+  const { tabs, state, from } = windowTabs({
+    open: async (path) => opened(Number(path)),
+    history: async () => history,
+    activate: async (id) => { events.push(`activate:${id}`); },
+    close: async (id) => { events.push(`close:${id}`); },
+  }, async (id) => {
+    events.push(`guard:${id}`);
+    return id !== blocked;
+  });
+  for (const id of ["1", "2", "3"]) await tabs.open(id, from);
+  events.length = 0;
+  await tabs.closeOthers(2);
+  assert.deepEqual(events, ["guard:1", "guard:3"]);
+  assert.deepEqual(state.tabs.map(tab => tab.id), [1, 2, 3]);
+  assert.equal(state.active, 3);
+
+  blocked = 0;
+  events.length = 0;
+  await tabs.closeOthers(2);
+  assert.deepEqual(events, ["guard:1", "guard:3", "activate:2", "close:1", "close:3"]);
+  assert.deepEqual(state.tabs.map(tab => tab.id), [2]);
+  assert.equal(state.active, 2);
+});
+
+test("the tab context menu targets the tab that opened it", () => {
+  const calls: unknown[] = [];
+  const target = { id: 2, repo: summary(2), history };
+  const actions = {
+    copyPath: (path: string) => calls.push(["copy", path]),
+    close: (id: number) => calls.push(["close", id]),
+    closeOthers: (id: number) => calls.push(["keep", id]),
+  };
+  const menu = repoTabActions(target, 3, actions);
+  menu.copy.run();
+  menu.close.run();
+  menu.others.run();
+  assert.deepEqual(calls, [["copy", "/repo/2"], ["close", 2], ["keep", 2]]);
+  assert.equal(menu.others.off, false);
+  assert.equal(repoTabActions(target, 1, actions).others.off, true);
+});
 
 test("opening deduplicates canonical paths, preserves the original on failure and cancellation, and raises other windows", async () => {
   const actions: string[] = [];

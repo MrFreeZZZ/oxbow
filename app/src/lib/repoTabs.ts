@@ -9,6 +9,18 @@ export interface OpenTab {
   history: History;
 }
 
+export function repoTabActions(tab: OpenTab, count: number, actions: {
+  copyPath(path: string): void;
+  close(id: RepoSessionId): void;
+  closeOthers(id: RepoSessionId): void;
+}) {
+  return {
+    copy: { label: "Copy Repository Path", run: () => actions.copyPath(tab.repo.path) },
+    close: { label: "Close Tab", run: () => actions.close(tab.id) },
+    others: { label: "Close Other Tabs", off: count < 2, run: () => actions.closeOthers(tab.id) },
+  };
+}
+
 interface TabBackend {
   open(path: string, answer?: Answer): Promise<RepoTabOpen>;
   history(id: RepoSessionId): Promise<History>;
@@ -79,6 +91,14 @@ export class RepoTabs {
     return this.#serialize(() => this.#activate(id));
   }
 
+  step(by: 1 | -1) {
+    return this.#serialize(async () => {
+      const tabs = this.#tabs.filter(tab => this.#exists(tab.id));
+      const at = tabs.findIndex(tab => tab.id === this.#active);
+      if (at >= 0 && tabs.length > 1) await this.#activate(tabs[(at + by + tabs.length) % tabs.length].id);
+    });
+  }
+
   open(path: string, from: OpenFrom) {
     const next = this.#opens.then(() => this.#open(path, from));
     this.#opens = next.catch(() => {});
@@ -138,11 +158,13 @@ export class RepoTabs {
   }
 
   async #remove(id: RepoSessionId) {
+    const at = this.#tabs.findIndex(tab => tab.id === id);
+    if (at < 0) return;
     this.#tabs = this.#tabs.filter(tab => tab.id !== id);
     if (id !== this.#active) return void this.#show();
     this.#active = null;
     try {
-      for (const next of [...this.#tabs].reverse()) {
+      for (const next of [...this.#tabs.slice(at), ...this.#tabs.slice(0, at).reverse()]) {
         if (!this.#exists(next.id)) continue;
         try {
           await this.#backend.activate(next.id);
@@ -162,6 +184,21 @@ export class RepoTabs {
     return this.#serialize(async () => {
       if (!this.#exists(id) || !this.#hooks.canSwitch() || !await this.#hooks.beforeClose(id)) return;
       await this.#retire(id);
+    });
+  }
+
+  closeOthers(keep: RepoSessionId) {
+    return this.#serialize(async () => {
+      if (!this.#exists(keep) || !this.#hooks.canSwitch()) return;
+      const others = this.#tabs.filter(tab => tab.id !== keep && this.#exists(tab.id));
+      for (const { id } of others) {
+        if (!await this.#hooks.beforeClose(id)) return;
+      }
+      await this.#activate(keep);
+      if (this.#active !== keep || !this.#exists(keep) || !this.#hooks.canSwitch()) return;
+      for (const { id } of others) {
+        if (this.#exists(id)) await this.#retire(id);
+      }
     });
   }
 

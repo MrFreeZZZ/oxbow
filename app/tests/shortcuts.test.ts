@@ -10,6 +10,15 @@ assert.equal(isImeEscape(press({ key: "Escape", isComposing: true })), true);
 assert.equal(isImeEscape(press({ key: "Escape", isComposing: false, keyCode: 229 })), true);
 assert.equal(isImeEscape(press({ key: "Escape", isComposing: false, keyCode: 27 })), false);
 
+for (const onMac of [true, false]) {
+  assert.deepEqual(defaultsOf("nextRepoTab", onMac), []);
+  assert.deepEqual(defaultsOf("previousRepoTab", onMac), []);
+  const map = new Keymap(onMac, () => ({ nextRepoTab: ["Mod+F6"], previousRepoTab: ["Mod+Shift+F6"] }));
+  const next = { key: "F6", code: "F6", metaKey: onMac, ctrlKey: !onMac };
+  assert.equal(id(map.match(press(next))), "nextRepoTab");
+  assert.equal(id(map.match(press({ ...next, shiftKey: true }))), "previousRepoTab");
+}
+
 // The Mac's keys are VS Code's: ⇧⌘P, ⌘B, ⌥⌘B, ⇧⌘U, ⌃⇧G, ⌘G.
 {
   const map = new Keymap(true);

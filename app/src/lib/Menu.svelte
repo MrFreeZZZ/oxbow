@@ -78,7 +78,9 @@
 
   const scope = useRepoScope();
 
-  let { x, y, label, entries, onClose }: { x: number; y: number; label: string; entries: MenuEntry[]; onClose: () => void } = $props();
+  let { x, y, label, entries, onClose, belowAnchor = false }: {
+    x: number; y: number; label: string; entries: MenuEntry[]; onClose: () => void; belowAnchor?: boolean;
+  } = $props();
 
   let box = $state<HTMLDivElement>();
   let left = $state(0);
@@ -199,7 +201,8 @@
     onClose();
   }}
 ></div>
-<div class="menu" class:keyed role="menu" aria-label={label} bind:this={box} style:left="{left}px" style:top="{top}px" onscroll={() => (sub = null)}>
+<div class="menu" class:keyed role="menu" aria-label={label} bind:this={box} style:left="{left}px" style:top="{top}px"
+  style:max-height={belowAnchor ? `calc(100vh - ${y + 8}px)` : undefined} onscroll={() => (sub = null)}>
   {#each entries as entry, i (i)}
     {#if entry.kind === "header"}
       <div class="header"><span>{entry.label}</span>{#if entry.keys}<span class="keys">{entry.keys}</span>{/if}</div>

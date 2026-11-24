@@ -65,6 +65,8 @@ export const COMMANDS = {
   // Open Next Editor and Open Previous Editor: the tabs of the details panel.
   nextTab: { category: "View", title: "Open Next Tab", mac: ["Alt+Mod+Right", "Ctrl+Tab"], other: ["Mod+PageDown", "Ctrl+Tab"] },
   previousTab: { category: "View", title: "Open Previous Tab", mac: ["Alt+Mod+Left", "Ctrl+Shift+Tab"], other: ["Mod+PageUp", "Ctrl+Shift+Tab"] },
+  nextRepoTab: { category: "View", title: "Next Repository Tab" },
+  previousRepoTab: { category: "View", title: "Previous Repository Tab" },
   // Show Output, where VS Code lists the git commands it ran; Toggle Terminal too, the other
   // place people look for them.
   console: { category: "View", title: "Show Console", mac: ["Mod+Shift+U", "Ctrl+`", "Alt+Mod+C"], other: ["Mod+Shift+U", "Ctrl+`"] },

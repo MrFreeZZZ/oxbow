@@ -16,7 +16,7 @@ export const MENUS: { title: string; items: Entry[] }[] = [
     title: "View",
     items: ["palette", "repositories", "-", "sidebar", "details", "expand", "focusOnly", "-", "history", "changes", "stashes", "oplog", "localHistory", "activity", "console", "-", "diffLayout", "wrap", "whitespace", "-", "zoomIn", "zoomOut", "zoomReset"],
   },
-  { title: "Go", items: ["back", "forward", "-", "quickOpen", "goToBranch", "goToTag", "goToStash", "browseFiles", "-", "nextChange", "previousChange", "-", "nextTab", "previousTab"] },
+  { title: "Go", items: ["back", "forward", "-", "quickOpen", "goToBranch", "goToTag", "goToStash", "browseFiles", "-", "nextChange", "previousChange", "-", "nextTab", "previousTab", "nextRepoTab", "previousRepoTab"] },
   {
     title: "Repository",
     items: ["fetch", "pull", "pullRebase", "pullMerge", "push", "publish", "publishGitHub", "publishGitLab", "-", "commit", "newChangelist", "commitChangelist", "stash", "stashStaged", "-", "branch", "checkout", "newWorktree", "editStack", "splitCommit", "resolve", "applyNonConflicting", "-", "savePatches", "applyPatches", "-", "fixMistake"],

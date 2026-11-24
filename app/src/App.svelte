@@ -37,12 +37,16 @@
   import { useRepoScope } from "./lib/repoScope";
   import type { OpenFrom, OpenTab } from "./lib/repoTabs";
 
-  let { openedTab, launched, openPath, closeTab, lostTab }: {
+  let { openedTab, launched, openPath, closeTab, lostTab, tabStrip, stepRepoTab, sideHidden = $bindable() }: {
     openedTab?: OpenTab;
     launched: boolean;
     openPath?: (path: string, from: OpenFrom) => Promise<void>;
     closeTab?: () => Promise<void>;
     lostTab?: (gone: Gone) => Promise<void>;
+    tabStrip?: Snippet<[(event: MouseEvent) => void, () => void, (path: string) => void]>;
+    stepRepoTab?: (by: 1 | -1) => Promise<void>;
+    /** The sidebar of a wide window put away with its button, kept between launches. */
+    sideHidden: boolean;
   } = $props();
   const scope = useRepoScope();
   const { kept } = scope;
@@ -69,7 +73,7 @@
   import SearchField from "./lib/SearchField.svelte";
   import SearchBar from "./lib/SearchBar.svelte";
   import { type Found } from "./lib/search.svelte";
-  import { onMount, tick, untrack } from "svelte";
+  import { onMount, tick, untrack, type Snippet } from "svelte";
   import FindField from "./lib/FindField.svelte";
   import QuickOpen from "./lib/QuickOpen.svelte";
   import CommandPalette from "./lib/CommandPalette.svelte";
@@ -303,8 +307,6 @@
   $effect(() => {
     if (!narrow) sideShown = false;
   });
-  /** The sidebar of a wide window put away with its button, kept in settings.json between launches. */
-  let sideHidden = $state(false);
   /** Whether the sidebar is out now: docked in a wide window, slid in over a narrow one. */
   const sideOut = $derived(narrow ? sideShown : !sideHidden);
   /** The sidebar is sliding in or out of a wide window. */
@@ -1191,6 +1193,10 @@
     add("zoomIn", () => zoom(zoomLevel + 1));
     add("zoomOut", () => zoom(zoomLevel - 1));
     add("zoomReset", () => zoom(0));
+    if (stepRepoTab) {
+      add("nextRepoTab", () => void stepRepoTab?.(1));
+      add("previousRepoTab", () => void stepRepoTab?.(-1));
+    }
     if (overviewShown || !repo || !history || !branchCtx) return out;
     if (!commandRunning) for (const command of commandsFor(prefs.get("oxbow.commands"), repo.path)) {
       add(commandId(command.id), () => void runCustom(command));
@@ -1316,6 +1322,11 @@
         if (!free || loading) return false;
         if (picker?.kind === "recent") picker = null;
         else void openRecent();
+        return true;
+      case "nextRepoTab":
+      case "previousRepoTab":
+        if (!free || !stepRepoTab) return false;
+        void stepRepoTab(id === "nextRepoTab" ? 1 : -1);
         return true;
       // These take the window over: the palette or Quick Open closes first, as when the command
       // is picked in the palette, so only one layer has the keyboard.
@@ -1979,9 +1990,6 @@
     api.getSetting<boolean>(settings.changesExpanded).then((on) => {
       if (typeof on === "boolean") changesExpanded = on;
     });
-    api.getSetting<boolean>(settings.sidebarHidden).then((hidden) => {
-      if (typeof hidden === "boolean") sideHidden = hidden;
-    });
     api.getSetting<boolean>(settings.detailsHidden).then((hidden) => {
       if (typeof hidden === "boolean") detailsHidden = hidden;
     });
@@ -2079,7 +2087,7 @@
     {/if}
   {/snippet}
 {:else}
-  <div class="window" class:narrow class:mac class:side-shown={sideShown} class:side-hidden={sideHidden && !narrow} class:sliding>
+  <div class="window" class:narrow class:mac class:side-shown={sideShown} class:side-hidden={sideHidden && !narrow} class:sliding class:with-repo-tabs={!!openedTab}>
     <button class="capsule side-toggle" onclick={toggleSidebar} aria-label={sideOut ? "Hide sidebar" : "Show sidebar"} aria-expanded={sideOut} title={withKeys(sideOut ? "Hide Sidebar" : "Show Sidebar", combo("sidebar"))}>
       <svg class="icon" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2" /><path d="M6 3v10" /></svg>
     </button>
@@ -2128,16 +2136,27 @@
       onActivity={history.remotes.length && remoteCtx ? showActivity : null}
     />
     <div class="main">
+      {#if tabStrip}
+        <div class="repo-tabs">
+          {@render tabStrip(
+            (event) => { if (windowCommandsFree()) void sidebar?.repoMenu(event, true); },
+            () => { if (windowCommandsFree()) void openRecent(); },
+            (path) => copyText(path, "Copied the repository path."),
+          )}
+        </div>
+      {/if}
       <header class:has-search={(view === "history" || view === "file") && !showConflicts} data-tauri-drag-region>
         <div class="lead" data-tauri-drag-region>
           {#if view !== "history" || showConflicts}
             <WindowTitle title={titleOf(repo, history)} steps={trailPath} onStep={goTo} />
           {/if}
-          <button class="capsule repo-picker" onclick={(event) => sidebar?.repoMenu(event)} oncontextmenu={(event) => { event.preventDefault(); void sidebar?.repoMenu(event); }} aria-label={`Repository ${repo.name}`} aria-haspopup="menu" title={`${repo.path}\n${branchCount} ${branchCount === 1 ? "branch" : "branches"}`}>
-            <svg class="icon" viewBox="0 0 16 16" style:color={history.trunk ? lane(0) : undefined}><path d={menuIcons.folder} /></svg>
-            <span>{repo.name}</span>
-            <svg class="icon small" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>
-          </button>
+          {#if !openedTab}
+            <button class="capsule repo-picker" onclick={(event) => sidebar?.repoMenu(event)} oncontextmenu={(event) => { event.preventDefault(); void sidebar?.repoMenu(event); }} aria-label={`Repository ${repo.name}`} aria-haspopup="menu" title={`${repo.path}\n${branchCount} ${branchCount === 1 ? "branch" : "branches"}`}>
+              <svg class="icon" viewBox="0 0 16 16" style:color={history.trunk ? lane(0) : undefined}><path d={menuIcons.folder} /></svg>
+              <span>{repo.name}</span>
+              <svg class="icon small" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>
+            </button>
+          {/if}
           {#if repo.restricted.length}
             <RestrictedBadge findings={repo.restricted} onTrust={() => session.trust()} />
           {/if}
@@ -2754,6 +2773,21 @@
   .window.narrow.mac header,
   .window.side-hidden.mac header {
     padding-left: 218px;
+  }
+  .repo-tabs {
+    flex-shrink: 0;
+    --repo-tabs-leading: 8px;
+  }
+  .window.with-repo-tabs:is(.narrow, .side-hidden) header {
+    padding-left: 14px;
+  }
+  .window:is(.narrow, .side-hidden) .repo-tabs {
+    --repo-tabs-leading: 136px;
+    /* Leave the window controls above the repository toolbar with the sidebar put away. */
+    --repo-tabs-height: 48px;
+  }
+  .window.mac:is(.narrow, .side-hidden) .repo-tabs {
+    --repo-tabs-leading: 218px;
   }
   /* Three zones: the two sides share the room equally, so the search sits in the middle of the
      toolbar. In a narrow window the buttons on the right keep their size, and the title and then

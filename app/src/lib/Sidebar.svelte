@@ -154,7 +154,7 @@
   const browseItem = (ref: RefInfo): MenuEntry => ({ kind: "item", label: "Browse Files", icon: menuIcons.folder, run: () => nav.openBrowse(ref.target, ref.name) });
 
   /** The open right-click menu and the ref it belongs to. */
-  let menu = $state<{ x: number; y: number; label: string; ref: string; entries: MenuEntry[] } | null>(null);
+  let menu = $state<{ x: number; y: number; label: string; ref: string; entries: MenuEntry[]; belowAnchor?: boolean } | null>(null);
   let collapsedRemotes = $state<Record<string, boolean>>({});
 
   /** Lists longer than this show only their first items until expanded. */
@@ -265,14 +265,23 @@
   let remoteDetails: RemoteInfo[] | null = null;
   let remoteDetailsFailed = false;
   let repoMenuRequest = 0;
-  export async function repoMenu(event: MouseEvent) {
-    const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  let repoMenuAnchor: HTMLElement | null = null;
+  $effect(() => {
+    if (!scope.isActive()) {
+      menu = null;
+      repoMenuAnchor = null;
+    }
+  });
+  export async function repoMenu(event: MouseEvent, belowAnchor = false) {
+    const anchor = event.currentTarget as HTMLElement;
+    const box = anchor.getBoundingClientRect();
+    repoMenuAnchor = anchor;
     const path = repo.path;
     const request = ++repoMenuRequest;
     remoteDetails = null;
     remoteDetailsFailed = false;
     let recent: RecentRepo[] = [];
-    menu = { x: box.left, y: box.bottom + 4, label: `Repository ${repo.name}`, ref: path, entries: repoEntries(recent) };
+    menu = { x: box.left, y: box.bottom + 4, label: `Repository ${repo.name}`, ref: path, entries: repoEntries(recent), belowAnchor };
     const refresh = (detailsOnly = false) => {
       if (request === repoMenuRequest && repo.path === path && menu?.ref === path) {
         const entries = repoEntries(recent);
@@ -292,6 +301,14 @@
         refresh(true);
       }),
     ]);
+  }
+
+  function closeMenu() {
+    if (menu?.ref === repo.path && document.hasFocus() && document.activeElement?.closest('[role="menu"]')) {
+      repoMenuAnchor?.focus();
+    }
+    repoMenuAnchor = null;
+    menu = null;
   }
 
   /** How many recent repositories the repository menu lists. */
@@ -1047,7 +1064,7 @@
 </nav>
 
 {#if menu}
-  <Menu x={menu.x} y={menu.y} label={menu.label} entries={menu.entries} onClose={() => (menu = null)} />
+  <Menu x={menu.x} y={menu.y} label={menu.label} entries={menu.entries} belowAnchor={menu.belowAnchor} onClose={closeMenu} />
 {/if}
 
 <style>
