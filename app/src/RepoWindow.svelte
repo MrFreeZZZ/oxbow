@@ -105,6 +105,8 @@
   export const openRepository = (path: string) => activeScreen()?.startup(path);
   export const activateTab = (id: RepoSessionId) => manager.activate(id).catch(report);
   export const closeTab = (id: RepoSessionId) => manager.close(id).catch(report);
+  const moveTab = (id: RepoSessionId, to: number) => manager.move(id, to).catch(report);
+  const activeNow = () => activeId;
   const closeOtherTabs = (id: RepoSessionId) => manager.closeOthers(id).catch(report);
   const stepTab = (by: 1 | -1) => manager.step(by).catch(report);
 
@@ -233,7 +235,8 @@
 {#snippet tabStrip(openMenu: (event: MouseEvent) => void, openRecent: () => void, copyPath: (path: string) => void)}
   {#if activeId !== null}
     <RepoTabStrip {tabs} {activeId} {openMenu} {openRecent} {copyPath}
-      activate={activateTab} close={closeTab} closeOthers={closeOtherTabs} />
+      activate={activateTab} close={closeTab} closeOthers={closeOtherTabs}
+      canSwitch={canSwitch} activeNow={activeNow} move={moveTab} />
   {/if}
 {/snippet}
 

@@ -152,6 +152,19 @@ export class RepoTabs {
     });
   }
 
+  /** `to` is the tab's index after the move. The active repository stays where it is. */
+  move(id: RepoSessionId, to: number) {
+    return this.#serialize(async () => {
+      const from = this.#tabs.findIndex(tab => tab.id === id);
+      if (from < 0 || !this.#exists(id) || to < 0 || to >= this.#tabs.length || to === from) return;
+      const next = this.#tabs.slice();
+      const [tab] = next.splice(from, 1);
+      next.splice(to, 0, tab);
+      this.#tabs = next;
+      this.#show();
+    });
+  }
+
   open(path: string, from: OpenFrom) {
     const next = this.#opens.then(() => this.#open(path, from));
     this.#opens = next.catch(() => {});

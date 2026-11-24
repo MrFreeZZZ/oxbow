@@ -69,6 +69,25 @@ test("repository shortcuts wrap in tab order and close picks the right neighbor,
   assert.equal(state.active, null);
 });
 
+test("dragging a tab reorders the list and leaves the active repository in place", async () => {
+  const { tabs, state, from } = windowTabs({
+    open: async (path) => opened(Number(path)),
+    history: async () => history,
+    activate: async () => {},
+    close: async () => {},
+  });
+  for (const id of ["1", "2", "3"]) await tabs.open(id, from);
+  await tabs.move(1, 2);
+  assert.deepEqual(state.tabs.map(tab => tab.id), [2, 3, 1]);
+  assert.equal(state.active, 3);
+  await tabs.move(3, 0);
+  assert.deepEqual(state.tabs.map(tab => tab.id), [3, 2, 1]);
+  assert.equal(state.active, 3);
+  await tabs.move(3, 0);
+  await tabs.move(9, 1);
+  assert.deepEqual(state.tabs.map(tab => tab.id), [3, 2, 1]);
+});
+
 test("the next run restores tab order and selection by path, skipping an unavailable folder", async () => {
   let saved: string | null = null;
   const storage = {

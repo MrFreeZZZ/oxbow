@@ -2,12 +2,14 @@
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import type { RepoSessionId } from "./api";
   import { withKeys } from "./keys";
+  import { tabDragOffsets } from "./repoTabDrag";
+  import { beginTabDrag, noteTabOrder, tabGesture } from "./repoTabDrag.svelte";
   import { repoTabActions, type OpenTab } from "./repoTabs";
   import { combo } from "./shortcuts";
   import { keyFocus } from "./tabs";
   import { tick } from "svelte";
 
-  let { tabs, activeId, openMenu, openRecent, copyPath, activate, close, closeOthers }: {
+  let { tabs, activeId, openMenu, openRecent, copyPath, activate, close, closeOthers, canSwitch, activeNow, move }: {
     tabs: readonly OpenTab[];
     activeId: RepoSessionId;
     openMenu: (event: MouseEvent) => void;
@@ -16,22 +18,51 @@
     activate: (id: RepoSessionId) => Promise<void>;
     close: (id: RepoSessionId) => Promise<void>;
     closeOthers: (id: RepoSessionId) => Promise<void>;
+    canSwitch: () => boolean;
+    /** The window's active tab, read after this strip has been remounted. */
+    activeNow: () => RepoSessionId | null;
+    move: (id: RepoSessionId, to: number) => Promise<void>;
   } = $props();
 
   let list = $state<HTMLDivElement>();
   let focused = $state<RepoSessionId | null>(null);
   let menu = $state<{ x: number; y: number; tab: OpenTab; anchor: HTMLButtonElement } | null>(null);
   const activeSelector = '[data-repo-tab-list] [role="tab"][aria-selected="true"]';
+  const orderKey = $derived(tabs.map(tab => tab.id).join("\0"));
+  const shownId = $derived.by(() => {
+    const gesture = tabGesture.current;
+    return gesture && gesture.originKey === orderKey ? gesture.id : activeId;
+  });
+  const offsets = $derived.by(() => {
+    const gesture = tabGesture.current;
+    if (!gesture?.dragging || gesture.originKey !== orderKey || gesture.slots.length !== tabs.length) return null;
+    return tabDragOffsets(gesture.slots, gesture.from, gesture.to, gesture.left, gesture.overlap);
+  });
+  const settling = $derived.by(() => {
+    const gesture = tabGesture.current;
+    return !!gesture?.settling && gesture.originKey === orderKey;
+  });
+
+  $effect(() => noteTabOrder(orderKey));
 
   $effect(() => {
+    if (tabGesture.current?.dragging) return;
     const node = list;
-    const tab = node?.querySelector(`[data-tab-id="${activeId}"]`);
+    const tab = node?.querySelector(`[data-tab-id="${shownId}"]`);
     if (!node || !tab) return;
     const reveal = () => tab.scrollIntoView({ block: "nearest", inline: "nearest" });
     reveal();
     const resize = new ResizeObserver(reveal);
     resize.observe(node);
     return () => resize.disconnect();
+  });
+
+  // The strip is created again in the newly active repository; keep the scroll the drag measured.
+  $effect(() => {
+    const node = list;
+    const gesture = tabGesture.current;
+    if (!node || !gesture?.dragging || gesture.originKey !== orderKey) return;
+    if (Math.abs(node.scrollLeft - gesture.scroll) > 1) node.scrollLeft = gesture.scroll;
   });
 
   async function withTabFocus(action: Promise<void>) {
@@ -94,13 +125,21 @@
     <svg class="icon" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>
   </button>
   <div class="list" data-repo-tab-list role="tablist" aria-label="Repository tabs" bind:this={list}
+    class:reordering={!!offsets} class:settling
     style:--tab-count={tabs.length}
     onfocusout={(event) => { if (!list?.contains(event.relatedTarget as Node | null)) focused = null; }}>
-    {#each tabs as tab (tab.id)}
-      {@const selected = tab.id === activeId}
-      <div class="item" class:selected role="presentation">
+    {#each tabs as tab, index (tab.id)}
+      {@const selected = tab.id === shownId}
+      <div class="item" class:selected class:dragging={!!offsets && tab.id === shownId} role="presentation"
+        style:transform={offsets ? `translateX(${Math.round(offsets[index])}px)` : undefined}>
         <button class="tab-button" role="tab" aria-selected={selected} aria-controls={`repo-panel-${tab.id}`}
-          tabindex={tab.id === (focused ?? activeId) ? 0 : -1} data-tab-id={tab.id} title={tab.repo.path}
+          tabindex={tab.id === (focused ?? shownId) ? 0 : -1} data-tab-id={tab.id} title={tab.repo.path}
+          onpointerdown={(event) => beginTabDrag(event, tab.id, tabs.map(item => item.id), {
+            canSwitch,
+            activate: () => activate(tab.id),
+            isCurrent: () => activeNow() === tab.id,
+            move: (to) => move(tab.id, to),
+          })}
           onclick={(event) => {
             const picking = activate(tab.id);
             if (event.detail === 0) void withTabFocus(picking);
@@ -175,6 +214,33 @@
   .item:last-child { margin-right: 0; }
   .item:hover { z-index: 1; }
   .item.selected { z-index: 2; min-width: 56px; }
+  .list.reordering .item {
+    transition: transform 200ms ease;
+  }
+  .list.reordering:not(.settling) .item.dragging {
+    z-index: 3;
+    transition: none;
+  }
+  .list.reordering .item.dragging {
+    z-index: 3;
+    overflow: visible;
+  }
+  .list.reordering .item:not(.dragging) {
+    pointer-events: none;
+  }
+  .list.reordering .item.dragging::before {
+    inset: 1px 0;
+    border-radius: var(--tab-top);
+    background: var(--win);
+    box-shadow: var(--glass-shadow);
+  }
+  .list.reordering .item.dragging::after,
+  .list.reordering .item:not(.dragging)::after {
+    opacity: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .list.reordering .item { transition: none; }
+  }
   .item:not(.selected):not(:hover):not(:has(+ .item:hover)):not(:has(+ .selected))::after {
     content: "";
     position: absolute;
