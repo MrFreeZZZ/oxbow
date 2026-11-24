@@ -32,8 +32,8 @@ export interface FileMenuActions {
   where?: string;
 }
 
-/** Stash Staged Changes…, in the menus of staged files. */
-const stashStagedItem = (a: FileMenuActions): MenuEntry => ({ kind: "item", label: "Stash Staged Changes…", icon: menuIcons.stash, run: () => a.act(stashStagedRequest(a.stagedCount(), "")) });
+/** Stash All Staged Changes…, in the menus of staged files. */
+const stashStagedItem = (a: FileMenuActions): MenuEntry => ({ kind: "item", label: "Stash All Staged Changes…", icon: menuIcons.stash, run: () => a.act(stashStagedRequest(a.stagedCount(), "")) });
 
 export interface FileMenu {
   entries: MenuEntry[];

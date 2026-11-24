@@ -32,13 +32,14 @@ export interface IgnoreChoice {
  *  go on tracking. */
 export function ignoreChoices(path: string, tracked = false): IgnoreChoice[] {
   const { dir, name } = splitPath(path);
-  const choices: IgnoreChoice[] = [{ label: `Ignore “${name}”`, pattern: `/${globEscape(path)}`, wide: false, untrack: tracked ? path : undefined }];
+  const verb = tracked ? "Stop Tracking and Ignore" : "Ignore";
+  const choices: IgnoreChoice[] = [{ label: `${verb} “${name}”`, pattern: `/${globEscape(path)}`, wide: false, untrack: tracked ? path : undefined }];
   // .env.local → .env.*, debug.log → *.log
   const dotted = /^(\.[^.]+)\.[^.]+/.exec(name);
   const ext = /^[^.].*(\.[^.]+)$/.exec(name);
   if (!tracked && dotted) choices.push({ label: `Ignore All ${dotted[1]}.* Files`, pattern: `${globEscape(dotted[1])}.*`, wide: true });
   else if (!tracked && ext) choices.push({ label: `Ignore All *${ext[1]} Files`, pattern: `*${globEscape(ext[1])}`, wide: true });
-  if (dir) choices.push({ label: `Ignore Folder “${dir}”`, pattern: `/${globEscape(dir)}`, wide: true, untrack: tracked ? dir.slice(0, -1) : undefined });
+  if (dir) choices.push({ label: `${verb} Folder “${dir}”`, pattern: `/${globEscape(dir)}`, wide: true, untrack: tracked ? dir.slice(0, -1) : undefined });
   return choices;
 }
 
@@ -51,7 +52,9 @@ export function ignoreRequest(path: string, choice: IgnoreChoice): Request {
   else if (choice.wide) body.push("files like ", { code: name }, " anywhere in the repository");
   else body.push({ code: path });
   if (choice.untrack) {
-    body.push(" and stops tracking it. It stays on your disk and leaves the repository with the next commit; when others pull that commit, git deletes it from their copies.");
+    body.push(folder
+      ? ". All tracked files in this folder stay on your disk. Git stages their removal from the repository for the next commit. When others pull that commit, git deletes those files from their working copies."
+      : " and stops tracking it. It stays on your disk and leaves the repository with the next commit; when others pull that commit, git deletes it from their copies.");
     body.push(" .gitignore itself is staged too.");
   } else body.push(" as a change. .gitignore itself is staged, so the rule reaches your team with the next commit.");
   if (/^\.env/.test(name)) body.push(" Good call: it usually holds secrets.");
