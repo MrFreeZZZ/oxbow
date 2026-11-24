@@ -191,7 +191,7 @@
   const version = $derived(loader.version);
   let openingPath = $state(false);
   let alive = true;
-  const load = async (path: string) => {
+  const load = async (path: string, restoring = false) => {
     if (!alive) return;
     if (!openPath) {
       overviewShown = false;
@@ -211,7 +211,8 @@
         },
         trust: (name, findings) => scope.isActive() ? session.askTrust(name, findings, true) : Promise.resolve(null),
         fail: async (path, error) => {
-          if (session.repo) confirm.fail(error);
+          if (session.repo && restoring) confirm.say(String(error), "warn");
+          else if (session.repo) confirm.fail(error);
           else await session.failed(path, error, session.tickets.take());
         },
       });
@@ -219,7 +220,7 @@
       openingPath = false;
     }
   };
-  export const startup = (path: string) => load(path);
+  export const startup = (path: string, restoring = false) => load(path, restoring);
   export function showGone(gone: Gone) { session.showGone(gone); }
   export function recentFromMenu(path: string) {
     if (!loading && !openingPath && windowCommandsFree()) void load(path);

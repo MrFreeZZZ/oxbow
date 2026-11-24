@@ -6,7 +6,7 @@ import * as runtime from "svelte/internal/client";
 import type * as Drafts from "../src/lib/commitDrafts.svelte.ts";
 import { test } from "node:test";
 import { api, apiForSession, type RepoNotice, type RepoTabOpen } from "../src/lib/api.ts";
-import { repoTabActions, RepoTabs, type OpenFrom, type OpenTab } from "../src/lib/repoTabs.ts";
+import { readTabLayout, repoTabActions, RepoTabs, saveTabLayout, type OpenFrom, type OpenTab } from "../src/lib/repoTabs.ts";
 import type { History, RepoSummary } from "../src/lib/types.ts";
 
 const summary = (id: number): RepoSummary => ({ path: `/repo/${id}`, name: String(id), restricted: [] });
@@ -62,6 +62,38 @@ test("repository shortcuts wrap in tab order and close picks the right neighbor,
   assert.equal(state.active, 1);
   await tabs.close(1);
   assert.equal(state.active, null);
+});
+
+test("the next run restores tab order and selection by path, skipping an unavailable folder", async () => {
+  let saved: string | null = null;
+  const storage = {
+    getItem: () => saved,
+    setItem: (_key: string, value: string) => { saved = value; },
+  };
+  const original = [1, 2, 3, 4].map(id => ({ id, repo: summary(id), history }));
+  assert.equal(readTabLayout(storage), null);
+  saveTabLayout(original, 2, storage);
+  const layout = readTabLayout(storage);
+  assert.ok(layout);
+  const { tabs, state, from, errors } = windowTabs({
+    async open(path) {
+      const original = Number(path.at(-1));
+      if (original === 3) throw new Error("Folder is unavailable");
+      return { kind: "opened", session: original + 10, repo: summary(original) };
+    },
+    history: async () => history,
+    activate: async () => {},
+    close: async () => {},
+  });
+  await tabs.restore(layout, path => tabs.open(path, from));
+  assert.deepEqual(state.tabs.map(tab => tab.id), [11, 12, 14]);
+  assert.equal(state.active, 12);
+  assert.equal(errors.length, 1);
+
+  saveTabLayout([], null, storage);
+  assert.deepEqual(readTabLayout(storage), { paths: [], active: null });
+  saved = '{"paths":[42],"active":null}';
+  assert.equal(readTabLayout(storage), null);
 });
 
 test("closing the other tabs checks all guards before selecting the target and closing anything", async () => {

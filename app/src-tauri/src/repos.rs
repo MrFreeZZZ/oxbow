@@ -401,36 +401,47 @@ pub(crate) fn tell_others(app: &AppHandle, session: &Session, repo: &Repo, addre
     }
 }
 
-/// Repository to open at start: the first command-line argument, else the last one used,
-/// unless the user turned that off. A window Open in New Window made opens its folder.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InitialRepo {
+    path: Option<String>,
+    restore_tabs: bool,
+}
+
+/// An explicit folder takes priority over reopening the main window's previous session.
 #[tauri::command]
-pub(crate) fn initial_repo(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
-    session: State<'_, Session>,
-) -> Option<String> {
+pub(crate) fn initial_repo(app: AppHandle, window: tauri::WebviewWindow, session: State<'_, Session>) -> InitialRepo {
     if window.label() != "main" {
-        return session
+        let path = session
             .repositories
             .lock()
             .expect("session lock")
             .pending(window.label())
             .map(|path| path.display().to_string());
+        return InitialRepo {
+            path,
+            restore_tabs: false,
+        };
+    }
+    if let Some(path) = std::env::args().nth(1).filter(|arg| !arg.starts_with('-')) {
+        return InitialRepo {
+            path: Some(path),
+            restore_tabs: false,
+        };
     }
     let reopen = read_settings(&app)
         .get("oxbow.startup.reopenRepository")
         .and_then(Value::as_bool)
         .unwrap_or(true);
-    std::env::args()
-        .nth(1)
-        .filter(|arg| !arg.starts_with('-'))
-        .or_else(|| {
-            reopen
-                .then(|| last_repo_file(&app).and_then(|file| std::fs::read_to_string(file).ok()))
-                .flatten()
-        })
+    let path = reopen
+        .then(|| last_repo_file(&app).and_then(|file| std::fs::read_to_string(file).ok()))
+        .flatten()
         .map(|path| path.trim().to_owned())
-        .filter(|path| !path.is_empty())
+        .filter(|path| !path.is_empty());
+    InitialRepo {
+        path,
+        restore_tabs: reopen,
+    }
 }
 
 /// A folder that isn't there any more, for the screen that says so.

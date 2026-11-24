@@ -9,6 +9,32 @@ export interface OpenTab {
   history: History;
 }
 
+interface TabLayout {
+  paths: string[];
+  active: string | null;
+}
+
+const LAYOUT_KEY = "oxbow.repoTabs.layout";
+
+export function readTabLayout(storage?: Pick<Storage, "getItem">): TabLayout | null {
+  try {
+    const layout = JSON.parse((storage ?? localStorage).getItem(LAYOUT_KEY) ?? "null");
+    if (Array.isArray(layout?.paths) && layout.paths.every((path: unknown) => typeof path === "string" && path)
+      && (layout.active === null || layout.paths.includes(layout.active))) return layout;
+  } catch { /* An unavailable or invalid layout falls back to the last repository. */ }
+  return null;
+}
+
+export function saveTabLayout(tabs: readonly OpenTab[], active: RepoSessionId | null, storage?: Pick<Storage, "setItem">) {
+  const layout: TabLayout = {
+    paths: tabs.map(tab => tab.repo.path),
+    active: tabs.find(tab => tab.id === active)?.repo.path ?? null,
+  };
+  try {
+    (storage ?? localStorage).setItem(LAYOUT_KEY, JSON.stringify(layout));
+  } catch { /* Storage may be unavailable. */ }
+}
+
 export function repoTabActions(tab: OpenTab, count: number, actions: {
   copyPath(path: string): void;
   close(id: RepoSessionId): void;
@@ -102,6 +128,15 @@ export class RepoTabs {
 
   activate(id: RepoSessionId) {
     return this.#serialize(() => this.#activate(id));
+  }
+
+  async restore(layout: TabLayout, open: (path: string) => Promise<void>) {
+    for (const path of layout.paths) {
+      if (this.#disposed) return;
+      await open(path);
+    }
+    const selected = this.#tabs.find(tab => tab.repo.path === layout.active);
+    if (selected) await this.activate(selected.id);
   }
 
   step(by: 1 | -1) {

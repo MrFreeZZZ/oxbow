@@ -10,7 +10,7 @@
   import { keepCommitMessage, keepMessagesForRestart } from "./lib/commitDrafts.svelte";
   import { FIRST_HISTORY_PAGE } from "./lib/historyLoad.svelte";
   import type { RepoScope } from "./lib/repoScope";
-  import { RepoTabs, type OpenTab } from "./lib/repoTabs";
+  import { readTabLayout, RepoTabs, saveTabLayout, type OpenTab } from "./lib/repoTabs";
   import { settleReviewSaves } from "./lib/reviewSaves";
   import type { ShortcutId } from "./lib/shortcuts";
   import type { Gone } from "./lib/types";
@@ -24,6 +24,7 @@
   let tabs = $state.raw<readonly OpenTab[]>([]);
   let activeId = $state<RepoSessionId | null>(null);
   let launched = $state(false);
+  const main = getCurrentWindow().label === "main";
   let sideHidden = $state(false);
   const screens = new Map<RepoSessionId | null, { screen: App; scope: RepoScope }>();
   function register(scope: RepoScope, screen: App) {
@@ -73,6 +74,8 @@
     closeBatch: (ids, active, previous) => api.closeRepoTabs(ids, active, previous),
   }, {
     show(next, active) {
+      if (main && launched && (active !== activeId || next.length !== tabs.length
+        || next.some((tab, i) => tab.id !== tabs[i].id))) saveTabLayout(next, active);
       tabs = next;
       activeId = active;
     },
@@ -197,9 +200,23 @@
         tabsEnabled = enabled;
         manager.setMode(tabsEnabled);
       }
-      const path = await api.initialRepo();
-      if (alive && path) await openRepository(path);
-    }).catch((error) => { if (alive) report(error); }).finally(() => { if (alive) launched = true; });
+      const { path, restoreTabs } = await api.initialRepo();
+      if (!alive) return;
+      const layout = restoreTabs ? readTabLayout() : null;
+      if (layout && tabsEnabled) {
+        await manager.restore(layout, async (folder) => {
+          await tick();
+          await activeScreen()?.startup(folder, true);
+        });
+      } else {
+        const folder = layout ? layout.active ?? layout.paths.at(-1) : path;
+        if (folder) await openRepository(folder);
+      }
+    }).catch((error) => { if (alive) report(error); }).finally(() => {
+      if (!alive) return;
+      if (main && tabs.length) saveTabLayout(tabs, activeId);
+      launched = true;
+    });
     return () => {
       alive = false;
       manager.dispose();
