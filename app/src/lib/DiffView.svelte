@@ -57,7 +57,7 @@
   import { changePreview } from "./diffScroll";
   import { menuIcons } from "./Menu.svelte";
 
-  let copySelection = $state<{ text: string; x: number; y: number } | null>(null);
+  let copySelection = $state<{ code: Element; text: string; x: number; y: number } | null>(null);
   let selectingWithMouse = false;
 
   type CopySide = "left" | "right";
@@ -117,7 +117,7 @@
       // Suppress WebKit’s opposite-column copy, but let it copy non-code selections.
       if (!side || ![...code.querySelectorAll(".selection-text")].some((line) => range.intersectsNode(line))) return null;
     }
-    return { text: lines.join("\n"), rects };
+    return { code, text: lines.join("\n"), rects };
   }
 
   function copyParts(diff: FileDiff, cut: { lines: number[] } | null) {
@@ -134,7 +134,12 @@
   const codeRoots = new Map<Element, () => ReturnType<typeof copyParts>>();
   function copyRoot(element: HTMLElement, source: () => ReturnType<typeof copyParts>) {
     codeRoots.set(element, source);
-    return { destroy: () => codeRoots.delete(element) };
+    return {
+      destroy() {
+        codeRoots.delete(element);
+        if (copySelection?.code === element) copySelection = null;
+      },
+    };
   }
 
   function beginMouseSelection(event: MouseEvent) {
@@ -173,7 +178,7 @@
     const above = top - height - gap;
     const y = above >= gap ? above : bottom + gap;
     if (y + height + gap <= innerHeight) {
-      copySelection = { x: (left + right) / 2, y, text: selected.text };
+      copySelection = { code: selected.code, x: (left + right) / 2, y, text: selected.text };
     }
   }
 
