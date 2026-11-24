@@ -131,48 +131,66 @@
 {/if}
 
 <style>
+  /* Chromium TabStyle: body 232 plus two 12 px feet = 256, overlap 18, so a tab
+     takes 238. The strip is 6 px of track over a 35 px tab. */
   .strip {
     --track: color-mix(in srgb, var(--accent) 15%, var(--win));
-    --tab-width: 166px;
-    --curve: var(--radius-m);
-    height: var(--repo-tabs-height, 40px);
+    --tab-box: 256px;
+    --tab-overlap: 18px;
+    --tab-pitch: 238px;
+    --tab-top: 10px;
+    --tab-foot: 12px;
+    height: var(--repo-tabs-height, 41px);
     display: flex;
     align-items: flex-end;
     gap: var(--space-1);
     padding-inline: var(--repo-tabs-leading) var(--space-2);
     background: var(--track);
     box-shadow: inset 0 -1px var(--sep);
+    font-size: var(--text-small);
   }
   .list {
     display: flex;
-    width: calc(var(--tab-count) * var(--tab-width));
+    flex: 0 1 auto;
+    width: calc(var(--tab-count) * var(--tab-pitch) + var(--tab-overlap));
     min-width: 0;
     overflow-x: auto;
     scrollbar-width: none;
   }
   .item {
     position: relative;
-    flex: 1 0 128px;
-    min-width: 0;
-    height: 34px;
+    z-index: 0;
+    flex: 1 1 var(--tab-box);
+    width: var(--tab-box);
+    max-width: var(--tab-box);
+    min-width: 32px;
+    height: 35px;
     display: flex;
     align-items: center;
-    padding-inline: var(--space-2);
+    gap: var(--space-1);
+    margin-right: calc(var(--tab-overlap) * -1);
+    padding: 0;
+    overflow: hidden;
   }
-  .item:not(.selected):not(:has(+ .selected))::after {
+  .item:last-child { margin-right: 0; }
+  .item:hover { z-index: 1; }
+  .item.selected { z-index: 2; min-width: 56px; }
+  .item:not(.selected):not(:hover):not(:has(+ .item:hover)):not(:has(+ .selected))::after {
     content: "";
     position: absolute;
-    right: 0;
-    height: 15px;
-    width: 1px;
+    top: 10px;
+    right: 8px;
+    height: 16px;
+    width: 2px;
+    border-radius: 1px;
     background: color-mix(in srgb, var(--text2) 26%, transparent);
     pointer-events: none;
   }
   .item.selected::before {
     content: "";
     position: absolute;
-    inset: 0 var(--curve);
-    border-radius: var(--radius-l) var(--radius-l) 0 0;
+    inset: 0 var(--tab-foot);
+    border-radius: var(--tab-top) var(--tab-top) 0 0;
     background: var(--win);
     pointer-events: none;
   }
@@ -180,16 +198,16 @@
     content: "";
     position: absolute;
     inset: auto 0 0;
-    height: var(--curve);
+    height: var(--tab-foot);
     background:
-      radial-gradient(circle at 0 0, transparent calc(var(--curve) - .5px), var(--win) var(--curve)) left / var(--curve) 100% no-repeat,
-      radial-gradient(circle at 100% 0, transparent calc(var(--curve) - .5px), var(--win) var(--curve)) right / var(--curve) 100% no-repeat;
+      radial-gradient(circle at 0 0, transparent calc(var(--tab-foot) - .5px), var(--win) var(--tab-foot)) left / var(--tab-foot) 100% no-repeat,
+      radial-gradient(circle at 100% 0, transparent calc(var(--tab-foot) - .5px), var(--win) var(--tab-foot)) right / var(--tab-foot) 100% no-repeat;
     pointer-events: none;
   }
   .item:not(.selected)::before {
     content: "";
     position: absolute;
-    inset: 3px var(--space-1);
+    inset: var(--space-1) var(--tab-foot);
     border-radius: var(--radius-m);
     pointer-events: none;
   }
@@ -223,10 +241,11 @@
     align-self: stretch;
     flex: 1;
     min-width: 0;
-    gap: var(--space-2);
-    padding: 0 var(--space-1) 0 var(--space-2);
+    gap: 6px;
+    padding: 0 0 0 20px;
     color: var(--text);
     text-align: left;
+    font-weight: 400;
   }
   .tab-button:is(:focus-visible, :global(.key-focus)) {
     outline-style: none;
@@ -244,7 +263,6 @@
     flex: 0 0 16px;
     color: var(--text2);
   }
-  .selected .tab-button { font-weight: 500; }
   .selected .folder { color: var(--accent); }
   .control {
     flex: none;
@@ -260,13 +278,18 @@
     border-radius: var(--radius-m);
   }
   .close {
-    width: 24px;
-    height: 24px;
-    margin: 0;
-    padding: var(--space-1);
+    width: 16px;
+    height: 16px;
+    margin: 0 20px 0 0;
     border-radius: var(--radius-pill);
-    background-clip: content-box;
   }
-  .close .icon { width: 12px; height: 12px; }
+  .item:not(.selected):not(:hover):not(:focus-within) .close {
+    width: 0;
+    margin-right: 0;
+    opacity: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .close .icon { width: 8px; height: 8px; }
   .selected .close, .add { color: var(--text); }
 </style>
