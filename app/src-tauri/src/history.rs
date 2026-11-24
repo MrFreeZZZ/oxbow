@@ -693,7 +693,12 @@ pub(crate) async fn save_restack(
     restack: Option<oxbow_core::Restack>,
 ) -> CommandResult<()> {
     let repo = current(&session, &window)?;
-    blocking(move || repo.save_restack(restack.as_ref())).await
+    let change = session.start_change(&window, window.label(), false)?;
+    blocking(move || {
+        let _change = change;
+        repo.save_restack(restack.as_ref())
+    })
+    .await
 }
 
 /// Which of `candidates` has the merged pull request's commit `merged`, for a restack to move

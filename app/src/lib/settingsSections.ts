@@ -29,6 +29,12 @@ export const generalSection: Section = {
       rows: [prefRow("oxbow.startup.reopenRepository", "Reopen the repository from the last session", "switch", { sub: "Otherwise Oxbow starts on the Welcome window" })],
     },
     {
+      title: "Windows",
+      rows: [prefRow("oxbow.windows.repositoryTabs", "Show repository tabs", "switch", {
+        off: () => prefs.pending("oxbow.windows.repositoryTabs"),
+      })],
+    },
+    {
       title: "Updates",
       detail: "updates",
       rows: [

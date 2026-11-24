@@ -97,7 +97,7 @@ pub(crate) async fn save_repo_file(
     let turns = session.turns.clone();
     let turn_label = window.turn_key();
     let address = window.address.clone();
-    let stop = session.new_stop(&window);
+    let stop = session.start_change(&window, window.label(), false)?;
     let events = app.clone();
     let saved = logged(
         Some(at(&repo)),

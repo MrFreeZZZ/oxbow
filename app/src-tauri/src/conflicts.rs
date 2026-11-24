@@ -80,7 +80,13 @@ pub(crate) async fn save_conflict_draft(
 ) -> CommandResult<()> {
     let repo = draft_repo(&session, &window, &workdir)?;
     let file = draft_file(&app, &repo)?;
+    let change = window
+        .address
+        .as_ref()
+        .map(|_| session.start_change(&window, window.label(), true))
+        .transpose()?;
     tauri::async_runtime::spawn_blocking(move || {
+        let _change = change;
         // A save arriving after the operation was finished or aborted would bring its draft back.
         if repo.operation().is_ok_and(|op| op.is_none()) {
             return drafts::remove(&file);
@@ -100,6 +106,11 @@ pub(crate) async fn drop_conflict_draft(
     workdir: String,
 ) -> CommandResult<()> {
     let repo = draft_repo(&session, &window, &workdir)?;
+    let _change = window
+        .address
+        .as_ref()
+        .map(|_| session.start_change(&window, window.label(), true))
+        .transpose()?;
     drafts::remove(&draft_file(&app, &repo)?)
 }
 
@@ -115,7 +126,7 @@ pub(crate) async fn open_merge_tool(
     let title = format!("Open {path} in the merge tool");
     let change = crate::turns::Running::new(&window.turn_key(), repo.name(), title.clone());
     let turns = session.turns.clone();
-    let stop = session.new_stop(&window);
+    let stop = session.start_change(&window, window.label(), false)?;
     logged(Some(at(&repo)), console::EntryKind::Action, title, move || {
         let Some(_turn) = turns.take(&repo.common_dir(), change, &stop.cancel, |_| {}) else {
             return Err(oxbow_core::Error::Cancelled);

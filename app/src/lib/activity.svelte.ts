@@ -92,7 +92,13 @@ export class Activity {
   open = $state(false);
   showOutput = $state(false);
   /** Starts a Push or Pull that waited for the fetch; set by the app. */
-  startQueued: ((item: ActivityItem) => void) | null = null;
+  startQueued: ((item: ActivityItem) => Promise<void>) | null = null;
+  queueBlocked = () => false;
+  #startingQueued = false;
+
+  get hasQueuedChange() {
+    return this.queued.length > 0 || this.#startingQueued;
+  }
   // The backend keeps the latest request number when the WebView reloads.
   #next = Math.floor(performance.timeOrigin * 1000);
   #fetch: ActivityItem | null = null;
@@ -195,12 +201,19 @@ export class Activity {
         this.#fetch = null;
         this.running = null;
         this.percent = null;
-        const waiting = this.queued[0];
-        this.queued = [];
-        if (waiting) this.startQueued?.(waiting);
+        void this.runQueued();
       }
     }
     return ok;
+  }
+
+  async runQueued() {
+    const waiting = this.queued[0];
+    if (!waiting || this.#fetch || this.queueBlocked() || !this.startQueued) return;
+    this.queued = [];
+    this.#startingQueued = true;
+    try { await this.startQueued(waiting); }
+    finally { this.#startingQueued = false; }
   }
 
   stop() {

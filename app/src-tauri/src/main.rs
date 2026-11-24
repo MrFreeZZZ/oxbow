@@ -23,6 +23,7 @@ mod repos;
 mod session;
 mod settings;
 mod setup;
+mod tab_settings;
 mod trusted;
 mod turns;
 mod updates;
@@ -73,7 +74,11 @@ fn main() {
             let session = window.state::<Session>();
             let label = window.label().to_owned();
             match event {
-                tauri::WindowEvent::CloseRequested { api, .. } if updates::restarting(window.app_handle()) => {
+                tauri::WindowEvent::CloseRequested { api, .. }
+                    if updates::restarting(window.app_handle())
+                        || ((label == "main" || label.starts_with("repo-")) && session.topology().is_err()) =>
+                {
+                    windows::cancel_quit();
                     api.prevent_close()
                 }
                 // Settings shows and changes the repository of the window used last.
@@ -126,7 +131,14 @@ fn main() {
             // Before anything runs git: it must find git-lfs where Homebrew put it.
             oxbow_core::lfs::extend_path();
             let handle = app.handle();
-            apply_settings(handle, &handle.state::<Session>(), &read_settings(handle), true);
+            let settings = read_settings(handle);
+            let session = handle.state::<Session>();
+            session
+                .repositories
+                .lock()
+                .expect("session lock")
+                .set_tabs_disabled(!tab_settings::enabled(&settings));
+            apply_settings(handle, &session, &settings, true);
             accounts::lend_to_git(handle);
             gitlab_accounts::lend_to_git(handle);
             console_window::follow(handle);
@@ -144,6 +156,9 @@ fn main() {
             repos::activate_repo_tab,
             session::repo_events,
             repos::close_repo,
+            repos::close_repo_tabs,
+            tab_settings::repo_tabs_ready,
+            tab_settings::repo_tabs_enabled,
             repos::trust_repo,
             trusted::trusted_repos,
             trusted::untrust_repo,

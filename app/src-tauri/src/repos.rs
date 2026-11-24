@@ -85,6 +85,21 @@ async fn open(
     if label != "main" && !label.starts_with("repo-") {
         return Err("Open repositories from a repository window.".into());
     }
+    let is_reserved_startup = session
+        .repositories
+        .lock()
+        .expect("session lock")
+        .pending(label)
+        .is_some();
+    let _topology = if is_reserved_startup {
+        session.repo_topology.read().await
+    } else {
+        session.topology()?
+    };
+    let single = session.repositories.lock().expect("session lock").tabs_disabled;
+    if legacy && !single {
+        return Err("Open this repository as a tab.".into());
+    }
     let replacing = session.begin_open(label, legacy)?;
     let repo = blocking(move || Repo::open(&path)).await?;
     let workdir = repo.workdir().to_path_buf();
@@ -94,7 +109,7 @@ async fn open(
     let found = {
         let repositories = session.repositories.lock().expect("session lock");
         Session::check_open(&repositories, label, replacing)?;
-        repositories.opening_target(&canonical, label, legacy)
+        repositories.opening_target(&canonical, label, single)
     };
     if let Some(target) = found {
         return duplicate(app, session, label, replacing, &repo, target);
@@ -226,6 +241,7 @@ pub(crate) fn find_repo_tab(
 /// Activate a session owned by the calling window.
 #[tauri::command]
 pub(crate) fn activate_repo_tab(app: AppHandle, window: RepoRequest, session: State<'_, Session>) -> CommandResult<()> {
+    let _topology = session.topology()?;
     let address = window
         .address
         .as_ref()
@@ -260,15 +276,45 @@ pub(crate) fn changed(app: &AppHandle) {
 
 /// Close the addressed repository. An unaddressed legacy close also supersedes a pending open.
 #[tauri::command]
-pub(crate) fn close_repo(app: AppHandle, window: RepoRequest, session: State<'_, Session>) {
-    if window
-        .address
-        .as_ref()
-        .is_none_or(|address| address.window == window.label())
-    {
-        session.close(window.label(), window.address.as_ref(), !window.explicit);
+pub(crate) async fn close_repo(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    repo_session: Option<u64>,
+    provisional: Option<bool>,
+) -> CommandResult<()> {
+    let provisional = provisional == Some(true);
+    let _topology = if provisional {
+        session.repo_topology.read().await
+    } else {
+        session.topology()?
+    };
+    let address = match session.resolve(window.label(), repo_session) {
+        Ok(address) => address,
+        Err(_) if provisional => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if let Some(address) = address.filter(|address| address.window == window.label()) {
+        session.close_one(&address, repo_session.is_none(), provisional)?;
         changed(&app);
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn close_repo_tabs(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    session: State<'_, Session>,
+    closing: Vec<u64>,
+    active: Option<u64>,
+    previous: Option<u64>,
+) -> CommandResult<()> {
+    if let Some(path) = session.close_tabs(window.label(), &closing, active, previous)? {
+        remember_main(&app, window.label(), &path.display().to_string());
+    }
+    changed(&app);
+    Ok(())
 }
 
 /// Trust This Repository…: git runs its settings from now on, in every window that has it open.
@@ -439,6 +485,7 @@ pub(crate) async fn reconnect_folder(
     old: String,
     new: String,
 ) -> CommandResult<Reconnected> {
+    let _topology = session.topology()?;
     let known = known_repos(&app, &session, &window);
     let (from, to) = (PathBuf::from(&old), PathBuf::from(&new));
     let path = logged(

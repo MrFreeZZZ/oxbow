@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter, Manager, State, Theme, WebviewUrl, WebviewWindow
 
 use crate::session::Session;
 use crate::turns::{DEFAULT_FETCH_INTERVAL, MAX_FETCH_INTERVAL};
-use crate::{CommandResult, open_in, settings};
+use crate::{CommandResult, open_in, settings, tab_settings};
 
 /// User settings live in `settings.json` in the app's config folder, as flat `oxbow.*` keys,
 /// holding only values that differ from the defaults.
@@ -46,17 +46,18 @@ pub(crate) struct AllSettings {
 }
 
 #[tauri::command]
-pub(crate) fn all_settings(app: AppHandle, session: State<'_, Session>) -> AllSettings {
+pub(crate) async fn all_settings(app: AppHandle, session: State<'_, Session>) -> CommandResult<AllSettings> {
+    let _writes = session.settings_writes.lock().await;
     let revision = session.settings.lock().expect("session lock");
     let (values, problem) = match settings_file(&app).and_then(|file| settings::read(&file)) {
         Ok(values) => (values, None),
         Err(problem) => (serde_json::Map::new(), Some(problem)),
     };
-    AllSettings {
+    Ok(AllSettings {
         revision: *revision,
         values,
         problem,
-    }
+    })
 }
 
 /// The system's Accessibility › Display switches the page can't read itself: WebKit has no media
@@ -96,13 +97,13 @@ pub(crate) struct SettingChanged {
 /// number of the change. Nothing is written when settings.json can't be read, so the other
 /// settings in it stay.
 #[tauri::command]
-pub(crate) fn set_setting(
+pub(crate) async fn set_setting(
     app: AppHandle,
     session: State<'_, Session>,
     key: String,
     value: Value,
 ) -> CommandResult<u64> {
-    let mut revision = session.settings.lock().expect("session lock");
+    let _writes = session.settings_writes.lock().await;
     let file = settings_file(&app)?;
     let mut settings = settings::read(&file).map_err(|problem| {
         format!("{problem} Oxbow doesn’t write over it until it is fixed in Edit in settings.json.")
@@ -113,7 +114,11 @@ pub(crate) fn set_setting(
     } else {
         settings.insert(key.clone(), value.clone());
     }
-    settings::write(&file, &settings)?;
+    tab_settings::persist(&app, &session, tab_settings::enabled(&settings), || {
+        settings::write(&file, &settings)
+    })
+    .await?;
+    let mut revision = session.settings.lock().expect("session lock");
     *revision += 1;
     apply_settings(&app, &session, &settings, previous_appearance != appearance(&settings));
     // A window that misses this keeps showing the old value until it reloads; not an error.
@@ -323,12 +328,17 @@ pub(crate) fn settings_text(app: AppHandle) -> CommandResult<String> {
 /// Save settings.json edited as text. It must be a JSON object; every window takes the new
 /// values at once.
 #[tauri::command]
-pub(crate) fn save_settings_text(app: AppHandle, session: State<'_, Session>, text: String) -> CommandResult<()> {
+pub(crate) async fn save_settings_text(app: AppHandle, session: State<'_, Session>, text: String) -> CommandResult<()> {
     let settings: serde_json::Map<String, Value> = serde_json::from_str(&text).map_err(|err| err.to_string())?;
-    let mut revision = session.settings.lock().expect("session lock");
+    let _writes = session.settings_writes.lock().await;
     let before = read_settings(&app);
     let file = settings_file(&app)?;
-    settings::write_text(&file, &if text.ends_with('\n') { text } else { text + "\n" })?;
+    let text = if text.ends_with('\n') { text } else { text + "\n" };
+    tab_settings::persist(&app, &session, tab_settings::enabled(&settings), || {
+        settings::write_text(&file, &text)
+    })
+    .await?;
+    let mut revision = session.settings.lock().expect("session lock");
     settings_replaced(&app, &session, &mut revision, &before, &settings);
     Ok(())
 }
@@ -367,10 +377,8 @@ fn settings_backup(file: &Path) -> PathBuf {
     file.with_file_name("settings.backup.json")
 }
 
-/// Rename `from` to `to`, replacing `to` (which a rename on Windows won't do by itself).
+/// Rename `from` over `to` without removing the destination before the write succeeds.
 fn move_file(from: &Path, to: &Path) -> CommandResult<()> {
-    #[cfg(windows)]
-    let _ = std::fs::remove_file(to);
     std::fs::rename(from, to).map_err(|err| err.to_string())
 }
 
@@ -398,27 +406,36 @@ pub(crate) fn settings_location(app: AppHandle) -> CommandResult<SettingsLocatio
 /// Put every Oxbow setting back to its default. settings.json moves aside to
 /// settings.backup.json, so the old values can come back; Git's own settings are not touched.
 #[tauri::command]
-pub(crate) fn restore_default_settings(app: AppHandle, session: State<'_, Session>) -> CommandResult<()> {
-    let mut revision = session.settings.lock().expect("session lock");
+pub(crate) async fn restore_default_settings(app: AppHandle, session: State<'_, Session>) -> CommandResult<()> {
+    let _writes = session.settings_writes.lock().await;
     let before = read_settings(&app);
     let file = settings_file(&app)?;
-    if file.exists() {
-        move_file(&file, &settings_backup(&file))?;
-    }
+    tab_settings::persist(&app, &session, true, || {
+        if file.try_exists().map_err(|err| err.to_string())? {
+            move_file(&file, &settings_backup(&file))?;
+        }
+        Ok(())
+    })
+    .await?;
+    let mut revision = session.settings.lock().expect("session lock");
     settings_replaced(&app, &session, &mut revision, &before, &serde_json::Map::new());
     Ok(())
 }
 
 /// Bring back the settings that Restore Defaults moved aside.
 #[tauri::command]
-pub(crate) fn restore_settings_backup(app: AppHandle, session: State<'_, Session>) -> CommandResult<()> {
+pub(crate) async fn restore_settings_backup(app: AppHandle, session: State<'_, Session>) -> CommandResult<()> {
+    let _writes = session.settings_writes.lock().await;
     let file = settings_file(&app)?;
     let backup = settings_backup(&file);
     let text = std::fs::read_to_string(&backup).map_err(|_| "There is no copy of the old settings.".to_owned())?;
     let after: serde_json::Map<String, Value> = serde_json::from_str(&text).map_err(|err| err.to_string())?;
-    let mut revision = session.settings.lock().expect("session lock");
     let before = read_settings(&app);
-    move_file(&backup, &file)?;
+    tab_settings::persist(&app, &session, tab_settings::enabled(&after), || {
+        move_file(&backup, &file)
+    })
+    .await?;
+    let mut revision = session.settings.lock().expect("session lock");
     settings_replaced(&app, &session, &mut revision, &before, &after);
     Ok(())
 }

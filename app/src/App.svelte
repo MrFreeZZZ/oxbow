@@ -1706,8 +1706,8 @@
     checkRemoteTags();
     openConflicts(opBefore);
   }
-  activity.startQueued = (item) => {
-    if (item.kind !== "action" && item.kind !== "reload") void sync(item.kind, item.mode);
+  activity.startQueued = async (item) => {
+    if (item.kind !== "action" && item.kind !== "reload") await sync(item.kind, item.mode);
   };
 
   /** What Fetch fetches: the one remote, or all of them, as its sheet says. */
@@ -2150,7 +2150,7 @@
           {#if view !== "history" || showConflicts}
             <WindowTitle title={titleOf(repo, history)} steps={trailPath} onStep={goTo} />
           {/if}
-          {#if !openedTab}
+          {#if !tabStrip}
             <button class="capsule repo-picker" onclick={(event) => sidebar?.repoMenu(event)} oncontextmenu={(event) => { event.preventDefault(); void sidebar?.repoMenu(event); }} aria-label={`Repository ${repo.name}`} aria-haspopup="menu" title={`${repo.path}\n${branchCount} ${branchCount === 1 ? "branch" : "branches"}`}>
               <svg class="icon" viewBox="0 0 16 16" style:color={history.trunk ? lane(0) : undefined}><path d={menuIcons.folder} /></svg>
               <span>{repo.name}</span>

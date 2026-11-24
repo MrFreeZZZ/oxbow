@@ -679,7 +679,9 @@ pub async fn save_review_draft(
     expected: String,
 ) -> CommandResult<String> {
     window.check_workdir(&target.workdir)?;
+    let change = window.state::<Session>().start_change(&window, window.label(), true)?;
     blocking(move || {
+        let _change = change;
         let repo = review_repo(&target).map_err(oxbow_core::Error::Git)?;
         repo.update_review_draft(&target.place, number, draft.as_ref(), &expected)
     })
@@ -708,7 +710,9 @@ pub async fn gitlab_set_viewed(
     viewed: bool,
 ) -> CommandResult<()> {
     window.check_workdir(&target.workdir)?;
+    let change = window.state::<Session>().start_change(&window, window.label(), false)?;
     blocking(move || {
+        let _change = change;
         let repo = review_repo(&target).map_err(oxbow_core::Error::Git)?;
         repo.set_viewed_here(&target.place, number, &path, viewed)
     })

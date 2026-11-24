@@ -45,7 +45,7 @@ pub(crate) async fn perform_action(
     // Only the window that asked shows the output: Settings runs actions of its own.
     let from_settings = window.label() == "settings";
     let progress = window.clone();
-    let repo = current(&session, &window).map_err(|message| Failure {
+    let failed = |message| Failure {
         kind: oxbow_core::FailureKind::Other,
         output: message,
         incoming: Vec::new(),
@@ -55,9 +55,14 @@ pub(crate) async fn perform_action(
         secrets: None,
         check: None,
         tracking: None,
-    })?;
+    };
+    let repo = current(&session, &window).map_err(failed)?;
     // Its own Stop, heard by the Stop of the window that asked until the run is over.
-    let stop = session.new_stop(&window);
+    let stop = if matches!(action, Action::Fetch { .. }) {
+        session.new_stop(&window)
+    } else {
+        session.start_change(&window, window.label(), false).map_err(failed)?
+    };
     let cancel = stop.cancel.clone();
     let events = app.clone();
     let turns = session.turns.clone();

@@ -19,6 +19,7 @@ pub(crate) async fn open_window(
     session: State<'_, Session>,
     path: String,
 ) -> CommandResult<()> {
+    let _topology = session.topology()?;
     let repo = current(&session, &window)?;
     let folder = worktree_folder(&repo, &path)?;
     let label = match session.reserve_window(&folder) {
@@ -67,7 +68,13 @@ pub(crate) fn raise_repo(app: &AppHandle, target: &Located) -> CommandResult<()>
 
 /// Close the worktree's session after its removal. Legacy worktree windows close as before.
 #[tauri::command]
-pub(crate) fn close_window_of(app: AppHandle, window: RepoRequest, session: State<'_, Session>, path: String) {
+pub(crate) async fn close_window_of(
+    app: AppHandle,
+    window: RepoRequest,
+    session: State<'_, Session>,
+    path: String,
+) -> CommandResult<()> {
+    let _topology = session.repo_topology.read().await;
     let path = workdir_key(Path::new(&path));
     let (target, close_window) = {
         let repositories = session.repositories.lock().expect("session lock");
@@ -79,7 +86,7 @@ pub(crate) fn close_window_of(app: AppHandle, window: RepoRequest, session: Stat
         };
         (target, close_window)
     };
-    let Some(target) = target else { return };
+    let Some(target) = target else { return Ok(()) };
     if close_window && target.window() != window.label() {
         if let Some(open) = app.get_webview_window(target.window()) {
             let _ = open.close();
@@ -91,6 +98,7 @@ pub(crate) fn close_window_of(app: AppHandle, window: RepoRequest, session: Stat
         session.emit_closed(&address);
         crate::repos::changed(&app);
     }
+    Ok(())
 }
 
 /// The default macOS menu, with Check for Updates… and Settings… (⌘,) after About. About shows the

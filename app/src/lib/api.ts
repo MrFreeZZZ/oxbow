@@ -149,7 +149,12 @@ const apiWithInvoke = (invoke: <T>(command: string, args?: Record<string, unknow
   /** Reduce Transparency and Increase Contrast from the system (always off outside macOS). */
   displayOptions: () => invoke<{ reduceTransparency: boolean; increaseContrast: boolean }>("display_options"),
   initialRepo: () => invoke<string | null>("initial_repo"),
-  closeRepo: () => invoke<void>("close_repo"),
+  closeRepo: (provisional?: boolean) => invoke<void>("close_repo", { provisional }),
+  closeRepoTabs: (closing: RepoSessionId[], active: RepoSessionId | null, previous: RepoSessionId | null) =>
+    invoke<void>("close_repo_tabs", { closing, active, previous }),
+  repoTabsEnabled: () => invoke<boolean>("repo_tabs_enabled"),
+  repoTabsReady: (generation: number, problem: string | null) =>
+    invoke<void>("repo_tabs_ready", { generation, problem }),
   openRepoTab: (path: string, answer?: "trust" | "restricted") => invoke<RepoTabOpen>("open_repo_tab", { path, answer }),
   findRepoTab: (path: string) => invoke<{ window: string; session: RepoSessionId | null } | null>("find_repo_tab", { path }),
   activateRepoTab: () => invoke<void>("activate_repo_tab"),

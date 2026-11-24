@@ -158,7 +158,7 @@ pub(crate) async fn set_git_config(
     let turn_label = window.turn_key();
     let address = window.address.clone();
     let stop = if repo.is_some() {
-        session.new_stop(&window)
+        session.start_change(&window, window.label(), false)?
     } else {
         session.stops.start(window.label())
     };
@@ -208,11 +208,13 @@ pub(crate) async fn set_commit_checks(
     expected_repo: String,
 ) -> CommandResult<()> {
     let repo = crate::session::expected(current(&session, &window)?, Some(&expected_repo))?;
+    let change = session.start_change(&window, window.label(), false)?;
     logged(
         Some(at(&repo)),
         console::EntryKind::Action,
         "Set the checks before commit",
         move || {
+            let _change = change;
             repo.set_commit_checks(&checks)?;
             let workdir = repo.workdir();
             if !oxbow_core::trust::is_restricted(workdir) && checks.iter().any(|c| c.on) {

@@ -306,7 +306,9 @@ pub(crate) async fn edit_changelists(
     edit: ChangelistEdit,
 ) -> CommandResult<Changelists> {
     let repo = current(&session, &window)?;
+    let change = session.start_change(&window, window.label(), false)?;
     read(&window, at(&repo), "Change the changelists", move || {
+        let _change = change;
         repo.edit_changelists(&edit)
     })
     .await

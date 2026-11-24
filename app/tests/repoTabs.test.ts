@@ -13,14 +13,23 @@ const summary = (id: number): RepoSummary => ({ path: `/repo/${id}`, name: Strin
 const history = {} as History;
 const opened = (session: number): RepoTabOpen => ({ kind: "opened", session, repo: summary(session) });
 
-function windowTabs(backend: ConstructorParameters<typeof RepoTabs>[0], beforeClose = async (_id: number) => true) {
+type TabBackend = ConstructorParameters<typeof RepoTabs>[0];
+
+function windowTabs(backend: Omit<TabBackend, "closeBatch"> & Partial<Pick<TabBackend, "closeBatch">>, beforeClose = async (_id: number) => true) {
   const state = { tabs: [] as readonly OpenTab[], active: null as number | null, free: true };
   const errors: unknown[] = [];
   const notices: RepoNotice[] = [];
-  const tabs = new RepoTabs(backend, {
+  const tabs = new RepoTabs({
+    closeBatch: async (ids, next, previous) => {
+      if (next !== null && next !== previous) await backend.activate(next);
+      for (const id of ids) await backend.close(id);
+    },
+    ...backend,
+  }, {
     show: (tabs, active) => Object.assign(state, { tabs, active }),
     canSwitch: () => state.free,
     beforeClose,
+    whileClosing: (run) => run(),
     notice: (notice) => notices.push(notice),
   });
   const from: OpenFrom = {
@@ -61,8 +70,9 @@ test("closing the other tabs checks all guards before selecting the target and c
   const { tabs, state, from } = windowTabs({
     open: async (path) => opened(Number(path)),
     history: async () => history,
-    activate: async (id) => { events.push(`activate:${id}`); },
-    close: async (id) => { events.push(`close:${id}`); },
+    activate: async () => {},
+    close: async () => assert.fail("closed outside the batch"),
+    closeBatch: async (ids, active) => { events.push(`close:${ids.join(",")};keep:${active}`); },
   }, async (id) => {
     events.push(`guard:${id}`);
     return id !== blocked;
@@ -77,7 +87,7 @@ test("closing the other tabs checks all guards before selecting the target and c
   blocked = 0;
   events.length = 0;
   await tabs.closeOthers(2);
-  assert.deepEqual(events, ["guard:1", "guard:3", "activate:2", "close:1", "close:3"]);
+  assert.deepEqual(events, ["guard:1", "guard:3", "close:1,3;keep:2"]);
   assert.deepEqual(state.tabs.map(tab => tab.id), [2]);
   assert.equal(state.active, 2);
 });
@@ -125,12 +135,12 @@ test("opening deduplicates canonical paths, preserves the original on failure an
   assert.deepEqual(actions, ["activate:1", "activate:2", "close:3", "activate:1"]);
 });
 
-test("an open that finishes while Welcome has a modal releases its session", async () => {
+test("an open that becomes blocked during its first History read releases its provisional session", async () => {
   const closed: number[] = [];
   const { tabs, state, from } = windowTabs({
     open: async () => opened(1),
-    history: async () => history,
-    activate: async () => { state.free = false; },
+    history: async () => { state.free = false; return history; },
+    activate: async () => assert.fail("blocked open activated"),
     close: async (id) => { closed.push(id); },
   });
   await tabs.open("1", from);
@@ -210,9 +220,13 @@ test("different worktrees keep separate commit drafts even after their panels re
   const compiled = compileModule(js, { filename: "commitDrafts.svelte.js", generate: "client" }).js.code
     .replace(/^import \* as \$ from ['"]svelte\/internal\/client['"];?$/m, "");
   const storage = new Map<string, string>();
-  const { draftFor, saveDraft } = Function("$", "localStorage", `${compiled}; return { draftFor, saveDraft };`)(runtime, {
+  let full = false;
+  const { draftFor, saveDraft, keepCommitMessage } = Function("$", "localStorage", `${compiled}; return { draftFor, saveDraft, keepCommitMessage };`)(runtime, {
     getItem: (key: string) => storage.get(key),
-    setItem: (key: string, value: string) => storage.set(key, value),
+    setItem: (key: string, value: string) => {
+      if (full) throw new Error("Full");
+      storage.set(key, value);
+    },
   }) as typeof Drafts;
 
   const a = draftFor("/common/main");
@@ -224,4 +238,57 @@ test("different worktrees keep separate commit drafts even after their panels re
   assert.equal(draftFor("/common/main").summary, "Changes on main");
   assert.equal(draftFor("/common/worktree").summary, "Changes on topic");
   assert.deepEqual([...storage.values()].map(value => JSON.parse(value).summary), ["Changes on main", "Changes on topic"]);
+  full = true;
+  assert.match(keepCommitMessage("/common/main")!, /could not save a commit message draft/);
+  assert.equal(keepCommitMessage("/common/unvisited"), null);
+  full = false;
+  assert.equal(keepCommitMessage("/common/main"), null);
+});
+
+test("legacy replacement preserves the previous screen on refusal and enabling tabs keeps its session", async () => {
+  let refused = false;
+  const { tabs, state, from, errors } = windowTabs({
+    open: async (path) => opened(Number(path)),
+    history: async () => history,
+    activate: async () => {},
+    close: async () => {},
+    closeBatch: async (ids, active, previous) => {
+      assert.deepEqual(ids, [previous]);
+      if (refused) throw new Error("Git command in progress");
+      assert.equal(active, 2);
+    },
+  });
+  tabs.setMode(false);
+  await tabs.open("1", from);
+  const first = state.tabs[0];
+  refused = true;
+  await tabs.open("2", from);
+  assert.deepEqual(state.tabs, [first]);
+  assert.match(String(errors[0]), /Git command in progress/);
+
+  refused = false;
+  await tabs.open("2", from);
+  const second = state.tabs[0];
+  assert.equal(state.active, 2);
+  tabs.setMode(true);
+  await tabs.open("3", from);
+  assert.equal(state.tabs[0], second);
+  assert.deepEqual(state.tabs.map(tab => tab.id), [2, 3]);
+  tabs.setMode(false, [2]);
+  assert.equal(state.active, 3);
+  assert.deepEqual(state.tabs.map(tab => tab.id), [3]);
+});
+
+test("a close batch rejected by the backend leaves every tab and the active selection in place", async () => {
+  const { tabs, state, from } = windowTabs({
+    open: async (path) => opened(Number(path)),
+    history: async () => history,
+    activate: async () => {},
+    close: async () => assert.fail("closed outside the batch"),
+    closeBatch: async () => { throw new Error("Waiting for a Git operation"); },
+  });
+  for (const id of ["1", "2", "3"]) await tabs.open(id, from);
+  await assert.rejects(tabs.closeOthers(2), /Waiting for a Git operation/);
+  assert.deepEqual(state.tabs.map(tab => tab.id), [1, 2, 3]);
+  assert.equal(state.active, 3);
 });

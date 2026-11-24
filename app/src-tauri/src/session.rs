@@ -21,6 +21,8 @@ use crate::{CommandResult, turns};
 pub(crate) struct Session {
     pub(crate) repositories: Mutex<Repositories>,
     pub(crate) opening: tokio::sync::Mutex<()>,
+    pub(crate) repo_topology: tokio::sync::RwLock<()>,
+    pub(crate) settings_writes: tokio::sync::Mutex<()>,
     /// Diff settings, given to the repository on every call.
     pub(crate) diff: Mutex<DiffOptions>,
     /// The repository window used last: the one Settings shows and changes.
@@ -46,10 +48,11 @@ pub(crate) struct Stops {
     paused: AtomicBool,
 }
 
-#[derive(Hash, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq)]
 struct StopScope {
     window: String,
     session: Option<u64>,
+    change: Option<(PathBuf, bool)>,
 }
 
 /// A run's own Stop, heard by its sheet's Stop button until it is dropped.
@@ -80,22 +83,23 @@ impl Stops {
     }
 
     fn start_for(self: &Arc<Self>, window: &str, session: Option<u64>, live: bool) -> RunStop {
-        let scope = StopScope {
-            window: window.to_owned(),
-            session,
-        };
+        self.start_scoped(
+            StopScope {
+                window: window.to_owned(),
+                session,
+                change: None,
+            },
+            live,
+        )
+    }
+
+    fn start_scoped(self: &Arc<Self>, scope: StopScope, live: bool) -> RunStop {
         let cancel = Arc::new(AtomicBool::new(false));
         let mut running = self.running.lock().expect("stops lock");
         if !live || self.paused.load(Ordering::SeqCst) {
             cancel.store(true, Ordering::Relaxed);
         } else {
-            running
-                .entry(StopScope {
-                    window: scope.window.clone(),
-                    session,
-                })
-                .or_default()
-                .push(cancel.clone());
+            running.entry(scope.clone()).or_default().push(cancel.clone());
         }
         RunStop {
             stops: self.clone(),
@@ -140,6 +144,7 @@ pub(crate) struct Slot {
     common: PathBuf,
     owner: String,
     legacy: bool,
+    published: bool,
     /// Stop of the fetch running in the background, apart from actions in the sheet.
     pub(crate) fetch_cancel: Arc<AtomicBool>,
     pub(crate) close_cancel: Arc<AtomicBool>,
@@ -197,9 +202,8 @@ impl Slot {
 
     /// Forget the repository, including late reads and its background fetch.
     pub(crate) fn close(&mut self) {
-        self.stop_reads();
-        self.fetch_cancel.store(true, Ordering::Relaxed);
-        self.close_cancel.store(true, Ordering::Relaxed);
+        self.cancel_reads();
+
         self.repo = None;
         self.history = HistoryCache::default();
         self.changes = None;
@@ -245,6 +249,12 @@ impl Slot {
     }
 
     /// Stop every read running for this window: its repository changed, or it closed.
+    fn cancel_reads(&mut self) {
+        self.stop_reads();
+        self.fetch_cancel.store(true, Ordering::Relaxed);
+        self.close_cancel.store(true, Ordering::Relaxed);
+    }
+
     pub(crate) fn stop_reads(&mut self) {
         for (_, cancel) in self.lanes.drain() {
             cancel.store(true, Ordering::Relaxed);
@@ -346,6 +356,8 @@ pub(crate) struct Repositories {
     windows: HashMap<String, RepoWindow>,
     slots: HashMap<u64, Slot>,
     next: u64,
+    pub(crate) tabs_disabled: bool,
+    pub(crate) tab_transition: Option<crate::tab_settings::Preparation>,
 }
 
 impl Default for Repositories {
@@ -354,6 +366,8 @@ impl Default for Repositories {
             windows: HashMap::from([("main".into(), RepoWindow::default())]),
             slots: HashMap::new(),
             next: 0,
+            tabs_disabled: false,
+            tab_transition: None,
         }
     }
 }
@@ -486,7 +500,7 @@ impl Repositories {
             .slots
             .iter()
             .filter(|(_, slot)| slot.workdir == canonical)
-            .min_by_key(|(id, slot)| (preferred_first(&slot.owner), **id))
+            .min_by_key(|(id, slot)| (preferred_first(&slot.owner), !slot.published, **id))
         {
             return Some(Located::Open(Address {
                 window: slot.owner.clone(),
@@ -525,6 +539,40 @@ impl Repositories {
     pub(crate) fn closes_legacy_window(&self, address: &Address) -> bool {
         self.slots.get(&address.id).is_some_and(|slot| slot.legacy)
             && self.slots.values().filter(|slot| slot.owner == address.window).count() == 1
+    }
+
+    pub(crate) fn retiring_tabs(&self) -> HashMap<String, Vec<u64>> {
+        let mut closing = HashMap::<String, Vec<u64>>::new();
+        for (&id, slot) in &self.slots {
+            if self.windows[&slot.owner].active != Some(id) {
+                closing.entry(slot.owner.clone()).or_default().push(id);
+            }
+        }
+        for ids in closing.values_mut() {
+            ids.sort_unstable();
+        }
+        closing
+    }
+
+    pub(crate) fn window_starting(&self) -> bool {
+        self.slots
+            .values()
+            .any(|slot| !slot.published && self.windows[&slot.owner].active.is_none())
+    }
+
+    pub(crate) fn contains_window(&self, label: &str) -> bool {
+        self.windows.contains_key(label)
+    }
+
+    pub(crate) fn common(&self, id: u64) -> Option<&Path> {
+        self.slots.get(&id).map(|slot| slot.common.as_path())
+    }
+
+    pub(crate) fn set_tabs_disabled(&mut self, disabled: bool) {
+        self.tabs_disabled = disabled;
+        for slot in self.slots.values_mut() {
+            slot.legacy = disabled;
+        }
     }
 
     fn next_id(&mut self) -> u64 {
@@ -724,6 +772,150 @@ impl Session {
         self.stops.start_for(sheet, id, live)
     }
 
+    /// Register before dispatch to a worker, including the time a write spends waiting for Git.
+    pub(crate) fn start_change(&self, request: &RepoRequest, sheet: &str, draft: bool) -> CommandResult<RunStop> {
+        let repositories = self.repositories.lock().expect("session lock");
+        let address = request.address.as_ref().ok_or("No repository is open")?;
+        let slot = repositories
+            .slots
+            .get(&address.id)
+            .filter(|slot| slot.published)
+            .ok_or_else(|| oxbow_core::Error::Cancelled.to_string())?;
+        let common = slot.common.as_path();
+        if repositories.tab_transition.as_ref().is_some_and(|transition| {
+            if draft {
+                transition.drafts_sealed(&address.window, address.id)
+            } else {
+                transition
+                    .closing
+                    .values()
+                    .flatten()
+                    .any(|&id| repositories.common(id) == Some(common))
+            }
+        }) {
+            return Err("Oxbow is closing tabs. Try again when it finishes.".into());
+        }
+        let stop = self.stops.start_scoped(
+            StopScope {
+                window: sheet.to_owned(),
+                session: Some(address.id),
+                change: Some((common.to_owned(), draft)),
+            },
+            true,
+        );
+        if stop.cancel.load(Ordering::Relaxed) {
+            return Err(oxbow_core::Error::Cancelled.to_string());
+        }
+        Ok(stop)
+    }
+
+    /// Called with the repository lock held so a write cannot start between this check and detach.
+    pub(crate) fn check_tab_writes(
+        &self,
+        repositories: &Repositories,
+        ids: &[u64],
+        include_drafts: bool,
+    ) -> CommandResult<()> {
+        let running = self.stops.running.lock().expect("stops lock");
+        for id in ids {
+            let slot = &repositories.slots[id];
+            if let Some(draft) = running.keys().find_map(|scope| {
+                let (common, draft) = scope.change.as_ref()?;
+                let blocks = if *draft {
+                    include_drafts && scope.session == Some(*id)
+                } else {
+                    *common == slot.common
+                };
+                blocks.then_some(*draft)
+            }) {
+                let name = slot
+                    .repo
+                    .as_ref()
+                    .map_or_else(|| slot.workdir.display().to_string(), Repo::name);
+                let reason = if draft {
+                    "a draft is still being saved"
+                } else {
+                    "a Git command is running or waiting"
+                };
+                return Err(format!("Oxbow can’t close {name} while {reason}."));
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn topology(&self) -> CommandResult<tokio::sync::RwLockReadGuard<'_, ()>> {
+        self.repo_topology
+            .try_read()
+            .map_err(|_| "Oxbow is changing how repository tabs are shown. Try again when it finishes.".into())
+    }
+
+    /// Commit a batch and its next active tab under one lock.
+    pub(crate) fn close_tabs(
+        &self,
+        label: &str,
+        ids: &[u64],
+        active: Option<u64>,
+        previous: Option<u64>,
+    ) -> CommandResult<Option<PathBuf>> {
+        let _topology = self.topology()?;
+        let mut repositories = self.repositories.lock().expect("session lock");
+        let owner = |id| repositories.slots.get(&id).is_some_and(|slot| slot.owner == label);
+        if !repositories.contains_window(label)
+            || ids.iter().any(|&id| !owner(id))
+            || active.is_some_and(|id| !owner(id) || ids.contains(&id))
+            || repositories.windows[label].active != previous
+            || (!repositories.tabs_disabled && active.is_some_and(|id| !repositories.slots[&id].published))
+            || (previous.is_some_and(|id| !ids.contains(&id)) && active.is_none())
+        {
+            return Err("The open repositories changed. Try again.".into());
+        }
+        self.check_tab_writes(&repositories, ids, true)?;
+        let path = active.map(|id| {
+            let slot = repositories.slots.get_mut(&id).expect("active tab");
+            slot.published = true;
+            slot.workdir.clone()
+        });
+        let revision = repositories.next_id();
+        let window = repositories.windows.get_mut(label).expect("owner window");
+        window.active = active;
+        window.replacing = revision;
+        let removed = self.detach_tabs(&mut repositories, ids);
+        drop(repositories);
+        drop(removed);
+        Ok(path)
+    }
+
+    pub(crate) fn commit_tab_mode(
+        &self,
+        enabled: bool,
+        closing: &HashMap<String, Vec<u64>>,
+        ids: &[u64],
+        write: impl FnOnce() -> CommandResult<()>,
+    ) -> CommandResult<()> {
+        let mut repositories = self.repositories.lock().expect("session lock");
+        if !enabled && *closing != repositories.retiring_tabs() {
+            return Err("The open repositories changed. Try again.".into());
+        }
+        self.check_tab_writes(&repositories, ids, true)?;
+        write()?;
+        let removed = self.detach_tabs(&mut repositories, ids);
+        repositories.set_tabs_disabled(!enabled);
+        drop(repositories);
+        drop(removed);
+        Ok(())
+    }
+
+    fn detach_tabs(&self, repositories: &mut Repositories, ids: &[u64]) -> Vec<Slot> {
+        ids.iter()
+            .filter_map(|&id| self.detach(repositories, id))
+            .map(|mut slot| {
+                // Cancel while the address is still locked against new requests.
+                slot.cancel_reads();
+                slot
+            })
+            .collect()
+    }
+
     pub(crate) fn new_files_fetch(&self, request: &RepoRequest, id: Option<u64>) -> CommandResult<Option<RunStop>> {
         let Some(id) = id else { return Ok(None) };
         let stop = self.new_stop(request);
@@ -745,6 +937,9 @@ impl Session {
         let (window, removed) = {
             let mut repositories = self.repositories.lock().expect("session lock");
             let window = repositories.windows.remove(label);
+            if let Some(preparation) = &repositories.tab_transition {
+                preparation.window_removed(label);
+            }
             self.stops.stop(label);
             let removed = repositories
                 .slots
@@ -809,19 +1004,24 @@ impl Session {
         let mut repositories = self.repositories.lock().expect("session lock");
         Self::check_open(&repositories, label, replacing)?;
         let legacy = replacing.is_some();
-        if let Some(target) = repositories.opening_target(&workdir, label, legacy) {
+        let single = legacy || repositories.tabs_disabled;
+        if let Some(target) = repositories.opening_target(&workdir, label, single) {
             return Ok(Opened::Existing(target));
         }
         let claims_pending = repositories.windows[label]
             .pending
             .as_ref()
             .is_some_and(|(_, key)| *key == workdir);
+        if legacy && let Some(active) = repositories.windows[label].active {
+            self.check_tab_writes(&repositories, &[active], true)?;
+        }
         let id = repositories.next_id();
         let mut slot = Slot {
             workdir,
             common,
             owner: label.to_owned(),
-            legacy,
+            legacy: single,
+            published: legacy,
             ..Slot::default()
         };
         slot.open(repo);
@@ -845,12 +1045,27 @@ impl Session {
     pub(crate) fn activate(&self, address: &Address, replacing: Option<u64>) -> CommandResult<()> {
         let mut repositories = self.repositories.lock().expect("session lock");
         Self::check_open(&repositories, &address.window, replacing)?;
+        if repositories.tabs_disabled
+            && replacing.is_none()
+            && repositories.windows[&address.window]
+                .active
+                .is_some_and(|id| id != address.id)
+        {
+            return Err("Replace the active repository before activating another.".into());
+        }
+        if replacing.is_some()
+            && let Some(active) = repositories.windows[&address.window].active
+            && active != address.id
+        {
+            self.check_tab_writes(&repositories, &[active], true)?;
+        }
         let slot = repositories
             .slots
             .get_mut(&address.id)
             .ok_or_else(|| oxbow_core::Error::Cancelled.to_string())?;
         let legacy = replacing.is_some();
         slot.legacy |= legacy;
+        slot.published = true;
         if repositories.windows[&address.window].active == Some(address.id) {
             return Ok(());
         }
@@ -872,6 +1087,28 @@ impl Session {
         let slot = repositories.slots.remove(&id)?;
         self.stops.stop_where(|scope| scope.session == Some(id));
         Some(slot)
+    }
+
+    pub(crate) fn close_one(&self, address: &Address, legacy: bool, provisional: bool) -> CommandResult<()> {
+        let mut repositories = self.repositories.lock().expect("session lock");
+        if repositories.repo(address).is_none() || (provisional && repositories.slots[&address.id].published) {
+            return Ok(());
+        }
+        if !provisional {
+            self.check_tab_writes(&repositories, &[address.id], true)?;
+        }
+        let revision = repositories.next_id();
+        let window = repositories.windows.get_mut(&address.window).expect("owner window");
+        if window.active == Some(address.id) || legacy {
+            window.replacing = revision;
+        }
+        if window.active == Some(address.id) {
+            window.active = None;
+        }
+        let removed = self.detach_tabs(&mut repositories, &[address.id]);
+        drop(repositories);
+        drop(removed);
+        Ok(())
     }
 
     /// Closing the active tab clears the backend's active address. The UI picks its successor.
@@ -1353,6 +1590,95 @@ mod tests {
         assert!(side_b.cancel.load(Ordering::Relaxed));
         assert!(fetch_b.load(Ordering::Relaxed));
         for repo in [repo_a, repo_b] {
+            std::fs::remove_dir_all(repo.workdir()).unwrap();
+        }
+    }
+
+    #[test]
+    fn disabling_tabs_checks_every_window_and_persists_before_retiring_anything() {
+        let a = repo("mode-a");
+        let b = repo("mode-b");
+        let c = repo("mode-c");
+        let d = repo("mode-d");
+        let session = Session::default();
+        let WindowTarget::New(second) = session.reserve_window(c.workdir()) else {
+            unreachable!()
+        };
+        let keep_a = open(&session, "main", &a, false);
+        let close_b = open(&session, "main", &b, false);
+        let keep_c = open(&session, &second, &c, false);
+        let close_d = open(&session, &second, &d, false);
+        session.activate(&keep_a, None).unwrap();
+        session.activate(&keep_c, None).unwrap();
+        let plan = session.repositories.lock().unwrap().retiring_tabs();
+        let closing = [close_b.id, close_d.id];
+        let running = session.stops.start_scoped(
+            StopScope {
+                window: "settings".into(),
+                session: Some(close_d.id),
+                change: Some((turns::canonical(&d.common_dir()), false)),
+            },
+            true,
+        );
+        assert!(
+            session
+                .commit_tab_mode(false, &plan, &closing, || panic!("a Git write is queued"))
+                .is_err()
+        );
+        assert!(session.live(&close_b) && session.live(&close_d));
+        drop(running);
+
+        assert!(
+            session
+                .commit_tab_mode(false, &plan, &closing, || Err("Disk write failed".into()))
+                .is_err()
+        );
+        assert!(session.live(&close_b) && session.live(&close_d));
+        assert!(!session.repositories.lock().unwrap().tabs_disabled);
+
+        session.commit_tab_mode(false, &plan, &closing, || Ok(())).unwrap();
+        assert!(!session.live(&close_b) && !session.live(&close_d));
+        assert_eq!(session.resolve("main", None).unwrap(), Some(keep_a.clone()));
+        assert_eq!(session.resolve(&second, None).unwrap(), Some(keep_c.clone()));
+        session.commit_tab_mode(true, &HashMap::new(), &[], || Ok(())).unwrap();
+        assert!(session.live(&keep_a) && session.live(&keep_c));
+        for repo in [a, b, c, d] {
+            std::fs::remove_dir_all(repo.workdir()).unwrap();
+        }
+    }
+
+    #[test]
+    fn close_other_tabs_keeps_the_clicked_tab_only_after_every_write_is_idle() {
+        let a = repo("batch-a");
+        let b = repo("batch-b");
+        let c = repo("batch-c");
+        let session = Session::default();
+        let a_id = open(&session, "main", &a, false);
+        let b_id = open(&session, "main", &b, false);
+        let c_id = open(&session, "main", &c, false);
+        session.activate(&a_id, None).unwrap();
+        session.activate(&b_id, None).unwrap();
+        session.activate(&c_id, None).unwrap();
+
+        let write = session.stops.start_scoped(
+            StopScope {
+                window: "command-main".into(),
+                session: Some(c_id.id),
+                change: Some((turns::canonical(&c.common_dir()), false)),
+            },
+            true,
+        );
+        let close = || session.close_tabs("main", &[a_id.id, c_id.id], Some(b_id.id), Some(c_id.id));
+        assert!(close().is_err());
+        assert!(session.live(&a_id) && session.live(&c_id));
+        assert_eq!(session.resolve("main", None).unwrap(), Some(c_id.clone()));
+        drop(write);
+        let fetch = session.with_slot(&c_id, |slot| slot.start_fetch(1).unwrap()).unwrap();
+        close().unwrap();
+        assert!(fetch.load(Ordering::Relaxed));
+        assert!(!session.live(&a_id) && !session.live(&c_id));
+        assert_eq!(session.resolve("main", None).unwrap(), Some(b_id));
+        for repo in [a, b, c] {
             std::fs::remove_dir_all(repo.workdir()).unwrap();
         }
     }

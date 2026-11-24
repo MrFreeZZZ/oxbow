@@ -20,6 +20,7 @@ export const defaults = {
   "oxbow.background.intensity": 20,
   "oxbow.history.rowStyle": "twoLines" as "twoLines" | "compact",
   "oxbow.startup.reopenRepository": true,
+  "oxbow.windows.repositoryTabs": true,
   /** Auto follows this build's channel; explicit choices survive updates and restarts. */
   "oxbow.updates.autoCheck": true,
   "oxbow.updates.channel": "auto" as "auto" | "release" | "preview",
@@ -263,7 +264,7 @@ class Prefs {
 
   #read<K extends PrefKey>(key: K): PrefValue<K> {
     // Publish the whitespace mode once the backend can serve diffs for it.
-    const value = key !== "oxbow.diff.ignoreWhitespace" && key in this.#unsaved ? this.#unsaved[key] : this.#values[key];
+    const value = key !== "oxbow.diff.ignoreWhitespace" && key !== "oxbow.windows.repositoryTabs" && key in this.#unsaved ? this.#unsaved[key] : this.#values[key];
     // A value settings.json can't hold, e.g. typed in by hand, counts as the default.
     return (value !== undefined && value !== null && !problemOf(key, value) ? value : defaults[key]) as PrefValue<K>;
   }

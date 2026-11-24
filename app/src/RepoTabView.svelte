@@ -6,10 +6,11 @@
   import type { Gone } from "./lib/types";
   import type { OpenFrom, OpenTab } from "./lib/repoTabs";
 
-  let { register, tab, active, launched, openPath, closeTab, lostTab, tabStrip, stepRepoTab, sideHidden = $bindable() }: {
+  let { register, tab, active, blocked, launched, openPath, closeTab, lostTab, tabStrip, stepRepoTab, sideHidden = $bindable() }: {
     register: (scope: RepoScope, screen: App) => () => void;
     tab: OpenTab | null;
     active: boolean;
+    blocked: boolean;
     launched: boolean;
     openPath?: (path: string, from: OpenFrom) => Promise<void>;
     closeTab?: () => Promise<void>;
@@ -20,7 +21,7 @@
   } = $props();
 
   let mounted = true;
-  const scope = createRepoScope(untrack(() => tab?.id ?? null), () => mounted && active);
+  const scope = createRepoScope(untrack(() => tab?.id ?? null), () => mounted && active && !blocked);
   provideRepoScope(scope);
 
   let screen: App;
@@ -33,7 +34,7 @@
   });
 </script>
 
-<div class="repo-tab-view" class:active hidden={!active} inert={!active}
+<div class="repo-tab-view" class:active hidden={!active} inert={!active || blocked}
   id={tab ? `repo-panel-${tab.id}` : undefined} role={tab ? "tabpanel" : undefined} aria-label={tab?.repo.name}>
   <App bind:this={screen} openedTab={tab ?? undefined} {launched} {openPath} {closeTab} {lostTab} {tabStrip} {stepRepoTab} bind:sideHidden />
   <WordPopover />

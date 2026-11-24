@@ -7,17 +7,20 @@
   import RepoTabView from "./RepoTabView.svelte";
   import RepoTabStrip from "./lib/RepoTabStrip.svelte";
   import { api, apiForSession, settings, type RepoSessionId } from "./lib/api";
-  import { keepMessagesForRestart } from "./lib/commitDrafts.svelte";
+  import { keepCommitMessage, keepMessagesForRestart } from "./lib/commitDrafts.svelte";
   import { FIRST_HISTORY_PAGE } from "./lib/historyLoad.svelte";
   import type { RepoScope } from "./lib/repoScope";
   import { RepoTabs, type OpenTab } from "./lib/repoTabs";
   import { settleReviewSaves } from "./lib/reviewSaves";
   import type { ShortcutId } from "./lib/shortcuts";
-  import type { Gone, OutsideChange } from "./lib/types";
+  import type { Gone } from "./lib/types";
   import { beforeUpdateRestart } from "./lib/updateRestart.svelte";
 
-  // The tab UI will supply this at the window entry point.
-  let { tabsEnabled = false }: { tabsEnabled?: boolean } = $props();
+  let tabsEnabled = $state(false);
+  let preparing = $state(0);
+  let finishing = 0;
+  let localClose = $state(false);
+  const blocked = $derived(preparing !== 0 || localClose);
   let tabs = $state.raw<readonly OpenTab[]>([]);
   let activeId = $state<RepoSessionId | null>(null);
   let launched = $state(false);
@@ -25,20 +28,37 @@
   const screens = new Map<RepoSessionId | null, { screen: App; scope: RepoScope }>();
   function register(scope: RepoScope, screen: App) {
     screens.set(scope.id, { screen, scope });
-    return () => { screens.delete(scope.id); };
+    scope.activity.queueBlocked = () => blocked;
+    return () => {
+      screens.delete(scope.id);
+      scope.activity.queueBlocked = () => false;
+    };
   }
+  $effect(() => {
+    if (blocked) return;
+    for (const { id } of tabs) void screens.get(id)?.scope.activity.runQueued();
+  });
+
   const activeScreen = () => screens.get(activeId)?.screen;
   const draftSaves = () => [...screens.values()].map(({ scope }) => scope.draftSaves);
-  const canSwitch = () => (activeScreen()?.canSwitch() ?? true) &&
-    !document.querySelector('[aria-modal="true"]:not([inert] *)');
+  const noDialog = () => (activeScreen()?.canSwitch() ?? true) &&
+    !document.querySelector('[aria-modal="true"]:not([hidden] *)');
+  const canSwitch = () => !blocked && noDialog();
   const report = (error: unknown) => activeScreen()?.fileOpenError(String(error));
 
   async function tabDraftProblem(id: RepoSessionId) {
-    const drafts = screens.get(id)?.scope.draftSaves;
-    const path = tabs.find(tab => tab.id === id)?.repo.path;
-    drafts?.retry();
-    const [conflict, review] = await Promise.all([drafts?.settle(3000), path && settleReviewSaves(3000, path)]);
-    return conflict ?? review;
+    const scope = screens.get(id)?.scope;
+    const tab = tabs.find(tab => tab.id === id);
+    if (!tab) return null;
+    const { path, name } = tab.repo;
+    const busy = () => scope?.activity.hasQueuedChange
+      ? `Oxbow can’t close ${name} while a Pull or Push is waiting.` : null;
+    const queued = busy();
+    if (queued) return queued;
+    const commit = keepCommitMessage(path);
+    scope?.draftSaves.retry();
+    const [conflict, review] = await Promise.all([scope?.draftSaves.settle(3000), settleReviewSaves(3000, path)]);
+    return commit ?? conflict ?? review ?? busy();
   }
 
   let eventsReady: Promise<void>;
@@ -49,7 +69,8 @@
     },
     history: (id) => apiForSession(id).history(FIRST_HISTORY_PAGE),
     activate: (id) => apiForSession(id).activateRepoTab(),
-    close: (id) => apiForSession(id).closeRepo(),
+    close: (id) => apiForSession(id).closeRepo(true),
+    closeBatch: (ids, active, previous) => api.closeRepoTabs(ids, active, previous),
   }, {
     show(next, active) {
       tabs = next;
@@ -58,12 +79,18 @@
     canSwitch,
     beforeClose: async (id) => {
       const problem = await tabDraftProblem(id);
-      if (!problem) return canSwitch();
-      report(problem);
-      return false;
+      if (problem) throw new Error(problem);
+      return !preparing && noDialog();
+    },
+    async whileClosing(run) {
+      localClose = true;
+      try { await run(); }
+      finally { localClose = false; }
     },
     notice: (notice) => {
-      void tick().then(() => screens.get(notice.session)?.screen.notice(notice));
+      void tick().then(() => {
+        if (notice.event !== "menu-command" || !blocked) screens.get(notice.session)?.screen.notice(notice);
+      });
     },
   });
 
@@ -78,18 +105,16 @@
   async function lostTab(id: RepoSessionId, gone: Gone) {
     const shown = activeId === id;
     await tick();
-    const problem = await tabDraftProblem(id);
-    if (problem) {
-      screens.get(id)?.screen.fileOpenError(problem);
-      return;
-    }
     await manager.lose(id).catch(report);
     if (shown && activeId === null) screens.get(null)?.screen.showGone(gone);
   }
 
   let askingToClose = false;
   async function closeRequested(event: CloseRequestedEvent) {
-    if (askingToClose) return event.preventDefault();
+    if (askingToClose || blocked) {
+      api.cancelQuit().catch(() => {});
+      return event.preventDefault();
+    }
     const drafts = draftSaves();
     for (const save of drafts) save.retry();
     const [conflicts, reviewWhy] = await Promise.all([
@@ -122,7 +147,6 @@
     const guards = beforeUpdateRestart(async () => {
       const problem = keepMessagesForRestart();
       if (problem) return problem;
-      if (!tabsEnabled) return null;
       const drafts = [...screens.values()].filter(({ scope }) => scope.id !== null).map(({ scope }) => scope.draftSaves);
       for (const save of drafts) save.retry();
       const failed = (await Promise.all(drafts.map(save => save.settle(3000)))).find(Boolean);
@@ -131,23 +155,50 @@
     const stops = [
       window.onCloseRequested(closeRequested),
       window.listen<ShortcutId>("menu-command", ({ payload }) => {
-        if (!tabsEnabled || activeId === null) activeScreen()?.fromMenu(payload);
+        if (!blocked && activeId === null) activeScreen()?.fromMenu(payload);
       }),
-      window.listen<string>("menu-open", ({ payload }) => activeScreen()?.recentFromMenu(payload)),
+      window.listen<string>("menu-open", ({ payload }) => { if (!blocked) activeScreen()?.recentFromMenu(payload); }),
       window.onFocusChanged(({ payload }) => { if (payload) activeScreen()?.windowFocused(); }),
       listen("account-changed", () => { for (const { screen } of screens.values()) screen.accountChanged(); }),
       listen<string>("trust-changed", ({ payload }) => { for (const { screen } of screens.values()) screen.trustChanged(payload); }),
+      window.listen<string>("open-file-error", ({ payload }) => { if (activeId === null) report(payload); }),
+      window.listen<{ generation: number; closing: RepoSessionId[] }>("repo-tabs-prepare", async ({ payload }) => {
+        const { generation, closing } = payload;
+        if (generation <= finishing || preparing >= generation) return;
+        preparing = generation;
+        let problem: string | null = null;
+        try {
+          await manager.settled;
+          await tick();
+          if (!noDialog()) problem = "Close unfinished dialogs before hiding repository tabs.";
+          else problem = (await Promise.all(closing.map(tabDraftProblem))).find(Boolean) ?? null;
+        } catch (error) {
+          problem = String(error);
+        }
+        if (alive && preparing === generation) await api.repoTabsReady(generation, problem).catch(report);
+      }),
+      listen<{ generation: number; enabled: boolean; closed: RepoSessionId[] }>("repo-tabs-finished", ({ payload }) => {
+        if (payload.generation <= finishing) {
+          if (payload.closed.length) manager.setMode(tabsEnabled, payload.closed);
+          return;
+        }
+        finishing = payload.generation;
+        if (preparing && preparing <= finishing) preparing = 0;
+        tabsEnabled = payload.enabled;
+        manager.setMode(tabsEnabled, payload.closed);
+      }),
     ];
-    if (!tabsEnabled) stops.push(
-      window.listen("repo-touched", () => activeScreen()?.repoTouched()),
-      window.listen<OutsideChange>("outside-change", ({ payload }) => activeScreen()?.changedOutside(payload)),
-      window.listen<string>("open-file-error", ({ payload }) => activeScreen()?.fileOpenError(payload)),
-    );
-    eventsReady = tabsEnabled
-      ? api.repoEvents((notice) => { void manager.receive(notice)?.catch(report); })
-      : Promise.resolve();
-    void Promise.all([eventsReady, ...stops]).then(() => api.initialRepo()).then((path) => {
-      if (alive && path) void openRepository(path);
+    eventsReady = api.repoEvents((notice) => { void manager.receive(notice)?.catch(report); });
+    void Promise.all([eventsReady, ...stops]).then(async () => {
+      const previous = finishing;
+      const enabled = await api.repoTabsEnabled();
+      if (!alive) return;
+      if (previous === finishing) {
+        tabsEnabled = enabled;
+        manager.setMode(tabsEnabled);
+      }
+      const path = await api.initialRepo();
+      if (alive && path) await openRepository(path);
     }).catch((error) => { if (alive) report(error); }).finally(() => { if (alive) launched = true; });
     return () => {
       alive = false;
@@ -165,12 +216,12 @@
   {/if}
 {/snippet}
 
-<RepoTabView {register} tab={null} active={activeId === null} bind:sideHidden
-  {launched} openPath={tabsEnabled ? (path, from) => manager.open(path, from).catch(report) : undefined} />
+<RepoTabView {register} tab={null} active={activeId === null} {blocked} bind:sideHidden
+  {launched} openPath={(path, from) => manager.open(path, from).catch(report)} />
 {#each tabs as tab (tab.id)}
-  <RepoTabView {register} {tab} active={activeId === tab.id} {launched} bind:sideHidden
-    tabStrip={activeId === tab.id ? tabStrip : undefined}
-    stepRepoTab={tabs.length > 1 ? stepTab : undefined}
+  <RepoTabView {register} {tab} active={activeId === tab.id} {blocked} {launched} bind:sideHidden
+    tabStrip={tabsEnabled && activeId === tab.id ? tabStrip : undefined}
+    stepRepoTab={tabsEnabled && tabs.length > 1 ? stepTab : undefined}
     openPath={(path, from) => manager.open(path, {
       ...from, live: () => from.live() && tabs.some(open => open.id === tab.id),
     }).catch(report)} closeTab={() => closeTab(tab.id)} lostTab={(gone) => lostTab(tab.id, gone)} />
