@@ -28,6 +28,8 @@
   let tabs = $state.raw<readonly ShownTab[]>([]);
   let activeId = $state<RepoSessionId | null>(null);
   let highlightedId = $state<RepoSessionId | null>(null);
+  let home = $state<"closed" | "open" | "selected">("closed");
+  const showingHome = $derived(home === "selected");
   let launched = $state(false);
   const main = getCurrentWindow().label === "main";
   let sideHidden = $state(false);
@@ -45,7 +47,7 @@
     for (const { id } of tabs) void screens.get(id)?.scope.activity.runQueued();
   });
 
-  const activeScreen = () => screens.get(activeId)?.screen;
+  const activeScreen = () => screens.get(showingHome ? null : activeId)?.screen;
   const draftSaves = () => [...screens.values()].map(({ scope }) => scope.draftSaves);
   const noDialog = () => (activeScreen()?.canSwitch() ?? true) &&
     !document.querySelector('[aria-modal="true"]:not([hidden] *)');
@@ -108,6 +110,9 @@
       activeId = active;
       highlightedId = highlighted;
     },
+    repoSelected() {
+      if (showingHome) home = "open";
+    },
     loadTab: (path) => openSaved(path, false),
     canSwitch,
     switchProblem: () => noDialog() ? null : DIALOG_IN_THE_WAY,
@@ -124,7 +129,11 @@
     },
     notice: (notice) => {
       void tick().then(() => {
-        if (notice.event !== "menu-command" || !blocked) screens.get(notice.session)?.screen.notice(notice);
+        if (notice.event === "menu-command") {
+          if (blocked) return;
+          if (showingHome) return activeScreen()?.fromMenu(notice.payload as ShortcutId);
+        }
+        screens.get(notice.session)?.screen.notice(notice);
       });
     },
   });
@@ -139,9 +148,22 @@
     await tick();
     await (activeScreen() ?? screens.get(null)?.screen)?.startup(path, restoring);
   }
-  const activeNow = () => activeId;
+  const activeNow = () => showingHome ? null : activeId;
+  function showHome() {
+    if (!canSwitch()) return;
+    home = "selected";
+    manager.selectHome();
+    void tick().then(() => document.querySelector<HTMLButtonElement>('[data-tab-id="home"][aria-selected="true"]')?.focus());
+  }
+  async function closeHome() {
+    if (canSwitch()) home = "closed";
+  }
   const closeOtherTabs = (id: RepoSessionId) => manager.closeOthers(id).catch(report);
-  const stepTab = (by: 1 | -1) => manager.step(by).catch(report);
+  const stepTab = async (by: 1 | -1) => {
+    const tab = showingHome && tabs.at(by === 1 ? 0 : -1);
+    if (tab) await activateTab(tab.id);
+    else await manager.step(by).catch(report);
+  };
   const jumpTab = (n: number) => {
     const tab = tabs[n - 1];
     if (tab) activateTab(tab.id);
@@ -231,6 +253,7 @@
         finishing = payload.generation;
         if (preparing && preparing <= finishing) preparing = 0;
         tabsEnabled = payload.enabled;
+        if (!tabsEnabled) home = "closed";
         manager.setMode(tabsEnabled, payload.closed);
       }),
     ];
@@ -268,9 +291,10 @@
 
 <svelte:window onkeydown={onTabModifier} onkeyup={onTabModifier} onblur={() => setNumberPhase("idle")} />
 
-{#snippet tabStrip(openMenu: (event: MouseEvent) => void, openRecent: () => void, copyPath: (path: string) => void)}
-  {#if tabs.length > 0}
-    <RepoTabStrip {tabs} activeId={highlightedId} showNumbers={numberPhase === "showing"} {openMenu} {openRecent} {copyPath}
+{#snippet tabStrip(openMenu: ((event: MouseEvent) => void) | undefined, openRecent: () => void, copyPath: (path: string) => void)}
+  {#if tabs.length > 0 || home !== "closed"}
+    <RepoTabStrip {tabs} activeId={showingHome ? null : highlightedId} showNumbers={numberPhase === "showing"} {openMenu} {openRecent} {copyPath}
+      home={home !== "closed"} homeSelected={showingHome} {showHome} {closeHome}
       activate={activateTab} close={closeTab} closeOthers={closeOtherTabs}
       canSwitch={canSwitch} activeNow={activeNow} move={moveTab}
       saveTag={(path, id) => void prefs.saveRepositoryTabTag(path, id).catch(report)}
@@ -278,13 +302,16 @@
   {/if}
 {/snippet}
 
-<RepoTabView {register} tab={null} active={activeId === null} {blocked} bind:sideHidden
-  {launched} tabStrip={tabsEnabled && launched && activeId === null && tabs.length > 0 ? tabStrip : undefined}
+<RepoTabView {register} tab={null} active={showingHome || activeId === null} homePanel={home !== "closed"} {blocked} bind:sideHidden
+  {launched} tabStrip={tabsEnabled && launched && (showingHome || (activeId === null && (tabs.length > 0 || home !== "closed"))) ? tabStrip : undefined}
+  stepRepoTab={showingHome && tabs.length ? stepTab : undefined}
+  jumpRepoTab={showingHome && tabs.length > 1 ? jumpTab : undefined}
   openPath={(path, from) => manager.open(path, from).catch(report)} />
 {#each tabs as tab (tab.id)}
   {#if !isPending(tab)}
-    <RepoTabView {register} {tab} active={activeId === tab.id} {blocked} {launched} bind:sideHidden
-      tabStrip={tabsEnabled && activeId === tab.id ? tabStrip : undefined}
+    <RepoTabView {register} {tab} active={!showingHome && activeId === tab.id} {blocked} {launched} bind:sideHidden
+      tabStrip={tabsEnabled && !showingHome && activeId === tab.id ? tabStrip : undefined}
+      showHome={tabsEnabled ? showHome : undefined}
       stepRepoTab={tabsEnabled && tabs.length > 1 ? stepTab : undefined}
       jumpRepoTab={tabsEnabled && tabs.length > 1 ? jumpTab : undefined}
       openPath={(path, from) => manager.open(path, {

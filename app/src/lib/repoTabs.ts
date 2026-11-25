@@ -80,6 +80,7 @@ export const DIALOG_IN_THE_WAY = "Close the open dialog first.";
 
 interface WindowHooks {
   show(tabs: readonly ShownTab[], active: RepoSessionId | null, highlighted: RepoSessionId | null): void;
+  repoSelected?(): void;
   canSwitch(): boolean;
   /** Why a switch is refused, when the user should hear it. Null stays quiet, as a mode change does. */
   switchProblem?(): string | null;
@@ -131,6 +132,13 @@ export class RepoTabs {
   }
 
   get settled() { return this.#queue; }
+
+  /** Home takes focus while the last repository remains active on the backend. */
+  selectHome() {
+    this.#focusToken += 1;
+    this.#armed = null;
+    this.#show();
+  }
 
   setMode(enabled: boolean, closed: readonly RepoSessionId[] = []) {
     this.#enabled = enabled;
@@ -206,12 +214,14 @@ export class RepoTabs {
   async #activate(id: RepoSessionId) {
     const tab = this.#tabs.find(item => item.id === id);
     if (!tab || isPending(tab) || !this.#hooks.canSwitch()) return;
-    this.#focusToken += 1;
+    const claim = ++this.#focusToken;
     this.#armed = null;
-    if (this.#active === id) return void this.#show();
-    await this.#backend.activate(id);
-    if (!this.#exists(id)) return;
-    this.#active = id;
+    if (this.#active !== id) {
+      await this.#backend.activate(id);
+      if (!this.#exists(id)) return;
+      this.#active = id;
+    }
+    if (this.#focusToken === claim) this.#hooks.repoSelected?.();
     this.#show();
   }
 
@@ -326,6 +336,7 @@ export class RepoTabs {
           if (force || this.#focusToken === claim) {
             this.#active = id;
             this.#armed = null;
+            this.#hooks.repoSelected?.();
           } else if (this.#armed !== null && !this.#tabs.some(tab => tab.id === this.#armed)) this.#armed = null;
           this.#show();
           for (const notice of this.#early.get(id) ?? []) this.#hooks.notice(notice);

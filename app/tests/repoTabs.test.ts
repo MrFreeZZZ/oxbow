@@ -18,7 +18,7 @@ type TabBackend = ConstructorParameters<typeof RepoTabs>[0];
 function windowTabs(
   backend: Omit<TabBackend, "closeBatch"> & Partial<Pick<TabBackend, "closeBatch">>,
   beforeClose = async (_id: number) => true,
-  hooks: { canSwitch?: () => boolean; switchProblem?: () => string | null } = {},
+  hooks: Partial<Pick<ConstructorParameters<typeof RepoTabs>[1], "canSwitch" | "switchProblem" | "repoSelected">> = {},
 ) {
   const state = { tabs: [] as readonly ShownTab[], active: null as number | null, highlighted: null as number | null, free: true };
   const errors: unknown[] = [];
@@ -40,6 +40,7 @@ function windowTabs(
     show: (tabs, active, highlighted) => Object.assign(state, { tabs, active, highlighted }),
     canSwitch: hooks.canSwitch ?? (() => state.free),
     switchProblem: hooks.switchProblem,
+    repoSelected: hooks.repoSelected,
     beforeClose,
     whileClosing: (run) => run(),
     notice: (notice) => notices.push(notice),
@@ -47,6 +48,33 @@ function windowTabs(
   });
   return { tabs, state, from, errors, notices };
 }
+
+test("choosing Home keeps the last repository and an in-flight open does not steal focus", async () => {
+  let selections = 0;
+  let finishHistory!: (value: History) => void;
+  let started!: () => void;
+  const loading = new Promise<void>(resolve => { started = resolve; });
+  const { tabs, state, from } = windowTabs({
+    open: async (path) => opened(Number(path)),
+    history: async (id) => id === 1 ? history : new Promise<History>(resolve => {
+      finishHistory = resolve;
+      started();
+    }),
+    activate: async () => {},
+    close: async () => {},
+  }, undefined, { repoSelected: () => { selections++; } });
+  await tabs.open("1", from);
+  const opening = tabs.open("2", from);
+  await loading;
+  tabs.selectHome();
+  finishHistory(history);
+  await opening;
+  assert.deepEqual(state.tabs.map(tab => tab.id), [1, 2]);
+  assert.equal(state.active, 1);
+  assert.equal(selections, 1);
+  await tabs.activate(1);
+  assert.equal(selections, 2, "choosing the last repository explicitly leaves Home");
+});
 
 test("repository shortcuts wrap in tab order and close picks the right neighbor, then the left", async () => {
   const { tabs, state, from } = windowTabs({

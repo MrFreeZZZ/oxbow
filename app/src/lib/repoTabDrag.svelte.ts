@@ -52,7 +52,7 @@ function tabList(): HTMLElement | null {
 function measure(list: HTMLElement): TabSlot[] {
   const base = list.getBoundingClientRect().left;
   const scroll = list.scrollLeft;
-  return [...list.querySelectorAll<HTMLElement>(":scope > .item")].map(item => {
+  return [...list.querySelectorAll<HTMLElement>(":scope > .item:not(.home)")].map(item => {
     const box = item.getBoundingClientRect();
     return { left: box.left - base + scroll, width: box.width };
   });

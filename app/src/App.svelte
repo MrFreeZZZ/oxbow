@@ -41,13 +41,14 @@
   import { autoFetchScheduled, repoWorkOnFocus } from "./lib/tabWork";
   import type { OpenFrom, OpenTab } from "./lib/repoTabs";
 
-  let { openedTab, launched, openPath, closeTab, lostTab, tabStrip, stepRepoTab, jumpRepoTab, sideHidden = $bindable() }: {
+  let { openedTab, launched, openPath, closeTab, lostTab, tabStrip, showHome, stepRepoTab, jumpRepoTab, sideHidden = $bindable() }: {
     openedTab?: OpenTab;
     launched: boolean;
     openPath?: (path: string, from: OpenFrom) => Promise<void>;
     closeTab?: () => Promise<void>;
     lostTab?: (gone: Gone) => Promise<void>;
-    tabStrip?: Snippet<[(event: MouseEvent) => void, () => void, (path: string) => void]>;
+    tabStrip?: Snippet<[((event: MouseEvent) => void) | undefined, () => void, (path: string) => void]>;
+    showHome?: () => void;
     stepRepoTab?: (by: 1 | -1) => Promise<void>;
     /** Open repository tab 1–9. Present while two or more tabs are open. */
     jumpRepoTab?: (n: number) => void;
@@ -74,7 +75,11 @@
   const splitRequest = splitRequestInRepo.bind(null, scope);
 
   let overviewShown = $state(false);
-  const showRepositories = () => { closePickers(); overviewShown = true; };
+  const showRepositories = () => {
+    closePickers();
+    if (showHome) showHome();
+    else overviewShown = true;
+  };
   import { prefs } from "./lib/prefs.svelte";
   import SearchField from "./lib/SearchField.svelte";
   import SearchBar from "./lib/SearchBar.svelte";
@@ -2081,7 +2086,7 @@
     <div class="welcome-host" class:mac>
       <div class="repo-tabs">
         {@render tabStrip(
-          (event) => { if (windowCommandsFree()) void sidebar?.repoMenu(event, true); },
+          undefined,
           () => { if (windowCommandsFree()) void openRecent(); },
           (path) => copyText(path, "Copied the repository path."),
         )}

@@ -11,12 +11,13 @@
   import { keyFocus } from "./tabs";
   import { tick } from "svelte";
 
-  let { tabs, activeId, showNumbers, openMenu, openRecent, copyPath, activate, close, closeOthers, canSwitch, activeNow, move, saveTag, customizeTags }: {
+  let { tabs, activeId, showNumbers, openMenu, openRecent, copyPath, activate, close, closeOthers, canSwitch, activeNow, move, saveTag, customizeTags,
+    home, homeSelected, showHome, closeHome }: {
     tabs: readonly ShownTab[];
     activeId: RepoSessionId | null;
     /** 1–9 in place of the folder icon, while ⌘ or Ctrl is held. */
     showNumbers: boolean;
-    openMenu: (event: MouseEvent) => void;
+    openMenu?: (event: MouseEvent) => void;
     openRecent: () => void;
     copyPath: (path: string) => void;
     activate: (id: RepoSessionId) => Promise<void>;
@@ -28,16 +29,20 @@
     move: (id: RepoSessionId, to: number) => Promise<void>;
     saveTag: (path: string, id: RepositoryTabTagId | null) => void;
     customizeTags: () => void;
+    home: boolean;
+    homeSelected: boolean;
+    showHome: () => void;
+    closeHome: () => Promise<void>;
   } = $props();
 
   let list = $state<HTMLDivElement>();
-  let focused = $state<RepoSessionId | null>(null);
+  let focused = $state<RepoSessionId | "home" | null>(null);
   let menu = $state<{ x: number; y: number; tab: ShownTab; anchor: HTMLButtonElement } | null>(null);
   const activeSelector = '[data-repo-tab-list] [role="tab"][aria-selected="true"]';
   const orderKey = $derived(tabs.map(tab => tab.id).join("\0"));
   const shownId = $derived.by(() => {
     const gesture = tabGesture.current;
-    return gesture && gesture.originKey === orderKey ? gesture.id : activeId;
+    return gesture && gesture.originKey === orderKey ? gesture.id : homeSelected ? "home" : activeId;
   });
   const offsets = $derived.by(() => {
     const gesture = tabGesture.current;
@@ -118,31 +123,34 @@
     ];
   }
 
-  function tabKey(event: KeyboardEvent, tab: ShownTab) {
-    if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+  function tabKey(event: KeyboardEvent, tab?: ShownTab) {
+    if (tab && (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) {
       showContext(event, tab);
       return;
     }
     if (event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return;
-    const at = tabs.indexOf(tab);
-    const last = tabs.length - 1;
-    const next = event.key === "ArrowLeft" ? (at + last) % tabs.length :
-      event.key === "ArrowRight" ? (at + 1) % tabs.length :
+    const buttons = Array.from(list?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []);
+    const at = buttons.indexOf(event.currentTarget as HTMLButtonElement);
+    const last = buttons.length - 1;
+    const next = event.key === "ArrowLeft" ? (at + last) % buttons.length :
+      event.key === "ArrowRight" ? (at + 1) % buttons.length :
       event.key === "Home" ? 0 : event.key === "End" ? last : -1;
     if (next < 0) return;
     event.preventDefault();
-    const button = list?.querySelector<HTMLButtonElement>(`[data-tab-id="${tabs[next].id}"]`);
+    const button = buttons[next];
     if (button) keyFocus(button);
   }
 </script>
 
 <div class="strip" data-tauri-drag-region>
-  <button class="control repository" onclick={openMenu} aria-label="Repository menu" aria-haspopup="menu" title="Repository menu">
-    <svg class="icon" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>
-  </button>
+  {#if openMenu}
+    <button class="control repository" onclick={openMenu} aria-label="Repository menu" aria-haspopup="menu" title="Repository menu">
+      <svg class="icon" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>
+    </button>
+  {/if}
   <div class="list" data-repo-tab-list role="tablist" aria-label="Repository tabs" bind:this={list}
     class:reordering={!!offsets} class:settling
-    style:--tab-count={tabs.length}
+    style:--tab-count={tabs.length + Number(home)}
     onfocusout={(event) => { if (!list?.contains(event.relatedTarget as Node | null)) focused = null; }}>
     {#each tabs as tab, index (tab.id)}
       {@const selected = tab.id === shownId}
@@ -181,6 +189,20 @@
         </button>
       </div>
     {/each}
+    {#if home}
+      <div class="item home" class:selected={shownId === "home"} role="presentation">
+        <button class="tab-button" role="tab" aria-selected={shownId === "home"} aria-controls="repo-panel-home"
+          tabindex={(focused ?? shownId) === "home" ? 0 : -1} data-tab-id="home" title="Oxbow Home"
+          onclick={showHome} onfocus={() => focused = "home"} onkeydown={tabKey}>
+          <svg class="icon folder" viewBox="0 0 16 16"><path d={menuIcons.home} /></svg>
+          <span>Oxbow Home</span>
+        </button>
+        <button class="control close" tabindex={shownId === "home" ? 0 : -1} aria-label="Close Oxbow Home tab"
+          title="Close Oxbow Home tab" onclick={() => void withTabFocus(closeHome())}>
+          <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.bad} /></svg>
+        </button>
+      </div>
+    {/if}
   </div>
   <button class="control add" onclick={openRecent} aria-label="Open recent repository" aria-haspopup="dialog"
     title={withKeys("Open Recent…", combo("openRecent"))}>

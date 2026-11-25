@@ -68,7 +68,6 @@
   /** A speech bubble with a tick: pull requests to review. */
   const REVIEW_ICON = "M2.5 4.2c0-.7.5-1.2 1.2-1.2h8.6c.7 0 1.2.5 1.2 1.2v5.6c0 .7-.5 1.2-1.2 1.2H7l-3 2.5V11h-.3c-.7 0-1.2-.5-1.2-1.2zM5.5 7l1.6 1.5 3.4-3";
   const FOLDER = "M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z";
-  const HOME = "M2.5 7.5 8 3l5.5 4.5M4 6.5v6.5h8V6.5";
   /** A list with a ×: Clear Recent. */
   const CLEAR = "M2.5 4h11M2.5 8h6M2.5 12h4M10 9.5l3.5 3.5M13.5 9.5 10 13";
   const RELOAD = "M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5";
@@ -340,7 +339,7 @@
       { kind: "item", label: "Open Local Repository…", icon: FOLDER, keys: shortcut("open"), run: onOpen },
       { kind: "item", label: "New Repository…", icon: "M8 3v10M3 8h10", keys: shortcut("newRepo"), run: () => start.newRepo() },
       { kind: "sep" },
-      { kind: "item", label: "Oxbow Home", icon: HOME, run: onWelcome },
+      { kind: "item", label: "Oxbow Home", icon: menuIcons.home, run: onWelcome },
     );
     if (recent.length) {
       entries.push({ kind: "sep" }, { kind: "header", label: "Recent", keys: shortcut("openRecent") });
