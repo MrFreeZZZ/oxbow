@@ -425,8 +425,8 @@ const apiWithInvoke = (invoke: <T>(command: string, args?: Record<string, unknow
   compareSnapshot: (id: string, after: boolean) => invoke<SnapshotComparison>("compare_snapshot", { id, after }),
   /** A newer search in the same `lane` stops this one. */
   search: (query: SearchQuery, lane: string | null = null) => invoke<SearchResult>("search", { query, lane }),
-  settingsText: () => invoke<string>("settings_text"),
-  saveSettingsText: (text: string) => invoke<void>("save_settings_text", { text }),
+  settingsText: () => invoke<string | null>("settings_text"),
+  saveSettingsText: (base: string | null, text: string) => invoke<string>("save_settings_text", { base, text }),
   /** settings.json and the copy Restore Defaults keeps, as typed in a shell. */
   settingsLocation: () => invoke<{ file: string; backup: string }>("settings_location"),
   restoreDefaultSettings: () => invoke<void>("restore_default_settings"),

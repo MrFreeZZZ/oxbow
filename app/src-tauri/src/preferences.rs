@@ -551,27 +551,35 @@ pub(crate) async fn monospace_fonts() -> Vec<String> {
 
 /// settings.json as it is on disk, for editing it as text.
 #[tauri::command]
-pub(crate) fn settings_text(app: AppHandle) -> CommandResult<String> {
-    let file = settings_file(&app)?;
-    Ok(std::fs::read_to_string(file).unwrap_or_else(|_| "{}\n".to_owned()))
+pub(crate) fn settings_text(app: AppHandle) -> CommandResult<Option<String>> {
+    settings::read_text(&settings_file(&app)?)
 }
 
 /// Save settings.json edited as text. It must be a JSON object; every window takes the new
-/// values at once.
+/// values at once. Return the exact text that was saved as the editor's next base.
 #[tauri::command]
-pub(crate) async fn save_settings_text(app: AppHandle, session: State<'_, Session>, text: String) -> CommandResult<()> {
+pub(crate) async fn save_settings_text(
+    app: AppHandle,
+    session: State<'_, Session>,
+    base: Option<String>,
+    mut text: String,
+) -> CommandResult<String> {
     let settings: serde_json::Map<String, Value> = serde_json::from_str(&text).map_err(|err| err.to_string())?;
     let _writes = session.settings_writes.lock().await;
-    let before = read_settings(&app);
     let file = settings_file(&app)?;
-    let text = if text.ends_with('\n') { text } else { text + "\n" };
+    settings::check_text_base(&file, base.as_deref())?;
+    let before = base
+        .as_deref()
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or_default();
     tab_settings::persist(&app, &session, tab_settings::enabled(&settings), || {
-        settings::write_text(&file, &text)
+        // A tab mode change may have waited for the windows while an external editor saved.
+        settings::write_edited_text(&file, base.as_deref(), &mut text)
     })
     .await?;
     let mut revision = session.settings.lock().expect("session lock");
     settings_replaced(&app, &session, &mut revision, &before, &settings);
-    Ok(())
+    Ok(text)
 }
 
 /// Follow settings that replaced `before` all at once, and tell every window which keys changed.
@@ -671,11 +679,19 @@ pub(crate) async fn restore_settings_backup(app: AppHandle, session: State<'_, S
 /// Show settings.json in Finder, Explorer or the file manager; an empty one is made first, so
 /// there is a file to show.
 #[tauri::command]
-pub(crate) fn reveal_settings(app: AppHandle) -> CommandResult<()> {
+pub(crate) async fn reveal_settings(app: AppHandle, session: State<'_, Session>) -> CommandResult<()> {
     let file = settings_file(&app)?;
-    if !file.exists() {
-        std::fs::create_dir_all(file.parent().expect("settings file has a parent")).map_err(|err| err.to_string())?;
-        std::fs::write(&file, "{}\n").map_err(|err| err.to_string())?;
+    {
+        let _writes = session.settings_writes.lock().await;
+        if !file.exists() {
+            std::fs::create_dir_all(file.parent().expect("settings file has a parent"))
+                .map_err(|err| err.to_string())?;
+            match std::fs::File::create_new(&file) {
+                Ok(mut file) => std::io::Write::write_all(&mut file, b"{}\n").map_err(|err| err.to_string())?,
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(err) => return Err(err.to_string()),
+            }
+        }
     }
     open_in::reveal(&file)
 }

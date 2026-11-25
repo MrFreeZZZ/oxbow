@@ -200,10 +200,10 @@
   // settings.json as text, like VS Code.
   let json = $state(false);
   let jsonText = $state("");
-  let jsonSaved = $state("");
+  let jsonBaseline = $state<{ raw: string | null; text: string }>({ raw: null, text: "" });
   onDestroy(beforeUpdateRestart(() => {
     if (backgroundIntensity.saving) return "Finish saving your settings before restarting to install the update.";
-    if (jsonText !== jsonSaved || editing || Object.keys(repoFiles.drafts).length) return "Save or discard your edits in Settings before restarting to install the update.";
+    if (jsonText !== jsonBaseline.text || editing || Object.keys(repoFiles.drafts).length) return "Save or discard your edits in Settings before restarting to install the update.";
     return null;
   }));
 
@@ -236,8 +236,20 @@
 
   async function openJson() {
     menu = null;
-    jsonText = jsonSaved = await api.settingsText().catch(() => "{}\n");
-    json = true;
+    try {
+      await readJson();
+      json = true;
+    } catch (err) {
+      confirm.fail(err);
+    }
+  }
+
+  async function readJson() {
+    const raw = await api.settingsText();
+    // The textarea normalizes line endings; keep the disk text for the Save comparison.
+    const text = raw?.replace(/\r\n?/g, "\n") ?? "{}\n";
+    jsonBaseline = { raw, text };
+    jsonText = text;
   }
 
   /** What the Settings window calls an Oxbow setting, for the note when it couldn't be saved. */
@@ -262,12 +274,12 @@
 
   /** Whether there is anything to restore; a file Oxbow can't read counts too. */
   // settings.json that can't be read can still be moved aside.
-  const customized = $derived(prefs.customized || !!prefs.unreadable || (json && jsonSaved.trim() !== "{}"));
+  const customized = $derived(prefs.customized || !!prefs.unreadable || (json && jsonBaseline.text.trim() !== "{}"));
 
   async function restoreDefaults() {
     const where = await api.settingsLocation().catch(() => ({ file: "settings.json", backup: "settings.backup.json" }));
     const reopen = async () => {
-      if (json) jsonText = jsonSaved = await api.settingsText().catch(() => "{}\n");
+      if (json) await readJson();
       await prefs.reload();
     };
     await confirm.run({
@@ -395,7 +407,7 @@
     </header>
 
     {#if json}
-      <SettingsJson bind:text={jsonText} bind:saved={jsonSaved} />
+      <SettingsJson bind:text={jsonText} bind:baseline={jsonBaseline} />
     {:else if fileOpen}
       {#key fileOpen}
         <RepoFileEditor kind={fileOpen} gitlab={repoFiles.list?.gitlab ?? false} />
