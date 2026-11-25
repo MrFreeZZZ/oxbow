@@ -242,15 +242,23 @@ pub(crate) fn find_repo_tab(
     })
 }
 
-/// Activate a session owned by the calling window.
+/// Activate an owned session, or publish it in the background after History has loaded.
 #[tauri::command]
-pub(crate) fn activate_repo_tab(app: AppHandle, window: RepoRequest, session: State<'_, Session>) -> CommandResult<()> {
+pub(crate) fn activate_repo_tab(
+    app: AppHandle,
+    window: RepoRequest,
+    session: State<'_, Session>,
+    background: Option<bool>,
+) -> CommandResult<()> {
     let _topology = session.topology()?;
     let address = window
         .address
         .as_ref()
         .filter(|_| window.explicit)
         .ok_or("A repository session is required.")?;
+    if background == Some(true) {
+        return session.publish_tab(address);
+    }
     let path = session
         .repositories
         .lock()

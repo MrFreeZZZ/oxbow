@@ -159,7 +159,7 @@ const apiWithInvoke = (invoke: <T>(command: string, args?: Record<string, unknow
     invoke<void>("repo_tabs_ready", { generation, problem }),
   openRepoTab: (path: string, answer?: "trust" | "restricted") => invoke<RepoTabOpen>("open_repo_tab", { path, answer }),
   findRepoTab: (path: string) => invoke<{ window: string; session: RepoSessionId | null } | null>("find_repo_tab", { path }),
-  activateRepoTab: () => invoke<void>("activate_repo_tab"),
+  activateRepoTab: (background?: boolean) => invoke<void>("activate_repo_tab", { background }),
   /** Register once in the owner window before opening tabs. */
   repoEvents: (onNotice: (notice: RepoNotice) => void) =>
     invoke<void>("repo_events", { onNotice: new Channel(onNotice) }),

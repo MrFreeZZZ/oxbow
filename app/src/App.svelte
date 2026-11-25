@@ -213,14 +213,8 @@
     try {
       await openPath(path, {
         live: () => alive,
-        reopened: async (id, summary) => {
-          if (scope.id !== id) return;
-          overviewShown = false;
-          if (!session.gone) return;
-          const next = await loader.first();
-          if (alive) session.attach(summary, next);
-        },
-        trust: (name, findings) => scope.isActive() ? session.askTrust(name, findings, true) : Promise.resolve(null),
+        reopened: reopenTab,
+        trust: askOpenTrust,
         fail: async (path, error) => {
           if (session.repo && restoring) confirm.say(String(error), "warn");
           else if (session.repo) confirm.fail(error);
@@ -230,6 +224,14 @@
     } finally {
       openingPath = false;
     }
+  };
+  export const askOpenTrust: OpenFrom["trust"] = (name, findings) => session.askTrust(name, findings, true);
+  export const reopenTab: OpenFrom["reopened"] = async (id, summary) => {
+    if (scope.id !== id) return;
+    overviewShown = false;
+    if (!session.gone) return;
+    const next = await loader.first();
+    if (alive) session.attach(summary, next);
   };
   export const startup = (path: string, restoring = false) => load(path, restoring);
   export function showGone(gone: Gone) { session.showGone(gone); }
@@ -262,7 +264,10 @@
     void loader.outsideChanged(event);
   }
   export const repoTouched = () => void refresh();
-  export const fileOpenError = (error: string) => confirm.fail(error);
+  export function fileOpenError(error: string) {
+    if (overviewShown || !repo || !history) session.error = error;
+    else confirm.fail(error);
+  }
   export function canSwitch() {
     return !session.trustAsk && !start.sheet && !confirm.request;
   }

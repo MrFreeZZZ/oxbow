@@ -71,6 +71,7 @@ interface TabBackend {
   open(path: string, answer?: Answer): Promise<RepoTabOpen>;
   history(id: RepoSessionId): Promise<History>;
   activate(id: RepoSessionId): Promise<void>;
+  publish(id: RepoSessionId): Promise<void>;
   close(id: RepoSessionId): Promise<void>;
   closeBatch(ids: RepoSessionId[], active: RepoSessionId | null, previous: RepoSessionId | null): Promise<void>;
 }
@@ -88,7 +89,7 @@ interface WindowHooks {
   whileClosing(run: () => Promise<void>): Promise<void>;
   notice(notice: RepoNotice): void;
   /** Open a restored repository the first time its tab is shown. */
-  loadTab?(path: string): Promise<void>;
+  restored: OpenFrom;
 }
 
 export interface OpenFrom {
@@ -98,16 +99,20 @@ export interface OpenFrom {
   fail(path: string, error: unknown): Promise<void>;
 }
 
+interface PendingOpen {
+  claim: number;
+  done: Promise<void>;
+}
+
 /** Owns this window's backend sessions. A restored tab stays in the strip and opens the first time it is shown. */
 export class RepoTabs {
   #tabs: ShownTab[] = [];
   #active: RepoSessionId | null = null;
-  /** The restored tab selected while its repository is still opening. */
+  /** The latest tab selection while its open or activation is in flight. */
   #armed: RepoSessionId | null = null;
   /** Bumped when the user picks another tab, so an open already in flight does not take focus. */
   #focusToken = 0;
-  #claims = new Map<string, number>();
-  #loading = new Map<string, Promise<void>>();
+  #loading = new Map<RepoSessionId, PendingOpen>();
   #nextPending = 0;
   #queue = Promise.resolve();
   #opens = Promise.resolve();
@@ -178,60 +183,62 @@ export class RepoTabs {
     };
   }
 
-  /** The open claims focus only while this token is still the latest choice. */
-  #claim(path: string): number {
-    const pending = this.#claims.get(path);
-    if (pending !== undefined) {
-      this.#claims.delete(path);
-      return pending;
-    }
-    this.#focusToken += 1;
-    return this.#focusToken;
-  }
-
-  #loadPending(path: string): Promise<void> {
-    const current = this.#loading.get(path);
-    if (current) return current;
-    const tab = this.#tabs.find(item => isPending(item) && item.repo.path === path);
-    if (!tab || this.#disposed) return Promise.resolve();
+  #pick(id: RepoSessionId | null) {
     const claim = ++this.#focusToken;
-    this.#claims.set(path, claim);
-    this.#armed = tab.id;
+    this.#armed = id;
     this.#show();
-    let run!: Promise<void>;
-    run = (this.#hooks.loadTab?.(path) ?? Promise.resolve()).finally(() => {
-      if (this.#loading.get(path) === run) this.#loading.delete(path);
-      if (this.#claims.get(path) === claim) this.#claims.delete(path);
-      if (this.#armed === tab.id) {
-        this.#armed = null;
-        this.#show();
-      }
-    });
-    this.#loading.set(path, run);
-    return run;
+    return claim;
   }
 
-  async #activate(id: RepoSessionId) {
-    const tab = this.#tabs.find(item => item.id === id);
-    if (!tab || isPending(tab) || !this.#hooks.canSwitch()) return;
-    const claim = ++this.#focusToken;
+  #clearPick(claim: number) {
+    if (claim !== this.#focusToken || this.#armed === null) return;
     this.#armed = null;
+    this.#show();
+  }
+
+  #loadPending(tab: PendingTab, claim: number): Promise<void> {
+    const current = this.#loading.get(tab.id);
+    if (current) {
+      current.claim = claim;
+      return current.done;
+    }
+    const request: PendingOpen = {
+      claim,
+      done: this.#enqueueOpen(tab.repo.path, this.#hooks.restored, () => request.claim, tab.id).finally(() => {
+        this.#loading.delete(tab.id);
+        this.#clearPick(request.claim);
+      }),
+    };
+    this.#loading.set(tab.id, request);
+    return request.done;
+  }
+
+  async #activate(id: RepoSessionId, claim: number) {
+    const tab = this.#tabs.find(item => item.id === id);
+    if (claim !== this.#focusToken || !tab || isPending(tab) || !this.#hooks.canSwitch()) return;
     if (this.#active !== id) {
       await this.#backend.activate(id);
       if (!this.#exists(id)) return;
+      if (claim !== this.#focusToken && this.#active !== null && this.#exists(this.#active)) {
+        await this.#backend.activate(this.#active);
+        return;
+      }
       this.#active = id;
     }
     if (this.#focusToken === claim) this.#hooks.repoSelected?.();
     this.#show();
   }
 
-  activate(id: RepoSessionId) {
+  async activate(id: RepoSessionId) {
+    if (!this.#exists(id) || this.#switchBlocked()) return;
+    const claim = this.#pick(id);
     const pending = this.#pending(id);
-    if (!pending) return this.#serialize(() => this.#activate(id));
-    if (this.#hooks.canSwitch()) return this.#loadPending(pending.repo.path);
-    const problem = this.#hooks.switchProblem?.();
-    if (problem) return Promise.reject(new Error(problem));
-    return Promise.resolve();
+    try {
+      if (pending) await this.#loadPending(pending, claim);
+      else await this.#serialize(() => this.#activate(id, claim));
+    } finally {
+      this.#clearPick(claim);
+    }
   }
 
   async restore(layout: TabLayout, open: (path: string) => Promise<void>) {
@@ -244,23 +251,11 @@ export class RepoTabs {
     await open(active);
   }
 
-  step(by: 1 | -1) {
-    let follow: string | null = null;
-    const done = this.#serialize(async () => {
-      const tabs = this.#tabs.filter(tab => this.#exists(tab.id));
-      const at = tabs.findIndex(tab => tab.id === this.#active);
-      if (at < 0 || tabs.length < 2) return;
-      const next = tabs[(at + by + tabs.length) % tabs.length];
-      if (isPending(next)) {
-        if (!this.#hooks.canSwitch()) {
-          const problem = this.#hooks.switchProblem?.();
-          if (problem) throw new Error(problem);
-          return;
-        }
-        follow = next.repo.path;
-      } else await this.#activate(next.id);
-    });
-    return done.then(() => (follow ? this.#loadPending(follow) : undefined));
+  step(by: 1 | -1, fromHome = false) {
+    const tabs = this.#tabs.filter(tab => this.#exists(tab.id));
+    const at = tabs.findIndex(tab => tab.id === (this.#armed ?? (fromHome ? null : this.#active)));
+    const next = at < 0 ? tabs.at(by === 1 ? 0 : -1) : tabs[(at + by + tabs.length) % tabs.length];
+    return next ? this.activate(next.id) : Promise.resolve();
   }
 
   /** `to` is the tab's index after the move. The active repository stays where it is. */
@@ -277,7 +272,12 @@ export class RepoTabs {
   }
 
   open(path: string, from: OpenFrom) {
-    const next = this.#opens.then(() => this.#open(path, from));
+    const claim = this.#pick(null);
+    return this.#enqueueOpen(path, from, () => claim);
+  }
+
+  #enqueueOpen(path: string, from: OpenFrom, claim: () => number, pending?: RepoSessionId) {
+    const next = this.#opens.then(() => this.#open(path, from, claim, pending));
     this.#opens = next.catch(() => {});
     return next;
   }
@@ -290,40 +290,50 @@ export class RepoTabs {
     return true;
   }
 
-  async #open(path: string, from: OpenFrom) {
-    if (this.#disposed || !from.live()) return;
-    const claim = this.#claim(path);
+  async #open(path: string, from: OpenFrom, claim: () => number, pending?: RepoSessionId) {
+    const live = () => !this.#disposed && from.live() && (pending === undefined || this.#exists(pending));
+    // Open Recent may already be reading the same folder when its restored tab is picked.
+    const placeholder = pending ?? this.#tabs.find(tab => isPending(tab) && tab.repo.path === path)?.id;
+    const focused = () => this.#focusToken === claim() || (pending === undefined && placeholder !== undefined &&
+      this.#loading.get(placeholder)?.claim === this.#focusToken);
+    if (!live()) return;
     let owned: RepoSessionId | null = null;
     this.#opening = true;
     try {
       if (this.#switchBlocked()) return;
       let result = await this.#backend.open(path);
       if (result.kind === "untrusted") {
-        if (!from.live() || this.#disposed) return;
-        const answer = await from.trust(result.repo.name, result.repo.untrusted ?? []);
-        if (!answer || !from.live() || this.#disposed) return;
+        const { name, untrusted } = result.repo;
+        let asking: Promise<Answer | null> | undefined;
+        await this.#serialize(async () => {
+          if (live() && focused() && !this.#switchBlocked()) asking = from.trust(name, untrusted ?? []);
+        });
+        const answer = await asking;
+        if (!answer || !live()) return;
         result = await this.#backend.open(path, answer);
       }
       if (result.kind === "otherWindow" || result.kind === "untrusted") return;
       const { session: id, repo } = result;
       if (this.#exists(id)) {
-        if (!from.live() || this.#disposed) return;
+        let reopened = false;
         await this.#serialize(async () => {
+          if (!live()) return;
+          if (focused() && this.#exists(id)) {
+            await this.#activate(id, claim());
+            reopened = focused() && this.#active === id;
+          }
           this.#dropPlaceholder(path, repo.path);
           this.#show();
         });
-        if (this.#focusToken === claim && this.#exists(id)) {
-          await this.activate(id);
-          if (this.#active === id) await from.reopened(id, repo);
-        }
+        if (reopened) await from.reopened(id, repo);
         return;
       }
       // Also reclaim an existing backend session if the WebView was reloaded.
       owned = id;
-      if (!from.live() || this.#disposed || this.#closed.has(id)) return;
+      if (!live() || this.#closed.has(id)) return;
       const history = await this.#backend.history(id);
       await this.#serialize(async () => {
-        if (!from.live() || this.#closed.has(id) || this.#switchBlocked()) return;
+        if (!live() || this.#closed.has(id) || this.#switchBlocked()) return;
         const attach = (force = false) => {
           const real: OpenTab = { id, repo, history };
           const at = this.#tabs.findIndex(tab => isPending(tab) && (tab.repo.path === path || tab.repo.path === repo.path));
@@ -333,7 +343,7 @@ export class RepoTabs {
             this.#tabs = next;
           } else this.#tabs = [...this.#tabs, real];
           owned = null;
-          if (force || this.#focusToken === claim) {
+          if (force || focused()) {
             this.#active = id;
             this.#armed = null;
             this.#hooks.repoSelected?.();
@@ -346,20 +356,26 @@ export class RepoTabs {
             const problem = this.#hooks.switchProblem?.();
             if (problem) throw new Error(problem);
           }
-        } else if (this.#focusToken === claim) {
+          return;
+        }
+        if (this.#enabled && !focused()) await this.#backend.publish(id);
+        if (!live() || this.#closed.has(id)) return;
+        if (focused()) {
           await this.#backend.activate(id);
-          if (!this.#disposed && !this.#closed.has(id)) {
-            const focused = this.#focusToken === claim;
+          if (live() && !this.#closed.has(id)) {
+            // Publish the tab before restoring focus so a newer pick can queue its activation.
+            const previous = !focused() && this.#active !== null && this.#exists(this.#active) ? this.#active : null;
+            if (!focused() && previous === null) this.#active = id;
             attach();
-            // The user picked another tab while this one was reading History.
-            if (!focused && this.#active !== null && this.#active !== id && !this.#pending(this.#active)) {
-              await this.#backend.activate(this.#active);
-            }
+            if (previous !== null) await this.#backend.activate(previous);
           }
-        } else if (!this.#disposed && !this.#closed.has(id)) attach();
+        } else attach();
       });
     } catch (error) {
-      if (from.live() && !this.#disposed) await from.fail(path, error);
+      if (live()) {
+        await this.#queue;
+        if (live()) await from.fail(path, error);
+      }
     } finally {
       this.#opening = false;
       this.#early.clear();
@@ -394,7 +410,6 @@ export class RepoTabs {
           await this.#backend.activate(next.id);
           if (!this.#exists(next.id)) continue;
           this.#active = next.id;
-          this.#armed = null;
           pending = null;
           break;
         } catch (error) {
@@ -436,47 +451,45 @@ export class RepoTabs {
   }
 
   close(id: RepoSessionId) {
-    let follow: string | null = null;
+    const claim = this.#focusToken;
+    let follow: PendingTab | undefined;
     const done = this.#serialize(async () => {
       if (!this.#exists(id) || !this.#hooks.canSwitch()) return;
       if (this.#pending(id)) return this.#dropPending([id]);
       const at = this.#tabs.findIndex(tab => tab.id === id);
-      const next = this.#tabs.slice(at + 1).find(tab => this.#exists(tab.id))
-        ?? this.#tabs.slice(0, at).reverse().find(tab => this.#exists(tab.id));
-      if (id === this.#active && next && isPending(next)) {
-        let allowed = false;
-        await this.#hooks.whileClosing(async () => {
-          allowed = await this.#hooks.beforeClose(id);
-        });
-        if (allowed) follow = next.repo.path;
-        return;
+      const neighbors = [...this.#tabs.slice(at + 1), ...this.#tabs.slice(0, at).reverse()]
+        .filter(tab => this.#exists(tab.id));
+      const next = neighbors[0];
+      const keep = id === this.#active ? neighbors.find(tab => !isPending(tab))?.id ?? null : this.#active;
+      const closingActive = id === this.#active;
+      if (await this.#closeBatch([id], keep) && closingActive && next && isPending(next) && this.#armed === null) {
+        follow = next;
       }
-      const keep = id === this.#active ? (next?.id ?? null) : this.#active;
-      await this.#closeBatch([id], keep);
     });
-    return done.then(async () => {
-      if (!follow) return;
-      await this.#loadPending(follow);
-      if (this.#active === id || !this.#exists(id)) return;
-      await this.close(id);
+    return done.then(() => {
+      if (follow && claim === this.#focusToken) return this.activate(follow.id);
     });
   }
 
   closeOthers(keep: RepoSessionId) {
-    let follow: string | null = null;
-    const done = this.#serialize(async () => {
-      if (!this.#exists(keep) || !this.#hooks.canSwitch()) return;
-      const kept = this.#tabs.find(tab => tab.id === keep);
-      if (kept && isPending(kept)) return void (follow = kept.repo.path);
+    const close = () => {
       const ids = this.#tabs.filter(tab => tab.id !== keep && this.#exists(tab.id)).map(tab => tab.id);
-      if (ids.length) await this.#closeBatch(ids, keep);
+      return ids.length ? this.#closeBatch(ids, keep) : Promise.resolve(false);
+    };
+    const pending = this.#pending(keep);
+    if (!pending) return this.#serialize(async () => {
+      if (this.#exists(keep) && this.#hooks.canSwitch()) await close();
     });
-    return done.then(async () => {
-      if (!follow) return;
-      await this.#loadPending(follow);
-      const real = this.#tabs.find(tab => !isPending(tab) && tab.repo.path === follow);
-      if (real && this.#exists(real.id)) await this.closeOthers(real.id);
-    });
+    if (!this.#hooks.canSwitch()) return Promise.resolve();
+    const claim = this.#pick(keep);
+    return this.#loadPending(pending, claim).then(() => this.#serialize(async () => {
+      if (claim !== this.#focusToken || !this.#hooks.canSwitch()) return;
+      const real = this.#tabs.find(tab => !isPending(tab) &&
+        (tab.repo.path === pending.repo.path || tab.repo.canonicalPath === pending.repo.canonicalPath));
+      if (!real || !this.#exists(real.id)) return;
+      keep = real.id;
+      await close();
+    }));
   }
 
   lose(id: RepoSessionId) {
@@ -498,10 +511,14 @@ export class RepoTabs {
     if (notice.event === "repo-closed") {
       this.#closed.add(id);
       let follow: string | null = null;
+      const claim = this.#focusToken;
       const done = this.#serialize(async () => {
         follow = await this.#remove(id);
       });
-      return done.then(() => (follow ? this.#loadPending(follow) : undefined));
+      return done.then(() => {
+        const tab = this.#tabs.find(tab => isPending(tab) && tab.repo.path === follow);
+        if (tab && this.#armed === null && claim === this.#focusToken) return this.activate(tab.id);
+      });
     }
     if (notice.event === "repo-activate-request") return this.activate(id);
     if (this.#exists(id)) this.#hooks.notice(notice);

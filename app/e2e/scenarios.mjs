@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { exerciseRepositoryTabQueue } from "./repoTabQueue.mjs";
 import { git, read, rebaseInConflict, repo, submodulesOneFails, withWorktree, write } from "./fixtures.mjs";
 
 /** Waits until `test()` gives something truthy, and gives it back. */
@@ -61,6 +62,20 @@ const openChanged = (app, name) =>
   }, name);
 
 export const SCENARIOS = [
+  {
+    name: "repository tab queue",
+    async run(ctx) {
+      const paths = Object.fromEntries(["a", "b", "c", "d", "extra"].map(name => [name, repo(`${ctx.dir}/tab-${name}`, 1)]));
+      paths.missing = `${ctx.dir}/tab-missing`;
+      const app = await ctx.start(paths.a);
+      fs.writeFileSync(path.join(ctx.config, "recent-repositories.json"), JSON.stringify([{ path: paths.extra, opened: 1 }]));
+      await app.js(async (_page, { a, b, c, d, missing }) => {
+        localStorage.setItem("oxbow.repoTabs.layout", JSON.stringify({ paths: [a, b, c, missing, d], active: a }));
+      }, paths);
+      const restored = await ctx.start(paths.a);
+      await restored.js(exerciseRepositoryTabQueue, paths);
+    },
+  },
   {
     name: "commit diff",
     // Open → pick a commit → read its diff; two quick steps show the second, not the first.

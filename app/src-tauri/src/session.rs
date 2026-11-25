@@ -1137,6 +1137,17 @@ impl Session {
         }))
     }
 
+    pub(crate) fn publish_tab(&self, address: &Address) -> CommandResult<()> {
+        let mut repositories = self.repositories.lock().expect("session lock");
+        let slot = repositories
+            .slots
+            .get_mut(&address.id)
+            .filter(|slot| slot.owner == address.window && slot.repo.is_some())
+            .ok_or_else(|| oxbow_core::Error::Cancelled.to_string())?;
+        slot.published = true;
+        Ok(())
+    }
+
     pub(crate) fn activate(&self, address: &Address, replacing: Option<u64>) -> CommandResult<()> {
         let mut repositories = self.repositories.lock().expect("session lock");
         Self::check_open(&repositories, &address.window, replacing)?;
@@ -1928,8 +1939,17 @@ mod tests {
         let b_id = open(&session, "main", &b, false);
         let c_id = open(&session, "main", &c, false);
         session.activate(&a_id, None).unwrap();
-        session.activate(&b_id, None).unwrap();
         session.activate(&c_id, None).unwrap();
+        let close = || session.close_tabs("main", &[a_id.id, c_id.id], Some(b_id.id), Some(c_id.id));
+        assert!(close().is_err(), "a provisional slot cannot be the fallback");
+        let wrong_owner = Address {
+            window: "other".into(),
+            id: b_id.id,
+        };
+        assert!(session.publish_tab(&wrong_owner).is_err());
+        assert!(close().is_err());
+        session.publish_tab(&b_id).unwrap();
+        assert_eq!(session.resolve("main", None).unwrap(), Some(c_id.clone()));
 
         let write = session.stops.start_scoped(
             StopScope {
@@ -1941,7 +1961,6 @@ mod tests {
             },
             true,
         );
-        let close = || session.close_tabs("main", &[a_id.id, c_id.id], Some(b_id.id), Some(c_id.id));
         assert!(close().is_err());
         assert!(session.live(&a_id) && session.live(&c_id));
         assert_eq!(session.resolve("main", None).unwrap(), Some(c_id.clone()));

@@ -13,7 +13,7 @@
   import { loadDetailsChrome } from "./lib/detailsChrome.svelte";
   import { nextTabNumberPhase, TAB_NUMBER_DELAY, type TabNumberPhase } from "./lib/repoTabNumbers";
   import { prefs } from "./lib/prefs.svelte";
-  import { DIALOG_IN_THE_WAY, isPending, readTabLayout, RepoTabs, saveTabLayout, type ShownTab } from "./lib/repoTabs";
+  import { DIALOG_IN_THE_WAY, isPending, readTabLayout, RepoTabs, saveTabLayout, type OpenFrom, type ShownTab } from "./lib/repoTabs";
   import { settleReviewSaves } from "./lib/reviewSaves";
   import { REPOSITORY_TAB_TAGS_GROUP } from "./lib/settingsNavigation";
   import { mac, type ShortcutId } from "./lib/shortcuts";
@@ -100,6 +100,7 @@
     },
     history: (id) => apiForSession(id).history(FIRST_HISTORY_PAGE),
     activate: (id) => apiForSession(id).activateRepoTab(),
+    publish: (id) => apiForSession(id).activateRepoTab(true),
     close: (id) => apiForSession(id).closeRepo(true),
     closeBatch: (ids, active, previous) => api.closeRepoTabs(ids, active, previous),
   }, {
@@ -113,7 +114,12 @@
     repoSelected() {
       if (showingHome) home = "open";
     },
-    loadTab: (path) => openSaved(path, false),
+    restored: {
+      live: () => true,
+      trust: askOpenTrust,
+      reopened: (id, repo) => screens.get(id)?.screen.reopenTab(id, repo),
+      fail: async (_path, error) => { await tick(); report(error); },
+    },
     canSwitch,
     switchProblem: () => noDialog() ? null : DIALOG_IN_THE_WAY,
     beforeClose: async (id) => {
@@ -138,6 +144,22 @@
     },
   });
 
+  function askOpenTrust(...args: Parameters<OpenFrom["trust"]>) {
+    return activeScreen()?.askOpenTrust(...args) ?? Promise.resolve(null);
+  }
+  function openPath(path: string, from: OpenFrom) {
+    const source = activeScreen();
+    return manager.open(path, {
+      ...from,
+      trust: askOpenTrust,
+      fail: async (folder, error) => {
+        await tick();
+        if (source && source === activeScreen()) await from.fail(folder, error);
+        else report(error);
+      },
+    }).catch(report);
+  }
+
   export function openTabs() { return tabs; }
   export function activeTab() { return activeId; }
   export const openRepository = (path: string) => activeScreen()?.startup(path);
@@ -159,11 +181,7 @@
     if (canSwitch()) home = "closed";
   }
   const closeOtherTabs = (id: RepoSessionId) => manager.closeOthers(id).catch(report);
-  const stepTab = async (by: 1 | -1) => {
-    const tab = showingHome && tabs.at(by === 1 ? 0 : -1);
-    if (tab) await activateTab(tab.id);
-    else await manager.step(by).catch(report);
-  };
+  const stepTab = (by: 1 | -1) => manager.step(by, showingHome).catch(report);
   const jumpTab = (n: number) => {
     const tab = tabs[n - 1];
     if (tab) activateTab(tab.id);
@@ -294,8 +312,8 @@
 
 {#snippet tabStrip(openMenu: ((event: MouseEvent) => void) | undefined, openRecent: () => void, copyPath: (path: string) => void)}
   {#if tabs.length > 0 || home !== "closed"}
-    <RepoTabStrip {tabs} activeId={showingHome ? null : highlightedId} showNumbers={numberPhase === "showing"} {openMenu} {openRecent} {copyPath}
-      home={home !== "closed"} homeSelected={showingHome} {showHome} {closeHome}
+    <RepoTabStrip {tabs} activeId={highlightedId} showNumbers={numberPhase === "showing"} {openMenu} {openRecent} {copyPath}
+      home={home !== "closed"} homeSelected={showingHome && highlightedId === activeId} {showHome} {closeHome}
       activate={activateTab} close={closeTab} closeOthers={closeOtherTabs}
       canSwitch={canSwitch} activeNow={activeNow} move={moveTab}
       saveTag={(path, id) => void prefs.saveRepositoryTabTag(path, id).catch(report)}
@@ -305,9 +323,9 @@
 
 <RepoTabView {register} tab={null} active={showingHome || activeId === null} homePanel={home !== "closed"} {blocked} bind:sideHidden
   {launched} tabStrip={tabsEnabled && launched && (showingHome || (activeId === null && (tabs.length > 0 || home !== "closed"))) ? tabStrip : undefined}
-  stepRepoTab={showingHome && tabs.length ? stepTab : undefined}
+  stepRepoTab={tabsEnabled && (showingHome ? tabs.length > 0 : tabs.length > 1) ? stepTab : undefined}
   jumpRepoTab={showingHome && tabs.length > 1 ? jumpTab : undefined}
-  openPath={(path, from) => manager.open(path, from).catch(report)} />
+  {openPath} />
 {#each tabs as tab (tab.id)}
   {#if !isPending(tab)}
     <RepoTabView {register} {tab} active={!showingHome && activeId === tab.id} {blocked} {launched} bind:sideHidden
@@ -315,8 +333,8 @@
       showHome={tabsEnabled ? showHome : undefined}
       stepRepoTab={tabsEnabled && tabs.length > 1 ? stepTab : undefined}
       jumpRepoTab={tabsEnabled && tabs.length > 1 ? jumpTab : undefined}
-      openPath={(path, from) => manager.open(path, {
+      openPath={(path, from) => openPath(path, {
         ...from, live: () => from.live() && tabs.some(open => open.id === tab.id),
-      }).catch(report)} closeTab={() => closeTab(tab.id)} lostTab={(gone) => lostTab(tab.id, gone)} />
+      })} closeTab={() => closeTab(tab.id)} lostTab={(gone) => lostTab(tab.id, gone)} />
   {/if}
 {/each}
