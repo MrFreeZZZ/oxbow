@@ -98,9 +98,15 @@ function onFrame() {
 
 /** The click follows pointerup, so this stays up after the other listeners come off. */
 function swallowClick(event: MouseEvent) {
+  if (event.detail === 0) return;
   event.preventDefault();
   event.stopPropagation();
+  clearClickGuard();
+}
+
+function clearClickGuard() {
   window.removeEventListener("click", swallowClick, true);
+  window.removeEventListener("pointerdown", clearClickGuard, true);
 }
 
 function attach() {
@@ -110,8 +116,10 @@ function attach() {
   window.addEventListener("pointerup", onUp);
   window.addEventListener("pointercancel", onCancel);
   window.addEventListener("keydown", onKey);
-  window.removeEventListener("click", swallowClick, true);
+  clearClickGuard();
   window.addEventListener("click", swallowClick, true);
+  // Switching tabs can remove the pressed element before it produces a click.
+  window.addEventListener("pointerdown", clearClickGuard, true);
 }
 
 function detach() {
@@ -128,7 +136,7 @@ function detach() {
 export function cancelTabDrag() {
   ending = false;
   detach();
-  window.removeEventListener("click", swallowClick, true);
+  clearClickGuard();
   dropMove = null;
   stillCurrent = null;
   tabGesture.current = null;

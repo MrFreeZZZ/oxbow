@@ -107,8 +107,8 @@
       { kind: "sep" },
       { kind: "swatches", label: "Repository Tab Tag", choices: [
         { label: "No Tag", icon: menuIcons.tag, checked: selected === null, run: () => actions.tag(null) },
-        ...REPOSITORY_TAB_TAGS.map(({ id, label }) => ({
-          label, color: prefs.repositoryTabTagColor(id), checked: selected === id, run: () => actions.tag(id),
+        ...REPOSITORY_TAB_TAGS.map(({ id }) => ({
+          ...prefs.repositoryTabTagStyle(id), checked: selected === id, run: () => actions.tag(id),
         })),
       ] },
       { kind: "item", label: "Customize Folder Tags…", icon: menuIcons.tag, run: customizeTags },
@@ -167,7 +167,7 @@
           {#if showNumbers && index < 9}
             <span class="number" aria-hidden="true">{index + 1}</span>
           {:else}
-            <svg class="icon folder" viewBox="0 0 16 16" style:--tag-color={tag ? prefs.repositoryTabTagColor(tag) : undefined}><path d={menuIcons.folder} /></svg>
+            <svg class="icon folder" viewBox="0 0 16 16" style:--tag-color={tag ? prefs.repositoryTabTagStyle(tag).color : undefined}><path d={menuIcons.folder} /></svg>
           {/if}
           <span>{tab.repo.name}</span>
         </button>

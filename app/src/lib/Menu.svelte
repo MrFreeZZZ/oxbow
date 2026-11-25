@@ -222,7 +222,7 @@
       <div class="note">{entry.label}</div>
     {:else if entry.kind === "swatches"}
       <div class="swatches" role="group" aria-label={entry.label}>
-        {#each entry.choices as choice (choice.label)}
+        {#each entry.choices as choice}
           <button type="button" role="menuitemradio" aria-checked={choice.checked} aria-label={choice.label}
             title={choice.label} tabindex={choice.checked ? 0 : -1} class="swatch" class:clear={"icon" in choice}
             style:--swatch={"color" in choice ? choice.color : undefined}

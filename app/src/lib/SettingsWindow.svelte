@@ -680,6 +680,10 @@
     font-weight: 600;
   }
 
+  h2[tabindex="-1"]:focus {
+    outline: none;
+  }
+
   .theme-choices {
     padding: 8px 2px 2px;
   }

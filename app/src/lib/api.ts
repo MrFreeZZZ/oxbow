@@ -2,6 +2,7 @@ import type { WorkingFileStatus } from "./openFile";
 import { Channel, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { MenuPart } from "./appMenu";
 import type { SettingsTarget } from "./settingsNavigation";
+import type { TabTagStyle } from "./repositoryTabTags";
 import type {
   AllSettings,
   ActionEvent,
@@ -355,7 +356,7 @@ const apiWithInvoke = (invoke: <T>(command: string, args?: Record<string, unknow
   consoleClear: (paths: (string | null)[]) => invoke<void>("console_clear", { paths }),
   /** Resolves to the number of the change, as `settings-changed` sends it. */
   setSetting: (key: string, value: unknown) => invoke<number>("set_setting", { key, value }),
-  editTabTag: (setting: "colors" | "assignments", entry: string, value: string | null) =>
+  editTabTag: (setting: "styles" | "assignments", entry: string, value: string | TabTagStyle | null) =>
     invoke<{ key: string; value: unknown; revision: number }>("edit_tab_tag", { setting, entry, value }),
   gitSettings: () => invoke<GitSettings>("git_settings"),
   repoSettings: () => invoke<RepoSettings | null>("repo_settings"),

@@ -6,7 +6,7 @@ import { BRANCH_PALETTES, branchPaletteById } from "./branchPalettes";
 import { confirm, type Request } from "./confirm.svelte";
 import { shortcut } from "./keys";
 import { prefs } from "./prefs.svelte";
-import { REPOSITORY_TAB_TAGS, type RepositoryTabTagId } from "./repositoryTabTags";
+import { REPOSITORY_TAB_TAGS, tabTagLabelProblem, type RepositoryTabTagId, type TabTagStyle } from "./repositoryTabTags";
 import { model, prefRow } from "./settingsModel.svelte";
 import { REPOSITORY_TAB_TAGS_GROUP } from "./settingsNavigation";
 import { GEAR, opts, type Group, type Option, type Section } from "./settingsRows";
@@ -18,21 +18,26 @@ import { updates } from "./updates.svelte";
 
 const confirmOff = () => !prefs.get("oxbow.confirm.enabled");
 
-function tabTagColorRequest(id: RepositoryTabTagId, label: string, color: string): Request {
+function tabTagRequest(id: RepositoryTabTagId, original: string, { label, color }: TabTagStyle): Request {
+  const invalid = tabTagLabelProblem(label);
   return {
-    title: `Edit ${label} Tag`,
+    title: `Edit ${original} Tag`,
     body: [],
     icon: "tag",
     button: "Save",
     always: true,
-    fields: [{ label: "Color", color: { value: color, edit: (value) => tabTagColorRequest(id, label, value) } }],
-    status: "Saving the tag color…",
-    recover: (failure) => ({ title: `Couldn’t save the ${label} tag color`, body: [failure.output], icon: "tag", tone: "err" }),
+    invalid,
+    fields: [
+      { label: "Name", text: { value: label, edit: (value) => tabTagRequest(id, original, { label: value, color }) }, error: invalid ?? undefined },
+      { label: "Color", color: { value: color, edit: (value) => tabTagRequest(id, original, { label, color: value }) } },
+    ],
+    status: "Saving the tag…",
+    recover: (failure) => ({ title: "Couldn’t save the tag", body: [failure.output], icon: "tag", tone: "err" }),
     local: {
       commands: [],
       run: async () => {
-        await prefs.saveRepositoryTabTagColor(id, color);
-        return `Saved the ${label} tag color.`;
+        await prefs.saveRepositoryTabTagStyle(id, { label: label.trim(), color });
+        return `Saved the ${label.trim()} tag.`;
       },
     },
   };
@@ -231,20 +236,23 @@ export const themeSection: Section = {
       {
         id: REPOSITORY_TAB_TAGS_GROUP,
         title: "Repository Tab Tags",
-        rows: REPOSITORY_TAB_TAGS.map(({ id, label }) => ({
-          id: `repository-tab-tag:${id}`,
-          label,
-          swatch: prefs.repositoryTabTagColor(id),
-          control: {
-            type: "button",
-            label: "Edit…",
-            ariaLabel: `Edit ${label} Tag`,
-            run: (event) => {
-              event.currentTarget.focus();
-              void confirm.run(tabTagColorRequest(id, label, prefs.repositoryTabTagColor(id)));
+        rows: REPOSITORY_TAB_TAGS.map(({ id }) => {
+          const style = prefs.repositoryTabTagStyle(id);
+          return {
+            id: `repository-tab-tag:${id}`,
+            label: style.label,
+            swatch: style.color,
+            control: {
+              type: "button",
+              label: "Edit…",
+              ariaLabel: `Edit ${style.label} Tag`,
+              run: (event) => {
+                event.currentTarget.focus();
+                void confirm.run(tabTagRequest(id, style.label, style));
+              },
             },
-          },
-        })),
+          };
+        }),
       },
     ];
   },

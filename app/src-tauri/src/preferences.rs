@@ -145,27 +145,37 @@ async fn write_setting(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum TabTagSetting {
-    Colors,
+    Styles,
     Assignments,
 }
 
 impl TabTagSetting {
     fn key(&self) -> &'static str {
         match self {
-            Self::Colors => "oxbow.repositoryTabTags.colors",
+            Self::Styles => "oxbow.repositoryTabTags.styles",
             Self::Assignments => "oxbow.repositoryTabTags.assignments",
         }
     }
 
-    fn valid(&self, entry: &str, value: Option<&str>) -> bool {
+    fn valid(&self, entry: &str, value: Option<&Value>) -> bool {
         let tag_id = |id: &str| matches!(id, "red" | "orange" | "yellow" | "green" | "blue" | "purple" | "gray");
         match self {
-            Self::Colors => {
+            Self::Styles => {
                 tag_id(entry)
-                    && value.is_none_or(|color| {
-                        color
-                            .strip_prefix('#')
-                            .is_some_and(|hex| hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+                    && value.is_none_or(|style| {
+                        style.as_object().is_some_and(|style| {
+                            style.len() == 2
+                                && style.get("label").and_then(Value::as_str).is_some_and(|label| {
+                                    !label.trim().is_empty()
+                                        && label.trim().chars().count() <= 64
+                                        && !label.chars().any(char::is_control)
+                                })
+                                && style.get("color").and_then(Value::as_str).is_some_and(|color| {
+                                    color
+                                        .strip_prefix('#')
+                                        .is_some_and(|hex| hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+                                })
+                        })
                     })
             }
             Self::Assignments => {
@@ -174,22 +184,18 @@ impl TabTagSetting {
                     || matches!(
                         entry.as_bytes(), [drive, b':', b'/' | b'\\', ..] if drive.is_ascii_alphabetic()
                     );
-                absolute && !entry.contains('\0') && value.is_none_or(tag_id)
+                absolute && !entry.contains('\0') && value.is_none_or(|value| value.as_str().is_some_and(tag_id))
             }
         }
     }
 
-    fn edit(&self, stored: Option<&Value>, entry: String, value: Option<String>) -> CommandResult<Value> {
-        if !self.valid(&entry, value.as_deref()) {
+    fn edit(&self, stored: Option<&Value>, entry: String, value: Option<Value>) -> CommandResult<Value> {
+        if !self.valid(&entry, value.as_ref()) {
             return Err("Invalid repository tab tag.".into());
         }
         let mut entries = match stored {
             None => serde_json::Map::new(),
-            Some(Value::Object(entries))
-                if entries
-                    .iter()
-                    .all(|(key, value)| value.as_str().is_some_and(|value| self.valid(key, Some(value)))) =>
-            {
+            Some(Value::Object(entries)) if entries.iter().all(|(key, value)| self.valid(key, Some(value))) => {
                 entries.clone()
             }
             Some(_) => {
@@ -200,7 +206,7 @@ impl TabTagSetting {
             }
         };
         if let Some(value) = value {
-            entries.insert(entry, Value::String(value));
+            entries.insert(entry, value);
         } else {
             entries.remove(&entry);
         }
@@ -212,14 +218,14 @@ impl TabTagSetting {
     }
 }
 
-/// Change one path or one color slot using the latest settings on disk while holding the write lock.
+/// Change one path or one tag's style using the latest settings on disk while holding the write lock.
 #[tauri::command]
 pub(crate) async fn edit_tab_tag(
     app: AppHandle,
     session: State<'_, Session>,
     setting: TabTagSetting,
     entry: String,
-    value: Option<String>,
+    value: Option<Value>,
 ) -> CommandResult<SettingChanged> {
     write_setting(&app, &session, setting.key().into(), |stored| {
         setting.edit(stored, entry, value)
@@ -233,7 +239,7 @@ fn tab_tag_edits_keep_the_other_paths_and_slots() {
     use serde_json::json;
 
     let assignments = TabTagSetting::Assignments;
-    let edit = |stored, path: &str, id: Option<&str>| assignments.edit(stored, path.into(), id.map(str::to_owned));
+    let edit = |stored, path: &str, id: Option<&str>| assignments.edit(stored, path.into(), id.map(Value::from));
     let main = edit(None, "/repo", Some("red")).unwrap();
     let both = edit(Some(&main), "/worktree", Some("blue")).unwrap();
     assert_eq!(both, json!({ "/repo": "red", "/worktree": "blue" }));
@@ -244,15 +250,21 @@ fn tab_tag_edits_keep_the_other_paths_and_slots() {
     assert!(edit(Some(&both), "/repo", Some("pink")).is_err());
     assert!(edit(Some(&json!({ "/other": null })), "/repo", Some("red")).is_err());
 
-    let colors = TabTagSetting::Colors;
-    let before = json!({ "blue": "#abc123", "green": "#123abc" });
+    let styles = TabTagSetting::Styles;
+    let green = json!({ "label": "Ready", "color": "#123abc" });
+    let blue = json!({ "label": "Review", "color": "#0042ff" });
+    let before = json!({ "blue": {"label": "Blue", "color": "#abc123"}, "green": green });
     assert_eq!(
-        colors
-            .edit(Some(&before), "blue".into(), Some("#0042ff".into()))
-            .unwrap(),
-        json!({ "blue": "#0042ff", "green": "#123abc" })
+        styles.edit(Some(&before), "blue".into(), Some(blue.clone())).unwrap(),
+        json!({ "blue": blue, "green": green })
     );
-    assert!(colors.edit(Some(&before), "blue".into(), Some("blue".into())).is_err());
+    for invalid in [
+        json!("blue"),
+        json!({"label": "", "color": "#0042ff"}),
+        json!({"label": "Review", "color": "blue"}),
+    ] {
+        assert!(styles.edit(Some(&before), "blue".into(), Some(invalid)).is_err());
+    }
 }
 
 /// The settings the backend itself follows: how diffs are made and the windows' appearance.

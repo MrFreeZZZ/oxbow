@@ -9,8 +9,8 @@ import { api } from "./api";
 import { BRANCH_PALETTES, branchPaletteById, branchVariables, type BranchPaletteId } from "./branchPalettes";
 import { BRANCH_PREFIXES, prefixesProblem, type BranchPrefix } from "./branchPrefixes";
 import {
-  REPOSITORY_TAB_TAGS, TAB_TAG_ASSIGNMENT_KEY, TAB_TAG_COLOR_KEY, tabTagEntryProblem, tabTagSettingProblem,
-  type RepositoryTabTagId, type TabTagKey,
+  REPOSITORY_TAB_TAGS, TAB_TAG_ASSIGNMENT_KEY, TAB_TAG_COLOR_KEY, TAB_TAG_STYLE_KEY, tabTagEntryProblem, tabTagSettingProblem,
+  type RepositoryTabTagId, type TabTagKey, type TabTagStyle,
 } from "./repositoryTabTags";
 import { isNewer, loadedOver, SaveQueue } from "./settingSaves";
 import { isCommand, useCustom, useUserCommands, validCombo, type Custom } from "./shortcuts";
@@ -26,6 +26,7 @@ export const defaults = {
   "oxbow.startup.reopenRepository": true,
   "oxbow.windows.repositoryTabs": true,
   [TAB_TAG_COLOR_KEY]: {} as Partial<Record<RepositoryTabTagId, string>>,
+  [TAB_TAG_STYLE_KEY]: {} as Partial<Record<RepositoryTabTagId, TabTagStyle>>,
   [TAB_TAG_ASSIGNMENT_KEY]: {} as Partial<Record<string, RepositoryTabTagId>>,
   /** Auto follows this build's channel; explicit choices survive updates and restarts. */
   "oxbow.updates.autoCheck": true,
@@ -179,7 +180,7 @@ export function problemOf(key: string, value: unknown): string | null {
   if (key === "oxbow.commands") return commandsProblem(value as unknown[]);
   if (key === "oxbow.secrets.patterns") return patternsProblem(value as unknown[]);
   if (key === "oxbow.branch.prefixes") return prefixesProblem(value as unknown[]);
-  if (key === TAB_TAG_COLOR_KEY || key === TAB_TAG_ASSIGNMENT_KEY) return tabTagSettingProblem(key, value as Record<string, unknown>);
+  if (key === TAB_TAG_COLOR_KEY || key === TAB_TAG_STYLE_KEY || key === TAB_TAG_ASSIGNMENT_KEY) return tabTagSettingProblem(key, value as Record<string, unknown>);
   if (key === "oxbow.keyboard.shortcuts") return shortcutsProblem(value as Record<string, unknown>);
   if (key === "oxbow.tips.seen" && (value as unknown[]).some((id) => typeof id !== "string")) return "Expected a list of tip names";
   const rule = rules[key as PrefKey];
@@ -212,7 +213,10 @@ class Prefs {
   /** Values saved here and not written yet, the newest of each key (null: its default). They are
    *  shown meanwhile and go back if the save fails. */
   #unsaved = $state<Record<string, unknown>>({});
-  #tabTagEdits = $state<Partial<Record<TabTagKey, Record<string, string | null>>>>({});
+  #tabTagEdits = $state<{
+    [TAB_TAG_ASSIGNMENT_KEY]?: Partial<Record<string, RepositoryTabTagId | null>>;
+    [TAB_TAG_STYLE_KEY]?: Partial<Record<string, TabTagStyle | null>>;
+  }>({});
   /** The number of the change behind each key's value, so an older word can't undo a newer one. */
   #revisions: Record<string, number> = {};
   /** The number of the change settings.json was loaded at. */
@@ -272,38 +276,43 @@ class Prefs {
 
   repositoryTabTag(canonicalPath: string): RepositoryTabTagId | null {
     const edit = this.#tabTagEdits[TAB_TAG_ASSIGNMENT_KEY]?.[canonicalPath];
-    return edit === undefined ? this.get(TAB_TAG_ASSIGNMENT_KEY)[canonicalPath] ?? null : edit as RepositoryTabTagId | null;
+    return edit === undefined ? this.get(TAB_TAG_ASSIGNMENT_KEY)[canonicalPath] ?? null : edit;
   }
 
-  repositoryTabTagColor(id: RepositoryTabTagId): string {
-    const fallback = REPOSITORY_TAB_TAGS.find((tag) => tag.id === id)!.color;
-    const edit = this.#tabTagEdits[TAB_TAG_COLOR_KEY]?.[id];
-    return (edit === undefined ? this.get(TAB_TAG_COLOR_KEY)[id] : edit) ?? fallback;
+  repositoryTabTagStyle(id: RepositoryTabTagId): TabTagStyle {
+    const edit = this.#tabTagEdits[TAB_TAG_STYLE_KEY]?.[id];
+    return (edit === undefined ? this.get(TAB_TAG_STYLE_KEY)[id] : edit) ?? this.#defaultTabTagStyle(id);
+  }
+
+  #defaultTabTagStyle(id: RepositoryTabTagId): TabTagStyle {
+    const { label, color } = REPOSITORY_TAB_TAGS.find((tag) => tag.id === id)!;
+    return { label, color: this.get(TAB_TAG_COLOR_KEY)[id] ?? color };
   }
 
   saveRepositoryTabTag(canonicalPath: string, id: RepositoryTabTagId | null): Promise<void> {
     return this.#saveTabTag(TAB_TAG_ASSIGNMENT_KEY, canonicalPath, id);
   }
 
-  saveRepositoryTabTagColor(id: RepositoryTabTagId, color: string | null): Promise<void> {
-    const fallback = REPOSITORY_TAB_TAGS.find((tag) => tag.id === id)?.color;
-    return this.#saveTabTag(TAB_TAG_COLOR_KEY, id, color?.toLowerCase() === fallback ? null : color);
+  saveRepositoryTabTagStyle(id: RepositoryTabTagId, { label, color }: TabTagStyle): Promise<void> {
+    const fallback = this.#defaultTabTagStyle(id);
+    return this.#saveTabTag(TAB_TAG_STYLE_KEY, id,
+      label === fallback.label && color.toLowerCase() === fallback.color.toLowerCase() ? null : { label, color });
   }
 
   /** Like save(), the caller reports errors. Each entry can be edited while others are saving. */
-  async #saveTabTag(key: TabTagKey, entry: string, value: string | null): Promise<void> {
+  async #saveTabTag(key: TabTagKey, entry: string, value: RepositoryTabTagId | TabTagStyle | null): Promise<void> {
     const problem = tabTagEntryProblem(key, entry, value);
     if (problem) throw problem;
     this.#tabTagEdits = { ...this.#tabTagEdits, [key]: { ...this.#tabTagEdits[key], [entry]: value } };
     await this.#saves.run(JSON.stringify([key, entry]), async (newest) => {
       try {
-        const change = await api.editTabTag(key === TAB_TAG_COLOR_KEY ? "colors" : "assignments", entry, value);
+        const change = await api.editTabTag(key === TAB_TAG_STYLE_KEY ? "styles" : "assignments", entry, value);
         this.#take(change.key, change.value, change.revision);
       } catch (err) {
         if (newest()) throw err;
       } finally {
         if (newest()) {
-          const entries = { ...this.#tabTagEdits[key] };
+          const entries: Partial<Record<string, RepositoryTabTagId | TabTagStyle | null>> = { ...this.#tabTagEdits[key] };
           delete entries[entry];
           this.#tabTagEdits = { ...this.#tabTagEdits, [key]: entries };
         }

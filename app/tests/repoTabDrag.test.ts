@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { compileModule } from "svelte/compiler";
+import * as runtime from "svelte/internal/client";
+import ts from "typescript";
 import { DRAG_THRESHOLD, draggedTabLeft, pastDragThreshold, tabDragOffsets, tabDropIndex, tabParkedLefts, type TabSlot } from "../src/lib/repoTabDrag.ts";
 
 /** Equal Chrome-sized tabs: 256px wide, 18px of overlap, so each starts 238px after the previous. */
@@ -43,4 +47,34 @@ test("the dragged tab stays inside the strip", () => {
   assert.equal(draggedTabLeft(10, 40, 256, 732), 0);
   assert.equal(draggedTabLeft(400, 20, 256, 732), 380);
   assert.equal(draggedTabLeft(900, 20, 256, 732), 476);
+});
+
+test("switching tabs does not swallow the next independent click", async () => {
+  const source = readFileSync(new URL("../src/lib/repoTabDrag.svelte.ts", import.meta.url), "utf8");
+  const js = ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext });
+  const compiled = compileModule(js, { generate: "client" }).js.code.replace(/^import [^;]+;$/gm, "").replace(/^export /gm, "");
+  const window = new EventTarget();
+  const begin = new Function("$", "window", compiled + "\nreturn beginTabDrag;")(runtime, window);
+  const pointer = (type: string) => Object.assign(new Event(type), { button: 0, pointerId: 1, clientX: 0, clientY: 0 });
+  const click = (detail: number) => window.dispatchEvent(Object.assign(new Event("click", { cancelable: true }), { detail }));
+  const press = async () => {
+    begin(pointer("pointerdown"), 2, [1, 2], {
+      canSwitch: () => true,
+      activate: async () => {},
+      isCurrent: () => true,
+      move: async () => {},
+    });
+    await Promise.resolve();
+    window.dispatchEvent(pointer("pointerup"));
+  };
+
+  await press();
+  // The old tab strip disappeared between down and up, so WebKit emitted no click.
+  window.dispatchEvent(pointer("pointerdown"));
+  assert.equal(click(1), true);
+
+  await press();
+  assert.equal(click(0), true, "a keyboard click is independent of the pointer press");
+  assert.equal(click(1), false, "the click from the tab gesture itself is still suppressed");
+  assert.equal(click(1), true, "the guard clears after the gesture click");
 });
