@@ -230,6 +230,7 @@
       listen("account-changed", () => { for (const { screen } of screens.values()) screen.accountChanged(); }),
       listen<string>("trust-changed", ({ payload }) => { for (const { screen } of screens.values()) screen.trustChanged(payload); }),
       window.listen<string>("open-file-error", ({ payload }) => { if (activeId === null) report(payload); }),
+      listen<string>("worktree-removed", ({ payload }) => { void manager.removeRestored(payload).catch(report); }),
       window.listen<{ generation: number; closing: RepoSessionId[] }>("repo-tabs-prepare", async ({ payload }) => {
         const { generation, closing } = payload;
         if (generation <= finishing || preparing >= generation) return;

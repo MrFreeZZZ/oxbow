@@ -52,7 +52,15 @@ pub(crate) struct Stops {
 struct StopScope {
     window: String,
     session: Option<u64>,
-    change: Option<(PathBuf, bool)>,
+    change: Option<RepoChange>,
+    worktree: Option<PathBuf>,
+    removing: Option<PathBuf>,
+}
+
+#[derive(Clone, Hash, PartialEq, Eq)]
+enum RepoChange {
+    Draft,
+    Git(PathBuf),
 }
 
 /// A run's own Stop, heard by its sheet's Stop button until it is dropped.
@@ -88,6 +96,8 @@ impl Stops {
                 window: window.to_owned(),
                 session,
                 change: None,
+                worktree: None,
+                removing: None,
             },
             live,
         )
@@ -120,6 +130,22 @@ impl Stops {
                 cancel.store(true, Ordering::Relaxed);
             }
         }
+    }
+
+    fn check_worktree(&self, path: &Path, removing: bool) -> CommandResult<()> {
+        let running = self.running.lock().expect("stops lock");
+        if running.keys().any(|scope| scope.removing.as_deref() == Some(path)) {
+            return Err("Oxbow is removing this worktree. Try again when it finishes.".into());
+        }
+        if removing && let Some(scope) = running.keys().find(|scope| scope.worktree.as_deref() == Some(path)) {
+            let reason = if scope.change == Some(RepoChange::Draft) {
+                "a draft is still being saved"
+            } else {
+                "a Git command is running or waiting"
+            };
+            return Err(format!("Oxbow can’t remove {} while {reason}.", path.display()));
+        }
+        Ok(())
     }
 }
 
@@ -536,11 +562,6 @@ impl Repositories {
             .collect()
     }
 
-    pub(crate) fn closes_legacy_window(&self, address: &Address) -> bool {
-        self.slots.get(&address.id).is_some_and(|slot| slot.legacy)
-            && self.slots.values().filter(|slot| slot.owner == address.window).count() == 1
-    }
-
     pub(crate) fn retiring_tabs(&self) -> HashMap<String, Vec<u64>> {
         let mut closing = HashMap::<String, Vec<u64>>::new();
         for (&id, slot) in &self.slots {
@@ -774,32 +795,102 @@ impl Session {
 
     /// Register before dispatch to a worker, including the time a write spends waiting for Git.
     pub(crate) fn start_change(&self, request: &RepoRequest, sheet: &str, draft: bool) -> CommandResult<RunStop> {
-        let repositories = self.repositories.lock().expect("session lock");
         let address = request.address.as_ref().ok_or("No repository is open")?;
+        self.start_repo_write(address, sheet, Some(draft), None)
+    }
+
+    pub(crate) fn start_worktree_remove(&self, address: &Address, sheet: &str, path: &Path) -> CommandResult<RunStop> {
+        self.start_repo_write(address, sheet, Some(false), Some(path))
+    }
+
+    /// Fetches can be stopped on a normal tab close, but cannot race worktree removal.
+    pub(crate) fn start_worktree_git(&self, request: &RepoRequest) -> CommandResult<RunStop> {
+        let address = request.address.as_ref().ok_or("No repository is open")?;
+        self.start_repo_write(address, request.label(), None, None)
+    }
+
+    fn start_repo_write(
+        &self,
+        address: &Address,
+        sheet: &str,
+        draft: Option<bool>,
+        removing: Option<&Path>,
+    ) -> CommandResult<RunStop> {
+        let repositories = self.repositories.lock().expect("session lock");
         let slot = repositories
             .slots
             .get(&address.id)
             .filter(|slot| slot.published)
             .ok_or_else(|| oxbow_core::Error::Cancelled.to_string())?;
         let common = slot.common.as_path();
-        if repositories.tab_transition.as_ref().is_some_and(|transition| {
-            if draft {
-                transition.drafts_sealed(&address.window, address.id)
-            } else {
-                transition
-                    .closing
-                    .values()
-                    .flatten()
-                    .any(|&id| repositories.common(id) == Some(common))
-            }
-        }) {
+        if let Some(draft) = draft
+            && repositories.tab_transition.as_ref().is_some_and(|transition| {
+                if draft {
+                    transition.drafts_sealed(&address.window, address.id)
+                } else {
+                    transition
+                        .closing
+                        .values()
+                        .flatten()
+                        .any(|&id| repositories.common(id) == Some(common))
+                }
+            })
+        {
             return Err("Oxbow is closing tabs. Try again when it finishes.".into());
+        }
+        // All worktree writes and removal reservations register under the repository lock.
+        self.stops.check_worktree(&slot.workdir, false)?;
+        if let Some(path) = removing {
+            self.stops.check_worktree(path, true)?;
         }
         let stop = self.stops.start_scoped(
             StopScope {
                 window: sheet.to_owned(),
                 session: Some(address.id),
-                change: Some((common.to_owned(), draft)),
+                change: draft.map(|draft| {
+                    if draft {
+                        RepoChange::Draft
+                    } else {
+                        RepoChange::Git(common.to_owned())
+                    }
+                }),
+                worktree: Some(slot.workdir.clone()),
+                removing: removing.map(Path::to_path_buf),
+            },
+            true,
+        );
+        if stop.cancel.load(Ordering::Relaxed) {
+            return Err(oxbow_core::Error::Cancelled.to_string());
+        }
+        Ok(stop)
+    }
+
+    pub(crate) fn start_worktree_write_at(
+        &self,
+        request: &RepoRequest,
+        workdir: &Path,
+        draft: Option<bool>,
+    ) -> CommandResult<RunStop> {
+        let path = workdir_key(workdir);
+        if let Some(address) = &request.address
+            && (request.explicit || self.with_slot(address, |slot| slot.workdir == path) == Some(true))
+        {
+            return self.start_repo_write(address, request.label(), draft, None);
+        }
+        // Commands with their own path can arrive after a legacy window switched repositories.
+        let _repositories = self.repositories.lock().expect("session lock");
+        self.stops.check_worktree(&path, false)?;
+        if !path.is_dir() {
+            return Err(oxbow_core::Error::Cancelled.to_string());
+        }
+        let stop = self.stops.start_scoped(
+            StopScope {
+                window: request.label().to_owned(),
+                session: None,
+                // With no associated session only worktree removal can inspect this draft.
+                change: (draft == Some(true)).then_some(RepoChange::Draft),
+                worktree: Some(path),
+                removing: None,
             },
             true,
         );
@@ -819,14 +910,10 @@ impl Session {
         let running = self.stops.running.lock().expect("stops lock");
         for id in ids {
             let slot = &repositories.slots[id];
-            if let Some(draft) = running.keys().find_map(|scope| {
-                let (common, draft) = scope.change.as_ref()?;
-                let blocks = if *draft {
-                    include_drafts && scope.session == Some(*id)
-                } else {
-                    *common == slot.common
-                };
-                blocks.then_some(*draft)
+            if let Some(draft) = running.keys().find_map(|scope| match scope.change.as_ref()? {
+                RepoChange::Draft if include_drafts && scope.session == Some(*id) => Some(true),
+                RepoChange::Git(common) if *common == slot.common => Some(false),
+                _ => None,
             }) {
                 let name = slot
                     .repo
@@ -918,7 +1005,7 @@ impl Session {
 
     pub(crate) fn new_files_fetch(&self, request: &RepoRequest, id: Option<u64>) -> CommandResult<Option<RunStop>> {
         let Some(id) = id else { return Ok(None) };
-        let stop = self.new_stop(request);
+        let stop = self.start_worktree_git(request)?;
         if self.slot(request, |slot| slot.start_files_fetch(id, &stop)) != Some(true) {
             return Err(oxbow_core::Error::Cancelled.to_string());
         }
@@ -955,11 +1042,15 @@ impl Session {
     }
 
     /// Reserve the canonical working directory under the same lock used to publish tabs.
-    pub(crate) fn reserve_window(&self, path: &Path) -> WindowTarget {
+    pub(crate) fn reserve_window(&self, path: &Path) -> CommandResult<WindowTarget> {
         let canonical = workdir_key(path);
         let mut repositories = self.repositories.lock().expect("session lock");
+        self.stops.check_worktree(&canonical, false)?;
+        if !canonical.is_dir() {
+            return Err(oxbow_core::Error::Cancelled.to_string());
+        }
         if let Some(target) = repositories.locate(&canonical, None) {
-            return WindowTarget::Existing(target);
+            return Ok(WindowTarget::Existing(target));
         }
         let label = format!("repo-{}", self.next.fetch_add(1, Ordering::Relaxed) + 1);
         repositories.windows.insert(
@@ -969,7 +1060,7 @@ impl Session {
                 ..RepoWindow::default()
             },
         );
-        WindowTarget::New(label)
+        Ok(WindowTarget::New(label))
     }
 
     /// Register a live window's open before any disk work. Only legacy opens supersede one another.
@@ -1003,6 +1094,10 @@ impl Session {
         let common = turns::canonical(&repo.common_dir());
         let mut repositories = self.repositories.lock().expect("session lock");
         Self::check_open(&repositories, label, replacing)?;
+        self.stops.check_worktree(&workdir, false)?;
+        if !workdir.is_dir() {
+            return Err(oxbow_core::Error::Cancelled.to_string());
+        }
         let legacy = replacing.is_some();
         let single = legacy || repositories.tabs_disabled;
         if let Some(target) = repositories.opening_target(&workdir, label, single) {
@@ -1112,7 +1207,8 @@ impl Session {
     }
 
     /// Closing the active tab clears the backend's active address. The UI picks its successor.
-    pub(crate) fn close(&self, label: &str, address: Option<&Address>, legacy: bool) {
+    #[cfg(test)]
+    fn close(&self, label: &str, address: Option<&Address>, legacy: bool) {
         let removed = {
             let mut repositories = self.repositories.lock().expect("session lock");
             let closing_active = address.is_some_and(|address| {
@@ -1138,6 +1234,47 @@ impl Session {
         if let Some(mut slot) = removed {
             slot.close();
         }
+    }
+
+    /// Detach every instance before allowing writes again, using the key captured before Git runs.
+    pub(crate) fn finish_worktree_remove(&self, path: &Path) -> (Vec<Address>, Vec<String>) {
+        let mut repositories = self.repositories.lock().expect("session lock");
+        let mut tabs = repositories
+            .slots
+            .iter()
+            .filter(|(_, slot)| slot.workdir == path)
+            .filter_map(|(&id, _)| repositories.address(id))
+            .collect::<Vec<_>>();
+        let ids = tabs.iter().map(|tab| tab.id).collect::<Vec<_>>();
+        let removed = self.detach_tabs(&mut repositories, &ids);
+        let mut windows = Vec::new();
+        let mut retired = Vec::new();
+        let owners = repositories.windows.keys().cloned().collect::<Vec<_>>();
+        for owner in owners {
+            let window = &repositories.windows[&owner];
+            let pending = window.pending.as_ref().is_some_and(|(_, key)| key == path);
+            if !pending && !tabs.iter().any(|tab| tab.window == owner) {
+                continue;
+            }
+            if owner != "main" && !repositories.slots.values().any(|slot| slot.owner == owner) {
+                retired.push(repositories.windows.remove(&owner));
+                windows.push(owner);
+            } else {
+                let revision = repositories.next_id();
+                let window = repositories.windows.get_mut(&owner).expect("owner window");
+                if pending {
+                    window.pending = None;
+                }
+                if window.active.is_some_and(|id| ids.contains(&id)) {
+                    window.active = None;
+                    window.replacing = revision;
+                }
+            }
+        }
+        drop(repositories);
+        drop((removed, retired));
+        tabs.retain(|tab| !windows.contains(&tab.window));
+        (tabs, windows)
     }
 }
 
@@ -1361,11 +1498,140 @@ mod tests {
         address
     }
 
+    fn linked_worktree(repo: &Repo, name: &str) -> Repo {
+        repo.run(&oxbow_core::cli::GitCommand::new([
+            "worktree", "add", "-qb", name, name,
+        ]))
+        .unwrap();
+        Repo::open(repo.workdir().join(name)).unwrap()
+    }
+
+    #[test]
+    fn worktree_removal_reserves_the_target_before_git_and_releases_it_after_failure() {
+        use oxbow_core::Action;
+
+        let repo = repo("remove-guard");
+        let linked = linked_worktree(&repo, "linked");
+        let sibling = linked_worktree(&repo, "sibling");
+        let session = Session::default();
+        let source = open(&session, "main", &repo, true);
+        let target = open(&session, "main", &linked, false);
+        let other = open(&session, "main", &sibling, false);
+        session.activate(&target, None).unwrap();
+        session.activate(&other, None).unwrap();
+        let path = workdir_key(linked.workdir());
+        let remove = || session.start_worktree_remove(&source, "main", &path);
+        let write = |draft| session.start_repo_write(&target, "main", draft, None);
+        for kind in [Some(true), Some(false), None] {
+            let running_or_queued = write(kind).unwrap();
+            let error = remove().err().unwrap();
+            assert!(error.contains(if kind == Some(true) { "draft" } else { "Git command" }));
+            assert!(!running_or_queued.cancel.load(Ordering::Relaxed));
+        }
+
+        let sibling_write = session.start_repo_write(&other, "main", Some(true), None).unwrap();
+        let reservation = remove().unwrap();
+        assert!(!reservation.cancel.load(Ordering::Relaxed));
+        assert!(!sibling_write.cancel.load(Ordering::Relaxed));
+        assert!(write(Some(true)).is_err());
+        assert!(write(Some(false)).is_err());
+        assert!(write(None).is_err());
+        assert!(remove().is_err());
+        assert!(session.start_repo_write(&other, "main", Some(false), None).is_ok());
+
+        std::fs::write(linked.workdir().join("a.txt"), "Keep me in the stash").unwrap();
+        let action = |stash| Action::WorktreeRemove {
+            path: "linked".into(),
+            force: false,
+            stash,
+        };
+        assert!(
+            repo.perform_with(&action(false), &mut |_| {}, &reservation.cancel)
+                .is_err()
+        );
+        drop(reservation);
+        assert!(session.live(&target) && linked.workdir().is_dir());
+        assert!(write(Some(true)).is_ok());
+        let reservation = remove().unwrap();
+        repo.perform_without_undo(&action(true), &mut |_| {}, &reservation.cancel)
+            .unwrap();
+        assert!(!linked.workdir().exists());
+        assert_eq!(session.finish_worktree_remove(&path), (vec![target.clone()], vec![]));
+        assert!(!session.live(&target));
+        assert!(session.live(&source));
+        assert_eq!(session.resolve("main", None).unwrap(), Some(other));
+        let stash = repo
+            .run(&oxbow_core::cli::GitCommand::new(["show", "stash@{0}:a.txt"]))
+            .unwrap();
+        assert_eq!(stash.stdout, "Keep me in the stash");
+        std::fs::remove_dir_all(repo.workdir()).unwrap();
+    }
+
+    #[test]
+    fn removal_retires_standalone_windows_and_cancels_late_opens() {
+        use oxbow_core::{Action, cli::GitCommand};
+
+        let repo = repo("remove-window");
+        let session = Session::default();
+        let source = open(&session, "main", &repo, true);
+        for (name, opened) in [("standalone", true), ("pending", false)] {
+            let linked = linked_worktree(&repo, name);
+            let WindowTarget::New(window) = session.reserve_window(linked.workdir()).unwrap() else {
+                panic!("expected a new window");
+            };
+            let ticket = session.begin_open(&window, false).unwrap();
+            if opened {
+                let address = open(&session, &window, &linked, false);
+                session.activate(&address, None).unwrap();
+            }
+            #[cfg(not(unix))]
+            let path = repo.workdir().join(name);
+            #[cfg(unix)]
+            let alias = {
+                let temporary = oxbow_core::cli::private_temp_folder("oxbow-remove-alias-").unwrap();
+                let parent = temporary.path().join("parent");
+                std::os::unix::fs::symlink(repo.workdir(), &parent).unwrap();
+                let alias = parent.join(name);
+                (temporary, alias)
+            };
+            #[cfg(unix)]
+            let path = alias.1;
+            let key = workdir_key(&path);
+            let reservation = session.start_worktree_remove(&source, "main", &key).unwrap();
+            assert!(session.finish_open(&window, ticket, linked.clone()).is_err());
+            repo.perform_with(
+                &Action::WorktreeRemove {
+                    path: path.display().to_string(),
+                    force: false,
+                    stash: false,
+                },
+                &mut |_| {},
+                &reservation.cancel,
+            )
+            .unwrap();
+            assert_eq!(session.finish_worktree_remove(&key), (vec![], vec![window.clone()]));
+            assert!(!session.repositories.lock().unwrap().contains_window(&window));
+            drop(reservation);
+            assert!(session.finish_open(&window, ticket, linked.clone()).is_err());
+            assert!(session.reserve_window(linked.workdir()).is_err());
+        }
+        assert!(session.live(&source));
+        assert_eq!(
+            repo.run(&GitCommand::new(["worktree", "list", "--porcelain"]))
+                .unwrap()
+                .stdout
+                .matches("worktree ")
+                .count(),
+            1
+        );
+        std::fs::remove_dir_all(repo.workdir()).unwrap();
+    }
+
     #[test]
     fn a_new_window_stays_reserved_through_legacy_startup() {
         let repo = repo("window-startup");
         let session = Session::default();
-        let WindowTarget::New(label) = session.reserve_window(repo.workdir()) else {
+        let WindowTarget::New(label) = session.reserve_window(repo.workdir()).unwrap() else {
             panic!("first invocation must create a window");
         };
         // The old UI closes the empty slot after initial_repo reads the pending path.
@@ -1386,14 +1652,14 @@ mod tests {
             assert_eq!(repositories.opening_target(&key, &label, false), None);
         }
         assert_eq!(
-            session.reserve_window(&alias),
+            session.reserve_window(&alias).unwrap(),
             WindowTarget::Existing(Located::Pending(label.clone()))
         );
         let address = open(&session, &label, &repo, true);
         assert_eq!(session.resolve(&label, None).unwrap(), Some(address.clone()));
         assert!(session.repositories.lock().unwrap().pending(&label).is_none());
         assert_eq!(
-            session.reserve_window(&alias),
+            session.reserve_window(&alias).unwrap(),
             WindowTarget::Existing(Located::Open(address.clone()))
         );
 
@@ -1413,7 +1679,7 @@ mod tests {
         let before = repo("legacy-replace-local");
         let shared = repo("legacy-replace-shared");
         let session = Session::default();
-        let WindowTarget::New(other_window) = session.reserve_window(shared.workdir()) else {
+        let WindowTarget::New(other_window) = session.reserve_window(shared.workdir()).unwrap() else {
             unreachable!()
         };
         let other = open(&session, &other_window, &shared, true);
@@ -1450,7 +1716,7 @@ mod tests {
         assert!(matches!(session.finish_open("main", tab, shared.clone()).unwrap(),
             Opened::Existing(Located::Open(address)) if address == local));
         assert_eq!(
-            session.reserve_window(shared.workdir()),
+            session.reserve_window(shared.workdir()).unwrap(),
             WindowTarget::Existing(Located::Open(other))
         );
         for repo in [before, shared] {
@@ -1488,7 +1754,7 @@ mod tests {
                     scope.spawn(move || {
                         barrier.wait();
                         if index % 2 == 0 {
-                            session.reserve_window(&repo.workdir().join("."))
+                            session.reserve_window(&repo.workdir().join(".")).unwrap()
                         } else {
                             let label = format!("owner-{index}");
                             session
@@ -1524,7 +1790,10 @@ mod tests {
             WindowTarget::Existing(target) => target.window() == new[0],
         }));
         session.remove_window(new[0]);
-        assert!(matches!(session.reserve_window(repo.workdir()), WindowTarget::New(_)));
+        assert!(matches!(
+            session.reserve_window(repo.workdir()).unwrap(),
+            WindowTarget::New(_)
+        ));
         std::fs::remove_dir_all(repo.workdir()).unwrap();
     }
 
@@ -1601,7 +1870,7 @@ mod tests {
         let c = repo("mode-c");
         let d = repo("mode-d");
         let session = Session::default();
-        let WindowTarget::New(second) = session.reserve_window(c.workdir()) else {
+        let WindowTarget::New(second) = session.reserve_window(c.workdir()).unwrap() else {
             unreachable!()
         };
         let keep_a = open(&session, "main", &a, false);
@@ -1616,7 +1885,9 @@ mod tests {
             StopScope {
                 window: "settings".into(),
                 session: Some(close_d.id),
-                change: Some((turns::canonical(&d.common_dir()), false)),
+                change: Some(RepoChange::Git(turns::canonical(&d.common_dir()))),
+                worktree: Some(workdir_key(d.workdir())),
+                removing: None,
             },
             true,
         );
@@ -1664,7 +1935,9 @@ mod tests {
             StopScope {
                 window: "command-main".into(),
                 session: Some(c_id.id),
-                change: Some((turns::canonical(&c.common_dir()), false)),
+                change: Some(RepoChange::Git(turns::canonical(&c.common_dir()))),
+                worktree: Some(workdir_key(c.workdir())),
+                removing: None,
             },
             true,
         );
@@ -1701,7 +1974,7 @@ mod tests {
 
         let repo = repo("close-notice");
         let session = Session::default();
-        let WindowTarget::New(owner) = session.reserve_window(repo.workdir()) else {
+        let WindowTarget::New(owner) = session.reserve_window(repo.workdir()).unwrap() else {
             unreachable!()
         };
         let main_events = listen(&session, "main");

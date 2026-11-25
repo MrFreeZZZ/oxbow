@@ -578,7 +578,10 @@ async fn fetch_review(
     work: impl FnOnce(&oxbow_core::Repo, &AtomicBool) -> oxbow_core::Result<ReviewFetch> + Send + 'static,
 ) -> CommandResult<ReviewFetch> {
     let turns = session.turns.clone();
-    let stop = stop.unwrap_or_else(|| session.new_stop(window));
+    let stop = match stop {
+        Some(stop) => stop,
+        None => session.start_worktree_git(window)?,
+    };
     let change = Running::new(&window.turn_key(), repo.name(), title.clone());
     logged(Some(at(&repo)), EntryKind::Background, title, move || {
         // Other review fetches share these refs, even from another worktree.
@@ -679,7 +682,11 @@ pub async fn save_review_draft(
     expected: String,
 ) -> CommandResult<String> {
     window.check_workdir(&target.workdir)?;
-    let change = window.state::<Session>().start_change(&window, window.label(), true)?;
+    let change = window.state::<Session>().start_worktree_write_at(
+        &window,
+        std::path::Path::new(&target.workdir),
+        Some(true),
+    )?;
     blocking(move || {
         let _change = change;
         let repo = review_repo(&target).map_err(oxbow_core::Error::Git)?;
@@ -710,7 +717,11 @@ pub async fn gitlab_set_viewed(
     viewed: bool,
 ) -> CommandResult<()> {
     window.check_workdir(&target.workdir)?;
-    let change = window.state::<Session>().start_change(&window, window.label(), false)?;
+    let change = window.state::<Session>().start_worktree_write_at(
+        &window,
+        std::path::Path::new(&target.workdir),
+        Some(false),
+    )?;
     blocking(move || {
         let _change = change;
         let repo = review_repo(&target).map_err(oxbow_core::Error::Git)?;

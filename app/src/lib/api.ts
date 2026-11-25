@@ -411,7 +411,6 @@ const apiWithInvoke = (invoke: <T>(command: string, args?: Record<string, unknow
   /** The worktrees alone, with their counts of changed files, for Retry. */
   worktrees: () => invoke<Worktree[]>("worktrees"),
   /** After removing the worktree at `path`, close the window that showed it. */
-  closeWindowOf: (path: string) => invoke<void>("close_window_of", { path }),
   monospaceFonts: () => invoke<string[]>("monospace_fonts"),
   refreshRemoteTags: () => invoke<boolean>("refresh_remote_tags"),
   /** Newest first. */

@@ -36,7 +36,7 @@
   import { addSubmoduleRequest as addSubmoduleRequestInRepo, openSubmoduleWindow as openSubmoduleWindowInRepo, submoduleMenu as submoduleEntriesInRepo, submoduleNote, submoduleWhere, syncRequest, updateRequest as updateRequestInRepo } from "./submodules";
   import { actionIcons } from "./icons";
   import { notInHistory } from "./objects";
-  import { locateRequest, lockRequest, newWorktreeRequest as newWorktreeRequestInRepo, pruneWorktreesRequest, removeWorktreeRequest as removeWorktreeRequestInRepo, tilde, unlockRequest, worktreeOf } from "./worktrees";
+  import { locateRequest, lockRequest, newWorktreeRequest as newWorktreeRequestInRepo, pruneWorktreesRequest, removeWorktreeRequest, tilde, unlockRequest, worktreeOf } from "./worktrees";
 
   const scope = useRepoScope();
   const deleteRemoteRequest = deleteRemoteRequestInRepo.bind(null, scope);
@@ -62,7 +62,6 @@
   const submoduleEntries = submoduleEntriesInRepo.bind(null, scope);
   const updateRequest = updateRequestInRepo.bind(null, scope);
   const newWorktreeRequest = newWorktreeRequestInRepo.bind(null, scope);
-  const removeWorktreeRequest = removeWorktreeRequestInRepo.bind(null, scope);
 
   const PULL_ICON = menuIcons.pull;
   /** A speech bubble with a tick: pull requests to review. */

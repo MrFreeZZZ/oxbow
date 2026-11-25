@@ -278,7 +278,6 @@ fn main() {
             working::submodules,
             working::worktrees,
             working::unpushed_submodules,
-            windows::close_window_of,
             outside::reveal_file,
             outside::quick_look,
             working::lfs_status,

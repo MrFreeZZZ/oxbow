@@ -1,6 +1,7 @@
 //! Running actions: planning one for its confirmation, performing it with Activity's
 //! progress and Stop, and fetching in the background.
 
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
@@ -12,7 +13,7 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::CommandResult;
 use crate::repos::tell_others;
-use crate::session::{RepoRequest, Session, at, current, logged, read};
+use crate::session::{RepoRequest, Session, at, current, logged, read, workdir_key};
 use crate::turns::{GiveWay, Running};
 
 /// The git commands an action will run, for the confirmation sheet.
@@ -57,9 +58,27 @@ pub(crate) async fn perform_action(
         tracking: None,
     };
     let repo = current(&session, &window).map_err(failed)?;
+    // Resolve aliases while the folder still exists, and keep tab-mode changes out of removal.
+    let removing = match &action {
+        Action::WorktreeRemove { path, .. } => Some(workdir_key(&repo.workdir().join(path))),
+        _ => None,
+    };
+    let _topology = removing
+        .as_ref()
+        .map(|_| session.topology())
+        .transpose()
+        .map_err(failed)?;
     // Its own Stop, heard by the Stop of the window that asked until the run is over.
-    let stop = if matches!(action, Action::Fetch { .. }) {
-        session.new_stop(&window)
+    let stop = if let Some(path) = &removing {
+        let address = window
+            .address
+            .as_ref()
+            .ok_or_else(|| failed("No repository is open".into()))?;
+        session
+            .start_worktree_remove(address, window.label(), path)
+            .map_err(failed)?
+    } else if matches!(action, Action::Fetch { .. }) {
+        session.start_worktree_git(&window).map_err(failed)?
     } else {
         session.start_change(&window, window.label(), false).map_err(failed)?
     };
@@ -68,6 +87,7 @@ pub(crate) async fn perform_action(
     let turns = session.turns.clone();
     let turn_window = window.turn_key();
     let joined = tauri::async_runtime::spawn_blocking(move || {
+        let _stop = stop;
         let title = repo.action_title(&action);
         // A change running in the repository goes first, from this window, Settings or another.
         let common = repo.common_dir();
@@ -92,6 +112,18 @@ pub(crate) async fn perform_action(
                 tracking: None,
             });
         };
+        if let Some(path) = &removing {
+            // Git also accepts a worktree name or path suffix. Only remove the folder we reserved.
+            let known = repo
+                .worktree_list()
+                .map_err(|err| repo.explain_failure(&action, &err))?;
+            if !known.iter().any(|tree| workdir_key(Path::new(&tree.path)) == *path) {
+                return Err(failed(format!(
+                    "{} isn’t a worktree of this repository.",
+                    path.display()
+                )));
+            }
+        }
         let done = console::scope(Some(repo.workdir()), console::EntryKind::Action, title, || {
             let mut emit = |event| {
                 progress.progress("action-event", event);
@@ -103,8 +135,14 @@ pub(crate) async fn perform_action(
             };
             result.map_err(|err| repo.explain_failure(&action, &err))
         });
+        let session = events.state::<Session>();
+        if done.is_ok()
+            && let Some(path) = &removing
+        {
+            crate::windows::worktree_removed(&events, &session, path);
+        }
         // Done or not, it may have changed what the other windows show.
-        tell_others(&events, &events.state::<Session>(), &repo, progress.address.as_ref());
+        tell_others(&events, &session, &repo, progress.address.as_ref());
         done
     })
     .await;
@@ -244,6 +282,7 @@ pub(crate) async fn fetch_in_background(
         }),
         remote: None,
     };
+    let worktree_run = session.start_worktree_git(&window).map_err(failed)?;
     let (repo, cancel) = session
         .slot(&window, |slot| {
             let repo = slot
@@ -263,6 +302,7 @@ pub(crate) async fn fetch_in_background(
     let turn_window = window.turn_key();
     let turns = session.turns.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        let _worktree_run = worktree_run;
         if cancel.load(Ordering::Relaxed) {
             return Err(cancelled());
         }
@@ -402,13 +442,17 @@ pub(crate) fn public_key(key: String) -> CommandResult<String> {
 #[tauri::command]
 pub(crate) async fn refresh_remote_tags(window: RepoRequest, session: State<'_, Session>) -> CommandResult<bool> {
     let repo = current(&session, &window)?;
+    let worktree_run = session.start_worktree_git(&window)?;
     logged(
         Some(at(&repo)),
         console::EntryKind::Background,
         "Check the remote's tags",
-        move || match repo.default_remote() {
-            Some(remote) => repo.refresh_remote_tags(&remote),
-            None => Ok(false),
+        move || {
+            let _worktree_run = worktree_run;
+            match repo.default_remote() {
+                Some(remote) => repo.refresh_remote_tags(&remote),
+                None => Ok(false),
+            }
         },
     )
     .await

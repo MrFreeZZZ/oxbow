@@ -3,12 +3,12 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 use crate::CommandResult;
 use crate::outside::worktree_folder;
 use crate::preferences::{appearance, read_settings};
-use crate::session::{Located, RepoRequest, Session, WindowTarget, current, workdir_key};
+use crate::session::{Located, RepoRequest, Session, WindowTarget, current};
 
 /// Open the worktree at `path` in a window of its own, or bring forward the window that has it.
 /// Async, because making a window in a synchronous command deadlocks on Windows.
@@ -22,7 +22,7 @@ pub(crate) async fn open_window(
     let _topology = session.topology()?;
     let repo = current(&session, &window)?;
     let folder = worktree_folder(&repo, &path)?;
-    let label = match session.reserve_window(&folder) {
+    let label = match session.reserve_window(&folder)? {
         WindowTarget::Existing(target) => return raise_repo(&app, &target),
         WindowTarget::New(label) => label,
     };
@@ -45,11 +45,24 @@ pub(crate) async fn open_window(
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true)
         .traffic_light_position(tauri::LogicalPosition::new(22.0, 30.0));
-    if let Err(err) = builder.build() {
-        session.remove_window(&label);
-        return Err(err.to_string());
+    let reserved = || {
+        session
+            .repositories
+            .lock()
+            .expect("session lock")
+            .contains_window(&label)
+    };
+    if !reserved() {
+        return Ok(());
     }
-    Ok(())
+    match builder.build() {
+        Ok(open) if !reserved() => open.destroy().map_err(|err| err.to_string()),
+        Ok(_) => Ok(()),
+        Err(err) => {
+            session.remove_window(&label);
+            Err(err.to_string())
+        }
+    }
 }
 
 /// Bring forward the owner. Its UI activates the existing tab after handling the request.
@@ -66,39 +79,22 @@ pub(crate) fn raise_repo(app: &AppHandle, target: &Located) -> CommandResult<()>
     Ok(())
 }
 
-/// Close the worktree's session after its removal. Legacy worktree windows close as before.
-#[tauri::command]
-pub(crate) async fn close_window_of(
-    app: AppHandle,
-    window: RepoRequest,
-    session: State<'_, Session>,
-    path: String,
-) -> CommandResult<()> {
-    let _topology = session.repo_topology.read().await;
-    let path = workdir_key(Path::new(&path));
-    let (target, close_window) = {
-        let repositories = session.repositories.lock().expect("session lock");
-        let target = repositories.locate(&path, None);
-        let close_window = match &target {
-            Some(Located::Open(address)) => repositories.closes_legacy_window(address),
-            Some(Located::Pending(_)) => true,
-            None => false,
-        };
-        (target, close_window)
-    };
-    let Some(target) = target else { return Ok(()) };
-    if close_window && target.window() != window.label() {
-        if let Some(open) = app.get_webview_window(target.window()) {
-            let _ = open.close();
-        }
-    } else if let Located::Open(address) = target
-        && window.address.as_ref() != Some(&address)
-    {
-        session.close(&address.window, Some(&address), false);
-        session.emit_closed(&address);
-        crate::repos::changed(&app);
+pub(crate) fn worktree_removed(app: &AppHandle, session: &Session, path: &Path) {
+    let (tabs, windows) = session.finish_worktree_remove(path);
+    // A restored tab can still be a placeholder and therefore have no repository session.
+    let _ = app.emit("worktree-removed", path.to_string_lossy());
+    for address in &tabs {
+        session.emit_closed(address);
     }
-    Ok(())
+    for label in &windows {
+        if let Some(open) = app.get_webview_window(label) {
+            // Draft writes were checked before removal. A close request would try to save again.
+            let _ = open.destroy();
+        }
+    }
+    if !tabs.is_empty() || !windows.is_empty() {
+        crate::repos::changed(app);
+    }
 }
 
 /// The default macOS menu, with Check for Updates… and Settings… (⌘,) after About. About shows the

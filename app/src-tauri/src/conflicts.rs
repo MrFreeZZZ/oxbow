@@ -80,11 +80,7 @@ pub(crate) async fn save_conflict_draft(
 ) -> CommandResult<()> {
     let repo = draft_repo(&session, &window, &workdir)?;
     let file = draft_file(&app, &repo)?;
-    let change = window
-        .address
-        .as_ref()
-        .map(|_| session.start_change(&window, window.label(), true))
-        .transpose()?;
+    let change = session.start_worktree_write_at(&window, repo.workdir(), Some(true))?;
     tauri::async_runtime::spawn_blocking(move || {
         let _change = change;
         // A save arriving after the operation was finished or aborted would bring its draft back.
@@ -106,11 +102,7 @@ pub(crate) async fn drop_conflict_draft(
     workdir: String,
 ) -> CommandResult<()> {
     let repo = draft_repo(&session, &window, &workdir)?;
-    let _change = window
-        .address
-        .as_ref()
-        .map(|_| session.start_change(&window, window.label(), true))
-        .transpose()?;
+    let _change = session.start_worktree_write_at(&window, repo.workdir(), Some(true))?;
     drafts::remove(&draft_file(&app, &repo)?)
 }
 

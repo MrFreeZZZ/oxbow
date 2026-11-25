@@ -483,6 +483,16 @@ export class RepoTabs {
     return this.close(id);
   }
 
+  removeRestored(path: string) {
+    return this.#serialize(async () => {
+      const removed = this.#tabs.filter(tab => isPending(tab) && tab.repo.canonicalPath === path);
+      if (removed.length) {
+        this.#forget(removed.map(tab => tab.id));
+        this.#show();
+      }
+    });
+  }
+
   receive(notice: RepoNotice) {
     const id = notice.session;
     if (notice.event === "repo-closed") {

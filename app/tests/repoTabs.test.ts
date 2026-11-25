@@ -188,6 +188,31 @@ test("closing the active tab opens the next restored repository before closing",
   assert.deepEqual(closed, [1]);
 });
 
+test("worktree removal drops a restored alias and selects a surviving tab without leaving Home", async () => {
+  let selections = 0;
+  const { tabs, state, from } = windowTabs({
+    open: async (path) => opened(Number(path.at(-1))),
+    history: async () => history,
+    activate: async () => {},
+    close: async () => { assert.fail("removal already detached its session"); },
+  }, undefined, { repoSelected: () => { selections++; } });
+  await tabs.restore({
+    paths: ["/repo/1", "/alias/3", "/repo/2"],
+    active: "/repo/1",
+    canonicalPaths: { "/alias/3": "/repo/3" },
+  }, path => tabs.open(path, from));
+  await tabs.activate(state.tabs[2].id);
+  await tabs.activate(1);
+  tabs.selectHome();
+  const before = selections;
+
+  await tabs.removeRestored("/repo/3");
+  await tabs.receive({ session: 1, event: "repo-closed", payload: null });
+  assert.deepEqual(state.tabs.map(tab => tab.id), [2]);
+  assert.equal(state.active, 2);
+  assert.equal(selections, before);
+});
+
 test("an open tab stays selected when a restored tab finishes opening afterwards", async () => {
   const reading = Promise.withResolvers<void>();
   let release: (value: History) => void = () => {};

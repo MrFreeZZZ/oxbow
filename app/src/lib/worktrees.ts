@@ -254,7 +254,7 @@ function newWorktreeSheet(scope: RepoScope, ctx: BranchContext, repoPath: string
 }
 
 /** Remove a worktree; with `stash`, its uncommitted changes go to the stash first. */
-export function removeWorktreeRequest(scope: RepoScope, ctx: BranchContext, wt: Worktree, stash = false): Request {
+export function removeWorktreeRequest(ctx: BranchContext, wt: Worktree, stash = false): Request {
   /** `git status` failed there, or is still to come: changes or not isn't known, so it isn't
    *  forced. A count from an earlier read that failed again isn't known either. */
   const unknown = wt.changed === null || stale(wt);
@@ -276,11 +276,10 @@ export function removeWorktreeRequest(scope: RepoScope, ctx: BranchContext, wt: 
     icon: stash ? "stash" : "drop",
     button: stash ? "Stash and Remove" : "Remove",
     danger: !stash,
-    alt: (dirty || unknown) && !stash ? { label: "Stash Them First", request: () => removeWorktreeRequest(scope, ctx, wt, true) } : undefined,
+    alt: (dirty || unknown) && !stash ? { label: "Stash Them First", request: () => removeWorktreeRequest(ctx, wt, true) } : undefined,
     note: (dirty || unknown) && !stash ? "Stash Them First keeps them, under Stashes." : "The branch stays: make a worktree for it again any time.",
     status: `Removing ${wt.name}…`,
     done: `Removed ${wt.name}.${dirty && stash ? " Its changes are in the stash." : ""}`,
-    after: () => void scope.api.closeWindowOf(wt.path).catch(() => {}),
     action: { kind: "worktreeRemove", path: wt.path, force: dirty, stash: (dirty || unknown) && stash },
   };
 }

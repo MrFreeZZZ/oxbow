@@ -510,9 +510,12 @@ pub async fn github_publish(
     }
     let client = accounts.client(&app)?;
     // Dropped once the run is over: Stop no longer reaches it.
-    let stop = app.state::<crate::session::Session>().new_stop(&window);
+    let stop = app
+        .state::<crate::session::Session>()
+        .start_worktree_write_at(&window, Path::new(&path), None)?;
     let cancel = stop.cancel.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _stop = stop;
         if cancel.load(Ordering::Relaxed) {
             return Err(oxbow_core::Error::Cancelled.to_string());
         }
