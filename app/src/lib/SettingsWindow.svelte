@@ -20,7 +20,7 @@
   import GitHubSignIn from "./GitHubSignIn.svelte";
   import GitLabSignIn from "./GitLabSignIn.svelte";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
-  import { defaults, prefs, type PrefKey } from "./prefs.svelte";
+  import { prefs, type PrefKey } from "./prefs.svelte";
   import { accountsSection, gitSection, repoSection, safetySection } from "./settingsGit";
   import { branchesSection } from "./settingsBranches";
   import SettingsJson from "./SettingsJson.svelte";
@@ -30,7 +30,7 @@
   import { closeRepoFile, forgetRepoFiles, loadRepoFiles, repoFiles, repoFilesSection } from "./repoFileState.svelte";
   import SettingGear from "./SettingGear.svelte";
   import SettingsRow from "./SettingsRow.svelte";
-  import { text, type Group, type Row, type Section } from "./settingsRows";
+  import { text, type Group, type PrefGroup, type Row, type Section } from "./settingsRows";
   import { diffSection, generalSection, integrationsSection, themeSection } from "./settingsSections";
   import ShortcutSearch from "./ShortcutSearch.svelte";
   import { shortcutEdit } from "./shortcutEdit.svelte";
@@ -155,29 +155,50 @@
     if (document.hasFocus()) anchor?.focus({ preventScroll: true });
   }
 
+  async function resetGroup(keys: PrefGroup["keys"]): Promise<boolean> {
+    // shortcut: writes can partially succeed until the group has an atomic reset.
+    for (const key of keys) if (!(await prefs.reset(key))) return false;
+    return true;
+  }
+
+  function resetGroupSetting(setting: PrefGroup, label: string) {
+    if (!setting.resetWarning) return resetGroup(setting.keys);
+    return confirm.run({
+      title: `Reset ${label}?`,
+      body: [setting.resetWarning],
+      icon: "reset",
+      button: "Reset",
+      always: true,
+      danger: true,
+      local: {
+        commands: [],
+        run: async () => {
+          if (!(await resetGroup(setting.keys))) throw prefs.failure?.error ?? "Couldn’t reset the setting.";
+          return "Settings are back to their defaults.";
+        },
+      },
+    });
+  }
+
   function menuEntries(row: Row): MenuEntry[] {
     const entries: MenuEntry[] = [];
     const setting = row.setting;
     if (setting?.kind === "pref" || setting?.kind === "prefGroup") {
       const keys: readonly PrefKey[] = setting.kind === "pref" ? [setting.key] : setting.keys;
+      if (setting.kind === "prefGroup" || !setting.resetWithGroup) {
+        entries.push({
+          kind: "item",
+          label: "Reset Setting",
+          icon: menuIcons.reset,
+          off: !keys.some((key) => prefs.hasStored(key)),
+          run: () => setting.kind === "pref" ? prefs.reset(setting.key) : resetGroupSetting(setting, text(row.label)),
+        }, { kind: "sep" });
+      }
       entries.push(
         { kind: "item", label: "Copy Setting ID", icon: menuIcons.copy, run: () => copy(row.id, keys.join("\n")) },
         { kind: "item", label: "Copy Setting as JSON", icon: menuIcons.copy, run: () => copy(row.id, keys.map((key) => `"${key}": ${JSON.stringify(prefs.get(key))}`).join(",\n")) },
         { kind: "item", label: "Edit in settings.json", icon: menuIcons.edit, run: openJson },
       );
-      if (setting.kind === "pref" && prefs.changed(setting.key)) {
-        const key = setting.key;
-        const control = row.control;
-        const fallback =
-          control && (control.type === "seg" || control.type === "popup")
-            ? (control.options().find((o) => o.value === defaults[key])?.label ?? String(defaults[key]))
-            : typeof defaults[key] === "boolean"
-              ? defaults[key]
-                ? "On"
-                : "Off"
-              : String(defaults[key]) || "automatic";
-        entries.push({ kind: "sep" }, { kind: "item", label: `Reset to Default (${fallback})`, icon: menuIcons.reset, run: () => prefs.reset(key) });
-      }
     } else if (setting?.kind === "git") {
       const commands = setting.commands();
       entries.push(
@@ -310,6 +331,7 @@
 <svelte:window
   onfocus={() => {
     if (model.loading || repoFiles.loading) return;
+    void prefs.reload();
     load();
     if (model.repo && !repoFiles.open) loadRepoFiles();
   }}

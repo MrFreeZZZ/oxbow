@@ -183,6 +183,7 @@ export const themeSection: Section = {
         preview: "background",
         rows: [
           prefRow("oxbow.background.source", "Background", "popup", {
+            setting: { kind: "pref", key: "oxbow.background.source", resetWithGroup: true },
             options: () => [
               { value: "none", label: "None" },
               { value: "spring", label: "Spring" },
@@ -195,13 +196,13 @@ export const themeSection: Section = {
           {
             id: "oxbow.background.image",
             label: "Custom image",
-            setting: { kind: "pref", key: "oxbow.background.image" },
+            setting: { kind: "pref", key: "oxbow.background.image", resetWithGroup: true },
             control: { type: "value", text: () => prefs.get("oxbow.background.image") || "None" },
           },
           {
             id: "oxbow.background.intensity",
             label: "Intensity",
-            setting: { kind: "pref", key: "oxbow.background.intensity" },
+            setting: { kind: "pref", key: "oxbow.background.intensity", resetWithGroup: true },
             off: () => prefs.get("oxbow.background.source") === "none",
             control: { type: "range", min: 0, max: 100, step: 1, suffix: "%", get: () => backgroundIntensity.value ?? prefs.get("oxbow.background.intensity"), set: previewIntensity, commit: () => { void saveIntensity(); } },
           },
@@ -213,6 +214,7 @@ export const themeSection: Section = {
         preview: "theme",
         rows: [
           prefRow("oxbow.theme.variant", "Variant", "seg", {
+            setting: { kind: "pref", key: "oxbow.theme.variant", resetWithGroup: true },
             sub: () => (theme.light && theme.dark ? "Auto follows Appearance above" : `${theme.name} has only a ${theme.dark ? "dark" : "light"} version, so it is used in both`),
             off: () => !(theme.light && theme.dark),
             options: () => [
@@ -238,7 +240,10 @@ export const themeSection: Section = {
       {
         id: REPOSITORY_TAB_TAGS_GROUP,
         title: "Repository Tab Tags",
-        setting: { kind: "prefGroup", keys: [TAB_TAG_STYLE_KEY, TAB_TAG_COLOR_KEY] },
+        setting: {
+          kind: "prefGroup", keys: [TAB_TAG_STYLE_KEY, TAB_TAG_COLOR_KEY],
+          resetWarning: "Your custom tag names and colors will be removed.",
+        },
         rows: REPOSITORY_TAB_TAGS.map(({ id }) => {
           const style = prefs.repositoryTabTagStyle(id);
           return {

@@ -26,7 +26,10 @@ const mac = navigator.platform.startsWith("Mac");
 
 const overrides: Group = {
   title: "Shortcut overrides",
-  setting: { kind: "prefGroup", keys: ["oxbow.keyboard.shortcuts"] },
+  setting: {
+    kind: "prefGroup", keys: ["oxbow.keyboard.shortcuts"],
+    resetWarning: "Your custom keyboard shortcuts will be removed and the default shortcuts will be restored.",
+  },
   detail: "shortcutSearch",
   rows: [],
 };

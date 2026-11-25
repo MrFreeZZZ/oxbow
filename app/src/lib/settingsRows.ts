@@ -13,11 +13,11 @@ export type Value = string | number | boolean;
 export type Option = { value: Value; label: string };
 export type Text = string | (() => string);
 
-export type PrefGroup = { kind: "prefGroup"; keys: readonly [PrefKey, ...PrefKey[]] };
+export type PrefGroup = { kind: "prefGroup"; keys: readonly [PrefKey, ...PrefKey[]]; resetWarning?: string };
 
 /** Where a row's or group's value lives, for its gear menu. */
 export type Setting =
-  | { kind: "pref"; key: PrefKey }
+  | { kind: "pref"; key: PrefKey; resetWithGroup?: boolean }
   | PrefGroup
   | { kind: "git"; scope: ConfigScope; keys: string[]; commands: () => string[]; reset: () => Promise<void> };
 

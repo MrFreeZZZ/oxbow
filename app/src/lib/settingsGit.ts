@@ -611,7 +611,10 @@ export const safetySection: Section = {
     },
     {
       title: "Secret patterns",
-      setting: { kind: "prefGroup", keys: ["oxbow.secrets.patterns"] },
+      setting: {
+        kind: "prefGroup", keys: ["oxbow.secrets.patterns"],
+        resetWarning: "Your custom secret patterns will be removed.",
+      },
       foot: "Your patterns are checked together with the built-in set: keys of AWS, GitHub, GitLab, Slack, Stripe, Google and OpenAI, private keys, and names like *API_KEY*, *SECRET*, *TOKEN*, *PASSWORD* that get a value.",
       rows: [
         ...prefs.get("oxbow.secrets.patterns").map((p, i): Row => ({

@@ -241,6 +241,8 @@ class Prefs {
     void listen<{ key: string; value: unknown; revision: number }>("settings-changed", (event) => {
       const { key, value, revision } = event.payload;
       this.#take(key, value, revision);
+      // A full-file edit can also send null for a key it kept.
+      if (value === null) void this.reload();
     }).catch(() => {}).then(() => this.reload());
   }
 
@@ -333,6 +335,11 @@ class Prefs {
   }
 
   pending(key: PrefKey): boolean { return key in this.#unsaved; }
+
+  /** Whether the file holds the key, even if its value falls back to the default. */
+  hasStored(key: PrefKey): boolean {
+    return Object.hasOwn(this.#values, key);
+  }
 
   get customized(): boolean {
     return Object.values({ ...this.#values, ...this.#unsaved }).some((value) => value !== null);

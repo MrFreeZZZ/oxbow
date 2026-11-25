@@ -37,7 +37,8 @@ const api = {
 };
 const Prefs = Function("$", "api", "listen", "defaults", "SaveQueue", "isNewer", "loadedOver", "problemOf", "isDefault", "REPOSITORY_TAB_TAGS", "TAB_TAG_ASSIGNMENT_KEY", "TAB_TAG_COLOR_KEY", "TAB_TAG_STYLE_KEY", "tabTagEntryProblem", `${compiled}; return Prefs;`)(
   runtime, api, (_name: string, callback: typeof changed) => { changed = callback; return Promise.resolve(() => {}); }, defaults,
-  SaveQueue, isNewer, loadedOver, () => null, (key: keyof typeof defaults, value: unknown) => defaults[key] === value,
+  SaveQueue, isNewer, loadedOver, (key: keyof typeof defaults, value: unknown) => typeof defaults[key] === typeof value ? null : "Wrong type",
+  (key: keyof typeof defaults, value: unknown) => defaults[key] === value,
   REPOSITORY_TAB_TAGS, TAB_TAG_ASSIGNMENT_KEY, TAB_TAG_COLOR_KEY, TAB_TAG_STYLE_KEY, tabTagEntryProblem,
 );
 const prefs = new Prefs();
@@ -145,3 +146,32 @@ assert.ok(tabTagSettingProblem(TAB_TAG_STYLE_KEY, { red: { label: "Urgent\nNow",
 assert.equal(tabTagSettingProblem(TAB_TAG_ASSIGNMENT_KEY, { "C:\\Worktree": "purple" }), null);
 assert.ok(tabTagSettingProblem(TAB_TAG_ASSIGNMENT_KEY, { worktree: "purple" }));
 assert.ok(tabTagSettingProblem(TAB_TAG_ASSIGNMENT_KEY, { "/worktree": "cyan" }));
+
+const contextKey = "oxbow.diff.contextLines";
+for (const value of [defaults[contextKey], "invalid", null]) {
+  stored[contextKey] = value;
+  changed({ payload: { key: contextKey, value, revision: ++revision } });
+  // A null event may mean a text edit stored null, so let its reload finish.
+  await Promise.resolve();
+  assert.equal(prefs.get(contextKey), defaults[contextKey]);
+  assert.equal(prefs.changed(contextKey), false);
+  assert.equal(prefs.hasStored(contextKey), true);
+  assert.equal(await prefs.reset(contextKey), true);
+  assert.equal(prefs.hasStored(contextKey), false);
+  assert.equal(Object.hasOwn(stored, contextKey), false);
+}
+
+const write = prefs.set(contextKey, 8);
+assert.equal(prefs.hasStored(contextKey), false);
+assert.equal(await write, true);
+assert.equal(prefs.hasStored(contextKey), true);
+fail = true;
+const reset = prefs.reset(contextKey);
+assert.equal(prefs.hasStored(contextKey), true);
+assert.equal(await reset, false);
+assert.equal(prefs.hasStored(contextKey), true);
+assert.match(prefs.failure.error, /Disk full/);
+fail = false;
+assert.equal(await prefs.reset(contextKey), true);
+assert.equal(prefs.hasStored(contextKey), false);
+assert.equal(prefs.failure, null);
