@@ -30,6 +30,7 @@
   import { closeRepoFile, forgetRepoFiles, loadRepoFiles, repoFiles, repoFilesSection } from "./repoFileState.svelte";
   import SettingGear from "./SettingGear.svelte";
   import SettingsRow from "./SettingsRow.svelte";
+  import { confirmSettingReset } from "./settingsReset";
   import { text, type Group, type PrefGroup, type Row, type Section } from "./settingsRows";
   import { diffSection, generalSection, integrationsSection, themeSection } from "./settingsSections";
   import ShortcutSearch from "./ShortcutSearch.svelte";
@@ -155,27 +156,10 @@
     if (document.hasFocus()) anchor?.focus({ preventScroll: true });
   }
 
-  function resetGroup(keys: PrefGroup["keys"]): Promise<boolean> {
-    return prefs.resetGroup(keys, keys.includes("oxbow.background.intensity") ? discardIntensity : undefined);
-  }
-
   function resetGroupSetting(setting: PrefGroup, label: string) {
-    if (!setting.resetWarning) return resetGroup(setting.keys);
-    return confirm.run({
-      title: `Reset ${label}?`,
-      body: [setting.resetWarning],
-      icon: "reset",
-      button: "Reset",
-      always: true,
-      danger: true,
-      local: {
-        commands: [],
-        run: async () => {
-          if (!(await resetGroup(setting.keys))) throw prefs.failure?.error ?? "Couldn’t reset the setting.";
-          return "Settings are back to their defaults.";
-        },
-      },
-    });
+    const { keys, resetWarning } = setting;
+    if (resetWarning) return confirmSettingReset(keys, label, resetWarning);
+    return prefs.resetGroup(keys, keys.includes("oxbow.background.intensity") ? discardIntensity : undefined);
   }
 
   function menuEntries(row: Row): MenuEntry[] {

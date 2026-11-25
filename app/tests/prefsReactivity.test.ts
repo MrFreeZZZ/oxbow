@@ -310,6 +310,16 @@ assert.deepEqual(intensityWrites, [40]);
 assert.equal(remoteSlider.backgroundIntensity.value, null);
 assert.equal(other.get(intensityKey), 20);
 
+// The confirmation sheet owns these errors and offers the next confirmation itself.
+await prefs.set(contextKey, 8);
+fail = true;
+await assert.rejects(prefs.saveGroupReset([contextKey]), /Disk full/);
+await assert.rejects(prefs.saveGroupReset(tagKeys), /Disk full/);
+assert.equal(prefs.failure, null);
+assert.equal(prefs.get(contextKey), 8);
+assert.equal(prefs.repositoryTabTagStyle("red").label, "After reset");
+fail = false;
+
 const intensityGate = Promise.withResolvers<void>();
 saving = intensityGate.promise;
 localSlider.previewIntensity(80);

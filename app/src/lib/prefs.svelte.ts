@@ -395,9 +395,25 @@ class Prefs {
     return this.set(key, defaults[key]);
   }
 
-  resetGroup(keys: readonly [PrefKey, ...PrefKey[]], beforeReset?: () => void): Promise<boolean> {
+  async resetGroup(keys: readonly [PrefKey, ...PrefKey[]], beforeReset?: () => void): Promise<boolean> {
     if (keys.length === 1) return this.reset(keys[0]);
     beforeReset?.();
+    try {
+      await this.saveGroupReset(keys);
+      return true;
+    } catch (err) {
+      this.failure = { key: keys[0], error: String(err), retry: () => this.resetGroup(keys, beforeReset) };
+      return false;
+    }
+  }
+
+  /** Like save(), leave write errors to the caller. */
+  async saveGroupReset(keys: readonly [PrefKey, ...PrefKey[]]): Promise<void> {
+    if (keys.length === 1) {
+      await this.save(keys[0], defaults[keys[0]]);
+      if (this.failure?.key === keys[0]) this.failure = null;
+      return;
+    }
     const lanes: readonly string[] = keys.includes(TAB_TAG_STYLE_KEY)
       ? [...keys, ...REPOSITORY_TAB_TAGS.map(({ id }) => tabTagSaveKey(TAB_TAG_STYLE_KEY, id))]
       : keys;
@@ -406,10 +422,6 @@ class Prefs {
       try {
         this.#takeReset(keys, await api.resetSettingsGroup(keys));
         if (this.failure && keys.includes(this.failure.key)) this.failure = null;
-        return true;
-      } catch (err) {
-        this.failure = { key: keys[0], error: String(err), retry: () => this.resetGroup(keys, beforeReset) };
-        return false;
       } finally {
         this.#resetting--;
       }

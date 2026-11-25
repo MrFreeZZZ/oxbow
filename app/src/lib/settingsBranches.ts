@@ -6,11 +6,19 @@ import { menuIcons, type MenuEntry } from "./Menu.svelte";
 import { prefs } from "./prefs.svelte";
 import { BRANCH_PREFIXES, prefixProblem, type BranchPrefix } from "./branchPrefixes";
 import { config, gitEdit, gitSwitch, prefRow } from "./settingsModel.svelte";
+import { confirmSettingReset } from "./settingsReset";
 import type { Row, Section } from "./settingsRows";
 
 const prefixes = () => prefs.get("oxbow.branch.prefixes");
 const saved = (list: BranchPrefix[]) => prefs.set("oxbow.branch.prefixes", list.map((p) => ({ ...p })));
 const sameList = (a: BranchPrefix[], b: BranchPrefix[]) => JSON.stringify(a) === JSON.stringify(b);
+const prefixGroup = {
+  title: "Prefixes",
+  setting: {
+    kind: "prefGroup", keys: ["oxbow.branch.prefixes"],
+    resetWarning: "Your custom prefixes will be removed and the built-in list will be restored.",
+  },
+} as const;
 
 /** The sheet that adds a prefix, or edits the one at `index`. */
 function prefixRequest(index: number | null, draft: BranchPrefix): Request {
@@ -95,7 +103,10 @@ function prefixRows(): Row[] {
       id: "prefix:default",
       label: "Default list",
       sub: BRANCH_PREFIXES.map((p) => p.prefix).join(" "),
-      control: { type: "button", label: "Use", run: () => saved(BRANCH_PREFIXES) },
+      control: {
+        type: "button", label: "Use",
+        run: () => confirmSettingReset(prefixGroup.setting.keys, prefixGroup.title, prefixGroup.setting.resetWarning),
+      },
     });
   }
   return rows;
@@ -160,11 +171,7 @@ export const branchesSection: Section = {
       ],
     },
     {
-      title: "Prefixes",
-      setting: {
-        kind: "prefGroup", keys: ["oxbow.branch.prefixes"],
-        resetWarning: "Your custom prefixes will be removed and the built-in list will be restored.",
-      },
+      ...prefixGroup,
       foot: "The pop-up at the start of the Name box offers them in this order, each with what it is for. A prefix typed by hand works too.",
       rows: [
         ...prefixRows(),
