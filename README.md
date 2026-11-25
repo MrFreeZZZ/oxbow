@@ -52,6 +52,8 @@ Right-click a repository tab to color its folder icon. Tags stay with each worki
 
 **Shared rules.** Protected branches, by default `main`, `master` and the production branch, are never force-pushed. Commits a remote already has are not rewritten on them: Amend, Edit Stack, rebase and reset leave those commits, and Revert undoes one. Commits not pushed yet stay editable, and the list of names is yours to change. Shared files such as `.gitignore`, `.gitattributes`, `.mailmap` and `CODEOWNERS` are edited in Settings, checked as they are typed, and saved into the working copy so they show up in Changes.
 
+In Settings, choose **Reset Setting** from the gear menu to restore an Oxbow setting or group to its defaults. Oxbow asks before resetting a customized list such as branch prefixes or keyboard shortcuts.
+
 ## Why Oxbow
 
 - Fast where you spend the time: history, the graph and diffs.
