@@ -597,7 +597,6 @@ export const safetySection: Section = {
     confirmationGroup(),
     {
       title: "Secrets check",
-      foot: "Your patterns are checked together with the built-in set: keys of AWS, GitHub, GitLab, Slack, Stripe, Google and OpenAI, private keys, and names like *API_KEY*, *SECRET*, *TOKEN*, *PASSWORD* that get a value.",
       rows: [
         {
           ...prefRow("oxbow.commit.checkSecrets", "Check for secrets before committing", "switch", {
@@ -608,6 +607,13 @@ export const safetySection: Section = {
           }),
           control: { type: "switch", get: () => prefs.get("oxbow.commit.checkSecrets"), set: (on) => (on ? prefs.set("oxbow.commit.checkSecrets", true) : checkSecretsOff()) },
         },
+      ],
+    },
+    {
+      title: "Secret patterns",
+      setting: { kind: "prefGroup", keys: ["oxbow.secrets.patterns"] },
+      foot: "Your patterns are checked together with the built-in set: keys of AWS, GitHub, GitLab, Slack, Stripe, Google and OpenAI, private keys, and names like *API_KEY*, *SECRET*, *TOKEN*, *PASSWORD* that get a value.",
+      rows: [
         ...prefs.get("oxbow.secrets.patterns").map((p, i): Row => ({
           id: `secret:${i}`,
           label: p.pattern,

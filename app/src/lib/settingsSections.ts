@@ -6,7 +6,7 @@ import { BRANCH_PALETTES, branchPaletteById } from "./branchPalettes";
 import { confirm, type Request } from "./confirm.svelte";
 import { shortcut } from "./keys";
 import { prefs } from "./prefs.svelte";
-import { REPOSITORY_TAB_TAGS, tabTagLabelProblem, type RepositoryTabTagId, type TabTagStyle } from "./repositoryTabTags";
+import { REPOSITORY_TAB_TAGS, TAB_TAG_COLOR_KEY, TAB_TAG_STYLE_KEY, tabTagLabelProblem, type RepositoryTabTagId, type TabTagStyle } from "./repositoryTabTags";
 import { model, prefRow } from "./settingsModel.svelte";
 import { REPOSITORY_TAB_TAGS_GROUP } from "./settingsNavigation";
 import { GEAR, opts, type Group, type Option, type Section } from "./settingsRows";
@@ -179,6 +179,7 @@ export const themeSection: Section = {
       },
       {
         title: "Background",
+        setting: { kind: "prefGroup", keys: ["oxbow.background.source", "oxbow.background.image", "oxbow.background.intensity"] },
         preview: "background",
         rows: [
           prefRow("oxbow.background.source", "Background", "popup", {
@@ -208,6 +209,7 @@ export const themeSection: Section = {
       },
       {
         title: "Code theme",
+        setting: { kind: "prefGroup", keys: ["oxbow.theme", "oxbow.theme.variant"] },
         preview: "theme",
         rows: [
           prefRow("oxbow.theme.variant", "Variant", "seg", {
@@ -236,6 +238,7 @@ export const themeSection: Section = {
       {
         id: REPOSITORY_TAB_TAGS_GROUP,
         title: "Repository Tab Tags",
+        setting: { kind: "prefGroup", keys: [TAB_TAG_STYLE_KEY, TAB_TAG_COLOR_KEY] },
         rows: REPOSITORY_TAB_TAGS.map(({ id }) => {
           const style = prefs.repositoryTabTagStyle(id);
           return {

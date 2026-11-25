@@ -161,6 +161,7 @@ export const branchesSection: Section = {
     },
     {
       title: "Prefixes",
+      setting: { kind: "prefGroup", keys: ["oxbow.branch.prefixes"] },
       foot: "The pop-up at the start of the Name box offers them in this order, each with what it is for. A prefix typed by hand works too.",
       rows: [
         ...prefixRows(),

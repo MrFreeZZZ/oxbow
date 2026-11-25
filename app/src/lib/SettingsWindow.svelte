@@ -28,6 +28,7 @@
   import { config, copy, load, model } from "./settingsModel.svelte";
   import RepoFileEditor from "./RepoFileEditor.svelte";
   import { closeRepoFile, forgetRepoFiles, loadRepoFiles, repoFiles, repoFilesSection } from "./repoFileState.svelte";
+  import SettingGear from "./SettingGear.svelte";
   import SettingsRow from "./SettingsRow.svelte";
   import { text, type Group, type Row, type Section } from "./settingsRows";
   import { diffSection, generalSection, integrationsSection, themeSection } from "./settingsSections";
@@ -112,10 +113,7 @@
 
   const needle = $derived(model.query.trim().toLowerCase());
 
-  function matches(section: Section, group: Group, row: Row): boolean {
-    const words = [labelOf(section), group.title ?? "", text(row.label), text(row.sub), row.id];
-    return words.some((t) => t.toLowerCase().includes(needle));
-  }
+  const matches = (word: string) => word.toLowerCase().includes(needle);
 
   /** Groups to show: the current section, or every row that matches the search. */
   const shown = $derived.by(() => {
@@ -123,15 +121,19 @@
     return shownSections.flatMap((section) =>
       section
         .groups()
-        .map((group, i) => ({
-          ...group,
-          key: `${section.id}:${i}`,
-          title: group.title ? `${labelOf(section)} · ${group.title}` : labelOf(section),
-          foot: undefined,
-          section,
-          rows: group.rows.filter((row) => matches(section, group, row)),
-        }))
-        .filter((group) => group.rows.length),
+        .flatMap((group, i) => {
+          const groupMatch = [labelOf(section), group.title ?? "", ...(group.setting?.keys ?? [])].some(matches);
+          const rows = groupMatch ? group.rows : group.rows.filter((row) => [text(row.label), text(row.sub), row.id].some(matches));
+          if (!rows.length && !(groupMatch && group.setting)) return [];
+          return [{
+            ...group,
+            key: `${section.id}:${i}`,
+            title: group.title ? `${labelOf(section)} · ${group.title}` : labelOf(section),
+            foot: undefined,
+            section,
+            rows,
+          }];
+        }),
     );
   });
   const hits = $derived(new Set(shown.map((group) => group.section.id)));
@@ -139,25 +141,32 @@
   // A text value being edited.
   let editing = $state<{ id: string; value: string } | null>(null);
 
-  // The gear beside a row, or a right click on it.
-  let menu = $state<{ x: number; y: number; row: Row } | null>(null);
+  // The gear for a group or row, or a right click on a row.
+  let menu = $state<{ x: number; y: number; row: Row; anchor?: HTMLButtonElement } | null>(null);
 
-  function openMenu(row: Row, x: number, y: number) {
+  function openMenu(row: Row, x: number, y: number, anchor?: HTMLButtonElement) {
     if (!row.setting && !row.more) return;
-    menu = { x, y, row };
+    menu = { x, y, row, anchor };
+  }
+
+  function closeMenu() {
+    const anchor = menu?.anchor;
+    menu = null;
+    if (document.hasFocus()) anchor?.focus({ preventScroll: true });
   }
 
   function menuEntries(row: Row): MenuEntry[] {
     const entries: MenuEntry[] = [];
     const setting = row.setting;
-    if (setting?.kind === "pref") {
-      const key = setting.key;
+    if (setting?.kind === "pref" || setting?.kind === "prefGroup") {
+      const keys: readonly PrefKey[] = setting.kind === "pref" ? [setting.key] : setting.keys;
       entries.push(
-        { kind: "item", label: "Copy Setting ID", icon: menuIcons.copy, run: () => copy(key, key) },
-        { kind: "item", label: "Copy Setting as JSON", icon: menuIcons.copy, run: () => copy(key, `"${key}": ${JSON.stringify(prefs.get(key))}`) },
+        { kind: "item", label: "Copy Setting ID", icon: menuIcons.copy, run: () => copy(row.id, keys.join("\n")) },
+        { kind: "item", label: "Copy Setting as JSON", icon: menuIcons.copy, run: () => copy(row.id, keys.map((key) => `"${key}": ${JSON.stringify(prefs.get(key))}`).join(",\n")) },
         { kind: "item", label: "Edit in settings.json", icon: menuIcons.edit, run: openJson },
       );
-      if (prefs.changed(key)) {
+      if (setting.kind === "pref" && prefs.changed(setting.key)) {
+        const key = setting.key;
         const control = row.control;
         const fallback =
           control && (control.type === "seg" || control.type === "popup")
@@ -231,8 +240,10 @@
   /** What the Settings window calls an Oxbow setting, for the note when it couldn't be saved. */
   function prefLabel(key: PrefKey): string | null {
     for (const section of sections)
-      for (const group of section.groups())
+      for (const group of section.groups()) {
         for (const row of group.rows) if (row.setting?.kind === "pref" && row.setting.key === key) return text(row.label);
+        if (group.title && group.setting?.keys.includes(key)) return group.title;
+      }
     return null;
   }
   const failedLabel = $derived(prefs.failure ? prefLabel(prefs.failure.key) : null);
@@ -404,44 +415,45 @@
           </p>
         {/if}
 
-        {#if !needle && current.id === "keys"}
-          <ShortcutSearch empty={!shown.length} />
-        {/if}
         {#if !needle && current.id === "repoFiles"}
           <p class="section-note">These files are committed, so everyone who clones the repository gets them. Save only writes the file: it shows up in Changes, and you commit it yourself.</p>
         {/if}
         {#each shown as group (group.key)}
-          <section>
-            {#if group.title}
-              {#if !needle && group.id}<h2 id={group.id} tabindex="-1">{group.title}</h2>
-              {:else}<h2>{group.title}</h2>{/if}
-            {/if}
-            {#if !needle && group.preview === "background"}<div class="background-choices"><BackgroundChoices /></div>{/if}
-            <div class="settings-panel">
-              {#each group.rows as row (row.id)}
-                {#if needle || group.preview !== "background" || row.id === "oxbow.background.intensity"}
-                  <SettingsRow {row} menuOn={menu?.row.id === row.id} onMenu={(x, y) => openMenu(row, x, y)} bind:editing />
-                {/if}
-              {/each}
-              {#if group.detail === "updates"}<UpdateStatusPanel />{/if}
-            </div>
-            {#if !needle && group.preview === "theme"}
-              <div class="theme-choices"><ThemeCards /></div>
-              <p class="foot">Themes color code: diffs, conflicts and stashes. The window keeps its own look.</p>
-              <ThemeSample />
-            {:else if !needle && group.preview === "branches"}
-              <BranchPreview />
-            {:else if !needle && group.preview === "diff"}
-              <DiffPreview />
-            {:else if !needle && group.preview === "console"}
-              <div class="term-preview" aria-label="Git commands">
-                <div><span class="dim">%</span> <span class="git">git</span> push origin main</div>
-                <div class="dim">To github.com:acme/api.git</div>
-                <div class="dim">{"   3f2a1c9..7c1e9a2  main -> main"}</div>
-              </div>
-            {/if}
-            {#if text(group.foot)}<p class="foot">{text(group.foot)}</p>{/if}
-          </section>
+          {#if !needle && group.detail === "shortcutSearch"}
+            {@render groupHeading(group)}
+            <ShortcutSearch empty={shown.length === 1} />
+          {:else}
+            <section>
+              {@render groupHeading(group)}
+              {#if !needle && group.preview === "background"}<div class="background-choices"><BackgroundChoices /></div>{/if}
+              {#if group.detail !== "shortcutSearch"}
+                <div class="settings-panel">
+                  {#each group.rows as row (row.id)}
+                    {#if needle || group.preview !== "background" || row.id === "oxbow.background.intensity"}
+                      <SettingsRow {row} menuOn={menu?.row.id === row.id} onMenu={(x, y) => openMenu(row, x, y)} bind:editing />
+                    {/if}
+                  {/each}
+                  {#if group.detail === "updates"}<UpdateStatusPanel />{/if}
+                </div>
+              {/if}
+              {#if !needle && group.preview === "theme"}
+                <div class="theme-choices"><ThemeCards /></div>
+                <p class="foot">Themes color code: diffs, conflicts and stashes. The window keeps its own look.</p>
+                <ThemeSample />
+              {:else if !needle && group.preview === "branches"}
+                <BranchPreview />
+              {:else if !needle && group.preview === "diff"}
+                <DiffPreview />
+              {:else if !needle && group.preview === "console"}
+                <div class="term-preview" aria-label="Git commands">
+                  <div><span class="dim">%</span> <span class="git">git</span> push origin main</div>
+                  <div class="dim">To github.com:acme/api.git</div>
+                  <div class="dim">{"   3f2a1c9..7c1e9a2  main -> main"}</div>
+                </div>
+              {/if}
+              {#if text(group.foot)}<p class="foot">{text(group.foot)}</p>{/if}
+            </section>
+          {/if}
         {:else}
           {#if needle}<p class="empty">No settings match “{model.query.trim()}”.</p>{/if}
         {/each}
@@ -450,8 +462,28 @@
   </div>
 </div>
 
+{#snippet groupHeading(group: Group & { key: string })}
+  {#if group.title}
+    <div class="group-heading" class:with-gear={!!group.setting}>
+      {#if group.setting}
+        {@const target = { id: group.key, label: group.title, setting: group.setting }}
+        <SettingGear
+          label={group.title}
+          on={menu?.row.id === target.id}
+          open={(button) => {
+            const box = button.getBoundingClientRect();
+            openMenu(target, box.left, box.bottom + 4, button);
+          }}
+        />
+      {/if}
+      {#if !needle && group.id}<h2 id={group.id} tabindex="-1">{group.title}</h2>
+      {:else}<h2>{group.title}</h2>{/if}
+    </div>
+  {/if}
+{/snippet}
+
 {#if menu}
-  <Menu x={menu.x} y={menu.y} label="Setting {text(menu.row.label)}" entries={menuEntries(menu.row)} onClose={() => (menu = null)} />
+  <Menu x={menu.x} y={menu.y} label="Setting {text(menu.row.label)}" entries={menuEntries(menu.row)} onClose={closeMenu} />
 {/if}
 
 <ConfirmSheet repo={model.repo?.name ?? ""} branch={null} color={0} />
@@ -680,6 +712,22 @@
     font-weight: 600;
   }
 
+  .group-heading.with-gear {
+    position: relative;
+    display: flex;
+    align-items: center;
+    min-height: 20px;
+  }
+
+  .group-heading > :global(.setting-gear) {
+    position: absolute;
+    left: -26px;
+  }
+
+  .group-heading:hover > :global(.setting-gear) {
+    opacity: 1;
+  }
+
   h2[tabindex="-1"]:focus {
     outline: none;
   }
@@ -828,6 +876,12 @@
     .scroll {
       overflow-x: hidden;
       padding: 6px 14px 20px;
+    }
+
+    .group-heading > :global(.setting-gear) {
+      position: static;
+      flex-shrink: 0;
+      opacity: 1;
     }
   }
 </style>

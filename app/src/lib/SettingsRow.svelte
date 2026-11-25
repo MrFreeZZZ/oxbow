@@ -4,8 +4,9 @@
 
   import { mac } from "./keys";
   import { model } from "./settingsModel.svelte";
+  import SettingGear from "./SettingGear.svelte";
   import ShortcutKeys from "./ShortcutKeys.svelte";
-  import { GEAR, stepPopup, text, withCurrent, type Row } from "./settingsRows";
+  import { stepPopup, text, withCurrent, type Row } from "./settingsRows";
 
   const canDetectOpenSelect = CSS.supports("selector(select:open)");
 
@@ -45,17 +46,14 @@
   }}
 >
   {#if row.setting || row.more}
-    <button
-      class="gear"
-      class:on={menuOn}
-      aria-label="More actions for {text(row.label)}"
-      onclick={(event) => {
-        const box = event.currentTarget.getBoundingClientRect();
+    <SettingGear
+      label={text(row.label)}
+      on={menuOn}
+      open={(button) => {
+        const box = button.getBoundingClientRect();
         onMenu(box.left, box.bottom + 4);
       }}
-    >
-      <svg class="icon" viewBox="0 0 16 16"><path d={GEAR} /></svg>
-    </button>
+    />
   {/if}
   {#if row.file}
     {@const file = row.file()}
@@ -193,35 +191,15 @@
     border-top: 0.5px solid var(--sep);
   }
 
-  .gear {
+  .row > :global(.setting-gear) {
     position: absolute;
     left: -27px;
     top: 50%;
     margin-top: -10px;
-    width: 20px;
-    height: 20px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius-pill);
-    color: var(--text2);
-    opacity: 0;
   }
 
-  .gear .icon {
-    width: 14px;
-    height: 14px;
-    stroke-width: 1.3;
-  }
-
-  .row:hover .gear,
-  .gear.on,
-  .gear:focus-visible {
+  .row:hover > :global(.setting-gear) {
     opacity: 1;
-  }
-
-  .gear.on {
-    background: var(--field);
   }
 
   .text {
@@ -470,7 +448,7 @@
       overflow-wrap: anywhere;
     }
 
-    .gear {
+    .row > :global(.setting-gear) {
       position: static;
       grid-column: 1;
       grid-row: 2;
@@ -478,7 +456,7 @@
       opacity: 1;
     }
 
-    .row > :not(.gear):not(.file):not(.avatar):not(.text) {
+    .row > :not(:global(.setting-gear)):not(.file):not(.avatar):not(.text) {
       grid-column: 2;
       justify-self: end;
       min-width: 0;

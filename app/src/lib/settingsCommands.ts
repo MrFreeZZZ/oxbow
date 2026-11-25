@@ -81,6 +81,7 @@ export const commandsSection: Section = {
   icon: "M3 4l4 4-4 4M9 12h4",
   groups: () => [{
     title: "Commands",
+    setting: { kind: "prefGroup", keys: ["oxbow.commands"] },
     rows: commandRows(),
     foot: "Run commands from the repository toolbar or the Command Palette. Assign keys in Keyboard Shortcuts. Output appears in the command window and Console; avoid secrets in scripts or output.",
   }],

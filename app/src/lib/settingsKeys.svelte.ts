@@ -4,7 +4,7 @@
 import { keys } from "./keys";
 import { menuIcons, type MenuEntry } from "./Menu.svelte";
 import { copy, model } from "./settingsModel.svelte";
-import type { Row, Section } from "./settingsRows";
+import type { Group, Row, Section } from "./settingsRows";
 import { fits, nameOf, shortcutEdit } from "./shortcutEdit.svelte";
 import { bindingsOf, changedKeys, commandIds, commandOf, defaultsOf, startsWith, strokeOf, type ShortcutId } from "./shortcuts";
 
@@ -23,6 +23,13 @@ const KEY_GROUPS: { title: string; categories: string[]; foot?: string }[] = [
 ];
 
 const mac = navigator.platform.startsWith("Mac");
+
+const overrides: Group = {
+  title: "Shortcut overrides",
+  setting: { kind: "prefGroup", keys: ["oxbow.keyboard.shortcuts"] },
+  detail: "shortcutSearch",
+  rows: [],
+};
 
 /** The section's own search: words, or keys pressed with Record Keys on. */
 export const keySearch = $state({ query: "", stroke: null as string | null, record: false, changedOnly: false });
@@ -79,9 +86,9 @@ export const keysSection: Section = {
   groups: () => {
     const { query, stroke, changedOnly } = keySearch;
     const shown = commandIds().filter((id) => model.query.trim() || (fits(id, query, mac) && (!stroke || bindingsOf(id).some((c) => startsWith(c, stroke))) && (!changedOnly || changedKeys(id))));
-    return KEY_GROUPS.flatMap(({ title, categories, foot }) => {
+    return [overrides, ...KEY_GROUPS.flatMap(({ title, categories, foot }) => {
       const ids = shown.filter((id) => categories.includes(commandOf(id).category));
       return ids.length ? [{ title, foot, rows: ids.map(keyRow) }] : [];
-    });
+    })];
   },
 };
