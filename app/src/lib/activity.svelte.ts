@@ -94,14 +94,14 @@ export class Activity {
   /** Starts a Push or Pull that waited for the fetch; set by the app. */
   startQueued: ((item: ActivityItem) => Promise<void>) | null = null;
   queueBlocked = () => false;
-  #startingQueued = false;
+  #startingQueued = $state(false);
 
   get hasQueuedChange() {
     return this.queued.length > 0 || this.#startingQueued;
   }
   // The backend keeps the latest request number when the WebView reloads.
   #next = Math.floor(performance.timeOrigin * 1000);
-  #fetch: ActivityItem | null = null;
+  #fetch = $state.raw<ActivityItem | null>(null);
 
   get hasFetch(): boolean {
     return this.#fetch !== null;
@@ -207,10 +207,18 @@ export class Activity {
     return ok;
   }
 
-  async runQueued() {
+  queuedReady(id: number): boolean {
+    return this.queued[0]?.id === id && !this.#fetch && !this.queueBlocked();
+  }
+
+  get canStartQueued(): boolean {
     const waiting = this.queued[0];
-    if (!waiting || this.#fetch || this.queueBlocked() || !this.startQueued) return;
-    this.queued = [];
+    return !!waiting && !this.#startingQueued && this.queuedReady(waiting.id);
+  }
+
+  async runQueued() {
+    if (!this.canStartQueued || !this.startQueued) return;
+    const waiting = this.queued[0];
     this.#startingQueued = true;
     try { await this.startQueued(waiting); }
     finally { this.#startingQueued = false; }
@@ -220,7 +228,7 @@ export class Activity {
     if (this.running) this.api.stopFetch(this.running.id).catch(() => {});
   }
 
-  /** Push or Pull pressed while the fetch runs: it starts when the fetch is done. */
+  /** Push or Pull pressed while the fetch runs: it waits for the fetch and its repository tab. */
   queue(kind: ActivityKind, title: string, mode?: "merge" | "rebase") {
     this.queued = [{ id: this.#next++, kind, title, sub: "Starts when the fetch finishes", state: "queued", time: Date.now(), mode }];
     this.open = true;

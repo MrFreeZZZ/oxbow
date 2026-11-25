@@ -1673,23 +1673,34 @@
   }
 
   /** `mode` picks merge or rebase for this one pull, over Settings › Git. */
-  async function sync(kind: "fetch" | "pull" | "push", mode?: "merge" | "rebase") {
+  async function sync(kind: "fetch" | "pull" | "push", mode?: "merge" | "rebase", queuedId?: number) {
     // While a fetch runs, Fetch shows its progress, and Pull or Push waits for it in line.
     if (kind === "fetch" && (activity.running || activity.problem)) {
       activity.open = !activity.open;
       return;
     }
-    if (kind !== "fetch" && activity.hasFetch) {
-      const branch = history?.head.branch ?? "HEAD";
-      activity.queue(kind, kind === "push" ? `Push ${branch}` : `Pull into ${branch}`, mode);
-      return;
+    if (kind !== "fetch" && queuedId === undefined) {
+      if (activity.hasFetch) {
+        const branch = history?.head.branch ?? "HEAD";
+        activity.queue(kind, kind === "push" ? `Push ${branch}` : `Pull into ${branch}`, mode);
+        return;
+      }
+      if (activity.queued.length) {
+        activity.open = true;
+        return;
+      }
     }
     // Commits made outside the app since the last reload belong in the sheet.
     const opened = repo;
     await (kind === "fetch" ? refresh() : loader.refreshForSync());
-    if (!opened || repo !== opened || !remoteCtx) return;
+    if (queuedId !== undefined && !activity.queuedReady(queuedId)) return;
+    if (!opened || repo !== opened || !remoteCtx) {
+      if (queuedId !== undefined) activity.unqueue(queuedId);
+      return;
+    }
     // Pull or Push that can't run says why under its button, as the grey button does.
     if (kind !== "fetch" && syncBlock(remoteCtx, kind)) {
+      if (queuedId !== undefined) activity.unqueue(queuedId);
       why = kind;
       return;
     }
@@ -1713,6 +1724,14 @@
         : undefined;
     // Submodule commits nobody else has would leave the pushed commits pointing at nothing.
     const unpushedSubs = kind === "push" && history?.submodules.length ? await api.unpushedSubmodules().catch(() => []) : [];
+    if (queuedId !== undefined) {
+      if (!activity.queuedReady(queuedId)) return;
+      activity.unqueue(queuedId);
+      if (repo === opened && remoteCtx && syncBlock(remoteCtx, kind)) {
+        why = kind;
+        return;
+      }
+    }
     if (repo !== opened || !remoteCtx) return;
     const request = kind === "pull" ? pullRequest(remoteCtx, setup) : pushRequest(remoteCtx, unpushedSubs);
     const opBefore = history?.operation ?? null;
@@ -1722,9 +1741,13 @@
     checkRemoteTags();
     openConflicts(opBefore);
   }
+  activity.queueBlocked = () => !repoWorkOnFocus(scope.isActive()) || overviewShown || !canSwitch() || !!fixing || !!splitting;
   activity.startQueued = async (item) => {
-    if (item.kind !== "action" && item.kind !== "reload") await sync(item.kind, item.mode);
+    if (item.kind === "pull" || item.kind === "push") await sync(item.kind, item.mode, item.id);
   };
+  $effect(() => {
+    if (activity.canStartQueued) untrack(() => void activity.runQueued());
+  });
 
   /** What Fetch fetches: the one remote, or all of them, as its sheet says. */
   function fetchTarget(): { remote: string | null; label: string } | null {

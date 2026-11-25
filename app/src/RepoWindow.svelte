@@ -36,16 +36,8 @@
   const screens = new Map<RepoSessionId | null, { screen: App; scope: RepoScope }>();
   function register(scope: RepoScope, screen: App) {
     screens.set(scope.id, { screen, scope });
-    scope.activity.queueBlocked = () => blocked;
-    return () => {
-      screens.delete(scope.id);
-      scope.activity.queueBlocked = () => false;
-    };
+    return () => { screens.delete(scope.id); };
   }
-  $effect(() => {
-    if (blocked) return;
-    for (const { id } of tabs) void screens.get(id)?.scope.activity.runQueued();
-  });
 
   const activeScreen = () => screens.get(showingHome ? null : activeId)?.screen;
   const draftSaves = () => [...screens.values()].map(({ scope }) => scope.draftSaves);

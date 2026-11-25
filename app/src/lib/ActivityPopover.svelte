@@ -115,7 +115,7 @@
           <span class="tile"><svg class="icon" viewBox="0 0 16 16"><path d={ICONS[item.kind]} /></svg></span>
           <span class="words">
             <span class="line"><span class="title">{item.title}</span><span class="time">next</span></span>
-            <span class="detail">{item.sub}</span>
+            <span class="detail">{activity.hasFetch ? item.sub : "Waiting to start"}</span>
             <span class="buttons"><button class="button small" onclick={() => activity.unqueue(item.id)}>Cancel</button></span>
           </span>
         </div>
