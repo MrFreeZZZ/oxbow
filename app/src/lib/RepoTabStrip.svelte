@@ -2,6 +2,8 @@
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import type { RepoSessionId } from "./api";
   import { withKeys } from "./keys";
+  import { prefs } from "./prefs.svelte";
+  import { REPOSITORY_TAB_TAGS, type RepositoryTabTagId } from "./repositoryTabTags";
   import { tabDragOffsets } from "./repoTabDrag";
   import { beginTabDrag, noteTabOrder, tabGesture } from "./repoTabDrag.svelte";
   import { repoTabActions, type ShownTab } from "./repoTabs";
@@ -9,7 +11,7 @@
   import { keyFocus } from "./tabs";
   import { tick } from "svelte";
 
-  let { tabs, activeId, showNumbers, openMenu, openRecent, copyPath, activate, close, closeOthers, canSwitch, activeNow, move }: {
+  let { tabs, activeId, showNumbers, openMenu, openRecent, copyPath, activate, close, closeOthers, canSwitch, activeNow, move, saveTag, customizeTags }: {
     tabs: readonly ShownTab[];
     activeId: RepoSessionId | null;
     /** 1–9 in place of the folder icon, while ⌘ or Ctrl is held. */
@@ -24,6 +26,8 @@
     /** The window's active tab, read after this strip has been remounted. */
     activeNow: () => RepoSessionId | null;
     move: (id: RepoSessionId, to: number) => Promise<void>;
+    saveTag: (path: string, id: RepositoryTabTagId | null) => void;
+    customizeTags: () => void;
   } = $props();
 
   let list = $state<HTMLDivElement>();
@@ -93,11 +97,21 @@
   function contextEntries(tab: ShownTab): MenuEntry[] {
     const actions = repoTabActions(tab, tabs.length, {
       copyPath,
+      saveTag,
       close: (id) => void withTabFocus(close(id)),
       closeOthers: (id) => void withTabFocus(closeOthers(id)),
     });
+    const selected = prefs.repositoryTabTag(tab.repo.canonicalPath);
     return [
       { kind: "item", icon: menuIcons.copy, ...actions.copy },
+      { kind: "sep" },
+      { kind: "swatches", label: "Repository Tab Tag", choices: [
+        { label: "No Tag", icon: menuIcons.tag, checked: selected === null, run: () => actions.tag(null) },
+        ...REPOSITORY_TAB_TAGS.map(({ id, label }) => ({
+          label, color: prefs.repositoryTabTagColor(id), checked: selected === id, run: () => actions.tag(id),
+        })),
+      ] },
+      { kind: "item", label: "Customize Folder Tags…", icon: menuIcons.tag, run: customizeTags },
       { kind: "sep" },
       { kind: "item", icon: menuIcons.bad, ...actions.close },
       { kind: "item", icon: menuIcons.bad, ...actions.others },
@@ -132,6 +146,7 @@
     onfocusout={(event) => { if (!list?.contains(event.relatedTarget as Node | null)) focused = null; }}>
     {#each tabs as tab, index (tab.id)}
       {@const selected = tab.id === shownId}
+      {@const tag = prefs.repositoryTabTag(tab.repo.canonicalPath)}
       <div class="item" class:selected class:dragging={!!offsets && tab.id === shownId} role="presentation"
         style:transform={offsets ? `translateX(${Math.round(offsets[index])}px)` : undefined}>
         <button class="tab-button" role="tab" aria-selected={selected} aria-controls={`repo-panel-${tab.id}`}
@@ -152,7 +167,7 @@
           {#if showNumbers && index < 9}
             <span class="number" aria-hidden="true">{index + 1}</span>
           {:else}
-            <svg class="icon folder" viewBox="0 0 16 16"><path d={menuIcons.folder} /></svg>
+            <svg class="icon folder" viewBox="0 0 16 16" style:--tag-color={tag ? prefs.repositoryTabTagColor(tag) : undefined}><path d={menuIcons.folder} /></svg>
           {/if}
           <span>{tab.repo.name}</span>
         </button>
@@ -334,7 +349,8 @@
   }
   .folder {
     flex: 0 0 16px;
-    color: var(--text2);
+    color: var(--tag-color, var(--text2));
+    fill: var(--tag-color, none);
   }
   /* The close button's gray circle, holding the shortcut digit. */
   .number {
@@ -351,7 +367,7 @@
     font-weight: 600;
     line-height: 1;
   }
-  .selected .folder { color: var(--accent); }
+  .selected .folder { color: var(--tag-color, var(--accent)); }
   .control {
     flex: none;
     justify-content: center;

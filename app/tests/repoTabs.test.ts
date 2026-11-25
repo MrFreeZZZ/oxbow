@@ -231,17 +231,24 @@ test("closing the other tabs checks all guards before selecting the target and c
 
 test("the tab context menu targets the tab that opened it", () => {
   const calls: unknown[] = [];
-  const target = { id: 2, repo: summary(2), history };
+  const target = { id: -1, repo: { ...summary(2), canonicalPath: "/canonical/worktree" }, pending: true } as const;
   const actions = {
     copyPath: (path: string) => calls.push(["copy", path]),
     close: (id: number) => calls.push(["close", id]),
     closeOthers: (id: number) => calls.push(["keep", id]),
+    saveTag: (path: string, id: string | null) => calls.push(["tag", path, id]),
   };
   const menu = repoTabActions(target, 3, actions);
   menu.copy.run();
+  menu.tag("gray");
+  menu.tag("gray");
+  menu.tag(null);
   menu.close.run();
   menu.others.run();
-  assert.deepEqual(calls, [["copy", "/repo/2"], ["close", 2], ["keep", 2]]);
+  assert.deepEqual(calls, [
+    ["copy", "/repo/2"], ["tag", "/canonical/worktree", "gray"], ["tag", "/canonical/worktree", "gray"],
+    ["tag", "/canonical/worktree", null], ["close", -1], ["keep", -1],
+  ]);
   assert.equal(menu.others.off, false);
   assert.equal(repoTabActions(target, 1, actions).others.off, true);
 });

@@ -1,4 +1,5 @@
 import type { RepoNotice, RepoSessionId, RepoTabOpen } from "./api";
+import type { RepositoryTabTagId } from "./repositoryTabTags";
 import type { History, RepoSummary, TrustFinding } from "./types";
 
 type Answer = "trust" | "restricted";
@@ -56,9 +57,11 @@ export function repoTabActions(tab: ShownTab, count: number, actions: {
   copyPath(path: string): void;
   close(id: RepoSessionId): void;
   closeOthers(id: RepoSessionId): void;
+  saveTag(path: string, id: RepositoryTabTagId | null): void;
 }) {
   return {
     copy: { label: "Copy Repository Path", run: () => actions.copyPath(tab.repo.path) },
+    tag: (id: RepositoryTabTagId | null) => actions.saveTag(tab.repo.canonicalPath, id),
     close: { label: "Close Tab", run: () => actions.close(tab.id) },
     others: { label: "Close Other Tabs", off: count < 2, run: () => actions.closeOthers(tab.id) },
   };

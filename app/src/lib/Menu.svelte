@@ -19,10 +19,13 @@
       }
     /** Opens a submenu to the side, e.g. Reset ▸ Soft / Mixed / Hard. */
     | { kind: "sub"; label: string; icon: string; entries: SubEntry[] }
+    | { kind: "swatches"; label: string; choices: Swatch[] }
     | { kind: "header"; label: string; keys?: string }
     | { kind: "note"; label: string }
     | { kind: "details"; label: string; path: string; color: number; branches: string; remotes: { label: string; lines: string[] }[] }
     | { kind: "sep" };
+
+  type Swatch = { label: string; checked: boolean; run: () => void } & ({ color: string } | { icon: string });
 
   /** An item of a submenu, with an optional second line and a grey hint on the right. */
   export type SubEntry = { label: string; detail?: string; hint?: string; danger?: boolean; off?: boolean; run: () => void };
@@ -164,6 +167,7 @@
     if (!scope.isActive()) return;
     const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const removable = focused?.dataset.index ? entries[Number(focused.dataset.index)] : undefined;
+    const swatches = focused?.closest<HTMLElement>(".swatches");
     if ((event.key === "Delete" || event.key === "Backspace") && removable?.kind === "item" && removable.remove) {
       event.preventDefault();
       keyed = true;
@@ -171,6 +175,11 @@
     } else if (event.key === "Escape") {
       event.preventDefault();
       onClose();
+    } else if (swatches && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+      event.preventDefault();
+      const choices = [...swatches.querySelectorAll("button")];
+      const step = event.key === "ArrowRight" ? 1 : -1;
+      choices[(choices.indexOf(focused as HTMLButtonElement) + choices.length + step) % choices.length]?.focus();
     } else if (event.key === "ArrowRight" && document.activeElement instanceof HTMLElement && document.activeElement.dataset.sub) {
       event.preventDefault();
       openSub(Number(document.activeElement.dataset.sub), document.activeElement, true);
@@ -182,10 +191,11 @@
       event.preventDefault();
       keyed = true;
       const inSub = !!subBox?.contains(document.activeElement);
-      const items = [...((inSub ? subBox : box)?.querySelectorAll<HTMLButtonElement>("button[role=menuitem]") ?? [])];
-      const at = items.indexOf(document.activeElement as HTMLButtonElement);
+      const items = [...((inSub ? subBox : box)?.querySelectorAll<HTMLElement>("button[role=menuitem], .swatches") ?? [])];
+      const at = focused ? items.indexOf(swatches ?? focused) : -1;
       const next = event.key === "ArrowDown" ? (at + 1) % items.length : (at - 1 + items.length) % items.length;
-      items[next]?.focus();
+      const item = items[next];
+      (item?.querySelector<HTMLButtonElement>('button[aria-checked="true"]') ?? item)?.focus();
     }
   }
 </script>
@@ -210,6 +220,27 @@
       <div class="sep"></div>
     {:else if entry.kind === "note"}
       <div class="note">{entry.label}</div>
+    {:else if entry.kind === "swatches"}
+      <div class="swatches" role="group" aria-label={entry.label}>
+        {#each entry.choices as choice (choice.label)}
+          <button type="button" role="menuitemradio" aria-checked={choice.checked} aria-label={choice.label}
+            title={choice.label} tabindex={choice.checked ? 0 : -1} class="swatch" class:clear={"icon" in choice}
+            style:--swatch={"color" in choice ? choice.color : undefined}
+            onmouseenter={() => (sub = null)} onclick={() => choose(choice.run)}>
+            {#if "icon" in choice}
+              <svg class="icon" viewBox="0 0 16 16" aria-hidden="true">
+                <path class="clear-tag" d={choice.icon} />
+                <path class="slash-gap" d="M2 2l12 12" />
+                <path d="M2 2l12 12" />
+              </svg>
+            {:else if choice.checked}
+              <svg class="icon swatch-check" viewBox="0 0 16 16" aria-hidden="true">
+                <path d={menuIcons.good} /><path d={menuIcons.good} />
+              </svg>
+            {/if}
+          </button>
+        {/each}
+      </div>
     {:else if entry.kind === "details"}
       <div class="details" style:background={tint(entry.color)} style:box-shadow={`inset 0 0 0 1px color-mix(in srgb, ${lane(entry.color)} 40%, transparent)`}>
         <div class="details-identity"><strong>{entry.label}</strong><span>{entry.path}</span></div>
@@ -343,6 +374,51 @@
     margin: 5px 10px;
     background: var(--sep);
   }
+  .swatches {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-2);
+  }
+  .swatch {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 21px;
+    height: 21px;
+    padding: 0;
+    border-radius: var(--radius-pill);
+    background: var(--swatch);
+    box-shadow: inset 0 0 0 1px var(--sep);
+  }
+  .swatch:hover, .swatch:focus-visible {
+    background: var(--swatch);
+    outline: 1px solid var(--icon);
+    outline-offset: 1px;
+  }
+  .swatch:focus-visible { outline-color: var(--accent); outline-width: 2px; }
+  .swatch.clear {
+    width: 24px;
+    height: 24px;
+    margin-right: var(--space-2);
+    border-radius: var(--radius-m);
+    box-shadow: none;
+  }
+  .swatch.clear::after {
+    content: "";
+    position: absolute;
+    inset: 2px calc(-1 * var(--space-2)) 2px auto;
+    width: 1px;
+    background: var(--sep);
+    pointer-events: none;
+  }
+  .swatch.clear:hover, .swatch.clear[aria-checked="true"] { background: var(--hover-wash); }
+  .swatch.clear[aria-checked="true"] { box-shadow: inset 0 0 0 1px var(--icon); }
+  .clear .icon { width: 18px; height: 18px; }
+  .clear-tag { transform: translateX(16px) scaleX(-1); }
+  .slash-gap { stroke: var(--sheet); stroke-width: 4px; }
+  .swatch-check path:first-child { stroke: black; stroke-width: 4px; }
+  .swatch-check path:last-child { stroke: white; stroke-width: 2px; }
   .note {
     padding: 1px 10px 4px 34px;
     font-size: var(--text-caption);

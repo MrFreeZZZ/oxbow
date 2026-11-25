@@ -12,6 +12,7 @@
   import type { RepoScope } from "./lib/repoScope";
   import { loadDetailsChrome } from "./lib/detailsChrome.svelte";
   import { nextTabNumberPhase, TAB_NUMBER_DELAY, type TabNumberPhase } from "./lib/repoTabNumbers";
+  import { prefs } from "./lib/prefs.svelte";
   import { DIALOG_IN_THE_WAY, isPending, readTabLayout, RepoTabs, saveTabLayout, type ShownTab } from "./lib/repoTabs";
   import { settleReviewSaves } from "./lib/reviewSaves";
   import { mac, type ShortcutId } from "./lib/shortcuts";
@@ -270,7 +271,9 @@
   {#if tabs.length > 0}
     <RepoTabStrip {tabs} activeId={highlightedId} showNumbers={numberPhase === "showing"} {openMenu} {openRecent} {copyPath}
       activate={activateTab} close={closeTab} closeOthers={closeOtherTabs}
-      canSwitch={canSwitch} activeNow={activeNow} move={moveTab} />
+      canSwitch={canSwitch} activeNow={activeNow} move={moveTab}
+      saveTag={(path, id) => void prefs.saveRepositoryTabTag(path, id).catch(report)}
+      customizeTags={() => void api.openSettings().catch(report)} />
   {/if}
 {/snippet}
 
