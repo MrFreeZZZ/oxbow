@@ -108,6 +108,8 @@ interface PendingOpen {
 export class RepoTabs {
   #tabs: ShownTab[] = [];
   #active: RepoSessionId | null = null;
+  /** Remember the startup selection until a repository opens or that tab is removed. */
+  #savedActive: RepoSessionId | null = null;
   /** The latest tab selection while its open or activation is in flight. */
   #armed: RepoSessionId | null = null;
   /** Bumped when the user picks another tab, so an open already in flight does not take focus. */
@@ -137,6 +139,7 @@ export class RepoTabs {
   }
 
   get settled() { return this.#queue; }
+  get layoutActive() { return this.#active ?? this.#savedActive; }
 
   /** Home takes focus while the last repository remains active on the backend. */
   selectHome() {
@@ -158,9 +161,11 @@ export class RepoTabs {
     this.#tabs = this.#tabs.filter(tab => !this.#closed.has(tab.id));
     if (this.#active !== null && this.#closed.has(this.#active)) this.#active = null;
     if (this.#armed !== null && this.#closed.has(this.#armed)) this.#armed = null;
+    if (this.#savedActive !== null && this.#closed.has(this.#savedActive)) this.#savedActive = null;
   }
 
   #show() {
+    if (this.#active !== null) this.#savedActive = null;
     if (!this.#disposed) this.#hooks.show(this.#tabs, this.#active, this.#armed ?? this.#active);
   }
 
@@ -241,14 +246,14 @@ export class RepoTabs {
     }
   }
 
-  async restore(layout: TabLayout, open: (path: string) => Promise<void>) {
-    const active = layout.active && layout.paths.includes(layout.active) ? layout.active : layout.paths.at(-1) ?? null;
+  async restore(layout: TabLayout, open: (path: string) => Promise<void>, explicit: string | null = null) {
+    const path = explicit ?? layout.active ?? layout.paths.at(-1);
     this.#tabs = layout.paths.map(path => this.#placeholder(path, layout.canonicalPaths?.[path]));
     this.#active = null;
+    this.#savedActive = this.#tabs.find(tab => tab.repo.path === layout.active)?.id ?? null;
     this.#armed = null;
     this.#show();
-    if (this.#disposed || !active) return;
-    await open(active);
+    if (!this.#disposed && path) await open(path);
   }
 
   step(by: 1 | -1, fromHome = false) {
@@ -322,7 +327,7 @@ export class RepoTabs {
             await this.#activate(id, claim());
             reopened = focused() && this.#active === id;
           }
-          this.#dropPlaceholder(path, repo.path);
+          this.#dropPlaceholder(path, repo);
           this.#show();
         });
         if (reopened) await from.reopened(id, repo);
@@ -336,7 +341,7 @@ export class RepoTabs {
         if (!live() || this.#closed.has(id) || this.#switchBlocked()) return;
         const attach = (force = false) => {
           const real: OpenTab = { id, repo, history };
-          const at = this.#tabs.findIndex(tab => isPending(tab) && (tab.repo.path === path || tab.repo.path === repo.path));
+          const at = this.#tabs.findIndex(tab => this.#matchesPlaceholder(tab, path, repo));
           if (at >= 0) {
             const next = this.#tabs.slice();
             next[at] = real;
@@ -383,8 +388,13 @@ export class RepoTabs {
     }
   }
 
-  #dropPlaceholder(path: string, canonical: string) {
-    this.#tabs = this.#tabs.filter(tab => !(isPending(tab) && (tab.repo.path === path || tab.repo.path === canonical)));
+  #matchesPlaceholder(tab: ShownTab, path: string, repo: RepoSummary) {
+    return isPending(tab) && (tab.repo.path === path || tab.repo.path === repo.path ||
+      tab.repo.canonicalPath === repo.canonicalPath);
+  }
+
+  #dropPlaceholder(path: string, repo: RepoSummary) {
+    this.#tabs = this.#tabs.filter(tab => !this.#matchesPlaceholder(tab, path, repo));
     if (this.#armed !== null && !this.#tabs.some(tab => tab.id === this.#armed)) this.#armed = null;
   }
 

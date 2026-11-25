@@ -20,6 +20,7 @@ use crate::{CommandResult, turns};
 #[derive(Default)]
 pub(crate) struct Session {
     pub(crate) repositories: Mutex<Repositories>,
+    pub(crate) restored_startup_argument: AtomicBool,
     pub(crate) opening: tokio::sync::Mutex<()>,
     pub(crate) repo_topology: tokio::sync::RwLock<()>,
     pub(crate) settings_writes: tokio::sync::Mutex<()>,

@@ -174,6 +174,91 @@ test("the next run opens only the active repository and keeps the others until t
   assert.equal(readTabLayout(storage), null);
 });
 
+test("a failed startup keeps the saved selection on remount until a tab is selected or closed", async () => {
+  const layout = { paths: ["/repo/1", "/repo/2", "/repo/3", "/repo/4"], active: "/repo/2" };
+  for (const explicit of [null, "/missing"]) {
+    let saved = JSON.stringify(layout);
+    const storage = {
+      getItem: () => saved,
+      setItem: (_key: string, value: string) => { saved = value; },
+    };
+    const opens: string[] = [];
+    for (const argument of [explicit, null]) {
+      const { tabs, state, from, errors } = windowTabs({
+        async open(path) {
+          opens.push(path);
+          if (path === "/repo/2" || path === "/missing") throw new Error("Folder is unavailable");
+          return opened(Number(path.at(-1)));
+        },
+        history: async () => history,
+        activate: async () => {},
+        close: async () => {},
+      });
+      await tabs.restore(readTabLayout(storage)!, path => tabs.open(path, from), argument);
+      assert.match(String(errors[0]), /Folder is unavailable/);
+      assert.equal(state.active, null);
+      assert.equal(state.tabs.every(isPending), true);
+      saveTabLayout(state.tabs, tabs.layoutActive, storage);
+      assert.deepEqual(readTabLayout(storage), layout);
+      if (opens.length === 2) {
+        if (explicit) {
+          await tabs.close(state.tabs[0].id);
+          saveTabLayout(state.tabs, tabs.layoutActive, storage);
+          assert.deepEqual(readTabLayout(storage), { paths: ["/repo/2", "/repo/3", "/repo/4"], active: "/repo/2" });
+          await tabs.removeRestored("/repo/3");
+          saveTabLayout(state.tabs, tabs.layoutActive, storage);
+          assert.deepEqual(readTabLayout(storage), { paths: ["/repo/2", "/repo/4"], active: "/repo/2" });
+          await tabs.removeRestored("/repo/2");
+          saveTabLayout(state.tabs, tabs.layoutActive, storage);
+          assert.deepEqual(readTabLayout(storage), { paths: ["/repo/4"], active: null });
+        } else {
+          await tabs.activate(state.tabs[0].id);
+          saveTabLayout(state.tabs, tabs.layoutActive, storage);
+          assert.deepEqual(readTabLayout(storage), { paths: layout.paths, active: "/repo/1" });
+        }
+      }
+    }
+    assert.deepEqual(opens, explicit ? [explicit, "/repo/2"] : ["/repo/2", "/repo/2", "/repo/1"]);
+  }
+});
+
+test("a startup argument opens first and reuses a saved tab by canonical folder or appends a new one", async () => {
+  const layout = { paths: ["/saved-alias", "/repo/2"], active: "/repo/2", canonicalPaths: { "/saved-alias": "/repo/1" } };
+  for (const [argument, id, order] of [
+    ["/repo/2", 2, ["/saved-alias", "/repo/2"]],
+    ["/another-alias", 1, ["/repo/1", "/repo/2"]],
+    ["/repo/3", 3, ["/saved-alias", "/repo/2", "/repo/3"]],
+  ] as const) {
+    const opens: string[] = [];
+    const { tabs, state, from } = windowTabs({
+      async open(path) { opens.push(path); return opened(id); },
+      history: async () => history,
+      activate: async () => {},
+      close: async () => {},
+    });
+    await tabs.restore(layout, path => tabs.open(path, from), argument);
+    assert.deepEqual(opens, [argument]);
+    assert.deepEqual(state.tabs.map(tab => tab.repo.path), order);
+    assert.deepEqual(state.tabs.filter(tab => !isPending(tab)).map(tab => tab.id), [id]);
+    assert.equal(state.active, id);
+    assert.equal(tabs.layoutActive, id);
+  }
+});
+
+test("a layout from an older run with no active path still opens the last tab", async () => {
+  const opens: string[] = [];
+  const { tabs, state, from } = windowTabs({
+    async open(path) { opens.push(path); return opened(Number(path.at(-1))); },
+    history: async () => history,
+    activate: async () => {},
+    close: async () => {},
+  });
+  await tabs.restore({ paths: ["/repo/1", "/repo/2"], active: null }, path => tabs.open(path, from));
+  assert.deepEqual(opens, ["/repo/2"]);
+  assert.equal(state.active, 2);
+  assert.equal(isPending(state.tabs[0]), true);
+});
+
 test("closing the active tab commits before opening the next restored repository", async () => {
   const events: string[] = [];
   const { tabs, state, from } = windowTabs({

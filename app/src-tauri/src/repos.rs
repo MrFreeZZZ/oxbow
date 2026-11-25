@@ -2,6 +2,7 @@
 //! changes in it outside Oxbow.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 
 use oxbow_core::Repo;
 use oxbow_core::console;
@@ -418,6 +419,7 @@ pub(crate) fn tell_others(app: &AppHandle, session: &Session, repo: &Repo, addre
 pub(crate) struct InitialRepo {
     path: Option<String>,
     restore_tabs: bool,
+    explicit: bool,
 }
 
 /// An explicit folder takes priority over reopening the main window's previous session.
@@ -433,18 +435,24 @@ pub(crate) fn initial_repo(app: AppHandle, window: tauri::WebviewWindow, session
         return InitialRepo {
             path,
             restore_tabs: false,
-        };
-    }
-    if let Some(path) = std::env::args().nth(1).filter(|arg| !arg.starts_with('-')) {
-        return InitialRepo {
-            path: Some(path),
-            restore_tabs: false,
+            explicit: false,
         };
     }
     let reopen = read_settings(&app)
         .get("oxbow.startup.reopenRepository")
         .and_then(Value::as_bool)
         .unwrap_or(true);
+    if let Some(path) = std::env::args().nth(1).filter(|arg| !arg.starts_with('-')) {
+        let restore_tabs = reopen && !session.repositories.lock().expect("session lock").tabs_disabled;
+        // A remounted window restores the latest selection instead of applying argv again.
+        if !restore_tabs || !session.restored_startup_argument.swap(true, Ordering::AcqRel) {
+            return InitialRepo {
+                path: Some(path),
+                restore_tabs,
+                explicit: true,
+            };
+        }
+    }
     let path = reopen
         .then(|| last_repo_file(&app).and_then(|file| std::fs::read_to_string(file).ok()))
         .flatten()
@@ -453,6 +461,7 @@ pub(crate) fn initial_repo(app: AppHandle, window: tauri::WebviewWindow, session
     InitialRepo {
         path,
         restore_tabs: reopen,
+        explicit: false,
     }
 }
 

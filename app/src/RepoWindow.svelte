@@ -98,7 +98,7 @@
   }, {
     show(next, active, highlighted) {
       if (main && launched && (active !== activeId || next.length !== tabs.length
-        || next.some((tab, i) => tab.id !== tabs[i].id))) saveTabLayout(next, active);
+        || next.some((tab, i) => tab.id !== tabs[i].id))) saveTabLayout(next, manager.layoutActive);
       tabs = next;
       activeId = active;
       highlightedId = highlighted;
@@ -277,18 +277,18 @@
         tabsEnabled = enabled;
         manager.setMode(tabsEnabled);
       }
-      const { path, restoreTabs } = await api.initialRepo();
+      const { path, restoreTabs, explicit } = await api.initialRepo();
       if (!alive) return;
       const layout = restoreTabs ? readTabLayout() : null;
       if (layout && tabsEnabled) {
-        await manager.restore(layout, (folder) => openSaved(folder, true));
+        await manager.restore(layout, (folder) => openSaved(folder, true), explicit ? path : null);
       } else {
-        const folder = layout ? layout.active ?? layout.paths.at(-1) : path;
+        const folder = layout && !explicit ? layout.active ?? layout.paths.at(-1) : path;
         if (folder) await openRepository(folder);
       }
     }).catch((error) => { if (alive) report(error); }).finally(() => {
       if (!alive) return;
-      if (main && tabs.length) saveTabLayout(tabs, activeId);
+      if (main && tabs.length) saveTabLayout(tabs, manager.layoutActive);
       launched = true;
     });
     return () => {
