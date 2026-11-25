@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use oxbow_core::DiffOptions;
 use oxbow_core::config;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State, Theme, WebviewUrl, WebviewWindowBuilder};
 
@@ -103,34 +103,156 @@ pub(crate) async fn set_setting(
     key: String,
     value: Value,
 ) -> CommandResult<u64> {
+    let change = write_setting(&app, &session, key, |_| Ok(value)).await?;
+    Ok(change.revision)
+}
+
+async fn write_setting(
+    app: &AppHandle,
+    session: &Session,
+    key: String,
+    edit: impl FnOnce(Option<&Value>) -> CommandResult<Value>,
+) -> CommandResult<SettingChanged> {
     let _writes = session.settings_writes.lock().await;
-    let file = settings_file(&app)?;
+    let file = settings_file(app)?;
     let mut settings = settings::read(&file).map_err(|problem| {
         format!("{problem} Oxbow doesn’t write over it until it is fixed in Edit in settings.json.")
     })?;
     let previous_appearance = appearance(&settings);
+    let value = edit(settings.get(&key))?;
     if value.is_null() {
         settings.remove(&key);
     } else {
         settings.insert(key.clone(), value.clone());
     }
-    tab_settings::persist(&app, &session, tab_settings::enabled(&settings), || {
+    tab_settings::persist(app, session, tab_settings::enabled(&settings), || {
         settings::write(&file, &settings)
     })
     .await?;
     let mut revision = session.settings.lock().expect("session lock");
     *revision += 1;
-    apply_settings(&app, &session, &settings, previous_appearance != appearance(&settings));
+    apply_settings(app, session, &settings, previous_appearance != appearance(&settings));
+    let change = SettingChanged {
+        key,
+        value,
+        revision: *revision,
+    };
     // A window that misses this keeps showing the old value until it reloads; not an error.
-    let _ = app.emit(
-        "settings-changed",
-        SettingChanged {
-            key,
-            value,
-            revision: *revision,
-        },
+    let _ = app.emit("settings-changed", &change);
+    Ok(change)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum TabTagSetting {
+    Colors,
+    Assignments,
+}
+
+impl TabTagSetting {
+    fn key(&self) -> &'static str {
+        match self {
+            Self::Colors => "oxbow.repositoryTabTags.colors",
+            Self::Assignments => "oxbow.repositoryTabTags.assignments",
+        }
+    }
+
+    fn valid(&self, entry: &str, value: Option<&str>) -> bool {
+        let tag_id = |id: &str| matches!(id, "red" | "orange" | "yellow" | "green" | "blue" | "purple" | "gray");
+        match self {
+            Self::Colors => {
+                tag_id(entry)
+                    && value.is_none_or(|color| {
+                        color
+                            .strip_prefix('#')
+                            .is_some_and(|hex| hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+                    })
+            }
+            Self::Assignments => {
+                let absolute = entry.starts_with('/')
+                    || entry.starts_with("\\\\")
+                    || matches!(
+                        entry.as_bytes(), [drive, b':', b'/' | b'\\', ..] if drive.is_ascii_alphabetic()
+                    );
+                absolute && !entry.contains('\0') && value.is_none_or(tag_id)
+            }
+        }
+    }
+
+    fn edit(&self, stored: Option<&Value>, entry: String, value: Option<String>) -> CommandResult<Value> {
+        if !self.valid(&entry, value.as_deref()) {
+            return Err("Invalid repository tab tag.".into());
+        }
+        let mut entries = match stored {
+            None => serde_json::Map::new(),
+            Some(Value::Object(entries))
+                if entries
+                    .iter()
+                    .all(|(key, value)| value.as_str().is_some_and(|value| self.valid(key, Some(value)))) =>
+            {
+                entries.clone()
+            }
+            Some(_) => {
+                return Err(format!(
+                    "Fix “{}” in Edit in settings.json before changing it.",
+                    self.key()
+                ));
+            }
+        };
+        if let Some(value) = value {
+            entries.insert(entry, Value::String(value));
+        } else {
+            entries.remove(&entry);
+        }
+        Ok(if entries.is_empty() {
+            Value::Null
+        } else {
+            Value::Object(entries)
+        })
+    }
+}
+
+/// Change one path or one color slot using the latest settings on disk while holding the write lock.
+#[tauri::command]
+pub(crate) async fn edit_tab_tag(
+    app: AppHandle,
+    session: State<'_, Session>,
+    setting: TabTagSetting,
+    entry: String,
+    value: Option<String>,
+) -> CommandResult<SettingChanged> {
+    write_setting(&app, &session, setting.key().into(), |stored| {
+        setting.edit(stored, entry, value)
+    })
+    .await
+}
+
+#[cfg(test)]
+#[test]
+fn tab_tag_edits_keep_the_other_paths_and_slots() {
+    use serde_json::json;
+
+    let assignments = TabTagSetting::Assignments;
+    let edit = |stored, path: &str, id: Option<&str>| assignments.edit(stored, path.into(), id.map(str::to_owned));
+    let main = edit(None, "/repo", Some("red")).unwrap();
+    let both = edit(Some(&main), "/worktree", Some("blue")).unwrap();
+    assert_eq!(both, json!({ "/repo": "red", "/worktree": "blue" }));
+    let remaining = edit(Some(&both), "/repo", None).unwrap();
+    assert_eq!(remaining, json!({ "/worktree": "blue" }));
+    assert_eq!(edit(Some(&remaining), "/worktree", None).unwrap(), Value::Null);
+    assert!(edit(Some(&both), "relative", Some("red")).is_err());
+    assert!(edit(Some(&both), "/repo", Some("pink")).is_err());
+    assert!(edit(Some(&json!({ "/other": null })), "/repo", Some("red")).is_err());
+
+    let colors = TabTagSetting::Colors;
+    let before = json!({ "blue": "#abc123", "green": "#123abc" });
+    assert_eq!(
+        colors
+            .edit(Some(&before), "blue".into(), Some("#0042ff".into()))
+            .unwrap(),
+        json!({ "blue": "#0042ff", "green": "#123abc" })
     );
-    Ok(*revision)
+    assert!(colors.edit(Some(&before), "blue".into(), Some("blue".into())).is_err());
 }
 
 /// The settings the backend itself follows: how diffs are made and the windows' appearance.

@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
   const revisions = { "oxbow.diff.wrap": 7 };
   assert.equal(isNewer(revisions, 3, "oxbow.diff.wrap", 6), false);
   assert.equal(isNewer(revisions, 3, "oxbow.diff.wrap", 8), true);
+  assert.equal(isNewer(revisions, 9, "oxbow.diff.wrap", 8), false);
   // A key without its own number goes by when settings.json was loaded.
   assert.equal(isNewer(revisions, 3, "oxbow.text.fontSize", 3), false);
   assert.equal(isNewer(revisions, 3, "oxbow.text.fontSize", 4), true);

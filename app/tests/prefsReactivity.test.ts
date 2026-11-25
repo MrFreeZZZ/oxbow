@@ -5,8 +5,9 @@ import ts from "typescript";
 import { compileModule } from "svelte/compiler";
 import * as runtime from "svelte/internal/client";
 import { isNewer, loadedOver, SaveQueue } from "../src/lib/settingSaves.ts";
+import { REPOSITORY_TAB_TAGS, TAB_TAG_ASSIGNMENT_KEY, TAB_TAG_COLOR_KEY, tabTagEntryProblem, tabTagSettingProblem } from "../src/lib/repositoryTabTags.ts";
 
-const defaults = { "oxbow.background.intensity": 20, "oxbow.diff.contextLines": 3, "oxbow.diff.ignoreWhitespace": false, "oxbow.diff.files": "smart" };
+const defaults = { "oxbow.background.intensity": 20, "oxbow.diff.contextLines": 3, "oxbow.diff.ignoreWhitespace": false, "oxbow.diff.files": "smart", [TAB_TAG_ASSIGNMENT_KEY]: {}, [TAB_TAG_COLOR_KEY]: {} };
 const source = fs.readFileSync(new URL("../src/lib/prefs.svelte.ts", import.meta.url), "utf8");
 const cls = source.slice(source.indexOf("class Prefs {"), source.indexOf("export const prefs"));
 const compiled = compileModule(ts.transpile(cls, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext }), { filename: "prefs.svelte.js", generate: "client" }).js.code
@@ -24,10 +25,20 @@ const api = {
     if (value === null) delete stored[key]; else stored[key] = value;
     return ++revision;
   },
+  editTabTag: async (setting: "colors" | "assignments", entry: string, value: string | null) => {
+    await saving;
+    if (fail) throw new Error("Disk full");
+    const key = setting === "colors" ? TAB_TAG_COLOR_KEY : TAB_TAG_ASSIGNMENT_KEY;
+    const entries = { ...stored[key] as Record<string, string> | undefined };
+    if (value === null) delete entries[entry]; else entries[entry] = value;
+    stored[key] = entries;
+    return { key, value: entries, revision: ++revision };
+  },
 };
-const Prefs = Function("$", "api", "listen", "defaults", "SaveQueue", "isNewer", "loadedOver", "problemOf", "isDefault", `${compiled}; return Prefs;`)(
+const Prefs = Function("$", "api", "listen", "defaults", "SaveQueue", "isNewer", "loadedOver", "problemOf", "isDefault", "REPOSITORY_TAB_TAGS", "TAB_TAG_ASSIGNMENT_KEY", "TAB_TAG_COLOR_KEY", "tabTagEntryProblem", `${compiled}; return Prefs;`)(
   runtime, api, (_name: string, callback: typeof changed) => { changed = callback; return Promise.resolve(() => {}); }, defaults,
   SaveQueue, isNewer, loadedOver, () => null, (key: keyof typeof defaults, value: unknown) => defaults[key] === value,
+  REPOSITORY_TAB_TAGS, TAB_TAG_ASSIGNMENT_KEY, TAB_TAG_COLOR_KEY, tabTagEntryProblem,
 );
 const prefs = new Prefs();
 await prefs.reload();
@@ -91,3 +102,34 @@ assert.equal(await save, true);
 runtime.flush();
 assert.equal(prefs.get("oxbow.diff.ignoreWhitespace"), true);
 stop();
+
+assert.equal(prefs.repositoryTabTag("/repo"), null);
+assert.equal(prefs.repositoryTabTagColor("red"), "#ff3038");
+const both = Promise.all([prefs.saveRepositoryTabTag("/repo", "red"), prefs.saveRepositoryTabTag("/worktree", "blue")]);
+assert.equal(prefs.repositoryTabTag("/repo"), "red");
+assert.equal(prefs.repositoryTabTag("/worktree"), "blue");
+await both;
+assert.deepEqual(stored[TAB_TAG_ASSIGNMENT_KEY], { "/repo": "red", "/worktree": "blue" });
+await prefs.saveRepositoryTabTagColor("red", "#102030");
+assert.equal(prefs.repositoryTabTagColor("red"), "#102030");
+assert.equal(prefs.repositoryTabTag("/repo"), "red");
+await prefs.saveRepositoryTabTagColor("red", "#FF3038");
+assert.equal(prefs.repositoryTabTagColor("red"), "#ff3038");
+
+changed({ payload: { key: TAB_TAG_ASSIGNMENT_KEY, value: { "/repo": "green", "/worktree": "blue" }, revision: ++revision } });
+assert.equal(prefs.repositoryTabTag("/repo"), "green");
+fail = true;
+const removal = prefs.saveRepositoryTabTag("/repo", null);
+assert.equal(prefs.repositoryTabTag("/repo"), null);
+await assert.rejects(removal, /Disk full/);
+assert.equal(prefs.repositoryTabTag("/repo"), "green");
+fail = false;
+await prefs.saveRepositoryTabTag("/repo", null);
+assert.deepEqual(stored[TAB_TAG_ASSIGNMENT_KEY], { "/worktree": "blue" });
+
+assert.equal(tabTagSettingProblem(TAB_TAG_COLOR_KEY, { gray: "#123aBc" }), null);
+assert.ok(tabTagSettingProblem(TAB_TAG_COLOR_KEY, { blue: "#123abc\n" }));
+assert.ok(tabTagSettingProblem(TAB_TAG_COLOR_KEY, { cyan: "#123abc" }));
+assert.equal(tabTagSettingProblem(TAB_TAG_ASSIGNMENT_KEY, { "C:\\Worktree": "purple" }), null);
+assert.ok(tabTagSettingProblem(TAB_TAG_ASSIGNMENT_KEY, { worktree: "purple" }));
+assert.ok(tabTagSettingProblem(TAB_TAG_ASSIGNMENT_KEY, { "/worktree": "cyan" }));

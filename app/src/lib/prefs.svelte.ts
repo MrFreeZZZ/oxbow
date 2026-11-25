@@ -8,6 +8,10 @@ import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import { BRANCH_PALETTES, branchPaletteById, branchVariables, type BranchPaletteId } from "./branchPalettes";
 import { BRANCH_PREFIXES, prefixesProblem, type BranchPrefix } from "./branchPrefixes";
+import {
+  REPOSITORY_TAB_TAGS, TAB_TAG_ASSIGNMENT_KEY, TAB_TAG_COLOR_KEY, tabTagEntryProblem, tabTagSettingProblem,
+  type RepositoryTabTagId, type TabTagKey,
+} from "./repositoryTabTags";
 import { isNewer, loadedOver, SaveQueue } from "./settingSaves";
 import { isCommand, useCustom, useUserCommands, validCombo, type Custom } from "./shortcuts";
 import { paletteOf, THEMES, themeById, themeVariables } from "./themes";
@@ -21,6 +25,8 @@ export const defaults = {
   "oxbow.history.rowStyle": "twoLines" as "twoLines" | "compact",
   "oxbow.startup.reopenRepository": true,
   "oxbow.windows.repositoryTabs": true,
+  [TAB_TAG_COLOR_KEY]: {} as Partial<Record<RepositoryTabTagId, string>>,
+  [TAB_TAG_ASSIGNMENT_KEY]: {} as Partial<Record<string, RepositoryTabTagId>>,
   /** Auto follows this build's channel; explicit choices survive updates and restarts. */
   "oxbow.updates.autoCheck": true,
   "oxbow.updates.channel": "auto" as "auto" | "release" | "preview",
@@ -173,6 +179,7 @@ export function problemOf(key: string, value: unknown): string | null {
   if (key === "oxbow.commands") return commandsProblem(value as unknown[]);
   if (key === "oxbow.secrets.patterns") return patternsProblem(value as unknown[]);
   if (key === "oxbow.branch.prefixes") return prefixesProblem(value as unknown[]);
+  if (key === TAB_TAG_COLOR_KEY || key === TAB_TAG_ASSIGNMENT_KEY) return tabTagSettingProblem(key, value as Record<string, unknown>);
   if (key === "oxbow.keyboard.shortcuts") return shortcutsProblem(value as Record<string, unknown>);
   if (key === "oxbow.tips.seen" && (value as unknown[]).some((id) => typeof id !== "string")) return "Expected a list of tip names";
   const rule = rules[key as PrefKey];
@@ -205,6 +212,7 @@ class Prefs {
   /** Values saved here and not written yet, the newest of each key (null: its default). They are
    *  shown meanwhile and go back if the save fails. */
   #unsaved = $state<Record<string, unknown>>({});
+  #tabTagEdits = $state<Partial<Record<TabTagKey, Record<string, string | null>>>>({});
   /** The number of the change behind each key's value, so an older word can't undo a newer one. */
   #revisions: Record<string, number> = {};
   /** The number of the change settings.json was loaded at. */
@@ -226,17 +234,17 @@ class Prefs {
         this.#readers.set(key, () => value);
       }
     });
-    this.reload();
-    listen<{ key: string; value: unknown; revision: number }>("settings-changed", (event) => {
+    void listen<{ key: string; value: unknown; revision: number }>("settings-changed", (event) => {
       const { key, value, revision } = event.payload;
       this.#take(key, value, revision);
-    }).catch(() => {});
+    }).catch(() => {}).then(() => this.reload());
   }
 
   /** Read settings.json again, e.g. after it was fixed by hand. */
   async reload() {
     try {
       const all = await api.allSettings();
+      if (all.revision < this.#loadedAt) return;
       this.#values = loadedOver(this.#values, this.#revisions, all.revision, all.values);
       this.#loadedAt = Math.max(this.#loadedAt, all.revision);
       this.unreadable = all.problem;
@@ -262,6 +270,47 @@ class Prefs {
     return this.#readers.get(key)!() as PrefValue<K>;
   }
 
+  repositoryTabTag(canonicalPath: string): RepositoryTabTagId | null {
+    const edit = this.#tabTagEdits[TAB_TAG_ASSIGNMENT_KEY]?.[canonicalPath];
+    return edit === undefined ? this.get(TAB_TAG_ASSIGNMENT_KEY)[canonicalPath] ?? null : edit as RepositoryTabTagId | null;
+  }
+
+  repositoryTabTagColor(id: RepositoryTabTagId): string {
+    const fallback = REPOSITORY_TAB_TAGS.find((tag) => tag.id === id)!.color;
+    const edit = this.#tabTagEdits[TAB_TAG_COLOR_KEY]?.[id];
+    return (edit === undefined ? this.get(TAB_TAG_COLOR_KEY)[id] : edit) ?? fallback;
+  }
+
+  saveRepositoryTabTag(canonicalPath: string, id: RepositoryTabTagId | null): Promise<void> {
+    return this.#saveTabTag(TAB_TAG_ASSIGNMENT_KEY, canonicalPath, id);
+  }
+
+  saveRepositoryTabTagColor(id: RepositoryTabTagId, color: string | null): Promise<void> {
+    const fallback = REPOSITORY_TAB_TAGS.find((tag) => tag.id === id)?.color;
+    return this.#saveTabTag(TAB_TAG_COLOR_KEY, id, color?.toLowerCase() === fallback ? null : color);
+  }
+
+  /** Like save(), the caller reports errors. Each entry can be edited while others are saving. */
+  async #saveTabTag(key: TabTagKey, entry: string, value: string | null): Promise<void> {
+    const problem = tabTagEntryProblem(key, entry, value);
+    if (problem) throw problem;
+    this.#tabTagEdits = { ...this.#tabTagEdits, [key]: { ...this.#tabTagEdits[key], [entry]: value } };
+    await this.#saves.run(JSON.stringify([key, entry]), async (newest) => {
+      try {
+        const change = await api.editTabTag(key === TAB_TAG_COLOR_KEY ? "colors" : "assignments", entry, value);
+        this.#take(change.key, change.value, change.revision);
+      } catch (err) {
+        if (newest()) throw err;
+      } finally {
+        if (newest()) {
+          const entries = { ...this.#tabTagEdits[key] };
+          delete entries[entry];
+          this.#tabTagEdits = { ...this.#tabTagEdits, [key]: entries };
+        }
+      }
+    }, undefined);
+  }
+
   #read<K extends PrefKey>(key: K): PrefValue<K> {
     // Publish the whitespace mode once the backend can serve diffs for it.
     const value = key !== "oxbow.diff.ignoreWhitespace" && key !== "oxbow.windows.repositoryTabs" && key in this.#unsaved ? this.#unsaved[key] : this.#values[key];
@@ -270,7 +319,9 @@ class Prefs {
   }
 
   /** Whether settings.json holds anything, so Restore Defaults has something to do. */
-  get saving(): boolean { return Object.keys(this.#unsaved).length > 0; }
+  get saving(): boolean {
+    return Object.keys(this.#unsaved).length > 0 || Object.values(this.#tabTagEdits).some((entries) => Object.keys(entries).length > 0);
+  }
 
   pending(key: PrefKey): boolean { return key in this.#unsaved; }
 

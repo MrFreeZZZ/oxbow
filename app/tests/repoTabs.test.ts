@@ -9,7 +9,7 @@ import { api, apiForSession, type RepoNotice, type RepoTabOpen } from "../src/li
 import { DIALOG_IN_THE_WAY, isPending, readTabLayout, repoTabActions, RepoTabs, saveTabLayout, type OpenFrom, type OpenTab, type ShownTab } from "../src/lib/repoTabs.ts";
 import type { History, RepoSummary } from "../src/lib/types.ts";
 
-const summary = (id: number): RepoSummary => ({ path: `/repo/${id}`, name: String(id), restricted: [] });
+const summary = (id: number): RepoSummary => ({ path: `/repo/${id}`, canonicalPath: `/repo/${id}`, name: String(id), restricted: [], untrusted: null });
 const history = {} as History;
 const opened = (session: number): RepoTabOpen => ({ kind: "opened", session, repo: summary(session) });
 
@@ -97,6 +97,7 @@ test("the next run opens only the active repository and keeps the others until t
     setItem: (_key: string, value: string) => { saved = value; },
   };
   const original = [1, 2, 3, 4].map(id => ({ id, repo: summary(id), history }));
+  original[0].repo.canonicalPath = "/canonical/worktree";
   assert.equal(readTabLayout(storage), null);
   saveTabLayout(original, 2, storage);
   const layout = readTabLayout(storage);
@@ -107,7 +108,7 @@ test("the next run opens only the active repository and keeps the others until t
       opened.push(path);
       const original = Number(path.at(-1));
       if (original === 3) throw new Error("Folder is unavailable");
-      return { kind: "opened", session: original + 10, repo: summary(original) };
+      return { kind: "opened", session: original + 10, repo: { ...summary(original), canonicalPath: original === 1 ? "/canonical/worktree" : path } };
     },
     history: async () => history,
     activate: async () => {},
@@ -117,6 +118,7 @@ test("the next run opens only the active repository and keeps the others until t
   assert.deepEqual(opened, ["/repo/2"]);
   assert.deepEqual(state.tabs.map(tab => tab.repo.path), ["/repo/1", "/repo/2", "/repo/3", "/repo/4"]);
   assert.equal(isPending(state.tabs[0]), true);
+  assert.equal(state.tabs[0].repo.canonicalPath, "/canonical/worktree");
   assert.equal(isPending(state.tabs[1]), false);
   assert.equal(state.active, 12);
   assert.equal(errors.length, 0);

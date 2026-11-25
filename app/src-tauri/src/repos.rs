@@ -19,6 +19,7 @@ use crate::{CommandResult, drafts, trusted, turns};
 pub(crate) struct RepoSummary {
     name: String,
     path: String,
+    canonical_path: String,
     /// Open Restricted: the repository's settings that git runs with off.
     restricted: Vec<oxbow_core::TrustFinding>,
     /// Nothing was opened: the repository's settings run programs, and the user hasn't said
@@ -134,6 +135,7 @@ async fn open(
                 repo: RepoSummary {
                     name: repo.name(),
                     path: workdir.display().to_string(),
+                    canonical_path: canonical.display().to_string(),
                     restricted: Vec::new(),
                     untrusted: Some(found),
                 },
@@ -151,6 +153,7 @@ async fn open(
     let summary = RepoSummary {
         name: repo.name(),
         path: workdir.display().to_string(),
+        canonical_path: canonical.display().to_string(),
         restricted: if restricted { found } else { Vec::new() },
         untrusted: None,
     };
@@ -199,6 +202,7 @@ fn duplicate(
             repo: RepoSummary {
                 name: repo.name(),
                 path: workdir.display().to_string(),
+                canonical_path: workdir_key(workdir).display().to_string(),
                 restricted,
                 untrusted: None,
             },

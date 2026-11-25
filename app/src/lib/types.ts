@@ -550,6 +550,8 @@ export interface SubmoduleMove {
 export interface RepoSummary {
   name: string;
   path: string;
+  /** The working folder's identity, including for linked worktrees. */
+  canonicalPath: string;
   /** Open Restricted: the repository's settings that git runs with off. */
   restricted: TrustFinding[];
   /** Nothing was opened: the repository's settings run programs, and the user hasn't said

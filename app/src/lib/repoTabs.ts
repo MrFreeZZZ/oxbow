@@ -25,6 +25,7 @@ export function isPending(tab: ShownTab): tab is PendingTab {
 interface TabLayout {
   paths: string[];
   active: string | null;
+  canonicalPaths?: Record<string, string>;
 }
 
 const LAYOUT_KEY = "oxbow.repoTabs.layout";
@@ -43,6 +44,9 @@ export function saveTabLayout(tabs: readonly ShownTab[], active: RepoSessionId |
     paths: tabs.map(tab => tab.repo.path),
     active: tabs.find(tab => tab.id === active)?.repo.path ?? null,
   };
+  // Keep aliases usable for reopening while restored tabs already know their folder identity.
+  const aliases = tabs.filter(({ repo }) => repo.canonicalPath !== repo.path);
+  if (aliases.length) layout.canonicalPaths = Object.fromEntries(aliases.map(({ repo }) => [repo.path, repo.canonicalPath]));
   try {
     (storage ?? localStorage).setItem(LAYOUT_KEY, JSON.stringify(layout));
   } catch { /* Storage may be unavailable. */ }
@@ -153,13 +157,13 @@ export class RepoTabs {
     return tab && isPending(tab) ? tab : undefined;
   }
 
-  #placeholder(path: string): PendingTab {
+  #placeholder(path: string, canonicalPath: unknown): PendingTab {
     this.#nextPending -= 1;
     const name = path.split(/[/\\]/).filter(Boolean).pop() ?? path;
     return {
       id: this.#nextPending,
       pending: true,
-      repo: { name, path, restricted: [], untrusted: null },
+      repo: { name, path, canonicalPath: typeof canonicalPath === "string" && canonicalPath ? canonicalPath : path, restricted: [], untrusted: null },
     };
   }
 
@@ -219,7 +223,7 @@ export class RepoTabs {
 
   async restore(layout: TabLayout, open: (path: string) => Promise<void>) {
     const active = layout.active && layout.paths.includes(layout.active) ? layout.active : layout.paths.at(-1) ?? null;
-    this.#tabs = layout.paths.map(path => this.#placeholder(path));
+    this.#tabs = layout.paths.map(path => this.#placeholder(path, layout.canonicalPaths?.[path]));
     this.#active = null;
     this.#armed = null;
     this.#show();

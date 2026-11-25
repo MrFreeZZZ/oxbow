@@ -249,6 +249,7 @@ fn main() {
             preferences::get_setting,
             preferences::all_settings,
             preferences::set_setting,
+            preferences::edit_tab_tag,
             preferences::open_settings,
             preferences::set_settings_key,
             menu::set_menu,
