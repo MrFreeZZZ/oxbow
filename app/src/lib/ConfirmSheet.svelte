@@ -210,7 +210,10 @@
   function onKey(event: KeyboardEvent) {
     if (!scope.isActive()) return;
     if (!request || isImeEscape(event)) return;
+    const colorInput = event.target instanceof HTMLInputElement && event.target.type === "color" ? event.target : null;
     if (event.key === "Escape") {
+      // WebKit can deliver Escape to the input while its native picker is closing.
+      if (colorInput && CSS.supports("selector(input:open)") && colorInput.matches(":open")) return;
       event.preventDefault();
       if (running) confirm.stop();
       else confirm.cancel();
@@ -219,6 +222,7 @@
       !event.isComposing &&
       confirm.phase === "ask" &&
       !(event.target instanceof HTMLButtonElement) &&
+      !colorInput &&
       // Return makes a new line in a message; ⌘Return runs the action.
       !(event.target instanceof HTMLTextAreaElement && !event.metaKey && !event.ctrlKey)
     ) {
@@ -323,7 +327,20 @@
             <div class="field">
               <span class="label">{field.label}</span>
               <div class="inputs">
-                {#if field.text?.multiline}
+                {#if field.color}
+                  {@const color = field.color}
+                  {@const inputId = `${titleId}-color-${i}`}
+                  <div class="color-field">
+                    <output for={inputId}>{color.value.toUpperCase()}</output>
+                    <input
+                      type="color"
+                      id={inputId}
+                      aria-label={field.label}
+                      value={color.value}
+                      oninput={(event) => confirm.change(color.edit(event.currentTarget.value))}
+                    />
+                  </div>
+                {:else if field.text?.multiline}
                   {@const text = field.text}
                   <textarea
                     class="text multiline"
@@ -862,6 +879,26 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
+  }
+  .color-field {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+  }
+  .color-field output {
+    color: var(--text2);
+    font-size: var(--text-small);
+    font-variant-numeric: tabular-nums;
+  }
+  .color-field input {
+    width: 34px;
+    height: 28px;
+    padding: 2px 4px;
+    border: 1px solid var(--sep);
+    border-radius: var(--radius-s);
+    background: var(--field);
+    cursor: pointer;
   }
   .text {
     height: 28px;

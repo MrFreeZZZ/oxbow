@@ -25,7 +25,7 @@ export type Control =
   | { type: "switch"; get: () => boolean; set: (on: boolean) => void }
   /** A value with Edit, which turns it into a text box. */
   | { type: "edit"; get: () => string; shown?: () => string; placeholder?: string; save: (value: string) => void }
-  | { type: "button"; label: Text; run: () => void; danger?: boolean }
+  | { type: "button"; label: Text; ariaLabel?: string; run: (event: MouseEvent & { currentTarget: HTMLButtonElement }) => void; danger?: boolean }
   /** A command's keyboard shortcuts, with the recorder for new ones. */
   | { type: "keys"; id: ShortcutId };
 
@@ -39,6 +39,7 @@ export type Row = {
   badge?: () => string | null;
   /** A round picture before the label, e.g. an account's avatar. */
   image?: () => string | null;
+  swatch?: string;
   /** A file's picture before the label; `missing` draws it dashed with a plus. */
   file?: () => { missing: boolean };
   control?: Control;
@@ -50,7 +51,7 @@ export type Row = {
   /** More items for its gear menu. */
   more?: () => MenuEntry[];
 };
-export type Group = { title?: string; foot?: Text; rows: Row[]; preview?: "theme" | "branches" | "diff" | "console" | "background"; detail?: "updates" };
+export type Group = { id?: string; title?: string; foot?: Text; rows: Row[]; preview?: "theme" | "branches" | "diff" | "console" | "background"; detail?: "updates" };
 export type Section = {
   id: string;
   label: string;

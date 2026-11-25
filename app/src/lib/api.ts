@@ -1,6 +1,7 @@
 import type { WorkingFileStatus } from "./openFile";
 import { Channel, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { MenuPart } from "./appMenu";
+import type { SettingsTarget } from "./settingsNavigation";
 import type {
   AllSettings,
   ActionEvent,
@@ -339,7 +340,7 @@ const apiWithInvoke = (invoke: <T>(command: string, args?: Record<string, unknow
   stopAction: () => invoke<void>("stop_action"),
   getSetting: <T>(key: string) => invoke<T | null>("get_setting", { key }),
   allSettings: () => invoke<AllSettings>("all_settings"),
-  openSettings: (section?: "commands" | "updates") => invoke<void>("open_settings", { section }),
+  openSettings: (section?: SettingsTarget) => invoke<void>("open_settings", { section }),
   /** The key of the app menu's Settings…, "CmdOrCtrl+,", or null for none (macOS). */
   setSettingsKey: (accelerator: string | null) => invoke<void>("set_settings_key", { accelerator }),
   setMenu: (menus: MenuPart[]) => invoke<void>("set_menu", { menus }),

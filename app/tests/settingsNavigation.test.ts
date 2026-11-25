@@ -3,11 +3,17 @@ import test from "node:test";
 import { settingsRoute, settingsSection } from "../src/lib/settingsNavigation.ts";
 
 test("first Settings load and an existing window resolve the same destination", () => {
-  for (const [target, section] of [["updates", "general"], ["commands", "commands"], ["general", "general"]]) {
-    assert.equal(settingsRoute(`#settings/${target}`), section);
-    assert.equal(settingsSection(target), section);
+  const destinations = {
+    updates: { section: "general" },
+    commands: { section: "commands" },
+    general: { section: "general" },
+    "repository-tab-tags": { section: "theme", group: "repository-tab-tags" },
+  };
+  for (const [target, destination] of Object.entries(destinations)) {
+    assert.deepEqual(settingsRoute(`#settings/${target}`), destination);
+    assert.deepEqual(settingsSection(target), destination);
   }
-  assert.equal(settingsRoute("#settings"), "general");
+  assert.deepEqual(settingsRoute("#settings"), destinations.general);
 });
 
 test("other windows and unknown destinations do not mount Settings", () => {

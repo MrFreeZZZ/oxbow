@@ -74,11 +74,15 @@
   const mac = navigator.platform.startsWith("Mac");
 
   // Back and Forward walk the sections visited, like System Settings.
-  let visited = $state([settingsRoute(location.hash) ?? "general"]);
+  const initial = settingsRoute(location.hash);
+  let visited = $state([initial?.section ?? "general"]);
   let at = $state(0);
   const current = $derived(shownSections.find((s) => s.id === visited[at]) ?? shownSections[0]);
+  let pendingGroup = $state(initial?.group);
+  let scroll = $state<HTMLDivElement>();
 
   function go(id: string, keepFile = false) {
+    pendingGroup = undefined;
     model.query = "";
     json = false;
     shortcutEdit.cancel();
@@ -90,9 +94,21 @@
   }
 
   listen<string>("settings-section", (event) => {
-    const section = settingsSection(event.payload);
-    if (section) go(section);
+    const destination = settingsSection(event.payload);
+    if (!destination) return;
+    go(destination.section);
+    pendingGroup = destination.group;
+    if (pendingGroup) menu = null;
   }).catch(() => {});
+
+  $effect(() => {
+    if (!pendingGroup || confirm.request) return;
+    const heading = scroll?.querySelector<HTMLElement>(`#${pendingGroup}`);
+    if (!heading) return;
+    pendingGroup = undefined;
+    heading.scrollIntoView({ block: "start" });
+    heading.focus({ preventScroll: true });
+  });
 
   const needle = $derived(model.query.trim().toLowerCase());
 
@@ -294,7 +310,7 @@
     <label class="search search-control">
       <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
       <!-- svelte-ignore a11y_autofocus -->
-      <input type="search" aria-label="Search settings" placeholder="Search" bind:value={model.query} spellcheck="false" autofocus />
+      <input type="search" aria-label="Search settings" placeholder="Search" bind:value={model.query} spellcheck="false" autofocus={!initial?.group} />
       {#if model.query}<button type="button" class="clear" onclick={() => { model.query = ""; }} aria-label="Clear the filter" title="Clear the filter">×</button>{/if}
     </label>
     {#each shownSections as section (section.id)}
@@ -370,7 +386,7 @@
         <RepoFileEditor kind={fileOpen} gitlab={repoFiles.list?.gitlab ?? false} />
       {/key}
     {:else}
-      <div class="scroll">
+      <div class="scroll" bind:this={scroll}>
         {#if model.problem}<p class="problem" role="alert">{model.problem}</p>{/if}
         {#if !needle && current.id === "repoFiles" && repoFiles.problem}<p class="problem" role="alert">{repoFiles.problem}</p>{/if}
         {#if prefs.failure}
@@ -396,7 +412,10 @@
         {/if}
         {#each shown as group (group.key)}
           <section>
-            {#if group.title}<h2>{group.title}</h2>{/if}
+            {#if group.title}
+              {#if !needle && group.id}<h2 id={group.id} tabindex="-1">{group.title}</h2>
+              {:else}<h2>{group.title}</h2>{/if}
+            {/if}
             {#if !needle && group.preview === "background"}<div class="background-choices"><BackgroundChoices /></div>{/if}
             <div class="settings-panel">
               {#each group.rows as row (row.id)}

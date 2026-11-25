@@ -15,6 +15,7 @@
   import { prefs } from "./lib/prefs.svelte";
   import { DIALOG_IN_THE_WAY, isPending, readTabLayout, RepoTabs, saveTabLayout, type ShownTab } from "./lib/repoTabs";
   import { settleReviewSaves } from "./lib/reviewSaves";
+  import { REPOSITORY_TAB_TAGS_GROUP } from "./lib/settingsNavigation";
   import { mac, type ShortcutId } from "./lib/shortcuts";
   import type { Gone } from "./lib/types";
   import { beforeUpdateRestart } from "./lib/updateRestart.svelte";
@@ -273,7 +274,7 @@
       activate={activateTab} close={closeTab} closeOthers={closeOtherTabs}
       canSwitch={canSwitch} activeNow={activeNow} move={moveTab}
       saveTag={(path, id) => void prefs.saveRepositoryTabTag(path, id).catch(report)}
-      customizeTags={() => void api.openSettings().catch(report)} />
+      customizeTags={() => void api.openSettings(REPOSITORY_TAB_TAGS_GROUP).catch(report)} />
   {/if}
 {/snippet}
 

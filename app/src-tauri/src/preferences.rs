@@ -376,17 +376,17 @@ pub(crate) fn show_settings(app: &AppHandle) -> CommandResult<()> {
 }
 
 pub(crate) fn show_settings_at(app: &AppHandle, section: Option<&str>) -> CommandResult<()> {
+    let section = section.filter(|section| matches!(*section, "commands" | "updates" | "repository-tab-tags"));
     if let Some(window) = app.get_webview_window("settings") {
-        if let Some(section @ ("commands" | "updates")) = section {
+        if let Some(section) = section {
             let _ = window.emit("settings-section", section);
         }
         return window.set_focus().map_err(|err| err.to_string());
     }
-    let url = match section {
-        Some("commands") => "index.html#settings/commands",
-        Some("updates") => "index.html#settings/updates",
-        _ => "index.html#settings",
-    };
+    let url = section.map_or_else(
+        || "index.html#settings".to_owned(),
+        |section| format!("index.html#settings/{section}"),
+    );
     let builder = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(url.into()))
         .title("Settings")
         .inner_size(940.0, 720.0)

@@ -64,6 +64,7 @@
     </span>
   {/if}
   {#if row.image?.()}<img class="avatar" src={row.image()} alt="" />{/if}
+  {#if row.swatch}<span class="swatch" style:background={row.swatch} aria-hidden="true"></span>{/if}
   <span class="text" class:unavailable={off}>
     <span class="name" class:mono={row.mono}>{text(row.label)}</span>
     {#if text(row.sub)}<span class="sub {row.subTone?.() ?? ''}">{text(row.sub)}</span>{/if}
@@ -129,7 +130,7 @@
       <button class="button small" disabled={off} onclick={() => (editing = { id: row.id, value: control.get() })}>Edit</button>
     {/if}
   {:else if control?.type === "button"}
-    <button class="button small" class:danger={control.danger} disabled={off} onclick={control.run}>{text(control.label)}</button>
+    <button class="button small" class:danger={control.danger} aria-label={control.ariaLabel} disabled={off} onclick={control.run}>{text(control.label)}</button>
   {:else if control?.type === "range"}
     <span class="range" class:off>
       <input type="range" aria-label={text(row.label)} aria-valuetext={`${control.get()}${control.suffix ?? ""}`} min={control.min} max={control.max} step={control.step} value={control.get()} style:--range-fill="{100 * (control.get() - control.min) / (control.max - control.min)}%" disabled={off} oninput={(event) => control.set(Number(event.currentTarget.value))} onchange={() => control.commit?.()} onblur={() => control.commit?.()} />
@@ -263,6 +264,14 @@
     border-radius: var(--radius-pill);
     flex-shrink: 0;
     background: var(--field);
+  }
+
+  .swatch {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    border-radius: var(--radius-pill);
+    box-shadow: inset 0 0 0 1px var(--sep);
   }
 
   .file {

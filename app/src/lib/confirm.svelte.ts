@@ -169,13 +169,14 @@ export interface Choice {
   toggle: () => Request;
 }
 
-/** A row of the sheet with a label: a text box, a choice of chips, or both, and a note under them. */
+/** A labeled row of controls with an optional note beneath them. */
 export interface Field {
   label: string;
   /** `multiline` for a commit message: Return makes a new line, ⌘Return runs the action. */
   /** `focus` puts the cursor in it when it appears, e.g. the search box Other… opens. */
   /** `prefixes` supplies the prefix picker. `branchRefs` enables existing branch suggestions. */
   text?: { value: string; placeholder?: string; multiline?: boolean; focus?: boolean; prefixes?: BranchPrefix[]; branchRefs?: RefInfo[]; edit: (value: string) => Request };
+  color?: { value: string; edit: (value: string) => Request };
   /** `off` says why a chip can't be picked. */
   chips?: { label: string; on: boolean; mono?: boolean; off?: string; pick: () => Request | Promise<Request> }[];
   note?: string;
