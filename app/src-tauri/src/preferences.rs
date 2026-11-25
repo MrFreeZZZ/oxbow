@@ -93,6 +93,11 @@ pub(crate) struct SettingChanged {
     revision: u64,
 }
 
+fn read_for_write(file: &Path) -> CommandResult<settings::Settings> {
+    settings::read(file)
+        .map_err(|problem| format!("{problem} Oxbow doesn’t write over it until it is fixed in Edit in settings.json."))
+}
+
 /// Save a setting (`null` puts it back to its default) and tell every window. Returns the
 /// number of the change. Nothing is written when settings.json can't be read, so the other
 /// settings in it stay.
@@ -115,9 +120,7 @@ async fn write_setting(
 ) -> CommandResult<SettingChanged> {
     let _writes = session.settings_writes.lock().await;
     let file = settings_file(app)?;
-    let mut settings = settings::read(&file).map_err(|problem| {
-        format!("{problem} Oxbow doesn’t write over it until it is fixed in Edit in settings.json.")
-    })?;
+    let mut settings = read_for_write(&file)?;
     let previous_appearance = appearance(&settings);
     let value = edit(settings.get(&key))?;
     if value.is_null() {
@@ -140,6 +143,100 @@ async fn write_setting(
     // A window that misses this keeps showing the old value until it reloads; not an error.
     let _ = app.emit("settings-changed", &change);
     Ok(change)
+}
+
+const RESET_GROUPS: &[&[&str]] = &[
+    &[
+        "oxbow.background.source",
+        "oxbow.background.image",
+        "oxbow.background.intensity",
+    ],
+    &["oxbow.theme", "oxbow.theme.variant"],
+    &["oxbow.repositoryTabTags.styles", "oxbow.repositoryTabTags.colors"],
+];
+
+fn read_reset_group(file: &Path, keys: &[String]) -> CommandResult<settings::Settings> {
+    if !RESET_GROUPS.iter().any(|group| keys == *group) {
+        return Err("Unknown settings group.".into());
+    }
+    let mut settings = read_for_write(file)?;
+    for key in keys {
+        settings.remove(key);
+    }
+    Ok(settings)
+}
+
+#[derive(Clone, Serialize)]
+struct SettingsGroupReset {
+    keys: Vec<String>,
+    revision: u64,
+}
+
+#[tauri::command]
+pub(crate) async fn reset_settings_group(
+    app: AppHandle,
+    session: State<'_, Session>,
+    keys: Vec<String>,
+) -> CommandResult<u64> {
+    let _writes = session.settings_writes.lock().await;
+    let file = settings_file(&app)?;
+    let settings = read_reset_group(&file, &keys)?;
+    tab_settings::persist(&app, &session, tab_settings::enabled(&settings), || {
+        settings::write(&file, &settings)
+    })
+    .await?;
+    let mut revision = session.settings.lock().expect("session lock");
+    *revision += 1;
+    apply_settings(&app, &session, &settings, false);
+    let _ = app.emit(
+        "settings-group-reset",
+        SettingsGroupReset {
+            keys,
+            revision: *revision,
+        },
+    );
+    Ok(*revision)
+}
+
+#[cfg(test)]
+#[test]
+fn group_reset_removes_only_its_keys_from_the_latest_file() {
+    use serde_json::json;
+
+    let dir = std::env::temp_dir().join(format!("oxbow-settings-group-{}", std::process::id()));
+    let file = dir.join("settings.json");
+    let keys = RESET_GROUPS[2].iter().map(|key| (*key).to_owned()).collect::<Vec<_>>();
+    let mut original = json!({
+        "oxbow.repositoryTabTags.styles": null,
+        "oxbow.repositoryTabTags.colors": { "red": "#abcdef" },
+        "oxbow.repositoryTabTags.assignments": { "/repo": "red" },
+        "unknown": { "keep": true }
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    settings::write(&file, &original).unwrap();
+    assert!(read_reset_group(&file, &["oxbow.repositoryTabTags.assignments".into()]).is_err());
+    let next = dir.join("settings.json.new");
+    std::fs::create_dir(&next).unwrap();
+    assert!(settings::write(&file, &read_reset_group(&file, &keys).unwrap()).is_err());
+    assert_eq!(settings::read(&file).unwrap(), original);
+    std::fs::remove_dir(next).unwrap();
+
+    original.insert("oxbow.theme".into(), json!("newer edit"));
+    settings::write(&file, &original).unwrap();
+    let reset = read_reset_group(&file, &keys).unwrap();
+    for key in &keys {
+        original.remove(key);
+    }
+    settings::write(&file, &reset).unwrap();
+    assert_eq!(settings::read(&file).unwrap(), original);
+    assert_eq!(read_reset_group(&file, &keys).unwrap(), original);
+
+    std::fs::write(&file, "{broken").unwrap();
+    assert!(read_reset_group(&file, &keys).is_err());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "{broken");
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[derive(Deserialize)]
@@ -488,17 +585,14 @@ fn settings_replaced(
 ) {
     *revision += 1;
     apply_settings(app, session, after, appearance(before) != appearance(after));
-    let removed = before
-        .keys()
-        .filter(|key| !after.contains_key(*key))
-        .map(|key| (key.clone(), Value::Null));
-    for (key, value) in after.clone().into_iter().chain(removed) {
-        if before.get(&key) != Some(&value) {
+    let removed = before.keys().filter(|key| !after.contains_key(*key));
+    for key in after.keys().chain(removed) {
+        if before.get(key) != after.get(key) {
             let _ = app.emit(
                 "settings-changed",
                 SettingChanged {
-                    key,
-                    value,
+                    key: key.clone(),
+                    value: after.get(key).cloned().unwrap_or(Value::Null),
                     revision: *revision,
                 },
             );

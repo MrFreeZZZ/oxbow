@@ -31,14 +31,20 @@ export class SaveQueue {
     const id = ++this.#count;
     this.#newest.set(key, id);
     const newest = () => this.#newest.get(key) === id;
-    const next = (this.#tails.get(key) ?? Promise.resolve()).then(() => (newest() ? work(newest) : skipped));
-    // A save that fails mustn't hold up the next one.
-    this.#tails.set(key, next.catch(() => {}).then(() => {
-      if (newest()) {
-        this.#tails.delete(key);
-        this.#newest.delete(key);
-      }
-    }));
+    return this.after([key], async () => {
+      if (!newest()) return skipped;
+      try { return await work(newest); }
+      finally { if (newest()) this.#newest.delete(key); }
+    });
+  }
+
+  /** Run a step between earlier and later saves of these keys, even when a later save is queued. */
+  after<T>(keys: readonly string[], work: () => Promise<T>): Promise<T> {
+    const next = Promise.all(keys.map((key) => this.#tails.get(key))).then(work);
+    const tail = next.catch(() => {}).then(() => {
+      for (const key of keys) if (this.#tails.get(key) === tail) this.#tails.delete(key);
+    });
+    for (const key of keys) this.#tails.set(key, tail);
     return next;
   }
 }

@@ -39,6 +39,18 @@ export function previewIntensity(value: number) {
   timer = setTimeout(() => { void saveIntensity(); }, 200);
 }
 
+/** Drop the slider's pending input before resetting the whole Background group. */
+export function discardIntensity() {
+  if (!backgroundIntensity.saving) return;
+  clearTimeout(timer);
+  pending = null;
+  preview(null);
+  const cleared = sequence;
+  saving = Promise.all([saving, sends]).then(() => {
+    if (cleared === sequence) backgroundIntensity.saving = false;
+  });
+}
+
 /** Flush on change, blur and window close, including a write already in flight. */
 export function saveIntensity(): Promise<void> {
   clearTimeout(timer);

@@ -356,6 +356,7 @@ const apiWithInvoke = (invoke: <T>(command: string, args?: Record<string, unknow
   consoleClear: (paths: (string | null)[]) => invoke<void>("console_clear", { paths }),
   /** Resolves to the number of the change, as `settings-changed` sends it. */
   setSetting: (key: string, value: unknown) => invoke<number>("set_setting", { key, value }),
+  resetSettingsGroup: (keys: readonly string[]) => invoke<number>("reset_settings_group", { keys }),
   editTabTag: (setting: "styles" | "assignments", entry: string, value: string | TabTagStyle | null) =>
     invoke<{ key: string; value: unknown; revision: number }>("edit_tab_tag", { setting, entry, value }),
   gitSettings: () => invoke<GitSettings>("git_settings"),

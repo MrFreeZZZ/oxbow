@@ -7,7 +7,7 @@
   // SettingsRow.svelte.
 
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { backgroundIntensity, saveIntensity } from "./backgroundIntensity.svelte";
+  import { backgroundIntensity, discardIntensity, saveIntensity } from "./backgroundIntensity.svelte";
   import { listen } from "@tauri-apps/api/event";
   import { untrack, onDestroy } from "svelte";
   import { beforeUpdateRestart } from "./updateRestart.svelte";
@@ -155,10 +155,8 @@
     if (document.hasFocus()) anchor?.focus({ preventScroll: true });
   }
 
-  async function resetGroup(keys: PrefGroup["keys"]): Promise<boolean> {
-    // shortcut: writes can partially succeed until the group has an atomic reset.
-    for (const key of keys) if (!(await prefs.reset(key))) return false;
-    return true;
+  function resetGroup(keys: PrefGroup["keys"]): Promise<boolean> {
+    return prefs.resetGroup(keys, keys.includes("oxbow.background.intensity") ? discardIntensity : undefined);
   }
 
   function resetGroupSetting(setting: PrefGroup, label: string) {
