@@ -2,7 +2,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow, type CloseRequestedEvent } from "@tauri-apps/api/window";
   import { message } from "@tauri-apps/plugin-dialog";
-  import { onDestroy, onMount, tick } from "svelte";
+  import { onDestroy, onMount, tick, type Snippet } from "svelte";
   import type App from "./App.svelte";
   import RepoTabView from "./RepoTabView.svelte";
   import RepoTabStrip from "./lib/RepoTabStrip.svelte";
@@ -19,6 +19,7 @@
   import { mac, type ShortcutId } from "./lib/shortcuts";
   import type { Gone } from "./lib/types";
   import { beforeUpdateRestart } from "./lib/updateRestart.svelte";
+  import { updates } from "./lib/updates.svelte";
 
   let tabsEnabled = $state(false);
   let preparing = $state(0);
@@ -304,9 +305,11 @@
 
 <svelte:window onkeydown={onTabModifier} onkeyup={onTabModifier} onblur={() => setNumberPhase("idle")} />
 
-{#snippet tabStrip(openMenu: ((event: MouseEvent) => void) | undefined, openRecent: () => void, copyPath: (path: string) => void)}
+<span class="sr-only" role="status">{updates.actionLabel ? updates.notice.title : ""}</span>
+
+{#snippet tabStrip(openMenu: ((event: MouseEvent) => void) | undefined, openRecent: () => void, copyPath: (path: string) => void, update: Snippet | undefined)}
   {#if tabs.length > 0 || home !== "closed"}
-    <RepoTabStrip {tabs} activeId={highlightedId} showNumbers={numberPhase === "showing"} {openMenu} {openRecent} {copyPath}
+    <RepoTabStrip {tabs} activeId={highlightedId} showNumbers={numberPhase === "showing"} {openMenu} {openRecent} {copyPath} {update}
       home={home !== "closed"} homeSelected={showingHome && highlightedId === activeId} {showHome} {closeHome}
       activate={activateTab} close={closeTab} closeOthers={closeOtherTabs}
       canSwitch={canSwitch} activeNow={activeNow} move={moveTab}
@@ -332,3 +335,7 @@
       })} closeTab={() => closeTab(tab.id)} lostTab={(gone) => lostTab(tab.id, gone)} />
   {/if}
 {/each}
+
+<style>
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+</style>

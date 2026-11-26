@@ -9,10 +9,10 @@
   import { repoTabActions, type ShownTab } from "./repoTabs";
   import { combo, mac } from "./shortcuts";
   import { keyFocus } from "./tabs";
-  import { tick } from "svelte";
+  import { tick, type Snippet } from "svelte";
 
   let { tabs, activeId, showNumbers, openMenu, openRecent, copyPath, activate, close, closeOthers, canSwitch, activeNow, move, saveTag, customizeTags,
-    home, homeSelected, showHome, closeHome }: {
+    home, homeSelected, showHome, closeHome, update }: {
     tabs: readonly ShownTab[];
     activeId: RepoSessionId | null;
     /** 1–9 in place of the folder icon, while ⌘ or Ctrl is held. */
@@ -33,6 +33,7 @@
     homeSelected: boolean;
     showHome: () => void;
     closeHome: () => Promise<void>;
+    update?: Snippet;
   } = $props();
 
   let list = $state<HTMLDivElement>();
@@ -208,6 +209,9 @@
     title={withKeys("Open Recent…", combo("openRecent"))}>
     <svg class="icon" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" /></svg>
   </button>
+  {#if update}
+    <div class="update">{@render update()}</div>
+  {/if}
 </div>
 {#if menu}
   <Menu x={menu.x} y={menu.y} label={menu.tab.repo.name} entries={contextEntries(menu.tab)} onClose={hideContext} />
@@ -239,6 +243,11 @@
     min-width: 0;
     overflow-x: auto;
     scrollbar-width: none;
+  }
+  .update {
+    display: flex;
+    align-self: center;
+    margin-inline-start: auto;
   }
   .item {
     position: relative;

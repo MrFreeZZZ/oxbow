@@ -17,11 +17,12 @@
   const scope = useRepoScope();
   const { start, api } = scope;
 
-  let { onBack, onOpen, onOpenPath, onLocate, currentPath = null, loading, error: sessionError, gone }: {
+  let { onBack, onOpen, onOpenPath, onLocate, currentPath = null, loading, error: sessionError, gone, update }: {
     onBack?: () => void;
     loading: boolean;
     error: string | null;
     gone?: Snippet;
+    update?: Snippet;
     onOpen: () => void;
     onOpenPath: (path: string) => void;
     onLocate: (path: string) => void;
@@ -228,7 +229,11 @@
   </section>
 
   <section class="repos" aria-label="Repositories">
-    <div class="drag top-drag" data-tauri-drag-region></div>
+    {#if update}
+      <div class="update-bar" data-tauri-drag-region>{@render update()}</div>
+    {:else}
+      <div class="drag top-drag" data-tauri-drag-region></div>
+    {/if}
     {#if gone}{@render gone()}{:else}
       <div class="repos-content">
       <div class="repos-main">
@@ -549,6 +554,14 @@
   }
   .top-drag {
     height: 12px;
+  }
+  .update-bar {
+    display: flex;
+    flex-shrink: 0;
+    justify-content: flex-end;
+    align-items: center;
+    height: 40px;
+    padding: 0 var(--space-3);
   }
   .repos-content {
     display: flex;

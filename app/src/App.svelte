@@ -18,7 +18,6 @@
   import { type Request } from "./lib/confirm.svelte";
   import BranchPicker from "./lib/BranchPicker.svelte";
   import { detachRequest, keepRequest as keepRequestInRepo, newBranchRequest as newBranchRequestInRepo, switchRequest as switchRequestInRepo, trackRequest, type BranchContext } from "./lib/branches";
-  import UpdateNotification from "./lib/UpdateNotification.svelte";
   import { updates } from "./lib/updates.svelte";
   import DetachedBanner from "./lib/DetachedBanner.svelte";
   import OperationBanner from "./lib/OperationBanner.svelte";
@@ -47,7 +46,7 @@
     openPath?: (path: string, from: OpenFrom) => Promise<void>;
     closeTab?: () => Promise<void>;
     lostTab?: (gone: Gone) => Promise<void>;
-    tabStrip?: Snippet<[((event: MouseEvent) => void) | undefined, () => void, (path: string) => void]>;
+    tabStrip?: Snippet<[((event: MouseEvent) => void) | undefined, () => void, (path: string) => void, Snippet | undefined]>;
     showHome?: () => void;
     stepRepoTab?: (by: 1 | -1) => Promise<void>;
     /** Open repository tab 1–9. Present while two or more tabs are open. */
@@ -358,17 +357,19 @@
   const CONSOLE_ICON = "M1.8 4a1.5 1.5 0 0 1 1.5-1.5h9.4A1.5 1.5 0 0 1 14.2 4v8a1.5 1.5 0 0 1-1.5 1.5H3.3A1.5 1.5 0 0 1 1.8 12zM4.8 6.2 6.8 8l-2 1.8M8.3 10H11";
   const COMMANDS_ICON = "M2 5l3 3-3 3M8 4h6M8 8h6M8 12h6";
   const NEW_BRANCH_ICON = "M3 3.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M3 12.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M4.5 5v6M11.5 2.5v6M8.5 5.5h6";
+  const updateInMore = $derived(narrow && !tabStrip ? updates.actionLabel : null);
+  const openUpdates = () => api.openSettings("updates").catch((error) => confirm.fail(error));
   /** New Branch, Console and Settings, which a narrow window's toolbar has no room for. */
   function moreEntries(): MenuEntry[] {
     const entries: MenuEntry[] = [];
+    if (updateInMore) entries.push({ kind: "item", label: `${updateInMore}…`, detail: updates.notice.title, icon: SETTINGS_ICON, run: openUpdates });
     if ((view !== "file" && view !== "browse") || showConflicts) entries.push({ kind: "item", label: history?.head.branch ? "New Branch…" : "Create a Branch at HEAD…", icon: NEW_BRANCH_ICON, run: newBranch });
     entries.push({ kind: "item", label: "Custom Commands…", icon: CONSOLE_ICON, run: manageCommands });
     for (const command of commandsFor(prefs.get("oxbow.commands"), repo?.path ?? "")) {
       entries.push({ kind: "item", label: command.name, icon: CONSOLE_ICON, run: () => void runCustom(command) });
     }
     entries.push({ kind: "item", label: "Console", icon: CONSOLE_ICON, keys: shortcut("console") || undefined, run: () => api.openConsole() });
-    const update = updates.available && `Oxbow ${updates.available.version} ${updates.installed ? "is installed" : updates.ready ? "is ready to install" : "is available"}`;
-    entries.push({ kind: "item", label: "Settings…", icon: SETTINGS_ICON, keys: shortcut("settings") || undefined, detail: update || undefined, run: () => api.openSettings() });
+    entries.push({ kind: "item", label: "Settings…", icon: SETTINGS_ICON, keys: shortcut("settings") || undefined, run: () => api.openSettings() });
     return entries;
   }
   /** The details panel over the whole content, for a long diff; the graph comes back with the same
@@ -2107,7 +2108,11 @@
   }}
 />
 
-<UpdateNotification />
+{#snippet updateButton()}
+  <button class="button small primary" title={updates.notice.title}
+    aria-label={`${updates.actionLabel}: ${updates.notice.title}. Open Updates settings`}
+    onclick={openUpdates}>{updates.actionLabel}</button>
+{/snippet}
 
 {#if overviewShown || !repo || !history}
   {#if tabStrip}
@@ -2117,6 +2122,7 @@
           undefined,
           () => { if (windowCommandsFree()) void openRecent(); },
           (path) => copyText(path, "Copied the repository path."),
+          updates.actionLabel ? updateButton : undefined,
         )}
       </div>
       <div class="welcome-body">
@@ -2129,6 +2135,7 @@
   {#snippet welcomeScreen()}
     <Welcome currentPath={repo?.path ?? null} onBack={repo && history ? () => (overviewShown = false) : undefined}
       loading={loading || openingPath} error={session.gone ? null : (error ?? settingsNote?.text ?? null)} onOpen={chooseRepo} onOpenPath={load}
+      update={!tabStrip && updates.actionLabel ? updateButton : undefined}
       onLocate={(path) => { void session.findFolder(path, load, () => { if (!openPath) overviewShown = false; }); }} gone={session.gone ? goneAside : undefined} />
   {/snippet}
   {#snippet goneAside()}
@@ -2202,11 +2209,13 @@
           (event) => { if (windowCommandsFree()) void sidebar?.repoMenu(event, true); },
           () => { if (windowCommandsFree()) void openRecent(); },
           (path) => copyText(path, "Copied the repository path."),
+          updates.actionLabel ? updateButton : undefined,
         )}
       </div>
     {/if}
     <div class="main">
-      <header class:has-search={(view === "history" || view === "file") && !showConflicts} data-tauri-drag-region>
+      <header class:has-search={(view === "history" || view === "file") && !showConflicts}
+        class:has-update={!tabStrip && !narrow && !!updates.actionLabel} data-tauri-drag-region>
         <div class="lead" data-tauri-drag-region>
           {#if view !== "history" || showConflicts}
             <WindowTitle title={titleOf(repo, history)} steps={trailPath} onStep={goTo} />
@@ -2253,7 +2262,7 @@
           {/if}
         </div>
         <div class="trail" data-tauri-drag-region>
-          {#if error}<span class="error" role="alert">{error}</span>{/if}
+          {#if error && !updateInMore}<span class="error" role="alert">{error}</span>{/if}
           {#if history.remotes.length && remoteCtx}
             <SyncButtons
               {history}
@@ -2311,15 +2320,16 @@
           {#if narrow}
             <button
               class="toolbar-control"
-              class:update-available={!!updates.available}
+              class:update-available={!!updateInMore}
               onclick={(event) => {
                 const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
                 moreMenu = moreMenu ? null : { x: box.left, y: box.bottom + 6 };
               }}
-              aria-label="More"
+              aria-label={updateInMore ? `More: ${updates.notice.title}` : "More"}
               aria-haspopup="menu"
               aria-expanded={!!moreMenu}
-              title={`${(view !== "file" && view !== "browse") || showConflicts ? "New Branch, Console, Settings" : "Console, Settings"}${updates.available ? " — an update is available" : ""}`}
+              title={updateInMore ? updates.notice.title
+                : (view !== "file" && view !== "browse") || showConflicts ? "New Branch, Console, Settings" : "Console, Settings"}
             >
               <svg class="icon" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6" /><circle cx="8" cy="8" r=".6" /><circle cx="12.5" cy="8" r=".6" /></svg>
             </button>
@@ -2333,12 +2343,14 @@
               </button>
             </div>
             <span class="divider"></span>
-            <button class="toolbar-control" class:update-available={!!updates.available} onclick={() => api.openSettings()} aria-label="Settings" title={withKeys("Settings", combo("settings"))}>
+            <button class="toolbar-control" onclick={() => api.openSettings()} aria-label="Settings" title={withKeys("Settings", combo("settings"))}>
               <svg class="icon" viewBox="0 0 16 16"><path d={SETTINGS_ICON} /></svg>
             </button>
           {/if}
+          {#if !tabStrip && !narrow && updates.actionLabel}{@render updateButton()}{/if}
         </div>
       </header>
+      {#if error && updateInMore}<div class="toolbar-error" role="alert">{error}</div>{/if}
       {#if searching}
         <SearchBar
           {history}
@@ -2925,6 +2937,22 @@
     color: var(--text);
     white-space: nowrap;
   }
+  .window.narrow .repo-picker,
+  header.has-update .repo-picker {
+    display: inline-grid;
+    grid-template-columns: 16px minmax(0, 1fr) 12px;
+    flex-shrink: 1;
+    min-width: min-content;
+  }
+  .window.narrow .repo-picker span,
+  header.has-update .repo-picker span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  header.has-update .joined.branch {
+    min-width: 44px;
+  }
   .repo-picker .icon {
     flex-shrink: 0;
   }
@@ -2959,10 +2987,6 @@
   header.has-search .trail {
     flex: 0 0 auto;
   }
-  .toolbar-control.update-available {
-    background-color: var(--accent-quiet);
-    color: var(--accent);
-  }
   .joined.steps > button {
     min-width: 32px;
     padding: 0 7px;
@@ -2978,6 +3002,16 @@
   .joined.branch {
     flex-shrink: 1;
     min-width: 0;
+  }
+  .toolbar-control.update-available {
+    background-color: var(--accent-quiet);
+    color: var(--accent);
+  }
+  .toolbar-error {
+    padding: 0 var(--space-3) var(--space-2);
+    color: var(--red);
+    font-size: var(--text-small);
+    overflow-wrap: anywhere;
   }
   .joined.branch > button {
     margin-left: var(--space-1);
