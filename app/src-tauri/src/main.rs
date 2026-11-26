@@ -283,6 +283,8 @@ fn main() {
             working::lfs_status,
             working::lfs_prune_preview,
             outside::open_lfs_download,
+            outside::open_oxbow_github,
+            outside::report_oxbow_bug,
             history::operation_log,
             history::series,
             history::last_rewrite,

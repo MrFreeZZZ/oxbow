@@ -399,6 +399,8 @@ const apiWithInvoke = (invoke: <T>(command: string, args?: Record<string, unknow
   /** e.g. "3 files would be pruned (1.4 GB)"; null when nothing would be. */
   lfsPrunePreview: () => invoke<string | null>("lfs_prune_preview"),
   openLfsDownload: () => invoke<void>("open_lfs_download"),
+  openOxbowGitHub: () => invoke<void>("open_oxbow_github"),
+  reportOxbowBug: () => invoke<void>("report_oxbow_bug"),
   /** With `worktree`, that working folder of the repository instead. */
   openInTerminal: (worktree: string | null = null) => invoke<void>("open_in_terminal", { worktree }),
   revealWorktree: (path: string) => invoke<void>("reveal_worktree", { path }),

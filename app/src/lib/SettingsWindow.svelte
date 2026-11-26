@@ -74,6 +74,7 @@
   const labelOf = (section: Section) => (section.id === "repo" ? (model.repo?.name ?? "") : section.label);
 
   const mac = navigator.platform.startsWith("Mac");
+  const version = (window as Window & { __OXBOW_SETTINGS_VERSION__?: string }).__OXBOW_SETTINGS_VERSION__;
 
   // Back and Forward walk the sections visited, like System Settings.
   const initial = settingsRoute(location.hash);
@@ -340,22 +341,46 @@
       <input type="search" aria-label="Search settings" placeholder="Search" bind:value={model.query} spellcheck="false" autofocus={!initial?.group} />
       {#if model.query}<button type="button" class="clear" onclick={() => { model.query = ""; }} aria-label="Clear the filter" title="Clear the filter">×</button>{/if}
     </label>
-    {#each shownSections as section (section.id)}
-      {#if section.head}<div class="head">{section.head}</div>{/if}
-      <button
-        class="section"
-        class:child={section.child}
-        class:current={!needle && !json && section.id === current.id}
-        class:miss={needle && !hits.has(section.id)}
-        aria-current={!needle && section.id === current.id ? "page" : undefined}
-        onclick={() => go(section.id)}
-      >
-        <span class="badge" style:background={section.color}>
-          <svg class="icon" viewBox="0 0 16 16"><path d={section.icon} /></svg>
+    <div class="sections">
+      {#each shownSections as section (section.id)}
+        {#if section.head}<div class="head">{section.head}</div>{/if}
+        <button
+          class="section"
+          class:child={section.child}
+          class:current={!needle && !json && section.id === current.id}
+          class:miss={needle && !hits.has(section.id)}
+          aria-current={!needle && section.id === current.id ? "page" : undefined}
+          onclick={() => go(section.id)}
+        >
+          <span class="badge" style:background={section.color}>
+            <svg class="icon" viewBox="0 0 16 16"><path d={section.icon} /></svg>
+          </span>
+          <span class="label">{labelOf(section)}</span>
+        </button>
+      {/each}
+    </div>
+    <div class="support">
+      <button type="button" class="section" onclick={() => api.openOxbowGitHub().catch((err) => confirm.fail(err))}>
+        <span class="badge github">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49C4 14.09 3.48 13.23 3.32 12.78c-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.65 7.65 0 0 1 8 3.86c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+          </svg>
         </span>
-        <span class="label">{labelOf(section)}</span>
+        GitHub
       </button>
-    {/each}
+      <button type="button" class="section" onclick={() => api.reportOxbowBug().catch((err) => confirm.fail(err))}>
+        <span class="badge bug">
+          <svg class="icon" viewBox="0 0 16 16" aria-hidden="true">
+            <rect x="4.5" y="5" width="7" height="9" rx="3.5" />
+            <path d="m5 2 1.5 2.5M11 2 9.5 4.5M8 8v6M2 5l2.5 2M2 9h2.5M2 13l2.5-2m7-4L14 5m-2.5 4H14m-2.5 2 2.5 2" />
+          </svg>
+        </span>
+        Report a Bug
+      </button>
+      {#if version}
+        <div class="version">{version}</div>
+      {/if}
+    </div>
   </nav>
 
   <div class="content">
@@ -562,7 +587,44 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+    overflow: hidden;
+  }
+
+  .sections, .support {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .sections {
+    flex: 1;
     overflow: hidden auto;
+  }
+
+  .support {
+    flex-shrink: 0;
+    margin-top: var(--space-2);
+    padding-bottom: var(--space-3);
+  }
+
+  .support::before {
+    content: "";
+    border-top: 1px solid var(--sep);
+    margin: 0 var(--space-4) var(--space-2);
+  }
+
+  .support .section:hover {
+    background: var(--hover-wash);
+  }
+
+  .github { background: var(--section-grey); }
+  .bug { background: var(--section-blue); }
+
+  .version {
+    padding: var(--space-2) var(--space-4) 0;
+    color: var(--text2);
+    font-size: var(--text-small);
+    user-select: text;
   }
 
   /* Room for the traffic lights, which macOS draws over the sidebar. */
@@ -577,6 +639,7 @@
 
   .search {
     margin: 0 10px 8px;
+    flex-shrink: 0;
   }
 
   .head {

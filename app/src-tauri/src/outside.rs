@@ -17,6 +17,109 @@ pub(crate) fn open_lfs_download() -> CommandResult<()> {
     open_in::open_url("https://git-lfs.com")
 }
 
+const OXBOW_GITHUB: &str = "https://github.com/MrFreeZZZ/oxbow";
+
+#[tauri::command]
+pub(crate) fn open_oxbow_github() -> CommandResult<()> {
+    open_in::open_url(OXBOW_GITHUB)
+}
+
+#[tauri::command]
+pub(crate) async fn report_oxbow_bug(app: AppHandle) -> CommandResult<()> {
+    let version = app.package_info().version.to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        open_in::open_url(bug_report_url(&version, &report_platform()).as_str())
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+fn bug_report_url(version: &str, platform: &str) -> tauri::Url {
+    let mut url = tauri::Url::parse(&format!("{OXBOW_GITHUB}/issues/new")).expect("Oxbow issue URL");
+    let commit = env!("OXBOW_COMMIT");
+    let channel = env!("OXBOW_BUILD_CHANNEL");
+    url.query_pairs_mut().append_pair(
+        "body",
+        &format!("Version: {version}\nCommit: {commit}\nBuild channel: {channel}\nPlatform: {platform}"),
+    );
+    url
+}
+
+fn report_platform() -> String {
+    let os = match std::env::consts::OS {
+        "macos" => "macOS",
+        "linux" => "Linux",
+        "windows" => "Windows",
+        os => os,
+    };
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        arch => arch,
+    };
+    match os_version() {
+        Some(version) => format!("{os} {arch} {version}"),
+        None => format!("{os} {arch}"),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn os_version() -> Option<String> {
+    let read = |flag: &str| {
+        let output = std::process::Command::new("/usr/bin/sw_vers").arg(flag).output().ok()?;
+        let value = std::str::from_utf8(&output.stdout).ok()?.trim();
+        (output.status.success() && !value.is_empty()).then(|| value.to_owned())
+    };
+    let version = read("-productVersion")?;
+    Some(match read("-buildVersion") {
+        Some(build) => format!("{version} ({build})"),
+        None => version,
+    })
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn os_version() -> Option<String> {
+    let output = std::process::Command::new("/usr/bin/uname")
+        .arg("-r")
+        .output()
+        .or_else(|_| std::process::Command::new("/bin/uname").arg("-r").output())
+        .ok()?;
+    let version = std::str::from_utf8(&output.stdout).ok()?.trim();
+    (output.status.success() && !version.is_empty()).then(|| version.to_owned())
+}
+
+#[cfg(windows)]
+fn os_version() -> Option<String> {
+    use winreg::RegKey;
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+
+    let key = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion")
+        .ok()?;
+    let build: String = key.get_value("CurrentBuildNumber").ok()?;
+    Some(match key.get_value::<u32, _>("UBR") {
+        Ok(revision) => format!("{build}.{revision}"),
+        Err(_) => build,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bug_report_prefills_one_body_parameter() {
+        let url = bug_report_url("0.1.741", "macOS arm64 27.2.1 (26B131)&test");
+        assert_eq!(url.host_str(), Some("github.com"));
+        assert_eq!(url.path(), "/MrFreeZZZ/oxbow/issues/new");
+        let expected = format!(
+            "Version: 0.1.741\nCommit: {}\nBuild channel: {}\nPlatform: macOS arm64 27.2.1 (26B131)&test",
+            env!("OXBOW_COMMIT"),
+            env!("OXBOW_BUILD_CHANNEL")
+        );
+        assert!(url.query_pairs().eq([("body".into(), expected.into())]));
+    }
+}
+
 /// Preview a file of the working copy: Quick Look on macOS, the default app elsewhere.
 #[tauri::command]
 pub(crate) fn quick_look(window: RepoRequest, session: State<'_, Session>, path: String) -> CommandResult<()> {

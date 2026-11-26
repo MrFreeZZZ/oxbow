@@ -511,7 +511,10 @@ pub(crate) fn show_settings_at(app: &AppHandle, section: Option<&str>) -> Comman
         || "index.html#settings".to_owned(),
         |section| format!("index.html#settings/{section}"),
     );
+    let version = format!("Version {} ({})", app.package_info().version, env!("OXBOW_COMMIT"));
+    let version = serde_json::to_string(&version).map_err(|err| err.to_string())?;
     let builder = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(url.into()))
+        .initialization_script(format!("window.__OXBOW_SETTINGS_VERSION__ = {version};"))
         .title("Settings")
         .inner_size(940.0, 720.0)
         .min_inner_size(760.0, 520.0)
