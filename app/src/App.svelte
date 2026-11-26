@@ -2852,7 +2852,6 @@
   /* Welcome has no sidebar, so the strip leaves the same room for the window controls. */
   .welcome-host .repo-tabs {
     --repo-tabs-leading: 136px;
-    --repo-tabs-height: 48px;
   }
   .welcome-host.mac .repo-tabs {
     --repo-tabs-leading: 218px;
@@ -2860,7 +2859,8 @@
   .repo-tabs {
     flex-shrink: 0;
   }
-  .window.with-repo-tabs {
+  .window.with-repo-tabs,
+  .welcome-host {
     --repo-tabs-height: 46px;
   }
   .window.with-repo-tabs .main,
