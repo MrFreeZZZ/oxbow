@@ -63,6 +63,46 @@ const openChanged = (app, name) =>
 
 export const SCENARIOS = [
   {
+    name: "repository tab strip geometry",
+    async run(ctx) {
+      const app = await ctx.start(repo(`${ctx.dir}/tab-geometry`, 1));
+      const { shown, hidden } = await app.js(async (page) => {
+        await window.__TAURI_INTERNALS__.invoke("plugin:window|set_size", {
+          label: "main", value: { Logical: { width: 1360, height: 860 } },
+        });
+        const strip = await page.until(
+          () => innerWidth >= 1300 && page.all(".window:not(.narrow) .repo-tabs > .strip")[0],
+          "a wide repository window",
+        );
+        const toggle = strip.closest(".window").querySelector(".side-toggle");
+        const measure = async (expanded) => {
+          await page.until(() => toggle.getAttribute("aria-expanded") === String(expanded), "the sidebar state");
+          await page.paint();
+          await page.until(() => !strip.getAnimations().some(animation => animation.pending || animation.playState === "running"),
+            "the tab strip transition to finish");
+          const position = (el) => {
+            const { x, y } = el.getBoundingClientRect();
+            return { x, y };
+          };
+          return {
+            height: strip.getBoundingClientRect().height,
+            menu: position(strip.querySelector('[aria-label="Repository menu"]')),
+            tab: position(strip.querySelector('[role="tab"][aria-selected="true"]')),
+          };
+        };
+        if (toggle.getAttribute("aria-expanded") !== "true") toggle.click();
+        const shown = await measure(true);
+        toggle.click();
+        return { shown, hidden: await measure(false) };
+      });
+      assert.equal(hidden.height, shown.height, "the strip keeps its height");
+      for (const control of ["menu", "tab"]) {
+        assert.ok(hidden[control].x < shown[control].x, `${control} moves left when the sidebar hides`);
+        assert.equal(hidden[control].y, shown[control].y, `${control} keeps its vertical position`);
+      }
+    },
+  },
+  {
     name: "repository tab queue",
     async run(ctx) {
       const paths = Object.fromEntries(["a", "b", "c", "d", "extra"].map(name => [name, repo(`${ctx.dir}/tab-${name}`, 1)]));
