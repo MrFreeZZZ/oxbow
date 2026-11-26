@@ -34,6 +34,8 @@ Oxbow is a quiet desktop window for the whole repository: the graph, the diff, t
 
 **Switch between repositories.** Open a recent or local repository in a tab, and drag tabs to reorder them. Ctrl+Tab goes to the next tab and Ctrl+Shift+Tab to the previous one; change either in Settings → Keyboard Shortcuts → Tabs. Hold Command, or Ctrl on Windows and Linux, and the first nine tabs show their numbers; that key with 1–9 opens one. Settings → Keyboard Shortcuts → Tabs lists the shortcut, and it can’t be changed. When you switch back, Oxbow returns you to the same screen and place in History, with your commit draft. Worktrees can still open in their own windows. Use **Settings → General → Windows → Show repository tabs** to return to one repository per window.
 
+With reopening enabled, Oxbow restores the main window’s tab order and loads the selected repository first. A folder passed at launch takes priority and the saved tabs keep their order.
+
 Right-click a repository tab to color its folder icon. Tags stay with each working folder, including linked worktrees. To edit the palette, choose **Customize Folder Tags…** from the tab menu.
 
 **Follow the history.** The trunk of the graph is the production branch: `main` or `master`, unless you choose another. The checked-out branch takes the left column down to the commit it forked from, and the trunk stays on the left when that branch is the one checked out. Every other branch keeps its own column and a stable color for as long as its line runs. Yellow is reserved for tags. A thin outer ring in the color of the commit's line marks a merge or a branch point. A commit that is both also has a small light center. Dashed lines show commits the remote does not have yet, with a thin hollow dot for ordinary commits. Compare branches and commits, search history and changed code, and open a file's history or blame. Browse the files at a commit. Back and Forward return you to the same place in History.
@@ -53,6 +55,8 @@ Right-click a repository tab to color its folder icon. Tags stay with each worki
 **Shared rules.** Protected branches, by default `main`, `master` and the production branch, are never force-pushed. Commits a remote already has are not rewritten on them: Amend, Edit Stack, rebase and reset leave those commits, and Revert undoes one. Commits not pushed yet stay editable, and the list of names is yours to change. Shared files such as `.gitignore`, `.gitattributes`, `.mailmap` and `CODEOWNERS` are edited in Settings, checked as they are typed, and saved into the working copy so they show up in Changes.
 
 In Settings, choose **Reset Setting** from the gear menu to restore an Oxbow setting or group to its defaults. Oxbow asks before resetting a customized list such as branch prefixes or keyboard shortcuts.
+
+If `settings.json` changes on disk while you edit it in Oxbow, **Save** reports the conflict and keeps your edits in the editor.
 
 ## Why Oxbow
 
