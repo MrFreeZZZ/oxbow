@@ -2147,7 +2147,8 @@
     {/if}
   {/snippet}
 {:else}
-  <div class="window" class:narrow class:mac class:side-shown={sideShown} class:side-hidden={sideHidden && !narrow} class:sliding class:with-repo-tabs={!!tabStrip}>
+  <div class="window" class:narrow class:mac class:side-shown={sideShown} class:side-hidden={sideHidden && !narrow} class:sliding class:with-repo-tabs={!!tabStrip}
+    style:--sidebar-width={`${SIDEBAR}px`}>
     <button class="capsule side-toggle" onclick={toggleSidebar} aria-label={sideOut ? "Hide sidebar" : "Show sidebar"} aria-expanded={sideOut} title={withKeys(sideOut ? "Hide Sidebar" : "Show Sidebar", combo("sidebar"))}>
       <svg class="icon" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2" /><path d="M6 3v10" /></svg>
     </button>
@@ -2729,7 +2730,7 @@
   }
   .main {
     position: absolute;
-    left: 280px;
+    left: var(--sidebar-width);
     top: 0;
     right: 0;
     bottom: 0;
@@ -2767,6 +2768,9 @@
       left 0.22s ease,
       padding-left 0.22s ease;
   }
+  .window:not(.narrow) .repo-tabs > :global(.strip) {
+    transition: padding-left 0.22s ease;
+  }
   .window.sliding :global(aside.panel) {
     transition: width 0.22s ease;
   }
@@ -2801,6 +2805,7 @@
     .window.side-hidden > :global(nav),
     .window.narrow.side-shown > :global(nav),
     .window.sliding :global(aside.panel),
+    .window:not(.narrow) .repo-tabs > :global(.strip),
     .main,
     header {
       transition: none;
@@ -2867,7 +2872,16 @@
     display: none;
   }
   .window .repo-tabs {
-    --repo-tabs-leading: calc(280px + var(--space-2));
+    --repo-tabs-leading: calc(var(--sidebar-width) + var(--space-2));
+    position: relative;
+  }
+  .window:not(.narrow, .side-hidden) .repo-tabs::after {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 calc(var(--sidebar-width) - 1px);
+    width: 1px;
+    background: var(--sep);
+    pointer-events: none;
   }
   .window.with-repo-tabs:is(.narrow, .side-hidden) header {
     padding-left: 14px;

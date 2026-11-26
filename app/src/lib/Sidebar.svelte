@@ -1071,7 +1071,7 @@
     left: 0;
     top: 0;
     bottom: 0;
-    width: 280px;
+    width: var(--sidebar-width);
     background: var(--surface-side);
     border-right: 1px solid var(--sep);
     display: flex;
