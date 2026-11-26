@@ -1,4 +1,5 @@
-import { addKnown, blockText, changeStarts, changedRow, pairRows, pieces, sideKind, spans, stepChange } from "../src/lib/diffRows.ts";
+import { addKnown, blockText, changeStarts, changedRow, pairRows, pieces, sideKind, spans, splitFindLine, stepChange } from "../src/lib/diffRows.ts";
+import { occurrences, paint } from "../src/lib/syntax.ts";
 import type { DiffLine, Hunk } from "../src/lib/types.ts";
 import assert from "node:assert/strict";
 
@@ -6,6 +7,42 @@ const line = (kind: DiffLine["kind"], text = ""): DiffLine => ({ kind, oldLine: 
 const c = line("context");
 const r = line("removed");
 const a = line("added");
+
+// Counted highlights follow the rows, left before right, with identical context counted once.
+{
+  const lines = [
+    { ...line("context", "  return value"), oldText: "    return value" },
+    line("context", "return value"),
+    { ...line("removed", "return before"), words: [{ text: "ret", changed: false }, { text: "urn before", changed: true }] },
+    line("added", "return after return"),
+    { ...line("context"), oldText: " " },
+  ];
+  const sides = ["left", "right"] as const;
+  for (const [find, expected, twins] of [
+    ["    return", ["0:left:0"], []],
+    ["return", ["0:left:0", "0:right:0", "1:right:0", "2:left:0", "2:right:0", "2:right:1"], ["1:left:0"]],
+    [" ", ["0:left:0", "0:left:1", "0:left:2", "0:left:3", "0:left:4", "0:right:0", "0:right:1", "0:right:2",
+      "1:right:0", "2:left:0", "2:right:0", "2:right:1", "3:left:0"], ["1:left:0"]],
+  ] as const) {
+    const counted: string[] = [];
+    const highlighted: string[] = [];
+    const uncounted: string[] = [];
+    for (const [index, row] of pairRows(lines).entries()) {
+      for (const side of sides) {
+        const at = row[side];
+        if (at === null) continue;
+        const { text, counted: primary } = splitFindLine(lines[at], side);
+        const key = (hit: number) => `${index}:${side}:${hit}`;
+        if (primary) counted.push(...occurrences(text, find).map((_, hit) => key(hit)));
+        const hits = new Set(paint(text, lines[at].words, null, find).flatMap((piece) => piece.hit === undefined ? [] : [key(piece.hit)]));
+        (primary ? highlighted : uncounted).push(...hits);
+      }
+    }
+    assert.deepEqual(counted, expected);
+    assert.deepEqual(highlighted, counted);
+    assert.deepEqual(uncounted, twins);
+  }
+}
 
 // Removed lines face the added lines after them; the longer run leaves the other side empty.
 {

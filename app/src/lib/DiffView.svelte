@@ -41,7 +41,7 @@
   import { foldReason, startsFolded } from "./diffFold";
   import { diffLineEndingLabel } from "./diffLineEndings";
   import { changeBadge } from "./changesList";
-  import { addKnown, blockText, changedRow, changeStarts, lineText, pieces, rowsOf, sideKind, type Known, type Piece, type Row } from "./diffRows";
+  import { addKnown, blockText, changedRow, changeStarts, pieces, rowsOf, sideKind, splitFindLine, type Known, type Piece, type Row } from "./diffRows";
   import { mac, withKeys } from "./keys";
   import { combo } from "./shortcuts";
   import ImageDiff from "./ImageDiff.svelte";
@@ -628,14 +628,17 @@
         const count = cut && piece.kind === "hunk" ? cut.lines[piece.h] : hunk.lines.length;
         const h = partOf(piece);
         if (split) {
-          // Side by Side draws an unchanged line twice: its matches count once, on the new side.
           const rows = rowsOf(hunk, count);
-          const hitsOf = (at: number | null) => (at === null ? 0 : occurrences(hunk.lines[at].text || " ", find, matchCase).length);
+          const hitsOf = (at: number | null, side: "left" | "right") => {
+            if (at === null) return 0;
+            const { text, counted } = splitFindLine(hunk.lines[at], side);
+            return counted ? occurrences(text, find, matchCase).length : 0;
+          };
           for (const start of blocks(rows.length)) {
             let n = 0;
             for (let r = start; r < Math.min(rows.length, start + BLOCK); r++) {
               const row = rows[r];
-              n += (changedRow(row) ? hitsOf(row.left) : 0) + hitsOf(row.right);
+              n += hitsOf(row.left, "left") + hitsOf(row.right, "right");
             }
             if (n) out.push({ key: blockKey(diff, h, start), count: n });
           }
@@ -705,9 +708,8 @@
   {/if}
 {/snippet}
 
-<!-- A line's code: syntax colors, changed words, matches of Find. `counted` is false for the
-     old side of an unchanged line in Side by Side, whose matches are the new side's again. -->
-{#snippet code(diff: FileDiff, line: DiffLine, language: ReturnType<typeof languageOf>, counted: boolean, text = line.text)}<span class="text"><span class="ink"><span class="selection-text" data-empty={text ? undefined : ""}>{#each paint(text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found && counted} class:twin={piece.found && !counted} data-hit={counted ? piece.hit : undefined} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>{#if line.cr && own(showEol, diff.file.path)}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}{#if line.secret}<span class="secret" title="Looks like a secret: Oxbow stops the commit until it is unstaged, or you commit anyway. Add oxbow:allow to the line if it is not one."><svg viewBox="0 0 16 16"><path d="M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2" /></svg>{line.secret}</span>{/if}</span></span>{/snippet}
+<!-- A line's code: syntax colors, changed words, and matches of Find. -->
+{#snippet code(diff: FileDiff, line: DiffLine, language: ReturnType<typeof languageOf>, counted: boolean, text = line.text)}<span class="text"><span class="ink"><span class="selection-text" data-empty={text ? undefined : ""}>{#each paint(text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, split && !text ? null : find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found && counted} class:twin={piece.found && !counted} data-hit={counted ? piece.hit : undefined} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>{#if line.cr && own(showEol, diff.file.path)}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}{#if line.secret}<span class="secret" title="Looks like a secret: Oxbow stops the commit until it is unstaged, or you commit anyway. Add oxbow:allow to the line if it is not one."><svg viewBox="0 0 16 16"><path d="M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2" /></svg>{line.secret}</span>{/if}</span></span>{/snippet}
 
 {#snippet pickBox(hunk: Hunk, line: DiffLine, i: number, on: boolean)}
   <button
@@ -765,7 +767,10 @@
       {#if line && at !== null && line.kind !== "context"}{@render pickBox(hunk, line, at, on)}{:else}<span></span>{/if}
     {/if}
     {#if side === "right" && line}{@render newNo(diff, line.newLine)}{:else}<span class="no">{line ? ((side === "left" ? line.oldLine : line.newLine) ?? "") : ""}</span>{/if}
-    {#if line}{@render code(diff, line, language, side === "right" || line.kind !== "context", lineText(line, side))}{/if}
+    {#if line}
+      {@const { text, counted } = splitFindLine(line, side)}
+      {@render code(diff, line, language, counted, text)}
+    {/if}
   </div>
 {/snippet}
 

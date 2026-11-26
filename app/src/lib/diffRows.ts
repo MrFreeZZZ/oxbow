@@ -53,6 +53,12 @@ export function blockText(hunk: Hunk, count: number, start: number, size: number
 /** Text of a line in its column. Unified shows the newer context. */
 export const lineText = (line: DiffLine, side: "left" | "right") => side === "left" ? (line.oldText ?? line.text) : line.text;
 
+/** Identical context is highlighted on both sides but contributes matches only on the right. */
+export function splitFindLine(line: DiffLine, side: "left" | "right"): { text: string; counted: boolean } {
+  const text = lineText(line, side);
+  return { text, counted: side === "right" || line.kind !== "context" || text !== line.text };
+}
+
 /** Context lines share an index even when their whitespace differs. */
 export const changedRow = (row: Row) => row.left !== row.right;
 
