@@ -44,7 +44,7 @@ pub(crate) async fn open_window(
     let builder = builder
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true)
-        .traffic_light_position(tauri::LogicalPosition::new(22.0, 30.0));
+        .traffic_light_position(tauri::LogicalPosition::new(22.0, 22.0));
     let reserved = || {
         session
             .repositories

@@ -747,26 +747,12 @@
     flex-grow: 1;
     min-width: 0;
   }
-  .segmented {
-    flex-shrink: 0;
-    display: flex;
-    padding: 2px;
-    border-radius: var(--radius-m);
-    background: var(--field);
-  }
   .segmented button {
     width: 28px;
     height: 22px;
-    border-radius: var(--radius-s);
     display: flex;
     align-items: center;
     justify-content: center;
-    color: var(--text2);
-  }
-  .segmented button.on {
-    background: var(--sheet);
-    color: var(--text);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
   }
   .segmented .icon {
     width: 14px;
@@ -912,7 +898,7 @@
   .sha {
     height: 22px;
     padding: 0 8px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     display: inline-flex;
     align-items: center;
     gap: 5px;

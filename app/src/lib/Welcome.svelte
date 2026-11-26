@@ -821,7 +821,7 @@
   .save {
     height: 28px;
     padding: 0 14px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-m);
     background: var(--accent);
     color: #fff;
     font-weight: 600;

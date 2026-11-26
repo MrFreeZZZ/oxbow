@@ -86,7 +86,7 @@
 </script>
 
 <div class="picker">
-  <button class="capsule" class:off={!!busy} onclick={toggle} aria-haspopup="menu" aria-expanded={open} title={busy ?? (open ? undefined : "Check out a branch")}>
+  <button class="toolbar-control toolbar-picker" class:off={!!busy} onclick={toggle} aria-haspopup="menu" aria-expanded={open} title={busy ?? (open ? undefined : "Check out a branch")}>
     <svg class="icon" viewBox="0 0 16 16" style:color={head ? lane(colorOf(head)) : lane(NO_BRANCH_COLOR)}
       ><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg
     >
@@ -143,24 +143,11 @@
     display: flex;
     min-width: 0;
   }
-  .capsule {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    height: 34px;
-    padding: 0 12px;
-    border-radius: var(--radius-pill);
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--icon);
-    font-weight: 500;
-  }
-  .capsule {
+  .toolbar-picker {
     min-width: 0;
     max-width: 100%;
   }
-  .capsule span {
+  .toolbar-picker span {
     color: var(--text);
     min-width: 0;
     overflow: hidden;
@@ -179,7 +166,7 @@
   .pop {
     position: absolute;
     left: 0;
-    top: 40px;
+    top: calc(100% + 6px);
     z-index: 20;
     width: 300px;
     padding: 6px;
@@ -260,7 +247,7 @@
     padding: 2px 10px 6px;
     line-height: 1.4;
   }
-  .capsule.off {
+  .toolbar-picker.off {
     opacity: 0.75;
   }
 </style>

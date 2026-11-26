@@ -806,7 +806,7 @@
       <div class="empty">
         <span>{lab ? github.mrProblem : github.problem}</span>
         <button class="button" onclick={() => github.refresh()}>Retry</button>
-        <button class="capsule" onclick={() => api.openSettings()}>Open Settings</button>
+        <button class="button review-action" onclick={() => api.openSettings()}>Open Settings</button>
       </div>
     {:else if !summary && (lab ? github.mrLoading : github.loading)}
       <div class="empty">Loading {w.noun}s…</div>
@@ -1071,7 +1071,7 @@
             />
             {#if !form.assignee && labFacts?.me}
               {@const self = labFacts.me}
-              <button class="capsule side" onclick={() => form && ((form.known = { ...form.known, [self.username]: self.id }), (form.assignee = self.username))}>Assign to Me</button>
+              <button class="button review-action side" onclick={() => form && ((form.known = { ...form.known, [self.username]: self.id }), (form.assignee = self.username))}>Assign to Me</button>
             {/if}
           </div>
           <div class="form-row">
@@ -1239,7 +1239,7 @@
           </span>
           <div class="steps">{@render restackList(savedLines)}</div>
           <div class="buttons">
-            <button class="capsule" onclick={forgetRestack} title="Stop showing it; the branches stay as they are">Forget</button>
+            <button class="button review-action" onclick={forgetRestack} title="Stop showing it; the branches stay as they are">Forget</button>
             <button class="button primary" disabled={saved.rebasing} onclick={continueRestack}>Continue…</button>
           </div>
         </div>
@@ -1260,7 +1260,7 @@
             <span class="step">{@render dot(warn ? "dot" : "ok", bg, fg)}<span>{step}</span></span>
           {/each}
           <div class="buttons">
-            <button class="capsule" onclick={() => (restackSkipped = true)}>Later</button>
+            <button class="button review-action" onclick={() => (restackSkipped = true)}>Later</button>
             <button class="button primary" disabled={!!restack.problem} onclick={() => restack && startRestack(restack.merged)}>Restack…</button>
           </div>
         </div>
@@ -1534,10 +1534,8 @@
     min-width: 0;
     height: 26px;
     padding: 0 12px;
-    border-radius: var(--radius-pill);
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
+    border-radius: var(--radius-m);
+    background: var(--field);
     font-size: var(--text-small);
     font-weight: 500;
     white-space: nowrap;
@@ -2056,24 +2054,14 @@
     font-size: var(--text-small);
   }
   .segmented {
-    display: flex;
     gap: 2px;
-    padding: 2px;
-    border-radius: var(--radius-m);
-    background: var(--field);
   }
   .segmented button {
     min-width: 70px;
     height: 24px;
     padding: 0 10px;
-    border-radius: var(--radius-s);
     text-align: center;
     font-size: var(--text-small);
-  }
-  .segmented button.on {
-    background: var(--seg-on);
-    box-shadow: var(--seg-shadow);
-    font-weight: 600;
   }
   .message {
     display: flex;
@@ -2222,16 +2210,8 @@
     gap: 8px;
     justify-content: flex-end;
   }
-  .capsule {
+  .review-action {
     min-width: 88px;
-    height: 30px;
-    padding: 0 14px;
-    border-radius: var(--radius-pill);
-    text-align: center;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    font-weight: 500;
   }
   .skipped {
     display: flex;

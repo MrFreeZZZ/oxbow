@@ -1247,7 +1247,7 @@
   .toggle {
     width: 26px;
     height: 26px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-m);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1566,7 +1566,7 @@
     gap: 3px;
     height: 18px;
     padding: 0 8px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     color: var(--code-dim, var(--text2));
     white-space: nowrap;
     flex-shrink: 0;
@@ -1589,7 +1589,7 @@
     margin: 0 20px 20px;
     height: 28px;
     padding: 0 12px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-m);
     background: var(--field);
   }
 </style>

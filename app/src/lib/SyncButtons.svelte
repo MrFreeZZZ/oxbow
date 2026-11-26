@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Fetch, Pull and Push in the toolbar, in one capsule: Fetch shows Activity's progress, and a
+  // Fetch, Pull and Push sit together in the toolbar: Fetch shows Activity's progress, and a
   // grey Pull or Push still answers a click, with why it can't run, under it.
 
   import { useRepoScope } from "./repoScope";
@@ -50,7 +50,7 @@
 <div class="sync">
   <div class="group" role="group" aria-label="Sync with remote">
     <button
-      class="fetch"
+      class="toolbar-control fetch"
       onclick={() => onSync("fetch")}
       oncontextmenu={(event) => {
         event.preventDefault();
@@ -77,6 +77,7 @@
     </button>
     <!-- Grey when it can't run, but it still answers a click: with why, under it. -->
     <button
+      class="toolbar-control"
       class:off={!!pullBlock}
       class:asking={why === "pull"}
       onclick={() => (pullBlock ? (why = why === "pull" ? null : "pull") : onSync("pull"))}
@@ -90,6 +91,7 @@
       {#if t?.behind && !t.rewritten}<span class="count">{t.behind}</span>{/if}
     </button>
     <button
+      class="toolbar-control"
       class:off={!!pushBlock}
       class:asking={why === "push"}
       onclick={() => (pushBlock ? (why = why === "push" ? null : "push") : onSync("push"))}
@@ -113,23 +115,6 @@
   .group {
     display: flex;
     align-items: center;
-    height: 34px;
-    padding: 0 4px;
-    border-radius: var(--radius-pill);
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--icon);
-  }
-  .group button {
-    height: 34px;
-    min-width: 36px;
-    padding: 0 9px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 3px;
-    border-radius: var(--radius-pill);
   }
   .group button:disabled,
   .group button.off {

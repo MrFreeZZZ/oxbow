@@ -1374,10 +1374,8 @@
   .pick {
     height: 20px;
     padding: 0 9px;
-    border-radius: var(--radius-pill);
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
+    border-radius: var(--radius-s);
+    background: var(--field);
     font-family: var(--font);
     font-size: var(--text-caption);
     font-weight: 600;

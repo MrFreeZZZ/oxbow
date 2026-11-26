@@ -502,7 +502,7 @@
     gap: 5px;
     height: 26px;
     padding: 0 10px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-m);
     background: var(--field);
     color: var(--text);
     font-size: var(--text-small);

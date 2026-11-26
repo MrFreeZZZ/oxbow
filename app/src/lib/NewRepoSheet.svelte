@@ -285,7 +285,7 @@
       {:else}
         <span class="label">Branch</span>
         <div class="row">
-          <div class="seg" role="radiogroup" aria-label="First branch">
+          <div class="segmented" role="radiogroup" aria-label="First branch">
             {#each branches as b (b)}
               <button role="radio" aria-checked={branch === b} class:on={branch === b} onclick={() => (branch = b)}>{b}</button>
             {/each}
@@ -344,7 +344,7 @@
                   </select>
                 </label>
               {/if}
-              <div class="seg" class:off={!publishing} role="radiogroup" aria-label="Visibility">
+              <div class="segmented" class:off={!publishing} role="radiogroup" aria-label="Visibility">
                 <button role="radio" aria-checked={isPrivate} class:on={isPrivate} disabled={!publishing} onclick={() => (isPrivate = true)}>Private</button>
                 <button role="radio" aria-checked={!isPrivate} class:on={!isPrivate} disabled={!publishing} onclick={() => (isPrivate = false)}>Public</button>
               </div>
@@ -373,7 +373,7 @@
                   {/each}
                 </select>
               </label>
-              <div class="seg" class:off={!labPublishing} role="radiogroup" aria-label="GitLab visibility">
+              <div class="segmented" class:off={!labPublishing} role="radiogroup" aria-label="GitLab visibility">
                 {#each [["private", "Private"], ["internal", "Internal"], ["public", "Public"]] as [id, label] (id)}
                   <button role="radio" aria-checked={visibility === id} class:on={visibility === id} disabled={!labPublishing} onclick={() => (visibility = id as GitLabVisibility)}>{label}</button>
                 {/each}
@@ -530,24 +530,14 @@
     color: var(--accent);
     font-size: inherit;
   }
-  .seg {
-    display: flex;
+  .segmented {
     gap: 2px;
-    padding: 2px;
-    border-radius: var(--radius-m);
-    background: var(--field);
   }
-  .seg button {
+  .segmented button {
     height: 24px;
     min-width: 72px;
     padding: 0 12px;
-    border-radius: var(--radius-s);
     font-size: var(--text-small);
-  }
-  .seg button.on {
-    background: var(--glass);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
-    font-weight: 600;
   }
   .hint {
     font-size: var(--text-caption);
@@ -606,9 +596,7 @@
     height: 24px;
     padding: 0 6px;
     border-radius: var(--radius-s);
-    border: 0.5px solid var(--glass-border);
-    background: var(--glass);
-    box-shadow: var(--glass-shadow);
+    background: var(--field);
     color: var(--text);
     font: inherit;
     font-size: var(--text-small);

@@ -2149,17 +2149,17 @@
 {:else}
   <div class="window" class:narrow class:mac class:side-shown={sideShown} class:side-hidden={sideHidden && !narrow} class:sliding class:with-repo-tabs={!!tabStrip}
     style:--sidebar-width={`${SIDEBAR}px`}>
-    <button class="capsule side-toggle" onclick={toggleSidebar} aria-label={sideOut ? "Hide sidebar" : "Show sidebar"} aria-expanded={sideOut} title={withKeys(sideOut ? "Hide Sidebar" : "Show Sidebar", combo("sidebar"))}>
+    <button class="toolbar-control side-toggle" onclick={toggleSidebar} aria-label={sideOut ? "Hide sidebar" : "Show sidebar"} aria-expanded={sideOut} title={withKeys(sideOut ? "Hide Sidebar" : "Show Sidebar", combo("sidebar"))}>
       <svg class="icon" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2" /><path d="M6 3v10" /></svg>
     </button>
     {#if !showConflicts}
       <!-- Back and Forward, as in Safari and Finder: a right-click lists the places that way. They
          stay beside the sidebar button, out or not. -->
       <div class="joined steps" role="group" aria-label="Back and Forward">
-        <button onclick={goBack} oncontextmenu={(event) => showPlaces(event, false)} disabled={!stepBack} aria-label={stepBack ? `Back to ${stepBack}` : "Back"} title={withKeys(stepBack ? `Back to ${stepBack}` : "Back", combo("back"))}>
+        <button class="toolbar-control" onclick={goBack} oncontextmenu={(event) => showPlaces(event, false)} disabled={!stepBack} aria-label={stepBack ? `Back to ${stepBack}` : "Back"} title={withKeys(stepBack ? `Back to ${stepBack}` : "Back", combo("back"))}>
           <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>
         </button>
-        <button onclick={goForward} oncontextmenu={(event) => showPlaces(event, true)} disabled={!stepForward} aria-label={stepForward ? `Forward to ${stepForward}` : "Forward"} title={withKeys(stepForward ? `Forward to ${stepForward}` : "Forward", combo("forward"))}>
+        <button class="toolbar-control" onclick={goForward} oncontextmenu={(event) => showPlaces(event, true)} disabled={!stepForward} aria-label={stepForward ? `Forward to ${stepForward}` : "Forward"} title={withKeys(stepForward ? `Forward to ${stepForward}` : "Forward", combo("forward"))}>
           <svg class="icon" viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
         </button>
       </div>
@@ -2212,7 +2212,7 @@
             <WindowTitle title={titleOf(repo, history)} steps={trailPath} onStep={goTo} />
           {/if}
           {#if !tabStrip}
-            <button class="capsule repo-picker" onclick={(event) => sidebar?.repoMenu(event)} oncontextmenu={(event) => { event.preventDefault(); void sidebar?.repoMenu(event); }} aria-label={`Repository ${repo.name}`} aria-haspopup="menu" title={`${repo.path}\n${branchCount} ${branchCount === 1 ? "branch" : "branches"}`}>
+            <button class="toolbar-control toolbar-picker repo-picker" onclick={(event) => sidebar?.repoMenu(event)} oncontextmenu={(event) => { event.preventDefault(); void sidebar?.repoMenu(event); }} aria-label={`Repository ${repo.name}`} aria-haspopup="menu" title={`${repo.path}\n${branchCount} ${branchCount === 1 ? "branch" : "branches"}`}>
               <svg class="icon" viewBox="0 0 16 16" style:color={history.trunk ? lane(0) : undefined}><path d={menuIcons.folder} /></svg>
               <span>{repo.name}</span>
               <svg class="icon small" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>
@@ -2223,12 +2223,10 @@
           {/if}
           <!-- File History is about one file, Browse Files about one commit: a plain back arrow and no branch picker, as in the design, leave room for Find in file. -->
           {#if (view !== "file" && view !== "browse") || showConflicts}
-            <!-- The branch and a new one beside it: one control, as Fetch, Pull and Push are. -->
             <div class="joined branch" role="group" aria-label="Branch">
               <BranchPicker bind:this={branchPicker} {history} {colorOf} onPick={(name) => branchCtx && run(switchRequest(branchCtx, name))} />
               {#if !narrow}
-                <span class="divider"></span>
-                <button onclick={newBranch} aria-label="New branch" title={history.head.branch ? "New Branch…" : "Create a branch at HEAD…"}>
+                <button class="toolbar-control" onclick={newBranch} aria-label="New branch" title={history.head.branch ? "New Branch…" : "Create a branch at HEAD…"}>
                   <svg class="icon" viewBox="0 0 16 16"><path d={NEW_BRANCH_ICON} /></svg>
                 </button>
               {/if}
@@ -2241,7 +2239,7 @@
             </div>
           {/if}
           {#if showConflicts}
-            <button class="capsule" onclick={() => (resolving = false)} title={view === "stashes" ? "Back to Stashes" : "Back to the commit graph"}>
+            <button class="toolbar-control" onclick={() => (resolving = false)} title={view === "stashes" ? "Back to Stashes" : "Back to the commit graph"}>
               <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>{view === "stashes" ? "Stashes" : "History"}
             </button>
           {/if}
@@ -2270,12 +2268,12 @@
               onFix={fixSync}
             />
           {:else if history.head.branch && history.head.commit}
-            <button class="capsule publish" onclick={publishToGitHub} title="Make a repository on GitHub and push {history.head.branch} there">
+            <button class="toolbar-control" onclick={publishToGitHub} title="Make a repository on GitHub and push {history.head.branch} there">
               <svg class="icon" viewBox="0 0 16 16"><path d="M8 12V3M4.5 6.5 8 3l3.5 3.5M3 14h10" /></svg>
               Publish to GitHub
             </button>
             {#if labSignedIn}
-              <button class="capsule publish" onclick={publishToGitLab} title="Make a project on GitLab and push {history.head.branch} there">
+              <button class="toolbar-control" onclick={publishToGitLab} title="Make a project on GitLab and push {history.head.branch} there">
                 <svg class="icon" viewBox="0 0 16 16"><path d="M8 12V3M4.5 6.5 8 3l3.5 3.5M3 14h10" /></svg>
                 Publish to GitLab
               </button>
@@ -2284,13 +2282,16 @@
           {#if view === "pull" && shownPull && !showConflicts}
             {@const lab = pullForge === "gitlab"}
             <button
-              class="capsule"
+              class="toolbar-control"
               onclick={() => void (lab ? api.openGitLab(shownPull!.htmlUrl) : api.openGitHub(shownPull!.htmlUrl)).catch(() => {})}
               title={lab ? "Open the merge request on GitLab" : "Open the pull request on GitHub"}
             >
               <svg class="icon" viewBox="0 0 16 16"><path d="M9.5 2.5h4v4M13.5 2.5 8 8M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" /></svg>
               Open on {lab ? "GitLab" : "GitHub"}
             </button>
+          {/if}
+          {#if (history.remotes.length && remoteCtx) || (history.head.branch && history.head.commit) || (view === "pull" && shownPull && !showConflicts)}
+            <span class="divider"></span>
           {/if}
           <!-- Undo and Fix a Mistake: the two ways back, side by side. -->
           <div class="joined" role="group" aria-label="Undo">
@@ -2302,14 +2303,14 @@
               onCompare={compareStep}
               onSeries={seriesOfStep}
             />
-            <span class="divider"></span>
-            <button onclick={() => openFixes()} aria-label="Fix a mistake" title={withKeys("Fix a Mistake…", combo("fixMistake"))}>
+            <button class="toolbar-control" onclick={() => openFixes()} aria-label="Fix a mistake" title={withKeys("Fix a Mistake…", combo("fixMistake"))}>
               <svg class="icon" viewBox="0 0 16 16"><path d="M8 1.8a6.2 6.2 0 1 0 0 12.4a6.2 6.2 0 1 0 0-12.4M8 5.4a2.6 2.6 0 1 0 0 5.2a2.6 2.6 0 1 0 0-5.2M3.6 3.6l2.6 2.6M12.4 3.6 9.8 6.2M3.6 12.4l2.6-2.6M12.4 12.4 9.8 9.8" /></svg>
             </button>
           </div>
+          <span class="divider"></span>
           {#if narrow}
             <button
-              class="capsule"
+              class="toolbar-control"
               class:update-available={!!updates.available}
               onclick={(event) => {
                 const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
@@ -2324,15 +2325,15 @@
             </button>
           {:else}
             <div class="joined" role="group" aria-label="Console and commands">
-              <button onclick={() => api.openConsole()} aria-label="Console" title={withKeys("Console", combo("console"))}>
+              <button class="toolbar-control" onclick={() => api.openConsole()} aria-label="Console" title={withKeys("Console", combo("console"))}>
                 <svg class="icon" viewBox="0 0 16 16"><path d={CONSOLE_ICON} /></svg>
               </button>
-              <span class="divider"></span>
-              <button onclick={() => { nav.quickOpen = false; picker = { kind: "commands", initial: "Custom:" }; }} aria-label="Run Command" title="Run or manage custom commands">
+              <button class="toolbar-control" onclick={() => { nav.quickOpen = false; picker = { kind: "commands", initial: "Custom:" }; }} aria-label="Run Command" title="Run or manage custom commands">
                 <svg class="icon" viewBox="0 0 16 16"><path d={COMMANDS_ICON} /></svg>
               </button>
             </div>
-            <button class="capsule" class:update-available={!!updates.available} onclick={() => api.openSettings()} aria-label="Settings" title={withKeys("Settings", combo("settings"))}>
+            <span class="divider"></span>
+            <button class="toolbar-control" class:update-available={!!updates.available} onclick={() => api.openSettings()} aria-label="Settings" title={withKeys("Settings", combo("settings"))}>
               <svg class="icon" viewBox="0 0 16 16"><path d={SETTINGS_ICON} /></svg>
             </button>
           {/if}
@@ -2724,9 +2725,18 @@
 
 <style>
   .window {
+    --toolbar-control-height: 28px;
     position: relative;
     height: 100%;
     color: var(--text);
+  }
+  .window,
+  .welcome-host {
+    --repo-tabs-height: 40px;
+  }
+  .window.mac,
+  .window.with-repo-tabs {
+    --window-controls-height: var(--repo-tabs-height);
   }
   .main {
     position: absolute;
@@ -2737,24 +2747,21 @@
     display: flex;
     flex-direction: column;
   }
-  /* The sidebar button stays where Mail has it, just right of the traffic lights and on the
-     toolbar's middle line, whether the sidebar is out or not. Elsewhere it opens the toolbar. */
-  .window .side-toggle {
+  /* Keep the window controls centered on their row while the sidebar moves. */
+  .window :is(.side-toggle, .steps) {
     position: absolute;
     z-index: 21;
-    top: 11px;
+    top: calc((var(--window-controls-height, 56px) - var(--toolbar-control-height)) / 2);
+  }
+  .window .side-toggle {
     left: 14px;
-    width: 34px;
+    width: var(--toolbar-control-height);
     padding: 0;
-    justify-content: center;
   }
   .window.mac .side-toggle {
     left: 96px;
   }
   .window .steps {
-    position: absolute;
-    z-index: 21;
-    top: 11px;
     left: 56px;
   }
   .window.mac .steps {
@@ -2859,10 +2866,6 @@
   .repo-tabs {
     flex-shrink: 0;
   }
-  .window.with-repo-tabs,
-  .welcome-host {
-    --repo-tabs-height: 46px;
-  }
   .window.with-repo-tabs .main,
   .window.with-repo-tabs > :global(nav),
   .window.with-repo-tabs .side-catcher {
@@ -2903,6 +2906,10 @@
     padding: 0 12px 0 14px;
     flex-shrink: 0;
   }
+  .window.mac:not(.with-repo-tabs) header,
+  .window.mac:not(.with-repo-tabs) > :global(nav > .lights) {
+    height: var(--window-controls-height);
+  }
   .lead,
   .trail {
     flex: 1 1 0;
@@ -2913,7 +2920,6 @@
   }
   .repo-picker {
     min-width: max-content;
-    flex-shrink: 0;
   }
   .repo-picker span {
     color: var(--text);
@@ -2932,6 +2938,7 @@
   .trail {
     min-width: max-content;
     justify-content: flex-end;
+    gap: var(--space-2);
   }
   .center {
     flex: 0 1 auto;
@@ -2952,24 +2959,9 @@
   header.has-search .trail {
     flex: 0 0 auto;
   }
-  .capsule {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    height: 34px;
-    padding: 0 12px;
-    border-radius: var(--radius-pill);
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--icon);
-    font-weight: 500;
-  }
-  .capsule.update-available {
-    background: var(--accent);
-    border-color: transparent;
-    color: #fff;
+  .toolbar-control.update-available {
+    background-color: var(--accent-quiet);
+    color: var(--accent);
   }
   .joined.steps > button {
     min-width: 32px;
@@ -2977,79 +2969,28 @@
   }
   .joined.steps > button:disabled {
     opacity: 0.4;
-    background: none;
   }
-  /* Controls that belong together share one glass capsule, split by a hairline. The parts drop
-     their own glass; a hover washes just the part under the pointer. */
   .joined {
     flex-shrink: 0;
     display: flex;
     align-items: center;
-    height: 34px;
-    border-radius: var(--radius-pill);
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--icon);
   }
   .joined.branch {
     flex-shrink: 1;
     min-width: 0;
   }
-  .joined > button,
-  .joined :global(.capsule) {
-    height: 32px;
-    min-width: 36px;
-    padding: 0 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    border-radius: var(--radius-pill);
-    background: none;
-    border: 0;
-    box-shadow: none;
-  }
-  .joined.branch :global(.picker .capsule) {
-    justify-content: flex-start;
-    gap: 6px;
-    padding: 0 10px 0 12px;
-  }
-  .joined > button:hover {
-    background: var(--hover-wash);
-  }
-  .joined > :first-child,
-  .joined > :first-child :global(.capsule) {
-    margin-left: 1px;
-  }
-  .joined > :last-child,
-  .joined > :last-child :global(.capsule) {
-    margin-right: 1px;
+  .joined.branch > button {
+    margin-left: var(--space-1);
   }
   .divider {
     flex-shrink: 0;
     width: 1px;
-    height: 18px;
+    height: 16px;
     background: var(--sep);
   }
-  .segmented {
-    display: flex;
-    padding: 3px;
-    border-radius: var(--radius-pill);
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-  }
   .segmented button {
-    height: 28px;
-    padding: 0 16px;
-    border-radius: var(--radius-pill);
-    color: var(--text);
-    font-weight: 500;
-  }
-  .segmented button.on {
-    background: var(--side-sel);
-    font-weight: 600;
+    height: calc(var(--toolbar-control-height) - 4px);
+    padding: 0 var(--space-3);
   }
   .error {
     color: var(--red);
@@ -3116,7 +3057,7 @@
     flex-shrink: 0;
     height: 22px;
     padding: 0 9px 0 7px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
@@ -3183,7 +3124,7 @@
     flex-shrink: 0;
     width: 22px;
     height: 22px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     color: var(--text2);
   }
   .bar-button:hover,

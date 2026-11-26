@@ -296,7 +296,7 @@
     flex-shrink: 0;
     height: 26px;
     padding: 0 12px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-m);
     background: var(--field);
     font-size: var(--text-small);
     font-weight: 500;
@@ -330,7 +330,7 @@
     gap: 4px;
     height: 28px;
     padding: 0 8px 0 11px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-m);
     border: 1px solid var(--sep);
     color: var(--text2);
     font-size: var(--text-small);
@@ -387,25 +387,10 @@
     color: var(--term-dim);
     flex-shrink: 0;
   }
-  .segmented {
-    display: flex;
-    flex-shrink: 0;
-    padding: 2px;
-    border-radius: var(--radius-pill);
-    background: var(--field);
-  }
   .segmented button {
     height: 26px;
     padding: 0 12px;
-    border-radius: var(--radius-pill);
     font-size: var(--text-small);
-    color: var(--text2);
     white-space: nowrap;
-  }
-  .segmented button.on {
-    background: var(--win);
-    color: var(--text);
-    font-weight: 600;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
   }
 </style>

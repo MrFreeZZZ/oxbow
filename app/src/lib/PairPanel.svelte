@@ -197,7 +197,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     color: var(--icon);
     flex-shrink: 0;
   }

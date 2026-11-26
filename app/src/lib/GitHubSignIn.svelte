@@ -148,7 +148,7 @@
     </div>
 
     {#if setup?.clientId}
-      <div class="seg" role="radiogroup" aria-label="How to sign in">
+      <div class="segmented" role="radiogroup" aria-label="How to sign in">
         <button role="radio" aria-checked={mode === "browser"} disabled={phase !== "ask"} onclick={() => ((mode = "browser"), (problem = null))}>In the browser</button>
         <button role="radio" aria-checked={mode === "token"} disabled={phase !== "ask"} onclick={() => ((mode = "token"), (problem = null))}>With a token</button>
       </div>
@@ -278,26 +278,13 @@
     font-family: var(--mono);
     font-size: var(--text-caption);
   }
-  .seg {
-    display: flex;
+  .segmented {
     align-self: flex-start;
-    padding: 2px;
-    border-radius: var(--radius-m);
-    background: var(--field);
-    border: 0.5px solid var(--glass-border);
   }
-  .seg button {
+  .segmented button {
     height: 24px;
     padding: 0 14px;
-    border-radius: var(--radius-s);
     font-size: var(--text-small);
-    color: var(--text2);
-  }
-  .seg button[aria-checked="true"] {
-    background: var(--glass);
-    color: var(--text);
-    font-weight: 600;
-    box-shadow: var(--glass-shadow);
   }
   .code-box {
     display: flex;

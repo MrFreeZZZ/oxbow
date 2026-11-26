@@ -139,7 +139,7 @@
     width: 24px;
     height: 24px;
     border: none;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     background: transparent;
     color: var(--text2);
     cursor: pointer;

@@ -1384,27 +1384,13 @@
     flex-grow: 1;
     min-width: 0;
   }
-  .segmented {
-    flex-shrink: 0;
-    display: flex;
-    padding: 2px;
-    border-radius: var(--radius-m);
-    background: var(--field);
-  }
   .segmented button {
     height: 22px;
     min-width: 58px;
     padding: 0 10px;
-    border-radius: var(--radius-s);
     font-size: var(--text-small);
     font-weight: 500;
-    color: var(--text2);
     white-space: nowrap;
-  }
-  .segmented button.on {
-    background: var(--sheet);
-    color: var(--text);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
   }
   .segmented.icons button {
     min-width: 0;

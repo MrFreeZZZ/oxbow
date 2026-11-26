@@ -306,11 +306,6 @@
     white-space: nowrap;
   }
   .segmented {
-    display: flex;
-    flex-shrink: 0;
-    padding: 2px;
-    border-radius: var(--radius-pill);
-    background: var(--field);
     align-self: flex-start;
   }
   .bar .segmented {
@@ -319,16 +314,8 @@
   .segmented button {
     height: 26px;
     padding: 0 12px;
-    border-radius: var(--radius-pill);
     font-size: var(--text-small);
-    color: var(--text2);
     white-space: nowrap;
-  }
-  .segmented button.on {
-    background: var(--win);
-    color: var(--text);
-    font-weight: 600;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
   }
   .term {
     display: flex;

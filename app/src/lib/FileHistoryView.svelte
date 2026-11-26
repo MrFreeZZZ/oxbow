@@ -872,9 +872,8 @@
   .elsewhere button {
     height: 24px;
     padding: 0 10px;
-    border-radius: var(--radius-pill);
-    background: var(--win);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    border-radius: var(--radius-m);
+    background: var(--field);
     font-size: var(--text-small);
   }
   .list {
@@ -1138,7 +1137,7 @@
   .back {
     height: 24px;
     padding: 0 10px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     background: var(--field);
     font-size: var(--text-small);
     flex-shrink: 0;
@@ -1153,7 +1152,7 @@
   .tool {
     width: 26px;
     height: 26px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-m);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1174,7 +1173,7 @@
   .skip {
     height: 24px;
     padding: 0 10px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     background: var(--field);
     color: var(--text2);
     font-size: var(--text-caption);

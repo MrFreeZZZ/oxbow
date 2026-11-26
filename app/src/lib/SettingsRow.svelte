@@ -71,7 +71,7 @@
   {#if control?.type === "value"}
     <span class="value" class:off>{text(control.text)}</span>
   {:else if control?.type === "seg"}
-    <span class="seg" class:off role="radiogroup" aria-label={text(row.label)}>
+    <span class="segmented" class:off role="radiogroup" aria-label={text(row.label)}>
       {#each control.options() as option (option.value)}
         <button role="radio" aria-checked={control.get() === option.value} disabled={off} onclick={() => control.set(option.value)}>{option.label}</button>
       {/each}
@@ -164,7 +164,7 @@
     width: 14px;
     height: 14px;
     border-radius: var(--radius-pill);
-    background: var(--seg-on);
+    background: var(--slider-thumb);
     border: 0.5px solid var(--panel-border);
     box-shadow: var(--ctrl-shadow);
   }
@@ -316,29 +316,18 @@
     min-width: 72px;
   }
 
-  .seg {
-    display: flex;
+  .segmented {
     gap: 2px;
-    padding: 2px;
-    border-radius: var(--radius-m);
-    background: var(--field);
-    flex-shrink: 0;
   }
 
-  .seg button {
+  .segmented button {
     min-width: 72px;
     height: 24px;
     padding: 0 12px;
-    border-radius: var(--radius-s);
     text-align: center;
     font-size: var(--text-small);
   }
 
-  .seg button[aria-checked="true"] {
-    background: var(--seg-on);
-    box-shadow: var(--seg-shadow);
-    font-weight: 600;
-  }
 
   .popup {
     position: relative;
@@ -353,9 +342,7 @@
     height: 26px;
     padding: 0 26px 0 11px;
     border-radius: var(--radius-m);
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--ctrl-shadow);
+    background: var(--field);
     color: var(--text);
     font: inherit;
     font-size: var(--text-small);
@@ -468,7 +455,7 @@
       overflow-wrap: anywhere;
     }
 
-    .seg {
+    .segmented {
       flex-wrap: wrap;
       justify-content: flex-end;
     }

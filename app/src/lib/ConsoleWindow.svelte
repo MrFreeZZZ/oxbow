@@ -403,18 +403,18 @@
 <div class="console" class:mac>
   <header data-tauri-drag-region>
     <div class="title" data-tauri-drag-region>Console<small>{sourceName}</small></div>
-    <span class="spacer" data-tauri-drag-region></span>
     <button
-      class="button small"
+      class="toolbar-control toolbar-picker"
       aria-haspopup="menu"
       aria-expanded={!!picker}
+      title={pickerLabel}
       onclick={(event) => {
         const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
         picker = picker ? null : { x: box.left, y: box.bottom + 6 };
       }}
     >
       <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.folder} /></svg>
-      {pickerLabel}
+      <span class="source-label">{pickerLabel}</span>
       <svg class="icon chevron" viewBox="0 0 16 16"><path d="M4.5 6.5 8 10l3.5-3.5" /></svg>
     </button>
     <div class="segmented" role="radiogroup" aria-label="Show">
@@ -427,7 +427,7 @@
       <input bind:this={search} type="search" aria-label="Filter commands and output" placeholder="Filter commands and output" bind:value={query} spellcheck="false" />
       {#if query}<button type="button" class="clear" onclick={() => { query = ""; }} aria-label="Clear the filter" title="Clear the filter">×</button>{/if}
     </label>
-    <button class="button icon-only trash" aria-label="Clear History…" title="Clear History…" disabled={!allCount && !entries.length} onclick={askClear}>
+    <button class="toolbar-control" aria-label="Clear History…" title="Clear History…" disabled={!allCount && !entries.length} onclick={askClear}>
       <svg class="icon" viewBox="0 0 16 16"><path d={TRASH} /></svg>
     </button>
   </header>
@@ -513,7 +513,7 @@
     flex-shrink: 0;
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-2);
     padding: 0 14px 0 18px;
     border-bottom: 0.5px solid var(--sep);
   }
@@ -538,50 +538,33 @@
   .spacer {
     flex: 1;
   }
-  header .button .chevron {
+  header .toolbar-picker {
+    margin-left: auto;
+  }
+  .source-label {
+    max-width: 13ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  header .toolbar-picker .chevron {
     width: 10px;
     height: 10px;
     margin-left: -2px;
   }
-  header .button .icon {
+  header .toolbar-picker .icon {
     width: 14px;
     height: 14px;
   }
-  .segmented {
-    display: flex;
-    flex-shrink: 0;
-    padding: 2px;
-    border-radius: var(--radius-pill);
-    background: var(--field);
-  }
   .segmented button {
     height: 24px;
-    padding: 0 11px;
-    border-radius: var(--radius-pill);
+    padding: 0 var(--space-2);
     font-size: var(--text-small);
-    color: var(--text2);
-  }
-  .segmented button.on {
-    background: var(--seg-on);
-    color: var(--text);
-    font-weight: 600;
-    box-shadow: var(--seg-shadow);
   }
   .search {
     width: 220px;
-    min-width: 120px;
+    min-width: 64px;
     flex-shrink: 1;
   }
-  .trash {
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-  }
-  .trash .icon {
-    width: 15px;
-    height: 15px;
-  }
-
   .log {
     flex: 1;
     min-height: 0;

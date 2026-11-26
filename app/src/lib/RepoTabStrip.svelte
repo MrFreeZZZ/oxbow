@@ -214,8 +214,7 @@
 {/if}
 
 <style>
-  /* Chromium TabStyle: body 232 plus two 12 px feet = 256, overlap 18, so a tab
-     takes 238. The strip is 6 px of track over a 35 px tab. */
+  /* Chrome shows 6 px of track above the 34 px visible tab. */
   .strip {
     --track: color-mix(in srgb, var(--accent) 15%, var(--win));
     --tab-box: 256px;
@@ -223,7 +222,8 @@
     --tab-pitch: 238px;
     --tab-top: 10px;
     --tab-foot: 12px;
-    height: var(--repo-tabs-height, 41px);
+    --tab-bottom-inset: 6px;
+    height: var(--repo-tabs-height);
     display: flex;
     align-items: flex-end;
     gap: var(--space-1);
@@ -247,7 +247,7 @@
     width: var(--tab-box);
     max-width: var(--tab-box);
     min-width: 32px;
-    height: 35px;
+    height: 34px;
     display: flex;
     align-items: center;
     gap: var(--space-1);
@@ -288,7 +288,7 @@
   .item:not(.selected):not(:hover):not(:has(+ .item:hover)):not(:has(+ .selected))::after {
     content: "";
     position: absolute;
-    top: 10px;
+    top: 6px;
     right: 8px;
     height: 16px;
     width: 2px;
@@ -317,7 +317,7 @@
   .item:not(.selected)::before {
     content: "";
     position: absolute;
-    inset: var(--space-1) var(--tab-foot);
+    inset: 0 var(--tab-foot) var(--tab-bottom-inset);
     border-radius: var(--radius-m);
     pointer-events: none;
   }
@@ -352,7 +352,7 @@
     flex: 1;
     min-width: 0;
     gap: 6px;
-    padding: 0 0 0 20px;
+    padding: 0 0 var(--tab-bottom-inset) 20px;
     color: var(--text);
     text-align: left;
     font-weight: 400;
@@ -392,22 +392,23 @@
   .selected .folder { color: var(--tag-color, var(--accent)); }
   .control {
     flex: none;
+    align-self: center;
     justify-content: center;
     padding: 0;
     width: 28px;
     height: 28px;
-    margin-bottom: 4px;
   }
   .repository {
     background-color: color-mix(in srgb, var(--accent) 11%, var(--track));
     color: var(--text);
     border-radius: var(--radius-m);
   }
+  .repository .icon { stroke-width: 2; }
   .close {
     width: 16px;
     height: 16px;
-    margin: 0 20px 0 0;
-    border-radius: var(--radius-pill);
+    margin: 0 20px var(--tab-bottom-inset) 0;
+    border-radius: var(--radius-s);
   }
   .item:not(.selected):not(:hover):not(:focus-within) .close {
     width: 0;
@@ -416,6 +417,6 @@
     overflow: hidden;
     pointer-events: none;
   }
-  .close .icon { width: 8px; height: 8px; }
+  .close .icon { width: 14px; height: 14px; }
   .selected .close, .add { color: var(--text); }
 </style>

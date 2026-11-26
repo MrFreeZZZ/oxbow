@@ -194,7 +194,7 @@
     justify-content: center;
     width: 22px;
     height: 22px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     color: var(--text2);
   }
   .legend-button:hover,

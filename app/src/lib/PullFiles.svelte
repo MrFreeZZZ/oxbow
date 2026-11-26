@@ -702,24 +702,10 @@
     align-items: flex-start;
     gap: 8px;
   }
-  .segmented {
-    display: inline-flex;
-    padding: 2px;
-    border-radius: var(--radius-m);
-    background: var(--field);
-  }
   .segmented button {
     height: 22px;
     padding: 0 10px;
-    border-radius: var(--radius-s);
     font-size: var(--text-small);
-    color: var(--text2);
-  }
-  .segmented button.on {
-    background: var(--win);
-    color: var(--text);
-    font-weight: 600;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
   }
   .counts {
     display: flex;

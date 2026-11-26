@@ -74,20 +74,32 @@ export const SCENARIOS = [
           () => innerWidth >= 1300 && page.all(".window:not(.narrow) .repo-tabs > .strip")[0],
           "a wide repository window",
         );
-        const toggle = strip.closest(".window").querySelector(".side-toggle");
+        const root = strip.closest(".window");
+        const toggle = root.querySelector(".side-toggle");
         const measure = async (expanded) => {
           await page.until(() => toggle.getAttribute("aria-expanded") === String(expanded), "the sidebar state");
           await page.paint();
           await page.until(() => !strip.getAnimations().some(animation => animation.pending || animation.playState === "running"),
             "the tab strip transition to finish");
           const position = (el) => {
-            const { x, y } = el.getBoundingClientRect();
-            return { x, y };
+            const { x, y, width, height } = el.getBoundingClientRect();
+            return { x, y, width, height };
           };
+          const center = (el) => {
+            const { y, height } = position(el);
+            return y + height / 2;
+          };
+          const menu = strip.querySelector('[aria-label="Repository menu"]');
+          const tab = strip.querySelector('[role="tab"][aria-selected="true"]');
+          const closeIcon = tab.parentElement.querySelector(".close .icon");
+          const { width, height } = position(closeIcon);
           return {
             height: strip.getBoundingClientRect().height,
-            menu: position(strip.querySelector('[aria-label="Repository menu"]')),
-            tab: position(strip.querySelector('[role="tab"][aria-selected="true"]')),
+            menu: position(menu),
+            tab: position(tab),
+            closeIconSize: [width, height],
+            center: center(strip),
+            controls: [toggle, root.querySelector(".steps"), menu, closeIcon].map(center),
           };
         };
         if (toggle.getAttribute("aria-expanded") !== "true") toggle.click();
@@ -95,7 +107,12 @@ export const SCENARIOS = [
         toggle.click();
         return { shown, hidden: await measure(false) };
       });
-      assert.equal(hidden.height, shown.height, "the strip keeps its height");
+      for (const state of [shown, hidden]) {
+        assert.equal(state.height, 40, "the strip keeps its Chrome height");
+        assert.deepEqual([state.menu.width, state.menu.height], [28, 28], "the menu keeps its Chrome size");
+        assert.deepEqual(state.closeIconSize, [14, 14], "the close glyph keeps its Chrome size");
+        assert.ok(state.controls.every(y => y === state.center), "the controls are centered on the strip");
+      }
       for (const control of ["menu", "tab"]) {
         assert.ok(hidden[control].x < shown[control].x, `${control} moves left when the sidebar hides`);
         assert.equal(hidden[control].y, shown[control].y, `${control} keeps its vertical position`);

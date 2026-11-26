@@ -779,7 +779,7 @@
     gap: 4px;
     height: 20px;
     padding: 0 8px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     font-size: var(--text-caption);
     color: var(--term-dim);
     background: var(--term-button);
@@ -940,8 +940,7 @@
     font-size: var(--text-small);
   }
   .chip-button.on {
-    background: var(--glass);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+    background: var(--side-sel);
     font-weight: 600;
   }
   .chip-button.mono {
@@ -1268,7 +1267,7 @@
     height: 30px;
     padding: 0 12px;
     margin-left: -12px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-m);
     font-weight: 500;
   }
   .alt.danger {

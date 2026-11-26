@@ -361,10 +361,10 @@
   <div class="content">
     <header data-tauri-drag-region>
       <div class="nav-buttons">
-        <button aria-label="Back" disabled={(at === 0 && !fileOpen) || !!needle || json} onclick={back}>
+        <button class="toolbar-control" aria-label="Back" disabled={(at === 0 && !fileOpen) || !!needle || json} onclick={back}>
           <svg class="icon small" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>
         </button>
-        <button aria-label="Forward" disabled={at === visited.length - 1 || !!needle || json} onclick={() => (at += 1)}>
+        <button class="toolbar-control" aria-label="Forward" disabled={at === visited.length - 1 || !!needle || json} onclick={() => (at += 1)}>
           <svg class="icon small" viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
         </button>
       </div>
@@ -657,26 +657,6 @@
   .nav-buttons {
     display: flex;
     align-items: center;
-    height: 30px;
-    padding: 0 2px;
-    border-radius: var(--radius-pill);
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--icon);
-  }
-
-  .nav-buttons button {
-    width: 30px;
-    height: 30px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius-pill);
-  }
-
-  .nav-buttons button:disabled {
-    opacity: 0.35;
   }
 
   .pill {
@@ -813,7 +793,7 @@
     place-items: center;
     width: 26px;
     height: 26px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-m);
     color: var(--icon);
   }
 

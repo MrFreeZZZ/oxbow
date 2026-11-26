@@ -95,7 +95,7 @@
     gap: 4px;
     height: 20px;
     padding: 0 8px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     font-size: var(--text-caption);
     color: var(--term-dim);
     background: var(--term-button);

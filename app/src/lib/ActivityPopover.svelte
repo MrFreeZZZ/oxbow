@@ -82,7 +82,7 @@
       <span class="h">Activity</span>
       <span class="every">{auto ? `Auto-fetch every ${every} min` : "Auto-fetch is off"}</span>
       <!-- Reload lives here and in the repository menu: the toolbar keeps only Fetch. -->
-      <button class="reload" onclick={reload} title="Read the repository again, without asking the remote">
+      <button class="button mini reload" onclick={reload} title="Read the repository again, without asking the remote">
         <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5" /></svg>
         Reload <span class="keys">{shortcut("reload")}</span>
       </button>
@@ -171,7 +171,7 @@
   .pop {
     position: absolute;
     right: 0;
-    top: 40px;
+    top: calc(100% + 6px);
     z-index: 20;
     width: 360px;
     max-width: calc(100vw - 32px);
@@ -205,20 +205,7 @@
     color: var(--text2);
   }
   .reload {
-    display: inline-flex;
-    align-items: center;
     gap: 5px;
-    height: 24px;
-    padding: 0 10px;
-    border-radius: var(--radius-pill);
-    font-size: var(--text-small);
-    font-weight: 500;
-    white-space: nowrap;
-    flex-shrink: 0;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--text);
   }
   .reload .icon {
     width: 13px;

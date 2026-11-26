@@ -173,7 +173,7 @@
 <div class="compare">
   <div class="bar">
     <RefPicker label="Base" value={base} other={target} {history} {colorOf} onPick={(name) => onChange({ base: name, target, mode })} />
-    <button class="swap" onclick={() => onChange({ base: target, target: base, mode })} aria-label="Swap Base and Compare" title="Swap">
+    <button class="toolbar-control" onclick={() => onChange({ base: target, target: base, mode })} aria-label="Swap Base and Compare" title="Swap">
       <svg class="icon" viewBox="0 0 16 16"><path d="M2.5 5.5h9M9 3l2.5 2.5L9 8M13.5 10.5h-9M7 8l-2.5 2.5L7 13" /></svg>
     </button>
     <RefPicker label="Compare" value={target} other={base} {history} {colorOf} onPick={(name) => onChange({ base, target: name, mode })} />
@@ -279,19 +279,6 @@
     border-top: 1px solid var(--sep);
     border-bottom: 1px solid var(--sep);
   }
-  .swap {
-    width: 32px;
-    height: 32px;
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius-pill);
-    background: var(--win);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--icon);
-  }
   .summary-text {
     flex-basis: 100%;
     min-width: 0;
@@ -312,29 +299,14 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .segmented {
-    display: flex;
-    flex-shrink: 0;
-    padding: 2px;
-    border-radius: var(--radius-pill);
-    background: var(--field);
-  }
   .segmented button {
     height: 28px;
     padding: 0 12px;
-    border-radius: var(--radius-pill);
     font-size: var(--text-small);
-    color: var(--text2);
     white-space: nowrap;
   }
   .segmented button:disabled {
     opacity: 0.4;
-  }
-  .segmented button.on {
-    background: var(--win);
-    color: var(--text);
-    font-weight: 600;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
   }
   .dots {
     font-family: var(--mono);

@@ -424,7 +424,7 @@
     max-width: 160px;
     height: 20px;
     padding: 0 6px 0 8px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     background: var(--field);
     font: inherit;
     font-weight: 600;

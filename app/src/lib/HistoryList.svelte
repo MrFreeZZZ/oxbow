@@ -665,10 +665,9 @@
     gap: 4px;
     height: 32px;
     padding: 0 12px 0 10px;
-    border-radius: var(--radius-pill);
-    background: var(--glass);
+    border-radius: var(--radius-m);
+    background: var(--sheet);
     border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
     -webkit-backdrop-filter: blur(20px);
     backdrop-filter: blur(20px);
     color: var(--icon);
