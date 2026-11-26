@@ -576,10 +576,11 @@ impl Repositories {
         closing
     }
 
-    pub(crate) fn window_starting(&self) -> bool {
-        self.slots
-            .values()
-            .any(|slot| !slot.published && self.windows[&slot.owner].active.is_none())
+    pub(crate) fn check_tab_mode_change(&self) -> CommandResult<()> {
+        if self.slots.values().any(|slot| !slot.published) {
+            return Err("A repository is still opening. Try again when it finishes.".into());
+        }
+        Ok(())
     }
 
     pub(crate) fn contains_window(&self, label: &str) -> bool {
@@ -1886,11 +1887,27 @@ mod tests {
             unreachable!()
         };
         let keep_a = open(&session, "main", &a, false);
-        let close_b = open(&session, "main", &b, false);
-        let keep_c = open(&session, &second, &c, false);
-        let close_d = open(&session, &second, &d, false);
         session.activate(&keep_a, None).unwrap();
+        let check_transition = || session.repositories.lock().unwrap().check_tab_mode_change();
+        let provisional = open(&session, "main", &b, false);
+        assert!(check_transition().is_err());
+        assert!(session.live(&keep_a) && session.live(&provisional));
+        session.close_one(&provisional, false, true).unwrap();
+        assert!(!session.live(&provisional));
+        check_transition().unwrap();
+
+        let close_b = open(&session, "main", &b, false);
+        assert!(check_transition().is_err());
+        session.publish_tab(&close_b).unwrap();
+        check_transition().unwrap();
+        assert_eq!(session.resolve("main", None).unwrap(), Some(keep_a.clone()));
+
+        let keep_c = open(&session, &second, &c, false);
+        assert!(check_transition().is_err());
         session.activate(&keep_c, None).unwrap();
+        let close_d = open(&session, &second, &d, false);
+        session.publish_tab(&close_d).unwrap();
+        check_transition().unwrap();
         let plan = session.repositories.lock().unwrap().retiring_tabs();
         let closing = [close_b.id, close_d.id];
         let running = session.stops.start_scoped(

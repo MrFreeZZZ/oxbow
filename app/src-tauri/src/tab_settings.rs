@@ -115,14 +115,13 @@ pub(crate) async fn persist(
     if current == enabled {
         return write();
     }
-    let _topology = session.repo_topology.try_write().map_err(|_| IN_PROGRESS)?;
     let generation = NEXT.fetch_add(1, Ordering::Relaxed);
     let changed = std::sync::Arc::new(tokio::sync::Notify::new());
-    let (closing, ids) = {
+    let (_topology, closing, ids) = {
         let mut repositories = session.repositories.lock().expect("session lock");
-        if repositories.window_starting() {
-            return Err("A repository window is still opening. Try again when it finishes.".into());
-        }
+        // Even briefly taking the write lock would reject a concurrent publication.
+        repositories.check_tab_mode_change()?;
+        let topology = session.repo_topology.try_write().map_err(|_| IN_PROGRESS)?;
         let closing = if enabled {
             HashMap::new()
         } else {
@@ -137,7 +136,7 @@ pub(crate) async fn persist(
             problem: None,
             changed: changed.clone(),
         });
-        (closing, ids)
+        (topology, closing, ids)
     };
     let mut transition = Transition {
         app,
