@@ -185,34 +185,33 @@ fn duplicate(
     if let Located::Open(address) = &target
         && address.window == label
     {
-        let workdir = repo.workdir();
-        let restricted = if oxbow_core::trust::is_restricted(workdir) {
-            oxbow_core::trust::scan(workdir).map_err(|err| err.to_string())?
-        } else {
-            Vec::new()
-        };
         if replacing.is_some() {
             session.activate(address, replacing)?;
-            let path = workdir.display().to_string();
+            let path = repo.workdir().display().to_string();
             remember_main(app, label, &path);
             remember_repo(app, &path);
             changed(app);
         }
-        return Ok(TabOpen::Existing {
-            session: address.id,
-            repo: RepoSummary {
-                name: repo.name(),
-                path: workdir.display().to_string(),
-                canonical_path: workdir_key(workdir).display().to_string(),
-                restricted,
-                untrusted: None,
-            },
-        });
+        return Ok(existing_repo(repo, address));
     }
     crate::windows::raise_repo(app, &target)?;
     Ok(TabOpen::OtherWindow {
         window: target.window().to_owned(),
     })
+}
+
+fn existing_repo(repo: &Repo, address: &Address) -> TabOpen {
+    let workdir = repo.workdir();
+    TabOpen::Existing {
+        session: address.id,
+        repo: RepoSummary {
+            name: repo.name(),
+            path: workdir.display().to_string(),
+            canonical_path: workdir_key(workdir).display().to_string(),
+            restricted: oxbow_core::trust::restricted_findings(workdir),
+            untrusted: None,
+        },
+    }
 }
 
 #[derive(Serialize)]
@@ -532,4 +531,56 @@ pub(crate) async fn reconnect_folder(
     let path = path.display().to_string();
     forget_repo(app, old, Some(path.clone()))?;
     Ok(Reconnected { path, conflict_draft })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxbow_core::{Error, cli, trust};
+    use std::sync::{Arc, atomic::AtomicBool};
+
+    #[test]
+    fn reopening_a_restricted_tab_uses_the_findings_behind_its_active_restriction() {
+        let folder = cli::private_temp_folder("oxbow-restricted-tab-").unwrap();
+        let dir = folder.path();
+        cli::run_in(dir, &cli::GitCommand::new(["init", "-q"]), None).unwrap();
+        cli::run_in(
+            dir,
+            &cli::GitCommand::new(["config", "--local", "core.fsmonitor", "./watch.sh"]),
+            None,
+        )
+        .unwrap();
+        let repo = Repo::open(dir).unwrap();
+        let found = trust::scan(repo.workdir()).unwrap();
+        assert!(found.iter().any(|finding| finding.key == "core.fsmonitor"));
+        trust::restrict(repo.workdir(), &found).unwrap();
+
+        let session = Session::default();
+        let Opened::New(opened) = session.finish_open("main", None, repo.clone()).unwrap() else {
+            panic!("expected a new tab");
+        };
+        let target = session
+            .repositories
+            .lock()
+            .unwrap()
+            .opening_target(&workdir_key(repo.workdir()), "main", false);
+        assert_eq!(target, Some(Located::Open(opened.clone())));
+
+        let stopped = Arc::new(AtomicBool::new(true));
+        cli::stoppable(&stopped, || {
+            assert!(matches!(trust::scan(repo.workdir()), Err(Error::Cancelled)));
+            let TabOpen::Existing { session, repo } = existing_repo(&repo, &opened) else {
+                panic!("expected the existing tab");
+            };
+            assert_eq!(session, opened.id);
+            assert_eq!(repo.restricted, found);
+            assert!(repo.untrusted.is_none());
+        });
+
+        trust::lift(repo.workdir());
+        let TabOpen::Existing { repo, .. } = existing_repo(&repo, &opened) else {
+            panic!("expected the existing tab");
+        };
+        assert!(repo.restricted.is_empty());
+    }
 }
