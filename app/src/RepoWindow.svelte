@@ -217,6 +217,7 @@
 
   onMount(() => {
     let alive = true;
+    let restoringLayout = false;
     const window = getCurrentWindow();
     void api.getSetting<boolean>(settings.sidebarHidden).then((hidden) => {
       if (alive && typeof hidden === "boolean") sideHidden = hidden;
@@ -281,6 +282,7 @@
       if (!alive) return;
       const layout = restoreTabs ? readTabLayout() : null;
       if (layout && tabsEnabled) {
+        restoringLayout = true;
         await manager.restore(layout, (folder) => openSaved(folder, true), explicit ? path : null);
       } else {
         const folder = layout && !explicit ? layout.active ?? layout.paths.at(-1) : path;
@@ -288,7 +290,7 @@
       }
     }).catch((error) => { if (alive) report(error); }).finally(() => {
       if (!alive) return;
-      if (main && tabs.length) saveTabLayout(tabs, manager.layoutActive);
+      if (main && (tabs.length || restoringLayout)) saveTabLayout(tabs, manager.layoutActive);
       launched = true;
     });
     return () => {

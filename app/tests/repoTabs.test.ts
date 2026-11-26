@@ -174,6 +174,87 @@ test("the next run opens only the active repository and keeps the others until t
   assert.equal(readTabLayout(storage), null);
 });
 
+test("a restored tab owned by another window is removed once and stays gone on restart", async () => {
+  const owner = windowTabs({
+    open: async (path) => opened(Number(path.at(-1))),
+    history: async () => history,
+    activate: async () => {},
+    close: async () => {},
+  });
+  await owner.tabs.open("/repo/2", owner.from);
+  await owner.tabs.open("/repo/4", owner.from);
+
+  const requested = Promise.withResolvers<void>();
+  const reply = Promise.withResolvers<void>();
+  const opens: string[] = [];
+  const reads: number[] = [];
+  const backend = {
+    async open(path: string): Promise<RepoTabOpen> {
+      opens.push(path);
+      if (path !== "/repo/2") return opened(Number(path.at(-1)));
+      requested.resolve();
+      await reply.promise;
+      await owner.tabs.receive({ session: 2, event: "repo-activate-request", payload: null });
+      return { kind: "otherWindow", window: "repo-2" };
+    },
+    async history(id: number) { reads.push(id); return history; },
+    activate: async () => {},
+    close: async () => assert.fail("a placeholder has no local session to close"),
+  };
+  let selections = 0;
+  const { tabs, state, from, errors } = windowTabs(backend, undefined, { repoSelected: () => { selections++; } });
+  await tabs.restore({ paths: ["/repo/1", "/repo/2", "/repo/3"], active: "/repo/3" }, path => tabs.open(path, from));
+  tabs.selectHome();
+  const placeholder = state.tabs[1].id;
+  const first = tabs.activate(placeholder);
+  await requested.promise;
+  const repeat = tabs.activate(placeholder);
+  reply.resolve();
+  await Promise.all([first, repeat]);
+  await tabs.activate(placeholder);
+  assert.deepEqual(opens, ["/repo/3", "/repo/2"]);
+  assert.equal(owner.state.active, 2);
+  assert.equal(state.active, 3);
+  assert.equal(state.highlighted, 3);
+  assert.equal(selections, 1, "the redirect does not select a local repository over Home");
+  assert.deepEqual(errors, []);
+
+  let saved = "";
+  const storage = {
+    getItem: () => saved,
+    setItem: (_key: string, value: string) => { saved = value; },
+  };
+  saveTabLayout(state.tabs, tabs.layoutActive, storage);
+  const layout = readTabLayout(storage);
+  assert.deepEqual(layout, { paths: ["/repo/1", "/repo/3"], active: "/repo/3" });
+  const restarted = windowTabs(backend);
+  await restarted.tabs.restore(layout, path => restarted.tabs.open(path, restarted.from));
+  assert.deepEqual(restarted.state.tabs.map(tab => tab.repo.path), ["/repo/1", "/repo/3"]);
+  assert.equal(restarted.state.active, 3);
+  assert.deepEqual(opens, ["/repo/3", "/repo/2", "/repo/3"]);
+  assert.deepEqual(reads, [3, 3]);
+});
+
+test("a startup redirect keeps the saved selection only if its placeholder survives", async () => {
+  for (const { paths, explicit, remaining, savedActive } of [
+    { paths: ["/repo/1", "/repo/2"], explicit: null, remaining: ["/repo/1"], savedActive: null },
+    { paths: ["/repo/1", "/repo/2"], explicit: "/repo/1", remaining: ["/repo/2"], savedActive: "/repo/2" },
+    { paths: ["/repo/2"], explicit: null, remaining: [], savedActive: null },
+  ]) {
+    const { tabs, state, from } = windowTabs({
+      open: async () => ({ kind: "otherWindow", window: "repo-2" }),
+      history: async () => assert.fail("the repository belongs to another window"),
+      activate: async () => assert.fail("the repository belongs to another window"),
+      close: async () => assert.fail("a placeholder has no local session to close"),
+    });
+    await tabs.restore({ paths, active: "/repo/2" }, path => tabs.open(path, from), explicit);
+    assert.deepEqual(state.tabs.map(tab => tab.repo.path), remaining);
+    assert.equal(state.active, null);
+    assert.equal(state.highlighted, null);
+    assert.equal(state.tabs.find(tab => tab.id === tabs.layoutActive)?.repo.path ?? null, savedActive);
+  }
+});
+
 test("a failed startup keeps the saved selection on remount until a tab is selected or closed", async () => {
   const layout = { paths: ["/repo/1", "/repo/2", "/repo/3", "/repo/4"], active: "/repo/2" };
   for (const explicit of [null, "/missing"]) {

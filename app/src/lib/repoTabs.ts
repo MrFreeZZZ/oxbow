@@ -317,7 +317,15 @@ export class RepoTabs {
         if (!answer || !live()) return;
         result = await this.#backend.open(path, answer);
       }
-      if (result.kind === "otherWindow" || result.kind === "untrusted") return;
+      if (result.kind === "otherWindow") {
+        if (placeholder !== undefined) await this.#serialize(async () => {
+          if (!this.#pending(placeholder)) return;
+          this.#forget([placeholder]);
+          this.#show();
+        });
+        return;
+      }
+      if (result.kind === "untrusted") return;
       const { session: id, repo } = result;
       if (this.#exists(id)) {
         let reopened = false;
