@@ -2147,7 +2147,7 @@
     {/if}
   {/snippet}
 {:else}
-  <div class="window" class:narrow class:mac class:side-shown={sideShown} class:side-hidden={sideHidden && !narrow} class:sliding class:with-repo-tabs={!!openedTab}>
+  <div class="window" class:narrow class:mac class:side-shown={sideShown} class:side-hidden={sideHidden && !narrow} class:sliding class:with-repo-tabs={!!tabStrip}>
     <button class="capsule side-toggle" onclick={toggleSidebar} aria-label={sideOut ? "Hide sidebar" : "Show sidebar"} aria-expanded={sideOut} title={withKeys(sideOut ? "Hide Sidebar" : "Show Sidebar", combo("sidebar"))}>
       <svg class="icon" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2" /><path d="M6 3v10" /></svg>
     </button>
@@ -2195,16 +2195,16 @@
       onReload={reload}
       onActivity={history.remotes.length && remoteCtx ? showActivity : null}
     />
+    {#if tabStrip}
+      <div class="repo-tabs">
+        {@render tabStrip(
+          (event) => { if (windowCommandsFree()) void sidebar?.repoMenu(event, true); },
+          () => { if (windowCommandsFree()) void openRecent(); },
+          (path) => copyText(path, "Copied the repository path."),
+        )}
+      </div>
+    {/if}
     <div class="main">
-      {#if tabStrip}
-        <div class="repo-tabs">
-          {@render tabStrip(
-            (event) => { if (windowCommandsFree()) void sidebar?.repoMenu(event, true); },
-            () => { if (windowCommandsFree()) void openRecent(); },
-            (path) => copyText(path, "Copied the repository path."),
-          )}
-        </div>
-      {/if}
       <header class:has-search={(view === "history" || view === "file") && !showConflicts} data-tauri-drag-region>
         <div class="lead" data-tauri-drag-region>
           {#if view !== "history" || showConflicts}
@@ -2854,15 +2854,26 @@
   }
   .repo-tabs {
     flex-shrink: 0;
-    --repo-tabs-leading: 8px;
+  }
+  .window.with-repo-tabs {
+    --repo-tabs-height: 46px;
+  }
+  .window.with-repo-tabs .main,
+  .window.with-repo-tabs > :global(nav),
+  .window.with-repo-tabs .side-catcher {
+    top: var(--repo-tabs-height);
+  }
+  .window.with-repo-tabs > :global(nav > .lights) {
+    display: none;
+  }
+  .window .repo-tabs {
+    --repo-tabs-leading: calc(280px + var(--space-2));
   }
   .window.with-repo-tabs:is(.narrow, .side-hidden) header {
     padding-left: 14px;
   }
   .window:is(.narrow, .side-hidden) .repo-tabs {
     --repo-tabs-leading: 136px;
-    /* Leave the window controls above the repository toolbar with the sidebar put away. */
-    --repo-tabs-height: 48px;
   }
   .window.mac:is(.narrow, .side-hidden) .repo-tabs {
     --repo-tabs-leading: 218px;
