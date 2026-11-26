@@ -136,9 +136,32 @@
   }
 
   const codeRoots = new Map<Element, () => ReturnType<typeof copyParts>>();
-  function copyRoot(element: HTMLElement, source: () => ReturnType<typeof copyParts>) {
-    codeRoots.set(element, source);
+
+  function clearCopySelection(element?: Element) {
+    if (!element || copySelection?.code === element) copySelection = null;
+    if (!element || mouseCopyStart?.code === element) mouseCopyStart = null;
+    const selection = document.getSelection();
+    const anchor = selection?.anchorNode;
+    const code = (anchor instanceof Element ? anchor : anchor?.parentElement)?.closest(".code.selectable");
+    if (code && (element ? code === element : codeRoots.has(code))) selection?.removeAllRanges();
+  }
+
+  $effect(() => {
+    if (scope.isActive()) return;
+    untrack(() => {
+      selectingWithMouse = false;
+      mouseCopyBlock = undefined;
+      clearCopySelection();
+    });
+  });
+
+  function copyRoot(element: HTMLElement, part: Parameters<typeof copyParts>) {
+    codeRoots.set(element, () => copyParts(...part));
     return {
+      update(next: Parameters<typeof copyParts>) {
+        if (next[0] !== part[0]) untrack(() => clearCopySelection(element));
+        part = next;
+      },
       destroy() {
         codeRoots.delete(element);
         if (copySelection?.code === element) copySelection = null;
@@ -1072,7 +1095,7 @@
       {@const cut = shown.cut?.diff === diff ? shown.cut : null}
       {#if notes?.top}{@render notes.top(diff)}{/if}
       {#key wrap}
-      <div class="code mono selectable" use:copyRoot={() => copyParts(diff, cut)} class:nowrap={!wrap} style:--digits={digits(diff)} style:--cols={wrap ? null : columns(diff)} use:sideways={wrap ? null : `${textLayout}:${columns(diff)}:${digits(diff)}`}>
+      <div class="code mono selectable" use:copyRoot={[diff, cut]} class:nowrap={!wrap} style:--digits={digits(diff)} style:--cols={wrap ? null : columns(diff)} use:sideways={wrap ? null : `${textLayout}:${columns(diff)}:${digits(diff)}`}>
         {#each piecesOf(diff, drawnHunks(diff, cut), !!cut) as piece (piece.kind === "hunk" ? `h${piece.h}` : `${piece.kind}${piece.from}`)}
           {#if piece.kind === "folded"}
             {@render foldBar(diff, piece)}
