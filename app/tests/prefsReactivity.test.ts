@@ -4,8 +4,9 @@ import fs from "node:fs";
 import ts from "typescript";
 import { compileModule } from "svelte/compiler";
 import * as runtime from "svelte/internal/client";
+import { check } from "../src/lib/jsonCheck.ts";
 import { isNewer, loadedOver, SaveQueue } from "../src/lib/settingSaves.ts";
-import { REPOSITORY_TAB_TAGS, TAB_TAG_ASSIGNMENT_KEY, TAB_TAG_COLOR_KEY, TAB_TAG_STYLE_KEY, tabTagEntryProblem, tabTagSettingProblem, type TabTagStyle } from "../src/lib/repositoryTabTags.ts";
+import { REPOSITORY_TAB_TAGS, TAB_TAG_ASSIGNMENT_KEY, TAB_TAG_COLOR_KEY, TAB_TAG_STYLE_KEY, tabTagEntryProblem, tabTagLabelProblem, tabTagSettingProblem, type TabTagStyle } from "../src/lib/repositoryTabTags.ts";
 
 const backgroundKeys = ["oxbow.background.source", "oxbow.background.image", "oxbow.background.intensity"] as const;
 const defaults = {
@@ -171,6 +172,22 @@ assert.ok(tabTagSettingProblem(TAB_TAG_COLOR_KEY, { cyan: "#123abc" }));
 assert.equal(tabTagSettingProblem(TAB_TAG_STYLE_KEY, { red: { label: "Urgent", color: "#123abc" } }), null);
 assert.ok(tabTagSettingProblem(TAB_TAG_STYLE_KEY, { red: { label: " ", color: "#123abc" } }));
 assert.ok(tabTagSettingProblem(TAB_TAG_STYLE_KEY, { red: { label: "Urgent\nNow", color: "#123abc" } }));
+const checkTagText = (text: string) => check(text, (key) => key === TAB_TAG_STYLE_KEY,
+  (_, value) => tabTagSettingProblem(TAB_TAG_STYLE_KEY, value as Record<string, unknown>)).problems;
+const tagText = (label: string) => JSON.stringify({ [TAB_TAG_STYLE_KEY]: { red: { label, color: "#123abc" } } });
+for (const separator of ["\u2028", "\u2029"]) {
+  for (const label of [`${separator}Review`, `Re${separator}view`, `Review${separator}`, separator]) {
+    assert.equal(tabTagLabelProblem(label), "Use a single-line tag name.");
+    const raw = tagText(label);
+    const escaped = raw.replaceAll(separator, `\\u${separator.charCodeAt(0).toString(16)}`);
+    for (const draft of [raw, escaped]) {
+      assert.equal(checkTagText(draft)[0]?.level, "error");
+      assert.equal(checkTagText(draft)[0]?.message, "Use a single-line tag name.");
+    }
+  }
+}
+assert.equal(tabTagLabelProblem("  Ревью 🦊  "), null);
+assert.deepEqual(checkTagText(tagText("  Ревью 🦊  ")), []);
 assert.equal(tabTagSettingProblem(TAB_TAG_ASSIGNMENT_KEY, { "C:\\Worktree": "purple" }), null);
 assert.ok(tabTagSettingProblem(TAB_TAG_ASSIGNMENT_KEY, { worktree: "purple" }));
 assert.ok(tabTagSettingProblem(TAB_TAG_ASSIGNMENT_KEY, { "/worktree": "cyan" }));

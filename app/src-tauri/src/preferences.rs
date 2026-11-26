@@ -263,9 +263,11 @@ impl TabTagSetting {
                         style.as_object().is_some_and(|style| {
                             style.len() == 2
                                 && style.get("label").and_then(Value::as_str).is_some_and(|label| {
-                                    !label.trim().is_empty()
+                                    !label
+                                        .chars()
+                                        .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+                                        && !label.trim().is_empty()
                                         && label.trim().chars().count() <= 64
-                                        && !label.chars().any(char::is_control)
                                 })
                                 && style.get("color").and_then(Value::as_str).is_some_and(|color| {
                                     color
@@ -286,15 +288,17 @@ impl TabTagSetting {
         }
     }
 
+    fn valid_entries(&self, entries: &serde_json::Map<String, Value>) -> bool {
+        entries.iter().all(|(key, value)| self.valid(key, Some(value)))
+    }
+
     fn edit(&self, stored: Option<&Value>, entry: String, value: Option<Value>) -> CommandResult<Value> {
         if !self.valid(&entry, value.as_ref()) {
             return Err("Invalid repository tab tag.".into());
         }
         let mut entries = match stored {
             None => serde_json::Map::new(),
-            Some(Value::Object(entries)) if entries.iter().all(|(key, value)| self.valid(key, Some(value))) => {
-                entries.clone()
-            }
+            Some(Value::Object(entries)) if self.valid_entries(entries) => entries.clone(),
             Some(_) => {
                 return Err(format!(
                     "Fix “{}” in Edit in settings.json before changing it.",
@@ -349,7 +353,7 @@ fn tab_tag_edits_keep_the_other_paths_and_slots() {
 
     let styles = TabTagSetting::Styles;
     let green = json!({ "label": "Ready", "color": "#123abc" });
-    let blue = json!({ "label": "Review", "color": "#0042ff" });
+    let blue = json!({ "label": "Ревью 🦊", "color": "#0042ff" });
     let before = json!({ "blue": {"label": "Blue", "color": "#abc123"}, "green": green });
     assert_eq!(
         styles.edit(Some(&before), "blue".into(), Some(blue.clone())).unwrap(),
@@ -361,6 +365,17 @@ fn tab_tag_edits_keep_the_other_paths_and_slots() {
         json!({"label": "Review", "color": "blue"}),
     ] {
         assert!(styles.edit(Some(&before), "blue".into(), Some(invalid)).is_err());
+    }
+    for separator in ['\u{2028}', '\u{2029}'] {
+        for label in [
+            format!("{separator}Review"),
+            format!("Re{separator}view"),
+            format!("Review{separator}"),
+            separator.to_string(),
+        ] {
+            let invalid = json!({ "label": label, "color": "#0042ff" });
+            assert!(!styles.valid_entries(json!({ "blue": invalid }).as_object().unwrap()));
+        }
     }
 }
 
@@ -565,6 +580,12 @@ pub(crate) async fn save_settings_text(
     mut text: String,
 ) -> CommandResult<String> {
     let settings: serde_json::Map<String, Value> = serde_json::from_str(&text).map_err(|err| err.to_string())?;
+    let styles = TabTagSetting::Styles;
+    if let Some(value) = settings.get(styles.key())
+        && !value.as_object().is_some_and(|entries| styles.valid_entries(entries))
+    {
+        return Err("Invalid repository tab tag.".into());
+    }
     let _writes = session.settings_writes.lock().await;
     let file = settings_file(&app)?;
     settings::check_text_base(&file, base.as_deref())?;

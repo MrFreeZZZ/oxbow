@@ -20,9 +20,9 @@ const isTagId = (id: unknown) => REPOSITORY_TAB_TAGS.some(tag => tag.id === id);
 const isHex = (value: unknown) => typeof value === "string" && value.length === 7 && /^#[0-9a-f]{6}$/i.test(value);
 
 export function tabTagLabelProblem(label: string): string | null {
+  if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(label)) return "Use a single-line tag name.";
   if (!label.trim()) return "Enter a tag name.";
   if ([...label.trim()].length > 64) return "Use at most 64 characters.";
-  if (/[\u0000-\u001f\u007f-\u009f]/.test(label)) return "Use a single-line tag name.";
   return null;
 }
 
