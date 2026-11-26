@@ -1324,6 +1324,7 @@ export interface GitSettings {
   global: Record<string, string>;
   sshKeys: SshKey[];
   editors: OpenApp[];
+  defaultEditor: string | null;
   terminals: OpenApp[];
 }
 

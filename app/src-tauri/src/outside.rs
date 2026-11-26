@@ -60,13 +60,15 @@ pub(crate) async fn open_working_file(
         if status == WorkingFileStatus::Binary {
             return open_in::open_default(&file, window);
         }
-        let editor = read_settings(&app)
+        let settings = read_settings(&app);
+        let editor = settings
             .get("oxbow.openIn.editor")
             .and_then(Value::as_str)
-            .map(str::to_owned)
-            .or_else(|| open_in::editors().first().map(|app| app.id.to_owned()))
-            .ok_or("No editor found. Install one, then pick it in Settings › External Tools.")?;
-        open_in::open_file(&editor, &file, line)
+            .filter(|id| !id.is_empty())
+            .or_else(|| open_in::default_editor_id(&open_in::editors()))
+            .ok_or("Choose an editor in Settings › External Tools.")?;
+        let terminal = settings.get("oxbow.openIn.terminal").and_then(Value::as_str);
+        open_in::open_file(editor, &file, line, terminal)
     })
     .await
     .map_err(|err| err.to_string())?

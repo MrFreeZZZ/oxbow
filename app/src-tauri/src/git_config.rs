@@ -16,6 +16,7 @@ pub(crate) struct GitSettings {
     global: std::collections::BTreeMap<String, String>,
     ssh_keys: Vec<oxbow_core::SshKey>,
     editors: Vec<open_in::App>,
+    default_editor: Option<&'static str>,
     terminals: Vec<open_in::App>,
 }
 
@@ -23,11 +24,13 @@ pub(crate) struct GitSettings {
 #[tauri::command]
 pub(crate) async fn git_settings() -> CommandResult<GitSettings> {
     logged(None, console::EntryKind::Read, "Read the Git setup", || {
+        let editors = open_in::editors();
         Ok(GitSettings {
             git: config::git_info(),
             global: config::global_config(),
             ssh_keys: config::ssh_keys(),
-            editors: open_in::editors(),
+            default_editor: open_in::default_editor_id(&editors),
+            editors,
             terminals: open_in::terminals(),
         })
     })

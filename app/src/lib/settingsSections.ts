@@ -376,12 +376,23 @@ export const integrationsSection: Section = {
       title: "Open in",
       rows: [
         prefRow("oxbow.openIn.editor", "Editor", "popup", {
-          sub: () => (model.git && !model.git.editors.length ? "None of Visual Studio Code, Zed, Sublime Text, Xcode or the JetBrains IDEs is installed" : "The ↗ button on a file’s diff opens it at its first change; a click on a line number opens it at that line"),
+          sub: () => {
+            if (model.git && !model.git.editors.length) return "No supported editor found";
+            const editor = prefs.get("oxbow.openIn.editor") || model.git?.defaultEditor;
+            if (!editor && model.git) return "Choose an editor to open files from the diff";
+            if (editor === "eclipse" || editor === "visualstudio") return "Opens the file without jumping to a line";
+            return "The ↗ button on a file’s diff opens it at its first change; a click on a line number opens it at that line";
+          },
           off: () => !model.git?.editors.length,
           control: {
             type: "popup",
-            options: () => apps(model.git?.editors),
-            get: () => prefs.get("oxbow.openIn.editor") || model.git?.editors[0]?.id || "",
+            options: () => {
+              const options = apps(model.git?.editors);
+              return model.git?.editors.length && !model.git.defaultEditor
+                ? [{ value: "", label: "Choose an editor" }, ...options]
+                : options;
+            },
+            get: () => prefs.get("oxbow.openIn.editor") || model.git?.defaultEditor || "",
             set: (value) => prefs.set("oxbow.openIn.editor", String(value)),
           },
         }),

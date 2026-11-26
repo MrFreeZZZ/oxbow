@@ -4155,6 +4155,7 @@ dependencies = [
  "fontdb",
  "keyring",
  "objc2-app-kit",
+ "objc2-foundation",
  "oxbow-core",
  "reqwest",
  "serde",
@@ -4165,6 +4166,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
  "tokio",
+ "winreg",
 ]
 
 [[package]]
