@@ -40,7 +40,7 @@ export function readTabLayout(storage?: Pick<Storage, "getItem">): TabLayout | n
   return null;
 }
 
-export function saveTabLayout(tabs: readonly ShownTab[], active: RepoSessionId | null, storage?: Pick<Storage, "setItem">) {
+function tabLayout(tabs: readonly ShownTab[], active: RepoSessionId | null): TabLayout {
   const layout: TabLayout = {
     paths: tabs.map(tab => tab.repo.path),
     active: tabs.find(tab => tab.id === active)?.repo.path ?? null,
@@ -48,9 +48,35 @@ export function saveTabLayout(tabs: readonly ShownTab[], active: RepoSessionId |
   // Keep aliases usable for reopening while restored tabs already know their folder identity.
   const aliases = tabs.filter(({ repo }) => repo.canonicalPath !== repo.path);
   if (aliases.length) layout.canonicalPaths = Object.fromEntries(aliases.map(({ repo }) => [repo.path, repo.canonicalPath]));
+  return layout;
+}
+
+export function saveTabLayout(tabs: readonly ShownTab[], active: RepoSessionId | null, storage?: Pick<Storage, "setItem">) {
+  writeTabLayout(tabLayout(tabs, active), storage);
+}
+
+function writeTabLayout(layout: TabLayout, storage?: Pick<Storage, "setItem">) {
   try {
     (storage ?? localStorage).setItem(LAYOUT_KEY, JSON.stringify(layout));
   } catch { /* Storage may be unavailable. */ }
+}
+
+function withoutWorktree(layout: TabLayout, path: string): TabLayout {
+  const paths = layout.paths.filter(folder => folder !== path && layout.canonicalPaths?.[folder] !== path);
+  if (paths.length === layout.paths.length) return layout;
+  const aliases = Object.entries(layout.canonicalPaths ?? {}).filter(([folder]) => paths.includes(folder));
+  return {
+    paths,
+    active: layout.active !== null && paths.includes(layout.active) ? layout.active : null,
+    canonicalPaths: aliases.length ? Object.fromEntries(aliases) : undefined,
+  };
+}
+
+export function removeSavedWorktree(path: string, storage?: Pick<Storage, "getItem" | "setItem">) {
+  const layout = readTabLayout(storage);
+  if (!layout) return;
+  const next = withoutWorktree(layout, path);
+  if (next !== layout) writeTabLayout(next, storage);
 }
 
 export function repoTabActions(tab: ShownTab, count: number, actions: {
@@ -108,7 +134,7 @@ interface PendingOpen {
 export class RepoTabs {
   #tabs: ShownTab[] = [];
   #active: RepoSessionId | null = null;
-  /** Remember the startup selection until a repository opens or that tab is removed. */
+  /** Remember the saved selection until a repository opens or that tab is removed. */
   #savedActive: RepoSessionId | null = null;
   /** The latest tab selection while its open or activation is in flight. */
   #armed: RepoSessionId | null = null;
@@ -123,6 +149,7 @@ export class RepoTabs {
   #early = new Map<RepoSessionId, RepoNotice[]>();
   #disposed = false;
   #enabled = true;
+  #hiddenLayout: TabLayout | null = null;
 
   #backend: TabBackend;
   #hooks: WindowHooks;
@@ -148,12 +175,29 @@ export class RepoTabs {
     this.#show();
   }
 
-  setMode(enabled: boolean, closed: readonly RepoSessionId[] = []) {
+  async setMode(enabled: boolean, closed: readonly RepoSessionId[] = [], savedLayout: TabLayout | null = null) {
+    if (!enabled && this.#enabled) this.#hiddenLayout = savedLayout ?? tabLayout(this.#tabs, this.layoutActive);
     this.#enabled = enabled;
     this.#forget(closed);
+    let selection: ShownTab | undefined;
     if (!enabled) this.#forget(this.#tabs.filter(isPending).map(tab => tab.id));
+    else if (this.#hiddenLayout) {
+      const { paths, active, canonicalPaths } = this.#hiddenLayout;
+      this.#hiddenLayout = null;
+      const remaining = this.#tabs.slice();
+      const restored = paths.map(path => {
+        const canonical = canonicalPaths?.[path] ?? path;
+        const at = remaining.findIndex(tab => tab.repo.path === path || tab.repo.canonicalPath === canonical);
+        return at < 0 ? this.#placeholder(path, canonical) : remaining.splice(at, 1)[0];
+      });
+      const saved = active === null ? undefined : restored[paths.indexOf(active)];
+      this.#savedActive = saved?.id ?? null;
+      if (this.#active === null) selection = saved ?? restored.at(-1);
+      this.#tabs = [...restored, ...remaining];
+    }
     if (this.#armed !== null && !this.#exists(this.#armed)) this.#armed = null;
     this.#show();
+    if (selection) await this.activate(selection.id);
   }
 
   #forget(ids: readonly RepoSessionId[]) {
@@ -515,8 +559,9 @@ export class RepoTabs {
   }
 
   removeRestored(path: string) {
+    if (this.#hiddenLayout) this.#hiddenLayout = withoutWorktree(this.#hiddenLayout, path);
     return this.#serialize(async () => {
-      const removed = this.#tabs.filter(tab => isPending(tab) && tab.repo.canonicalPath === path);
+      const removed = this.#tabs.filter(tab => isPending(tab) && (tab.repo.path === path || tab.repo.canonicalPath === path));
       if (removed.length) {
         this.#forget(removed.map(tab => tab.id));
         this.#show();

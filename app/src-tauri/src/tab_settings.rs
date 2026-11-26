@@ -63,6 +63,7 @@ struct Finished<'a> {
 struct Transition<'a> {
     app: &'a AppHandle,
     session: &'a Session,
+    topology: Option<tokio::sync::RwLockWriteGuard<'a, ()>>,
     generation: u64,
     closed: Vec<u64>,
 }
@@ -73,6 +74,8 @@ impl Drop for Transition<'_> {
         repositories.tab_transition = None;
         let enabled = !repositories.tabs_disabled;
         drop(repositories);
+        // A window can open its saved tab as soon as it receives the event.
+        drop(self.topology.take());
         let _ = self.app.emit(
             "repo-tabs-finished",
             Finished {
@@ -117,7 +120,7 @@ pub(crate) async fn persist(
     }
     let generation = NEXT.fetch_add(1, Ordering::Relaxed);
     let changed = std::sync::Arc::new(tokio::sync::Notify::new());
-    let (_topology, closing, ids) = {
+    let (topology, closing, ids) = {
         let mut repositories = session.repositories.lock().expect("session lock");
         // Even briefly taking the write lock would reject a concurrent publication.
         repositories.check_tab_mode_change()?;
@@ -141,6 +144,7 @@ pub(crate) async fn persist(
     let mut transition = Transition {
         app,
         session,
+        topology: Some(topology),
         generation,
         closed: Vec::new(),
     };

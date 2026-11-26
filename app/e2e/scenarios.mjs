@@ -134,6 +134,47 @@ export const SCENARIOS = [
     },
   },
   {
+    name: "repository startup with tabs disabled",
+    async run(ctx) {
+      const last = repo(`${ctx.dir}/last-repo`, 1);
+      const saved = repo(`${ctx.dir}/saved-tab`, 1);
+      const layout = { paths: [last, saved], active: saved };
+      write(ctx.config, "settings.json", JSON.stringify({ "oxbow.windows.repositoryTabs": false }));
+      const initial = await ctx.start(last);
+      await initial.js((_page, layout) => {
+        localStorage.setItem("oxbow.repoTabs.layout", JSON.stringify(layout));
+      }, layout);
+
+      const checkStartup = async (app, folder) => {
+        const state = await app.js(async (page) => {
+          const picker = await page.until(() => document.querySelector(".repo-tab-view.active .repo-picker"), "the repository picker");
+          return {
+            repository: picker.getAttribute("aria-label"),
+            hasTabs: Boolean(document.querySelector("[data-repo-tab-list]")),
+            layout: JSON.parse(localStorage.getItem("oxbow.repoTabs.layout")),
+          };
+        });
+        assert.equal(state.repository, `Repository ${path.basename(folder)}`);
+        assert.equal(state.hasTabs, false);
+        assert.deepEqual(state.layout, layout);
+      };
+
+      await checkStartup(await ctx.start(last), last);
+      fs.unlinkSync(path.join(ctx.config, "last-repository"));
+      const fallback = await ctx.start();
+      await checkStartup(fallback, saved);
+      const restored = await fallback.js(async (page) => {
+        await window.__TAURI_INTERNALS__.invoke("set_setting", { key: "oxbow.windows.repositoryTabs", value: true });
+        const list = await page.until(() => document.querySelector("[data-repo-tab-list]"), "the restored tab strip");
+        return {
+          paths: [...list.querySelectorAll('[role="tab"]')].map(tab => tab.title),
+          active: list.querySelector('[role="tab"][aria-selected="true"]')?.title,
+        };
+      });
+      assert.deepEqual(restored, layout);
+    },
+  },
+  {
     name: "commit diff",
     // Open → pick a commit → read its diff; two quick steps show the second, not the first.
     async run(ctx) {

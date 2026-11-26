@@ -6,7 +6,7 @@ import * as runtime from "svelte/internal/client";
 import type * as Drafts from "../src/lib/commitDrafts.svelte.ts";
 import { test } from "node:test";
 import { api, apiForSession, type RepoNotice, type RepoTabOpen } from "../src/lib/api.ts";
-import { DIALOG_IN_THE_WAY, isPending, readTabLayout, repoTabActions, RepoTabs, saveTabLayout, type OpenFrom, type OpenTab, type ShownTab } from "../src/lib/repoTabs.ts";
+import { DIALOG_IN_THE_WAY, isPending, readTabLayout, removeSavedWorktree, repoTabActions, RepoTabs, saveTabLayout, type OpenFrom, type OpenTab, type ShownTab } from "../src/lib/repoTabs.ts";
 import type { History, RepoSummary } from "../src/lib/types.ts";
 
 const summary = (id: number): RepoSummary => ({ path: `/repo/${id}`, canonicalPath: `/repo/${id}`, name: String(id), restricted: [], untrusted: null });
@@ -411,17 +411,106 @@ test("an open tab stays selected when a restored tab finishes opening afterwards
   assert.deepEqual(published, [1]);
 });
 
-test("turning tabs off drops repositories that have not been opened", async () => {
+test("turning tabs back on restores the reordered layout and keeps the active session", async () => {
+  const opens: string[] = [];
+  const { tabs, state, from } = windowTabs({
+    open: async (path) => {
+      opens.push(path);
+      return { kind: "opened", session: opens.length, repo: summary(Number(path.at(-1))) };
+    },
+    history: async () => history,
+    activate: async () => {},
+    close: async () => {},
+  });
+  await tabs.restore({ paths: ["/repo/1", "/repo/2", "/repo/3"], active: "/repo/2" }, path => tabs.open(path, from));
+  await tabs.open("/repo/1", from);
+  const current = state.tabs[0];
+  await tabs.move(current.id, 2);
+  tabs.setMode(false, [1]);
+  assert.deepEqual(state.tabs, [current]);
+  tabs.setMode(false); // Another failed settings change leaves the saved layout intact.
+  tabs.setMode(true);
+  assert.deepEqual(state.tabs.map(tab => tab.repo.path), ["/repo/2", "/repo/3", "/repo/1"]);
+  assert.deepEqual(state.tabs.map(isPending), [true, true, false]);
+  assert.equal(state.tabs[2], current);
+  assert.equal(state.active, current.id);
+  assert.deepEqual(opens, ["/repo/2", "/repo/1"]);
+  await tabs.activate(state.tabs[0].id);
+  assert.equal(state.active, 3);
+  assert.equal(state.tabs[0].id, 3);
+});
+
+test("a window started without tabs restores the saved order around its current repository", async () => {
   const { tabs, state, from } = windowTabs({
     open: async (path) => opened(Number(path.at(-1))),
     history: async () => history,
     activate: async () => {},
     close: async () => {},
   });
-  await tabs.restore({ paths: ["/repo/1", "/repo/2"], active: "/repo/1" }, path => tabs.open(path, from));
-  tabs.setMode(false);
-  assert.deepEqual(state.tabs.map(tab => tab.repo.path), ["/repo/1"]);
+  tabs.setMode(false, [], {
+    paths: ["/old-alias", "/repo/2"], active: "/repo/2", canonicalPaths: { "/old-alias": "/repo/1" },
+  });
+  await tabs.open("/repo/1", from);
+  tabs.setMode(true);
+  assert.deepEqual(state.tabs.map(tab => tab.repo.path), ["/repo/1", "/repo/2"]);
   assert.equal(state.active, 1);
+
+  tabs.setMode(false);
+  await tabs.open("/repo/3", from);
+  tabs.setMode(true);
+  assert.deepEqual(state.tabs.map(tab => tab.repo.path), ["/repo/1", "/repo/2", "/repo/3"]);
+  assert.equal(state.active, 3);
+});
+
+test("enabling tabs in an empty window reopens only the saved selection", async () => {
+  const opens: string[] = [];
+  const { tabs, state, from } = windowTabs({
+    open: async (path) => {
+      opens.push(path);
+      return { kind: "opened", session: opens.length, repo: summary(Number(path.at(-1))) };
+    },
+    history: async () => history,
+    activate: async () => {},
+    close: async () => {},
+  });
+  await tabs.restore({ paths: ["/repo/1", "/repo/2"], active: "/repo/1" }, path => tabs.open(path, from));
+  await tabs.setMode(false);
+  await tabs.close(1);
+  assert.equal(state.active, null);
+  await tabs.setMode(true);
+  assert.deepEqual(opens, ["/repo/1", "/repo/1"]);
+  assert.deepEqual(state.tabs.map(isPending), [false, true]);
+  assert.equal(state.active, 2);
+  assert.equal(state.highlighted, 2);
+});
+
+test("removing worktrees with tabs disabled prunes both layouts and opens a surviving tab", async () => {
+  const layout = {
+    paths: ["/repo/1", "/alias/2", "/alias/3", "/repo/4"], active: "/alias/2",
+    canonicalPaths: { "/alias/2": "/repo/2", "/alias/3": "/repo/3" },
+  };
+  let saved = JSON.stringify(layout);
+  const storage = {
+    getItem: () => saved,
+    setItem: (_key: string, value: string) => { saved = value; },
+  };
+  const opens: string[] = [];
+  const { tabs, state } = windowTabs({
+    open: async (path) => { opens.push(path); return opened(Number(path.at(-1))); },
+    history: async () => history,
+    activate: async () => {},
+    close: async () => {},
+  });
+  await tabs.setMode(false, [], layout);
+  for (const path of ["/repo/2", "/alias/3"]) {
+    removeSavedWorktree(path, storage);
+    await tabs.removeRestored(path);
+  }
+  assert.deepEqual(readTabLayout(storage), { paths: ["/repo/1", "/repo/4"], active: null });
+  await tabs.setMode(true);
+  assert.deepEqual(state.tabs.map(tab => tab.repo.path), ["/repo/1", "/repo/4"]);
+  assert.deepEqual(opens, ["/repo/4"]);
+  assert.equal(state.active, 4);
 });
 
 test("closing the other tabs checks all guards before selecting the target and closing anything", async () => {

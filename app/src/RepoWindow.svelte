@@ -13,7 +13,7 @@
   import { loadDetailsChrome } from "./lib/detailsChrome.svelte";
   import { nextTabNumberPhase, TAB_NUMBER_DELAY, type TabNumberPhase } from "./lib/repoTabNumbers";
   import { prefs } from "./lib/prefs.svelte";
-  import { DIALOG_IN_THE_WAY, isPending, readTabLayout, RepoTabs, saveTabLayout, type OpenFrom, type ShownTab } from "./lib/repoTabs";
+  import { DIALOG_IN_THE_WAY, isPending, readTabLayout, removeSavedWorktree, RepoTabs, saveTabLayout, type OpenFrom, type ShownTab } from "./lib/repoTabs";
   import { settleReviewSaves } from "./lib/reviewSaves";
   import { REPOSITORY_TAB_TAGS_GROUP } from "./lib/settingsNavigation";
   import { mac, type ShortcutId } from "./lib/shortcuts";
@@ -98,7 +98,7 @@
     closeBatch: (ids, active, previous) => api.closeRepoTabs(ids, active, previous),
   }, {
     show(next, active, highlighted) {
-      if (main && launched && (active !== activeId || next.length !== tabs.length
+      if (main && launched && tabsEnabled && (active !== activeId || next.length !== tabs.length
         || next.some((tab, i) => tab.id !== tabs[i].id))) saveTabLayout(next, manager.layoutActive);
       tabs = next;
       activeId = active;
@@ -242,7 +242,10 @@
       listen("account-changed", () => { for (const { screen } of screens.values()) screen.accountChanged(); }),
       listen<string>("trust-changed", ({ payload }) => { for (const { screen } of screens.values()) screen.trustChanged(payload); }),
       window.listen<string>("open-file-error", ({ payload }) => { if (activeId === null) report(payload); }),
-      listen<string>("worktree-removed", ({ payload }) => { void manager.removeRestored(payload).catch(report); }),
+      listen<string>("worktree-removed", ({ payload }) => {
+        if (main) removeSavedWorktree(payload);
+        void manager.removeRestored(payload).catch(report);
+      }),
       window.listen<{ generation: number; closing: RepoSessionId[] }>("repo-tabs-prepare", async ({ payload }) => {
         const { generation, closing } = payload;
         if (generation <= finishing || preparing >= generation) return;
@@ -260,14 +263,16 @@
       }),
       listen<{ generation: number; enabled: boolean; closed: RepoSessionId[] }>("repo-tabs-finished", ({ payload }) => {
         if (payload.generation <= finishing) {
-          if (payload.closed.length) manager.setMode(tabsEnabled, payload.closed);
+          if (payload.closed.length) void manager.setMode(tabsEnabled, payload.closed).catch(report);
           return;
         }
         finishing = payload.generation;
         if (preparing && preparing <= finishing) preparing = 0;
+        const enabling = payload.enabled && !tabsEnabled;
         tabsEnabled = payload.enabled;
         if (!tabsEnabled) home = "closed";
-        manager.setMode(tabsEnabled, payload.closed);
+        void manager.setMode(tabsEnabled, payload.closed).catch(report);
+        if (main && launched && enabling) saveTabLayout(tabs, manager.layoutActive);
       }),
     ];
     eventsReady = api.repoEvents((notice) => { void manager.receive(notice)?.catch(report); });
@@ -277,7 +282,7 @@
       if (!alive) return;
       if (previous === finishing) {
         tabsEnabled = enabled;
-        manager.setMode(tabsEnabled);
+        await manager.setMode(enabled, [], main && !enabled ? readTabLayout() : null);
       }
       const { path, restoreTabs, explicit } = await api.initialRepo();
       if (!alive) return;
@@ -286,12 +291,12 @@
         restoringLayout = true;
         await manager.restore(layout, (folder) => openSaved(folder, true), explicit ? path : null);
       } else {
-        const folder = layout && !explicit ? layout.active ?? layout.paths.at(-1) : path;
+        const folder = path ?? layout?.active ?? layout?.paths.at(-1);
         if (folder) await openRepository(folder);
       }
     }).catch((error) => { if (alive) report(error); }).finally(() => {
       if (!alive) return;
-      if (main && (tabs.length || restoringLayout)) saveTabLayout(tabs, manager.layoutActive);
+      if (main && tabsEnabled && (tabs.length || restoringLayout)) saveTabLayout(tabs, manager.layoutActive);
       launched = true;
     });
     return () => {
