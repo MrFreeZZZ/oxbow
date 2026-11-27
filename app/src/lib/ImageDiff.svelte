@@ -9,6 +9,7 @@
   // a divider to swipe, one faded over the other, or their difference (black where nothing changed).
 
   import { useRepoScope } from "./repoScope";
+  import { onDestroy, tick } from "svelte";
   import type { FileDiff, Source } from "./types";
   import { bytes, imageType } from "./unusual";
   import { Urls, inTurn, loadPair, type Size } from "./pictures";
@@ -32,6 +33,17 @@
   /** A side of too many pixels to draw without asking, until Show Anyway. */
   let huge = $state<{ width: number; height: number } | null>(null);
   let anyway = $state(false);
+  let shownUrls: Urls | null = null;
+  let shownKey: string | null = null;
+
+  function clearPicture() {
+    shownUrls?.close();
+    shownUrls = null;
+    shownKey = null;
+    before = after = null;
+  }
+
+  onDestroy(clearPicture);
 
   $effect(() => {
     const el = box;
@@ -64,7 +76,14 @@
   $effect(() => {
     const d = diff;
     const all = anyway;
-    if (!near) return;
+    const key = JSON.stringify([d.file.path, ...[d.old, d.new].map((s) =>
+      s && (s.kind === "blob" ? [s.kind, s.id] : [s.kind, s.path]),
+    )]);
+    if (key !== shownKey) clearPicture();
+    if (!near) {
+      clearPicture();
+      return;
+    }
     const type = imageType(d.file.path) ?? "application/octet-stream";
     let gone = false;
     const urls = new Urls();
@@ -77,21 +96,29 @@
         const big = sides.find((s) => !!s && !("url" in s));
         if (big) {
           urls.close();
+          clearPicture();
           huge = big;
           return;
         }
         const [b, a] = sides as (Side | null)[];
+        const previous = shownUrls;
+        shownUrls = urls;
+        shownKey = key;
         before = b;
         after = a;
+        // Keep the displayed URLs valid until Svelte has installed the decoded replacements.
+        void tick().then(() => previous?.close());
       },
       (err) => {
-        if (!gone) error = String(err);
+        if (!gone) {
+          clearPicture();
+          error = String(err);
+        }
       },
     );
     return () => {
       gone = true;
-      urls.close();
-      before = after = null;
+      if (urls !== shownUrls) urls.close();
     };
   });
 
