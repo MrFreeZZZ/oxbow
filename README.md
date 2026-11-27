@@ -28,7 +28,16 @@
 
 <p align="center"><sub>Follow branches through the commit graph and inspect a change without leaving History.</sub></p>
 
-Oxbow is a quiet desktop window for the whole repository: the graph, the diff, the review and the way back. It stays quick on a large history because commits and diffs are read in the app. Coming back to a window where nothing has changed does not start git. The tools are current — command palette, keyboard throughout, light and dark themes, updates in place — and every change still runs your own git, so hooks, SSH and credentials match the terminal.
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/summer-dark.png">
+    <img src="docs/images/summer-light.png" width="100%" alt="Oxbow showing History with the Summer background and three demo repository tabs">
+  </picture>
+</p>
+
+<p align="center"><sub>Make the window your own: Summer background, available in Settings → Appearance, with adjustable intensity.</sub></p>
+
+Oxbow is a quiet desktop window for the whole repository: the graph, the diff, the review and the way back. It stays quick on a large history because commits and diffs are read in the app. Coming back to a window where nothing has changed does not start git. The tools are current — command palette, keyboard throughout, light and dark themes, updates in place — and Git operations run your own git, using your hooks, SSH and credentials subject to Oxbow’s trust and hook settings.
 
 ## What you can do
 
@@ -48,7 +57,7 @@ Right-click a repository tab to color its folder icon. Tags stay with each worki
 
 **Review on GitHub and GitLab.** Sign in to GitHub, or connect GitLab with a personal access token. A pull request and a merge request open on the same screen: the diff, comments, CI status and a draft review. Mark files viewed. Apply Suggestion puts the suggested lines in place of the ones the comment is on.
 
-**Find the breaking commit.** Bisect starts from a commit that worked and one that is broken. Good, Bad and Skip each cut the remaining range in half, until one commit is left. Git keeps the bisect, so one started in a terminal shows here too.
+**Find the breaking commit.** Bisect starts from a commit that worked and one that is broken. Good and Bad narrow the remaining range; Skip moves past a commit you cannot test. Bisect finds the first bad commit, or reports several possible commits if skipped ones prevent a single answer. Git keeps the bisect, so one started in a terminal shows here too.
 
 **Keep the rest in one window.** Merge, rebase, cherry-pick and revert, and resolve conflicts in a three-way editor. Pull, push and fetch, with an explanation when a remote refuses. Clone a repository or initialize one. Publish a branch, or the repository itself, to GitHub or GitLab. Create a worktree and open it on its own. Create, delete and push tags. Stash what is staged, or a hunk or selected lines of a file; everything else stays, and Stashes brings it back. Save commits as patch files, or apply them: a mailbox of patches becomes commits, and a plain diff goes into the files uncommitted. Git LFS files are shown as pointers and downloaded into place when git-lfs is available; a tracking rule is written into `.gitattributes`. A submodule can be cloned, opened, updated to the commit this repository records, or pulled to the latest commit of the branch it follows. Run your own commands with live output and a Stop button. A repository does not run its own programs until you trust it. Recent repositories are in the same app.
 
