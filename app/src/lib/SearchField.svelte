@@ -1,12 +1,15 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { shortcut, withKeys } from "./keys";
   import { combo } from "./shortcuts";
   // The toolbar search field: a mode token (Message, Code, Author, File, SHA), the text, and the
   // place of the selected commit among the matches with arrows to the previous and next one.
 
   import type { HistoryRow } from "./types";
-  import { MODES, search, type Mode } from "./search.svelte";
-  import { nav } from "./nav.svelte";
+  import { MODES, type Mode } from "./search.svelte";
+
+  const scope = useRepoScope();
+  const { search, nav } = scope;
 
   let {
     rows,
@@ -118,6 +121,7 @@
 
 <svelte:window
   onkeydown={(event) => {
+    if (!scope.isActive()) return;
     if (menu && event.key === "Escape") {
       event.preventDefault();
       menu = false;

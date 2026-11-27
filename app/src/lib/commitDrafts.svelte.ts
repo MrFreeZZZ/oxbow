@@ -77,14 +77,22 @@ export function draftFor(repo: string): Draft {
   return draft;
 }
 
-/** Restart must not discard a message kept only in memory when localStorage is full. */
-export function keepMessagesForRestart(): string | null {
+/** A closing tab must keep its message even when storage was full during typing. */
+export function keepCommitMessage(repo: string): string | null {
+  const draft = drafts.get(repo);
+  if (!draft) return null;
   try {
-    for (const [repo, draft] of drafts) {
-      localStorage.setItem(DRAFT_KEY + repo, JSON.stringify($state.snapshot(draft)));
-    }
+    localStorage.setItem(DRAFT_KEY + repo, JSON.stringify($state.snapshot(draft)));
     return null;
   } catch {
-    return "Oxbow could not save a commit message draft. Copy or clear it before restarting to install the update.";
+    return "Oxbow could not save a commit message draft. Copy or clear it before closing the tab.";
   }
+}
+
+/** Restart must not discard a message kept only in memory when localStorage is full. */
+export function keepMessagesForRestart(): string | null {
+  for (const repo of drafts.keys()) {
+    if (keepCommitMessage(repo)) return "Oxbow could not save a commit message draft. Copy or clear it before restarting to install the update.";
+  }
+  return null;
 }

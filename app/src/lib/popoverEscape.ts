@@ -2,9 +2,9 @@
 const open: { node: HTMLElement; close: () => void }[] = [];
 
 function onKey(event: KeyboardEvent) {
-  if (event.key !== "Escape" || event.defaultPrevented || document.querySelector('[role="menu"]')) return;
-  const top = open.at(-1);
-  const modal = document.querySelector('[aria-modal="true"]');
+  if (event.key !== "Escape" || event.defaultPrevented || document.querySelector('[role="menu"]:not([inert] *)')) return;
+  const top = [...open].reverse().find((entry) => !entry.node.closest("[inert]"));
+  const modal = document.querySelector('[aria-modal="true"]:not([inert] *)');
   if (!top || (modal && !modal.contains(top.node))) return;
   event.preventDefault();
   event.stopImmediatePropagation();

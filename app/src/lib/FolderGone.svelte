@@ -46,9 +46,10 @@
       ] as ({ id: GoneAction; label: string; title: string; run: () => void } | null)[]
     ).filter((b) => b !== null),
   );
+  const titleId = $props.id();
 </script>
 
-<div class="gone" aria-labelledby="gone-title">
+<div class="gone" aria-labelledby={titleId}>
   <span class="gone-icon" class:disk={gone.why === "disk"}>
     {#if gone.why === "disk"}
       <svg viewBox="0 0 16 16"><rect x="2" y="5" width="12" height="6" rx="1.5" /><path d="M5 8h.01M11.5 8h-3" /></svg>
@@ -56,7 +57,7 @@
       <svg viewBox="0 0 16 16"><path d="M1.5 4.5a1 1 0 0 1 1-1H6l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" stroke-dasharray="2 1.6" /></svg>
     {/if}
   </span>
-  <h2 class="title" id="gone-title">{screen.title}</h2>
+  <h2 class="title" id={titleId}>{screen.title}</h2>
   <div class="path" title={gone.path}>{shown(gone.path)}</div>
   <p class="reason">{screen.reason}</p>
 

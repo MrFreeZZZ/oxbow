@@ -40,6 +40,13 @@
   </span>
   <button class="button small" onclick={() => shortcutEdit.cancel()}>Cancel</button>
   <button class="button small primary" disabled={!shortcutEdit.combo || !!shortcutEdit.problem} onclick={() => void shortcutEdit.save()}>Save</button>
+{:else if commandOf(id).fixed}
+  <span class="keys">
+    {#if combos.length}
+      <span class="fixed"><kbd>{keys(combos[0])}–{keys(combos[combos.length - 1])}</kbd></span>
+    {/if}
+  </span>
+  <span class="tools"></span>
 {:else}
   <span class="keys">
     {#each combos as combo (combo)}
@@ -89,6 +96,13 @@
     background: var(--accent-quiet);
   }
 
+  .fixed {
+    display: inline-flex;
+    align-items: center;
+    height: 24px;
+    padding: 0 3px;
+  }
+
   .none {
     padding: 0 8px;
     font-size: var(--text-small);
@@ -125,7 +139,7 @@
     width: 24px;
     height: 24px;
     border: none;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     background: transparent;
     color: var(--text2);
     cursor: pointer;

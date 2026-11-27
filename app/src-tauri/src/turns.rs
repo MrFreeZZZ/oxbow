@@ -67,7 +67,7 @@ impl Drop for AutoFetch {
 #[derive(Clone)]
 pub struct Running {
     id: u64,
-    /// The label of the repository window it is for (Settings acts for one).
+    /// The repository session it is for (including commands from its Settings).
     pub window: String,
     /// The window's folder name, as its title shows it.
     pub folder: String,

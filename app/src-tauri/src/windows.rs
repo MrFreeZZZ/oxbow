@@ -3,33 +3,27 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 use crate::CommandResult;
 use crate::outside::worktree_folder;
 use crate::preferences::{appearance, read_settings};
-use crate::session::{Session, WindowTarget, current};
+use crate::session::{Located, RepoRequest, Session, WindowTarget, current};
 
 /// Open the worktree at `path` in a window of its own, or bring forward the window that has it.
 /// Async, because making a window in a synchronous command deadlocks on Windows.
 #[tauri::command]
 pub(crate) async fn open_window(
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
     path: String,
 ) -> CommandResult<()> {
+    let _topology = session.topology()?;
     let repo = current(&session, &window)?;
     let folder = worktree_folder(&repo, &path)?;
-    let label = match session.reserve_window(&folder) {
-        WindowTarget::Existing(label) => {
-            // The reservation can precede the native window: its first invocation builds it.
-            if let Some(open) = app.get_webview_window(&label) {
-                let _ = open.unminimize();
-                open.set_focus().map_err(|err| err.to_string())?;
-            }
-            return Ok(());
-        }
+    let label = match session.reserve_window(&folder)? {
+        WindowTarget::Existing(target) => return raise_repo(&app, &target),
         WindowTarget::New(label) => label,
     };
     // Named after the folder, so the Window menu and Mission Control tell the windows apart.
@@ -50,23 +44,56 @@ pub(crate) async fn open_window(
     let builder = builder
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true)
-        .traffic_light_position(tauri::LogicalPosition::new(22.0, 30.0));
-    if let Err(err) = builder.build() {
-        session.windows.lock().expect("session lock").remove(&label);
-        return Err(err.to_string());
+        .traffic_light_position(tauri::LogicalPosition::new(22.0, 22.0));
+    let reserved = || {
+        session
+            .repositories
+            .lock()
+            .expect("session lock")
+            .contains_window(&label)
+    };
+    if !reserved() {
+        return Ok(());
+    }
+    match builder.build() {
+        Ok(open) if !reserved() => open.destroy().map_err(|err| err.to_string()),
+        Ok(_) => Ok(()),
+        Err(err) => {
+            session.remove_window(&label);
+            Err(err.to_string())
+        }
+    }
+}
+
+/// Bring forward the owner. Its UI activates the existing tab after handling the request.
+pub(crate) fn raise_repo(app: &AppHandle, target: &Located) -> CommandResult<()> {
+    // The reservation can precede the native window: its first invocation builds it.
+    if let Some(window) = app.get_webview_window(target.window()) {
+        let _ = window.unminimize();
+        window.set_focus().map_err(|err| err.to_string())?;
+        if let Located::Open(address) = target {
+            app.state::<Session>()
+                .emit_repo(app, address, "repo-activate-request", (), false);
+        }
     }
     Ok(())
 }
 
-/// Close the window of the worktree that was at `path`, after it was removed.
-#[tauri::command]
-pub(crate) fn close_window_of(app: AppHandle, window: tauri::WebviewWindow, session: State<'_, Session>, path: String) {
-    if let Some(open) = session
-        .window_of(Path::new(&path))
-        .filter(|label| label != window.label())
-        .and_then(|label| app.get_webview_window(&label))
-    {
-        let _ = open.close();
+pub(crate) fn worktree_removed(app: &AppHandle, session: &Session, path: &Path) {
+    let (tabs, windows) = session.finish_worktree_remove(path);
+    // A restored tab can still be a placeholder and therefore have no repository session.
+    let _ = app.emit("worktree-removed", path.to_string_lossy());
+    for address in &tabs {
+        session.emit_closed(address);
+    }
+    for label in &windows {
+        if let Some(open) = app.get_webview_window(label) {
+            // Draft writes were checked before removal. A close request would try to save again.
+            let _ = open.destroy();
+        }
+    }
+    if !tabs.is_empty() || !windows.is_empty() {
+        crate::repos::changed(app);
     }
 }
 

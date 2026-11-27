@@ -23,6 +23,10 @@ class Updates {
   get notice() { return updateNotice(this.info, this.choice, this.status, this.problem); }
   get available() { return !this.problem && (this.installed || (!this.unsupported && this.status?.channel === this.channel)) && this.status && "release" in this.status ? this.status.release : null; }
   get ready() { return this.status?.state === "ready" || this.status?.state === "installFailed"; }
+  get actionLabel() {
+    if (!this.available || this.busy) return null;
+    return this.ready || this.installed ? "Restart" : "Update";
+  }
   get canDownload() { return this.info?.canInstall && !this.busy && !!this.available && !this.ready && !this.installed; }
 
   async refresh() {

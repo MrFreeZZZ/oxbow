@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import FileFilter from "./FileFilter.svelte";
   // Browse Files at This Commit: the repository as one commit has it, its folders on the left,
   // read one at a time, and the picked file on the right as text or a picture. A file is saved
@@ -7,9 +8,6 @@
 
   import { untrack } from "svelte";
   import { save } from "@tauri-apps/plugin-dialog";
-  import { api } from "./api";
-  import { nav } from "./nav.svelte";
-  import { confirm } from "./confirm.svelte";
   import type { FileAt, HistoryRow, TreeItem } from "./types";
   import { shortId, splitPath } from "./format";
   import { languageOf, paint } from "./syntax";
@@ -20,6 +18,9 @@
   import { NEWEST_SAVED } from "./localHistory";
   import { takeVersionRequest, type CommitFile } from "./commitFiles";
   import WorkingCopyPanel from "./WorkingCopyPanel.svelte";
+
+  const scope = useRepoScope();
+  const { api, nav, confirm } = scope;
 
   let {
     rev,

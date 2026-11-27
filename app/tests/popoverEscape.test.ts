@@ -6,7 +6,7 @@ type Node = { contains: (other: unknown) => boolean };
 
 function page() {
   const listeners = new Set<(event: KeyboardEvent) => void>();
-  const found: Record<string, Node | null> = { '[role="menu"]': null, '[aria-modal="true"]': null };
+  const found: Record<string, Node | null> = { '[role="menu"]:not([inert] *)': null, '[aria-modal="true"]:not([inert] *)': null };
   const g = globalThis as Record<string, unknown>;
   g.window = {
     addEventListener: (_: string, listener: (event: KeyboardEvent) => void) => listeners.add(listener),
@@ -26,8 +26,8 @@ function page() {
   return { listeners, found, press };
 }
 
-const node = (inside: Node[] = []): Node & HTMLElement =>
-  ({ contains: (other: unknown) => inside.includes(other as Node) }) as unknown as Node & HTMLElement;
+const node = (inside: Node[] = [], inert = false): Node & HTMLElement =>
+  ({ closest: () => inert ? {} : null, contains: (other: unknown) => inside.includes(other as Node) }) as unknown as Node & HTMLElement;
 
 test("Escape closes the latest popover first, then the one under it", () => {
   const { listeners, press } = page();
@@ -49,13 +49,24 @@ test("an open menu or another dialog keeps its own Escape", () => {
   const closed: string[] = [];
   const popover = node();
   const handle = popoverEscape(popover, () => closed.push("popover"));
-  found['[role="menu"]'] = node();
+  found['[role="menu"]:not([inert] *)'] = node();
   assert.equal(press(), false);
-  found['[role="menu"]'] = null;
-  found['[aria-modal="true"]'] = node();
+  found['[role="menu"]:not([inert] *)'] = null;
+  found['[aria-modal="true"]:not([inert] *)'] = node();
   assert.equal(press(), false);
-  found['[aria-modal="true"]'] = node([popover]);
+  found['[aria-modal="true"]:not([inert] *)'] = node([popover]);
   assert.equal(press(), true);
   assert.deepEqual(closed, ["popover"]);
   handle.destroy();
+});
+
+test("Escape ignores a newer popover in a hidden tab", () => {
+  const { press } = page();
+  const closed: string[] = [];
+  const active = popoverEscape(node(), () => closed.push("active"));
+  const hidden = popoverEscape(node([], true), () => closed.push("hidden"));
+  assert.equal(press(), true);
+  assert.deepEqual(closed, ["active"]);
+  hidden.destroy();
+  active.destroy();
 });

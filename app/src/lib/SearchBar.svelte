@@ -2,12 +2,16 @@
   // The bar under the toolbar while searching: how many commits matched, filters for author,
   // branch and date, the same search as a `git log` command, and In Graph / Only Matches.
 
+  import { useRepoScope } from "./repoScope";
   import type { History } from "./types";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import { actionIcons } from "./icons";
   import { shortcut } from "./keys";
   import type { ObjectItem, ObjectKind } from "./objects";
-  import { SINCE, search } from "./search.svelte";
+  import { SINCE } from "./search.svelte";
+
+  const scope = useRepoScope();
+  const { search } = scope;
 
   let {
     history,
@@ -292,7 +296,7 @@
     flex-shrink: 0;
     height: 26px;
     padding: 0 12px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-m);
     background: var(--field);
     font-size: var(--text-small);
     font-weight: 500;
@@ -326,7 +330,7 @@
     gap: 4px;
     height: 28px;
     padding: 0 8px 0 11px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-m);
     border: 1px solid var(--sep);
     color: var(--text2);
     font-size: var(--text-small);
@@ -383,25 +387,10 @@
     color: var(--term-dim);
     flex-shrink: 0;
   }
-  .segmented {
-    display: flex;
-    flex-shrink: 0;
-    padding: 2px;
-    border-radius: var(--radius-pill);
-    background: var(--field);
-  }
   .segmented button {
     height: 26px;
     padding: 0 12px;
-    border-radius: var(--radius-pill);
     font-size: var(--text-small);
-    color: var(--text2);
     white-space: nowrap;
-  }
-  .segmented button.on {
-    background: var(--win);
-    color: var(--text);
-    font-weight: 600;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
   }
 </style>

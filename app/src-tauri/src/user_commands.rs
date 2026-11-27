@@ -1,7 +1,7 @@
 //! Personal commands are resolved from settings at invocation, then bound to this repository.
 use crate::{
     CommandResult, preferences,
-    session::{Session, at, blocking, current, expected},
+    session::{RepoRequest, Session, at, blocking, current, expected},
     turns::Running,
     user_command_window::{self, CommandView},
 };
@@ -11,7 +11,7 @@ use tauri::{AppHandle, State};
 #[tauri::command]
 pub(crate) async fn run_user_command(
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
     id: String,
     repository: String,
@@ -29,9 +29,11 @@ pub(crate) async fn run_user_command(
         .into_iter()
         .find(|c| c.id == id)
         .ok_or("This command no longer exists.")?;
-    let label = user_command_window::open(
+    let label = format!("command-{}", window.output_owner());
+    let stop = session.start_change(&window, &label, false)?;
+    user_command_window::open(
         &app,
-        window.label(),
+        &label,
         CommandView {
             revision: 0,
             title: command.name.clone(),
@@ -43,9 +45,8 @@ pub(crate) async fn run_user_command(
             entry: None,
         },
     )?;
-    let stop = session.stops.start(&label);
     let turns = session.turns.clone();
-    let change = Running::new(window.label(), repository, command.name.clone());
+    let change = Running::new(&window.turn_key(), repository, command.name.clone());
     let dir = at(&repo);
     let title = format!("Custom: {}", console::mask(&command.name));
     let handle = app.clone();

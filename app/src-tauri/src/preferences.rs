@@ -5,13 +5,13 @@ use std::path::{Path, PathBuf};
 
 use oxbow_core::DiffOptions;
 use oxbow_core::config;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State, Theme, WebviewUrl, WebviewWindowBuilder};
 
 use crate::session::Session;
 use crate::turns::{DEFAULT_FETCH_INTERVAL, MAX_FETCH_INTERVAL};
-use crate::{CommandResult, open_in, settings};
+use crate::{CommandResult, open_in, settings, tab_settings};
 
 /// User settings live in `settings.json` in the app's config folder, as flat `oxbow.*` keys,
 /// holding only values that differ from the defaults.
@@ -46,17 +46,18 @@ pub(crate) struct AllSettings {
 }
 
 #[tauri::command]
-pub(crate) fn all_settings(app: AppHandle, session: State<'_, Session>) -> AllSettings {
+pub(crate) async fn all_settings(app: AppHandle, session: State<'_, Session>) -> CommandResult<AllSettings> {
+    let _writes = session.settings_writes.lock().await;
     let revision = session.settings.lock().expect("session lock");
     let (values, problem) = match settings_file(&app).and_then(|file| settings::read(&file)) {
         Ok(values) => (values, None),
         Err(problem) => (serde_json::Map::new(), Some(problem)),
     };
-    AllSettings {
+    Ok(AllSettings {
         revision: *revision,
         values,
         problem,
-    }
+    })
 }
 
 /// The system's Accessibility › Display switches the page can't read itself: WebKit has no media
@@ -92,40 +93,290 @@ pub(crate) struct SettingChanged {
     revision: u64,
 }
 
+fn read_for_write(file: &Path) -> CommandResult<settings::Settings> {
+    settings::read(file)
+        .map_err(|problem| format!("{problem} Oxbow doesn’t write over it until it is fixed in Edit in settings.json."))
+}
+
 /// Save a setting (`null` puts it back to its default) and tell every window. Returns the
 /// number of the change. Nothing is written when settings.json can't be read, so the other
 /// settings in it stay.
 #[tauri::command]
-pub(crate) fn set_setting(
+pub(crate) async fn set_setting(
     app: AppHandle,
     session: State<'_, Session>,
     key: String,
     value: Value,
 ) -> CommandResult<u64> {
-    let mut revision = session.settings.lock().expect("session lock");
-    let file = settings_file(&app)?;
-    let mut settings = settings::read(&file).map_err(|problem| {
-        format!("{problem} Oxbow doesn’t write over it until it is fixed in Edit in settings.json.")
-    })?;
+    let change = write_setting(&app, &session, key, |_| Ok(value)).await?;
+    Ok(change.revision)
+}
+
+async fn write_setting(
+    app: &AppHandle,
+    session: &Session,
+    key: String,
+    edit: impl FnOnce(Option<&Value>) -> CommandResult<Value>,
+) -> CommandResult<SettingChanged> {
+    let _writes = session.settings_writes.lock().await;
+    let file = settings_file(app)?;
+    let mut settings = read_for_write(&file)?;
     let previous_appearance = appearance(&settings);
+    let value = edit(settings.get(&key))?;
     if value.is_null() {
         settings.remove(&key);
     } else {
         settings.insert(key.clone(), value.clone());
     }
-    settings::write(&file, &settings)?;
+    tab_settings::persist(app, session, tab_settings::enabled(&settings), || {
+        settings::write(&file, &settings)
+    })
+    .await?;
+    let mut revision = session.settings.lock().expect("session lock");
     *revision += 1;
-    apply_settings(&app, &session, &settings, previous_appearance != appearance(&settings));
+    apply_settings(app, session, &settings, previous_appearance != appearance(&settings));
+    let change = SettingChanged {
+        key,
+        value,
+        revision: *revision,
+    };
     // A window that misses this keeps showing the old value until it reloads; not an error.
+    let _ = app.emit("settings-changed", &change);
+    Ok(change)
+}
+
+const RESET_GROUPS: &[&[&str]] = &[
+    &[
+        "oxbow.background.source",
+        "oxbow.background.image",
+        "oxbow.background.intensity",
+    ],
+    &["oxbow.theme", "oxbow.theme.variant"],
+    &["oxbow.repositoryTabTags.styles", "oxbow.repositoryTabTags.colors"],
+];
+
+fn read_reset_group(file: &Path, keys: &[String]) -> CommandResult<settings::Settings> {
+    if !RESET_GROUPS.iter().any(|group| keys == *group) {
+        return Err("Unknown settings group.".into());
+    }
+    let mut settings = read_for_write(file)?;
+    for key in keys {
+        settings.remove(key);
+    }
+    Ok(settings)
+}
+
+#[derive(Clone, Serialize)]
+struct SettingsGroupReset {
+    keys: Vec<String>,
+    revision: u64,
+}
+
+#[tauri::command]
+pub(crate) async fn reset_settings_group(
+    app: AppHandle,
+    session: State<'_, Session>,
+    keys: Vec<String>,
+) -> CommandResult<u64> {
+    let _writes = session.settings_writes.lock().await;
+    let file = settings_file(&app)?;
+    let settings = read_reset_group(&file, &keys)?;
+    tab_settings::persist(&app, &session, tab_settings::enabled(&settings), || {
+        settings::write(&file, &settings)
+    })
+    .await?;
+    let mut revision = session.settings.lock().expect("session lock");
+    *revision += 1;
+    apply_settings(&app, &session, &settings, false);
     let _ = app.emit(
-        "settings-changed",
-        SettingChanged {
-            key,
-            value,
+        "settings-group-reset",
+        SettingsGroupReset {
+            keys,
             revision: *revision,
         },
     );
     Ok(*revision)
+}
+
+#[cfg(test)]
+#[test]
+fn group_reset_removes_only_its_keys_from_the_latest_file() {
+    use serde_json::json;
+
+    let dir = std::env::temp_dir().join(format!("oxbow-settings-group-{}", std::process::id()));
+    let file = dir.join("settings.json");
+    let keys = RESET_GROUPS[2].iter().map(|key| (*key).to_owned()).collect::<Vec<_>>();
+    let mut original = json!({
+        "oxbow.repositoryTabTags.styles": null,
+        "oxbow.repositoryTabTags.colors": { "red": "#abcdef" },
+        "oxbow.repositoryTabTags.assignments": { "/repo": "red" },
+        "unknown": { "keep": true }
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    settings::write(&file, &original).unwrap();
+    assert!(read_reset_group(&file, &["oxbow.repositoryTabTags.assignments".into()]).is_err());
+    let next = dir.join("settings.json.new");
+    std::fs::create_dir(&next).unwrap();
+    assert!(settings::write(&file, &read_reset_group(&file, &keys).unwrap()).is_err());
+    assert_eq!(settings::read(&file).unwrap(), original);
+    std::fs::remove_dir(next).unwrap();
+
+    original.insert("oxbow.theme".into(), json!("newer edit"));
+    settings::write(&file, &original).unwrap();
+    let reset = read_reset_group(&file, &keys).unwrap();
+    for key in &keys {
+        original.remove(key);
+    }
+    settings::write(&file, &reset).unwrap();
+    assert_eq!(settings::read(&file).unwrap(), original);
+    assert_eq!(read_reset_group(&file, &keys).unwrap(), original);
+
+    std::fs::write(&file, "{broken").unwrap();
+    assert!(read_reset_group(&file, &keys).is_err());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "{broken");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum TabTagSetting {
+    Styles,
+    Assignments,
+}
+
+impl TabTagSetting {
+    fn key(&self) -> &'static str {
+        match self {
+            Self::Styles => "oxbow.repositoryTabTags.styles",
+            Self::Assignments => "oxbow.repositoryTabTags.assignments",
+        }
+    }
+
+    fn valid(&self, entry: &str, value: Option<&Value>) -> bool {
+        let tag_id = |id: &str| matches!(id, "red" | "orange" | "yellow" | "green" | "blue" | "purple" | "gray");
+        match self {
+            Self::Styles => {
+                tag_id(entry)
+                    && value.is_none_or(|style| {
+                        style.as_object().is_some_and(|style| {
+                            style.len() == 2
+                                && style.get("label").and_then(Value::as_str).is_some_and(|label| {
+                                    !label
+                                        .chars()
+                                        .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+                                        && !label.trim().is_empty()
+                                        && label.trim().chars().count() <= 64
+                                })
+                                && style.get("color").and_then(Value::as_str).is_some_and(|color| {
+                                    color
+                                        .strip_prefix('#')
+                                        .is_some_and(|hex| hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+                                })
+                        })
+                    })
+            }
+            Self::Assignments => {
+                let absolute = entry.starts_with('/')
+                    || entry.starts_with("\\\\")
+                    || matches!(
+                        entry.as_bytes(), [drive, b':', b'/' | b'\\', ..] if drive.is_ascii_alphabetic()
+                    );
+                absolute && !entry.contains('\0') && value.is_none_or(|value| value.as_str().is_some_and(tag_id))
+            }
+        }
+    }
+
+    fn valid_entries(&self, entries: &serde_json::Map<String, Value>) -> bool {
+        entries.iter().all(|(key, value)| self.valid(key, Some(value)))
+    }
+
+    fn edit(&self, stored: Option<&Value>, entry: String, value: Option<Value>) -> CommandResult<Value> {
+        if !self.valid(&entry, value.as_ref()) {
+            return Err("Invalid repository tab tag.".into());
+        }
+        let mut entries = match stored {
+            None => serde_json::Map::new(),
+            Some(Value::Object(entries)) if self.valid_entries(entries) => entries.clone(),
+            Some(_) => {
+                return Err(format!(
+                    "Fix “{}” in Edit in settings.json before changing it.",
+                    self.key()
+                ));
+            }
+        };
+        if let Some(value) = value {
+            entries.insert(entry, value);
+        } else {
+            entries.remove(&entry);
+        }
+        Ok(if entries.is_empty() {
+            Value::Null
+        } else {
+            Value::Object(entries)
+        })
+    }
+}
+
+/// Change one path or one tag's style using the latest settings on disk while holding the write lock.
+#[tauri::command]
+pub(crate) async fn edit_tab_tag(
+    app: AppHandle,
+    session: State<'_, Session>,
+    setting: TabTagSetting,
+    entry: String,
+    value: Option<Value>,
+) -> CommandResult<SettingChanged> {
+    write_setting(&app, &session, setting.key().into(), |stored| {
+        setting.edit(stored, entry, value)
+    })
+    .await
+}
+
+#[cfg(test)]
+#[test]
+fn tab_tag_edits_keep_the_other_paths_and_slots() {
+    use serde_json::json;
+
+    let assignments = TabTagSetting::Assignments;
+    let edit = |stored, path: &str, id: Option<&str>| assignments.edit(stored, path.into(), id.map(Value::from));
+    let main = edit(None, "/repo", Some("red")).unwrap();
+    let both = edit(Some(&main), "/worktree", Some("blue")).unwrap();
+    assert_eq!(both, json!({ "/repo": "red", "/worktree": "blue" }));
+    let remaining = edit(Some(&both), "/repo", None).unwrap();
+    assert_eq!(remaining, json!({ "/worktree": "blue" }));
+    assert_eq!(edit(Some(&remaining), "/worktree", None).unwrap(), Value::Null);
+    assert!(edit(Some(&both), "relative", Some("red")).is_err());
+    assert!(edit(Some(&both), "/repo", Some("pink")).is_err());
+    assert!(edit(Some(&json!({ "/other": null })), "/repo", Some("red")).is_err());
+
+    let styles = TabTagSetting::Styles;
+    let green = json!({ "label": "Ready", "color": "#123abc" });
+    let blue = json!({ "label": "Ревью 🦊", "color": "#0042ff" });
+    let before = json!({ "blue": {"label": "Blue", "color": "#abc123"}, "green": green });
+    assert_eq!(
+        styles.edit(Some(&before), "blue".into(), Some(blue.clone())).unwrap(),
+        json!({ "blue": blue, "green": green })
+    );
+    for invalid in [
+        json!("blue"),
+        json!({"label": "", "color": "#0042ff"}),
+        json!({"label": "Review", "color": "blue"}),
+    ] {
+        assert!(styles.edit(Some(&before), "blue".into(), Some(invalid)).is_err());
+    }
+    for separator in ['\u{2028}', '\u{2029}'] {
+        for label in [
+            format!("{separator}Review"),
+            format!("Re{separator}view"),
+            format!("Review{separator}"),
+            separator.to_string(),
+        ] {
+            let invalid = json!({ "label": label, "color": "#0042ff" });
+            assert!(!styles.valid_entries(json!({ "blue": invalid }).as_object().unwrap()));
+        }
+    }
 }
 
 /// The settings the backend itself follows: how diffs are made and the windows' appearance.
@@ -249,18 +500,21 @@ pub(crate) fn show_settings(app: &AppHandle) -> CommandResult<()> {
 }
 
 pub(crate) fn show_settings_at(app: &AppHandle, section: Option<&str>) -> CommandResult<()> {
+    let section = section.filter(|section| matches!(*section, "commands" | "updates" | "repository-tab-tags"));
     if let Some(window) = app.get_webview_window("settings") {
-        if let Some(section @ ("commands" | "updates")) = section {
+        if let Some(section) = section {
             let _ = window.emit("settings-section", section);
         }
         return window.set_focus().map_err(|err| err.to_string());
     }
-    let url = match section {
-        Some("commands") => "index.html#settings/commands",
-        Some("updates") => "index.html#settings/updates",
-        _ => "index.html#settings",
-    };
+    let url = section.map_or_else(
+        || "index.html#settings".to_owned(),
+        |section| format!("index.html#settings/{section}"),
+    );
+    let version = format!("Version {} ({})", app.package_info().version, env!("OXBOW_COMMIT"));
+    let version = serde_json::to_string(&version).map_err(|err| err.to_string())?;
     let builder = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(url.into()))
+        .initialization_script(format!("window.__OXBOW_SETTINGS_VERSION__ = {version};"))
         .title("Settings")
         .inner_size(940.0, 720.0)
         .min_inner_size(760.0, 520.0)
@@ -315,22 +569,41 @@ pub(crate) async fn monospace_fonts() -> Vec<String> {
 
 /// settings.json as it is on disk, for editing it as text.
 #[tauri::command]
-pub(crate) fn settings_text(app: AppHandle) -> CommandResult<String> {
-    let file = settings_file(&app)?;
-    Ok(std::fs::read_to_string(file).unwrap_or_else(|_| "{}\n".to_owned()))
+pub(crate) fn settings_text(app: AppHandle) -> CommandResult<Option<String>> {
+    settings::read_text(&settings_file(&app)?)
 }
 
 /// Save settings.json edited as text. It must be a JSON object; every window takes the new
-/// values at once.
+/// values at once. Return the exact text that was saved as the editor's next base.
 #[tauri::command]
-pub(crate) fn save_settings_text(app: AppHandle, session: State<'_, Session>, text: String) -> CommandResult<()> {
+pub(crate) async fn save_settings_text(
+    app: AppHandle,
+    session: State<'_, Session>,
+    base: Option<String>,
+    mut text: String,
+) -> CommandResult<String> {
     let settings: serde_json::Map<String, Value> = serde_json::from_str(&text).map_err(|err| err.to_string())?;
-    let mut revision = session.settings.lock().expect("session lock");
-    let before = read_settings(&app);
+    let styles = TabTagSetting::Styles;
+    if let Some(value) = settings.get(styles.key())
+        && !value.as_object().is_some_and(|entries| styles.valid_entries(entries))
+    {
+        return Err("Invalid repository tab tag.".into());
+    }
+    let _writes = session.settings_writes.lock().await;
     let file = settings_file(&app)?;
-    settings::write_text(&file, &if text.ends_with('\n') { text } else { text + "\n" })?;
+    settings::check_text_base(&file, base.as_deref())?;
+    let before = base
+        .as_deref()
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or_default();
+    tab_settings::persist(&app, &session, tab_settings::enabled(&settings), || {
+        // A tab mode change may have waited for the windows while an external editor saved.
+        settings::write_edited_text(&file, base.as_deref(), &mut text)
+    })
+    .await?;
+    let mut revision = session.settings.lock().expect("session lock");
     settings_replaced(&app, &session, &mut revision, &before, &settings);
-    Ok(())
+    Ok(text)
 }
 
 /// Follow settings that replaced `before` all at once, and tell every window which keys changed.
@@ -344,17 +617,14 @@ fn settings_replaced(
 ) {
     *revision += 1;
     apply_settings(app, session, after, appearance(before) != appearance(after));
-    let removed = before
-        .keys()
-        .filter(|key| !after.contains_key(*key))
-        .map(|key| (key.clone(), Value::Null));
-    for (key, value) in after.clone().into_iter().chain(removed) {
-        if before.get(&key) != Some(&value) {
+    let removed = before.keys().filter(|key| !after.contains_key(*key));
+    for key in after.keys().chain(removed) {
+        if before.get(key) != after.get(key) {
             let _ = app.emit(
                 "settings-changed",
                 SettingChanged {
-                    key,
-                    value,
+                    key: key.clone(),
+                    value: after.get(key).cloned().unwrap_or(Value::Null),
                     revision: *revision,
                 },
             );
@@ -367,10 +637,8 @@ fn settings_backup(file: &Path) -> PathBuf {
     file.with_file_name("settings.backup.json")
 }
 
-/// Rename `from` to `to`, replacing `to` (which a rename on Windows won't do by itself).
+/// Rename `from` over `to` without removing the destination before the write succeeds.
 fn move_file(from: &Path, to: &Path) -> CommandResult<()> {
-    #[cfg(windows)]
-    let _ = std::fs::remove_file(to);
     std::fs::rename(from, to).map_err(|err| err.to_string())
 }
 
@@ -398,27 +666,36 @@ pub(crate) fn settings_location(app: AppHandle) -> CommandResult<SettingsLocatio
 /// Put every Oxbow setting back to its default. settings.json moves aside to
 /// settings.backup.json, so the old values can come back; Git's own settings are not touched.
 #[tauri::command]
-pub(crate) fn restore_default_settings(app: AppHandle, session: State<'_, Session>) -> CommandResult<()> {
-    let mut revision = session.settings.lock().expect("session lock");
+pub(crate) async fn restore_default_settings(app: AppHandle, session: State<'_, Session>) -> CommandResult<()> {
+    let _writes = session.settings_writes.lock().await;
     let before = read_settings(&app);
     let file = settings_file(&app)?;
-    if file.exists() {
-        move_file(&file, &settings_backup(&file))?;
-    }
+    tab_settings::persist(&app, &session, true, || {
+        if file.try_exists().map_err(|err| err.to_string())? {
+            move_file(&file, &settings_backup(&file))?;
+        }
+        Ok(())
+    })
+    .await?;
+    let mut revision = session.settings.lock().expect("session lock");
     settings_replaced(&app, &session, &mut revision, &before, &serde_json::Map::new());
     Ok(())
 }
 
 /// Bring back the settings that Restore Defaults moved aside.
 #[tauri::command]
-pub(crate) fn restore_settings_backup(app: AppHandle, session: State<'_, Session>) -> CommandResult<()> {
+pub(crate) async fn restore_settings_backup(app: AppHandle, session: State<'_, Session>) -> CommandResult<()> {
+    let _writes = session.settings_writes.lock().await;
     let file = settings_file(&app)?;
     let backup = settings_backup(&file);
     let text = std::fs::read_to_string(&backup).map_err(|_| "There is no copy of the old settings.".to_owned())?;
     let after: serde_json::Map<String, Value> = serde_json::from_str(&text).map_err(|err| err.to_string())?;
-    let mut revision = session.settings.lock().expect("session lock");
     let before = read_settings(&app);
-    move_file(&backup, &file)?;
+    tab_settings::persist(&app, &session, tab_settings::enabled(&after), || {
+        move_file(&backup, &file)
+    })
+    .await?;
+    let mut revision = session.settings.lock().expect("session lock");
     settings_replaced(&app, &session, &mut revision, &before, &after);
     Ok(())
 }
@@ -426,11 +703,19 @@ pub(crate) fn restore_settings_backup(app: AppHandle, session: State<'_, Session
 /// Show settings.json in Finder, Explorer or the file manager; an empty one is made first, so
 /// there is a file to show.
 #[tauri::command]
-pub(crate) fn reveal_settings(app: AppHandle) -> CommandResult<()> {
+pub(crate) async fn reveal_settings(app: AppHandle, session: State<'_, Session>) -> CommandResult<()> {
     let file = settings_file(&app)?;
-    if !file.exists() {
-        std::fs::create_dir_all(file.parent().expect("settings file has a parent")).map_err(|err| err.to_string())?;
-        std::fs::write(&file, "{}\n").map_err(|err| err.to_string())?;
+    {
+        let _writes = session.settings_writes.lock().await;
+        if !file.exists() {
+            std::fs::create_dir_all(file.parent().expect("settings file has a parent"))
+                .map_err(|err| err.to_string())?;
+            match std::fs::File::create_new(&file) {
+                Ok(mut file) => std::io::Write::write_all(&mut file, b"{}\n").map_err(|err| err.to_string())?,
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(err) => return Err(err.to_string()),
+            }
+        }
     }
     open_in::reveal(&file)
 }

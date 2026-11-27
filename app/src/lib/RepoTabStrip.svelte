@@ -1,0 +1,431 @@
+<script lang="ts">
+  import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
+  import type { RepoSessionId } from "./api";
+  import { withKeys } from "./keys";
+  import { prefs } from "./prefs.svelte";
+  import { REPOSITORY_TAB_TAGS, type RepositoryTabTagId } from "./repositoryTabTags";
+  import { tabDragOffsets } from "./repoTabDrag";
+  import { beginTabDrag, noteTabOrder, tabGesture } from "./repoTabDrag.svelte";
+  import { repoTabActions, type ShownTab } from "./repoTabs";
+  import { combo, mac } from "./shortcuts";
+  import { keyFocus } from "./tabs";
+  import { tick, type Snippet } from "svelte";
+
+  let { tabs, activeId, showNumbers, openMenu, openRecent, copyPath, activate, close, closeOthers, canSwitch, activeNow, move, saveTag, customizeTags,
+    home, homeSelected, showHome, closeHome, update }: {
+    tabs: readonly ShownTab[];
+    activeId: RepoSessionId | null;
+    /** 1–9 in place of the folder icon, while ⌘ or Ctrl is held. */
+    showNumbers: boolean;
+    openMenu?: (event: MouseEvent) => void;
+    openRecent: () => void;
+    copyPath: (path: string) => void;
+    activate: (id: RepoSessionId) => Promise<void>;
+    close: (id: RepoSessionId) => Promise<void>;
+    closeOthers: (id: RepoSessionId) => Promise<void>;
+    canSwitch: () => boolean;
+    /** The window's active tab, read after this strip has been remounted. */
+    activeNow: () => RepoSessionId | null;
+    move: (id: RepoSessionId, to: number) => Promise<void>;
+    saveTag: (path: string, id: RepositoryTabTagId | null) => void;
+    customizeTags: () => void;
+    home: boolean;
+    homeSelected: boolean;
+    showHome: () => void;
+    closeHome: () => Promise<void>;
+    update?: Snippet;
+  } = $props();
+
+  let list = $state<HTMLDivElement>();
+  let focused = $state<RepoSessionId | "home" | null>(null);
+  let menu = $state<{ x: number; y: number; tab: ShownTab; anchor: HTMLButtonElement } | null>(null);
+  const activeSelector = '[data-repo-tab-list] [role="tab"][aria-selected="true"]';
+  const orderKey = $derived(tabs.map(tab => tab.id).join("\0"));
+  const shownId = $derived.by(() => {
+    const gesture = tabGesture.current;
+    return gesture && gesture.originKey === orderKey ? gesture.id : homeSelected ? "home" : activeId;
+  });
+  const offsets = $derived.by(() => {
+    const gesture = tabGesture.current;
+    if (!gesture?.dragging || gesture.originKey !== orderKey || gesture.slots.length !== tabs.length) return null;
+    return tabDragOffsets(gesture.slots, gesture.from, gesture.to, gesture.left, gesture.overlap);
+  });
+  const settling = $derived.by(() => {
+    const gesture = tabGesture.current;
+    return !!gesture?.settling && gesture.originKey === orderKey;
+  });
+
+  $effect(() => noteTabOrder(orderKey));
+
+  $effect(() => {
+    if (tabGesture.current?.dragging) return;
+    const node = list;
+    const tab = node?.querySelector(`[data-tab-id="${shownId}"]`);
+    if (!node || !tab) return;
+    const reveal = () => tab.scrollIntoView({ block: "nearest", inline: "nearest" });
+    reveal();
+    const resize = new ResizeObserver(reveal);
+    resize.observe(node);
+    return () => resize.disconnect();
+  });
+
+  // The strip is created again in the newly active repository; keep the scroll the drag measured.
+  $effect(() => {
+    const node = list;
+    const gesture = tabGesture.current;
+    if (!node || !gesture?.dragging || gesture.originKey !== orderKey) return;
+    if (Math.abs(node.scrollLeft - gesture.scroll) > 1) node.scrollLeft = gesture.scroll;
+  });
+
+  async function withTabFocus(action: Promise<void>) {
+    await action;
+    await tick();
+    if (!document.hasFocus()) return;
+    const tab = document.querySelector<HTMLButtonElement>(activeSelector);
+    if (tab && (document.activeElement === document.body || list?.contains(document.activeElement))) keyFocus(tab);
+  }
+
+  function showContext(event: MouseEvent | KeyboardEvent, tab: ShownTab) {
+    event.preventDefault();
+    const anchor = event.currentTarget as HTMLButtonElement;
+    const box = anchor.getBoundingClientRect();
+    menu = event instanceof MouseEvent && (event.clientX || event.clientY)
+      ? { x: event.clientX, y: event.clientY, tab, anchor }
+      : { x: box.left, y: box.bottom + 4, tab, anchor };
+  }
+
+  function hideContext() {
+    const anchor = menu?.anchor;
+    menu = null;
+    if (document.hasFocus() && document.activeElement?.closest('[role="menu"]')) anchor?.focus();
+  }
+
+  function contextEntries(tab: ShownTab): MenuEntry[] {
+    const actions = repoTabActions(tab, tabs.length, {
+      copyPath,
+      saveTag,
+      close: (id) => void withTabFocus(close(id)),
+      closeOthers: (id) => void withTabFocus(closeOthers(id)),
+    });
+    const selected = prefs.repositoryTabTag(tab.repo.canonicalPath);
+    return [
+      { kind: "item", icon: menuIcons.copy, ...actions.copy },
+      { kind: "sep" },
+      { kind: "swatches", label: "Repository Tab Tag", choices: [
+        { label: "No Tag", icon: menuIcons.tag, checked: selected === null, run: () => actions.tag(null) },
+        ...REPOSITORY_TAB_TAGS.map(({ id }) => ({
+          ...prefs.repositoryTabTagStyle(id), checked: selected === id, run: () => actions.tag(id),
+        })),
+      ] },
+      { kind: "item", label: "Customize Folder Tags…", icon: menuIcons.tag, run: customizeTags },
+      { kind: "sep" },
+      { kind: "item", icon: menuIcons.bad, ...actions.close },
+      { kind: "item", icon: menuIcons.bad, ...actions.others },
+    ];
+  }
+
+  function tabKey(event: KeyboardEvent, tab?: ShownTab) {
+    if (tab && (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) {
+      showContext(event, tab);
+      return;
+    }
+    if (event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return;
+    const buttons = Array.from(list?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []);
+    const at = buttons.indexOf(event.currentTarget as HTMLButtonElement);
+    const last = buttons.length - 1;
+    const next = event.key === "ArrowLeft" ? (at + last) % buttons.length :
+      event.key === "ArrowRight" ? (at + 1) % buttons.length :
+      event.key === "Home" ? 0 : event.key === "End" ? last : -1;
+    if (next < 0) return;
+    event.preventDefault();
+    const button = buttons[next];
+    if (button) keyFocus(button);
+  }
+</script>
+
+<div class="strip" data-tauri-drag-region>
+  {#if openMenu}
+    <button class="control repository" onclick={openMenu} aria-label="Repository menu" aria-haspopup="menu" title="Repository menu">
+      <svg class="icon" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>
+    </button>
+  {/if}
+  <div class="list" data-repo-tab-list role="tablist" aria-label="Repository tabs" bind:this={list}
+    class:reordering={!!offsets} class:settling
+    style:--tab-count={tabs.length + Number(home)}
+    onfocusout={(event) => { if (!list?.contains(event.relatedTarget as Node | null)) focused = null; }}>
+    {#each tabs as tab, index (tab.id)}
+      {@const selected = tab.id === shownId}
+      {@const tag = prefs.repositoryTabTag(tab.repo.canonicalPath)}
+      <div class="item" class:selected class:dragging={!!offsets && tab.id === shownId} role="presentation"
+        style:transform={offsets ? `translateX(${Math.round(offsets[index])}px)` : undefined}>
+        <button class="tab-button" role="tab" aria-selected={selected} aria-controls={`repo-panel-${tab.id}`}
+          aria-keyshortcuts={tabs.length > 1 && index < 9 ? `${mac ? "Meta" : "Control"}+${index + 1}` : undefined}
+          tabindex={tab.id === (focused ?? shownId) ? 0 : -1} data-tab-id={tab.id} title={tab.repo.path}
+          onpointerdown={(event) => beginTabDrag(event, tab.id, tabs.map(item => item.id), {
+            canSwitch,
+            activate: () => activate(tab.id),
+            isCurrent: () => activeNow() === tab.id,
+            move: (to) => move(tab.id, to),
+          })}
+          onclick={(event) => {
+            const picking = activate(tab.id);
+            if (event.detail === 0) void withTabFocus(picking);
+          }}
+          onfocus={() => focused = tab.id} onkeydown={(event) => tabKey(event, tab)}
+          oncontextmenu={(event) => showContext(event, tab)}>
+          {#if showNumbers && index < 9}
+            <span class="number" aria-hidden="true">{index + 1}</span>
+          {:else}
+            <svg class="icon folder" viewBox="0 0 16 16" style:--tag-color={tag ? prefs.repositoryTabTagStyle(tag).color : undefined}><path d={menuIcons.folder} /></svg>
+          {/if}
+          <span>{tab.repo.name}</span>
+        </button>
+        <button class="control close" tabindex={selected ? 0 : -1} aria-label={`Close ${tab.repo.name} tab`}
+          title={`Close ${tab.repo.name} tab`} oncontextmenu={(event) => showContext(event, tab)}
+          onclick={(event) => {
+            const closing = close(tab.id);
+            if (event.detail === 0) void withTabFocus(closing);
+          }}>
+          <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.bad} /></svg>
+        </button>
+      </div>
+    {/each}
+    {#if home}
+      <div class="item home" class:selected={shownId === "home"} role="presentation">
+        <button class="tab-button" role="tab" aria-selected={shownId === "home"} aria-controls="repo-panel-home"
+          tabindex={(focused ?? shownId) === "home" ? 0 : -1} data-tab-id="home" title="Oxbow Home"
+          onclick={showHome} onfocus={() => focused = "home"} onkeydown={tabKey}>
+          <svg class="icon folder" viewBox="0 0 16 16"><path d={menuIcons.home} /></svg>
+          <span>Oxbow Home</span>
+        </button>
+        <button class="control close" tabindex={shownId === "home" ? 0 : -1} aria-label="Close Oxbow Home tab"
+          title="Close Oxbow Home tab" onclick={() => void withTabFocus(closeHome())}>
+          <svg class="icon" viewBox="0 0 16 16"><path d={menuIcons.bad} /></svg>
+        </button>
+      </div>
+    {/if}
+  </div>
+  <button class="control add" onclick={openRecent} aria-label="Open recent repository" aria-haspopup="dialog"
+    title={withKeys("Open Recent…", combo("openRecent"))}>
+    <svg class="icon" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" /></svg>
+  </button>
+  {#if update}
+    <div class="update">{@render update()}</div>
+  {/if}
+</div>
+{#if menu}
+  <Menu x={menu.x} y={menu.y} label={menu.tab.repo.name} entries={contextEntries(menu.tab)} onClose={hideContext} />
+{/if}
+
+<style>
+  /* Chrome shows 6 px of track above the 34 px visible tab. */
+  .strip {
+    --track: color-mix(in srgb, var(--accent) 15%, var(--win));
+    --tab-box: 256px;
+    --tab-overlap: 18px;
+    --tab-pitch: 238px;
+    --tab-top: 10px;
+    --tab-foot: 12px;
+    --tab-bottom-inset: 6px;
+    height: var(--repo-tabs-height);
+    display: flex;
+    align-items: flex-end;
+    gap: var(--space-1);
+    padding-inline: var(--repo-tabs-leading) var(--space-2);
+    background: var(--track);
+    box-shadow: inset 0 -1px var(--sep);
+    font-size: var(--text-small);
+  }
+  .list {
+    display: flex;
+    flex: 0 1 auto;
+    width: calc(var(--tab-count) * var(--tab-pitch) + var(--tab-overlap));
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .update {
+    display: flex;
+    align-self: center;
+    margin-inline-start: auto;
+  }
+  .item {
+    position: relative;
+    z-index: 0;
+    flex: 1 1 var(--tab-box);
+    width: var(--tab-box);
+    max-width: var(--tab-box);
+    min-width: 32px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin-right: calc(var(--tab-overlap) * -1);
+    padding: 0;
+    overflow: hidden;
+  }
+  .item:last-child { margin-right: 0; }
+  .item:hover { z-index: 1; }
+  .item.selected { z-index: 2; min-width: 56px; }
+  .list.reordering .item {
+    transition: transform 200ms ease;
+  }
+  .list.reordering:not(.settling) .item.dragging {
+    z-index: 3;
+    transition: none;
+  }
+  .list.reordering .item.dragging {
+    z-index: 3;
+    overflow: visible;
+  }
+  .list.reordering .item:not(.dragging) {
+    pointer-events: none;
+  }
+  .list.reordering .item.dragging::before {
+    inset: 1px 0;
+    border-radius: var(--tab-top);
+    background: var(--win);
+    box-shadow: var(--glass-shadow);
+  }
+  .list.reordering .item.dragging::after,
+  .list.reordering .item:not(.dragging)::after {
+    opacity: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .list.reordering .item { transition: none; }
+  }
+  .item:not(.selected):not(:hover):not(:has(+ .item:hover)):not(:has(+ .selected))::after {
+    content: "";
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    height: 16px;
+    width: 2px;
+    border-radius: 1px;
+    background: color-mix(in srgb, var(--text2) 26%, transparent);
+    pointer-events: none;
+  }
+  .item.selected::before {
+    content: "";
+    position: absolute;
+    inset: 0 var(--tab-foot);
+    border-radius: var(--tab-top) var(--tab-top) 0 0;
+    background: var(--win);
+    pointer-events: none;
+  }
+  .item.selected::after {
+    content: "";
+    position: absolute;
+    inset: auto 0 0;
+    height: var(--tab-foot);
+    background:
+      radial-gradient(circle at 0 0, transparent calc(var(--tab-foot) - .5px), var(--win) var(--tab-foot)) left / var(--tab-foot) 100% no-repeat,
+      radial-gradient(circle at 100% 0, transparent calc(var(--tab-foot) - .5px), var(--win) var(--tab-foot)) right / var(--tab-foot) 100% no-repeat;
+    pointer-events: none;
+  }
+  .item:not(.selected)::before {
+    content: "";
+    position: absolute;
+    inset: 0 var(--tab-foot) var(--tab-bottom-inset);
+    border-radius: var(--radius-m);
+    pointer-events: none;
+  }
+  .item:not(.selected):hover::before {
+    background: var(--hover-wash);
+  }
+  .item:not(.selected):has(.tab-button:active)::before {
+    background: var(--press-wash);
+  }
+  .item:not(.selected):has(.tab-button:is(:focus-visible, :global(.key-focus)))::before {
+    box-shadow: var(--focus-ring);
+  }
+  .tab-button,
+  .control {
+    position: relative;
+    display: flex;
+    align-items: center;
+    border: 0;
+    border-radius: var(--radius-s);
+    background-color: transparent;
+    color: var(--text2);
+    font: inherit;
+  }
+  .control:hover {
+    background-image: linear-gradient(var(--hover-wash), var(--hover-wash));
+  }
+  .control:active {
+    background-image: linear-gradient(var(--press-wash), var(--press-wash));
+  }
+  .tab-button {
+    align-self: stretch;
+    flex: 1;
+    min-width: 0;
+    gap: 6px;
+    padding: 0 0 var(--tab-bottom-inset) 20px;
+    color: var(--text);
+    text-align: left;
+    font-weight: 400;
+  }
+  .tab-button:is(:focus-visible, :global(.key-focus)) {
+    outline-style: none;
+  }
+  .selected .tab-button:is(:focus-visible, :global(.key-focus)) span {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .tab-button span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .folder {
+    flex: 0 0 16px;
+    color: var(--tag-color, var(--text2));
+    fill: var(--tag-color, none);
+  }
+  /* The close button's gray circle, holding the shortcut digit. */
+  .number {
+    flex: 0 0 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: var(--radius-pill);
+    background: var(--hover-wash);
+    color: var(--text);
+    font-size: var(--text-small);
+    font-weight: 600;
+    line-height: 1;
+  }
+  .selected .folder { color: var(--tag-color, var(--accent)); }
+  .control {
+    flex: none;
+    align-self: center;
+    justify-content: center;
+    padding: 0;
+    width: 28px;
+    height: 28px;
+  }
+  .repository {
+    background-color: color-mix(in srgb, var(--accent) 11%, var(--track));
+    color: var(--text);
+    border-radius: var(--radius-m);
+  }
+  .repository .icon { stroke-width: 2; }
+  .close {
+    width: 16px;
+    height: 16px;
+    margin: 0 20px var(--tab-bottom-inset) 0;
+    border-radius: var(--radius-s);
+  }
+  .item:not(.selected):not(:hover):not(:focus-within) .close {
+    width: 0;
+    margin-right: 0;
+    opacity: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .close .icon { width: 14px; height: 14px; }
+  .selected .close, .add { color: var(--text); }
+</style>

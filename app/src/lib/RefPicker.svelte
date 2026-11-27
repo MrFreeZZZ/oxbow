@@ -70,7 +70,7 @@
 </script>
 
 <div class="picker">
-  <button class="field" onclick={toggle} aria-haspopup="listbox" aria-expanded={open}>
+  <button class="toolbar-control toolbar-picker field" onclick={toggle} aria-haspopup="listbox" aria-expanded={open}>
     {#if isTag}
       <svg class="icon kind tag" viewBox="0 0 16 16"><path d="M2.5 2.5h5l6 6-5 5-6-6z" /><circle cx="5.5" cy="5.5" r="0.8" /></svg>
     {:else}
@@ -132,17 +132,10 @@
     min-width: 120px;
   }
   .field {
-    display: flex;
-    align-items: center;
     gap: 8px;
     width: 100%;
     min-width: 0;
-    height: 40px;
     padding: 0 10px 0 12px;
-    border-radius: var(--radius-l);
-    background: var(--win);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
     text-align: left;
   }
   .kind {
@@ -182,7 +175,7 @@
   .pop {
     position: absolute;
     left: 0;
-    top: 46px;
+    top: calc(100% + 6px);
     z-index: 20;
     width: 300px;
     padding: 6px;

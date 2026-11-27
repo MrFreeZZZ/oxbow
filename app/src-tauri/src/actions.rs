@@ -1,7 +1,7 @@
 //! Running actions: planning one for its confirmation, performing it with Activity's
 //! progress and Stop, and fetching in the background.
 
-use std::sync::Arc;
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
@@ -9,22 +9,22 @@ use oxbow_core::console;
 use oxbow_core::remote::AutoFetchPlan;
 use oxbow_core::{Action, Failure, Plan};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::CommandResult;
 use crate::repos::tell_others;
-use crate::session::{Session, at, current, logged, read};
+use crate::session::{RepoRequest, Session, at, current, logged, read, workdir_key};
 use crate::turns::{GiveWay, Running};
 
 /// The git commands an action will run, for the confirmation sheet.
 #[tauri::command]
 pub(crate) async fn plan_action(
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
     action: Action,
 ) -> CommandResult<Plan> {
     let repo = current(&session, &window)?;
-    read(at(&repo), "Prepare an action", move || {
+    read(&window, at(&repo), "Prepare an action", move || {
         let mut plan = repo.plan(&action)?;
         plan.not_kept = repo.not_kept(&action)?;
         Ok(plan)
@@ -38,16 +38,15 @@ pub(crate) async fn plan_action(
 #[tauri::command]
 pub(crate) async fn perform_action(
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
     action: Action,
     without_undo: Option<bool>,
 ) -> Result<String, Failure> {
     // Only the window that asked shows the output: Settings runs actions of its own.
-    let label = window.label().to_owned();
-    let from_settings = label == "settings";
-    let repo_window = session.label(&window);
-    let repo = current(&session, &window).map_err(|message| Failure {
+    let from_settings = window.label() == "settings";
+    let progress = window.clone();
+    let failed = |message| Failure {
         kind: oxbow_core::FailureKind::Other,
         output: message,
         incoming: Vec::new(),
@@ -57,14 +56,38 @@ pub(crate) async fn perform_action(
         secrets: None,
         check: None,
         tracking: None,
-    })?;
+    };
+    let repo = current(&session, &window).map_err(failed)?;
+    // Resolve aliases while the folder still exists, and keep tab-mode changes out of removal.
+    let removing = match &action {
+        Action::WorktreeRemove { path, .. } => Some(workdir_key(&repo.workdir().join(path))),
+        _ => None,
+    };
+    let _topology = removing
+        .as_ref()
+        .map(|_| session.topology())
+        .transpose()
+        .map_err(failed)?;
     // Its own Stop, heard by the Stop of the window that asked until the run is over.
-    let stop = session.new_stop(&window);
+    let stop = if let Some(path) = &removing {
+        let address = window
+            .address
+            .as_ref()
+            .ok_or_else(|| failed("No repository is open".into()))?;
+        session
+            .start_worktree_remove(address, window.label(), path)
+            .map_err(failed)?
+    } else if matches!(action, Action::Fetch { .. }) {
+        session.start_worktree_git(&window).map_err(failed)?
+    } else {
+        session.start_change(&window, window.label(), false).map_err(failed)?
+    };
     let cancel = stop.cancel.clone();
     let events = app.clone();
     let turns = session.turns.clone();
-    let turn_window = repo_window.clone();
+    let turn_window = window.turn_key();
     let joined = tauri::async_runtime::spawn_blocking(move || {
+        let _stop = stop;
         let title = repo.action_title(&action);
         // A change running in the repository goes first, from this window, Settings or another.
         let common = repo.common_dir();
@@ -74,7 +97,7 @@ pub(crate) async fn perform_action(
                 title: other.title.clone(),
                 window: other.folder.clone(),
             };
-            let _ = events.emit_to(label.as_str(), "action-event", event);
+            progress.progress("action-event", event);
         });
         let Some(_turn) = turn else {
             return Err(Failure {
@@ -89,9 +112,21 @@ pub(crate) async fn perform_action(
                 tracking: None,
             });
         };
+        if let Some(path) = &removing {
+            // Git also accepts a worktree name or path suffix. Only remove the folder we reserved.
+            let known = repo
+                .worktree_list()
+                .map_err(|err| repo.explain_failure(&action, &err))?;
+            if !known.iter().any(|tree| workdir_key(Path::new(&tree.path)) == *path) {
+                return Err(failed(format!(
+                    "{} isn’t a worktree of this repository.",
+                    path.display()
+                )));
+            }
+        }
         let done = console::scope(Some(repo.workdir()), console::EntryKind::Action, title, || {
             let mut emit = |event| {
-                let _ = events.emit_to(label.as_str(), "action-event", event);
+                progress.progress("action-event", event);
             };
             let result = if without_undo.unwrap_or(false) {
                 repo.perform_without_undo(&action, &mut emit, &cancel)
@@ -100,14 +135,20 @@ pub(crate) async fn perform_action(
             };
             result.map_err(|err| repo.explain_failure(&action, &err))
         });
+        let session = events.state::<Session>();
+        if done.is_ok()
+            && let Some(path) = &removing
+        {
+            crate::windows::worktree_removed(&events, &session, path);
+        }
         // Done or not, it may have changed what the other windows show.
-        tell_others(&events, &events.state::<Session>(), &repo, &turn_window);
+        tell_others(&events, &session, &repo, progress.address.as_ref());
         done
     })
     .await;
     // The repository window shows the remotes and branches Settings just changed.
-    if from_settings {
-        let _ = app.emit_to(repo_window.as_str(), "repo-touched", ());
+    if from_settings && let Some(address) = &window.address {
+        session.emit_repo(&app, address, "repo-touched", (), true);
     }
     joined.unwrap_or_else(|err| {
         Err(Failure {
@@ -133,9 +174,9 @@ pub(crate) struct PullSetup {
 
 /// How Pull will go here, for the words of its confirmation.
 #[tauri::command]
-pub(crate) async fn pull_setup(window: tauri::WebviewWindow, session: State<'_, Session>) -> CommandResult<PullSetup> {
+pub(crate) async fn pull_setup(window: RepoRequest, session: State<'_, Session>) -> CommandResult<PullSetup> {
     let repo = current(&session, &window)?;
-    read(at(&repo), "Read pull settings", move || {
+    read(&window, at(&repo), "Read pull settings", move || {
         Ok(PullSetup {
             mode: repo.pull_mode(),
             autostash: repo.pull_autostash(),
@@ -213,7 +254,7 @@ pub(crate) struct FetchEvent {
 #[tauri::command]
 pub(crate) async fn fetch_in_background(
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
     remote: Option<String>,
     fetch: Option<u64>,
@@ -241,23 +282,27 @@ pub(crate) async fn fetch_in_background(
         }),
         remote: None,
     };
-    let (repo, cancel) = session.slot(&window, |slot| {
-        let repo = slot
-            .repo
-            .clone()
-            .ok_or_else(|| failed("No repository is open".to_owned()))?;
-        let cancel = match fetch {
-            Some(id) => slot.start_fetch(id).ok_or_else(cancelled)?,
-            None => Arc::default(),
-        };
-        Ok::<_, FetchFailure>((repo, cancel))
-    })?;
+    let worktree_run = session.start_worktree_git(&window).map_err(failed)?;
+    let (repo, cancel) = session
+        .slot(&window, |slot| {
+            let repo = slot
+                .repo
+                .clone()
+                .ok_or_else(|| failed("No repository is open".to_owned()))?;
+            let cancel = match fetch {
+                Some(id) => slot.start_fetch(id).ok_or_else(cancelled)?,
+                None => slot.close_cancel.clone(),
+            };
+            Ok::<_, FetchFailure>((repo, cancel))
+        })
+        .ok_or_else(|| failed("No repository is open".to_owned()))??;
     // A fetch of the timer stops for an action rather than make it wait.
     let gives_way = (auto == Some(true)).then(|| GiveWay::new(cancel.clone()));
-    let label = window.label().to_owned();
-    let turn_window = session.label(&window);
+    let progress = window.clone();
+    let turn_window = window.turn_key();
     let turns = session.turns.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let _worktree_run = worktree_run;
         if cancel.load(Ordering::Relaxed) {
             return Err(cancelled());
         }
@@ -298,8 +343,7 @@ pub(crate) async fn fetch_in_background(
             )
         };
         let emit = |event| {
-            let _ = app.emit_to(
-                label.as_str(),
+            progress.progress(
                 "fetch-event",
                 FetchEvent {
                     fetch,
@@ -366,17 +410,24 @@ pub(crate) async fn fetch_in_background(
             }
         });
         if updated > 0 {
-            tell_others(&app, &app.state::<Session>(), &repo, &turn_window);
+            tell_others(&app, &app.state::<Session>(), &repo, progress.address.as_ref());
         }
         done.map(FetchResult::Fetched)
     })
     .await
-    .unwrap_or_else(|err| Err(failed(err.to_string())))
+    .unwrap_or_else(|err| Err(failed(err.to_string())));
+    if !session
+        .slot(&window, |slot| slot.fetch_is_current(fetch))
+        .unwrap_or(false)
+    {
+        return Err(cancelled());
+    }
+    result
 }
 
 /// Stop the background fetch.
 #[tauri::command]
-pub(crate) fn stop_fetch(window: tauri::WebviewWindow, session: State<'_, Session>, fetch: u64) {
+pub(crate) fn stop_fetch(window: RepoRequest, session: State<'_, Session>, fetch: u64) {
     session.slot(&window, |slot| slot.stop_fetch(fetch));
 }
 
@@ -389,18 +440,19 @@ pub(crate) fn public_key(key: String) -> CommandResult<String> {
 /// Ask the default remote which tags it has, so tags it lacks show as local. True when that
 /// changed. Without a remote there is nothing to ask.
 #[tauri::command]
-pub(crate) async fn refresh_remote_tags(
-    window: tauri::WebviewWindow,
-    session: State<'_, Session>,
-) -> CommandResult<bool> {
+pub(crate) async fn refresh_remote_tags(window: RepoRequest, session: State<'_, Session>) -> CommandResult<bool> {
     let repo = current(&session, &window)?;
+    let worktree_run = session.start_worktree_git(&window)?;
     logged(
         Some(at(&repo)),
         console::EntryKind::Background,
         "Check the remote's tags",
-        move || match repo.default_remote() {
-            Some(remote) => repo.refresh_remote_tags(&remote),
-            None => Ok(false),
+        move || {
+            let _worktree_run = worktree_run;
+            match repo.default_remote() {
+                Some(remote) => repo.refresh_remote_tags(&remote),
+                None => Ok(false),
+            }
         },
     )
     .await

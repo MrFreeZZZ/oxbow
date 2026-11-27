@@ -1,9 +1,10 @@
+import type { RepoScope } from "./repoScope";
 // Git LFS: which files the repository keeps on the LFS server, and the confirmations that
 // change that. Big files get a note in Changes with a way into LFS; a repository that uses LFS
 // while git-lfs isn't installed gets a banner, since its files are only pointers then.
 
-import { api } from "./api";
-import { confirm, type Part, type Recovery, type Request } from "./confirm.svelte";
+import { api as windowApi } from "./api";
+import { type Part, type Recovery, type Request } from "./confirm.svelte";
 import type { Failure, LfsFile, LfsPattern, LfsStatus } from "./types";
 import { bytes } from "./unusual";
 import { splitPath } from "./format";
@@ -15,7 +16,9 @@ export { matches } from "./lfsGlob";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-class LfsState {
+export class LfsState {
+  constructor(private readonly api: typeof windowApi = windowApi) {}
+
   status = $state<LfsStatus | null>(null);
   /** Not Now on the banner, until another repository is opened. */
   dismissed = $state(false);
@@ -43,7 +46,7 @@ class LfsState {
   async load() {
     const mine = ++this.#loads;
     try {
-      const next = await api.lfsStatus();
+      const next = await this.api.lfsStatus();
       if (mine === this.#loads) this.status = next;
     } catch {
       if (mine === this.#loads) this.status = null;
@@ -179,7 +182,7 @@ export function missingFiles(pattern: LfsPattern | null, paths?: string[]): LfsF
 /** Download the files of one pattern, the ones at `paths`, or all, in place of their pointers.
  *  The sheet lists them with their sizes, then shows how far each one is; with `always` it
  *  shows even when downloads don't ask, for the list of what isn't downloaded. */
-export function downloadRequest(pattern: LfsPattern | null, paths?: string[], always = false): Request {
+export function downloadRequest(scope: RepoScope, pattern: LfsPattern | null, paths?: string[], always = false): Request {
   const files = missingFiles(pattern, paths);
   // The status lists at most 5000; the patterns count them all.
   const count = paths ? files.length : pattern ? Math.max(pattern.missing, files.length) : Math.max(lfs.patterns.reduce((n, p) => n + p.missing, 0), files.length);
@@ -210,7 +213,7 @@ export function downloadRequest(pattern: LfsPattern | null, paths?: string[], al
     done: one ? `Downloaded ${one}.` : pattern ? `Downloaded the files of ${pattern.pattern}.` : "Downloaded the LFS files.",
     past: `Downloaded ${what}`,
     partWhy: lfsWhy,
-    recover: downloadRecovery,
+    recover: downloadRecovery.bind(null, scope),
     action: { kind: "lfsPull", include: pattern?.pattern ?? null, paths: paths ?? [] },
   };
 }
@@ -225,9 +228,9 @@ export function lfsWhy(error: string): string {
 }
 
 /** After a download where some files failed: which, why, and Try Again for just those. */
-function downloadRecovery(failure: Failure): Recovery | null {
+function downloadRecovery(scope: RepoScope, failure: Failure): Recovery | null {
   if (failure.kind !== "partlyDone") return null;
-  const parts = confirm.parts;
+  const parts = scope.confirm.parts;
   const failed = parts.filter((p) => p.state === "failed");
   if (!failed.length) return null;
   const done = parts.filter((p) => p.state === "done").length;
@@ -254,7 +257,7 @@ function downloadRecovery(failure: Failure): Recovery | null {
       action: { kind: "lfsPull", include: null, paths },
       status: one ? `Downloading ${one}…` : `Downloading ${plural(failed.length, "file")}…`,
       done: one ? `Downloaded ${one}.` : "Downloaded the LFS files.",
-      recover: downloadRecovery,
+      recover: downloadRecovery.bind(null, scope),
     },
   };
 }

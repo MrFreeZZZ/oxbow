@@ -2,15 +2,20 @@
   // settings.json as text, like VS Code: the text box draws only the caret and selection, and a
   // colored copy of its text under it shows what is wrong as it is typed.
 
-  import { api } from "./api";
+  import { useRepoScope } from "./repoScope";
   import { check, lineOf, segments } from "./jsonCheck";
   import { keys } from "./keys";
   import { knownSetting, prefs, problemOf } from "./prefs.svelte";
   import { load } from "./settingsModel.svelte";
 
-  let { text = $bindable(), saved = $bindable() }: { text: string; saved: string } = $props();
+  const scope = useRepoScope();
+  const { api } = scope;
+
+  let { text = $bindable(), baseline = $bindable() }: { text: string; baseline: { raw: string | null; text: string } } = $props();
 
   let error = $state<string | null>(null);
+  let saving = $state(false);
+  const dirty = $derived(text !== baseline.text);
 
   // What is wrong in the text, checked as it is typed: errors keep it from being saved, so a
   // value Oxbow can't use never reaches the other windows.
@@ -47,18 +52,23 @@
   }
 
   async function saveJson() {
+    if (saving || !dirty) return;
     if (errors.length) {
       error = `Fix ${errors.length === 1 ? "the error" : `${errors.length} errors`} to save`;
       return;
     }
+    const submitted = text;
+    saving = true;
     try {
-      await api.saveSettingsText(text);
-      saved = text;
+      const raw = await api.saveSettingsText(baseline.raw, submitted);
+      baseline = { raw, text: submitted };
       error = null;
       load();
       prefs.reload();
     } catch (err) {
       error = String(err);
+    } finally {
+      saving = false;
     }
   }
 </script>
@@ -111,17 +121,17 @@
   </div>
   <div class="json-bar">
     {#if error}
-      <span class="error">{error}</span>
+      <span class="error" role="alert">{error}</span>
     {:else if described}
       <button class="problem-link" class:warn={described.level === "warn"} onclick={() => goTo(described.from, described.to)} title="Go to it">
         Line {lineOf(text, described.from)}: {described.message}{#if checked.problems.length > 1}<span class="more">&nbsp;· {checked.problems.length - 1} more</span>{/if}
       </button>
     {:else}
-      <span class="sub">{text === saved ? "Saved" : "Not saved yet"}</span>
+      <span class="sub">{dirty ? "Not saved yet" : "Saved"}</span>
     {/if}
     <span class="spacer"></span>
-    <button class="button small" disabled={text === saved} onclick={() => ((text = saved), (error = null))}>Revert</button>
-    <button class="button small primary" disabled={text === saved || errors.length > 0} onclick={saveJson} title={errors.length ? "Fix the errors underlined in red to save" : undefined}>Save <span class="keys">{keys("Mod+S")}</span></button>
+    <button class="button small" disabled={saving || !dirty} onclick={() => ((text = baseline.text), (error = null))}>Revert</button>
+    <button class="button small primary" disabled={saving || !dirty || errors.length > 0} onclick={saveJson} title={errors.length ? "Fix the errors underlined in red to save" : undefined}>Save <span class="keys">{keys("Mod+S")}</span></button>
   </div>
 </div>
 

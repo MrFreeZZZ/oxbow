@@ -1,7 +1,7 @@
+import type { RepoScope } from "./repoScope";
 // Confirmations for Fetch, Pull and Push, and the way out when one of them fails.
 
 import type { Part, Recovery, Request, Step, TermLine } from "./confirm.svelte";
-import { api } from "./api";
 import { mac } from "./keys";
 import { describe, stoppedOnConflicts } from "./merge";
 import type { Action, Bisect, CommitBrief, Failure, HistoryRow, Operation, SshCheck, Tracking, UnpushedSubmodule } from "./types";
@@ -142,7 +142,7 @@ export function canPush(ctx: RemoteContext): boolean {
   return syncBlock(ctx, "push") === null;
 }
 
-export function fetchRequest(ctx: RemoteContext): Request {
+export function fetchRequest(scope: RepoScope, ctx: RemoteContext): Request {
   const all = ctx.remotes.length > 1;
   const remote = ctx.remote ?? ctx.remotes[0];
   return {
@@ -157,13 +157,13 @@ export function fetchRequest(ctx: RemoteContext): Request {
     note: "Your branches and files do not change.",
     status: all ? "Fetching all remotes…" : `Fetching ${remote}…`,
     done: all ? "Fetched all remotes." : `Fetched ${remote}.`,
-    recover: (failure) => networkOrAuth(failure, { kind: "fetch", remote: all ? null : remote }, "Fetching", ctx, all ? "Fetched all remotes." : `Fetched ${remote}.`),
+    recover: (failure) => networkOrAuth(scope, failure, { kind: "fetch", remote: all ? null : remote }, "Fetching", ctx, all ? "Fetched all remotes." : `Fetched ${remote}.`),
     action: { kind: "fetch", remote: all ? null : remote },
   };
 }
 
 /** Fetch what a shallow clone left out, so History reaches the first commit. */
-export function unshallowRequest(remote: string): Request {
+export function unshallowRequest(scope: RepoScope, remote: string): Request {
   const action: Action = { kind: "unshallow", remote };
   const done = `Fetched the full history of ${remote}.`;
   return {
@@ -178,7 +178,7 @@ export function unshallowRequest(remote: string): Request {
     note: "Your branches and files do not change.",
     status: `Fetching the full history from ${remote}…`,
     done,
-    recover: (failure) => remoteTrouble(failure, action, "Fetching", remote, done),
+    recover: (failure) => remoteTrouble(scope, failure, action, "Fetching", remote, done),
     action,
   };
 }
@@ -196,7 +196,7 @@ export interface PullSetup {
   hasSubmodules?: boolean;
 }
 
-export function pullRequest(ctx: RemoteContext, setup: PullSetup = { mode: "rebase", autostash: true }): Request {
+export function pullRequest(scope: RepoScope, ctx: RemoteContext, setup: PullSetup = { mode: "rebase", autostash: true }): Request {
   const t = ctx.tracking!;
   const branch = ctx.branch!;
   const upstream = `${t.remote}/${t.branch}`;
@@ -226,15 +226,15 @@ export function pullRequest(ctx: RemoteContext, setup: PullSetup = { mode: "reba
         : undefined,
     status: `Pulling ${upstream} into ${branch}…`,
     done: `${branch} is up to date with ${upstream}.`,
-    recover: (failure) => conflict(failure, setup.mode) ?? networkOrAuth(failure, action, "Pulling", ctx, `${branch} is up to date with ${upstream}.`),
+    recover: (failure) => conflict(failure, setup.mode) ?? networkOrAuth(scope, failure, action, "Pulling", ctx, `${branch} is up to date with ${upstream}.`),
     action,
   };
 }
 
 /** Push, or Publish; with submodule commits their remotes don't have, the sheet says so and
  *  pushes those first unless asked not to. */
-export function pushRequest(ctx: RemoteContext, submodules: UnpushedSubmodule[] = []): Request {
-  const request = plainPushRequest(ctx);
+export function pushRequest(scope: RepoScope, ctx: RemoteContext, submodules: UnpushedSubmodule[] = []): Request {
+  const request = plainPushRequest(scope, ctx);
   const action = request.action;
   if (!submodules.length || action?.kind !== "push" || action.force) return request;
   const both: Action & { kind: "push" } = { ...action, submodules: true };
@@ -249,11 +249,11 @@ export function pushRequest(ctx: RemoteContext, submodules: UnpushedSubmodule[] 
       body: unpushedWarning(submodules, `${verb} Both`),
     },
     alt: { label: one ? `${verb} Without ${submodules[0].title}` : `${verb} Without Them`, request: () => request },
-    recover: (failure) => pushRecovery(failure, ctx, both),
+    recover: (failure) => pushRecovery(scope, failure, ctx, both),
   };
 }
 
-function plainPushRequest(ctx: RemoteContext): Request {
+function plainPushRequest(scope: RepoScope, ctx: RemoteContext): Request {
   const to = target(ctx)!;
   const branch = ctx.branch!;
   const action: Action = {
@@ -266,7 +266,7 @@ function plainPushRequest(ctx: RemoteContext): Request {
     lease: null,
     noVerify: false,
   };
-  const recover = (failure: Failure) => pushRecovery(failure, ctx, action);
+  const recover = (failure: Failure) => pushRecovery(scope, failure, ctx, action);
   if (to.publish) {
     return {
       title: `Publish ${branch} to ${to.remote}?`,
@@ -291,9 +291,9 @@ function plainPushRequest(ctx: RemoteContext): Request {
   const commits = ctx.unpushed;
   const rewritten = ctx.tracking?.rewritten;
   const replay = ctx.tracking?.replay;
-  if (rewritten && isProtected(ctx.protected, to.upstream)) return protectedPushRequest(ctx, action);
-  if (rewritten && replay) return replayPushRequest(ctx, action, rewritten, replay);
-  if (rewritten) return rewrittenPushRequest(ctx, action, to, rewritten);
+  if (rewritten && isProtected(ctx.protected, to.upstream)) return protectedPushRequest(scope, ctx, action);
+  if (rewritten && replay) return replayPushRequest(scope, ctx, action, rewritten, replay);
+  if (rewritten) return rewrittenPushRequest(scope, ctx, action, to, rewritten);
   const body: Part[] = [`Uploads ${plural(commits.length, "commit")} of `, chip(ctx, branch), ` to ${to.remote}${commits.length ? ": " : ""}`];
   const listed = commits.slice(0, 3);
   listed.forEach((c, i) => {
@@ -335,7 +335,7 @@ function protectedPullAndPush(ctx: RemoteContext, action: Action & { kind: "push
 
 /** Push after commits on a protected branch's remote were rewritten here, in a terminal or before
  *  the branch was protected: no force push, Pull and Push instead. */
-function protectedPushRequest(ctx: RemoteContext, push: Action & { kind: "push" }): Request {
+function protectedPushRequest(scope: RepoScope, ctx: RemoteContext, push: Action & { kind: "push" }): Request {
   const way = protectedPullAndPush(ctx, push);
   return {
     title: `Pull ${push.remote}/${push.upstream} first, then push?`,
@@ -346,7 +346,7 @@ function protectedPushRequest(ctx: RemoteContext, push: Action & { kind: "push" 
     note: way.note,
     status: way.status,
     done: way.done,
-    recover: (failure) => pushRecovery(failure, ctx, push),
+    recover: (failure) => pushRecovery(scope, failure, ctx, push),
     action: way.action,
   };
 }
@@ -354,7 +354,7 @@ function protectedPushRequest(ctx: RemoteContext, push: Action & { kind: "push" 
 /** Push after commits already on the remote were rewritten here (an edited message, a squash,
  *  a drop, Edit Stack): a plain push is refused, and Pull and Push would bring the old versions
  *  back. So it replaces them, with --force-with-lease at the tip seen at the last fetch. */
-function rewrittenPushRequest(ctx: RemoteContext, action: Action & { kind: "push" }, to: { remote: string; upstream: string }, tip: string): Request {
+function rewrittenPushRequest(scope: RepoScope, ctx: RemoteContext, action: Action & { kind: "push" }, to: { remote: string; upstream: string }, tip: string): Request {
   const remoteBranch = `${to.remote}/${to.upstream}`;
   const branch = action.branch;
   // Try Again and Push Without Hook repeat this push, so they keep its force and lease too.
@@ -390,7 +390,7 @@ function rewrittenPushRequest(ctx: RemoteContext, action: Action & { kind: "push
     note: `If someone pushed to ${remoteBranch} after your last fetch, nothing is overwritten.`,
     status: `Force pushing ${branch} to ${to.remote}…`,
     done: `Pushed ${branch} to ${remoteBranch}, replacing the old commits.`,
-    recover: (failure) => pushRecovery(failure, ctx, forced),
+    recover: (failure) => pushRecovery(scope, failure, ctx, forced),
     action: forced,
   };
 }
@@ -399,7 +399,7 @@ function rewrittenPushRequest(ctx: RemoteContext, action: Action & { kind: "push
  *  their old versions. Pull and Push would drop an edited message (rebase sees the commit as
  *  already upstream), so the push copies their commits onto the branch first, then replaces
  *  the old versions with --force-with-lease at the tip seen at the last fetch. */
-function replayPushRequest(ctx: RemoteContext, push: Action & { kind: "push" }, tip: string, replay: { base: string; commits: CommitBrief[] }): Request {
+function replayPushRequest(scope: RepoScope, ctx: RemoteContext, push: Action & { kind: "push" }, tip: string, replay: { base: string; commits: CommitBrief[] }): Request {
   const remoteBranch = `${push.remote}/${push.upstream}`;
   const branch = push.branch;
   const action: Action & { kind: "replayAndPush" } = {
@@ -430,12 +430,12 @@ function replayPushRequest(ctx: RemoteContext, push: Action & { kind: "push" }, 
     note: "The copies get new SHAs: whoever pushed them pulls once to pick them up. If someone pushes again before you, nothing is overwritten.",
     status: `Copying commits and pushing ${branch}…`,
     done: `Pushed ${branch} to ${remoteBranch} with ${plural(replay.commits.length, "copied commit")}.`,
-    recover: (failure) => replayRecovery(failure, ctx, push, action),
+    recover: (failure) => replayRecovery(scope, failure, ctx, push, action),
     action,
   };
 }
 
-function replayRecovery(failure: Failure, ctx: RemoteContext, push: Action & { kind: "push" }, action: Action & { kind: "replayAndPush" }): Recovery | null {
+function replayRecovery(scope: RepoScope, failure: Failure, ctx: RemoteContext, push: Action & { kind: "push" }, action: Action & { kind: "replayAndPush" }): Recovery | null {
   if (failure.kind === "conflict") return stoppedOnConflicts(failure, "cherry-pick");
   if (failure.kind === "hook") {
     return {
@@ -447,13 +447,13 @@ function replayRecovery(failure: Failure, ctx: RemoteContext, push: Action & { k
       alt: {
         label: "Push Without Hook…",
         danger: true,
-        request: () => ({ ...noVerifyRequest(ctx, push), recover: (f) => replayRecovery(f, ctx, { ...push, noVerify: true }, { ...action, noVerify: true }), action: { ...action, noVerify: true } }),
+        request: () => ({ ...noVerifyRequest(scope, ctx, push), recover: (f) => replayRecovery(scope, f, ctx, { ...push, noVerify: true }, { ...action, noVerify: true }), action: { ...action, noVerify: true } }),
       },
       close: "Close",
     };
   }
-  if (failure.kind === "rejected" || failure.kind === "staleLease") return pushRecovery(failure, ctx, push);
-  return networkOrAuth(failure, action, "Pushing", ctx, `Pushed ${action.branch}.`);
+  if (failure.kind === "rejected" || failure.kind === "staleLease") return pushRecovery(scope, failure, ctx, push);
+  return networkOrAuth(scope, failure, action, "Pushing", ctx, `Pushed ${action.branch}.`);
 }
 
 /** Who pushed what, e.g. "Kirill pushed 1a2b3c4 “Fix login”" or "Kirill and Maria pushed 3 commits". */
@@ -465,7 +465,7 @@ function whoPushed(incoming: CommitBrief[]): Part[] {
   return [`${who} pushed ${plural(incoming.length, "commit")}, the newest `, { code: shortId(incoming[0].id) }, " ", { quote: incoming[0].summary }];
 }
 
-export function pushRecovery(failure: Failure, ctx: RemoteContext, action: Action & { kind: "push" }): Recovery | null {
+export function pushRecovery(scope: RepoScope, failure: Failure, ctx: RemoteContext, action: Action & { kind: "push" }): Recovery | null {
   const remoteBranch = `${action.remote}/${action.upstream}`;
   const pullAndPush: Action = { kind: "pullAndPush", remote: action.remote, branch: action.branch, upstream: action.upstream, noVerify: action.noVerify };
   const n = Math.max(ctx.unpushed.length, ctx.tracking?.ahead ?? 0);
@@ -483,7 +483,7 @@ export function pushRecovery(failure: Failure, ctx: RemoteContext, action: Actio
     };
   }
   if ((failure.kind === "rejected" || failure.kind === "staleLease") && rewrite?.rewritten) {
-    return rewrittenRecovery(failure, ctx, action, rewrite.rewritten, rewrite.replay);
+    return rewrittenRecovery(scope, failure, ctx, action, rewrite.rewritten, rewrite.replay);
   }
   if (failure.kind === "rejected" || failure.kind === "staleLease") {
     const count = failure.incoming.length;
@@ -499,7 +499,7 @@ export function pushRecovery(failure: Failure, ctx: RemoteContext, action: Actio
       icon: "warn",
       tone: "warn",
       button: { label: "Pull and Push", action: pullAndPush, status: `Pulling ${remoteBranch}, then pushing ${action.branch}…`, done: `Pulled and pushed ${action.branch}.` },
-      alt: failure.remoteTip && !guarded ? { label: "Force Push…", danger: true, request: () => forcePushRequest(ctx, action, failure, true) } : undefined,
+      alt: failure.remoteTip && !guarded ? { label: "Force Push…", danger: true, request: () => forcePushRequest(scope, ctx, action, failure, true) } : undefined,
       note: "If the commits clash, the pull stops and you can undo it.",
     };
   }
@@ -510,19 +510,19 @@ export function pushRecovery(failure: Failure, ctx: RemoteContext, action: Actio
       icon: "hook",
       tone: "err",
       button: { label: "Try Again", action, status: `Pushing ${action.branch} to ${action.remote}…`, done: `Pushed ${action.branch}.` },
-      alt: { label: "Push Without Hook…", danger: true, request: () => noVerifyRequest(ctx, action) },
+      alt: { label: "Push Without Hook…", danger: true, request: () => noVerifyRequest(scope, ctx, action) },
       close: "Close",
     };
   }
   // Copy and Push, run from this sheet's recovery, stops in a cherry-pick, not a pull.
   const copying = failure.output.includes("cherry-pick --continue");
-  return (copying ? stoppedOnConflicts(failure, "cherry-pick") : conflict(failure)) ?? networkOrAuth(failure, action, "Pushing", ctx, `Pushed ${action.branch}.`);
+  return (copying ? stoppedOnConflicts(failure, "cherry-pick") : conflict(failure)) ?? networkOrAuth(scope, failure, action, "Pushing", ctx, `Pushed ${action.branch}.`);
 }
 
 /** A push of commits rewritten here was refused because the remote moved: someone pushed on
  *  top of the old versions. Pull and Push would drop an edited message, so the way out copies
  *  their commits over and pushes with the new lease. */
-function rewrittenRecovery(failure: Failure, ctx: RemoteContext, action: Action & { kind: "push" }, tip: string, replay: { base: string; commits: CommitBrief[] } | null): Recovery {
+function rewrittenRecovery(scope: RepoScope, failure: Failure, ctx: RemoteContext, action: Action & { kind: "push" }, tip: string, replay: { base: string; commits: CommitBrief[] } | null): Recovery {
   const remoteBranch = `${action.remote}/${action.upstream}`;
   // Its own failures go on from what it runs, with the new lease, not from the first push.
   const copy: Action & { kind: "replayAndPush" } | null = replay
@@ -535,13 +535,13 @@ function rewrittenRecovery(failure: Failure, ctx: RemoteContext, action: Action 
           action: copy,
           status: `Copying commits and pushing ${action.branch}…`,
           done: `Pushed ${action.branch} to ${remoteBranch} with ${plural(replay.commits.length, "copied commit")}.`,
-          recover: (f) => replayRecovery(f, ctx, forced, copy),
+          recover: (f) => replayRecovery(scope, f, ctx, forced, copy),
         }
       : {
           action: forced,
           status: `Force pushing ${action.branch} to ${action.remote}…`,
           done: `Pushed ${action.branch} to ${remoteBranch}, replacing the old commits.`,
-          recover: (f) => pushRecovery(f, ctx, forced),
+          recover: (f) => pushRecovery(scope, f, ctx, forced),
         };
   return {
     title: `${remoteBranch} changed since your last fetch`,
@@ -559,12 +559,12 @@ function rewrittenRecovery(failure: Failure, ctx: RemoteContext, action: Action 
     icon: "warn",
     tone: "warn",
     button: { label: replay ? "Copy and Push" : "Force Push", ...button },
-    alt: failure.remoteTip ? { label: "Overwrite Anyway…", danger: true, request: () => forcePushRequest(ctx, action, failure, true) } : undefined,
+    alt: failure.remoteTip ? { label: "Overwrite Anyway…", danger: true, request: () => forcePushRequest(scope, ctx, action, failure, true) } : undefined,
     note: replay ? "The copies get new SHAs: whoever pushed them pulls once to pick them up." : `Only if ${remoteBranch} is still ${shortId(tip)}.`,
   };
 }
 
-function forcePushRequest(ctx: RemoteContext, action: Action & { kind: "push" }, failure: Failure, lease: boolean): Request {
+function forcePushRequest(scope: RepoScope, ctx: RemoteContext, action: Action & { kind: "push" }, failure: Failure, lease: boolean): Request {
   const remoteBranch = `${action.remote}/${action.upstream}`;
   const tip = failure.remoteTip!;
   const lost = failure.incoming;
@@ -587,15 +587,15 @@ function forcePushRequest(ctx: RemoteContext, action: Action & { kind: "push" },
         label: `Only if ${action.remote} still ends at ${shortId(tip)}`,
         sub: "If someone pushes again before you, nothing is overwritten",
         on: lease,
-        toggle: () => forcePushRequest(ctx, action, failure, !lease),
+        toggle: () => forcePushRequest(scope, ctx, action, failure, !lease),
       },
     ],
-    recover: (f) => pushRecovery(f, ctx, forced),
+    recover: (f) => pushRecovery(scope, f, ctx, forced),
     action: forced,
   };
 }
 
-function noVerifyRequest(ctx: RemoteContext, action: Action & { kind: "push" }): Request {
+function noVerifyRequest(scope: RepoScope, ctx: RemoteContext, action: Action & { kind: "push" }): Request {
   return {
     title: "Push without the pre-push hook?",
     body: ["Sends ", chip(ctx, action.branch), " to ", { code: action.remote }, " without running the checks the hook does."],
@@ -605,7 +605,7 @@ function noVerifyRequest(ctx: RemoteContext, action: Action & { kind: "push" }):
     note: "The hook runs again on your next push.",
     status: `Pushing ${action.branch} to ${action.remote}…`,
     done: `Pushed ${action.branch} without the hook.`,
-    recover: (f) => pushRecovery(f, ctx, { ...action, noVerify: true }),
+    recover: (f) => pushRecovery(scope, f, ctx, { ...action, noVerify: true }),
     action: { ...action, noVerify: true },
   };
 }
@@ -615,16 +615,16 @@ function conflict(failure: Failure, mode: PullSetup["mode"] = "rebase"): Recover
 }
 
 /** Try Again after a remote could not be reached or refused the sign-in, for any action that talks to `remote`. */
-export function remoteTrouble(failure: Failure, action: Action, verb: string, remote: string, done: string): Recovery | null {
+export function remoteTrouble(scope: RepoScope, failure: Failure, action: Action, verb: string, remote: string, done: string): Recovery | null {
   const ctx: RemoteContext = { branch: null, color: 0, tracking: null, remote, remotes: [remote], unpushed: [] };
-  return networkOrAuth(failure, action, verb, ctx, done);
+  return networkOrAuth(scope, failure, action, verb, ctx, done);
 }
 
-function networkOrAuth(failure: Failure, action: Action, verb: string, ctx: RemoteContext, done: string): Recovery | null {
+function networkOrAuth(scope: RepoScope, failure: Failure, action: Action, verb: string, ctx: RemoteContext, done: string): Recovery | null {
   const remote = "remote" in action && action.remote ? action.remote : (ctx.remote ?? "the remote");
   const again = { label: "Try Again", action, status: `${verb} ${remote}…`, done };
   if (failure.kind === "auth" && failure.ssh) {
-    const ssh = sshRecovery(failure.ssh, verbNoun(action), again);
+    const ssh = sshRecovery(scope, failure.ssh, verbNoun(action), again);
     if (ssh) return ssh;
   }
   if (failure.kind === "auth") {
@@ -682,7 +682,7 @@ function checkedLines(check: SshCheck, fix: string[] = []): TermLine[] {
 }
 
 /** The way out when a remote refused the SSH connection, from what Oxbow found out. */
-export function sshRecovery(check: SshCheck, verb: string, retry: Step & { label: string }): Recovery | null {
+export function sshRecovery(scope: RepoScope, check: SshCheck, verb: string, retry: Step & { label: string }): Recovery | null {
   const host = hostName(check.host);
   const how: Part[] = [`${verb} ${verb === "Push" ? "to" : "from"} `, { code: check.remote }, " connects over SSH as ", { code: check.login }];
   const https = check.httpsUrl ? { label: "Use HTTPS Instead…", request: () => httpsRequest(check) } : undefined;
@@ -721,7 +721,7 @@ export function sshRecovery(check: SshCheck, verb: string, retry: Step & { label
           ? {
               label: "Copy Public Key",
               run: async () => {
-                await navigator.clipboard.writeText(await api.publicKey(check.keyPath!));
+                await navigator.clipboard.writeText(await scope.api.publicKey(check.keyPath!));
                 return host === "GitHub"
                   ? "Copied the public key. Paste it in GitHub › Settings › SSH and GPG keys, then try again."
                   : `Copied the public key. Add it to your ${host} account, then try again.`;

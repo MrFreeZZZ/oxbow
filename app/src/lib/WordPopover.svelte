@@ -2,8 +2,11 @@
   // The popover of a clicked word in a terminal block (lens.svelte.ts), over everything else,
   // sheets included. Escape or a click elsewhere closes it, and only it.
 
+  import { useRepoScope } from "./repoScope";
   import { plate, relativeTime, tint } from "./format";
-  import { lens } from "./lens.svelte";
+
+  const scope = useRepoScope();
+  const { lens } = scope;
 
   const WIDTH = 300;
   const GAP = 6;
@@ -41,6 +44,7 @@
   }
 
   $effect(() => {
+    if (!scope.isActive()) return;
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("pointerdown", onPointer, true);
     const close = () => lens.close();

@@ -3,9 +3,9 @@
 use oxbow_core::config::{self, ConfigScope};
 use oxbow_core::console;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 
-use crate::session::{Session, at, current, logged, read};
+use crate::session::{RepoRequest, Session, at, current, logged, read};
 use crate::{CommandResult, open_in};
 
 #[derive(Serialize)]
@@ -16,6 +16,7 @@ pub(crate) struct GitSettings {
     global: std::collections::BTreeMap<String, String>,
     ssh_keys: Vec<oxbow_core::SshKey>,
     editors: Vec<open_in::App>,
+    default_editor: Option<&'static str>,
     terminals: Vec<open_in::App>,
 }
 
@@ -23,11 +24,13 @@ pub(crate) struct GitSettings {
 #[tauri::command]
 pub(crate) async fn git_settings() -> CommandResult<GitSettings> {
     logged(None, console::EntryKind::Read, "Read the Git setup", || {
+        let editors = open_in::editors();
         Ok(GitSettings {
             git: config::git_info(),
             global: config::global_config(),
             ssh_keys: config::ssh_keys(),
-            editors: open_in::editors(),
+            default_editor: open_in::default_editor_id(&editors),
+            editors,
             terminals: open_in::terminals(),
         })
     })
@@ -78,13 +81,13 @@ pub(crate) struct Production {
 /// Only remote addresses for the repository menu; no storage scan or settings reads.
 #[tauri::command]
 pub(crate) async fn repository_remotes(
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
 ) -> CommandResult<Option<(String, Vec<oxbow_core::RemoteInfo>)>> {
     let Ok(repo) = current(&session, &window) else {
         return Ok(None);
     };
-    read(at(&repo), "Read repository remote addresses", move || {
+    read(&window, at(&repo), "Read repository remote addresses", move || {
         let repo = repo.reopen().unwrap_or(repo);
         Ok(Some((repo.workdir().display().to_string(), repo.remotes_info()?)))
     })
@@ -94,13 +97,13 @@ pub(crate) async fn repository_remotes(
 /// Settings › This Repository, or nothing when no repository is open.
 #[tauri::command]
 pub(crate) async fn repo_settings(
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
 ) -> CommandResult<Option<RepoSettings>> {
     let Ok(repo) = current(&session, &window) else {
         return Ok(None);
     };
-    read(at(&repo), "Read repository settings", move || {
+    read(&window, at(&repo), "Read repository settings", move || {
         // Afresh: the built-in engine reads .git/config once, and a setting may have just changed.
         let repo = repo.reopen().unwrap_or(repo);
         Ok(Some(RepoSettings {
@@ -140,7 +143,7 @@ pub(crate) async fn repo_settings(
 #[tauri::command]
 pub(crate) async fn set_git_config(
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
     scope: ConfigScope,
     values: Vec<(String, Option<String>)>,
@@ -155,9 +158,13 @@ pub(crate) async fn set_git_config(
     };
     let dir = repo.as_ref().map(at);
     let turns = session.turns.clone();
-    let label = session.label(&window);
-    let turn_label = label.clone();
-    let stop = session.new_stop(&window);
+    let turn_label = window.turn_key();
+    let address = window.address.clone();
+    let stop = if repo.is_some() {
+        session.start_change(&window, window.label(), false)?
+    } else {
+        session.stops.start(window.label())
+    };
     let events = app.clone();
     logged(dir, console::EntryKind::Action, "Write Git settings", move || {
         let _turn = if let Some(repo) = &repo {
@@ -182,12 +189,14 @@ pub(crate) async fn set_git_config(
         }
         if let Some(repo) = &repo {
             use tauri::Manager;
-            crate::repos::tell_others(&events, &events.state::<Session>(), repo, &turn_label);
+            crate::repos::tell_others(&events, &events.state::<Session>(), repo, address.as_ref());
         }
         Ok(())
     })
     .await?;
-    let _ = app.emit_to(label.as_str(), "repo-touched", ());
+    if let Some(address) = &window.address {
+        session.emit_repo(&app, address, "repo-touched", (), true);
+    }
     Ok(())
 }
 
@@ -196,17 +205,19 @@ pub(crate) async fn set_git_config(
 #[tauri::command]
 pub(crate) async fn set_commit_checks(
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
     checks: Vec<oxbow_core::CommitCheck>,
     expected_repo: String,
 ) -> CommandResult<()> {
     let repo = crate::session::expected(current(&session, &window)?, Some(&expected_repo))?;
+    let change = session.start_change(&window, window.label(), false)?;
     logged(
         Some(at(&repo)),
         console::EntryKind::Action,
         "Set the checks before commit",
         move || {
+            let _change = change;
             repo.set_commit_checks(&checks)?;
             let workdir = repo.workdir();
             if !oxbow_core::trust::is_restricted(workdir) && checks.iter().any(|c| c.on) {

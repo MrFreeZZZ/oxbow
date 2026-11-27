@@ -3,12 +3,15 @@
   // account each. GitLab says whose the token is, its scopes and the server's version before
   // Oxbow keeps it in the computer's credential store; the requests show in the terminal block.
 
+  import { useRepoScope } from "./repoScope";
   import { modal } from "./modal";
   import { onDestroy, onMount } from "svelte";
-  import { api } from "./api";
   import { prefs } from "./prefs.svelte";
   import TermBlock, { type TermLine } from "./TermBlock.svelte";
   import type { GitLabAccount, GitLabSignInSetup } from "./types";
+
+  const scope = useRepoScope();
+  const { api } = scope;
 
   let { server: start = "gitlab.com", onDone, onClose }: { server?: string; onDone: (account: GitLabAccount) => void; onClose: () => void } = $props();
 
@@ -72,6 +75,7 @@
   onDestroy(stop);
 
   function onKey(event: KeyboardEvent) {
+    if (!scope.isActive()) return;
     if (event.key === "Escape") {
       event.preventDefault();
       cancel();
@@ -91,18 +95,19 @@
       : [],
   );
   const copy = $derived(lines.filter((l) => l.kind === "cmd").map((l) => l.text));
+  const titleId = $props.id();
 </script>
 
 <svelte:window onkeydown={onKey} />
 
 <div class="dim">
-  <div class="sheet" use:modal role="dialog" aria-modal="true" aria-labelledby="gitlab-title" aria-busy={checking}>
+  <div class="sheet" use:modal role="dialog" aria-modal="true" aria-labelledby={titleId} aria-busy={checking}>
     <div class="head">
       <span class="mark" aria-hidden="true">
         <svg viewBox="0 0 16 16"><path d="m14.6 6.4-.02-.05-1.8-4.7a.47.47 0 0 0-.9.05l-1.2 3.7H5.3L4.1 1.7a.47.47 0 0 0-.9-.05l-1.8 4.7-.02.05a3.3 3.3 0 0 0 1.1 3.8l.01.01 2.7 2 1.3 1 .8.6a.55.55 0 0 0 .66 0l.8-.6 1.3-1 2.7-2 .01-.01a3.3 3.3 0 0 0 1.1-3.8" /></svg>
       </span>
       <span class="words">
-        <span class="title" id="gitlab-title">Sign in to GitLab</span>
+        <span class="title" id={titleId}>Sign in to GitLab</span>
         <span class="sub">To work with merge requests on gitlab.com or a server of your own, GitLab {setup?.oldest ?? "16.0"} or later. The token is kept in the {setup?.store ?? "Keychain"}, never in a file.</span>
       </span>
     </div>

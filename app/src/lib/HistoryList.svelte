@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { withKeys } from "./keys";
   import { tick, untrack } from "svelte";
   import type { History, HistoryRow, Label, RowLayout, Segment, WorktreeSummary } from "./types";
@@ -9,6 +10,9 @@
   import { bisectPills, bisectRange, type BisectPill } from "./bisect";
   import { segmentsAt } from "./graph";
   import { historyPosition, historyScrollTop, type HistoryPosition } from "./backStack";
+
+  const scope = useRepoScope();
+  const rowId = $props.id();
 
   let {
     history,
@@ -195,7 +199,7 @@
     untrack(() => {
       const old = anchored;
       anchored = next;
-      if (!old || old === next || !viewport) return;
+      if (!scope.isActive() || !old || old === next || !viewport) return;
       const position = viewport.scrollTop < ROW ? null : historyPosition(old, viewport.scrollTop, ROW, PAD_TOP);
       const top = position ? historyScrollTop(position, indexOf.get(position.id), ROW, PAD_TOP) : null;
       anchor = top;
@@ -220,7 +224,7 @@
   // The shallow clone's card leaves room under it for the Top button.
   const FOOT = $derived(loadingOlder ? ROW : shallowEnd ? 130 : 0);
   $effect(() => {
-    if (loadingOlder && !paging && last >= rows.length - OVERSCAN) untrack(() => onMore?.());
+    if (scope.isActive() && loadingOlder && !paging && last >= rows.length - OVERSCAN) untrack(() => onMore?.());
   });
 
   // Lines: 3px for the production branch, 2px for the others. Lanes sit on whole pixels, so a
@@ -460,7 +464,7 @@
     tabindex="0"
     role="listbox"
     aria-label="Commits"
-    aria-activedescendant={visible.some(({ row }) => row.id === selected) ? `history-option-${indexOf.get(selected!)}` : undefined}
+    aria-activedescendant={visible.some(({ row }) => row.id === selected) ? `${rowId}-history-option-${indexOf.get(selected!)}` : undefined}
   >
     {#if only && !rows.length}
       <!-- Only Matches with nothing found: the list says so itself, since no row can. -->
@@ -485,7 +489,7 @@
           class:pointed={pointed === row.id}
           class:menu-open={menu?.id === row.id}
           role="option"
-          id={`history-option-${index}`}
+          id={`${rowId}-history-option-${index}`}
           aria-selected={picked}
           tabindex="-1"
           style:top="{PAD_TOP + index * ROW}px"
@@ -661,10 +665,9 @@
     gap: 4px;
     height: 32px;
     padding: 0 12px 0 10px;
-    border-radius: var(--radius-pill);
-    background: var(--glass);
+    border-radius: var(--radius-m);
+    background: var(--sheet);
     border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
     -webkit-backdrop-filter: blur(20px);
     backdrop-filter: blur(20px);
     color: var(--icon);

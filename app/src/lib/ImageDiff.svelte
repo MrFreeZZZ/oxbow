@@ -8,10 +8,13 @@
   // Two versions of a picture, the way GitHub and Kaleidoscope compare them: side by side,
   // a divider to swipe, one faded over the other, or their difference (black where nothing changed).
 
-  import { api } from "./api";
+  import { useRepoScope } from "./repoScope";
   import type { FileDiff, Source } from "./types";
   import { bytes, imageType } from "./unusual";
   import { Urls, inTurn, loadPair, type Size } from "./pictures";
+
+  const scope = useRepoScope();
+  const { api } = scope;
 
   let { diff }: { diff: FileDiff } = $props();
 

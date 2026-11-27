@@ -50,7 +50,7 @@ function setup() {
   const { ChangesReads, pagingView } = Function("$", "api", "sameShown", "stopped", "untrack",
     `${compiled}; return { ChangesReads, pagingView };`)(
     runtime, api, sameShown, (err: unknown) => err === "stopped", runtime.untrack);
-  const state = new ChangesReads(() => listed++, () => {});
+  const state = new ChangesReads(api, () => listed++, () => {});
   return { state, pagingView, reads, counts, files, pages, get listed() { return listed; } };
 }
 

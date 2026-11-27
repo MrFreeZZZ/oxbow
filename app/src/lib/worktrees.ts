@@ -1,10 +1,10 @@
+import type { RepoScope } from "./repoScope";
 // Worktrees: more working folders for one repository, each with its own branch checked out.
 // The New Worktree sheet, removing, locking, pruning and reconnecting a moved folder, and what
 // checking out a branch that another worktree has does.
 
 import { open } from "@tauri-apps/plugin-dialog";
 import { homeDir } from "@tauri-apps/api/path";
-import { api } from "./api";
 import type { Part, Recovery, Request } from "./confirm.svelte";
 import { nameProblem, type BranchContext } from "./branches";
 import { onlyPrefix } from "./branchPrefixes";
@@ -87,36 +87,36 @@ function folderFor(repoPath: string, branch: string): string {
 }
 
 /** `folderFor`, with -2, -3… when the folder is taken. */
-async function freeFolder(history: History, repoPath: string, branch: string): Promise<string> {
+async function freeFolder(scope: RepoScope, history: History, repoPath: string, branch: string): Promise<string> {
   const base = folderFor(repoPath, branch);
   for (let n = 1; n < 20; n++) {
     const path = n === 1 ? base : `${base}-${n}`;
     if (history.worktrees.some((t) => t.path === path)) continue;
-    const state = await api.folderState(path).catch(() => "missing" as const);
+    const state = await scope.api.folderState(path).catch(() => "missing" as const);
     if (state === "missing" || state === "empty") return path;
   }
   return base;
 }
 
 /** The New Worktree sheet; `branch` is the one it was opened for, if any. */
-export async function newWorktreeRequest(ctx: BranchContext, repoPath: string, branch?: string): Promise<Request> {
+export async function newWorktreeRequest(scope: RepoScope, ctx: BranchContext, repoPath: string, branch?: string): Promise<Request> {
   const free = freeBranches(ctx.history);
   const first = branch && free.includes(branch) ? branch : free[0];
   const state: NewWorktree = first
     ? { branch: first, create: false, from: null, folder: "", edited: false, open: true, search: null }
     : { branch: firstName(prefixesFor(ctx.history)), create: true, from: null, folder: "", edited: false, open: true, search: null };
-  state.folder = tilde(await freeFolder(ctx.history, repoPath, state.branch || "new"));
+  state.folder = tilde(await freeFolder(scope, ctx.history, repoPath, state.branch || "new"));
   const shown = [...new Set([first, ...free].filter((b): b is string => !!b))].slice(0, 3);
-  return newWorktreeSheet(ctx, repoPath, shown, free, state);
+  return newWorktreeSheet(scope, ctx, repoPath, shown, free, state);
 }
 
 /** New Worktree for a pull request: its branch here when there is one, else a new branch at
  *  its head, which follows the branch on `remote` when it is one of this repository. */
-export async function pullWorktreeRequest(ctx: BranchContext, repoPath: string, pull: PullSummary, remote: string, fork: boolean, gitlab = false): Promise<Request> {
+export async function pullWorktreeRequest(scope: RepoScope, ctx: BranchContext, repoPath: string, pull: PullSummary, remote: string, fork: boolean, gitlab = false): Promise<Request> {
   const { history } = ctx;
   const local = history.refs.some((r) => r.kind === "local" && r.name === pull.head);
-  if (local && !fork) return newWorktreeRequest(ctx, repoPath, pull.head);
-  const { tips } = await (gitlab ? api.gitlabFetch(pull.number, pull.base) : api.pullFetch(pull.number, pull.base));
+  if (local && !fork) return newWorktreeRequest(scope, ctx, repoPath, pull.head);
+  const { tips } = await (gitlab ? scope.api.gitlabFetch(pull.number, pull.base) : scope.api.pullFetch(pull.number, pull.base));
   if (!tips) throw new Error("Could not find the fetched review head.");
   const tracked = `${remote}/${pull.head}`;
   const follows = !fork && history.refs.some((r) => r.kind === "remote" && r.name === tracked);
@@ -127,24 +127,24 @@ export async function pullWorktreeRequest(ctx: BranchContext, repoPath: string, 
     create: true,
     from: follows ? `refs/remotes/${tracked}` : tips.head,
     fromLabel: follows ? tracked : gitlab ? `merge request !${pull.number}` : `pull request #${pull.number}`,
-    folder: tilde(await freeFolder(history, repoPath, name)),
+    folder: tilde(await freeFolder(scope, history, repoPath, name)),
     edited: false,
     open: true,
     search: null,
   };
-  return newWorktreeSheet(ctx, repoPath, free.slice(0, 3), free, state);
+  return newWorktreeSheet(scope, ctx, repoPath, free.slice(0, 3), free, state);
 }
 
 /** Branch chips shown while searching. */
 const FOUND = 8;
 
-function newWorktreeSheet(ctx: BranchContext, repoPath: string, shown: string[], free: string[], state: NewWorktree): Request {
-  const again = (change: Partial<NewWorktree>) => newWorktreeSheet(ctx, repoPath, shown, free, { ...state, ...change });
+function newWorktreeSheet(scope: RepoScope, ctx: BranchContext, repoPath: string, shown: string[], free: string[], state: NewWorktree): Request {
+  const again = (change: Partial<NewWorktree>) => newWorktreeSheet(scope, ctx, repoPath, shown, free, { ...state, ...change });
   /** Pick another branch: the folder follows it unless it was typed. */
   const pickBranch = async (change: Partial<NewWorktree>) => {
     const next = { ...state, ...change };
-    if (!next.edited) next.folder = tilde(await freeFolder(ctx.history, repoPath, next.branch || "new"));
-    return newWorktreeSheet(ctx, repoPath, shown, free, next);
+    if (!next.edited) next.folder = tilde(await freeFolder(scope, ctx.history, repoPath, next.branch || "new"));
+    return newWorktreeSheet(scope, ctx, repoPath, shown, free, next);
   };
   const { history } = ctx;
   const name = state.branch.trim();
@@ -248,7 +248,7 @@ function newWorktreeSheet(ctx: BranchContext, repoPath: string, shown: string[],
     note: "Remove it any time: the branch and its commits stay.",
     status: `Creating ${folderName}…`,
     done: state.open ? `Created ${folderName}. It opens in a new window.` : `Created ${folderName}, with ${name} checked out.`,
-    after: state.open ? () => void api.openWindow(path).catch((err) => console.error(err)) : undefined,
+    after: state.open ? () => void scope.api.openWindow(path).catch((err) => console.error(err)) : undefined,
     action: { kind: "worktreeAdd", path, branch: name, create: state.create, start: state.create ? start : null },
   };
 }
@@ -280,7 +280,6 @@ export function removeWorktreeRequest(ctx: BranchContext, wt: Worktree, stash = 
     note: (dirty || unknown) && !stash ? "Stash Them First keeps them, under Stashes." : "The branch stays: make a worktree for it again any time.",
     status: `Removing ${wt.name}…`,
     done: `Removed ${wt.name}.${dirty && stash ? " Its changes are in the stash." : ""}`,
-    after: () => void api.closeWindowOf(wt.path).catch(() => {}),
     action: { kind: "worktreeRemove", path: wt.path, force: dirty, stash: (dirty || unknown) && stash },
   };
 }
@@ -351,7 +350,7 @@ export async function locateRequest(ctx: BranchContext, wt: Worktree): Promise<R
 }
 
 /** Checking out `branch`, which another worktree has: git refuses, so offer that folder instead. */
-export function elsewhereRequest(ctx: BranchContext, branch: string, wt: Worktree): Request {
+export function elsewhereRequest(scope: RepoScope, ctx: BranchContext, branch: string, wt: Worktree): Request {
   const chip: Part = { branch, color: ctx.colorOf(branch) };
   if (wt.missing) {
     return {
@@ -378,7 +377,7 @@ export function elsewhereRequest(ctx: BranchContext, branch: string, wt: Worktre
       commands: [`git switch ${branch}`],
       comment: `git refuses: ${branch} is already used by the worktree at ${tilde(wt.path)}`,
       run: async () => {
-        await api.openWindow(wt.path);
+        await scope.api.openWindow(wt.path);
         return `Opened ${wt.name}.`;
       },
     },
@@ -386,7 +385,7 @@ export function elsewhereRequest(ctx: BranchContext, branch: string, wt: Worktre
 }
 
 /** git refused a checkout because another worktree has the branch: offer that folder. */
-export function refusedForWorktree(failure: Failure, ctx: BranchContext): Recovery | null {
+export function refusedForWorktree(scope: RepoScope, failure: Failure, ctx: BranchContext): Recovery | null {
   const said = /'([^']+)' is already (?:used by worktree|checked out) at '([^']+)'/.exec(failure.output);
   if (!said) return null;
   const [, branch, path] = said;
@@ -397,7 +396,7 @@ export function refusedForWorktree(failure: Failure, ctx: BranchContext): Recove
     body: ["Git won’t check out ", { branch, color: ctx.colorOf(branch) }, " here: it is already checked out in ", { code: name }, ". Open that folder, or remove the worktree first."],
     icon: "worktree",
     tone: "warn",
-    act: wt && !wt.missing ? { label: `Open ${name}`, run: () => api.openWindow(wt.path).then(() => `Opened ${name}.`) } : undefined,
+    act: wt && !wt.missing ? { label: `Open ${name}`, run: () => scope.api.openWindow(wt.path).then(() => `Opened ${name}.`) } : undefined,
     note: "Git keeps a branch in one folder at a time.",
     close: "Cancel",
   };

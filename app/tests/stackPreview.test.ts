@@ -4,7 +4,7 @@ import { test } from "node:test";
 import ts from "typescript";
 import { compileModule } from "svelte/compiler";
 import * as runtime from "svelte/internal/client";
-import { api, stopped } from "../src/lib/api.ts";
+import { api, apiForSession, stopped, type RepoNotice } from "../src/lib/api.ts";
 
 const view = fs.readFileSync(new URL("../src/lib/EditStackView.svelte", import.meta.url), "utf8");
 const shared = view.slice(view.indexOf("  let pendingPreview"), view.indexOf("</script>"));
@@ -108,4 +108,51 @@ test("Edit Stack cancels immediately and lets only the latest preview run and re
   assert.equal(previews[3].scope, undefined);
   previews[3].reply.resolve("restack result");
   assert.equal(await restack, "restack result");
+});
+
+test("tab calls and the delayed stack Stop retain their IPC address", async (t) => {
+  const calls: { command: string; args?: Record<string, unknown> }[] = [];
+  const preview = Promise.withResolvers<string>();
+  let started: (() => void) | undefined;
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { __TAURI_INTERNALS__: {
+    transformCallback: () => 0,
+    invoke(command: string, args?: Record<string, unknown>) {
+      calls.push({ command, args });
+      if (command === "stack_preview") {
+        const scope = args?.scope as { onStart: { onmessage: () => void } };
+        started = () => scope.onStart.onmessage();
+        return preview.promise;
+      }
+      return Promise.resolve();
+    },
+  } } });
+  t.after(() => { Reflect.deleteProperty(globalThis, "window"); });
+
+  const notices: RepoNotice[] = [];
+  await api.repoEvents((notice) => notices.push(notice));
+  const onNotice = calls[0].args?.onNotice as { onmessage: (notice: RepoNotice) => void };
+  onNotice.onmessage({ session: 1, event: "repo-activate-request", payload: null });
+
+  const a = apiForSession(1);
+  const b = apiForSession(2);
+  const controller = new AbortController();
+  const plan = {} as Parameters<typeof a.stackPreview>[0];
+  const result = a.stackPreview(plan, { workdir: "/a", signal: controller.signal });
+  await b.activateRepoTab();
+  controller.abort();
+  started?.();
+  await b.stopFetch(1);
+  await api.stopAction();
+  preview.reject("stopped");
+  await assert.rejects(result, (error) => stopped(error));
+
+  assert.deepEqual(calls.map(({ command, args }) => [command, args?.repoSession]), [
+    ["repo_events", undefined],
+    ["stack_preview", 1],
+    ["activate_repo_tab", 2],
+    ["stop_reads", 1],
+    ["stop_fetch", 2],
+    ["stop_action", undefined],
+  ]);
+  assert.deepEqual(notices, [{ session: 1, event: "repo-activate-request", payload: null }]);
 });

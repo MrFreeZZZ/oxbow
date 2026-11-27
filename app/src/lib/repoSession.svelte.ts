@@ -1,19 +1,13 @@
+import type { RepoScope } from "./repoScope";
 // The window's repository: opening it (asking first when it would run its own programs), its
 // folder gone, trusting it, closing it. Its history loads in historyLoad.svelte.ts.
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
-import { api } from "./api";
 import type { Gone, History, RepoSummary, TrustFinding } from "./types";
 import { Tickets, type Phase, type Ticket } from "./loads";
 import { HistoryLoader } from "./historyLoad.svelte";
 import { moveMessage } from "./commitDrafts.svelte";
-import { activity } from "./activity.svelte";
-import { confirm } from "./confirm.svelte";
-import { github } from "./github.svelte";
-import { lfs } from "./lfs.svelte";
-import { oplog } from "./oplog.svelte";
-import { nav } from "./nav.svelte";
 
 type TrustAnswer = "trust" | "restricted" | null;
 
@@ -27,6 +21,7 @@ export interface SessionHooks {
   reloaded(next: History): void;
   /** No repository any more: the window goes back to Welcome. */
   closed(): void;
+  lost(gone: Gone): void;
 }
 
 export class RepoSession {
@@ -50,9 +45,9 @@ export class RepoSession {
   /** One open at a time: the backend keeps whichever repository was opened last. */
   #opening: Promise<void> = Promise.resolve();
 
-  constructor(hooks: SessionHooks) {
+  constructor(readonly scope: RepoScope, hooks: SessionHooks) {
     this.#hooks = hooks;
-    this.loader = new HistoryLoader(this, (next) => hooks.reloaded(next));
+    this.loader = new HistoryLoader(scope, this, (next) => hooks.reloaded(next));
   }
 
   /** A repository is opening. */
@@ -75,42 +70,59 @@ export class RepoSession {
     this.phase = "loading";
     this.error = null;
     this.#hooks.leaving();
-    oplog.forget();
-    lfs.forget();
-    const stopping = activity.reset();
+    this.scope.oplog.forget();
+    this.scope.lfs.forget();
+    const stopping = this.scope.activity.reset();
     this.loader.stopPaging();
     this.repo = null;
     this.loader.clear();
-    nav.repo = "";
+    this.scope.nav.repo = "";
     try {
       await stopping;
-      await api.closeRepo();
+      await this.scope.api.closeRepo();
       this.loader.reset();
-      let summary = await api.openRepo(path);
+      let summary = await this.scope.api.openRepo(path);
       if (!this.tickets.current(mine)) return;
       if (summary.untrusted) {
         const answer = await this.askTrust(summary.name, summary.untrusted, true);
         if (!this.tickets.current(mine) || !answer) return;
-        summary = await api.openRepo(path, answer);
+        summary = await this.scope.api.openRepo(path, answer);
       }
       if (!this.tickets.current(mine)) return;
       const next = await this.loader.first();
       if (!this.tickets.current(mine)) return;
-      this.gone = null;
-      this.goneNote = null;
-      this.repo = summary;
-      nav.repo = summary.path;
-      github.load(summary.path);
-      this.loader.opened(next);
-      this.#hooks.opened(next);
+      this.attach(summary, next);
     } catch (err) {
       if (this.tickets.current(mine)) {
-        await api.closeRepo();
+        await this.scope.api.closeRepo();
         await this.failed(path, err, mine);
       }
     } finally {
       if (this.tickets.current(mine)) this.phase = this.repo ? "ready" : this.error || this.gone ? "failed" : "idle";
     }
+  }
+
+  attach(summary: RepoSummary, history: History) {
+    this.gone = null;
+    this.goneNote = null;
+    this.repo = summary;
+    this.scope.nav.repo = summary.path;
+    this.scope.github.load(summary.path);
+    this.loader.opened(history);
+    this.#hooks.opened(history);
+    this.phase = "ready";
+  }
+
+  dispose() {
+    this.trustAsk?.answer(null);
+    this.tickets.switch();
+    this.scope.confirm.cancel();
+    this.scope.confirm.dismiss();
+    this.scope.search.clear();
+    this.scope.github.clear();
+    this.scope.lfs.forget();
+    this.scope.oplog.forget();
+    void this.scope.activity.reset();
   }
 
   askTrust(name: string, findings: TrustFinding[], opening: boolean): Promise<TrustAnswer> {
@@ -133,9 +145,9 @@ export class RepoSession {
     const shown = this.repo;
     if ((await this.askTrust(shown.name, shown.restricted, false)) !== "trust") return;
     try {
-      await api.trustRepo(shown.path);
+      await this.scope.api.trustRepo(shown.path);
     } catch (err) {
-      confirm.say(String(err), "warn");
+      this.scope.confirm.say(String(err), "warn");
       return;
     }
     this.trusted(shown.path);
@@ -150,22 +162,33 @@ export class RepoSession {
   /** Opening or reading the repository at `path` failed: when its folder isn't there, the
    *  screen of a gone folder says why and what is safe, otherwise the error shows. */
   async failed(path: string, err: unknown, mine: Ticket) {
-    const found = await api.goneFolder(path).catch(() => null);
+    const found = await this.scope.api.goneFolder(path).catch(() => null);
     if (!this.tickets.current(mine)) return;
     if (!found) {
       this.error = String(err);
       return;
     }
     const again = this.gone?.path === found.path;
-    if (this.repo) this.close();
-    this.gone = found;
+    if (this.repo && this.scope.id !== null) {
+      this.tickets.switch();
+      this.scope.nav.repo = "";
+      this.repo = null;
+      this.loader.stopPaging();
+      this.loader.clear();
+      this.#hooks.lost(found);
+    } else if (this.repo) this.close();
+    this.showGone(found);
     this.goneNote = again ? `Still not there at ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.` : null;
+  }
+
+  showGone(gone: Gone) {
+    this.gone = gone;
     this.phase = "failed";
   }
 
   /** Open Main Folder: the gone worktree's commit message and Conflicts draft stay with it. */
-  goneMain() {
-    if (this.gone?.worktree?.main) this.load(this.gone.worktree.main);
+  goneMain(load: (path: string) => Promise<void>) {
+    if (this.gone?.worktree?.main) void load(this.gone.worktree.main);
   }
 
   /** Close: the main window shows Recent Repositories again, another window closes. */
@@ -184,7 +207,7 @@ export class RepoSession {
   /** Find Folder… and Locate…: choose where the folder that was at `old` is now, point git at it
    *  there and open it. It is the same folder, so its commit message and Conflicts draft go
    *  along, and the toast says they did. */
-  async findFolder(old: string, onPicked?: () => void) {
+  async findFolder(old: string, load: (path: string) => Promise<void>, onPicked?: () => void) {
     const name = old.split(/[/\\]/).filter(Boolean).pop() ?? old;
     const near = this.gone?.path === old ? this.gone.found : null;
     const picked = await open({ directory: true, multiple: false, title: `Find ${name}`, defaultPath: near ?? old.replace(/[/\\][^/\\]*[/\\]?$/, "") });
@@ -195,7 +218,7 @@ export class RepoSession {
     this.error = null;
     let moved: { path: string; conflictDraft: boolean };
     try {
-      moved = await api.reconnectFolder(old, picked);
+      moved = await this.scope.api.reconnectFolder(old, picked);
     } catch (err) {
       if (this.gone?.path === old) this.goneNote = String(err);
       else this.error = String(err);
@@ -204,24 +227,24 @@ export class RepoSession {
       this.reconnecting = false;
     }
     const message = moveMessage(old, moved.path);
-    await this.load(moved.path);
+    await load(moved.path);
     if (this.repo?.path !== moved.path) return;
     const along = [message && "commit message", moved.conflictDraft && "Conflicts draft"].filter(Boolean);
     const newName = moved.path.split(/[/\\]/).filter(Boolean).pop() ?? moved.path;
-    confirm.say(`Reconnected ${newName}.${along.length ? ` Its ${along.join(" and ")} came along.` : ""}`, "done");
+    this.scope.confirm.say(`Reconnected ${newName}.${along.length ? ` Its ${along.join(" and ")} came along.` : ""}`, "done");
   }
 
   /** Back to the Welcome window; the repository stays in Recent Repositories. */
   close() {
     this.trustAsk?.answer(null);
     this.tickets.switch();
-    const stopping = activity.reset();
-    this.#opening = this.#opening.then(() => stopping).then(() => api.closeRepo()).catch((err) => { this.error = String(err); });
+    const stopping = this.scope.activity.reset();
+    this.#opening = this.#opening.then(() => stopping).then(() => this.scope.api.closeRepo()).catch((err) => { this.error = String(err); });
     this.loader.stopPaging();
-    oplog.forget();
+    this.scope.oplog.forget();
     this.repo = null;
-    nav.repo = "";
-    lfs.forget();
+    this.scope.nav.repo = "";
+    this.scope.lfs.forget();
     this.loader.clear();
     this.error = null;
     this.phase = "idle";

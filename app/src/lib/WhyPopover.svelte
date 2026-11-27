@@ -58,7 +58,7 @@
   .pop {
     position: absolute;
     right: 0;
-    top: 40px;
+    top: calc(100% + 6px);
     z-index: 20;
     width: 300px;
     max-width: calc(100vw - 32px);

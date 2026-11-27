@@ -19,13 +19,16 @@
       }
     /** Opens a submenu to the side, e.g. Reset ▸ Soft / Mixed / Hard. */
     | { kind: "sub"; label: string; icon: string; entries: SubEntry[] }
+    | { kind: "swatches"; label: string; choices: Swatch[] }
     | { kind: "header"; label: string; keys?: string }
     | { kind: "note"; label: string }
     | { kind: "details"; label: string; path: string; color: number; branches: string; remotes: { label: string; lines: string[] }[] }
     | { kind: "sep" };
 
-  /** An item of a submenu: a label, and a grey hint on the right. */
-  export type SubEntry = { label: string; hint?: string; danger?: boolean; off?: boolean; run: () => void };
+  type Swatch = { label: string; checked: boolean; run: () => void } & ({ color: string } | { icon: string });
+
+  /** An item of a submenu, with an optional second line and a grey hint on the right. */
+  export type SubEntry = { label: string; detail?: string; hint?: string; danger?: boolean; off?: boolean; run: () => void };
 
   /** Icon paths of menu items, from the Branches design. */
   export const menuIcons = {
@@ -41,7 +44,6 @@
     rebase: "M4.5 14V7M4.5 7c0-3 7-1 7-5M11.5 2v12M9.5 4 11.5 2l2 2",
     split: "M8 1.5v4M8 5.5 4 9.5v5M8 5.5l4 4v5",
     patch: "M4 1.5h5.5l3 3v10h-8.5zM9.5 1.5v3h3M8.3 6.2v5.2M6.2 9.4l2.1 2.1 2.1-2.1",
-    applyPatch: "M4 1.5h5.5l3 3v10h-8.5zM9.5 1.5v3h3M8.3 11.4V6.2M6.2 8.3l2.1-2.1 2.1 2.1",
     cherry: "M3 12a2 2 0 1 0 4 0a2 2 0 1 0-4 0M9 11a2 2 0 1 0 4 0a2 2 0 1 0-4 0M5 10c.5-4 3-6.5 6-8M11 9c-.5-2.5-.5-5 0-7",
     undo: "M3 6.5h7a3.5 3.5 0 0 1 0 7H6M5.5 4 3 6.5 5.5 9",
     revert: "M12.5 8a4.5 4.5 0 1 1-1.3-3.2M11.5 2v3h-3",
@@ -66,17 +68,23 @@
     up: "M8 13V3M4.5 6.5 8 3l3.5 3.5",
     down: "M8 3v10M4.5 9.5 8 13l3.5-3.5",
     folder: "M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z",
+    home: "M2.5 7.5 8 3l5.5 4.5M4 6.5v6.5h8V6.5",
     changelist: "M3 3.5h10v9.5l-5-2.6L3 13z",
     commit: "M2 8h3.5M10.5 8H14M5.5 8a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0",
   };
 </script>
 
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { lane, tint } from "./format";
 
   // A context menu at the pointer, in the glass style of the design.
 
-  let { x, y, label, entries, onClose }: { x: number; y: number; label: string; entries: MenuEntry[]; onClose: () => void } = $props();
+  const scope = useRepoScope();
+
+  let { x, y, label, entries, onClose, belowAnchor = false }: {
+    x: number; y: number; label: string; entries: MenuEntry[]; onClose: () => void; belowAnchor?: boolean;
+  } = $props();
 
   let box = $state<HTMLDivElement>();
   let left = $state(0);
@@ -112,11 +120,27 @@
   // Beside the menu, on the right unless there is no room there.
   $effect(() => {
     if (!sub || !subBox || !box) return;
-    const menu = box.getBoundingClientRect();
-    const item = sub.item.getBoundingClientRect();
-    const { width, height } = subBox.getBoundingClientRect();
-    subLeft = menu.right - 4 + width > window.innerWidth - 8 ? menu.left + 4 - width : menu.right - 4;
-    subTop = Math.max(8, Math.min(item.top - 5, window.innerHeight - height - 8));
+    const menu = box;
+    const item = sub.item;
+    const popup = subBox;
+    const position = () => {
+      const menuRect = menu.getBoundingClientRect();
+      const { width, height } = popup.getBoundingClientRect();
+      const right = left + menuRect.width - 4;
+      const maxLeft = window.innerWidth - width - 8;
+      subLeft = right <= maxLeft ? right : Math.max(8, left + 4 - width);
+      const itemTop = top + item.getBoundingClientRect().top - menuRect.top;
+      subTop = Math.max(8, Math.min(itemTop - 5, window.innerHeight - height - 8));
+    };
+    position();
+    const observer = new ResizeObserver(position);
+    observer.observe(menu);
+    observer.observe(popup);
+    window.addEventListener("resize", position);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", position);
+    };
   });
 
   function openSub(index: number, item: HTMLElement, focus = false) {
@@ -141,8 +165,10 @@
   }
 
   function onKey(event: KeyboardEvent) {
+    if (!scope.isActive()) return;
     const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const removable = focused?.dataset.index ? entries[Number(focused.dataset.index)] : undefined;
+    const swatches = focused?.closest<HTMLElement>(".swatches");
     if ((event.key === "Delete" || event.key === "Backspace") && removable?.kind === "item" && removable.remove) {
       event.preventDefault();
       keyed = true;
@@ -150,6 +176,11 @@
     } else if (event.key === "Escape") {
       event.preventDefault();
       onClose();
+    } else if (swatches && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+      event.preventDefault();
+      const choices = [...swatches.querySelectorAll("button")];
+      const step = event.key === "ArrowRight" ? 1 : -1;
+      choices[(choices.indexOf(focused as HTMLButtonElement) + choices.length + step) % choices.length]?.focus();
     } else if (event.key === "ArrowRight" && document.activeElement instanceof HTMLElement && document.activeElement.dataset.sub) {
       event.preventDefault();
       openSub(Number(document.activeElement.dataset.sub), document.activeElement, true);
@@ -161,10 +192,11 @@
       event.preventDefault();
       keyed = true;
       const inSub = !!subBox?.contains(document.activeElement);
-      const items = [...((inSub ? subBox : box)?.querySelectorAll<HTMLButtonElement>("button[role=menuitem]") ?? [])];
-      const at = items.indexOf(document.activeElement as HTMLButtonElement);
+      const items = [...((inSub ? subBox : box)?.querySelectorAll<HTMLElement>("button[role=menuitem], .swatches") ?? [])];
+      const at = focused ? items.indexOf(swatches ?? focused) : -1;
       const next = event.key === "ArrowDown" ? (at + 1) % items.length : (at - 1 + items.length) % items.length;
-      items[next]?.focus();
+      const item = items[next];
+      (item?.querySelector<HTMLButtonElement>('button[aria-checked="true"]') ?? item)?.focus();
     }
   }
 </script>
@@ -180,7 +212,8 @@
     onClose();
   }}
 ></div>
-<div class="menu" class:keyed role="menu" aria-label={label} bind:this={box} style:left="{left}px" style:top="{top}px" onscroll={() => (sub = null)}>
+<div class="menu" class:keyed role="menu" aria-label={label} bind:this={box} style:left="{left}px" style:top="{top}px"
+  style:max-height={belowAnchor ? `calc(100vh - ${y + 8}px)` : undefined} onscroll={() => (sub = null)}>
   {#each entries as entry, i (i)}
     {#if entry.kind === "header"}
       <div class="header"><span>{entry.label}</span>{#if entry.keys}<span class="keys">{entry.keys}</span>{/if}</div>
@@ -188,6 +221,27 @@
       <div class="sep"></div>
     {:else if entry.kind === "note"}
       <div class="note">{entry.label}</div>
+    {:else if entry.kind === "swatches"}
+      <div class="swatches" role="group" aria-label={entry.label}>
+        {#each entry.choices as choice}
+          <button type="button" role="menuitemradio" aria-checked={choice.checked} aria-label={choice.label}
+            title={choice.label} tabindex={choice.checked ? 0 : -1} class="swatch" class:clear={"icon" in choice}
+            style:--swatch={"color" in choice ? choice.color : undefined}
+            onmouseenter={() => (sub = null)} onclick={() => choose(choice.run)}>
+            {#if "icon" in choice}
+              <svg class="icon" viewBox="0 0 16 16" aria-hidden="true">
+                <path class="clear-tag" d={choice.icon} />
+                <path class="slash-gap" d="M2 2l12 12" />
+                <path d="M2 2l12 12" />
+              </svg>
+            {:else if choice.checked}
+              <svg class="icon swatch-check" viewBox="0 0 16 16" aria-hidden="true">
+                <path d={menuIcons.good} /><path d={menuIcons.good} />
+              </svg>
+            {/if}
+          </button>
+        {/each}
+      </div>
     {:else if entry.kind === "details"}
       <div class="details" style:background={tint(entry.color)} style:box-shadow={`inset 0 0 0 1px color-mix(in srgb, ${lane(entry.color)} 40%, transparent)`}>
         <div class="details-identity"><strong>{entry.label}</strong><span>{entry.path}</span></div>
@@ -249,8 +303,15 @@
   {#if parent?.kind === "sub"}
     <div class="menu submenu" role="menu" aria-label={parent.label} bind:this={subBox} style:left="{subLeft}px" style:top="{subTop}px">
       {#each parent.entries as entry (entry.label)}
-        <button role="menuitem" class:danger={entry.danger} class:off={entry.off} aria-disabled={entry.off} onclick={() => !entry.off && choose(entry.run)}>
-          <span>{entry.label}</span>
+        <button role="menuitem" class:danger={entry.danger} class:two={entry.detail} class:off={entry.off} aria-disabled={entry.off} onclick={() => !entry.off && choose(entry.run)}>
+          {#if entry.detail}
+            <span class="lines">
+              <span>{entry.label}</span>
+              <span class="detail">{entry.detail}</span>
+            </span>
+          {:else}
+            <span>{entry.label}</span>
+          {/if}
           {#if entry.hint}<span class="hint">{entry.hint}</span>{/if}
         </button>
       {/each}
@@ -314,6 +375,51 @@
     margin: 5px 10px;
     background: var(--sep);
   }
+  .swatches {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-2);
+  }
+  .swatch {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 21px;
+    height: 21px;
+    padding: 0;
+    border-radius: var(--radius-pill);
+    background: var(--swatch);
+    box-shadow: inset 0 0 0 1px var(--sep);
+  }
+  .swatch:hover, .swatch:focus-visible {
+    background: var(--swatch);
+    outline: 1px solid var(--icon);
+    outline-offset: 1px;
+  }
+  .swatch:focus-visible { outline-color: var(--accent); outline-width: 2px; }
+  .swatch.clear {
+    width: 24px;
+    height: 24px;
+    margin-right: var(--space-2);
+    border-radius: var(--radius-m);
+    box-shadow: none;
+  }
+  .swatch.clear::after {
+    content: "";
+    position: absolute;
+    inset: 2px calc(-1 * var(--space-2)) 2px auto;
+    width: 1px;
+    background: var(--sep);
+    pointer-events: none;
+  }
+  .swatch.clear:hover, .swatch.clear[aria-checked="true"] { background: var(--hover-wash); }
+  .swatch.clear[aria-checked="true"] { box-shadow: inset 0 0 0 1px var(--icon); }
+  .clear .icon { width: 18px; height: 18px; }
+  .clear-tag { transform: translateX(16px) scaleX(-1); }
+  .slash-gap { stroke: var(--sheet); stroke-width: 4px; }
+  .swatch-check path:first-child { stroke: black; stroke-width: 4px; }
+  .swatch-check path:last-child { stroke: white; stroke-width: 2px; }
   .note {
     padding: 1px 10px 4px 34px;
     font-size: var(--text-caption);
@@ -399,7 +505,7 @@
   }
   button.off > .icon,
   button.off .lines > span:first-child,
-  button.off > span {
+  button.off > span:not(.lines) {
     opacity: 0.45;
   }
   button .chevron {
@@ -410,9 +516,19 @@
   }
   .submenu {
     min-width: 0;
+    max-width: min(380px, calc(100vw - 16px));
   }
   .submenu button {
     gap: 28px;
+  }
+  .submenu button.two {
+    height: auto;
+    min-height: 38px;
+    padding-block: var(--space-1);
+  }
+  .submenu .detail {
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   .keys {
     flex-grow: 0;
@@ -430,7 +546,7 @@
     color: var(--text2);
   }
   /* A long hint, such as a path, gives way; the label stays whole. */
-  .submenu button > span:first-child {
+  .submenu button > span:first-child:not(.lines) {
     flex-shrink: 0;
   }
   .row {

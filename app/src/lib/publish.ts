@@ -1,10 +1,10 @@
+import type { RepoScope } from "./repoScope";
 // Publish to GitHub: make a repository there for one that has no remote yet, add it as origin
 // and push the checked-out branch. The sheet shows the API request as curl and the git commands
 // that follow; `gh repo create … --source . --push` does the same. Publish to GitLab the same
 // way, as a project in one of the account's namespaces.
 
-import { api } from "./api";
-import { confirm, type Part, type Request } from "./confirm.svelte";
+import { type Part, type Request } from "./confirm.svelte";
 import { prefs } from "./prefs.svelte";
 import { labPublishCommands, labPublishNote, validProjectName, visibilityText } from "./labPublish";
 import type { GitHubOwners, GitLabAccount, GitLabNamespace, GitLabPublish, GitLabVisibility, Publish } from "./types";
@@ -41,9 +41,9 @@ export function publishNote(publish: Publish): string {
 }
 
 /** The confirmation for a repository with no remote. `color` is the branch's lane. */
-export function publishRequest(path: string, owners: GitHubOwners, publish: Publish, color: number): Request {
+export function publishRequest(scope: RepoScope, path: string, owners: GitHubOwners, publish: Publish, color: number): Request {
   const at = `${publish.owner}/${publish.name}`;
-  const again = (change: Partial<Publish>) => publishRequest(path, owners, { ...publish, ...change }, color);
+  const again = (change: Partial<Publish>) => publishRequest(scope, path, owners, { ...publish, ...change }, color);
   const who: Part[] = publish.private
     ? [publish.personal ? " Private: only you, and people you invite, can see it." : ` Private: members of ${publish.owner} with access can see it.`]
     : [" Public: anyone can see it and its whole history."];
@@ -84,16 +84,16 @@ export function publishRequest(path: string, owners: GitHubOwners, publish: Publ
     status: `Publishing to github.com/${at}…`,
     recover: (failure) => {
       // GitHub made nothing: the name can change and it can go again.
-      const made = confirm.lines.some((line) => line.text.startsWith("Created https://"));
+      const made = scope.confirm.lines.some((line) => line.text.startsWith("Created https://"));
       // The push only starts once origin is added.
-      const linked = confirm.lines.some((line) => line.kind === "cmd" && line.text.startsWith("git push"));
+      const linked = scope.confirm.lines.some((line) => line.kind === "cmd" && line.text.startsWith("git push"));
       if (!made)
         return {
           title: "GitHub didn’t make the repository",
           body: [failure.output.trim()],
           icon: "warn",
           tone: "err",
-          alt: { label: "Change and Try Again…", request: () => publishRequest(path, owners, publish, color) },
+          alt: { label: "Change and Try Again…", request: () => publishRequest(scope, path, owners, publish, color) },
           close: "Close",
         };
       if (!linked)
@@ -102,7 +102,7 @@ export function publishRequest(path: string, owners: GitHubOwners, publish: Publ
           body: [failure.output.trim()],
           icon: "warn",
           tone: "err",
-          alt: { label: "Add Origin and Push…", request: () => linkRequest(path, publish, color) },
+          alt: { label: "Add Origin and Push…", request: () => linkRequest(scope, path, publish, color) },
           close: "Close",
         };
       return {
@@ -121,7 +121,7 @@ export function publishRequest(path: string, owners: GitHubOwners, publish: Publ
         `-u: remember origin/${publish.branch} as the upstream`,
       ],
       run: async () => {
-        await api.githubPublish(path, publish);
+        await scope.api.githubPublish(path, publish);
         return `Published to github.com/${at}.`;
       },
     },
@@ -130,7 +130,7 @@ export function publishRequest(path: string, owners: GitHubOwners, publish: Publ
 
 /** After a Publish that made the repository on GitHub but stopped before origin was added: add
  *  it and push, without making the repository again. */
-function linkRequest(path: string, publish: Publish, color: number): Request {
+function linkRequest(scope: RepoScope, path: string, publish: Publish, color: number): Request {
   const at = `${publish.owner}/${publish.name}`;
   const [, ...commands] = publishCommands(publish);
   return {
@@ -143,7 +143,7 @@ function linkRequest(path: string, publish: Publish, color: number): Request {
       commands,
       comments: ["the GitHub repository becomes origin", `-u: remember origin/${publish.branch} as the upstream`],
       run: async () => {
-        await api.githubPublish(path, publish, false);
+        await scope.api.githubPublish(path, publish, false);
         return `Published to github.com/${at}.`;
       },
     },
@@ -151,9 +151,9 @@ function linkRequest(path: string, publish: Publish, color: number): Request {
 }
 
 /** The request to start with, or a message when nobody is signed in. */
-export async function startPublish(path: string, name: string, branch: string, color: number): Promise<Request> {
-  const owners = await api.githubOwners();
-  return publishRequest(path, owners, { owner: owners.login, personal: true, name: repositoryName(name), private: true, description: "", branch }, color);
+export async function startPublish(scope: RepoScope, path: string, name: string, branch: string, color: number): Promise<Request> {
+  const owners = await scope.api.githubOwners();
+  return publishRequest(scope, path, owners, { owner: owners.login, personal: true, name: repositoryName(name), private: true, description: "", branch }, color);
 }
 
 /** A GitLab server signed in to, with the namespaces its account can make a project in. */
@@ -163,8 +163,8 @@ export interface LabPlace {
 }
 
 /** The confirmation of Publish to GitLab, on one of the servers in `places`. */
-export function publishGitLabRequest(path: string, places: LabPlace[], at: LabPlace, publish: GitLabPublish, color: number): Request {
-  const again = (change: Partial<GitLabPublish>, place = at) => publishGitLabRequest(path, places, place, { ...publish, ...change }, color);
+export function publishGitLabRequest(scope: RepoScope, path: string, places: LabPlace[], at: LabPlace, publish: GitLabPublish, color: number): Request {
+  const again = (change: Partial<GitLabPublish>, place = at) => publishGitLabRequest(scope, path, places, place, { ...publish, ...change }, color);
   const { host, web } = at.account;
   const where = `${host}/${publish.namespace}/${publish.name}`;
   const personal = at.spaces.find((n) => n.id === publish.namespaceId)?.kind === "user";
@@ -214,15 +214,15 @@ export function publishGitLabRequest(path: string, places: LabPlace[], at: LabPl
     note: "Undo can’t take the GitLab project back: delete it on GitLab if you change your mind.",
     status: `Publishing to ${where}…`,
     recover: (failure) => {
-      const made = confirm.lines.some((line) => line.text.startsWith("Created http"));
-      const linked = confirm.lines.some((line) => line.kind === "cmd" && line.text.startsWith("git push"));
+      const made = scope.confirm.lines.some((line) => line.text.startsWith("Created http"));
+      const linked = scope.confirm.lines.some((line) => line.kind === "cmd" && line.text.startsWith("git push"));
       if (!made)
         return {
           title: "GitLab didn’t make the project",
           body: [failure.output.trim()],
           icon: "warn",
           tone: "err",
-          alt: { label: "Change and Try Again…", request: () => publishGitLabRequest(path, places, at, publish, color) },
+          alt: { label: "Change and Try Again…", request: () => publishGitLabRequest(scope, path, places, at, publish, color) },
           close: "Close",
         };
       if (!linked)
@@ -231,7 +231,7 @@ export function publishGitLabRequest(path: string, places: LabPlace[], at: LabPl
           body: [failure.output.trim()],
           icon: "warn",
           tone: "err",
-          alt: { label: "Add Origin and Push…", request: () => linkGitLabRequest(path, at, publish, color) },
+          alt: { label: "Add Origin and Push…", request: () => linkGitLabRequest(scope, path, at, publish, color) },
           close: "Close",
         };
       return {
@@ -246,7 +246,7 @@ export function publishGitLabRequest(path: string, places: LabPlace[], at: LabPl
       commands: labPublishCommands(publish, web, prefs.get("oxbow.git.runHooks")),
       comments: [`GitLab makes an empty project; ${labPublishNote(publish)}`, "the new GitLab project becomes origin", `-u: remember origin/${publish.branch} as the upstream`],
       run: async () => {
-        await api.gitlabPublish(path, host, publish);
+        await scope.api.gitlabPublish(path, host, publish);
         return `Published to ${where}.`;
       },
     },
@@ -254,7 +254,7 @@ export function publishGitLabRequest(path: string, places: LabPlace[], at: LabPl
 }
 
 /** After a Publish that made the project on GitLab but stopped before origin was added. */
-function linkGitLabRequest(path: string, at: LabPlace, publish: GitLabPublish, color: number): Request {
+function linkGitLabRequest(scope: RepoScope, path: string, at: LabPlace, publish: GitLabPublish, color: number): Request {
   const where = `${at.account.host}/${publish.namespace}/${publish.name}`;
   const [, ...commands] = labPublishCommands(publish, at.account.web, prefs.get("oxbow.git.runHooks"));
   return {
@@ -267,7 +267,7 @@ function linkGitLabRequest(path: string, at: LabPlace, publish: GitLabPublish, c
       commands,
       comments: ["the GitLab project becomes origin", `-u: remember origin/${publish.branch} as the upstream`],
       run: async () => {
-        await api.gitlabPublish(path, at.account.host, publish, false);
+        await scope.api.gitlabPublish(path, at.account.host, publish, false);
         return `Published to ${where}.`;
       },
     },
@@ -275,17 +275,17 @@ function linkGitLabRequest(path: string, at: LabPlace, publish: GitLabPublish, c
 }
 
 /** The namespaces of each GitLab server signed in to; a server that doesn't answer is left out. */
-export async function labPlaces(): Promise<LabPlace[]> {
-  const accounts = await api.gitlabAccounts().catch(() => [] as GitLabAccount[]);
-  const all = await Promise.all(accounts.map((account) => api.gitlabNamespaces(account.host).then((spaces) => ({ account, spaces }), () => null)));
+export async function labPlaces(scope: RepoScope): Promise<LabPlace[]> {
+  const accounts = await scope.api.gitlabAccounts().catch(() => [] as GitLabAccount[]);
+  const all = await Promise.all(accounts.map((account) => scope.api.gitlabNamespaces(account.host).then((spaces) => ({ account, spaces }), () => null)));
   return all.filter((p): p is LabPlace => !!p && p.spaces.length > 0);
 }
 
 /** Publish to GitLab, in the account's own namespace, private; null when no server answers. */
-export async function startPublishGitLab(path: string, name: string, branch: string, color: number): Promise<Request | null> {
-  const places = await labPlaces();
+export async function startPublishGitLab(scope: RepoScope, path: string, name: string, branch: string, color: number): Promise<Request | null> {
+  const places = await labPlaces(scope);
   const at = places[0];
   if (!at) return null;
   const own = at.spaces[0];
-  return publishGitLabRequest(path, places, at, { namespaceId: own.id, namespace: own.fullPath, name: repositoryName(name), visibility: "private", description: "", branch }, color);
+  return publishGitLabRequest(scope, path, places, at, { namespaceId: own.id, namespace: own.fullPath, name: repositoryName(name), visibility: "private", description: "", branch }, color);
 }

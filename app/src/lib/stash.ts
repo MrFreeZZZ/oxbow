@@ -1,13 +1,12 @@
+import type { RepoScope } from "./repoScope";
 // The stash: put uncommitted changes aside, bring them back, drop them, or turn one into a
 // branch. Used by the Stashes screen and by the menus of stashes in History and the sidebar.
 
-import { api } from "./api";
 import type { Part, Request } from "./confirm.svelte";
 import type { BranchContext } from "./branches";
 import { nameProblem } from "./branches";
 import { stoppedOnConflicts } from "./merge";
 import { menuIcons, type MenuEntry } from "./Menu.svelte";
-import { nav } from "./nav.svelte";
 import type { StashCheck, StashInfo } from "./types";
 import { shortId } from "./format";
 import { stashStagedRequest } from "./stashLines";
@@ -79,8 +78,8 @@ export function stashRequest(ctx: BranchContext, message = "", untracked = true,
 }
 
 /** Bring a stash's changes back; `pop` deletes it afterwards. */
-export async function applyRequest(ctx: BranchContext, stash: StashInfo, pop: boolean, keepIndex = false, check?: StashCheck): Promise<Request> {
-  const known = check ?? (await api.stashCheck(stash.index, stash.id).catch(() => null));
+export async function applyRequest(scope: RepoScope, ctx: BranchContext, stash: StashInfo, pop: boolean, keepIndex = false, check?: StashCheck): Promise<Request> {
+  const known = check ?? (await scope.api.stashCheck(stash.index, stash.id).catch(() => null));
   return applySheet(ctx, stash, pop, keepIndex, known);
 }
 
@@ -199,13 +198,13 @@ export function stashBranchRequest(ctx: BranchContext, stash: StashInfo, typed =
 }
 
 /** The menu of a stash, in History and in the sidebar. */
-export function stashMenu(ctx: BranchContext, stash: StashInfo, run: (request: Request | Promise<Request>) => void, copy: (text: string) => void): MenuEntry[] {
+export function stashMenu(scope: RepoScope, ctx: BranchContext, stash: StashInfo, run: (request: Request | Promise<Request>) => void, copy: (text: string) => void): MenuEntry[] {
   const busy = !!ctx.history.operation;
   const entries: MenuEntry[] = [{ kind: "header", label: `${stashName(stash)} · ${stash.title}` }];
   if (!busy) {
     entries.push(
-      { kind: "item", label: `Apply to ${hereName(ctx)}…`, icon: menuIcons.stash, run: () => run(applyRequest(ctx, stash, false)) },
-      { kind: "item", label: `Pop onto ${hereName(ctx)}…`, icon: menuIcons.pop, run: () => run(applyRequest(ctx, stash, true)) },
+      { kind: "item", label: `Apply to ${hereName(ctx)}…`, icon: menuIcons.stash, run: () => run(applyRequest(scope, ctx, stash, false)) },
+      { kind: "item", label: `Pop onto ${hereName(ctx)}…`, icon: menuIcons.pop, run: () => run(applyRequest(scope, ctx, stash, true)) },
       { kind: "item", label: "New Branch from Stash…", icon: menuIcons.branch, run: () => run(stashBranchRequest(ctx, stash)) },
     );
   } else {
@@ -214,7 +213,7 @@ export function stashMenu(ctx: BranchContext, stash: StashInfo, run: (request: R
   entries.push(
     { kind: "sep" },
     // The files as the stash keeps them: the working copy when it was made.
-    { kind: "item", label: "Browse Files", icon: menuIcons.folder, run: () => nav.openBrowse(stash.id, stashName(stash)) },
+    { kind: "item", label: "Browse Files", icon: menuIcons.folder, run: () => scope.nav.openBrowse(stash.id, stashName(stash)) },
     {
       kind: "sub",
       label: "Copy",

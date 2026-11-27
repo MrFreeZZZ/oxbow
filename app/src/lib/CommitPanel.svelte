@@ -1,14 +1,14 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import FileLineCounts from "./FileLineCounts.svelte";
   import { diffScroll } from "./diffScroll";
   import FileFilter from "./FileFilter.svelte";
   import { untrack, type Snippet } from "svelte";
-  import { api, stopped } from "./api";
+  import { stopped } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { CommitDetail, DiffPage, FileChange, FileDiff, HistoryRow } from "./types";
   import { fullDate, initials, relativeTime, lane, person, plate, shortId, tint, fileDeletionWidth } from "./format";
   import { fileTabs, keyFocus, tabStepper } from "./tabs";
-  import { confirm } from "./confirm.svelte";
   import DiffView from "./DiffView.svelte";
   import DiffTools from "./DiffTools.svelte";
   import FoldAll from "./FoldAll.svelte";
@@ -19,11 +19,14 @@
   import FileBadge from "./FileBadge.svelte";
   import { byFolder, filesWidth, listView, resizeFiles, setFolders } from "./listView.svelte";
   import Menu from "./Menu.svelte";
-  import { commitFileMenu, type FileMenu } from "./changesMenu";
+  import { commitFileMenu as commitFileMenuInRepo, type FileMenu } from "./changesMenu";
   import type { CommitFile } from "./commitFiles";
   import WorkingCopyPanel from "./WorkingCopyPanel.svelte";
-  import { nav } from "./nav.svelte";
   import { pressed } from "./shortcuts";
+
+  const scope = useRepoScope();
+  const { api, confirm, nav } = scope;
+  const commitFileMenu = commitFileMenuInRepo.bind(null, scope);
 
   let {
     row,
@@ -744,26 +747,12 @@
     flex-grow: 1;
     min-width: 0;
   }
-  .segmented {
-    flex-shrink: 0;
-    display: flex;
-    padding: 2px;
-    border-radius: var(--radius-m);
-    background: var(--field);
-  }
   .segmented button {
     width: 28px;
     height: 22px;
-    border-radius: var(--radius-s);
     display: flex;
     align-items: center;
     justify-content: center;
-    color: var(--text2);
-  }
-  .segmented button.on {
-    background: var(--sheet);
-    color: var(--text);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
   }
   .segmented .icon {
     width: 14px;
@@ -909,7 +898,7 @@
   .sha {
     height: 22px;
     padding: 0 8px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     display: inline-flex;
     align-items: center;
     gap: 5px;

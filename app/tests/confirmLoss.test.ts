@@ -13,7 +13,8 @@ for (const kind of ["discardChangelist", "takeVersion", "restoreLocalVersion"]) 
     $state: (x: unknown) => x,
     getCurrentWindow: () => ({ listen: async () => () => {} }),
     prefs: { get: () => false },
-    api: {
+    windowOplog: {},
+    windowApi: {
       planAction: async () => ({ commands: [], notKept: [gap] }),
       performAction: async () => { performed++; return ""; },
     },
@@ -39,9 +40,9 @@ for (const kind of ["resolve", "resolveWorking", "takeFile"]) {
     getCurrentWindow: () => ({ listen: async () => () => {} }),
     prefs: { get: () => false },
     cannotRestore: (value: typeof entry) => value.before.index === null ? "No conflict stages" : null,
-    oplog: { newest: async () => entry },
+    windowOplog: { newest: async () => entry },
     activity: { start: () => 1, finish: () => {}, event: () => {} },
-    api: {
+    windowApi: {
       planAction: async () => ({ commands: [], notKept: [gap] }),
       performAction: async () => { performed++; return ""; },
     },

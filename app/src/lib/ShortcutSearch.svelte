@@ -2,13 +2,16 @@
   // The search bar of Settings › Keyboard Shortcuts: words or keys pressed with Record Keys on,
   // only the changed commands, and Reset All.
 
-  import { confirm } from "./confirm.svelte";
+  import { useRepoScope } from "./repoScope";
   import { keys } from "./keys";
   import { menuIcons } from "./Menu.svelte";
   import { KEYBOARD, keySearch, searchKey } from "./settingsKeys.svelte";
   import { anyChanged, resetAllRequest } from "./shortcutEdit.svelte";
 
   /** No command matches the search. */
+  const scope = useRepoScope();
+  const { confirm } = scope;
+
   let { empty }: { empty: boolean } = $props();
 
   let keyField = $state<HTMLInputElement>();

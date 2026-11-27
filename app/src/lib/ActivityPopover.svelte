@@ -1,11 +1,11 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { popoverEscape } from "./popoverEscape";
   // The Activity popover under Fetch / Pull / Push, with Reload at the top: the fetch that runs now with its progress,
   // Output and Stop; a Push or Pull waiting for it; and under Done what ran lately with its git
   // commands, with Fix… and Try Again on a fetch that failed.
 
-  import { activity, type ActivityItem } from "./activity.svelte";
-  import { api } from "./api";
+  import { type ActivityItem } from "./activity.svelte";
   import { relativeTime } from "./format";
   import { actionIcons } from "./icons";
   import { prefs } from "./prefs.svelte";
@@ -13,6 +13,9 @@
   import { shortcut } from "./keys";
 
   /** Commands a row shows before Show All. */
+  const scope = useRepoScope();
+  const { activity, api } = scope;
+
   const FEW = 2;
 
   /** Rows whose commands are all shown. */
@@ -79,7 +82,7 @@
       <span class="h">Activity</span>
       <span class="every">{auto ? `Auto-fetch every ${every} min` : "Auto-fetch is off"}</span>
       <!-- Reload lives here and in the repository menu: the toolbar keeps only Fetch. -->
-      <button class="reload" onclick={reload} title="Read the repository again, without asking the remote">
+      <button class="button mini reload" onclick={reload} title="Read the repository again, without asking the remote">
         <svg class="icon" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5" /></svg>
         Reload <span class="keys">{shortcut("reload")}</span>
       </button>
@@ -112,7 +115,7 @@
           <span class="tile"><svg class="icon" viewBox="0 0 16 16"><path d={ICONS[item.kind]} /></svg></span>
           <span class="words">
             <span class="line"><span class="title">{item.title}</span><span class="time">next</span></span>
-            <span class="detail">{item.sub}</span>
+            <span class="detail">{activity.hasFetch ? item.sub : "Waiting to start"}</span>
             <span class="buttons"><button class="button small" onclick={() => activity.unqueue(item.id)}>Cancel</button></span>
           </span>
         </div>
@@ -168,7 +171,7 @@
   .pop {
     position: absolute;
     right: 0;
-    top: 40px;
+    top: calc(100% + 6px);
     z-index: 20;
     width: 360px;
     max-width: calc(100vw - 32px);
@@ -202,20 +205,7 @@
     color: var(--text2);
   }
   .reload {
-    display: inline-flex;
-    align-items: center;
     gap: 5px;
-    height: 24px;
-    padding: 0 10px;
-    border-radius: var(--radius-pill);
-    font-size: var(--text-small);
-    font-weight: 500;
-    white-space: nowrap;
-    flex-shrink: 0;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--text);
   }
   .reload .icon {
     width: 13px;

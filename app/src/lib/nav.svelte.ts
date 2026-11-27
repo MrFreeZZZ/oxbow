@@ -12,7 +12,7 @@ function loadRecent(): Record<string, string[]> {
   }
 }
 
-class Nav {
+export class Nav {
   /** File History's file, history base (null for HEAD), and the commit to start on; null when it isn't open. Back and Forward
    *  also bring back Blame's revision and the line that was followed. `seq` tells each request
    *  from the one before, even for the same file. */
@@ -69,7 +69,7 @@ class Nav {
     const list = [path, ...(this.recentFiles[this.repo] ?? []).filter((p) => p !== path)].slice(0, 8);
     this.recentFiles = { ...this.recentFiles, [this.repo]: list };
     try {
-      localStorage.setItem(RECENT_KEY, JSON.stringify(this.recentFiles));
+      localStorage.setItem(RECENT_KEY, JSON.stringify({ ...loadRecent(), [this.repo]: list }));
     } catch {
       // Private mode or full storage: recent files last until the app quits.
     }

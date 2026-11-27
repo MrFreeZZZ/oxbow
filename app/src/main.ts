@@ -1,7 +1,7 @@
 import { settingsRoute } from "./lib/settingsNavigation";
 import { mount } from "svelte";
 import "./app.css";
-import App from "./App.svelte";
+import RepoWindow from "./RepoWindow.svelte";
 import WordPopover from "./lib/WordPopover.svelte";
 import UpdateRestartGate from "./lib/UpdateRestartGate.svelte";
 import WindowBackground from "./lib/WindowBackground.svelte";
@@ -25,9 +25,11 @@ else if (location.hash === "#command") void import("./lib/UserCommandWindow.svel
 else if (location.hash === "#commit-summary") void import("./lib/CommitSummaryWindow.svelte").then((m) => mount(m.default, { target }));
 else {
   mount(WindowBackground, { target: document.body });
-  mount(App, { target });
+  mount(RepoWindow, { target });
 }
 // What a word of a git command means, over every window's sheets.
-mount(WordPopover, { target: document.body });
+if (settingsRoute(location.hash) !== null || ["#console", "#command", "#commit-summary"].includes(location.hash)) {
+  mount(WordPopover, { target: document.body });
+}
 
 mount(UpdateRestartGate, { target: document.body });

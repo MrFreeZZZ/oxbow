@@ -1,14 +1,14 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { diffScroll } from "./diffScroll";
   // The diff column of the Changes panel: what is shown over it (a file's side, or every file
   // of a side), the diffs with the actions of each hunk and file, or the way on when a side has
   // nothing left.
 
-  import { api } from "./api";
   import { hunkRequest, linesRequest, stashMessageFor, type LinesKind } from "./changes";
   import { stashLinesRequest } from "./stashLines";
   import type { Shown } from "./changesView";
-  import { confirm, type Request } from "./confirm.svelte";
+  import { type Request } from "./confirm.svelte";
   import DiffTools from "./DiffTools.svelte";
   import DiffView, { type LinePicker } from "./DiffView.svelte";
   import FoldAll from "./FoldAll.svelte";
@@ -17,6 +17,9 @@
   import { updateFolderRequest } from "./submodules";
   import TipCard from "./TipCard.svelte";
   import type { FileChange, FileDiff, Hunk, Side } from "./types";
+
+  const scope = useRepoScope();
+  const { api, confirm } = scope;
 
   let {
     color,
@@ -330,46 +333,32 @@
 {/if}
 
 <style>
-  .segmented {
-    flex-shrink: 0;
-    display: flex;
-    padding: 2px;
-    border-radius: var(--radius-m);
-    background: var(--field);
-  }
   .segmented button {
     height: 22px;
     min-width: 58px;
     padding: 0 10px;
-    border-radius: var(--radius-s);
     font-size: var(--text-small);
     font-weight: 500;
-    color: var(--text2);
     white-space: nowrap;
-  }
-  .segmented button.on {
-    background: var(--sheet);
-    color: var(--text);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
   }
   .segmented button:disabled:not(.on) {
     opacity: 0.45;
     cursor: default;
   }
-  /* Stage with its menu on the bar of the open file: one capsule cut in two. */
+  /* Stage with its menu on the bar of the open file: two halves of one control. */
   .split {
     display: inline-flex;
     gap: 1px;
     flex-shrink: 0;
   }
   .split .button:first-child {
-    border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+    border-radius: var(--radius-m) 0 0 var(--radius-m);
     padding-right: 8px;
   }
   .split .more {
     width: 22px;
     padding: 0;
-    border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+    border-radius: 0 var(--radius-m) var(--radius-m) 0;
   }
   .split .more .icon {
     width: 11px;

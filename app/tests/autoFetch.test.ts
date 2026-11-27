@@ -3,6 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 import ts from "typescript";
 import { Reloads, Tickets } from "../src/lib/loads.ts";
+import { autoFetchScheduled, repoWorkOnFocus } from "../src/lib/tabWork.ts";
 
 const app = fs.readFileSync(new URL("../src/App.svelte", import.meta.url), "utf8");
 
@@ -22,18 +23,30 @@ function setup(fetch: (auto: boolean) => Promise<FetchReply>, timeOrigin = perfo
   const requests: { id: number; remote: string | null }[] = [];
   const refresh = Promise.withResolvers<void>();
   const confirmed = Promise.withResolvers<SyncRequest>();
+  const preparing = Promise.withResolvers<void>();
+  const availability = { active: true, modal: false };
+  let syncSetup: Promise<void> | undefined;
+  let wake = () => {};
   const syncRefresh = () => {
     calls.push("sync-refresh");
     return refresh.promise;
   };
   let onEvent: (event: unknown) => void = () => {};
   const globals = {
-    $state: (value: unknown) => value,
+    $state: Object.assign((value: unknown) => value, { raw: (value: unknown) => value }),
+    $effect: (effect: () => void) => { wake = effect; },
+    untrack: (fn: () => void) => fn(),
+    scope: { isActive: () => availability.active },
+    repoWorkOnFocus,
+    overviewShown: false,
+    canSwitch: () => !availability.modal,
+    fixing: null,
+    splitting: null,
     performance: { timeOrigin },
     getCurrentWindow: () => ({ listen: async (_name: string, callback: typeof onEvent) => { onEvent = callback; } }),
     waitingWords: () => "Waiting…",
     repo: { path: "repo" },
-    history: { head: { branch: "feature" }, submodules: [] },
+    history: { head: { branch: "feature" }, submodules: [] as string[] },
     remoteCtx: { remote: "origin" },
     fetchTarget: () => ({ remote: "origin", label: "origin" }),
     api: {
@@ -44,7 +57,16 @@ function setup(fetch: (auto: boolean) => Promise<FetchReply>, timeOrigin = perfo
       },
       stopFetch: async (id: number) => calls.push(`stop:${id}`),
       refreshRemoteTags: async () => calls.push("ls-remote"),
-      pullSetup: async () => ({ mode: "rebase", autostash: true }),
+      pullSetup: async () => {
+        preparing.resolve();
+        if (syncSetup) await syncSetup;
+        return { mode: "rebase", autostash: true };
+      },
+      unpushedSubmodules: async () => {
+        preparing.resolve();
+        await syncSetup;
+        return [];
+      },
     },
     refreshQuietly: async () => {
       calls.push("refresh");
@@ -66,15 +88,23 @@ function setup(fetch: (auto: boolean) => Promise<FetchReply>, timeOrigin = perfo
     checkRemoteTags: () => {},
     openConflicts: () => {},
   };
-  const { activity, backgroundFetch, sync, setRemote, switchRepo } = Function(
-    ...Object.keys(globals), `${js}; return {
+  const { activity, backgroundFetch, sync, setRemote, switchRepo, setOverview } = Function(
+    ...Object.keys(globals), "windowApi", `${js}; return {
       activity, backgroundFetch, sync,
       setRemote: (remote) => { remoteCtx = { remote }; },
+      setOverview: (shown) => { overviewShown = shown; },
       switchRepo: () => { repo = { path: "other" }; return activity.reset(); },
     };`,
-  )(...Object.values(globals));
+  )(...Object.values(globals), globals.api);
   const event = (fetch: number, remote: string | null, event: unknown) => onEvent({ payload: { fetch, remote, event } });
-  return { activity, backgroundFetch, sync, calls, requests, event, refresh, confirmed, setRemote, switchRepo };
+  return {
+    activity, backgroundFetch, sync, calls, requests, event, refresh, confirmed, setRemote, switchRepo,
+    preparing, availability, setOverview, wake: () => wake(),
+    holdSetup: (until: Promise<void>) => {
+      syncSetup = until;
+      globals.history.submodules.push("sub");
+    },
+  };
 }
 
 test("a skipped timer tick leaves Activity and remote tags alone", async () => {
@@ -123,6 +153,23 @@ test("manual Fetch can start during an invisible timer tick and survives its lat
   assert.deepEqual(calls, ["auto", "manual", "ls-remote", "refresh", "notice"]);
 });
 
+test("a new sync choice replaces the waiting request while fetch is active", async () => {
+  const auto = Promise.withResolvers<FetchReply>();
+  const { activity, backgroundFetch, confirmed, refresh, sync } = setup(() => auto.promise);
+  const tick = backgroundFetch(true);
+  await sync("push");
+  const [push] = activity.queued;
+  await sync("pull", "merge");
+  assert.equal(activity.queued.length, 1);
+  assert.notEqual(activity.queued[0].id, push.id);
+
+  auto.resolve({ retryAfterMs: null });
+  await tick;
+  await sync("push"); // The fetch ended and the chosen Pull is preparing.
+  refresh.resolve();
+  assert.deepEqual(await confirmed.promise, { kind: "pull", remote: "origin", mode: "merge" });
+});
+
 for (const [kind, title] of [["pull", "Pull into feature"], ["push", "Push feature"]] as const) {
   test(`${kind} queues behind auto-fetch before its first event and confirms once after refreshing`, async () => {
     const auto = Promise.withResolvers<FetchReply>();
@@ -142,12 +189,13 @@ for (const [kind, title] of [["pull", "Pull into feature"], ["push", "Push featu
     assert.deepEqual(calls, ["auto"]);
     auto.resolve({ updated: 1, gaveWay: false, remote: "upstream" });
     await tick;
-    assert.deepEqual(activity.queued, []);
+    assert.equal(activity.queued.length, 1, "preparation keeps the Activity row cancellable");
     assert.deepEqual(calls, ["auto", "sync-refresh", "ls-remote", "refresh"]);
 
     setRemote("upstream");
     refresh.resolve();
     assert.deepEqual(await confirmed.promise, { kind, remote: "upstream", ...(mode && { mode }) });
+    assert.deepEqual(activity.queued, []);
     assert.equal(calls.filter((call) => call.startsWith("confirm:")).length, 1);
   });
 }
@@ -165,13 +213,104 @@ for (const retryAfterMs of [null, 5000]) {
     auto.resolve({ retryAfterMs });
     assert.equal(await tick, retryAfterMs);
     assert.equal(activity.running, null);
-    assert.deepEqual(activity.queued, []);
+    assert.equal(activity.queued.length, 1);
     assert.deepEqual(activity.recent, []);
     assert.deepEqual(calls, ["auto", "sync-refresh"]);
     refresh.resolve();
     assert.deepEqual(await confirmed.promise, { kind: "push", remote: "origin" });
   });
 }
+
+for (const kind of ["pull", "push"] as const) {
+  test(`${kind} stays queued if the tab is hidden when fetch finishes`, async () => {
+    const auto = Promise.withResolvers<FetchReply>();
+    const { activity, availability, backgroundFetch, calls, confirmed, refresh, sync, wake } = setup(() => auto.promise);
+    const tick = backgroundFetch(true);
+    const mode = kind === "pull" ? "merge" : undefined;
+    await sync(kind, mode);
+    const [waiting] = activity.queued;
+    availability.active = false; // Another repo tab or Oxbow Home is selected.
+    auto.resolve({ retryAfterMs: 5000 });
+    assert.equal(await tick, 5000);
+    wake();
+    assert.deepEqual(calls, ["auto"]);
+    assert.deepEqual(activity.queued, [waiting]);
+    assert.equal(activity.hasQueuedChange, true);
+
+    availability.active = true;
+    availability.modal = true;
+    wake();
+    assert.deepEqual(calls, ["auto"]);
+    availability.modal = false;
+    wake();
+    wake();
+    assert.deepEqual(calls, ["auto", "sync-refresh"]);
+    refresh.resolve();
+    assert.deepEqual(await confirmed.promise, { kind, remote: "origin", ...(mode && { mode }) });
+    wake();
+    assert.equal(calls.filter((call) => call === `confirm:${kind}`).length, 1);
+  });
+
+  for (const stage of ["refresh", "IPC"] as const) {
+    test(`${kind} keeps its request if the user leaves during ${stage}`, async () => {
+      const auto = Promise.withResolvers<FetchReply>();
+      const ipc = Promise.withResolvers<void>();
+      const { activity, availability, backgroundFetch, calls, confirmed, preparing, refresh, holdSetup, sync, wake } = setup(() => auto.promise);
+      const tick = backgroundFetch(true);
+      await sync(kind);
+      const [waiting] = activity.queued;
+      if (stage === "IPC") holdSetup(ipc.promise);
+      auto.resolve({ updated: 0, gaveWay: true, remote: null });
+      await tick;
+      if (stage === "IPC") {
+        refresh.resolve();
+        await preparing.promise;
+      }
+      availability.active = false;
+      refresh.resolve();
+      ipc.resolve();
+      await new Promise(setImmediate);
+      assert.deepEqual(calls, ["auto", "sync-refresh"]);
+      assert.deepEqual(activity.queued, [waiting]);
+
+      availability.active = true;
+      wake();
+      wake();
+      await confirmed.promise;
+      assert.deepEqual(activity.queued, []);
+      assert.equal(calls.filter((call) => call === "sync-refresh").length, 2);
+      assert.equal(calls.filter((call) => call === `confirm:${kind}`).length, 1);
+    });
+  }
+}
+
+test("cancelling from Activity during preparation prevents a queued Push", async () => {
+  const auto = Promise.withResolvers<FetchReply>();
+  const { activity, backgroundFetch, calls, refresh, sync, wake } = setup(() => auto.promise);
+  const tick = backgroundFetch(true);
+  await sync("push");
+  const [waiting] = activity.queued;
+  auto.resolve({ retryAfterMs: null });
+  await tick;
+  activity.unqueue(waiting.id);
+  refresh.resolve();
+  await new Promise(setImmediate);
+  wake();
+  assert.deepEqual(calls, ["auto", "sync-refresh"]);
+  assert.equal(activity.hasQueuedChange, false);
+});
+
+test("the single-repository overview also pauses queued work", async () => {
+  const auto = Promise.withResolvers<FetchReply>();
+  const { activity, backgroundFetch, calls, setOverview, sync } = setup(() => auto.promise);
+  const tick = backgroundFetch(true);
+  await sync("pull");
+  setOverview(true);
+  auto.resolve({ retryAfterMs: null });
+  await tick;
+  assert.deepEqual(calls, ["auto"]);
+  assert.equal(activity.queued.length, 1);
+});
 
 test("switching repositories drops a queued Pull and ignores the old auto-fetch's result", async () => {
   const auto = Promise.withResolvers<FetchReply>();
@@ -228,7 +367,7 @@ test("queued Pull waits for the older history page and the reload that reads fre
     lfs: { load: () => {} },
   };
   const HistoryLoader = Function(...Object.keys(globals), `${js}; return HistoryLoader;`)(...Object.values(globals));
-  const loader = new HistoryLoader({ repo: {}, tickets: new Tickets() }, (next: typeof initial) => setRemote(next.remote));
+  const loader = new HistoryLoader(globals, { repo: {}, tickets: new Tickets() }, (next: typeof initial) => setRemote(next.remote));
   loader.history = initial;
   const paging = loader.loadOlder();
   assert.deepEqual(reads, [4000]);
@@ -301,6 +440,9 @@ test("auto-fetch replaces the next interval for a timed retry and keeps it for a
     $effect: (start: () => () => void) => t.after(start()),
     overviewShown: false,
     repo: {},
+    scope: { isActive: () => true },
+    autoFetchScheduled,
+    repoWorkOnFocus,
     prefs: { get: (key: string) => ({ "oxbow.fetch.auto": true, "oxbow.fetch.interval": 1 })[key] },
     confirm: { request: null },
     document: { hidden: false },

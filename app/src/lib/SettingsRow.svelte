@@ -4,8 +4,9 @@
 
   import { mac } from "./keys";
   import { model } from "./settingsModel.svelte";
+  import SettingGear from "./SettingGear.svelte";
   import ShortcutKeys from "./ShortcutKeys.svelte";
-  import { GEAR, stepPopup, text, withCurrent, type Row } from "./settingsRows";
+  import { stepPopup, text, withCurrent, type Row } from "./settingsRows";
 
   const canDetectOpenSelect = CSS.supports("selector(select:open)");
 
@@ -45,17 +46,14 @@
   }}
 >
   {#if row.setting || row.more}
-    <button
-      class="gear"
-      class:on={menuOn}
-      aria-label="More actions for {text(row.label)}"
-      onclick={(event) => {
-        const box = event.currentTarget.getBoundingClientRect();
+    <SettingGear
+      label={text(row.label)}
+      on={menuOn}
+      open={(button) => {
+        const box = button.getBoundingClientRect();
         onMenu(box.left, box.bottom + 4);
       }}
-    >
-      <svg class="icon" viewBox="0 0 16 16"><path d={GEAR} /></svg>
-    </button>
+    />
   {/if}
   {#if row.file}
     {@const file = row.file()}
@@ -64,6 +62,7 @@
     </span>
   {/if}
   {#if row.image?.()}<img class="avatar" src={row.image()} alt="" />{/if}
+  {#if row.swatch}<span class="swatch" style:background={row.swatch} aria-hidden="true"></span>{/if}
   <span class="text" class:unavailable={off}>
     <span class="name" class:mono={row.mono}>{text(row.label)}</span>
     {#if text(row.sub)}<span class="sub {row.subTone?.() ?? ''}">{text(row.sub)}</span>{/if}
@@ -72,7 +71,7 @@
   {#if control?.type === "value"}
     <span class="value" class:off>{text(control.text)}</span>
   {:else if control?.type === "seg"}
-    <span class="seg" class:off role="radiogroup" aria-label={text(row.label)}>
+    <span class="segmented" class:off role="radiogroup" aria-label={text(row.label)}>
       {#each control.options() as option (option.value)}
         <button role="radio" aria-checked={control.get() === option.value} disabled={off} onclick={() => control.set(option.value)}>{option.label}</button>
       {/each}
@@ -129,7 +128,7 @@
       <button class="button small" disabled={off} onclick={() => (editing = { id: row.id, value: control.get() })}>Edit</button>
     {/if}
   {:else if control?.type === "button"}
-    <button class="button small" class:danger={control.danger} disabled={off} onclick={control.run}>{text(control.label)}</button>
+    <button class="button small" class:danger={control.danger} aria-label={control.ariaLabel} disabled={off} onclick={control.run}>{text(control.label)}</button>
   {:else if control?.type === "range"}
     <span class="range" class:off>
       <input type="range" aria-label={text(row.label)} aria-valuetext={`${control.get()}${control.suffix ?? ""}`} min={control.min} max={control.max} step={control.step} value={control.get()} style:--range-fill="{100 * (control.get() - control.min) / (control.max - control.min)}%" disabled={off} oninput={(event) => control.set(Number(event.currentTarget.value))} onchange={() => control.commit?.()} onblur={() => control.commit?.()} />
@@ -165,7 +164,7 @@
     width: 14px;
     height: 14px;
     border-radius: var(--radius-pill);
-    background: var(--seg-on);
+    background: var(--slider-thumb);
     border: 0.5px solid var(--panel-border);
     box-shadow: var(--ctrl-shadow);
   }
@@ -192,35 +191,15 @@
     border-top: 0.5px solid var(--sep);
   }
 
-  .gear {
+  .row > :global(.setting-gear) {
     position: absolute;
     left: -27px;
     top: 50%;
     margin-top: -10px;
-    width: 20px;
-    height: 20px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius-pill);
-    color: var(--text2);
-    opacity: 0;
   }
 
-  .gear .icon {
-    width: 14px;
-    height: 14px;
-    stroke-width: 1.3;
-  }
-
-  .row:hover .gear,
-  .gear.on,
-  .gear:focus-visible {
+  .row:hover > :global(.setting-gear) {
     opacity: 1;
-  }
-
-  .gear.on {
-    background: var(--field);
   }
 
   .text {
@@ -263,6 +242,14 @@
     border-radius: var(--radius-pill);
     flex-shrink: 0;
     background: var(--field);
+  }
+
+  .swatch {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    border-radius: var(--radius-pill);
+    box-shadow: inset 0 0 0 1px var(--sep);
   }
 
   .file {
@@ -329,29 +316,18 @@
     min-width: 72px;
   }
 
-  .seg {
-    display: flex;
+  .segmented {
     gap: 2px;
-    padding: 2px;
-    border-radius: var(--radius-m);
-    background: var(--field);
-    flex-shrink: 0;
   }
 
-  .seg button {
+  .segmented button {
     min-width: 72px;
     height: 24px;
     padding: 0 12px;
-    border-radius: var(--radius-s);
     text-align: center;
     font-size: var(--text-small);
   }
 
-  .seg button[aria-checked="true"] {
-    background: var(--seg-on);
-    box-shadow: var(--seg-shadow);
-    font-weight: 600;
-  }
 
   .popup {
     position: relative;
@@ -366,9 +342,7 @@
     height: 26px;
     padding: 0 26px 0 11px;
     border-radius: var(--radius-m);
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--ctrl-shadow);
+    background: var(--field);
     color: var(--text);
     font: inherit;
     font-size: var(--text-small);
@@ -461,7 +435,7 @@
       overflow-wrap: anywhere;
     }
 
-    .gear {
+    .row > :global(.setting-gear) {
       position: static;
       grid-column: 1;
       grid-row: 2;
@@ -469,7 +443,7 @@
       opacity: 1;
     }
 
-    .row > :not(.gear):not(.file):not(.avatar):not(.text) {
+    .row > :not(:global(.setting-gear)):not(.file):not(.avatar):not(.text) {
       grid-column: 2;
       justify-self: end;
       min-width: 0;
@@ -481,7 +455,7 @@
       overflow-wrap: anywhere;
     }
 
-    .seg {
+    .segmented {
       flex-wrap: wrap;
       justify-content: flex-end;
     }

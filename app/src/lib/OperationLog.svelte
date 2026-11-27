@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { popoverEscape } from "./popoverEscape";
   // The toolbar's Undo button and its popover: every step Oxbow ran here, newest first. The top
   // one has Undo; any other goes back to right after it with Restore to Here. Its second tab
@@ -6,7 +7,7 @@
   // no branch has any more.
 
   import type { Request } from "./confirm.svelte";
-  import { cannotRestore, clearRequest, entryIcon, isRedo, keptUntil, lostUntil, moveIcon, moveText, oplog, reflogRows, restoreRequest, undoRequest } from "./oplog.svelte";
+  import { cannotRestore, clearRequest, entryIcon, isRedo, keptUntil, lostUntil, moveIcon, moveText, reflogRows, restoreRequest, undoRequest } from "./oplog.svelte";
   import { relativeTime } from "./format";
   import { errorLine } from "./reads";
   import { prefs } from "./prefs.svelte";
@@ -14,6 +15,9 @@
   import { combo } from "./shortcuts";
   import WhyNote from "./WhyNote.svelte";
   import type { OpEntry, ReflogEntry } from "./types";
+
+  const scope = useRepoScope();
+  const { oplog } = scope;
 
   let {
     repo,
@@ -139,7 +143,7 @@
             {#if entry.lost && entry.expires !== null}<span class="until">{lostUntil(entry)}</span>{/if}
           </span>
           <span class="actions">
-            <button class="compare" title="Show the commit and its changes" aria-label="Show {entry.summary}" onclick={(e) => (e.stopPropagation(), show(entry))}>Show</button>
+            <button class="button small compare" title="Show the commit and its changes" aria-label="Show {entry.summary}" onclick={(e) => (e.stopPropagation(), show(entry))}>Show</button>
             {#if entry.lost}
               <button class="button small restore" title="Keep {entry.lostCount === 1 ? 'this commit' : `these ${entry.lostCount} commits`} on a new branch, without a reset" aria-label="Create a branch for {entry.summary}" onclick={(e) => (e.stopPropagation(), branch(entry))}>Create Branch…</button>
             {/if}
@@ -178,13 +182,13 @@
         </span>
         <span class="actions">
           <button
-            class="compare"
+            class="button small compare"
             title={i === 0 ? "Compare the files before this step with now" : "Compare the files right after this step with now"}
             aria-label="Compare {i === 0 ? 'before' : 'after'} “{entry.title}” with now"
             onclick={() => compare(entry, i > 0)}>Compare</button
           >
           {#if entry.rewrites?.length}
-            <button class="compare" title="The commits this step rewrote, before beside after (git range-diff)" aria-label="Compare the series “{entry.title}” rewrote" onclick={() => series(entry)}>Compare Series</button>
+            <button class="button small compare" title="The commits this step rewrote, before beside after (git range-diff)" aria-label="Compare the series “{entry.title}” rewrote" onclick={() => series(entry)}>Compare Series</button>
           {/if}
           {#if i > 0}
             <button class="button small restore" disabled={!!blocked} title={blocked ?? "Back to right after this step"} aria-label="Restore to right after “{entry.title}”" onclick={() => go(restoreRequest(entry, i))}>Restore to Here</button>
@@ -219,7 +223,7 @@
 {:else}
   <div class="anchor">
     <button
-      class="capsule"
+      class="toolbar-control"
       onclick={toggle}
       aria-haspopup="dialog"
       aria-expanded={oplog.open}
@@ -271,18 +275,6 @@
     margin-top: 0;
     padding: var(--space-3) 10px;
   }
-  .capsule {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    height: 34px;
-    padding: 0 10px 0 12px;
-    border-radius: var(--radius-pill);
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--icon);
-  }
   .chevron {
     width: 12px;
     height: 12px;
@@ -296,7 +288,7 @@
   .pop {
     position: absolute;
     right: 0;
-    top: 40px;
+    top: calc(100% + 6px);
     z-index: 20;
     width: 480px;
     max-width: calc(100vw - 32px);
@@ -334,27 +326,13 @@
   .head {
     align-items: center;
   }
-  .segmented {
-    flex-shrink: 0;
-    display: flex;
-    padding: 2px;
-    border-radius: var(--radius-m);
-    background: var(--field);
-  }
   .segmented button {
     height: 22px;
     min-width: 64px;
     padding: 0 10px;
-    border-radius: var(--radius-s);
     font-size: var(--text-small);
     font-weight: 500;
-    color: var(--text2);
     white-space: nowrap;
-  }
-  .segmented button.on {
-    background: var(--sheet);
-    color: var(--text);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
   }
   .move {
     cursor: default;
@@ -481,21 +459,6 @@
   .row:focus-within {
     background: var(--field);
   }
-  .compare {
-    display: flex;
-    flex-shrink: 0;
-    height: 26px;
-    padding: 0 12px;
-    border-radius: var(--radius-pill);
-    align-items: center;
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    font-weight: 500;
-    font-size: var(--text-small);
-    color: var(--text);
-  }
-
   .move:hover .lost,
   .move:focus-within .lost {
     display: none;

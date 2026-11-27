@@ -11,14 +11,12 @@
   // in blocks near the screen, like a long diff, so a file of 100,000 lines opens and answers as
   // fast as a short one.
 
-  import { api } from "./api";
-  import { draftSaves } from "./conflictDrafts";
+  import { useRepoScope } from "./repoScope";
   import TipCard from "./TipCard.svelte";
   import EditBox from "./EditBox.svelte";
   import Lazy, { BLOCK } from "./Lazy.svelte";
   import { onMount, tick, untrack } from "svelte";
-  import { confirm, type Request } from "./confirm.svelte";
-  import { kept } from "./kept";
+  import { type Request } from "./confirm.svelte";
   import { prefs } from "./prefs.svelte";
   import { hasWork, makeDraft, mergedCount, readDraft, takeDraft, type Draft, type DraftState, type DraftText, type OldDraft } from "./drafts";
   import {
@@ -55,6 +53,10 @@
   } from "./conflicts";
   import type { Chunk, ConflictFile, ConflictSide, History, MergeTool, Operation, WorkingTree } from "./types";
   import { NO_BRANCH_COLOR, plate, relativeTime, shortId, splitPath, tint } from "./format";
+
+  const scope = useRepoScope();
+  const { kept } = scope;
+  const { api, draftSaves, confirm } = scope;
 
   let {
     folder,
@@ -1372,10 +1374,8 @@
   .pick {
     height: 20px;
     padding: 0 9px;
-    border-radius: var(--radius-pill);
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
+    border-radius: var(--radius-s);
+    background: var(--field);
     font-family: var(--font);
     font-size: var(--text-caption);
     font-weight: 600;

@@ -20,7 +20,11 @@ type Command = {
   mac?: string[];
   other?: string[];
   scope?: Scope;
+  /** Shown in Keyboard Shortcuts, and kept: Settings cannot take the keys or give them away. */
+  fixed?: boolean;
 };
+
+const REPO_TAB_NUMBER_KEYS = [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `Mod+${n}`);
 
 /** Every command a key can run. The comments name VS Code's command with the same key. */
 export const COMMANDS = {
@@ -63,8 +67,12 @@ export const COMMANDS = {
   // Toggle Maximize Editor Group.
   expand: { category: "View", title: "Toggle Expanded Details", mac: ["Mod+K Mod+M", "Ctrl+Mod+E"], other: ["Mod+K Mod+M"] },
   // Open Next Editor and Open Previous Editor: the tabs of the details panel.
-  nextTab: { category: "View", title: "Open Next Tab", mac: ["Alt+Mod+Right", "Ctrl+Tab"], other: ["Mod+PageDown", "Ctrl+Tab"] },
-  previousTab: { category: "View", title: "Open Previous Tab", mac: ["Alt+Mod+Left", "Ctrl+Shift+Tab"], other: ["Mod+PageUp", "Ctrl+Shift+Tab"] },
+  nextTab: { category: "View", title: "Open Next Tab", mac: ["Alt+Mod+Right"], other: ["Mod+PageDown"] },
+  previousTab: { category: "View", title: "Open Previous Tab", mac: ["Alt+Mod+Left"], other: ["Mod+PageUp"] },
+  // The repository tabs, as in Chrome. Ctrl+Tab on the Mac too: ⌘Tab switches apps.
+  nextRepoTab: { category: "Tabs", title: "Next Repository Tab", mac: ["Ctrl+Tab"], other: ["Ctrl+Tab"] },
+  previousRepoTab: { category: "Tabs", title: "Previous Repository Tab", mac: ["Ctrl+Shift+Tab"], other: ["Ctrl+Shift+Tab"] },
+  repoTabNumber: { category: "Tabs", title: "Switch to Repository Tab 1–9", mac: REPO_TAB_NUMBER_KEYS, other: REPO_TAB_NUMBER_KEYS, fixed: true },
   // Show Output, where VS Code lists the git commands it ran; Toggle Terminal too, the other
   // place people look for them.
   console: { category: "View", title: "Show Console", mac: ["Mod+Shift+U", "Ctrl+`", "Alt+Mod+C"], other: ["Mod+Shift+U", "Ctrl+`"] },
@@ -173,7 +181,10 @@ export function defaultsOf(id: ShortcutId, onMac = mac): string[] {
 }
 
 /** The keys a command has now: yours if you set any, else its defaults. */
+const fixed = (id: ShortcutId) => commandOf(id).fixed === true;
+
 export function bindingsOf(id: ShortcutId, mine: Custom = custom(), onMac = mac): string[] {
+  if (fixed(id)) return defaultsOf(id, onMac);
   const own = Object.hasOwn(mine, id) ? mine[id] : undefined;
   return Array.isArray(own) ? own.filter((c) => validCombo(c)) : defaultsOf(id, onMac);
 }
@@ -309,6 +320,11 @@ export class Keymap {
     const single = all.find((s) => s.strokes.length === 1 && s.strokes[0] === stroke);
     return single ? { id: single.id } : null;
   }
+
+  /** A key this map does not own, such as a fixed repository-tab number, drops a chord that was waiting. */
+  endChord() {
+    this.#pending = null;
+  }
 }
 
 /** Whether a key press is one of a screen's commands, e.g. ⌘↩ in the commit message. */
@@ -324,9 +340,15 @@ export function startsWith(combo: string, stroke: string, onMac = mac): boolean 
 
 // --- Your own keys ------------------------------------------------------------------------------
 
+/** ⌘1–⌘9, and Ctrl+1–Ctrl+9 elsewhere, always switch repository tabs. */
+const REPO_TAB_NUMBERS = Object.fromEntries(
+  REPO_TAB_NUMBER_KEYS.map((combo) => [combo, "switches to a repository tab"]),
+);
+
 /** Keys the system or the menus keep, which no command can have. */
 const RESERVED: { mac: Record<string, string>; other: Record<string, string> } = {
   mac: {
+    ...REPO_TAB_NUMBERS,
     "Mod+Q": "quits Oxbow",
     "Mod+H": "hides Oxbow",
     "Alt+Mod+H": "hides the other apps",
@@ -338,7 +360,7 @@ const RESERVED: { mac: Record<string, string>; other: Record<string, string> } =
     "Mod+X": "cuts",
     "Mod+A": "selects all",
   },
-  other: { "Alt+F4": "closes the window", "Mod+C": "copies", "Mod+V": "pastes", "Mod+X": "cuts", "Mod+A": "selects all" },
+  other: { ...REPO_TAB_NUMBERS, "Alt+F4": "closes the window", "Mod+C": "copies", "Mod+V": "pastes", "Mod+X": "cuts", "Mod+A": "selects all" },
 };
 
 /** Why a combo can't be a command's key, or null when it can. */
@@ -388,6 +410,8 @@ function withKeys(mine: Custom, id: ShortcutId, list: string[], onMac: boolean):
 /** Your keys with `combo` given to a command, in place of `replacing` or after its keys, and
  *  taken from the commands it clashed with. */
 export function assign(id: ShortcutId, combo: string, mine: Custom = custom(), onMac = mac, replacing?: string): Custom {
+  // A fixed key stays where it is, and cannot be given to another command.
+  if (fixed(id) || conflicts(id, combo, mine, onMac).some((lost) => fixed(lost.id))) return mine;
   let next = mine;
   for (const lost of conflicts(id, combo, mine, onMac)) {
     next = withKeys(next, lost.id, bindingsOf(lost.id, next, onMac).filter((c) => c !== lost.combo), onMac);
@@ -400,11 +424,13 @@ export function assign(id: ShortcutId, combo: string, mine: Custom = custom(), o
 
 /** Your keys without one of a command's keys. */
 export function unassign(id: ShortcutId, combo: string, mine: Custom = custom(), onMac = mac): Custom {
+  if (fixed(id)) return mine;
   return withKeys(mine, id, bindingsOf(id, mine, onMac).filter((c) => c !== combo), onMac);
 }
 
 /** Your keys with a command back to its defaults. */
 export function resetKeys(id: ShortcutId, mine: Custom = custom()): Custom {
+  if (fixed(id)) return mine;
   const next = { ...mine };
   delete next[id];
   return next;

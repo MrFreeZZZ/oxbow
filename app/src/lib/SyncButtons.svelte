@@ -1,16 +1,21 @@
 <script lang="ts">
-  // Fetch, Pull and Push in the toolbar, in one capsule: Fetch shows Activity's progress, and a
+  // Fetch, Pull and Push sit together in the toolbar: Fetch shows Activity's progress, and a
   // grey Pull or Push still answers a click, with why it can't run, under it.
 
-  import { api } from "./api";
-  import { activity, type ActivityItem } from "./activity.svelte";
+  import { useRepoScope } from "./repoScope";
+  import { type ActivityItem } from "./activity.svelte";
   import ActivityPopover from "./ActivityPopover.svelte";
   import WhyPopover from "./WhyPopover.svelte";
+  import { lane } from "./format";
   import type { RemoteContext, SyncBlock, SyncFix } from "./remote";
   import type { History } from "./types";
 
+  const scope = useRepoScope();
+  const { api, activity } = scope;
+
   let {
     history,
+    color,
     remote,
     pullBlock,
     pushBlock,
@@ -22,6 +27,7 @@
     onFix,
   }: {
     history: History;
+    color: number;
     remote: RemoteContext;
     /** Why Pull or Push can't run now, if it can't. */
     pullBlock: SyncBlock | null;
@@ -47,7 +53,7 @@
 <div class="sync">
   <div class="group" role="group" aria-label="Sync with remote">
     <button
-      class="fetch"
+      class="toolbar-control fetch"
       onclick={() => onSync("fetch")}
       oncontextmenu={(event) => {
         event.preventDefault();
@@ -74,6 +80,7 @@
     </button>
     <!-- Grey when it can't run, but it still answers a click: with why, under it. -->
     <button
+      class="toolbar-control"
       class:off={!!pullBlock}
       class:asking={why === "pull"}
       onclick={() => (pullBlock ? (why = why === "pull" ? null : "pull") : onSync("pull"))}
@@ -84,9 +91,10 @@
     >
       <svg class="icon" viewBox="0 0 16 16"><path d="M8 2v9M4.5 7.5 8 11l3.5-3.5M3 14h10" /></svg>
       <!-- Old versions of commits rewritten here are nothing to pull. -->
-      {#if t?.behind && !t.rewritten}<span class="count">{t.behind}</span>{/if}
+      {#if t?.behind && !t.rewritten}<span class="count" style:color={lane(color)}>{t.behind}</span>{/if}
     </button>
     <button
+      class="toolbar-control"
       class:off={!!pushBlock}
       class:asking={why === "push"}
       onclick={() => (pushBlock ? (why = why === "push" ? null : "push") : onSync("push"))}
@@ -96,7 +104,7 @@
       title={why === "push" ? undefined : pushBlock ? `${pushBlock.title} · click for more` : t?.rewritten ? `Force push to ${t.remote}/${t.branch}: it has the old versions of commits you rewrote` : t && !t.gone ? `Push to ${t.remote}/${t.branch}` : `Publish ${history.head.branch} to ${remote.remote}`}
     >
       <svg class="icon" viewBox="0 0 16 16"><path d="M8 12V3M4.5 6.5 8 3l3.5 3.5M3 14h10" /></svg>
-      {#if t?.ahead}<span class="count">{t.ahead}</span>{:else if !t && history.head.branch && !remote.unread}<span class="count">Publish</span>{/if}
+      {#if t?.ahead}<span class="count" style:color={lane(color)}>{t.ahead}</span>{:else if !t && history.head.branch && !remote.unread}<span class="count">Publish</span>{/if}
     </button>
   </div>
   <ActivityPopover fix={onFixFetch} retry={onRetryFetch} settings={() => ((activity.open = false), api.openSettings())} reload={onReload} />
@@ -110,23 +118,6 @@
   .group {
     display: flex;
     align-items: center;
-    height: 34px;
-    padding: 0 4px;
-    border-radius: var(--radius-pill);
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--icon);
-  }
-  .group button {
-    height: 34px;
-    min-width: 36px;
-    padding: 0 9px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 3px;
-    border-radius: var(--radius-pill);
   }
   .group button:disabled,
   .group button.off {

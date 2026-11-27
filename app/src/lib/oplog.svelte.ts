@@ -1,7 +1,7 @@
 // The Operation Log: every step Oxbow ran in this repository, newest first, and the way back to
 // the moment before any of them, or right after one.
 
-import { api } from "./api";
+import { api as windowApi } from "./api";
 import type { Icon, Request } from "./confirm.svelte";
 import { relativeTime } from "./format";
 import { actionIcons } from "./icons";
@@ -10,7 +10,9 @@ import type { HistoryRow, OpEntry, ReflogEntry } from "./types";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-class OplogState {
+export class OplogState {
+  constructor(private readonly api: typeof windowApi = windowApi) {}
+
   entries = $state<OpEntry[]>([]);
   /** The popover under the toolbar button. */
   open = $state(false);
@@ -40,7 +42,7 @@ class OplogState {
     const mine = ++this.#asked;
     this.loading = true;
     try {
-      const entries = await api.operationLog();
+      const entries = await this.api.operationLog();
       if (mine === this.#asked) {
         this.entries = entries;
         this.entriesError = null;
@@ -56,7 +58,7 @@ class OplogState {
     const mine = ++this.#askedReflog;
     this.loadingReflog = true;
     try {
-      const entries = await api.reflogEntries();
+      const entries = await this.api.reflogEntries();
       if (mine === this.#askedReflog) {
         this.reflog = entries;
         this.reflogError = null;

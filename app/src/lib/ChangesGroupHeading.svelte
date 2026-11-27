@@ -170,7 +170,7 @@
     top: 2px;
     width: 24px;
     height: 24px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     display: flex;
     align-items: center;
     justify-content: center;

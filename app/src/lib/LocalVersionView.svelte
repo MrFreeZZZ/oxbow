@@ -1,18 +1,23 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { diffScroll } from "./diffScroll";
   // A version of Local History beside what it changed: since the version saved before it (the
   // last commit for the oldest), or with Compare with Current File, how the file on disk now
   // differs from it. Restore puts it back on disk.
 
-  import { api } from "./api";
   import { relativeTime } from "./format";
   import { bytes } from "./unusual";
   import { sinceWhat, whenSaved } from "./localHistory";
-  import { localVersionEntries, restoreVersion } from "./localHistoryMenu";
+  import { localVersionEntries as localVersionEntriesInRepo, restoreVersion as restoreVersionInRepo } from "./localHistoryMenu";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { FileDiff, LocalVersion } from "./types";
   import DiffView from "./DiffView.svelte";
   import Menu, { type MenuEntry } from "./Menu.svelte";
+
+  const scope = useRepoScope();
+  const { api } = scope;
+  const localVersionEntries = localVersionEntriesInRepo.bind(null, scope);
+  const restoreVersion = restoreVersionInRepo.bind(null, scope);
 
   let {
     version: v,

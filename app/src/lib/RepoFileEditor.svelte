@@ -4,12 +4,17 @@
   // wrong; the gray notes beside each line say what it matches. The core checks the text as it
   // is typed, and errors keep it from being saved.
 
+  import { useRepoScope } from "./repoScope";
   import { onDestroy } from "svelte";
-  import { api, stopped } from "./api";
+  import { stopped } from "./api";
   import { keys } from "./keys";
   import { applyFix, banner, drawnLines, lineStart, mergedCheck, messageParts, notesByLine, paintLine, problemsByLine, status } from "./repoFiles";
-  import { loadRepoFiles, repoFiles, untrack } from "./repoFileState.svelte";
+  import { loadRepoFiles, repoFiles, untrack as untrackInRepo } from "./repoFileState.svelte";
   import type { FileCheck, FileProblem, RepoFileKind, RepoFileText } from "./types";
+
+  const scope = useRepoScope();
+  const { api } = scope;
+  const untrack = untrackInRepo.bind(null, scope);
 
   let { kind, gitlab }: { kind: RepoFileKind; gitlab: boolean } = $props();
 

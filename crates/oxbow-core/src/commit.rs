@@ -254,6 +254,9 @@ pub struct DiffLine {
     pub new_line: Option<u32>,
     /// The line without its line ending.
     pub text: String,
+    /// The old text of a context line whose whitespace changes were hidden.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_text: Option<String>,
     /// The line ends with a carriage return (CRLF), which `text` leaves out.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub cr: bool,
@@ -1376,12 +1379,31 @@ pub fn diff_text(before: &str, after: &str, context: DiffContext, with_words: bo
     diff_text_with(before, after, context, with_words, false)
 }
 
-/// The same line with every run of whitespace as one space and none at the ends, so lines that
-/// differ only in whitespace compare equal.
+/// Normalize spaces and tabs on each line while keeping its original ending.
 fn squeeze_whitespace(text: &str) -> String {
-    text.split_inclusive('\n')
-        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" ") + "\n")
-        .collect()
+    let mut squeezed = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let (body, ending) = if let Some(body) = line.strip_suffix("\r\n") {
+            (body, "\r\n")
+        } else if let Some(body) = line.strip_suffix('\n') {
+            (body, "\n")
+        } else {
+            (line, "")
+        };
+        let mut words = body.split([' ', '\t']).filter(|word| !word.is_empty());
+        if let Some(first) = words.next() {
+            squeezed.push_str(first);
+            for word in words {
+                squeezed.push(' ');
+                squeezed.push_str(word);
+            }
+        } else if ending.is_empty() {
+            // Keep a token for a blank last line without a terminator.
+            squeezed.push(' ');
+        }
+        squeezed.push_str(ending);
+    }
+    squeezed
 }
 
 /// Diff two texts into hunks, optionally treating lines that differ only in whitespace as equal.
@@ -1470,12 +1492,15 @@ pub(crate) fn diff_text_within(
         let mut lines = Vec::new();
         let push_context = |lines: &mut Vec<DiffLine>, o: &mut u32, n: &mut u32, count: u32| {
             for _ in 0..count {
+                let before = old[*o as usize];
+                let after = new[*n as usize];
                 lines.push(DiffLine {
                     kind: LineKind::Context,
                     old_line: Some(*o + 1),
                     new_line: Some(*n + 1),
-                    text: text(old[*o as usize]),
-                    cr: cr(new[*n as usize]),
+                    text: text(after),
+                    old_text: (before != after).then(|| text(before)),
+                    cr: cr(after),
                     words: None,
                     secret: None,
                 });
@@ -1494,6 +1519,7 @@ pub(crate) fn diff_text_within(
                     old_line: Some(i + 1),
                     new_line: None,
                     text: text(old[i as usize]),
+                    old_text: None,
                     cr: cr(old[i as usize]),
                     words: None,
                     secret: None,
@@ -1507,6 +1533,7 @@ pub(crate) fn diff_text_within(
                     old_line: None,
                     new_line: Some(i + 1),
                     text: text(new[i as usize]),
+                    old_text: None,
                     cr: cr(new[i as usize]),
                     words: None,
                     secret: None,
@@ -1679,7 +1706,33 @@ mod tests {
         assert_eq!(kinds(&all[0]), " --++ ");
         let changed = diff_text_with(before, after, DiffContext::Compact, false, true);
         assert_eq!(kinds(&changed[0]), "  -+ ");
-        assert_eq!(changed[0].lines[2].text, "    stop();");
+        let context = &changed[0].lines[1];
+        assert_eq!(context.text, "\trun();  ");
+        assert_eq!(context.old_text.as_deref(), Some("    run();"));
+    }
+
+    #[test]
+    fn whitespace_filter_keeps_line_endings_and_unterminated_blank_lines() {
+        let hunks = diff_text_with("a \r\n  ", "a\n", DiffContext::Compact, false, true);
+        assert_eq!(kinds(&hunks[0]), "--+");
+        assert_eq!(hunks[0].lines[1].text, "  ");
+        assert!(diff_text_with("a\n ", "a\n\t", DiffContext::Compact, false, true).is_empty());
+        assert!(!diff_text_with("a ", "a\n", DiffContext::Compact, false, true).is_empty());
+    }
+
+    #[test]
+    fn hidden_indentation_shows_the_new_python_block_without_a_change_marker() {
+        let before = "if balance is not None:\n    append(balance)\n";
+        let after =
+            "if balance is not None:\n    if limit:\n        append(limit)\n    else:\n        append(balance)\n";
+        for mode in [DiffContext::Compact, DiffContext::WholeFile] {
+            let hunks = diff_text_with(before, after, mode, false, true);
+            assert_eq!(kinds(&hunks[0]), " +++ ");
+            let line = hunks[0].lines.last().unwrap();
+            assert_eq!((line.old_line, line.new_line), (Some(2), Some(5)));
+            assert_eq!(line.text, "        append(balance)");
+            assert_eq!(line.old_text.as_deref(), Some("    append(balance)"));
+        }
     }
 
     #[test]

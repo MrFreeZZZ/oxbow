@@ -3,9 +3,12 @@
 
 import { backgroundIntensity, previewIntensity, saveIntensity } from "./backgroundIntensity.svelte";
 import { BRANCH_PALETTES, branchPaletteById } from "./branchPalettes";
+import { confirm, type Request } from "./confirm.svelte";
 import { shortcut } from "./keys";
 import { prefs } from "./prefs.svelte";
+import { REPOSITORY_TAB_TAGS, TAB_TAG_COLOR_KEY, TAB_TAG_STYLE_KEY, tabTagLabelProblem, type RepositoryTabTagId, type TabTagStyle } from "./repositoryTabTags";
 import { model, prefRow } from "./settingsModel.svelte";
+import { REPOSITORY_TAB_TAGS_GROUP } from "./settingsNavigation";
 import { GEAR, opts, type Group, type Option, type Section } from "./settingsRows";
 import { themeById } from "./themes";
 import { tips, TIP_COUNT } from "./tips.svelte";
@@ -14,6 +17,31 @@ import { channelDescription, installedVersion, updateChannels } from "./updates"
 import { updates } from "./updates.svelte";
 
 const confirmOff = () => !prefs.get("oxbow.confirm.enabled");
+
+function tabTagRequest(id: RepositoryTabTagId, original: string, { label, color }: TabTagStyle): Request {
+  const invalid = tabTagLabelProblem(label);
+  return {
+    title: `Edit ${original} Tag`,
+    body: [],
+    icon: "tag",
+    button: "Save",
+    always: true,
+    invalid,
+    fields: [
+      { label: "Name", text: { value: label, edit: (value) => tabTagRequest(id, original, { label: value, color }) }, error: invalid ?? undefined },
+      { label: "Color", color: { value: color, edit: (value) => tabTagRequest(id, original, { label, color: value }) } },
+    ],
+    status: "Saving the tag…",
+    recover: (failure) => ({ title: "Couldn’t save the tag", body: [failure.output], icon: "tag", tone: "err" }),
+    local: {
+      commands: [],
+      run: async () => {
+        await prefs.saveRepositoryTabTagStyle(id, { label: label.trim(), color });
+        return `Saved the ${label.trim()} tag.`;
+      },
+    },
+  };
+}
 
 /** Installed apps as popup options; an empty popup says so. */
 const apps = (list: OpenApp[] | undefined): Option[] => (list?.length ? list.map((app) => ({ value: app.id, label: app.name })) : [{ value: "", label: "None found" }]);
@@ -27,6 +55,12 @@ export const generalSection: Section = {
     {
       title: "Startup",
       rows: [prefRow("oxbow.startup.reopenRepository", "Reopen the repository from the last session", "switch", { sub: "Otherwise Oxbow starts on the Welcome window" })],
+    },
+    {
+      title: "Windows",
+      rows: [prefRow("oxbow.windows.repositoryTabs", "Show repository tabs", "switch", {
+        off: () => prefs.pending("oxbow.windows.repositoryTabs"),
+      })],
     },
     {
       title: "Updates",
@@ -145,9 +179,11 @@ export const themeSection: Section = {
       },
       {
         title: "Background",
+        setting: { kind: "prefGroup", keys: ["oxbow.background.source", "oxbow.background.image", "oxbow.background.intensity"] },
         preview: "background",
         rows: [
           prefRow("oxbow.background.source", "Background", "popup", {
+            setting: { kind: "pref", key: "oxbow.background.source", resetWithGroup: true },
             options: () => [
               { value: "none", label: "None" },
               { value: "spring", label: "Spring" },
@@ -160,13 +196,13 @@ export const themeSection: Section = {
           {
             id: "oxbow.background.image",
             label: "Custom image",
-            setting: { kind: "pref", key: "oxbow.background.image" },
+            setting: { kind: "pref", key: "oxbow.background.image", resetWithGroup: true },
             control: { type: "value", text: () => prefs.get("oxbow.background.image") || "None" },
           },
           {
             id: "oxbow.background.intensity",
             label: "Intensity",
-            setting: { kind: "pref", key: "oxbow.background.intensity" },
+            setting: { kind: "pref", key: "oxbow.background.intensity", resetWithGroup: true },
             off: () => prefs.get("oxbow.background.source") === "none",
             control: { type: "range", min: 0, max: 100, step: 1, suffix: "%", get: () => backgroundIntensity.value ?? prefs.get("oxbow.background.intensity"), set: previewIntensity, commit: () => { void saveIntensity(); } },
           },
@@ -174,9 +210,11 @@ export const themeSection: Section = {
       },
       {
         title: "Code theme",
+        setting: { kind: "prefGroup", keys: ["oxbow.theme", "oxbow.theme.variant"] },
         preview: "theme",
         rows: [
           prefRow("oxbow.theme.variant", "Variant", "seg", {
+            setting: { kind: "pref", key: "oxbow.theme.variant", resetWithGroup: true },
             sub: () => (theme.light && theme.dark ? "Auto follows Appearance above" : `${theme.name} has only a ${theme.dark ? "dark" : "light"} version, so it is used in both`),
             off: () => !(theme.light && theme.dark),
             options: () => [
@@ -198,6 +236,31 @@ export const themeSection: Section = {
             options: () => BRANCH_PALETTES.map((palette) => ({ value: palette.id, label: palette.name })),
           }),
         ],
+      },
+      {
+        id: REPOSITORY_TAB_TAGS_GROUP,
+        title: "Repository Tab Tags",
+        setting: {
+          kind: "prefGroup", keys: [TAB_TAG_STYLE_KEY, TAB_TAG_COLOR_KEY],
+          resetWarning: "Your custom tag names and colors will be removed.",
+        },
+        rows: REPOSITORY_TAB_TAGS.map(({ id }) => {
+          const style = prefs.repositoryTabTagStyle(id);
+          return {
+            id: `repository-tab-tag:${id}`,
+            label: style.label,
+            swatch: style.color,
+            control: {
+              type: "button",
+              label: "Edit…",
+              ariaLabel: `Edit ${style.label} Tag`,
+              run: (event) => {
+                event.currentTarget.focus();
+                void confirm.run(tabTagRequest(id, style.label, style));
+              },
+            },
+          };
+        }),
       },
     ];
   },
@@ -313,12 +376,23 @@ export const integrationsSection: Section = {
       title: "Open in",
       rows: [
         prefRow("oxbow.openIn.editor", "Editor", "popup", {
-          sub: () => (model.git && !model.git.editors.length ? "None of Visual Studio Code, Zed, Sublime Text, Xcode or the JetBrains IDEs is installed" : "The ↗ button on a file’s diff opens it at its first change; a click on a line number opens it at that line"),
+          sub: () => {
+            if (model.git && !model.git.editors.length) return "No supported editor found";
+            const editor = prefs.get("oxbow.openIn.editor") || model.git?.defaultEditor;
+            if (!editor && model.git) return "Choose an editor to open files from the diff";
+            if (editor === "eclipse" || editor === "visualstudio") return "Opens the file without jumping to a line";
+            return "The ↗ button on a file’s diff opens it at its first change; a click on a line number opens it at that line";
+          },
           off: () => !model.git?.editors.length,
           control: {
             type: "popup",
-            options: () => apps(model.git?.editors),
-            get: () => prefs.get("oxbow.openIn.editor") || model.git?.editors[0]?.id || "",
+            options: () => {
+              const options = apps(model.git?.editors);
+              return model.git?.editors.length && !model.git.defaultEditor
+                ? [{ value: "", label: "Choose an editor" }, ...options]
+                : options;
+            },
+            get: () => prefs.get("oxbow.openIn.editor") || model.git?.defaultEditor || "",
             set: (value) => prefs.set("oxbow.openIn.editor", String(value)),
           },
         }),

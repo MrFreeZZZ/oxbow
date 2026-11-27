@@ -1,9 +1,9 @@
+import type { RepoScope } from "./repoScope";
 // Edit Stack: a stack's commits and branch lines as a plan the user rearranges, the plan as git
 // gets it, and the sheets that carry it out. The commit menu's Drop, Squash into Previous, Edit
 // Message of an older commit, Split Commit and Add Staged Changes are one-line plans of the same
 // kind.
 
-import { api } from "./api";
 import { checkFailed } from "./commitChecks";
 import type { Part, Recovery, Request } from "./confirm.svelte";
 import type { BranchContext } from "./branches";
@@ -218,12 +218,12 @@ export function pushBranchesRequest(ctx: BranchContext, stack: Stack, names: str
 // --- One-step edits from the commit menu ------------------------------------------------------
 
 /** The checked-out branch's stack with one commit's action changed, and what that does. */
-async function oneStep(id: string, act: StepAction, message: string | null): Promise<{ stack: Stack; draft: Draft; preview: StackPreview }> {
-  const stack = await api.stack(null);
+async function oneStep(scope: RepoScope, id: string, act: StepAction, message: string | null): Promise<{ stack: Stack; draft: Draft; preview: StackPreview }> {
+  const stack = await scope.api.stack(null);
   const draft = freshDraft(stack);
   draft.acts[id] = act;
   if (message !== null) draft.messages[id] = message;
-  const preview = await api.stackPreview(planOf(stack, draft));
+  const preview = await scope.api.stackPreview(planOf(stack, draft));
   return { stack, draft, preview };
 }
 
@@ -251,10 +251,10 @@ function oneStepRequest(ctx: BranchContext, stack: Stack, draft: Draft, preview:
 const commitParts = (row: { id: string; summary: string }): Part[] => [{ code: shortId(row.id) }, " ", { quote: row.summary }];
 
 /** Split Commit from the commit menu: the picked changes become a new commit right after it. */
-export async function splitRequest(ctx: BranchContext, row: HistoryRow, split: DraftSplit, files: number): Promise<Request> {
-  const stack = await api.stack(null);
+export async function splitRequest(scope: RepoScope, ctx: BranchContext, row: HistoryRow, split: DraftSplit, files: number): Promise<Request> {
+  const stack = await scope.api.stack(null);
   const draft = withSplit(freshDraft(stack), split);
-  const preview = await api.stackPreview(planOf(stack, draft));
+  const preview = await scope.api.stackPreview(planOf(stack, draft));
   const branch = stack.commits.find((c) => c.id === row.id)?.branch ?? stack.top;
   const picked = split.files.every((f) => !f.lines) ? plural(files, "file") : `${plural(split.additions + split.deletions, "changed line")} of ${plural(files, "file")}`;
   return oneStepRequest(
@@ -274,8 +274,8 @@ export async function splitRequest(ctx: BranchContext, row: HistoryRow, split: D
   );
 }
 
-export async function dropCommitRequest(ctx: BranchContext, row: HistoryRow): Promise<Request> {
-  const { stack, draft, preview } = await oneStep(row.id, "drop", null);
+export async function dropCommitRequest(scope: RepoScope, ctx: BranchContext, row: HistoryRow): Promise<Request> {
+  const { stack, draft, preview } = await oneStep(scope, row.id, "drop", null);
   const branch = stack.commits.find((c) => c.id === row.id)?.branch ?? stack.top;
   return oneStepRequest(ctx, stack, draft, preview, row.id, ["Removes ", ...commitParts(row), " from ", chip(ctx, branch), ". Its changes go with it."], {
     title: "Drop this commit?",
@@ -287,8 +287,8 @@ export async function dropCommitRequest(ctx: BranchContext, row: HistoryRow): Pr
   });
 }
 
-export async function squashRequest(ctx: BranchContext, row: HistoryRow): Promise<Request> {
-  const { stack, draft, preview } = await oneStep(row.id, "squash", null);
+export async function squashRequest(scope: RepoScope, ctx: BranchContext, row: HistoryRow): Promise<Request> {
+  const { stack, draft, preview } = await oneStep(scope, row.id, "squash", null);
   const target = foldTarget(draft, row.id);
   const into = stack.commits.find((c) => c.id === target);
   if (!into) throw new Error("There is no commit before this one in the stack to squash it into.");
@@ -307,12 +307,12 @@ export async function squashRequest(ctx: BranchContext, row: HistoryRow): Promis
   return sheet(combinedMessage(stack, draft, into.id));
 }
 
-export async function rewordRequest(ctx: BranchContext, row: HistoryRow): Promise<Request> {
-  const stack = await api.stack(null);
+export async function rewordRequest(scope: RepoScope, ctx: BranchContext, row: HistoryRow): Promise<Request> {
+  const stack = await scope.api.stack(null);
   const commit = stack.commits.find((c) => c.id === row.id);
   if (!commit) throw new Error("This commit is not in the checked-out branch’s stack.");
   // What a new message does to the stack doesn't depend on its words: one dry run will do.
-  const { draft, preview } = await oneStep(row.id, "reword", `${commit.message}\n\n(reworded)`);
+  const { draft, preview } = await oneStep(scope, row.id, "reword", `${commit.message}\n\n(reworded)`);
   const sheet = (typed: string): Request => {
     draft.messages[row.id] = typed;
     const changed = !!typed.trim() && typed.trim() !== commit.message.trim();

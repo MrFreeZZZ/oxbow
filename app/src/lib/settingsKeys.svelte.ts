@@ -4,7 +4,7 @@
 import { keys } from "./keys";
 import { menuIcons, type MenuEntry } from "./Menu.svelte";
 import { copy, model } from "./settingsModel.svelte";
-import type { Row, Section } from "./settingsRows";
+import type { Group, Row, Section } from "./settingsRows";
 import { fits, nameOf, shortcutEdit } from "./shortcutEdit.svelte";
 import { bindingsOf, changedKeys, commandIds, commandOf, defaultsOf, startsWith, strokeOf, type ShortcutId } from "./shortcuts";
 
@@ -14,6 +14,7 @@ const KEY_GROUPS: { title: string; categories: string[]; foot?: string }[] = [
   { title: "Go", categories: ["Go"] },
   { title: "Search", categories: ["Search"] },
   { title: "View", categories: ["View"] },
+  { title: "Tabs", categories: ["Tabs"], foot: "With two or more repositories open in the window." },
   { title: "Custom Commands", categories: ["Custom"] },
   { title: "Git", categories: ["Git"] },
   { title: "Changes", categories: ["Changes"], foot: "In the commit message of the Changes panel." },
@@ -23,17 +24,28 @@ const KEY_GROUPS: { title: string; categories: string[]; foot?: string }[] = [
 
 const mac = navigator.platform.startsWith("Mac");
 
+const overrides: Group = {
+  title: "Shortcut overrides",
+  setting: {
+    kind: "prefGroup", keys: ["oxbow.keyboard.shortcuts"],
+    resetWarning: "Your custom keyboard shortcuts will be removed and the default shortcuts will be restored.",
+  },
+  detail: "shortcutSearch",
+  rows: [],
+};
+
 /** The section's own search: words, or keys pressed with Record Keys on. */
 export const keySearch = $state({ query: "", stroke: null as string | null, record: false, changedOnly: false });
 
 function keyRow(id: ShortcutId): Row {
+  const kept = commandOf(id).fixed === true;
   return {
     id: `keys:${id}`,
     label: () => (model.query.trim() ? nameOf(id) : commandOf(id).title),
-    sub: () => shortcutEdit.note(id)?.text ?? "",
-    subTone: () => shortcutEdit.note(id)?.tone,
+    sub: () => (kept ? "Can’t be changed" : shortcutEdit.note(id)?.text ?? ""),
+    subTone: () => (kept ? undefined : shortcutEdit.note(id)?.tone),
     control: { type: "keys", id },
-    more: () => {
+    ...(kept ? {} : { more: () => {
       const combos = bindingsOf(id);
       const fallback = defaultsOf(id);
       return [
@@ -44,7 +56,7 @@ function keyRow(id: ShortcutId): Row {
         { kind: "item", label: "Copy Command ID", icon: menuIcons.copy, run: () => copy(id, id) },
         ...(changedKeys(id) ? [{ kind: "sep" } as MenuEntry, { kind: "item", label: `Reset to Default (${fallback.length ? fallback.map((c) => keys(c)).join(", ") : "no key"})`, icon: menuIcons.reset, run: () => shortcutEdit.reset(id) } as MenuEntry] : []),
       ];
-    },
+    } }),
   };
 }
 
@@ -77,9 +89,9 @@ export const keysSection: Section = {
   groups: () => {
     const { query, stroke, changedOnly } = keySearch;
     const shown = commandIds().filter((id) => model.query.trim() || (fits(id, query, mac) && (!stroke || bindingsOf(id).some((c) => startsWith(c, stroke))) && (!changedOnly || changedKeys(id))));
-    return KEY_GROUPS.flatMap(({ title, categories, foot }) => {
+    return [overrides, ...KEY_GROUPS.flatMap(({ title, categories, foot }) => {
       const ids = shown.filter((id) => categories.includes(commandOf(id).category));
       return ids.length ? [{ title, foot, rows: ids.map(keyRow) }] : [];
-    });
+    })];
   },
 };

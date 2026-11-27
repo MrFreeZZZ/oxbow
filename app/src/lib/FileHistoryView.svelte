@@ -1,15 +1,14 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { diffScroll } from "./diffScroll";
   // File History: the commits that changed one file, across renames, with either what each one
   // changed (Changes) or who last changed every line (Blame). A line number shows every commit
   // that changed that line (git log -L).
 
   import { tick, untrack } from "svelte";
-  import { api, stopped } from "./api";
+  import { stopped } from "./api";
   import { FindQuery } from "./findQuery.svelte";
   import { ancestors } from "./commits";
-  import { nav } from "./nav.svelte";
-  import { confirm } from "./confirm.svelte";
   import { diffSettings, prefs, wholeByDefault } from "./prefs.svelte";
   import type { Blame, FileCommit, FileDiff, FileHistory, History, HistoryRow, LocalVersion } from "./types";
   import { initials, lane, person, relativeTime, shortId, splitPath, tint } from "./format";
@@ -17,14 +16,21 @@
   import DiffView from "./DiffView.svelte";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import WorkingCopyPanel from "./WorkingCopyPanel.svelte";
-  import { commitFileEntries } from "./changesMenu";
+  import { commitFileEntries as commitFileEntriesInRepo } from "./changesMenu";
   import Lazy, { BLOCK, matchesIn, placeOf, type FindHits } from "./Lazy.svelte";
   import LocalVersionView from "./LocalVersionView.svelte";
   import { countsOf, keyOf, NEWEST_SAVED, whenSaved } from "./localHistory";
-  import { localVersionEntries } from "./localHistoryMenu";
+  import { localVersionEntries as localVersionEntriesInRepo } from "./localHistoryMenu";
   import { bytes } from "./unusual";
   import { workingFileAction } from "./openFile";
-  import { openWorkingFile, watchWorkingFiles } from "./openFile.svelte";
+  import { openWorkingFile as openWorkingFileInRepo, watchWorkingFiles as watchWorkingFilesInRepo } from "./openFile.svelte";
+
+  const scope = useRepoScope();
+  const { api, nav, confirm } = scope;
+  const commitFileEntries = commitFileEntriesInRepo.bind(null, scope);
+  const localVersionEntries = localVersionEntriesInRepo.bind(null, scope);
+  const openWorkingFile = openWorkingFileInRepo.bind(null, scope);
+  const watchWorkingFiles = watchWorkingFilesInRepo.bind(null, scope);
 
   let {
     history,
@@ -866,9 +872,8 @@
   .elsewhere button {
     height: 24px;
     padding: 0 10px;
-    border-radius: var(--radius-pill);
-    background: var(--win);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    border-radius: var(--radius-m);
+    background: var(--field);
     font-size: var(--text-small);
   }
   .list {
@@ -1132,7 +1137,7 @@
   .back {
     height: 24px;
     padding: 0 10px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     background: var(--field);
     font-size: var(--text-small);
     flex-shrink: 0;
@@ -1147,7 +1152,7 @@
   .tool {
     width: 26px;
     height: 26px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-m);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1168,7 +1173,7 @@
   .skip {
     height: 24px;
     padding: 0 10px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     background: var(--field);
     color: var(--text2);
     font-size: var(--text-caption);

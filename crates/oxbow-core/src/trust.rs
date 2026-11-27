@@ -361,6 +361,8 @@ fn runnable(path: &Path) -> bool {
 /// How git runs in the folders of a restricted repository.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Restriction {
+    /// The findings used to build these overrides, for the Restricted screen.
+    findings: Vec<TrustFinding>,
     /// Settings given after the repository's own, in order.
     config: Vec<(String, String)>,
     /// The merge tool comes from the repository's settings, and the user has none of the same
@@ -401,6 +403,11 @@ pub fn lift(dir: &Path) {
 /// Whether git runs restricted in `dir`.
 pub fn is_restricted(dir: &Path) -> bool {
     restriction_for(dir).is_some()
+}
+
+/// The findings behind the restriction currently applied in `dir`.
+pub fn restricted_findings(dir: &Path) -> Vec<TrustFinding> {
+    restriction_for(dir).map_or_else(Vec::new, |restriction| restriction.findings.clone())
 }
 
 /// The restriction of the repository `dir` is in: the deepest folder registered that holds it.
@@ -446,7 +453,10 @@ pub(crate) fn merge_tool_off(dir: &Path) -> bool {
 
 /// The settings that turn `found` off, given the user's own settings `user`.
 fn restriction(found: &[TrustFinding], user: &[Entry]) -> Result<Restriction> {
-    let mut out = Restriction::default();
+    let mut out = Restriction {
+        findings: found.to_vec(),
+        ..Restriction::default()
+    };
     let users = |key: &str| -> Option<String> {
         let key = key.to_ascii_lowercase();
         user.iter()

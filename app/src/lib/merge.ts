@@ -1,8 +1,8 @@
+import type { RepoScope } from "./repoScope";
 // The merge sheet (bring a branch into the checked-out one: merge commit, squash, rebase or
 // fast-forward, with a picture of the result and a dry run for conflicts), and the actions that
 // finish or abort a merge, rebase, cherry-pick or revert that stopped on conflicts.
 
-import { api } from "./api.ts";
 import type { Part, PreviewRow, Recovery, Request } from "./confirm.svelte";
 import type { BranchContext } from "./branches";
 import type { CommitBrief, Failure, MergeMethod, MergePreview, Operation, Label } from "./types";
@@ -192,13 +192,13 @@ type Branch = Pick<Label, "kind" | "name">;
 const branchRef = (branch: Branch) => `refs/${branch.kind === "remote" ? "remotes" : "heads"}/${branch.name}`;
 
 /** The merge sheet for bringing `branch` into the checked-out branch. */
-export async function mergeRequest(ctx: BranchContext, branch: Branch, method: MergeMethod = "merge", message?: string): Promise<Request> {
+export async function mergeRequest(scope: RepoScope, ctx: BranchContext, branch: Branch, method: MergeMethod = "merge", message?: string): Promise<Request> {
   const ref = branchRef(branch);
-  const preview = await api.mergePreview(ref);
-  return mergeSheet(ctx, branch, preview, method, message, new Map([[ref, preview]]));
+  const preview = await scope.api.mergePreview(ref);
+  return mergeSheet(scope, ctx, branch, preview, method, message, new Map([[ref, preview]]));
 }
 
-function mergeSheet(ctx: BranchContext, picked: Branch, p: MergePreview, method: MergeMethod, typed: string | undefined, cache: Map<string, MergePreview>): Request {
+function mergeSheet(scope: RepoScope, ctx: BranchContext, picked: Branch, p: MergePreview, method: MergeMethod, typed: string | undefined, cache: Map<string, MergePreview>): Request {
   const here = ctx.history.head.branch ?? "HEAD";
   const branch = picked.name;
   const diverged = p.oursCount > 0;
@@ -214,10 +214,10 @@ function mergeSheet(ctx: BranchContext, picked: Branch, p: MergePreview, method:
     const ref = branchRef(choice);
     const keep = next.message ?? (next.branch || next.method ? undefined : message);
     const cached = cache.get(ref);
-    if (cached) return mergeSheet(ctx, choice, cached, next.method ?? method, keep, cache);
-    return api.mergePreview(ref).then((fresh) => {
+    if (cached) return mergeSheet(scope, ctx, choice, cached, next.method ?? method, keep, cache);
+    return scope.api.mergePreview(ref).then((fresh) => {
       cache.set(ref, fresh);
-      return mergeSheet(ctx, choice, fresh, next.method ?? method, keep, cache);
+      return mergeSheet(scope, ctx, choice, fresh, next.method ?? method, keep, cache);
     });
   };
   const conflicts = p.conflicts?.length ?? 0;
@@ -261,7 +261,7 @@ function mergeSheet(ctx: BranchContext, picked: Branch, p: MergePreview, method:
       text: {
         value: message,
         placeholder: "Commit message",
-        edit: (value) => mergeSheet(ctx, picked, p, method, value, cache),
+        edit: (value) => mergeSheet(scope, ctx, picked, p, method, value, cache),
       },
     });
   }

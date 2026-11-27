@@ -33,6 +33,15 @@ for (const menu of MENUS) for (const entry of menu.items) if (entry !== "-" && e
   const bar = menuBar(new Map(), title, (id) => bindingsOf(id, { fetch: ["Mod+Shift+L"] }, true));
   assert.equal(bar.flatMap((m) => m.items).find((i) => i.id === "fetch")!.accelerator, "CmdOrCtrl+Shift+L");
 }
+{
+  const available = new Map([["nextRepoTab", undefined]]);
+  const go = menuBar(available, title, (id) => bindingsOf(id, { nextRepoTab: ["Mod+F6"] }, true)).find((m) => m.title === "Go")!;
+  assert.deepEqual(go.items.find((i) => i.id === "nextRepoTab"), {
+    id: "nextRepoTab", title: "Next Repository Tab", enabled: true, accelerator: "CmdOrCtrl+F6",
+  });
+  assert.equal(go.items.find((i) => i.id === "previousRepoTab")?.enabled, false);
+  assert.equal(go.items.find((i) => i.id === "nextTab")?.accelerator, "Alt+CmdOrCtrl+Right");
+}
 // The menu bar has these until the first window loads (app/src-tauri/src/menu.json): every
 // command greyed out, with the Mac's own keys. `OXBOW_WRITE_MENU=1 npm test` writes it again.
 {

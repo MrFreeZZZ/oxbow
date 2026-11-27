@@ -1,15 +1,19 @@
 <script lang="ts">
   // Every change between the two sides of Compare, or the diff of a selected file.
 
+  import { useRepoScope } from "./repoScope";
   import { untrack, type Snippet } from "svelte";
   import { quoteGitArg } from "./compareRefs";
-  import { api, stopped } from "./api";
+  import { stopped } from "./api";
   import { diffSettings, prefs, wholeByDefault } from "./prefs.svelte";
   import type { CompareFile, Comparison, FileChange, FileDiff, DiffPage } from "./types";
   import { shortId } from "./format";
   import { CountTurns } from "./counting";
   import DiffView from "./DiffView.svelte";
   import ComparisonDiffPane from "./ComparisonDiffPane.svelte";
+
+  const scope = useRepoScope();
+  const { api } = scope;
 
   let {
     comparison: c,

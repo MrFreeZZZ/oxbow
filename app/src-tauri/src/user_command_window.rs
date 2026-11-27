@@ -41,19 +41,18 @@ pub(crate) fn update(app: &AppHandle, label: &str, change: impl FnOnce(&mut Comm
     let _ = app.emit_to(label, "user-command-state", next);
 }
 
-pub(crate) fn open(app: &AppHandle, owner: &str, mut view: CommandView) -> CommandResult<String> {
-    let label = format!("command-{owner}");
+pub(crate) fn open(app: &AppHandle, label: &str, mut view: CommandView) -> CommandResult<()> {
     {
         let windows = app.state::<CommandWindows>();
         let mut views = windows.0.lock().expect("command windows lock");
-        if views.get(&label).is_some_and(|v| v.running) {
+        if views.get(label).is_some_and(|v| v.running) {
             return Err("A command is already running in this window.".into());
         }
-        view.revision = views.get(&label).map_or(1, |old| old.revision + 1);
-        views.insert(label.clone(), view.clone());
+        view.revision = views.get(label).map_or(1, |old| old.revision + 1);
+        views.insert(label.to_owned(), view.clone());
     }
     let opened = (|| {
-        if let Some(window) = app.get_webview_window(&label) {
+        if let Some(window) = app.get_webview_window(label) {
             let _ = window.unminimize();
             window.set_title(&view.title).map_err(|err| err.to_string())?;
             window.show().map_err(|err| err.to_string())?;
@@ -61,7 +60,7 @@ pub(crate) fn open(app: &AppHandle, owner: &str, mut view: CommandView) -> Comma
             let _ = window.emit("user-command-state", &view);
             return Ok(());
         }
-        let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html#command".into()))
+        let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html#command".into()))
             .title(&view.title)
             .inner_size(760.0, 520.0)
             .min_inner_size(560.0, 320.0)
@@ -75,13 +74,13 @@ pub(crate) fn open(app: &AppHandle, owner: &str, mut view: CommandView) -> Comma
         builder.build().map(|_| ()).map_err(|err| err.to_string())
     })();
     if let Err(err) = opened {
-        update(app, &label, |view| {
+        update(app, label, |view| {
             view.running = false;
             view.result = err.clone();
         });
         return Err(err);
     }
-    Ok(label)
+    Ok(())
 }
 
 #[tauri::command]

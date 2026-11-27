@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { api } from "../src/lib/api.ts";
+import type { RepoScope } from "../src/lib/repoScope.ts";
 import type { BranchContext } from "../src/lib/branches.ts";
 import { mergeRequest } from "../src/lib/merge.ts";
 import type { MergePreview } from "../src/lib/types.ts";
@@ -16,7 +17,7 @@ test("merge sends the displayed default and edited messages to Git", async (t) =
     base: null, conflicts: [], files: 1, touchedHere: 0,
   } satisfies MergePreview;
   const fetch = t.mock.method(api, "mergePreview", async () => preview);
-  const request = await mergeRequest(ctx, branch);
+  const request = await mergeRequest({ api } as RepoScope, ctx, branch);
   assert.deepEqual(fetch.mock.calls[0].arguments, ["refs/heads/feature"]);
   const message = request.fields?.find((field) => field.label === "Message")?.text;
   assert.ok(message);

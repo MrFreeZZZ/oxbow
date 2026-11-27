@@ -27,7 +27,7 @@
     problem = "";
     try {
       const path = await open({ title: "Choose Background Image", multiple: false, directory: false, filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "webp"] }] });
-      if (typeof path === "string" && await prefs.set("oxbow.background.image", path)) await prefs.set("oxbow.background.source", "custom");
+      if (typeof path === "string") await prefs.saveBackgroundImage(path);
     } catch (err) {
       problem = `Couldn’t choose an image. ${String(err)}`;
     } finally {

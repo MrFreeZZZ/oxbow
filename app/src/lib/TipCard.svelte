@@ -1,9 +1,13 @@
 <script lang="ts">
   // A one-time Git tip (tips.svelte.ts): shown until Got It, or until tips are turned off.
 
-  import { tips, TIPS, type TipId } from "./tips.svelte";
+  import { useRepoScope } from "./repoScope";
+  import { TIPS, type TipId } from "./tips.svelte";
 
   /** `wide`: one strip across the window, with the buttons at its right end. */
+  const scope = useRepoScope();
+  const { tips } = scope;
+
   let { id, wide = false }: { id: TipId; wide?: boolean } = $props();
 
   const tip = $derived(TIPS[id]);

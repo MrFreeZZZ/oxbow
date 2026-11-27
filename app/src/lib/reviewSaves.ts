@@ -98,11 +98,12 @@ export class ReviewSaves {
 }
 
 /** Closing waits for edits even after their screen was replaced. Failed writes stay retryable. */
-export async function settleReviewSaves(ms: number): Promise<string | null> {
+export async function settleReviewSaves(ms: number, workdir?: string): Promise<string | null> {
+  const saves = [...pending].filter(save => workdir === undefined || save.target.workdir === workdir);
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      Promise.all([...pending].map(save => save.flush())).then(() => null, err => String(err)),
+      Promise.all(saves.map(save => save.flush())).then(() => null, err => String(err)),
       new Promise<string>(resolve => { timer = setTimeout(() => resolve("the review draft is still being written"), ms); }),
     ]);
   } finally { clearTimeout(timer); }

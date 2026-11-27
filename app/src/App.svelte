@@ -1,9 +1,8 @@
 <script lang="ts">
-  import { message, open } from "@tauri-apps/plugin-dialog";
-  import { listen } from "@tauri-apps/api/event";
-  import { api, settings } from "./lib/api";
+  import { open } from "@tauri-apps/plugin-dialog";
+  import { settings, type RepoNotice } from "./lib/api";
   import { resizeSplitter } from "./lib/resizeSplitter";
-  import { WORKTREE_ID, type History, type HistoryRow, type OutsideChange, type ReadPart, type RecentRepo, type ReflogEntry, type RepoSummary } from "./lib/types";
+  import { WORKTREE_ID, type Gone, type History, type HistoryRow, type ReadPart, type RecentRepo, type ReflogEntry, type RepoSummary } from "./lib/types";
   import { RepoSession } from "./lib/repoSession.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
   import HistoryList from "./lib/HistoryList.svelte";
@@ -11,40 +10,80 @@
   import { focusedView } from "./lib/graph";
   import CommitPanel from "./lib/CommitPanel.svelte";
   import ChangesPanel from "./lib/ChangesPanel.svelte";
-  import { beforeUpdateRestart } from "./lib/updateRestart.svelte";
-  import { keepMessagesForRestart, savedMessage } from "./lib/commitDrafts.svelte";
+  import { savedMessage } from "./lib/commitDrafts.svelte";
   import FolderGone from "./lib/FolderGone.svelte";
   import { goneScreen, messageOf } from "./lib/gone";
   import { tilde } from "./lib/term";
   import ConfirmSheet from "./lib/ConfirmSheet.svelte";
-  import { confirm, type Request } from "./lib/confirm.svelte";
+  import { type Request } from "./lib/confirm.svelte";
   import BranchPicker from "./lib/BranchPicker.svelte";
-  import { detachRequest, keepRequest, newBranchRequest, switchRequest, trackRequest, type BranchContext } from "./lib/branches";
-  import UpdateNotification from "./lib/UpdateNotification.svelte";
+  import { detachRequest, keepRequest as keepRequestInRepo, newBranchRequest as newBranchRequestInRepo, switchRequest as switchRequestInRepo, trackRequest, type BranchContext } from "./lib/branches";
   import { updates } from "./lib/updates.svelte";
   import DetachedBanner from "./lib/DetachedBanner.svelte";
   import OperationBanner from "./lib/OperationBanner.svelte";
-  import { draftSaves } from "./lib/conflictDrafts";
-  import { settleReviewSaves } from "./lib/reviewSaves";
   import { abortRequest, continueRequest, describe, skipRequest } from "./lib/merge";
-  import { applyPatchesRequest, choosePatchFiles, savePatchesRequest, type PatchTarget } from "./lib/patches";
+  import { applyPatchesRequest as applyPatchesRequestInRepo, choosePatchFiles, savePatchesRequest as savePatchesRequestInRepo, type PatchTarget } from "./lib/patches";
   import { stashRequest } from "./lib/stash";
-  import { newWorktreeRequest } from "./lib/worktrees";
+  import { newWorktreeRequest as newWorktreeRequestInRepo } from "./lib/worktrees";
   import StashesView from "./lib/StashesView.svelte";
   import { ancestors } from "./lib/commits";
   import { lockedCommit } from "./lib/protect";
   import type { Operation } from "./lib/types";
   import Menu, { menuIcons, type MenuEntry } from "./lib/Menu.svelte";
-  import { fetchRequest, pullRequest, pushRequest, syncBlock, unshallowRequest, type RemoteContext, type SyncFix } from "./lib/remote";
+  import { fetchRequest as fetchRequestInRepo, pullRequest as pullRequestInRepo, pushRequest as pushRequestInRepo, syncBlock, unshallowRequest as unshallowRequestInRepo, type RemoteContext, type SyncFix } from "./lib/remote";
   import SyncButtons from "./lib/SyncButtons.svelte";
   import Welcome from "./lib/Welcome.svelte";
+  import { detailsChrome, noteDetailsChromeEdit } from "./lib/detailsChrome.svelte";
+  import { DETAILS_PANEL_MIN } from "./lib/detailsChrome";
+  import { useRepoScope } from "./lib/repoScope";
+  import { repoTabDigit } from "./lib/repoTabNumbers";
+  import { autoFetchScheduled, repoWorkOnFocus } from "./lib/tabWork";
+  import type { OpenFrom, OpenTab } from "./lib/repoTabs";
+
+  let { openedTab, launched, openPath, closeTab, lostTab, tabStrip, showHome, stepRepoTab, jumpRepoTab, sideHidden = $bindable() }: {
+    openedTab?: OpenTab;
+    launched: boolean;
+    openPath?: (path: string, from: OpenFrom) => Promise<void>;
+    closeTab?: () => Promise<void>;
+    lostTab?: (gone: Gone) => Promise<void>;
+    tabStrip?: Snippet<[((event: MouseEvent) => void) | undefined, () => void, (path: string) => void, Snippet | undefined]>;
+    showHome?: () => void;
+    stepRepoTab?: (by: 1 | -1) => Promise<void>;
+    /** Open repository tab 1–9. Present while two or more tabs are open. */
+    jumpRepoTab?: (n: number) => void;
+    /** The sidebar of a wide window put away with its button, kept between launches. */
+    sideHidden: boolean;
+  } = $props();
+  const scope = useRepoScope();
+  const { kept } = scope;
+  const keepRequest = keepRequestInRepo.bind(null, scope);
+  const newBranchRequest = newBranchRequestInRepo.bind(null, scope);
+  const switchRequest = switchRequestInRepo.bind(null, scope);
+  const { api, confirm, draftSaves, search, nav, start, oplog, activity, github, lfs, lens, tips } = scope;
+  const applyPatchesRequest = applyPatchesRequestInRepo.bind(null, scope);
+  const savePatchesRequest = savePatchesRequestInRepo.bind(null, scope);
+  const newWorktreeRequest = newWorktreeRequestInRepo.bind(null, scope);
+  const fetchRequest = fetchRequestInRepo.bind(null, scope);
+  const pullRequest = pullRequestInRepo.bind(null, scope);
+  const pushRequest = pushRequestInRepo.bind(null, scope);
+  const unshallowRequest = unshallowRequestInRepo.bind(null, scope);
+  const startPublish = startPublishInRepo.bind(null, scope);
+  const startPublishGitLab = startPublishGitLabInRepo.bind(null, scope);
+  const loadFixState = loadFixStateInRepo.bind(null, scope);
+  const commitMenuOf = commitMenuOfInRepo.bind(null, scope);
+  const splitRequest = splitRequestInRepo.bind(null, scope);
+
   let overviewShown = $state(false);
-  const showRepositories = () => { closePickers(); overviewShown = true; };
+  const showRepositories = () => {
+    closePickers();
+    if (showHome) showHome();
+    else overviewShown = true;
+  };
   import { prefs } from "./lib/prefs.svelte";
   import SearchField from "./lib/SearchField.svelte";
   import SearchBar from "./lib/SearchBar.svelte";
-  import { search, type Found } from "./lib/search.svelte";
-  import { tick, untrack } from "svelte";
+  import { type Found } from "./lib/search.svelte";
+  import { onMount, tick, untrack, type Snippet } from "svelte";
   import FindField from "./lib/FindField.svelte";
   import QuickOpen from "./lib/QuickOpen.svelte";
   import CommandPalette from "./lib/CommandPalette.svelte";
@@ -57,29 +96,21 @@
   import { stepChange } from "./lib/diffRows";
   import { conflictSteps, KEPT_CONFLICTS } from "./lib/conflicts";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { getCurrentWindow, type CloseRequestedEvent } from "@tauri-apps/api/window";
-  import { nav } from "./lib/nav.svelte";
   import { compareRef } from "./lib/compareRefs";
   import type { CompareMode } from "./lib/types";
-  import { startPublish, startPublishGitLab } from "./lib/publish";
-  import { start } from "./lib/start.svelte";
+  import { startPublish as startPublishInRepo, startPublishGitLab as startPublishGitLabInRepo } from "./lib/publish";
   import OperationLog from "./lib/OperationLog.svelte";
   import { shortcut, withKeys } from "./lib/keys";
-  import { cannotRestore, isRedo, lostRow, oplog, undoRequest } from "./lib/oplog.svelte";
-  import { canBack, canForward, crumbs, detailOfPlace, moveToPlace, nameOfPlace, newNavigationTrail, placeKey, recordPlace, resetNavigationTrail, type Place } from "./lib/backStack";
-  import { kept } from "./lib/kept";
+  import { cannotRestore, isRedo, lostRow, undoRequest } from "./lib/oplog.svelte";
+  import { canBack, canForward, crumbs, detailOfPlace, moveToPlace, nameOfPlace, newNavigationTrail, placeKey, recordPlace, resetNavigationTrail, type HistoryPosition, type Place } from "./lib/backStack";
   import { stepQuery, type SeriesQuery } from "./lib/series";
   import { lane, relativeTime } from "./lib/format";
-  import { activity, failureShort, type ActivityItem } from "./lib/activity.svelte";
-  import { github } from "./lib/github.svelte";
+  import { failureShort, type ActivityItem } from "./lib/activity.svelte";
   import type { ForgeKind } from "./lib/forge";
-  import { lfs } from "./lib/lfs.svelte";
   import LfsBanner from "./lib/LfsBanner.svelte";
   import StatusLine from "./lib/StatusLine.svelte";
-  import { lens } from "./lib/lens.svelte";
   import TipCard from "./lib/TipCard.svelte";
-  import { tips } from "./lib/tips.svelte";
-  import { fixChoices, fixRequest, fixStateLine, loadFixState, type FixContext, type FixId } from "./lib/fixes";
+  import { fixChoices, fixRequest, fixStateLine, loadFixState as loadFixStateInRepo, type FixContext, type FixId } from "./lib/fixes";
   import { bisectMarkRequest, bisectResetRequest } from "./lib/bisect";
   import { keys, mac } from "./lib/keys";
   import type { BisectMark, OpEntry } from "./lib/types";
@@ -87,8 +118,8 @@
   import { keyFocus, stepperOf } from "./lib/tabs";
   import { Lazy } from "./lib/lazyScreen.svelte";
   import TrustSheet from "./lib/TrustSheet.svelte";
-  import { commitMenu as commitMenuOf } from "./lib/commitMenu";
-  import { splitRequest } from "./lib/stack";
+  import { commitMenu as commitMenuOfInRepo } from "./lib/commitMenu";
+  import { splitRequest as splitRequestInRepo } from "./lib/stack";
   import RestrictedBadge from "./lib/RestrictedBadge.svelte";
   import WindowTitle from "./lib/WindowTitle.svelte";
   import { windowTitle, type Title } from "./lib/windowTitle";
@@ -114,7 +145,7 @@
   const PairPanel = new Lazy(() => import("./lib/PairPanel.svelte"));
 
   // The window's repository and its history: repoSession.svelte.ts, historyLoad.svelte.ts.
-  const session = new RepoSession({
+  const session = new RepoSession(scope, {
     leaving() {
       // The commit panel must not ask the new repository about the old one's commits.
       selected = null;
@@ -132,10 +163,22 @@
       selected = next.head.commit ?? next.rows[0]?.id ?? null;
       requestAnimationFrame(() => selected && list?.reveal(selected));
     },
+    lost(gone) {
+      if (lostTab) void lostTab(gone);
+    },
     reloaded(next) {
-      if (!selected || !next.rows.some((r) => r.id === selected)) selected = next.head.commit ?? next.rows[0]?.id ?? null;
-      // Current Branch Only follows a checkout: a commit it no longer shows gives way to HEAD.
-      else if (next.focus && !next.focus.rows.some((i) => next.rows[i].id === selected)) selected = next.head.commit ?? selected;
+      const id = selected;
+      const fallback = next.head.commit ?? next.rows[0]?.id ?? null;
+      if (!id || id === WORKTREE_ID && !loader.rowsById.has(id)) selected = fallback;
+      else if (next.focus) {
+        if (!next.focus.rows.some((i) => next.rows[i].id === id)) selected = fallback;
+      } else if (!loader.rowsById.has(id)) {
+        // Older selections can fall past the loaded rows when new commits arrive above them.
+        const ticket = session.tickets.take();
+        void ensureLoaded(id).then((found) => {
+          if (!found && session.tickets.current(ticket) && selected === id) selected = history?.head.commit ?? fallback;
+        });
+      }
     },
     closed() {
       selected = null;
@@ -156,7 +199,77 @@
   const focusOnly = $derived(loader.focusOnly);
   /** Goes up on every reload of the history, so the views showing it reload too. */
   const version = $derived(loader.version);
-  const load = (path: string) => { overviewShown = false; return session.load(path); };
+  let openingPath = $state(false);
+  let alive = true;
+  const load = async (path: string, restoring = false) => {
+    if (!alive) return;
+    if (!openPath) {
+      overviewShown = false;
+      return session.load(path);
+    }
+    if (openingPath) return;
+    openingPath = true;
+    try {
+      await openPath(path, {
+        live: () => alive,
+        reopened: reopenTab,
+        trust: askOpenTrust,
+        fail: async (path, error) => {
+          if (session.repo && restoring) confirm.say(String(error), "warn");
+          else if (session.repo) confirm.fail(error);
+          else await session.failed(path, error, session.tickets.take());
+        },
+      });
+    } finally {
+      openingPath = false;
+    }
+  };
+  export const askOpenTrust: OpenFrom["trust"] = (name, findings) => session.askTrust(name, findings, true);
+  export const reopenTab: OpenFrom["reopened"] = async (id, summary) => {
+    if (scope.id !== id) return;
+    overviewShown = false;
+    if (!session.gone) return;
+    const next = await loader.first();
+    if (alive) session.attach(summary, next);
+  };
+  export const startup = (path: string, restoring = false) => load(path, restoring);
+  export function showGone(gone: Gone) { session.showGone(gone); }
+  export function recentFromMenu(path: string) {
+    if (!loading && !openingPath && windowCommandsFree()) void load(path);
+  }
+  export function accountChanged() {
+    if (session.repo) github.accountChanged();
+  }
+  export const trustChanged = (path: string) => session.trusted(path);
+  export function windowFocused() {
+    menuShown = "";
+    untrack(showMenu);
+  }
+  export function notice(event: RepoNotice) {
+    switch (event.event) {
+      case "action-event": confirm.onEvent(event.payload); break;
+      case "fetch-event": activity.onFetch(event.payload); break;
+      case "clone-line": scope.clone.line?.(event.payload); break;
+      case "outside-change":
+        for (const refresh of scope.filesChanged) refresh();
+        void loader.outsideChanged(event.payload);
+        break;
+      case "repo-touched": void refresh(); break;
+      case "open-file-error": confirm.fail(event.payload); break;
+      case "menu-command": fromMenu(event.payload as ShortcutId); break;
+    }
+  }
+  export function changedOutside(event: Parameters<typeof loader.outsideChanged>[0]) {
+    void loader.outsideChanged(event);
+  }
+  export const repoTouched = () => void refresh();
+  export function fileOpenError(error: string) {
+    if (overviewShown || !repo || !history) session.error = error;
+    else confirm.fail(error);
+  }
+  export function canSwitch() {
+    return !session.trustAsk && !start.sheet && !confirm.request;
+  }
   const refresh = () => loader.refresh();
   const refreshQuietly = () => loader.refreshQuietly();
   let reviewRefresh = $state(0);
@@ -167,8 +280,8 @@
   const retryRead = (part: ReadPart) => loader.retryRead(part);
   const loadOlder = (until: string | null = null) => loader.loadOlder(until);
   const ensureLoaded = (id: string) => loader.ensureLoaded(id);
-  const closeRepo = () => session.close();
-  const findFolder = (old: string) => session.findFolder(old);
+  const closeRepo = () => closeTab ? closeTab() : session.close();
+  const findFolder = (old: string) => session.findFolder(old, load);
   $effect(() => {
     if (loader.history?.unpushedPending) untrack(() => loader.settleUnpushed());
   });
@@ -177,9 +290,6 @@
   let searchField = $state<SearchField>();
   let findField = $state<FindField>();
   let stashesView = $state<StashesView>();
-  /** The width of the details panel, one for Changes and a commit so the graph keeps its width
-   *  between them; until it is dragged, as wide as the graph lets it be. */
-  let panelWidth = $state<number | null>(null);
   /** The Conflicts screen is open in place of History. */
   let resolving = $state(false);
   const operation = $derived(history?.operation ?? null);
@@ -210,8 +320,6 @@
   $effect(() => {
     if (!narrow) sideShown = false;
   });
-  /** The sidebar of a wide window put away with its button, kept in settings.json between launches. */
-  let sideHidden = $state(false);
   /** Whether the sidebar is out now: docked in a wide window, slid in over a narrow one. */
   const sideOut = $derived(narrow ? sideShown : !sideHidden);
   /** The sidebar is sliding in or out of a wide window. */
@@ -242,55 +350,57 @@
   let moreMenu = $state<{ x: number; y: number } | null>(null);
   /** The details panel can take any width that leaves the graph 360 px. */
   const GRAPH_MIN = 360;
-  const PANEL_MIN = 320;
+  const PANEL_MIN = DETAILS_PANEL_MIN;
   const SIDEBAR = 280;
   const SETTINGS_ICON =
     "M12.78 6.52L14.44 6.56L14.44 9.44L12.78 9.48L12.42 10.33L13.57 11.54L11.54 13.57L10.33 12.42L9.48 12.78L9.44 14.44L6.56 14.44L6.52 12.78L5.67 12.42L4.46 13.57L2.43 11.54L3.58 10.33L3.22 9.48L1.56 9.44L1.56 6.56L3.22 6.52L3.58 5.67L2.43 4.46L4.46 2.43L5.67 3.58L6.52 3.22L6.56 1.56L9.44 1.56L9.48 3.22L10.33 3.58L11.54 2.43L13.57 4.46L12.42 5.67zM8 5.8a2.2 2.2 0 1 0 0 4.4a2.2 2.2 0 1 0 0-4.4";
   const CONSOLE_ICON = "M1.8 4a1.5 1.5 0 0 1 1.5-1.5h9.4A1.5 1.5 0 0 1 14.2 4v8a1.5 1.5 0 0 1-1.5 1.5H3.3A1.5 1.5 0 0 1 1.8 12zM4.8 6.2 6.8 8l-2 1.8M8.3 10H11";
   const COMMANDS_ICON = "M2 5l3 3-3 3M8 4h6M8 8h6M8 12h6";
   const NEW_BRANCH_ICON = "M3 3.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M3 12.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M4.5 5v6M11.5 2.5v6M8.5 5.5h6";
+  const updateInMore = $derived(narrow && !tabStrip ? updates.actionLabel : null);
+  const openUpdates = () => api.openSettings("updates").catch((error) => confirm.fail(error));
   /** New Branch, Console and Settings, which a narrow window's toolbar has no room for. */
   function moreEntries(): MenuEntry[] {
     const entries: MenuEntry[] = [];
+    if (updateInMore) entries.push({ kind: "item", label: `${updateInMore}…`, detail: updates.notice.title, icon: SETTINGS_ICON, run: openUpdates });
     if ((view !== "file" && view !== "browse") || showConflicts) entries.push({ kind: "item", label: history?.head.branch ? "New Branch…" : "Create a Branch at HEAD…", icon: NEW_BRANCH_ICON, run: newBranch });
     entries.push({ kind: "item", label: "Custom Commands…", icon: CONSOLE_ICON, run: manageCommands });
     for (const command of commandsFor(prefs.get("oxbow.commands"), repo?.path ?? "")) {
       entries.push({ kind: "item", label: command.name, icon: CONSOLE_ICON, run: () => void runCustom(command) });
     }
     entries.push({ kind: "item", label: "Console", icon: CONSOLE_ICON, keys: shortcut("console") || undefined, run: () => api.openConsole() });
-    const update = updates.available && `Oxbow ${updates.available.version} ${updates.installed ? "is installed" : updates.ready ? "is ready to install" : "is available"}`;
-    entries.push({ kind: "item", label: "Settings…", icon: SETTINGS_ICON, keys: shortcut("settings") || undefined, detail: update || undefined, run: () => api.openSettings() });
+    entries.push({ kind: "item", label: "Settings…", icon: SETTINGS_ICON, keys: shortcut("settings") || undefined, run: () => api.openSettings() });
     return entries;
   }
-  /** The details panel put away, so the graph takes the whole width; kept in settings.json. */
-  let detailsHidden = $state(false);
   /** The details panel over the whole content, for a long diff; the graph comes back with the same
    *  button or Esc. A commit's goes back once another is picked; Changes stays so, kept in
    *  settings.json, until the graph is asked back. */
   let commitExpanded = $state(false);
-  let changesExpanded = $state(false);
-  const expanded = $derived.by(() => (onChanges ? changesExpanded : commitExpanded));
+  const expanded = $derived.by(() => (onChanges ? detailsChrome.changesExpanded : commitExpanded));
   function setChangesExpanded(on: boolean) {
-    if (changesExpanded === on) return;
-    changesExpanded = on;
+    if (detailsChrome.changesExpanded === on) return;
+    noteDetailsChromeEdit();
+    detailsChrome.changesExpanded = on;
     api.setSetting(settings.changesExpanded, on).catch(() => {});
   }
   function toggleDetails() {
     commitExpanded = false;
     if (onChanges) setChangesExpanded(false);
-    detailsHidden = !detailsHidden;
-    api.setSetting(settings.detailsHidden, detailsHidden).catch(() => {});
+    noteDetailsChromeEdit();
+    detailsChrome.detailsHidden = !detailsChrome.detailsHidden;
+    api.setSetting(settings.detailsHidden, detailsChrome.detailsHidden).catch(() => {});
     // Back from the whole width, the list keeps the selected commit in view.
     if (selected) requestAnimationFrame(() => list?.reveal(selected!));
   }
   function showDetails() {
-    if (!detailsHidden) return;
-    detailsHidden = false;
+    if (!detailsChrome.detailsHidden) return;
+    noteDetailsChromeEdit();
+    detailsChrome.detailsHidden = false;
     api.setSetting(settings.detailsHidden, false).catch(() => {});
   }
   function toggleExpanded() {
     if (!expanded) showDetails();
-    if (onChanges) setChangesExpanded(!changesExpanded);
+    if (onChanges) setChangesExpanded(!detailsChrome.changesExpanded);
     else commitExpanded = !commitExpanded;
     if (!expanded && selected) requestAnimationFrame(() => list?.reveal(selected!));
   }
@@ -304,7 +414,7 @@
   /** A hidden sidebar's room goes to the details panel, as in Mail: the graph keeps its width and only moves to the edge. */
   const panelBonus = $derived(!narrow && sideHidden ? SIDEBAR : 0);
   const shownPanelWidth = $derived.by(() =>
-    panelWidth === null ? panelMax : Math.min(Math.max(panelWidth + panelBonus, PANEL_MIN), panelMax),
+    detailsChrome.panelWidth === null ? panelMax : Math.min(Math.max(detailsChrome.panelWidth + panelBonus, PANEL_MIN), panelMax),
   );
   /** The screen next to the sidebar. */
   let view = $state<"history" | "stashes" | "oplog" | "local" | "compare" | "file" | "stack" | "pull" | "series" | "reviews" | "browse">("history");
@@ -396,6 +506,31 @@
 
   const navigation = $state(newNavigationTrail());
   const trail = $derived(navigation.trail);
+  let returnToHistory: HistoryPosition | null = null;
+  let wasActive = true;
+  $effect.pre(() => {
+    if (scope.id === null) return;
+    const active = scope.isActive();
+    const graph = list;
+    untrack(() => {
+      const becameActive = active && !wasActive;
+      if (!active && wasActive) returnToHistory = navigation.scroll;
+      wasActive = active;
+      if (becameActive) loader.cameBack();
+      if (!active || !graph || !returnToHistory) return;
+      const position = returnToHistory;
+      const revision = navigation.revision;
+      const ticket = session.tickets.take();
+      returnToHistory = null;
+      void (async () => {
+        await tick();
+        const found = rowsById.has(position.id) || position.id !== WORKTREE_ID && await ensureLoaded(position.id);
+        if (alive && scope.isActive() && list === graph && navigation.revision === revision && session.tickets.current(ticket)) {
+          graph.restorePosition(found ? position : null, selected);
+        }
+      })();
+    });
+  });
   /** The list of places behind or ahead, from a right-click on Back or Forward. */
   let placesMenu = $state<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
 
@@ -497,7 +632,8 @@
         selected = p.commit;
         requestAnimationFrame(() => {
           if (current() && view === "history" && selected === p.commit) {
-            list?.restorePosition(p.scroll, p.commit);
+            if (scope.isActive()) list?.restorePosition(p.scroll, p.commit);
+            else returnToHistory = p.scroll;
           }
         });
         break;
@@ -711,6 +847,7 @@
       return;
     }
     searchTimer = setTimeout(() => search.run(untrack(() => history?.rows ?? []), untrack(() => !!history?.truncated)), 220);
+    return () => clearTimeout(searchTimer);
   });
   // A new search selects its first match; a reload with the same search keeps the selection.
   let selectedFor = "";
@@ -766,8 +903,11 @@
     }
     const before = history?.head;
     const opBefore = history?.operation ?? null;
+    if (!alive) return false;
     const ok = await confirm.run(request);
+    if (!alive) return ok;
     await refresh();
+    if (!alive) return ok;
     if (ok && request.action?.kind === "fetchTags") checkRemoteTags();
     // A stash made or put back is the newest, and the Stashes screen shows it.
     if (ok && (request.action?.kind === "stashPush" || request.action?.kind === "stashHunk" || request.action?.kind === "stashStore")) stashSel = history?.stashes[0]?.id ?? null;
@@ -842,6 +982,10 @@
   /** The menu bar shows the commands of the window in front (appMenu.ts). */
   function showMenu() {
     if (!mac) return;
+    if (!scope.isActive()) {
+      menuShown = "";
+      return;
+    }
     const available: Available = new Map(paletteCommands().map((c) => [c.id, c.title]));
     available.set("palette", undefined);
     if (history) for (const id of ["findNext", "findPrevious", "nextTab", "previousTab"]) available.set(id, undefined);
@@ -854,7 +998,8 @@
   $effect(showMenu);
 
   /** A command picked in the menu bar runs as its key would in the field that has the focus. */
-  function fromMenu(id: ShortcutId) {
+  export function fromMenu(id: ShortcutId) {
+    if (!scope.isActive()) return;
     const event = { target: document.activeElement, altKey: false } as unknown as KeyboardEvent;
     shortcutKey(id, event);
   }
@@ -967,7 +1112,7 @@
     // Compare and Stashes have their own file pane outside the History details.
     if (showConflicts) return false;
     const files = view === "compare" || view === "stashes"
-      ? document.querySelector("[data-comparison-files]")
+      ? document.querySelector("[data-comparison-files]:not([inert] *)")
       : content?.querySelector("aside.panel [data-steps]");
     const steps = stepperOf(files);
     if (steps) return steps(by, true);
@@ -1065,6 +1210,10 @@
     add("zoomIn", () => zoom(zoomLevel + 1));
     add("zoomOut", () => zoom(zoomLevel - 1));
     add("zoomReset", () => zoom(0));
+    if (stepRepoTab) {
+      add("nextRepoTab", () => void stepRepoTab?.(1));
+      add("previousRepoTab", () => void stepRepoTab?.(-1));
+    }
     if (overviewShown || !repo || !history || !branchCtx) return out;
     if (!commandRunning) for (const command of commandsFor(prefs.get("oxbow.commands"), repo.path)) {
       add(commandId(command.id), () => void runCustom(command));
@@ -1099,7 +1248,7 @@
     add("oplog", () => ((view = "oplog"), (resolving = false)));
     add("localHistory", () => ((view = "local"), (resolving = false)));
     if (view === "history" && !showConflicts) {
-      add("details", toggleDetails, detailsHidden ? "Show Details" : "Hide Details");
+      add("details", toggleDetails, detailsChrome.detailsHidden ? "Show Details" : "Hide Details");
       add("expand", toggleExpanded, expanded ? "Show Graph" : "Expand Details");
       add("focusOnly", () => void setFocusOnly(!focusOnly), focusOnly ? "Show All Branches" : "Show Current Branch Only");
     }
@@ -1159,7 +1308,7 @@
 
   /** A sheet keeps the window's commands until it closes, apart from opening other windows or zooming. */
   function windowCommandsFree(): boolean {
-    return !confirm.request && !start.sheet && !document.querySelector('[aria-modal="true"]');
+    return !confirm.request && !start.sheet && !document.querySelector('[aria-modal="true"]:not([inert] *)');
   }
 
   /** Run a window-wide shortcut. False when it can't run here and now, so the key does what it
@@ -1190,6 +1339,11 @@
         if (!free || loading) return false;
         if (picker?.kind === "recent") picker = null;
         else void openRecent();
+        return true;
+      case "nextRepoTab":
+      case "previousRepoTab":
+        if (!free || !stepRepoTab) return false;
+        void stepRepoTab(id === "nextRepoTab" ? 1 : -1);
         return true;
       // These take the window over: the palette or Quick Open closes first, as when the command
       // is picked in the palette, so only one layer has the keyboard.
@@ -1520,23 +1674,34 @@
   }
 
   /** `mode` picks merge or rebase for this one pull, over Settings › Git. */
-  async function sync(kind: "fetch" | "pull" | "push", mode?: "merge" | "rebase") {
+  async function sync(kind: "fetch" | "pull" | "push", mode?: "merge" | "rebase", queuedId?: number) {
     // While a fetch runs, Fetch shows its progress, and Pull or Push waits for it in line.
     if (kind === "fetch" && (activity.running || activity.problem)) {
       activity.open = !activity.open;
       return;
     }
-    if (kind !== "fetch" && activity.hasFetch) {
-      const branch = history?.head.branch ?? "HEAD";
-      activity.queue(kind, kind === "push" ? `Push ${branch}` : `Pull into ${branch}`, mode);
-      return;
+    if (kind !== "fetch" && queuedId === undefined) {
+      if (activity.hasFetch) {
+        const branch = history?.head.branch ?? "HEAD";
+        activity.queue(kind, kind === "push" ? `Push ${branch}` : `Pull into ${branch}`, mode);
+        return;
+      }
+      if (activity.queued.length) {
+        activity.open = true;
+        return;
+      }
     }
     // Commits made outside the app since the last reload belong in the sheet.
     const opened = repo;
     await (kind === "fetch" ? refresh() : loader.refreshForSync());
-    if (!opened || repo !== opened || !remoteCtx) return;
+    if (queuedId !== undefined && !activity.queuedReady(queuedId)) return;
+    if (!opened || repo !== opened || !remoteCtx) {
+      if (queuedId !== undefined) activity.unqueue(queuedId);
+      return;
+    }
     // Pull or Push that can't run says why under its button, as the grey button does.
     if (kind !== "fetch" && syncBlock(remoteCtx, kind)) {
+      if (queuedId !== undefined) activity.unqueue(queuedId);
       why = kind;
       return;
     }
@@ -1560,6 +1725,14 @@
         : undefined;
     // Submodule commits nobody else has would leave the pushed commits pointing at nothing.
     const unpushedSubs = kind === "push" && history?.submodules.length ? await api.unpushedSubmodules().catch(() => []) : [];
+    if (queuedId !== undefined) {
+      if (!activity.queuedReady(queuedId)) return;
+      activity.unqueue(queuedId);
+      if (repo === opened && remoteCtx && syncBlock(remoteCtx, kind)) {
+        why = kind;
+        return;
+      }
+    }
     if (repo !== opened || !remoteCtx) return;
     const request = kind === "pull" ? pullRequest(remoteCtx, setup) : pushRequest(remoteCtx, unpushedSubs);
     const opBefore = history?.operation ?? null;
@@ -1569,9 +1742,13 @@
     checkRemoteTags();
     openConflicts(opBefore);
   }
-  activity.startQueued = (item) => {
-    if (item.kind !== "action" && item.kind !== "reload") void sync(item.kind, item.mode);
+  activity.queueBlocked = () => !repoWorkOnFocus(scope.isActive()) || overviewShown || !canSwitch() || !!fixing || !!splitting;
+  activity.startQueued = async (item) => {
+    if (item.kind === "pull" || item.kind === "push") await sync(item.kind, item.mode, item.id);
   };
+  $effect(() => {
+    if (activity.canStartQueued) untrack(() => void activity.runQueued());
+  });
 
   /** What Fetch fetches: the one remote, or all of them, as its sheet says. */
   function fetchTarget(): { remote: string | null; label: string } | null {
@@ -1618,44 +1795,18 @@
     if (await api.refreshRemoteTags().catch(() => false)) await refreshQuietly();
   }
 
-  /** The window asks whether to close without the conflict draft: a close meanwhile waits. */
-  let askingToClose = false;
-  $effect(() => beforeUpdateRestart(keepMessagesForRestart));
-  /** Closing the window, or quitting, waits for the Conflicts screen's last draft to be written.
-   *  When it can't be, or isn't after 3 seconds, the window stays and asks: Try Again, Close
-   *  Without Saving, or Cancel, which also calls off a quit. */
-  async function closeRequested(event: CloseRequestedEvent) {
-    if (askingToClose) return event.preventDefault();
-    // A save that failed earlier gets another go first: what stopped it may be over.
-    draftSaves.retry();
-    const [conflictWhy, reviewWhy] = await Promise.all([draftSaves.settle(3000), settleReviewSaves(3000)]);
-    const why = conflictWhy ?? reviewWhy;
-    if (why === null) return;
-    event.preventDefault();
-    askingToClose = true;
-    const answer = await message(`Oxbow couldn’t save your ${conflictWhy ? "conflict" : "review"} draft: ${why.replace(/\.$/, "")}. Do you really want to close without it?`, {
-      title: `Your ${conflictWhy ? "conflict" : "review"} draft isn’t saved`,
-      kind: "warning",
-      buttons: { yes: "Try Again", no: "Close Without Saving", cancel: "Cancel" },
-    }).catch(() => "Cancel");
-    askingToClose = false;
-    if (answer === "Close Without Saving") return void getCurrentWindow().destroy();
-    if (answer === "Try Again") return void getCurrentWindow().close();
-    api.cancelQuit().catch(() => {});
-  }
-
   // Background fetch, from Settings › Git › Fetch: keeps ahead/behind counts current. It skips a
   // turn while a sheet is open or the window is hidden; a failure only puts the amber dot on
   // Fetch, and Activity says what is wrong.
   const hasRemotes = $derived(!!history?.remotes.length);
   $effect(() => {
-    if (overviewShown || !repo || !hasRemotes || !prefs.get("oxbow.fetch.auto")) return;
+    if (!autoFetchScheduled(scope.isActive(), !overviewShown && !!repo && hasRemotes, prefs.get("oxbow.fetch.auto"))) return;
     const interval = prefs.get("oxbow.fetch.interval") * 60_000;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const fetchNow = () => {
       const next = setTimeout(fetchNow, interval);
       timer = next;
-      if (confirm.request || document.hidden || loading || activity.hasFetch) return;
+      if (!repoWorkOnFocus(scope.isActive()) || confirm.request || document.hidden || loading || activity.hasFetch) return;
       void backgroundFetch(true).then((retryAfterMs) => {
         if (timer !== next || retryAfterMs == null) return;
         clearTimeout(timer);
@@ -1805,21 +1956,19 @@
     }
   }
 
-  /** Once the repository to open at launch is known, so Welcome doesn't shrink the window first. */
-  let launched = $state(false);
   // Welcome is a compact window; a repository gets the repository window's size back.
   $effect(() => {
     const welcome = overviewShown || !repo || !history;
-    if (launched && !(welcome && loading)) fitWindow(welcome);
+    if (scope.isActive() && launched && !(welcome && (loading || openingPath))) fitWindow(welcome);
   });
 
   let content = $state<HTMLDivElement>();
   // The commit list has the keyboard when History opens and nothing else asked for it, so ↑ ↓
   // work at once and the selection shows in its branch color.
   $effect(() => {
-    if (view !== "history" || !list || showConflicts) return;
+    if (!scope.isActive() || view !== "history" || !list || showConflicts) return;
     requestAnimationFrame(() => {
-      if (document.activeElement === document.body || document.activeElement === null) list?.focus();
+      if (scope.isActive() && canSwitch() && (document.activeElement === document.body || document.activeElement === null)) list?.focus();
     });
   });
 
@@ -1866,77 +2015,39 @@
     resizeSplitter(event, (delta) => {
       // Saved without the hidden sidebar's room, so the graph keeps its width when the sidebar comes back.
       const width = Math.max(Math.min(Math.max(startWidth - delta, PANEL_MIN), panelMax) - panelBonus, PANEL_MIN);
-      panelWidth = width;
+      noteDetailsChromeEdit();
+      detailsChrome.panelWidth = width;
     }, () => {
-      if (panelWidth !== null) api.setSetting(settings.detailsWidth, Math.round(panelWidth)).catch(() => {});
+      if (detailsChrome.panelWidth !== null) api.setSetting(settings.detailsWidth, Math.round(detailsChrome.panelWidth)).catch(() => {});
     });
   }
 
   $effect(() => {
-    // Changes once kept a width of its own: it serves until the shared one is saved.
-    Promise.all([api.getSetting<number>(settings.detailsWidth), api.getSetting<number>(settings.changesWidth)]).then(([details, changes]) => {
-      const width = typeof details === "number" ? details : changes;
-      if (typeof width === "number") panelWidth = Math.max(width, PANEL_MIN);
-    });
-    api.getSetting<boolean>(settings.changesExpanded).then((on) => {
-      if (typeof on === "boolean") changesExpanded = on;
-    });
-    api.getSetting<boolean>(settings.sidebarHidden).then((hidden) => {
-      if (typeof hidden === "boolean") sideHidden = hidden;
-    });
-    api.getSetting<boolean>(settings.detailsHidden).then((hidden) => {
-      if (typeof hidden === "boolean") detailsHidden = hidden;
-    });
     api.getSetting<number>(settings.zoomLevel).then((level) => {
-      if (typeof level === "number" && level !== 0) zoom(level, false);
+      if (!openedTab && typeof level === "number" && level !== 0) zoom(level, false);
     });
-    api.initialRepo().then((path) => {
-      if (path) load(path);
-      launched = true;
-    });
-    // Settings changed remotes or packed the repository. Only this window's: each window has
-    // its own repository.
-    const unlisten = getCurrentWindow().listen("repo-touched", () => refresh());
-    // A terminal, an editor or another window changed the repository.
-    const outside = getCurrentWindow().listen<OutsideChange>("outside-change", (event) => loader.outsideChanged(event.payload));
-    const openFileError = getCurrentWindow().listen<string>("open-file-error", (event) => confirm.fail(event.payload));
-    // Signing in or out changes what GitHub tells about the pull requests.
-    const account = listen("account-changed", () => repo && github.accountChanged());
-    const closing = getCurrentWindow().onCloseRequested(closeRequested);
-    const picked = getCurrentWindow().listen<ShortcutId>("menu-command", (event) => fromMenu(event.payload));
-    const recent = getCurrentWindow().listen<string>("menu-open", (event) => {
-      if (!loading && windowCommandsFree()) void load(event.payload);
-    });
-    // Another window trusted a repository: git runs its settings here too.
-    const trusted = listen<string>("trust-changed", (event) => {
-      session.trusted(event.payload);
-    });
-    // Back in front: the menu bar shows this window's commands again.
-    const front = getCurrentWindow().onFocusChanged(({ payload }) => {
-      if (!payload) return;
-      menuShown = "";
-      untrack(showMenu);
-    });
+  });
+
+  untrack(() => { if (openedTab) session.attach(openedTab.repo, openedTab.history); });
+  onMount(() => {
+    const scoped = !!openPath;
     return () => {
-      picked.then((stop) => stop());
-      recent.then((stop) => stop());
-      trusted.then((stop) => stop());
-      front.then((stop) => stop());
-      unlisten.then((stop) => stop());
-      outside.then((stop) => stop());
-      openFileError.then((stop) => stop());
-      account.then((stop) => stop());
-      closing.then((stop) => stop());
+      alive = false;
+      clearTimeout(slideTimer);
+      if (scoped) session.dispose();
     };
   });
 </script>
 
-<svelte:document onvisibilitychange={() => document.visibilityState === "visible" && loader.unseen && loader.showsAgain()} />
+<svelte:document onvisibilitychange={() => {
+  if (repoWorkOnFocus(scope.isActive()) && document.visibilityState === "visible" && loader.unseen) loader.showsAgain();
+}} />
 
 <svelte:window
   bind:innerWidth={windowWidth}
-  onfocus={() => loader.cameBack()}
+  onfocus={() => { if (repoWorkOnFocus(scope.isActive())) loader.cameBack(); }}
   onmouseup={(event) => {
+    if (!scope.isActive()) return;
     // A mouse's own Back and Forward buttons.
     if ((event.button !== 3 && event.button !== 4) || !history || overviewShown || confirm.request || start.sheet) return;
     event.preventDefault();
@@ -1944,9 +2055,21 @@
     else goForward();
   }}
   onkeydown={(event) => {
+    if (!scope.isActive()) return;
+    // ⌘1–⌘9 (Ctrl+1–Ctrl+9 elsewhere) always belong to the repository tabs.
+    if (!event.isComposing) {
+      const digit = repoTabDigit(event);
+      if (digit) {
+        keymap.match(event);
+        keymap.endChord();
+        event.preventDefault();
+        if (!event.repeat && jumpRepoTab && windowCommandsFree()) jumpRepoTab(digit);
+        return;
+      }
+    }
     if (confirm.request && isImeEscape(event)) return;
     // Menu handles Escape on the same window; its listener may run after this one.
-    if (event.key === "Escape" && document.querySelector('[role="menu"]')) return;
+    if (event.key === "Escape" && document.querySelector('[role="menu"]:not([inert] *)')) return;
     const hit = keymap.match(event);
     // The chord's note goes once its second key came.
     if (hit && chordNote && confirm.toast?.text === chordNote) confirm.dismiss();
@@ -1962,7 +2085,7 @@
     } else if (hit && "id" in hit && shortcutKey(hit.id, event)) {
       event.preventDefault();
     } else if (overviewShown) {
-      if (event.key === "Escape" && !event.defaultPrevented && !confirm.request && !start.sheet && !picker && !document.querySelector('[role="menu"]')) {
+      if (event.key === "Escape" && !event.defaultPrevented && !confirm.request && !start.sheet && !picker && !document.querySelector('[role="menu"]:not([inert] *)')) {
         event.preventDefault();
         overviewShown = false;
       }
@@ -1985,12 +2108,36 @@
   }}
 />
 
-<UpdateNotification />
+{#snippet updateButton()}
+  <button class="button small primary" title={updates.notice.title}
+    aria-label={`${updates.actionLabel}: ${updates.notice.title}. Open Updates settings`}
+    onclick={openUpdates}>{updates.actionLabel}</button>
+{/snippet}
 
 {#if overviewShown || !repo || !history}
-  <Welcome currentPath={repo?.path ?? null} onBack={repo && history ? () => (overviewShown = false) : undefined}
-    {loading} error={session.gone ? null : (error ?? settingsNote?.text ?? null)} onOpen={chooseRepo} onOpenPath={load}
-    onLocate={(path) => { void session.findFolder(path, () => (overviewShown = false)); }} gone={session.gone ? goneAside : undefined} />
+  {#if tabStrip}
+    <div class="welcome-host" class:mac>
+      <div class="repo-tabs">
+        {@render tabStrip(
+          undefined,
+          () => { if (windowCommandsFree()) void openRecent(); },
+          (path) => copyText(path, "Copied the repository path."),
+          updates.actionLabel ? updateButton : undefined,
+        )}
+      </div>
+      <div class="welcome-body">
+        {@render welcomeScreen()}
+      </div>
+    </div>
+  {:else}
+    {@render welcomeScreen()}
+  {/if}
+  {#snippet welcomeScreen()}
+    <Welcome currentPath={repo?.path ?? null} onBack={repo && history ? () => (overviewShown = false) : undefined}
+      loading={loading || openingPath} error={session.gone ? null : (error ?? settingsNote?.text ?? null)} onOpen={chooseRepo} onOpenPath={load}
+      update={!tabStrip && updates.actionLabel ? updateButton : undefined}
+      onLocate={(path) => { void session.findFolder(path, load, () => { if (!openPath) overviewShown = false; }); }} gone={session.gone ? goneAside : undefined} />
+  {/snippet}
   {#snippet goneAside()}
     {#if session.gone && goneShown}
       <FolderGone
@@ -1999,26 +2146,27 @@
         shown={shownPath}
         busy={loading || session.reconnecting}
         note={session.goneNote}
-        onMain={() => session.goneMain()}
+        onMain={() => session.goneMain(load)}
         onFind={() => session.gone && findFolder(session.gone.path)}
         onRetry={() => session.gone && load(session.gone.path)}
-        onClose={() => session.goneClose()}
+        onClose={() => closeTab ? closeTab() : session.goneClose()}
       />
     {/if}
   {/snippet}
 {:else}
-  <div class="window" class:narrow class:mac class:side-shown={sideShown} class:side-hidden={sideHidden && !narrow} class:sliding>
-    <button class="capsule side-toggle" onclick={toggleSidebar} aria-label={sideOut ? "Hide sidebar" : "Show sidebar"} aria-expanded={sideOut} title={withKeys(sideOut ? "Hide Sidebar" : "Show Sidebar", combo("sidebar"))}>
+  <div class="window" class:narrow class:mac class:side-shown={sideShown} class:side-hidden={sideHidden && !narrow} class:sliding class:with-repo-tabs={!!tabStrip}
+    style:--sidebar-width={`${SIDEBAR}px`}>
+    <button class="toolbar-control side-toggle" onclick={toggleSidebar} aria-label={sideOut ? "Hide sidebar" : "Show sidebar"} aria-expanded={sideOut} title={withKeys(sideOut ? "Hide Sidebar" : "Show Sidebar", combo("sidebar"))}>
       <svg class="icon" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2" /><path d="M6 3v10" /></svg>
     </button>
     {#if !showConflicts}
       <!-- Back and Forward, as in Safari and Finder: a right-click lists the places that way. They
          stay beside the sidebar button, out or not. -->
       <div class="joined steps" role="group" aria-label="Back and Forward">
-        <button onclick={goBack} oncontextmenu={(event) => showPlaces(event, false)} disabled={!stepBack} aria-label={stepBack ? `Back to ${stepBack}` : "Back"} title={withKeys(stepBack ? `Back to ${stepBack}` : "Back", combo("back"))}>
+        <button class="toolbar-control" onclick={goBack} oncontextmenu={(event) => showPlaces(event, false)} disabled={!stepBack} aria-label={stepBack ? `Back to ${stepBack}` : "Back"} title={withKeys(stepBack ? `Back to ${stepBack}` : "Back", combo("back"))}>
           <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>
         </button>
-        <button onclick={goForward} oncontextmenu={(event) => showPlaces(event, true)} disabled={!stepForward} aria-label={stepForward ? `Forward to ${stepForward}` : "Forward"} title={withKeys(stepForward ? `Forward to ${stepForward}` : "Forward", combo("forward"))}>
+        <button class="toolbar-control" onclick={goForward} oncontextmenu={(event) => showPlaces(event, true)} disabled={!stepForward} aria-label={stepForward ? `Forward to ${stepForward}` : "Forward"} title={withKeys(stepForward ? `Forward to ${stepForward}` : "Forward", combo("forward"))}>
           <svg class="icon" viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
         </button>
       </div>
@@ -2055,28 +2203,39 @@
       onReload={reload}
       onActivity={history.remotes.length && remoteCtx ? showActivity : null}
     />
+    {#if tabStrip}
+      <div class="repo-tabs">
+        {@render tabStrip(
+          (event) => { if (windowCommandsFree()) void sidebar?.repoMenu(event, true); },
+          () => { if (windowCommandsFree()) void openRecent(); },
+          (path) => copyText(path, "Copied the repository path."),
+          updates.actionLabel ? updateButton : undefined,
+        )}
+      </div>
+    {/if}
     <div class="main">
-      <header class:has-search={(view === "history" || view === "file") && !showConflicts} data-tauri-drag-region>
+      <header class:has-search={(view === "history" || view === "file") && !showConflicts}
+        class:has-update={!tabStrip && !narrow && !!updates.actionLabel} data-tauri-drag-region>
         <div class="lead" data-tauri-drag-region>
           {#if view !== "history" || showConflicts}
             <WindowTitle title={titleOf(repo, history)} steps={trailPath} onStep={goTo} />
           {/if}
-          <button class="capsule repo-picker" onclick={(event) => sidebar?.repoMenu(event)} oncontextmenu={(event) => { event.preventDefault(); void sidebar?.repoMenu(event); }} aria-label={`Repository ${repo.name}`} aria-haspopup="menu" title={`${repo.path}\n${branchCount} ${branchCount === 1 ? "branch" : "branches"}`}>
-            <svg class="icon" viewBox="0 0 16 16" style:color={history.trunk ? lane(0) : undefined}><path d={menuIcons.folder} /></svg>
-            <span>{repo.name}</span>
-            <svg class="icon small" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>
-          </button>
+          {#if !tabStrip}
+            <button class="toolbar-control toolbar-picker repo-picker" onclick={(event) => sidebar?.repoMenu(event)} oncontextmenu={(event) => { event.preventDefault(); void sidebar?.repoMenu(event); }} aria-label={`Repository ${repo.name}`} aria-haspopup="menu" title={`${repo.path}\n${branchCount} ${branchCount === 1 ? "branch" : "branches"}`}>
+              <svg class="icon" viewBox="0 0 16 16" style:color={history.trunk ? lane(0) : undefined}><path d={menuIcons.folder} /></svg>
+              <span>{repo.name}</span>
+              <svg class="icon small" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></svg>
+            </button>
+          {/if}
           {#if repo.restricted.length}
             <RestrictedBadge findings={repo.restricted} onTrust={() => session.trust()} />
           {/if}
           <!-- File History is about one file, Browse Files about one commit: a plain back arrow and no branch picker, as in the design, leave room for Find in file. -->
           {#if (view !== "file" && view !== "browse") || showConflicts}
-            <!-- The branch and a new one beside it: one control, as Fetch, Pull and Push are. -->
             <div class="joined branch" role="group" aria-label="Branch">
               <BranchPicker bind:this={branchPicker} {history} {colorOf} onPick={(name) => branchCtx && run(switchRequest(branchCtx, name))} />
               {#if !narrow}
-                <span class="divider"></span>
-                <button onclick={newBranch} aria-label="New branch" title={history.head.branch ? "New Branch…" : "Create a branch at HEAD…"}>
+                <button class="toolbar-control" onclick={newBranch} aria-label="New branch" title={history.head.branch ? "New Branch…" : "Create a branch at HEAD…"}>
                   <svg class="icon" viewBox="0 0 16 16"><path d={NEW_BRANCH_ICON} /></svg>
                 </button>
               {/if}
@@ -2089,7 +2248,7 @@
             </div>
           {/if}
           {#if showConflicts}
-            <button class="capsule" onclick={() => (resolving = false)} title={view === "stashes" ? "Back to Stashes" : "Back to the commit graph"}>
+            <button class="toolbar-control" onclick={() => (resolving = false)} title={view === "stashes" ? "Back to Stashes" : "Back to the commit graph"}>
               <svg class="icon" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>{view === "stashes" ? "Stashes" : "History"}
             </button>
           {/if}
@@ -2103,10 +2262,11 @@
           {/if}
         </div>
         <div class="trail" data-tauri-drag-region>
-          {#if error}<span class="error" role="alert">{error}</span>{/if}
+          {#if error && !updateInMore}<span class="error" role="alert">{error}</span>{/if}
           {#if history.remotes.length && remoteCtx}
             <SyncButtons
               {history}
+              color={headColor}
               remote={remoteCtx}
               {pullBlock}
               {pushBlock}
@@ -2118,12 +2278,12 @@
               onFix={fixSync}
             />
           {:else if history.head.branch && history.head.commit}
-            <button class="capsule publish" onclick={publishToGitHub} title="Make a repository on GitHub and push {history.head.branch} there">
+            <button class="toolbar-control" onclick={publishToGitHub} title="Make a repository on GitHub and push {history.head.branch} there">
               <svg class="icon" viewBox="0 0 16 16"><path d="M8 12V3M4.5 6.5 8 3l3.5 3.5M3 14h10" /></svg>
               Publish to GitHub
             </button>
             {#if labSignedIn}
-              <button class="capsule publish" onclick={publishToGitLab} title="Make a project on GitLab and push {history.head.branch} there">
+              <button class="toolbar-control" onclick={publishToGitLab} title="Make a project on GitLab and push {history.head.branch} there">
                 <svg class="icon" viewBox="0 0 16 16"><path d="M8 12V3M4.5 6.5 8 3l3.5 3.5M3 14h10" /></svg>
                 Publish to GitLab
               </button>
@@ -2132,13 +2292,16 @@
           {#if view === "pull" && shownPull && !showConflicts}
             {@const lab = pullForge === "gitlab"}
             <button
-              class="capsule"
+              class="toolbar-control"
               onclick={() => void (lab ? api.openGitLab(shownPull!.htmlUrl) : api.openGitHub(shownPull!.htmlUrl)).catch(() => {})}
               title={lab ? "Open the merge request on GitLab" : "Open the pull request on GitHub"}
             >
               <svg class="icon" viewBox="0 0 16 16"><path d="M9.5 2.5h4v4M13.5 2.5 8 8M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" /></svg>
               Open on {lab ? "GitLab" : "GitHub"}
             </button>
+          {/if}
+          {#if (history.remotes.length && remoteCtx) || (history.head.branch && history.head.commit) || (view === "pull" && shownPull && !showConflicts)}
+            <span class="divider"></span>
           {/if}
           <!-- Undo and Fix a Mistake: the two ways back, side by side. -->
           <div class="joined" role="group" aria-label="Undo">
@@ -2150,42 +2313,45 @@
               onCompare={compareStep}
               onSeries={seriesOfStep}
             />
-            <span class="divider"></span>
-            <button onclick={() => openFixes()} aria-label="Fix a mistake" title={withKeys("Fix a Mistake…", combo("fixMistake"))}>
+            <button class="toolbar-control" onclick={() => openFixes()} aria-label="Fix a mistake" title={withKeys("Fix a Mistake…", combo("fixMistake"))}>
               <svg class="icon" viewBox="0 0 16 16"><path d="M8 1.8a6.2 6.2 0 1 0 0 12.4a6.2 6.2 0 1 0 0-12.4M8 5.4a2.6 2.6 0 1 0 0 5.2a2.6 2.6 0 1 0 0-5.2M3.6 3.6l2.6 2.6M12.4 3.6 9.8 6.2M3.6 12.4l2.6-2.6M12.4 12.4 9.8 9.8" /></svg>
             </button>
           </div>
+          <span class="divider"></span>
           {#if narrow}
             <button
-              class="capsule"
-              class:update-available={!!updates.available}
+              class="toolbar-control"
+              class:update-available={!!updateInMore}
               onclick={(event) => {
                 const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
                 moreMenu = moreMenu ? null : { x: box.left, y: box.bottom + 6 };
               }}
-              aria-label="More"
+              aria-label={updateInMore ? `More: ${updates.notice.title}` : "More"}
               aria-haspopup="menu"
               aria-expanded={!!moreMenu}
-              title={`${(view !== "file" && view !== "browse") || showConflicts ? "New Branch, Console, Settings" : "Console, Settings"}${updates.available ? " — an update is available" : ""}`}
+              title={updateInMore ? updates.notice.title
+                : (view !== "file" && view !== "browse") || showConflicts ? "New Branch, Console, Settings" : "Console, Settings"}
             >
               <svg class="icon" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6" /><circle cx="8" cy="8" r=".6" /><circle cx="12.5" cy="8" r=".6" /></svg>
             </button>
           {:else}
             <div class="joined" role="group" aria-label="Console and commands">
-              <button onclick={() => api.openConsole()} aria-label="Console" title={withKeys("Console", combo("console"))}>
+              <button class="toolbar-control" onclick={() => api.openConsole()} aria-label="Console" title={withKeys("Console", combo("console"))}>
                 <svg class="icon" viewBox="0 0 16 16"><path d={CONSOLE_ICON} /></svg>
               </button>
-              <span class="divider"></span>
-              <button onclick={() => { nav.quickOpen = false; picker = { kind: "commands", initial: "Custom:" }; }} aria-label="Run Command" title="Run or manage custom commands">
+              <button class="toolbar-control" onclick={() => { nav.quickOpen = false; picker = { kind: "commands", initial: "Custom:" }; }} aria-label="Run Command" title="Run or manage custom commands">
                 <svg class="icon" viewBox="0 0 16 16"><path d={COMMANDS_ICON} /></svg>
               </button>
             </div>
-            <button class="capsule" class:update-available={!!updates.available} onclick={() => api.openSettings()} aria-label="Settings" title={withKeys("Settings", combo("settings"))}>
+            <span class="divider"></span>
+            <button class="toolbar-control" onclick={() => api.openSettings()} aria-label="Settings" title={withKeys("Settings", combo("settings"))}>
               <svg class="icon" viewBox="0 0 16 16"><path d={SETTINGS_ICON} /></svg>
             </button>
           {/if}
+          {#if !tabStrip && !narrow && updates.actionLabel}{@render updateButton()}{/if}
         </div>
       </header>
+      {#if error && updateInMore}<div class="toolbar-error" role="alert">{error}</div>{/if}
       {#if searching}
         <SearchBar
           {history}
@@ -2364,7 +2530,7 @@
               </button>
               <GraphLegend {history} shown={graphHistory!} onShow={jump} />
             {/if}
-            {#if detailsHidden}
+            {#if detailsChrome.detailsHidden}
               <button class="bar-button" onclick={toggleDetails} aria-label="Show details" title={withKeys("Show Details", combo("details"))}>
                 <svg class="icon" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2" /><path d="M10 3v10" /></svg>
               </button>
@@ -2376,7 +2542,7 @@
               history={graphHistory!}
               {selected}
               onSelect={select}
-              onScroll={(position) => (navigation.scroll = position)}
+              onScroll={(position) => { if (scope.isActive()) navigation.scroll = position; }}
               menuFor={commitMenu}
               linkFor={(id) => api.commitLink(repo.path, id)}
               copyLink={(url) => copyText(url, "Copied the commit link.")}
@@ -2391,7 +2557,7 @@
             />
           {/key}
         </section>
-        {#if !detailsHidden}
+        {#if !detailsChrome.detailsHidden}
         <aside class="panel" style:width={expanded ? null : `${shownPanelWidth}px`} aria-label="Commit details">
           {#if !expanded}
             <button class="vertical-splitter" title="Drag to resize" tabindex="-1" onpointerdown={startResize} aria-label="Resize commit details"></button>
@@ -2572,37 +2738,43 @@
 
 <style>
   .window {
+    --toolbar-control-height: 28px;
     position: relative;
     height: 100%;
     color: var(--text);
   }
+  .window,
+  .welcome-host {
+    --repo-tabs-height: 40px;
+  }
+  .window.mac,
+  .window.with-repo-tabs {
+    --window-controls-height: var(--repo-tabs-height);
+  }
   .main {
     position: absolute;
-    left: 280px;
+    left: var(--sidebar-width);
     top: 0;
     right: 0;
     bottom: 0;
     display: flex;
     flex-direction: column;
   }
-  /* The sidebar button stays where Mail has it, just right of the traffic lights and on the
-     toolbar's middle line, whether the sidebar is out or not. Elsewhere it opens the toolbar. */
-  .window .side-toggle {
+  /* Keep the window controls centered on their row while the sidebar moves. */
+  .window :is(.side-toggle, .steps) {
     position: absolute;
     z-index: 21;
-    top: 11px;
+    top: calc((var(--window-controls-height, 56px) - var(--toolbar-control-height)) / 2);
+  }
+  .window .side-toggle {
     left: 14px;
-    width: 34px;
+    width: var(--toolbar-control-height);
     padding: 0;
-    justify-content: center;
   }
   .window.mac .side-toggle {
     left: 96px;
   }
   .window .steps {
-    position: absolute;
-    z-index: 21;
-    top: 11px;
     left: 56px;
   }
   .window.mac .steps {
@@ -2615,6 +2787,9 @@
       transform 0.22s ease,
       left 0.22s ease,
       padding-left 0.22s ease;
+  }
+  .window:not(.narrow) .repo-tabs > :global(.strip) {
+    transition: padding-left 0.22s ease;
   }
   .window.sliding :global(aside.panel) {
     transition: width 0.22s ease;
@@ -2650,6 +2825,7 @@
     .window.side-hidden > :global(nav),
     .window.narrow.side-shown > :global(nav),
     .window.sliding :global(aside.panel),
+    .window:not(.narrow) .repo-tabs > :global(.strip),
     .main,
     header {
       transition: none;
@@ -2683,6 +2859,55 @@
   .window.side-hidden.mac header {
     padding-left: 218px;
   }
+  .welcome-host {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .welcome-body {
+    flex: 1;
+    min-height: 0;
+  }
+  /* Welcome has no sidebar, so the strip leaves the same room for the window controls. */
+  .welcome-host .repo-tabs {
+    --repo-tabs-leading: 136px;
+  }
+  .welcome-host.mac .repo-tabs {
+    --repo-tabs-leading: 218px;
+  }
+  .repo-tabs {
+    flex-shrink: 0;
+  }
+  .window.with-repo-tabs .main,
+  .window.with-repo-tabs > :global(nav),
+  .window.with-repo-tabs .side-catcher {
+    top: var(--repo-tabs-height);
+  }
+  .window.with-repo-tabs > :global(nav > .lights) {
+    display: none;
+  }
+  .window .repo-tabs {
+    --repo-tabs-leading: calc(var(--sidebar-width) + var(--space-2));
+    position: relative;
+  }
+  .window:not(.narrow, .side-hidden) .repo-tabs::after {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 calc(var(--sidebar-width) - 1px);
+    width: 1px;
+    background: var(--sep);
+    pointer-events: none;
+  }
+  .window.with-repo-tabs:is(.narrow, .side-hidden) header {
+    padding-left: 14px;
+  }
+  .window:is(.narrow, .side-hidden) .repo-tabs {
+    --repo-tabs-leading: 136px;
+  }
+  .window.mac:is(.narrow, .side-hidden) .repo-tabs {
+    --repo-tabs-leading: 218px;
+  }
   /* Three zones: the two sides share the room equally, so the search sits in the middle of the
      toolbar. In a narrow window the buttons on the right keep their size, and the title and then
      the search give way, rather than anything covering a button. */
@@ -2694,6 +2919,10 @@
     padding: 0 12px 0 14px;
     flex-shrink: 0;
   }
+  .window.mac:not(.with-repo-tabs) header,
+  .window.mac:not(.with-repo-tabs) > :global(nav > .lights) {
+    height: var(--window-controls-height);
+  }
   .lead,
   .trail {
     flex: 1 1 0;
@@ -2704,11 +2933,26 @@
   }
   .repo-picker {
     min-width: max-content;
-    flex-shrink: 0;
   }
   .repo-picker span {
     color: var(--text);
     white-space: nowrap;
+  }
+  .window.narrow .repo-picker,
+  header.has-update .repo-picker {
+    display: inline-grid;
+    grid-template-columns: 16px minmax(0, 1fr) 12px;
+    flex-shrink: 1;
+    min-width: min-content;
+  }
+  .window.narrow .repo-picker span,
+  header.has-update .repo-picker span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  header.has-update .joined.branch {
+    min-width: 44px;
   }
   .repo-picker .icon {
     flex-shrink: 0;
@@ -2723,6 +2967,7 @@
   .trail {
     min-width: max-content;
     justify-content: flex-end;
+    gap: var(--space-2);
   }
   .center {
     flex: 0 1 auto;
@@ -2743,104 +2988,44 @@
   header.has-search .trail {
     flex: 0 0 auto;
   }
-  .capsule {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    height: 34px;
-    padding: 0 12px;
-    border-radius: var(--radius-pill);
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--icon);
-    font-weight: 500;
-  }
-  .capsule.update-available {
-    background: var(--accent);
-    border-color: transparent;
-    color: #fff;
-  }
   .joined.steps > button {
     min-width: 32px;
     padding: 0 7px;
   }
   .joined.steps > button:disabled {
     opacity: 0.4;
-    background: none;
   }
-  /* Controls that belong together share one glass capsule, split by a hairline. The parts drop
-     their own glass; a hover washes just the part under the pointer. */
   .joined {
     flex-shrink: 0;
     display: flex;
     align-items: center;
-    height: 34px;
-    border-radius: var(--radius-pill);
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--icon);
   }
   .joined.branch {
     flex-shrink: 1;
     min-width: 0;
   }
-  .joined > button,
-  .joined :global(.capsule) {
-    height: 32px;
-    min-width: 36px;
-    padding: 0 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    border-radius: var(--radius-pill);
-    background: none;
-    border: 0;
-    box-shadow: none;
+  .toolbar-control.update-available {
+    background-color: var(--accent-quiet);
+    color: var(--accent);
   }
-  .joined.branch :global(.picker .capsule) {
-    justify-content: flex-start;
-    gap: 6px;
-    padding: 0 10px 0 12px;
+  .toolbar-error {
+    padding: 0 var(--space-3) var(--space-2);
+    color: var(--red);
+    font-size: var(--text-small);
+    overflow-wrap: anywhere;
   }
-  .joined > button:hover {
-    background: var(--hover-wash);
-  }
-  .joined > :first-child,
-  .joined > :first-child :global(.capsule) {
-    margin-left: 1px;
-  }
-  .joined > :last-child,
-  .joined > :last-child :global(.capsule) {
-    margin-right: 1px;
+  .joined.branch > button {
+    margin-left: var(--space-1);
   }
   .divider {
     flex-shrink: 0;
     width: 1px;
-    height: 18px;
+    height: 16px;
     background: var(--sep);
   }
-  .segmented {
-    display: flex;
-    padding: 3px;
-    border-radius: var(--radius-pill);
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-  }
   .segmented button {
-    height: 28px;
-    padding: 0 16px;
-    border-radius: var(--radius-pill);
-    color: var(--text);
-    font-weight: 500;
-  }
-  .segmented button.on {
-    background: var(--side-sel);
-    font-weight: 600;
+    height: calc(var(--toolbar-control-height) - 4px);
+    padding: 0 var(--space-3);
   }
   .error {
     color: var(--red);
@@ -2907,7 +3092,7 @@
     flex-shrink: 0;
     height: 22px;
     padding: 0 9px 0 7px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     font-size: var(--text-caption);
     font-weight: 600;
     color: var(--text2);
@@ -2974,7 +3159,7 @@
     flex-shrink: 0;
     width: 22px;
     height: 22px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     color: var(--text2);
   }
   .bar-button:hover,

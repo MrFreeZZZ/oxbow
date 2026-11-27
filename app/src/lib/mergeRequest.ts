@@ -1,10 +1,9 @@
+import type { RepoScope } from "./repoScope";
 // Create Merge Request on GitLab: the push itself asks for it with GitLab's push options
 // (`git push -o merge_request.create …`), so it needs no sign-in and works on a GitLab server of
 // your own too. With nothing to push, git sends no options: GitLab's New merge request page opens
 // in the browser instead, with both branches picked.
 
-import { api } from "./api";
-import { github } from "./github.svelte";
 import type { Part, Request } from "./confirm.svelte";
 import { hostName, pushRecovery, type RemoteContext } from "./remote";
 import type { BranchContext } from "./branches";
@@ -37,14 +36,14 @@ export function gitlabOf(history: History, projects: GitLabProject[], ref: RefIn
 
 /** Whether Oxbow is signed in to `project`'s server: then Create Merge Request opens the full
  *  form on the Merge Request screen rather than asking GitLab through the push. */
-export function signedInTo(project: GitLabProject): boolean {
-  const signed = github.mrProject;
+export function signedInTo(scope: RepoScope, project: GitLabProject): boolean {
+  const signed = scope.github.mrProject;
   return !!signed && signed.remote === project.remote && signed.host === project.host;
 }
 
 /** Create Merge Request for a local branch, from the branch list or the graph: into the trunk,
  *  or a branch like develop that the remote has. */
-export function branchMergeRequest(ctx: BranchContext, ref: RefInfo, project: GitLabProject): Request {
+export function branchMergeRequest(scope: RepoScope, ctx: BranchContext, ref: RefInfo, project: GitLabProject): Request {
   const history = ctx.history;
   // A branch only the remote has, e.g. origin/sigma-tg: it is already there.
   const remoteOnly = ref.kind === "remote";
@@ -53,7 +52,7 @@ export function branchMergeRequest(ctx: BranchContext, ref: RefInfo, project: Gi
   const trunk = history.trunk ?? "main";
   const targets = [trunk, ...["develop", "dev", "staging"].filter(onRemote)].filter((branch, i, all) => branch !== name && all.indexOf(branch) === i);
   const summary = history.rows.find((r) => r.id === ref.target)?.summary;
-  return mergeRequestRequest(
+  return mergeRequestRequest(scope,
     {
       branch: name,
       color: ctx.colorOf(ref.name),
@@ -70,8 +69,8 @@ export function branchMergeRequest(ctx: BranchContext, ref: RefInfo, project: Gi
   );
 }
 
-export function mergeRequestRequest(ctx: MergeRequestContext, state: NewMergeRequest): Request {
-  const again = (change: Partial<NewMergeRequest>) => mergeRequestRequest(ctx, { ...state, ...change });
+export function mergeRequestRequest(scope: RepoScope, ctx: MergeRequestContext, state: NewMergeRequest): Request {
+  const again = (change: Partial<NewMergeRequest>) => mergeRequestRequest(scope, ctx, { ...state, ...change });
   const { branch, project } = ctx;
   const host = hostName(project.host);
   const chip = (name: string): Part => ({ branch: name, color: ctx.colorOf(name) });
@@ -107,7 +106,7 @@ export function mergeRequestRequest(ctx: MergeRequestContext, state: NewMergeReq
         commands: [`open '${url}'`],
         comment: `${host}’s New merge request page, the branches picked`,
         run: async () => {
-          await api.openGitLab(url);
+          await scope.api.openGitLab(url);
           return `Opened ${host}’s New merge request page.`;
         },
       },
@@ -158,11 +157,11 @@ export function mergeRequestRequest(ctx: MergeRequestContext, state: NewMergeReq
     after: (output) => {
       const link = mergeRequestLink(output, project);
       const url = link ? (state.open ? link.url : null) : newMergeRequestUrl(project, upstream, state.target, state.title);
-      if (url) api.openGitLab(url).catch(() => {});
+      if (url) scope.api.openGitLab(url).catch(() => {});
       // Signed in there: the branch shows its !N.
-      if (link) github.refresh();
+      if (link) scope.github.refresh();
     },
-    recover: (failure) => pushRecovery(failure, ctx, action),
+    recover: (failure) => pushRecovery(scope, failure, ctx, action),
     action,
   };
 }

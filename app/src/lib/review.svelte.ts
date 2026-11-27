@@ -1,11 +1,10 @@
+import type { RepoScope } from "./repoScope";
 // Reviewing one pull request here: the files ticked Viewed on GitHub, the draft review kept in
 // `.git/oxbow/reviews` until it is sent, the one comment being written, and the requests that
 // send comments, replies and the review itself. A merge request on GitLab the same way: its
 // Viewed ticks stay on this computer, as GitLab keeps none for others to read.
 
-import { api } from "./api";
-import { github } from "./github.svelte";
-import { confirm, type Request } from "./confirm.svelte";
+import { type Request } from "./confirm.svelte";
 import type { PullCall, PullRequest, ReviewDraft, ReviewTarget, Spot, Verdict, Viewing } from "./types";
 import { addProblem, approvedBy, commentCall, countWords, emptyDraft, isEmpty, spotLabel, submitCalls, withComment, withEdit, withReply, type Thread, type Writing } from "./reviewDraft";
 import { wordsOf, type ForgeKind, type Words } from "./forge";
@@ -48,7 +47,7 @@ export class ReviewSession {
   #viewedPaths = new Map<string, { version: number; confirmed: { viewed: boolean; dismissed: boolean }; pending: number; queue: Promise<void> }>();
   #disposed = false;
 
-  constructor(pr: PullRequest, run: (request: Request | Promise<Request>) => Promise<boolean>, changed: () => void, target: ReviewTarget, forge: ForgeKind = "github") {
+  constructor(private readonly scope: RepoScope, pr: PullRequest, run: (request: Request | Promise<Request>) => Promise<boolean>, changed: () => void, target: ReviewTarget, forge: ForgeKind = "github") {
     this.number = pr.number;
     this.lab = forge === "gitlab";
     this.words = wordsOf(forge);
@@ -56,7 +55,7 @@ export class ReviewSession {
     this.files = pr.changedFiles;
     this.#run = run;
     this.#changed = changed;
-    this.saves = new ReviewSaves(api, target, pr.number, draft => { this.draft = draft; }, err => confirm.fail(err));
+    this.saves = new ReviewSaves(scope.api, target, pr.number, draft => { this.draft = draft; }, err => this.scope.confirm.fail(err));
     this.loadViewing().catch(() => {});
   }
 
@@ -69,7 +68,7 @@ export class ReviewSession {
   async loadViewing() {
     const mine = ++this.#viewing;
     const version = this.#viewedVersion;
-    const v = await (this.lab ? api.gitlabViewing(this.number, this.saves.target) : api.githubViewing(this.number, this.saves.target));
+    const v = await (this.lab ? this.scope.api.gitlabViewing(this.number, this.saves.target) : this.scope.api.githubViewing(this.number, this.saves.target));
     if (this.#disposed || mine !== this.#viewing) return;
     const viewed = new Set(v.viewed), dismissed = new Set(v.dismissed);
     for (const [path, state] of this.#viewedPaths) {
@@ -100,8 +99,8 @@ export class ReviewSession {
     this.dismissed = dismissed;
     state.queue = state.queue.then(async () => {
       try {
-        if (this.lab) await api.gitlabSetViewed(this.number, path, on, this.saves.target);
-        else await api.githubSend({ kind: "viewed", id: this.pr.nodeId, path, viewed: on }, this.saves.target);
+        if (this.lab) await this.scope.api.gitlabSetViewed(this.number, path, on, this.saves.target);
+        else await this.scope.api.githubSend({ kind: "viewed", id: this.pr.nodeId, path, viewed: on }, this.saves.target);
         state.confirmed = { viewed: on, dismissed: false };
       } catch (err) {
         if (!this.#disposed && state.version === version) {
@@ -130,11 +129,11 @@ export class ReviewSession {
   }
 
   #preview(calls: PullCall[]): Promise<string[]> {
-    return this.lab ? api.gitlabCallsPreview(calls, this.saves.target) : api.githubCallsPreview(calls, this.saves.target);
+    return this.lab ? this.scope.api.gitlabCallsPreview(calls, this.saves.target) : this.scope.api.githubCallsPreview(calls, this.saves.target);
   }
 
   #sendCalls(calls: PullCall[]): Promise<unknown> {
-    return this.lab ? api.gitlabRun(calls, this.saves.target) : api.githubRun(calls, this.saves.target);
+    return this.lab ? this.scope.api.gitlabRun(calls, this.saves.target) : this.scope.api.githubRun(calls, this.saves.target);
   }
 
   /** How the draft's file is named in `.git/oxbow/reviews`. */
@@ -145,7 +144,7 @@ export class ReviewSession {
   addComment(writing: Writing) {
     // Its commit must be checked against the saved review before a comment is attached to it.
     if (!this.saves.state) {
-      void this.saves.ready().then(() => { if (!this.#disposed) this.addComment(writing); }, err => confirm.fail(err));
+      void this.saves.ready().then(() => { if (!this.#disposed) this.addComment(writing); }, err => this.scope.confirm.fail(err));
       return;
     }
     // Whether its file is the same on the newest commit is for the Files tab to say, before Add
@@ -205,7 +204,7 @@ export class ReviewSession {
       if (ok) this.#changed();
       return ok;
     } catch (err) {
-      confirm.fail(err);
+      this.scope.confirm.fail(err);
       return false;
     }
   }
@@ -246,7 +245,7 @@ export class ReviewSession {
     const range = suggestedRange(part, thread, this.lab);
     if (!range || !thread.path) return;
     const commit = thread.commit || this.pr.headSha;
-    await (this.lab ? api.gitlabFetch(this.number, this.pr.base, this.saves.target) : api.pullFetch(this.number, this.pr.base, this.saves.target)).catch(() => {});
+    await (this.lab ? this.scope.api.gitlabFetch(this.number, this.pr.base, this.saves.target) : this.scope.api.pullFetch(this.number, this.pr.base, this.saves.target)).catch(() => {});
     await this.#run(applyRequest(thread.path, commit, range, part.lines, who));
   }
 
@@ -255,7 +254,7 @@ export class ReviewSession {
     try {
       await this.saves.flush();
       const draft = this.draft;
-      const revoke = this.lab && approvedBy(this.pr, github.mrMe);
+      const revoke = this.lab && approvedBy(this.pr, this.scope.github.mrMe);
       const calls = submitCalls(this.pr, draft, verdict, body, this.shown, this.lab ? { revoke } : null);
       const curls = await this.#preview(calls);
       const what = countWords(draft?.comments.length ?? 0, draft?.replies.length ?? 0);
@@ -287,7 +286,7 @@ export class ReviewSession {
       this.finishing = false;
       this.#changed();
     } catch (err) {
-      confirm.fail(err);
+      this.scope.confirm.fail(err);
     }
   }
 
@@ -317,7 +316,7 @@ export class ReviewSession {
       this.draft = null;
       this.finishing = false;
     } catch (err) {
-      confirm.fail(err);
+      this.scope.confirm.fail(err);
     }
   }
 }

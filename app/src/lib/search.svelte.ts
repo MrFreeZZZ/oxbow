@@ -2,7 +2,7 @@
 // commits that matched. The search itself is `git log`, run by the backend; a SHA is looked up
 // among the loaded commits, then in the whole repository.
 
-import { api } from "./api";
+import { api as windowApi } from "./api";
 import type { HistoryRow, SearchMode, SearchResult } from "./types";
 
 export type Mode = SearchMode | "sha";
@@ -42,7 +42,9 @@ function loadRecent(): Recent[] {
   }
 }
 
-class Search {
+export class Search {
+  constructor(private readonly api: typeof windowApi = windowApi) {}
+
   /** What is in the field, a `code:` style prefix included. */
   input = $state("");
   /** The mode picked with the token; a prefix in the field wins over it. */
@@ -94,7 +96,7 @@ class Search {
     this.since = "any";
     this.#generation++;
     // Searches still running would only be dropped: they stop now, freeing git for what's next.
-    api.stopReads(["main", ...MODES.map(({ mode }) => `count-${mode}`)]).catch(() => {});
+    this.api.stopReads(["main", ...MODES.map(({ mode }) => `count-${mode}`)]).catch(() => {});
   }
 
   /** A typed `code:` style prefix turns into the mode token. */
@@ -124,7 +126,9 @@ class Search {
     const { mode, text } = this.parsed;
     if (!text) return;
     const entry = { mode, text };
-    this.recent = [entry, ...this.recent.filter((r) => r.mode !== mode || r.text !== text)].slice(0, 6);
+    const stored = loadRecent();
+    const prior = stored.length ? stored : this.recent;
+    this.recent = [entry, ...prior.filter((r) => r.mode !== mode || r.text !== text)].slice(0, 6);
     try {
       localStorage.setItem(RECENT_KEY, JSON.stringify(this.recent));
     } catch {
@@ -146,7 +150,7 @@ class Search {
         continue;
       }
       this.counts[mode] = null;
-      api.search({ mode, text, branch: this.branch, since, author: mode === "author" ? null : this.author }, `count-${mode}`).then(
+      this.api.search({ mode, text, branch: this.branch, since, author: mode === "author" ? null : this.author }, `count-${mode}`).then(
         (r) => {
           if (mine === this.#counting && this.parsed.text === text) this.counts[mode] = r.hits.length;
         },
@@ -176,7 +180,7 @@ class Search {
     if (mode === "sha") {
       let hits = shaHits(rows, text);
       if (!hits.length && truncated) {
-        const id = await api.resolveCommit(text).catch(() => null);
+        const id = await this.api.resolveCommit(text).catch(() => null);
         if (mine !== this.#generation) return;
         if (id) hits = [{ id, files: [] }];
       }
@@ -189,7 +193,7 @@ class Search {
     this.busy = true;
     try {
       // In Author mode the field is the author filter itself.
-      const result = await api.search({ mode, text, branch: this.branch, since, author: mode === "author" ? null : this.author }, "main");
+      const result = await this.api.search({ mode, text, branch: this.branch, since, author: mode === "author" ? null : this.author }, "main");
       if (mine !== this.#generation) return;
       this.result = result;
       this.resultKey = key;

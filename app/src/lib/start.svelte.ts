@@ -6,7 +6,7 @@ import type { WelcomeInfo } from "./types";
 
 export type Sheet = { kind: "clone"; url: string } | { kind: "new"; folder: string | null };
 
-class Start {
+export class Start {
   info = $state<WelcomeInfo | null>(null);
   sheet = $state<Sheet | null>(null);
 

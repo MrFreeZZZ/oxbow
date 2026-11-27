@@ -1,3 +1,4 @@
+import type { RepoScope } from "./repoScope";
 // Confirmations for tags: making one, pushing, deleting and fetching them. Git never pushes tags
 // with a branch, so a new tag offers to go to the remote right away, and tags the remote doesn't
 // have yet are drawn as local until pushed.
@@ -51,13 +52,13 @@ function compare(x: number[], y: number[]): number {
 }
 
 /** New Tag: on `at` when given (a commit in the graph), else on HEAD. */
-export function newTagRequest(ctx: BranchContext, at?: HistoryRow): Request {
+export function newTagRequest(scope: RepoScope, ctx: BranchContext, at?: HistoryRow): Request {
   const onCommit = !!at && at.id !== ctx.history.head.commit;
-  return newTagSheet(ctx, at ?? null, { name: "", annotated: true, message: "", onCommit, push: !!ctx.history.defaultRemote });
+  return newTagSheet(scope, ctx, at ?? null, { name: "", annotated: true, message: "", onCommit, push: !!ctx.history.defaultRemote });
 }
 
-function newTagSheet(ctx: BranchContext, at: HistoryRow | null, state: NewTag): Request {
-  const again = (change: Partial<NewTag>) => newTagSheet(ctx, at, { ...state, ...change });
+function newTagSheet(scope: RepoScope, ctx: BranchContext, at: HistoryRow | null, state: NewTag): Request {
+  const again = (change: Partial<NewTag>) => newTagSheet(scope, ctx, at, { ...state, ...change });
   const { head, defaultRemote: remote } = ctx.history;
   const name = state.name.trim();
   const problem = nameProblem(ctx, name);
@@ -109,13 +110,13 @@ function newTagSheet(ctx: BranchContext, at: HistoryRow | null, state: NewTag): 
     status: `Tagging ${name}…`,
     done: push ? `Created ${name} and pushed it to ${push}.` : `Created ${name}.`,
     // The tag is made; only the push failed, so Try Again pushes it.
-    recover: (failure) => (push ? remoteTrouble(failure, { kind: "pushTags", remote: push, names: [name] }, "Pushing to", push, `Pushed ${name} to ${push}.`) : null),
+    recover: (failure) => (push ? remoteTrouble(scope, failure, { kind: "pushTags", remote: push, names: [name] }, "Pushing to", push, `Pushed ${name} to ${push}.`) : null),
     action,
   };
 }
 
 /** Push tags the remote doesn't have: one, or every local tag. */
-export function pushTagsRequest(ctx: BranchContext, names: string[]): Request {
+export function pushTagsRequest(scope: RepoScope, ctx: BranchContext, names: string[]): Request {
   const remote = ctx.history.defaultRemote!;
   const one = names.length === 1;
   const action: Action = { kind: "pushTags", remote, names };
@@ -129,13 +130,13 @@ export function pushTagsRequest(ctx: BranchContext, names: string[]): Request {
     button: one ? "Push Tag" : "Push Tags",
     status: `Pushing to ${remote}…`,
     done,
-    recover: (failure) => remoteTrouble(failure, action, "Pushing to", remote, done),
+    recover: (failure) => remoteTrouble(scope, failure, action, "Pushing to", remote, done),
     action,
   };
 }
 
 /** Delete a tag here, and on the remote when it is there too. */
-export function deleteTagRequest(ctx: BranchContext, name: string, onRemote = !isLocalTag(ctx, name)): Request {
+export function deleteTagRequest(scope: RepoScope, ctx: BranchContext, name: string, onRemote = !isLocalTag(ctx, name)): Request {
   const remote = ctx.history.defaultRemote;
   const pushed = !!remote && !isLocalTag(ctx, name);
   const both = pushed && onRemote;
@@ -151,15 +152,15 @@ export function deleteTagRequest(ctx: BranchContext, name: string, onRemote = !i
     icon: "drop",
     button: "Delete Tag",
     danger: true,
-    options: pushed ? [{ label: `Also delete it on ${remote}`, on: onRemote, toggle: () => deleteTagRequest(ctx, name, !onRemote) }] : undefined,
+    options: pushed ? [{ label: `Also delete it on ${remote}`, on: onRemote, toggle: () => deleteTagRequest(scope, ctx, name, !onRemote) }] : undefined,
     status: `Deleting ${name}…`,
     done,
-    recover: (failure) => (both ? remoteTrouble(failure, action, "Deleting on", remote!, done) : null),
+    recover: (failure) => (both ? remoteTrouble(scope, failure, action, "Deleting on", remote!, done) : null),
     action,
   };
 }
 
-export function fetchTagsRequest(ctx: BranchContext): Request {
+export function fetchTagsRequest(scope: RepoScope, ctx: BranchContext): Request {
   const remote = ctx.history.defaultRemote!;
   const action: Action = { kind: "fetchTags", remote };
   const done = `Fetched the tags of ${remote}.`;
@@ -171,7 +172,7 @@ export function fetchTagsRequest(ctx: BranchContext): Request {
     note: "Your branches and files do not change.",
     status: `Fetching tags from ${remote}…`,
     done,
-    recover: (failure) => remoteTrouble(failure, action, "Fetching", remote, done),
+    recover: (failure) => remoteTrouble(scope, failure, action, "Fetching", remote, done),
     action,
   };
 }

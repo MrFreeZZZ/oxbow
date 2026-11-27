@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { exerciseRepositoryTabQueue } from "./repoTabQueue.mjs";
 import { git, read, rebaseInConflict, repo, submodulesOneFails, withWorktree, write } from "./fixtures.mjs";
 
 /** Waits until `test()` gives something truthy, and gives it back. */
@@ -61,6 +62,118 @@ const openChanged = (app, name) =>
   }, name);
 
 export const SCENARIOS = [
+  {
+    name: "repository tab strip geometry",
+    async run(ctx) {
+      const app = await ctx.start(repo(`${ctx.dir}/tab-geometry`, 1));
+      const { shown, hidden } = await app.js(async (page) => {
+        await window.__TAURI_INTERNALS__.invoke("plugin:window|set_size", {
+          label: "main", value: { Logical: { width: 1360, height: 860 } },
+        });
+        const strip = await page.until(
+          () => innerWidth >= 1300 && page.all(".window:not(.narrow) .repo-tabs > .strip")[0],
+          "a wide repository window",
+        );
+        const root = strip.closest(".window");
+        const toggle = root.querySelector(".side-toggle");
+        const measure = async (expanded) => {
+          await page.until(() => toggle.getAttribute("aria-expanded") === String(expanded), "the sidebar state");
+          await page.paint();
+          await page.until(() => !strip.getAnimations().some(animation => animation.pending || animation.playState === "running"),
+            "the tab strip transition to finish");
+          const position = (el) => {
+            const { x, y, width, height } = el.getBoundingClientRect();
+            return { x, y, width, height };
+          };
+          const center = (el) => {
+            const { y, height } = position(el);
+            return y + height / 2;
+          };
+          const menu = strip.querySelector('[aria-label="Repository menu"]');
+          const tab = strip.querySelector('[role="tab"][aria-selected="true"]');
+          const closeIcon = tab.parentElement.querySelector(".close .icon");
+          const { width, height } = position(closeIcon);
+          return {
+            height: strip.getBoundingClientRect().height,
+            menu: position(menu),
+            tab: position(tab),
+            closeIconSize: [width, height],
+            center: center(strip),
+            controls: [toggle, root.querySelector(".steps"), menu, closeIcon].map(center),
+          };
+        };
+        if (toggle.getAttribute("aria-expanded") !== "true") toggle.click();
+        const shown = await measure(true);
+        toggle.click();
+        return { shown, hidden: await measure(false) };
+      });
+      for (const state of [shown, hidden]) {
+        assert.equal(state.height, 40, "the strip keeps its Chrome height");
+        assert.deepEqual([state.menu.width, state.menu.height], [28, 28], "the menu keeps its Chrome size");
+        assert.deepEqual(state.closeIconSize, [14, 14], "the close glyph keeps its Chrome size");
+        assert.ok(state.controls.every(y => y === state.center), "the controls are centered on the strip");
+      }
+      for (const control of ["menu", "tab"]) {
+        assert.ok(hidden[control].x < shown[control].x, `${control} moves left when the sidebar hides`);
+        assert.equal(hidden[control].y, shown[control].y, `${control} keeps its vertical position`);
+      }
+    },
+  },
+  {
+    name: "repository tab queue",
+    async run(ctx) {
+      const paths = Object.fromEntries(["a", "b", "c", "d", "extra"].map(name => [name, repo(`${ctx.dir}/tab-${name}`, 1)]));
+      paths.missing = `${ctx.dir}/tab-missing`;
+      const app = await ctx.start(paths.a);
+      fs.writeFileSync(path.join(ctx.config, "recent-repositories.json"), JSON.stringify([{ path: paths.extra, opened: 1 }]));
+      await app.js(async (_page, { a, b, c, d, missing }) => {
+        localStorage.setItem("oxbow.repoTabs.layout", JSON.stringify({ paths: [a, b, c, missing, d], active: a }));
+      }, paths);
+      const restored = await ctx.start(paths.a);
+      await restored.js(exerciseRepositoryTabQueue, paths);
+    },
+  },
+  {
+    name: "repository startup with tabs disabled",
+    async run(ctx) {
+      const last = repo(`${ctx.dir}/last-repo`, 1);
+      const saved = repo(`${ctx.dir}/saved-tab`, 1);
+      const layout = { paths: [last, saved], active: saved };
+      write(ctx.config, "settings.json", JSON.stringify({ "oxbow.windows.repositoryTabs": false }));
+      const initial = await ctx.start(last);
+      await initial.js((_page, layout) => {
+        localStorage.setItem("oxbow.repoTabs.layout", JSON.stringify(layout));
+      }, layout);
+
+      const checkStartup = async (app, folder) => {
+        const state = await app.js(async (page) => {
+          const picker = await page.until(() => document.querySelector(".repo-tab-view.active .repo-picker"), "the repository picker");
+          return {
+            repository: picker.getAttribute("aria-label"),
+            hasTabs: Boolean(document.querySelector("[data-repo-tab-list]")),
+            layout: JSON.parse(localStorage.getItem("oxbow.repoTabs.layout")),
+          };
+        });
+        assert.equal(state.repository, `Repository ${path.basename(folder)}`);
+        assert.equal(state.hasTabs, false);
+        assert.deepEqual(state.layout, layout);
+      };
+
+      await checkStartup(await ctx.start(last), last);
+      fs.unlinkSync(path.join(ctx.config, "last-repository"));
+      const fallback = await ctx.start();
+      await checkStartup(fallback, saved);
+      const restored = await fallback.js(async (page) => {
+        await window.__TAURI_INTERNALS__.invoke("set_setting", { key: "oxbow.windows.repositoryTabs", value: true });
+        const list = await page.until(() => document.querySelector("[data-repo-tab-list]"), "the restored tab strip");
+        return {
+          paths: [...list.querySelectorAll('[role="tab"]')].map(tab => tab.title),
+          active: list.querySelector('[role="tab"][aria-selected="true"]')?.title,
+        };
+      });
+      assert.deepEqual(restored, layout);
+    },
+  },
   {
     name: "commit diff",
     // Open → pick a commit → read its diff; two quick steps show the second, not the first.

@@ -480,6 +480,8 @@ export interface DiffLine {
   oldLine: number | null;
   newLine: number | null;
   text: string;
+  /** The old text of a context line whose whitespace changes were hidden. */
+  oldText?: string;
   /** The line ends with CRLF; `text` leaves the CR out. */
   cr?: boolean;
   words: WordPart[] | null;
@@ -548,6 +550,8 @@ export interface SubmoduleMove {
 export interface RepoSummary {
   name: string;
   path: string;
+  /** The working folder's identity, including for linked worktrees. */
+  canonicalPath: string;
   /** Open Restricted: the repository's settings that git runs with off. */
   restricted: TrustFinding[];
   /** Nothing was opened: the repository's settings run programs, and the user hasn't said
@@ -1320,6 +1324,7 @@ export interface GitSettings {
   global: Record<string, string>;
   sshKeys: SshKey[];
   editors: OpenApp[];
+  defaultEditor: string | null;
   terminals: OpenApp[];
 }
 

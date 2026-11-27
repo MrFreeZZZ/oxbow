@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import ts from "typescript";
+import type { CommitFileContext } from "../src/lib/changesMenu.ts";
 import { commitFileActions, commitFileRequest } from "../src/lib/commitFiles.ts";
 import { shortId, splitPath } from "../src/lib/format.ts";
 import type { MenuEntry } from "../src/lib/Menu.svelte";
@@ -34,23 +35,29 @@ const globals = {
   api, confirm, shortId, splitPath, commitFileActions, commitFileRequest, nav,
   ignoreChoices: () => [], ignoreRequest: () => ({}), stashFilesRequest: () => ({}), stashMessageFor: () => "",
   stashStagedRequest: () => ({}),
+  navigator: { platform: "MacIntel" },
   menuIcons: new Proxy({}, { get: () => "" }),
-  workingFileMenuItem: () => ({ kind: "item", label: "Open", icon: "", run() {} }),
+  workingFileMenuItem: () => ({ kind: "item", label: "Open Working Copy", icon: "", run() {} }),
   NEWEST_SAVED: "local",
 };
 const js = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 const commitFileMenu = Function(...Object.keys(globals), `${js}; return commitFileMenu;`)(...Object.values(globals)) as (
+  scope: Pick<typeof globals, "api" | "confirm" | "nav">,
   repo: string,
   file: { path: string; status: string; oldPath?: string | null; submodule?: unknown },
   commit: string,
-  ctx: { summary: string | null; inHead: boolean | null; compare: () => void },
+  ctx: CommitFileContext,
   canBlame: () => boolean,
 ) => { entries: MenuEntry[]; label: string };
 
 const file = (status: string, more: { oldPath?: string | null; submodule?: unknown; path?: string } = {}) => ({ path: "src/app.py", status, ...more });
 const ctx = { summary: "Edit the app", inHead: true, compare() {} };
-function menu(entry = file("modified"), canBlame: () => boolean = () => false) {
-  return commitFileMenu(repo, entry, sha, ctx, canBlame);
+function menu(entry = file("modified"), canBlame: () => boolean = () => false, context: CommitFileContext = ctx) {
+  return commitFileMenu(globals, repo, entry, sha, context, canBlame);
+}
+function visibleLabels(entries: MenuEntry[]) {
+  return entries.filter((entry) => entry.kind !== "item" || !entry.hidden)
+    .map((entry) => entry.kind === "sep" ? "---" : entry.label);
 }
 function item(entries: MenuEntry[], label: string) {
   const found = entries.find((entry) => entry.kind === "item" && entry.label === label);
@@ -68,21 +75,42 @@ function reset() {
   api.saveFilePatch = async (...args: unknown[]) => { saved.push(args); };
 }
 
-// Blame keeps its place between File History and Local History, hidden until the caller allows it.
+// Blame keeps its slot between File History and Browse when the caller reveals it.
 {
   let allow = false;
   const entries = menu(file("modified"), () => allow).entries;
   const blame = item(entries, "Blame at This Commit");
-  const at = entries.indexOf(blame);
-  assert.ok(at > entries.findIndex((entry) => entry.kind === "item" && entry.label === "File History"));
-  assert.ok(at < entries.findIndex((entry) => entry.kind === "item" && entry.label === "Local History"));
+  const order = [
+    "app.py · modified in this commit",
+    "Revert This File", "Take This Version…", "Compare with Working Copy", "Save File Patch…",
+    "---",
+    "File History", "Blame at This Commit", "Browse Files at This Commit",
+    "---",
+    "Open Working Copy", "Reveal in Finder", "Local History", "Copy Path/Reference",
+  ];
+  const at = order.indexOf(blame.label);
+  assert.equal(entries[at], blame);
   assert.equal(blame.hidden, true);
+  assert.deepEqual(visibleLabels(entries), order.filter((label) => label !== blame.label));
   allow = true;
   assert.equal(blame.hidden, false);
-  assert.equal(entries.indexOf(blame), at);
+  assert.equal(entries[at], blame);
+  assert.deepEqual(visibleLabels(entries), order);
+  assert.equal(entries.at(-1)?.kind, "sub");
   blame.run();
   assert.equal(nav.fileMode, "blame");
   assert.deepEqual(nav.files, [[file().path, sha, { base: sha, at: sha }]]);
+}
+
+// The action group starts with the commands allowed by the commit's relation to HEAD.
+for (const [inHead, actions] of [
+  [false, ["Cherry-Pick This File"]],
+  [null, ["Revert This File", "Cherry-Pick This File"]],
+] as const) {
+  const entries = visibleLabels(menu(file("modified"), undefined, { ...ctx, inHead, split() {} }).entries);
+  assert.deepEqual(entries.slice(1, entries.indexOf("---")), [
+    ...actions, "Take This Version…", "Compare with Working Copy", "Split into a New Commit…", "Save File Patch…",
+  ]);
 }
 
 // A rename's patch names both paths. A copy, a modification and a deletion name only the file.
@@ -118,12 +146,26 @@ function reset() {
   assert.equal(failures.length, 1);
 }
 
-// A submodule is not a file patch. Blame stays a normal item: the panel, not this menu, refuses to allow it.
-{
-  const entries = menu(file("modified", { submodule: { moved: true } }), () => true).entries;
-  assert.equal(entries.some((entry) => entry.kind === "item" && entry.label === "Save File Patch…"), false);
-  assert.equal(item(entries, "Blame at This Commit").hidden, false);
-  assert.equal(entries.some((entry) => entry.kind === "item" && entry.label === "Browse Files at This Commit"), false);
+// Deleted files retain patch export. A submodule only has an action group when Split is offered.
+for (const split of [undefined, () => {}]) {
+  const context = { ...ctx, split };
+  const splitLabels = split ? ["Split into a New Commit…"] : [];
+  assert.deepEqual(visibleLabels(menu(file("deleted"), undefined, context).entries), [
+    "app.py · deleted in this commit",
+    "Revert This File", ...splitLabels, "Save File Patch…",
+    "---",
+    "File History",
+    "---",
+    "Open Working Copy", "Local History", "Copy Path/Reference",
+  ]);
+  const submodule = file("modified", { path: "vendor/module", submodule: { moved: true } });
+  assert.deepEqual(visibleLabels(menu(submodule, undefined, context).entries), [
+    "module · modified in this commit",
+    ...(split ? [...splitLabels, "---"] : []),
+    "File History",
+    "---",
+    "Reveal in Finder", "Local History", "Copy Path/Reference",
+  ]);
 }
 
 // Deletions and submodules never get that allowance: the panel returns before the binary check.

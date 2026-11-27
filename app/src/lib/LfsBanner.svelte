@@ -2,9 +2,11 @@
   // Under the toolbar while the repository keeps files in Git LFS but git-lfs can't fetch them
   // here: those files are pointer text until it is installed and turned on.
 
-  import { api } from "./api";
-  import { confirm } from "./confirm.svelte";
-  import { installRequest, lfs } from "./lfs.svelte";
+  import { useRepoScope } from "./repoScope";
+  import { installRequest } from "./lfs.svelte";
+
+  const scope = useRepoScope();
+  const { api, confirm, lfs } = scope;
 
   let { repoName, run }: { repoName: string; run: (request: NonNullable<ReturnType<typeof installRequest>>) => void } = $props();
 

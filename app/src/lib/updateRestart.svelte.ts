@@ -8,8 +8,9 @@ import { draftSaves } from "./conflictDrafts";
 import { settleReviewSaves } from "./reviewSaves";
 import type { UpdateStatus } from "./types";
 
-const guards = new Set<() => string | null>();
-export function beforeUpdateRestart(guard: () => string | null) {
+type RestartGuard = () => string | null | Promise<string | null>;
+const guards = new Set<RestartGuard>();
+export function beforeUpdateRestart(guard: RestartGuard) {
   guards.add(guard);
   return () => { guards.delete(guard); };
 }
@@ -29,7 +30,7 @@ listen<number>("update-prepare-restart", async ({ payload: generation }) => {
   try {
     if (confirm.request || document.querySelector('[role="dialog"], dialog[open]')) problem = "Close unfinished dialogs before restarting to install the update.";
     else if (prefs.saving || prefs.failure) problem = "Finish saving your settings before restarting to install the update.";
-    else problem = [...guards].map((guard) => guard()).find(Boolean) ?? null;
+    else problem = (await Promise.all([...guards].map((guard) => guard()))).find(Boolean) ?? null;
     if (!problem) {
       draftSaves.retry();
       const [conflicts, reviews] = await Promise.all([draftSaves.settle(3000), settleReviewSaves(3000)]);

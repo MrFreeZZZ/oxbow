@@ -8,6 +8,7 @@
 </script>
 
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { diffScroll } from "./diffScroll";
   import FileFilter from "./FileFilter.svelte";
   // The Files tab of a pull request: what it changes since it split from its base, as GitHub
@@ -18,7 +19,7 @@
   // A merge request on GitLab the same, fetched from refs/merge-requests; its Viewed ticks stay
   // on this computer.
   import { untrack } from "svelte";
-  import { api, stopped } from "./api";
+  import { stopped } from "./api";
   import { diffSettings, wholeByDefault } from "./prefs.svelte";
   import type { Comparison, DiffLine, DiffPage, DraftComment, FileChange, FileDiff, Hunk, ReviewTips, Spot } from "./types";
   import { shortId, splitPath, fileDeletionWidth } from "./format";
@@ -31,6 +32,9 @@
   import type { ReviewSession } from "./review.svelte";
   import { addProblem, commentable, covers, liveThreads, lineKey, placeOf, pushedText, spotLabel, spotOf, type Thread, type Writing } from "./reviewDraft";
   import { hunkText, suggestedRange, suggestionBlock, type BodyPart } from "./suggestion";
+
+  const scope = useRepoScope();
+  const { api } = scope;
 
   let {
     session,
@@ -698,24 +702,10 @@
     align-items: flex-start;
     gap: 8px;
   }
-  .segmented {
-    display: inline-flex;
-    padding: 2px;
-    border-radius: var(--radius-m);
-    background: var(--field);
-  }
   .segmented button {
     height: 22px;
     padding: 0 10px;
-    border-radius: var(--radius-s);
     font-size: var(--text-small);
-    color: var(--text2);
-  }
-  .segmented button.on {
-    background: var(--win);
-    color: var(--text);
-    font-weight: 600;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
   }
   .counts {
     display: flex;

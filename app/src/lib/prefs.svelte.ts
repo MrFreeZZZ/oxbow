@@ -8,6 +8,10 @@ import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import { BRANCH_PALETTES, branchPaletteById, branchVariables, type BranchPaletteId } from "./branchPalettes";
 import { BRANCH_PREFIXES, prefixesProblem, type BranchPrefix } from "./branchPrefixes";
+import {
+  REPOSITORY_TAB_TAGS, TAB_TAG_ASSIGNMENT_KEY, TAB_TAG_COLOR_KEY, TAB_TAG_STYLE_KEY, tabTagEntryProblem, tabTagSettingProblem,
+  type RepositoryTabTagId, type TabTagKey, type TabTagStyle,
+} from "./repositoryTabTags";
 import { isNewer, loadedOver, SaveQueue } from "./settingSaves";
 import { isCommand, useCustom, useUserCommands, validCombo, type Custom } from "./shortcuts";
 import { paletteOf, THEMES, themeById, themeVariables } from "./themes";
@@ -20,6 +24,10 @@ export const defaults = {
   "oxbow.background.intensity": 20,
   "oxbow.history.rowStyle": "twoLines" as "twoLines" | "compact",
   "oxbow.startup.reopenRepository": true,
+  "oxbow.windows.repositoryTabs": true,
+  [TAB_TAG_COLOR_KEY]: {} as Partial<Record<RepositoryTabTagId, string>>,
+  [TAB_TAG_STYLE_KEY]: {} as Partial<Record<RepositoryTabTagId, TabTagStyle>>,
+  [TAB_TAG_ASSIGNMENT_KEY]: {} as Partial<Record<string, RepositoryTabTagId>>,
   /** Auto follows this build's channel; explicit choices survive updates and restarts. */
   "oxbow.updates.autoCheck": true,
   "oxbow.updates.channel": "auto" as "auto" | "release" | "preview",
@@ -172,6 +180,7 @@ export function problemOf(key: string, value: unknown): string | null {
   if (key === "oxbow.commands") return commandsProblem(value as unknown[]);
   if (key === "oxbow.secrets.patterns") return patternsProblem(value as unknown[]);
   if (key === "oxbow.branch.prefixes") return prefixesProblem(value as unknown[]);
+  if (key === TAB_TAG_COLOR_KEY || key === TAB_TAG_STYLE_KEY || key === TAB_TAG_ASSIGNMENT_KEY) return tabTagSettingProblem(key, value as Record<string, unknown>);
   if (key === "oxbow.keyboard.shortcuts") return shortcutsProblem(value as Record<string, unknown>);
   if (key === "oxbow.tips.seen" && (value as unknown[]).some((id) => typeof id !== "string")) return "Expected a list of tip names";
   const rule = rules[key as PrefKey];
@@ -193,10 +202,11 @@ function fontStack(family: string): string {
 /** A save settings.json didn't take: the setting stays as it was. */
 export interface SaveFailure {
   key: PrefKey;
-  /** What was asked for, for Try Again. */
-  value: unknown;
   error: string;
+  retry: () => Promise<boolean>;
 }
+
+const tabTagSaveKey = (key: TabTagKey, entry: string) => JSON.stringify([key, entry]);
 
 class Prefs {
   /** settings.json as the backend last told of it. */
@@ -204,11 +214,16 @@ class Prefs {
   /** Values saved here and not written yet, the newest of each key (null: its default). They are
    *  shown meanwhile and go back if the save fails. */
   #unsaved = $state<Record<string, unknown>>({});
+  #tabTagEdits = $state<{
+    [TAB_TAG_ASSIGNMENT_KEY]?: Partial<Record<string, RepositoryTabTagId | null>>;
+    [TAB_TAG_STYLE_KEY]?: Partial<Record<string, TabTagStyle | null>>;
+  }>({});
   /** The number of the change behind each key's value, so an older word can't undo a newer one. */
   #revisions: Record<string, number> = {};
   /** The number of the change settings.json was loaded at. */
   #loadedAt = -1;
   #saves = new SaveQueue();
+  #resetting = $state(0);
   /** Consumers follow the value of their key, rather than every replacement of the maps. */
   #readers = new Map<PrefKey, () => unknown>();
   /** True once settings.json has been read. */
@@ -225,17 +240,23 @@ class Prefs {
         this.#readers.set(key, () => value);
       }
     });
-    this.reload();
-    listen<{ key: string; value: unknown; revision: number }>("settings-changed", (event) => {
-      const { key, value, revision } = event.payload;
-      this.#take(key, value, revision);
-    }).catch(() => {});
+    void Promise.allSettled([
+      listen<{ key: string; value: unknown; revision: number }>("settings-changed", ({ payload: { key, value, revision } }) => {
+        this.#take(revision, [[key, value]]);
+        // A full-file edit can also send null for a key it kept.
+        if (value === null) void this.reload();
+      }),
+      listen<{ keys: PrefKey[]; revision: number }>("settings-group-reset", ({ payload: { keys, revision } }) => {
+        this.#takeReset(keys, revision);
+      }),
+    ]).then(() => this.reload());
   }
 
   /** Read settings.json again, e.g. after it was fixed by hand. */
   async reload() {
     try {
       const all = await api.allSettings();
+      if (all.revision < this.#loadedAt) return;
       this.#values = loadedOver(this.#values, this.#revisions, all.revision, all.values);
       this.#loadedAt = Math.max(this.#loadedAt, all.revision);
       this.unreadable = all.problem;
@@ -246,31 +267,92 @@ class Prefs {
   }
 
   /** A change the backend wrote, `null` for a key put back to its default. */
-  #take(key: string, value: unknown, revision: number) {
-    if (!isNewer(this.#revisions, this.#loadedAt, key, revision)) return;
-    this.#revisions[key] = revision;
+  #take(revision: number, changes: readonly (readonly [string, unknown])[]) {
+    const newer = changes.filter(([key]) => isNewer(this.#revisions, this.#loadedAt, key, revision));
+    if (!newer.length) return;
     const values = { ...this.#values };
-    if (value === null) delete values[key];
-    else values[key] = value;
+    for (const [key, value] of newer) {
+      this.#revisions[key] = revision;
+      if (value === null) delete values[key];
+      else values[key] = value;
+    }
     this.#values = values;
     // Written, so settings.json can be read again.
     this.unreadable = null;
+  }
+
+  #takeReset(keys: readonly PrefKey[], revision: number) {
+    this.#take(revision, keys.map((key) => [key, null] as const));
   }
 
   get<K extends PrefKey>(key: K): PrefValue<K> {
     return this.#readers.get(key)!() as PrefValue<K>;
   }
 
+  repositoryTabTag(canonicalPath: string): RepositoryTabTagId | null {
+    const edit = this.#tabTagEdits[TAB_TAG_ASSIGNMENT_KEY]?.[canonicalPath];
+    return edit === undefined ? this.get(TAB_TAG_ASSIGNMENT_KEY)[canonicalPath] ?? null : edit;
+  }
+
+  repositoryTabTagStyle(id: RepositoryTabTagId): TabTagStyle {
+    const edit = this.#tabTagEdits[TAB_TAG_STYLE_KEY]?.[id];
+    return (edit === undefined ? this.get(TAB_TAG_STYLE_KEY)[id] : edit) ?? this.#defaultTabTagStyle(id);
+  }
+
+  #defaultTabTagStyle(id: RepositoryTabTagId): TabTagStyle {
+    const { label, color } = REPOSITORY_TAB_TAGS.find((tag) => tag.id === id)!;
+    return { label, color: this.get(TAB_TAG_COLOR_KEY)[id] ?? color };
+  }
+
+  saveRepositoryTabTag(canonicalPath: string, id: RepositoryTabTagId | null): Promise<void> {
+    return this.#saveTabTag(TAB_TAG_ASSIGNMENT_KEY, canonicalPath, id);
+  }
+
+  saveRepositoryTabTagStyle(id: RepositoryTabTagId, { label, color }: TabTagStyle): Promise<void> {
+    const fallback = this.#defaultTabTagStyle(id);
+    return this.#saveTabTag(TAB_TAG_STYLE_KEY, id,
+      label === fallback.label && color.toLowerCase() === fallback.color.toLowerCase() ? null : { label, color });
+  }
+
+  /** Like save(), the caller reports errors. Each entry can be edited while others are saving. */
+  async #saveTabTag(key: TabTagKey, entry: string, value: RepositoryTabTagId | TabTagStyle | null): Promise<void> {
+    const problem = tabTagEntryProblem(key, entry, value);
+    if (problem) throw problem;
+    this.#tabTagEdits = { ...this.#tabTagEdits, [key]: { ...this.#tabTagEdits[key], [entry]: value } };
+    await this.#saves.run(tabTagSaveKey(key, entry), async (newest) => {
+      try {
+        const change = await api.editTabTag(key === TAB_TAG_STYLE_KEY ? "styles" : "assignments", entry, value);
+        this.#take(change.revision, [[change.key, change.value]]);
+      } catch (err) {
+        if (newest()) throw err;
+      } finally {
+        if (newest()) {
+          const entries: Partial<Record<string, RepositoryTabTagId | TabTagStyle | null>> = { ...this.#tabTagEdits[key] };
+          delete entries[entry];
+          this.#tabTagEdits = { ...this.#tabTagEdits, [key]: entries };
+        }
+      }
+    }, undefined);
+  }
+
   #read<K extends PrefKey>(key: K): PrefValue<K> {
-    const value = key in this.#unsaved ? this.#unsaved[key] : this.#values[key];
+    // Publish the whitespace mode once the backend can serve diffs for it.
+    const value = key !== "oxbow.diff.ignoreWhitespace" && key !== "oxbow.windows.repositoryTabs" && key in this.#unsaved ? this.#unsaved[key] : this.#values[key];
     // A value settings.json can't hold, e.g. typed in by hand, counts as the default.
     return (value !== undefined && value !== null && !problemOf(key, value) ? value : defaults[key]) as PrefValue<K>;
   }
 
   /** Whether settings.json holds anything, so Restore Defaults has something to do. */
-  get saving(): boolean { return Object.keys(this.#unsaved).length > 0; }
+  get saving(): boolean {
+    return this.#resetting > 0 || Object.keys(this.#unsaved).length > 0 || Object.values(this.#tabTagEdits).some((entries) => Object.keys(entries).length > 0);
+  }
 
   pending(key: PrefKey): boolean { return key in this.#unsaved; }
+
+  /** Whether the file holds the key, even if its value falls back to the default. */
+  hasStored(key: PrefKey): boolean {
+    return Object.hasOwn(this.#values, key);
+  }
 
   get customized(): boolean {
     return Object.values({ ...this.#values, ...this.#unsaved }).some((value) => value !== null);
@@ -284,12 +366,22 @@ class Prefs {
   /** Save a setting; its default value is saved as no value at all. It shows at once, and
    *  resolves once settings.json has it: true, or false when it couldn't be written, and the
    *  setting went back to what it was, with the reason in `failure`. */
-  async set<K extends PrefKey>(key: K, value: PrefValue<K>): Promise<boolean> {
-    const error = await this.#save(key, value);
+  set<K extends PrefKey>(key: K, value: PrefValue<K>): Promise<boolean> {
+    return this.#set(key, value);
+  }
+
+  async #set<K extends PrefKey>(key: K, value: PrefValue<K>, after?: Promise<boolean>): Promise<boolean> {
+    const error = await this.#save(key, value, after);
     if (error === null) {
       if (this.failure?.key === key) this.failure = null;
-    } else if (error) this.failure = { key, value, error };
+    } else if (error) this.failure = { key, error, retry: () => this.set(key, value) };
     return error === null;
+  }
+
+  saveBackgroundImage(path: string): Promise<boolean> {
+    const image = this.set("oxbow.background.image", path);
+    // Register both saves now so a group reset can't run between them.
+    return this.#set("oxbow.background.source", "custom", image);
   }
 
   /** Save a setting for a step that reports its own result: rejects with why it wasn't saved,
@@ -303,21 +395,57 @@ class Prefs {
     return this.set(key, defaults[key]);
   }
 
+  async resetGroup(keys: readonly [PrefKey, ...PrefKey[]], beforeReset?: () => void): Promise<boolean> {
+    if (keys.length === 1) return this.reset(keys[0]);
+    beforeReset?.();
+    try {
+      await this.saveGroupReset(keys);
+      return true;
+    } catch (err) {
+      this.failure = { key: keys[0], error: String(err), retry: () => this.resetGroup(keys, beforeReset) };
+      return false;
+    }
+  }
+
+  /** Like save(), leave write errors to the caller. */
+  async saveGroupReset(keys: readonly [PrefKey, ...PrefKey[]]): Promise<void> {
+    if (keys.length === 1) {
+      await this.save(keys[0], defaults[keys[0]]);
+      if (this.failure?.key === keys[0]) this.failure = null;
+      return;
+    }
+    const lanes: readonly string[] = keys.includes(TAB_TAG_STYLE_KEY)
+      ? [...keys, ...REPOSITORY_TAB_TAGS.map(({ id }) => tabTagSaveKey(TAB_TAG_STYLE_KEY, id))]
+      : keys;
+    this.#resetting++;
+    return this.#saves.after(lanes, async () => {
+      try {
+        this.#takeReset(keys, await api.resetSettingsGroup(keys));
+        if (this.failure && keys.includes(this.failure.key)) this.failure = null;
+      } finally {
+        this.#resetting--;
+      }
+    });
+  }
+
   /** Save the failed setting again. */
   retry() {
-    const failure = this.failure;
-    if (failure) void this.set(failure.key, failure.value as never);
+    return this.failure?.retry();
   }
 
   /** null once saved; why not, when it failed and no newer save of the key replaced it; "" when one did. */
-  #save(key: PrefKey, value: unknown): Promise<string | null> {
+  #save(key: PrefKey, value: unknown, after?: Promise<boolean>): Promise<string | null> {
     const stored = isDefault(key, value) ? null : value;
-    this.#unsaved = { ...this.#unsaved, [key]: stored };
+    if (!after) this.#unsaved = { ...this.#unsaved, [key]: stored };
     return this.#saves.run(
       key,
       async (newest) => {
         try {
-          this.#take(key, stored, await api.setSetting(key, stored));
+          if (after) {
+            if (!(await after) || !newest()) return "";
+            this.#unsaved = { ...this.#unsaved, [key]: stored };
+          }
+          this.#take(await api.setSetting(key, stored), [[key, stored]]);
           return null;
         } catch (err) {
           return newest() ? String(err) : "";

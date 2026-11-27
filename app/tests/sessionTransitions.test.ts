@@ -32,11 +32,9 @@ function session() {
     async first() { throw new Error("history failed"); }
   }
   const noop = { forget() {}, reset() {} };
-  const C = controller("repoSession.svelte.ts", {
-    $state: (v: unknown) => v, api, Tickets, HistoryLoader,
-    oplog: noop, lfs: noop, activity: noop, nav: {}, github: { load() {} },
-  }, "RepoSession");
-  const state = new C({ leaving() {}, closed() {}, opened() {} });
+  const scope = { api, oplog: noop, lfs: noop, activity: noop, nav: {}, github: { load() {} } };
+  const C = controller("repoSession.svelte.ts", { $state: (v: unknown) => v, Tickets, HistoryLoader }, "RepoSession");
+  const state = new C(scope, { leaving() {}, closed() {}, opened() {} });
   state.repo = { path: "A" };
   return { state, api, backend: () => backend };
 }
@@ -111,8 +109,10 @@ test("Settings ignores focus during either read and refreshes on the next focus 
   const window = fs.readFileSync(new URL("../src/lib/SettingsWindow.svelte", import.meta.url), "utf8");
   const handler = window.match(/<svelte:window\s+onfocus=\{([\s\S]*?)\}\s*\/>/)?.[1];
   assert.ok(handler);
-  const focus = Function("model", "repoFiles", "load", "loadRepoFiles", `return (${handler});`)(
-    model, repoFiles, load, loadRepoFiles,
+  let prefsReads = 0;
+  const prefs = { reload: async () => { prefsReads++; } };
+  const focus = Function("model", "repoFiles", "load", "loadRepoFiles", "prefs", `return (${handler});`)(
+    model, repoFiles, load, loadRepoFiles, prefs,
   );
   const repo = { path: "A" };
   repoFiles.repo = repo.path;
@@ -143,6 +143,7 @@ test("Settings ignores focus during either read and refreshes on the next focus 
   focus();
   assert.equal(settingsReads.length, 3);
   assert.equal(fileReads.length, 2);
+  assert.equal(prefsReads, 2);
   settingsReads[2].resolve(repo);
   fileReads[1].resolve({ files: [] });
 });

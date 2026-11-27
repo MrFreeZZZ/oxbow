@@ -3,11 +3,14 @@
   // create has settings that make git run programs. Opening, it can open Restricted; once open
   // Restricted, the title bar's capsule brings the same list back to trust it.
 
+  import { useRepoScope } from "./repoScope";
   import { modal } from "./modal";
   import { withKeys } from "./keys";
   import { tilde } from "./term";
   import { trustWhy } from "./trust";
   import type { TrustFinding } from "./types";
+
+  const scope = useRepoScope();
 
   let {
     name,
@@ -30,21 +33,23 @@
   });
 
   function onKey(event: KeyboardEvent) {
+    if (!scope.isActive()) return;
     if (event.key === "Escape") {
       event.preventDefault();
       onAnswer(null);
     }
   }
+  const titleId = $props.id();
 </script>
 
 <svelte:window onkeydown={onKey} />
 
 <div class="dim">
-  <div class="sheet" use:modal role="dialog" aria-modal="true" aria-labelledby="trust-title" bind:this={box}>
+  <div class="sheet" use:modal role="dialog" aria-modal="true" aria-labelledby={titleId} bind:this={box}>
     <div class="top">
       <span class="tile"><svg class="icon" viewBox="0 0 16 16"><path d="M8 1.6 2.8 3.5v4c0 3.2 2.2 5.7 5.2 6.9 3-1.2 5.2-3.7 5.2-6.9v-4z" /><path d="M8 5.2v3.4M8 10.6v.1" /></svg></span>
       <div class="words">
-        <span class="title" id="trust-title">Do you really want to let “{name}” run these programs?</span>
+        <span class="title" id={titleId}>Do you really want to let “{name}” run these programs?</span>
         {#if opening}
           <span class="body">Oxbow didn’t clone or create this folder. Its Git settings run programs whenever Git reads the repository, before you do anything. Trust it only if you know where it came from.</span>
         {:else}

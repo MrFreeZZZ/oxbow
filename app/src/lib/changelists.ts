@@ -143,9 +143,13 @@ export function stagePartRequest(files: FileChange[], list: string | null, lists
 /** Throw away what list `list` (null: Unstaged) holds of `files`. */
 export function discardPartRequest(files: FileChange[], list: string | null, lists: Changelists | null): Request {
   const name = listName(lists, list);
+  const fresh = files.filter((f) => f.status === "untracked");
+  const tracked = files.filter((f) => f.status !== "untracked");
+  const body: Part[] = ["Discards the unstaged changes of ", { quote: name }, " in ", ...named(tracked), ". Changes of other lists in the same files stay as they are."];
+  if (fresh.length) body.push(" Deletes ", ...named(fresh), ", which Git does not track yet.");
   return {
     title: `Discard the changes of ${name} in ${count(files)}?`,
-    body: ["Throws away the changes of ", { quote: name }, " in ", ...named(files), ". Changes of other lists in the same files stay as they are; new files git does not track yet are deleted."],
+    body,
     icon: "discard",
     button: "Discard",
     danger: true,

@@ -2,11 +2,11 @@
   // The commit form under the staged files: the summary and description, Amend, and Commit with
   // why it is grey and the way out when there is one.
 
+  import { useRepoScope } from "./repoScope";
   import { tick } from "svelte";
-  import { api } from "./api";
   import { commitRecovery } from "./changes";
   import type { Draft } from "./commitDrafts.svelte";
-  import { confirm, type Part } from "./confirm.svelte";
+  import { type Part } from "./confirm.svelte";
   import { lane, plate, tint } from "./format";
   import { shortcut } from "./keys";
   import { prefs } from "./prefs.svelte";
@@ -15,6 +15,9 @@
   import type { Changelist, FileChange, HistoryRow } from "./types";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import WhyNote from "./WhyNote.svelte";
+
+  const scope = useRepoScope();
+  const { api, confirm } = scope;
 
   let {
     draft,
@@ -421,7 +424,7 @@
     max-width: 160px;
     height: 20px;
     padding: 0 6px 0 8px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     background: var(--field);
     font: inherit;
     font-weight: 600;

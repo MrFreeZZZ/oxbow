@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { modal } from "./modal";
-  import { confirm, type Part } from "./confirm.svelte";
+  import { type Part } from "./confirm.svelte";
   import { actionIcons as icons } from "./icons";
   import { withKeys } from "./keys";
   import { isImeEscape } from "./shortcuts";
@@ -12,10 +13,13 @@
   import { prefs } from "./prefs.svelte";
   import CommandWords from "./CommandWords.svelte";
   import TipCard from "./TipCard.svelte";
-  import { tips, type TipId } from "./tips.svelte";
+  import { type TipId } from "./tips.svelte";
   import { bytes } from "./unusual";
   import { errorLine } from "./reads";
   import type { Action, NotKept } from "./types";
+
+  const scope = useRepoScope();
+  const { confirm, tips } = scope;
 
   let { repo, branch, color }: { repo: string; branch: string | null; color: number } = $props();
 
@@ -204,8 +208,12 @@
   }
 
   function onKey(event: KeyboardEvent) {
+    if (!scope.isActive()) return;
     if (!request || isImeEscape(event)) return;
+    const colorInput = event.target instanceof HTMLInputElement && event.target.type === "color" ? event.target : null;
     if (event.key === "Escape") {
+      // WebKit can deliver Escape to the input while its native picker is closing.
+      if (colorInput && CSS.supports("selector(input:open)") && colorInput.matches(":open")) return;
       event.preventDefault();
       if (running) confirm.stop();
       else confirm.cancel();
@@ -214,6 +222,7 @@
       !event.isComposing &&
       confirm.phase === "ask" &&
       !(event.target instanceof HTMLButtonElement) &&
+      !colorInput &&
       // Return makes a new line in a message; ⌘Return runs the action.
       !(event.target instanceof HTMLTextAreaElement && !event.metaKey && !event.ctrlKey)
     ) {
@@ -235,11 +244,13 @@
     // A closed sheet forgets, so the same sheet opened again gets the focus again.
     if (!request) focusedFor = null;
     const key = request && (confirm.phase === "ask" || recovery?.button) ? `${confirm.phase}:${request.title}` : null;
+    if (!scope.isActive()) { focusedFor = null; return; }
     if (!key || key === focusedFor) return;
     // A disabled primary button can't take focus. Wait for the plan if there's no text field.
     if (confirm.planning && !request?.fields?.some((field) => field.text)) return;
     focusedFor = key;
     requestAnimationFrame(() => {
+      if (!scope.isActive()) return;
       // The first text box, when a sheet has several.
       const textBox = fieldsBox?.querySelector<HTMLInputElement | HTMLTextAreaElement>(".text");
       if (confirm.phase === "ask" && textBox) {
@@ -257,6 +268,7 @@
     const box = linesBox;
     if (box) requestAnimationFrame(() => (box.scrollTop = box.scrollHeight));
   });
+  const titleId = $props.id();
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -272,7 +284,7 @@
 {#if request && shown}
   <!-- Run without asking: out of sight unless it takes a while, so a quick stage never flashes. -->
   <div class="dim" class:quiet={confirm.quiet && running}>
-    <div class="sheet" use:modal role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-busy={running}>
+    <div class="sheet" use:modal role="alertdialog" aria-modal="true" aria-labelledby={titleId} aria-busy={running}>
       <div class="top">
         <span
           class="tile"
@@ -282,7 +294,7 @@
           <svg class="icon" viewBox="0 0 16 16"><path d={icons[shown.icon]} /></svg>
         </span>
         <div class="words">
-          <span class="title" id="confirm-title">{shown.title}</span>
+          <span class="title" id={titleId}>{shown.title}</span>
           {#if shown.body.length}
             <span class="body">
               {#each shown.body as part, i (i)}
@@ -315,7 +327,20 @@
             <div class="field">
               <span class="label">{field.label}</span>
               <div class="inputs">
-                {#if field.text?.multiline}
+                {#if field.color}
+                  {@const color = field.color}
+                  {@const inputId = `${titleId}-color-${i}`}
+                  <div class="color-field">
+                    <output for={inputId}>{color.value.toUpperCase()}</output>
+                    <input
+                      type="color"
+                      id={inputId}
+                      aria-label={field.label}
+                      value={color.value}
+                      oninput={(event) => confirm.change(color.edit(event.currentTarget.value))}
+                    />
+                  </div>
+                {:else if field.text?.multiline}
                   {@const text = field.text}
                   <textarea
                     class="text multiline"
@@ -754,7 +779,7 @@
     gap: 4px;
     height: 20px;
     padding: 0 8px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     font-size: var(--text-caption);
     color: var(--term-dim);
     background: var(--term-button);
@@ -855,6 +880,26 @@
     flex-direction: column;
     gap: 6px;
   }
+  .color-field {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+  }
+  .color-field output {
+    color: var(--text2);
+    font-size: var(--text-small);
+    font-variant-numeric: tabular-nums;
+  }
+  .color-field input {
+    width: 34px;
+    height: 28px;
+    padding: 2px 4px;
+    border: 1px solid var(--sep);
+    border-radius: var(--radius-s);
+    background: var(--field);
+    cursor: pointer;
+  }
   .text {
     height: 28px;
     padding: 0 10px;
@@ -895,8 +940,7 @@
     font-size: var(--text-small);
   }
   .chip-button.on {
-    background: var(--glass);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+    background: var(--side-sel);
     font-weight: 600;
   }
   .chip-button.mono {
@@ -1223,7 +1267,7 @@
     height: 30px;
     padding: 0 12px;
     margin-left: -12px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-m);
     font-weight: 500;
   }
   .alt.danger {

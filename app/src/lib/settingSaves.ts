@@ -3,10 +3,9 @@
 // has for that key, whatever order the words arrive in. Saves of one key run one after another,
 // in the order they were made, so the last one made is the one that stays.
 
-/** Whether a change numbered `revision` is newer than what the window has for `key`: its own
- *  number in `revisions`, else the number settings.json was loaded at. */
+/** Whether the change is newer than both the last event for the key and the last full load. */
 export function isNewer(revisions: Record<string, number>, loaded: number, key: string, revision: number): boolean {
-  return revision > (revisions[key] ?? loaded);
+  return revision > Math.max(revisions[key] ?? -1, loaded);
 }
 
 /** The values after loading `values`, read at change `revision`: a key changed since keeps the
@@ -32,9 +31,20 @@ export class SaveQueue {
     const id = ++this.#count;
     this.#newest.set(key, id);
     const newest = () => this.#newest.get(key) === id;
-    const next = (this.#tails.get(key) ?? Promise.resolve()).then(() => (newest() ? work(newest) : skipped));
-    // A save that fails mustn't hold up the next one.
-    this.#tails.set(key, next.catch(() => {}));
+    return this.after([key], async () => {
+      if (!newest()) return skipped;
+      try { return await work(newest); }
+      finally { if (newest()) this.#newest.delete(key); }
+    });
+  }
+
+  /** Run a step between earlier and later saves of these keys, even when a later save is queued. */
+  after<T>(keys: readonly string[], work: () => Promise<T>): Promise<T> {
+    const next = Promise.all(keys.map((key) => this.#tails.get(key))).then(work);
+    const tail = next.catch(() => {}).then(() => {
+      for (const key of keys) if (this.#tails.get(key) === tail) this.#tails.delete(key);
+    });
+    for (const key of keys) this.#tails.set(key, tail);
     return next;
   }
 }

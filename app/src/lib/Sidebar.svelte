@@ -1,7 +1,6 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { compareHead, compareRef } from "./compareRefs";
-  import { lens } from "./lens.svelte";
-  import { oplog } from "./oplog.svelte";
   import { shortcut } from "./keys";
   import type { History, HistoryRow, RefInfo, RepoSummary } from "./types";
   import type { ForgeKind } from "./forge";
@@ -9,46 +8,65 @@
   import { sharedLeads } from "./refNames";
   import { branchAccessibleName } from "./branchAccessibility";
   import type { Request } from "./confirm.svelte";
-  import { confirm } from "./confirm.svelte";
-  import { api } from "./api";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
   import {
-    deleteRemoteRequest,
-    deleteRequest,
+    deleteRemoteRequest as deleteRemoteRequestInRepo,
+    deleteRequest as deleteRequestInRepo,
     detachRequest,
-    keepRequest,
-    newBranchRequest,
-    renameRequest,
-    switchRequest,
+    keepRequest as keepRequestInRepo,
+    newBranchRequest as newBranchRequestInRepo,
+    renameRequest as renameRequestInRepo,
+    switchRequest as switchRequestInRepo,
     trackRequest,
     upstreamOf,
     type BranchContext,
   } from "./branches";
-  import { pushRequest } from "./remote";
-  import { mergeRequest } from "./merge";
+  import { pushRequest as pushRequestInRepo } from "./remote";
+  import { mergeRequest as mergeRequestInRepo } from "./merge";
   import { dropsPushed, isProtected, lockedNote } from "./protect";
-  import { branchMergeRequest, gitlabOf, signedInTo } from "./mergeRequest";
-  import { savePatchesRequest } from "./patches";
-  import { stashMenu } from "./stash";
-  import { deleteTagRequest, fetchTagsRequest, isLocalTag, newTagRequest, pushTagsRequest } from "./tags";
-  import { start } from "./start.svelte";
-  import { github } from "./github.svelte";
-  import { downloadRequest, installRequest, lfs, patternNote, pruneRequest, lfsTrackRequest, untrackRequest } from "./lfs.svelte";
+  import { branchMergeRequest as branchMergeRequestInRepo, gitlabOf, signedInTo as signedInToInRepo } from "./mergeRequest";
+  import { savePatchesRequest as savePatchesRequestInRepo } from "./patches";
+  import { stashMenu as stashMenuInRepo } from "./stash";
+  import { deleteTagRequest as deleteTagRequestInRepo, fetchTagsRequest as fetchTagsRequestInRepo, isLocalTag, newTagRequest as newTagRequestInRepo, pushTagsRequest as pushTagsRequestInRepo } from "./tags";
+  import { downloadRequest as downloadRequestInRepo, installRequest, patternNote, pruneRequest, lfsTrackRequest, untrackRequest } from "./lfs.svelte";
   import { bytes } from "./unusual";
-  import { nav } from "./nav.svelte";
   import type { LfsPattern, ReadPart, RecentRepo, RemoteInfo, Submodule, Tracking, Worktree } from "./types";
   import { PART_NAMES, age, errorLine, type ReadStates } from "./reads";
   import { checking, stale } from "./folders";
-  import { addSubmoduleRequest, openSubmoduleWindow, submoduleMenu as submoduleEntries, submoduleNote, submoduleWhere, syncRequest, updateRequest } from "./submodules";
+  import { addSubmoduleRequest as addSubmoduleRequestInRepo, openSubmoduleWindow as openSubmoduleWindowInRepo, submoduleMenu as submoduleEntriesInRepo, submoduleNote, submoduleWhere, syncRequest, updateRequest as updateRequestInRepo } from "./submodules";
   import { actionIcons } from "./icons";
   import { notInHistory } from "./objects";
-  import { locateRequest, lockRequest, newWorktreeRequest, pruneWorktreesRequest, removeWorktreeRequest, tilde, unlockRequest, worktreeOf } from "./worktrees";
+  import { locateRequest, lockRequest, newWorktreeRequest as newWorktreeRequestInRepo, pruneWorktreesRequest, removeWorktreeRequest, tilde, unlockRequest, worktreeOf } from "./worktrees";
+
+  const scope = useRepoScope();
+  const deleteRemoteRequest = deleteRemoteRequestInRepo.bind(null, scope);
+  const deleteRequest = deleteRequestInRepo.bind(null, scope);
+  const keepRequest = keepRequestInRepo.bind(null, scope);
+  const newBranchRequest = newBranchRequestInRepo.bind(null, scope);
+  const renameRequest = renameRequestInRepo.bind(null, scope);
+  const switchRequest = switchRequestInRepo.bind(null, scope);
+  const deleteTagRequest = deleteTagRequestInRepo.bind(null, scope);
+  const fetchTagsRequest = fetchTagsRequestInRepo.bind(null, scope);
+  const newTagRequest = newTagRequestInRepo.bind(null, scope);
+  const pushTagsRequest = pushTagsRequestInRepo.bind(null, scope);
+  const { lens, oplog, confirm, api, start, github, lfs, nav } = scope;
+  const pushRequest = pushRequestInRepo.bind(null, scope);
+  const mergeRequest = mergeRequestInRepo.bind(null, scope);
+  const branchMergeRequest = branchMergeRequestInRepo.bind(null, scope);
+  const signedInTo = signedInToInRepo.bind(null, scope);
+  const savePatchesRequest = savePatchesRequestInRepo.bind(null, scope);
+  const stashMenu = stashMenuInRepo.bind(null, scope);
+  const downloadRequest = downloadRequestInRepo.bind(null, scope);
+  const addSubmoduleRequest = addSubmoduleRequestInRepo.bind(null, scope);
+  const openSubmoduleWindow = openSubmoduleWindowInRepo.bind(null, scope);
+  const submoduleEntries = submoduleEntriesInRepo.bind(null, scope);
+  const updateRequest = updateRequestInRepo.bind(null, scope);
+  const newWorktreeRequest = newWorktreeRequestInRepo.bind(null, scope);
 
   const PULL_ICON = menuIcons.pull;
   /** A speech bubble with a tick: pull requests to review. */
   const REVIEW_ICON = "M2.5 4.2c0-.7.5-1.2 1.2-1.2h8.6c.7 0 1.2.5 1.2 1.2v5.6c0 .7-.5 1.2-1.2 1.2H7l-3 2.5V11h-.3c-.7 0-1.2-.5-1.2-1.2zM5.5 7l1.6 1.5 3.4-3";
   const FOLDER = "M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z";
-  const HOME = "M2.5 7.5 8 3l5.5 4.5M4 6.5v6.5h8V6.5";
   /** A list with a ×: Clear Recent. */
   const CLEAR = "M2.5 4h11M2.5 8h6M2.5 12h4M10 9.5l3.5 3.5M13.5 9.5 10 13";
   const RELOAD = "M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5";
@@ -134,7 +152,7 @@
   const browseItem = (ref: RefInfo): MenuEntry => ({ kind: "item", label: "Browse Files", icon: menuIcons.folder, run: () => nav.openBrowse(ref.target, ref.name) });
 
   /** The open right-click menu and the ref it belongs to. */
-  let menu = $state<{ x: number; y: number; label: string; ref: string; entries: MenuEntry[] } | null>(null);
+  let menu = $state<{ x: number; y: number; label: string; ref: string; entries: MenuEntry[]; belowAnchor?: boolean } | null>(null);
   let collapsedRemotes = $state<Record<string, boolean>>({});
 
   /** Lists longer than this show only their first items until expanded. */
@@ -245,14 +263,23 @@
   let remoteDetails: RemoteInfo[] | null = null;
   let remoteDetailsFailed = false;
   let repoMenuRequest = 0;
-  export async function repoMenu(event: MouseEvent) {
-    const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  let repoMenuAnchor: HTMLElement | null = null;
+  $effect(() => {
+    if (!scope.isActive()) {
+      menu = null;
+      repoMenuAnchor = null;
+    }
+  });
+  export async function repoMenu(event: MouseEvent, belowAnchor = false) {
+    const anchor = event.currentTarget as HTMLElement;
+    const box = anchor.getBoundingClientRect();
+    repoMenuAnchor = anchor;
     const path = repo.path;
     const request = ++repoMenuRequest;
     remoteDetails = null;
     remoteDetailsFailed = false;
     let recent: RecentRepo[] = [];
-    menu = { x: box.left, y: box.bottom + 4, label: `Repository ${repo.name}`, ref: path, entries: repoEntries(recent) };
+    menu = { x: box.left, y: box.bottom + 4, label: `Repository ${repo.name}`, ref: path, entries: repoEntries(recent), belowAnchor };
     const refresh = (detailsOnly = false) => {
       if (request === repoMenuRequest && repo.path === path && menu?.ref === path) {
         const entries = repoEntries(recent);
@@ -272,6 +299,14 @@
         refresh(true);
       }),
     ]);
+  }
+
+  function closeMenu() {
+    if (menu?.ref === repo.path && document.hasFocus() && document.activeElement?.closest('[role="menu"]')) {
+      repoMenuAnchor?.focus();
+    }
+    repoMenuAnchor = null;
+    menu = null;
   }
 
   /** How many recent repositories the repository menu lists. */
@@ -303,7 +338,7 @@
       { kind: "item", label: "Open Local Repository…", icon: FOLDER, keys: shortcut("open"), run: onOpen },
       { kind: "item", label: "New Repository…", icon: "M8 3v10M3 8h10", keys: shortcut("newRepo"), run: () => start.newRepo() },
       { kind: "sep" },
-      { kind: "item", label: "Oxbow Home", icon: HOME, run: onWelcome },
+      { kind: "item", label: "Oxbow Home", icon: menuIcons.home, run: onWelcome },
     );
     if (recent.length) {
       entries.push({ kind: "sep" }, { kind: "header", label: "Recent", keys: shortcut("openRecent") });
@@ -1027,7 +1062,7 @@
 </nav>
 
 {#if menu}
-  <Menu x={menu.x} y={menu.y} label={menu.label} entries={menu.entries} onClose={() => (menu = null)} />
+  <Menu x={menu.x} y={menu.y} label={menu.label} entries={menu.entries} belowAnchor={menu.belowAnchor} onClose={closeMenu} />
 {/if}
 
 <style>
@@ -1036,7 +1071,7 @@
     left: 0;
     top: 0;
     bottom: 0;
-    width: 280px;
+    width: var(--sidebar-width);
     background: var(--surface-side);
     border-right: 1px solid var(--sep);
     display: flex;

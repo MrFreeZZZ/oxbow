@@ -2,14 +2,17 @@
   // What changed about a file whose diff isn't text worth reading: a binary file, a diff too long
   // to load at once, a mode bit, or line endings alone.
 
-  import { api } from "./api";
-  import { confirm } from "./confirm.svelte";
+  import { useRepoScope } from "./repoScope";
   import type { workingFileAction } from "./openFile";
-  import { openWorkingFile } from "./openFile.svelte";
+  import { openWorkingFile as openWorkingFileInRepo } from "./openFile.svelte";
   import { mac } from "./keys";
   import TermBlock, { type TermLine } from "./TermBlock.svelte";
   import type { FileDiff, Source } from "./types";
   import { bytes, bytesDelta, count, maxLines, modeWord } from "./unusual";
+
+  const scope = useRepoScope();
+  const { api, confirm } = scope;
+  const openWorkingFile = openWorkingFileInRepo.bind(null, scope);
 
   let {
     diff,

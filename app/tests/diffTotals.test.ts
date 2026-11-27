@@ -8,11 +8,12 @@ import * as runtime from "svelte/internal/client";
 
 const view = fs.readFileSync(new URL("../src/lib/DiffView.svelte", import.meta.url), "utf8");
 const effect = view.slice(view.indexOf("  // How long each file drawn is,"), view.indexOf("  /** Starts of the blocks"));
-const key = view.match(/  const openKey = .*;/)![0];
+const key = view.slice(view.indexOf("  const newContextSource"), view.indexOf("  /** What a file draws"));
 const source = `
   let items = $state.raw([]);
   let totals = $state.raw(new Map());
   let whole = $state(false);
+  const ignoring = false;
   const shown = $derived({ files: items });
   ${key}
   ${effect}

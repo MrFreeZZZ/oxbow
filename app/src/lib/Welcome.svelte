@@ -1,12 +1,12 @@
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import { onMount, onDestroy, untrack, type Snippet } from "svelte";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import Menu, { type MenuEntry } from "./Menu.svelte";
   import { prefs } from "./prefs.svelte";
-  import { looksLikeUrl, start } from "./start.svelte";
+  import { looksLikeUrl } from "./start.svelte";
   import { shortcut } from "./keys";
   import { tilde } from "./term";
-  import { api } from "./api";
   import { OverviewReader, overviewFacts, selectedOverview, trackingNote, overviewStatus } from "./overview";
   import { actionIcons } from "./icons";
   import { menuIcons } from "./Menu.svelte";
@@ -14,11 +14,15 @@
   import SettingsRow from "./SettingsRow.svelte";
   import type { OverviewRow, RepoOverview } from "./types";
 
-  let { onBack, onOpen, onOpenPath, onLocate, currentPath = null, loading, error: sessionError, gone }: {
+  const scope = useRepoScope();
+  const { start, api } = scope;
+
+  let { onBack, onOpen, onOpenPath, onLocate, currentPath = null, loading, error: sessionError, gone, update }: {
     onBack?: () => void;
     loading: boolean;
     error: string | null;
     gone?: Snippet;
+    update?: Snippet;
     onOpen: () => void;
     onOpenPath: (path: string) => void;
     onLocate: (path: string) => void;
@@ -145,7 +149,7 @@
     let disposed = false;
     getCurrentWebview()
       .onDragDropEvent((event) => {
-        if (event.payload.type === "drop" && event.payload.paths[0] && !start.sheet) dropFolder(event.payload.paths[0]);
+        if (scope.isActive() && event.payload.type === "drop" && event.payload.paths[0] && !start.sheet) dropFolder(event.payload.paths[0]);
       })
       .then((unlisten) => { if (disposed) unlisten(); else stop = unlisten; })
       .catch(() => {});
@@ -161,6 +165,7 @@
   }
 
   function onPaste(event: ClipboardEvent) {
+    if (!scope.isActive()) return;
     if (start.sheet || event.target instanceof HTMLInputElement) return;
     const text = event.clipboardData?.getData("text/plain") ?? "";
     if (looksLikeUrl(text)) {
@@ -224,7 +229,11 @@
   </section>
 
   <section class="repos" aria-label="Repositories">
-    <div class="drag top-drag" data-tauri-drag-region></div>
+    {#if update}
+      <div class="update-bar" data-tauri-drag-region>{@render update()}</div>
+    {:else}
+      <div class="drag top-drag" data-tauri-drag-region></div>
+    {/if}
     {#if gone}{@render gone()}{:else}
       <div class="repos-content">
       <div class="repos-main">
@@ -546,6 +555,14 @@
   .top-drag {
     height: 12px;
   }
+  .update-bar {
+    display: flex;
+    flex-shrink: 0;
+    justify-content: flex-end;
+    align-items: center;
+    height: 40px;
+    padding: 0 var(--space-3);
+  }
   .repos-content {
     display: flex;
     flex-direction: column;
@@ -817,7 +834,7 @@
   .save {
     height: 28px;
     padding: 0 14px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-m);
     background: var(--accent);
     color: #fff;
     font-weight: 600;

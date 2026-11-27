@@ -4,12 +4,15 @@
   // changed one (message, code, author), a new commit or a dropped one; a changed pair shows how
   // its two versions differ, apart from the base under them.
 
-  import { api } from "./api";
+  import { useRepoScope } from "./repoScope";
   import type { HistoryRow, Series, SeriesCommit, SeriesPair } from "./types";
   import { relativeTime, shortId, tint, plate } from "./format";
   import { baseLine, firstPick, headline, pairLabel, seriesRow, tally, type SeriesQuery } from "./series";
   import CommitPanel from "./CommitPanel.svelte";
   import InterDiff from "./InterDiff.svelte";
+
+  const scope = useRepoScope();
+  const { api } = scope;
 
   let {
     query,
@@ -303,11 +306,6 @@
     white-space: nowrap;
   }
   .segmented {
-    display: flex;
-    flex-shrink: 0;
-    padding: 2px;
-    border-radius: var(--radius-pill);
-    background: var(--field);
     align-self: flex-start;
   }
   .bar .segmented {
@@ -316,16 +314,8 @@
   .segmented button {
     height: 26px;
     padding: 0 12px;
-    border-radius: var(--radius-pill);
     font-size: var(--text-small);
-    color: var(--text2);
     white-space: nowrap;
-  }
-  .segmented button.on {
-    background: var(--win);
-    color: var(--text);
-    font-weight: 600;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
   }
   .term {
     display: flex;

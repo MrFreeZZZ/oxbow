@@ -118,8 +118,7 @@
   /* Settings: grouped rows and their controls. */
   --panel: rgba(0, 0, 0, 0.028);
   --panel-border: rgba(0, 0, 0, 0.06);
-  --seg-on: #ffffff;
-  --seg-shadow: 0 1px 2px rgba(0, 0, 0, 0.14), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  --slider-thumb: #fff;
   --ctrl-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
   --hunk-bg: #f1f4f9;
   --hunk-text: #4f5f75;
@@ -161,7 +160,7 @@
   --radius-xl: 16px;
   --radius-sheet: 22px;
   --radius-pill: 999px;
-  /* Two shadows for things over the window: a popover or menu, and a sheet. Controls keep --glass-shadow. */
+  /* Elevation for popovers, menus and sheets. */
   --shadow-pop: 0 12px 36px rgba(0, 0, 0, 0.2);
   --shadow-sheet: 0 24px 60px rgba(0, 0, 0, 0.28);
   /* The one focus ring of fields: a soft Steel halo around the box. Buttons draw it as an outline. */
@@ -281,9 +280,8 @@
   --switch-off: rgba(255, 255, 255, 0.22);
   --panel: rgba(255, 255, 255, 0.04);
   --panel-border: rgba(255, 255, 255, 0.07);
-  --seg-on: rgba(255, 255, 255, 0.2);
-  --seg-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   --ctrl-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --slider-thumb: rgba(255, 255, 255, 0.2);
   --hunk-bg: rgba(110, 150, 220, 0.12);
   --hunk-text: #9db2d0;
 
@@ -367,9 +365,9 @@ button {
 :root
   button:is(
     .button,
-    .capsule,
+    .toolbar-control,
     .group > button,
-    .segmented > button:not(.on),
+    .segmented > button:not([aria-checked="true"], [aria-selected="true"]),
     [role="radiogroup"] > button[role="radio"][aria-checked="false"],
     .action,
     .env-action,
@@ -399,7 +397,7 @@ button {
 :root
   button:is(
     .button,
-    .capsule,
+    .toolbar-control,
     .group > button,
     .segmented > button,
     [role="radiogroup"] > button[role="radio"],
@@ -435,6 +433,49 @@ button.key-focus {
   outline-offset: -2px;
 }
 
+.toolbar-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  gap: 4px;
+  height: var(--toolbar-control-height, 28px);
+  min-width: var(--toolbar-control-height, 28px);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-m);
+  color: var(--icon);
+}
+
+.toolbar-control:disabled {
+  opacity: 0.45;
+}
+
+.toolbar-control.toolbar-picker {
+  justify-content: flex-start;
+  gap: 6px;
+  background-color: var(--field);
+  font-weight: 500;
+}
+
+.segmented {
+  display: inline-flex;
+  flex-shrink: 0;
+  padding: 2px;
+  border-radius: var(--radius-m);
+  background: var(--field);
+}
+
+.segmented > button {
+  border-radius: var(--radius-s);
+  color: var(--text2);
+}
+
+.segmented > button:is([aria-checked="true"], [aria-selected="true"]) {
+  background: var(--side-sel);
+  color: var(--text);
+  font-weight: 600;
+}
+
 /* Fields show where typing goes. Zero specificity, so a field drawn inside a box of its own (a search
    field) can hand the ring to the box with `box-shadow: none` and `.box:focus-within`. */
 :where(input, textarea, select):focus-visible {
@@ -443,9 +484,9 @@ button.key-focus {
 }
 
 /* Buttons, three kinds on every screen. `.button.primary` is filled: the one main action of an area.
-   `.button` is the regular glass capsule. `.button.icon-only` is a round button with just an icon.
+   `.button` uses a neutral surface. `.button.icon-only` is a flat button with just an icon.
    `.small` and `.mini` make any of them 26 and 24 px tall. Two looks the Changes panel needs on top:
-   `.quiet`, a soft Steel tint (Stage beside the one filled Commit), and `.text`, no capsule until
+   `.quiet`, a soft Steel tint (Stage beside the one filled Commit), and `.text`, no fill until
    hovered (Discard). `.danger` turns a filled button red, only in the confirmation sheet. */
 .button {
   display: inline-flex;
@@ -455,10 +496,8 @@ button.key-focus {
   flex-shrink: 0;
   height: 30px;
   padding: 0 14px;
-  border-radius: var(--radius-pill);
-  background: var(--glass);
-  border: 0.5px solid var(--glass-border);
-  box-shadow: var(--glass-shadow);
+  border-radius: var(--radius-m);
+  background: var(--field);
   color: var(--text);
   font-family: var(--font);
   font-size: var(--text-body);
@@ -478,7 +517,6 @@ button.key-focus {
 }
 .button.primary {
   background: var(--accent);
-  border-color: transparent;
   color: #fff;
   font-weight: 600;
 }
@@ -487,16 +525,12 @@ button.key-focus {
 }
 .button.quiet {
   background: var(--accent-quiet);
-  border-color: transparent;
-  box-shadow: none;
   color: var(--accent-ink);
   font-weight: 600;
 }
 .button.text,
 .button.icon-only {
   background: transparent;
-  border-color: transparent;
-  box-shadow: none;
   color: var(--text2);
 }
 .button.icon-only {

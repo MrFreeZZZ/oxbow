@@ -29,25 +29,24 @@
 </script>
 
 <script lang="ts">
+  import { useRepoScope } from "./repoScope";
   import type { Snippet } from "svelte";
   import type { DiffLine, FileDiff, Hunk, Side, Source } from "./types";
   import { lane, plate, splitPath, tint } from "./format";
   import { prefs } from "./prefs.svelte";
-  import { api, stopped } from "./api";
-  import { confirm } from "./confirm.svelte";
+  import { stopped } from "./api";
   import { languageOf, occurrences, paint } from "./syntax";
   import Lazy, { BLOCK, type FindHits } from "./Lazy.svelte";
-  import { nav } from "./nav.svelte";
   import { onDestroy, untrack } from "svelte";
   import { foldReason, startsFolded } from "./diffFold";
   import { diffLineEndingLabel } from "./diffLineEndings";
   import { changeBadge } from "./changesList";
-  import { addKnown, blockText, changedRow, changeStarts, pieces, rowsOf, sideKind, type Known, type Piece, type Row } from "./diffRows";
+  import { addKnown, blockText, changedRow, changeStarts, pieces, rowsOf, sideKind, splitFindLine, type Known, type Piece, type Row } from "./diffRows";
   import { mac, withKeys } from "./keys";
   import { combo } from "./shortcuts";
   import ImageDiff from "./ImageDiff.svelte";
   import { workingFileAction } from "./openFile";
-  import { openWorkingFile, watchWorkingFiles } from "./openFile.svelte";
+  import { openWorkingFile as openWorkingFileInRepo, watchWorkingFiles as watchWorkingFilesInRepo } from "./openFile.svelte";
   import UnusualCard from "./UnusualCard.svelte";
   import LfsCard from "./LfsCard.svelte";
   import SubmoduleCard from "./SubmoduleCard.svelte";
@@ -57,7 +56,12 @@
   import { changePreview } from "./diffScroll";
   import { menuIcons } from "./Menu.svelte";
 
-  let copySelection = $state<{ text: string; x: number; y: number } | null>(null);
+  const scope = useRepoScope();
+  const { api, confirm, nav } = scope;
+  const openWorkingFile = openWorkingFileInRepo.bind(null, scope);
+  const watchWorkingFiles = watchWorkingFilesInRepo.bind(null, scope);
+
+  let copySelection = $state<{ code: Element; text: string; x: number; y: number } | null>(null);
   let selectingWithMouse = false;
 
   type CopySide = "left" | "right";
@@ -117,7 +121,7 @@
       // Suppress WebKit’s opposite-column copy, but let it copy non-code selections.
       if (!side || ![...code.querySelectorAll(".selection-text")].some((line) => range.intersectsNode(line))) return null;
     }
-    return { text: lines.join("\n"), rects };
+    return { code, text: lines.join("\n"), rects };
   }
 
   function copyParts(diff: FileDiff, cut: { lines: number[] } | null) {
@@ -132,12 +136,41 @@
   }
 
   const codeRoots = new Map<Element, () => ReturnType<typeof copyParts>>();
-  function copyRoot(element: HTMLElement, source: () => ReturnType<typeof copyParts>) {
-    codeRoots.set(element, source);
-    return { destroy: () => codeRoots.delete(element) };
+
+  function clearCopySelection(element?: Element) {
+    if (!element || copySelection?.code === element) copySelection = null;
+    if (!element || mouseCopyStart?.code === element) mouseCopyStart = null;
+    const selection = document.getSelection();
+    const anchor = selection?.anchorNode;
+    const code = (anchor instanceof Element ? anchor : anchor?.parentElement)?.closest(".code.selectable");
+    if (code && (element ? code === element : codeRoots.has(code))) selection?.removeAllRanges();
+  }
+
+  $effect(() => {
+    if (scope.isActive()) return;
+    untrack(() => {
+      selectingWithMouse = false;
+      mouseCopyBlock = undefined;
+      clearCopySelection();
+    });
+  });
+
+  function copyRoot(element: HTMLElement, part: Parameters<typeof copyParts>) {
+    codeRoots.set(element, () => copyParts(...part));
+    return {
+      update(next: Parameters<typeof copyParts>) {
+        if (next[0] !== part[0]) untrack(() => clearCopySelection(element));
+        part = next;
+      },
+      destroy() {
+        codeRoots.delete(element);
+        if (copySelection?.code === element) copySelection = null;
+      },
+    };
   }
 
   function beginMouseSelection(event: MouseEvent) {
+    if (!scope.isActive()) return;
     if (event.button !== 0 || (event.target instanceof Element && event.target.closest(".copy-selection"))) return;
     const target = event.target instanceof Element ? event.target : null;
     const code = target?.closest(".code.selectable");
@@ -152,12 +185,14 @@
   }
 
   function endMouseSelection(event: MouseEvent) {
+    if (!scope.isActive()) return;
     if (event.button !== 0 || !selectingWithMouse) return;
     selectingWithMouse = false;
     updateCopySelection();
   }
 
   function updateCopySelection() {
+    if (!scope.isActive()) return;
     if (selectingWithMouse) return;
     copySelection = null;
     const selected = selectedCode(true);
@@ -173,7 +208,7 @@
     const above = top - height - gap;
     const y = above >= gap ? above : bottom + gap;
     if (y + height + gap <= innerHeight) {
-      copySelection = { x: (left + right) / 2, y, text: selected.text };
+      copySelection = { code: selected.code, x: (left + right) / 2, y, text: selected.text };
     }
   }
 
@@ -186,6 +221,7 @@
   }
 
   function copyWithKeyboard(event: ClipboardEvent) {
+    if (!scope.isActive()) return;
     if (event.defaultPrevented || !event.clipboardData) return;
     const selected = selectedCode();
     if (!selected) return;
@@ -275,9 +311,7 @@
   let showEol = $state<Record<string, boolean>>({});
   /** SVG files shown as code instead of as a picture, by path. */
   let showCode = $state<Record<string, boolean>>({});
-  /** Unchanged lines opened between hunks, and how many lines the old side has, by file and
-   *  old side: a diff loaded again (a refresh, a setting, another file staged) keeps them while
-   *  its old side is the same, since that is where they are read from. */
+  /** Opened context and old line totals, keyed by the source versions read. */
   let opened = $state.raw(new Map<string, Known>());
   let totals = $state.raw(new Map<string, number>());
   $effect(() => {
@@ -477,8 +511,10 @@
   /** Lines one click opens over or under a hunk. */
   const STEP = 20;
 
-  /** Where a file's unchanged lines are read from: its old side, which never moves under it. */
-  const openKey = (diff: FileDiff): string | null => (diff.old ? `${nav.repo}\0${diff.file.path}\0${JSON.stringify(diff.old)}` : null);
+  /** Filtered context can differ between the two versions. */
+  const newContextSource = (diff: FileDiff) => ignoring && diff.old?.kind === "blob" && diff.new?.kind === "blob" ? diff.new : null;
+  const openKey = (diff: FileDiff): string | null =>
+    diff.old ? JSON.stringify([nav.repo, diff.file.path, diff.old, newContextSource(diff)]) : null;
 
   /** What a file draws in order: its hunks, and around them the unchanged lines, folded or
    *  opened. A file cut short by the budget leaves out the lines after its last hunk drawn. */
@@ -489,14 +525,20 @@
     return pieces(hunks, (key && opened.get(key)) || [], key && !cut ? (totals.get(key) ?? null) : null);
   }
 
-  /** Old lines `from` to `to` of a file, opened. */
-  function reveal(diff: FileDiff, from: number, to: number) {
+  /** Open context by its old line numbers, with both versions when whitespace is hidden. */
+  function reveal(diff: FileDiff, from: number, to: number, shift: number) {
     const key = openKey(diff);
     if (!key || !diff.old) return;
-    api.sourceLines(diff.old, from, to - from + 1).then(
-      (read) => {
-        opened = new Map(opened).set(key, addKnown(opened.get(key) ?? [], from, read.lines));
-        totals = new Map(totals).set(key, read.total);
+    const newSource = newContextSource(diff);
+    const count = to - from + 1;
+    Promise.all([api.sourceLines(diff.old, from, count), newSource && api.sourceLines(newSource, from + shift, count)]).then(
+      ([before, after]) => {
+        const lines = after ? after.lines.map((line, i) => ({
+          ...line,
+          oldText: before.lines[i]?.text !== line.text ? before.lines[i]?.text : undefined,
+        })) : before.lines;
+        opened = new Map(opened).set(key, addKnown(opened.get(key) ?? [], from, lines));
+        totals = new Map(totals).set(key, before.total);
       },
       (err) => stopped(err) || confirm.fail(err),
     );
@@ -578,8 +620,9 @@
   function columns(diff: FileDiff): number {
     const key = openKey(diff);
     const known = key ? opened.get(key) : undefined;
-    const cols = widest(diff, () => diff.hunks.flatMap((h) => h.lines.map((l) => l.text)));
-    return known ? Math.max(cols, widest(known, () => known.flatMap((run) => run.lines.map((l) => l.text)))) : cols;
+    const texts = (line: { text: string; oldText?: string }) => line.oldText === undefined ? [line.text] : [line.text, line.oldText];
+    const cols = widest(diff, () => diff.hunks.flatMap((h) => h.lines.flatMap(texts)));
+    return known ? Math.max(cols, widest(known, () => known.flatMap((run) => run.lines.flatMap(texts)))) : cols;
   }
 
   /** Where changes start among a hunk's lines `start` to `end`, for Next Change. */
@@ -608,14 +651,17 @@
         const count = cut && piece.kind === "hunk" ? cut.lines[piece.h] : hunk.lines.length;
         const h = partOf(piece);
         if (split) {
-          // Side by Side draws an unchanged line twice: its matches count once, on the new side.
           const rows = rowsOf(hunk, count);
-          const hitsOf = (at: number | null) => (at === null ? 0 : occurrences(hunk.lines[at].text || " ", find, matchCase).length);
+          const hitsOf = (at: number | null, side: "left" | "right") => {
+            if (at === null) return 0;
+            const { text, counted } = splitFindLine(hunk.lines[at], side);
+            return counted ? occurrences(text, find, matchCase).length : 0;
+          };
           for (const start of blocks(rows.length)) {
             let n = 0;
             for (let r = start; r < Math.min(rows.length, start + BLOCK); r++) {
               const row = rows[r];
-              n += (changedRow(row) ? hitsOf(row.left) : 0) + hitsOf(row.right);
+              n += hitsOf(row.left, "left") + hitsOf(row.right, "right");
             }
             if (n) out.push({ key: blockKey(diff, h, start), count: n });
           }
@@ -685,9 +731,8 @@
   {/if}
 {/snippet}
 
-<!-- A line's code: syntax colors, changed words, matches of Find. `counted` is false for the
-     old side of an unchanged line in Side by Side, whose matches are the new side's again. -->
-{#snippet code(diff: FileDiff, line: DiffLine, language: ReturnType<typeof languageOf>, counted: boolean)}<span class="text"><span class="ink"><span class="selection-text" data-empty={line.text ? undefined : ""}>{#each paint(line.text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found && counted} class:twin={piece.found && !counted} data-hit={counted ? piece.hit : undefined} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>{#if line.cr && own(showEol, diff.file.path)}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}{#if line.secret}<span class="secret" title="Looks like a secret: Oxbow stops the commit until it is unstaged, or you commit anyway. Add oxbow:allow to the line if it is not one."><svg viewBox="0 0 16 16"><path d="M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2" /></svg>{line.secret}</span>{/if}</span></span>{/snippet}
+<!-- A line's code: syntax colors, changed words, and matches of Find. -->
+{#snippet code(diff: FileDiff, line: DiffLine, language: ReturnType<typeof languageOf>, counted: boolean, text = line.text)}<span class="text"><span class="ink"><span class="selection-text" data-empty={text ? undefined : ""}>{#each paint(text || " ", prefs.get("oxbow.diff.wordHighlight") ? line.words : null, language, split && !text ? null : find, matchCase) as piece, w (w)}<span class:word={piece.changed} class:found={piece.found && counted} class:twin={piece.found && !counted} data-hit={counted ? piece.hit : undefined} class={piece.role ? `syn-${piece.role}` : undefined}>{piece.text}</span>{/each}</span>{#if line.cr && own(showEol, diff.file.path)}<span class="cr" class:word={line.kind !== "context"} title="Carriage return: this line ends with CRLF">CR</span>{/if}{#if line.secret}<span class="secret" title="Looks like a secret: Oxbow stops the commit until it is unstaged, or you commit anyway. Add oxbow:allow to the line if it is not one."><svg viewBox="0 0 16 16"><path d="M4.5 7.5h7v6h-7zM6 7.5V5.5a2 2 0 0 1 4 0v2" /></svg>{line.secret}</span>{/if}</span></span>{/snippet}
 
 {#snippet pickBox(hunk: Hunk, line: DiffLine, i: number, on: boolean)}
   <button
@@ -745,7 +790,10 @@
       {#if line && at !== null && line.kind !== "context"}{@render pickBox(hunk, line, at, on)}{:else}<span></span>{/if}
     {/if}
     {#if side === "right" && line}{@render newNo(diff, line.newLine)}{:else}<span class="no">{line ? ((side === "left" ? line.oldLine : line.newLine) ?? "") : ""}</span>{/if}
-    {#if line}{@render code(diff, line, language, side === "right" || line.kind !== "context")}{/if}
+    {#if line}
+      {@const { text, counted } = splitFindLine(line, side)}
+      {@render code(diff, line, language, counted, text)}
+    {/if}
   </div>
 {/snippet}
 
@@ -816,16 +864,16 @@
     <div class="fold">
       <span class="grow">{label}</span>
       {#if count > STEP && piece.above}
-        <button class="open" onclick={() => reveal(diff, piece.from, piece.from + STEP - 1)} title="Show {STEP} more lines under the code above">
+        <button class="open" onclick={() => reveal(diff, piece.from, piece.from + STEP - 1, piece.shift)} title="Show {STEP} more lines under the code above">
           <svg class="icon" viewBox="0 0 16 16"><path d="M8 3v9M4.5 8.5 8 12l3.5-3.5" /></svg>{STEP} More Lines
         </button>
       {/if}
       {#if count > STEP && piece.below}
-        <button class="open" onclick={() => reveal(diff, piece.to - STEP + 1, piece.to)} title="Show {STEP} more lines over the code below">
+        <button class="open" onclick={() => reveal(diff, piece.to - STEP + 1, piece.to, piece.shift)} title="Show {STEP} more lines over the code below">
           <svg class="icon" viewBox="0 0 16 16"><path d="M8 13V4M4.5 7.5 8 4l3.5 3.5" /></svg>{STEP} More Lines
         </button>
       {/if}
-      <button class="open" onclick={() => reveal(diff, piece.from, piece.to)} title="Show every unchanged line here">Show All</button>
+      <button class="open" onclick={() => reveal(diff, piece.from, piece.to, piece.shift)} title="Show every unchanged line here">Show All</button>
     </div>
   {/if}
 {/snippet}
@@ -1047,7 +1095,7 @@
       {@const cut = shown.cut?.diff === diff ? shown.cut : null}
       {#if notes?.top}{@render notes.top(diff)}{/if}
       {#key wrap}
-      <div class="code mono selectable" use:copyRoot={() => copyParts(diff, cut)} class:nowrap={!wrap} style:--digits={digits(diff)} style:--cols={wrap ? null : columns(diff)} use:sideways={wrap ? null : `${textLayout}:${columns(diff)}:${digits(diff)}`}>
+      <div class="code mono selectable" use:copyRoot={[diff, cut]} class:nowrap={!wrap} style:--digits={digits(diff)} style:--cols={wrap ? null : columns(diff)} use:sideways={wrap ? null : `${textLayout}:${columns(diff)}:${digits(diff)}`}>
         {#each piecesOf(diff, drawnHunks(diff, cut), !!cut) as piece (piece.kind === "hunk" ? `h${piece.h}` : `${piece.kind}${piece.from}`)}
           {#if piece.kind === "folded"}
             {@render foldBar(diff, piece)}
@@ -1199,7 +1247,7 @@
   .toggle {
     width: 26px;
     height: 26px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-m);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1518,7 +1566,7 @@
     gap: 3px;
     height: 18px;
     padding: 0 8px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-s);
     color: var(--code-dim, var(--text2));
     white-space: nowrap;
     flex-shrink: 0;
@@ -1541,7 +1589,7 @@
     margin: 0 20px 20px;
     height: 28px;
     padding: 0 12px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-m);
     background: var(--field);
   }
 </style>

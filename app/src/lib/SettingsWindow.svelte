@@ -7,7 +7,7 @@
   // SettingsRow.svelte.
 
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { backgroundIntensity, saveIntensity } from "./backgroundIntensity.svelte";
+  import { backgroundIntensity, discardIntensity, saveIntensity } from "./backgroundIntensity.svelte";
   import { listen } from "@tauri-apps/api/event";
   import { untrack, onDestroy } from "svelte";
   import { beforeUpdateRestart } from "./updateRestart.svelte";
@@ -20,7 +20,7 @@
   import GitHubSignIn from "./GitHubSignIn.svelte";
   import GitLabSignIn from "./GitLabSignIn.svelte";
   import Menu, { menuIcons, type MenuEntry } from "./Menu.svelte";
-  import { defaults, prefs, type PrefKey } from "./prefs.svelte";
+  import { prefs, type PrefKey } from "./prefs.svelte";
   import { accountsSection, gitSection, repoSection, safetySection } from "./settingsGit";
   import { branchesSection } from "./settingsBranches";
   import SettingsJson from "./SettingsJson.svelte";
@@ -28,8 +28,10 @@
   import { config, copy, load, model } from "./settingsModel.svelte";
   import RepoFileEditor from "./RepoFileEditor.svelte";
   import { closeRepoFile, forgetRepoFiles, loadRepoFiles, repoFiles, repoFilesSection } from "./repoFileState.svelte";
+  import SettingGear from "./SettingGear.svelte";
   import SettingsRow from "./SettingsRow.svelte";
-  import { text, type Group, type Row, type Section } from "./settingsRows";
+  import { confirmSettingReset } from "./settingsReset";
+  import { text, type Group, type PrefGroup, type Row, type Section } from "./settingsRows";
   import { diffSection, generalSection, integrationsSection, themeSection } from "./settingsSections";
   import ShortcutSearch from "./ShortcutSearch.svelte";
   import { shortcutEdit } from "./shortcutEdit.svelte";
@@ -72,13 +74,18 @@
   const labelOf = (section: Section) => (section.id === "repo" ? (model.repo?.name ?? "") : section.label);
 
   const mac = navigator.platform.startsWith("Mac");
+  const version = (window as Window & { __OXBOW_SETTINGS_VERSION__?: string }).__OXBOW_SETTINGS_VERSION__;
 
   // Back and Forward walk the sections visited, like System Settings.
-  let visited = $state([settingsRoute(location.hash) ?? "general"]);
+  const initial = settingsRoute(location.hash);
+  let visited = $state([initial?.section ?? "general"]);
   let at = $state(0);
   const current = $derived(shownSections.find((s) => s.id === visited[at]) ?? shownSections[0]);
+  let pendingGroup = $state(initial?.group);
+  let scroll = $state<HTMLDivElement>();
 
   function go(id: string, keepFile = false) {
+    pendingGroup = undefined;
     model.query = "";
     json = false;
     shortcutEdit.cancel();
@@ -90,16 +97,25 @@
   }
 
   listen<string>("settings-section", (event) => {
-    const section = settingsSection(event.payload);
-    if (section) go(section);
+    const destination = settingsSection(event.payload);
+    if (!destination) return;
+    go(destination.section);
+    pendingGroup = destination.group;
+    if (pendingGroup) menu = null;
   }).catch(() => {});
+
+  $effect(() => {
+    if (!pendingGroup || confirm.request) return;
+    const heading = scroll?.querySelector<HTMLElement>(`#${pendingGroup}`);
+    if (!heading) return;
+    pendingGroup = undefined;
+    heading.scrollIntoView({ block: "start" });
+    heading.focus({ preventScroll: true });
+  });
 
   const needle = $derived(model.query.trim().toLowerCase());
 
-  function matches(section: Section, group: Group, row: Row): boolean {
-    const words = [labelOf(section), group.title ?? "", text(row.label), text(row.sub), row.id];
-    return words.some((t) => t.toLowerCase().includes(needle));
-  }
+  const matches = (word: string) => word.toLowerCase().includes(needle);
 
   /** Groups to show: the current section, or every row that matches the search. */
   const shown = $derived.by(() => {
@@ -107,15 +123,19 @@
     return shownSections.flatMap((section) =>
       section
         .groups()
-        .map((group, i) => ({
-          ...group,
-          key: `${section.id}:${i}`,
-          title: group.title ? `${labelOf(section)} · ${group.title}` : labelOf(section),
-          foot: undefined,
-          section,
-          rows: group.rows.filter((row) => matches(section, group, row)),
-        }))
-        .filter((group) => group.rows.length),
+        .flatMap((group, i) => {
+          const groupMatch = [labelOf(section), group.title ?? "", ...(group.setting?.keys ?? [])].some(matches);
+          const rows = groupMatch ? group.rows : group.rows.filter((row) => [text(row.label), text(row.sub), row.id].some(matches));
+          if (!rows.length && !(groupMatch && group.setting)) return [];
+          return [{
+            ...group,
+            key: `${section.id}:${i}`,
+            title: group.title ? `${labelOf(section)} · ${group.title}` : labelOf(section),
+            foot: undefined,
+            section,
+            rows,
+          }];
+        }),
     );
   });
   const hits = $derived(new Set(shown.map((group) => group.section.id)));
@@ -123,36 +143,45 @@
   // A text value being edited.
   let editing = $state<{ id: string; value: string } | null>(null);
 
-  // The gear beside a row, or a right click on it.
-  let menu = $state<{ x: number; y: number; row: Row } | null>(null);
+  // The gear for a group or row, or a right click on a row.
+  let menu = $state<{ x: number; y: number; row: Row; anchor?: HTMLButtonElement } | null>(null);
 
-  function openMenu(row: Row, x: number, y: number) {
+  function openMenu(row: Row, x: number, y: number, anchor?: HTMLButtonElement) {
     if (!row.setting && !row.more) return;
-    menu = { x, y, row };
+    menu = { x, y, row, anchor };
+  }
+
+  function closeMenu() {
+    const anchor = menu?.anchor;
+    menu = null;
+    if (document.hasFocus()) anchor?.focus({ preventScroll: true });
+  }
+
+  function resetGroupSetting(setting: PrefGroup, label: string) {
+    const { keys, resetWarning } = setting;
+    if (resetWarning) return confirmSettingReset(keys, label, resetWarning);
+    return prefs.resetGroup(keys, keys.includes("oxbow.background.intensity") ? discardIntensity : undefined);
   }
 
   function menuEntries(row: Row): MenuEntry[] {
     const entries: MenuEntry[] = [];
     const setting = row.setting;
-    if (setting?.kind === "pref") {
-      const key = setting.key;
+    if (setting?.kind === "pref" || setting?.kind === "prefGroup") {
+      const keys: readonly PrefKey[] = setting.kind === "pref" ? [setting.key] : setting.keys;
+      if (setting.kind === "prefGroup" || !setting.resetWithGroup) {
+        entries.push({
+          kind: "item",
+          label: "Reset Setting",
+          icon: menuIcons.reset,
+          off: !keys.some((key) => prefs.hasStored(key)),
+          run: () => setting.kind === "pref" ? prefs.reset(setting.key) : resetGroupSetting(setting, text(row.label)),
+        }, { kind: "sep" });
+      }
       entries.push(
-        { kind: "item", label: "Copy Setting ID", icon: menuIcons.copy, run: () => copy(key, key) },
-        { kind: "item", label: "Copy Setting as JSON", icon: menuIcons.copy, run: () => copy(key, `"${key}": ${JSON.stringify(prefs.get(key))}`) },
+        { kind: "item", label: "Copy Setting ID", icon: menuIcons.copy, run: () => copy(row.id, keys.join("\n")) },
+        { kind: "item", label: "Copy Setting as JSON", icon: menuIcons.copy, run: () => copy(row.id, keys.map((key) => `"${key}": ${JSON.stringify(prefs.get(key))}`).join(",\n")) },
         { kind: "item", label: "Edit in settings.json", icon: menuIcons.edit, run: openJson },
       );
-      if (prefs.changed(key)) {
-        const control = row.control;
-        const fallback =
-          control && (control.type === "seg" || control.type === "popup")
-            ? (control.options().find((o) => o.value === defaults[key])?.label ?? String(defaults[key]))
-            : typeof defaults[key] === "boolean"
-              ? defaults[key]
-                ? "On"
-                : "Off"
-              : String(defaults[key]) || "automatic";
-        entries.push({ kind: "sep" }, { kind: "item", label: `Reset to Default (${fallback})`, icon: menuIcons.reset, run: () => prefs.reset(key) });
-      }
     } else if (setting?.kind === "git") {
       const commands = setting.commands();
       entries.push(
@@ -172,10 +201,10 @@
   // settings.json as text, like VS Code.
   let json = $state(false);
   let jsonText = $state("");
-  let jsonSaved = $state("");
+  let jsonBaseline = $state<{ raw: string | null; text: string }>({ raw: null, text: "" });
   onDestroy(beforeUpdateRestart(() => {
     if (backgroundIntensity.saving) return "Finish saving your settings before restarting to install the update.";
-    if (jsonText !== jsonSaved || editing || Object.keys(repoFiles.drafts).length) return "Save or discard your edits in Settings before restarting to install the update.";
+    if (jsonText !== jsonBaseline.text || editing || Object.keys(repoFiles.drafts).length) return "Save or discard your edits in Settings before restarting to install the update.";
     return null;
   }));
 
@@ -208,15 +237,29 @@
 
   async function openJson() {
     menu = null;
-    jsonText = jsonSaved = await api.settingsText().catch(() => "{}\n");
-    json = true;
+    try {
+      await readJson();
+      json = true;
+    } catch (err) {
+      confirm.fail(err);
+    }
+  }
+
+  async function readJson() {
+    const raw = await api.settingsText();
+    // The textarea normalizes line endings; keep the disk text for the Save comparison.
+    const text = raw?.replace(/\r\n?/g, "\n") ?? "{}\n";
+    jsonBaseline = { raw, text };
+    jsonText = text;
   }
 
   /** What the Settings window calls an Oxbow setting, for the note when it couldn't be saved. */
   function prefLabel(key: PrefKey): string | null {
     for (const section of sections)
-      for (const group of section.groups())
+      for (const group of section.groups()) {
         for (const row of group.rows) if (row.setting?.kind === "pref" && row.setting.key === key) return text(row.label);
+        if (group.title && group.setting?.keys.includes(key)) return group.title;
+      }
     return null;
   }
   const failedLabel = $derived(prefs.failure ? prefLabel(prefs.failure.key) : null);
@@ -232,12 +275,12 @@
 
   /** Whether there is anything to restore; a file Oxbow can't read counts too. */
   // settings.json that can't be read can still be moved aside.
-  const customized = $derived(prefs.customized || !!prefs.unreadable || (json && jsonSaved.trim() !== "{}"));
+  const customized = $derived(prefs.customized || !!prefs.unreadable || (json && jsonBaseline.text.trim() !== "{}"));
 
   async function restoreDefaults() {
     const where = await api.settingsLocation().catch(() => ({ file: "settings.json", backup: "settings.backup.json" }));
     const reopen = async () => {
-      if (json) jsonText = jsonSaved = await api.settingsText().catch(() => "{}\n");
+      if (json) await readJson();
       await prefs.reload();
     };
     await confirm.run({
@@ -283,6 +326,7 @@
 <svelte:window
   onfocus={() => {
     if (model.loading || repoFiles.loading) return;
+    void prefs.reload();
     load();
     if (model.repo && !repoFiles.open) loadRepoFiles();
   }}
@@ -294,34 +338,58 @@
     <label class="search search-control">
       <svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
       <!-- svelte-ignore a11y_autofocus -->
-      <input type="search" aria-label="Search settings" placeholder="Search" bind:value={model.query} spellcheck="false" autofocus />
+      <input type="search" aria-label="Search settings" placeholder="Search" bind:value={model.query} spellcheck="false" autofocus={!initial?.group} />
       {#if model.query}<button type="button" class="clear" onclick={() => { model.query = ""; }} aria-label="Clear the filter" title="Clear the filter">×</button>{/if}
     </label>
-    {#each shownSections as section (section.id)}
-      {#if section.head}<div class="head">{section.head}</div>{/if}
-      <button
-        class="section"
-        class:child={section.child}
-        class:current={!needle && !json && section.id === current.id}
-        class:miss={needle && !hits.has(section.id)}
-        aria-current={!needle && section.id === current.id ? "page" : undefined}
-        onclick={() => go(section.id)}
-      >
-        <span class="badge" style:background={section.color}>
-          <svg class="icon" viewBox="0 0 16 16"><path d={section.icon} /></svg>
+    <div class="sections">
+      {#each shownSections as section (section.id)}
+        {#if section.head}<div class="head">{section.head}</div>{/if}
+        <button
+          class="section"
+          class:child={section.child}
+          class:current={!needle && !json && section.id === current.id}
+          class:miss={needle && !hits.has(section.id)}
+          aria-current={!needle && section.id === current.id ? "page" : undefined}
+          onclick={() => go(section.id)}
+        >
+          <span class="badge" style:background={section.color}>
+            <svg class="icon" viewBox="0 0 16 16"><path d={section.icon} /></svg>
+          </span>
+          <span class="label">{labelOf(section)}</span>
+        </button>
+      {/each}
+    </div>
+    <div class="support">
+      <button type="button" class="section" onclick={() => api.openOxbowGitHub().catch((err) => confirm.fail(err))}>
+        <span class="badge github">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49C4 14.09 3.48 13.23 3.32 12.78c-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.65 7.65 0 0 1 8 3.86c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+          </svg>
         </span>
-        <span class="label">{labelOf(section)}</span>
+        GitHub
       </button>
-    {/each}
+      <button type="button" class="section" onclick={() => api.reportOxbowBug().catch((err) => confirm.fail(err))}>
+        <span class="badge bug">
+          <svg class="icon" viewBox="0 0 16 16" aria-hidden="true">
+            <rect x="4.5" y="5" width="7" height="9" rx="3.5" />
+            <path d="m5 2 1.5 2.5M11 2 9.5 4.5M8 8v6M2 5l2.5 2M2 9h2.5M2 13l2.5-2m7-4L14 5m-2.5 4H14m-2.5 2 2.5 2" />
+          </svg>
+        </span>
+        Report a Bug
+      </button>
+      {#if version}
+        <div class="version">{version}</div>
+      {/if}
+    </div>
   </nav>
 
   <div class="content">
     <header data-tauri-drag-region>
       <div class="nav-buttons">
-        <button aria-label="Back" disabled={(at === 0 && !fileOpen) || !!needle || json} onclick={back}>
+        <button class="toolbar-control" aria-label="Back" disabled={(at === 0 && !fileOpen) || !!needle || json} onclick={back}>
           <svg class="icon small" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>
         </button>
-        <button aria-label="Forward" disabled={at === visited.length - 1 || !!needle || json} onclick={() => (at += 1)}>
+        <button class="toolbar-control" aria-label="Forward" disabled={at === visited.length - 1 || !!needle || json} onclick={() => (at += 1)}>
           <svg class="icon small" viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
         </button>
       </div>
@@ -364,13 +432,13 @@
     </header>
 
     {#if json}
-      <SettingsJson bind:text={jsonText} bind:saved={jsonSaved} />
+      <SettingsJson bind:text={jsonText} bind:baseline={jsonBaseline} />
     {:else if fileOpen}
       {#key fileOpen}
         <RepoFileEditor kind={fileOpen} gitlab={repoFiles.list?.gitlab ?? false} />
       {/key}
     {:else}
-      <div class="scroll">
+      <div class="scroll" bind:this={scroll}>
         {#if model.problem}<p class="problem" role="alert">{model.problem}</p>{/if}
         {#if !needle && current.id === "repoFiles" && repoFiles.problem}<p class="problem" role="alert">{repoFiles.problem}</p>{/if}
         {#if prefs.failure}
@@ -388,41 +456,45 @@
           </p>
         {/if}
 
-        {#if !needle && current.id === "keys"}
-          <ShortcutSearch empty={!shown.length} />
-        {/if}
         {#if !needle && current.id === "repoFiles"}
           <p class="section-note">These files are committed, so everyone who clones the repository gets them. Save only writes the file: it shows up in Changes, and you commit it yourself.</p>
         {/if}
         {#each shown as group (group.key)}
-          <section>
-            {#if group.title}<h2>{group.title}</h2>{/if}
-            {#if !needle && group.preview === "background"}<div class="background-choices"><BackgroundChoices /></div>{/if}
-            <div class="settings-panel">
-              {#each group.rows as row (row.id)}
-                {#if needle || group.preview !== "background" || row.id === "oxbow.background.intensity"}
-                  <SettingsRow {row} menuOn={menu?.row.id === row.id} onMenu={(x, y) => openMenu(row, x, y)} bind:editing />
-                {/if}
-              {/each}
-              {#if group.detail === "updates"}<UpdateStatusPanel />{/if}
-            </div>
-            {#if !needle && group.preview === "theme"}
-              <div class="theme-choices"><ThemeCards /></div>
-              <p class="foot">Themes color code: diffs, conflicts and stashes. The window keeps its own look.</p>
-              <ThemeSample />
-            {:else if !needle && group.preview === "branches"}
-              <BranchPreview />
-            {:else if !needle && group.preview === "diff"}
-              <DiffPreview />
-            {:else if !needle && group.preview === "console"}
-              <div class="term-preview" aria-label="Git commands">
-                <div><span class="dim">%</span> <span class="git">git</span> push origin main</div>
-                <div class="dim">To github.com:acme/api.git</div>
-                <div class="dim">{"   3f2a1c9..7c1e9a2  main -> main"}</div>
-              </div>
-            {/if}
-            {#if text(group.foot)}<p class="foot">{text(group.foot)}</p>{/if}
-          </section>
+          {#if !needle && group.detail === "shortcutSearch"}
+            {@render groupHeading(group)}
+            <ShortcutSearch empty={shown.length === 1} />
+          {:else}
+            <section>
+              {@render groupHeading(group)}
+              {#if !needle && group.preview === "background"}<div class="background-choices"><BackgroundChoices /></div>{/if}
+              {#if group.detail !== "shortcutSearch"}
+                <div class="settings-panel">
+                  {#each group.rows as row (row.id)}
+                    {#if needle || group.preview !== "background" || row.id === "oxbow.background.intensity"}
+                      <SettingsRow {row} menuOn={menu?.row.id === row.id} onMenu={(x, y) => openMenu(row, x, y)} bind:editing />
+                    {/if}
+                  {/each}
+                  {#if group.detail === "updates"}<UpdateStatusPanel />{/if}
+                </div>
+              {/if}
+              {#if !needle && group.preview === "theme"}
+                <div class="theme-choices"><ThemeCards /></div>
+                <p class="foot">Themes color code: diffs, conflicts and stashes. The window keeps its own look.</p>
+                <ThemeSample />
+              {:else if !needle && group.preview === "branches"}
+                <BranchPreview />
+              {:else if !needle && group.preview === "diff"}
+                <DiffPreview />
+              {:else if !needle && group.preview === "console"}
+                <div class="term-preview" aria-label="Git commands">
+                  <div><span class="dim">%</span> <span class="git">git</span> push origin main</div>
+                  <div class="dim">To github.com:acme/api.git</div>
+                  <div class="dim">{"   3f2a1c9..7c1e9a2  main -> main"}</div>
+                </div>
+              {/if}
+              {#if text(group.foot)}<p class="foot">{text(group.foot)}</p>{/if}
+            </section>
+          {/if}
         {:else}
           {#if needle}<p class="empty">No settings match “{model.query.trim()}”.</p>{/if}
         {/each}
@@ -431,8 +503,28 @@
   </div>
 </div>
 
+{#snippet groupHeading(group: Group & { key: string })}
+  {#if group.title}
+    <div class="group-heading" class:with-gear={!!group.setting}>
+      {#if group.setting}
+        {@const target = { id: group.key, label: group.title, setting: group.setting }}
+        <SettingGear
+          label={group.title}
+          on={menu?.row.id === target.id}
+          open={(button) => {
+            const box = button.getBoundingClientRect();
+            openMenu(target, box.left, box.bottom + 4, button);
+          }}
+        />
+      {/if}
+      {#if !needle && group.id}<h2 id={group.id} tabindex="-1">{group.title}</h2>
+      {:else}<h2>{group.title}</h2>{/if}
+    </div>
+  {/if}
+{/snippet}
+
 {#if menu}
-  <Menu x={menu.x} y={menu.y} label="Setting {text(menu.row.label)}" entries={menuEntries(menu.row)} onClose={() => (menu = null)} />
+  <Menu x={menu.x} y={menu.y} label="Setting {text(menu.row.label)}" entries={menuEntries(menu.row)} onClose={closeMenu} />
 {/if}
 
 <ConfirmSheet repo={model.repo?.name ?? ""} branch={null} color={0} />
@@ -495,7 +587,44 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+    overflow: hidden;
+  }
+
+  .sections, .support {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .sections {
+    flex: 1;
     overflow: hidden auto;
+  }
+
+  .support {
+    flex-shrink: 0;
+    margin-top: var(--space-2);
+    padding-bottom: var(--space-3);
+  }
+
+  .support::before {
+    content: "";
+    border-top: 1px solid var(--sep);
+    margin: 0 var(--space-4) var(--space-2);
+  }
+
+  .support .section:hover {
+    background: var(--hover-wash);
+  }
+
+  .github { background: var(--section-grey); }
+  .bug { background: var(--section-blue); }
+
+  .version {
+    padding: var(--space-2) var(--space-4) 0;
+    color: var(--text2);
+    font-size: var(--text-small);
+    user-select: text;
   }
 
   /* Room for the traffic lights, which macOS draws over the sidebar. */
@@ -510,6 +639,7 @@
 
   .search {
     margin: 0 10px 8px;
+    flex-shrink: 0;
   }
 
   .head {
@@ -590,26 +720,6 @@
   .nav-buttons {
     display: flex;
     align-items: center;
-    height: 30px;
-    padding: 0 2px;
-    border-radius: var(--radius-pill);
-    background: var(--glass);
-    border: 0.5px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    color: var(--icon);
-  }
-
-  .nav-buttons button {
-    width: 30px;
-    height: 30px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius-pill);
-  }
-
-  .nav-buttons button:disabled {
-    opacity: 0.35;
   }
 
   .pill {
@@ -659,6 +769,26 @@
     padding: 0 12px;
     font-size: var(--text-body);
     font-weight: 600;
+  }
+
+  .group-heading.with-gear {
+    position: relative;
+    display: flex;
+    align-items: center;
+    min-height: 20px;
+  }
+
+  .group-heading > :global(.setting-gear) {
+    position: absolute;
+    left: -26px;
+  }
+
+  .group-heading:hover > :global(.setting-gear) {
+    opacity: 1;
+  }
+
+  h2[tabindex="-1"]:focus {
+    outline: none;
   }
 
   .theme-choices {
@@ -726,7 +856,7 @@
     place-items: center;
     width: 26px;
     height: 26px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-m);
     color: var(--icon);
   }
 
@@ -805,6 +935,12 @@
     .scroll {
       overflow-x: hidden;
       padding: 6px 14px 20px;
+    }
+
+    .group-heading > :global(.setting-gear) {
+      position: static;
+      flex-shrink: 0;
+      opacity: 1;
     }
   }
 </style>

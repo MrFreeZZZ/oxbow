@@ -2,17 +2,21 @@
   // New Repository: git init in a new or existing folder, starter files, and the first commit,
   // with the exact commands. A folder that is a repository already is opened instead.
 
+  import { useRepoScope } from "./repoScope";
   import { modal } from "./modal";
   import { open as chooseFolder } from "@tauri-apps/plugin-dialog";
-  import { api } from "./api";
   import { prefs } from "./prefs.svelte";
-  import { labPlaces, publishCommands, publishNote, repositoryName, type LabPlace } from "./publish";
+  import { labPlaces as labPlacesInRepo, publishCommands, publishNote, repositoryName, type LabPlace } from "./publish";
   import { labPublishCommands, labPublishNote, validProjectName, visibilityText } from "./labPublish";
-  import { join, start } from "./start.svelte";
+  import { join } from "./start.svelte";
   import TermBlock, { type TermLine } from "./TermBlock.svelte";
   import WhyNote from "./WhyNote.svelte";
   import { tilde } from "./term";
   import type { GitHubOwners, GitLabPublish, GitLabVisibility, NewRepoPlan, Publish } from "./types";
+
+  const scope = useRepoScope();
+  const { api, start } = scope;
+  const labPlaces = labPlacesInRepo.bind(null, scope);
 
   let {
     folder: initialFolder,
@@ -203,6 +207,7 @@
   }
 
   function onKey(event: KeyboardEvent) {
+    if (!scope.isActive()) return;
     if (event.key === "Escape" && !running) {
       event.preventDefault();
       onClose();
@@ -246,14 +251,15 @@
     !plan ? "" : plan.exists && plan.entries > 0 ? "everything in the folder" : `${plan.writes.length} ${plan.writes.length === 1 ? "file" : "files"}`,
   );
   const noIdentity = $derived(!!info && commit && (!info.name || !info.email));
+  const titleId = $props.id();
 </script>
 
 <svelte:window onkeydown={onKey} />
 
 <div class="dim">
-  <div class="sheet" use:modal role="dialog" aria-modal="true" aria-labelledby="new-title" aria-busy={running}>
+  <div class="sheet" use:modal role="dialog" aria-modal="true" aria-labelledby={titleId} aria-busy={running}>
     <div class="head">
-      <span class="title" id="new-title">New Repository</span>
+      <span class="title" id={titleId}>New Repository</span>
       <span class="sub">Starts version control in a new folder, or in a folder you already have.</span>
     </div>
 
@@ -279,7 +285,7 @@
       {:else}
         <span class="label">Branch</span>
         <div class="row">
-          <div class="seg" role="radiogroup" aria-label="First branch">
+          <div class="segmented" role="radiogroup" aria-label="First branch">
             {#each branches as b (b)}
               <button role="radio" aria-checked={branch === b} class:on={branch === b} onclick={() => (branch = b)}>{b}</button>
             {/each}
@@ -338,7 +344,7 @@
                   </select>
                 </label>
               {/if}
-              <div class="seg" class:off={!publishing} role="radiogroup" aria-label="Visibility">
+              <div class="segmented" class:off={!publishing} role="radiogroup" aria-label="Visibility">
                 <button role="radio" aria-checked={isPrivate} class:on={isPrivate} disabled={!publishing} onclick={() => (isPrivate = true)}>Private</button>
                 <button role="radio" aria-checked={!isPrivate} class:on={!isPrivate} disabled={!publishing} onclick={() => (isPrivate = false)}>Public</button>
               </div>
@@ -367,7 +373,7 @@
                   {/each}
                 </select>
               </label>
-              <div class="seg" class:off={!labPublishing} role="radiogroup" aria-label="GitLab visibility">
+              <div class="segmented" class:off={!labPublishing} role="radiogroup" aria-label="GitLab visibility">
                 {#each [["private", "Private"], ["internal", "Internal"], ["public", "Public"]] as [id, label] (id)}
                   <button role="radio" aria-checked={visibility === id} class:on={visibility === id} disabled={!labPublishing} onclick={() => (visibility = id as GitLabVisibility)}>{label}</button>
                 {/each}
@@ -524,24 +530,14 @@
     color: var(--accent);
     font-size: inherit;
   }
-  .seg {
-    display: flex;
+  .segmented {
     gap: 2px;
-    padding: 2px;
-    border-radius: var(--radius-m);
-    background: var(--field);
   }
-  .seg button {
+  .segmented button {
     height: 24px;
     min-width: 72px;
     padding: 0 12px;
-    border-radius: var(--radius-s);
     font-size: var(--text-small);
-  }
-  .seg button.on {
-    background: var(--glass);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
-    font-weight: 600;
   }
   .hint {
     font-size: var(--text-caption);
@@ -600,9 +596,7 @@
     height: 24px;
     padding: 0 6px;
     border-radius: var(--radius-s);
-    border: 0.5px solid var(--glass-border);
-    background: var(--glass);
-    box-shadow: var(--glass-shadow);
+    background: var(--field);
     color: var(--text);
     font: inherit;
     font-size: var(--text-small);

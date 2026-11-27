@@ -1,8 +1,13 @@
 import type { WorkingFileStatus } from "./openFile";
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { MenuPart } from "./appMenu";
+import type { SettingsTarget } from "./settingsNavigation";
+import type { TabTagStyle } from "./repositoryTabTags";
 import type {
   AllSettings,
+  ActionEvent,
+  OutsideChange,
+  OutputLine,
   UpdateInfo,
   UpdateStatus,
   FileCheck,
@@ -106,7 +111,34 @@ import type { ConsoleEntry, ConsoleRepos } from "./console";
 /** What a read answers when a newer one in its lane, or `stopReads`, stopped it. */
 export const stopped = (err: unknown) => String(err) === "stopped";
 
-export const api = {
+export type RepoSessionId = number;
+
+export type RepoTabOpen =
+  | { kind: "opened" | "existing"; session: RepoSessionId; repo: RepoSummary }
+  | { kind: "otherWindow"; window: string }
+  | { kind: "untrusted"; repo: RepoSummary };
+
+interface RepoEventPayload {
+  "action-event": ActionEvent;
+  "clone-line": OutputLine;
+  "fetch-event": { fetch: number | null; remote: string | null; event: ActionEvent };
+  "outside-change": OutsideChange;
+  "repo-touched": null;
+  "menu-command": string;
+  "open-file-error": string;
+  "repo-activate-request": null;
+  "repo-closed": null;
+}
+
+export type RepoNotice = {
+  [E in keyof RepoEventPayload]: { session: RepoSessionId; event: E; payload: RepoEventPayload[E] };
+}[keyof RepoEventPayload];
+
+/** Capture the address once per tab. An unbound call uses the window's active repository. */
+export const apiForSession = (repoSession: RepoSessionId) =>
+  apiWithInvoke((command, args) => tauriInvoke(command, { ...args, repoSession }));
+
+const apiWithInvoke = (invoke: <T>(command: string, args?: Record<string, unknown>) => Promise<T>) => ({
   /** Only the custom image currently configured in settings.json; no arbitrary file access. */
   backgroundImageVersion: () => invoke<string>("background_image_version"),
   backgroundImage: () => invoke<ArrayBuffer | ArrayBufferView | number[]>("background_image").then((data) =>
@@ -118,8 +150,19 @@ export const api = {
 
   /** Reduce Transparency and Increase Contrast from the system (always off outside macOS). */
   displayOptions: () => invoke<{ reduceTransparency: boolean; increaseContrast: boolean }>("display_options"),
-  initialRepo: () => invoke<string | null>("initial_repo"),
-  closeRepo: () => invoke<void>("close_repo"),
+  initialRepo: () => invoke<{ path: string | null; restoreTabs: boolean; explicit: boolean }>("initial_repo"),
+  closeRepo: (provisional?: boolean) => invoke<void>("close_repo", { provisional }),
+  closeRepoTabs: (closing: RepoSessionId[], active: RepoSessionId | null, previous: RepoSessionId | null) =>
+    invoke<void>("close_repo_tabs", { closing, active, previous }),
+  repoTabsEnabled: () => invoke<boolean>("repo_tabs_enabled"),
+  repoTabsReady: (generation: number, problem: string | null) =>
+    invoke<void>("repo_tabs_ready", { generation, problem }),
+  openRepoTab: (path: string, answer?: "trust" | "restricted") => invoke<RepoTabOpen>("open_repo_tab", { path, answer }),
+  findRepoTab: (path: string) => invoke<{ window: string; session: RepoSessionId | null } | null>("find_repo_tab", { path }),
+  activateRepoTab: (background?: boolean) => invoke<void>("activate_repo_tab", { background }),
+  /** Register once in the owner window before opening tabs. */
+  repoEvents: (onNotice: (notice: RepoNotice) => void) =>
+    invoke<void>("repo_events", { onNotice: new Channel(onNotice) }),
   /** A repository whose settings run programs comes back `untrusted`, unopened, unless it is
    *  trusted or Settings says not to ask; `answer` is the user's reply to that. */
   openRepo: (path: string, answer: "trust" | "restricted" | null = null) => invoke<RepoSummary>("open_repo", { path, answer }),
@@ -276,7 +319,7 @@ export const api = {
     const { workdir, signal } = scope;
     const lane = "stack-preview";
     let stopping: Promise<void> | undefined;
-    const stop = () => { stopping = api.stopReads([lane]).catch(() => {}); };
+    const stop = () => { stopping = invoke<void>("stop_reads", { lanes: [lane] }).catch(() => {}); };
     // A Stop sent before the native command registered its lane could miss the read.
     const onStart = new Channel<void>(() => {
       if (signal.aborted) stop();
@@ -298,7 +341,7 @@ export const api = {
   stopAction: () => invoke<void>("stop_action"),
   getSetting: <T>(key: string) => invoke<T | null>("get_setting", { key }),
   allSettings: () => invoke<AllSettings>("all_settings"),
-  openSettings: (section?: "commands" | "updates") => invoke<void>("open_settings", { section }),
+  openSettings: (section?: SettingsTarget) => invoke<void>("open_settings", { section }),
   /** The key of the app menu's Settings…, "CmdOrCtrl+,", or null for none (macOS). */
   setSettingsKey: (accelerator: string | null) => invoke<void>("set_settings_key", { accelerator }),
   setMenu: (menus: MenuPart[]) => invoke<void>("set_menu", { menus }),
@@ -313,6 +356,9 @@ export const api = {
   consoleClear: (paths: (string | null)[]) => invoke<void>("console_clear", { paths }),
   /** Resolves to the number of the change, as `settings-changed` sends it. */
   setSetting: (key: string, value: unknown) => invoke<number>("set_setting", { key, value }),
+  resetSettingsGroup: (keys: readonly string[]) => invoke<number>("reset_settings_group", { keys }),
+  editTabTag: (setting: "styles" | "assignments", entry: string, value: string | TabTagStyle | null) =>
+    invoke<{ key: string; value: unknown; revision: number }>("edit_tab_tag", { setting, entry, value }),
   gitSettings: () => invoke<GitSettings>("git_settings"),
   repoSettings: () => invoke<RepoSettings | null>("repo_settings"),
   repositoryRemotes: () => invoke<[string, RemoteInfo[]] | null>("repository_remotes"),
@@ -353,6 +399,8 @@ export const api = {
   /** e.g. "3 files would be pruned (1.4 GB)"; null when nothing would be. */
   lfsPrunePreview: () => invoke<string | null>("lfs_prune_preview"),
   openLfsDownload: () => invoke<void>("open_lfs_download"),
+  openOxbowGitHub: () => invoke<void>("open_oxbow_github"),
+  reportOxbowBug: () => invoke<void>("report_oxbow_bug"),
   /** With `worktree`, that working folder of the repository instead. */
   openInTerminal: (worktree: string | null = null) => invoke<void>("open_in_terminal", { worktree }),
   revealWorktree: (path: string) => invoke<void>("reveal_worktree", { path }),
@@ -365,7 +413,6 @@ export const api = {
   /** The worktrees alone, with their counts of changed files, for Retry. */
   worktrees: () => invoke<Worktree[]>("worktrees"),
   /** After removing the worktree at `path`, close the window that showed it. */
-  closeWindowOf: (path: string) => invoke<void>("close_window_of", { path }),
   monospaceFonts: () => invoke<string[]>("monospace_fonts"),
   refreshRemoteTags: () => invoke<boolean>("refresh_remote_tags"),
   /** Newest first. */
@@ -379,8 +426,8 @@ export const api = {
   compareSnapshot: (id: string, after: boolean) => invoke<SnapshotComparison>("compare_snapshot", { id, after }),
   /** A newer search in the same `lane` stops this one. */
   search: (query: SearchQuery, lane: string | null = null) => invoke<SearchResult>("search", { query, lane }),
-  settingsText: () => invoke<string>("settings_text"),
-  saveSettingsText: (text: string) => invoke<void>("save_settings_text", { text }),
+  settingsText: () => invoke<string | null>("settings_text"),
+  saveSettingsText: (base: string | null, text: string) => invoke<string>("save_settings_text", { base, text }),
   /** settings.json and the copy Restore Defaults keeps, as typed in a shell. */
   settingsLocation: () => invoke<{ file: string; backup: string }>("settings_location"),
   restoreDefaultSettings: () => invoke<void>("restore_default_settings"),
@@ -452,7 +499,9 @@ export const api = {
   saveReviewDraft: (target: ReviewTarget, number: number, draft: ReviewDraft | null, expected: string) => invoke<string>("save_review_draft", { target, number, draft, expected }),
   gitlabViewing: (number: number, target: ReviewTarget) => invoke<Viewing>("gitlab_viewing", { number, target }),
   gitlabSetViewed: (number: number, path: string, viewed: boolean, target: ReviewTarget) => invoke<void>("gitlab_set_viewed", { number, path, viewed, target }),
-};
+});
+
+export const api = apiWithInvoke(tauriInvoke);
 
 /** Keys of `settings.json`. */
 export const settings = {

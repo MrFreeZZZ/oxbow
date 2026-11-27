@@ -5,9 +5,9 @@ use std::path::Path;
 use oxbow_core::config;
 use oxbow_core::console;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 
-use crate::session::{Session, blocking, logged};
+use crate::session::{RepoRequest, Session, blocking, logged};
 use crate::{CommandResult, accounts, trusted};
 
 #[derive(Serialize)]
@@ -103,7 +103,7 @@ pub(crate) fn clone_command(options: oxbow_core::CloneOptions) -> CommandResult<
 #[tauri::command]
 pub(crate) async fn clone_repo(
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: RepoRequest,
     session: State<'_, Session>,
     options: oxbow_core::CloneOptions,
 ) -> CommandResult<String> {
@@ -116,15 +116,7 @@ pub(crate) async fn clone_repo(
         Some(options.path.clone()),
         console::EntryKind::Action,
         title,
-        move || {
-            oxbow_core::setup::clone(
-                &options,
-                &mut |line| {
-                    let _ = window.emit_to(window.label(), "clone-line", line);
-                },
-                &cancel,
-            )
-        },
+        move || oxbow_core::setup::clone(&options, &mut |line| window.progress("clone-line", line), &cancel),
     )
     .await?;
     // A clone brings neither hooks nor settings along: what it has, the user's templates gave it.

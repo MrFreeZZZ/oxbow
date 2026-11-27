@@ -4,13 +4,15 @@
 // changed them.
 
 import { keepList } from "./reviewLoads";
-import { api } from "./api";
+import { api as windowApi } from "./api";
 import type { ForgeKind } from "./forge";
 import type { GitHubRepo, GitLabProject, PullStatus, PullSummary, LoadIssue } from "./types";
 
 const FRESH_FOR = 60_000;
 
-class GitHubState {
+export class GitHubState {
+  constructor(private readonly api: typeof windowApi = windowApi) {}
+
   /** The GitHub repository the open one pushes to; null when it has none there. */
   repo = $state<GitHubRepo | null>(null);
   /** The GitLab projects the remotes point at, the default remote's first. */
@@ -45,6 +47,11 @@ class GitHubState {
    *  out of, or for another repository, never comes back. */
   #load = 0;
 
+  clear() {
+    this.#path = "";
+    this.#forget();
+  }
+
   /** Load what the repository at `path` has on GitHub; `force` skips the one-minute wait. */
   async load(path: string, force = false) {
     if (path !== this.#path) {
@@ -55,7 +62,7 @@ class GitHubState {
     this.#loadedAt = Date.now();
     const load = ++this.#load;
     this.loading = true;
-    const [repo, gitlab] = await Promise.all([api.githubRepo().catch(() => null), api.gitlabProjects().catch(() => [])]);
+    const [repo, gitlab] = await Promise.all([this.api.githubRepo().catch(() => null), this.api.gitlabProjects().catch(() => [])]);
     if (load !== this.#load) return;
     this.repo = repo;
     this.gitlab = gitlab;
@@ -71,10 +78,10 @@ class GitHubState {
     }
     try {
       const [pulls, statuses, account] = await Promise.all([
-        api.githubPulls(),
+        this.api.githubPulls(),
         // A verdict and checks are a nicety: the list stays without them.
-        api.githubPullStatuses().catch(() => []),
-        api.githubAccount().catch(() => null),
+        this.api.githubPullStatuses().catch(() => []),
+        this.api.githubAccount().catch(() => null),
       ]);
       if (load !== this.#load) return;
       this.pulls = keepList(this.pulls, pulls);
@@ -92,7 +99,7 @@ class GitHubState {
   async #loadMergeRequests(load: number) {
     this.mrLoading = true;
     try {
-      const [list, accounts] = await Promise.all([api.gitlabMergeRequests(), api.gitlabAccounts().catch(() => [])]);
+      const [list, accounts] = await Promise.all([this.api.gitlabMergeRequests(), this.api.gitlabAccounts().catch(() => [])]);
       if (load !== this.#load) return;
       this.mrProject = list?.project ?? null;
       const account = accounts.find((a) => a.host === list?.project.host);
@@ -109,7 +116,7 @@ class GitHubState {
     }
     // Approvals and pipelines are a nicety, as on GitHub: the list stays without them.
     const open = this.mergeRequests.filter((p) => p.state === "open").map((p) => p.number);
-    const statuses = open.length ? await api.gitlabStatuses(open).catch(() => []) : [];
+    const statuses = open.length ? await this.api.gitlabStatuses(open).catch(() => []) : [];
     if (load === this.#load) this.mrStatuses = Object.fromEntries(statuses.map((s) => [s.number, s]));
   }
 
