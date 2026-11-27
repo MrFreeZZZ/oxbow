@@ -19,10 +19,13 @@
       <div class="notes"><CommentBody body={updates.available.notes} /></div>
     </details>
   {/if}
-  {#if updates.available || updates.notice.error}
+  {#if updates.available || updates.notice.error || updates.switchLabel}
     <div class="actions">
+      {#if updates.switchLabel}<button class="button small" disabled={!updates.canSwitch} onclick={() => updates.switchChannel()}>{updates.switching ? "Switching…" : updates.switchLabel}</button>{/if}
       {#if updates.notice.error && !updates.available}<button class="button small" disabled={updates.loading || updates.busy} onclick={() => updates.check()}>Retry</button>{/if}
-      <button class="button small" disabled={updates.restarting} onclick={() => updates.open()}>{updates.available ? "View Release" : "View Releases"}</button>
+      {#if updates.available || updates.notice.error}
+        <button class="button small" disabled={updates.restarting} onclick={() => updates.open()}>{updates.available ? "View Release" : "View Releases"}</button>
+      {/if}
       {#if updates.status?.state === "downloading"}<button class="button small" onclick={() => updates.cancel()}>Cancel</button>{/if}
       {#if updates.canDownload}<button class="button small primary" disabled={updates.loading} onclick={() => updates.download()}>{updates.status?.state === "downloadFailed" ? "Retry Download" : "Download Update"}</button>{/if}
       {#if updates.ready || updates.installed}<button class="button small primary" disabled={updates.loading || updates.busy} onclick={() => updates.install()}>{updates.installed ? "Restart Now" : "Restart & Install"}</button>{/if}

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { channelDescription, channelUnavailable, installedVersion, selectedChannel, updateChannels, updateNotice } from "../src/lib/updates.ts";
+import { canSwitchChannel, switchConfirmation, channelDescription, channelUnavailable, installedVersion, selectedChannel, updateChannels, updateNotice } from "../src/lib/updates.ts";
 import type { UpdateInfo, UpdateStatus } from "../src/lib/types.ts";
 
 const info: UpdateInfo = { built: "27 Nov 2026", baseRelease: "2026.8.0", commitsSinceRelease: 52, version: "0.1.550", commit: "abcdef0", buildChannel: "preview", channel: "preview", platform: "darwin-aarch64", canInstall: true, availableChannels: ["release", "preview"] };
@@ -76,4 +76,26 @@ test("an installed update requests only a restart, even after the configured cha
     assert.match(notice.message, /Restart Now/);
     assert.doesNotMatch(notice.title, /download/i);
   }
+});
+
+
+test("switching is explicit, cross-channel and limited to supported devices", () => {
+  assert.equal(canSwitchChannel(null, "release"), false);
+  assert.equal(canSwitchChannel(info, "auto"), false);
+  assert.equal(canSwitchChannel(info, "preview"), false);
+  assert.equal(canSwitchChannel(info, "release"), true);
+  assert.equal(canSwitchChannel({ ...info, availableChannels: [] }, "release"), false);
+  assert.equal(canSwitchChannel({ ...info, buildChannel: "release", availableChannels: ["release"] }, "preview"), false);
+  assert.equal(canSwitchChannel({ ...info, canInstall: false }, "release"), true, "browser fallback can switch channels");
+});
+
+test("switch confirmation identifies both versions and explicitly warns about a downgrade", () => {
+  const candidate = { id: 7, channel: "release" as const, currentVersion: "2026.9.0-preview.749", version: "0.1.750", older: true };
+  const request = switchConfirmation(candidate);
+  assert.equal(request.title, "Switch to Release?");
+  assert.equal(request.button, "Switch to Release");
+  assert.match(request.body.join(""), /Installed: 2026.9.0-preview.749/);
+  assert.match(request.body.join(""), /Available in Release: 0.1.750/);
+  assert.match(request.body.join(""), /older than your current build/);
+  assert.doesNotMatch(switchConfirmation({ ...candidate, older: false, version: candidate.currentVersion }).body.join(""), /older/);
 });

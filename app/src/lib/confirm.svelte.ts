@@ -513,6 +513,10 @@ export class ConfirmState {
       return;
     }
     if (!request.action) {
+      this.commands = [];
+      this.notKept = [];
+      this.steps = [];
+      this.phase = "ask";
       this.planning = false;
       return;
     }

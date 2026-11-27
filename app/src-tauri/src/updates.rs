@@ -64,7 +64,7 @@ impl Channel {
         }
     }
 
-    fn configured(settings: &Settings, built: Self) -> Self {
+    pub(crate) fn configured(settings: &Settings, built: Self) -> Self {
         match settings
             .get("oxbow.updates.channel")
             .and_then(serde_json::Value::as_str)
@@ -211,6 +211,8 @@ impl UpdateStatus {
 }
 
 struct Checks {
+    switch_revision: u64,
+    pending_switch: Option<(SwitchCandidate, UpdateRelease, Update)>,
     running: bool,
     status: UpdateStatus,
     update: Option<Update>,
@@ -300,6 +302,8 @@ impl Checks {
         if self.running || self.installed {
             return false;
         }
+        self.switch_revision += 1;
+        self.pending_switch = None;
         self.running = true;
         self.update = None;
         self.bytes = None;
@@ -332,6 +336,8 @@ impl Default for UpdateChecks {
 
 fn empty_checks() -> Checks {
     Checks {
+        switch_revision: 0,
+        pending_switch: None,
         running: false,
         status: UpdateStatus::idle(Channel::built()),
         update: None,
@@ -433,18 +439,31 @@ pub(crate) fn start(app: &AppHandle) {
 }
 
 #[tauri::command]
-pub(crate) async fn download_update(app: AppHandle) -> UpdateStatus {
+pub(crate) async fn download_update(app: AppHandle) -> Result<UpdateStatus, String> {
+    download(app, None).await
+}
+
+async fn download(app: AppHandle, switch_id: Option<u64>) -> Result<UpdateStatus, String> {
     let state = app.state::<UpdateChecks>();
-    let (mut update, release, mut cancelled) = {
+    let (mut update, release, mut cancelled, revision) = {
         let mut checks = state.0.lock().expect("update checks lock");
+        if let Some(id) = switch_id {
+            checks.accept_switch(id, selected_channel(&app), tauri_plugin_updater::target().as_deref())?;
+            if !can_install() {
+                let page = release_of(&checks.status.state).expect("accepted release").page.clone();
+                drop(checks);
+                crate::open_in::open_url(&page).map_err(|error| error.to_string())?;
+                return Ok(broadcast(&app));
+            }
+        }
         if checks.running || checks.installed || checks.status.channel != selected_channel(&app) || !can_install() {
-            return checks.status.clone();
+            return Ok(checks.status.clone());
         }
         let (Some(update), Some(release)) = (checks.update.clone(), release_of(&checks.status.state).cloned()) else {
-            return checks.status.clone();
+            return Ok(checks.status.clone());
         };
         if checks.bytes.is_some() {
-            return checks.status.clone();
+            return Ok(checks.status.clone());
         }
         let (cancel, cancelled) = watch::channel(false);
         checks.cancel = Some(cancel);
@@ -454,7 +473,7 @@ pub(crate) async fn download_update(app: AppHandle) -> UpdateStatus {
             received: 0,
             total: None,
         };
-        (update, release, cancelled)
+        (update, release, cancelled, checks.switch_revision)
     };
     broadcast(&app);
     update.timeout = Some(Duration::from_secs(10 * 60));
@@ -489,6 +508,15 @@ pub(crate) async fn download_update(app: AppHandle) -> UpdateStatus {
     };
     {
         let mut checks = state.0.lock().expect("update checks lock");
+        if checks.switch_revision != revision {
+            checks.status = UpdateStatus::idle(selected_channel(&app));
+            checks.running = false;
+            checks.cancel = None;
+            checks.update = None;
+            checks.bytes = None;
+            drop(checks);
+            return Ok(broadcast(&app));
+        }
         checks.finish_download(
             selected_channel(&app),
             release,
@@ -497,7 +525,7 @@ pub(crate) async fn download_update(app: AppHandle) -> UpdateStatus {
             too_large || received > 256 * 1024 * 1024,
         );
     }
-    broadcast(&app)
+    Ok(broadcast(&app))
 }
 
 #[tauri::command]
@@ -572,21 +600,19 @@ pub(crate) async fn install_update(app: AppHandle) -> UpdateStatus {
         if app.webview_windows().keys().any(|label| !state.0.lock().expect("update checks lock").prepared.contains(label)) {
             return Err("A new window opened during restart preparation. Try restarting again.".into());
         }
-        let (installed, channel) = {
-            let checks = state.0.lock().expect("update checks lock");
-            (checks.installed, checks.status.channel)
-        };
-        if !installed && selected_channel(&app) != channel {
-            return Err("The update channel changed. Check for updates again.".into());
-        }
         app.save_window_state(tauri_plugin_window_state::StateFlags::all()).map_err(|_| "Window positions could not be saved. Try again.")?;
         let package = {
             let mut checks = state.0.lock().expect("update checks lock");
             if checks.installed {
                 None
             } else {
+                if checks.status.channel != selected_channel(&app) || checks.bytes.is_none() {
+                    return Err("The update channel changed. Check for updates again.".into());
+                }
+                let update = checks.update.clone().ok_or("Check for updates again.")?;
+                let bytes = checks.bytes.clone().ok_or("Download the update again.")?;
                 checks.status.state = CheckState::Installing { release: release.clone() };
-                Some((checks.update.clone().ok_or("Check for updates again.")?, checks.bytes.clone().ok_or("Download the update again.")?))
+                Some((update, bytes))
             }
         };
         if let Some((update, bytes)) = package {
@@ -731,7 +757,11 @@ fn check_error(error: tauri_plugin_updater::Error) -> String {
     }
 }
 
-async fn fetch_update(app: &AppHandle, channel: Channel) -> Result<Option<(UpdateRelease, Update)>, String> {
+async fn fetch_update(
+    app: &AppHandle,
+    channel: Channel,
+    switching: bool,
+) -> Result<Option<(UpdateRelease, Update)>, String> {
     let builder = app
         .updater_builder()
         .endpoints(vec![
@@ -741,6 +771,9 @@ async fn fetch_update(app: &AppHandle, channel: Channel) -> Result<Option<(Updat
         .timeout(Duration::from_secs(20));
     #[cfg(feature = "updater-test")]
     let builder = test_transport::configure(builder, channel);
+    // Only the explicit switch route may offer an older or equal version.
+    let builder =
+        builder.version_comparator(move |current, remote| offer_version(remote.version.cmp(&current), switching));
     let updater = builder.build().map_err(check_error)?;
     let Some(update) = updater.check().await.map_err(check_error)? else {
         return Ok(None);
@@ -759,11 +792,144 @@ async fn fetch_update(app: &AppHandle, channel: Channel) -> Result<Option<(Updat
     })
 }
 
+fn offer_version(order: std::cmp::Ordering, switching: bool) -> bool {
+    switching || order.is_gt()
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SwitchCandidate {
+    id: u64,
+    channel: Channel,
+    current_version: String,
+    version: String,
+    older: bool,
+}
+
+fn switch_supported(channel: Channel, built: Channel, platform: Option<&str>) -> bool {
+    channel != built && platform.is_some_and(|p| channel.definition().platforms.iter().any(|v| v == p))
+}
+
+impl SwitchCandidate {
+    fn valid(&self, id: u64, revision: u64, selected: Channel, built: Channel, platform: Option<&str>) -> bool {
+        self.id == id && id == revision && self.channel == selected && switch_supported(selected, built, platform)
+    }
+}
+
+impl Checks {
+    fn accept_switch(&mut self, id: u64, selected: Channel, platform: Option<&str>) -> Result<(), String> {
+        let valid = self.pending_switch.as_ref().is_some_and(|(candidate, _, _)| {
+            candidate.valid(id, self.switch_revision, selected, Channel::built(), platform)
+        });
+        if self.running || self.installed || !valid {
+            return Err("The channel switch changed or expired. Choose Switch again.".into());
+        }
+        let (candidate, release, update) = self.pending_switch.take().expect("checked candidate");
+        self.update = Some(update);
+        self.status = UpdateStatus {
+            channel: candidate.channel,
+            checked_at: None,
+            state: CheckState::Available { release },
+        };
+        Ok(())
+    }
+
+    fn select_channel(&mut self, previous: Channel, selected: Channel) {
+        if previous != selected {
+            self.invalidate_switch();
+            if !self.running && !self.installed {
+                self.status = UpdateStatus::idle(selected);
+            }
+        }
+    }
+
+    fn invalidate_switch(&mut self) {
+        self.switch_revision += 1;
+        self.pending_switch = None;
+        if !self.installed && !matches!(self.status.state, CheckState::Installing { .. }) {
+            self.update = None;
+            self.bytes = None;
+            if !self.running {
+                self.status = UpdateStatus::idle(self.status.channel);
+            }
+        }
+    }
+}
+
+pub(crate) fn channel_changed(app: &AppHandle, previous: Channel, selected: Channel) {
+    app.state::<UpdateChecks>()
+        .0
+        .lock()
+        .expect("update checks lock")
+        .select_channel(previous, selected);
+}
+
+#[tauri::command]
+pub(crate) async fn prepare_channel_switch(app: AppHandle) -> Result<SwitchCandidate, String> {
+    let channel = selected_channel(&app);
+    if !switch_supported(channel, Channel::built(), tauri_plugin_updater::target().as_deref()) {
+        return Err("Select a different channel supported on this device.".into());
+    }
+    let state = app.state::<UpdateChecks>();
+    let revision = {
+        let mut checks = state.0.lock().expect("update checks lock");
+        if checks.bytes.is_some() || !checks.begin(channel) {
+            return Err("Finish the current update before switching channels.".into());
+        }
+        checks.switch_revision
+    };
+    broadcast(&app);
+    let result = fetch_update(&app, channel, true).await;
+    let outcome = {
+        let mut checks = state.0.lock().expect("update checks lock");
+        checks.running = false;
+        checks.status = UpdateStatus::idle(selected_channel(&app));
+        if checks.switch_revision != revision || selected_channel(&app) != channel {
+            Err("The update channel changed. Choose Switch again.".into())
+        } else {
+            result.and_then(|result| {
+                let (release, update) = result.ok_or("No package is available in this channel.")?;
+                let remote: tauri_plugin_updater::RemoteRelease = serde_json::from_value(update.raw_json.clone())
+                    .map_err(|_| "The update version could not be read.")?;
+                let candidate = SwitchCandidate {
+                    id: revision,
+                    channel,
+                    current_version: app.package_info().version.to_string(),
+                    version: release.version.clone(),
+                    older: remote.version < app.package_info().version,
+                };
+                checks.pending_switch = Some((candidate.clone(), release, update));
+                Ok(candidate)
+            })
+        }
+    };
+    broadcast(&app);
+    outcome
+}
+
+#[tauri::command]
+pub(crate) async fn confirm_channel_switch(app: AppHandle, id: u64) -> Result<UpdateStatus, String> {
+    download(app, Some(id)).await
+}
+
+#[tauri::command]
+pub(crate) fn cancel_channel_switch(app: AppHandle, id: u64) {
+    let state = app.state::<UpdateChecks>();
+    let mut checks = state.0.lock().expect("update checks lock");
+    if checks
+        .pending_switch
+        .as_ref()
+        .is_some_and(|(candidate, _, _)| candidate.id == id)
+    {
+        checks.pending_switch = None;
+    }
+}
+
 #[tauri::command]
 pub(crate) async fn check_updates(app: AppHandle) -> UpdateStatus {
     let channel = selected_channel(&app);
     let state = app.state::<UpdateChecks>();
-    let checking = {
+    let (checking, revision) = {
         let mut checks = state.0.lock().expect("update checks lock");
         if checks.status.channel == channel && checks.bytes.is_some() {
             return checks.status.clone();
@@ -771,27 +937,24 @@ pub(crate) async fn check_updates(app: AppHandle) -> UpdateStatus {
         if !checks.begin(channel) {
             return checks.status.clone();
         }
-        checks.status.clone()
+        (checks.status.clone(), checks.switch_revision)
     };
     let _ = app.emit("updates-changed", checking);
     let supported =
         tauri_plugin_updater::target().is_some_and(|target| channel.definition().platforms.contains(&target));
-    let (result, checked_at) = if supported {
-        match fetch_update(&app, channel).await {
+    let (result, checked_at, update) = if supported {
+        match fetch_update(&app, channel, false).await {
             Ok(update) => {
                 let at = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64;
-                (
-                    update.map_or(CheckState::Current, |(release, update)| {
-                        state.0.lock().expect("update checks lock").update = Some(update);
-                        CheckState::Available { release }
-                    }),
-                    Some(at),
-                )
+                match update {
+                    Some((release, update)) => (CheckState::Available { release }, Some(at), Some(update)),
+                    None => (CheckState::Current, Some(at), None),
+                }
             }
-            Err(message) => (CheckState::Failed { message }, None),
+            Err(message) => (CheckState::Failed { message }, None, None),
         }
     } else {
         let message = if channel == Channel::Preview {
@@ -804,18 +967,25 @@ pub(crate) async fn check_updates(app: AppHandle) -> UpdateStatus {
                 message: message.into(),
             },
             None,
+            None,
         )
     };
     let status = {
         let mut checks = state.0.lock().expect("update checks lock");
-        checks.finish(
-            selected_channel(&app),
-            UpdateStatus {
-                channel,
-                checked_at,
-                state: result,
-            },
-        );
+        let selected = selected_channel(&app);
+        if checks.switch_revision == revision && selected == channel {
+            checks.update = update;
+            checks.finish(
+                selected,
+                UpdateStatus {
+                    channel,
+                    checked_at,
+                    state: result,
+                },
+            );
+        } else {
+            checks.finish(selected, UpdateStatus::idle(selected));
+        }
         checks.status.clone()
     };
     let _ = app.emit("updates-changed", status.clone());
@@ -894,6 +1064,88 @@ mod tests {
             version: "0.1.551".into(),
             notes: None,
             page: "https://github.com/MrFreeZZZ/oxbow/releases/tag/v0.1.551".into(),
+        }
+    }
+
+    #[test]
+    fn ordinary_checks_only_offer_newer_semver_and_switches_allow_equal_or_older() {
+        for (version, newer) in [("0.1.750", false), ("2026.9.0-preview.749", false), ("2026.9.0", true)] {
+            let remote: tauri_plugin_updater::RemoteRelease = serde_json::from_value(json!({
+                "version": version, "platforms": {}
+            }))
+            .unwrap();
+            let current = "2026.9.0-preview.749".parse().unwrap();
+            let order = remote.version.cmp(&current);
+            assert_eq!(offer_version(order, false), newer);
+            assert!(offer_version(order, true));
+        }
+    }
+
+    #[test]
+    fn switch_confirmation_is_bound_to_candidate_revision_channel_and_platform() {
+        let candidate = SwitchCandidate {
+            id: 7,
+            channel: Channel::Release,
+            current_version: "2026.9.0-preview.749".into(),
+            version: "0.1.750".into(),
+            older: true,
+        };
+        assert!(candidate.valid(7, 7, Channel::Release, Channel::Preview, Some("darwin-aarch64")));
+        assert!(!candidate.valid(6, 7, Channel::Release, Channel::Preview, Some("darwin-aarch64")));
+        assert!(!candidate.valid(7, 8, Channel::Release, Channel::Preview, Some("darwin-aarch64")));
+        assert!(!candidate.valid(7, 7, Channel::Preview, Channel::Preview, Some("darwin-aarch64")));
+        assert!(!candidate.valid(7, 7, Channel::Release, Channel::Release, Some("darwin-aarch64")));
+        assert!(!candidate.valid(7, 7, Channel::Release, Channel::Preview, None));
+        assert!(!switch_supported(
+            Channel::Preview,
+            Channel::Release,
+            Some("darwin-x86_64")
+        ));
+        let mut checks = empty_checks();
+        assert!(checks.begin(Channel::Release));
+        assert!(!candidate.valid(
+            7,
+            checks.switch_revision,
+            Channel::Release,
+            Channel::Preview,
+            Some("darwin-aarch64")
+        ));
+        checks.running = false;
+        assert!(
+            checks
+                .accept_switch(7, Channel::Release, Some("darwin-aarch64"))
+                .is_err()
+        );
+        assert!(checks.update.is_none() && checks.bytes.is_none());
+    }
+
+    #[test]
+    fn changing_the_choice_of_the_same_channel_preserves_ready_updates() {
+        for built in [Channel::Release, Channel::Preview] {
+            let mut settings = Settings::new();
+            settings.insert("oxbow.updates.channel".into(), json!(built));
+            let previous = Channel::configured(&settings, built);
+            settings.insert("oxbow.updates.channel".into(), json!("auto"));
+            let selected = Channel::configured(&settings, built);
+            let mut checks = empty_checks();
+            checks.status.channel = built;
+            checks.status.state = CheckState::Ready { release: release() };
+            checks.bytes = Some(Arc::new(vec![1]));
+            let revision = checks.switch_revision;
+            checks.select_channel(previous, selected);
+            assert!(checks.bytes.is_some());
+            assert!(matches!(checks.status.state, CheckState::Ready { .. }));
+            assert_eq!(checks.switch_revision, revision);
+            let other = if built == Channel::Release {
+                Channel::Preview
+            } else {
+                Channel::Release
+            };
+            checks.select_channel(built, other);
+            checks.select_channel(other, built);
+            assert!(checks.bytes.is_none());
+            assert!(matches!(checks.status.state, CheckState::Idle));
+            assert_ne!(checks.switch_revision, revision);
         }
     }
 

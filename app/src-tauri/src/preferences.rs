@@ -123,6 +123,7 @@ async fn write_setting(
     let mut settings = read_for_write(&file)?;
     let previous_appearance = appearance(&settings);
     let value = edit(settings.get(&key))?;
+    let previous_channel = crate::updates::Channel::configured(&settings, crate::updates::Channel::built());
     if value.is_null() {
         settings.remove(&key);
     } else {
@@ -132,6 +133,11 @@ async fn write_setting(
         settings::write(&file, &settings)
     })
     .await?;
+    crate::updates::channel_changed(
+        app,
+        previous_channel,
+        crate::updates::Channel::configured(&settings, crate::updates::Channel::built()),
+    );
     let mut revision = session.settings.lock().expect("session lock");
     *revision += 1;
     apply_settings(app, session, &settings, previous_appearance != appearance(&settings));
@@ -615,6 +621,11 @@ fn settings_replaced(
     before: &serde_json::Map<String, Value>,
     after: &serde_json::Map<String, Value>,
 ) {
+    crate::updates::channel_changed(
+        app,
+        crate::updates::Channel::configured(before, crate::updates::Channel::built()),
+        crate::updates::Channel::configured(after, crate::updates::Channel::built()),
+    );
     *revision += 1;
     apply_settings(app, session, after, appearance(before) != appearance(after));
     let removed = before.keys().filter(|key| !after.contains_key(*key));

@@ -1509,6 +1509,14 @@ export interface UpdateInfo {
   canInstall: boolean;
 }
 
+export interface SwitchCandidate {
+  id: number;
+  channel: UpdateChannel;
+  currentVersion: string;
+  version: string;
+  older: boolean;
+}
+
 export interface UpdateRelease {
   version: string;
   notes: string | null;

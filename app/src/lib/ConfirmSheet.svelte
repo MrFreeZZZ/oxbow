@@ -540,7 +540,7 @@
 
       <!-- With "Show the git command" off, the commands stay out of the question; git's output
            still shows once it runs. -->
-      {#if (confirm.phase !== "ask" || prefs.get("oxbow.confirm.showCommand")) && !(request.local && !request.local.commands.length)}
+      {#if (confirm.phase !== "ask" || (confirm.commands.length > 0 && prefs.get("oxbow.confirm.showCommand"))) && !(request.local && !request.local.commands.length)}
       <div class="term" aria-label="Git command">
         <div class="bar">
           <span class="light"></span><span class="light"></span><span class="light"></span>

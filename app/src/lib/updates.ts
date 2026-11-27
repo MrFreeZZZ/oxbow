@@ -1,11 +1,26 @@
 import type { Option } from "./settingsRows";
-import type { UpdateChannel, UpdateInfo, UpdateStatus } from "./types";
+import type { UpdateChannel, UpdateInfo, UpdateStatus, SwitchCandidate } from "./types";
 
 export type ChannelChoice = "auto" | UpdateChannel;
 export const channelLabel = (channel: UpdateChannel) => channel === "release" ? "Release" : "Preview";
 
 export function selectedChannel(info: UpdateInfo | null, choice: ChannelChoice): UpdateChannel | null {
   return choice === "auto" ? info?.buildChannel ?? null : choice;
+}
+
+export function canSwitchChannel(info: UpdateInfo | null, choice: ChannelChoice): boolean {
+  const channel = selectedChannel(info, choice);
+  return !!info && !!channel && channel !== info.buildChannel && info.availableChannels.includes(channel);
+}
+
+export function switchConfirmation(candidate: SwitchCandidate) {
+  const label = `Switch to ${channelLabel(candidate.channel)}`;
+  return {
+    title: `${label}?`,
+    button: label,
+    body: [`Installed: ${candidate.currentVersion}. Available in ${channelLabel(candidate.channel)}: ${candidate.version}.`,
+      candidate.older ? " This version is older than your current build." : " The selected channel’s package will replace your current build."],
+  };
 }
 
 export function updateChannels(info: UpdateInfo | null, choice: ChannelChoice): Option[] {
@@ -53,7 +68,7 @@ export function updateNotice(info: UpdateInfo | null, choice: ChannelChoice, sta
   if (status.state === "installing") return { title: "Installing the update…", message: "Oxbow will restart when installation finishes.", error: false };
   if (status.state === "failed") return { title: "Couldn’t check for updates", message: status.message, error: true };
   if (status.state === "unsupported") return { title: "Updates unavailable on this device", message: status.message, error: false };
-  if (status.state === "available") return { title: `Oxbow ${status.release.version} is available`, message: info.canInstall ? `A newer ${channelLabel(channel)} build is available.` : "Install the package from the release page. In-app installation is unavailable for this build or package type.", error: false };
+  if (status.state === "available") return { title: `Oxbow ${status.release.version} is available`, message: info.canInstall ? `A ${status.checkedAt === null ? "" : "newer "}${channelLabel(channel)} build is available.` : "Install the package from the release page. In-app installation is unavailable for this build or package type.", error: false };
   const checked = status.checkedAt === null ? "" : ` Last checked at ${new Date(status.checkedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}.`;
   return { title: "No newer update available", message: `No newer ${channelLabel(channel)} build is available.${checked}`, error: false };
 }

@@ -4,7 +4,7 @@ import { confirm } from "./confirm.svelte";
 import { Latest } from "./latest";
 import { prefs } from "./prefs.svelte";
 import type { UpdateInfo, UpdateStatus } from "./types";
-import { channelUnavailable, selectedChannel, updateNotice } from "./updates";
+import { canSwitchChannel, channelLabel, channelUnavailable, selectedChannel, switchConfirmation, updateNotice } from "./updates";
 
 class Updates {
   info = $state<UpdateInfo | null>(null);
@@ -12,6 +12,7 @@ class Updates {
   problem = $state<string | null>(null);
   loading = $state(false);
   #loads = new Latest();
+  switching = $state(false);
 
   get choice() { return prefs.get("oxbow.updates.channel"); }
   get channel() { return selectedChannel(this.info, this.choice); }
@@ -27,6 +28,8 @@ class Updates {
     if (!this.available || this.busy) return null;
     return this.ready || this.installed ? "Restart" : "Update";
   }
+  get switchLabel() { return canSwitchChannel(this.info, this.choice) ? `Switch to ${channelLabel(this.channel!)}` : null; }
+  get canSwitch() { return !!this.switchLabel && this.canCheck && !this.switching; }
   get canDownload() { return this.info?.canInstall && !this.busy && !!this.available && !this.ready && !this.installed; }
 
   async refresh() {
@@ -56,6 +59,30 @@ class Updates {
       await this.refresh();
     } catch {
       this.status = { channel, state: "failed", message: "Oxbow could not start the update check. Try again.", checkedAt: null };
+    }
+  }
+
+  async switchChannel() {
+    if (!this.canSwitch) return;
+    this.switching = true;
+    let id: number | null = null;
+    try {
+      const candidate = await api.prepareChannelSwitch();
+      id = candidate.id;
+      let accepted: Promise<unknown> | null = null;
+      await confirm.run({
+        ...switchConfirmation(candidate), icon: "box", always: true,
+        background: () => {
+          accepted = api.confirmChannelSwitch(candidate.id).then((status) => { this.status = status; })
+            .catch((error) => confirm.fail(error));
+        },
+      });
+      if (accepted) await accepted;
+    } catch (error) { confirm.fail(error); }
+    finally {
+      if (id !== null) await api.cancelChannelSwitch(id).catch(() => {});
+      this.switching = false;
+      await this.refresh();
     }
   }
 
