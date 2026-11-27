@@ -6,6 +6,7 @@
   import { type ActivityItem } from "./activity.svelte";
   import ActivityPopover from "./ActivityPopover.svelte";
   import WhyPopover from "./WhyPopover.svelte";
+  import { lane } from "./format";
   import type { RemoteContext, SyncBlock, SyncFix } from "./remote";
   import type { History } from "./types";
 
@@ -14,6 +15,7 @@
 
   let {
     history,
+    color,
     remote,
     pullBlock,
     pushBlock,
@@ -25,6 +27,7 @@
     onFix,
   }: {
     history: History;
+    color: number;
     remote: RemoteContext;
     /** Why Pull or Push can't run now, if it can't. */
     pullBlock: SyncBlock | null;
@@ -88,7 +91,7 @@
     >
       <svg class="icon" viewBox="0 0 16 16"><path d="M8 2v9M4.5 7.5 8 11l3.5-3.5M3 14h10" /></svg>
       <!-- Old versions of commits rewritten here are nothing to pull. -->
-      {#if t?.behind && !t.rewritten}<span class="count">{t.behind}</span>{/if}
+      {#if t?.behind && !t.rewritten}<span class="count" style:color={lane(color)}>{t.behind}</span>{/if}
     </button>
     <button
       class="toolbar-control"
@@ -101,7 +104,7 @@
       title={why === "push" ? undefined : pushBlock ? `${pushBlock.title} · click for more` : t?.rewritten ? `Force push to ${t.remote}/${t.branch}: it has the old versions of commits you rewrote` : t && !t.gone ? `Push to ${t.remote}/${t.branch}` : `Publish ${history.head.branch} to ${remote.remote}`}
     >
       <svg class="icon" viewBox="0 0 16 16"><path d="M8 12V3M4.5 6.5 8 3l3.5 3.5M3 14h10" /></svg>
-      {#if t?.ahead}<span class="count">{t.ahead}</span>{:else if !t && history.head.branch && !remote.unread}<span class="count">Publish</span>{/if}
+      {#if t?.ahead}<span class="count" style:color={lane(color)}>{t.ahead}</span>{:else if !t && history.head.branch && !remote.unread}<span class="count">Publish</span>{/if}
     </button>
   </div>
   <ActivityPopover fix={onFixFetch} retry={onRetryFetch} settings={() => ((activity.open = false), api.openSettings())} reload={onReload} />

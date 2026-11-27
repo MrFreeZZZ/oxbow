@@ -2266,6 +2266,7 @@
           {#if history.remotes.length && remoteCtx}
             <SyncButtons
               {history}
+              color={headColor}
               remote={remoteCtx}
               {pullBlock}
               {pushBlock}
