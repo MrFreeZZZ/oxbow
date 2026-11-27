@@ -36,7 +36,7 @@ if [ ${#groups[@]} -eq 0 ] || [ "${groups[0]}" = auto ]; then
     grep -qE '^app/(src/|tests/|package|tsconfig|svelte\.config|vite\.config|index\.html)' <<<"$files" && groups+=(ui)
     grep -qE '^(crates/|Cargo\.|rust-toolchain\.toml|rustfmt\.toml)' <<<"$files" && groups+=(core)
     grep -qE '^(app/src-tauri/|Cargo\.|rust-toolchain\.toml)' <<<"$files" && groups+=(tauri)
-    grep -qE '^(app/src-tauri/update-channels\.json|\.github/workflows/|scripts/(check\.sh|release\.|publish-release\.|updater-test\.))' <<<"$files" && groups+=(release)
+    grep -qE '^(app/src-tauri/update-channels\.json|\.github/workflows/|scripts/(check\.sh|release\.|versioning\.|publish-release\.|updater-test\.))' <<<"$files" && groups+=(release)
     if [ ${#groups[@]} -eq 0 ]; then
       echo "check: nothing to check (no relevant files changed against the development base)"
       exit 0

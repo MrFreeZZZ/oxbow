@@ -6,6 +6,8 @@ import { appendFileSync, copyFileSync, mkdirSync, readFileSync, readdirSync, wri
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { previewPattern, stablePattern, resolvePublished } from "./versioning.mjs";
+
 export const channels = JSON.parse(readFileSync(new URL("../app/src-tauri/update-channels.json", import.meta.url), "utf8"));
 export const platforms = Object.fromEntries(Object.entries(channels).map(([name, definition]) => [name, definition.platforms]));
 const matrix = [
@@ -21,7 +23,7 @@ function requireValue(ok, message) {
 
 export function identity(channel, version, sha, tag) {
   requireValue(Object.hasOwn(platforms, channel), "Unknown distribution channel");
-  requireValue(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version), "Invalid distribution version");
+  requireValue(stablePattern.test(version) || (channel === "preview" && previewPattern.test(version)), "Invalid distribution version");
   requireValue(/^[a-f0-9]{40}$/.test(sha), "Distribution must use a full commit SHA");
   const expected = channel === "release" ? `v${version}` : `preview-${sha}`;
   requireValue(tag === expected, `Expected distribution tag ${expected}`);
@@ -149,16 +151,24 @@ export function verifyBuildMetadata(metadata, info, platform, allowModified = fa
 
 function main() {
   const command = process.argv[2];
-  if (command === "resolve") {
-    const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
-    const sha = git("rev-parse", "HEAD");
-    const base = JSON.parse(readFileSync("app/src-tauri/tauri.conf.json", "utf8")).version.split(".").slice(0, 2).join(".");
-    const version = `${base}.${git("rev-list", "--count", "HEAD")}`;
-    const channel = process.env.CHANNEL;
-    const tag = channel === "preview" ? `preview-${sha}` : process.env.RELEASE_TAG;
-    identity(channel, version, sha, tag);
-    const outputs = { sha, version, tag, epoch: git("show", "-s", "--format=%ct", "HEAD"), matrix: JSON.stringify({ include: matrix.filter((item) => platforms[channel].includes(item.platform)) }) };
-    appendFileSync(process.env.GITHUB_OUTPUT, Object.entries(outputs).map(([k, v]) => `${k}=${v}\n`).join(""));
+  if (command === "prepare" || command === "resolve") {
+    const channel = command === "prepare" ? "release" : process.env.CHANNEL;
+    const outputs = resolvePublished(channel, command === "prepare" ? process.argv[3] : undefined, command === "prepare" ? undefined : process.env.RELEASE_TAG);
+    if (command === "prepare") {
+      console.log(JSON.stringify(outputs, null, 2));
+      return;
+    }
+    outputs.planned_version = outputs.version;
+    // shortcut: legacy Preview packaging until step 2 supports prerelease macOS bundle identity.
+    if (channel === "preview" && process.env.PREVIEW_VERSION_FORMAT === "legacy") {
+      const base = JSON.parse(readFileSync("app/src-tauri/tauri.conf.json", "utf8")).version.split(".").slice(0, 2).join(".");
+      outputs.version = `${base}.${execFileSync("git", ["rev-list", "--count", "HEAD"], { encoding: "utf8" }).trim()}`;
+    }
+    identity(channel, outputs.version, outputs.sha, outputs.tag);
+    outputs.epoch = execFileSync("git", ["show", "-s", "--format=%ct", "HEAD"], { encoding: "utf8" }).trim();
+    outputs.matrix = JSON.stringify({ include: matrix.filter((item) => platforms[channel].includes(item.platform)) });
+    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, Object.entries(outputs).map(([k, v]) => `${k}=${v}\n`).join(""));
+    console.log(JSON.stringify(outputs, null, 2));
   } else if (command === "config") {
     // Only distribution jobs require a private key. Normal PR/local builds remain unsigned.
     const config = buildConfig(environmentInfo());

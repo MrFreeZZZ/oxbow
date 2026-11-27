@@ -28,6 +28,12 @@ jobs:
     outputs:
       sha: ${{ steps.identity.outputs.sha }}
       version: ${{ steps.identity.outputs.version }}
+      planned_version: ${{ steps.identity.outputs.planned_version }}
+      base_release: ${{ steps.identity.outputs.base_release }}
+      base_tag: ${{ steps.identity.outputs.base_tag }}
+      base_commit: ${{ steps.identity.outputs.base_commit }}
+      base_source: ${{ steps.identity.outputs.base_source }}
+      commits_since_release: ${{ steps.identity.outputs.commits_since_release }}
       tag: ${{ steps.identity.outputs.tag }}
       epoch: ${{ steps.identity.outputs.epoch }}
       matrix: ${{ steps.identity.outputs.matrix }}
@@ -46,6 +52,9 @@ jobs:
       - name: Resolve and validate distribution identity
         id: identity
         env:
+          GH_TOKEN: ${{ github.token }}
+          # Remove in step 2 once prerelease macOS packaging and build identity are ready.
+          PREVIEW_VERSION_FORMAT: legacy
           CHANNEL: ${{ inputs.channel }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: node scripts/release.mjs resolve

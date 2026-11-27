@@ -6,13 +6,15 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { identity, platforms, verifyArtifact } from "./release.mjs";
+import { previewPattern, stablePattern } from "./versioning.mjs";
 
 export function previewDecision(current, next) {
   if (!current) return "advance";
   if (current.channel !== "preview") throw new Error("Existing Preview index has an unexpected channel");
   const parse = (v) => {
-    if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(v)) throw new Error("Invalid Preview version");
-    return v.split(".").map(BigInt);
+    if (previewPattern.test(v)) return v.split(/[.-]/).filter((part) => part !== "preview").map(BigInt);
+    if (stablePattern.test(v)) return [...v.split(".").map(BigInt), -1n];
+    throw new Error("Invalid Preview version");
   };
   const a = parse(current.version), b = parse(next.version);
   for (let i = 0; i < a.length; i++) {
@@ -74,7 +76,8 @@ function main() {
       // Recover a retry that published the snapshot but failed before updating the index.
       gh("release", "download", info.tag, "--repo", repository, "--dir", work);
       manifest = JSON.parse(readFileSync(join(work, "latest.json"), "utf8"));
-      validatePublished(manifest, info, repository, work, key);
+      const snapshot = identity(info.channel, manifest.version, info.sha, info.tag);
+      validatePublished(manifest, snapshot, repository, work, key);
       console.log("Reusing the previously published, verified Preview snapshot.");
     } else {
       const title = info.channel === "preview" ? `Oxbow ${info.version} — Preview (${info.sha.slice(0, 7)})` : `Oxbow ${info.version}`;

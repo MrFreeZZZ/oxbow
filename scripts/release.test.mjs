@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { buildConfig, collect, identity, manifest, platforms, verifyArtifact, verifyBuildMetadata } from "./release.mjs";
 import { previewDecision, validatePublished } from "./publish-release.mjs";
+import { migration, nextVersion, publishedBase, resolveVersions } from "./versioning.mjs";
 
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const id = Buffer.from("0102030405060708", "hex");
@@ -259,4 +260,172 @@ test("a delayed Preview run leaves a newer channel index untouched", (t) => {
   const delayed = f.run(); assert.equal(delayed.status, 0, delayed.stderr);
   assert.equal(f.state().calls.filter((a) => a[1] === "upload" && a[2] === "preview").length, before);
   assert.deepEqual(JSON.parse(readFileSync(path)), newer);
+});
+
+test("year-based planned releases and hotfixes preserve the published series", () => {
+  assert.equal(nextVersion("2026.8.0", "planned", 2026), "2026.9.0");
+  assert.equal(nextVersion("2026.8.0", "hotfix", 2026), "2026.8.1");
+  assert.equal(nextVersion("2026.8.3", "planned", 2027), "2027.1.0");
+  assert.equal(nextVersion("2026.8.3", "hotfix", 2027), "2026.8.4");
+  assert.throws(() => nextVersion("2026.8.0", undefined, 2026), /explicitly/);
+  assert.throws(() => nextVersion("2026.8.0", "planned", 2025), /year/);
+});
+
+const published = { tag_name: migration.tag, published_at: "2026-11-27T07:32:00Z", draft: false, prerelease: false };
+function versionGit(...args) {
+  const command = args.join(" ");
+  if (command === `rev-parse ${migration.tag}^{commit}`) return migration.commit;
+  if (command === "rev-parse HEAD") return sha;
+  if (command === "rev-list --count HEAD") return "1009";
+  if (command === `merge-base --is-ancestor ${migration.source} HEAD`) return "";
+  if (command === `rev-list --count ${migration.source}..HEAD`) return "12";
+  throw new Error(`Unexpected git command: ${command}`);
+}
+
+test("migration is fixed and Preview uses total HEAD count, with a separate Release distance", () => {
+  const result = resolveVersions({ channel: "preview", year: 2026, release: published, git: versionGit });
+  assert.equal(result.version, "2026.9.0-preview.1009");
+  assert.equal(result.tag, `preview-${sha}`);
+  assert.equal(result.base_release, "2026.8.0");
+  assert.equal(result.base_source, migration.source);
+  assert.equal(result.commits_since_release, "12");
+  assert.equal(resolveVersions({ channel: "preview", year: 2027, release: published, git: versionGit }).version, "2027.1.0-preview.1009");
+  assert.throws(() => publishedBase(published, () => sha), /Migration tag moved/);
+});
+
+test("only published stable Releases can be the base, never a draft or bare tag", () => {
+  for (const release of [null, { ...published, draft: true }, { ...published, prerelease: true }, { ...published, published_at: null }, { tag_name: "v2026.99.0" }]) {
+    assert.throws(() => publishedBase(release, versionGit), /published stable/);
+  }
+});
+
+test("Release preparation requires a choice and tagged builds must match a possible next version", () => {
+  const options = { channel: "release", year: 2026, release: published, git: versionGit };
+  assert.equal(resolveVersions({ ...options, kind: "planned" }).version, "2026.9.0");
+  assert.equal(resolveVersions({ ...options, kind: "hotfix" }).version, "2026.8.1");
+  assert.equal(resolveVersions({ ...options, tag: "v2026.8.1" }).release_kind, "hotfix");
+  assert.equal(resolveVersions({ ...options, tag: "v2026.9.0" }).release_kind, "planned");
+  assert.throws(() => resolveVersions(options), /explicitly/);
+  assert.throws(() => resolveVersions({ ...options, tag: "v2026.10.0" }), /explicitly/);
+  assert.throws(() => resolveVersions({ ...options, kind: "planned", tag: "v2026.8.1" }), /differs/);
+});
+
+test("a published promotion merge uses its advanced source off main", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "oxbow-version-history-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const git = (...args) => {
+    const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git("init", "-b", "main");
+  git("config", "user.name", "Test"); git("config", "user.email", "test@example.com");
+  git("commit", "--allow-empty", "-m", "Initial");
+  git("checkout", "-b", "preview"); git("commit", "--allow-empty", "-m", "Advanced source");
+  const source = git("rev-parse", "HEAD");
+  git("checkout", "main"); git("merge", "--no-ff", "preview", "-m", "Promote");
+  git("tag", "v2026.9.0");
+  const commit = git("rev-parse", "HEAD");
+  git("checkout", "preview"); git("commit", "--allow-empty", "-m", "Next change");
+  const result = resolveVersions({ channel: "preview", year: 2026, release: { ...published, tag_name: "v2026.9.0" }, git });
+  assert.equal(result.base_commit, commit);
+  assert.equal(result.base_source, source);
+  assert.equal(result.commits_since_release, "1");
+  assert.equal(result.version, "2026.10.0-preview.3");
+});
+
+test("Preview index migrates from numeric versions and compares prerelease ordinals numerically", () => {
+  const current = { channel: "preview", version: "0.1.999", commit: sha };
+  const next = { ...current, version: "2026.9.0-preview.1009" };
+  assert.equal(previewDecision(current, next), "advance");
+  assert.equal(previewDecision(next, current), "keep-newer");
+  assert.equal(previewDecision(next, { ...next, version: "2026.9.0-preview.99" }), "keep-newer");
+  assert.equal(previewDecision(next, { ...next, version: "2026.9.0-preview.1010" }), "advance");
+  assert.equal(previewDecision(next, { ...next, version: "2027.1.0-preview.1020" }), "advance");
+  assert.equal(previewDecision(next, next), "unchanged");
+  assert.throws(() => previewDecision(next, { ...next, commit: "b".repeat(40) }), /same Preview version/);
+  assert.throws(() => previewDecision(next, { ...next, version: "2026.9.0-preview.01" }), /Invalid Preview/);
+  identity("preview", next.version, sha, `preview-${sha}`);
+  assert.throws(() => identity("release", next.version, sha, `v${next.version}`), /Invalid distribution/);
+});
+
+test("CLI resolves one published snapshot per run and preparation writes no output files", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "oxbow-version-cli-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const bin = join(root, "bin"); mkdirSync(bin);
+  const responses = {
+    [`rev-parse ${migration.tag}^{commit}`]: migration.commit,
+    "rev-parse HEAD": sha,
+    "rev-list --count HEAD": "1009",
+    [`merge-base --is-ancestor ${migration.source} HEAD`]: "",
+    [`rev-list --count ${migration.source}..HEAD`]: "12",
+    "show -s --format=%ct HEAD": "1795760000",
+  };
+  writeFileSync(join(bin, "git"), `#!/usr/bin/env node\nconst values = ${JSON.stringify(responses)}; const key = process.argv.slice(2).join(' '); if (!(key in values)) process.exit(2); console.log(values[key]);\n`);
+  writeFileSync(join(bin, "gh"), `#!/usr/bin/env node\nconst fs = require('node:fs'); fs.appendFileSync(${JSON.stringify(join(root, "calls"))}, JSON.stringify(process.argv.slice(2))+'\\n'); console.log(${JSON.stringify(JSON.stringify(published))});\n`);
+  for (const name of ["git", "gh"]) chmodSync(join(bin, name), 0o755);
+  const output = join(root, "output");
+  writeFileSync(output, "sentinel\n");
+  const script = resolve(dirname(new URL(import.meta.url).pathname), "release.mjs");
+  const run = (args, extra = {}) => {
+    writeFileSync(join(root, "calls"), "");
+    const result = spawnSync(process.execPath, [script, ...args], { cwd: root, encoding: "utf8", env: {
+      ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_OUTPUT: output, GITHUB_REPOSITORY: "MrFreeZZZ/oxbow", ...extra,
+    } });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(readFileSync(join(root, "calls"), "utf8").trim().split("\n").map(JSON.parse), [["api", "repos/MrFreeZZZ/oxbow/releases/latest"]]);
+    return JSON.parse(result.stdout);
+  };
+  const year = new Date().getUTCFullYear();
+  const planned = year === 2026 ? "2026.9.0" : `${year}.1.0`;
+  assert.equal(run(["prepare", "planned"]).version, planned);
+  assert.equal(run(["prepare", "hotfix"]).version, "2026.8.1");
+  assert.equal(readFileSync(output, "utf8"), "sentinel\n");
+  const result = run(["resolve"], { CHANNEL: "preview", PREVIEW_VERSION_FORMAT: "" });
+  assert.equal(result.version, `${planned}-preview.1009`);
+  assert.equal(run(["resolve"], { CHANNEL: "release", RELEASE_TAG: "v2026.8.1" }).version, "2026.8.1");
+  mkdirSync(join(root, "app/src-tauri"), { recursive: true });
+  writeFileSync(join(root, "app/src-tauri/tauri.conf.json"), JSON.stringify({ version: "0.1.0" }));
+  const legacy = run(["resolve"], { CHANNEL: "preview", PREVIEW_VERSION_FORMAT: "legacy" });
+  assert.equal(legacy.version, "0.1.1009");
+  assert.equal(legacy.planned_version, `${planned}-preview.1009`);
+  assert.match(readFileSync(output, "utf8"), /base_release=2026.8.0\n/);
+});
+
+test("Preview recovery uses the immutable snapshot version after the calculated version changes", (t) => {
+  const f = publisher(t, "preview");
+  assert.equal(f.run({ FAIL_INDEX_ONCE: "1" }).status, 1);
+  const snapshot = JSON.parse(readFileSync(join(f.root, `remote-${f.info.tag}/latest.json`)));
+  const before = f.state().calls.filter((a) => a[1] === "upload" && a[2] === f.info.tag).length;
+  const nextVersion = "2027.1.0-preview.550";
+  const next = structuredClone(snapshot);
+  next.version = nextVersion;
+  for (const entry of Object.values(next.platforms)) entry.signature = signature(data, nextVersion);
+  writeFileSync(join(f.directory, "latest.json"), JSON.stringify(next));
+  const retry = f.run({ RELEASE_VERSION: nextVersion });
+  assert.equal(retry.status, 0, retry.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(join(f.root, "remote-preview/latest.json"))), snapshot);
+  assert.equal(f.state().calls.filter((a) => a[1] === "upload" && a[2] === f.info.tag).length, before);
+  // Compare the saved snapshot to the index, even when the recalculated version would advance it.
+  const index = { ...snapshot, version: "2026.9.0-preview.550", commit: "b".repeat(40) };
+  writeFileSync(join(f.root, "remote-preview/latest.json"), JSON.stringify(index));
+  const indexUploads = f.state().calls.filter((a) => a[1] === "upload" && a[2] === "preview").length;
+  assert.equal(f.run({ RELEASE_VERSION: nextVersion }).status, 0);
+  assert.deepEqual(JSON.parse(readFileSync(join(f.root, "remote-preview/latest.json"))), index);
+  assert.equal(f.state().calls.filter((a) => a[1] === "upload" && a[2] === "preview").length, indexUploads);
+});
+
+test("reused Preview snapshots still require their own valid version, exact SHA, channel and signature", (t) => {
+  for (const [field, value] of [["version", "invalid"], ["version", "0.1.551"], ["commit", sha.slice(0, 7)], ["commit", "b".repeat(40)], ["channel", "release"]]) {
+    const f = publisher(t, "preview");
+    assert.equal(f.run({ FAIL_INDEX_ONCE: "1" }).status, 1);
+    const path = join(f.root, `remote-${f.info.tag}/latest.json`);
+    const snapshot = JSON.parse(readFileSync(path));
+    writeFileSync(path, JSON.stringify({ ...snapshot, [field]: value }));
+    const uploads = f.state().calls.filter((a) => a[1] === "upload").length;
+    const retry = f.run();
+    assert.equal(retry.status, 1, `${field}: ${value}`);
+    assert.match(retry.stderr, /Invalid distribution version|Published build identity|Signature version/);
+    assert.equal(f.state().calls.filter((a) => a[1] === "upload").length, uploads);
+  }
 });
