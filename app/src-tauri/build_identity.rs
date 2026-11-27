@@ -15,15 +15,20 @@ impl BuildIdentity<'_> {
             return Err("OXBOW_BUILD_CHANNEL must be release or preview".into());
         }
         if let Some(version) = self.expected_version {
-            let parts: Vec<_> = version.split('.').collect();
-            if parts.len() != 3
-                || parts.iter().any(|part| {
-                    !part.bytes().all(|c| c.is_ascii_digit())
-                        || part.parse::<u64>().is_err()
-                        || (part.len() > 1 && part.starts_with('0'))
-                })
+            let (core, preview) = version
+                .split_once("-preview.")
+                .map_or((version, None), |(v, n)| (v, Some(n)));
+            let numeric = |part: &str| {
+                !part.is_empty()
+                    && part.bytes().all(|c| c.is_ascii_digit())
+                    && part.parse::<u64>().is_ok()
+                    && (part.len() == 1 || !part.starts_with('0'))
+            };
+            if core.split('.').count() != 3
+                || !core.split('.').all(numeric)
+                || preview.is_some_and(|n| channel != "preview" || !numeric(n))
             {
-                return Err("OXBOW_BUILD_VERSION must be a numeric SemVer version".into());
+                return Err("OXBOW_BUILD_VERSION must be a stable or Preview SemVer version".into());
             }
             if self.version != version {
                 return Err(format!(
@@ -44,6 +49,22 @@ impl BuildIdentity<'_> {
         }
         Ok(channel)
     }
+}
+
+pub fn validate_release_context(base: &str, distance: &str, required: bool) -> Result<(), String> {
+    if !required && base.is_empty() && distance.is_empty() {
+        return Ok(());
+    }
+    let numeric = |part: &str| {
+        !part.is_empty()
+            && part.bytes().all(|c| c.is_ascii_digit())
+            && part.parse::<u64>().is_ok()
+            && (part.len() == 1 || !part.starts_with('0'))
+    };
+    if base.split('.').count() != 3 || !base.split('.').all(numeric) || !numeric(distance) {
+        return Err("Builds require a resolved numeric base Release and commit distance".into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -89,7 +110,15 @@ mod tests {
     #[test]
     fn versions_and_channels_are_strictly_validated() {
         let mut build = distribution();
-        for version in ["0.1.550-preview", "0.1.0550", "0.1", "0.1.+1", "0.1.-1"] {
+        for version in [
+            "0.1.550-preview",
+            "2026.9.0-preview.01",
+            "2026.9.0-beta.1",
+            "0.1.0550",
+            "0.1",
+            "0.1.+1",
+            "0.1.-1",
+        ] {
             build.expected_version = Some(version);
             build.version = version;
             assert!(build.validate().is_err(), "{version}");
@@ -97,6 +126,33 @@ mod tests {
         let mut build = distribution();
         build.channel = Some("nightly");
         assert!(build.validate().is_err());
+    }
+
+    #[test]
+    fn preview_preserves_the_full_semver() {
+        let mut build = distribution();
+        build.version = "2026.9.0-preview.748";
+        build.expected_version = Some(build.version);
+        build.channel = Some("preview");
+        assert_eq!(build.validate().unwrap(), "preview");
+        build.channel = Some("release");
+        assert!(build.validate().is_err());
+    }
+
+    #[test]
+    fn about_metadata_requires_both_resolved_values() {
+        assert!(validate_release_context("", "", false).is_ok());
+        assert!(validate_release_context("2026.8.0", "52", true).is_ok());
+        for (base, distance) in [
+            ("", ""),
+            ("2026.8.0", ""),
+            ("", "52"),
+            ("2026.8.0-preview.1", "52"),
+            ("2026.08.0", "52"),
+            ("2026.8.0", "+1"),
+        ] {
+            assert!(validate_release_context(base, distance, true).is_err());
+        }
     }
 
     #[test]

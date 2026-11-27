@@ -1500,6 +1500,9 @@ export interface UpdateInfo {
   version: string;
   commit: string;
   buildChannel: UpdateChannel;
+  built: string;
+  baseRelease: string;
+  commitsSinceRelease: number | null;
   channel: UpdateChannel;
   platform: string | null;
   availableChannels: UpdateChannel[];

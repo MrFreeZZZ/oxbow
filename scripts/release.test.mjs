@@ -5,7 +5,7 @@ import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
-import { buildConfig, collect, identity, manifest, platforms, verifyArtifact, verifyBuildMetadata } from "./release.mjs";
+import { buildConfig, macInfoPlist, verifyMacVersions, collect, identity, manifest, platforms, verifyArtifact, verifyBuildMetadata } from "./release.mjs";
 import { previewDecision, validatePublished } from "./publish-release.mjs";
 import { migration, nextVersion, publishedBase, resolveVersions } from "./versioning.mjs";
 
@@ -59,7 +59,7 @@ test("signed data, public key and version must all match", () => {
   assert.throws(() => verifyArtifact(data, sig, wrongKey, "0.1.550"), /verification failed/);
 });
 
-test("build configurations bind numeric versions and the correct channel endpoint", () => {
+test("build configurations bind full versions and the correct channel endpoint", () => {
   for (const channel of ["release", "preview"]) {
     const info = identity(channel, "0.1.550", sha, channel === "release" ? "v0.1.550" : `preview-${sha}`);
     const config = buildConfig(info);
@@ -76,6 +76,10 @@ test("the built executable must match the package version, channel, architecture
   const info = identity("preview", "0.1.550", sha, `preview-${sha}`);
   const metadata = { version: info.version, commit: sha.slice(0, 7), buildChannel: "preview", channel: "preview", platform: "darwin-aarch64" };
   verifyBuildMetadata(metadata, info, "darwin-aarch64");
+  const resolved = { ...info, baseRelease: "2026.8.0", commitsSinceRelease: "52" };
+  verifyBuildMetadata({ ...metadata, baseRelease: "2026.8.0", commitsSinceRelease: 52 }, resolved, "darwin-aarch64");
+  assert.throws(() => verifyBuildMetadata({ ...metadata, baseRelease: "2026.7.0", commitsSinceRelease: 52 }, resolved, "darwin-aarch64"), /base Release/);
+  assert.throws(() => verifyBuildMetadata({ ...metadata, baseRelease: "2026.8.0", commitsSinceRelease: 51 }, resolved, "darwin-aarch64"), /distance/);
   for (const [field, value] of [["version", "0.1.0"], ["buildChannel", "release"], ["platform", "darwin-x86_64"], ["commit", "bbbbbbb"], ["commit", `${sha.slice(0, 7)}, modified`]]) {
     assert.throws(() => verifyBuildMetadata({ ...metadata, [field]: value }, info, "darwin-aarch64"));
   }
@@ -381,14 +385,10 @@ test("CLI resolves one published snapshot per run and preparation writes no outp
   assert.equal(run(["prepare", "planned"]).version, planned);
   assert.equal(run(["prepare", "hotfix"]).version, "2026.8.1");
   assert.equal(readFileSync(output, "utf8"), "sentinel\n");
-  const result = run(["resolve"], { CHANNEL: "preview", PREVIEW_VERSION_FORMAT: "" });
+  const result = run(["resolve"], { CHANNEL: "preview" });
   assert.equal(result.version, `${planned}-preview.1009`);
   assert.equal(run(["resolve"], { CHANNEL: "release", RELEASE_TAG: "v2026.8.1" }).version, "2026.8.1");
-  mkdirSync(join(root, "app/src-tauri"), { recursive: true });
-  writeFileSync(join(root, "app/src-tauri/tauri.conf.json"), JSON.stringify({ version: "0.1.0" }));
-  const legacy = run(["resolve"], { CHANNEL: "preview", PREVIEW_VERSION_FORMAT: "legacy" });
-  assert.equal(legacy.version, "0.1.1009");
-  assert.equal(legacy.planned_version, `${planned}-preview.1009`);
+  assert.equal(result.planned_version, result.version);
   assert.match(readFileSync(output, "utf8"), /base_release=2026.8.0\n/);
 });
 
@@ -428,4 +428,20 @@ test("reused Preview snapshots still require their own valid version, exact SHA,
     assert.match(retry.stderr, /Invalid distribution version|Published build identity|Signature version/);
     assert.equal(f.state().calls.filter((a) => a[1] === "upload").length, uploads);
   }
+});
+
+test("Preview packaging keeps signed SemVer while macOS plist stays numeric and keeps permissions", () => {
+  const version = "2026.9.0-preview.748";
+  const info = identity("preview", version, sha, `preview-${sha}`);
+  const config = buildConfig(info);
+  assert.equal(config.version, version);
+  assert.equal(config.bundle.macOS.bundleVersion, "2026.9.0");
+  const plist = macInfoPlist(version);
+  assert.match(plist, /NSAppleEventsUsageDescription/);
+  assert.match(plist, /CFBundleShortVersionString<\/key><string>2026\.9\.0<\/string>/);
+  verifyMacVersions("2026.9.0", "2026.9.0", info);
+  assert.throws(() => verifyMacVersions(version, "2026.9.0", info));
+  assert.throws(() => verifyMacVersions("2026.9.0", "2026.9.1", info));
+  verifyArtifact(data, signature(data, version), key, version);
+  assert.throws(() => verifyArtifact(data, signature(data, version), key, "2026.9.0"));
 });

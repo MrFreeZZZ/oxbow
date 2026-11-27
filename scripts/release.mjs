@@ -2,7 +2,8 @@
 // implementations to verify the Minisign format used by Tauri before publishing anything.
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, copyFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -81,7 +82,6 @@ export function collect(directory, destination, platform, info, key = publicKey(
     source = one(join(directory, "macos"), ".app.tar.gz");
     filename = `${prefix}.app.tar.gz`;
     const zip = join(destination, `${prefix}.zip`);
-    execFileSync("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", join(directory, "macos", "Oxbow.app"), zip]);
     installers.push(basename(zip));
   } else if (platform.startsWith("linux-")) {
     source = one(join(directory, "appimage"), ".AppImage");
@@ -95,6 +95,15 @@ export function collect(directory, destination, platform, info, key = publicKey(
   const signature = readFileSync(`${source}.sig`, "utf8").trim();
   const data = readFileSync(source);
   verifyArtifact(data, signature, key, info.version);
+  if (platform.startsWith("darwin-")) {
+    const extracted = mkdtempSync(join(tmpdir(), "oxbow-package-"));
+    try {
+      execFileSync("tar", ["-xzf", resolve(source), "-C", extracted]);
+      const app = join(extracted, "Oxbow.app");
+      verifyMacPackage(app, info, platform, process.env.OXBOW_VERIFY_ALLOW_MODIFIED === "1");
+      execFileSync("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", app, join(destination, `${prefix}.zip`)]);
+    } finally { rmSync(extracted, { recursive: true, force: true }); }
+  }
   copyFileSync(source, join(destination, filename));
   copyFileSync(`${source}.sig`, join(destination, `${filename}.sig`));
   const entry = { ...info, platform, filename, installers, sha256: createHash("sha256").update(data).digest("hex") };
@@ -128,16 +137,30 @@ export function manifest(directory, info, repository, notes, key = publicKey()) 
 }
 
 function environmentInfo() {
-  return identity(process.env.CHANNEL, process.env.RELEASE_VERSION, process.env.SOURCE_SHA, process.env.RELEASE_TAG);
+  return { ...identity(process.env.CHANNEL, process.env.RELEASE_VERSION, process.env.SOURCE_SHA, process.env.RELEASE_TAG),
+    baseRelease: process.env.OXBOW_BASE_RELEASE, commitsSinceRelease: process.env.OXBOW_COMMITS_SINCE_RELEASE };
 }
 
 export function buildConfig(info) {
   identity(info.channel, info.version, info.sha, info.tag);
   return {
     version: info.version,
-    bundle: { createUpdaterArtifacts: true },
+    bundle: { createUpdaterArtifacts: true, macOS: { bundleVersion: info.version.split("-")[0], infoPlist: resolve("app/release-Info.plist") } },
     plugins: { updater: { endpoints: [channels[info.channel].endpoint] } },
   };
+}
+
+// Merge version overrides into the existing plist so automation permissions survive packaging.
+export function macInfoPlist(version, source = readFileSync(new URL("../app/src-tauri/Info.plist", import.meta.url), "utf8")) {
+  requireValue(stablePattern.test(version) || previewPattern.test(version), "Invalid macOS version");
+  const numeric = version.split("-")[0];
+  return source.replace(/\s*<key>CFBundle(?:ShortVersionString|Version)<\/key>\s*<string>[^<]*<\/string>/g, "")
+    .replace("</dict>", `<key>CFBundleShortVersionString</key><string>${numeric}</string>\n<key>CFBundleVersion</key><string>${numeric}</string>\n</dict>`);
+}
+
+export function verifyMacVersions(shortVersion, bundleVersion, info) {
+  const numeric = info.version.split("-")[0];
+  requireValue(shortVersion === numeric && bundleVersion === numeric, "macOS numeric bundle versions differ from distribution version");
 }
 
 export function verifyBuildMetadata(metadata, info, platform, allowModified = false) {
@@ -146,7 +169,23 @@ export function verifyBuildMetadata(metadata, info, platform, allowModified = fa
   requireValue(metadata.platform === platform, "Executable architecture differs from the package target");
   const commit = metadata.commit.split(",")[0];
   requireValue(/^[a-f0-9]{7,40}$/.test(commit) && info.sha.startsWith(commit), "Executable was built from another commit");
+  if (info.baseRelease !== undefined) requireValue(metadata.baseRelease === info.baseRelease, "Executable base Release differs from resolve");
+  if (info.commitsSinceRelease !== undefined) requireValue(String(metadata.commitsSinceRelease) === String(info.commitsSinceRelease), "Executable commit distance differs from resolve");
   requireValue(allowModified || !metadata.commit.includes(","), "Distribution executable contains uncommitted changes");
+}
+
+export function verifyMacPackage(app, info, platform, allowModified = false) {
+  const plist = join(app, "Contents/Info.plist");
+  const field = (key) => execFileSync("plutil", ["-extract", key, "raw", "-o", "-", plist], { encoding: "utf8" }).trim();
+  verifyMacVersions(field("CFBundleShortVersionString"), field("CFBundleVersion"), info);
+  requireValue(field("NSAppleEventsUsageDescription").length > 0, "Missing macOS automation permission description");
+  const binary = join(app, "Contents/MacOS/oxbow");
+  const arch = execFileSync("lipo", ["-archs", binary], { encoding: "utf8" }).trim();
+  requireValue(arch === (platform === "darwin-aarch64" ? "arm64" : "x86_64"), "macOS executable architecture mismatch");
+  execFileSync("codesign", ["--verify", "--deep", "--strict", app], { stdio: "pipe" });
+  if (platform === `darwin-${process.arch === "arm64" ? "aarch64" : "x86_64"}`) {
+    verifyBuildMetadata(JSON.parse(execFileSync(binary, ["--build-info"], { encoding: "utf8" })), info, platform, allowModified);
+  }
 }
 
 function main() {
@@ -159,11 +198,6 @@ function main() {
       return;
     }
     outputs.planned_version = outputs.version;
-    // shortcut: legacy Preview packaging until step 2 supports prerelease macOS bundle identity.
-    if (channel === "preview" && process.env.PREVIEW_VERSION_FORMAT === "legacy") {
-      const base = JSON.parse(readFileSync("app/src-tauri/tauri.conf.json", "utf8")).version.split(".").slice(0, 2).join(".");
-      outputs.version = `${base}.${execFileSync("git", ["rev-list", "--count", "HEAD"], { encoding: "utf8" }).trim()}`;
-    }
     identity(channel, outputs.version, outputs.sha, outputs.tag);
     outputs.epoch = execFileSync("git", ["show", "-s", "--format=%ct", "HEAD"], { encoding: "utf8" }).trim();
     outputs.matrix = JSON.stringify({ include: matrix.filter((item) => platforms[channel].includes(item.platform)) });
@@ -172,6 +206,7 @@ function main() {
   } else if (command === "config") {
     // Only distribution jobs require a private key. Normal PR/local builds remain unsigned.
     const config = buildConfig(environmentInfo());
+    writeFileSync("app/release-Info.plist", macInfoPlist(config.version));
     writeFileSync("app/release-config.json", `${JSON.stringify(config, null, 2)}\n`);
   } else if (command === "collect") {
     collect(process.env.BUNDLE_DIR, "release-assets", process.env.PLATFORM, environmentInfo());
@@ -184,11 +219,8 @@ function main() {
     let binary = join(process.env.BUNDLE_DIR, "..", platform.startsWith("windows-") ? "oxbow.exe" : "oxbow");
     if (platform.startsWith("darwin-")) {
       const app = join(process.env.BUNDLE_DIR, "macos", "Oxbow.app", "Contents");
-      const version = execFileSync("plutil", ["-extract", "CFBundleShortVersionString", "raw", "-o", "-", join(app, "Info.plist")], { encoding: "utf8" }).trim();
-      requireValue(version === info.version, "macOS bundle version differs from distribution version");
+      verifyMacPackage(join(process.env.BUNDLE_DIR, "macos", "Oxbow.app"), info, platform, allowModified);
       binary = join(app, "MacOS", "oxbow");
-      const arch = execFileSync("lipo", ["-archs", binary], { encoding: "utf8" }).trim();
-      requireValue(arch === (platform === "darwin-aarch64" ? "arm64" : "x86_64"), "macOS executable architecture mismatch");
     }
     const os = process.platform === "win32" ? "windows" : process.platform;
     const arch = { arm64: "aarch64", x64: "x86_64" }[process.arch];

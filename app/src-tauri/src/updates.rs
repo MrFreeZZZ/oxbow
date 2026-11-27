@@ -83,6 +83,9 @@ pub(crate) struct UpdateInfo {
     version: String,
     commit: &'static str,
     build_channel: Channel,
+    built: &'static str,
+    base_release: &'static str,
+    commits_since_release: Option<u64>,
     channel: Channel,
     platform: Option<String>,
     available_channels: Vec<Channel>,
@@ -103,6 +106,9 @@ impl UpdateInfo {
             version,
             commit: env!("OXBOW_COMMIT"),
             build_channel: built,
+            built: env!("OXBOW_BUILT"),
+            base_release: env!("OXBOW_BASE_RELEASE"),
+            commits_since_release: env!("OXBOW_COMMITS_SINCE_RELEASE").parse().ok(),
             channel: Channel::configured(settings, built),
             platform,
             available_channels,
@@ -1039,7 +1045,7 @@ mod tests {
         assert_eq!(value["availableChannels"], json!(["release", "preview"]));
         assert_eq!(value["platform"], "darwin-aarch64");
         assert!(value["commit"].is_string());
-        assert_eq!(value.as_object().unwrap().len(), 7);
+        assert_eq!(value.as_object().unwrap().len(), 10);
     }
 
     #[test]
@@ -1064,6 +1070,35 @@ mod tests {
         assert_eq!(checks.status.channel, Channel::Release);
         assert!(matches!(checks.status.state, CheckState::Idle));
         assert!(checks.begin(Channel::Release));
+    }
+
+    #[test]
+    fn legacy_clients_accept_year_based_semver_from_the_existing_manifest() {
+        for (channel, version) in [
+            (Channel::Release, "2026.9.0"),
+            (Channel::Preview, "2026.9.0-preview.748"),
+        ] {
+            let commit = "a".repeat(40);
+            let tag = if channel == Channel::Release {
+                format!("v{version}")
+            } else {
+                format!("preview-{commit}")
+            };
+            let url = format!("https://github.com/MrFreeZZZ/oxbow/releases/download/{tag}/Oxbow.app.tar.gz");
+            let manifest = json!({ "version": version, "channel": channel, "commit": commit,
+                "platforms": { "darwin-aarch64": { "url": url, "signature": "signed" } } });
+            let remote: tauri_plugin_updater::RemoteRelease = serde_json::from_value(manifest.clone()).unwrap();
+            assert!(remote.version > "0.1.750".parse().unwrap());
+            assert!(candidate(channel, version.into(), None, &url, &manifest).is_ok());
+        }
+        assert_eq!(
+            Channel::Release.definition().endpoint,
+            "https://github.com/MrFreeZZZ/oxbow/releases/latest/download/latest.json"
+        );
+        assert_eq!(
+            Channel::Preview.definition().endpoint,
+            "https://github.com/MrFreeZZZ/oxbow/releases/download/preview/latest.json"
+        );
     }
 
     #[test]

@@ -2,6 +2,7 @@
 node_modules/
 /app/dist
 /app/release-config.json
+/app/release-Info.plist
 /release-assets/
 /release-notes.txt
 /app/src-tauri/gen/schemas

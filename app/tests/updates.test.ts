@@ -3,7 +3,7 @@ import test from "node:test";
 import { channelDescription, channelUnavailable, installedVersion, selectedChannel, updateChannels, updateNotice } from "../src/lib/updates.ts";
 import type { UpdateInfo, UpdateStatus } from "../src/lib/types.ts";
 
-const info: UpdateInfo = { version: "0.1.550", commit: "abcdef0", buildChannel: "preview", channel: "preview", platform: "darwin-aarch64", canInstall: true, availableChannels: ["release", "preview"] };
+const info: UpdateInfo = { built: "27 Nov 2026", baseRelease: "2026.8.0", commitsSinceRelease: 52, version: "0.1.550", commit: "abcdef0", buildChannel: "preview", channel: "preview", platform: "darwin-aarch64", canInstall: true, availableChannels: ["release", "preview"] };
 const status = (state: UpdateStatus): UpdateStatus => state;
 
 test("channel choices follow the build and preserve an unsupported saved choice", () => {

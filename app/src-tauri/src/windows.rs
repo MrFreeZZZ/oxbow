@@ -103,18 +103,11 @@ pub(crate) fn worktree_removed(app: &AppHandle, session: &Session, path: &Path) 
 pub(crate) fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let menu = tauri::menu::Menu::default(app)?;
     if let Some(app_menu) = menu.items()?.first().and_then(|item| item.as_submenu().cloned()) {
-        let about = tauri::menu::AboutMetadata {
-            name: Some(app.package_info().name.clone()),
-            // "Version 0.1.113 (b5cc367)": macOS puts the short version in the parentheses.
-            version: Some(app.package_info().version.to_string()),
-            short_version: Some(env!("OXBOW_COMMIT").to_owned()),
-            copyright: Some(format!("Built {}", env!("OXBOW_BUILT"))),
-            // No credits: macOS draws them larger than the version. Third-party notices ship in
-            // the bundle's Resources (THIRD-PARTY-NOTICES.txt).
-            ..Default::default()
-        };
         app_menu.remove_at(0)?;
-        app_menu.insert(&tauri::menu::PredefinedMenuItem::about(app, None, Some(about))?, 0)?;
+        app_menu.insert(
+            &tauri::menu::MenuItem::with_id(app, "about", "About Oxbow", true, None::<&str>)?,
+            0,
+        )?;
         let updates = tauri::menu::MenuItem::with_id(app, "check-updates", "Check for Updates…", true, None::<&str>)?;
         app_menu.insert(&updates, 1)?;
         let settings = tauri::menu::MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;

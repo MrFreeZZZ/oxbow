@@ -5,6 +5,7 @@ import { createServer } from 'node:https';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, cpSync, chmodSync, openSync, closeSync, appendFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
+import { macInfoPlist, verifyArtifact } from './release.mjs';
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 
@@ -44,16 +45,16 @@ if (command === 'snapshot') {
 } else if (command === 'verify') {
   const before = JSON.parse(readFileSync(join(fixture, 'before.json')));
   const after = snapshot();
-  assert.equal(before.version, '0.0.1');
-  assert.equal(after.version, '0.0.2');
+  assert.equal(before.version, '0.1.750');
+  assert.equal(after.version, '2026.9.0-preview.748');
   for (const key of ['settings', 'file', 'index', 'head', 'status']) assert.equal(after[key], before[key], `${key} changed through installation`);
   const hash = path => createHash('sha256').update(readFileSync(path)).digest('hex');
-  assert.equal(hash(join(fixture, app, 'Contents/MacOS/oxbow')), hash(join(fixture, '0.0.2', app, 'Contents/MacOS/oxbow')));
+  assert.equal(hash(join(fixture, app, 'Contents/MacOS/oxbow')), hash(join(fixture, '2026.9.0-preview.748', app, 'Contents/MacOS/oxbow')));
   const states = readFileSync(join(fixture, 'states.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
   for (const state of ['available', 'downloading', 'verifying', 'ready', 'preparing', 'installing', 'downloadFailed', 'installFailed', 'current']) assert(states.some(item => item.state === state), `Missing ${state}`);
   for (const message of [/signature could not be verified/, /could not be downloaded/, /Save or discard/, /Finish the running Git/]) assert(states.some(item => message.test(item.message ?? '')), `Missing failure ${message}`);
   save('verified.json', JSON.stringify({ at: new Date().toISOString(), before, after, states: [...new Set(states.map(item => item.state))] }, null, 2));
-  console.log('Verified signed 0.0.1 → 0.0.2: exact installed binary, unchanged settings/working file/index/HEAD/status and expected lifecycle/failures');
+  console.log('Verified signed 0.1.750 → 2026.9.0-preview.748: exact installed binary, unchanged settings/working file/index/HEAD/status and expected lifecycle/failures');
 } else if (command === 'build') {
   if (process.platform !== 'darwin') throw new Error('This native fixture currently supports macOS only');
   if (!existsSync(join(fixture, 'key'))) {
@@ -66,10 +67,13 @@ if (command === 'snapshot') {
     run('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '3', '-config', join(fixture, 'tls.cnf'), '-keyout', join(fixture, 'tls.key'), '-out', join(fixture, 'certificate.pem')], { stdio: 'ignore' });
     chmodSync(join(fixture, 'tls.key'), 0o600);
   }
-  for (const version of ['0.0.2', '0.0.1']) {
+  for (const version of ['2026.9.0-preview.748', '0.1.750']) {
     const config = { productName: product, identifier: 'app.oxbow.updater-test', version, bundle: { createUpdaterArtifacts: true }, plugins: { updater: { pubkey: readFileSync(join(fixture, 'key.pub'), 'utf8').trim(), requireSignedVersion: true } } };
+    const plist = join(fixture, `Info-${version}.plist`);
+    save(`Info-${version}.plist`, macInfoPlist(version));
+    config.bundle.macOS = { bundleVersion: version.split('-')[0], infoPlist: plist };
     save(`config-${version}.json`, JSON.stringify(config));
-    const env = { ...process.env, APPLE_SIGNING_IDENTITY: '-', OXBOW_UPDATER_TEST_ROOT: fixture, OXBOW_BUILD_CHANNEL: 'preview', OXBOW_BUILD_VERSION: version, OXBOW_BUILD_COMMIT: sha, TAURI_SIGNING_PRIVATE_KEY: readFileSync(join(fixture, 'key'), 'utf8'), TAURI_SIGNING_PRIVATE_KEY_PASSWORD: '' };
+    const env = { ...process.env, APPLE_SIGNING_IDENTITY: '-', OXBOW_UPDATER_TEST_ROOT: fixture, OXBOW_BUILD_CHANNEL: 'preview', OXBOW_BUILD_VERSION: version, OXBOW_BUILD_COMMIT: sha, OXBOW_BASE_RELEASE: '2026.8.0', OXBOW_COMMITS_SINCE_RELEASE: '52', TAURI_SIGNING_PRIVATE_KEY: readFileSync(join(fixture, 'key'), 'utf8'), TAURI_SIGNING_PRIVATE_KEY_PASSWORD: '' };
     const log = openSync(join(fixture, `build-${version}.log`), 'w', 0o600);
     try {
       run(process.execPath, [cli, 'build', '--ci', '--features', 'updater-test', '--bundles', 'app', '--config', JSON.stringify(config)], { cwd: join(root, 'app'), env, stdio: ['ignore', log, log] });
@@ -80,10 +84,14 @@ if (command === 'snapshot') {
       rmSync(join(dest, name), { recursive: true, force: true });
       cpSync(join(root, 'target/release/bundle/macos', name), join(dest, name), { recursive: true });
     }
-    console.log(`Built isolated ${version}`);
+    verifyArtifact(readFileSync(join(dest, `${app}.tar.gz`)), readFileSync(join(dest, `${app}.tar.gz.sig`), 'utf8').trim(), readFileSync(join(fixture, 'key.pub'), 'utf8').trim(), version);
+    const metadata = JSON.parse(run(join(dest, app, 'Contents/MacOS/oxbow'), ['--build-info']));
+    assert.equal(metadata.version, version);
+    assert.equal(metadata.baseRelease, '2026.8.0');
+    console.log(`Built and verified isolated signed ${version}`);
   }
   rmSync(join(fixture, app), { recursive: true, force: true });
-  cpSync(join(fixture, '0.0.1', app), join(fixture, app), { recursive: true });
+  cpSync(join(fixture, '0.1.750', app), join(fixture, app), { recursive: true });
   // Do not leave test packages beside the production artifacts collected by release.mjs.
   for (const name of [app, `${app}.tar.gz`, `${app}.tar.gz.sig`]) rmSync(join(root, 'target/release/bundle/macos', name), { recursive: true, force: true });
   rmSync(join(fixture, 'restart-failed'), { force: true });
@@ -95,15 +103,15 @@ if (command === 'snapshot') {
   save('mode', process.argv[3]);
   console.log(`Fixture mode: ${process.argv[3]}`);
 } else if (command === 'serve') {
-  const packageBytes = readFileSync(join(fixture, '0.0.2', `${app}.tar.gz`));
-  const signature = readFileSync(join(fixture, '0.0.2', `${app}.tar.gz.sig`), 'utf8').trim();
+  const packageBytes = readFileSync(join(fixture, '2026.9.0-preview.748', `${app}.tar.gz`));
+  const signature = readFileSync(join(fixture, '2026.9.0-preview.748', `${app}.tar.gz.sig`), 'utf8').trim();
   const server = createServer({ key: readFileSync(join(fixture, 'tls.key')), cert: readFileSync(join(fixture, 'certificate.pem')) }, (req, res) => {
     const mode = readFileSync(join(fixture, 'mode'), 'utf8').trim();
     appendFileSync(join(fixture, 'requests.jsonl'), JSON.stringify({ at: Date.now(), path: req.url, mode }) + '\n');
     if (mode === 'offline') { res.writeHead(503); res.end(); return; }
     if (/^\/(preview|release)\/latest.json$/.test(req.url)) {
       const channel = req.url.split('/')[1];
-      const version = mode === 'older' ? '0.0.0' : mode === 'wrong-version' ? '0.0.3' : '0.0.2';
+      const version = mode === 'older' ? '0.0.0' : mode === 'wrong-version' ? '2026.9.0-preview.749' : '2026.9.0-preview.748';
       let sig = signature;
       if (mode === 'bad-signature') {
         const lines = Buffer.from(sig, 'base64').toString().split('\n');
@@ -111,7 +119,7 @@ if (command === 'snapshot') {
         sig = Buffer.from(lines.join('\n')).toString('base64');
       }
       const tag = channel === 'preview' ? `preview-${sha}` : `v${version}`;
-      const manifest = { version, channel: mode === 'wrong-channel' ? 'foreign' : channel, commit: sha, notes: '## Updater acceptance\n\nSigned macOS 0.0.1 → 0.0.2.\n\n' + Array.from({ length: 80 }, (_, i) => `- Release note ${i + 1}: long notes stay inside their scroll area.`).join('\n'), platforms: mode === 'missing-target' ? {} : { [`darwin-${process.arch === 'arm64' ? 'aarch64' : 'x86_64'}`]: { url: `https://github.com/MrFreeZZZ/oxbow/releases/download/${tag}/Oxbow-test.app.tar.gz`, signature: sig } } };
+      const manifest = { version, channel: mode === 'wrong-channel' ? 'foreign' : channel, commit: sha, notes: '## Updater acceptance\n\nSigned macOS 0.1.750 → 2026.9.0-preview.748.\n\n' + Array.from({ length: 80 }, (_, i) => `- Release note ${i + 1}: long notes stay inside their scroll area.`).join('\n'), platforms: mode === 'missing-target' ? {} : { [`darwin-${process.arch === 'arm64' ? 'aarch64' : 'x86_64'}`]: { url: `https://github.com/MrFreeZZZ/oxbow/releases/download/${tag}/Oxbow-test.app.tar.gz`, signature: sig } } };
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(manifest)); return;
     }
     if (!req.url.startsWith('/MrFreeZZZ/oxbow/releases/download/')) { res.writeHead(404); res.end(); return; }

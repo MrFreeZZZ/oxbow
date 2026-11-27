@@ -20,6 +20,7 @@ windowState();
 // Auxiliary windows use a hash route and load their views on demand.
 const target = document.getElementById("app")!;
 if (settingsRoute(location.hash) !== null) void import("./lib/SettingsWindow.svelte").then((m) => mount(m.default, { target }));
+else if (location.hash === "#about") void import("./lib/AboutWindow.svelte").then((m) => mount(m.default, { target }));
 else if (location.hash === "#console") void import("./lib/ConsoleWindow.svelte").then((m) => mount(m.default, { target }));
 else if (location.hash === "#command") void import("./lib/UserCommandWindow.svelte").then((m) => mount(m.default, { target }));
 else if (location.hash === "#commit-summary") void import("./lib/CommitSummaryWindow.svelte").then((m) => mount(m.default, { target }));

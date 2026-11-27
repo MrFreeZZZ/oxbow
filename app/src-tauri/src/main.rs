@@ -1,6 +1,7 @@
 // Hide the extra console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod about_window;
 mod accounts;
 mod actions;
 mod background;
@@ -113,6 +114,10 @@ fn main() {
             }
             if event.id() == "settings" {
                 let _ = show_settings(app);
+            }
+            #[cfg(target_os = "macos")]
+            if event.id() == "about" {
+                let _ = about_window::show_about(app);
             }
             #[cfg(target_os = "macos")]
             if event.id() == "check-updates" {

@@ -52,6 +52,8 @@ fn main() {
         "OXBOW_BUILD_CHANNEL",
         "OXBOW_BUILD_VERSION",
         "OXBOW_BUILD_COMMIT",
+        "OXBOW_BASE_RELEASE",
+        "OXBOW_COMMITS_SINCE_RELEASE",
         "TAURI_CONFIG",
         "OXBOW_UPDATER_TEST_ROOT",
     ] {
@@ -75,8 +77,8 @@ fn main() {
             "Updater tests require their own identifier"
         );
         assert!(
-            matches!(version, "0.0.1" | "0.0.2"),
-            "Updater test versions must stay outside distribution versions"
+            matches!(version, "0.1.750" | "2026.9.0-preview.748"),
+            "Updater tests require an explicit migration fixture version"
         );
         let key = override_config
             .pointer("/plugins/updater/pubkey")
@@ -103,6 +105,12 @@ fn main() {
     };
     let channel = identity.validate().expect("distribution build identity");
     println!("cargo:rustc-env=OXBOW_BUILD_CHANNEL={channel}");
+    let base = std::env::var("OXBOW_BASE_RELEASE").unwrap_or_default();
+    let distance = std::env::var("OXBOW_COMMITS_SINCE_RELEASE").unwrap_or_default();
+    build_identity::validate_release_context(&base, &distance, expected_version.is_some())
+        .expect("resolved About metadata");
+    println!("cargo:rustc-env=OXBOW_BASE_RELEASE={base}");
+    println!("cargo:rustc-env=OXBOW_COMMITS_SINCE_RELEASE={distance}");
     let commit = match git(&["rev-parse", "--short=7", "HEAD"]) {
         Some(sha) if git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty()) => {
             format!("{sha}, modified")

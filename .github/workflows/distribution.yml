@@ -53,8 +53,6 @@ jobs:
         id: identity
         env:
           GH_TOKEN: ${{ github.token }}
-          # Remove in step 2 once prerelease macOS packaging and build identity are ready.
-          PREVIEW_VERSION_FORMAT: legacy
           CHANNEL: ${{ inputs.channel }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: node scripts/release.mjs resolve
@@ -146,6 +144,8 @@ jobs:
       OXBOW_BUILD_CHANNEL: ${{ inputs.channel }}
       OXBOW_BUILD_VERSION: ${{ needs.resolve.outputs.version }}
       OXBOW_BUILD_COMMIT: ${{ needs.resolve.outputs.sha }}
+      OXBOW_BASE_RELEASE: ${{ needs.resolve.outputs.base_release }}
+      OXBOW_COMMITS_SINCE_RELEASE: ${{ needs.resolve.outputs.commits_since_release }}
       PLATFORM: ${{ matrix.platform }}
       BUNDLE_DIR: target/${{ matrix.target }}/release/bundle
     steps:

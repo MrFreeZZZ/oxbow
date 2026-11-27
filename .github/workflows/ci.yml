@@ -98,15 +98,29 @@ jobs:
         run: npm install --global npm@12.2.3
       - run: npm ci
         working-directory: app
-      - name: Build the app bundle
-        # The bundle's version as About shows it: 0.1.<number of commits>.
+      - name: Resolve Preview identity once
+        id: identity
         env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: preview
+        run: node scripts/release.mjs resolve
+      - name: Build the app bundle
+        env:
+          CHANNEL: preview
+          RELEASE_VERSION: ${{ steps.identity.outputs.version }}
+          RELEASE_TAG: ${{ steps.identity.outputs.tag }}
+          SOURCE_SHA: ${{ steps.identity.outputs.sha }}
+          SOURCE_DATE_EPOCH: ${{ steps.identity.outputs.epoch }}
           OXBOW_BUILD_CHANNEL: preview
+          OXBOW_BUILD_VERSION: ${{ steps.identity.outputs.version }}
+          OXBOW_BUILD_COMMIT: ${{ steps.identity.outputs.sha }}
+          OXBOW_BASE_RELEASE: ${{ steps.identity.outputs.base_release }}
+          OXBOW_COMMITS_SINCE_RELEASE: ${{ steps.identity.outputs.commits_since_release }}
         run: |
-          base=$(node -p "require('./src-tauri/tauri.conf.json').version.split('.').slice(0, 2).join('.')")
-          version="$base.$(git rev-list --count HEAD)"
-          OXBOW_BUILD_VERSION="$version" OXBOW_BUILD_COMMIT="$(git rev-parse HEAD)" npx tauri build --ci --bundles app --config "{\"version\":\"$version\"}"
-        working-directory: app
+          node scripts/release.mjs config
+          node --input-type=module -e 'import fs from "node:fs"; const p = "app/release-config.json"; const c = JSON.parse(fs.readFileSync(p)); c.bundle.createUpdaterArtifacts = false; fs.writeFileSync(p, JSON.stringify(c));'
+          cd app
+          npx tauri build --ci --bundles app --config release-config.json
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: oxbow-macOS
