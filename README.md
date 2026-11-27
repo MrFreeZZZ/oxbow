@@ -123,12 +123,16 @@ is configurable. It captures saves only while the repository is open.
 
 Releases include packages for macOS Apple Silicon and Intel, Linux x64 and Windows x64. The macOS app is ad-hoc signed and is not notarized. Its update packages are signed separately. GitLab integration has automated tests against a test server; a check against a live GitLab service is still ahead.
 
+On Apple Silicon, choose Release or Preview in **Settings → General → Updates**. Use **Switch to Release** or **Switch to Preview** to see the latest available build in that channel, including an older version. Check Now offers newer versions only.
+
 Development branches start from `preview` and target it with pull requests. `main` is reserved
-for releases: merge a validated `preview` (or a temporary `release/*` branch) through a pull
-request, then tag the merged commit. Urgent `hotfix/*` branches start from `main`; merge their
-fixes back into `preview` as well. Keep release merges as merge commits rather than squashing
-or rebasing, so both long-lived branches retain their shared history. Release notes and the
-changelog require approval before publication.
+for releases. Merge a validated `preview` (or a temporary `release/*` branch) through a pull
+request. On the merged commit, run `node scripts/release.mjs prepare planned` or
+`node scripts/release.mjs prepare hotfix` to calculate the next `vYYYY.N.P` tag from the latest
+published Release, then tag the commit. Urgent `hotfix/*` branches start from `main`; merge
+their fixes back into `preview` as well. Keep release merges as merge commits so both
+long-lived branches retain their shared history. Release notes and the changelog require
+approval before publication.
 
 CI checks pull requests and pushes to `main` on Linux. Pushes to `preview` run Preview, which checks Linux and tests
 macOS once before building and publishing a signed macOS Apple Silicon update.
