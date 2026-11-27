@@ -77,7 +77,10 @@ fn main() {
             "Updater tests require their own identifier"
         );
         assert!(
-            matches!(version, "0.1.750" | "2026.9.0-preview.748"),
+            matches!(
+                version,
+                "0.1.747" | "0.1.750" | "2026.8.1" | "2026.9.0-preview.748" | "2026.9.0-preview.749"
+            ),
             "Updater tests require an explicit migration fixture version"
         );
         let key = override_config
