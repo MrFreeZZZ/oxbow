@@ -388,7 +388,6 @@ test("CLI resolves one published snapshot per run and preparation writes no outp
   const result = run(["resolve"], { CHANNEL: "preview" });
   assert.equal(result.version, `${planned}-preview.1009`);
   assert.equal(run(["resolve"], { CHANNEL: "release", RELEASE_TAG: "v2026.8.1" }).version, "2026.8.1");
-  assert.equal(result.planned_version, result.version);
   assert.match(readFileSync(output, "utf8"), /base_release=2026.8.0\n/);
 });
 

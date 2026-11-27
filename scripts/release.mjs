@@ -197,7 +197,6 @@ function main() {
       console.log(JSON.stringify(outputs, null, 2));
       return;
     }
-    outputs.planned_version = outputs.version;
     identity(channel, outputs.version, outputs.sha, outputs.tag);
     outputs.epoch = execFileSync("git", ["show", "-s", "--format=%ct", "HEAD"], { encoding: "utf8" }).trim();
     outputs.matrix = JSON.stringify({ include: matrix.filter((item) => platforms[channel].includes(item.platform)) });

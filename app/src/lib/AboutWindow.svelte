@@ -37,6 +37,6 @@
   p { margin: 0 0 var(--space-3); overflow-wrap: anywhere; }
   .version { font-size: 16px; }
   .base, .built { font-size: 14px; color: var(--text2); }
-  .button { margin-top: var(--space-2); color: var(--accent); }
+  .button { margin-top: var(--space-2); color: var(--accent-text); }
   .error { color: var(--danger); font-size: var(--text-small); margin-top: var(--space-3); }
 </style>
