@@ -145,22 +145,31 @@ export function buildConfig(info) {
   identity(info.channel, info.version, info.sha, info.tag);
   return {
     version: info.version,
-    bundle: { createUpdaterArtifacts: true, macOS: { bundleVersion: info.version.split("-")[0], infoPlist: resolve("app/release-Info.plist") } },
+    bundle: { createUpdaterArtifacts: true, macOS: { bundleVersion: macBundleVersion(info.version), infoPlist: resolve("app/release-Info.plist") } },
     plugins: { updater: { endpoints: [channels[info.channel].endpoint] } },
   };
+}
+
+export function macBundleVersion(version) {
+  const [shortVersion, count] = version.split("-preview.");
+  const [year, series, patch] = shortVersion.split(".");
+  if (year.length < 4) return shortVersion;
+  // Use the slot before each Release series for its Preview builds.
+  const releaseSeries = 2n * BigInt(series);
+  return count === undefined ? `${year}.${releaseSeries}.${patch}` : `${year}.${releaseSeries - 1n}.${count}`;
 }
 
 // Merge version overrides into the existing plist so automation permissions survive packaging.
 export function macInfoPlist(version, source = readFileSync(new URL("../app/src-tauri/Info.plist", import.meta.url), "utf8")) {
   requireValue(stablePattern.test(version) || previewPattern.test(version), "Invalid macOS version");
   const numeric = version.split("-")[0];
-  return source.replace(/\s*<key>CFBundle(?:ShortVersionString|Version)<\/key>\s*<string>[^<]*<\/string>/g, "")
-    .replace("</dict>", `<key>CFBundleShortVersionString</key><string>${numeric}</string>\n<key>CFBundleVersion</key><string>${numeric}</string>\n</dict>`);
+  return source.replace(/<\/dict>(\s*<\/plist>\s*)$/, (_, end) =>
+    `    <key>CFBundleShortVersionString</key><string>${numeric}</string>\n    <key>CFBundleVersion</key><string>${macBundleVersion(version)}</string>\n</dict>${end}`);
 }
 
 export function verifyMacVersions(shortVersion, bundleVersion, info) {
   const numeric = info.version.split("-")[0];
-  requireValue(shortVersion === numeric && bundleVersion === numeric, "macOS numeric bundle versions differ from distribution version");
+  requireValue(shortVersion === numeric && bundleVersion === macBundleVersion(info.version), "macOS numeric bundle versions differ from distribution version");
 }
 
 export function verifyBuildMetadata(metadata, info, platform, allowModified = false) {
@@ -191,6 +200,13 @@ export function verifyMacPackage(app, info, platform, allowModified = false) {
 function main() {
   const command = process.argv[2];
   if (command === "prepare" || command === "resolve") {
+    if (command === "prepare") {
+      try {
+        execFileSync("git", ["merge-base", "--is-ancestor", "HEAD", "refs/remotes/origin/main"], { stdio: "ignore" });
+      } catch {
+        throw new Error("HEAD must belong to origin/main. Fetch origin/main before preparing a Release.");
+      }
+    }
     const channel = command === "prepare" ? "release" : process.env.CHANNEL;
     const outputs = resolvePublished(channel, command === "prepare" ? process.argv[3] : undefined, command === "prepare" ? undefined : process.env.RELEASE_TAG);
     if (command === "prepare") {

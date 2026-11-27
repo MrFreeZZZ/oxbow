@@ -5,7 +5,7 @@ import { createServer } from 'node:https';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, cpSync, chmodSync, openSync, closeSync, appendFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { macInfoPlist, verifyArtifact } from './release.mjs';
+import { macBundleVersion, macInfoPlist, verifyArtifact } from './release.mjs';
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 
@@ -92,7 +92,7 @@ if (command === 'snapshot') {
     const config = { productName: product, identifier: 'app.oxbow.updater-test', version, bundle: { createUpdaterArtifacts: true }, plugins: { updater: { pubkey: readFileSync(join(fixture, 'key.pub'), 'utf8').trim(), requireSignedVersion: true } } };
     const plist = join(fixture, `Info-${version}.plist`);
     save(`Info-${version}.plist`, macInfoPlist(version));
-    config.bundle.macOS = { bundleVersion: version.split('-')[0], infoPlist: plist };
+    config.bundle.macOS = { bundleVersion: macBundleVersion(version), infoPlist: plist };
     save(`config-${version}.json`, JSON.stringify(config));
     const env = { ...process.env, APPLE_SIGNING_IDENTITY: '-', OXBOW_UPDATER_TEST_ROOT: fixture, OXBOW_BUILD_CHANNEL: channel, OXBOW_BUILD_VERSION: version, OXBOW_BUILD_COMMIT: sha, OXBOW_BASE_RELEASE: '2026.8.0', OXBOW_COMMITS_SINCE_RELEASE: '52', TAURI_SIGNING_PRIVATE_KEY: readFileSync(join(fixture, 'key'), 'utf8'), TAURI_SIGNING_PRIVATE_KEY_PASSWORD: '' };
     const log = openSync(join(fixture, `build-${version}.log`), 'w', 0o600);

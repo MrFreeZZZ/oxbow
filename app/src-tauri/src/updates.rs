@@ -212,7 +212,7 @@ impl UpdateStatus {
 
 struct Checks {
     switch_revision: u64,
-    pending_switch: Option<(SwitchCandidate, UpdateRelease, Update)>,
+    pending_switch: Option<PendingSwitch>,
     running: bool,
     status: UpdateStatus,
     update: Option<Update>,
@@ -298,12 +298,15 @@ impl Checks {
         self.update = None;
     }
 
+    fn can_begin(&self) -> bool {
+        !self.running && !self.installed && self.pending_switch.is_none()
+    }
+
     fn begin(&mut self, channel: Channel) -> bool {
-        if self.running || self.installed {
+        if !self.can_begin() {
             return false;
         }
         self.switch_revision += 1;
-        self.pending_switch = None;
         self.running = true;
         self.update = None;
         self.bytes = None;
@@ -427,7 +430,7 @@ pub(crate) fn start(app: &AppHandle) {
                 let idle = {
                     let state = app.state::<UpdateChecks>();
                     let checks = state.0.lock().expect("update checks lock");
-                    !checks.running && !checks.installed && checks.bytes.is_none()
+                    checks.can_begin() && checks.bytes.is_none()
                 };
                 if idle {
                     check_updates(app.clone()).await;
@@ -806,6 +809,11 @@ pub(crate) struct SwitchCandidate {
     older: bool,
 }
 
+struct PendingSwitch {
+    id: u64,
+    package: Option<(SwitchCandidate, UpdateRelease, Update)>,
+}
+
 fn switch_supported(channel: Channel, built: Channel, platform: Option<&str>) -> bool {
     channel != built && platform.is_some_and(|p| channel.definition().platforms.iter().any(|v| v == p))
 }
@@ -818,13 +826,21 @@ impl SwitchCandidate {
 
 impl Checks {
     fn accept_switch(&mut self, id: u64, selected: Channel, platform: Option<&str>) -> Result<(), String> {
-        let valid = self.pending_switch.as_ref().is_some_and(|(candidate, _, _)| {
-            candidate.valid(id, self.switch_revision, selected, Channel::built(), platform)
-        });
+        let valid = self
+            .pending_switch
+            .as_ref()
+            .and_then(|pending| pending.package.as_ref())
+            .is_some_and(|(candidate, _, _)| {
+                candidate.valid(id, self.switch_revision, selected, Channel::built(), platform)
+            });
         if self.running || self.installed || !valid {
             return Err("The channel switch changed or expired. Choose Switch again.".into());
         }
-        let (candidate, release, update) = self.pending_switch.take().expect("checked candidate");
+        let (candidate, release, update) = self
+            .pending_switch
+            .take()
+            .and_then(|pending| pending.package)
+            .expect("checked candidate");
         self.update = Some(update);
         self.status = UpdateStatus {
             channel: candidate.channel,
@@ -864,6 +880,14 @@ pub(crate) fn channel_changed(app: &AppHandle, previous: Channel, selected: Chan
         .select_channel(previous, selected);
 }
 
+pub(crate) fn settings_closed(app: &AppHandle) {
+    let state = app.state::<UpdateChecks>();
+    let mut checks = state.0.lock().expect("update checks lock");
+    if checks.pending_switch.is_some() {
+        checks.invalidate_switch();
+    }
+}
+
 #[tauri::command]
 pub(crate) async fn prepare_channel_switch(app: AppHandle) -> Result<SwitchCandidate, String> {
     let channel = selected_channel(&app);
@@ -876,15 +900,21 @@ pub(crate) async fn prepare_channel_switch(app: AppHandle) -> Result<SwitchCandi
         if checks.bytes.is_some() || !checks.begin(channel) {
             return Err("Finish the current update before switching channels.".into());
         }
-        checks.switch_revision
+        let id = checks.switch_revision;
+        checks.pending_switch = Some(PendingSwitch { id, package: None });
+        id
     };
     broadcast(&app);
     let result = fetch_update(&app, channel, true).await;
     let outcome = {
         let mut checks = state.0.lock().expect("update checks lock");
         checks.running = false;
-        checks.status = UpdateStatus::idle(selected_channel(&app));
-        if checks.switch_revision != revision || selected_channel(&app) != channel {
+        let selected = selected_channel(&app);
+        checks.status = UpdateStatus::idle(selected);
+        checks.pending_switch = None;
+        if app.get_webview_window("settings").is_none() {
+            Err("Settings closed. Open Settings to switch channels.".into())
+        } else if checks.switch_revision != revision || selected != channel {
             Err("The update channel changed. Choose Switch again.".into())
         } else {
             result.and_then(|result| {
@@ -898,7 +928,10 @@ pub(crate) async fn prepare_channel_switch(app: AppHandle) -> Result<SwitchCandi
                     version: release.version.clone(),
                     older: remote.version < app.package_info().version,
                 };
-                checks.pending_switch = Some((candidate.clone(), release, update));
+                checks.pending_switch = Some(PendingSwitch {
+                    id: revision,
+                    package: Some((candidate.clone(), release, update)),
+                });
                 Ok(candidate)
             })
         }
@@ -916,11 +949,7 @@ pub(crate) async fn confirm_channel_switch(app: AppHandle, id: u64) -> Result<Up
 pub(crate) fn cancel_channel_switch(app: AppHandle, id: u64) {
     let state = app.state::<UpdateChecks>();
     let mut checks = state.0.lock().expect("update checks lock");
-    if checks
-        .pending_switch
-        .as_ref()
-        .is_some_and(|(candidate, _, _)| candidate.id == id)
-    {
+    if checks.pending_switch.as_ref().is_some_and(|pending| pending.id == id) {
         checks.pending_switch = None;
     }
 }
@@ -1117,6 +1146,25 @@ mod tests {
                 .is_err()
         );
         assert!(checks.update.is_none() && checks.bytes.is_none());
+    }
+
+    #[test]
+    fn pending_switch_blocks_checks_even_when_status_is_idle() {
+        let mut checks = empty_checks();
+        assert!(checks.begin(Channel::Release));
+        checks.finish(Channel::Release, UpdateStatus::idle(Channel::Release));
+        let id = checks.switch_revision;
+        checks.pending_switch = Some(PendingSwitch { id, package: None });
+
+        assert!(!checks.can_begin());
+        assert!(!checks.begin(Channel::Release));
+        assert_eq!(checks.switch_revision, id);
+        assert_eq!(checks.pending_switch.as_ref().unwrap().id, id);
+        assert!(matches!(checks.status.state, CheckState::Idle));
+
+        checks.invalidate_switch();
+        assert!(checks.can_begin());
+        assert!(checks.begin(Channel::Release));
     }
 
     #[test]

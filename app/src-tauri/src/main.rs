@@ -91,6 +91,9 @@ fn main() {
                     }
                 }
                 tauri::WindowEvent::Destroyed => {
+                    if label == "settings" {
+                        updates::settings_closed(window.app_handle());
+                    }
                     if commit_summary_window::is_summary_window(&label) {
                         window.state::<commit_summary_window::SummaryWindows>().remove(&label);
                     }

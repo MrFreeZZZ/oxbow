@@ -5,7 +5,7 @@ import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
-import { buildConfig, macInfoPlist, verifyMacVersions, collect, identity, manifest, platforms, verifyArtifact, verifyBuildMetadata } from "./release.mjs";
+import { buildConfig, macBundleVersion, macInfoPlist, verifyMacVersions, collect, identity, manifest, platforms, verifyArtifact, verifyBuildMetadata } from "./release.mjs";
 import { previewDecision, validatePublished } from "./publish-release.mjs";
 import { migration, nextVersion, publishedBase, resolveVersions } from "./versioning.mjs";
 
@@ -360,22 +360,32 @@ test("CLI resolves one published snapshot per run and preparation writes no outp
   const responses = {
     [`rev-parse ${migration.tag}^{commit}`]: migration.commit,
     "rev-parse HEAD": sha,
+    "merge-base --is-ancestor HEAD refs/remotes/origin/main": "",
     "rev-list --count HEAD": "1009",
     [`merge-base --is-ancestor ${migration.source} HEAD`]: "",
     [`rev-list --count ${migration.source}..HEAD`]: "12",
     "show -s --format=%ct HEAD": "1795760000",
   };
-  writeFileSync(join(bin, "git"), `#!/usr/bin/env node\nconst values = ${JSON.stringify(responses)}; const key = process.argv.slice(2).join(' '); if (!(key in values)) process.exit(2); console.log(values[key]);\n`);
+  writeFileSync(join(bin, "git"), `#!/usr/bin/env node
+const values = ${JSON.stringify(responses)};
+const key = process.argv.slice(2).join(' ');
+if (!(key in values)) process.exit(2);
+if (key === "merge-base --is-ancestor HEAD refs/remotes/origin/main" && process.env.OFF_MAIN === "1") process.exit(1);
+console.log(values[key]);
+`);
   writeFileSync(join(bin, "gh"), `#!/usr/bin/env node\nconst fs = require('node:fs'); fs.appendFileSync(${JSON.stringify(join(root, "calls"))}, JSON.stringify(process.argv.slice(2))+'\\n'); console.log(${JSON.stringify(JSON.stringify(published))});\n`);
   for (const name of ["git", "gh"]) chmodSync(join(bin, name), 0o755);
   const output = join(root, "output");
   writeFileSync(output, "sentinel\n");
   const script = resolve(dirname(new URL(import.meta.url).pathname), "release.mjs");
-  const run = (args, extra = {}) => {
+  const invoke = (args, extra = {}) => {
     writeFileSync(join(root, "calls"), "");
-    const result = spawnSync(process.execPath, [script, ...args], { cwd: root, encoding: "utf8", env: {
+    return spawnSync(process.execPath, [script, ...args], { cwd: root, encoding: "utf8", env: {
       ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_OUTPUT: output, GITHUB_REPOSITORY: "MrFreeZZZ/oxbow", ...extra,
     } });
+  };
+  const run = (args, extra) => {
+    const result = invoke(args, extra);
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(readFileSync(join(root, "calls"), "utf8").trim().split("\n").map(JSON.parse), [["api", "repos/MrFreeZZZ/oxbow/releases/latest"]]);
     return JSON.parse(result.stdout);
@@ -384,6 +394,10 @@ test("CLI resolves one published snapshot per run and preparation writes no outp
   const planned = year === 2026 ? "2026.9.0" : `${year}.1.0`;
   assert.equal(run(["prepare", "planned"]).version, planned);
   assert.equal(run(["prepare", "hotfix"]).version, "2026.8.1");
+  const rejected = invoke(["prepare", "planned"], { OFF_MAIN: "1" });
+  assert.equal(rejected.status, 1);
+  assert.match(rejected.stderr, /HEAD must belong to origin\/main/);
+  assert.equal(readFileSync(join(root, "calls"), "utf8"), "");
   assert.equal(readFileSync(output, "utf8"), "sentinel\n");
   const result = run(["resolve"], { CHANNEL: "preview" });
   assert.equal(result.version, `${planned}-preview.1009`);
@@ -429,18 +443,32 @@ test("reused Preview snapshots still require their own valid version, exact SHA,
   }
 });
 
-test("Preview packaging keeps signed SemVer while macOS plist stays numeric and keeps permissions", () => {
+test("Preview packaging keeps signed SemVer and puts the build count in the macOS bundle version", () => {
   const version = "2026.9.0-preview.748";
   const info = identity("preview", version, sha, `preview-${sha}`);
   const config = buildConfig(info);
   assert.equal(config.version, version);
-  assert.equal(config.bundle.macOS.bundleVersion, "2026.9.0");
+  assert.equal(config.bundle.macOS.bundleVersion, "2026.17.748");
   const plist = macInfoPlist(version);
   assert.match(plist, /NSAppleEventsUsageDescription/);
   assert.match(plist, /CFBundleShortVersionString<\/key><string>2026\.9\.0<\/string>/);
-  verifyMacVersions("2026.9.0", "2026.9.0", info);
-  assert.throws(() => verifyMacVersions(version, "2026.9.0", info));
-  assert.throws(() => verifyMacVersions("2026.9.0", "2026.9.1", info));
+  assert.match(plist, /CFBundleVersion<\/key><string>2026\.17\.748<\/string>/);
+  const nested = macInfoPlist(version, '<plist version="1.0"><dict><key>Nested</key><dict></dict></dict></plist>');
+  assert.match(nested, /<key>Nested<\/key><dict><\/dict>\s*<key>CFBundleShortVersionString/);
+  verifyMacVersions("2026.9.0", "2026.17.748", info);
+  verifyMacVersions("2026.9.0", "2026.18.0", { version: "2026.9.0" });
+  assert.throws(() => verifyMacVersions(version, "2026.17.748", info));
+  assert.throws(() => verifyMacVersions("2026.9.0", "2026.9.0", info));
   verifyArtifact(data, signature(data, version), key, version);
   assert.throws(() => verifyArtifact(data, signature(data, version), key, "2026.9.0"));
+});
+
+test("macOS bundle versions order Preview, Release and hotfixes by series", () => {
+  assert.deepEqual([
+    "0.1.750", "2026.8.9", "2026.9.0-preview.748", "2026.9.0-preview.749",
+    "2026.9.0", "2026.9.1", "2026.10.0-preview.999", "2027.1.0-preview.1000",
+  ].map(macBundleVersion), [
+    "0.1.750", "2026.16.9", "2026.17.748", "2026.17.749",
+    "2026.18.0", "2026.18.1", "2026.19.999", "2027.1.1000",
+  ]);
 });

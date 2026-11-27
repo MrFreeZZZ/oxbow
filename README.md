@@ -127,8 +127,9 @@ On Apple Silicon, choose Release or Preview in **Settings → General → Update
 
 Development branches start from `preview` and target it with pull requests. `main` is reserved
 for releases. Merge a validated `preview` (or a temporary `release/*` branch) through a pull
-request. On the merged commit, run `node scripts/release.mjs prepare planned` or
-`node scripts/release.mjs prepare hotfix` to calculate the next `vYYYY.N.P` tag from the latest
+request. Run `git fetch origin` and check out the merged commit. Use
+`node scripts/release.mjs prepare planned` or `node scripts/release.mjs prepare hotfix`
+to calculate the next `vYYYY.N.P` tag from the latest
 published Release, then tag the commit. Urgent `hotfix/*` branches start from `main`; merge
 their fixes back into `preview` as well. Keep release merges as merge commits so both
 long-lived branches retain their shared history. Release notes and the changelog require
